@@ -1,0 +1,21 @@
+{
+  "selected_id": "home",
+  "profiles": [
+    {
+      "id": "home",
+      "name": "Home Router",
+      "endpoint": "",
+      "router_api": "http://10.77.0.1:8787",
+      "api_token": "PASTE_TOKEN_FROM_ROUTER_INSTALLER",
+      "adguard_ipv4": "10.77.0.1",
+      "adguard_ipv6": "fd77:77::1",
+      "socks_host": "10.77.0.1",
+      "socks_port": 1080,
+      "socks_username": "PASTE_SOCKS_USERNAME",
+      "socks_password": "PASTE_SOCKS_PASSWORD",
+      "daita_host": "10.77.0.1",
+      "daita_port": 45999,
+      "daita_rate_kbps": 192
+    }
+  ]
+}

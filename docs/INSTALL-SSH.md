@@ -1,32 +1,33 @@
 # Install or repair through SSH
 
-## 1. Open Terminal on the Mac
+## 1. Open Terminal
 
-Press `Command + Space`, type `Terminal`, and press Return.
+On Mac: Command + Space → type `Terminal` → Return.
 
-## 2. Connect to the AI Board Linux host
+## 2. SSH to the AI Board Linux host
 
 ```bash
 ssh YOUR_AI_BOARD_USERNAME@192.168.50.133
 ```
 
-Type `yes` and press Return the first time. Enter the AI Board Linux password.
+Type `yes` once, then enter the AI Board Linux password.
 
-If SSH uses another port:
+For a custom SSH port:
 
 ```bash
 ssh -p PORT YOUR_AI_BOARD_USERNAME@192.168.50.133
 ```
 
-## 3. Clone only the private project repository
+## 3. Clone only the private project repo
 
 ```bash
 cd /tmp
+rm -rf router-vpn
 git clone https://github.com/Eabusham2/router-vpn.git
 cd router-vpn
 ```
 
-GitHub username: `Eabusham2`. Use a fine-grained token as the password.
+Use `Eabusham2` as the username and a fine-grained read-only token as the password.
 
 ## 4. Install
 
@@ -34,13 +35,15 @@ GitHub username: `Eabusham2`. Use a fine-grained token as the password.
 sudo ./server/install.sh
 ```
 
-Accept the defaults or enter the requested values. Use the AI Board interface shown by:
+At the endpoint question, leave it blank. Choose the public IPv4, global IPv6, or hostname later inside the client app.
+
+To identify the AI Board interface:
 
 ```bash
 ip route show default
 ```
 
-The interface after `dev` is the value, commonly `eth0`.
+Use the name after `dev`, commonly `eth0`.
 
 ## 5. Diagnose
 
@@ -48,10 +51,16 @@ The interface after `dev` is the value, commonly `eth0`.
 sudo /opt/router-vpn/source/server/scripts/doctor.sh
 ```
 
-## 6. Update a changed home public IPv4
-
-Run this while at home, then download the replacement client bundle:
+## 6. Get the bundle
 
 ```bash
-sudo /opt/router-vpn/source/server/scripts/update-endpoint.sh /opt/router-vpn AUTO
+sudo /opt/router-vpn/source/server/scripts/export-client.sh
 ```
+
+Or download it on the home LAN:
+
+```text
+http://192.168.50.133:8786/router-vpn-client-bundle.zip
+```
+
+Changing the home public IP does not require rebuilding the client. Edit the selected router endpoint in the app while disconnected.
