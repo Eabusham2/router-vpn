@@ -13,7 +13,7 @@ docker compose version >/dev/null 2>&1 && pass 'Docker Compose' || fail 'Docker 
 for f in "$BASE/config/wireguard/wg0.conf" "$BASE/config/awg2/awg0.conf" "$BASE/config/socks5.json" "$BASE/config/router-agent.json"; do
   [[ -s $f ]] && pass "$f" || fail "$f missing"
 done
-for c in router-vpn-agent router-vpn-wireguard router-vpn-awg2 router-vpn-socks5; do
+for c in router-vpn-agent router-vpn-wireguard router-vpn-awg2 router-vpn-socks5 router-vpn-xray; do
   [[ $(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null) == true ]] && pass "$c running" || fail "$c not running"
 done
 ip link show wg0 >/dev/null 2>&1 && pass 'wg0 interface' || fail 'wg0 interface missing'

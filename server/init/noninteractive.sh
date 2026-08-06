@@ -4,12 +4,14 @@ BASE=/opt/router-vpn
 WAN_INTERFACE=${WAN_INTERFACE:-eth0}
 LAN_CIDR=${LAN_CIDR:-192.168.50.0/24}
 ADGUARD4=${ADGUARD4:-192.168.50.133}
-ENDPOINT=${ENDPOINT:?Set ENDPOINT to your public IPv4 or hostname}
+ENDPOINT=${ENDPOINT:?Set ENDPOINT to AUTO, your public IPv4, or a hostname}
+if [[ $ENDPOINT == AUTO ]]; then ENDPOINT=$(curl -4fsS --max-time 10 https://api.ipify.org); fi
 WG_PORT=${WG_PORT:-51820}
 AWG_PORT=${AWG_PORT:-585}
 REALITY_PORT=${REALITY_PORT:-443}
 HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
+XRAY_PQ_PORT=${XRAY_PQ_PORT:-9443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 if [[ -f $BASE/.initialized ]]; then
   echo 'Router VPN config already initialized; keeping current keys.'
@@ -51,6 +53,19 @@ AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 CFG
 done
+cat >"$BASE/client-bundle/generated/wg/wg-socks.conf" <<CFG
+[Interface]
+Address = 10.77.0.2/24, fd77:77::2/64
+PrivateKey = $WG_CLIENT_PRIV
+MTU = 1420
+[Peer]
+PublicKey = $WG_SERVER_PUB
+PresharedKey = $WG_PSK
+Endpoint = $ENDPOINT:$WG_PORT
+AllowedIPs = 10.77.0.0/24, fd77:77::/64, $LAN_CIDR
+PersistentKeepalive = 25
+CFG
+cp "$BASE/client-bundle/generated/wg/wg-socks.conf" "$BASE/client-bundle/generated/wg-pq/wg-socks.conf"
 cat >"$BASE/config/awg2/awg0.conf" <<CFG
 [Interface]
 Address = 10.78.0.1/24, fd78:78::1/64
@@ -98,7 +113,12 @@ CFG
 make_awg awg2-fast 3 900 1400
 make_awg awg2-strong 8 1200 1360
 cp -a "$BASE/client-bundle/generated/awg2-fast" "$BASE/client-bundle/generated/awg2-pq"
+for mode in awg2-fast awg2-strong awg2-pq; do
+  cp "$BASE/client-bundle/generated/$mode/awg.conf" "$BASE/client-bundle/generated/$mode/awg-socks.conf"
+  sed -i 's#AllowedIPs = 0.0.0.0/0, ::/0#AllowedIPs = 10.78.0.0/24, fd78:78::/64, $LAN_CIDR#' "$BASE/client-bundle/generated/$mode/awg-socks.conf"
+done
 /src/server/scripts/generate-transports.sh "$BASE" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$REALITY_TARGET"
+/src/server/scripts/generate-xray-pq.sh "$BASE" "$ENDPOINT" "$ADGUARD4" "$XRAY_PQ_PORT" "$REALITY_TARGET"
 python3 - "$TOKEN" "$WAN_INTERFACE" <<'PY'
 import json,sys
 x=json.load(open('/src/configs/router/router-agent.json.example')); x['token']=sys.argv[1]; x['wan_interface']=sys.argv[2]
@@ -110,7 +130,7 @@ x=json.load(open('/src/configs/router/socks5.json.example')); x['inbounds'][0]['
 json.dump(x,open('/opt/router-vpn/config/socks5.json','w'),indent=2)
 PY
 cat >"$BASE/client-bundle/client.json" <<CFG
-{"listen":"127.0.0.1:8788","router_api":"http://$ADGUARD4:8787","api_token":"$TOKEN","health_url":"https://connectivitycheck.gstatic.com/generate_204","adguard_ipv4":"$ADGUARD4","adguard_ipv6":"fd77:77::1","auto_test_seconds":8,"modes_file":"./modes.json","state_file":"./state.json","scripts_dir":"./modes","socks_host":"$ADGUARD4","socks_port":1080,"socks_username":"$SOCKS_USER","socks_password":"$SOCKS_PASSWORD"}
+{"listen":"127.0.0.1:8788","router_api":"http://$ADGUARD4:8787","api_token":"$TOKEN","health_url":"https://connectivitycheck.gstatic.com/generate_204","adguard_ipv4":"$ADGUARD4","adguard_ipv6":"fd77:77::1","auto_test_seconds":8,"modes_file":"./modes.json","state_file":"./state.json","scripts_dir":"./modes","socks_host":"$ADGUARD4","socks_port":1080,"socks_username":"$SOCKS_USER","socks_password":"$SOCKS_PASSWORD","daita_host":"$ADGUARD4","daita_port":45999,"daita_rate_kbps":192}
 CFG
 cp /src/configs/client/modes.json "$BASE/client-bundle/modes.json"
 cp -a /src/modes /src/dist /src/client "$BASE/client-bundle/"
@@ -121,6 +141,7 @@ AmneziaWG UDP: $AWG_PORT
 REALITY TCP: $REALITY_PORT
 Hysteria2 UDP: $HY2_PORT
 Shadowsocks TCP/UDP: $SS_PORT
+PQ REALITY TCP: $XRAY_PQ_PORT
 SOCKS5 after VPN: $ADGUARD4:1080
 SOCKS5 username: $SOCKS_USER
 SOCKS5 password: $SOCKS_PASSWORD

@@ -20,6 +20,7 @@ prompt AWG_PORT 'AmneziaWG UDP port' '585'
 prompt REALITY_PORT 'REALITY/Vision TCP port' '443'
 prompt HY2_PORT 'Hysteria2 QUIC UDP port' '8443'
 prompt SS_PORT 'Shadowsocks TCP/UDP port' '8388'
+prompt XRAY_PQ_PORT 'PQ VLESS/REALITY TCP port' '9443'
 prompt REALITY_TARGET 'REALITY target host:port' 'www.microsoft.com:443'
 
 for command_name in wg curl openssl python3 zip nft; do
@@ -81,6 +82,21 @@ PersistentKeepalive = 25
 CFG
 done
 
+cat >"$INSTALL/client-bundle/generated/wg/wg-socks.conf" <<CFG
+[Interface]
+Address = 10.77.0.2/24, fd77:77::2/64
+PrivateKey = $WG_CLIENT_PRIV
+MTU = 1420
+
+[Peer]
+PublicKey = $WG_SERVER_PUB
+PresharedKey = $WG_PSK
+Endpoint = $ENDPOINT:$WG_PORT
+AllowedIPs = 10.77.0.0/24, fd77:77::/64, $LAN_CIDR
+PersistentKeepalive = 25
+CFG
+cp "$INSTALL/client-bundle/generated/wg/wg-socks.conf" "$INSTALL/client-bundle/generated/wg-pq/wg-socks.conf"
+
 cat >"$INSTALL/config/awg2/awg0.conf" <<CFG
 [Interface]
 Address = 10.78.0.1/24, fd78:78::1/64
@@ -134,7 +150,12 @@ CFG
 make_awg_client awg2-fast 3 40 900 1400
 make_awg_client awg2-strong 8 64 1200 1360
 cp -a "$INSTALL/client-bundle/generated/awg2-fast" "$INSTALL/client-bundle/generated/awg2-pq"
+for mode in awg2-fast awg2-strong awg2-pq; do
+  cp "$INSTALL/client-bundle/generated/$mode/awg.conf" "$INSTALL/client-bundle/generated/$mode/awg-socks.conf"
+  sed -i "s#AllowedIPs = 0.0.0.0/0, ::/0#AllowedIPs = 10.78.0.0/24, fd78:78::/64, $LAN_CIDR#" "$INSTALL/client-bundle/generated/$mode/awg-socks.conf"
+done
 "$ROOT_DIR/server/scripts/generate-transports.sh" "$INSTALL" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$REALITY_TARGET"
+"$ROOT_DIR/server/scripts/generate-xray-pq.sh" "$INSTALL" "$ENDPOINT" "$ADGUARD4" "$XRAY_PQ_PORT" "$REALITY_TARGET"
 
 python3 - "$ROOT_DIR/configs/router/router-agent.json.example" "$INSTALL/config/router-agent.json" "$TOKEN" "$WAN_INTERFACE" <<'PY'
 import json,sys
@@ -167,7 +188,10 @@ cat >"$INSTALL/client-bundle/client.json" <<CFG
   "socks_host": "$ADGUARD4",
   "socks_port": 1080,
   "socks_username": "$SOCKS_USER",
-  "socks_password": "$SOCKS_PASSWORD"
+  "socks_password": "$SOCKS_PASSWORD",
+  "daita_host": "$ADGUARD4",
+  "daita_port": 45999,
+  "daita_rate_kbps": 192
 }
 CFG
 cp "$ROOT_DIR/configs/client/modes.json" "$INSTALL/client-bundle/modes.json"
@@ -180,6 +204,7 @@ AmneziaWG UDP: $AWG_PORT
 REALITY TCP: $REALITY_PORT
 Hysteria2 UDP: $HY2_PORT
 Shadowsocks TCP/UDP: $SS_PORT
+PQ REALITY TCP: $XRAY_PQ_PORT
 SOCKS5 after VPN connects: $ADGUARD4:1080
 SOCKS5 username: $SOCKS_USER
 SOCKS5 password: $SOCKS_PASSWORD
@@ -200,7 +225,7 @@ sysctl --system >/dev/null
 cat >"$INSTALL/scripts/apply-guard.sh" <<GUARD
 #!/usr/bin/env bash
 set -euo pipefail
-export WG_PORT=$WG_PORT AWG_PORT=$AWG_PORT REALITY_PORT=$REALITY_PORT HY2_PORT=$HY2_PORT SS_PORT=$SS_PORT
+export WG_PORT=$WG_PORT AWG_PORT=$AWG_PORT REALITY_PORT=$REALITY_PORT HY2_PORT=$HY2_PORT SS_PORT=$SS_PORT XRAY_PQ_PORT=$XRAY_PQ_PORT
 exec "$INSTALL/source/server/scripts/apply-runtime.sh" "$WAN_INTERFACE" "$LAN_CIDR"
 GUARD
 chmod +x "$INSTALL/scripts/apply-guard.sh"
@@ -223,6 +248,7 @@ ASUS port forwards to this AI Board:
   TCP $REALITY_PORT -> $ADGUARD4:$REALITY_PORT
   UDP $HY2_PORT -> $ADGUARD4:$HY2_PORT
   TCP+UDP $SS_PORT -> $ADGUARD4:$SS_PORT
+  TCP $XRAY_PQ_PORT -> $ADGUARD4:$XRAY_PQ_PORT
 
 Do NOT forward TCP 1080, TCP 8787, SSH, Portainer, or AdGuard admin.
 

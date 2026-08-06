@@ -12,6 +12,7 @@ services:
     environment:
       WAN_INTERFACE: ${WAN_INTERFACE:-eth0}
       LAN_CIDR: ${LAN_CIDR:-192.168.50.0/24}
+      LAN_CIDR6: ${LAN_CIDR6:-fd00::/8}
       ADGUARD4: ${ADGUARD4:-192.168.50.133}
       ENDPOINT: ${ENDPOINT:?enter your home public IP or hostname}
       WG_PORT: ${WG_PORT:-51820}
@@ -19,6 +20,7 @@ services:
       REALITY_PORT: ${REALITY_PORT:-443}
       HY2_PORT: ${HY2_PORT:-8443}
       SS_PORT: ${SS_PORT:-8388}
+      XRAY_PQ_PORT: ${XRAY_PQ_PORT:-9443}
       REALITY_TARGET: ${REALITY_TARGET:-www.microsoft.com:443}
     restart: "no"
 
@@ -80,8 +82,21 @@ services:
     depends_on:
       init: {condition: service_completed_successfully}
     volumes:
-      - /opt/router-vpn/config/transports:/etc/sing-box:ro
-    command: ["-D", "/var/lib/sing-box", "-C", "/etc/sing-box", "run"]
+      - /opt/router-vpn/config/transports/server.json:/etc/sing-box/config.json:ro
+      - /opt/router-vpn/config/transports/cert.pem:/etc/sing-box/cert.pem:ro
+      - /opt/router-vpn/config/transports/key.pem:/etc/sing-box/key.pem:ro
+    command: ["run", "-c", "/etc/sing-box/config.json"]
+
+  xray-pq:
+    image: ghcr.io/xtls/xray-core:latest
+    container_name: router-vpn-xray
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      init: {condition: service_completed_successfully}
+    volumes:
+      - /opt/router-vpn/config/xray/server.json:/etc/xray/config.json:ro
+    command: ["run", "-c", "/etc/xray/config.json"]
 
   bundle-web:
     image: busybox:1.36
