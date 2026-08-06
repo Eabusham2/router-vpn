@@ -5,6 +5,7 @@ BUNDLE=${1:-$(pwd)}
 [[ -f "$BUNDLE/client.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools git make gcc libc6-dev golang-go curl python3 tar
+"$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
 mkdir -p "$ROOT" /usr/local/bin
 cp -a "$BUNDLE/client.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"

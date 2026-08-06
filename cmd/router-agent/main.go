@@ -26,6 +26,7 @@ type cfg struct {
 	WANInterface  string   `json:"wan_interface"`
 	ReservedPorts []int    `json:"reserved_ports"`
 	NftTable      string   `json:"nft_table"`
+	DAITAListen   string   `json:"daita_listen"`
 }
 
 type server struct {
@@ -53,6 +54,9 @@ func main() {
 	if c.WANInterface == "" {
 		log.Fatal("wan_interface is required")
 	}
+	if c.DAITAListen == "" {
+		c.DAITAListen = "0.0.0.0:45999"
+	}
 	s := &server{cfg: c}
 	for _, raw := range c.TunnelCIDRs {
 		_, n, err := net.ParseCIDR(raw)
@@ -64,6 +68,7 @@ func main() {
 	if err := s.ensureBaseRules(); err != nil {
 		log.Fatal(err)
 	}
+	go s.runDAITASink()
 	h := http.NewServeMux()
 	h.HandleFunc("/health", s.health)
 	h.HandleFunc("/api/forward", s.forward)
@@ -78,6 +83,23 @@ func getenv(k, v string) string {
 	}
 	return v
 }
+func (s *server) runDAITASink() {
+	pc, err := net.ListenPacket("udp", s.cfg.DAITAListen)
+	if err != nil {
+		log.Printf("DAITA-like sink disabled: %v", err)
+		return
+	}
+	defer pc.Close()
+	buf := make([]byte, 2048)
+	for {
+		_, _, err := pc.ReadFrom(buf)
+		if err != nil {
+			log.Printf("DAITA-like sink: %v", err)
+			return
+		}
+	}
+}
+
 func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("content-type", "application/json")
 	fmt.Fprint(w, `{"ok":true}`)

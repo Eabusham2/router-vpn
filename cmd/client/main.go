@@ -3,17 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,11 +34,12 @@ type state struct {
 	LastError string `json:"last_error"`
 }
 type app struct {
-	cfg   common.ClientConfig
-	modes []common.Mode
-	mu    sync.Mutex
-	state state
-	cmd   *exec.Cmd
+	cfg         common.ClientConfig
+	modes       []common.Mode
+	mu          sync.Mutex
+	state       state
+	cmd         *exec.Cmd
+	daitaCancel context.CancelFunc
 }
 
 func main() {
@@ -55,6 +57,15 @@ func main() {
 	}
 	if c.AutoTestSeconds == 0 {
 		c.AutoTestSeconds = 8
+	}
+	if c.DAITAHost == "" {
+		c.DAITAHost = c.AdGuardIPv4
+	}
+	if c.DAITAPort == 0 {
+		c.DAITAPort = 45999
+	}
+	if c.DAITARateKbps == 0 {
+		c.DAITARateKbps = 192
 	}
 	mb, err := os.ReadFile(c.ModesFile)
 	if err != nil {
@@ -206,7 +217,7 @@ func (a *app) startMode(id string) error {
 		return err
 	}
 	a.mu.Lock()
-	env := append(os.Environ(), fmt.Sprintf("HOMEVPN_DAITA=%t", a.state.DAITA), fmt.Sprintf("HOMEVPN_JUMBO=%t", a.state.Jumbo), fmt.Sprintf("HOMEVPN_SOCKS=%t", a.state.Socks), fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU), "HOMEVPN_ADGUARD4="+a.cfg.AdGuardIPv4, "HOMEVPN_ADGUARD6="+a.cfg.AdGuardIPv6)
+	env := append(os.Environ(), fmt.Sprintf("HOMEVPN_DAITA=%t", a.state.DAITA), fmt.Sprintf("HOMEVPN_JUMBO=%t", a.state.Jumbo), fmt.Sprintf("HOMEVPN_SOCKS=%t", a.state.Socks), fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU), "HOMEVPN_ADGUARD4="+a.cfg.AdGuardIPv4, "HOMEVPN_ADGUARD6="+a.cfg.AdGuardIPv6, "HOMEVPN_SOCKS_HOST="+a.cfg.SocksHost, fmt.Sprintf("HOMEVPN_SOCKS_PORT=%d", a.cfg.SocksPort), "HOMEVPN_SOCKS_USER="+a.cfg.SocksUsername, "HOMEVPN_SOCKS_PASSWORD="+a.cfg.SocksPassword)
 	a.mu.Unlock()
 	if len(m.Command) == 0 {
 		return errors.New("mode has no command")
@@ -224,7 +235,11 @@ func (a *app) startMode(id string) error {
 	a.state.Connected = true
 	a.state.Mode = id
 	a.state.LastError = ""
+	daitaEnabled := a.state.DAITA
 	a.mu.Unlock()
+	if daitaEnabled {
+		a.startCoverTraffic()
+	}
 	time.Sleep(1200 * time.Millisecond)
 	return nil
 }
@@ -232,10 +247,15 @@ func (a *app) stopMode() error {
 	a.mu.Lock()
 	cmd := a.cmd
 	modeID := a.state.Mode
+	coverCancel := a.daitaCancel
+	a.daitaCancel = nil
 	a.cmd = nil
 	a.state.Connected = false
 	a.state.Mode = "off"
 	a.mu.Unlock()
+	if coverCancel != nil {
+		coverCancel()
+	}
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(os.Interrupt)
 		done := make(chan error, 1)
@@ -256,11 +276,6 @@ func (a *app) stopMode() error {
 	return nil
 }
 func (a *app) auto(w http.ResponseWriter, r *http.Request) {
-	type result struct {
-		Mode    string
-		Latency time.Duration
-	}
-	var ok []result
 	for _, m := range a.modes {
 		if !m.AutoEligible {
 			continue
@@ -269,22 +284,15 @@ func (a *app) auto(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		lat, err := a.testHealth()
-		_ = a.stopMode()
 		if err == nil {
-			ok = append(ok, result{m.ID, lat})
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": m.ID, "latency_ms": float64(lat.Microseconds()) / 1000})
+			return
 		}
+		_ = a.stopMode()
 	}
-	if len(ok) == 0 {
-		http.Error(w, "no working mode", 503)
-		return
-	}
-	sort.Slice(ok, func(i, j int) bool { return ok[i].Latency < ok[j].Latency })
-	if err := a.startMode(ok[0].Mode); err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": ok[0].Mode, "latency_ms": float64(ok[0].Latency.Microseconds()) / 1000})
+	http.Error(w, "no working mode", 503)
 }
+
 func (a *app) testHealth() (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.cfg.AutoTestSeconds)*time.Second)
 	defer cancel()
@@ -301,6 +309,51 @@ func (a *app) testHealth() (time.Duration, error) {
 	}
 	return time.Since(t), nil
 }
+func (a *app) startCoverTraffic() {
+	a.mu.Lock()
+	if a.daitaCancel != nil {
+		a.daitaCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.daitaCancel = cancel
+	host, port, rate := a.cfg.DAITAHost, a.cfg.DAITAPort, a.cfg.DAITARateKbps
+	a.mu.Unlock()
+	go func() {
+		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+		c, err := net.Dial("udp", addr)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		if rate < 32 {
+			rate = 32
+		}
+		bytesPerTick := rate * 1000 / 8 / 20
+		if bytesPerTick < 256 {
+			bytesPerTick = 256
+		}
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				n := bytesPerTick
+				var jitter [1]byte
+				_, _ = rand.Read(jitter[:])
+				n = n * int(75+int(jitter[0])%51) / 100
+				if n > 1200 {
+					n = 1200
+				}
+				buf := make([]byte, n)
+				_, _ = rand.Read(buf)
+				_, _ = c.Write(buf)
+			}
+		}
+	}()
+}
+
 func (a *app) forward(w http.ResponseWriter, r *http.Request) { proxyJSON(a, w, r, "/api/forward") }
 func (a *app) clearForward(w http.ResponseWriter, r *http.Request) {
 	proxyJSON(a, w, r, "/api/forward/clear")

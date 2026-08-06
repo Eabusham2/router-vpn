@@ -12,11 +12,19 @@
     "speed_loss_min_pct": 0.5,
     "speed_loss_max_pct": 2,
     "mtu": 1420,
-    "command": ["./run-mode.sh", "wg"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "wg"],
+    "command": [
+      "./run-mode.sh",
+      "wg"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "wg"
+    ],
     "auto_eligible": true,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": false
   },
   {
@@ -32,11 +40,19 @@
     "speed_loss_min_pct": 0.7,
     "speed_loss_max_pct": 3,
     "mtu": 1400,
-    "command": ["./run-mode.sh", "awg2-fast"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "awg2-fast"],
+    "command": [
+      "./run-mode.sh",
+      "awg2-fast"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "awg2-fast"
+    ],
     "auto_eligible": true,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": false
   },
   {
@@ -52,11 +68,19 @@
     "speed_loss_min_pct": 0.7,
     "speed_loss_max_pct": 3,
     "mtu": 1400,
-    "command": ["./run-mode.sh", "wg-pq"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "wg-pq"],
+    "command": [
+      "./run-mode.sh",
+      "wg-pq"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "wg-pq"
+    ],
     "auto_eligible": false,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": false
   },
   {
@@ -72,11 +96,19 @@
     "speed_loss_min_pct": 1,
     "speed_loss_max_pct": 5,
     "mtu": 1380,
-    "command": ["./run-mode.sh", "awg2-pq"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "awg2-pq"],
+    "command": [
+      "./run-mode.sh",
+      "awg2-pq"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "awg2-pq"
+    ],
     "auto_eligible": false,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": false
   },
   {
@@ -92,16 +124,52 @@
     "speed_loss_min_pct": 1.5,
     "speed_loss_max_pct": 6,
     "mtu": 1360,
-    "command": ["./run-mode.sh", "awg2-strong"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "awg2-strong"],
+    "command": [
+      "./run-mode.sh",
+      "awg2-strong"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "awg2-strong"
+    ],
     "auto_eligible": true,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": false
   },
   {
+    "id": "reality-pq-vision",
+    "name": "6. PQ VLESS + REALITY Vision",
+    "protection": "Hybrid post-quantum VLESS encryption + HTTPS camouflage",
+    "engine": "Xray + sing-box TUN",
+    "maturity": "ready",
+    "ping_min_ms": 0.9,
+    "ping_max_ms": 3.5,
+    "traffic_min_pct": 5,
+    "traffic_max_pct": 10,
+    "speed_loss_min_pct": 2.5,
+    "speed_loss_max_pct": 7,
+    "mtu": 1360,
+    "command": [
+      "./run-mode.sh",
+      "reality-pq-vision"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "reality-pq-vision"
+    ],
+    "auto_eligible": true,
+    "daita_supported": true,
+    "jumbo_supported": true
+  },
+  {
     "id": "reality-vision",
-    "name": "6. VLESS + REALITY Vision",
+    "name": "7. VLESS + REALITY Vision",
     "protection": "Encryption + HTTPS camouflage; hybrid PQ TLS when negotiated",
     "engine": "sing-box",
     "maturity": "ready",
@@ -112,16 +180,24 @@
     "speed_loss_min_pct": 2,
     "speed_loss_max_pct": 6,
     "mtu": 1380,
-    "command": ["./run-mode.sh", "reality-vision"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "reality-vision"],
+    "command": [
+      "./run-mode.sh",
+      "reality-vision"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "reality-vision"
+    ],
     "auto_eligible": true,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": true
   },
   {
     "id": "hysteria2",
-    "name": "7. Hysteria2 QUIC",
+    "name": "8. Hysteria2 QUIC",
     "protection": "Encryption + QUIC transport camouflage",
     "engine": "sing-box",
     "maturity": "ready",
@@ -132,16 +208,24 @@
     "speed_loss_min_pct": 3,
     "speed_loss_max_pct": 10,
     "mtu": 1360,
-    "command": ["./run-mode.sh", "hysteria2"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "hysteria2"],
+    "command": [
+      "./run-mode.sh",
+      "hysteria2"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "hysteria2"
+    ],
     "auto_eligible": true,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": true
   },
   {
     "id": "wg-quic",
-    "name": "8. WireGuard over QUIC",
+    "name": "9. WireGuard over QUIC",
     "protection": "WireGuard encryption + QUIC obfuscation",
     "engine": "GotaTun/QUIC adapter",
     "maturity": "adapter",
@@ -152,16 +236,24 @@
     "speed_loss_min_pct": 4,
     "speed_loss_max_pct": 12,
     "mtu": 1340,
-    "command": ["./run-mode.sh", "wg-quic"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "wg-quic"],
+    "command": [
+      "./run-mode.sh",
+      "wg-quic"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "wg-quic"
+    ],
     "auto_eligible": false,
     "daita_supported": true,
     "jumbo_supported": false
   },
   {
     "id": "shadowsocks",
-    "name": "9. Shadowsocks 2022",
+    "name": "10. Shadowsocks 2022",
     "protection": "Encryption + basic obfuscation",
     "engine": "sing-box",
     "maturity": "ready",
@@ -172,16 +264,24 @@
     "speed_loss_min_pct": 2,
     "speed_loss_max_pct": 8,
     "mtu": 1380,
-    "command": ["./run-mode.sh", "shadowsocks"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "shadowsocks"],
+    "command": [
+      "./run-mode.sh",
+      "shadowsocks"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "shadowsocks"
+    ],
     "auto_eligible": true,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": true
   },
   {
     "id": "ss-v2ray",
-    "name": "10. Shadowsocks + V2Ray TLS",
+    "name": "11. Shadowsocks + V2Ray TLS",
     "protection": "Encryption + TLS/WebSocket camouflage",
     "engine": "sing-box + v2ray-plugin",
     "maturity": "integration",
@@ -192,16 +292,24 @@
     "speed_loss_min_pct": 4,
     "speed_loss_max_pct": 12,
     "mtu": 1340,
-    "command": ["./run-mode.sh", "ss-v2ray"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "ss-v2ray"],
+    "command": [
+      "./run-mode.sh",
+      "ss-v2ray"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "ss-v2ray"
+    ],
     "auto_eligible": false,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": true
   },
   {
     "id": "reality-xhttp",
-    "name": "11. VLESS PQ + REALITY XHTTP",
+    "name": "12. VLESS PQ + REALITY XHTTP",
     "protection": "Hybrid PQ payload encryption + HTTP camouflage + FinalMask",
     "engine": "Xray",
     "maturity": "integration",
@@ -212,16 +320,24 @@
     "speed_loss_min_pct": 5,
     "speed_loss_max_pct": 14,
     "mtu": 1320,
-    "command": ["./run-mode.sh", "reality-xhttp"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "reality-xhttp"],
+    "command": [
+      "./run-mode.sh",
+      "reality-xhttp"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "reality-xhttp"
+    ],
     "auto_eligible": false,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": true
   },
   {
     "id": "naive-h2",
-    "name": "12. Naive HTTPS HTTP/2",
+    "name": "13. Naive HTTPS HTTP/2",
     "protection": "Encryption + Chromium-style HTTPS",
     "engine": "sing-box/Naive",
     "maturity": "integration",
@@ -232,16 +348,24 @@
     "speed_loss_min_pct": 6,
     "speed_loss_max_pct": 16,
     "mtu": 1320,
-    "command": ["./run-mode.sh", "naive-h2"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "naive-h2"],
+    "command": [
+      "./run-mode.sh",
+      "naive-h2"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "naive-h2"
+    ],
     "auto_eligible": false,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": true
   },
   {
     "id": "naive-h3",
-    "name": "13. Naive HTTPS HTTP/3",
+    "name": "14. Naive HTTPS HTTP/3",
     "protection": "Encryption + browser-like QUIC/HTTPS",
     "engine": "sing-box/Naive",
     "maturity": "integration",
@@ -252,16 +376,24 @@
     "speed_loss_min_pct": 5,
     "speed_loss_max_pct": 15,
     "mtu": 1320,
-    "command": ["./run-mode.sh", "naive-h3"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "naive-h3"],
+    "command": [
+      "./run-mode.sh",
+      "naive-h3"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "naive-h3"
+    ],
     "auto_eligible": false,
-    "daita_supported": false,
+    "daita_supported": true,
     "jumbo_supported": true
   },
   {
     "id": "wg-ss-v2ray",
-    "name": "14. WireGuard over Shadowsocks/V2Ray TLS",
+    "name": "15. WireGuard over Shadowsocks/V2Ray TLS",
     "protection": "Inner WireGuard encryption + Shadowsocks + TLS camouflage",
     "engine": "WireGuard + sing-box",
     "maturity": "chain",
@@ -272,17 +404,25 @@
     "speed_loss_min_pct": 7,
     "speed_loss_max_pct": 20,
     "mtu": 1300,
-    "command": ["./run-mode.sh", "wg-ss-v2ray"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "wg-ss-v2ray"],
+    "command": [
+      "./run-mode.sh",
+      "wg-ss-v2ray"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "wg-ss-v2ray"
+    ],
     "auto_eligible": false,
     "daita_supported": true,
     "jumbo_supported": true
   },
   {
     "id": "max-tls",
-    "name": "15. MAX TLS — All Compatible TLS Layers",
-    "protection": "DAITA/PQ-WG → Shadowsocks/V2Ray TLS → VLESS PQ/REALITY/XHTTP/FinalMask",
+    "name": "16. MAX TLS \u2014 All Compatible TLS Layers",
+    "protection": "DAITA/PQ-WG \u2192 Shadowsocks/V2Ray TLS \u2192 VLESS PQ/REALITY/XHTTP/FinalMask",
     "engine": "multi-engine chain",
     "maturity": "lab",
     "ping_min_ms": 5,
@@ -292,17 +432,25 @@
     "speed_loss_min_pct": 18,
     "speed_loss_max_pct": 45,
     "mtu": 1280,
-    "command": ["./run-mode.sh", "max-tls"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "max-tls"],
+    "command": [
+      "./run-mode.sh",
+      "max-tls"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "max-tls"
+    ],
     "auto_eligible": false,
     "daita_supported": true,
     "jumbo_supported": true
   },
   {
     "id": "max-quic",
-    "name": "16. MAX QUIC — All Compatible QUIC Layers",
-    "protection": "DAITA/PQ-WG → Shadowsocks → Hysteria2/QUIC masking",
+    "name": "17. MAX QUIC \u2014 All Compatible QUIC Layers",
+    "protection": "DAITA/PQ-WG \u2192 Shadowsocks \u2192 Hysteria2/QUIC masking",
     "engine": "multi-engine chain",
     "maturity": "lab",
     "ping_min_ms": 4,
@@ -312,9 +460,17 @@
     "speed_loss_min_pct": 15,
     "speed_loss_max_pct": 40,
     "mtu": 1280,
-    "command": ["./run-mode.sh", "max-quic"],
-    "stop_command": ["./stop-mode.sh"],
-    "check_command": ["./check-mode.sh", "max-quic"],
+    "command": [
+      "./run-mode.sh",
+      "max-quic"
+    ],
+    "stop_command": [
+      "./stop-mode.sh"
+    ],
+    "check_command": [
+      "./check-mode.sh",
+      "max-quic"
+    ],
     "auto_eligible": false,
     "daita_supported": true,
     "jumbo_supported": true

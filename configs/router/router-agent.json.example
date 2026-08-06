@@ -23,7 +23,9 @@
     8787,
     9443,
     10443,
+    45999,
     51820
   ],
-  "nft_table": "router_vpn"
+  "nft_table": "router_vpn",
+  "daita_listen": "0.0.0.0:45999"
 }

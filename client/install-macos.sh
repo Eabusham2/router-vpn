@@ -4,6 +4,7 @@ BUNDLE=${1:-$(pwd)}
 [[ -f "$BUNDLE/client.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
 command -v brew >/dev/null || { echo 'Install Homebrew first from brew.sh, then rerun.'; exit 1; }
 brew install wireguard-tools go make git python sing-box || true
+"$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
 sudo mkdir -p "$ROOT" /usr/local/bin
 sudo cp -a "$BUNDLE/client.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"

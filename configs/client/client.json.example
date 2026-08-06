@@ -12,5 +12,8 @@
   "socks_host": "10.77.0.1",
   "socks_port": 1080,
   "socks_username": "CHANGE_ME",
-  "socks_password": "CHANGE_ME"
+  "socks_password": "CHANGE_ME",
+  "daita_host": "192.168.50.133",
+  "daita_port": 45999,
+  "daita_rate_kbps": 192
 }
