@@ -1,111 +1,100 @@
-# Install on the ASUS AI Board with Portainer
+# Install through Portainer
 
-This is the easiest path and does not require router SSH.
+## 1. Reserve the AI Board address
 
-## 1. Give the AI Board a fixed LAN address
+1. Open the ASUS router app or `http://192.168.50.1`.
+2. Open **LAN → DHCP Server**.
+3. Reserve the AI Board/Portainer host as `192.168.50.133`.
+4. Confirm AdGuard Home is reachable at `192.168.50.133`.
 
-In the ASUS router app/web page:
+## 2. Create a read-only GitHub token
 
-1. Open **LAN → DHCP Server**.
-2. Reserve the AI Board address. Example: `192.168.50.133`.
-3. Confirm AdGuard Home is reachable at that address.
-
-## 2. Create a read-only GitHub token for this private repository
-
-1. Open GitHub **Settings → Developer settings → Personal access tokens → Fine-grained tokens**.
+1. Open GitHub → **Settings → Developer settings → Personal access tokens → Fine-grained tokens**.
 2. Create a token named `router-vpn-portainer`.
 3. Repository access: **Only select repositories → router-vpn**.
 4. Repository permission: **Contents: Read-only**.
 5. Copy the token.
 
-## 3. Deploy the stack
+## 3. Deploy the private repository
 
-1. Open the AI Board page, then open **Portainer**. A direct Portainer address is commonly `https://AI_BOARD_IP:9443`.
-2. Select the local environment.
-3. Open **Stacks → Add stack**.
-4. Name: `router-vpn`.
-5. Choose **Repository**.
-6. Repository URL: `https://github.com/Eabusham2/router-vpn.git`
-7. Enable repository authentication:
-   - Username: `Eabusham2`
-   - Password/token: the fine-grained token
-8. Compose path: `server/portainer-compose.yaml`
-9. Add these environment variables:
+1. Open ASUS **AI Board → Portainer**, or open Portainer directly.
+2. Choose **Stacks → Add stack → Repository**.
+3. Name: `router-vpn`.
+4. Repository URL: `https://github.com/Eabusham2/router-vpn.git`.
+5. Reference: `refs/heads/main`.
+6. Compose path: `server/portainer-compose.yaml`.
+7. Enable authentication.
+8. Username: `Eabusham2`.
+9. Password/token: paste the fine-grained token.
+10. Add these environment variables:
 
 ```text
 WAN_INTERFACE=eth0
 LAN_CIDR=192.168.50.0/24
+LAN_CIDR6=fd00::/8
 ADGUARD4=192.168.50.133
-ENDPOINT=YOUR_HOME_PUBLIC_IPV4
+ENDPOINT=AUTO
 WG_PORT=51820
 AWG_PORT=585
 REALITY_PORT=443
 HY2_PORT=8443
 SS_PORT=8388
+XRAY_PQ_PORT=9443
 REALITY_TARGET=www.microsoft.com:443
 ```
 
-10. Press **Deploy the stack**.
-11. Open **Containers → router-vpn-init → Logs**.
-12. Wait for `Initialization complete`.
+11. Press **Deploy the stack**.
+12. Wait until `router-vpn-init` exits with code `0` and the remaining containers show **running**.
+13. Open the `router-vpn-init` logs and confirm the bundle URL was printed.
 
-If `eth0` is wrong, open the init container console and run `ip route`; use the interface shown after `default via`, then update the stack variable and redeploy.
+## 4. Test the firewall before enabling ASUS DMZ
 
-## 4. Download the generated client bundle
+1. In Portainer, open `router-vpn-agent` → **Console**.
+2. Choose `/bin/sh` and connect.
+3. Run:
 
-While connected to home Wi-Fi, open:
+```sh
+nft list table inet router_vpn_guard
+```
+
+4. Confirm the table exists.
+5. Exit the console.
+
+## 5. Allow inbound traffic
+
+For fixed VPN listeners only, add ASUS port-forward rules to `192.168.50.133`:
+
+```text
+UDP 51820
+UDP 585
+TCP 443
+UDP 8443
+TCP+UDP 8388
+TCP 9443
+```
+
+For client-controlled arbitrary port/range/protected-DMZ forwarding:
+
+1. Open ASUS **WAN → DMZ**.
+2. Set the DMZ device to `192.168.50.133` only after Step 4 passed.
+3. Never separately expose TCP 22, 1080, 8786, 8787, 9443-Portainer, or the AdGuard administration port.
+
+For IPv6:
+
+1. Open ASUS **Firewall → IPv6 Firewall**.
+2. Allow the VPN listener ports to the AI Board global IPv6 address.
+3. Keep ICMPv6 allowed.
+
+## 6. Download the private client bundle
+
+While connected to the home LAN, open:
 
 ```text
 http://192.168.50.133:8786/router-vpn-client-bundle.zip
 ```
 
-Keep this private. It contains keys, passwords, and the controller token.
+Do not expose port `8786` to the internet.
 
-## 5. Add ASUS port forwards
+## 7. Diagnostics
 
-Open **WAN → Virtual Server / Port Forwarding** and send these to the AI Board:
-
-```text
-UDP 51820 → 192.168.50.133:51820   WireGuard
-UDP 585   → 192.168.50.133:585     AmneziaWG 2
-TCP 443   → 192.168.50.133:443     REALITY Vision
-UDP 8443  → 192.168.50.133:8443    Hysteria2 QUIC
-TCP 8388  → 192.168.50.133:8388    Shadowsocks
-UDP 8388  → 192.168.50.133:8388    Shadowsocks UDP
-```
-
-Do not forward `22`, `53`, `1080`, `2053`, `8786`, `8787`, or `9443`.
-
-## 6. Optional: allow remote port ranges or protected DMZ
-
-For ordinary fixed public services, create normal ASUS forwards to the AI Board and use the client’s forwarding control.
-
-For arbitrary ranges or **Protected DMZ**:
-
-1. Confirm `router-vpn-init`, `router-vpn-agent`, `router-vpn-wireguard`, and `router-vpn-awg2` are healthy.
-2. Confirm the stack firewall exists by opening a container console and running:
-
-```bash
-nft list table inet router_vpn_guard
-```
-
-3. Set **WAN → DMZ** to `192.168.50.133`.
-4. Connect remotely through WireGuard or AmneziaWG.
-5. In the client UI, add one port, a range, TCP/UDP/both, or Protected DMZ.
-
-Never set DMZ before the firewall guard is active.
-
-## 7. IPv6
-
-1. Keep IPv6 enabled on the ASUS router.
-2. In the ASUS IPv6 firewall, allow the same VPN listener ports to the AI Board’s global IPv6 address.
-3. Do not open the management ports listed above.
-4. The generated client routes both `0.0.0.0/0` and `::/0` and uses tunnel ULA IPv6 with NAT66 for home exit.
-
-## 8. Diagnose
-
-Portainer → `router-vpn-init` console, or a host shell:
-
-```bash
-sudo /opt/router-vpn/source/server/scripts/doctor.sh
-```
+In Portainer, open `router-vpn-init` logs for generated credentials. For full shell diagnostics use `docs/INSTALL-SSH.md`.

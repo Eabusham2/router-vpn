@@ -1,71 +1,57 @@
-# Install from a Linux/AI Board shell
+# Install or repair through SSH
 
-Use this only when you can SSH into the Linux Docker host. ASUSWRT router SSH and the AI Board Linux environment may be separate; Portainer installation is safer on the GT-BE19000AI.
+## 1. Open Terminal on the Mac
 
-## 1. On your Mac
+Press `Command + Space`, type `Terminal`, and press Return.
 
-1. Download and unzip `router-vpn.zip`.
-2. Open **Terminal**: Applications → Utilities → Terminal.
-3. Go to Downloads:
+## 2. Connect to the AI Board Linux host
 
 ```bash
-cd ~/Downloads
+ssh YOUR_AI_BOARD_USERNAME@192.168.50.133
 ```
 
-4. Copy the folder to the Linux host:
+Type `yes` and press Return the first time. Enter the AI Board Linux password.
+
+If SSH uses another port:
 
 ```bash
-scp -r router-vpn YOUR_LINUX_USERNAME@192.168.50.133:/tmp/
+ssh -p PORT YOUR_AI_BOARD_USERNAME@192.168.50.133
 ```
 
-5. Type `yes` once if asked.
-6. Enter the Linux password. The password does not appear while typing.
-7. Connect:
+## 3. Clone only the private project repository
 
 ```bash
-ssh YOUR_LINUX_USERNAME@192.168.50.133
+cd /tmp
+git clone https://github.com/Eabusham2/router-vpn.git
+cd router-vpn
 ```
 
-## 2. Run the installer
+GitHub username: `Eabusham2`. Use a fine-grained token as the password.
+
+## 4. Install
 
 ```bash
-cd /tmp/router-vpn
 sudo ./server/install.sh
 ```
 
-Enter the requested values. Recommended defaults:
-
-```text
-AI Board interface: eth0
-Home LAN: 192.168.50.0/24
-AdGuard: 192.168.50.133
-Endpoint: your home public IPv4
-WireGuard: 51820
-AmneziaWG: 585
-REALITY: 443
-Hysteria2: 8443
-Shadowsocks: 8388
-REALITY target: www.microsoft.com:443
-```
-
-The installer generates keys, starts containers, enables IPv4/IPv6 forwarding, applies the firewall guard, and creates:
-
-```text
-/opt/router-vpn/downloads/router-vpn-client-bundle.zip
-```
-
-## 3. Copy the bundle back to the Mac
-
-Exit SSH:
+Accept the defaults or enter the requested values. Use the AI Board interface shown by:
 
 ```bash
-exit
+ip route show default
 ```
 
-Then:
+The interface after `dev` is the value, commonly `eth0`.
+
+## 5. Diagnose
 
 ```bash
-scp YOUR_LINUX_USERNAME@192.168.50.133:/opt/router-vpn/downloads/router-vpn-client-bundle.zip ~/Downloads/
+sudo /opt/router-vpn/source/server/scripts/doctor.sh
 ```
 
-Complete the ASUS port-forward steps in `INSTALL-PORTAINER.md`.
+## 6. Update a changed home public IPv4
+
+Run this while at home, then download the replacement client bundle:
+
+```bash
+sudo /opt/router-vpn/source/server/scripts/update-endpoint.sh /opt/router-vpn AUTO
+```

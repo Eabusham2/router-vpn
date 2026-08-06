@@ -1,27 +1,33 @@
-# iPhone and iPad
+# iPhone/iPad
 
-The ZIP contains the native SwiftUI interface, bundle importer, mode list, DAITA/Jumbo controls, port-forward controls, and Packet Tunnel extension target.
+A signed IPA cannot be bundled without your Apple signing identity and Network Extension provisioning. The SwiftUI app, Packet Tunnel target, entitlements, XcodeGen project, and GitHub Actions signing workflow are included.
 
-A signed working IPA is not included. It cannot be validly signed without your Apple Developer Team, provisioning profiles, Network Extension capability, and a linked tunnel engine.
+## Build the IPA
 
-## Build the project
-
-On a Mac:
+1. On a Mac, install Xcode from the App Store.
+2. Install XcodeGen:
 
 ```bash
 brew install xcodegen
-cd router-vpn/ios/RouterVPN
+```
+
+3. Open Terminal and enter:
+
+```bash
+cd /path/to/router-vpn/ios/RouterVPN
 xcodegen generate
 open RouterVPN.xcodeproj
 ```
 
-Then in Xcode:
+4. In Xcode, select your Apple Developer Team for `RouterVPN` and `RouterVPNPacketTunnel`.
+5. Enable **Network Extensions → Packet Tunnel** for both App IDs in Apple Developer.
+6. Add the AmneziaWG Apple package to the Packet Tunnel target.
+7. Link its WireGuardKit/Go bridge as described in `ios/README.md`.
+8. Replace the marked PacketTunnel placeholder with the included engine adapter work.
+9. Choose **Product → Archive → Distribute App → Development/Ad Hoc**.
 
-1. Select your Apple Team for both targets.
-2. Enable **Network Extensions → Packet Tunnel** for both App IDs/targets.
-3. Link an iOS-capable WireGuard/AmneziaWG and proxy engine to `RouterVPNPacketTunnel`.
-4. Replace the intentional placeholder in `PacketTunnelProvider.swift` with that engine adapter.
-5. Product → Archive.
-6. Distribute as Development, Ad Hoc, TestFlight, or App Store using your provisioning profile.
+The GitHub workflow `.github/workflows/build-ios.yml` can export the IPA after adding its Apple signing secrets.
 
-The included GitHub iOS workflow also requires your signing certificate and provisioning secrets before it can produce an IPA.
+## Immediate iPhone fallback
+
+Import `generated/awg2-fast/awg.conf` into the AmneziaWG App Store app, or `generated/wg/wg.conf` into WireGuard. This uses the router server immediately but does not provide the custom all-mode picker.

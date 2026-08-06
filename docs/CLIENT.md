@@ -1,63 +1,72 @@
-# Use the VPN and SOCKS5 proxy
+# Use the VPN and SOCKS5
 
 ## macOS
 
-1. Extract `router-vpn-client-bundle.zip`.
-2. Open Terminal in the extracted folder.
-3. Run:
+1. Double-click `router-vpn-client-bundle.zip`.
+2. Open Terminal.
+3. Type `cd ` with a trailing space.
+4. Drag the extracted folder into Terminal and press Return.
+5. Run:
 
 ```bash
-chmod +x client/install-macos.sh
+chmod +x client/*.sh modes/*.sh
 ./client/install-macos.sh .
 ```
 
-4. Start the controller with the command printed by the installer.
-5. Open `http://127.0.0.1:8788`.
-6. Choose **AUTO** or a ready mode.
-7. Press **Connect**.
-8. At home, press **Off**.
+6. Start the controller with the command printed by the installer.
+7. Open `http://127.0.0.1:8788`.
+8. Leave **SOCKS5-only** off for full-device VPN.
+9. Choose **AUTO Escalate** or select a mode and press **Connect**.
+10. Press **Off** when back home.
 
 ## Linux
 
-From the extracted bundle:
-
 ```bash
+cd /path/to/extracted/router-vpn-client-bundle
 sudo ./client/install-linux.sh .
 ```
 
 Open `http://127.0.0.1:8788`.
 
+## SOCKS5-only mode
+
+1. Check **SOCKS5-only**.
+2. Connect with AUTO or a ready mode.
+3. Configure the selected app:
+
+```text
+SOCKS5 host: 127.0.0.1
+Port: 1080
+Authentication: none
+Proxy DNS through SOCKS5: on
+```
+
+Only that app uses home; other device traffic stays direct.
+
+## Port forwarding
+
+Use Raw WireGuard or AmneziaWG mode, then enter:
+
+- Protocol: TCP, UDP, or both
+- From/To: one port or a range
+- Target: destination port; use `0` to preserve a range
+- Protected DMZ: forwards all unused public ports while excluding management/VPN ports
+
+ASUS DMZ to the AI Board must be enabled for arbitrary ports. Press **Clear** when finished.
+
+## Jumbo
+
+- Leave Jumbo off for WireGuard/AWG.
+- Enable Jumbo only for a ready TUN proxy mode on a system that supports it.
+- LAN MTU 9000 is accepted as payload and segmented for the internet path.
+
 ## Windows
 
-The ZIP contains `dist/router-vpn-client-windows-amd64.exe`, but the all-engine Windows installer is not completed. Raw profiles can be imported into their normal protocol apps; the custom controller is currently complete for macOS/Linux.
+Run PowerShell as Administrator:
 
-## SOCKS5
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\client\install-windows.ps1 .
+```
 
-1. Connect the VPN first.
-2. The Router VPN UI displays the SOCKS5 address, port, username, and password.
-3. In the app that should use the proxy, choose **SOCKS5** and enter those values.
-4. Enable “proxy DNS through SOCKS” when the app offers it.
-
-SOCKS5 is intentionally not exposed directly to the internet.
-
-## Port forwarding to the remote device
-
-Port forwarding works while connected through WireGuard Raw or AmneziaWG 2 because those modes assign the remote device a tunnel IP.
-
-1. Connect WireGuard/AWG.
-2. In **Port forwarding**, select `tcp`, `udp`, or `both`.
-3. Enter:
-   - `From`: first public port
-   - `To`: last public port
-   - `Target`: destination port; use the same port for a single-port mapping
-4. Press **Apply**.
-5. For all unreserved ports, press **Protected DMZ**.
-6. Press **Clear** to remove dynamic rules.
-
-## AUTO
-
-AUTO tests every installed, generated, ready mode and connects the one with the fastest successful health check. Missing integration modes are skipped automatically.
-
-## Jumbo payloads
-
-Leave Jumbo off normally. Turn it on only for a TUN proxy mode when the client OS supports large TUN/GSO traffic. WireGuard and AWG keep their safe tunnel MTUs automatically.
+The native controller binary is included. The complete multi-engine launcher currently requires WSL2; raw profiles remain importable into WireGuard/AmneziaWG apps.
