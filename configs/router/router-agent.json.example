@@ -1,0 +1,29 @@
+{
+  "listen": "0.0.0.0:8787",
+  "token": "CHANGE_ME_LONG_RANDOM",
+  "tunnel_cidrs": [
+    "10.77.0.0/24",
+    "10.78.0.0/24",
+    "fd77:77::/64",
+    "fd78:78::/64"
+  ],
+  "wan_interface": "CHANGE_WAN_INTERFACE",
+  "reserved_ports": [
+    22,
+    53,
+    80,
+    443,
+    585,
+    1080,
+    2053,
+    3000,
+    8388,
+    8443,
+    8786,
+    8787,
+    9443,
+    10443,
+    51820
+  ],
+  "nft_table": "router_vpn"
+}

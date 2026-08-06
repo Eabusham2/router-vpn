@@ -1,0 +1,16 @@
+{
+  "listen": "127.0.0.1:8788",
+  "router_api": "http://10.77.0.1:8787",
+  "api_token": "PASTE_TOKEN_FROM_INSTALLER",
+  "health_url": "https://connectivitycheck.gstatic.com/generate_204",
+  "adguard_ipv4": "192.168.50.133",
+  "adguard_ipv6": "fd77:77::1",
+  "auto_test_seconds": 8,
+  "modes_file": "./modes.json",
+  "state_file": "./state.json",
+  "scripts_dir": "./modes",
+  "socks_host": "10.77.0.1",
+  "socks_port": 1080,
+  "socks_username": "CHANGE_ME",
+  "socks_password": "CHANGE_ME"
+}

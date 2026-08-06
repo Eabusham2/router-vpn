@@ -1,0 +1,28 @@
+name: RouterVPN
+options:
+  bundleIdPrefix: com.eabusham.routervpn
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    SWIFT_VERSION: "6.0"
+targets:
+  RouterVPN:
+    type: application
+    platform: iOS
+    sources: [App, Resources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.eabusham.routervpn
+        CODE_SIGN_ENTITLEMENTS: Resources/RouterVPN.entitlements
+    dependencies:
+      - target: RouterVPNPacketTunnel
+  RouterVPNPacketTunnel:
+    type: app-extension
+    platform: iOS
+    sources: [PacketTunnel]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.eabusham.routervpn.PacketTunnel
+        INFOPLIST_KEY_NSExtension_NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+        INFOPLIST_KEY_NSExtension_NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+        CODE_SIGN_ENTITLEMENTS: Resources/PacketTunnel.entitlements

@@ -1,0 +1,9 @@
+dist/
+*.zip
+*.tar.gz
+client.json
+state.json
+run/
+.DS_Store
+.idea/
+.vscode/
