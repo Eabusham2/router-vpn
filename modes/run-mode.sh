@@ -12,62 +12,109 @@ start_bg(){ "$@" >>"$RUN/$MODE.log" 2>&1 & echo $! >>"$RUN/$MODE.pids"; }
 set_dns_hint(){ printf '%s\n%s\n' "${HOMEVPN_ADGUARD4:-}" "${HOMEVPN_ADGUARD6:-}" >"$RUN/dns.txt"; }
 set_dns_hint
 : >"$RUN/$MODE.pids"
+
+socks_only(){ [[ ${HOMEVPN_SOCKS:-false} == true ]]; }
+
+make_local_socks_chain(){
+  local out="$RUN/local-socks-chain.json"
+  python3 - "$out" <<'PY'
+import json,os,sys
+host=os.environ.get('HOMEVPN_SOCKS_HOST','192.168.50.133')
+port=int(os.environ.get('HOMEVPN_SOCKS_PORT','1080'))
+user=os.environ.get('HOMEVPN_SOCKS_USER','')
+pw=os.environ.get('HOMEVPN_SOCKS_PASSWORD','')
+server={"type":"socks","tag":"home-socks","server":host,"server_port":port,"version":"5"}
+if user or pw: server["username"],server["password"]=user,pw
+cfg={
+ "log":{"level":"warn"},
+ "inbounds":[{"type":"socks","tag":"local-socks","listen":"127.0.0.1","listen_port":1080,"users":[]}],
+ "outbounds":[server],
+ "route":{"final":"home-socks"}
+}
+json.dump(cfg,open(sys.argv[1],'w'),indent=2); open(sys.argv[1],'a').write('\n')
+PY
+  printf '%s' "$out"
+}
+
+run_kernel_tunnel(){
+  local tool=$1 full=$2 split=$3
+  local cfg=$full
+  socks_only && cfg=$split
+  sudo "$tool" up "$cfg"
+  cleanup_kernel(){ sudo "$tool" down "$cfg" >/dev/null 2>&1 || true; }
+  trap cleanup_kernel EXIT INT TERM
+  if socks_only; then
+    local proxy_cfg
+    proxy_cfg=$(make_local_socks_chain)
+    exec sudo sing-box run -c "$proxy_cfg"
+  fi
+  while sleep 3600; do :; done
+}
+
 run_sing_box(){
   local cfg="$CONF/sing-box.json"
-  if [[ ${HOMEVPN_JUMBO:-false} == true ]]; then
-    local tmp="$RUN/$MODE-sing-box.json"
+  local tmp="$RUN/$MODE-sing-box.json"
+  if [[ ${HOMEVPN_JUMBO:-false} == true || ${HOMEVPN_SOCKS:-false} == true ]]; then
     python3 - "$cfg" "$tmp" <<'PY'
-import json,sys
+import json,os,sys
 x=json.load(open(sys.argv[1]))
-for inbound in x.get('inbounds',[]):
-    if inbound.get('type')=='tun': inbound['mtu']=9000
-json.dump(x,open(sys.argv[2],'w'),indent=2)
+if os.environ.get('HOMEVPN_SOCKS','false')=='true':
+    x['inbounds']=[{"type":"socks","tag":"socks-in","listen":"127.0.0.1","listen_port":1080,"users":[]}]
+else:
+    for inbound in x.get('inbounds',[]):
+        if inbound.get('type')=='tun' and os.environ.get('HOMEVPN_JUMBO','false')=='true': inbound['mtu']=9000
+json.dump(x,open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
 PY
     cfg="$tmp"
   fi
   exec sudo sing-box run -c "$cfg"
 }
+
 case "$MODE" in
   wg)
-    exec sudo wg-quick up "$CONF/wg.conf"
+    run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf"
     ;;
   awg2-fast|awg2-strong)
-    exec sudo awg-quick up "$CONF/awg.conf"
+    run_kernel_tunnel awg-quick "$CONF/awg.conf" "$CONF/awg-socks.conf"
     ;;
   wg-pq)
     start_bg sudo rosenpass exchange-config "$CONF/rosenpass.toml"
     sleep 1
-    exec sudo wg-quick up "$CONF/wg.conf"
+    run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf"
     ;;
   awg2-pq)
     start_bg sudo rosenpass exchange-config "$CONF/rosenpass.toml"
     sleep 1
-    exec sudo awg-quick up "$CONF/awg.conf"
+    run_kernel_tunnel awg-quick "$CONF/awg.conf" "$CONF/awg-socks.conf"
     ;;
   reality-vision|hysteria2|shadowsocks|ss-v2ray|naive-h2|naive-h3)
+    run_sing_box
+    ;;
+  reality-pq-vision)
+    start_bg sudo xray run -c "$CONF/xray.json"
+    sleep 1
     run_sing_box
     ;;
   reality-xhttp)
     exec sudo xray run -c "$CONF/xray.json"
     ;;
   wg-quic)
-    if [[ ${HOMEVPN_DAITA:-false} == true ]]; then export GOTATUN_DAITA=1; fi
+    [[ ${HOMEVPN_DAITA:-false} == true ]] && export GOTATUN_DAITA=1
     exec sudo gotatun --config "$CONF/gotatun.json"
     ;;
   wg-ss-v2ray)
     start_bg sudo sing-box run -c "$CONF/sing-box.json"
     sleep 1
-    exec sudo wg-quick up "$CONF/wg.conf"
+    run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf"
     ;;
   max-tls|max-quic)
-    # Configs define local hop ports and routes. The launcher supervises all compatible layers.
     set -a; source "$CONF/chain.env"; set +a
     [[ ${HOMEVPN_DAITA:-false} == true ]] && export GOTATUN_DAITA=1
     start_bg sudo xray run -c "$CONF/outer-xray.json"
     start_bg sudo sing-box run -c "$CONF/middle-sing-box.json"
     start_bg sudo rosenpass exchange-config "$CONF/rosenpass.toml"
     sleep 2
-    exec sudo wg-quick up "$CONF/wg.conf"
+    run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf"
     ;;
   *) echo "unknown mode: $MODE" >&2; exit 2 ;;
 esac

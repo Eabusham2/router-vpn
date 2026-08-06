@@ -53,8 +53,19 @@ services:
     depends_on:
       - router-agent
     volumes:
-      - /opt/router-vpn/config/transports:/etc/sing-box:ro
-    command: ["-D", "/var/lib/sing-box", "-C", "/etc/sing-box", "run"]
+      - /opt/router-vpn/config/transports/server.json:/etc/sing-box/config.json:ro
+      - /opt/router-vpn/config/transports/cert.pem:/etc/sing-box/cert.pem:ro
+      - /opt/router-vpn/config/transports/key.pem:/etc/sing-box/key.pem:ro
+    command: ["run", "-c", "/etc/sing-box/config.json"]
+
+  xray-pq:
+    image: ghcr.io/xtls/xray-core:latest
+    container_name: router-vpn-xray
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /opt/router-vpn/config/xray/server.json:/etc/xray/config.json:ro
+    command: ["run", "-c", "/etc/xray/config.json"]
 
   bundle-web:
     image: busybox:1.36
