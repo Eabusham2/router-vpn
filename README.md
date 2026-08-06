@@ -1,44 +1,27 @@
-# router-vpn
+# Router VPN
 
-Private home-exit VPN for an ASUS GT-BE19000AI AI Board or another Linux Docker host.
+Private home-exit VPN stack for the ASUS AI Board/Portainer.
 
-## What the single ZIP contains
+## Included in the single ZIP
 
-- Router/Portainer stack
-- Raw WireGuard server and client profile
-- AmneziaWG 2 Fast and Strong server/client profiles
-- VLESS + REALITY Vision profile
-- Hysteria2/QUIC profile
-- Shadowsocks 2022 profile
-- Authenticated SOCKS5 proxy available after the VPN connects
-- IPv4 + IPv6 full-tunnel routes
-- Home AdGuard DNS
-- AUTO/manual desktop mode controller
-- Single-port, range, TCP/UDP/both, and protected-DMZ forwarding controls
-- Jumbo-payload/TUN option where supported
-- Source and prebuilt desktop controller binaries
-- iPhone/iPad Xcode project and build workflow
-- Integration adapters for PQ, exact DAITA, XHTTP/FinalMask, Naive, V2Ray-plugin, and MAX chains
+- Router Portainer stack and SSH installer
+- Raw WireGuard
+- AmneziaWG 2 Fast and Strong
+- Hybrid post-quantum VLESS encryption + REALITY/Vision
+- VLESS + REALITY/Vision
+- Hysteria2/QUIC
+- Shadowsocks 2022
+- Authenticated private SOCKS5
+- AUTO escalation and manual mode picker
+- IPv4/IPv6, home AdGuard DNS, jumbo-payload toggle
+- Single-port, range, TCP/UDP/both, and protected-DMZ controls
+- Prebuilt desktop controller binaries
+- iOS SwiftUI/Xcode project and signing workflow
 
-## What is ready now
+Start with [`START-HERE.md`](START-HERE.md).
 
-`WireGuard Raw`, `AmneziaWG 2 Fast`, `AmneziaWG 2 Strong`, `VLESS + REALITY Vision`, `Hysteria2 QUIC`, `Shadowsocks 2022`, private `SOCKS5`, AdGuard DNS, IPv4/IPv6, desktop AUTO/manual selection, and port forwarding through WireGuard/AWG peers.
+## Honest limits
 
-## What still needs an upstream engine or credentials
+The single signed iOS IPA is not included because Apple requires the owner's signing certificate, provisioning profiles, Apple Team ID, and Network Extension entitlement. The Xcode project and workflow are included.
 
-Rosenpass PQ, exact Mullvad/Maybenot DAITA, XHTTP/FinalMask, NaiveProxy, domain-backed Shadowsocks+V2Ray TLS, and the MAX serial chains are included as disabled adapters. The iOS app source is included, but a signed working IPA requires your Apple signing identity, Network Extension entitlement, and a linked packet-tunnel engine.
-
-## Start here
-
-1. [Portainer installation](docs/INSTALL-PORTAINER.md) — easiest for the ASUS AI Board.
-2. [SSH installation](docs/INSTALL-SSH.md) — Linux terminal alternative.
-3. [Client use](docs/CLIENT.md).
-4. [Mode list and overhead](docs/MODES.md).
-5. [iPhone/iPad build](docs/IOS.md).
-
-## Safety defaults
-
-- SOCKS5, Portainer, AdGuard administration, SSH, bundle downloads, and the control API are LAN/tunnel-only.
-- Dynamic public forwarding is accepted only from an authenticated WireGuard/AWG tunnel peer.
-- Protected DMZ excludes management and VPN-listener ports.
-- No generated keys or client bundles are stored in GitHub.
+Rosenpass, exact Mullvad Maybenot/DAITA, V2Ray-plugin TLS requiring a real certificate/domain, Naive, XHTTP/FinalMask, and serial MAX chains are included as disabled integration slots until their required engines or credentials are added. Ready modes are generated automatically.

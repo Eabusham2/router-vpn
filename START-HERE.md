@@ -1,19 +1,12 @@
 # Start here
 
-This is the **only ZIP you need**. It contains the private-router server stack, Portainer and SSH installers, generated-profile scripts, desktop controller binaries, SOCKS5 support, IPv4/IPv6 routing, AdGuard DNS settings, port/range/protected-DMZ controls, jumbo-payload support where the selected TUN engine permits it, and the iPhone/iPad Xcode project.
+Use only `router-vpn.zip`. It contains the source, Portainer stack, router installer, prebuilt desktop controller binaries, generated-profile code, SOCKS5, and the iOS project.
 
-## Easiest router installation
+## Recommended order
 
-Open `docs/INSTALL-PORTAINER.md` and follow it from step 1. Portainer deploys `server/portainer-compose.yaml` from the private GitHub repository.
-
-## After router setup
-
-Download the generated private client bundle from the LAN-only address printed in the init-container logs, then follow `docs/CLIENT.md`.
-
-## iPhone/iPad
-
-Open `docs/IOS.md`. The project is included, but Apple requires your own signing identity, provisioning profiles, Network Extension entitlement, and a linked packet-tunnel engine before a working IPA can be produced.
-
-## Implementation status
-
-Open `docs/STATUS.md`. Modes labeled **Ready** have generated server/client configurations. Modes labeled **Adapter/Integration/Lab** are present in the picker and launcher but stay disabled until their required upstream engine or credentials are installed.
+1. Follow `docs/INSTALL-PORTAINER.md` on the home network.
+2. Download the generated `router-vpn-client-bundle.zip` from the AI Board.
+3. Follow `docs/CLIENT.md` on the Mac/Linux travel device.
+4. Follow `docs/IOS.md` for the iPhone build/signing path.
+5. Use `docs/MODES.md` for mode order and overhead.
+6. Use `docs/STATUS.md` to see what is ready versus an integration slot.

@@ -1,0 +1,7 @@
+fbf991c68398aa36d30a81b0471bad0f758146464116c48785684a729be0db24  dist/router-vpn-agent-linux-amd64
+3a17be5da1554c499b1e423aa263f5128ea07b7c25c1aa9e50d26f2b8967f15c  dist/router-vpn-agent-linux-arm64
+5f2f6daa41e7b155184b291fcf4b63c22b64163372c2ed04a32979d22f35e311  dist/router-vpn-client-darwin-amd64
+c4f5ae83e584ddddb2cc76506452a8a7074f96145820a1c6eaa5a8c214da63a2  dist/router-vpn-client-darwin-arm64
+6f15e96e817704e983c11219d8b2c6e0e2d1762e4a91c49feda7e51eefc7e1bb  dist/router-vpn-client-linux-amd64
+6a909bc6024d27e765f068c5a36bf40232713fd54dc81635090d278b63843871  dist/router-vpn-client-linux-arm64
+480a8bf5d0a77e12c9112007fdc0ebf4206d6416db84e8ac3c50c90cac0801db  dist/router-vpn-client-windows-amd64.exe
