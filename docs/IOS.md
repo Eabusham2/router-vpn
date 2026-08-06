@@ -1,34 +1,39 @@
 # iPhone and iPad
 
-The iOS source now includes a runtime router picker and editable endpoint. No router address is fixed at build time.
+No home-router address is embedded in the app. Router profiles are imported and edited at runtime.
 
-A signed IPA is not bundled because Apple requires your certificate, provisioning profiles, Team ID, and Packet Tunnel entitlement.
+## Immediate usable profiles
 
-## Build/sign
+After the router installs, open the private client bundle:
+
+- `generated/wg/wg.conf` → import into WireGuard
+- `generated/awg2-fast/awg.conf` → import into an AmneziaWG-compatible iOS client
+
+## Custom Router VPN IPA
+
+A signed IPA is not bundled. Apple requires your own Developer Team, app and extension provisioning profiles, and Packet Tunnel entitlement. The included Packet Tunnel target is a scaffold until the AWG/WireGuardKit adapter is linked.
+
+### Build
 
 1. Install Xcode on a Mac.
-2. Open Terminal.
-3. Run:
+2. Install XcodeGen:
 
 ```bash
 brew install xcodegen
+```
+
+3. Open Terminal and run:
+
+```bash
 cd /path/to/router-vpn/ios/RouterVPN
 xcodegen generate
 open RouterVPN.xcodeproj
 ```
 
-4. Select your Apple Developer Team for both targets.
+4. Select your Apple Developer Team for `RouterVPN` and `RouterVPNPacketTunnel`.
 5. Enable **Network Extensions → Packet Tunnel** for both App IDs.
-6. Add the AmneziaWG Apple package/engine to the Packet Tunnel target.
-7. Archive and export a Development or Ad Hoc IPA.
+6. Add the AmneziaWG Apple/WireGuardKit package and its required Go bridge target to the Packet Tunnel target.
+7. Replace the placeholder in `PacketTunnelProvider.swift` with the engine adapter.
+8. Product → Archive → Distribute App → Development or Ad Hoc.
 
-The private repository includes `.github/workflows/build-ios.yml`. Add the documented Apple signing secrets, then run **Actions → Build signed iOS IPA → Run workflow**.
-
-## Use
-
-1. Import `router-vpn-bundle.json`.
-2. Select the router.
-3. Enter its public IPv4, global IPv6, or hostname.
-4. Select AUTO/manual mode and connect.
-
-Until the Packet Tunnel engine adapter and entitlement are linked, use the generated `awg2-fast/awg.conf` in the Amnezia app or `wg/wg.conf` in WireGuard on iPhone.
+The private repo also includes `.github/workflows/build-ios.yml`; it requires your Apple certificate, provisioning profiles, Team ID, and the completed tunnel adapter.

@@ -1,32 +1,36 @@
 # Implementation status
 
-## Ready and generated automatically
+## Generated and runnable when the target host supports the required kernel/userspace engine
 
 - Raw WireGuard
-- AmneziaWG 2 Fast and Strong
-- Hybrid post-quantum VLESS encryption + REALITY/Vision
+- AmneziaWG 2 Fast
+- AmneziaWG 2 Strong
 - VLESS + REALITY/Vision
+- Hybrid-PQ VLESS + REALITY/Vision
 - Hysteria2/QUIC
 - Shadowsocks 2022
 - Authenticated private SOCKS5
 - IPv4/IPv6 full tunnel and NAT
 - Home AdGuard DNS
-- Desktop AUTO escalation/manual picker
-- DAITA-like router-bound cover traffic toggle
-- Jumbo TUN toggle for proxy modes
-- Port/range/both/protected-DMZ forwarding for WireGuard/AWG peers
-- Management firewall guard and LAN-only client-bundle download
-- macOS/Linux installers and desktop binaries
+- Desktop AUTO/manual picker
+- Runtime-selectable router profiles
+- DAITA-like cover traffic
+- Jumbo TUN option for proxy modes
+- Port/range/protected-DMZ forwarding for WireGuard/AmneziaWG peers
 
-## Included but disabled until its dependency is completed
+## Included as disabled integration slots
 
-- Rosenpass WireGuard/AWG post-quantum PSK integration
+- Rosenpass-enhanced WireGuard/AmneziaWG
 - Exact Mullvad Maybenot/DAITA
-- Shadowsocks + V2Ray-plugin TLS with a real domain/certificate
-- Xray XHTTP/FinalMask
+- Shadowsocks + V2Ray-plugin TLS
+- XHTTP/FinalMask
 - Naive HTTP/2 and HTTP/3
-- WireGuard over QUIC or Shadowsocks/V2Ray
+- WireGuard over QUIC or Shadowsocks
 - MAX TLS and MAX QUIC serial chains
-- Signed functional iOS all-mode packet tunnel
 
-The picker shows unavailable integrations as disabled and reports the missing command/profile.
+## iOS
+
+- SwiftUI profile/mode/control interface: included
+- Network Extension target: included
+- Functional AWG/Xray Packet Tunnel adapter: not yet linked
+- Signed IPA: not included; Apple signing and entitlement are required

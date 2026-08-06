@@ -1,15 +1,24 @@
-# Files you receive
+# The one download
 
 ## `router-vpn.zip`
 
-The only project download. It contains the complete source tree, Portainer and SSH installers, router stack, custom controller, prebuilt desktop/router binaries, documentation, and iOS project.
+Contains:
 
-## `router-vpn.zip.sha256`
+- complete source
+- Portainer and SSH installers
+- router services and firewall scripts
+- raw WireGuard and AmneziaWG 2 generation
+- REALITY, PQ-REALITY, Hysteria2, and Shadowsocks generation
+- authenticated SOCKS5
+- AUTO/manual desktop controller
+- runtime router-profile importer
+- IPv4/IPv6, AdGuard DNS, jumbo, DAITA-like, and port-forward controls
+- prebuilt macOS, Windows, Linux, and router-agent binaries
+- iOS Xcode source and signing workflow
+- exact setup guide
 
-Checksum for the project ZIP.
+## Generated after router installation
 
-## `router-vpn-client-bundle.zip`
+`router-vpn-client-bundle.zip` contains the private keys, credentials, and profiles for that router. Keep it private.
 
-This is created by your router after installation. It contains that router's private keys, generated mode profiles, credentials, controller files, and `router-vpn-bundle.json`. Keep it private and import the JSON into the app.
-
-No TAR archive or second project ZIP is required.
+There is no second project archive.

@@ -2,12 +2,14 @@
 ./.github/workflows/build-ios.yml
 ./.gitignore
 ./BINARY-SHA256SUMS.txt
+./INSTALL-EVERYTHING.md
 ./PACKAGE-MANIFEST.txt
 ./README.md
 ./SECURITY.md
 ./START-HERE.md
 ./THIRD-PARTY.md
 ./VERSION
+./WHAT-IS-IN-ZIP.md
 ./client/install-linux.sh
 ./client/install-macos.sh
 ./client/install-windows.ps1
@@ -17,6 +19,7 @@
 ./cmd/router-agent/main.go
 ./configs/client/client.json.example
 ./configs/client/modes.json
+./configs/client/routers.json.example
 ./configs/router/router-agent.json.example
 ./configs/router/socks5.json.example
 ./deploy/build-client.sh

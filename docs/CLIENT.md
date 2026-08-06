@@ -1,5 +1,7 @@
 # Install and use the client
 
+The exact end-to-end sequence is in `INSTALL-EVERYTHING.md`.
+
 ## macOS
 
 1. Double-click the router-generated `router-vpn-client-bundle.zip`.
