@@ -2,13 +2,13 @@
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo 'Run with sudo.'; exit 1; }
 BUNDLE=${1:-$(pwd)}
-[[ -f "$BUNDLE/client.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
+[[ -f "$BUNDLE/client.json" && -f "$BUNDLE/routers.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools git make gcc libc6-dev golang-go curl python3 tar
 "$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
 mkdir -p "$ROOT" /usr/local/bin
-cp -a "$BUNDLE/client.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
+cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
 ARCH=$(uname -m)
 case "$ARCH" in aarch64|arm64) BIN="$BUNDLE/dist/router-vpn-client-linux-arm64";; x86_64|amd64) BIN="$BUNDLE/dist/router-vpn-client-linux-amd64";; *) echo "Unsupported Linux architecture: $ARCH"; exit 1;; esac
 install -m 755 "$BIN" /usr/local/bin/router-vpn-client

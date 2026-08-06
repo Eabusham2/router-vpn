@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 BUNDLE=${1:-$(pwd)}
-[[ -f "$BUNDLE/client.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
+[[ -f "$BUNDLE/client.json" && -f "$BUNDLE/routers.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
 command -v brew >/dev/null || { echo 'Install Homebrew first from brew.sh, then rerun.'; exit 1; }
 brew install wireguard-tools go make git python sing-box || true
 "$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
 sudo mkdir -p "$ROOT" /usr/local/bin
-sudo cp -a "$BUNDLE/client.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
+sudo cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
 ARCH=$(uname -m)
 case "$ARCH" in arm64) BIN="$BUNDLE/dist/router-vpn-client-darwin-arm64";; x86_64) BIN="$BUNDLE/dist/router-vpn-client-darwin-amd64";; *) echo "Unsupported Mac architecture: $ARCH"; exit 1;; esac
 sudo install -m 755 "$BIN" /usr/local/bin/router-vpn-client

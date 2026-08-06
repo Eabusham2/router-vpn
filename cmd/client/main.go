@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/rand"
 	"embed"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,14 +31,17 @@ var uiFS embed.FS
 type state struct {
 	Connected bool   `json:"connected"`
 	Mode      string `json:"mode"`
+	RouterID  string `json:"router_id"`
 	DAITA     bool   `json:"daita"`
 	Jumbo     bool   `json:"jumbo"`
 	Socks     bool   `json:"socks"`
 	LastError string `json:"last_error"`
 }
+
 type app struct {
 	cfg         common.ClientConfig
 	modes       []common.Mode
+	profiles    common.RouterProfileStore
 	mu          sync.Mutex
 	state       state
 	cmd         *exec.Cmd
@@ -43,30 +49,52 @@ type app struct {
 }
 
 func main() {
-	path := getenv("HOMEVPN_CLIENT_CONFIG", "./client.json")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		log.Fatal(err)
-	}
+	configPath := getenv("HOMEVPN_CLIENT_CONFIG", "./client.json")
 	var c common.ClientConfig
-	if err = json.Unmarshal(b, &c); err != nil {
+	b, err := os.ReadFile(configPath)
+	if err == nil {
+		if err = json.Unmarshal(b, &c); err != nil {
+			log.Fatal(err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		log.Fatal(err)
 	}
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:8788"
 	}
+	if c.HealthURL == "" {
+		c.HealthURL = "https://connectivitycheck.gstatic.com/generate_204"
+	}
 	if c.AutoTestSeconds == 0 {
 		c.AutoTestSeconds = 8
 	}
-	if c.DAITAHost == "" {
-		c.DAITAHost = c.AdGuardIPv4
+	configDir := filepath.Dir(configPath)
+	if c.ModesFile == "" {
+		c.ModesFile = filepath.Join(configDir, "modes.json")
+	} else if !filepath.IsAbs(c.ModesFile) {
+		c.ModesFile = filepath.Join(configDir, c.ModesFile)
 	}
-	if c.DAITAPort == 0 {
-		c.DAITAPort = 45999
+	if c.StateFile == "" {
+		c.StateFile = filepath.Join(configDir, "state.json")
+	} else if !filepath.IsAbs(c.StateFile) {
+		c.StateFile = filepath.Join(configDir, c.StateFile)
 	}
-	if c.DAITARateKbps == 0 {
-		c.DAITARateKbps = 192
+	if c.ScriptsDir == "" {
+		c.ScriptsDir = filepath.Join(configDir, "modes")
+	} else if !filepath.IsAbs(c.ScriptsDir) {
+		c.ScriptsDir = filepath.Join(configDir, c.ScriptsDir)
 	}
+	if c.ProfilesFile == "" {
+		c.ProfilesFile = filepath.Join(configDir, "routers.json")
+	} else if !filepath.IsAbs(c.ProfilesFile) {
+		c.ProfilesFile = filepath.Join(configDir, c.ProfilesFile)
+	}
+	if _, err = os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+		if err = persistClientConfig(configPath, c); err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	mb, err := os.ReadFile(c.ModesFile)
 	if err != nil {
 		log.Fatal(err)
@@ -75,12 +103,23 @@ func main() {
 	if err = json.Unmarshal(mb, &modes); err != nil {
 		log.Fatal(err)
 	}
+
 	a := &app{cfg: c, modes: modes, state: state{Mode: "off"}}
+	if err = a.loadProfiles(); err != nil {
+		log.Fatal(err)
+	}
+	a.state.RouterID = a.profiles.SelectedID
+
 	h := http.NewServeMux()
 	h.HandleFunc("/", a.index)
 	h.HandleFunc("/api/status", a.status)
 	h.HandleFunc("/api/modes", a.listModes)
 	h.HandleFunc("/api/info", a.info)
+	h.HandleFunc("/api/profiles", a.listProfiles)
+	h.HandleFunc("/api/profile/save", a.saveProfile)
+	h.HandleFunc("/api/profile/select", a.selectProfile)
+	h.HandleFunc("/api/profile/delete", a.deleteProfile)
+	h.HandleFunc("/api/profile/import", a.importProfileBundle)
 	h.HandleFunc("/api/connect", a.connect)
 	h.HandleFunc("/api/disconnect", a.disconnect)
 	h.HandleFunc("/api/auto", a.auto)
@@ -90,41 +129,473 @@ func main() {
 	log.Printf("Router VPN client UI: http://%s", c.Listen)
 	log.Fatal(http.ListenAndServe(c.Listen, h))
 }
+
+func persistClientConfig(path string, c common.ClientConfig) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil && filepath.Dir(path) != "." {
+		return err
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err = os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 func getenv(k, v string) string {
 	if x := os.Getenv(k); x != "" {
 		return x
 	}
 	return v
 }
-func (a *app) index(w http.ResponseWriter, r *http.Request) {
+
+func (a *app) index(w http.ResponseWriter, _ *http.Request) {
 	b, _ := uiFS.ReadFile("ui.html")
 	w.Header().Set("content-type", "text/html; charset=utf-8")
-	w.Write(b)
-}
-func (a *app) status(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	json.NewEncoder(w).Encode(a.state)
+	_, _ = w.Write(b)
 }
 
-func (a *app) info(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(map[string]any{
-		"adguard_ipv4":   a.cfg.AdGuardIPv4,
-		"adguard_ipv6":   a.cfg.AdGuardIPv6,
-		"socks_host":     a.cfg.SocksHost,
-		"socks_port":     a.cfg.SocksPort,
-		"socks_username": a.cfg.SocksUsername,
-		"socks_password": a.cfg.SocksPassword,
+func (a *app) status(w http.ResponseWriter, _ *http.Request) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_ = json.NewEncoder(w).Encode(a.state)
+}
+
+func (a *app) info(w http.ResponseWriter, _ *http.Request) {
+	p, _ := a.activeProfile()
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"router":         p,
+		"selected_id":    a.profiles.SelectedID,
+		"profiles_file":  a.cfg.ProfilesFile,
+		"client_listen":  a.cfg.Listen,
+		"health_url":     a.cfg.HealthURL,
+		"auto_test_secs": a.cfg.AutoTestSeconds,
 	})
 }
 
-func (a *app) listModes(w http.ResponseWriter, r *http.Request) {
+func (a *app) listProfiles(w http.ResponseWriter, _ *http.Request) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_ = json.NewEncoder(w).Encode(a.profiles)
+}
+
+func (a *app) saveProfile(w http.ResponseWriter, r *http.Request) {
+	var p common.RouterProfile
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&p) != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	p.Name = strings.TrimSpace(p.Name)
+	if p.Name == "" {
+		p.Name = "Home Router"
+	}
+	var err error
+	p.Endpoint, err = normalizeEndpoint(p.Endpoint)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	applyProfileDefaults(&p)
+	if p.ID == "" {
+		p.ID = newID()
+	}
+
+	a.mu.Lock()
+	if a.state.Connected {
+		a.mu.Unlock()
+		http.Error(w, "disconnect before changing router settings", http.StatusConflict)
+		return
+	}
+	found := false
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == p.ID {
+			a.profiles.Profiles[i] = p
+			found = true
+			break
+		}
+	}
+	if !found {
+		a.profiles.Profiles = append(a.profiles.Profiles, p)
+	}
+	a.profiles.SelectedID = p.ID
+	a.state.RouterID = p.ID
+	err = a.persistProfilesLocked()
+	a.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "profile": p})
+}
+
+func (a *app) selectProfile(w http.ResponseWriter, r *http.Request) {
+	var q struct {
+		ID string `json:"id"`
+	}
+	if json.NewDecoder(r.Body).Decode(&q) != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	a.mu.Lock()
+	if a.state.Connected {
+		a.mu.Unlock()
+		http.Error(w, "disconnect before switching routers", http.StatusConflict)
+		return
+	}
+	if _, ok := a.profileByIDLocked(q.ID); !ok {
+		a.mu.Unlock()
+		http.Error(w, "unknown router profile", http.StatusNotFound)
+		return
+	}
+	a.profiles.SelectedID = q.ID
+	a.state.RouterID = q.ID
+	err := a.persistProfilesLocked()
+	a.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprint(w, `{"ok":true}`)
+}
+
+func (a *app) deleteProfile(w http.ResponseWriter, r *http.Request) {
+	var q struct {
+		ID string `json:"id"`
+	}
+	if json.NewDecoder(r.Body).Decode(&q) != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	a.mu.Lock()
+	if a.state.Connected {
+		a.mu.Unlock()
+		http.Error(w, "disconnect before deleting a router", http.StatusConflict)
+		return
+	}
+	out := a.profiles.Profiles[:0]
+	for _, p := range a.profiles.Profiles {
+		if p.ID != q.ID {
+			out = append(out, p)
+		}
+	}
+	a.profiles.Profiles = out
+	if a.profiles.SelectedID == q.ID {
+		a.profiles.SelectedID = ""
+		if len(out) > 0 {
+			a.profiles.SelectedID = out[0].ID
+		}
+	}
+	a.state.RouterID = a.profiles.SelectedID
+	err := a.persistProfilesLocked()
+	a.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	_ = os.RemoveAll(filepath.Join(root, "generated", q.ID))
+	fmt.Fprint(w, `{"ok":true}`)
+}
+
+type profileBundle struct {
+	Endpoint         string                       `json:"endpoint"`
+	APIToken         string                       `json:"apiToken"`
+	RouterAPI        string                       `json:"routerAPI"`
+	AdGuardIPv4      string                       `json:"adGuardIPv4"`
+	AdGuardIPv6      string                       `json:"adGuardIPv6"`
+	Socks5Host       string                       `json:"socks5Host"`
+	Socks5Port       int                          `json:"socks5Port"`
+	Socks5Username   string                       `json:"socks5Username"`
+	Socks5Password   string                       `json:"socks5Password"`
+	RouterProfiles   []common.RouterProfile       `json:"routerProfiles"`
+	SelectedRouterID string                       `json:"selectedRouterID"`
+	Profiles         map[string]map[string]string `json:"profiles"`
+}
+
+func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var b profileBundle
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&b); err != nil {
+		http.Error(w, "invalid router bundle", http.StatusBadRequest)
+		return
+	}
+
+	p := common.RouterProfile{ID: newID(), Name: "Home Router"}
+	if len(b.RouterProfiles) > 0 {
+		selected := b.RouterProfiles[0]
+		for _, candidate := range b.RouterProfiles {
+			if b.SelectedRouterID != "" && candidate.ID == b.SelectedRouterID {
+				selected = candidate
+				break
+			}
+		}
+		p = selected
+		p.ID = newID()
+		if strings.TrimSpace(p.Name) == "" {
+			p.Name = "Home Router"
+		}
+	}
+	if strings.TrimSpace(b.Endpoint) != "" {
+		endpoint, err := normalizeEndpoint(b.Endpoint)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		p.Endpoint = endpoint
+	} else if strings.TrimSpace(p.Endpoint) != "" {
+		endpoint, err := normalizeEndpoint(p.Endpoint)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		p.Endpoint = endpoint
+	}
+	if b.RouterAPI != "" {
+		p.RouterAPI = b.RouterAPI
+	}
+	if b.APIToken != "" {
+		p.APIToken = b.APIToken
+	}
+	if b.AdGuardIPv4 != "" {
+		p.AdGuardIPv4 = b.AdGuardIPv4
+	}
+	if b.AdGuardIPv6 != "" {
+		p.AdGuardIPv6 = b.AdGuardIPv6
+	}
+	if b.Socks5Host != "" {
+		p.SocksHost = b.Socks5Host
+	}
+	if b.Socks5Port != 0 {
+		p.SocksPort = b.Socks5Port
+	}
+	if b.Socks5Username != "" {
+		p.SocksUsername = b.Socks5Username
+	}
+	if b.Socks5Password != "" {
+		p.SocksPassword = b.Socks5Password
+	}
+	applyProfileDefaults(&p)
+
+	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	profileRoot := filepath.Join(root, "generated", p.ID)
+	if err := os.MkdirAll(profileRoot, 0o700); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for mode, files := range b.Profiles {
+		if filepath.Base(mode) != mode || mode == "." || mode == ".." {
+			http.Error(w, "invalid mode path", http.StatusBadRequest)
+			return
+		}
+		dir := filepath.Join(profileRoot, mode)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for name, encoded := range files {
+			if filepath.Base(name) != name || name == "." || name == ".." {
+				http.Error(w, "invalid profile path", http.StatusBadRequest)
+				return
+			}
+			data, decodeErr := base64.StdEncoding.DecodeString(encoded)
+			if decodeErr != nil {
+				http.Error(w, "invalid profile encoding", http.StatusBadRequest)
+				return
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
+	a.mu.Lock()
+	if a.state.Connected {
+		a.mu.Unlock()
+		http.Error(w, "disconnect before importing a router", http.StatusConflict)
+		return
+	}
+	a.profiles.Profiles = append(a.profiles.Profiles, p)
+	a.profiles.SelectedID = p.ID
+	a.state.RouterID = p.ID
+	err := a.persistProfilesLocked()
+	a.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "profile": p, "profiles_written": len(b.Profiles)})
+}
+
+func (a *app) loadProfiles() error {
+	b, err := os.ReadFile(a.cfg.ProfilesFile)
+	if err == nil {
+		if err = json.Unmarshal(b, &a.profiles); err != nil {
+			return fmt.Errorf("read router profiles: %w", err)
+		}
+		for i := range a.profiles.Profiles {
+			applyProfileDefaults(&a.profiles.Profiles[i])
+		}
+		if a.profiles.SelectedID == "" && len(a.profiles.Profiles) > 0 {
+			a.profiles.SelectedID = a.profiles.Profiles[0].ID
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	legacy := common.RouterProfile{
+		ID:            "home",
+		Name:          "Home Router",
+		RouterAPI:     a.cfg.RouterAPI,
+		APIToken:      a.cfg.APIToken,
+		AdGuardIPv4:   a.cfg.AdGuardIPv4,
+		AdGuardIPv6:   a.cfg.AdGuardIPv6,
+		SocksHost:     a.cfg.SocksHost,
+		SocksPort:     a.cfg.SocksPort,
+		SocksUsername: a.cfg.SocksUsername,
+		SocksPassword: a.cfg.SocksPassword,
+		DAITAHost:     a.cfg.DAITAHost,
+		DAITAPort:     a.cfg.DAITAPort,
+		DAITARateKbps: a.cfg.DAITARateKbps,
+	}
+	applyProfileDefaults(&legacy)
+	if legacy.APIToken != "" || legacy.AdGuardIPv4 != "" || legacy.SocksUsername != "" {
+		a.profiles = common.RouterProfileStore{SelectedID: legacy.ID, Profiles: []common.RouterProfile{legacy}}
+	} else {
+		a.profiles = common.RouterProfileStore{Profiles: []common.RouterProfile{}}
+	}
+	return a.persistProfiles()
+}
+
+func (a *app) persistProfiles() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.persistProfilesLocked()
+}
+
+func (a *app) persistProfilesLocked() error {
+	if err := os.MkdirAll(filepath.Dir(a.cfg.ProfilesFile), 0o700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(a.profiles, "", "  ")
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	tmp := a.cfg.ProfilesFile + ".tmp"
+	if err = os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, a.cfg.ProfilesFile)
+}
+
+func (a *app) profileByIDLocked(id string) (common.RouterProfile, bool) {
+	for _, p := range a.profiles.Profiles {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return common.RouterProfile{}, false
+}
+
+func (a *app) activeProfile() (common.RouterProfile, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p, ok := a.profileByIDLocked(a.profiles.SelectedID)
+	if !ok {
+		return common.RouterProfile{}, errors.New("add and select your home router first")
+	}
+	if p.Endpoint == "" {
+		return common.RouterProfile{}, errors.New("selected router has no public IP or hostname")
+	}
+	return p, nil
+}
+
+func applyProfileDefaults(p *common.RouterProfile) {
+	if p.RouterAPI == "" {
+		p.RouterAPI = "http://10.77.0.1:8787"
+	}
+	if p.AdGuardIPv4 == "" {
+		p.AdGuardIPv4 = "10.77.0.1"
+	}
+	if p.AdGuardIPv6 == "" {
+		p.AdGuardIPv6 = "fd77:77::1"
+	}
+	if p.SocksHost == "" {
+		p.SocksHost = "10.77.0.1"
+	}
+	if p.SocksPort == 0 {
+		p.SocksPort = 1080
+	}
+	if p.DAITAHost == "" {
+		p.DAITAHost = p.SocksHost
+	}
+	if p.DAITAPort == 0 {
+		p.DAITAPort = 45999
+	}
+	if p.DAITARateKbps == 0 {
+		p.DAITARateKbps = 192
+	}
+}
+
+func normalizeEndpoint(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("enter the router public IPv4, IPv6, or hostname")
+	}
+	if strings.Contains(value, "://") {
+		u, err := url.Parse(value)
+		if err != nil || u.Hostname() == "" {
+			return "", errors.New("invalid router address")
+		}
+		value = u.Hostname()
+	}
+	value = strings.TrimPrefix(strings.TrimSuffix(value, "]"), "[")
+	if ip := net.ParseIP(value); ip != nil {
+		return ip.String(), nil
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	if strings.ContainsAny(value, " /\\?#@") || strings.HasPrefix(value, ".") || strings.HasSuffix(value, ".") {
+		return "", errors.New("invalid router hostname")
+	}
+	for _, label := range strings.Split(value, ".") {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return "", errors.New("invalid router hostname")
+		}
+		for _, r := range label {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-') {
+				return "", errors.New("invalid router hostname")
+			}
+		}
+	}
+	return strings.ToLower(value), nil
+}
+
+func newID() string {
+	b := make([]byte, 5)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("router-%d", time.Now().Unix())
+	}
+	return "router-" + hex.EncodeToString(b)
+}
+
+func (a *app) listModes(w http.ResponseWriter, _ *http.Request) {
 	out := make([]common.ModeStatus, 0, len(a.modes))
 	for _, m := range a.modes {
 		ok, reason := a.checkMode(m)
 		out = append(out, common.ModeStatus{Mode: m, Available: ok, Reason: reason})
 	}
-	json.NewEncoder(w).Encode(out)
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (a *app) checkMode(m common.Mode) (bool, string) {
@@ -133,7 +604,13 @@ func (a *app) checkMode(m common.Mode) (bool, string) {
 	}
 	cmd := exec.Command(m.CheckCommand[0], m.CheckCommand[1:]...)
 	cmd.Dir = a.cfg.ScriptsDir
-	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client")))
+	a.mu.Lock()
+	profileID := a.profiles.SelectedID
+	a.mu.Unlock()
+	cmd.Env = append(os.Environ(),
+		"HOMEVPN_ROOT="+filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client")),
+		"HOMEVPN_PROFILE_ID="+profileID,
+	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		reason := strings.TrimSpace(string(out))
@@ -144,6 +621,7 @@ func (a *app) checkMode(m common.Mode) (bool, string) {
 	}
 	return true, strings.TrimSpace(string(out))
 }
+
 func (a *app) mode(id string) (common.Mode, error) {
 	for _, m := range a.modes {
 		if m.ID == id {
@@ -152,27 +630,30 @@ func (a *app) mode(id string) (common.Mode, error) {
 	}
 	return common.Mode{}, errors.New("unknown mode")
 }
+
 func (a *app) connect(w http.ResponseWriter, r *http.Request) {
 	var q struct {
 		Mode string `json:"mode"`
 	}
 	if json.NewDecoder(r.Body).Decode(&q) != nil {
-		http.Error(w, "bad json", 400)
+		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
 	if err := a.startMode(q.Mode); err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	fmt.Fprint(w, `{"ok":true}`)
 }
-func (a *app) disconnect(w http.ResponseWriter, r *http.Request) {
+
+func (a *app) disconnect(w http.ResponseWriter, _ *http.Request) {
 	if err := a.stopMode(); err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	fmt.Fprint(w, `{"ok":true}`)
 }
+
 func (a *app) options(w http.ResponseWriter, r *http.Request) {
 	var q struct {
 		DAITA *bool `json:"daita"`
@@ -180,7 +661,7 @@ func (a *app) options(w http.ResponseWriter, r *http.Request) {
 		Socks *bool `json:"socks"`
 	}
 	if json.NewDecoder(r.Body).Decode(&q) != nil {
-		http.Error(w, "bad json", 400)
+		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
 	a.mu.Lock()
@@ -196,7 +677,12 @@ func (a *app) options(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	fmt.Fprint(w, `{"ok":true}`)
 }
+
 func (a *app) startMode(id string) error {
+	p, err := a.activeProfile()
+	if err != nil {
+		return err
+	}
 	m, err := a.mode(id)
 	if err != nil {
 		return err
@@ -216,8 +702,22 @@ func (a *app) startMode(id string) error {
 	if err = a.stopMode(); err != nil {
 		return err
 	}
+
 	a.mu.Lock()
-	env := append(os.Environ(), fmt.Sprintf("HOMEVPN_DAITA=%t", a.state.DAITA), fmt.Sprintf("HOMEVPN_JUMBO=%t", a.state.Jumbo), fmt.Sprintf("HOMEVPN_SOCKS=%t", a.state.Socks), fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU), "HOMEVPN_ADGUARD4="+a.cfg.AdGuardIPv4, "HOMEVPN_ADGUARD6="+a.cfg.AdGuardIPv6, "HOMEVPN_SOCKS_HOST="+a.cfg.SocksHost, fmt.Sprintf("HOMEVPN_SOCKS_PORT=%d", a.cfg.SocksPort), "HOMEVPN_SOCKS_USER="+a.cfg.SocksUsername, "HOMEVPN_SOCKS_PASSWORD="+a.cfg.SocksPassword)
+	env := append(os.Environ(),
+		fmt.Sprintf("HOMEVPN_DAITA=%t", a.state.DAITA),
+		fmt.Sprintf("HOMEVPN_JUMBO=%t", a.state.Jumbo),
+		fmt.Sprintf("HOMEVPN_SOCKS=%t", a.state.Socks),
+		fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU),
+		"HOMEVPN_PROFILE_ID="+p.ID,
+		"HOMEVPN_ENDPOINT="+p.Endpoint,
+		"HOMEVPN_ADGUARD4="+p.AdGuardIPv4,
+		"HOMEVPN_ADGUARD6="+p.AdGuardIPv6,
+		"HOMEVPN_SOCKS_HOST="+p.SocksHost,
+		fmt.Sprintf("HOMEVPN_SOCKS_PORT=%d", p.SocksPort),
+		"HOMEVPN_SOCKS_USER="+p.SocksUsername,
+		"HOMEVPN_SOCKS_PASSWORD="+p.SocksPassword,
+	)
 	a.mu.Unlock()
 	if len(m.Command) == 0 {
 		return errors.New("mode has no command")
@@ -227,22 +727,24 @@ func (a *app) startMode(id string) error {
 	cmd.Dir = a.cfg.ScriptsDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
+	if err = cmd.Start(); err != nil {
 		return err
 	}
 	a.mu.Lock()
 	a.cmd = cmd
 	a.state.Connected = true
 	a.state.Mode = id
+	a.state.RouterID = p.ID
 	a.state.LastError = ""
 	daitaEnabled := a.state.DAITA
 	a.mu.Unlock()
 	if daitaEnabled {
-		a.startCoverTraffic()
+		a.startCoverTraffic(p)
 	}
 	time.Sleep(1200 * time.Millisecond)
 	return nil
 }
+
 func (a *app) stopMode() error {
 	a.mu.Lock()
 	cmd := a.cmd
@@ -275,7 +777,12 @@ func (a *app) stopMode() error {
 	}
 	return nil
 }
-func (a *app) auto(w http.ResponseWriter, r *http.Request) {
+
+func (a *app) auto(w http.ResponseWriter, _ *http.Request) {
+	if _, err := a.activeProfile(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	for _, m := range a.modes {
 		if !m.AutoEligible {
 			continue
@@ -285,38 +792,39 @@ func (a *app) auto(w http.ResponseWriter, r *http.Request) {
 		}
 		lat, err := a.testHealth()
 		if err == nil {
-			json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": m.ID, "latency_ms": float64(lat.Microseconds()) / 1000})
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": m.ID, "latency_ms": float64(lat.Microseconds()) / 1000})
 			return
 		}
 		_ = a.stopMode()
 	}
-	http.Error(w, "no working mode", 503)
+	http.Error(w, "no working mode", http.StatusServiceUnavailable)
 }
 
 func (a *app) testHealth() (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.cfg.AutoTestSeconds)*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", a.cfg.HealthURL, nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, a.cfg.HealthURL, nil)
 	t := time.Now()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode/100 != 2 {
 		return 0, fmt.Errorf("health %s", resp.Status)
 	}
 	return time.Since(t), nil
 }
-func (a *app) startCoverTraffic() {
+
+func (a *app) startCoverTraffic(p common.RouterProfile) {
 	a.mu.Lock()
 	if a.daitaCancel != nil {
 		a.daitaCancel()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.daitaCancel = cancel
-	host, port, rate := a.cfg.DAITAHost, a.cfg.DAITAPort, a.cfg.DAITARateKbps
+	host, port, rate := p.DAITAHost, p.DAITAPort, p.DAITARateKbps
 	a.mu.Unlock()
 	go func() {
 		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
@@ -354,27 +862,34 @@ func (a *app) startCoverTraffic() {
 	}()
 }
 
-func (a *app) forward(w http.ResponseWriter, r *http.Request) { proxyJSON(a, w, r, "/api/forward") }
+func (a *app) forward(w http.ResponseWriter, r *http.Request) {
+	proxyJSON(a, w, r, "/api/forward")
+}
+
 func (a *app) clearForward(w http.ResponseWriter, r *http.Request) {
 	proxyJSON(a, w, r, "/api/forward/clear")
 }
+
 func proxyJSON(a *app, w http.ResponseWriter, r *http.Request, path string) {
-	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 8192))
-	req, err := http.NewRequest("POST", strings.TrimRight(a.cfg.RouterAPI, "/")+path, bytes.NewReader(body))
+	p, err := a.activeProfile()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+a.cfg.APIToken)
+	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 8192))
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(p.RouterAPI, "/")+path, bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+p.APIToken)
 	req.Header.Set("content-type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		http.Error(w, err.Error(), 502)
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	_, _ = io.Copy(w, resp.Body)
 }
-
-var _ = filepath.Separator
