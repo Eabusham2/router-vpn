@@ -13,13 +13,16 @@ HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
 XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
+umask 077
+mkdir -p "$BASE"/{config/{wireguard,awg2},client-bundle/generated,scripts,logs,downloads}
+rm -rf "$BASE/source"
+mkdir -p "$BASE/source"
+cp -a /src/. "$BASE/source/"
 if [[ -f $BASE/.initialized ]]; then
   echo 'Router VPN config already initialized; keeping current keys.'
   /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
   exit 0
 fi
-umask 077
-mkdir -p "$BASE"/{config/{wireguard,awg2},client-bundle/generated,scripts,logs,downloads}
 TOKEN=$(openssl rand -hex 32)
 SOCKS_USER="vpn$(openssl rand -hex 3)"
 SOCKS_PASSWORD=$(openssl rand -base64 24 | tr -d '\n=/+' | head -c 28)

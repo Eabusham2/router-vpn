@@ -2,7 +2,7 @@ name: router-vpn
 services:
   init:
     build:
-      context: .
+      context: ..
       dockerfile: server/init/Dockerfile
     container_name: router-vpn-init
     network_mode: host
@@ -26,7 +26,7 @@ services:
 
   router-agent:
     build:
-      context: .
+      context: ..
       dockerfile: deploy/router-agent.Dockerfile
     container_name: router-vpn-agent
     network_mode: host
@@ -41,7 +41,7 @@ services:
 
   wireguard:
     build:
-      context: .
+      context: ..
       dockerfile: server/wireguard/Dockerfile
     container_name: router-vpn-wireguard
     network_mode: host
@@ -58,7 +58,7 @@ services:
 
   awg2:
     build:
-      context: .
+      context: ..
       dockerfile: server/awg2/Dockerfile
     container_name: router-vpn-awg2
     network_mode: host
