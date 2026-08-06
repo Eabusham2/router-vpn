@@ -4,14 +4,14 @@ BASE=/opt/router-vpn
 WAN_INTERFACE=${WAN_INTERFACE:-eth0}
 LAN_CIDR=${LAN_CIDR:-192.168.50.0/24}
 ADGUARD4=${ADGUARD4:-192.168.50.133}
-ENDPOINT=${ENDPOINT:?Set ENDPOINT to AUTO, your public IPv4, or a hostname}
-if [[ $ENDPOINT == AUTO ]]; then ENDPOINT=$(curl -4fsS --max-time 10 https://api.ipify.org); fi
+ENDPOINT=${ENDPOINT:-}
+CONFIG_ENDPOINT=${ENDPOINT:-router.invalid}
 WG_PORT=${WG_PORT:-51820}
 AWG_PORT=${AWG_PORT:-585}
 REALITY_PORT=${REALITY_PORT:-443}
 HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
-XRAY_PQ_PORT=${XRAY_PQ_PORT:-9443}
+XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 if [[ -f $BASE/.initialized ]]; then
   echo 'Router VPN config already initialized; keeping current keys.'
@@ -48,7 +48,7 @@ MTU = 1420
 [Peer]
 PublicKey = $WG_SERVER_PUB
 PresharedKey = $WG_PSK
-Endpoint = $ENDPOINT:$WG_PORT
+Endpoint = $CONFIG_ENDPOINT:$WG_PORT
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 CFG
@@ -61,7 +61,7 @@ MTU = 1420
 [Peer]
 PublicKey = $WG_SERVER_PUB
 PresharedKey = $WG_PSK
-Endpoint = $ENDPOINT:$WG_PORT
+Endpoint = $CONFIG_ENDPOINT:$WG_PORT
 AllowedIPs = 10.77.0.0/24, fd77:77::/64, $LAN_CIDR
 PersistentKeepalive = 25
 CFG
@@ -105,7 +105,7 @@ H4 = 40000000-49999999
 [Peer]
 PublicKey = $AWG_SERVER_PUB
 PresharedKey = $AWG_PSK
-Endpoint = $ENDPOINT:$AWG_PORT
+Endpoint = $CONFIG_ENDPOINT:$AWG_PORT
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 CFG
@@ -115,10 +115,10 @@ make_awg awg2-strong 8 1200 1360
 cp -a "$BASE/client-bundle/generated/awg2-fast" "$BASE/client-bundle/generated/awg2-pq"
 for mode in awg2-fast awg2-strong awg2-pq; do
   cp "$BASE/client-bundle/generated/$mode/awg.conf" "$BASE/client-bundle/generated/$mode/awg-socks.conf"
-  sed -i 's#AllowedIPs = 0.0.0.0/0, ::/0#AllowedIPs = 10.78.0.0/24, fd78:78::/64, $LAN_CIDR#' "$BASE/client-bundle/generated/$mode/awg-socks.conf"
+  sed -i "s#AllowedIPs = 0.0.0.0/0, ::/0#AllowedIPs = 10.78.0.0/24, fd78:78::/64, $LAN_CIDR#" "$BASE/client-bundle/generated/$mode/awg-socks.conf"
 done
-/src/server/scripts/generate-transports.sh "$BASE" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$REALITY_TARGET"
-/src/server/scripts/generate-xray-pq.sh "$BASE" "$ENDPOINT" "$ADGUARD4" "$XRAY_PQ_PORT" "$REALITY_TARGET"
+/src/server/scripts/generate-transports.sh "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$REALITY_TARGET"
+/src/server/scripts/generate-xray-pq.sh "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$XRAY_PQ_PORT" "$REALITY_TARGET"
 python3 - "$TOKEN" "$WAN_INTERFACE" <<'PY'
 import json,sys
 x=json.load(open('/src/configs/router/router-agent.json.example')); x['token']=sys.argv[1]; x['wan_interface']=sys.argv[2]
@@ -130,12 +130,15 @@ x=json.load(open('/src/configs/router/socks5.json.example')); x['inbounds'][0]['
 json.dump(x,open('/opt/router-vpn/config/socks5.json','w'),indent=2)
 PY
 cat >"$BASE/client-bundle/client.json" <<CFG
-{"listen":"127.0.0.1:8788","router_api":"http://$ADGUARD4:8787","api_token":"$TOKEN","health_url":"https://connectivitycheck.gstatic.com/generate_204","adguard_ipv4":"$ADGUARD4","adguard_ipv6":"fd77:77::1","auto_test_seconds":8,"modes_file":"./modes.json","state_file":"./state.json","scripts_dir":"./modes","socks_host":"$ADGUARD4","socks_port":1080,"socks_username":"$SOCKS_USER","socks_password":"$SOCKS_PASSWORD","daita_host":"$ADGUARD4","daita_port":45999,"daita_rate_kbps":192}
+{"listen":"127.0.0.1:8788","health_url":"https://connectivitycheck.gstatic.com/generate_204","auto_test_seconds":8,"modes_file":"./modes.json","state_file":"./state.json","scripts_dir":"./modes","profiles_file":"./routers.json"}
+CFG
+cat >"$BASE/client-bundle/routers.json" <<CFG
+{"selected_id":"home","profiles":[{"id":"home","name":"Home Router","endpoint":"$ENDPOINT","router_api":"http://$ADGUARD4:8787","api_token":"$TOKEN","adguard_ipv4":"$ADGUARD4","adguard_ipv6":"fd77:77::1","socks_host":"$ADGUARD4","socks_port":1080,"socks_username":"$SOCKS_USER","socks_password":"$SOCKS_PASSWORD","daita_host":"$ADGUARD4","daita_port":45999,"daita_rate_kbps":192}]}
 CFG
 cp /src/configs/client/modes.json "$BASE/client-bundle/modes.json"
 cp -a /src/modes /src/dist /src/client "$BASE/client-bundle/"
 cat >"$BASE/client-bundle/CREDENTIALS.txt" <<TXT
-Endpoint: $ENDPOINT
+Endpoint: ${ENDPOINT:-CHOOSE_IN_APP}
 WireGuard UDP: $WG_PORT
 AmneziaWG UDP: $AWG_PORT
 REALITY TCP: $REALITY_PORT

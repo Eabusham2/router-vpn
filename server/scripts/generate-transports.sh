@@ -30,17 +30,16 @@ TARGET_HOST=${REALITY_TARGET%:*}
 TARGET_PORT=${REALITY_TARGET##*:}
 [[ $TARGET_PORT =~ ^[0-9]+$ ]] || { TARGET_HOST=$REALITY_TARGET; TARGET_PORT=443; }
 
-CERT_NAME=$ENDPOINT
+CERT_NAME=${ROUTER_VPN_TLS_NAME:-router-vpn.home}
 SAN="DNS:$CERT_NAME"
-if [[ $CERT_NAME =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then SAN="IP:$CERT_NAME"; fi
 openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 825 \
   -subj "/CN=$CERT_NAME" -addext "subjectAltName=$SAN" \
   -keyout "$BASE/config/transports/key.pem" -out "$BASE/config/transports/cert.pem" >/dev/null 2>&1
 cp "$BASE/config/transports/cert.pem" "$BASE/client-bundle/generated/hysteria2/cert.pem"
 
-python3 - "$BASE" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$TARGET_HOST" "$TARGET_PORT" "$REALITY_PRIV" "$REALITY_PUB" "$UUID" "$SHORT_ID" "$SS_KEY" "$HY2_PASSWORD" <<'PY'
+python3 - "$BASE" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$TARGET_HOST" "$TARGET_PORT" "$REALITY_PRIV" "$REALITY_PUB" "$UUID" "$SHORT_ID" "$SS_KEY" "$HY2_PASSWORD" "$CERT_NAME" <<'PY'
 import json,sys,os
-(base,endpoint,dns,rp,hp,sp,target,target_port,rpriv,rpub,uuid,shortid,sskey,hy2pass)=sys.argv[1:]
+(base,endpoint,dns,rp,hp,sp,target,target_port,rpriv,rpub,uuid,shortid,sskey,hy2pass,tls_name)=sys.argv[1:]
 rp,hp,sp,target_port=map(int,(rp,hp,sp,target_port))
 server={
  "log":{"level":"warn"},
@@ -76,7 +75,7 @@ def client(outbound,mtu):
 reality={"type":"vless","tag":"proxy","server":endpoint,"server_port":rp,"uuid":uuid,"flow":"xtls-rprx-vision","network":"tcp","packet_encoding":"xudp",
  "tls":{"enabled":True,"server_name":target,"utls":{"enabled":True,"fingerprint":"chrome"},"reality":{"enabled":True,"public_key":rpub,"short_id":shortid}}}
 hy2={"type":"hysteria2","tag":"proxy","server":endpoint,"server_port":hp,"password":hy2pass,"obfs":{"type":"salamander","password":hy2pass},
- "tls":{"enabled":True,"server_name":endpoint,"certificate_path":"cert.pem"}}
+ "tls":{"enabled":True,"server_name":tls_name,"certificate_path":"cert.pem"}}
 ss={"type":"shadowsocks","tag":"proxy","server":endpoint,"server_port":sp,"method":"2022-blake3-aes-256-gcm","password":sskey}
 for name,obj,mtu in (("reality-vision",reality,1380),("hysteria2",hy2,1360),("shadowsocks",ss,1380)):
  path=f"{base}/client-bundle/generated/{name}/sing-box.json"

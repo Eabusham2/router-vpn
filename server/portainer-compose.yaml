@@ -14,13 +14,13 @@ services:
       LAN_CIDR: ${LAN_CIDR:-192.168.50.0/24}
       LAN_CIDR6: ${LAN_CIDR6:-fd00::/8}
       ADGUARD4: ${ADGUARD4:-192.168.50.133}
-      ENDPOINT: ${ENDPOINT:?enter your home public IP or hostname}
+      ENDPOINT: ${ENDPOINT:-}
       WG_PORT: ${WG_PORT:-51820}
       AWG_PORT: ${AWG_PORT:-585}
       REALITY_PORT: ${REALITY_PORT:-443}
       HY2_PORT: ${HY2_PORT:-8443}
       SS_PORT: ${SS_PORT:-8388}
-      XRAY_PQ_PORT: ${XRAY_PQ_PORT:-9443}
+      XRAY_PQ_PORT: ${XRAY_PQ_PORT:-10443}
       REALITY_TARGET: ${REALITY_TARGET:-www.microsoft.com:443}
     restart: "no"
 

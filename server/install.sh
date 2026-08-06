@@ -8,29 +8,29 @@ INSTALL=/opt/router-vpn
 DEFAULT_WAN=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')
 DEFAULT_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 DEFAULT_IP=${DEFAULT_IP:-192.168.50.133}
-PUBLIC_GUESS=$(curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
 
 prompt(){ local var=$1 text=$2 def=$3 value; read -r -p "$text [$def]: " value; printf -v "$var" '%s' "${value:-$def}"; }
 prompt WAN_INTERFACE 'AI Board network interface' "${DEFAULT_WAN:-eth0}"
 prompt LAN_CIDR 'Home LAN IPv4 subnet' '192.168.50.0/24'
 prompt ADGUARD4 'AdGuard Home IPv4 address' "$DEFAULT_IP"
-prompt ENDPOINT 'Home public IPv4 or one hostname' "${PUBLIC_GUESS:-YOUR_PUBLIC_IP}"
+prompt ENDPOINT 'Optional router public IP/hostname (leave blank and choose it in the app)' ''
+CONFIG_ENDPOINT=${ENDPOINT:-router.invalid}
 prompt WG_PORT 'Raw WireGuard UDP port' '51820'
 prompt AWG_PORT 'AmneziaWG UDP port' '585'
 prompt REALITY_PORT 'REALITY/Vision TCP port' '443'
 prompt HY2_PORT 'Hysteria2 QUIC UDP port' '8443'
 prompt SS_PORT 'Shadowsocks TCP/UDP port' '8388'
-prompt XRAY_PQ_PORT 'PQ VLESS/REALITY TCP port' '9443'
+prompt XRAY_PQ_PORT 'PQ VLESS/REALITY TCP port' '10443'
 prompt REALITY_TARGET 'REALITY target host:port' 'www.microsoft.com:443'
 
-for command_name in wg curl openssl python3 zip nft; do
+for command_name in wg openssl python3 zip nft; do
   command -v "$command_name" >/dev/null 2>&1 && continue
   if command -v apt-get >/dev/null; then
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools curl openssl python3 zip nftables
+    DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools openssl python3 zip nftables
     break
   fi
-  echo 'Install wireguard-tools, curl, openssl, python3, zip, and nftables, then rerun.'; exit 1
+  echo 'Install wireguard-tools, openssl, python3, zip, and nftables, then rerun.'; exit 1
 done
 
 umask 077
@@ -76,7 +76,7 @@ MTU = 1420
 [Peer]
 PublicKey = $WG_SERVER_PUB
 PresharedKey = $WG_PSK
-Endpoint = $ENDPOINT:$WG_PORT
+Endpoint = $CONFIG_ENDPOINT:$WG_PORT
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 CFG
@@ -91,7 +91,7 @@ MTU = 1420
 [Peer]
 PublicKey = $WG_SERVER_PUB
 PresharedKey = $WG_PSK
-Endpoint = $ENDPOINT:$WG_PORT
+Endpoint = $CONFIG_ENDPOINT:$WG_PORT
 AllowedIPs = 10.77.0.0/24, fd77:77::/64, $LAN_CIDR
 PersistentKeepalive = 25
 CFG
@@ -142,7 +142,7 @@ H4 = 40000000-49999999
 [Peer]
 PublicKey = $AWG_SERVER_PUB
 PresharedKey = $AWG_PSK
-Endpoint = $ENDPOINT:$AWG_PORT
+Endpoint = $CONFIG_ENDPOINT:$AWG_PORT
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 CFG
@@ -154,8 +154,8 @@ for mode in awg2-fast awg2-strong awg2-pq; do
   cp "$INSTALL/client-bundle/generated/$mode/awg.conf" "$INSTALL/client-bundle/generated/$mode/awg-socks.conf"
   sed -i "s#AllowedIPs = 0.0.0.0/0, ::/0#AllowedIPs = 10.78.0.0/24, fd78:78::/64, $LAN_CIDR#" "$INSTALL/client-bundle/generated/$mode/awg-socks.conf"
 done
-"$ROOT_DIR/server/scripts/generate-transports.sh" "$INSTALL" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$REALITY_TARGET"
-"$ROOT_DIR/server/scripts/generate-xray-pq.sh" "$INSTALL" "$ENDPOINT" "$ADGUARD4" "$XRAY_PQ_PORT" "$REALITY_TARGET"
+"$ROOT_DIR/server/scripts/generate-transports.sh" "$INSTALL" "$CONFIG_ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$REALITY_TARGET"
+"$ROOT_DIR/server/scripts/generate-xray-pq.sh" "$INSTALL" "$CONFIG_ENDPOINT" "$ADGUARD4" "$XRAY_PQ_PORT" "$REALITY_TARGET"
 
 python3 - "$ROOT_DIR/configs/router/router-agent.json.example" "$INSTALL/config/router-agent.json" "$TOKEN" "$WAN_INTERFACE" <<'PY'
 import json,sys
@@ -176,29 +176,42 @@ ENV
 cat >"$INSTALL/client-bundle/client.json" <<CFG
 {
   "listen": "127.0.0.1:8788",
-  "router_api": "http://$ADGUARD4:8787",
-  "api_token": "$TOKEN",
   "health_url": "https://connectivitycheck.gstatic.com/generate_204",
-  "adguard_ipv4": "$ADGUARD4",
-  "adguard_ipv6": "fd77:77::1",
   "auto_test_seconds": 8,
   "modes_file": "./modes.json",
   "state_file": "./state.json",
   "scripts_dir": "./modes",
-  "socks_host": "$ADGUARD4",
-  "socks_port": 1080,
-  "socks_username": "$SOCKS_USER",
-  "socks_password": "$SOCKS_PASSWORD",
-  "daita_host": "$ADGUARD4",
-  "daita_port": 45999,
-  "daita_rate_kbps": 192
+  "profiles_file": "./routers.json"
+}
+CFG
+cat >"$INSTALL/client-bundle/routers.json" <<CFG
+{
+  "selected_id": "home",
+  "profiles": [
+    {
+      "id": "home",
+      "name": "Home Router",
+      "endpoint": "$ENDPOINT",
+      "router_api": "http://10.77.0.1:8787",
+      "api_token": "$TOKEN",
+      "adguard_ipv4": "$ADGUARD4",
+      "adguard_ipv6": "fd77:77::1",
+      "socks_host": "$ADGUARD4",
+      "socks_port": 1080,
+      "socks_username": "$SOCKS_USER",
+      "socks_password": "$SOCKS_PASSWORD",
+      "daita_host": "$ADGUARD4",
+      "daita_port": 45999,
+      "daita_rate_kbps": 192
+    }
+  ]
 }
 CFG
 cp "$ROOT_DIR/configs/client/modes.json" "$INSTALL/client-bundle/modes.json"
 cp -a "$ROOT_DIR/modes" "$INSTALL/client-bundle/modes"
 cp -a "$ROOT_DIR/dist" "$INSTALL/client-bundle/dist"
 cat >"$INSTALL/client-bundle/CREDENTIALS.txt" <<TXT
-Endpoint: $ENDPOINT
+Endpoint: ${ENDPOINT:-CHOOSE_IN_APP}
 WireGuard UDP: $WG_PORT
 AmneziaWG UDP: $AWG_PORT
 REALITY TCP: $REALITY_PORT

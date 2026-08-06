@@ -2,7 +2,10 @@
 set -euo pipefail
 MODE=${1:?mode}
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
-CONF="$ROOT/generated/$MODE"
+PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}" | tr -cd 'A-Za-z0-9_.-')
+PROFILE_ID=${PROFILE_ID:-router}
+CONF="$ROOT/generated/$PROFILE_ID/$MODE"
+[[ -d "$CONF" ]] || CONF="$ROOT/generated/$MODE"
 need_bin(){ command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1"; exit 1; }; }
 need_file(){ [[ -f "$1" ]] || { echo "missing profile: $1"; exit 1; }; }
 case "$MODE" in

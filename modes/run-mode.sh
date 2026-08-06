@@ -2,9 +2,56 @@
 set -euo pipefail
 MODE=${1:?mode}
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
-CONF="$ROOT/generated/$MODE"
+PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}" | tr -cd 'A-Za-z0-9_.-')
+PROFILE_ID=${PROFILE_ID:-router}
+SOURCE_CONF="$ROOT/generated/$PROFILE_ID/$MODE"
+[[ -d "$SOURCE_CONF" ]] || SOURCE_CONF="$ROOT/generated/$MODE"
 RUN="$ROOT/run"
+ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend in the app first}
+CONF="$RUN/profile-$PROFILE_ID-$MODE"
+rm -rf "$CONF"
 mkdir -p "$RUN"
+cp -a "$SOURCE_CONF" "$CONF"
+python3 - "$CONF" "$ENDPOINT" <<'PY_ENDPOINT'
+from pathlib import Path
+import json,re,sys
+root=Path(sys.argv[1]); endpoint=sys.argv[2].strip().strip('[]')
+wg_host=f'[{endpoint}]' if ':' in endpoint else endpoint
+
+def patch_json(obj):
+    if isinstance(obj,dict):
+        outbounds=obj.get('outbounds')
+        if isinstance(outbounds,list):
+            for outbound in outbounds:
+                if not isinstance(outbound,dict): continue
+                if outbound.get('tag')=='proxy' and isinstance(outbound.get('server'),str):
+                    outbound['server']=endpoint
+                settings=outbound.get('settings')
+                if isinstance(settings,dict):
+                    for vnext in settings.get('vnext',[]) if isinstance(settings.get('vnext'),list) else []:
+                        if isinstance(vnext,dict) and 'address' in vnext: vnext['address']=endpoint
+        for key,value in list(obj.items()):
+            if key in ('endpoint','remote_address') and isinstance(value,str): obj[key]=endpoint
+            elif key in ('certificate_path','key_path') and isinstance(value,str) and not value.startswith('/'):
+                obj[key]=str(root/value)
+            else: patch_json(value)
+    elif isinstance(obj,list):
+        for value in obj: patch_json(value)
+
+for p in root.rglob('*'):
+    if not p.is_file(): continue
+    if p.suffix.lower()=='.json':
+        try: data=json.loads(p.read_text())
+        except Exception: continue
+        patch_json(data)
+        p.write_text(json.dumps(data,indent=2)+'\n')
+        continue
+    try: text=p.read_text()
+    except UnicodeDecodeError: continue
+    text=re.sub(r'(?m)^(Endpoint\s*=\s*).*:(\d+)\s*$', lambda m:f'{m.group(1)}{wg_host}:{m.group(2)}', text)
+    text=re.sub(r'(?m)^(endpoint\s*=\s*["\']).*?(["\'])', lambda m:f'{m.group(1)}{endpoint}{m.group(2)}', text)
+    p.write_text(text)
+PY_ENDPOINT
 export HOMEVPN_MODE="$MODE"
 export HOMEVPN_MTU=${HOMEVPN_MTU:-1380}
 "$(dirname "$0")/check-mode.sh" "$MODE" >/dev/null
