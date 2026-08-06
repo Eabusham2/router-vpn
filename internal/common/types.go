@@ -42,6 +42,9 @@ type ClientConfig struct {
 	SocksPort       int    `json:"socks_port"`
 	SocksUsername   string `json:"socks_username"`
 	SocksPassword   string `json:"socks_password"`
+	DAITAHost       string `json:"daita_host"`
+	DAITAPort       int    `json:"daita_port"`
+	DAITARateKbps   int    `json:"daita_rate_kbps"`
 }
 
 type ForwardRequest struct {
