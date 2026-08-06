@@ -19,6 +19,7 @@ case "$MODE" in
   wg-quic) need_bin gotatun; need_file "$CONF/gotatun.json" ;;
   wg-ss-v2ray) need_bin wg-quick; need_bin sing-box; need_file "$CONF/wg.conf"; need_file "$CONF/sing-box.json" ;;
   max-tls|max-quic) need_bin wg-quick; need_bin rosenpass; need_bin sing-box; need_bin xray; need_file "$CONF/chain.env" ;;
+  all) need_bin wg-quick; need_bin rosenpass; need_bin sing-box; need_bin xray; [[ -f "$ROOT/generated/$PROFILE_ID/max-tls/chain.env" || -f "$ROOT/generated/max-tls/chain.env" || -f "$ROOT/generated/$PROFILE_ID/max-quic/chain.env" || -f "$ROOT/generated/max-quic/chain.env" ]] || { echo "missing MAX chain profiles"; exit 1; } ;;
   *) echo "unknown mode: $MODE"; exit 2 ;;
 esac
 printf 'ready'

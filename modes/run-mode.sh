@@ -163,5 +163,16 @@ case "$MODE" in
     sleep 2
     run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf"
     ;;
+  all)
+    TLS_CONF="$ROOT/generated/$PROFILE_ID/max-tls"; [[ -d "$TLS_CONF" ]] || TLS_CONF="$ROOT/generated/max-tls"
+    QUIC_CONF="$ROOT/generated/$PROFILE_ID/max-quic"; [[ -d "$QUIC_CONF" ]] || QUIC_CONF="$ROOT/generated/max-quic"
+    if timeout 2 bash -c "</dev/tcp/${ENDPOINT}/443" >/dev/null 2>&1 && [[ -f "$TLS_CONF/chain.env" ]]; then
+      exec env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ENDPOINT="$ENDPOINT" HOMEVPN_DAITA="${HOMEVPN_DAITA:-false}" HOMEVPN_JUMBO="${HOMEVPN_JUMBO:-false}" HOMEVPN_SOCKS="${HOMEVPN_SOCKS:-false}" HOMEVPN_ROOT="$ROOT" "$0" max-tls
+    elif [[ -f "$QUIC_CONF/chain.env" ]]; then
+      exec env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ENDPOINT="$ENDPOINT" HOMEVPN_DAITA="${HOMEVPN_DAITA:-false}" HOMEVPN_JUMBO="${HOMEVPN_JUMBO:-false}" HOMEVPN_SOCKS="${HOMEVPN_SOCKS:-false}" HOMEVPN_ROOT="$ROOT" "$0" max-quic
+    else
+      echo "no ALL-compatible chain profile is installed" >&2; exit 1
+    fi
+    ;;
   *) echo "unknown mode: $MODE" >&2; exit 2 ;;
 esac

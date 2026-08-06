@@ -1,24 +1,17 @@
-# The one download
+# What this ZIP is
 
-## `router-vpn.zip`
+`router-vpn.zip` is the only package you need. It contains:
 
-Contains:
+- Router/AI Board Portainer and SSH installers
+- Raw WireGuard and AmneziaWG 2
+- REALITY/Vision, PQ REALITY, Hysteria2/QUIC, Shadowsocks/V2Ray, XHTTP/FinalMask, Naive, MAX and ALL profile definitions
+- Private authenticated SOCKS5
+- AUTO/manual mode picker
+- Runtime-selectable router backend profiles
+- IPv4/IPv6, AdGuard DNS, DAITA-like toggle, jumbo-payload option
+- Tunnel port, range and protected-DMZ controls
+- macOS, Windows and Linux client binaries
+- iOS Xcode project and signing workflow
+- The same full tutorial as the chat in `START-HERE.md` and `docs/FULL-TUTORIAL.md`
 
-- complete source
-- Portainer and SSH installers
-- router services and firewall scripts
-- raw WireGuard and AmneziaWG 2 generation
-- REALITY, PQ-REALITY, Hysteria2, and Shadowsocks generation
-- authenticated SOCKS5
-- AUTO/manual desktop controller
-- runtime router-profile importer
-- IPv4/IPv6, AdGuard DNS, jumbo, DAITA-like, and port-forward controls
-- prebuilt macOS, Windows, Linux, and router-agent binaries
-- iOS Xcode source and signing workflow
-- exact setup guide
-
-## Generated after router installation
-
-`router-vpn-client-bundle.zip` contains the private keys, credentials, and profiles for that router. Keep it private.
-
-There is no second project archive.
+The router generates a separate private `router-vpn-client-bundle.zip` after installation. That second ZIP is unique to your router and contains private keys; it is not a second software package.
