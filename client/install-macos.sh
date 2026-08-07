@@ -3,14 +3,25 @@ set -euo pipefail
 BUNDLE=${1:-$(pwd)}
 [[ -f "$BUNDLE/client.json" && -f "$BUNDLE/routers.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
 command -v brew >/dev/null || { echo 'Install Homebrew first from brew.sh, then rerun.'; exit 1; }
-brew install wireguard-tools go make git python sing-box rust cmake llvm pkg-config libsodium || true
+brew install wireguard-tools go make git python sing-box rust cmake llvm pkg-config libsodium shadowsocks-rust || true
 "$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
 sudo mkdir -p "$ROOT" /usr/local/bin
 sudo cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
 ARCH=$(uname -m)
-case "$ARCH" in arm64) BIN="$BUNDLE/dist/router-vpn-client-darwin-arm64";; x86_64) BIN="$BUNDLE/dist/router-vpn-client-darwin-amd64";; *) echo "Unsupported Mac architecture: $ARCH"; exit 1;; esac
+case "$ARCH" in
+  arm64)
+    BIN="$BUNDLE/dist/router-vpn-client-darwin-arm64"
+    DNS_BIN="$BUNDLE/dist/router-vpn-dns-darwin-arm64"
+    ;;
+  x86_64)
+    BIN="$BUNDLE/dist/router-vpn-client-darwin-amd64"
+    DNS_BIN="$BUNDLE/dist/router-vpn-dns-darwin-amd64"
+    ;;
+  *) echo "Unsupported Mac architecture: $ARCH"; exit 1;;
+esac
 sudo install -m 755 "$BIN" /usr/local/bin/router-vpn-client
+sudo install -m 755 "$DNS_BIN" /usr/local/bin/router-vpn-dns
 if ! command -v rosenpass >/dev/null; then
   echo 'Building Rosenpass for PQ-WireGuard/PQ-AmneziaWG...'
   TMP_RP=$(mktemp -d)
@@ -22,6 +33,17 @@ if ! command -v rosenpass >/dev/null; then
     echo 'Warning: Rosenpass build failed. Normal modes still work; PQ-WG/PQ-AWG remain disabled.' >&2
   fi
   rm -rf "$TMP_RP"
+fi
+if ! command -v v2ray-plugin >/dev/null; then
+  echo 'Building V2Ray SIP003 plugin for SS+V2Ray TLS...'
+  TMP_V2=$(mktemp -d)
+  if git clone --depth 1 https://github.com/shadowsocks/v2ray-plugin "$TMP_V2/v2ray-plugin" \
+    && (cd "$TMP_V2/v2ray-plugin" && go build -trimpath -ldflags='-s -w' -o v2ray-plugin .); then
+    sudo install -m 755 "$TMP_V2/v2ray-plugin/v2ray-plugin" /usr/local/bin/v2ray-plugin
+  else
+    echo 'Warning: V2Ray-plugin build failed; SS+V2Ray TLS remains disabled.' >&2
+  fi
+  rm -rf "$TMP_V2"
 fi
 if ! command -v amneziawg-go >/dev/null || ! command -v awg-quick >/dev/null; then
   TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
