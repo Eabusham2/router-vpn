@@ -4,15 +4,21 @@ MODE=${1:?mode}
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
 PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}" | tr -cd 'A-Za-z0-9_.-')
 PROFILE_ID=${PROFILE_ID:-router}
-SOURCE_CONF="$ROOT/generated/$PROFILE_ID/$MODE"
-[[ -d "$SOURCE_CONF" ]] || SOURCE_CONF="$ROOT/generated/$MODE"
 RUN="$ROOT/run"
 ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend in the app first}
-CONF="$RUN/profile-$PROFILE_ID-$MODE"
-rm -rf "$CONF"
 mkdir -p "$RUN"
-cp -a "$SOURCE_CONF" "$CONF"
-python3 - "$CONF" "$ENDPOINT" <<'PY_ENDPOINT'
+
+if [[ $MODE == all ]]; then
+  CONF="$RUN/profile-$PROFILE_ID-all"
+  rm -rf "$CONF"
+  mkdir -p "$CONF"
+else
+  SOURCE_CONF="$ROOT/generated/$PROFILE_ID/$MODE"
+  [[ -d "$SOURCE_CONF" ]] || SOURCE_CONF="$ROOT/generated/$MODE"
+  CONF="$RUN/profile-$PROFILE_ID-$MODE"
+  rm -rf "$CONF"
+  cp -a "$SOURCE_CONF" "$CONF"
+  python3 - "$CONF" "$ENDPOINT" <<'PY_ENDPOINT'
 from pathlib import Path
 import json,re,sys
 root=Path(sys.argv[1]); endpoint=sys.argv[2].strip().strip('[]')
@@ -24,7 +30,7 @@ def patch_json(obj):
         if isinstance(outbounds,list):
             for outbound in outbounds:
                 if not isinstance(outbound,dict): continue
-                if outbound.get('tag')=='proxy' and isinstance(outbound.get('server'),str):
+                if outbound.get('tag') in ('proxy','outer','transport') and isinstance(outbound.get('server'),str):
                     outbound['server']=endpoint
                 settings=outbound.get('settings')
                 if isinstance(settings,dict):
@@ -52,6 +58,8 @@ for p in root.rglob('*'):
     text=re.sub(r'(?m)^(endpoint\s*=\s*["\']).*?(["\'])', lambda m:f'{m.group(1)}{endpoint}{m.group(2)}', text)
     p.write_text(text)
 PY_ENDPOINT
+fi
+
 export HOMEVPN_MODE="$MODE"
 export HOMEVPN_MTU=${HOMEVPN_MTU:-1380}
 "$(dirname "$0")/check-mode.sh" "$MODE" >/dev/null
@@ -66,7 +74,7 @@ make_local_socks_chain(){
   local out="$RUN/local-socks-chain.json"
   python3 - "$out" <<'PY'
 import json,os,sys
-host=os.environ.get('HOMEVPN_SOCKS_HOST','192.168.50.133')
+host=os.environ.get('HOMEVPN_SOCKS_HOST','10.77.0.1')
 port=int(os.environ.get('HOMEVPN_SOCKS_PORT','1080'))
 user=os.environ.get('HOMEVPN_SOCKS_USER','')
 pw=os.environ.get('HOMEVPN_SOCKS_PASSWORD','')
@@ -117,6 +125,24 @@ PY
   exec sudo sing-box run -c "$cfg"
 }
 
+run_max(){
+  local base=$1
+  set -a
+  source "$CONF/chain.env"
+  set +a
+  start_bg sudo xray run -c "$CONF/outer-xray.json"
+  start_bg sudo sing-box run -c "$CONF/middle-sing-box.json"
+  if [[ -f "$CONF/rosenpass.toml" ]]; then
+    start_bg sudo rosenpass exchange-config "$CONF/rosenpass.toml"
+  fi
+  sleep 2
+  case "$base" in
+    wg) run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf" ;;
+    awg) run_kernel_tunnel awg-quick "$CONF/awg.conf" "$CONF/awg-socks.conf" ;;
+    *) echo "unknown MAX base: $base" >&2; exit 2 ;;
+  esac
+}
+
 case "$MODE" in
   wg)
     run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf"
@@ -134,7 +160,7 @@ case "$MODE" in
     sleep 1
     run_kernel_tunnel awg-quick "$CONF/awg.conf" "$CONF/awg-socks.conf"
     ;;
-  reality-vision|hysteria2|shadowsocks|ss-v2ray|naive-h2|naive-h3)
+  reality-vision|hysteria2|shadowsocks|ss-v2ray|naive-h2)
     run_sing_box
     ;;
   reality-pq-vision)
@@ -145,34 +171,25 @@ case "$MODE" in
   reality-xhttp)
     exec sudo xray run -c "$CONF/xray.json"
     ;;
-  wg-quic)
-    [[ ${HOMEVPN_DAITA:-false} == true ]] && export GOTATUN_DAITA=1
-    exec sudo gotatun --config "$CONF/gotatun.json"
+  max-tls-wg|max-quic-wg)
+    run_max wg
     ;;
-  wg-ss-v2ray)
-    start_bg sudo sing-box run -c "$CONF/sing-box.json"
-    sleep 1
-    run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf"
-    ;;
-  max-tls|max-quic)
-    set -a; source "$CONF/chain.env"; set +a
-    [[ ${HOMEVPN_DAITA:-false} == true ]] && export GOTATUN_DAITA=1
-    start_bg sudo xray run -c "$CONF/outer-xray.json"
-    start_bg sudo sing-box run -c "$CONF/middle-sing-box.json"
-    start_bg sudo rosenpass exchange-config "$CONF/rosenpass.toml"
-    sleep 2
-    run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf"
+  max-tls-awg|max-quic-awg)
+    run_max awg
     ;;
   all)
-    TLS_CONF="$ROOT/generated/$PROFILE_ID/max-tls"; [[ -d "$TLS_CONF" ]] || TLS_CONF="$ROOT/generated/max-tls"
-    QUIC_CONF="$ROOT/generated/$PROFILE_ID/max-quic"; [[ -d "$QUIC_CONF" ]] || QUIC_CONF="$ROOT/generated/max-quic"
-    if timeout 2 bash -c "</dev/tcp/${ENDPOINT}/443" >/dev/null 2>&1 && [[ -f "$TLS_CONF/chain.env" ]]; then
-      exec env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ENDPOINT="$ENDPOINT" HOMEVPN_DAITA="${HOMEVPN_DAITA:-false}" HOMEVPN_JUMBO="${HOMEVPN_JUMBO:-false}" HOMEVPN_SOCKS="${HOMEVPN_SOCKS:-false}" HOMEVPN_ROOT="$ROOT" "$0" max-tls
-    elif [[ -f "$QUIC_CONF/chain.env" ]]; then
-      exec env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ENDPOINT="$ENDPOINT" HOMEVPN_DAITA="${HOMEVPN_DAITA:-false}" HOMEVPN_JUMBO="${HOMEVPN_JUMBO:-false}" HOMEVPN_SOCKS="${HOMEVPN_SOCKS:-false}" HOMEVPN_ROOT="$ROOT" "$0" max-quic
-    else
-      echo "no ALL-compatible chain profile is installed" >&2; exit 1
-    fi
+    case ${HOMEVPN_BASE:-auto} in
+      awg|amnezia|amneziawg) candidates=(max-tls-awg max-tls-wg max-quic-awg max-quic-wg) ;;
+      wg|wireguard|standard) candidates=(max-tls-wg max-tls-awg max-quic-wg max-quic-awg) ;;
+      *) candidates=(max-tls-wg max-tls-awg max-quic-wg max-quic-awg) ;;
+    esac
+    for candidate in "${candidates[@]}"; do
+      if env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ROOT="$ROOT" "$(dirname "$0")/check-mode.sh" "$candidate" >/dev/null 2>&1; then
+        exec env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ENDPOINT="$ENDPOINT" HOMEVPN_BASE="${HOMEVPN_BASE:-auto}" HOMEVPN_DAITA="${HOMEVPN_DAITA:-false}" HOMEVPN_JUMBO="${HOMEVPN_JUMBO:-false}" HOMEVPN_SOCKS="${HOMEVPN_SOCKS:-false}" HOMEVPN_ROOT="$ROOT" "$0" "$candidate"
+      fi
+    done
+    echo "no validated MAX TLS or MAX QUIC branch is installed" >&2
+    exit 1
     ;;
   *) echo "unknown mode: $MODE" >&2; exit 2 ;;
 esac
