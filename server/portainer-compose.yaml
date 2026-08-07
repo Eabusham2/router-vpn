@@ -24,6 +24,9 @@ services:
       SS_PORT: ${SS_PORT:-8388}
       XRAY_PQ_PORT: ${XRAY_PQ_PORT:-10443}
       XHTTP_PORT: ${XHTTP_PORT:-11443}
+      SS_V2RAY_PORT: ${SS_V2RAY_PORT:-12443}
+      NAIVE_PORT: ${NAIVE_PORT:-13443}
+      ROUTER_VPN_TLS_NAME: ${ROUTER_VPN_TLS_NAME:-}
       REALITY_TARGET: ${REALITY_TARGET:-www.microsoft.com:443}
     restart: "no"
 
@@ -51,6 +54,9 @@ services:
       SS_PORT: ${SS_PORT:-8388}
       XRAY_PQ_PORT: ${XRAY_PQ_PORT:-10443}
       XHTTP_PORT: ${XHTTP_PORT:-11443}
+      SS_V2RAY_PORT: ${SS_V2RAY_PORT:-12443}
+      NAIVE_PORT: ${NAIVE_PORT:-13443}
+      ROUTER_VPN_TLS_NAME: ${ROUTER_VPN_TLS_NAME:-}
       REALITY_TARGET: ${REALITY_TARGET:-www.microsoft.com:443}
     restart: "no"
 
@@ -145,6 +151,38 @@ services:
     volumes:
       - /opt/router-vpn/config/xray/server.json:/etc/xray/config.json:ro
     command: ["run", "-c", "/etc/xray/config.json"]
+
+  naive:
+    build:
+      context: ..
+      dockerfile: server/naive/Dockerfile
+    container_name: router-vpn-naive
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      finalize: {condition: service_completed_successfully}
+    volumes:
+      - /opt/router-vpn/config/tls/settings.env:/router-vpn/settings.env:ro
+      - /opt/router-vpn/caddy-data:/data
+      - /opt/router-vpn/caddy-config:/config
+    environment:
+      ROUTER_VPN_TLS_SETTINGS: /router-vpn/settings.env
+
+  ss-v2ray:
+    build:
+      context: ..
+      dockerfile: server/ss-v2ray/Dockerfile
+    container_name: router-vpn-ss-v2ray
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      finalize: {condition: service_completed_successfully}
+      naive: {condition: service_started}
+    volumes:
+      - /opt/router-vpn/config/tls/settings.env:/router-vpn/settings.env:ro
+      - /opt/router-vpn/caddy-data:/caddy-data:ro
+    environment:
+      ROUTER_VPN_TLS_SETTINGS: /router-vpn/settings.env
 
   bundle-web:
     image: busybox:1.36
