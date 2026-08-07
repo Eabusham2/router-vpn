@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import NetworkExtension
 
@@ -36,7 +37,7 @@ final class RouterVPNModel: ObservableObject {
 
     var socksSummary: String {
         guard !socksHost.isEmpty else { return "Configure your home router first" }
-        return "\(socksHost):\(socksPort) • \(socksUsername.isEmpty ? "no username" : socksUsername)"
+        return "\(socksHost):\(socksPort) • no authentication • tunnel/LAN only"
     }
 
     func importBundle(_ data: Data) throws {
@@ -57,8 +58,8 @@ final class RouterVPNModel: ObservableObject {
         current.routerAPI = routerAPI
         current.socks5Host = socksHost
         current.socks5Port = Int(socksPort) ?? 1080
-        current.socks5Username = socksUsername
-        current.socks5Password = socksPassword
+        current.socks5Username = ""
+        current.socks5Password = ""
         current.modes = modes
         bundle = current
         if let data = try? JSONEncoder().encode(current) {
@@ -75,8 +76,8 @@ final class RouterVPNModel: ObservableObject {
         apiToken = decoded.apiToken
         socksHost = decoded.socks5Host
         socksPort = String(decoded.socks5Port)
-        socksUsername = decoded.socks5Username
-        socksPassword = decoded.socks5Password
+        socksUsername = ""
+        socksPassword = ""
         if !modes.contains(where: { $0.id == selectedMode }) { selectedMode = modes.first?.id ?? "wg" }
     }
 
