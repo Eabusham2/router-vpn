@@ -1,51 +1,57 @@
 # Modes
 
-Modes are listed from the lightest/least intensive to the strongest/heaviest. Added ping and traffic are same-route engineering estimates; the travel distance back home is separate.
+Modes are ordered from the lightest/basic option to the strongest/heaviest option. Added ping and traffic are same-route engineering estimates; travel distance back to the home router is separate.
 
-| Order | Mode | Layer stack | Added ping | Traffic increase | Speed loss | State |
+| Order | Mode | Main layers | Added ping | Traffic increase | Speed loss | State |
 |---:|---|---|---:|---:|---:|---|
-| AUTO | First working eligible profile | Tries the eligible modes below in order and stops at the first successful health check | varies | varies | varies | ready |
-| 1 | WireGuard Raw | Standard WireGuard encryption | 0.1–0.8 ms | 3–5% | 0.5–2% | ready |
-| 2 | AmneziaWG 2 Fast | Modded WireGuard + light packet obfuscation | 0.2–1.5 ms | 4–7% | 0.7–3% | ready |
-| 3 | WireGuard + Rosenpass PQ | Standard WireGuard + hybrid post-quantum key exchange | 0.2–1.2 ms | 3–6% | 0.7–3% | integration |
-| 4 | AmneziaWG 2 Strong | Modded WireGuard + stronger padding/signature obfuscation | 0.3–2.5 ms | 6–12% | 1.5–6% | ready |
-| 5 | AmneziaWG 2 + Rosenpass PQ | Modded WireGuard + stronger obfuscation + hybrid-PQ key exchange | 0.4–3 ms | 6–13% | 2–7% | integration |
-| 6 | **VLESS + TCP + REALITY + Vision + Chrome uTLS — RECOMMENDED** | VLESS + TCP + REALITY + XTLS Vision + Chrome-style TLS fingerprint on TCP 443 | 0.7–3 ms | 4–8% | 2–6% | ready |
-| 7 | PQ VLESS + REALITY + Vision | Hybrid-PQ VLESS encryption + REALITY + Vision | 0.9–3.5 ms | 5–10% | 2.5–7% | ready |
-| 8 | Hysteria2 QUIC | Encrypted Hysteria2 + QUIC camouflage/loss resistance | 0.8–4 ms | 6–12% | 3–10% | ready |
-| 9 | Shadowsocks 2022 | Shadowsocks encryption/obfuscation | 0.8–3.5 ms | 4–9% | 2–8% | ready |
-| 10 | Shadowsocks + V2Ray TLS | Shadowsocks + V2Ray-plugin TLS/WebSocket camouflage | 1.5–6 ms | 7–14% | 4–12% | integration |
-| 11 | VLESS PQ + REALITY + XHTTP + FinalMask | Hybrid-PQ VLESS + REALITY + XHTTP + FinalMask | 1.5–7 ms | 7–15% | 5–14% | integration |
-| 12 | Naive HTTPS HTTP/2 | Chromium-style HTTPS proxy camouflage | 2–8 ms | 8–18% | 6–16% | integration |
-| 13 | MAX TLS — Standard WireGuard base | WG/PQ option + DAITA-like shaping + Shadowsocks/V2Ray TLS + VLESS PQ/REALITY/XHTTP/FinalMask | 5–20 ms | 25–80% | 18–45% | lab |
-| 14 | MAX TLS — AmneziaWG 2 base | AWG2/PQ option + DAITA-like shaping + Shadowsocks/V2Ray TLS + VLESS PQ/REALITY/XHTTP/FinalMask | 5.5–22 ms | 28–85% | 20–48% | lab |
-| 15 | MAX QUIC — Standard WireGuard base | WG/PQ option + DAITA-like shaping + Shadowsocks + Hysteria2/QUIC | 4–16 ms | 20–70% | 15–40% | lab |
-| 16 | MAX QUIC — AmneziaWG 2 base | AWG2/PQ option + DAITA-like shaping + Shadowsocks + Hysteria2/QUIC | 4.5–18 ms | 23–75% | 17–43% | lab |
-| 17 | **ALL** | Tries both MAX TLS bases first, then both MAX QUIC bases; uses every compatible generated layer | 5–25 ms | 25–100% | 18–60% | lab |
+| AUTO | First working eligible profile | Tries eligible modes in the order below and stops after a successful health check | varies | varies | varies | ready |
+| 1 | WireGuard Raw | Standard WireGuard | 0.1–0.8 ms | 3–5% | 0.5–2% | ready |
+| 2 | AmneziaWG 2 Fast | WireGuard + light randomized obfuscation | 0.2–1.5 ms | 4–7% | 0.7–3% | ready |
+| 3 | Shadowsocks 2022 | Shadowsocks 2022 encrypted proxy | 0.8–3.5 ms | 4–9% | 2–8% | ready |
+| 4 | WireGuard + Rosenpass PQ | WireGuard + Rosenpass hybrid-PQ key exchange | 0.2–1.2 ms | 3–6% | 0.7–3% | integration |
+| 5 | AmneziaWG 2 Strong | WireGuard + stronger AmneziaWG obfuscation | 0.3–2.5 ms | 6–12% | 1.5–6% | ready |
+| 6 | AmneziaWG 2 + Rosenpass PQ | Strong AmneziaWG + Rosenpass hybrid-PQ exchange | 0.4–3 ms | 6–13% | 2–7% | integration |
+| 7 | **VLESS + TCP + REALITY + Vision + Chrome uTLS — RECOMMENDED** | VLESS + TCP + REALITY + XTLS Vision + Chrome-style uTLS | 0.7–3 ms | 4–8% | 2–6% | ready |
+| 8 | Hysteria2 + QUIC + Salamander | Hysteria2 + QUIC + Salamander obfuscation | 0.8–4 ms | 6–12% | 3–10% | ready |
+| 9 | PQ VLESS + REALITY + Vision | Hybrid-PQ VLESS + REALITY + Vision | 0.9–3.5 ms | 5–10% | 2.5–7% | ready |
+| 10 | Dual Transport | REALITY/Vision/uTLS for TCP + Hysteria2/QUIC for UDP | 1–5 ms | 6–14% | 3–12% | generated |
+| 11 | Naive HTTPS HTTP/2 | Chromium-style HTTPS proxy | 2–8 ms | 8–18% | 6–16% | integration |
+| 12 | Shadowsocks + V2Ray-plugin TLS | Shadowsocks + V2Ray-plugin TLS/WebSocket | 1.5–6 ms | 7–14% | 4–12% | integration |
+| 13 | PQ VLESS + REALITY + XHTTP + FinalMask | PQ VLESS + REALITY + XHTTP + FinalMask fragmentation | 1.5–7 ms | 7–15% | 5–14% | generated |
+| 14 | PQ Dual Transport | PQ REALITY/Vision for TCP + Hysteria2/QUIC for UDP | 2–9 ms | 10–22% | 7–18% | generated |
+| 15 | MAX QUIC — WireGuard base | WireGuard → Shadowsocks 2022 → Hysteria2/QUIC | 4–16 ms | 20–70% | 15–40% | generated |
+| 16 | MAX QUIC — AmneziaWG base | AmneziaWG 2 → Shadowsocks 2022 → Hysteria2/QUIC | 4.5–18 ms | 23–75% | 17–43% | generated |
+| 17 | MAX TLS — WireGuard base | WireGuard → Shadowsocks 2022 → PQ VLESS/REALITY/XHTTP/FinalMask | 5–20 ms | 25–80% | 18–45% | generated |
+| 18 | MAX TLS — AmneziaWG base | AmneziaWG 2 → Shadowsocks 2022 → PQ VLESS/REALITY/XHTTP/FinalMask | 5.5–22 ms | 28–85% | 20–48% | generated |
+| 19 | **ALL** | Tries both MAX TLS bases, then both MAX QUIC bases, and selects the strongest validated compatible branch | 5–25 ms | 25–100% | 18–60% | generated |
 
 ## AUTO order
 
-AUTO does **not** default to MAX. It tries the least intensive eligible mode first and escalates only when the current mode cannot pass the health check:
+AUTO does **not** start with MAX. It escalates through only the available modes marked AUTO-eligible:
 
-WireGuard Raw → AmneziaWG 2 Fast → AmneziaWG 2 Strong → recommended REALITY/Vision/uTLS → PQ REALITY/Vision → Hysteria2 → Shadowsocks 2022.
+WireGuard Raw → AmneziaWG 2 Fast → Shadowsocks 2022 → AmneziaWG 2 Strong → recommended REALITY/Vision/uTLS → Hysteria2/QUIC → PQ REALITY/Vision → Dual Transport.
 
-Rosenpass and the laboratory chains are excluded from AUTO until their required local binaries and generated profiles pass validation. They remain available manually.
+It stops at the first mode that starts successfully and passes the configured internet health check.
 
-## Base tunnel choice
+## Base choice
 
-The strongest profiles expose both bases in the picker:
+The picker exposes both bases for the strongest serial chains:
 
-- **Standard WireGuard base** — lower overhead and widest compatibility.
-- **AmneziaWG 2 base** — modded WireGuard with additional packet obfuscation.
+- **Standard WireGuard:** less overhead and broader compatibility.
+- **AmneziaWG 2:** modded WireGuard with additional packet obfuscation.
 
-**ALL** automatically tries both bases. This avoids silently forcing one engine and provides a fallback when a network blocks or breaks the other.
+ALL tries the standard and AmneziaWG versions automatically. TLS and QUIC are alternative outer paths, so ALL keeps both available and selects a working path rather than blindly nesting incompatible alternatives into the same packet.
 
-## Toggles
+## Toggles and SOCKS5
 
-- **DAITA Off/On:** On enables the shipped randomized cover-traffic control. It is DAITA-like unless both ends use a compatible Maybenot-enabled implementation.
-- **Jumbo Off/On:** On exposes a 9000-byte client TUN only for compatible proxy modes. Internet packets are still segmented to the path MTU.
-- **SOCKS5:** The router proxy works as a normal SOCKS5 endpoint after a tunnel connects. Use the tunnel IP and port shown in the generated credentials; no Router VPN app is required on the device using the proxy.
+- **DAITA Off/On:** enables the included randomized cover-traffic control. It is DAITA-like, not exact Mullvad Maybenot DAITA unless both ends are replaced by a compatible Maybenot-enabled engine.
+- **Jumbo Off/On:** raises the client TUN MTU for compatible proxy modes. Internet packets still follow the real path MTU.
+- **SOCKS5:** after any tunnel connects, use the generated tunnel IP and TCP port `1080` as a normal no-auth SOCKS5 proxy. No custom Router VPN app is required on the device using SOCKS5. TCP `1080` remains blocked from WAN.
 
-## Censorship-resistance note
+## State meanings
 
-The heavier modes provide additional camouflage and multiple fallback transports, but no VPN or proxy can honestly guarantee bypassing every country or every future filtering system.
+- **ready:** generated by the base installer and supported by the shipped launcher.
+- **generated:** assembled and configuration-validated by the finalizer; exact router/kernel testing is still required.
+- **integration:** the launcher slot exists, but an external requirement is still missing. Rosenpass requires its client/server engine and live key exchange; V2Ray-plugin TLS and Naive HTTPS require a suitable TLS endpoint/certificate.
+
+No mode can honestly guarantee bypassing every country or every future filtering system.
