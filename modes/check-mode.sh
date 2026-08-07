@@ -20,6 +20,15 @@ check_xray(){
   need_file "$file"
   xray run -test -c "$file" >/dev/null
 }
+check_rosenpass(){
+  local dir=$1
+  need_bin rosenpass
+  need_file "$dir/rosenpass.toml"
+  need_file "$dir/rosenpass.env"
+  need_file "$dir/rosenpass-client-public"
+  need_file "$dir/rosenpass-client-secret"
+  need_file "$dir/rosenpass-server-public"
+}
 check_max(){
   local mode=$1 base=$2 dir="$ROOT/generated/$PROFILE_ID/$mode"
   [[ -d "$dir" ]] || dir="$ROOT/generated/$mode"
@@ -47,13 +56,13 @@ check_max(){
       need_file "$dir/awg-socks.conf"
       ;;
   esac
-  if [[ -f "$dir/rosenpass.toml" ]]; then need_bin rosenpass; fi
+  if [[ -f "$dir/rosenpass.toml" ]]; then check_rosenpass "$dir"; fi
 }
 case "$MODE" in
   wg) need_bin wg-quick; need_file "$CONF/wg.conf" ;;
   awg2-fast|awg2-strong) need_bin amneziawg-go; need_bin awg; need_bin awg-quick; need_file "$CONF/awg.conf" ;;
-  wg-pq) need_bin wg-quick; need_bin rosenpass; need_file "$CONF/wg.conf"; need_file "$CONF/rosenpass.toml" ;;
-  awg2-pq) need_bin amneziawg-go; need_bin awg; need_bin awg-quick; need_bin rosenpass; need_file "$CONF/awg.conf"; need_file "$CONF/rosenpass.toml" ;;
+  wg-pq) need_bin wg-quick; need_file "$CONF/wg.conf"; need_file "$CONF/wg-socks.conf"; check_rosenpass "$CONF" ;;
+  awg2-pq) need_bin amneziawg-go; need_bin awg; need_bin awg-quick; need_file "$CONF/awg.conf"; need_file "$CONF/awg-socks.conf"; check_rosenpass "$CONF" ;;
   reality-vision|hysteria2|shadowsocks|ss-v2ray|naive-h2) check_sing "$CONF" sing-box.json ;;
   reality-pq-vision) check_xray "$CONF/xray.json"; check_sing "$CONF" sing-box.json ;;
   reality-xhttp) check_xray "$CONF/xray.json" ;;
