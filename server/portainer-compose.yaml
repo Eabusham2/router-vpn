@@ -162,7 +162,7 @@ services:
     depends_on:
       finalize: {condition: service_completed_successfully}
     volumes:
-      - /opt/router-vpn/config/tls/settings.env:/router-vpn/settings.env:ro
+      - /opt/router-vpn/config/tls:/router-vpn:ro
       - /opt/router-vpn/caddy-data:/data
       - /opt/router-vpn/caddy-config:/config
     environment:
@@ -179,7 +179,7 @@ services:
       finalize: {condition: service_completed_successfully}
       naive: {condition: service_started}
     volumes:
-      - /opt/router-vpn/config/tls/settings.env:/router-vpn/settings.env:ro
+      - /opt/router-vpn/config/tls:/router-vpn:ro
       - /opt/router-vpn/caddy-data:/caddy-data:ro
     environment:
       ROUTER_VPN_TLS_SETTINGS: /router-vpn/settings.env
