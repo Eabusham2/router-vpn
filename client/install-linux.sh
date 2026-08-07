@@ -4,33 +4,46 @@ set -euo pipefail
 BUNDLE=${1:-$(pwd)}
 [[ -f "$BUNDLE/client.json" && -f "$BUNDLE/routers.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools git make gcc libc6-dev golang-go curl python3 tar cmake clang pkg-config libsodium-dev cargo rustc
+DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf git make gcc libc6-dev golang-go curl python3 tar cmake clang pkg-config libsodium-dev cargo rustc
 "$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
-mkdir -p "$ROOT" /usr/local/bin
+mkdir -p "$ROOT" /usr/local/bin /usr/local/lib
 cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
 ARCH=$(uname -m)
 case "$ARCH" in
   aarch64|arm64)
     BIN="$BUNDLE/dist/router-vpn-client-linux-arm64"
     DNS_BIN="$BUNDLE/dist/router-vpn-dns-linux-arm64"
+    SB_ARCH=arm64
     ;;
   x86_64|amd64)
     BIN="$BUNDLE/dist/router-vpn-client-linux-amd64"
     DNS_BIN="$BUNDLE/dist/router-vpn-dns-linux-amd64"
+    SB_ARCH=amd64
     ;;
   *) echo "Unsupported Linux architecture: $ARCH"; exit 1;;
 esac
 install -m 755 "$BIN" /usr/local/bin/router-vpn-client
 install -m 755 "$DNS_BIN" /usr/local/bin/router-vpn-dns
-if ! command -v sing-box >/dev/null; then
+
+# Official no-suffix Linux sing-box releases include libcronet.so, which Naive H2/H3
+# needs at runtime. Refresh both pieces when either is missing.
+if ! command -v sing-box >/dev/null || [[ ! -s /usr/local/lib/libcronet.so && ! -s /usr/local/bin/libcronet.so ]]; then
   SB_VER=1.13.12
-  case "$ARCH" in aarch64|arm64) SB_ARCH=arm64;; x86_64|amd64) SB_ARCH=amd64;; esac
   TMP_SB=$(mktemp -d)
   curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/sing-box-${SB_VER}-linux-${SB_ARCH}.tar.gz" | tar -xz -C "$TMP_SB"
-  install -m 755 "$TMP_SB/sing-box-${SB_VER}-linux-${SB_ARCH}/sing-box" /usr/local/bin/sing-box
+  SB_DIR="$TMP_SB/sing-box-${SB_VER}-linux-${SB_ARCH}"
+  install -m 755 "$SB_DIR/sing-box" /usr/local/bin/sing-box
+  CRONET=$(find "$SB_DIR" -type f -name libcronet.so -print -quit)
+  if [[ -n "$CRONET" && -s "$CRONET" ]]; then
+    install -m 755 "$CRONET" /usr/local/lib/libcronet.so
+    command -v ldconfig >/dev/null 2>&1 && ldconfig || true
+  else
+    echo 'Warning: official sing-box archive did not contain libcronet.so; Naive H2/H3 will remain disabled.' >&2
+  fi
   rm -rf "$TMP_SB"
 fi
+
 if ! command -v rosenpass >/dev/null; then
   echo 'Installing Rosenpass for PQ-WireGuard/PQ-AmneziaWG...'
   TMP_RP=$(mktemp -d)
@@ -81,6 +94,7 @@ Wants=network-online.target
 Type=simple
 Environment=HOMEVPN_ROOT=$ROOT
 Environment=HOMEVPN_CLIENT_CONFIG=$ROOT/client.json
+Environment=LD_LIBRARY_PATH=/usr/local/lib
 WorkingDirectory=$ROOT
 ExecStart=/usr/local/bin/router-vpn-client
 Restart=on-failure
