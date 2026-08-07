@@ -46,6 +46,7 @@ type RouterProfile struct {
 	DAITAPort     int    `json:"daita_port"`
 	DAITARateKbps int    `json:"daita_rate_kbps"`
 	BaseTunnel    string `json:"base_tunnel,omitempty"`
+	CustomLayers  []string `json:"custom_layers,omitempty"`
 
 	// DNS is applied inside the selected VPN path. DNSMode values are fastest,
 	// home, custom, doh, dot, doh3, and rescue.
