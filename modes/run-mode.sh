@@ -128,9 +128,14 @@ PY
 run_max(){
   local base=$1
   set -a
+  # shellcheck disable=SC1090
   source "$CONF/chain.env"
   set +a
-  start_bg sudo xray run -c "$CONF/outer-xray.json"
+  case "${OUTER_ENGINE:-}" in
+    xray) start_bg sudo xray run -c "$CONF/outer-xray.json" ;;
+    sing-box|none) ;;
+    *) echo "invalid OUTER_ENGINE: ${OUTER_ENGINE:-unset}" >&2; exit 1 ;;
+  esac
   start_bg sudo sing-box run -c "$CONF/middle-sing-box.json"
   if [[ -f "$CONF/rosenpass.toml" ]]; then
     start_bg sudo rosenpass exchange-config "$CONF/rosenpass.toml"
