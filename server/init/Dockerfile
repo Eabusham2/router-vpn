@@ -12,9 +12,9 @@ RUN mkdir -p dist \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-agent-${GOOS}-${GOARCH}" ./cmd/router-agent; \
     done
 
-FROM ghcr.io/sagernet/sing-box:1.13.12 AS singbox
-FROM ghcr.io/xtls/xray-core:latest AS xray
-FROM ghcr.io/rosenpass/rosenpass:latest AS rosenpass
+FROM ghcr.io/sagernet/sing-box:v1.13.16 AS singbox
+FROM ghcr.io/xtls/xray-core:26.7.11 AS xray
+FROM ghcr.io/rosenpass/rosenpass:sha-00569eb AS rosenpass
 
 FROM alpine:3.22
 RUN apk add --no-cache bash curl iproute2 nftables openssl python3 wireguard-tools zip
