@@ -1,12 +1,12 @@
 # Install and use the client
 
-The exact end-to-end sequence is in `INSTALL-EVERYTHING.md`.
+The exact end-to-end sequence is in `docs/FULL-TUTORIAL.md`.
 
 ## macOS
 
-1. Double-click the router-generated `router-vpn-client-bundle.zip`.
-2. Open **Terminal** with Command + Space → type `Terminal` → Return.
-3. Type `cd `, drag the extracted bundle folder into Terminal, and press Return.
+1. Extract the router-generated `router-vpn-client-bundle.zip`.
+2. Open Terminal.
+3. `cd` into the extracted bundle folder.
 4. Run:
 
 ```bash
@@ -16,12 +16,12 @@ chmod +x client/*.sh modes/*.sh
 
 5. Start the controller using the command printed by the installer.
 6. Open `http://127.0.0.1:8788`.
-7. In **Router backend**, import `router-vpn-bundle.json`.
-8. Enter the home router's current public IPv4, global IPv6, or hostname.
-9. Press **Save and use this router**.
+7. Import `router-vpn-bundle.json`.
+8. Enter the home router's current public IPv4, global IPv6, or hostname if it was left blank during router setup.
+9. Save/select the router.
 10. Leave **SOCKS5-only** off for a full-device VPN.
-11. Press **AUTO** or select a mode and press **Connect**.
-12. Press **Off** when finished.
+11. Choose **AUTO** or a manual mode and connect.
+12. Disconnect before switching router profiles.
 
 ## Linux
 
@@ -34,16 +34,15 @@ Open `http://127.0.0.1:8788`, import the bundle JSON, enter/select the router en
 
 ## Add another router
 
-1. Press **Import router bundle**.
-2. Choose the other router's `router-vpn-bundle.json`.
-3. Enter its endpoint and press **Save and use this router**.
-4. Switch routers from the drop-down while disconnected.
+1. Import the other router's `router-vpn-bundle.json`.
+2. Enter its endpoint if needed.
+3. Save/select it while disconnected.
 
-Each imported router keeps separate mode files and credentials.
+Each imported router keeps separate private generated profile files.
 
-## SOCKS5-only
+## SOCKS5-only app mode
 
-1. Check **SOCKS5-only**.
+1. Enable **SOCKS5-only**.
 2. Connect with Raw WireGuard or AmneziaWG.
 3. Configure the selected application:
 
@@ -58,7 +57,7 @@ Only the configured application uses the home connection.
 
 ## Router SOCKS5 service
 
-After connecting to the VPN, the authenticated router proxy is listed in the app under **SOCKS5 proxy**. Do not expose router port `1080` publicly.
+After a tunnel reaches the home network, the router SOCKS5 endpoint shown in the imported profile works like a normal SOCKS5 proxy using only its IP and port. Authentication is disabled because WAN access to TCP `1080` is blocked by the package firewall and must never be forwarded publicly.
 
 ## Port forwarding
 
@@ -69,21 +68,14 @@ After connecting to the VPN, the authenticated router proxy is listed in the app
 5. Press **Apply**, or press **Protected DMZ** for all unused ports.
 6. Press **Clear** when finished.
 
-The ASUS router must forward fixed VPN listeners to the AI Board. Protected DMZ requires ASUS DMZ to the AI Board after the package firewall has passed diagnostics.
+The ASUS router must forward the fixed VPN listeners to the AI Board. Protected DMZ requires ASUS DMZ to the AI Board after the package firewall has passed diagnostics.
 
 ## Jumbo
 
 - Keep normal WireGuard/AWG tunnel MTU on Auto/default.
-- Enable **Jumbo TUN** only for a compatible TUN proxy mode.
-- LAN frames up to 9000 bytes are accepted as payload and segmented into internet-sized encrypted packets.
+- Enable **Jumbo TUN** only for a compatible proxy TUN mode.
+- LAN jumbo payloads are segmented to the internet path MTU as required.
 
 ## Windows
 
-Run PowerShell as Administrator:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\client\install-windows.ps1 .
-```
-
-The controller is included. The complete multi-engine launcher currently uses the Linux scripts through WSL2; raw WireGuard/AWG profiles remain importable in their native apps.
+Use either the normal Windows ZIP or the PortableApps-style ZIP from the GitHub build artifact. The controller is native Windows; the complete multi-engine shell launcher currently uses the Linux transport engines through WSL2. Raw WireGuard/AWG profiles remain importable in their native Windows clients.
