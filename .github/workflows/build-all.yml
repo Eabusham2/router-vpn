@@ -34,6 +34,30 @@ jobs:
             echo "Merged temporary branch is already absent."
           fi
 
+  project-package:
+    name: All-in-one router-vpn.zip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Build all-in-one project ZIP
+        run: |
+          chmod +x release-make-zip.sh deploy/build-client.sh deploy/package-builds.sh
+          ./release-make-zip.sh /tmp/router-vpn.zip
+          unzip -tq /tmp/router-vpn.zip >/dev/null
+          sha256sum -c /tmp/router-vpn.zip.sha256
+          mkdir -p dist/release
+          cp /tmp/router-vpn.zip /tmp/router-vpn.zip.sha256 dist/release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-project-package
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 30
+
   desktop-unix:
     name: Desktop and Unix packages
     runs-on: ubuntu-latest
@@ -224,21 +248,26 @@ jobs:
   aggregate:
     name: All-platform release bundle
     runs-on: ubuntu-latest
-    needs: [desktop-unix, android, ios]
+    needs: [project-package, desktop-unix, android, ios]
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: all-platforms
-      - name: Build aggregate checksum file
+      - name: Build aggregate checksum and archives
         run: |
           find all-platforms -type f -print0 | sort -z | xargs -0 sha256sum > all-platforms/SHA256SUMS
+          zip -qr RouterVPN-all-platforms.zip all-platforms
+          unzip -tq RouterVPN-all-platforms.zip >/dev/null
           tar -czf RouterVPN-all-platforms.tar.gz all-platforms
           tar -tzf RouterVPN-all-platforms.tar.gz >/dev/null
+          sha256sum RouterVPN-all-platforms.zip RouterVPN-all-platforms.tar.gz > RouterVPN-all-platforms.SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-all-platforms
           path: |
+            RouterVPN-all-platforms.zip
             RouterVPN-all-platforms.tar.gz
+            RouterVPN-all-platforms.SHA256SUMS
             all-platforms/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
