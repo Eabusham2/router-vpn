@@ -64,10 +64,14 @@ fi
 if ! bash /src/server/scripts/generate-advanced-profiles.sh \
   "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$WG_PORT" "$AWG_PORT" \
   "$SS_PORT" "$HY2_PORT" "$XHTTP_PORT" "$REALITY_TARGET"; then
-  echo 'Warning: advanced MAX profiles failed validation and remain unavailable.' >&2
-  for mode in max-tls-wg max-tls-awg max-quic-wg max-quic-awg; do
-    rm -f "$BASE/client-bundle/generated/$mode/chain.env"
-  done
+  echo 'Warning: advanced MAX and XHTTP profiles failed validation and remain unavailable.' >&2
+  rm -rf \
+    "$BASE/client-bundle/generated/max-tls-wg" \
+    "$BASE/client-bundle/generated/max-tls-awg" \
+    "$BASE/client-bundle/generated/max-quic-wg" \
+    "$BASE/client-bundle/generated/max-quic-awg" \
+    "$BASE/client-bundle/generated/reality-xhttp"
+  rm -f "$BASE/config/xray/advanced-secrets.json"
 fi
 
 TOKEN=$(python3 - "$BASE/config/router-agent.json" <<'PY'
