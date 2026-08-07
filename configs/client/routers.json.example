@@ -11,8 +11,8 @@
       "adguard_ipv6": "fd77:77::1",
       "socks_host": "10.77.0.1",
       "socks_port": 1080,
-      "socks_username": "PASTE_SOCKS_USERNAME",
-      "socks_password": "PASTE_SOCKS_PASSWORD",
+      "socks_username": "",
+      "socks_password": "",
       "daita_host": "10.77.0.1",
       "daita_port": 45999,
       "daita_rate_kbps": 192
