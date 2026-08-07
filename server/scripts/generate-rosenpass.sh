@@ -39,6 +39,17 @@ key_out = "/data/wg.psk"
 public_key = "/data/awg-client-public"
 key_out = "/data/awg.psk"
 CFG
+cat >"$SERVER/server.env" <<CFG
+ROSENPASS_PORT=$RP_PORT
+ROSENPASS_WG_TOOL=wg
+ROSENPASS_WG_INTERFACE=wg0
+ROSENPASS_WG_PEER=$WG_CLIENT_PUB
+ROSENPASS_WG_KEY_OUT=/data/wg.psk
+ROSENPASS_AWG_TOOL=awg
+ROSENPASS_AWG_INTERFACE=awg0
+ROSENPASS_AWG_PEER=$AWG_CLIENT_PUB
+ROSENPASS_AWG_KEY_OUT=/data/awg.psk
+CFG
 
 write_client(){
   local dir=$1 server_wg_pub=$2 tool=$3 iface=$4
