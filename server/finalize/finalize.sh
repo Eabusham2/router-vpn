@@ -6,7 +6,6 @@ WAN_INTERFACE=${WAN_INTERFACE:-eth0}
 LAN_CIDR=${LAN_CIDR:-192.168.50.0/24}
 ADGUARD4=${ADGUARD4:-192.168.50.133}
 ENDPOINT=${ENDPOINT:-}
-CONFIG_ENDPOINT=${ENDPOINT:-router.invalid}
 WG_PORT=${WG_PORT:-51820}
 AWG_PORT=${AWG_PORT:-585}
 REALITY_PORT=${REALITY_PORT:-443}
@@ -23,6 +22,11 @@ for required in \
   "$BASE/client-bundle/modes.json"; do
   [[ -s "$required" ]] || { echo "Base initialization missing $required" >&2; exit 1; }
 done
+
+# Prefer the values actually written by the base installer. This preserves custom
+# ports and the selected endpoint for both Portainer and SSH installations.
+eval "$(python3 /src/server/finalize/detect-settings.py "$BASE")"
+CONFIG_ENDPOINT=${ENDPOINT:-router.invalid}
 
 # The base initializer temporarily writes credentials because older init code expects
 # a users array. Remove it before SOCKS5 starts so apps only need tunnel IP + port.
@@ -55,6 +59,7 @@ PY
 # engine disables that profile instead of breaking the basic WireGuard services.
 if ! python3 /src/server/scripts/generate-stack-profiles.py "$BASE"; then
   echo 'Warning: dual-transport profiles were not generated.' >&2
+  rm -rf "$BASE/client-bundle/generated/split" "$BASE/client-bundle/generated/max"
 fi
 if ! bash /src/server/scripts/generate-advanced-profiles.sh \
   "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$WG_PORT" "$AWG_PORT" \
