@@ -1,17 +1,35 @@
-# iPhone/iPad build
+# iPhone/iPad source
 
-This folder is the native SwiftUI app, mode picker, bundle importer, Network Extension target, DAITA/jumbo controls, and port-forward control surface.
+This folder contains the SwiftUI controller/importer and Packet Tunnel extension target.
 
-A signed IPA is not included because Apple requires your own Developer Team, provisioning profile, and Packet Tunnel entitlement. The PacketTunnel target intentionally fails until an approved tunnel engine is linked.
+## Build artifacts
 
-## Build
+Run the single repository workflow:
 
-1. On a Mac install Xcode and XcodeGen: `brew install xcodegen`.
-2. Open Terminal: `cd ios/RouterVPN && xcodegen generate && open RouterVPN.xcodeproj`.
-3. Select your Apple Team for both targets.
-4. Add the AmneziaWG Apple package from `https://github.com/amnezia-vpn/amneziawg-apple` and link `WireGuardKit` to the PacketTunnel target.
-5. Replace the placeholder in `PacketTunnelProvider.swift` with the engine adapter.
-6. Set the Network Extension entitlement for both App IDs in Apple Developer.
-7. Product → Archive → Distribute App → Development or Ad Hoc.
+```text
+.github/workflows/build-all.yml
+```
 
-The GitHub workflow is included, but it only succeeds after repository signing secrets and provisioning profiles are added.
+It produces an unsigned re-signable IPA on every successful iOS build and an optional signed IPA when the Apple secrets are configured. See `docs/BUILDS.md`.
+
+## Important limitation
+
+`PacketTunnelProvider.swift` intentionally reports that the native tunnel adapter is missing. The IPA can build and be signed, but custom VPN connections will not work until WireGuard/AmneziaWG/Xray/sing-box engine code is linked to the extension.
+
+## Manual project generation
+
+```bash
+brew install xcodegen
+cd ios/RouterVPN
+xcodegen generate
+open RouterVPN.xcodeproj
+```
+
+Use these bundle identifiers:
+
+```text
+com.eabusham.routervpn
+com.eabusham.routervpn.PacketTunnel
+```
+
+Both App IDs and provisioning profiles need the Packet Tunnel Network Extension entitlement.
