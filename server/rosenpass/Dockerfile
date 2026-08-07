@@ -1,4 +1,4 @@
-FROM ghcr.io/rosenpass/rosenpass:latest AS rosenpass
+FROM ghcr.io/rosenpass/rosenpass:sha-00569eb AS rosenpass
 
 FROM debian:bookworm AS tools-build
 RUN apt-get update && apt-get install -y --no-install-recommends git make gcc libc6-dev pkg-config ca-certificates \
