@@ -26,6 +26,10 @@ for required in \
   [[ -s "$required" ]] || { echo "Base initialization missing $required" >&2; exit 1; }
 done
 
+# Refresh public client code/catalog/builds while preserving this router's generated
+# private profiles, token, selected endpoint, and keys.
+bash /src/server/finalize/sync-client-runtime.sh "$BASE"
+
 eval "$(python3 /src/server/finalize/detect-settings.py "$BASE")"
 CONFIG_ENDPOINT=${ENDPOINT:-router.invalid}
 
