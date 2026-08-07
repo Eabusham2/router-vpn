@@ -3,11 +3,20 @@ set -euo pipefail
 CONF=${1:?profile directory}
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
 RUN="$ROOT/run"
+ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend in the app first}
 mkdir -p "$RUN"
 command -v sslocal >/dev/null 2>&1 || { echo 'missing command: sslocal' >&2; exit 1; }
 command -v v2ray-plugin >/dev/null 2>&1 || { echo 'missing command: v2ray-plugin' >&2; exit 1; }
 command -v sing-box >/dev/null 2>&1 || { echo 'missing command: sing-box' >&2; exit 1; }
 [[ -s "$CONF/sslocal.json" && -s "$CONF/sing-box.json" ]] || { echo 'missing SS+V2Ray profile' >&2; exit 1; }
+
+# Router profiles are runtime-selectable. Keep the certificate hostname/SNI fixed,
+# but always send the transport to the currently selected router endpoint.
+python3 - "$CONF/sslocal.json" "$ENDPOINT" <<'PY'
+import json,sys
+p=sys.argv[1]; x=json.load(open(p)); x['server']=sys.argv[2].strip().strip('[]')
+json.dump(x,open(p,'w'),indent=2); open(p,'a').write('\n')
+PY
 
 SS_PID=''
 cleanup(){
