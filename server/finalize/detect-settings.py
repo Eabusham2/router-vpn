@@ -38,6 +38,8 @@ for inbound in transports.get("inbounds", []):
     port = inbound.get("listen_port")
     if not isinstance(port, int):
         continue
+    # Backward compatibility: old installs stored REALITY in sing-box. New
+    # installs overwrite REALITY_PORT below from Xray when that inbound exists.
     if tag == "reality-in":
         values["REALITY_PORT"] = port
     elif tag == "hy2-in":
@@ -47,8 +49,23 @@ for inbound in transports.get("inbounds", []):
 
 xray = load(base / "config/xray/server.json")
 for inbound in xray.get("inbounds", []):
-    if inbound.get("tag") == "pq-reality-in" and isinstance(inbound.get("port"), int):
-        values["XRAY_PQ_PORT"] = inbound["port"]
+    tag = inbound.get("tag")
+    port = inbound.get("port")
+    if not isinstance(port, int):
+        continue
+    if tag == "reality-in":
+        values["REALITY_PORT"] = port
+    elif tag == "pq-reality-in":
+        values["XRAY_PQ_PORT"] = port
+    elif tag == "max-xhttp-in":
+        values["XHTTP_PORT"] = port
+
+# TLS alternate generated metadata is the source of truth for those listener ports.
+tls = load(base / "config/tls/generated.json")
+if isinstance(tls.get("ss_v2ray_port"), int):
+    values["SS_V2RAY_PORT"] = tls["ss_v2ray_port"]
+if isinstance(tls.get("naive_port"), int):
+    values["NAIVE_PORT"] = tls["naive_port"]
 
 agent = load(base / "config/router-agent.json")
 if agent.get("wan_interface"):
