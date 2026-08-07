@@ -30,6 +30,28 @@ for required in \
   [[ -s $required ]] || { echo "Missing prerequisite: $required" >&2; exit 1; }
 done
 
+SERVER_PATH="$BASE/config/xray/server.json"
+SERVER_BACKUP=$(mktemp "$BASE/config/xray/server.json.backup.XXXXXX")
+cp -p "$SERVER_PATH" "$SERVER_BACKUP"
+rollback(){
+  status=$?
+  trap - EXIT
+  if (( status != 0 )); then
+    cp -p "$SERVER_BACKUP" "$SERVER_PATH" 2>/dev/null || true
+    rm -rf \
+      "$BASE/client-bundle/generated/max-tls-wg" \
+      "$BASE/client-bundle/generated/max-tls-awg" \
+      "$BASE/client-bundle/generated/max-quic-wg" \
+      "$BASE/client-bundle/generated/max-quic-awg" \
+      "$BASE/client-bundle/generated/reality-xhttp"
+    rm -f "$BASE/config/xray/advanced-secrets.json"
+    echo 'Advanced profile generation failed; restored the previous Xray server config.' >&2
+  fi
+  rm -f "$SERVER_BACKUP"
+  exit "$status"
+}
+trap rollback EXIT
+
 TARGET_HOST=${REALITY_TARGET%:*}
 TARGET_PORT=${REALITY_TARGET##*:}
 [[ $TARGET_PORT =~ ^[0-9]+$ ]] || { TARGET_HOST=$REALITY_TARGET; TARGET_PORT=443; }
@@ -38,15 +60,14 @@ PAIR=$(xr x25519)
 REALITY_PRIVATE=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /privatekey/ {print $2; exit}')
 REALITY_PASSWORD=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /password|publickey/ {print $2; exit}')
 SHORT_ID=$(openssl rand -hex 8)
-FINALMASK_PASSWORD=$(openssl rand -hex 16)
 for value in UUID REALITY_PRIVATE REALITY_PASSWORD SHORT_ID; do
   [[ -n ${!value} ]] || { echo "Failed generating $value" >&2; exit 1; }
 done
 
-python3 - "$BASE" "$ENDPOINT" "$ADGUARD4" "$WG_PORT" "$AWG_PORT" "$SS_PORT" "$HY2_PORT" "$XHTTP_PORT" "$TARGET_HOST" "$TARGET_PORT" "$UUID" "$REALITY_PRIVATE" "$REALITY_PASSWORD" "$SHORT_ID" "$FINALMASK_PASSWORD" "$LOCAL_RELAY_PORT" "$XHTTP_PATH" <<'PY'
+python3 - "$BASE" "$ENDPOINT" "$ADGUARD4" "$WG_PORT" "$AWG_PORT" "$SS_PORT" "$HY2_PORT" "$XHTTP_PORT" "$TARGET_HOST" "$TARGET_PORT" "$UUID" "$REALITY_PRIVATE" "$REALITY_PASSWORD" "$SHORT_ID" "$LOCAL_RELAY_PORT" "$XHTTP_PATH" <<'PY'
 from pathlib import Path
 import copy,json,re,shutil,sys
-(base,endpoint,dns,wgp,awgp,ssp,hp,xp,target,tp,uuid,rpriv,rpub,shortid,maskpass,relay,path)=sys.argv[1:]
+(base,endpoint,dns,wgp,awgp,ssp,hp,xp,target,tp,uuid,rpriv,rpub,shortid,relay,path)=sys.argv[1:]
 base=Path(base); wgp,awgp,ssp,hp,xp,tp,relay=map(int,(wgp,awgp,ssp,hp,xp,tp,relay))
 root=base/'client-bundle'/'generated'
 server_path=base/'config'/'xray'/'server.json'
@@ -101,8 +122,6 @@ hy_doc=json.load(open(root/'hysteria2'/'sing-box.json'))
 ss=copy.deepcopy(next(x for x in ss_doc['outbounds'] if x.get('tag')=='proxy'))
 hy=copy.deepcopy(next(x for x in hy_doc['outbounds'] if x.get('tag')=='proxy'))
 
-# The Xray outer terminates at home. Destinations 127.0.0.1 below therefore
-# mean the loopback interface on the home AI Board, not the travel device.
 def middle_tls(remote_port):
     outer={'type':'socks','tag':'outer','server':'127.0.0.1','server_port':1090,'version':'5'}
     hop=copy.deepcopy(ss); hop['tag']='ss-hop'; hop['server']='127.0.0.1'; hop['server_port']=ssp; hop['detour']='outer'
@@ -150,21 +169,20 @@ def write_branch(name,base_kind,transport):
         layers='base>shadowsocks2022>hysteria2-quic'
     json.dump(middle,open(d/'middle-sing-box.json','w'),indent=2); open(d/'middle-sing-box.json','a').write('\n')
     (d/'chain.env').write_text(f'CHAIN_READY=0\nOUTER_ENGINE={outer_engine}\nCHAIN_LAYERS={layers}\nLOCAL_RELAY_PORT={relay}\n')
-    return d
 
-branches=[
+for args in [
  ('max-tls-wg','wg','tls'),('max-tls-awg','awg','tls'),
- ('max-quic-wg','wg','quic'),('max-quic-awg','awg','quic')]
-for args in branches: write_branch(*args)
+ ('max-quic-wg','wg','quic'),('max-quic-awg','awg','quic')]:
+    write_branch(*args)
 
-# Standalone XHTTP/REALITY/FinalMask mode uses the same validated outer profile.
-xdir=root/'reality-xhttp'; xdir.mkdir(parents=True,exist_ok=True)
+xdir=root/'reality-xhttp'
+if xdir.exists(): shutil.rmtree(xdir)
+xdir.mkdir(parents=True)
 json.dump(outer_xray,open(xdir/'xray.json','w'),indent=2); open(xdir/'xray.json','a').write('\n')
 
 advanced={
  'xhttp_port':xp,'xhttp_path':path,'xhttp_uuid':uuid,'xhttp_short_id':shortid,
- 'xhttp_reality_public':rpub,'finalmask_password':maskpass,
- 'max_local_relay_port':relay
+ 'xhttp_reality_public':rpub,'max_local_relay_port':relay
 }
 json.dump(advanced,open(base/'config'/'xray'/'advanced-secrets.json','w'),indent=2); open(base/'config'/'xray'/'advanced-secrets.json','a').write('\n')
 PY
@@ -176,9 +194,11 @@ validate_branch(){
   sed -i 's/^CHAIN_READY=0$/CHAIN_READY=1/' "$dir/chain.env"
 }
 
-# Validate the combined server before exposing the new TCP listener.
 xr run -test -c "$BASE/config/xray/server.json" >/dev/null
 for branch in max-tls-wg max-tls-awg max-quic-wg max-quic-awg; do validate_branch "$branch"; done
 xr run -test -c "$BASE/client-bundle/generated/reality-xhttp/xray.json" >/dev/null
 chmod 600 "$BASE/config/xray/"*.json "$BASE/client-bundle/generated/"*/chain.env "$BASE/client-bundle/generated/"*/middle-sing-box.json 2>/dev/null || true
+
+trap - EXIT
+rm -f "$SERVER_BACKUP"
 printf 'Generated and validated MAX TLS/QUIC branches on standard WireGuard and AmneziaWG bases.\n'
