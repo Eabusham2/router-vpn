@@ -9,6 +9,7 @@ REALITY_PORT=${REALITY_PORT:-443}
 HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
 XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
+XHTTP_PORT=${XHTTP_PORT:-11443}
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null
 sysctl -w net.ipv6.conf.default.forwarding=1 >/dev/null
@@ -23,7 +24,7 @@ add rule inet router_vpn_guard input iifname "$WAN" ip6 saddr fe80::/10 accept
 add rule inet router_vpn_guard input iifname "$WAN" ip6 saddr $LAN6 accept
 add rule inet router_vpn_guard input iifname "$WAN" meta l4proto ipv6-icmp accept
 add rule inet router_vpn_guard input iifname "$WAN" udp dport { $WG_PORT, $AWG_PORT, $HY2_PORT, $SS_PORT } accept
-add rule inet router_vpn_guard input iifname "$WAN" tcp dport { $REALITY_PORT, $SS_PORT, $XRAY_PQ_PORT } accept
+add rule inet router_vpn_guard input iifname "$WAN" tcp dport { $REALITY_PORT, $SS_PORT, $XRAY_PQ_PORT, $XHTTP_PORT } accept
 add rule inet router_vpn_guard input iifname "$WAN" drop
 NFT
 
