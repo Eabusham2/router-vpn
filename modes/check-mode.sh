@@ -71,7 +71,7 @@ case "$MODE" in
     check_sing "$CONF" sing-box.json
     ;;
   reality-pq-vision) check_xray "$CONF/xray.json"; check_sing "$CONF" sing-box.json ;;
-  reality-xhttp) check_xray "$CONF/xray.json" ;;
+  reality-xhttp) check_xray "$CONF/xray.json"; check_sing "$CONF" sing-box.json ;;
   max-tls-wg|max-quic-wg) check_max "$MODE" wg ;;
   max-tls-awg|max-quic-awg) check_max "$MODE" awg ;;
   all)
