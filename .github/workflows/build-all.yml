@@ -1,0 +1,179 @@
+name: Build all platforms
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-all-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-unix:
+    name: Desktop and Unix packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Validate source and configs
+        run: |
+          go test ./...
+          python3 -m json.tool configs/client/modes.json >/dev/null
+          find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+      - name: Build all Go targets
+        run: |
+          chmod +x deploy/build-client.sh deploy/package-builds.sh
+          ./deploy/build-client.sh
+      - name: Package archives and PortableApps layouts
+        run: ./deploy/package-builds.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-desktop-unix
+          path: |
+            dist/packages/*
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Install Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build debug APK
+        run: gradle -p android --no-daemon :app:assembleDebug
+      - name: Collect APK and checksum
+        run: |
+          mkdir -p dist/mobile
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/mobile/RouterVPN-android-debug.apk
+          sha256sum dist/mobile/RouterVPN-android-debug.apk > dist/mobile/RouterVPN-android-debug.apk.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Android-APK
+          path: dist/mobile/*
+          if-no-files-found: error
+          retention-days: 30
+
+  ios:
+    name: iOS IPA
+    runs-on: macos-15
+    env:
+      IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+      IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+      IOS_APP_PROFILE_BASE64: ${{ secrets.IOS_APP_PROFILE_BASE64 }}
+      IOS_TUNNEL_PROFILE_BASE64: ${{ secrets.IOS_TUNNEL_PROFILE_BASE64 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: ios/RouterVPN
+        run: xcodegen generate
+      - name: Build unsigned device app
+        working-directory: ios/RouterVPN
+        run: |
+          xcodebuild \
+            -project RouterVPN.xcodeproj \
+            -scheme RouterVPN \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM='' \
+            build
+      - name: Package unsigned re-signable IPA
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          test -d "$APP"
+          rm -rf build/unsigned
+          mkdir -p build/unsigned/Payload
+          ditto "$APP" build/unsigned/Payload/RouterVPN.app
+          (
+            cd build/unsigned
+            zip -qry ../RouterVPN-unsigned-resignable.ipa Payload
+          )
+          shasum -a 256 build/RouterVPN-unsigned-resignable.ipa > build/RouterVPN-unsigned-resignable.ipa.sha256
+      - name: Import Apple signing assets
+        if: ${{ env.IOS_CERTIFICATE_BASE64 != '' && env.IOS_CERTIFICATE_PASSWORD != '' && env.IOS_APP_PROFILE_BASE64 != '' && env.IOS_TUNNEL_PROFILE_BASE64 != '' && env.APPLE_TEAM_ID != '' }}
+        run: |
+          python3 - <<'PY'
+          import base64, os, pathlib
+          pathlib.Path('/tmp/router-vpn-cert.p12').write_bytes(base64.b64decode(os.environ['IOS_CERTIFICATE_BASE64']))
+          profiles = pathlib.Path.home() / 'Library/MobileDevice/Provisioning Profiles'
+          profiles.mkdir(parents=True, exist_ok=True)
+          (profiles / 'router-vpn-app.mobileprovision').write_bytes(base64.b64decode(os.environ['IOS_APP_PROFILE_BASE64']))
+          (profiles / 'router-vpn-tunnel.mobileprovision').write_bytes(base64.b64decode(os.environ['IOS_TUNNEL_PROFILE_BASE64']))
+          PY
+          security create-keychain -p actions /tmp/router-vpn.keychain
+          security default-keychain -s /tmp/router-vpn.keychain
+          security unlock-keychain -p actions /tmp/router-vpn.keychain
+          security set-keychain-settings -lut 21600 /tmp/router-vpn.keychain
+          security import /tmp/router-vpn-cert.p12 \
+            -k /tmp/router-vpn.keychain \
+            -P "$IOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions /tmp/router-vpn.keychain
+      - name: Archive signed app
+        if: ${{ env.IOS_CERTIFICATE_BASE64 != '' && env.IOS_CERTIFICATE_PASSWORD != '' && env.IOS_APP_PROFILE_BASE64 != '' && env.IOS_TUNNEL_PROFILE_BASE64 != '' && env.APPLE_TEAM_ID != '' }}
+        working-directory: ios/RouterVPN
+        run: |
+          xcodebuild \
+            -project RouterVPN.xcodeproj \
+            -scheme RouterVPN \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/RouterVPN.xcarchive" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            archive
+      - name: Export signed IPA
+        if: ${{ env.IOS_CERTIFICATE_BASE64 != '' && env.IOS_CERTIFICATE_PASSWORD != '' && env.IOS_APP_PROFILE_BASE64 != '' && env.IOS_TUNNEL_PROFILE_BASE64 != '' && env.APPLE_TEAM_ID != '' }}
+        working-directory: ios/RouterVPN
+        run: |
+          rm -rf build/signed
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$PWD/build/RouterVPN.xcarchive" \
+            -exportPath "$PWD/build/signed" \
+            -exportOptionsPlist ../ExportOptions.plist
+          ipa=$(find build/signed -maxdepth 1 -name '*.ipa' -print -quit)
+          test -n "$ipa"
+          cp "$ipa" build/RouterVPN-signed.ipa
+          shasum -a 256 build/RouterVPN-signed.ipa > build/RouterVPN-signed.ipa.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-IPA
+          path: |
+            ios/RouterVPN/build/RouterVPN-unsigned-resignable.ipa
+            ios/RouterVPN/build/RouterVPN-unsigned-resignable.ipa.sha256
+            ios/RouterVPN/build/RouterVPN-signed.ipa
+            ios/RouterVPN/build/RouterVPN-signed.ipa.sha256
+            ios/RouterVPN/build/RouterVPN.xcarchive
+          if-no-files-found: warn
+          retention-days: 30
