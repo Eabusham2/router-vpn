@@ -39,15 +39,16 @@ AWG_PORT=585
 REALITY_PORT=443
 HY2_PORT=8443
 SS_PORT=8388
-XRAY_PQ_PORT=9443
+XRAY_PQ_PORT=10443
+XHTTP_PORT=11443
 REALITY_TARGET=www.microsoft.com:443
 ```
 
 11. Press **Deploy the stack**.
-12. Wait for `router-vpn-init` to exit with code `0`.
-13. Confirm every other service is running.
+12. Wait for `router-vpn-init` and `router-vpn-finalize` to finish successfully.
+13. Confirm the long-running VPN services are running.
 
-The endpoint is intentionally blank. It is selected later in the app and is not compiled into the client.
+The endpoint may stay blank. It is selected later in the client and is not compiled into the app.
 
 ## 4. Verify the firewall
 
@@ -71,7 +72,8 @@ UDP 585
 TCP 443
 UDP 8443
 TCP+UDP 8388
-TCP 9443
+TCP 10443
+TCP 11443
 ```
 
 Do not forward TCP `1080`, `8786`, `8787`, SSH, Portainer, or the AdGuard admin port.
@@ -85,7 +87,7 @@ For arbitrary client-requested ports/ranges/protected DMZ:
 For IPv6:
 
 1. ASUS → **Firewall → IPv6 Firewall**.
-2. Allow the VPN listener ports to the AI Board global IPv6 address.
+2. Allow only the VPN listener ports above to the AI Board global IPv6 address.
 3. Keep ICMPv6 allowed.
 
 ## 6. Download your private client bundle
