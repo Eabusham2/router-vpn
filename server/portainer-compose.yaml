@@ -1,12 +1,39 @@
 name: router-vpn
 services:
   init:
+    image: router-vpn-init:local
     build:
       context: ..
       dockerfile: server/init/Dockerfile
     container_name: router-vpn-init
     network_mode: host
     privileged: true
+    volumes:
+      - /opt/router-vpn:/opt/router-vpn
+    environment:
+      WAN_INTERFACE: ${WAN_INTERFACE:-eth0}
+      LAN_CIDR: ${LAN_CIDR:-192.168.50.0/24}
+      LAN_CIDR6: ${LAN_CIDR6:-fd00::/8}
+      ADGUARD4: ${ADGUARD4:-192.168.50.133}
+      ENDPOINT: ${ENDPOINT:-}
+      WG_PORT: ${WG_PORT:-51820}
+      AWG_PORT: ${AWG_PORT:-585}
+      REALITY_PORT: ${REALITY_PORT:-443}
+      HY2_PORT: ${HY2_PORT:-8443}
+      SS_PORT: ${SS_PORT:-8388}
+      XRAY_PQ_PORT: ${XRAY_PQ_PORT:-10443}
+      XHTTP_PORT: ${XHTTP_PORT:-11443}
+      REALITY_TARGET: ${REALITY_TARGET:-www.microsoft.com:443}
+    restart: "no"
+
+  finalize:
+    image: router-vpn-init:local
+    container_name: router-vpn-finalize
+    network_mode: host
+    privileged: true
+    depends_on:
+      init: {condition: service_completed_successfully}
+    entrypoint: ["/bin/bash", "/src/server/finalize/finalize.sh"]
     volumes:
       - /opt/router-vpn:/opt/router-vpn
     environment:
@@ -34,7 +61,7 @@ services:
     restart: unless-stopped
     cap_add: [NET_ADMIN, NET_RAW]
     depends_on:
-      init: {condition: service_completed_successfully}
+      finalize: {condition: service_completed_successfully}
     volumes:
       - /opt/router-vpn/config:/etc/router-vpn:ro
     environment:
@@ -49,7 +76,7 @@ services:
     restart: unless-stopped
     privileged: true
     depends_on:
-      init: {condition: service_completed_successfully}
+      finalize: {condition: service_completed_successfully}
     volumes:
       - /opt/router-vpn/config/wireguard:/data:ro
       - /lib/modules:/lib/modules:ro
@@ -66,7 +93,7 @@ services:
     restart: unless-stopped
     privileged: true
     depends_on:
-      init: {condition: service_completed_successfully}
+      finalize: {condition: service_completed_successfully}
     devices: [/dev/net/tun:/dev/net/tun]
     volumes:
       - /opt/router-vpn/config/awg2:/data:ro
@@ -81,7 +108,7 @@ services:
     network_mode: host
     restart: unless-stopped
     depends_on:
-      init: {condition: service_completed_successfully}
+      finalize: {condition: service_completed_successfully}
     volumes:
       - /opt/router-vpn/config/transports/server.json:/etc/sing-box/config.json:ro
       - /opt/router-vpn/config/transports/cert.pem:/etc/sing-box/cert.pem:ro
@@ -94,7 +121,7 @@ services:
     network_mode: host
     restart: unless-stopped
     depends_on:
-      init: {condition: service_completed_successfully}
+      finalize: {condition: service_completed_successfully}
     volumes:
       - /opt/router-vpn/config/xray/server.json:/etc/xray/config.json:ro
     command: ["run", "-c", "/etc/xray/config.json"]
@@ -105,7 +132,7 @@ services:
     network_mode: host
     restart: unless-stopped
     depends_on:
-      init: {condition: service_completed_successfully}
+      finalize: {condition: service_completed_successfully}
     volumes:
       - /opt/router-vpn/downloads:/www:ro
     command: ["httpd", "-f", "-p", "8786", "-h", "/www"]
@@ -116,7 +143,7 @@ services:
     network_mode: host
     restart: unless-stopped
     depends_on:
-      init: {condition: service_completed_successfully}
+      finalize: {condition: service_completed_successfully}
       wireguard: {condition: service_started}
       awg2: {condition: service_started}
     volumes:
