@@ -11,11 +11,20 @@ need_file(){ [[ -f "$1" ]] || { echo "missing profile: $1"; exit 1; }; }
 check_max(){
   local mode=$1 base=$2 dir="$ROOT/generated/$PROFILE_ID/$mode"
   [[ -d "$dir" ]] || dir="$ROOT/generated/$mode"
-  need_bin sing-box
-  need_bin xray
   need_file "$dir/chain.env"
-  need_file "$dir/outer-xray.json"
+  # shellcheck disable=SC1090
+  source "$dir/chain.env"
+  [[ ${CHAIN_READY:-0} == 1 ]] || { echo "profile generation did not validate this chain"; exit 1; }
+  need_bin sing-box
   need_file "$dir/middle-sing-box.json"
+  case "${OUTER_ENGINE:-}" in
+    xray)
+      need_bin xray
+      need_file "$dir/outer-xray.json"
+      ;;
+    sing-box|none) ;;
+    *) echo "invalid OUTER_ENGINE in $dir/chain.env"; exit 1 ;;
+  esac
   case "$base" in
     wg)
       need_bin wg-quick
