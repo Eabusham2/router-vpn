@@ -2,7 +2,7 @@
 set -u
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
 RUN="$ROOT/run"
-for i in wg0 awg0; do
+for i in wg0 awg0 wg awg; do
   sudo wg-quick down "$i" >/dev/null 2>&1 || true
   sudo awg-quick down "$i" >/dev/null 2>&1 || true
   sudo ip link del "$i" >/dev/null 2>&1 || true
@@ -15,4 +15,5 @@ sudo pkill -f 'xray run.*router-vpn-client/generated' >/dev/null 2>&1 || true
 sudo pkill -f 'sing-box run.*router-vpn-client/generated' >/dev/null 2>&1 || true
 sudo pkill -f 'sing-box run.*router-vpn-client/run' >/dev/null 2>&1 || true
 sudo pkill -f 'rosenpass exchange-config.*router-vpn-client/generated' >/dev/null 2>&1 || true
+sudo pkill -f 'router-vpn-dns.*127.0.0.1:53' >/dev/null 2>&1 || true
 exit 0
