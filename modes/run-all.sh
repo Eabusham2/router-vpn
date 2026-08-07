@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
+PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}" | tr -cd 'A-Za-z0-9_.-')
+PROFILE_ID=${PROFILE_ID:-router}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+HEALTH_URL=${HOMEVPN_HEALTH_URL:-https://connectivitycheck.gstatic.com/generate_204}
+TEST_SECONDS=${HOMEVPN_AUTO_TEST_SECONDS:-6}
+BASE=${HOMEVPN_BASE:-auto}
+
+if [[ $BASE == auto ]]; then
+  BASE=$(python3 - "$ROOT/routers.json" "$PROFILE_ID" <<'PY'
+import json,sys
+try: x=json.load(open(sys.argv[1]))
+except Exception: print('wg'); raise SystemExit
+p=next((p for p in x.get('profiles',[]) if p.get('id')==sys.argv[2]),{})
+print(str(p.get('base_tunnel') or 'wg').lower())
+PY
+  )
+fi
+case "$BASE" in
+  awg|amnezia|amneziawg|amneziawg2) candidates=(max-tls-awg max-tls-wg max-quic-awg max-quic-wg) ;;
+  *) candidates=(max-tls-wg max-tls-awg max-quic-wg max-quic-awg) ;;
+esac
+
+health(){
+  python3 - "$HEALTH_URL" "$TEST_SECONDS" <<'PY'
+import sys,urllib.request
+url=sys.argv[1]; timeout=float(sys.argv[2])
+try:
+    with urllib.request.urlopen(url,timeout=timeout) as r:
+        if 200 <= r.status < 300: raise SystemExit(0)
+except Exception:
+    pass
+raise SystemExit(1)
+PY
+}
+
+for candidate in "${candidates[@]}"; do
+  if ! HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ROOT="$ROOT" "$SCRIPT_DIR/check-mode.sh" "$candidate" >/dev/null 2>&1; then
+    continue
+  fi
+  echo "ALL trying $candidate" >&2
+  bash "$SCRIPT_DIR/run-max.sh" "$candidate" &
+  pid=$!
+  sleep 2
+  if kill -0 "$pid" >/dev/null 2>&1 && health; then
+    echo "ALL connected with $candidate" >&2
+    wait "$pid"
+    exit $?
+  fi
+  kill "$pid" >/dev/null 2>&1 || true
+  wait "$pid" >/dev/null 2>&1 || true
+  HOMEVPN_ROOT="$ROOT" bash "$SCRIPT_DIR/stop-mode.sh" >/dev/null 2>&1 || true
+  sleep 0.3
+done
+
+echo 'ALL could not establish any validated MAX TLS or MAX QUIC branch.' >&2
+exit 1
