@@ -6,6 +6,7 @@ PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}" | tr -cd 'A-Za-z0-9_.-'
 PROFILE_ID=${PROFILE_ID:-router}
 RUN="$ROOT/run"
 ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend in the app first}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$RUN"
 
 if [[ $MODE == all ]]; then
@@ -71,13 +72,56 @@ fi
 
 export HOMEVPN_MODE="$MODE"
 export HOMEVPN_MTU=${HOMEVPN_MTU:-1380}
-"$(dirname "$0")/check-mode.sh" "$MODE" >/dev/null
+"$SCRIPT_DIR/check-mode.sh" "$MODE" >/dev/null
+# shellcheck disable=SC2046
+eval "$(python3 "$SCRIPT_DIR/dns-policy.py" env)"
+export HOMEVPN_DNS_MODE HOMEVPN_DNS_PROTOCOL HOMEVPN_DNS_HOST HOMEVPN_DNS_PORT HOMEVPN_DNS_SERVER_NAME HOMEVPN_DNS_PATH
+
 start_bg(){ "$@" >>"$RUN/$MODE.log" 2>&1 & echo $! >>"$RUN/$MODE.pids"; }
-set_dns_hint(){ printf '%s\n%s\n' "${HOMEVPN_ADGUARD4:-}" "${HOMEVPN_ADGUARD6:-}" >"$RUN/dns.txt"; }
+set_dns_hint(){
+  printf '%s\n' "mode=$HOMEVPN_DNS_MODE" "protocol=$HOMEVPN_DNS_PROTOCOL" "server=$HOMEVPN_DNS_HOST:$HOMEVPN_DNS_PORT" >"$RUN/dns.txt"
+}
 set_dns_hint
 : >"$RUN/$MODE.pids"
 
 socks_only(){ [[ ${HOMEVPN_SOCKS:-false} == true ]]; }
+
+dns_binary(){
+  if command -v router-vpn-dns >/dev/null 2>&1; then command -v router-vpn-dns; return; fi
+  if [[ -x "$ROOT/router-vpn-dns" ]]; then printf '%s\n' "$ROOT/router-vpn-dns"; return; fi
+  echo 'router-vpn-dns is missing; reinstall the current client bundle' >&2
+  return 1
+}
+
+patch_kernel_dns(){
+  local cfg=$1
+  python3 - "$cfg" <<'PY'
+from pathlib import Path
+import re,sys
+p=Path(sys.argv[1]); text=p.read_text()
+if re.search(r'(?mi)^DNS\s*=',text):
+    text=re.sub(r'(?mi)^DNS\s*=.*$', 'DNS = 127.0.0.1', text)
+else:
+    text=text.replace('[Interface]\n','[Interface]\nDNS = 127.0.0.1\n',1)
+p.write_text(text)
+PY
+}
+
+start_dns_proxy(){
+  local bin pid
+  bin=$(dns_binary)
+  sudo env \
+    HOMEVPN_DNS_PROTOCOL="$HOMEVPN_DNS_PROTOCOL" \
+    HOMEVPN_DNS_HOST="$HOMEVPN_DNS_HOST" \
+    HOMEVPN_DNS_PORT="$HOMEVPN_DNS_PORT" \
+    HOMEVPN_DNS_SERVER_NAME="$HOMEVPN_DNS_SERVER_NAME" \
+    HOMEVPN_DNS_PATH="$HOMEVPN_DNS_PATH" \
+    "$bin" --listen 127.0.0.1:53 >>"$RUN/$MODE-dns.log" 2>&1 &
+  pid=$!
+  echo "$pid" >>"$RUN/$MODE.pids"
+  sleep 0.2
+  kill -0 "$pid" >/dev/null 2>&1 || { echo 'DNS proxy failed to start' >&2; return 1; }
+}
 
 make_local_socks_chain(){
   local out="$RUN/local-socks-chain.json"
@@ -85,10 +129,7 @@ make_local_socks_chain(){
 import json,os,sys
 host=os.environ.get('HOMEVPN_SOCKS_HOST','10.77.0.1')
 port=int(os.environ.get('HOMEVPN_SOCKS_PORT','1080'))
-user=os.environ.get('HOMEVPN_SOCKS_USER','')
-pw=os.environ.get('HOMEVPN_SOCKS_PASSWORD','')
 server={"type":"socks","tag":"home-socks","server":host,"server_port":port,"version":"5"}
-if user or pw: server["username"],server["password"]=user,pw
 cfg={
  "log":{"level":"warn"},
  "inbounds":[{"type":"socks","tag":"local-socks","listen":"127.0.0.1","listen_port":1080,"users":[]}],
@@ -104,6 +145,7 @@ run_kernel_tunnel(){
   local tool=$1 full=$2 split=$3
   local cfg=$full
   socks_only && cfg=$split
+  if ! socks_only; then patch_kernel_dns "$cfg"; fi
   sudo "$tool" up "$cfg"
   cleanup_kernel(){ sudo "$tool" down "$cfg" >/dev/null 2>&1 || true; }
   trap cleanup_kernel EXIT INT TERM
@@ -113,12 +155,14 @@ run_kernel_tunnel(){
     sudo sing-box run -c "$proxy_cfg"
     return
   fi
+  start_dns_proxy
   while sleep 3600; do :; done
 }
 
 run_sing_box(){
   local cfg="$CONF/sing-box.json"
   local tmp="$RUN/$MODE-sing-box.json"
+  python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$cfg"
   if [[ ${HOMEVPN_JUMBO:-false} == true || ${HOMEVPN_SOCKS:-false} == true ]]; then
     python3 - "$cfg" "$tmp" <<'PY'
 import json,os,sys
@@ -132,7 +176,8 @@ json.dump(x,open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
 PY
     cfg="$tmp"
   fi
-  exec sudo sing-box run -c "$cfg"
+  sing-box check -D "$CONF" -c "$cfg" >/dev/null
+  exec sudo sing-box run -D "$CONF" -c "$cfg"
 }
 
 run_max(){
@@ -146,7 +191,7 @@ run_max(){
     sing-box|none) ;;
     *) echo "invalid OUTER_ENGINE: ${OUTER_ENGINE:-unset}" >&2; exit 1 ;;
   esac
-  start_bg sudo sing-box run -c "$CONF/middle-sing-box.json"
+  start_bg sudo sing-box run -D "$CONF" -c "$CONF/middle-sing-box.json"
   sleep 2
   case "$base" in
     wg) run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf" ;;
@@ -163,10 +208,14 @@ case "$MODE" in
     run_kernel_tunnel awg-quick "$CONF/awg.conf" "$CONF/awg-socks.conf"
     ;;
   wg-pq|awg2-pq)
-    exec bash "$(dirname "$0")/run-pq.sh" "$MODE" "$CONF"
+    exec bash "$SCRIPT_DIR/run-pq.sh" "$MODE" "$CONF"
     ;;
-  reality-vision|hysteria2|shadowsocks|ss-v2ray|naive-h2)
+  reality-vision|hysteria2|shadowsocks|naive-h2|naive-h3)
     run_sing_box
+    ;;
+  ss-v2ray)
+    python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json"
+    exec bash "$SCRIPT_DIR/run-ss-v2ray.sh" "$CONF"
     ;;
   reality-pq-vision)
     start_bg sudo xray run -c "$CONF/xray.json"
@@ -189,7 +238,7 @@ case "$MODE" in
       *) candidates=(max-tls-wg max-tls-awg max-quic-wg max-quic-awg) ;;
     esac
     for candidate in "${candidates[@]}"; do
-      if env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ROOT="$ROOT" "$(dirname "$0")/check-mode.sh" "$candidate" >/dev/null 2>&1; then
+      if env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ROOT="$ROOT" "$SCRIPT_DIR/check-mode.sh" "$candidate" >/dev/null 2>&1; then
         exec env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ENDPOINT="$ENDPOINT" HOMEVPN_BASE="${HOMEVPN_BASE:-auto}" HOMEVPN_DAITA="${HOMEVPN_DAITA:-false}" HOMEVPN_JUMBO="${HOMEVPN_JUMBO:-false}" HOMEVPN_SOCKS="${HOMEVPN_SOCKS:-false}" HOMEVPN_ROOT="$ROOT" "$0" "$candidate"
       fi
     done
