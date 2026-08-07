@@ -21,6 +21,7 @@ services:
       HY2_PORT: ${HY2_PORT:-8443}
       SS_PORT: ${SS_PORT:-8388}
       XRAY_PQ_PORT: ${XRAY_PQ_PORT:-10443}
+      XHTTP_PORT: ${XHTTP_PORT:-11443}
       REALITY_TARGET: ${REALITY_TARGET:-www.microsoft.com:443}
     restart: "no"
 
