@@ -27,7 +27,7 @@ for required in \
 done
 
 # Refresh public client code/catalog/builds while preserving this router's generated
-# private profiles, token, selected endpoint, and keys.
+# private WG/AWG/Rosenpass profiles, token, selected endpoint, and keys.
 bash /src/server/finalize/sync-client-runtime.sh "$BASE"
 
 eval "$(python3 /src/server/finalize/detect-settings.py "$BASE")"
@@ -69,6 +69,14 @@ if ! bash /src/server/scripts/ensure-rosenpass.sh "$BASE" "$CONFIG_ENDPOINT" "$R
     "$BASE/client-bundle/generated/awg2-pq/rosenpass-client-secret" \
     "$BASE/client-bundle/generated/awg2-pq/rosenpass-server-public"
 fi
+
+# Rebuild transport-generated profiles on every redeploy. This migrates older
+# installs from sing-box REALITY to the validated Xray REALITY/Vision implementation
+# while preserving the long-lived WG/AWG/Rosenpass keys above.
+bash /src/server/scripts/generate-transports.sh \
+  "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$REALITY_TARGET"
+bash /src/server/scripts/generate-xray-pq.sh \
+  "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$XRAY_PQ_PORT" "$REALITY_TARGET" "$REALITY_PORT"
 
 if ! python3 /src/server/scripts/generate-stack-profiles.py "$BASE"; then
   echo 'Warning: dual-transport profiles were not generated.' >&2
@@ -174,4 +182,4 @@ export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_POR
 bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
 touch "$BASE/.finalized"
 
-echo 'Finalization complete: advanced/PQ/TLS profiles generated where supported; SOCKS5 uses IP and port only.'
+echo 'Finalization complete: current transport/PQ/TLS profiles generated where supported; SOCKS5 uses IP and port only.'
