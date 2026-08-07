@@ -44,6 +44,15 @@ def patch_json(obj):
     elif isinstance(obj,list):
         for value in obj: patch_json(value)
 
+def patch_text_endpoint(match):
+    prefix, old, quote = match.group(1), match.group(2), match.group(3)
+    port_match=re.search(r':(\d+)$',old)
+    if not port_match:
+        return f'{prefix}{endpoint}{quote}'
+    port=port_match.group(1)
+    host=f'[{endpoint}]' if ':' in endpoint else endpoint
+    return f'{prefix}{host}:{port}{quote}'
+
 for p in root.rglob('*'):
     if not p.is_file(): continue
     if p.suffix.lower()=='.json':
@@ -55,7 +64,7 @@ for p in root.rglob('*'):
     try: text=p.read_text()
     except UnicodeDecodeError: continue
     text=re.sub(r'(?m)^(Endpoint\s*=\s*).*:(\d+)\s*$', lambda m:f'{m.group(1)}{wg_host}:{m.group(2)}', text)
-    text=re.sub(r'(?m)^(endpoint\s*=\s*["\']).*?(["\'])', lambda m:f'{m.group(1)}{endpoint}{m.group(2)}', text)
+    text=re.sub(r'(?m)^(endpoint\s*=\s*["\'])(.*?)(["\'])', patch_text_endpoint, text)
     p.write_text(text)
 PY_ENDPOINT
 fi
@@ -101,7 +110,8 @@ run_kernel_tunnel(){
   if socks_only; then
     local proxy_cfg
     proxy_cfg=$(make_local_socks_chain)
-    exec sudo sing-box run -c "$proxy_cfg"
+    sudo sing-box run -c "$proxy_cfg"
+    return
   fi
   while sleep 3600; do :; done
 }
@@ -137,9 +147,6 @@ run_max(){
     *) echo "invalid OUTER_ENGINE: ${OUTER_ENGINE:-unset}" >&2; exit 1 ;;
   esac
   start_bg sudo sing-box run -c "$CONF/middle-sing-box.json"
-  if [[ -f "$CONF/rosenpass.toml" ]]; then
-    start_bg sudo rosenpass exchange-config "$CONF/rosenpass.toml"
-  fi
   sleep 2
   case "$base" in
     wg) run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf" ;;
@@ -155,15 +162,8 @@ case "$MODE" in
   awg2-fast|awg2-strong)
     run_kernel_tunnel awg-quick "$CONF/awg.conf" "$CONF/awg-socks.conf"
     ;;
-  wg-pq)
-    start_bg sudo rosenpass exchange-config "$CONF/rosenpass.toml"
-    sleep 1
-    run_kernel_tunnel wg-quick "$CONF/wg.conf" "$CONF/wg-socks.conf"
-    ;;
-  awg2-pq)
-    start_bg sudo rosenpass exchange-config "$CONF/rosenpass.toml"
-    sleep 1
-    run_kernel_tunnel awg-quick "$CONF/awg.conf" "$CONF/awg-socks.conf"
+  wg-pq|awg2-pq)
+    exec bash "$(dirname "$0")/run-pq.sh" "$MODE" "$CONF"
     ;;
   reality-vision|hysteria2|shadowsocks|ss-v2ray|naive-h2)
     run_sing_box
