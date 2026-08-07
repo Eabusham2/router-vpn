@@ -19,6 +19,9 @@ type Mode struct {
 	AutoEligible    bool     `json:"auto_eligible"`
 	DAITASupported  bool     `json:"daita_supported"`
 	JumboSupported  bool     `json:"jumbo_supported"`
+	Layers          []string `json:"layers,omitempty"`
+	SmartSimplify   []string `json:"smart_simplify,omitempty"`
+	Recommended     bool     `json:"recommended,omitempty"`
 }
 
 type ModeStatus struct {
