@@ -87,15 +87,15 @@ ss_tun={
   "route":{"rules":[{"protocol":"dns","action":"hijack-dns"},{"network":"tcp","action":"route","outbound":"tcp-stack"},{"network":"udp","action":"route","outbound":"udp-stack"}],"auto_detect_interface":True,"final":"tcp-stack"}
 }
 (gen/'ss-v2ray'/'sing-box.json').write_text(json.dumps(ss_tun,indent=2)+'\n')
-# Hysteria's private self-signed certificate is still required for the UDP branch.
 (gen/'ss-v2ray'/'cert.pem').write_bytes((gen/'hysteria2'/'cert.pem').read_bytes())
 
-# sing-box 1.13 native Naive outbound. H2 can carry UDP over TCP; H3 uses QUIC.
+# sing-box 1.13 native Naive outbound. H2 explicitly enables UDP-over-TCP v2;
+# H3 uses QUIC directly.
 def naive(quic: bool, name: str):
     outbound={
       "type":"naive","tag":"proxy","server":endpoint,"server_port":naive_port,
       "username":naive_user,"password":naive_pw,
-      "udp_over_tcp":False if quic else {},"quic":quic,
+      "udp_over_tcp":False if quic else {"enabled":True,"version":2},"quic":quic,
       "tls":{"enabled":True,"server_name":tls_name}
     }
     cfg={
