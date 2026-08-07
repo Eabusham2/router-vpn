@@ -101,4 +101,27 @@ payload = {
 OUT.parent.mkdir(parents=True, exist_ok=True)
 OUT.write_text(json.dumps(payload, indent=2) + "\n")
 OUT.chmod(0o600)
+
+# Desktop installers may copy routers.json directly instead of importing the JSON
+# bundle, so keep the same benchmark result in that profile store too.
+routers_path = BASE / "client-bundle" / "routers.json"
+if routers_path.is_file():
+    try:
+        routers = json.loads(routers_path.read_text())
+        latency = winner.get("latency_ms")
+        for profile in routers.get("profiles", []):
+            profile.setdefault("dns_mode", "fastest")
+            profile.setdefault("dns_protocol", "udp")
+            profile["dns_host"] = winner["address"]
+            profile.setdefault("dns_port", 53)
+            profile.setdefault("dns_server_name", "")
+            profile.setdefault("dns_path", "/dns-query")
+            profile["fastest_dns_host"] = winner["address"]
+            profile["fastest_dns_name"] = winner["name"]
+            profile["fastest_dns_latency_ms"] = float(latency) if latency is not None else 0.0
+        routers_path.write_text(json.dumps(routers, indent=2) + "\n")
+        routers_path.chmod(0o600)
+    except Exception as exc:
+        print(f"warning: could not update routers.json DNS fields: {exc}", file=sys.stderr)
+
 print(winner["address"])
