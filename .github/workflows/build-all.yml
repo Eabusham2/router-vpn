@@ -54,6 +54,22 @@ jobs:
           ./deploy/build-client.sh
       - name: Package archives and PortableApps layouts
         run: ./deploy/package-builds.sh
+      - name: Verify desktop and Unix packages
+        run: |
+          test -f dist/packages/RouterVPN-Windows-amd64.zip
+          test -f dist/packages/RouterVPN-Windows-arm64.zip
+          test -f dist/packages/RouterVPNPortable-amd64.zip
+          test -f dist/packages/RouterVPNPortable-arm64.zip
+          test -f dist/packages/RouterVPN-darwin-amd64.tar.gz
+          test -f dist/packages/RouterVPN-darwin-arm64.tar.gz
+          test -f dist/packages/RouterVPN-linux-amd64.tar.gz
+          test -f dist/packages/RouterVPN-linux-arm64.tar.gz
+          (
+            cd dist/packages
+            sha256sum -c SHA256SUMS
+            for archive in ./*.zip; do unzip -tq "$archive" >/dev/null; done
+            for archive in ./*.tar.gz; do tar -tzf "$archive" >/dev/null; done
+          )
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-desktop-unix
@@ -82,11 +98,13 @@ jobs:
             'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
       - name: Build debug APK
         run: gradle -p android --no-daemon :app:assembleDebug
-      - name: Collect APK and checksum
+      - name: Collect and verify APK
         run: |
           mkdir -p dist/mobile
           cp android/app/build/outputs/apk/debug/app-debug.apk dist/mobile/RouterVPN-android-debug.apk
+          unzip -tq dist/mobile/RouterVPN-android-debug.apk >/dev/null
           sha256sum dist/mobile/RouterVPN-android-debug.apk > dist/mobile/RouterVPN-android-debug.apk.sha256
+          sha256sum -c dist/mobile/RouterVPN-android-debug.apk.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Android-APK
@@ -124,11 +142,12 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM='' \
             build
-      - name: Package unsigned re-signable IPA
+      - name: Package and verify unsigned re-signable IPA
         working-directory: ios/RouterVPN
         run: |
           APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
           test -d "$APP"
+          test -d "$APP/PlugIns/RouterVPNPacketTunnel.appex"
           rm -rf build/unsigned
           mkdir -p build/unsigned/Payload
           ditto "$APP" build/unsigned/Payload/RouterVPN.app
@@ -136,7 +155,10 @@ jobs:
             cd build/unsigned
             zip -qry ../RouterVPN-unsigned-resignable.ipa Payload
           )
+          unzip -tq build/RouterVPN-unsigned-resignable.ipa >/dev/null
+          unzip -l build/RouterVPN-unsigned-resignable.ipa | grep -q 'Payload/RouterVPN.app/PlugIns/RouterVPNPacketTunnel.appex/'
           shasum -a 256 build/RouterVPN-unsigned-resignable.ipa > build/RouterVPN-unsigned-resignable.ipa.sha256
+          shasum -a 256 -c build/RouterVPN-unsigned-resignable.ipa.sha256
       - name: Import Apple signing assets
         if: ${{ env.IOS_CERTIFICATE_BASE64 != '' && env.IOS_CERTIFICATE_PASSWORD != '' && env.IOS_APP_PROFILE_BASE64 != '' && env.IOS_TUNNEL_PROFILE_BASE64 != '' && env.APPLE_TEAM_ID != '' }}
         run: |
@@ -171,7 +193,7 @@ jobs:
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_STYLE=Automatic \
             archive
-      - name: Export signed IPA
+      - name: Export and verify signed IPA
         if: ${{ env.IOS_CERTIFICATE_BASE64 != '' && env.IOS_CERTIFICATE_PASSWORD != '' && env.IOS_APP_PROFILE_BASE64 != '' && env.IOS_TUNNEL_PROFILE_BASE64 != '' && env.APPLE_TEAM_ID != '' }}
         working-directory: ios/RouterVPN
         run: |
@@ -184,7 +206,9 @@ jobs:
           ipa=$(find build/signed -maxdepth 1 -name '*.ipa' -print -quit)
           test -n "$ipa"
           cp "$ipa" build/RouterVPN-signed.ipa
+          unzip -tq build/RouterVPN-signed.ipa >/dev/null
           shasum -a 256 build/RouterVPN-signed.ipa > build/RouterVPN-signed.ipa.sha256
+          shasum -a 256 -c build/RouterVPN-signed.ipa.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-iOS-IPA
@@ -209,6 +233,7 @@ jobs:
         run: |
           find all-platforms -type f -print0 | sort -z | xargs -0 sha256sum > all-platforms/SHA256SUMS
           tar -czf RouterVPN-all-platforms.tar.gz all-platforms
+          tar -tzf RouterVPN-all-platforms.tar.gz >/dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-all-platforms
