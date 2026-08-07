@@ -2,38 +2,73 @@
 
 No home-router address is embedded in the app. Router profiles are imported and edited at runtime.
 
-## Immediate usable profiles
+## Immediate working profiles
 
 After the router installs, open the private client bundle:
 
 - `generated/wg/wg.conf` → import into WireGuard
 - `generated/awg2-fast/awg.conf` → import into an AmneziaWG-compatible iOS client
 
-## Custom Router VPN IPA
+These are the immediate iPhone/iPad choices while the custom Packet Tunnel adapter is unfinished.
 
-A signed IPA is not bundled. Apple requires your own Developer Team, app and extension provisioning profiles, and Packet Tunnel entitlement. The included Packet Tunnel target is a scaffold until the AWG/WireGuardKit adapter is linked.
+## Custom Router VPN app
 
-### Build
+The SwiftUI app includes:
 
-1. Install Xcode on a Mac.
-2. Install XcodeGen:
+- router-bundle import
+- runtime endpoint editing
+- all generated modes and overhead display
+- AUTO/manual controls
+- DAITA-like and Jumbo controls
+- SOCKS5 IP:port display
+- WG/AWG port-forward controls
+- Packet Tunnel extension target
+
+The current `PacketTunnelProvider.swift` intentionally returns an error explaining that the native WireGuard, AmneziaWG, Xray, and sing-box adapter is not linked. This prevents a signed UI-only app from pretending the VPN connected.
+
+## GitHub Actions IPA builds
+
+Run **Actions → Build all platforms**.
+
+Without Apple secrets, the workflow builds:
+
+```text
+RouterVPN-unsigned-resignable.ipa
+```
+
+This IPA must be re-signed before installation.
+
+With all Apple secrets configured, it also attempts to build:
+
+```text
+RouterVPN-signed.ipa
+RouterVPN.xcarchive
+```
+
+See `docs/BUILDS.md` for the five required secrets, bundle identifiers, and Base64 commands.
+
+Signing does not add the missing tunnel engine. The custom app becomes a working VPN only after a native adapter is linked in `PacketTunnelProvider.swift`.
+
+## Build manually on a Mac
 
 ```bash
 brew install xcodegen
-```
-
-3. Open Terminal and run:
-
-```bash
-cd /path/to/router-vpn/ios/RouterVPN
+cd ios/RouterVPN
 xcodegen generate
 open RouterVPN.xcodeproj
 ```
 
-4. Select your Apple Developer Team for `RouterVPN` and `RouterVPNPacketTunnel`.
-5. Enable **Network Extensions → Packet Tunnel** for both App IDs.
-6. Add the AmneziaWG Apple/WireGuardKit package and its required Go bridge target to the Packet Tunnel target.
-7. Replace the placeholder in `PacketTunnelProvider.swift` with the engine adapter.
-8. Product → Archive → Distribute App → Development or Ad Hoc.
+Then:
 
-The private repo also includes `.github/workflows/build-ios.yml`; it requires your Apple certificate, provisioning profiles, Team ID, and the completed tunnel adapter.
+1. Select your Apple Developer Team for both targets.
+2. Enable the Packet Tunnel Network Extension entitlement for both App IDs.
+3. Add the required WireGuard/AmneziaWG and proxy-engine libraries to the Packet Tunnel target.
+4. Replace the current explicit placeholder error with the real adapter.
+5. Build to a device or archive and export.
+
+Bundle identifiers:
+
+```text
+com.eabusham.routervpn
+com.eabusham.routervpn.PacketTunnel
+```
