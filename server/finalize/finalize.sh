@@ -26,28 +26,20 @@ for required in \
   [[ -s "$required" ]] || { echo "Base initialization missing $required" >&2; exit 1; }
 done
 
-# Prefer the values actually written by the base installer. This preserves custom
-# ports and the selected endpoint for both Portainer and SSH installations.
 eval "$(python3 /src/server/finalize/detect-settings.py "$BASE")"
 CONFIG_ENDPOINT=${ENDPOINT:-router.invalid}
 
-# The base initializer temporarily writes credentials because older init code expects
-# a users array. Remove it before SOCKS5 starts so apps only need tunnel IP + port.
 python3 - "$BASE" "$ADGUARD4" <<'PY'
 from pathlib import Path
 import json,sys
 base=Path(sys.argv[1]); dns=sys.argv[2]
-
 socks_path=base/'config'/'socks5.json'
 socks=json.load(open(socks_path))
 for inbound in socks.get('inbounds',[]):
-    if inbound.get('type')=='socks':
-        inbound.pop('users',None)
+    if inbound.get('type')=='socks': inbound.pop('users',None)
 for server in socks.get('dns',{}).get('servers',[]):
-    if isinstance(server,dict) and server.get('tag')=='home-dns':
-        server['server']=dns
+    if isinstance(server,dict) and server.get('tag')=='home-dns': server['server']=dns
 socks_path.write_text(json.dumps(socks,indent=2)+'\n')
-
 routers_path=base/'client-bundle'/'routers.json'
 routers=json.load(open(routers_path))
 for profile in routers.get('profiles',[]):
@@ -58,8 +50,6 @@ for profile in routers.get('profiles',[]):
 routers_path.write_text(json.dumps(routers,indent=2)+'\n')
 PY
 
-# Backfill real Rosenpass client/server profiles on both fresh and existing installs.
-# If the engine cannot be generated, the base WG/AWG modes remain usable and PQ stays disabled.
 if ! bash /src/server/scripts/ensure-rosenpass.sh "$BASE" "$CONFIG_ENDPOINT" "$ROSENPASS_PORT"; then
   echo 'Warning: Rosenpass PQ profiles were not generated; WG-PQ/AWG-PQ remain unavailable.' >&2
   rm -rf "$BASE/config/rosenpass"
@@ -76,8 +66,6 @@ if ! bash /src/server/scripts/ensure-rosenpass.sh "$BASE" "$CONFIG_ENDPOINT" "$R
     "$BASE/client-bundle/generated/awg2-pq/rosenpass-server-public"
 fi
 
-# Generate every compatible combined profile. Failure of an experimental upstream
-# engine disables that profile instead of breaking the basic WireGuard services.
 if ! python3 /src/server/scripts/generate-stack-profiles.py "$BASE"; then
   echo 'Warning: dual-transport profiles were not generated.' >&2
   rm -rf "$BASE/client-bundle/generated/split" "$BASE/client-bundle/generated/max"
@@ -93,11 +81,13 @@ if ! bash /src/server/scripts/generate-advanced-profiles.sh \
     "$BASE/client-bundle/generated/max-quic-awg" \
     "$BASE/client-bundle/generated/reality-xhttp"
   rm -f "$BASE/config/xray/advanced-secrets.json"
+else
+  if ! python3 /src/server/scripts/wrap-xhttp-tun.py "$BASE" "$ADGUARD4"; then
+    echo 'Warning: XHTTP outer profile is valid but its full-tunnel wrapper failed validation; disabling XHTTP mode only.' >&2
+    rm -rf "$BASE/client-bundle/generated/reality-xhttp"
+  fi
 fi
 
-# Generate certificate-backed alternatives. Caddy obtains and renews the public
-# certificate after services start. A public IPv4 automatically gets an sslip.io
-# hostname; custom hostnames can be supplied with ROUTER_VPN_TLS_NAME.
 export SS_V2RAY_PORT NAIVE_PORT
 if ! bash /src/server/scripts/generate-tls-alternates.sh "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4"; then
   echo 'Warning: automatic TLS alternate profiles were not generated.' >&2
@@ -108,9 +98,6 @@ if ! bash /src/server/scripts/generate-tls-alternates.sh "$BASE" "$CONFIG_ENDPOI
     "$BASE/client-bundle/generated/naive-h3"
 fi
 
-# Public DNS requests leave from this home node after tunneling, so benchmark here.
-# Failure never blocks installation: Home AdGuard/custom DNS remain available and
-# the bundle generator has a safe public fallback.
 if ! python3 /src/server/scripts/benchmark-dns.py "$BASE" >/dev/null; then
   echo 'Warning: public DNS benchmark failed; using bundle fallback until next upgrade/redeploy.' >&2
   rm -f "$BASE/config/dns-fastest.json"
