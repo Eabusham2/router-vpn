@@ -129,7 +129,7 @@ services:
       ROSENPASS_ENV: /data/server.env
 
   transports:
-    image: ghcr.io/sagernet/sing-box:1.13.12
+    image: ghcr.io/sagernet/sing-box:v1.13.16
     container_name: router-vpn-transports
     network_mode: host
     restart: unless-stopped
@@ -142,7 +142,7 @@ services:
     command: ["run", "-c", "/etc/sing-box/config.json"]
 
   xray-pq:
-    image: ghcr.io/xtls/xray-core:latest
+    image: ghcr.io/xtls/xray-core:26.7.11
     container_name: router-vpn-xray
     network_mode: host
     restart: unless-stopped
@@ -196,7 +196,7 @@ services:
     command: ["httpd", "-f", "-p", "8786", "-h", "/www"]
 
   socks5:
-    image: ghcr.io/sagernet/sing-box:1.13.12
+    image: ghcr.io/sagernet/sing-box:v1.13.16
     container_name: router-vpn-socks5
     network_mode: host
     restart: unless-stopped
