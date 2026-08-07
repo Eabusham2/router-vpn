@@ -10,8 +10,19 @@ ROOT=/opt/router-vpn-client
 mkdir -p "$ROOT" /usr/local/bin
 cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
 ARCH=$(uname -m)
-case "$ARCH" in aarch64|arm64) BIN="$BUNDLE/dist/router-vpn-client-linux-arm64";; x86_64|amd64) BIN="$BUNDLE/dist/router-vpn-client-linux-amd64";; *) echo "Unsupported Linux architecture: $ARCH"; exit 1;; esac
+case "$ARCH" in
+  aarch64|arm64)
+    BIN="$BUNDLE/dist/router-vpn-client-linux-arm64"
+    DNS_BIN="$BUNDLE/dist/router-vpn-dns-linux-arm64"
+    ;;
+  x86_64|amd64)
+    BIN="$BUNDLE/dist/router-vpn-client-linux-amd64"
+    DNS_BIN="$BUNDLE/dist/router-vpn-dns-linux-amd64"
+    ;;
+  *) echo "Unsupported Linux architecture: $ARCH"; exit 1;;
+esac
 install -m 755 "$BIN" /usr/local/bin/router-vpn-client
+install -m 755 "$DNS_BIN" /usr/local/bin/router-vpn-dns
 if ! command -v sing-box >/dev/null; then
   SB_VER=1.13.12
   case "$ARCH" in aarch64|arm64) SB_ARCH=arm64;; x86_64|amd64) SB_ARCH=amd64;; esac
@@ -31,6 +42,25 @@ if ! command -v rosenpass >/dev/null; then
     echo 'Warning: Rosenpass build failed. Normal modes still work; PQ-WG/PQ-AWG remain disabled.' >&2
   fi
   rm -rf "$TMP_RP"
+fi
+if ! command -v sslocal >/dev/null; then
+  echo 'Installing Shadowsocks-rust for SS+V2Ray TLS...'
+  if cargo install --locked --version 1.24.0 shadowsocks-rust; then
+    install -m 755 "${CARGO_HOME:-/root/.cargo}/bin/sslocal" /usr/local/bin/sslocal
+  else
+    echo 'Warning: Shadowsocks-rust install failed; SS+V2Ray TLS remains disabled.' >&2
+  fi
+fi
+if ! command -v v2ray-plugin >/dev/null; then
+  echo 'Installing V2Ray SIP003 plugin...'
+  TMP_V2=$(mktemp -d)
+  if git clone --depth 1 https://github.com/shadowsocks/v2ray-plugin "$TMP_V2/v2ray-plugin" \
+    && (cd "$TMP_V2/v2ray-plugin" && go build -trimpath -ldflags='-s -w' -o v2ray-plugin .); then
+    install -m 755 "$TMP_V2/v2ray-plugin/v2ray-plugin" /usr/local/bin/v2ray-plugin
+  else
+    echo 'Warning: V2Ray-plugin build failed; SS+V2Ray TLS remains disabled.' >&2
+  fi
+  rm -rf "$TMP_V2"
 fi
 if ! command -v amneziawg-go >/dev/null || ! command -v awg-quick >/dev/null; then
   TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
