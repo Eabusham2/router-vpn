@@ -2,7 +2,10 @@
 set -euo pipefail
 CONF=${ROSENPASS_CONFIG:-/data/server.toml}
 ENV_FILE=${ROSENPASS_ENV:-/data/server.env}
-[[ -s "$CONF" && -s "$ENV_FILE" ]] || { echo 'Rosenpass server config is missing.' >&2; exit 1; }
+if [[ ! -s "$CONF" || ! -s "$ENV_FILE" ]]; then
+  echo 'Rosenpass PQ is disabled because no generated server config is present.'
+  exec sleep infinity
+fi
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 
@@ -25,6 +28,6 @@ bash /usr/local/lib/router-vpn/rosenpass-key-watch.sh \
   "$ROSENPASS_AWG_TOOL" "$ROSENPASS_AWG_INTERFACE" "$ROSENPASS_AWG_PEER" "$ROSENPASS_AWG_KEY_OUT" &
 PIDS+=("$!")
 
-# Fail the container if Rosenpass itself exits. Watchers are intentionally retrying
-# because WG/AWG interfaces may appear a moment after this service starts.
+# Fail the container if Rosenpass itself exits. Watchers intentionally retry because
+# WG/AWG interfaces may appear a moment after this service starts.
 wait "${PIDS[0]}"
