@@ -63,7 +63,13 @@ case "$MODE" in
   awg2-fast|awg2-strong) need_bin amneziawg-go; need_bin awg; need_bin awg-quick; need_file "$CONF/awg.conf" ;;
   wg-pq) need_bin wg-quick; need_file "$CONF/wg.conf"; need_file "$CONF/wg-socks.conf"; check_rosenpass "$CONF" ;;
   awg2-pq) need_bin amneziawg-go; need_bin awg; need_bin awg-quick; need_file "$CONF/awg.conf"; need_file "$CONF/awg-socks.conf"; check_rosenpass "$CONF" ;;
-  reality-vision|hysteria2|shadowsocks|ss-v2ray|naive-h2) check_sing "$CONF" sing-box.json ;;
+  reality-vision|hysteria2|shadowsocks|naive-h2|naive-h3) check_sing "$CONF" sing-box.json ;;
+  ss-v2ray)
+    need_bin sslocal
+    need_bin v2ray-plugin
+    need_file "$CONF/sslocal.json"
+    check_sing "$CONF" sing-box.json
+    ;;
   reality-pq-vision) check_xray "$CONF/xray.json"; check_sing "$CONF" sing-box.json ;;
   reality-xhttp) check_xray "$CONF/xray.json" ;;
   max-tls-wg|max-quic-wg) check_max "$MODE" wg ;;
