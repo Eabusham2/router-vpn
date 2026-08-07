@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -86,17 +87,31 @@ func getenv(k, v string) string {
 func (s *server) runDAITASink() {
 	pc, err := net.ListenPacket("udp", s.cfg.DAITAListen)
 	if err != nil {
-		log.Printf("DAITA-like sink disabled: %v", err)
+		log.Printf("DAITA-like cover endpoint disabled: %v", err)
 		return
 	}
 	defer pc.Close()
 	buf := make([]byte, 2048)
 	for {
-		_, _, err := pc.ReadFrom(buf)
+		n, addr, err := pc.ReadFrom(buf)
 		if err != nil {
-			log.Printf("DAITA-like sink: %v", err)
+			log.Printf("DAITA-like cover endpoint: %v", err)
 			return
 		}
+		if n <= 0 {
+			continue
+		}
+		// Generate a bounded reverse-direction packet. The reply is never larger
+		// than the request (and capped at 1200 bytes), so this cannot amplify traffic.
+		replyN := n
+		if replyN > 1200 {
+			replyN = 1200
+		}
+		reply := make([]byte, replyN)
+		if _, err := rand.Read(reply); err != nil {
+			continue
+		}
+		_, _ = pc.WriteTo(reply, addr)
 	}
 }
 
