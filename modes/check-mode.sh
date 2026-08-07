@@ -7,7 +7,19 @@ PROFILE_ID=${PROFILE_ID:-router}
 CONF="$ROOT/generated/$PROFILE_ID/$MODE"
 [[ -d "$CONF" ]] || CONF="$ROOT/generated/$MODE"
 need_bin(){ command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1"; exit 1; }; }
-need_file(){ [[ -f "$1" ]] || { echo "missing profile: $1"; exit 1; }; }
+need_file(){ [[ -s "$1" ]] || { echo "missing profile: $1"; exit 1; }; }
+check_sing(){
+  local dir=$1 file=$2
+  need_bin sing-box
+  need_file "$dir/$file"
+  sing-box check -D "$dir" -c "$dir/$file" >/dev/null
+}
+check_xray(){
+  local file=$1
+  need_bin xray
+  need_file "$file"
+  xray run -test -c "$file" >/dev/null
+}
 check_max(){
   local mode=$1 base=$2 dir="$ROOT/generated/$PROFILE_ID/$mode"
   [[ -d "$dir" ]] || dir="$ROOT/generated/$mode"
@@ -15,13 +27,9 @@ check_max(){
   # shellcheck disable=SC1090
   source "$dir/chain.env"
   [[ ${CHAIN_READY:-0} == 1 ]] || { echo "profile generation did not validate this chain"; exit 1; }
-  need_bin sing-box
-  need_file "$dir/middle-sing-box.json"
+  check_sing "$dir" middle-sing-box.json
   case "${OUTER_ENGINE:-}" in
-    xray)
-      need_bin xray
-      need_file "$dir/outer-xray.json"
-      ;;
+    xray) check_xray "$dir/outer-xray.json" ;;
     sing-box|none) ;;
     *) echo "invalid OUTER_ENGINE in $dir/chain.env"; exit 1 ;;
   esac
@@ -46,9 +54,9 @@ case "$MODE" in
   awg2-fast|awg2-strong) need_bin amneziawg-go; need_bin awg; need_bin awg-quick; need_file "$CONF/awg.conf" ;;
   wg-pq) need_bin wg-quick; need_bin rosenpass; need_file "$CONF/wg.conf"; need_file "$CONF/rosenpass.toml" ;;
   awg2-pq) need_bin amneziawg-go; need_bin awg; need_bin awg-quick; need_bin rosenpass; need_file "$CONF/awg.conf"; need_file "$CONF/rosenpass.toml" ;;
-  reality-vision|hysteria2|shadowsocks|ss-v2ray|naive-h2) need_bin sing-box; need_file "$CONF/sing-box.json" ;;
-  reality-pq-vision) need_bin xray; need_bin sing-box; need_file "$CONF/xray.json"; need_file "$CONF/sing-box.json" ;;
-  reality-xhttp) need_bin xray; need_file "$CONF/xray.json" ;;
+  reality-vision|hysteria2|shadowsocks|ss-v2ray|naive-h2) check_sing "$CONF" sing-box.json ;;
+  reality-pq-vision) check_xray "$CONF/xray.json"; check_sing "$CONF" sing-box.json ;;
+  reality-xhttp) check_xray "$CONF/xray.json" ;;
   max-tls-wg|max-quic-wg) check_max "$MODE" wg ;;
   max-tls-awg|max-quic-awg) check_max "$MODE" awg ;;
   all)
