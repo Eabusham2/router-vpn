@@ -3,7 +3,7 @@ set -euo pipefail
 BASE=${1:?base}
 ENDPOINT=${2:?endpoint}
 ADGUARD4=${3:?adguard ipv4}
-PORT=${4:-9443}
+PORT=${4:-10443}
 TARGET=${5:-www.microsoft.com:443}
 xr(){ if command -v xray >/dev/null 2>&1; then xray "$@"; else docker run --rm ghcr.io/xtls/xray-core:latest "$@"; fi; }
 mkdir -p "$BASE/config/xray" "$BASE/client-bundle/generated/reality-pq-vision"
@@ -12,7 +12,7 @@ UUID=$(xr uuid | awk 'NF{print $1; exit}')
 PAIR=$(xr x25519)
 REALITY_PRIVATE=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /privatekey/ {print $2; exit}')
 REALITY_PASSWORD=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /password|publickey/ {print $2; exit}')
-MLDSA=$(xr mldsa65)
+MLDSA=$(xr mldsa65 2>/dev/null || true)
 MLDSA_SEED=$(printf '%s\n' "$MLDSA" | awk -F': *' 'tolower($1) ~ /^seed/ {print $2; exit}')
 MLDSA_VERIFY=$(printf '%s\n' "$MLDSA" | awk -F': *' 'tolower($1) ~ /verify/ {print $2; exit}')
 VLESS=$(xr vlessenc)
@@ -28,8 +28,7 @@ import json,sys,os
 (base,endpoint,dns,port,target,tport,uuid,rpriv,rpass,shortid,sdec,cenc,mseed,mverify)=sys.argv[1:]
 port,tport=int(port),int(tport)
 reality={"show":False,"target":f"{target}:{tport}","xver":0,"serverNames":[target],"privateKey":rpriv,"minClientVer":"26.3.27","maxTimeDiff":120000,"shortIds":[shortid]}
-# ML-DSA is included only when key generation succeeded. Target suitability still must be verified with xray tls ping.
-# ML-DSA keys are exported for an optional hardened profile after target verification.
+# ML-DSA is exported only when the installed Xray build supports key generation.
 server={
  "log":{"loglevel":"warning"},
  "inbounds":[{"tag":"pq-reality-in","listen":"::","port":port,"protocol":"vless",
@@ -57,5 +56,6 @@ os.makedirs(f"{base}/client-bundle/generated/reality-pq-vision",exist_ok=True)
 json.dump(client_xray,open(f"{base}/client-bundle/generated/reality-pq-vision/xray.json","w"),indent=2); open(f"{base}/client-bundle/generated/reality-pq-vision/xray.json","a").write("\n")
 json.dump(wrapper,open(f"{base}/client-bundle/generated/reality-pq-vision/sing-box.json","w"),indent=2); open(f"{base}/client-bundle/generated/reality-pq-vision/sing-box.json","a").write("\n")
 json.dump({"target":f"{target}:{tport}","uuid":uuid,"short_id":shortid,"reality_password":rpass,"vless_encryption":cenc,"mldsa65_verify":mverify},open(f"{base}/config/xray/generated-secrets.json","w"),indent=2)
+open(f"{base}/config/xray/generated-secrets.json","a").write("\n")
 PY
 chmod 600 "$BASE/config/xray/"*.json "$BASE/client-bundle/generated/reality-pq-vision/"*.json
