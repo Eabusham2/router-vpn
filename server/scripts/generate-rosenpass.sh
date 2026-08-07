@@ -72,8 +72,10 @@ ROSENPASS_KEY_OUT=rosenpass.psk
 ROSENPASS_PORT=$RP_PORT
 CFG
 }
-write_client "$WG_CLIENT" "$WG_SERVER_PUB" wg wg0
-write_client "$AWG_CLIENT" "$AWG_SERVER_PUB" awg awg0
+# Client interface names come from wg-quick/awg-quick config basenames: wg.conf -> wg,
+# awg.conf -> awg. The router uses wg0.conf/awg0.conf and therefore stays wg0/awg0.
+write_client "$WG_CLIENT" "$WG_SERVER_PUB" wg wg
+write_client "$AWG_CLIENT" "$AWG_SERVER_PUB" awg awg
 
 chmod 600 "$SERVER"/* "$WG_CLIENT"/rosenpass-* "$AWG_CLIENT"/rosenpass-* "$WG_CLIENT/rosenpass.toml" "$AWG_CLIENT/rosenpass.toml" 2>/dev/null || true
 printf 'Generated Rosenpass server plus WG/AWG client PQ profiles on UDP %s.\n' "$RP_PORT"
