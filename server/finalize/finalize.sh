@@ -14,6 +14,8 @@ HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
 XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 XHTTP_PORT=${XHTTP_PORT:-11443}
+SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
+NAIVE_PORT=${NAIVE_PORT:-13443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 
 for required in \
@@ -93,6 +95,19 @@ if ! bash /src/server/scripts/generate-advanced-profiles.sh \
   rm -f "$BASE/config/xray/advanced-secrets.json"
 fi
 
+# Generate certificate-backed alternatives. Caddy obtains and renews the public
+# certificate after services start. A public IPv4 automatically gets an sslip.io
+# hostname; custom hostnames can be supplied with ROUTER_VPN_TLS_NAME.
+export SS_V2RAY_PORT NAIVE_PORT
+if ! bash /src/server/scripts/generate-tls-alternates.sh "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4"; then
+  echo 'Warning: automatic TLS alternate profiles were not generated.' >&2
+  rm -rf \
+    "$BASE/config/tls" \
+    "$BASE/client-bundle/generated/ss-v2ray" \
+    "$BASE/client-bundle/generated/naive-h2" \
+    "$BASE/client-bundle/generated/naive-h3"
+fi
+
 # Public DNS requests leave from this home node after tunneling, so benchmark here.
 # Failure never blocks installation: Home AdGuard/custom DNS remain available and
 # the bundle generator has a safe public fallback.
@@ -116,6 +131,14 @@ except Exception:
     print('public DNS fallback: 1.1.1.1')
 PY
 )
+TLS_INFO=$(python3 - "$BASE/config/tls/generated.json" <<'PY'
+import json,sys
+try:
+    x=json.load(open(sys.argv[1])); print(x.get('tls_name','unavailable'))
+except Exception:
+    print('unavailable')
+PY
+)
 
 cat >"$BASE/client-bundle/CREDENTIALS.txt" <<TXT
 Endpoint: ${ENDPOINT:-CHOOSE_IN_APP}
@@ -127,6 +150,10 @@ Hysteria2/QUIC UDP: $HY2_PORT
 Shadowsocks TCP/UDP: $SS_PORT
 PQ REALITY TCP: $XRAY_PQ_PORT
 XHTTP/FinalMask TCP: $XHTTP_PORT
+SS + V2Ray TLS TCP: $SS_V2RAY_PORT
+Naive HTTPS TCP/UDP: $NAIVE_PORT
+Automatic TLS hostname: $TLS_INFO
+Certificate challenge TCP: 80
 Fastest public DNS at home: $DNS_FASTEST
 Default DNS policy: fastest (changeable to Home AdGuard, custom, DoT, DoH, DoH3, or rescue in client)
 SOCKS5 after VPN connects: $ADGUARD4:1080
@@ -144,8 +171,8 @@ rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bu
 )
 cp "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
 
-export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT
+export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT SS_V2RAY_PORT NAIVE_PORT
 bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
 touch "$BASE/.finalized"
 
-echo 'Finalization complete: advanced/PQ profiles generated where supported; SOCKS5 uses IP and port only.'
+echo 'Finalization complete: advanced/PQ/TLS profiles generated where supported; SOCKS5 uses IP and port only.'
