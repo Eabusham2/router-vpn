@@ -5,6 +5,7 @@ ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
 PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}" | tr -cd 'A-Za-z0-9_.-')
 PROFILE_ID=${PROFILE_ID:-router}
 ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend first}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SOURCE="$ROOT/generated/$PROFILE_ID/$MODE"
 [[ -d "$SOURCE" ]] || SOURCE="$ROOT/generated/$MODE"
 RUN="$ROOT/run"
@@ -38,7 +39,8 @@ for p in root.glob('*.json'):
     data=json.load(open(p)); patch(data); p.write_text(json.dumps(data,indent=2)+'\n')
 PY
 
-"$(dirname "$0")/check-combined.sh" "$MODE" >/dev/null
+"$SCRIPT_DIR/check-combined.sh" "$MODE" >/dev/null
+python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json"
 : >"$RUN/$MODE.pids"
 start_bg(){ "$@" >>"$RUN/$MODE.log" 2>&1 & echo $! >>"$RUN/$MODE.pids"; }
 CFG="$CONF/sing-box.json"
@@ -56,14 +58,15 @@ json.dump(x,open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
 PY
   CFG="$TMP"
 fi
+sing-box check -D "$CONF" -c "$CFG" >/dev/null
 case "$MODE" in
   split)
-    exec sudo sing-box run -c "$CFG"
+    exec sudo sing-box run -D "$CONF" -c "$CFG"
     ;;
   max)
     start_bg sudo xray run -c "$CONF/xray.json"
     sleep 1
-    exec sudo sing-box run -c "$CFG"
+    exec sudo sing-box run -D "$CONF" -c "$CFG"
     ;;
   *) echo "unknown combined mode: $MODE" >&2; exit 2 ;;
 esac
