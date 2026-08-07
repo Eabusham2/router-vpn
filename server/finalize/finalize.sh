@@ -8,6 +8,7 @@ ADGUARD4=${ADGUARD4:-192.168.50.133}
 ENDPOINT=${ENDPOINT:-}
 WG_PORT=${WG_PORT:-51820}
 AWG_PORT=${AWG_PORT:-585}
+ROSENPASS_PORT=${ROSENPASS_PORT:-51822}
 REALITY_PORT=${REALITY_PORT:-443}
 HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
@@ -55,6 +56,24 @@ for profile in routers.get('profiles',[]):
 routers_path.write_text(json.dumps(routers,indent=2)+'\n')
 PY
 
+# Backfill real Rosenpass client/server profiles on both fresh and existing installs.
+# If the engine cannot be generated, the base WG/AWG modes remain usable and PQ stays disabled.
+if ! bash /src/server/scripts/ensure-rosenpass.sh "$BASE" "$CONFIG_ENDPOINT" "$ROSENPASS_PORT"; then
+  echo 'Warning: Rosenpass PQ profiles were not generated; WG-PQ/AWG-PQ remain unavailable.' >&2
+  rm -rf "$BASE/config/rosenpass"
+  rm -f \
+    "$BASE/client-bundle/generated/wg-pq/rosenpass.toml" \
+    "$BASE/client-bundle/generated/wg-pq/rosenpass.env" \
+    "$BASE/client-bundle/generated/wg-pq/rosenpass-client-public" \
+    "$BASE/client-bundle/generated/wg-pq/rosenpass-client-secret" \
+    "$BASE/client-bundle/generated/wg-pq/rosenpass-server-public" \
+    "$BASE/client-bundle/generated/awg2-pq/rosenpass.toml" \
+    "$BASE/client-bundle/generated/awg2-pq/rosenpass.env" \
+    "$BASE/client-bundle/generated/awg2-pq/rosenpass-client-public" \
+    "$BASE/client-bundle/generated/awg2-pq/rosenpass-client-secret" \
+    "$BASE/client-bundle/generated/awg2-pq/rosenpass-server-public"
+fi
+
 # Generate every compatible combined profile. Failure of an experimental upstream
 # engine disables that profile instead of breaking the basic WireGuard services.
 if ! python3 /src/server/scripts/generate-stack-profiles.py "$BASE"; then
@@ -84,6 +103,7 @@ cat >"$BASE/client-bundle/CREDENTIALS.txt" <<TXT
 Endpoint: ${ENDPOINT:-CHOOSE_IN_APP}
 WireGuard UDP: $WG_PORT
 AmneziaWG UDP: $AWG_PORT
+Rosenpass PQ UDP: $ROSENPASS_PORT
 REALITY/Vision TCP: $REALITY_PORT
 Hysteria2/QUIC UDP: $HY2_PORT
 Shadowsocks TCP/UDP: $SS_PORT
@@ -104,8 +124,8 @@ rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bu
 )
 cp "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
 
-export WG_PORT AWG_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT
+export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT
 bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
 touch "$BASE/.finalized"
 
-echo 'Finalization complete: advanced profiles generated where supported; SOCKS5 uses IP and port only.'
+echo 'Finalization complete: advanced/PQ profiles generated where supported; SOCKS5 uses IP and port only.'
