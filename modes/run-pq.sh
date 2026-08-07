@@ -12,6 +12,9 @@ mkdir -p "$RUN"
 source "$CONF/rosenpass.env"
 RP_PORT=${ROSENPASS_PORT:-51822}
 RP_KEY="$CONF/${ROSENPASS_KEY_OUT:-rosenpass.psk}"
+# shellcheck disable=SC2046
+eval "$(python3 "$SCRIPT_DIR/dns-policy.py" env)"
+export HOMEVPN_DNS_MODE HOMEVPN_DNS_PROTOCOL HOMEVPN_DNS_HOST HOMEVPN_DNS_PORT HOMEVPN_DNS_SERVER_NAME HOMEVPN_DNS_PATH
 
 # run-mode patches generic endpoint fields, but Rosenpass needs its dedicated UDP port.
 python3 - "$CONF/rosenpass.toml" "$ENDPOINT" "$RP_PORT" <<'PY'
@@ -41,8 +44,9 @@ esac
 
 CFG=$FULL
 [[ ${HOMEVPN_SOCKS:-false} == true ]] && CFG=$SPLIT
-RP_PID=''; WATCH_PID=''; SOCKS_PID=''
+RP_PID=''; WATCH_PID=''; SOCKS_PID=''; DNS_PID=''
 cleanup(){
+  [[ -n "$DNS_PID" ]] && sudo kill "$DNS_PID" >/dev/null 2>&1 || true
   [[ -n "$SOCKS_PID" ]] && sudo kill "$SOCKS_PID" >/dev/null 2>&1 || true
   [[ -n "$WATCH_PID" ]] && sudo kill "$WATCH_PID" >/dev/null 2>&1 || true
   [[ -n "$RP_PID" ]] && sudo kill "$RP_PID" >/dev/null 2>&1 || true
@@ -50,7 +54,33 @@ cleanup(){
 }
 trap cleanup EXIT INT TERM
 
+if [[ ${HOMEVPN_SOCKS:-false} != true ]]; then
+  python3 - "$CFG" <<'PY'
+from pathlib import Path
+import re,sys
+p=Path(sys.argv[1]); text=p.read_text()
+if re.search(r'(?mi)^DNS\s*=',text): text=re.sub(r'(?mi)^DNS\s*=.*$','DNS = 127.0.0.1',text)
+else: text=text.replace('[Interface]\n','[Interface]\nDNS = 127.0.0.1\n',1)
+p.write_text(text)
+PY
+fi
 sudo "$QUICK" up "$CFG"
+
+if [[ ${HOMEVPN_SOCKS:-false} != true ]]; then
+  if command -v router-vpn-dns >/dev/null 2>&1; then DNS_BIN=$(command -v router-vpn-dns)
+  elif [[ -x "$ROOT/router-vpn-dns" ]]; then DNS_BIN="$ROOT/router-vpn-dns"
+  else echo 'router-vpn-dns is missing; reinstall the current client bundle' >&2; exit 1
+  fi
+  sudo env \
+    HOMEVPN_DNS_PROTOCOL="$HOMEVPN_DNS_PROTOCOL" HOMEVPN_DNS_HOST="$HOMEVPN_DNS_HOST" \
+    HOMEVPN_DNS_PORT="$HOMEVPN_DNS_PORT" HOMEVPN_DNS_SERVER_NAME="$HOMEVPN_DNS_SERVER_NAME" \
+    HOMEVPN_DNS_PATH="$HOMEVPN_DNS_PATH" \
+    "$DNS_BIN" --listen 127.0.0.1:53 >>"$RUN/$MODE-dns.log" 2>&1 &
+  DNS_PID=$!
+  echo "$DNS_PID" >>"$RUN/$MODE.pids"
+  sleep 0.2
+  kill -0 "$DNS_PID" >/dev/null 2>&1 || { echo 'DNS proxy failed to start' >&2; exit 1; }
+fi
 
 # Run Rosenpass from the profile directory so its relative key paths remain private
 # to this imported router profile.
@@ -78,8 +108,6 @@ server={
   "server_port":int(os.environ.get("HOMEVPN_SOCKS_PORT","1080")),
   "version":"5"
 }
-user=os.environ.get("HOMEVPN_SOCKS_USER",""); password=os.environ.get("HOMEVPN_SOCKS_PASSWORD","")
-if user or password: server["username"],server["password"]=user,password
 cfg={
   "log":{"level":"warn"},
   "inbounds":[{"type":"socks","tag":"local-socks","listen":"127.0.0.1","listen_port":1080,"users":[]}],
@@ -97,6 +125,10 @@ fi
 while kill -0 "$RP_PID" >/dev/null 2>&1; do
   if [[ -n "$SOCKS_PID" ]] && ! kill -0 "$SOCKS_PID" >/dev/null 2>&1; then
     echo 'local SOCKS5 proxy exited' >&2
+    exit 1
+  fi
+  if [[ -n "$DNS_PID" ]] && ! kill -0 "$DNS_PID" >/dev/null 2>&1; then
+    echo 'DNS proxy exited' >&2
     exit 1
   fi
   sleep 2
