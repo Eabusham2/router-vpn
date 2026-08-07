@@ -14,6 +14,19 @@ check_sing(){
   need_file "$dir/$file"
   sing-box check -D "$dir" -c "$dir/$file" >/dev/null
 }
+check_naive(){
+  local dir=$1
+  need_bin sing-box
+  sing-box version 2>&1 | grep -q 'with_naive_outbound' || { echo 'installed sing-box build lacks Naive outbound support'; exit 1; }
+  case "$(uname -s 2>/dev/null || true)" in
+    Linux)
+      [[ -s /usr/local/lib/libcronet.so || -s /usr/local/bin/libcronet.so || -n ${LD_LIBRARY_PATH:-} && -s "${LD_LIBRARY_PATH%%:*}/libcronet.so" ]] || {
+        echo 'Naive on Linux requires libcronet.so from the official sing-box release'; exit 1;
+      }
+      ;;
+  esac
+  check_sing "$dir" sing-box.json
+}
 check_xray(){
   local file=$1
   need_bin xray
@@ -63,7 +76,8 @@ case "$MODE" in
   awg2-fast|awg2-strong) need_bin amneziawg-go; need_bin awg; need_bin awg-quick; need_file "$CONF/awg.conf" ;;
   wg-pq) need_bin wg-quick; need_file "$CONF/wg.conf"; need_file "$CONF/wg-socks.conf"; check_rosenpass "$CONF" ;;
   awg2-pq) need_bin amneziawg-go; need_bin awg; need_bin awg-quick; need_file "$CONF/awg.conf"; need_file "$CONF/awg-socks.conf"; check_rosenpass "$CONF" ;;
-  reality-vision|hysteria2|shadowsocks|naive-h2|naive-h3) check_sing "$CONF" sing-box.json ;;
+  reality-vision|hysteria2|shadowsocks) check_sing "$CONF" sing-box.json ;;
+  naive-h2|naive-h3) check_naive "$CONF" ;;
   ss-v2ray)
     need_bin sslocal
     need_bin v2ray-plugin
