@@ -18,6 +18,7 @@ services:
       ENDPOINT: ${ENDPOINT:-}
       WG_PORT: ${WG_PORT:-51820}
       AWG_PORT: ${AWG_PORT:-585}
+      ROSENPASS_PORT: ${ROSENPASS_PORT:-51822}
       REALITY_PORT: ${REALITY_PORT:-443}
       HY2_PORT: ${HY2_PORT:-8443}
       SS_PORT: ${SS_PORT:-8388}
@@ -44,6 +45,7 @@ services:
       ENDPOINT: ${ENDPOINT:-}
       WG_PORT: ${WG_PORT:-51820}
       AWG_PORT: ${AWG_PORT:-585}
+      ROSENPASS_PORT: ${ROSENPASS_PORT:-51822}
       REALITY_PORT: ${REALITY_PORT:-443}
       HY2_PORT: ${HY2_PORT:-8443}
       SS_PORT: ${SS_PORT:-8388}
@@ -101,6 +103,24 @@ services:
     environment:
       WAN_INTERFACE: ${WAN_INTERFACE:-eth0}
       AWG_CONFIG: /data/awg0.conf
+
+  rosenpass:
+    build:
+      context: ..
+      dockerfile: server/rosenpass/Dockerfile
+    container_name: router-vpn-rosenpass
+    network_mode: host
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    depends_on:
+      finalize: {condition: service_completed_successfully}
+      wireguard: {condition: service_started}
+      awg2: {condition: service_started}
+    volumes:
+      - /opt/router-vpn/config/rosenpass:/data
+    environment:
+      ROSENPASS_CONFIG: /data/server.toml
+      ROSENPASS_ENV: /data/server.env
 
   transports:
     image: ghcr.io/sagernet/sing-box:1.13.12
