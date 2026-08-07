@@ -16,6 +16,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 MODES_PATH = ROOT / "modes.json"
 HEALTH_URL = os.environ.get("HOMEVPN_HEALTH_URL", "https://connectivitycheck.gstatic.com/generate_204")
 TEST_SECONDS = float(os.environ.get("HOMEVPN_AUTO_TEST_SECONDS", "6"))
+WANT_JUMBO = os.environ.get("HOMEVPN_JUMBO", "false").lower() == "true"
+WANT_DAITA = os.environ.get("HOMEVPN_DAITA", "false").lower() == "true"
 
 modes = json.loads(MODES_PATH.read_text())
 by_id = {m["id"]: m for m in modes}
@@ -39,6 +41,10 @@ def run_command(parts: list[str], *, quiet: bool = False) -> subprocess.Complete
 
 
 def available(mode: dict) -> bool:
+    if WANT_JUMBO and not mode.get("jumbo_supported", False):
+        return False
+    if WANT_DAITA and not mode.get("daita_supported", False):
+        return False
     cmd = mode.get("check_command") or []
     if not cmd:
         return True
@@ -105,7 +111,7 @@ def smart_auto() -> int:
     best_latency = 0.0
     tested: list[str] = []
     for mode in modes:
-        if not mode.get("auto_eligible"):
+        if not mode.get("auto_eligible") or not available(mode):
             continue
         tested.append(mode["id"])
         ok, latency = launch(mode)
@@ -124,6 +130,8 @@ def smart_auto() -> int:
                 continue
             visited.add(candidate_id)
             candidate = by_id[candidate_id]
+            if not available(candidate):
+                continue
             tested.append(candidate_id)
             last_good = best
             last_latency = best_latency
@@ -132,7 +140,6 @@ def smart_auto() -> int:
                 print(f"SMART removed/replaced layers: {last_good['id']} -> {candidate_id}", flush=True)
                 best, best_latency, changed = candidate, latency, True
                 break
-            # launch() already cleaned failed candidate; restore last known good.
             restored, restored_latency = launch(last_good)
             if not restored:
                 print("SMART AUTO could not restore its last-known-good mode", file=sys.stderr)
@@ -155,23 +162,29 @@ def custom() -> int:
     if not requested:
         print("CUSTOM: select at least one layer in the client first", file=sys.stderr)
         return 2
+    preferred = str(profile.get("base_tunnel") or "wg").lower()
 
     candidates = []
     for mode in modes:
         if mode.get("id") in {"smart-auto", "custom", "all"}:
             continue
         layers = [str(x).lower() for x in mode.get("layers", [])]
-        if not layers or not all(x in layers for x in requested):
+        if not layers or not all(x in layers for x in requested) or not available(mode):
             continue
-        if not available(mode):
-            continue
-        candidates.append((len(layers) - len(requested), float(mode.get("traffic_min_pct", 999)), float(mode.get("ping_min_ms", 999)), mode))
-    candidates.sort(key=lambda item: item[:3])
+        has_wg = "wireguard" in layers
+        has_awg = "amneziawg2" in layers
+        base_penalty = 0
+        if preferred.startswith("awg") or preferred.startswith("amnezia"):
+            base_penalty = 0 if has_awg else 1 if has_wg else 0
+        else:
+            base_penalty = 0 if has_wg else 1 if has_awg else 0
+        candidates.append((len(layers) - len(requested), base_penalty, float(mode.get("traffic_min_pct", 999)), float(mode.get("ping_min_ms", 999)), mode))
+    candidates.sort(key=lambda item: item[:4])
     if not candidates:
         print("CUSTOM: no validated compatible stack contains that exact layer selection", file=sys.stderr)
         return 2
 
-    for _, _, _, mode in candidates:
+    for *_, mode in candidates:
         ok, latency = launch(mode)
         if ok:
             print("CUSTOM requested: " + ", ".join(requested), flush=True)
