@@ -45,6 +45,18 @@ type RouterProfile struct {
 	DAITAHost     string `json:"daita_host"`
 	DAITAPort     int    `json:"daita_port"`
 	DAITARateKbps int    `json:"daita_rate_kbps"`
+
+	// DNS is applied inside the selected VPN path. DNSMode values are fastest,
+	// home, custom, doh, dot, doh3, and rescue.
+	DNSMode             string  `json:"dns_mode,omitempty"`
+	DNSProtocol         string  `json:"dns_protocol,omitempty"`
+	DNSHost             string  `json:"dns_host,omitempty"`
+	DNSPort             int     `json:"dns_port,omitempty"`
+	DNSServerName       string  `json:"dns_server_name,omitempty"`
+	DNSPath             string  `json:"dns_path,omitempty"`
+	FastestDNSHost      string  `json:"fastest_dns_host,omitempty"`
+	FastestDNSName      string  `json:"fastest_dns_name,omitempty"`
+	FastestDNSLatencyMs float64 `json:"fastest_dns_latency_ms,omitempty"`
 }
 
 type RouterProfileStore struct {
