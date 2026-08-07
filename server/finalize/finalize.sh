@@ -93,9 +93,27 @@ if ! bash /src/server/scripts/generate-advanced-profiles.sh \
   rm -f "$BASE/config/xray/advanced-secrets.json"
 fi
 
+# Public DNS requests leave from this home node after tunneling, so benchmark here.
+# Failure never blocks installation: Home AdGuard/custom DNS remain available and
+# the bundle generator has a safe public fallback.
+if ! python3 /src/server/scripts/benchmark-dns.py "$BASE" >/dev/null; then
+  echo 'Warning: public DNS benchmark failed; using bundle fallback until next upgrade/redeploy.' >&2
+  rm -f "$BASE/config/dns-fastest.json"
+fi
+
 TOKEN=$(python3 - "$BASE/config/router-agent.json" <<'PY'
 import json,sys
 print(json.load(open(sys.argv[1])).get('token',''))
+PY
+)
+DNS_FASTEST=$(python3 - "$BASE/config/dns-fastest.json" <<'PY'
+import json,sys
+try:
+    x=json.load(open(sys.argv[1])).get('winner',{})
+    name=x.get('name','public DNS fallback'); addr=x.get('address','1.1.1.1'); lat=x.get('latency_ms')
+    print(f"{name}: {addr}" + (f" ({float(lat):.2f} ms DNS query)" if lat is not None else ""))
+except Exception:
+    print('public DNS fallback: 1.1.1.1')
 PY
 )
 
@@ -109,6 +127,8 @@ Hysteria2/QUIC UDP: $HY2_PORT
 Shadowsocks TCP/UDP: $SS_PORT
 PQ REALITY TCP: $XRAY_PQ_PORT
 XHTTP/FinalMask TCP: $XHTTP_PORT
+Fastest public DNS at home: $DNS_FASTEST
+Default DNS policy: fastest (changeable to Home AdGuard, custom, DoT, DoH, DoH3, or rescue in client)
 SOCKS5 after VPN connects: $ADGUARD4:1080
 SOCKS5 authentication: none
 Router API token: $TOKEN
