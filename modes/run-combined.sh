@@ -58,15 +58,10 @@ json.dump(x,open(sys.argv[2],'w'),indent=2); open(sys.argv[2],'a').write('\n')
 PY
   CFG="$TMP"
 fi
+xray run -test -c "$CONF/xray.json" >/dev/null
 sing-box check -D "$CONF" -c "$CFG" >/dev/null
-case "$MODE" in
-  split)
-    exec sudo sing-box run -D "$CONF" -c "$CFG"
-    ;;
-  max)
-    start_bg sudo xray run -c "$CONF/xray.json"
-    sleep 1
-    exec sudo sing-box run -D "$CONF" -c "$CFG"
-    ;;
-  *) echo "unknown combined mode: $MODE" >&2; exit 2 ;;
-esac
+start_bg sudo xray run -c "$CONF/xray.json"
+XPID=$(tail -n 1 "$RUN/$MODE.pids")
+sleep 1
+kill -0 "$XPID" >/dev/null 2>&1 || { echo 'combined REALITY Xray branch failed to start' >&2; exit 1; }
+exec sudo sing-box run -D "$CONF" -c "$CFG"
