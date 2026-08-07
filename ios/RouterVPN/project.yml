@@ -5,6 +5,10 @@ settings:
   base:
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.6.0"
+    CURRENT_PROJECT_VERSION: "6"
+    GENERATE_INFOPLIST_FILE: YES
+    DEVELOPMENT_TEAM: ""
 targets:
   RouterVPN:
     type: application
@@ -12,17 +16,26 @@ targets:
     sources: [App, Resources]
     settings:
       base:
+        PRODUCT_NAME: RouterVPN
         PRODUCT_BUNDLE_IDENTIFIER: com.eabusham.routervpn
         CODE_SIGN_ENTITLEMENTS: Resources/RouterVPN.entitlements
+        INFOPLIST_KEY_CFBundleDisplayName: Router VPN
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
       - target: RouterVPNPacketTunnel
+        embed: true
   RouterVPNPacketTunnel:
     type: app-extension
     platform: iOS
     sources: [PacketTunnel]
     settings:
       base:
+        PRODUCT_NAME: RouterVPNPacketTunnel
         PRODUCT_BUNDLE_IDENTIFIER: com.eabusham.routervpn.PacketTunnel
+        CODE_SIGN_ENTITLEMENTS: Resources/PacketTunnel.entitlements
+        INFOPLIST_KEY_CFBundleDisplayName: Router VPN Tunnel
         INFOPLIST_KEY_NSExtension_NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
         INFOPLIST_KEY_NSExtension_NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
-        CODE_SIGN_ENTITLEMENTS: Resources/PacketTunnel.entitlements
+        SKIP_INSTALL: YES
