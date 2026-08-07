@@ -13,11 +13,13 @@ RUN mkdir -p dist \
 
 FROM ghcr.io/sagernet/sing-box:1.13.12 AS singbox
 FROM ghcr.io/xtls/xray-core:latest AS xray
+FROM ghcr.io/rosenpass/rosenpass:latest AS rosenpass
 
 FROM alpine:3.22
 RUN apk add --no-cache bash curl iproute2 nftables openssl python3 wireguard-tools zip
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
+COPY --from=rosenpass /usr/local/bin/rosenpass /usr/local/bin/rosenpass
 WORKDIR /src
 COPY . /src
 COPY --from=binaries /src/dist /src/dist
