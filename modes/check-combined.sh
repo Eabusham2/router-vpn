@@ -12,12 +12,15 @@ case "$MODE" in
   split)
     need_bin sing-box
     need_file "$CONF/sing-box.json"
+    sing-box check -D "$CONF" -c "$CONF/sing-box.json" >/dev/null
     ;;
   max)
     need_bin xray
     need_bin sing-box
     need_file "$CONF/xray.json"
     need_file "$CONF/sing-box.json"
+    xray run -test -c "$CONF/xray.json" >/dev/null
+    sing-box check -D "$CONF" -c "$CONF/sing-box.json" >/dev/null
     ;;
   *) echo "unknown combined mode: $MODE" >&2; exit 2 ;;
 esac
