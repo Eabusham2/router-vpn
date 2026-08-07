@@ -44,6 +44,7 @@ for arch in amd64 arm64; do
   mkdir -p "$dir"
   copy_runtime "$dir"
   cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$dir/router-vpn-client.exe"
+  cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$dir/router-vpn-dns.exe"
   cp "$ROOT/client/install-windows.ps1" "$dir/install-windows.ps1"
   cat >"$dir/Start-RouterVPN.ps1" <<'PS1'
 $ErrorActionPreference = 'Stop'
@@ -70,6 +71,7 @@ for arch in amd64 arm64; do
   mkdir -p "$app" "$data"
   copy_runtime "$data"
   cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe"
+  cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe"
   cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe"
   mkdir -p "$root/App/AppInfo"
   cat >"$root/App/AppInfo/appinfo.ini" <<EOF
@@ -116,7 +118,8 @@ while IFS= read -r binary; do
   mkdir -p "$dir"
   copy_runtime "$dir"
   cp "$binary" "$dir/router-vpn-client"
-  chmod +x "$dir/router-vpn-client" "$dir/modes/"*.sh
+  cp "$DIST/dnsproxy/router-vpn-dns-${os}-${arch}" "$dir/router-vpn-dns"
+  chmod +x "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/modes/"*.sh
   cat >"$dir/start-router-vpn.sh" <<'SH'
 #!/usr/bin/env sh
 set -eu
