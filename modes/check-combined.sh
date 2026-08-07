@@ -9,12 +9,7 @@ CONF="$ROOT/generated/$PROFILE_ID/$MODE"
 need_bin(){ command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1"; exit 1; }; }
 need_file(){ [[ -s "$1" ]] || { echo "missing profile: $1"; exit 1; }; }
 case "$MODE" in
-  split)
-    need_bin sing-box
-    need_file "$CONF/sing-box.json"
-    sing-box check -D "$CONF" -c "$CONF/sing-box.json" >/dev/null
-    ;;
-  max)
+  split|max)
     need_bin xray
     need_bin sing-box
     need_file "$CONF/xray.json"
