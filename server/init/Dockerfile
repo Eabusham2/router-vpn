@@ -5,6 +5,7 @@ RUN mkdir -p dist \
  && for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
       GOOS=${target%/*}; GOARCH=${target#*/}; ext=''; [ "$GOOS" = windows ] && ext='.exe'; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-client-${GOOS}-${GOARCH}${ext}" ./cmd/client; \
+      CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-dns-${GOOS}-${GOARCH}${ext}" ./cmd/dnsproxy; \
     done \
  && for target in linux/amd64 linux/arm64; do \
       GOOS=${target%/*}; GOARCH=${target#*/}; \
