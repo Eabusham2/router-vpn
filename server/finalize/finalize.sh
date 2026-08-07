@@ -82,6 +82,14 @@ if ! bash /src/server/scripts/generate-advanced-profiles.sh \
     "$BASE/client-bundle/generated/reality-xhttp"
   rm -f "$BASE/config/xray/advanced-secrets.json"
 else
+  if ! python3 /src/server/scripts/enhance-max-pq.py "$BASE"; then
+    echo 'Warning: MAX branches could not be enhanced with live Rosenpass PQ; disabling MAX instead of silently downgrading.' >&2
+    rm -rf \
+      "$BASE/client-bundle/generated/max-tls-wg" \
+      "$BASE/client-bundle/generated/max-tls-awg" \
+      "$BASE/client-bundle/generated/max-quic-wg" \
+      "$BASE/client-bundle/generated/max-quic-awg"
+  fi
   if ! python3 /src/server/scripts/wrap-xhttp-tun.py "$BASE" "$ADGUARD4"; then
     echo 'Warning: XHTTP outer profile is valid but its full-tunnel wrapper failed validation; disabling XHTTP mode only.' >&2
     rm -rf "$BASE/client-bundle/generated/reality-xhttp"
