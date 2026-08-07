@@ -121,7 +121,7 @@ for mode in awg2-fast awg2-strong awg2-pq; do
   sed -i "s#AllowedIPs = 0.0.0.0/0, ::/0#AllowedIPs = 10.78.0.0/24, fd78:78::/64, $LAN_CIDR#" "$BASE/client-bundle/generated/$mode/awg-socks.conf"
 done
 /src/server/scripts/generate-transports.sh "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$REALITY_TARGET"
-/src/server/scripts/generate-xray-pq.sh "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$XRAY_PQ_PORT" "$REALITY_TARGET"
+/src/server/scripts/generate-xray-pq.sh "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$XRAY_PQ_PORT" "$REALITY_TARGET" "$REALITY_PORT"
 python3 - "$TOKEN" "$WAN_INTERFACE" <<'PY'
 import json,sys
 x=json.load(open('/src/configs/router/router-agent.json.example')); x['token']=sys.argv[1]; x['wan_interface']=sys.argv[2]
