@@ -20,6 +20,7 @@ mkdir -p "$CONFIG" "$GENERATED"
 CORE_MARKER="$CONFIG/.core-transports-xray-v2"
 ADV_MARKER="$CONFIG/.advanced-profiles-v2"
 TLS_MARKER="$CONFIG/.tls-alternates-v1"
+CORE_REBUILT=0
 
 core_ready(){
   [[ -s "$CONFIG/transports/server.json" \
@@ -37,7 +38,6 @@ import json,sys
 x=json.load(open(sys.argv[1])); s=json.load(open(sys.argv[2]))
 xtags={i.get('tag') for i in x.get('inbounds',[]) if isinstance(i,dict)}
 stags={i.get('tag') for i in s.get('inbounds',[]) if isinstance(i,dict)}
-# Current architecture: Xray owns both REALITY listeners; sing-box owns HY2/SS only.
 raise SystemExit(0 if {'reality-in','pq-reality-in'} <= xtags and {'hy2-in','ss-in'} <= stags and 'reality-in' not in stags else 1)
 PY
 }
@@ -49,6 +49,12 @@ advanced_ready(){
     && -s "$GENERATED/max-quic-wg/chain.env" \
     && -s "$GENERATED/max-quic-awg/chain.env" \
     && -s "$GENERATED/reality-xhttp/xray.json" ]] || return 1
+  python3 - "$CONFIG/xray/server.json" <<'PY'
+import json,sys
+x=json.load(open(sys.argv[1]))
+tags={i.get('tag') for i in x.get('inbounds',[]) if isinstance(i,dict)}
+raise SystemExit(0 if 'max-xhttp-in' in tags else 1)
+PY
 }
 
 tls_ready(){
@@ -60,9 +66,9 @@ tls_ready(){
     && -s "$GENERATED/naive-h3/sing-box.json" ]] || return 1
 }
 
-# The first run of this profile-engine version is a one-time migration. Fresh installs
-# also pass through here before the bundle is exposed. Later redeploys keep the same
-# UUIDs/passwords/REALITY keys/Hysteria/Shadowsocks secrets unless files are missing.
+# One-time credential migration. Later redeploys keep the same secrets unless the
+# underlying files are missing/broken. A core rebuild invalidates dependent profiles,
+# so their markers are cleared in the same transaction and they are rebuilt once too.
 if [[ ! -s "$CORE_MARKER" ]] || ! core_ready; then
   echo 'Generating/migrating core transport profiles (one-time credential version)...'
   bash /src/server/scripts/generate-transports.sh \
@@ -72,6 +78,8 @@ if [[ ! -s "$CORE_MARKER" ]] || ! core_ready; then
   core_ready || { rm -f "$CORE_MARKER"; echo 'Core transport validation failed.' >&2; exit 1; }
   printf '%s\n' 'core-transports-xray-v2' >"$CORE_MARKER"
   chmod 600 "$CORE_MARKER"
+  CORE_REBUILT=1
+  rm -f "$ADV_MARKER" "$TLS_MARKER"
 else
   echo 'Keeping existing core transport credentials.'
 fi
@@ -88,10 +96,12 @@ if [[ ! -s "$ADV_MARKER" ]] || ! advanced_ready; then
   if bash /src/server/scripts/generate-advanced-profiles.sh \
     "$BASE" "$ENDPOINT" "$ADGUARD4" "$WG_PORT" "$AWG_PORT" \
     "$SS_PORT" "$HY2_PORT" "$XHTTP_PORT" "$REALITY_TARGET"; then
-    advanced_ready || { rm -f "$ADV_MARKER"; echo 'Advanced profile validation failed.' >&2; }
     if advanced_ready; then
       printf '%s\n' 'advanced-profiles-v2' >"$ADV_MARKER"
       chmod 600 "$ADV_MARKER"
+    else
+      rm -f "$ADV_MARKER"
+      echo 'Warning: advanced profile validation failed; it will retry next redeploy.' >&2
     fi
   else
     echo 'Warning: advanced MAX/XHTTP credential generation failed; it will retry next redeploy.' >&2
@@ -101,13 +111,15 @@ else
   echo 'Keeping existing MAX/XHTTP credentials.'
 fi
 
-# These steps do not rotate the advanced outer credentials. They add current wrappers
-# and PQ base material and can therefore be safely retried on every redeploy.
+# These steps do not rotate advanced outer credentials. They add current wrappers
+# and PQ base material and can be safely retried on every redeploy.
 if advanced_ready; then
   if ! python3 /src/server/scripts/enhance-max-pq.py "$BASE"; then
     echo 'Warning: live Rosenpass enhancement failed; MAX modes remain unavailable until a later successful redeploy.' >&2
     for dir in "$GENERATED"/max-{tls,quic}-{wg,awg}; do
-      [[ -s "$dir/chain.env" ]] && sed -i 's/^PQ_BASE=.*/PQ_BASE=0/' "$dir/chain.env" || true
+      if [[ -s "$dir/chain.env" ]]; then
+        if grep -q '^PQ_BASE=' "$dir/chain.env"; then sed -i 's/^PQ_BASE=.*/PQ_BASE=0/' "$dir/chain.env"; else echo 'PQ_BASE=0' >>"$dir/chain.env"; fi
+      fi
     done
   fi
   if ! python3 /src/server/scripts/wrap-xhttp-tun.py "$BASE" "$ADGUARD4"; then
@@ -133,4 +145,8 @@ if [[ ! -s "$TLS_MARKER" ]] || ! tls_ready; then
   fi
 else
   echo 'Keeping existing automatic TLS credentials and certificate identity.'
+fi
+
+if (( CORE_REBUILT )); then
+  echo 'Core credential migration completed; dependent profile credentials were refreshed in the same migration.'
 fi
