@@ -59,7 +59,7 @@ jobs:
           retention-days: 30
 
   desktop-unix:
-    name: Desktop and Unix packages
+    name: Desktop, Unix, and router validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,11 +67,27 @@ jobs:
         with:
           go-version: '1.24.x'
           cache: false
-      - name: Validate source and configs
+      - name: Validate source, catalog, scripts, and compose
+        env:
+          ENDPOINT: 203.0.113.10
+          ADGUARD4: 192.168.50.133
         run: |
           go test ./...
+          python3 deploy/validate-repo.py
           python3 -m json.tool configs/client/modes.json >/dev/null
+          find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          docker compose -f server/portainer-compose.yaml config >/dev/null
+          docker compose -f server/compose.yaml config >/dev/null
+      - name: Build router images
+        run: |
+          docker build -f server/init/Dockerfile -t router-vpn-ci-init .
+          docker build -f deploy/router-agent.Dockerfile -t router-vpn-ci-agent .
+          docker build -f server/wireguard/Dockerfile -t router-vpn-ci-wireguard .
+          docker build -f server/awg2/Dockerfile -t router-vpn-ci-awg2 .
+          docker build -f server/rosenpass/Dockerfile -t router-vpn-ci-rosenpass .
+          docker build -f server/naive/Dockerfile -t router-vpn-ci-naive .
+          docker build -f server/ss-v2ray/Dockerfile -t router-vpn-ci-ss-v2ray .
       - name: Build all Go targets
         run: |
           chmod +x deploy/build-client.sh deploy/package-builds.sh
@@ -205,7 +221,7 @@ jobs:
             -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple: -s -k actions /tmp/router-vpn.keychain
       - name: Archive signed app
-        if: ${{ env.IOS_CERTIFICATE_BASE64 != '' && env.IOS_CERTIFICATE_PASSWORD != '' && env.IOS_APP_PROFILE_BASE64 != '' && env.IOS_TUNNEL_PROFILE_BASE64 != '' && env.APPLE_TEAM_ID != '' }}
+        if: ${{ env.IOS_CERTIFICATE_BASE64 != '' && env.IOS_CERTIFICATE_PASSWORD != '' && env.IOS_APP_PROFILE_BASE64 != '' && env.APPLE_TEAM_ID != '' && env.IOS_TUNNEL_PROFILE_BASE64 != '' }}
         working-directory: ios/RouterVPN
         run: |
           xcodebuild \
