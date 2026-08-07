@@ -16,7 +16,13 @@ XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 XHTTP_PORT=${XHTTP_PORT:-11443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 
-[[ -f "$BASE/.initialized" ]] || { echo 'Base initialization did not complete.' >&2; exit 1; }
+for required in \
+  "$BASE/config/router-agent.json" \
+  "$BASE/config/socks5.json" \
+  "$BASE/client-bundle/routers.json" \
+  "$BASE/client-bundle/modes.json"; do
+  [[ -s "$required" ]] || { echo "Base initialization missing $required" >&2; exit 1; }
+done
 
 # The base initializer temporarily writes credentials because older init code expects
 # a users array. Remove it before SOCKS5 starts so apps only need tunnel IP + port.
