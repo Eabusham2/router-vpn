@@ -7,6 +7,14 @@ RP_PORT=${3:-51822}
 if [[ -s "$BASE/config/rosenpass/server.toml" \
    && -s "$BASE/client-bundle/generated/wg-pq/rosenpass.toml" \
    && -s "$BASE/client-bundle/generated/awg2-pq/rosenpass.toml" ]]; then
+  # Older generated profiles used router-side interface names on the client.
+  # Repair them in place so upgrades get live PSK rotation without regenerating keys.
+  for item in "wg-pq:wg" "awg2-pq:awg"; do
+    mode=${item%%:*}; iface=${item##*:}; env="$BASE/client-bundle/generated/$mode/rosenpass.env"
+    if [[ -s "$env" ]]; then
+      sed -i "s/^ROSENPASS_INTERFACE=.*/ROSENPASS_INTERFACE=$iface/" "$env"
+    fi
+  done
   exit 0
 fi
 
