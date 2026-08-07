@@ -2,7 +2,7 @@
 set -euo pipefail
 
 rm -rf dist
-mkdir -p dist/client dist/router-agent
+mkdir -p dist/client dist/dnsproxy dist/router-agent
 
 client_targets=(
   windows/amd64 windows/arm64
@@ -27,6 +27,12 @@ for target in "${client_targets[@]}"; do
   env GOOS="$GOOS" GOARCH="$GOARCH" GOARM=7 CGO_ENABLED=0 \
     go build -trimpath -ldflags='-s -w' -o "$output" ./cmd/client
   cp "$output" "dist/$(basename "$output")"
+
+  echo "building DNS helper $GOOS/$GOARCH"
+  dns_output="dist/dnsproxy/router-vpn-dns-${suffix}${ext}"
+  env GOOS="$GOOS" GOARCH="$GOARCH" GOARM=7 CGO_ENABLED=0 \
+    go build -trimpath -ldflags='-s -w' -o "$dns_output" ./cmd/dnsproxy
+  cp "$dns_output" "dist/$(basename "$dns_output")"
 done
 
 for target in windows/amd64 windows/arm64; do
