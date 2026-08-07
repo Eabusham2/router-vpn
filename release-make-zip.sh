@@ -53,7 +53,6 @@ NAME=$(basename "$ROOT")
   zip -qr "$OUT" "$NAME" \
     -x "$NAME/.git/*" \
        "$NAME/*.zip" \
-       "$NAME/**/*.zip" \
        "$NAME/**/__pycache__/*" \
        "$NAME/**/*.pyc"
 )
