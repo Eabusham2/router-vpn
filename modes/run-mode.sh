@@ -180,6 +180,15 @@ PY
   exec sudo sing-box run -D "$CONF" -c "$cfg"
 }
 
+run_xray_tun(){
+  start_bg sudo xray run -c "$CONF/xray.json"
+  local pid
+  pid=$(tail -n 1 "$RUN/$MODE.pids")
+  sleep 1
+  kill -0 "$pid" >/dev/null 2>&1 || { echo 'Xray REALITY process failed to start' >&2; exit 1; }
+  run_sing_box
+}
+
 run_max(){
   local base=$1
   set -a
@@ -210,40 +219,24 @@ case "$MODE" in
   wg-pq|awg2-pq)
     exec bash "$SCRIPT_DIR/run-pq.sh" "$MODE" "$CONF"
     ;;
-  reality-vision|hysteria2|shadowsocks|naive-h2|naive-h3)
+  hysteria2|shadowsocks|naive-h2|naive-h3)
     run_sing_box
+    ;;
+  reality-vision|reality-pq-vision)
+    run_xray_tun
     ;;
   ss-v2ray)
     python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json"
     exec bash "$SCRIPT_DIR/run-ss-v2ray.sh" "$CONF"
     ;;
-  reality-pq-vision)
-    start_bg sudo xray run -c "$CONF/xray.json"
-    sleep 1
-    run_sing_box
-    ;;
   reality-xhttp)
-    exec sudo xray run -c "$CONF/xray.json"
+    exec bash "$SCRIPT_DIR/run-xhttp.sh"
     ;;
-  max-tls-wg|max-quic-wg)
-    run_max wg
-    ;;
-  max-tls-awg|max-quic-awg)
-    run_max awg
+  max-tls-wg|max-quic-wg|max-tls-awg|max-quic-awg)
+    exec bash "$SCRIPT_DIR/run-max.sh" "$MODE"
     ;;
   all)
-    case ${HOMEVPN_BASE:-auto} in
-      awg|amnezia|amneziawg) candidates=(max-tls-awg max-tls-wg max-quic-awg max-quic-wg) ;;
-      wg|wireguard|standard) candidates=(max-tls-wg max-tls-awg max-quic-wg max-quic-awg) ;;
-      *) candidates=(max-tls-wg max-tls-awg max-quic-wg max-quic-awg) ;;
-    esac
-    for candidate in "${candidates[@]}"; do
-      if env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ROOT="$ROOT" "$SCRIPT_DIR/check-mode.sh" "$candidate" >/dev/null 2>&1; then
-        exec env HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_ENDPOINT="$ENDPOINT" HOMEVPN_BASE="${HOMEVPN_BASE:-auto}" HOMEVPN_DAITA="${HOMEVPN_DAITA:-false}" HOMEVPN_JUMBO="${HOMEVPN_JUMBO:-false}" HOMEVPN_SOCKS="${HOMEVPN_SOCKS:-false}" HOMEVPN_ROOT="$ROOT" "$0" "$candidate"
-      fi
-    done
-    echo "no validated MAX TLS or MAX QUIC branch is installed" >&2
-    exit 1
+    exec bash "$SCRIPT_DIR/run-all.sh"
     ;;
   *) echo "unknown mode: $MODE" >&2; exit 2 ;;
 esac
