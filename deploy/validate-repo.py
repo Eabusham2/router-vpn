@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 
 root = pathlib.Path(__file__).resolve().parents[1]
@@ -98,6 +100,23 @@ ui = (root / "cmd" / "client" / "ui.html").read_text()
 for stale in ("SOCKS5 username", "SOCKS5 password"):
     if stale.lower() in ui.lower():
         errors.append(f"UI contains stale authenticated SOCKS wording: {stale}")
+
+# The current Portainer compose is the production deployment entrypoint. Validate
+# it whenever Docker is available (including GitHub Actions), not only legacy files.
+current_compose = root / "server" / "portainer-current.yaml"
+if not current_compose.is_file():
+    errors.append("missing current Portainer compose: server/portainer-current.yaml")
+elif shutil.which("docker"):
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(current_compose), "config"],
+        cwd=root,
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or "docker compose config failed").strip().splitlines()[-1]
+        errors.append(f"current Portainer compose is invalid: {detail}")
 
 if errors:
     print("Repository validation failed:", file=sys.stderr)
