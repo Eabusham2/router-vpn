@@ -1,7 +1,7 @@
 FROM golang:1.25.12-bookworm AS go-build
 ARG AWG_GO_TAG=v3.0.2
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl gzip tar \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src/amneziawg-go
 RUN mkdir -p /out \
@@ -17,7 +17,7 @@ RUN mkdir -p /out \
 FROM debian:bookworm AS tools-build
 ARG AWGTOOLS_COMMIT=05434cab7d91bbbc607d18ec5fade91f4b83774c
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl make gcc libc6-dev pkg-config linux-libc-dev \
+ && apt-get install -y --no-install-recommends ca-certificates curl gzip tar make gcc libc6-dev pkg-config linux-libc-dev \
  && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /src/amneziawg-tools \
  && curl -fL --retry 5 --retry-delay 2 \
