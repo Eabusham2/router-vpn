@@ -6,7 +6,7 @@ ADGUARD4=${3:?AdGuard IPv4}
 SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
 NAIVE_PORT=${NAIVE_PORT:-13443}
 SS_V2RAY_PATH=${SS_V2RAY_PATH:-/cdn/assets}
-SING_BOX_IMAGE=${SING_BOX_IMAGE:-ghcr.io/sagernet/sing-box:1.13.12}
+SING_BOX_IMAGE=${SING_BOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.12}
 
 sb(){
   if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm -v "$BASE:$BASE" "$SING_BOX_IMAGE" "$@"; fi
@@ -116,8 +116,16 @@ meta={
 (base/'config'/'tls'/'generated.json').write_text(json.dumps(meta,indent=2)+'\n')
 PY
 
-for d in ss-v2ray naive-h2 naive-h3; do
-  sb check -D "$BASE/client-bundle/generated/$d" -c "$BASE/client-bundle/generated/$d/sing-box.json" >/dev/null
-done
+# The official sing-box Docker image intentionally omits with_naive_outbound.
+# Validate all profiles it supports here, and let the client readiness check
+# require a Naive-capable official desktop build before enabling Naive modes.
+sb check -D "$BASE/client-bundle/generated/ss-v2ray" -c "$BASE/client-bundle/generated/ss-v2ray/sing-box.json" >/dev/null
+if sb version 2>&1 | grep -q 'with_naive_outbound'; then
+  for d in naive-h2 naive-h3; do
+    sb check -D "$BASE/client-bundle/generated/$d" -c "$BASE/client-bundle/generated/$d/sing-box.json" >/dev/null
+  done
+else
+  echo 'sing-box validator lacks with_naive_outbound; Naive profile validation deferred to the client readiness check.' >&2
+fi
 chmod 600 "$BASE/client-bundle/generated/ss-v2ray/"* "$BASE/client-bundle/generated/naive-h2/"* "$BASE/client-bundle/generated/naive-h3/"* "$BASE/config/tls/generated.json"
-printf 'Generated TLS hostname %s and validated SS+V2Ray / Naive H2 / Naive H3 client profiles.\n' "$TLS_NAME"
+printf 'Generated TLS hostname %s and validated available SS+V2Ray / Naive client profiles.\n' "$TLS_NAME"
