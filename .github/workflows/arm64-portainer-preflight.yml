@@ -16,7 +16,7 @@ on:
       - '.github/workflows/arm64-portainer-preflight.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: arm64-portainer-${{ github.ref }}
@@ -66,10 +66,29 @@ jobs:
       - name: Build SS plus V2Ray image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/ss-v2ray/Dockerfile -t router-vpn-preflight-ss-v2ray:arm64 .
 
-      - name: Smoke-test built binaries
+      - name: Smoke-test built ARM64 binaries
         run: |
-          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/router-vpn-agent router-vpn-preflight-agent:arm64 2>&1 | grep -qE 'no such file|config|router' || true
-          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/amneziawg-go router-vpn-preflight-awg2:arm64 -version >/dev/null 2>&1 || docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/amneziawg-go router-vpn-preflight-awg2:arm64 --version >/dev/null
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-agent:arm64 -c 'test -x /usr/local/bin/router-vpn-agent'
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/amneziawg-go router-vpn-preflight-awg2:arm64 --version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/rosenpass router-vpn-preflight-rosenpass:arm64 --version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/bin/caddy router-vpn-preflight-naive:arm64 version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/bin/v2ray-plugin router-vpn-preflight-ss-v2ray:arm64 -version >/dev/null
+
+      - name: Record preflight result
+        if: always()
+        env:
+          PREFLIGHT_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p ci
+          {
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'status=%s\n' "$PREFLIGHT_STATUS"
+            printf 'workflow=ARM64 Portainer preflight\n'
+          } > ci/arm64-preflight-status.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ci/arm64-preflight-status.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Record ARM64 Portainer preflight: $PREFLIGHT_STATUS"
+            git push origin HEAD:main
+          fi
