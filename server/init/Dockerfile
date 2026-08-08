@@ -17,7 +17,7 @@ FROM ghcr.io/xtls/xray-core:26.7.11 AS xray
 FROM ghcr.io/rosenpass/rosenpass:sha-00569eb AS rosenpass
 
 FROM alpine:3.22
-RUN apk add --no-cache bash curl iproute2 nftables openssl python3 wireguard-tools zip
+RUN apk add --no-cache bash ca-certificates curl iproute2 nftables openssl python3 wireguard-tools zip
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
 COPY --from=rosenpass /usr/local/bin/rosenpass /usr/local/bin/rosenpass
