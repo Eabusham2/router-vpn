@@ -22,8 +22,21 @@ for required in "$BASE/config/router-agent.json" "$BASE/config/socks5.json" "$BA
 done
 
 bash /src/server/finalize/sync-client-runtime.sh "$BASE"
+# current-entrypoint may have auto-detected a fresh public IP, and an explicit
+# ENDPOINT from Portainer must also win. detect-settings is only fallback state.
+REQUESTED_ENDPOINT=${ENDPOINT:-}
 eval "$(python3 /src/server/finalize/detect-settings.py "$BASE")"
+if [[ -n "$REQUESTED_ENDPOINT" ]]; then
+  ENDPOINT=$REQUESTED_ENDPOINT
+fi
 CONFIG_ENDPOINT=${ENDPOINT:-router.invalid}
+
+# Keep only the raw WG/AWG peer endpoints in sync. Do not use the legacy broad
+# endpoint rewriter here: JSON DNS, localhost SOCKS, and internal chain servers
+# must remain untouched.
+if [[ $CONFIG_ENDPOINT != router.invalid ]]; then
+  python3 /src/server/finalize/sync-endpoint.py "$BASE" "$CONFIG_ENDPOINT"
+fi
 
 # Keep the tunnel-only SOCKS endpoint simple: IP + port, no credentials.
 python3 - "$BASE" "$ADGUARD4" <<'PY'
