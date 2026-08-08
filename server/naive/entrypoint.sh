@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SETTINGS=${ROUTER_VPN_TLS_SETTINGS:-/router-vpn/settings.env}
+ACME_HTTP_PORT=${ACME_HTTP_PORT:-18080}
 if [[ ! -s "$SETTINGS" ]]; then
   echo 'TLS alternate settings are not available; Naive server is disabled.'
   exec sleep infinity
@@ -15,7 +16,7 @@ source "$SETTINGS"
 cat >/tmp/Caddyfile <<EOF
 {
   order forward_proxy before file_server
-  http_port 80
+  http_port ${ACME_HTTP_PORT}
   https_port ${NAIVE_PORT}
   auto_https disable_redirects
   log {
