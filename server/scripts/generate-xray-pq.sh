@@ -6,8 +6,8 @@ ADGUARD4=${3:?adguard ipv4}
 PQ_PORT=${4:-10443}
 TARGET=${5:-www.microsoft.com:443}
 REALITY_PORT=${6:-443}
-xr(){ if command -v xray >/dev/null 2>&1; then xray "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/xtls/xray-core:latest "$@"; fi; }
-sb(){ if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/sagernet/sing-box:1.13.12 "$@"; fi; }
+xr(){ if command -v xray >/dev/null 2>&1; then xray "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/xtls/xray-core:26.7.11 "$@"; fi; }
+sb(){ if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/sagernet/sing-box:v1.13.12 "$@"; fi; }
 mkdir -p "$BASE/config/xray" \
   "$BASE/client-bundle/generated/reality-vision" \
   "$BASE/client-bundle/generated/reality-pq-vision"
