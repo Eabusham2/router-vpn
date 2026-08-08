@@ -16,7 +16,8 @@ on:
       - '.github/workflows/arm64-portainer-preflight.yml'
 
 permissions:
-  contents: write
+  contents: read
+  issues: write
 
 concurrency:
   group: arm64-portainer-${{ github.ref }}
@@ -74,21 +75,10 @@ jobs:
           docker run --rm --platform linux/arm64 --entrypoint /usr/bin/caddy router-vpn-preflight-naive:arm64 version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/bin/v2ray-plugin router-vpn-preflight-ss-v2ray:arm64 -version >/dev/null
 
-      - name: Record preflight result
+      - name: Report preflight result
         if: always()
         env:
+          GH_TOKEN: ${{ github.token }}
           PREFLIGHT_STATUS: ${{ job.status }}
         run: |
-          mkdir -p ci
-          {
-            printf 'commit=%s\n' "$GITHUB_SHA"
-            printf 'status=%s\n' "$PREFLIGHT_STATUS"
-            printf 'workflow=ARM64 Portainer preflight\n'
-          } > ci/arm64-preflight-status.txt
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add ci/arm64-preflight-status.txt
-          if ! git diff --cached --quiet; then
-            git commit -m "Record ARM64 Portainer preflight: $PREFLIGHT_STATUS"
-            git push origin HEAD:main
-          fi
+          gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA status=$PREFLIGHT_STATUS workflow=ARM64-Portainer-preflight"
