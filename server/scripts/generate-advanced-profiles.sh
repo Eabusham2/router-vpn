@@ -12,8 +12,8 @@ REALITY_TARGET=${9:-www.microsoft.com:443}
 LOCAL_RELAY_PORT=${LOCAL_RELAY_PORT:-51830}
 XHTTP_PATH=${XHTTP_PATH:-/assets/sync}
 
-SING_BOX_IMAGE=${SING_BOX_IMAGE:-ghcr.io/sagernet/sing-box:1.13.12}
-XRAY_IMAGE=${XRAY_IMAGE:-ghcr.io/xtls/xray-core:latest}
+SING_BOX_IMAGE=${SING_BOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.12}
+XRAY_IMAGE=${XRAY_IMAGE:-ghcr.io/xtls/xray-core:26.7.11}
 sb(){ if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm -v "$BASE:$BASE" "$SING_BOX_IMAGE" "$@"; fi; }
 xr(){ if command -v xray >/dev/null 2>&1; then xray "$@"; else docker run --rm -v "$BASE:$BASE" "$XRAY_IMAGE" "$@"; fi; }
 
