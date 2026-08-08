@@ -16,13 +16,15 @@ cat >/tmp/Caddyfile <<EOF
 {
   order forward_proxy before file_server
   http_port 80
+  https_port ${NAIVE_PORT}
   auto_https disable_redirects
   log {
     exclude http.log.access
+    exclude http.log.error
   }
 }
 
-https://${TLS_NAME}:${NAIVE_PORT} {
+:${NAIVE_PORT}, ${TLS_NAME} {
   encode
   forward_proxy {
     basic_auth ${NAIVE_USER} ${NAIVE_PASSWORD}
