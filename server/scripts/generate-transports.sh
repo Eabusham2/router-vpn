@@ -7,7 +7,7 @@ REALITY_PORT=${4:-443}
 HY2_PORT=${5:-8443}
 SS_PORT=${6:-8388}
 REALITY_TARGET=${7:-www.microsoft.com:443}
-SING_BOX_IMAGE=${SING_BOX_IMAGE:-ghcr.io/sagernet/sing-box:1.13.12}
+SING_BOX_IMAGE=${SING_BOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.12}
 
 mkdir -p "$BASE/config/transports" \
   "$BASE/client-bundle/generated/hysteria2" \
