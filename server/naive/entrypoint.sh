@@ -1,13 +1,13 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 SETTINGS=${ROUTER_VPN_TLS_SETTINGS:-/router-vpn/settings.env}
 ACME_HTTP_PORT=${ACME_HTTP_PORT:-18080}
-if [[ ! -s "$SETTINGS" ]]; then
+if [ ! -s "$SETTINGS" ]; then
   echo 'TLS alternate settings are not available; Naive server is disabled.'
   exec sleep infinity
 fi
 # shellcheck disable=SC1090
-source "$SETTINGS"
+. "$SETTINGS"
 : "${TLS_NAME:?missing TLS_NAME}"
 : "${NAIVE_PORT:?missing NAIVE_PORT}"
 : "${NAIVE_USER:?missing NAIVE_USER}"
