@@ -30,6 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Report preflight start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA status=started workflow=ARM64-Portainer-preflight"
+
       - name: Static production preflight
         run: |
           python3 deploy/validate-repo.py
@@ -80,5 +85,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PREFLIGHT_STATUS: ${{ job.status }}
-        run: |
-          gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA status=$PREFLIGHT_STATUS workflow=ARM64-Portainer-preflight"
+        run: gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA status=$PREFLIGHT_STATUS workflow=ARM64-Portainer-preflight"
