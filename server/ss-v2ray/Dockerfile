@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS plugin
+FROM golang:1.23.12-alpine AS plugin
 ARG V2RAY_PLUGIN_COMMIT=e9af1cdd2549d528deb20a4ab8d61c5fbe51f306
 RUN apk add --no-cache ca-certificates curl tar
 RUN mkdir -p /src/v2ray-plugin /out \
