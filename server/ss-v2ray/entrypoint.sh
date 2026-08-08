@@ -16,20 +16,18 @@ SS_V2RAY_METHOD=${SS_V2RAY_METHOD:-2022-blake3-aes-256-gcm}
 CERT=''
 KEY=''
 tries=0
-while [ "$tries" -lt 180 ]; do
+while :; do
   CERT=$(find /caddy-data/caddy/certificates -type f -path "*/${TLS_NAME}/${TLS_NAME}.crt" 2>/dev/null | head -n 1 || true)
   KEY=$(find /caddy-data/caddy/certificates -type f -path "*/${TLS_NAME}/${TLS_NAME}.key" 2>/dev/null | head -n 1 || true)
   if [ -n "$CERT" ] && [ -s "$CERT" ] && [ -n "$KEY" ] && [ -s "$KEY" ]; then
     break
   fi
   tries=$((tries+1))
+  if [ $((tries % 30)) -eq 1 ]; then
+    echo "Waiting for Caddy to obtain the public TLS certificate for ${TLS_NAME}..."
+  fi
   sleep 2
 done
-
-if [ -z "$CERT" ] || [ ! -s "$CERT" ] || [ -z "$KEY" ] || [ ! -s "$KEY" ]; then
-  echo 'No public TLS certificate became available; SS+V2Ray TLS stays disabled.' >&2
-  exec sleep infinity
-fi
 
 exec ssserver --log-without-time \
   -s "[::]:${SS_V2RAY_PORT}" \
