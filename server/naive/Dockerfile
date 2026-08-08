@@ -4,7 +4,8 @@ ARG CADDY_VERSION=v2.8.4
 ARG FORWARDPROXY_COMMIT=d62c80d3dd2c706b6b87579844d2397bddd18317
 RUN apk add --no-cache ca-certificates git
 RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}
-RUN git clone https://github.com/klzgrad/forwardproxy /src/forwardproxy \
+RUN mkdir -p /out \
+ && git clone https://github.com/klzgrad/forwardproxy /src/forwardproxy \
  && cd /src/forwardproxy \
  && git checkout "${FORWARDPROXY_COMMIT}" \
  && /go/bin/xcaddy build "${CADDY_VERSION}" \
