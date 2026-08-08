@@ -1,6 +1,7 @@
 FROM golang:1.25.12 AS go-build
 WORKDIR /src/amneziawg-go
-RUN git clone --branch v3.0.2 --depth 1 https://github.com/amnezia-vpn/amneziawg-go . \
+RUN mkdir -p /out \
+ && git clone --branch v3.0.2 --depth 1 https://github.com/amnezia-vpn/amneziawg-go . \
  && go mod download \
  && go mod verify \
  && go build -ldflags '-linkmode external -extldflags "-fno-PIC -static"' -v -o /out/amneziawg-go .
