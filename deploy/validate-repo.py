@@ -18,7 +18,7 @@ def error(message: str) -> None:
 
 
 # ----- Mode catalog -----
-modes_path = ROOT / "configs/client/modes.json"
+modes_path = ROOT / "configs" / "client" / "modes.json"
 try:
     modes = json.loads(modes_path.read_text())
 except Exception as exc:
@@ -228,11 +228,7 @@ pins: dict[str, tuple[str, ...]] = {
         "AWGTOOLS_TAG=v1.0.20250901",
     ),
     "server/naive/Dockerfile": (
-        "golang:1.23.12-alpine",
-        "XCADDY_VERSION=v0.4.5",
-        "CADDY_VERSION=v2.8.4",
-        "FORWARDPROXY_COMMIT=d62c80d3dd2c706b6b87579844d2397bddd18317",
-        "caddy:2.8.4-alpine",
+        "pocat/naiveproxy:v150.0.7871.63-1",
     ),
     "server/ss-v2ray/Dockerfile": (
         "golang:1.23.12-alpine",
@@ -245,6 +241,12 @@ for rel, expected in pins.items():
     for value in expected:
         if value not in text:
             error(f"{rel} missing required pin: {value}")
+
+# Naive is deliberately a thin wrapper around a prebuilt multi-arch image.
+naive_text = (ROOT / "server/naive/Dockerfile").read_text() if (ROOT / "server/naive/Dockerfile").is_file() else ""
+for forbidden in ("xcaddy", "forwardproxy/archive", "go install", "go build"):
+    if forbidden in naive_text:
+        error(f"Naive Dockerfile reintroduced fragile source build step: {forbidden}")
 
 if ERRORS:
     print("Repository validation failed:", file=sys.stderr)
