@@ -1,7 +1,7 @@
 FROM golang:1.25.12-bookworm AS go-build
 ARG AWG_GO_TAG=v3.0.2
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl gzip tar \
+ && apt-get install -y --no-install-recommends ca-certificates curl gzip tar gcc libc6-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src/amneziawg-go
 RUN mkdir -p /out \
