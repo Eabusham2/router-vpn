@@ -33,7 +33,7 @@ jobs:
       - name: Report preflight start
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA status=started workflow=ARM64-Portainer-preflight"
+        run: gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA run=$GITHUB_RUN_ID status=started workflow=ARM64-Portainer-preflight"
 
       - name: Static production preflight
         run: |
@@ -113,4 +113,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PREFLIGHT_STATUS: ${{ job.status }}
-        run: gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA status=$PREFLIGHT_STATUS workflow=ARM64-Portainer-preflight"
+        run: gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA run=$GITHUB_RUN_ID status=$PREFLIGHT_STATUS workflow=ARM64-Portainer-preflight"
