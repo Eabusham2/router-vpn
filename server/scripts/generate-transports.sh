@@ -72,6 +72,24 @@ secrets={"hysteria2_password":hy2pass,"shadowsocks_key":sskey}
 json.dump(secrets,open(f"{base}/config/transports/generated-secrets.json","w"),indent=2); open(f"{base}/config/transports/generated-secrets.json","a").write("\n")
 PY
 chmod 600 "$BASE/config/transports/"* "$BASE/client-bundle/generated/hysteria2/cert.pem" "$BASE/client-bundle/generated/"*/sing-box.json
-sb check -D "$BASE/config/transports" -c "$BASE/config/transports/server.json" >/dev/null
+
+# Production mounts the transport certificate/key at /etc/sing-box. During
+# initialization those mounts do not exist yet, so validate a temporary copy
+# whose TLS paths point at the generated files without changing production paths.
+CHECK_CONFIG="$BASE/config/transports/server.check.json"
+python3 - "$BASE/config/transports/server.json" "$CHECK_CONFIG" "$BASE/config/transports/cert.pem" "$BASE/config/transports/key.pem" <<'PY'
+import json,sys
+src,dst,cert,key=sys.argv[1:]
+x=json.load(open(src))
+for inbound in x.get("inbounds",[]):
+    tls=inbound.get("tls") or {}
+    if tls.get("enabled"):
+        tls["certificate_path"]=cert
+        tls["key_path"]=key
+json.dump(x,open(dst,"w"),indent=2)
+open(dst,"a").write("\n")
+PY
+sb check -D "$BASE/config/transports" -c "$CHECK_CONFIG" >/dev/null
+rm -f "$CHECK_CONFIG"
 sb check -D "$BASE/client-bundle/generated/hysteria2" -c "$BASE/client-bundle/generated/hysteria2/sing-box.json" >/dev/null
 sb check -D "$BASE/client-bundle/generated/shadowsocks" -c "$BASE/client-bundle/generated/shadowsocks/sing-box.json" >/dev/null
