@@ -54,6 +54,15 @@ jobs:
       - name: Build init image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/init/Dockerfile -t router-vpn-preflight-init:arm64 .
 
+      - name: Run ARM64 init end to end
+        run: |
+          docker run --rm --privileged --platform linux/arm64 \
+            -e WAN_INTERFACE=eth0 \
+            -e LAN_CIDR=192.168.50.0/24 \
+            -e ADGUARD4=192.168.50.133 \
+            -e ENDPOINT=203.0.113.10 \
+            router-vpn-preflight-init:arm64
+
       - name: Build router agent image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f deploy/router-agent.Dockerfile -t router-vpn-preflight-agent:arm64 .
 
