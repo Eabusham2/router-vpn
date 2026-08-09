@@ -1,0 +1,90 @@
+name: Publish ARM64 Portainer images
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'deploy/**'
+      - 'modes/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'configs/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/publish-arm64-images.yml'
+
+permissions:
+  contents: read
+  packages: write
+  issues: write
+
+concurrency:
+  group: publish-arm64-portainer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and publish ARM64 images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: init
+            dockerfile: server/init/Dockerfile
+            image: router-vpn-init
+          - name: agent
+            dockerfile: deploy/router-agent.Dockerfile
+            image: router-vpn-agent
+          - name: wireguard
+            dockerfile: server/wireguard/Dockerfile
+            image: router-vpn-wireguard
+          - name: awg2
+            dockerfile: server/awg2/Dockerfile
+            image: router-vpn-awg2
+          - name: rosenpass
+            dockerfile: server/rosenpass/Dockerfile
+            image: router-vpn-rosenpass
+          - name: naive
+            dockerfile: server/naive/Dockerfile
+            image: router-vpn-naive
+          - name: ss-v2ray
+            dockerfile: server/ss-v2ray/Dockerfile
+            image: router-vpn-ss-v2ray
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ghcr.io/eabusham2/${{ matrix.image }}:arm64-main
+            ghcr.io/eabusham2/${{ matrix.image }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/Eabusham2/router-vpn
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  report:
+    name: Report publish result
+    if: always()
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.publish.result }}
+        run: gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA status=$RESULT workflow=Publish-ARM64-Portainer-images"
