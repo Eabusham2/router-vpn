@@ -18,7 +18,7 @@ FROM ghcr.io/rosenpass/rosenpass:sha-00569eb AS rosenpass
 
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash ca-certificates curl iproute2 nftables openssl python3 wireguard-tools zip \
+ && apt-get install -y --no-install-recommends bash ca-certificates curl iproute2 nftables openssl procps python3 wireguard-tools zip \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
@@ -33,6 +33,7 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && chmod 0755 /usr/local/bin/router-vpn-init \
  && /bin/bash -n /usr/local/bin/router-vpn-init \
  && /usr/local/bin/rosenpass --version >/dev/null \
+ && command -v sysctl >/dev/null \
  && test -x /src/server/scripts/generate-transports.sh \
  && test -x /src/server/scripts/generate-xray-pq.sh \
  && test -x /src/server/scripts/create-bundle-json.py \
