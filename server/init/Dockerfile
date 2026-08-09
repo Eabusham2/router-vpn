@@ -25,10 +25,13 @@ WORKDIR /src
 COPY . /src
 COPY --from=binaries /src/dist /src/dist
 COPY server/init/noninteractive.sh /usr/local/bin/router-vpn-init
-RUN chmod +x /usr/local/bin/router-vpn-init \
- && find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod +x {} + \
+RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' {} + \
+ && find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod 0755 {} + \
+ && sed -i 's/\r$//' /usr/local/bin/router-vpn-init \
+ && chmod 0755 /usr/local/bin/router-vpn-init \
+ && /bin/bash -n /usr/local/bin/router-vpn-init \
  && test -x /src/server/scripts/generate-transports.sh \
  && test -x /src/server/scripts/generate-xray-pq.sh \
  && test -x /src/server/scripts/create-bundle-json.py \
  && test -x /src/server/scripts/apply-runtime.sh
-ENTRYPOINT ["/usr/local/bin/router-vpn-init"]
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/router-vpn-init"]
