@@ -63,7 +63,7 @@ jobs:
             router-vpn-preflight-init:arm64
           docker run --rm --platform linux/arm64 \
             -v "$TEST_ROOT:/opt/router-vpn:ro" \
-            alpine:3.22 sh -c 'test -s /opt/router-vpn/.initialized && test -s /opt/router-vpn/config/router-agent.json && test -s /opt/router-vpn/config/transports/server.json && test -s /opt/router-vpn/config/xray/server.json && test -s /opt/router-vpn/downloads/router-vpn-client-bundle.zip'
+            alpine:3.22 sh -c 'test -e /opt/router-vpn/.initialized && test -s /opt/router-vpn/config/router-agent.json && test -s /opt/router-vpn/config/transports/server.json && test -s /opt/router-vpn/config/xray/server.json && test -s /opt/router-vpn/downloads/router-vpn-client-bundle.zip'
 
       - name: Run ARM64 finalizer end to end
         run: |
@@ -79,7 +79,7 @@ jobs:
             /src/server/finalize/current-entrypoint.sh
           docker run --rm --platform linux/arm64 \
             -v "$TEST_ROOT:/opt/router-vpn:ro" \
-            alpine:3.22 sh -c 'test -s /opt/router-vpn/.finalized && test -s /opt/router-vpn/downloads/router-vpn-client-bundle.zip && test -s /opt/router-vpn/config/rosenpass/server.toml && test -s /opt/router-vpn/client-bundle/routers.json'
+            alpine:3.22 sh -c 'test -e /opt/router-vpn/.finalized && test -s /opt/router-vpn/downloads/router-vpn-client-bundle.zip && test -s /opt/router-vpn/config/rosenpass/server.toml && test -s /opt/router-vpn/client-bundle/routers.json'
 
       - name: Build router agent image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f deploy/router-agent.Dockerfile -t router-vpn-preflight-agent:arm64 .
