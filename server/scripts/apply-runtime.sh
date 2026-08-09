@@ -26,7 +26,7 @@ add rule inet router_vpn_guard input iifname "$WAN" ct state established,related
 add rule inet router_vpn_guard input iifname "$WAN" ip saddr $LAN accept
 add rule inet router_vpn_guard input iifname "$WAN" ip6 saddr fe80::/10 accept
 add rule inet router_vpn_guard input iifname "$WAN" ip6 saddr $LAN6 accept
-add rule inet router_vpn_guard input iifname "$WAN" meta l4proto ipv6-icmp accept
+add rule inet router_vpn_guard input iifname "$WAN" meta l4proto 58 accept
 add rule inet router_vpn_guard input iifname "$WAN" udp dport { $WG_PORT, $AWG_PORT, $ROSENPASS_PORT, $HY2_PORT, $SS_PORT, $NAIVE_PORT } accept
 add rule inet router_vpn_guard input iifname "$WAN" tcp dport { $ACME_HTTP_PORT, $REALITY_PORT, $SS_PORT, $XRAY_PQ_PORT, $XHTTP_PORT, $SS_V2RAY_PORT, $NAIVE_PORT } accept
 add rule inet router_vpn_guard input iifname "$WAN" drop
