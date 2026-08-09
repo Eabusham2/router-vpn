@@ -26,7 +26,7 @@ concurrency:
 jobs:
   arm64-portainer:
     name: Build production images for linux/arm64
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -43,11 +43,6 @@ jobs:
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
           docker compose -f server/portainer-current.yaml config >/dev/null
 
-      - name: Enable ARM64 emulation
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -56,12 +51,35 @@ jobs:
 
       - name: Run ARM64 init end to end
         run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-preflight"
+          rm -rf "$TEST_ROOT"
+          mkdir -p "$TEST_ROOT"
           docker run --rm --privileged --platform linux/arm64 \
             -e WAN_INTERFACE=eth0 \
             -e LAN_CIDR=192.168.50.0/24 \
             -e ADGUARD4=192.168.50.133 \
-            -e ENDPOINT=203.0.113.10 \
+            -e ENDPOINT=1.1.1.1 \
+            -v "$TEST_ROOT:/opt/router-vpn" \
             router-vpn-preflight-init:arm64
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            alpine:3.22 sh -c 'test -s /opt/router-vpn/.initialized && test -s /opt/router-vpn/config/router-agent.json && test -s /opt/router-vpn/config/transports/server.json && test -s /opt/router-vpn/config/xray/server.json && test -s /opt/router-vpn/downloads/router-vpn-client-bundle.zip'
+
+      - name: Run ARM64 finalizer end to end
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-preflight"
+          docker run --rm --privileged --platform linux/arm64 \
+            -e WAN_INTERFACE=eth0 \
+            -e LAN_CIDR=192.168.50.0/24 \
+            -e ADGUARD4=192.168.50.133 \
+            -e ENDPOINT=1.1.1.1 \
+            -v "$TEST_ROOT:/opt/router-vpn" \
+            --entrypoint /bin/bash \
+            router-vpn-preflight-init:arm64 \
+            /src/server/finalize/current-entrypoint.sh
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            alpine:3.22 sh -c 'test -s /opt/router-vpn/.finalized && test -s /opt/router-vpn/downloads/router-vpn-client-bundle.zip && test -s /opt/router-vpn/config/rosenpass/server.toml && test -s /opt/router-vpn/client-bundle/routers.json'
 
       - name: Build router agent image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f deploy/router-agent.Dockerfile -t router-vpn-preflight-agent:arm64 .
