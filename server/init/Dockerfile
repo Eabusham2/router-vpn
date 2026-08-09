@@ -16,8 +16,10 @@ FROM ghcr.io/sagernet/sing-box:v1.13.12 AS singbox
 FROM ghcr.io/xtls/xray-core:26.7.11 AS xray
 FROM ghcr.io/rosenpass/rosenpass:sha-00569eb AS rosenpass
 
-FROM alpine:3.22
-RUN apk add --no-cache bash ca-certificates curl iproute2 nftables openssl python3 wireguard-tools zip
+FROM debian:bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends bash ca-certificates curl iproute2 nftables openssl python3 wireguard-tools zip \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
 COPY --from=rosenpass /usr/local/bin/rosenpass /usr/local/bin/rosenpass
@@ -30,6 +32,7 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && sed -i 's/\r$//' /usr/local/bin/router-vpn-init \
  && chmod 0755 /usr/local/bin/router-vpn-init \
  && /bin/bash -n /usr/local/bin/router-vpn-init \
+ && /usr/local/bin/rosenpass --version >/dev/null \
  && test -x /src/server/scripts/generate-transports.sh \
  && test -x /src/server/scripts/generate-xray-pq.sh \
  && test -x /src/server/scripts/create-bundle-json.py \
