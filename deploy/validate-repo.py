@@ -228,7 +228,9 @@ pins: dict[str, tuple[str, ...]] = {
         "AWGTOOLS_TAG=v1.0.20250901",
     ),
     "server/naive/Dockerfile": (
-        "pocat/naiveproxy:v150.0.7871.63-1",
+        "pocat/naiveproxy:v2.11.4",
+        "list-modules",
+        "forward_proxy",
     ),
     "server/ss-v2ray/Dockerfile": (
         "golang:1.23.12-alpine",
@@ -242,7 +244,7 @@ for rel, expected in pins.items():
         if value not in text:
             error(f"{rel} missing required pin: {value}")
 
-# Naive is deliberately a thin wrapper around a prebuilt multi-arch image.
+# Naive is deliberately a thin wrapper around a prebuilt multi-arch server image.
 naive_text = (ROOT / "server/naive/Dockerfile").read_text() if (ROOT / "server/naive/Dockerfile").is_file() else ""
 for forbidden in ("xcaddy", "forwardproxy/archive", "go install", "go build"):
     if forbidden in naive_text:
