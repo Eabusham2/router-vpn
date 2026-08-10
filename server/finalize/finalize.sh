@@ -123,6 +123,13 @@ if ! python3 /src/server/scripts/benchmark-dns.py "$BASE" >/dev/null; then
   rm -f "$BASE/config/dns-fastest.json"
 fi
 
+# Generate all user-facing protocol URLs/config QR images locally. They are
+# private bundle material: no key or URL is sent to any external QR service.
+if ! python3 /src/server/scripts/generate-setup-assets.py "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4"; then
+  echo 'Warning: user-friendly setup QR/URL assets were not generated; raw profiles remain available.' >&2
+  rm -f "$BASE/client-bundle/setup-assets.json"
+fi
+
 TOKEN=$(python3 - "$BASE/config/router-agent.json" <<'PY'
 import json,sys
 print(json.load(open(sys.argv[1])).get('token',''))
