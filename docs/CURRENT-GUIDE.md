@@ -1,14 +1,14 @@
 # Router VPN — Current Guide
 
-This is the authoritative guide for the current stack. Use `server/portainer-current.yaml` for Portainer deployments.
+This is the authoritative current setup guide. Use `server/portainer-current.yaml` for Portainer deployments and the in-client **Run full onboarding again** flow for the same steps interactively.
 
 ## Small summary
 
-Router VPN now provides one home node with a least-to-strongest manual picker, fast **AUTO**, slower **SMART AUTO**, constrained **CUSTOM** stacks, Standard WireGuard or AmneziaWG 2 bases, live Rosenpass post-quantum PSK rotation, Xray VLESS/REALITY/Vision, Shadowsocks, V2Ray-plugin TLS, Hysteria2/QUIC, Naive HTTPS H2/H3, XHTTP/FinalMask, PQ MAX TLS/QUIC branches, and **ALL** with health-tested TLS-to-QUIC fallback.
+Router VPN is one home node with 20 ordered manual modes plus fast **AUTO**, slower **SMART AUTO**, constrained **CUSTOM**, Standard WireGuard/AmneziaWG 2 bases, live Rosenpass post-quantum PSK rotation, Xray VLESS/REALITY/Vision, Shadowsocks, V2Ray-plugin TLS, Hysteria2/QUIC, Naive HTTPS H2/H3, XHTTP/FinalMask, PQ MAX TLS/QUIC branches, and **ALL** with health-tested TLS-to-QUIC fallback.
 
-It also includes IPv4 + IPv6, Home AdGuard/custom/public DNS and encrypted DNS policies, DNS Rescue, DAITA-like bidirectional cover traffic, Jumbo TUN on compatible proxy/TUN modes, tunnel-only no-auth SOCKS5, and configurable port/range/TCP/UDP/both/protected-DMZ forwarding. Generated modes fail closed when their required engine/config is unavailable instead of silently dropping a claimed layer.
+It also includes IPv4 + IPv6, Home AdGuard/custom/public DNS and encrypted DNS policies, DNS Rescue, DAITA-like bidirectional cover traffic, Jumbo TUN on compatible proxy/TUN modes, tunnel-only no-auth SOCKS5, and configurable port/range/TCP/UDP/both/Protected-DMZ forwarding.
 
-**Important:** the traffic-shaping toggle is DAITA-like, not Mullvad's exact Maybenot/DAITA implementation. The estimates below are same-route estimates, not measured guarantees, and exclude the physical latency of traveling back to the home node.
+**Boundaries:** DAITA-like is not exact Mullvad Maybenot/DAITA. Jumbo payloads may enter a tunnel-facing interface but public-Internet packets still have to be segmented to the real path MTU. Android/iOS controller builds do not claim full native all-mode tunneling until their platform tunnel adapters are linked.
 
 ## Mode chart — lightest to strongest
 
@@ -35,43 +35,99 @@ It also includes IPv4 + IPv6, Home AdGuard/custom/public DNS and encrypted DNS p
 | 19 | MAX TLS — PQ AmneziaWG 2 base | AmneziaWG 2 + Rosenpass PQ → Shadowsocks 2022 → PQ VLESS/REALITY/XHTTP/FinalMask | 5.5–22 ms | +28–85% | 20–48% |
 | 20 | ALL | Health-tests complete PQ MAX TLS branches, then PQ MAX QUIC fallback branches | 5–25 ms | +25–100% | 18–60% |
 
-**AUTO** is not another tunnel: it tries modes 1→19 and immediately keeps the first one that passes a real connectivity check. **SMART AUTO** intentionally takes longer: it gets connected first, then tests declared layer removals/replacements and restores the last working stack whenever a reduction fails. **CUSTOM** takes the layers you select and chooses the lightest already-validated compatible profile containing all of them; impossible combinations are rejected instead of being fabricated.
+**AUTO** tries modes 1→19 and immediately keeps the first one that passes a real connectivity check. **SMART AUTO** gets connected first, then tests declared layer removals/replacements and restores the last-good stack whenever simplification fails. **CUSTOM** takes the layers you select and chooses the lightest already-validated compatible profile containing all of them. **ALL** keeps mutually exclusive outer transports in separate strongest branches instead of fake-nesting them.
 
-DAITA-like cover traffic is an independent On/Off toggle and can add traffic beyond the table. The **Base tunnel** selector chooses Standard WireGuard or AmneziaWG 2 when a MAX/ALL/CUSTOM branch has both compatible bases.
+## Complete first-run tutorial
 
-## Simple tutorial
+### 1. Deploy the home node on the ASUS AI Board
 
-### A. Install the home node with Portainer
+Open **Portainer → Stacks → Add stack → Repository**.
 
-1. Open the ASUS AI Board / Portainer page.
-2. In Portainer open **Stacks → Add stack → Repository**.
-3. Enter this private repository and your GitHub credentials/token.
-4. Set the Compose path to:
+Use:
 
 ```text
-server/portainer-current.yaml
+Name: router-vpn
+Repository reference: refs/heads/main
+Compose path: server/portainer-current.yaml
 ```
 
-5. Add these environment variables:
+If the repository is private, enable Git authentication. If it is public, authentication can stay off.
+
+Normal environment values:
 
 ```text
 WAN_INTERFACE=eth0
 LAN_CIDR=192.168.50.0/24
 ADGUARD4=192.168.50.133
-ENDPOINT=
 ```
 
-Leave `ENDPOINT` blank to let the finalizer detect the public IPv4, or enter the home public IP yourself. Leave all other variables at their defaults unless you want custom ports.
+`ENDPOINT` is optional. Leave it unset/blank for automatic public-IP detection, or set your public IPv4/IPv6/hostname manually. The listener ports already have defaults.
 
-6. Press **Deploy the stack**.
-7. Wait until `router-vpn-init` and `router-vpn-finalize` finish successfully and the long-running Router VPN containers show as running.
+Deploy the stack.
 
-### B. Add the ASUS WAN forwards
+### 2. Verify the stack before exposing WAN ports
 
-Forward these to the AI Board / Docker host (`192.168.50.133` in this example):
+Expected one-shot containers:
 
 ```text
-TCP      80      -> 80
+router-vpn-init      exited 0
+router-vpn-finalize  exited 0
+```
+
+That is normal. Do not restart them just because they are exited.
+
+Expected long-running services:
+
+```text
+router-vpn-agent
+router-vpn-wireguard
+router-vpn-awg2
+router-vpn-rosenpass
+router-vpn-transports
+router-vpn-xray
+router-vpn-naive
+router-vpn-ss-v2ray
+router-vpn-bundle-web
+router-vpn-socks5
+```
+
+Optional host check:
+
+```bash
+sudo bash server/scripts/doctor-current.sh
+```
+
+Fix core failures before adding WAN forwarding.
+
+### 3. Download the private client bundle
+
+While on your home LAN open:
+
+```text
+http://192.168.50.133:8786/router-vpn-client-bundle.zip
+```
+
+Extract it and keep it private. It contains router-specific profiles/keys plus the persistent ASUS forwarding helper:
+
+```text
+router/asus-merlin-router-vpn-forwards.sh
+```
+
+### 4. Install the ASUS Merlin WAN forwards
+
+From a computer on your LAN, copy the helper to the ASUS router and run it through SSH:
+
+```bash
+scp router/asus-merlin-router-vpn-forwards.sh ROUTER_USER@192.168.50.1:/tmp/router-vpn-forwards.sh
+ssh ROUTER_USER@192.168.50.1 'sh /tmp/router-vpn-forwards.sh install'
+```
+
+The helper auto-detects the active WAN interface, creates dedicated Router VPN iptables chains, and appends persistent calls to `/jffs/scripts/nat-start` and `/jffs/scripts/firewall-start` without replacing existing script content.
+
+Default WAN mappings:
+
+```text
+TCP      80      -> 18080
 TCP      443     -> 443
 UDP      585     -> 585
 TCP+UDP  8388    -> 8388
@@ -84,101 +140,161 @@ UDP      51820   -> 51820
 UDP      51822   -> 51822
 ```
 
-Do **not** forward `1080`, `8786`, `8787`, Portainer, SSH, or the AdGuard admin page.
+The destination is the AI Board/Docker host, normally `192.168.50.133`.
 
-If you changed any listener port in Portainer, forward that custom port instead. Protected DMZ automatically reserves the generated listener ports.
+**Important:** external TCP 80 goes to **internal TCP 18080**, not the AI Board's port 80. Port 80 on the AI Board can remain the AdGuard block page. ASUS TCP 8443 management does not conflict with Router VPN's **UDP** 8443.
 
-### C. Download the private client bundle
-
-While connected to your home LAN, open:
+Never WAN-expose:
 
 ```text
-http://192.168.50.133:8786/router-vpn-client-bundle.zip
+1080   SOCKS5
+8786   private bundle server
+8787   internal router-agent API
+9443   Portainer
+SSH
+AdGuard admin
 ```
 
-Extract it. Keep this ZIP private because it contains the router-specific client profiles/keys.
-
-### D. Install the client
-
-#### macOS
-
-Open Terminal in the extracted folder and run as your normal user:
+To inspect the persistent rules later:
 
 ```bash
-bash client/install-macos-complete.sh "$PWD"
+/jffs/scripts/router-vpn-forward.sh status
 ```
 
-Enter the Mac password when `sudo` asks. Then open:
+If you intentionally changed VPN listener ports in Portainer, run the helper with matching environment overrides for `WG_PORT`, `AWG_PORT`, `ROSENPASS_PORT`, `REALITY_PORT`, `HY2_PORT`, `SS_PORT`, `XRAY_PQ_PORT`, `XHTTP_PORT`, `SS_V2RAY_PORT`, or `NAIVE_PORT`.
 
-```text
-http://127.0.0.1:8788
+### 5. Install the desktop client
+
+macOS, from the extracted bundle as your normal user:
+
+```bash
+bash client/install-macos-final.sh "$PWD"
 ```
 
-#### Linux
-
-Open a terminal in the extracted folder:
+Linux:
 
 ```bash
 sudo bash client/install-linux.sh "$PWD"
 ```
 
-Then open:
+Open:
 
 ```text
 http://127.0.0.1:8788
 ```
 
-If the router address is blank in the UI, use **Import router bundle** and select `router-vpn-bundle.json` from the extracted folder.
+The first launch opens the full onboarding automatically. Its current step is saved if you close it. **Finish** marks setup complete and keeps it dismissed later. **Help & setup → Run full onboarding again** reopens it without deleting your saved router profile.
 
-### E. Choose the normal settings
+### 6. Import/select the home-router profile
 
-In the client:
+Use **Import router bundle** and choose `router-vpn-bundle.json` from the extracted bundle. This carries the endpoint, internal API/token, generated profiles, AdGuard/SOCKS settings, DNS benchmark result and mode catalog.
 
-1. **Base tunnel:** choose Standard WireGuard or AmneziaWG 2.
-2. **DNS:** choose Fastest measured at home, Home AdGuard, Custom, DoH, DoT, or DNS Rescue. Public DNS timing is measured by real DNS queries at the home exit; IPv4 and IPv6 candidates are tested.
-3. Leave **DAITA-like** Off for normal speed, or turn it On when you want bidirectional cover traffic.
-4. Leave **Jumbo TUN** Off unless you specifically need it on a compatible proxy/TUN mode.
-5. Leave **SOCKS5-only** Off for a normal full VPN.
-6. Press **AUTO** for the quickest automatic connection, **SMART AUTO** for slower optimization, or select a mode manually.
+You may keep multiple router profiles and choose them at runtime. The normal base selector is Standard WireGuard or AmneziaWG 2.
 
-### F. Use plain SOCKS5
+### 7. Choose DNS
 
-After the VPN reaches home, point any SOCKS5-capable app at:
+Default:
+
+```text
+Fastest measured at home
+```
+
+The server benchmarks real A/AAAA DNS query RTT from the home exit, including IPv4/IPv6 candidates. Alternatives:
+
+```text
+Home AdGuard
+Custom UDP/TCP DNS
+DNS over TLS
+DNS over HTTPS
+DNS over HTTPS/3
+DNS Rescue
+```
+
+DNS Rescue helps with name-resolution interference/captive or filtered networks; it is not presented as a magical bypass for a direct-IP VPN handshake.
+
+### 8. Choose connection behavior
+
+For the fastest automatic connection, press **AUTO**.
+
+For slower optimization, press **SMART AUTO**.
+
+For manual control, choose any numbered mode and press **Connect selected**.
+
+For a required-layer combination, open **CUSTOM layer picker**, select the layers, save the router profile, then press **CUSTOM**.
+
+Options:
+
+```text
+DAITA-like Off = normal traffic
+DAITA-like On  = bounded bidirectional cover traffic
+Jumbo TUN      = optional on compatible TUN/proxy modes
+SOCKS5-only    = app/proxy path instead of normal full VPN
+```
+
+### 9. Plain SOCKS5
+
+After a VPN path to home exists, normal SOCKS5-capable applications can use the profile's SOCKS address, normally:
 
 ```text
 192.168.50.133:1080
 ```
 
-There is no SOCKS username or password. Port `1080` stays blocked from the public WAN.
+There is no username/password. You do not need the custom Router VPN app for the program consuming SOCKS5. TCP 1080 remains unavailable from public WAN.
 
-### G. Port forwarding / Protected DMZ
+### 10. Incoming port forwarding / Protected DMZ
 
-In the client **Port forwarding** card choose TCP, UDP, or both; enter a single port or range; then press **Apply**. Use **Protected DMZ** to forward all unused ports while keeping Router VPN, management, DNS, Portainer, SSH, and SOCKS5 ports reserved.
+The client Port forwarding card supports:
 
-For incoming connections to the remote device, use a mode that has a WireGuard/AmneziaWG peer path: raw WG/AWG, their Rosenpass variants, MAX, or ALL. Proxy-only modes are outbound tunnels and do not create an inbound peer address.
+```text
+TCP
+UDP
+both
+single port
+port range
+same or custom target port
+Protected DMZ
+```
 
-### H. Check the router
+Protected DMZ forwards unused ports while reserving Router VPN listeners plus management, DNS, Portainer, SSH, bundle/API and SOCKS5 ports.
 
-If you have a host terminal, from the repository run:
+Incoming connections to the remote device require a WireGuard/AmneziaWG peer path: raw WG/AWG, their Rosenpass variants, MAX, or ALL. Proxy-only outer modes are outbound-only for arbitrary inbound forwarding.
+
+### 11. Optional checks/tests
+
+Safe local client check: **Help & setup → Run safe client checks**.
+
+AI Board/Docker host:
 
 ```bash
 sudo bash server/scripts/doctor-current.sh
 ```
 
-A fresh current install should have no core failures. Optional modes that cannot be supported by an installed client engine are reported as warnings/disabled rather than silently downgraded.
+ASUS router:
 
-### I. Update later
+```bash
+/jffs/scripts/router-vpn-forward.sh status
+```
 
-For Portainer Git stacks, pull/redeploy the same `server/portainer-current.yaml`. The current finalizer preserves current-version profile credentials. An older profile-engine layout may migrate once; after such a migration, download/import the new private client bundle once.
+A live VPN protocol test only counts after an actual connection and mode health/handshake check. Test WAN reachability from cellular/off-LAN. Generic UDP port checkers do not prove WireGuard/AWG/Hysteria handshakes.
 
-If you use a host terminal instead, run from the updated repository:
+### 12. Update later
+
+For Portainer Git stacks, pull/redeploy the same:
+
+```text
+server/portainer-current.yaml
+```
+
+Current-version profile credentials are preserved. If an older profile-engine layout requires a one-time migration, download/import the private client bundle once afterward.
+
+Terminal-managed installs can use:
 
 ```bash
 sudo bash server/manage.sh
 ```
 
-### Build artifacts
+## Build artifacts
 
-The single GitHub Actions workflow builds the all-in-one project ZIP, Windows and PortableApps packages, macOS, Linux, Unix/BSD/illumos packages, Android APK, an unsigned re-signable IPA, an optional signed IPA when Apple signing secrets are configured, checksums, and an aggregate all-platform archive.
+The single GitHub Actions workflow builds the all-in-one project ZIP, Windows x64/ARM64 and PortableApps packages, macOS Intel/Apple Silicon, Linux, Unix/BSD/illumos packages, Android APK, unsigned re-signable IPA, optional signed IPA when signing secrets exist, checksums, and aggregate all-platform archives.
 
-The current Android and iOS projects build controller/importer applications, but the native mobile packet-tunnel engines for the full desktop mode set are not yet linked. Do not treat those mobile artifacts as full all-mode VPN clients until that adapter work is completed.
+The macOS/Linux path has the full engine installers today. Android/iOS controller/importer artifacts and other platform packages must not be described as having identical native all-mode tunnel-engine parity until those platform-specific adapters are actually linked and tested.
