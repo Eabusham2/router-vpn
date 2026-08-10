@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-import NetworkExtension
+@preconcurrency import NetworkExtension
 
 @MainActor
 final class RouterVPNModel: ObservableObject {
