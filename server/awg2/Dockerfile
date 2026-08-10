@@ -29,11 +29,14 @@ RUN mkdir -p /src/amneziawg-tools \
 
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash iproute2 nftables openresolv procps ca-certificates \
+ && apt-get install -y --no-install-recommends bash iproute2 iptables nftables openresolv procps ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=go-build /out/amneziawg-go /usr/local/bin/amneziawg-go
 COPY --from=tools-build /src/amneziawg-tools/src/wg /usr/bin/awg
 COPY --from=tools-build /src/amneziawg-tools/src/wg-quick/linux.bash /usr/bin/awg-quick
 COPY server/awg2/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /usr/bin/awg /usr/bin/awg-quick
+RUN chmod +x /entrypoint.sh /usr/bin/awg /usr/bin/awg-quick \
+ && /bin/bash -n /entrypoint.sh \
+ && command -v iptables-legacy >/dev/null \
+ && command -v ip6tables-legacy >/dev/null
 ENTRYPOINT ["/entrypoint.sh"]
