@@ -15,6 +15,9 @@ XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 XHTTP_PORT=${XHTTP_PORT:-11443}
 SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
 NAIVE_PORT=${NAIVE_PORT:-13443}
+OVERTLS_PORT=${OVERTLS_PORT:-14443}
+OVERTLS_INTERNAL_PORT=${OVERTLS_INTERNAL_PORT:-14444}
+SSR_PORT=${SSR_PORT:-15443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 
 for required in "$BASE/config/router-agent.json" "$BASE/config/socks5.json" "$BASE/client-bundle/routers.json"; do
@@ -69,9 +72,26 @@ bash /src/server/finalize/ensure-profile-engines.sh \
   "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" \
   "$SS_V2RAY_PORT" "$NAIVE_PORT" "$REALITY_TARGET"
 
+# Keep auxiliary compatibility secrets stable across normal upgrades. These are
+# outside the 20-mode AUTO ladder and never replace the modern transports.
+export OVERTLS_INTERNAL_PORT
+if [[ -s "$BASE/config/tls/settings.env" ]]; then
+  python3 /src/server/scripts/generate-aux-proxies.py \
+    "$BASE" "$CONFIG_ENDPOINT" "$OVERTLS_PORT" "$SSR_PORT"
+else
+  echo 'Warning: TLS settings unavailable; OverTLS/SSR compatibility methods remain disabled.' >&2
+  rm -rf "$BASE/config/aux" "$BASE/client-bundle/generated/overtls" "$BASE/client-bundle/generated/shadowsocksr"
+fi
+
 if ! python3 /src/server/scripts/benchmark-dns.py "$BASE" >/dev/null; then
   echo 'Warning: DNS benchmark failed; preserving the prior/fallback DNS selection.' >&2
 fi
+
+# The setup UI/QRs are a required user-facing feature. Existing installations
+# must receive them too, so fail rather than silently ship an incomplete bundle.
+python3 /src/server/scripts/generate-setup-assets.py "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4"
+[[ -s "$BASE/client-bundle/setup-assets.json" ]]
+[[ -s "$BASE/client-bundle/router-vpn-device-setup.html" ]]
 
 TOKEN=$(python3 - "$BASE/config/router-agent.json" <<'PY'
 import json,sys
@@ -106,24 +126,39 @@ PQ REALITY TCP: $XRAY_PQ_PORT
 XHTTP/FinalMask TCP: $XHTTP_PORT
 SS + V2Ray TLS TCP: $SS_V2RAY_PORT
 Naive HTTPS TCP/UDP: $NAIVE_PORT
+SOCKS5 + TLS / OverTLS TCP: $OVERTLS_PORT
+ShadowsocksR legacy TCP/UDP: $SSR_PORT
 Automatic TLS hostname: $TLS_INFO
-Certificate challenge TCP: 80
+Certificate challenge external TCP: 80 -> AI Board TCP 18080
 Fastest public DNS at home: $DNS_FASTEST
+Default DNS policy: fastest (changeable to Home AdGuard, custom, DoT, DoH, DoH3, or rescue in client)
 SOCKS5 after VPN connects: $ADGUARD4:1080
 SOCKS5 authentication: none
+Private Device Setup WebGUI (home LAN only): http://$ADGUARD4:8786/router-vpn-device-setup.html
 Router API token: $TOKEN
 TXT
 
 python3 /src/server/scripts/create-bundle-json.py \
   "$BASE" "$ENDPOINT" "$TOKEN" "http://$ADGUARD4:8787" "$ADGUARD4" "" ""
-rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
+
+# Refresh the bundled Merlin helper too, so existing users get any new listener
+# rules without reconstructing them manually.
+mkdir -p "$BASE/client-bundle/router"
+cp /src/router/asus-merlin-router-vpn-forwards.sh "$BASE/client-bundle/router/"
+chmod 0755 "$BASE/client-bundle/router/asus-merlin-router-vpn-forwards.sh"
+
+rm -f \
+  "$BASE/downloads/router-vpn-client-bundle.zip" \
+  "$BASE/downloads/router-vpn-device-setup.html" \
+  "$BASE/router-vpn-client-bundle.zip"
+cp "$BASE/client-bundle/router-vpn-device-setup.html" "$BASE/downloads/router-vpn-device-setup.html"
 (
   cd "$BASE/client-bundle"
   zip -qr "$BASE/downloads/router-vpn-client-bundle.zip" .
 )
 cp "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
 
-export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT SS_V2RAY_PORT NAIVE_PORT
+export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT SS_V2RAY_PORT NAIVE_PORT OVERTLS_PORT SSR_PORT
 bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
 touch "$BASE/.finalized"
-echo 'Credential-preserving upgrade finalization complete.'
+echo 'Credential-preserving upgrade finalization complete with private setup assets and auxiliary compatibility profiles.'
