@@ -181,7 +181,7 @@ public final class MainActivity extends Activity {
             case 5:
                 return "Import router-vpn-bundle.json. It carries the runtime endpoint, generated profiles, token, AdGuard/SOCKS5 details, and mode catalog. Multiple runtime router profiles are supported; nothing is hardcoded into this app.";
             case 6:
-                return "DNS choices in the full client: fastest real DNS query RTT measured at the home exit, Home AdGuard, custom UDP/TCP, DoT, DoH, DoH3, and DNS Rescue. AUTO stops at the first healthy mode. SMART AUTO takes longer and preserves/restores a last-good stack. CUSTOM chooses the lightest validated compatible stack containing every required layer.";
+                return "Connection choices: AUTO / SMART AUTO / CUSTOM plus manual modes and ALL. DNS choices in the full client: fastest real DNS query RTT measured at the home exit, Home AdGuard, custom UDP/TCP, DoT, DoH, DoH3, and DNS Rescue. AUTO stops at the first healthy mode. SMART AUTO takes longer and preserves/restores a last-good stack. CUSTOM chooses the lightest validated compatible stack containing every required layer.";
             case 7:
                 return "DAITA-like is bounded bidirectional cover traffic, not exact Mullvad DAITA/Maybenot. Jumbo TUN is only for compatible paths. SOCKS5 is ordinary IP + port with no authentication and stays LAN/tunnel-only. Incoming forwarding/Protected DMZ requires a WireGuard/AmneziaWG peer path; proxy-only modes are outbound.";
             case 8:
