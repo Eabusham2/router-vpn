@@ -14,12 +14,87 @@ XHTTP_PORT=${XHTTP_PORT:-11443}
 SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
 NAIVE_PORT=${NAIVE_PORT:-13443}
 ACME_HTTP_PORT=${ACME_HTTP_PORT:-18080}
-sysctl -w net.ipv4.ip_forward=1 >/dev/null
-sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null
-sysctl -w net.ipv6.conf.default.forwarding=1 >/dev/null
-sysctl -w net.ipv6.conf.all.accept_ra=2 >/dev/null || true
-nft delete table inet router_vpn_guard >/dev/null 2>&1 || true
-nft -f - <<NFT
+FIREWALL_BACKEND=${ROUTER_VPN_FIREWALL_BACKEND:-auto}
+
+set_sysctl(){
+  local key=$1 value=$2 current
+  if sysctl -w "$key=$value" >/dev/null 2>&1; then return 0; fi
+  current=$(sysctl -n "$key" 2>/dev/null || true)
+  if [[ $current == "$value" ]]; then
+    echo "Warning: could not write $key, but it is already $value." >&2
+    return 0
+  fi
+  echo "ERROR: cannot enable required sysctl $key=$value (current=${current:-unknown})." >&2
+  return 1
+}
+
+set_sysctl net.ipv4.ip_forward 1
+set_sysctl net.ipv6.conf.all.forwarding 1
+set_sysctl net.ipv6.conf.default.forwarding 1
+sysctl -w net.ipv6.conf.all.accept_ra=2 >/dev/null 2>&1 || true
+
+pick_iptables(){
+  local family=$1
+  if [[ $family == 4 ]]; then
+    if command -v iptables-legacy >/dev/null 2>&1; then echo iptables-legacy
+    elif command -v iptables >/dev/null 2>&1; then echo iptables
+    else return 1
+    fi
+  else
+    if command -v ip6tables-legacy >/dev/null 2>&1; then echo ip6tables-legacy
+    elif command -v ip6tables >/dev/null 2>&1; then echo ip6tables
+    else return 1
+    fi
+  fi
+}
+
+clear_legacy_guard(){
+  local ipt=$1
+  while "$ipt" -D INPUT -i "$WAN" -j ROUTER_VPN_GUARD >/dev/null 2>&1; do :; done
+  "$ipt" -F ROUTER_VPN_GUARD >/dev/null 2>&1 || true
+  "$ipt" -X ROUTER_VPN_GUARD >/dev/null 2>&1 || true
+}
+
+install_legacy_guard(){
+  local ipt4 ipt6 port
+  ipt4=$(pick_iptables 4) || { echo 'ERROR: nftables failed and no IPv4 iptables fallback exists.' >&2; return 1; }
+  ipt6=$(pick_iptables 6) || { echo 'ERROR: nftables failed and no IPv6 iptables fallback exists.' >&2; return 1; }
+
+  clear_legacy_guard "$ipt4"
+  clear_legacy_guard "$ipt6"
+
+  "$ipt4" -N ROUTER_VPN_GUARD
+  "$ipt4" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  "$ipt4" -A ROUTER_VPN_GUARD -s "$LAN" -j ACCEPT
+  for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT"; do
+    "$ipt4" -A ROUTER_VPN_GUARD -p udp --dport "$port" -j ACCEPT
+  done
+  for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT"; do
+    "$ipt4" -A ROUTER_VPN_GUARD -p tcp --dport "$port" -j ACCEPT
+  done
+  "$ipt4" -A ROUTER_VPN_GUARD -j DROP
+  "$ipt4" -I INPUT 1 -i "$WAN" -j ROUTER_VPN_GUARD
+
+  "$ipt6" -N ROUTER_VPN_GUARD
+  "$ipt6" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  "$ipt6" -A ROUTER_VPN_GUARD -s fe80::/10 -j ACCEPT
+  "$ipt6" -A ROUTER_VPN_GUARD -s "$LAN6" -j ACCEPT
+  "$ipt6" -A ROUTER_VPN_GUARD -p ipv6-icmp -j ACCEPT
+  for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT"; do
+    "$ipt6" -A ROUTER_VPN_GUARD -p udp --dport "$port" -j ACCEPT
+  done
+  for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT"; do
+    "$ipt6" -A ROUTER_VPN_GUARD -p tcp --dport "$port" -j ACCEPT
+  done
+  "$ipt6" -A ROUTER_VPN_GUARD -j DROP
+  "$ipt6" -I INPUT 1 -i "$WAN" -j ROUTER_VPN_GUARD
+  echo "Router VPN firewall: legacy iptables fallback active on $WAN."
+}
+
+NFT_OK=0
+if [[ $FIREWALL_BACKEND != iptables ]]; then
+  nft delete table inet router_vpn_guard >/dev/null 2>&1 || true
+  if nft -f - <<NFT
 add table inet router_vpn_guard
 add chain inet router_vpn_guard input { type filter hook input priority -100; policy accept; }
 add rule inet router_vpn_guard input iifname "$WAN" ct state established,related accept
@@ -31,9 +106,22 @@ add rule inet router_vpn_guard input iifname "$WAN" udp dport { $WG_PORT, $AWG_P
 add rule inet router_vpn_guard input iifname "$WAN" tcp dport { $ACME_HTTP_PORT, $REALITY_PORT, $SS_PORT, $XRAY_PQ_PORT, $XHTTP_PORT, $SS_V2RAY_PORT, $NAIVE_PORT } accept
 add rule inet router_vpn_guard input iifname "$WAN" drop
 NFT
+  then
+    NFT_OK=1
+    echo "Router VPN firewall: nftables active on $WAN."
+  else
+    echo 'Warning: nftables is unsupported on this host; falling back to legacy iptables.' >&2
+    nft delete table inet router_vpn_guard >/dev/null 2>&1 || true
+  fi
+fi
 
-for IPT in iptables ip6tables; do
-  command -v "$IPT" >/dev/null 2>&1 || continue
+if [[ $NFT_OK -eq 0 ]]; then
+  install_legacy_guard
+fi
+
+for family in 4 6; do
+  IPT=$(pick_iptables "$family" || true)
+  [[ -n ${IPT:-} ]] || continue
   "$IPT" -C FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || \
     "$IPT" -I FORWARD 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   "$IPT" -C FORWARD -m conntrack --ctstate DNAT -j ACCEPT >/dev/null 2>&1 || \
