@@ -56,12 +56,21 @@ jobs:
             test -s /opt/router-vpn/client-bundle/generated/shadowsocksr/ssr-client.json
             grep -q "WireGuard" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
+            grep -q "SOCKS5 + TLS (OverTLS)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
+            grep -q "ShadowsocksR (legacy)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
           '
 
       - name: Build auxiliary proxy ARM64 image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
 
-      - name: Smoke-test OverTLS and SSR binaries
+      - name: Smoke-test generated OverTLS and SSR services
         run: |
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 --version
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 -h >/dev/null 2>&1
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          CID=$(docker run -d --platform linux/arm64 --network host \
+            -v "$TEST_ROOT/config/aux:/router-vpn:ro" router-vpn-ci-aux:arm64)
+          trap 'docker logs "$CID" || true; docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+          sleep 3
+          docker inspect -f '{{.State.Running}}' "$CID" | grep -qx true
+          docker logs "$CID"
