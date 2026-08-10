@@ -107,6 +107,7 @@ jobs:
         run: |
           docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-init:arm64 -c 'test -x /usr/local/bin/router-vpn-init && test -x /src/server/scripts/generate-transports.sh && test -x /src/server/scripts/generate-xray-pq.sh && test -x /src/server/scripts/create-bundle-json.py && test -x /src/server/scripts/apply-runtime.sh'
           docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-agent:arm64 -c 'test -x /usr/local/bin/router-vpn-agent'
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-wireguard:arm64 -c 'command -v wg >/dev/null && command -v wg-quick >/dev/null && command -v wireguard-go >/dev/null && wireguard-go --version 2>&1 | grep -qi wireguard'
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/amneziawg-go router-vpn-preflight-awg2:arm64 --version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/rosenpass router-vpn-preflight-rosenpass:arm64 --version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/bin/caddy router-vpn-preflight-naive:arm64 version >/dev/null
