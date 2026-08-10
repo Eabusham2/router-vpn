@@ -41,6 +41,10 @@ jobs:
           python3 -m json.tool configs/client/modes.json >/dev/null
           find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          if grep -Eq '^[[:space:]]*build:' server/portainer-current.yaml; then
+            echo 'ERROR: Portainer production compose must be pull-only; build: is forbidden.' >&2
+            exit 1
+          fi
           docker compose -f server/portainer-current.yaml config >/dev/null
 
       - name: Set up Docker Buildx
