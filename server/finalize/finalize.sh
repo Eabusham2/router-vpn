@@ -127,7 +127,7 @@ fi
 # private bundle material: no key or URL is sent to any external QR service.
 if ! python3 /src/server/scripts/generate-setup-assets.py "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4"; then
   echo 'Warning: user-friendly setup QR/URL assets were not generated; raw profiles remain available.' >&2
-  rm -f "$BASE/client-bundle/setup-assets.json"
+  rm -f "$BASE/client-bundle/setup-assets.json" "$BASE/client-bundle/router-vpn-device-setup.html"
 fi
 
 TOKEN=$(python3 - "$BASE/config/router-agent.json" <<'PY'
@@ -172,6 +172,7 @@ Fastest public DNS at home: $DNS_FASTEST
 Default DNS policy: fastest (changeable to Home AdGuard, custom, DoT, DoH, DoH3, or rescue in client)
 SOCKS5 after VPN connects: $ADGUARD4:1080
 SOCKS5 authentication: none
+Private Device Setup WebGUI (home LAN only): http://$ADGUARD4:8786/router-vpn-device-setup.html
 Router API token: $TOKEN
 TXT
 
@@ -184,7 +185,13 @@ mkdir -p "$BASE/client-bundle/router"
 cp /src/router/asus-merlin-router-vpn-forwards.sh "$BASE/client-bundle/router/"
 chmod 0755 "$BASE/client-bundle/router/asus-merlin-router-vpn-forwards.sh"
 
-rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
+rm -f \
+  "$BASE/downloads/router-vpn-client-bundle.zip" \
+  "$BASE/downloads/router-vpn-device-setup.html" \
+  "$BASE/router-vpn-client-bundle.zip"
+if [[ -s "$BASE/client-bundle/router-vpn-device-setup.html" ]]; then
+  cp "$BASE/client-bundle/router-vpn-device-setup.html" "$BASE/downloads/router-vpn-device-setup.html"
+fi
 (
   cd "$BASE/client-bundle"
   zip -qr "$BASE/downloads/router-vpn-client-bundle.zip" .
