@@ -160,7 +160,7 @@ XHTTP/FinalMask TCP: $XHTTP_PORT
 SS + V2Ray TLS TCP: $SS_V2RAY_PORT
 Naive HTTPS TCP/UDP: $NAIVE_PORT
 Automatic TLS hostname: $TLS_INFO
-Certificate challenge TCP: 80
+Certificate challenge external TCP: 80 -> AI Board TCP 18080
 Fastest public DNS at home: $DNS_FASTEST
 Default DNS policy: fastest (changeable to Home AdGuard, custom, DoT, DoH, DoH3, or rescue in client)
 SOCKS5 after VPN connects: $ADGUARD4:1080
@@ -170,6 +170,12 @@ TXT
 
 python3 /src/server/scripts/create-bundle-json.py \
   "$BASE" "$ENDPOINT" "$TOKEN" "http://$ADGUARD4:8787" "$ADGUARD4" "" ""
+
+# Ship the persistent ASUS Merlin WAN-forward helper with the private bundle so
+# first-run onboarding can configure the router without users reconstructing rules.
+mkdir -p "$BASE/client-bundle/router"
+cp /src/router/asus-merlin-router-vpn-forwards.sh "$BASE/client-bundle/router/"
+chmod 0755 "$BASE/client-bundle/router/asus-merlin-router-vpn-forwards.sh"
 
 rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
 (

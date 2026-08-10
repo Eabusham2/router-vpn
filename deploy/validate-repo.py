@@ -111,7 +111,7 @@ for required in (
     if required not in orchestrator_text:
         error(f"SMART/CUSTOM contract missing: {required}")
 
-# ----- WebGUI and native app onboarding contract -----
+# ----- Complete first-run onboarding contract -----
 ui_path = ROOT / "cmd/client/ui.html"
 if ui_path.is_file():
     ui = ui_path.read_text()
@@ -120,51 +120,119 @@ if ui_path.is_file():
         if stale in ui_lower:
             error(f"UI contains stale authenticated SOCKS wording: {stale}")
     for required in (
-        "routervpn.onboarding.web.done.v1",
-        "routervpn.onboarding.web.step.v1",
-        "Run onboarding again",
-        "Run setup checks",
+        "routervpn.onboarding.web.done.v2",
+        "routervpn.onboarding.web.step.v2",
+        "Run full onboarding again",
+        "Portainer → Stacks → Add stack → Repository",
+        "WAN_INTERFACE=eth0",
+        "LAN_CIDR=192.168.50.0/24",
+        "ADGUARD4=192.168.50.133",
+        "router-vpn-init",
+        "router-vpn-finalize",
+        "router-vpn-client-bundle.zip",
+        "asus-merlin-router-vpn-forwards.sh",
+        "TCP      80      → 18080",
+        "Never expose 1080, 8786, 8787, 9443",
         "SMART AUTO",
         "CUSTOM",
         "Home AdGuard",
         "DNS Rescue",
         "Protected DMZ",
         "no authentication",
+        "doctor-current.sh",
+        "router-vpn-forward.sh status",
         "Live WireGuard/AWG/REALITY/QUIC handshakes",
     ):
         if required not in ui:
-            error(f"WebGUI missing agreed onboarding/product text: {required}")
+            error(f"WebGUI missing agreed complete-onboarding text: {required}")
 else:
     error("missing cmd/client/ui.html")
 
 android_path = ROOT / "android/app/src/main/java/com/eabusham/routervpn/MainActivity.java"
 android_text = android_path.read_text() if android_path.is_file() else ""
 for required in (
-    "onboarding_done_v1",
-    "onboarding_step_v1",
-    "Run onboarding again",
-    "Run setup check",
+    "onboarding_done_v2",
+    "onboarding_step_v2",
+    "Run full onboarding again",
+    "server/portainer-current.yaml",
+    "TCP 80 maps to AI Board TCP 18080",
+    "router-vpn-forward.sh status",
     "AUTO / SMART AUTO / CUSTOM",
     "never forward TCP 1080 from WAN",
-    "does not fake a live all-mode VPN handshake",
+    "does not fake a live all-mode VPN connection",
 ):
     if required not in android_text:
-        error(f"Android onboarding contract missing: {required}")
+        error(f"Android complete-onboarding contract missing: {required}")
 
 ios_path = ROOT / "ios/RouterVPN/App/ContentView.swift"
 ios_text = ios_path.read_text() if ios_path.is_file() else ""
 for required in (
-    "routerVPNOnboardingDoneV1",
-    "routerVPNOnboardingStepV1",
-    "Run onboarding again",
-    "Run setup check",
+    "routerVPNOnboardingDoneV2",
+    "routerVPNOnboardingStepV2",
+    "Run full onboarding again",
+    "server/portainer-current.yaml",
+    "TCP 80→18080",
+    "router-vpn-forward.sh status",
     "SMART AUTO",
     "Home AdGuard",
     "Protected DMZ",
     "native all-mode Packet Tunnel adapters are not linked yet",
 ):
     if required not in ios_text:
-        error(f"iOS onboarding contract missing: {required}")
+        error(f"iOS complete-onboarding contract missing: {required}")
+
+# ----- Persistent ASUS Merlin WAN forwarding helper -----
+forward_helper = ROOT / "router" / "asus-merlin-router-vpn-forwards.sh"
+helper_text = forward_helper.read_text() if forward_helper.is_file() else ""
+if not helper_text:
+    error("missing ASUS Merlin forwarding helper")
+else:
+    syntax = subprocess.run(
+        ["/bin/sh", "-n", str(forward_helper)],
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    if syntax.returncode:
+        detail = (syntax.stderr or "shell syntax error").strip().splitlines()[-1]
+        error(f"ASUS Merlin forwarding helper shell syntax error: {detail}")
+    for required in (
+        "ACME_EXTERNAL_PORT=${ACME_EXTERNAL_PORT:-80}",
+        "ACME_INTERNAL_PORT=${ACME_INTERNAL_PORT:-18080}",
+        "WG_PORT=${WG_PORT:-51820}",
+        "AWG_PORT=${AWG_PORT:-585}",
+        "ROSENPASS_PORT=${ROSENPASS_PORT:-51822}",
+        "HY2_PORT=${HY2_PORT:-8443}",
+        "write_hook \"$NAT_START\" \"$RUNTIME apply-nat\"",
+        "write_hook \"$FIREWALL_START\" \"$RUNTIME apply-filter\"",
+        "Existing nat-start/firewall-start content was preserved.",
+        "Never exposed by this script: 1080, 8786, 8787, 9443, SSH, Portainer, AdGuard admin.",
+    ):
+        if required not in helper_text:
+            error(f"ASUS forwarding helper missing contract: {required}")
+
+finalizer_path = ROOT / "server" / "finalize" / "finalize.sh"
+finalizer_text = finalizer_path.read_text() if finalizer_path.is_file() else ""
+for required in (
+    "Certificate challenge external TCP: 80 -> AI Board TCP 18080",
+    "cp /src/router/asus-merlin-router-vpn-forwards.sh",
+):
+    if required not in finalizer_text:
+        error(f"finalizer missing bundle/onboarding contract: {required}")
+
+guide_path = ROOT / "docs" / "CURRENT-GUIDE.md"
+guide_text = guide_path.read_text() if guide_path.is_file() else ""
+if "TCP      80      -> 18080" not in guide_text and "TCP      80      → 18080" not in guide_text:
+    error("CURRENT-GUIDE must document external TCP 80 -> internal 18080")
+if "TCP      80      -> 80" in guide_text or "TCP      80      → 192.168.50.133:80" in guide_text:
+    error("CURRENT-GUIDE still contains stale external TCP 80 -> internal 80 mapping")
+for required in (
+    "client/install-macos-final.sh",
+    "router/asus-merlin-router-vpn-forwards.sh",
+    "Run full onboarding again",
+):
+    if required not in guide_text:
+        error(f"CURRENT-GUIDE missing current setup entry: {required}")
 
 # ----- Production Portainer compose -----
 compose_path = ROOT / "server/portainer-current.yaml"
@@ -189,6 +257,16 @@ for required in (
 ):
     if required not in compose_text:
         error(f"Portainer compose missing pinned image: {required}")
+
+custom_runtime_tags = re.findall(
+    r"ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray):([0-9a-f]{40})",
+    compose_text,
+)
+if len(custom_runtime_tags) != 8:  # init appears twice: init + finalizer
+    error(f"expected 8 exact-SHA custom runtime image references, found {len(custom_runtime_tags)}")
+elif_tags = set(custom_runtime_tags)
+if len(elif_tags) > 1:
+    error("production custom runtime images are not pinned to one validated SHA")
 
 for forbidden_port in ("1080", "8786", "8787", "9443"):
     if re.search(rf"(?m)^\s*ports:\s*.*{forbidden_port}", compose_text):
@@ -327,6 +405,7 @@ if ERRORS:
 
 print(
     f"Validated final product contract: {len(numbered)} ordered strength modes + "
-    f"{max(0, len(modes)-len(numbered))} utilities; Web/Android/iOS onboarding; "
-    f"production compose; {len(active)} active Dockerfiles; pinned dependencies; COPY paths; and RUN shell syntax."
+    f"{max(0, len(modes)-len(numbered))} utilities; complete Web/Android/iOS onboarding; "
+    f"persistent ASUS forwarding helper; production compose; {len(active)} active Dockerfiles; "
+    f"pinned dependencies; COPY paths; and RUN shell syntax."
 )
