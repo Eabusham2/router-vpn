@@ -17,7 +17,7 @@ def error(message: str) -> None:
     ERRORS.append(message)
 
 
-# ----- Mode catalog -----
+# ----- Mode catalog / product contract -----
 modes_path = ROOT / "configs" / "client" / "modes.json"
 try:
     modes = json.loads(modes_path.read_text())
@@ -44,6 +44,14 @@ else:
         if mode.get("id") != "all" and not mode.get("layers"):
             error(f"{mode.get('id')} has no layer metadata")
 
+expected_strength_order = [
+    "wg", "awg2-fast", "wg-pq", "shadowsocks", "awg2-strong", "awg2-pq",
+    "reality-vision", "hysteria2", "reality-pq-vision", "ss-v2ray",
+    "naive-h2", "naive-h3", "split", "reality-xhttp", "max",
+    "max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg", "all",
+]
+if ids[:20] != expected_strength_order:
+    error("20 strength profiles are not in the agreed lightest-to-strongest order")
 if ids[20:] != ["smart-auto", "custom"]:
     error("smart-auto and custom must follow the 20 strength profiles")
 for mode in numbered[:19]:
@@ -52,13 +60,7 @@ for mode in numbered[:19]:
 if len(numbered) == 20 and numbered[19].get("id") == "all" and numbered[19].get("auto_eligible"):
     error("ALL must not be a normal AUTO candidate")
 
-required_ids = {
-    "wg", "awg2-fast", "wg-pq", "shadowsocks", "awg2-strong", "awg2-pq",
-    "reality-vision", "hysteria2", "reality-pq-vision", "ss-v2ray",
-    "naive-h2", "naive-h3", "split", "reality-xhttp", "max",
-    "max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg", "all",
-    "smart-auto", "custom",
-}
+required_ids = set(expected_strength_order) | {"smart-auto", "custom"}
 missing_ids = required_ids - set(ids)
 if missing_ids:
     error("missing modes: " + ", ".join(sorted(missing_ids)))
@@ -79,25 +81,90 @@ for mode in modes:
             error(f"{mode.get('id')} {field} references missing {candidate.relative_to(ROOT)}")
 
 for mode_id, layers in {
-    "max-tls-wg": {"rosenpass-pq", "shadowsocks2022", "vless-pq", "reality", "xhttp", "finalmask"},
-    "max-tls-awg": {"rosenpass-pq", "shadowsocks2022", "vless-pq", "reality", "xhttp", "finalmask"},
-    "max-quic-wg": {"rosenpass-pq", "shadowsocks2022", "hysteria2", "quic"},
-    "max-quic-awg": {"rosenpass-pq", "shadowsocks2022", "hysteria2", "quic"},
+    "max-tls-wg": {"wireguard", "rosenpass-pq", "shadowsocks2022", "vless-pq", "reality", "xhttp", "finalmask"},
+    "max-tls-awg": {"amneziawg2", "rosenpass-pq", "shadowsocks2022", "vless-pq", "reality", "xhttp", "finalmask"},
+    "max-quic-wg": {"wireguard", "rosenpass-pq", "shadowsocks2022", "hysteria2", "quic"},
+    "max-quic-awg": {"amneziawg2", "rosenpass-pq", "shadowsocks2022", "hysteria2", "quic"},
 }.items():
     mode = next((item for item in modes if item.get("id") == mode_id), {})
     missing = layers - set(mode.get("layers") or [])
     if missing:
         error(f"{mode_id} missing layers: {', '.join(sorted(missing))}")
 
+all_script = ROOT / "modes" / "run-all.sh"
+all_text = all_script.read_text() if all_script.is_file() else ""
+for required in (
+    "max-tls-awg max-tls-wg max-quic-awg max-quic-wg",
+    "max-tls-wg max-tls-awg max-quic-wg max-quic-awg",
+    "ALL could not establish any validated MAX TLS or MAX QUIC branch.",
+):
+    if required not in all_text:
+        error(f"ALL fallback contract missing: {required}")
+
+orchestrator = ROOT / "modes" / "orchestrate.py"
+orchestrator_text = orchestrator.read_text() if orchestrator.is_file() else ""
+for required in (
+    "SMART AUTO could not restore its last-known-good mode",
+    "CUSTOM: no validated compatible stack contains that exact layer selection",
+    "len(layers) - len(requested)",
+):
+    if required not in orchestrator_text:
+        error(f"SMART/CUSTOM contract missing: {required}")
+
+# ----- WebGUI and native app onboarding contract -----
 ui_path = ROOT / "cmd/client/ui.html"
 if ui_path.is_file():
-    ui = ui_path.read_text().lower()
+    ui = ui_path.read_text()
+    ui_lower = ui.lower()
     for stale in ("socks5 username", "socks5 password"):
-        if stale in ui:
+        if stale in ui_lower:
             error(f"UI contains stale authenticated SOCKS wording: {stale}")
+    for required in (
+        "routervpn.onboarding.web.done.v1",
+        "routervpn.onboarding.web.step.v1",
+        "Run onboarding again",
+        "Run setup checks",
+        "SMART AUTO",
+        "CUSTOM",
+        "Home AdGuard",
+        "DNS Rescue",
+        "Protected DMZ",
+        "no authentication",
+        "Live WireGuard/AWG/REALITY/QUIC handshakes",
+    ):
+        if required not in ui:
+            error(f"WebGUI missing agreed onboarding/product text: {required}")
 else:
     error("missing cmd/client/ui.html")
 
+android_path = ROOT / "android/app/src/main/java/com/eabusham/routervpn/MainActivity.java"
+android_text = android_path.read_text() if android_path.is_file() else ""
+for required in (
+    "onboarding_done_v1",
+    "onboarding_step_v1",
+    "Run onboarding again",
+    "Run setup check",
+    "AUTO / SMART AUTO / CUSTOM",
+    "never forward TCP 1080 from WAN",
+    "does not fake a live all-mode VPN handshake",
+):
+    if required not in android_text:
+        error(f"Android onboarding contract missing: {required}")
+
+ios_path = ROOT / "ios/RouterVPN/App/ContentView.swift"
+ios_text = ios_path.read_text() if ios_path.is_file() else ""
+for required in (
+    "routerVPNOnboardingDoneV1",
+    "routerVPNOnboardingStepV1",
+    "Run onboarding again",
+    "Run setup check",
+    "SMART AUTO",
+    "Home AdGuard",
+    "Protected DMZ",
+    "native all-mode Packet Tunnel adapters are not linked yet",
+):
+    if required not in ios_text:
+        error(f"iOS onboarding contract missing: {required}")
 
 # ----- Production Portainer compose -----
 compose_path = ROOT / "server/portainer-current.yaml"
@@ -123,6 +190,10 @@ for required in (
     if required not in compose_text:
         error(f"Portainer compose missing pinned image: {required}")
 
+for forbidden_port in ("1080", "8786", "8787", "9443"):
+    if re.search(rf"(?m)^\s*ports:\s*.*{forbidden_port}", compose_text):
+        error(f"production compose unexpectedly publishes protected port {forbidden_port}")
+
 if shutil.which("docker") and compose_path.is_file():
     check = subprocess.run(
         ["docker", "compose", "-f", str(compose_path), "config"],
@@ -134,7 +205,6 @@ if shutil.which("docker") and compose_path.is_file():
     if check.returncode:
         detail = (check.stderr or "docker compose config failed").strip().splitlines()[-1]
         error(f"Portainer compose invalid: {detail}")
-
 
 # ----- Active Docker build files -----
 active = [
@@ -244,7 +314,6 @@ for rel, expected in pins.items():
         if value not in text:
             error(f"{rel} missing required pin: {value}")
 
-# Naive is deliberately a thin wrapper around a prebuilt multi-arch server image.
 naive_text = (ROOT / "server/naive/Dockerfile").read_text() if (ROOT / "server/naive/Dockerfile").is_file() else ""
 for forbidden in ("xcaddy", "forwardproxy/archive", "go install", "go build"):
     if forbidden in naive_text:
@@ -257,6 +326,7 @@ if ERRORS:
     raise SystemExit(1)
 
 print(
-    f"Validated {len(numbered)} strength modes + {max(0, len(modes)-len(numbered))} utility modes; "
+    f"Validated final product contract: {len(numbered)} ordered strength modes + "
+    f"{max(0, len(modes)-len(numbered))} utilities; Web/Android/iOS onboarding; "
     f"production compose; {len(active)} active Dockerfiles; pinned dependencies; COPY paths; and RUN shell syntax."
 )
