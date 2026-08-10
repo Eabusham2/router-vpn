@@ -64,7 +64,8 @@ install_legacy_guard(){
   clear_legacy_guard "$ipt6"
 
   "$ipt4" -N ROUTER_VPN_GUARD
-  "$ipt4" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  "$ipt4" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+    "$ipt4" -A ROUTER_VPN_GUARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
   "$ipt4" -A ROUTER_VPN_GUARD -s "$LAN" -j ACCEPT
   for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT"; do
     "$ipt4" -A ROUTER_VPN_GUARD -p udp --dport "$port" -j ACCEPT
@@ -76,7 +77,8 @@ install_legacy_guard(){
   "$ipt4" -I INPUT 1 -i "$WAN" -j ROUTER_VPN_GUARD
 
   "$ipt6" -N ROUTER_VPN_GUARD
-  "$ipt6" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  "$ipt6" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+    "$ipt6" -A ROUTER_VPN_GUARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
   "$ipt6" -A ROUTER_VPN_GUARD -s fe80::/10 -j ACCEPT
   "$ipt6" -A ROUTER_VPN_GUARD -s "$LAN6" -j ACCEPT
   "$ipt6" -A ROUTER_VPN_GUARD -p ipv6-icmp -j ACCEPT
@@ -119,11 +121,19 @@ if [[ $NFT_OK -eq 0 ]]; then
   install_legacy_guard
 fi
 
+# Forwarding is explicitly scoped to the two VPN peer networks.  This avoids
+# depending on optional legacy conntrack match modules on embedded kernels.
 for family in 4 6; do
-  IPT=$(pick_iptables "$family" || true)
+  if [[ $family == 4 ]]; then
+    IPT=$(pick_iptables 4 || true)
+    SUBNETS=(10.77.0.0/24 10.78.0.0/24)
+  else
+    IPT=$(pick_iptables 6 || true)
+    SUBNETS=(fd77:77::/64 fd78:78::/64)
+  fi
   [[ -n ${IPT:-} ]] || continue
-  "$IPT" -C FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || \
-    "$IPT" -I FORWARD 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-  "$IPT" -C FORWARD -m conntrack --ctstate DNAT -j ACCEPT >/dev/null 2>&1 || \
-    "$IPT" -I FORWARD 1 -m conntrack --ctstate DNAT -j ACCEPT
+  for subnet in "${SUBNETS[@]}"; do
+    "$IPT" -C FORWARD -s "$subnet" -j ACCEPT >/dev/null 2>&1 || "$IPT" -I FORWARD 1 -s "$subnet" -j ACCEPT
+    "$IPT" -C FORWARD -d "$subnet" -j ACCEPT >/dev/null 2>&1 || "$IPT" -I FORWARD 1 -d "$subnet" -j ACCEPT
+  done
 done
