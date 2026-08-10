@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import secrets
@@ -28,7 +29,11 @@ def main() -> int:
     endpoint = sys.argv[2].strip().strip("[]")
     overtls_port = int(sys.argv[3])
     ssr_port = int(sys.argv[4])
-    internal_port = int(__import__('os').environ.get('OVERTLS_INTERNAL_PORT', '14444'))
+    internal_port = int(os.environ.get('OVERTLS_INTERNAL_PORT', '14444'))
+    for name, port in [('OVERTLS_PORT', overtls_port), ('OVERTLS_INTERNAL_PORT', internal_port), ('SSR_PORT', ssr_port)]:
+        if not 1 <= port <= 65535:
+            raise SystemExit(f'{name} must be between 1 and 65535')
+
     tls_settings = base / 'config' / 'tls' / 'settings.env'
     if not tls_settings.is_file():
         print('TLS settings are required before OverTLS generation.', file=sys.stderr)
@@ -58,22 +63,30 @@ def main() -> int:
     secrets_path.write_text(json.dumps(saved, indent=2) + '\n')
     secrets_path.chmod(0o600)
 
+    # Public TLS terminates at Caddy. Plaintext is permitted only on 127.0.0.1.
     overtls_server = {
+        'method': 'none',
+        'password': '',
         'tunnel_path': tunnel_path,
-        'disable_tls': True,
         'server_settings': {
+            'disable_tls': True,
             'forward_addr': 'http://127.0.0.1:80',
             'listen_host': '127.0.0.1',
             'listen_port': internal_port,
         },
+        'client_settings': {},
     }
     overtls_client = {
+        'method': 'none',
+        'password': '',
         'tunnel_path': tunnel_path,
         'server_settings': {},
         'client_settings': {
+            'disable_tls': False,
             'server_host': endpoint,
             'server_port': overtls_port,
             'server_domain': tls_name,
+            'dangerous_mode': False,
             'listen_host': '127.0.0.1',
             'listen_port': 1080,
         },
@@ -122,7 +135,7 @@ def main() -> int:
         fh.write(f"OVERTLS_INTERNAL_PORT={shell_quote(str(internal_port))}\n")
         fh.write(f"OVERTLS_PATH={shell_quote(tunnel_path)}\n")
 
-    for p in [aux / 'overtls-server.json', aux / 'ssr-server.json', aux / 'generated.json', gen / 'overtls' / 'overtls-client.json', gen / 'shadowsocksr' / 'ssr-client.json']:
+    for p in [aux/'overtls-server.json', aux/'ssr-server.json', aux/'generated.json', gen/'overtls'/'overtls-client.json', gen/'shadowsocksr'/'ssr-client.json']:
         p.chmod(0o600)
     print(f'Generated OverTLS TCP {overtls_port} -> loopback {internal_port} and legacy SSR TCP/UDP {ssr_port}.')
     return 0
