@@ -31,9 +31,9 @@ public final class MainActivity extends Activity {
     private static final int IMPORT_BUNDLE = 1001;
     private static final String BUNDLE_FILE = "router-vpn-bundle.json";
     private static final String PREFS = "router-vpn";
-    private static final String ONBOARDING_DONE = "onboarding_done_v1";
-    private static final String ONBOARDING_STEP = "onboarding_step_v1";
-    private static final int ONBOARDING_LAST_STEP = 5;
+    private static final String ONBOARDING_DONE = "onboarding_done_v2";
+    private static final String ONBOARDING_STEP = "onboarding_step_v2";
+    private static final int ONBOARDING_LAST_STEP = 9;
 
     private TextView statusView;
     private TextView endpointView;
@@ -82,7 +82,7 @@ public final class MainActivity extends Activity {
         checksButton.setOnClickListener(v -> showSetupCheck());
         content.addView(checksButton, margins(0, dp(8), 0, 0));
 
-        Button onboardingButton = button("Run onboarding again");
+        Button onboardingButton = button("Run full onboarding again");
         onboardingButton.setOnClickListener(v -> showOnboarding(true));
         content.addView(onboardingButton, margins(0, dp(8), 0, 0));
 
@@ -125,10 +125,11 @@ public final class MainActivity extends Activity {
         AlertDialog.Builder builder = new AlertDialog.Builder(this)
             .setTitle("Router VPN setup — " + (step + 1) + "/" + (ONBOARDING_LAST_STEP + 1))
             .setMessage(onboardingText(step))
-            .setNegativeButton("Close", (dialog, which) -> dialog.dismiss());
+            .setNegativeButton("Close for now", (dialog, which) -> dialog.dismiss());
 
         if (step > 0) {
-            builder.setNeutralButton(step == 1 ? "Import bundle" : step == 4 ? "Run setup check" : "Back", null);
+            String neutral = step == 4 ? "Import bundle" : step == 8 ? "Run setup check" : "Back";
+            builder.setNeutralButton(neutral, null);
         }
 
         builder.setPositiveButton(step == ONBOARDING_LAST_STEP ? "Finish" : "Next", null);
@@ -148,10 +149,10 @@ public final class MainActivity extends Activity {
             });
             if (step > 0) {
                 dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
-                    if (step == 1) {
+                    if (step == 4) {
                         dialog.dismiss();
                         openBundlePicker();
-                    } else if (step == 4) {
+                    } else if (step == 8) {
                         showSetupCheck();
                     } else {
                         int previous = step - 1;
@@ -168,17 +169,25 @@ public final class MainActivity extends Activity {
     private String onboardingText(int step) {
         switch (step) {
             case 0:
-                return "This guide sets up your home-router profile, DNS, modes, SOCKS5, forwarding, and optional checks. Progress is saved until you finish.";
+                return "Complete path: home node → ASUS WAN rules → client → DNS/modes → optional tests. Progress is saved. Closing does not mark it complete; Finish does.";
             case 1:
-                return "Import router-vpn-bundle.json. It carries the runtime home endpoint, generated profiles, AdGuard/SOCKS5 details, and mode catalog. Nothing is hardcoded into the app.";
+                return "Deploy the home node in Portainer: Stacks → Add stack → Repository. Compose path: server/portainer-current.yaml. Normal environment values: WAN_INTERFACE=eth0, LAN_CIDR=192.168.50.0/24, ADGUARD4=192.168.50.133. ENDPOINT is optional and can stay blank for auto-detection.";
             case 2:
-                return "Mode choices: AUTO / SMART AUTO / CUSTOM plus manual modes. AUTO stops at the first healthy mode; SMART AUTO takes longer and then tries to simplify while preserving a last-good stack. CUSTOM chooses the lightest validated compatible stack containing your required layers.";
+                return "Verify the home node before WAN exposure. router-vpn-init and router-vpn-finalize should exit code 0; do not restart those one-shots. Long-running Router VPN services should be running. Optional host check: sudo bash server/scripts/doctor-current.sh.";
             case 3:
-                return "DNS options include home AdGuard, fastest measured at the home exit, custom DNS, DoT/DoH/DoH3, and Rescue. SOCKS5 is ordinary IP + port with no authentication and must stay LAN/tunnel-only. Port 1080 is never a WAN forward.";
+                return "On the home LAN download http://192.168.50.133:8786/router-vpn-client-bundle.zip and keep it private. The bundle includes router-vpn-bundle.json plus router/asus-merlin-router-vpn-forwards.sh.";
             case 4:
-                return "Optional setup checks validate the imported endpoint, SOCKS5 settings, and required mode catalog without changing your network. This Android build is still a controller/importer, so it does not fake a live all-mode VPN handshake.";
+                return "ASUS Merlin WAN forwarding: use the bundled helper over SSH. It installs persistent JFFS hooks without replacing existing nat-start/firewall-start content. External TCP 80 maps to AI Board TCP 18080; 443/TCP, 585/UDP, 8388/TCP+UDP, 8443/UDP, 10443/11443/12443 TCP, 13443 TCP+UDP, and 51820/51822 UDP map 1:1. Never expose 1080, 8786, 8787, 9443, SSH, Portainer, or AdGuard admin. TCP 8443 ASUS management does not conflict with UDP 8443.";
+            case 5:
+                return "Import router-vpn-bundle.json. It carries the runtime endpoint, generated profiles, token, AdGuard/SOCKS5 details, and mode catalog. Multiple runtime router profiles are supported; nothing is hardcoded into this app.";
+            case 6:
+                return "DNS choices in the full client: fastest real DNS query RTT measured at the home exit, Home AdGuard, custom UDP/TCP, DoT, DoH, DoH3, and DNS Rescue. AUTO stops at the first healthy mode. SMART AUTO takes longer and preserves/restores a last-good stack. CUSTOM chooses the lightest validated compatible stack containing every required layer.";
+            case 7:
+                return "DAITA-like is bounded bidirectional cover traffic, not exact Mullvad DAITA/Maybenot. Jumbo TUN is only for compatible paths. SOCKS5 is ordinary IP + port with no authentication and stays LAN/tunnel-only. Incoming forwarding/Protected DMZ requires a WireGuard/AmneziaWG peer path; proxy-only modes are outbound.";
+            case 8:
+                return "Optional checks: use Run setup check here; on the AI Board run server/scripts/doctor-current.sh; on the ASUS router run /jffs/scripts/router-vpn-forward.sh status. Live WireGuard/AWG/REALITY/QUIC success only counts after an actual client connection/handshake. Generic UDP port checkers do not prove a VPN handshake.";
             default:
-                return "Setup is complete. Onboarding stays dismissed after Finish, but Run onboarding again remains available on the main screen. Your imported router bundle is not erased when onboarding is reopened.";
+                return "Setup is complete. Finish keeps onboarding dismissed on this device. Run full onboarding again remains available on the main screen and does not erase the saved/imported router bundle. This Android build remains honest: native all-mode VpnService adapters are not linked yet, so it does not fake a live all-mode VPN connection.";
         }
     }
 
@@ -211,6 +220,8 @@ public final class MainActivity extends Activity {
         } catch (Exception error) {
             result.append("✗ Import router-vpn-bundle.json first\n");
         }
+        result.append("ℹ Server test: server/scripts/doctor-current.sh\n");
+        result.append("ℹ ASUS test: /jffs/scripts/router-vpn-forward.sh status\n");
         result.append("ℹ Live tunnel handshakes require a native tunnel adapter; this safe check does not claim one occurred.");
         return result.toString();
     }
