@@ -21,13 +21,27 @@ Implemented and wired with runtime validation/fail-closed checks:
 - Normal AUTO and slower SMART AUTO
 - CUSTOM compatible-layer selection
 - IPv4 + IPv6
-- Home AdGuard / fastest public DNS / custom DNS / DoT / DoH / rescue policy
+- Home AdGuard / fastest public DNS / custom DNS / DoT / DoH / DoH3 / rescue policy
 - DAITA-like bidirectional bounded cover traffic toggle
 - Jumbo TUN on compatible proxy/TUN modes
 - tunnel-only no-auth SOCKS5 using IP + port
 - single-port, range, TCP/UDP/both, target-port and Protected DMZ forwarding
 - dynamic reservation of the actual generated listener ports
 - credential-stable current Portainer redeploy/upgrade path
+
+## Onboarding and setup help
+
+The WebGUI, Android controller app, and iOS app all include first-run onboarding with these rules:
+
+- onboarding starts automatically until it is completed
+- progress is persisted so a closed setup flow resumes later
+- completion stays remembered after setup is finished
+- **Run onboarding again** remains available afterward and does not erase the saved router profile
+- setup explains runtime router/profile import, DNS choices, AUTO / SMART AUTO / CUSTOM, DAITA-like/Jumbo behavior, SOCKS5 safety, and forwarding boundaries
+- optional setup checks validate configuration/catalog state without pretending a protocol handshake happened
+- WebGUI live protocol testing remains explicit: an actual mode must be connected before a WireGuard/AWG/REALITY/QUIC handshake can be claimed
+
+The native mobile onboarding keeps the same product-boundary wording as the rest of the repo: Android/iOS controller builds do not claim full native all-mode tunneling until their platform tunnel adapters are linked.
 
 ## Exact boundaries
 
