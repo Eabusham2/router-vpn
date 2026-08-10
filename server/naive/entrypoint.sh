@@ -38,4 +38,18 @@ cat >/tmp/Caddyfile <<EOF
 }
 EOF
 
+# OverTLS is intentionally plaintext only on loopback behind this TLS terminator.
+# The public side remains normal HTTPS with Caddy-managed ACME certificates.
+if [ -n "${OVERTLS_PORT:-}" ] && [ -n "${OVERTLS_INTERNAL_PORT:-}" ] && [ -n "${OVERTLS_PATH:-}" ]; then
+  cat >>/tmp/Caddyfile <<EOF
+
+https://${TLS_NAME}:${OVERTLS_PORT} {
+  @overtls path ${OVERTLS_PATH}*
+  reverse_proxy @overtls 127.0.0.1:${OVERTLS_INTERNAL_PORT}
+  root * /srv
+  file_server
+}
+EOF
+fi
+
 exec caddy run --config /tmp/Caddyfile --adapter caddyfile
