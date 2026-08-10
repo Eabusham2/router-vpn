@@ -26,6 +26,8 @@ XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 XHTTP_PORT=${XHTTP_PORT:-11443}
 SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
 NAIVE_PORT=${NAIVE_PORT:-13443}
+OVERTLS_PORT=${OVERTLS_PORT:-14443}
+SSR_PORT=${SSR_PORT:-15443}
 ACME_EXTERNAL_PORT=${ACME_EXTERNAL_PORT:-80}
 ACME_INTERNAL_PORT=${ACME_INTERNAL_PORT:-18080}
 ROUTER_VPN_WAN_INTERFACE=${ROUTER_VPN_WAN_INTERFACE:-}
@@ -60,6 +62,8 @@ validate_settings(){
   validate_port XHTTP_PORT "$XHTTP_PORT"
   validate_port SS_V2RAY_PORT "$SS_V2RAY_PORT"
   validate_port NAIVE_PORT "$NAIVE_PORT"
+  validate_port OVERTLS_PORT "$OVERTLS_PORT"
+  validate_port SSR_PORT "$SSR_PORT"
   validate_port ACME_EXTERNAL_PORT "$ACME_EXTERNAL_PORT"
   validate_port ACME_INTERNAL_PORT "$ACME_INTERNAL_PORT"
 }
@@ -128,6 +132,9 @@ apply_nat(){
   add_dnat tcp "$SS_V2RAY_PORT" "$SS_V2RAY_PORT"
   add_dnat tcp "$NAIVE_PORT" "$NAIVE_PORT"
   add_dnat udp "$NAIVE_PORT" "$NAIVE_PORT"
+  add_dnat tcp "$OVERTLS_PORT" "$OVERTLS_PORT"
+  add_dnat tcp "$SSR_PORT" "$SSR_PORT"
+  add_dnat udp "$SSR_PORT" "$SSR_PORT"
   add_dnat udp "$WG_PORT" "$WG_PORT"
   add_dnat udp "$ROSENPASS_PORT" "$ROSENPASS_PORT"
 
@@ -152,6 +159,9 @@ apply_filter(){
   add_fwd tcp "$SS_V2RAY_PORT"
   add_fwd tcp "$NAIVE_PORT"
   add_fwd udp "$NAIVE_PORT"
+  add_fwd tcp "$OVERTLS_PORT"
+  add_fwd tcp "$SSR_PORT"
+  add_fwd udp "$SSR_PORT"
   add_fwd udp "$WG_PORT"
   add_fwd udp "$ROSENPASS_PORT"
 
@@ -187,6 +197,8 @@ write_config(){
   write_saved XHTTP_PORT "$XHTTP_PORT"
   write_saved SS_V2RAY_PORT "$SS_V2RAY_PORT"
   write_saved NAIVE_PORT "$NAIVE_PORT"
+  write_saved OVERTLS_PORT "$OVERTLS_PORT"
+  write_saved SSR_PORT "$SSR_PORT"
   write_saved ACME_EXTERNAL_PORT "$ACME_EXTERNAL_PORT"
   write_saved ACME_INTERNAL_PORT "$ACME_INTERNAL_PORT"
   chmod 600 "$CONFIG"
@@ -243,8 +255,11 @@ status(){
   printf 'TCP      %-7s -> %s\n' "$XHTTP_PORT" "$XHTTP_PORT"
   printf 'TCP      %-7s -> %s\n' "$SS_V2RAY_PORT" "$SS_V2RAY_PORT"
   printf 'TCP+UDP  %-7s -> %s\n' "$NAIVE_PORT" "$NAIVE_PORT"
+  printf 'TCP      %-7s -> %s\n' "$OVERTLS_PORT" "$OVERTLS_PORT"
+  printf 'TCP+UDP  %-7s -> %s\n' "$SSR_PORT" "$SSR_PORT"
   printf 'UDP      %-7s -> %s\n' "$WG_PORT" "$WG_PORT"
   printf 'UDP      %-7s -> %s\n' "$ROSENPASS_PORT" "$ROSENPASS_PORT"
+  say 'OverTLS loopback backend 14444 is never WAN-forwarded.'
   say 'Never exposed by this script: 1080, 8786, 8787, 9443, SSH, Portainer, AdGuard admin.'
   [ ! -f "$CONFIG" ] || say "Persistent settings: $CONFIG"
   say '--- NAT ---'
