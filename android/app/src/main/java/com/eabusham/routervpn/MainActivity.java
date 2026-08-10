@@ -172,7 +172,7 @@ public final class MainActivity extends Activity {
             case 1:
                 return "Import router-vpn-bundle.json. It carries the runtime home endpoint, generated profiles, AdGuard/SOCKS5 details, and mode catalog. Nothing is hardcoded into the app.";
             case 2:
-                return "Connection choices in the full client are manual modes, AUTO, SMART AUTO, and CUSTOM. AUTO stops at the first healthy mode; SMART AUTO takes longer and then tries to simplify while preserving a last-good stack. CUSTOM chooses the lightest validated compatible stack containing your required layers.";
+                return "Mode choices: AUTO / SMART AUTO / CUSTOM plus manual modes. AUTO stops at the first healthy mode; SMART AUTO takes longer and then tries to simplify while preserving a last-good stack. CUSTOM chooses the lightest validated compatible stack containing your required layers.";
             case 3:
                 return "DNS options include home AdGuard, fastest measured at the home exit, custom DNS, DoT/DoH/DoH3, and Rescue. SOCKS5 is ordinary IP + port with no authentication and must stay LAN/tunnel-only. Port 1080 is never a WAN forward.";
             case 4:
