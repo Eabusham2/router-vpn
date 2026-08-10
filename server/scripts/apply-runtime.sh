@@ -33,36 +33,37 @@ set_sysctl net.ipv6.conf.all.forwarding 1
 set_sysctl net.ipv6.conf.default.forwarding 1
 sysctl -w net.ipv6.conf.all.accept_ra=2 >/dev/null 2>&1 || true
 
-pick_iptables(){
-  local family=$1
+# Return a firewall frontend only when its kernel backend is actually usable.
+# Embedded ARM kernels often ship the command but omit one of the legacy tables.
+pick_filter(){
+  local family=$1 candidate
   if [[ $family == 4 ]]; then
-    if command -v iptables-legacy >/dev/null 2>&1; then echo iptables-legacy
-    elif command -v iptables >/dev/null 2>&1; then echo iptables
-    else return 1
-    fi
+    for candidate in iptables-legacy iptables-nft iptables; do
+      command -v "$candidate" >/dev/null 2>&1 || continue
+      "$candidate" -t filter -L INPUT >/dev/null 2>&1 && { echo "$candidate"; return 0; }
+    done
   else
-    if command -v ip6tables-legacy >/dev/null 2>&1; then echo ip6tables-legacy
-    elif command -v ip6tables >/dev/null 2>&1; then echo ip6tables
-    else return 1
-    fi
+    for candidate in ip6tables-legacy ip6tables-nft ip6tables; do
+      command -v "$candidate" >/dev/null 2>&1 || continue
+      "$candidate" -t filter -L INPUT >/dev/null 2>&1 && { echo "$candidate"; return 0; }
+    done
   fi
+  return 1
 }
 
-clear_legacy_guard(){
+clear_guard(){
   local ipt=$1
   while "$ipt" -D INPUT -i "$WAN" -j ROUTER_VPN_GUARD >/dev/null 2>&1; do :; done
   "$ipt" -F ROUTER_VPN_GUARD >/dev/null 2>&1 || true
   "$ipt" -X ROUTER_VPN_GUARD >/dev/null 2>&1 || true
 }
 
-install_legacy_guard(){
+install_iptables_guard(){
   local ipt4 ipt6 port
-  ipt4=$(pick_iptables 4) || { echo 'ERROR: nftables failed and no IPv4 iptables fallback exists.' >&2; return 1; }
-  ipt6=$(pick_iptables 6) || { echo 'ERROR: nftables failed and no IPv6 iptables fallback exists.' >&2; return 1; }
+  ipt4=$(pick_filter 4) || { echo 'ERROR: nftables failed and no usable IPv4 iptables filter backend exists.' >&2; return 1; }
+  ipt6=$(pick_filter 6 || true)
 
-  clear_legacy_guard "$ipt4"
-  clear_legacy_guard "$ipt6"
-
+  clear_guard "$ipt4"
   "$ipt4" -N ROUTER_VPN_GUARD
   "$ipt4" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
     "$ipt4" -A ROUTER_VPN_GUARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
@@ -76,21 +77,26 @@ install_legacy_guard(){
   "$ipt4" -A ROUTER_VPN_GUARD -j DROP
   "$ipt4" -I INPUT 1 -i "$WAN" -j ROUTER_VPN_GUARD
 
-  "$ipt6" -N ROUTER_VPN_GUARD
-  "$ipt6" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
-    "$ipt6" -A ROUTER_VPN_GUARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-  "$ipt6" -A ROUTER_VPN_GUARD -s fe80::/10 -j ACCEPT
-  "$ipt6" -A ROUTER_VPN_GUARD -s "$LAN6" -j ACCEPT
-  "$ipt6" -A ROUTER_VPN_GUARD -p ipv6-icmp -j ACCEPT
-  for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT"; do
-    "$ipt6" -A ROUTER_VPN_GUARD -p udp --dport "$port" -j ACCEPT
-  done
-  for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT"; do
-    "$ipt6" -A ROUTER_VPN_GUARD -p tcp --dport "$port" -j ACCEPT
-  done
-  "$ipt6" -A ROUTER_VPN_GUARD -j DROP
-  "$ipt6" -I INPUT 1 -i "$WAN" -j ROUTER_VPN_GUARD
-  echo "Router VPN firewall: legacy iptables fallback active on $WAN."
+  if [[ -n $ipt6 ]]; then
+    clear_guard "$ipt6"
+    "$ipt6" -N ROUTER_VPN_GUARD
+    "$ipt6" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+      "$ipt6" -A ROUTER_VPN_GUARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+    "$ipt6" -A ROUTER_VPN_GUARD -s fe80::/10 -j ACCEPT
+    "$ipt6" -A ROUTER_VPN_GUARD -s "$LAN6" -j ACCEPT
+    "$ipt6" -A ROUTER_VPN_GUARD -p ipv6-icmp -j ACCEPT
+    for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT"; do
+      "$ipt6" -A ROUTER_VPN_GUARD -p udp --dport "$port" -j ACCEPT
+    done
+    for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT"; do
+      "$ipt6" -A ROUTER_VPN_GUARD -p tcp --dport "$port" -j ACCEPT
+    done
+    "$ipt6" -A ROUTER_VPN_GUARD -j DROP
+    "$ipt6" -I INPUT 1 -i "$WAN" -j ROUTER_VPN_GUARD
+  else
+    echo 'Warning: no usable IPv6 iptables filter backend; IPv6 fallback guard is unavailable.' >&2
+  fi
+  echo "Router VPN firewall: iptables-compatible fallback active on $WAN."
 }
 
 NFT_OK=0
@@ -112,28 +118,29 @@ NFT
     NFT_OK=1
     echo "Router VPN firewall: nftables active on $WAN."
   else
-    echo 'Warning: nftables is unsupported on this host; falling back to legacy iptables.' >&2
+    echo 'Warning: nftables is unsupported on this host; trying iptables-compatible backends.' >&2
     nft delete table inet router_vpn_guard >/dev/null 2>&1 || true
   fi
 fi
 
 if [[ $NFT_OK -eq 0 ]]; then
-  install_legacy_guard
+  install_iptables_guard
 fi
 
-# Forwarding is explicitly scoped to the two VPN peer networks.  This avoids
-# depending on optional legacy conntrack match modules on embedded kernels.
-for family in 4 6; do
-  if [[ $family == 4 ]]; then
-    IPT=$(pick_iptables 4 || true)
-    SUBNETS=(10.77.0.0/24 10.78.0.0/24)
-  else
-    IPT=$(pick_iptables 6 || true)
-    SUBNETS=(fd77:77::/64 fd78:78::/64)
-  fi
-  [[ -n ${IPT:-} ]] || continue
-  for subnet in "${SUBNETS[@]}"; do
-    "$IPT" -C FORWARD -s "$subnet" -j ACCEPT >/dev/null 2>&1 || "$IPT" -I FORWARD 1 -s "$subnet" -j ACCEPT
-    "$IPT" -C FORWARD -d "$subnet" -j ACCEPT >/dev/null 2>&1 || "$IPT" -I FORWARD 1 -d "$subnet" -j ACCEPT
-  done
+# Forwarding is scoped to the VPN peer networks. Pick a backend that proves the
+# relevant filter table exists instead of assuming installed legacy tools work.
+IPT4=$(pick_filter 4) || { echo 'ERROR: no usable IPv4 FORWARD backend.' >&2; exit 1; }
+for subnet in 10.77.0.0/24 10.78.0.0/24; do
+  "$IPT4" -C FORWARD -s "$subnet" -j ACCEPT >/dev/null 2>&1 || "$IPT4" -I FORWARD 1 -s "$subnet" -j ACCEPT
+  "$IPT4" -C FORWARD -d "$subnet" -j ACCEPT >/dev/null 2>&1 || "$IPT4" -I FORWARD 1 -d "$subnet" -j ACCEPT
 done
+
+IPT6=$(pick_filter 6 || true)
+if [[ -n $IPT6 ]]; then
+  for subnet in fd77:77::/64 fd78:78::/64; do
+    "$IPT6" -C FORWARD -s "$subnet" -j ACCEPT >/dev/null 2>&1 || "$IPT6" -I FORWARD 1 -s "$subnet" -j ACCEPT
+    "$IPT6" -C FORWARD -d "$subnet" -j ACCEPT >/dev/null 2>&1 || "$IPT6" -I FORWARD 1 -d "$subnet" -j ACCEPT
+  done
+else
+  echo 'Warning: IPv6 FORWARD table unavailable; IPv4 VPN forwarding remains enabled.' >&2
+fi
