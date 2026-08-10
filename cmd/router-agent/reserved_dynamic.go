@@ -73,6 +73,7 @@ func init() {
 					if n, ok := m[key].(float64); ok && n >= 1 && n <= 65535 {
 						reserved[int(n)] = true
 					}
+				}
 			}
 		}
 	}
