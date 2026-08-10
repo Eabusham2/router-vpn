@@ -10,6 +10,19 @@ FIREWALL_START="$JFFS_DIR/firewall-start"
 NAT_CHAIN=ROUTER_VPN_DNAT
 FWD_CHAIN=ROUTER_VPN_FWD
 
+WG_PORT=${WG_PORT:-51820}
+AWG_PORT=${AWG_PORT:-585}
+ROSENPASS_PORT=${ROSENPASS_PORT:-51822}
+REALITY_PORT=${REALITY_PORT:-443}
+HY2_PORT=${HY2_PORT:-8443}
+SS_PORT=${SS_PORT:-8388}
+XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
+XHTTP_PORT=${XHTTP_PORT:-11443}
+SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
+NAIVE_PORT=${NAIVE_PORT:-13443}
+ACME_EXTERNAL_PORT=${ACME_EXTERNAL_PORT:-80}
+ACME_INTERNAL_PORT=${ACME_INTERNAL_PORT:-18080}
+
 say(){ printf '%s\n' "$*"; }
 fail(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -50,24 +63,34 @@ make_chain(){
   iptables -t "$TABLE" -F "$CHAIN"
 }
 
+add_dnat(){
+  PROTO=$1; EXT=$2; INT=$3
+  iptables -t nat -A "$NAT_CHAIN" -p "$PROTO" --dport "$EXT" -j DNAT --to-destination "$DST:$INT"
+}
+
+add_fwd(){
+  PROTO=$1; PORT=$2
+  iptables -A "$FWD_CHAIN" -p "$PROTO" --dport "$PORT" -j ACCEPT
+}
+
 apply_nat(){
   need_router
   WAN=$(wan_if)
   make_chain nat "$NAT_CHAIN"
 
-  iptables -t nat -A "$NAT_CHAIN" -p tcp --dport 80 -j DNAT --to-destination "$DST:18080"
-  iptables -t nat -A "$NAT_CHAIN" -p tcp --dport 443 -j DNAT --to-destination "$DST:443"
-  iptables -t nat -A "$NAT_CHAIN" -p udp --dport 585 -j DNAT --to-destination "$DST:585"
-  iptables -t nat -A "$NAT_CHAIN" -p tcp --dport 8388 -j DNAT --to-destination "$DST:8388"
-  iptables -t nat -A "$NAT_CHAIN" -p udp --dport 8388 -j DNAT --to-destination "$DST:8388"
-  iptables -t nat -A "$NAT_CHAIN" -p udp --dport 8443 -j DNAT --to-destination "$DST:8443"
-  iptables -t nat -A "$NAT_CHAIN" -p tcp --dport 10443 -j DNAT --to-destination "$DST:10443"
-  iptables -t nat -A "$NAT_CHAIN" -p tcp --dport 11443 -j DNAT --to-destination "$DST:11443"
-  iptables -t nat -A "$NAT_CHAIN" -p tcp --dport 12443 -j DNAT --to-destination "$DST:12443"
-  iptables -t nat -A "$NAT_CHAIN" -p tcp --dport 13443 -j DNAT --to-destination "$DST:13443"
-  iptables -t nat -A "$NAT_CHAIN" -p udp --dport 13443 -j DNAT --to-destination "$DST:13443"
-  iptables -t nat -A "$NAT_CHAIN" -p udp --dport 51820 -j DNAT --to-destination "$DST:51820"
-  iptables -t nat -A "$NAT_CHAIN" -p udp --dport 51822 -j DNAT --to-destination "$DST:51822"
+  add_dnat tcp "$ACME_EXTERNAL_PORT" "$ACME_INTERNAL_PORT"
+  add_dnat tcp "$REALITY_PORT" "$REALITY_PORT"
+  add_dnat udp "$AWG_PORT" "$AWG_PORT"
+  add_dnat tcp "$SS_PORT" "$SS_PORT"
+  add_dnat udp "$SS_PORT" "$SS_PORT"
+  add_dnat udp "$HY2_PORT" "$HY2_PORT"
+  add_dnat tcp "$XRAY_PQ_PORT" "$XRAY_PQ_PORT"
+  add_dnat tcp "$XHTTP_PORT" "$XHTTP_PORT"
+  add_dnat tcp "$SS_V2RAY_PORT" "$SS_V2RAY_PORT"
+  add_dnat tcp "$NAIVE_PORT" "$NAIVE_PORT"
+  add_dnat udp "$NAIVE_PORT" "$NAIVE_PORT"
+  add_dnat udp "$WG_PORT" "$WG_PORT"
+  add_dnat udp "$ROSENPASS_PORT" "$ROSENPASS_PORT"
 
   ensure_jump nat PREROUTING -i "$WAN" -j "$NAT_CHAIN"
   say "Router VPN NAT forwards active on $WAN -> $DST"
@@ -78,19 +101,19 @@ apply_filter(){
   WAN=$(wan_if)
   make_chain filter "$FWD_CHAIN"
 
-  iptables -A "$FWD_CHAIN" -p tcp --dport 18080 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p tcp --dport 443 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p udp --dport 585 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p tcp --dport 8388 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p udp --dport 8388 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p udp --dport 8443 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p tcp --dport 10443 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p tcp --dport 11443 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p tcp --dport 12443 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p tcp --dport 13443 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p udp --dport 13443 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p udp --dport 51820 -j ACCEPT
-  iptables -A "$FWD_CHAIN" -p udp --dport 51822 -j ACCEPT
+  add_fwd tcp "$ACME_INTERNAL_PORT"
+  add_fwd tcp "$REALITY_PORT"
+  add_fwd udp "$AWG_PORT"
+  add_fwd tcp "$SS_PORT"
+  add_fwd udp "$SS_PORT"
+  add_fwd udp "$HY2_PORT"
+  add_fwd tcp "$XRAY_PQ_PORT"
+  add_fwd tcp "$XHTTP_PORT"
+  add_fwd tcp "$SS_V2RAY_PORT"
+  add_fwd tcp "$NAIVE_PORT"
+  add_fwd udp "$NAIVE_PORT"
+  add_fwd udp "$WG_PORT"
+  add_fwd udp "$ROSENPASS_PORT"
 
   ensure_jump filter FORWARD -i "$WAN" -d "$DST" -j "$FWD_CHAIN"
   say "Router VPN FORWARD rules active on $WAN -> $DST"
@@ -106,7 +129,9 @@ write_hook(){
 install(){
   need_router
   mkdir -p "$JFFS_DIR"
-  cp "$SELF" "$RUNTIME"
+  if [ "$SELF" != "$RUNTIME" ]; then
+    cp "$SELF" "$RUNTIME"
+  fi
   chmod 755 "$RUNTIME"
   write_hook "$NAT_START" "$RUNTIME apply-nat"
   write_hook "$FIREWALL_START" "$RUNTIME apply-filter"
@@ -139,20 +164,18 @@ status(){
   say "WAN interface: $WAN"
   say "Destination:   $DST"
   say 'Expected external -> internal mapping:'
-  cat <<'MAP'
-TCP      80      -> 18080
-TCP      443     -> 443
-UDP      585     -> 585
-TCP+UDP  8388    -> 8388
-UDP      8443    -> 8443
-TCP      10443   -> 10443
-TCP      11443   -> 11443
-TCP      12443   -> 12443
-TCP+UDP  13443   -> 13443
-UDP      51820   -> 51820
-UDP      51822   -> 51822
-MAP
-  say 'Never exposed by this script: 1080, 8786, 8787, 9443, SSH, AdGuard admin.'
+  printf 'TCP      %-7s -> %s\n' "$ACME_EXTERNAL_PORT" "$ACME_INTERNAL_PORT"
+  printf 'TCP      %-7s -> %s\n' "$REALITY_PORT" "$REALITY_PORT"
+  printf 'UDP      %-7s -> %s\n' "$AWG_PORT" "$AWG_PORT"
+  printf 'TCP+UDP  %-7s -> %s\n' "$SS_PORT" "$SS_PORT"
+  printf 'UDP      %-7s -> %s\n' "$HY2_PORT" "$HY2_PORT"
+  printf 'TCP      %-7s -> %s\n' "$XRAY_PQ_PORT" "$XRAY_PQ_PORT"
+  printf 'TCP      %-7s -> %s\n' "$XHTTP_PORT" "$XHTTP_PORT"
+  printf 'TCP      %-7s -> %s\n' "$SS_V2RAY_PORT" "$SS_V2RAY_PORT"
+  printf 'TCP+UDP  %-7s -> %s\n' "$NAIVE_PORT" "$NAIVE_PORT"
+  printf 'UDP      %-7s -> %s\n' "$WG_PORT" "$WG_PORT"
+  printf 'UDP      %-7s -> %s\n' "$ROSENPASS_PORT" "$ROSENPASS_PORT"
+  say 'Never exposed by this script: 1080, 8786, 8787, 9443, SSH, Portainer, AdGuard admin.'
   say '--- NAT ---'
   iptables -t nat -S "$NAT_CHAIN" 2>/dev/null || say 'NAT chain not installed.'
   say '--- FORWARD ---'
