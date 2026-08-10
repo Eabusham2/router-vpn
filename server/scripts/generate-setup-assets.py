@@ -87,6 +87,37 @@ def method_asset(
     }
 
 
+def build_setup_html(data: dict) -> str:
+    # JSON is embedded only in this private local/LAN bundle page. Escape the
+    # script-closing sequence so arbitrary generated text cannot end the block.
+    packed = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
+    return r'''<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Router VPN — Device Setup</title>
+<style>
+:root{color-scheme:dark}body{font-family:system-ui;margin:0;background:#101010;color:#eee}.wrap{max-width:1050px;margin:auto;padding:20px}.card{background:#1b1b1b;border:1px solid #333;border-radius:15px;padding:16px;margin:14px 0}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}select,button{font:inherit;padding:10px 12px;border-radius:10px;border:1px solid #555;background:#242424;color:#fff}button{cursor:pointer}.grow{flex:1;min-width:200px}.small{font-size:13px;opacity:.78}.warn{border-color:#745b1b;background:#211d12}.grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}@media(max-width:760px){.grid{grid-template-columns:1fr}}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0e0e0e;border:1px solid #333;border-radius:10px;padding:12px;max-height:310px;overflow:auto}.qr{background:white;padding:12px;border-radius:12px;max-width:275px;width:100%;box-sizing:border-box}.muted{opacity:.55}.pill{display:inline-block;border:1px solid #444;border-radius:999px;padding:5px 8px;margin:3px;font-size:12px}h1,h2,h3{margin-top:5px}.copyline{display:flex;gap:8px;align-items:flex-start}.copyline pre{flex:1;margin:0}.ok{color:#7ce39a}
+</style></head><body><div class="wrap">
+<h1>Router VPN — Device Setup</h1>
+<div class="card warn"><b>Private setup page.</b> <span id="warning"></span><div class="small">QR codes are generated locally on your home node. Nothing on this page needs an external QR website.</div></div>
+<div class="card"><h2>1. Choose your device</h2><div class="row"><select id="device" class="grow"></select></div><h3 id="deviceLabel"></h3><div id="customApp"></div><ol id="deviceSteps"></ol></div>
+<div class="card"><h2>2. Choose how to connect</h2><div class="row"><select id="method" class="grow"></select></div><div id="methodBody"></div></div>
+<div class="card"><h2>3. Universal guidance</h2><div class="small">Use the Router VPN custom client when you want AUTO, SMART AUTO, CUSTOM, full mode selection, DNS policy, DAITA-like padding, Jumbo TUN, or protected forwarding. Use a protocol-native app when you only need that one protocol. Never expose the internal SOCKS5 port 1080 to WAN.</div></div>
+</div>
+<script>const DATA=__DATA__;
+const device=document.getElementById('device'),method=document.getElementById('method');
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+warning.textContent=DATA.warning||'Keep these profiles private.';
+Object.entries(DATA.devices||{}).forEach(([id,x])=>{let o=document.createElement('option');o.value=id;o.textContent=x.label||id;device.appendChild(o)});
+(DATA.methods||[]).filter(x=>x.available).forEach(x=>{let o=document.createElement('option');o.value=x.id;o.textContent=`${x.label} — ${x.category}`;method.appendChild(o)});
+function copyText(text){navigator.clipboard?.writeText(text).then(()=>status('Copied')).catch(()=>fallback(text))}
+function fallback(text){let t=document.createElement('textarea');t.value=text;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();status('Copied')}
+function status(text){let x=document.getElementById('copyStatus');if(x){x.textContent=text;setTimeout(()=>x.textContent='',1400)}}
+function renderDevice(){let x=(DATA.devices||{})[device.value]||{};deviceLabel.textContent=x.label||'';customApp.innerHTML=`<b>Router VPN custom app:</b> ${esc(x.customApp||'')}`;deviceSteps.innerHTML=(x.steps||[]).map(s=>`<li>${esc(s)}</li>`).join('')}
+function renderMethod(){let x=(DATA.methods||[]).find(v=>v.id===method.value)||{};let apps=(x.apps||[]).map(a=>`<span class="pill">${esc(a)}</span>`).join('');let url=x.url?`<h3>Share / import URL</h3><div class="copyline"><pre>${esc(x.url)}</pre><button onclick='copyText(${JSON.stringify(x.url)})'>Copy URL</button></div>`:'';let cfg=x.config?`<h3>Config / settings</h3><div class="copyline"><pre>${esc(x.config)}</pre><button onclick='copyText(${JSON.stringify(x.config)})'>Copy config</button></div>`:'';let qr=x.qrPngBase64?`<div><h3>QR code</h3><img class="qr" alt="${esc(x.label)} QR" src="data:image/png;base64,${x.qrPngBase64}"><div class="small">Scan only with a client you trust. This QR can contain private keys/passwords.</div></div>`:'<div class="muted">No QR generated for this method.</div>';methodBody.innerHTML=`<div class="grid"><div><h2>${esc(x.label||'')}</h2><div>${apps}</div><p>${esc(x.note||'')}</p><p><b>Native/system setup:</b> ${esc(x.native||'')}</p>${url}${cfg}<div id="copyStatus" class="ok"></div></div>${qr}</div>`}
+device.onchange=renderDevice;method.onchange=renderMethod;renderDevice();renderMethod();
+</script></body></html>'''.replace("__DATA__", packed)
+
+
 def main() -> int:
     if len(sys.argv) != 4:
         print("usage: generate-setup-assets.py BASE ENDPOINT SOCKS_HOST", file=sys.stderr)
@@ -174,7 +205,7 @@ def main() -> int:
         url=hy_url,
         config=read_text(gen / "hysteria2" / "sing-box.json"),
         apps=["Hysteria 2", "sing-box", "Router VPN"],
-        note="Uses the official Hysteria2 URI fields, including the generated certificate pin when available.",
+        note="Uses the Hysteria2 URI fields, including the generated certificate pin when available.",
         native="Requires a Hysteria2/sing-box-compatible client; it is not a built-in OS VPN type.",
     ))
 
@@ -288,7 +319,10 @@ def main() -> int:
     path = base / "client-bundle" / "setup-assets.json"
     path.write_text(json.dumps(output, indent=2) + "\n")
     path.chmod(0o600)
-    print(f"Generated {sum(1 for x in assets if x['available'])} setup assets.")
+    web = base / "client-bundle" / "router-vpn-device-setup.html"
+    web.write_text(build_setup_html(output))
+    web.chmod(0o600)
+    print(f"Generated {sum(1 for x in assets if x['available'])} setup assets and private device setup WebGUI.")
     return 0
 
 
