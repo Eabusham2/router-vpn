@@ -2,6 +2,31 @@
 
 The exact end-to-end sequence is in `docs/FULL-TUTORIAL.md`.
 
+## Private Device Setup WebGUI
+
+After the home-node finalizer completes, open this **only from your home LAN**:
+
+```text
+http://AI_BOARD_IP:8786/router-vpn-device-setup.html
+```
+
+It is also included inside `router-vpn-client-bundle.zip`, so you can open the HTML file locally after extracting the private bundle.
+
+The page provides:
+
+- device picker: iPhone/iPad, Android, macOS, Windows, Linux, other/manual
+- method picker
+- WireGuard and AmneziaWG configs + QR codes
+- Shadowsocks 2022 import URL + QR
+- Hysteria2 import URL + QR
+- Shadowsocks + V2Ray-plugin URL + QR where supported
+- plain SOCKS5 IP/port instructions for Potatso-compatible or other SOCKS5 apps
+- copy buttons for URLs/configs
+- native-system vs third-party-app instructions
+- Router VPN custom-app installation guidance per device
+
+The QR codes are generated locally on the home node with `qrencode`; the project does not send private configs/keys to an external QR website. Treat the page, ZIP, URLs and QR codes as private credentials.
+
 ## macOS
 
 1. Extract the router-generated `router-vpn-client-bundle.zip`.
@@ -10,8 +35,7 @@ The exact end-to-end sequence is in `docs/FULL-TUTORIAL.md`.
 4. Run:
 
 ```bash
-chmod +x client/*.sh modes/*.sh
-./client/install-macos.sh .
+bash client/install-macos-final.sh "$PWD"
 ```
 
 5. Start the controller using the command printed by the installer.
@@ -23,14 +47,35 @@ chmod +x client/*.sh modes/*.sh
 11. Choose **AUTO** or a manual mode and connect.
 12. Disconnect before switching router profiles.
 
+For app-only SOCKS5 after the VPN reaches home, macOS can also use **System Settings → Network → service → Details → Proxies → SOCKS Proxy** with the home SOCKS host and port `1080`.
+
 ## Linux
 
 ```bash
 cd /path/to/extracted/router-vpn-client-bundle
-sudo ./client/install-linux.sh .
+sudo bash client/install-linux.sh "$PWD"
 ```
 
 Open `http://127.0.0.1:8788`, import the bundle JSON, enter/select the router endpoint, and connect.
+
+## iPhone / iPad
+
+- **WireGuard:** import the generated config or scan the WireGuard QR in the WireGuard app.
+- **AmneziaWG:** import the generated AWG config in an Amnezia-compatible client.
+- **Shadowsocks / SOCKS5 testing:** Potatso or another compatible proxy app can use the generated/importable settings when that format is supported.
+- **Hysteria2:** use a Hysteria2/sing-box-compatible iOS client and import the generated URL/QR.
+- **Router VPN IPA:** the current IPA is a controller/importer package until the native Packet Tunnel adapters are linked; it must not be presented as a finished all-mode VPN client yet.
+
+## Android
+
+- WireGuard: import the config file or scan its QR in WireGuard for Android.
+- AmneziaWG: import the AWG config in an Amnezia-compatible client.
+- Shadowsocks/Hysteria2: import the generated URL/QR in a compatible client.
+- Router VPN APK: install the generated APK artifact if you want the current controller/importer app. The native all-mode `VpnService` adapters are not linked yet.
+
+## Windows
+
+Use either the normal Windows ZIP or the PortableApps-style ZIP from the GitHub build artifact. The controller is native Windows; the complete multi-engine shell launcher currently uses the Linux transport engines through WSL2. Raw WireGuard/AWG profiles remain importable in their native Windows clients.
 
 ## Add another router
 
@@ -68,14 +113,10 @@ After a tunnel reaches the home network, the router SOCKS5 endpoint shown in the
 5. Press **Apply**, or press **Protected DMZ** for all unused ports.
 6. Press **Clear** when finished.
 
-The ASUS router must forward the fixed VPN listeners to the AI Board. Protected DMZ requires ASUS DMZ to the AI Board after the package firewall has passed diagnostics.
+The ASUS router must forward the fixed VPN listeners to the AI Board. Protected DMZ requires a WireGuard/AmneziaWG peer path; proxy-only modes are outbound.
 
 ## Jumbo
 
 - Keep normal WireGuard/AWG tunnel MTU on Auto/default.
 - Enable **Jumbo TUN** only for a compatible proxy TUN mode.
 - LAN jumbo payloads are segmented to the internet path MTU as required.
-
-## Windows
-
-Use either the normal Windows ZIP or the PortableApps-style ZIP from the GitHub build artifact. The controller is native Windows; the complete multi-engine shell launcher currently uses the Linux transport engines through WSL2. Raw WireGuard/AWG profiles remain importable in their native Windows clients.
