@@ -41,6 +41,7 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && test -x /src/server/scripts/generate-transports.sh \
  && test -x /src/server/scripts/generate-xray-pq.sh \
  && test -x /src/server/scripts/generate-setup-assets.py \
+ && test -x /src/server/scripts/generate-aux-proxies.py \
  && test -x /src/server/scripts/create-bundle-json.py \
  && test -x /src/server/scripts/apply-runtime.sh
 ENTRYPOINT ["/bin/bash", "/usr/local/bin/router-vpn-init"]
