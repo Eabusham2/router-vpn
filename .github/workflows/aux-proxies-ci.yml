@@ -1,0 +1,67 @@
+name: Aux proxies and setup assets ARM64
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aux-proxies-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arm64:
+    name: Native ARM64 setup assets + OverTLS + SSR
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Static checks
+        run: |
+          python3 -m py_compile server/scripts/generate-setup-assets.py server/scripts/generate-aux-proxies.py
+          bash -n server/finalize/finalize.sh
+          bash -n server/aux-proxies/entrypoint.sh
+          bash -n server/naive/entrypoint.sh
+          sh -n router/asus-merlin-router-vpn-forwards.sh
+
+      - name: Build init ARM64
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/init/Dockerfile -t router-vpn-ci-init:arm64 .
+
+      - name: Run init and finalizer end to end
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          rm -rf "$TEST_ROOT"
+          mkdir -p "$TEST_ROOT"
+          docker run --rm --privileged --platform linux/arm64 \
+            -e WAN_INTERFACE=eth0 -e LAN_CIDR=192.168.50.0/24 \
+            -e ADGUARD4=192.168.50.133 -e ENDPOINT=1.1.1.1 \
+            -v "$TEST_ROOT:/opt/router-vpn" router-vpn-ci-init:arm64
+          docker run --rm --privileged --platform linux/arm64 \
+            -e WAN_INTERFACE=eth0 -e LAN_CIDR=192.168.50.0/24 \
+            -e ADGUARD4=192.168.50.133 -e ENDPOINT=1.1.1.1 \
+            -e OVERTLS_PORT=14443 -e OVERTLS_INTERNAL_PORT=14444 -e SSR_PORT=15443 \
+            -v "$TEST_ROOT:/opt/router-vpn" --entrypoint /bin/bash \
+            router-vpn-ci-init:arm64 /src/server/finalize/current-entrypoint.sh
+          docker run --rm --platform linux/arm64 -v "$TEST_ROOT:/opt/router-vpn:ro" alpine:3.22 sh -ec '
+            test -s /opt/router-vpn/client-bundle/setup-assets.json
+            test -s /opt/router-vpn/client-bundle/router-vpn-device-setup.html
+            test -s /opt/router-vpn/downloads/router-vpn-device-setup.html
+            test -s /opt/router-vpn/config/aux/overtls-server.json
+            test -s /opt/router-vpn/config/aux/ssr-server.json
+            test -s /opt/router-vpn/client-bundle/generated/overtls/overtls-client.json
+            test -s /opt/router-vpn/client-bundle/generated/shadowsocksr/ssr-client.json
+            grep -q "WireGuard" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
+            grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
+          '
+
+      - name: Build auxiliary proxy ARM64 image
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
+
+      - name: Smoke-test OverTLS and SSR binaries
+        run: |
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 --version
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 -h >/dev/null 2>&1
