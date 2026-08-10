@@ -20,7 +20,10 @@ The page provides:
 - Shadowsocks 2022 import URL + QR
 - Hysteria2 import URL + QR
 - Shadowsocks + V2Ray-plugin URL + QR where supported
-- plain SOCKS5 IP/port instructions for Potatso-compatible or other SOCKS5 apps
+- VLESS/REALITY, XHTTP/FinalMask, and Naive H2/H3 generated configs
+- SOCKS5 + TLS / OverTLS client JSON + QR
+- ShadowsocksR legacy client JSON + QR
+- plain internal SOCKS5 IP/port instructions for Potatso-compatible or other SOCKS5 apps
 - copy buttons for URLs/configs
 - native-system vs third-party-app instructions
 - Router VPN custom-app installation guidance per device
@@ -62,8 +65,9 @@ Open `http://127.0.0.1:8788`, import the bundle JSON, enter/select the router en
 
 - **WireGuard:** import the generated config or scan the WireGuard QR in the WireGuard app.
 - **AmneziaWG:** import the generated AWG config in an Amnezia-compatible client.
-- **Shadowsocks / SOCKS5 testing:** Potatso or another compatible proxy app can use the generated/importable settings when that format is supported.
+- **Shadowsocks / SOCKS5 testing:** Potatso or another compatible proxy app can use the generated/importable settings when that exact format is supported.
 - **Hysteria2:** use a Hysteria2/sing-box-compatible iOS client and import the generated URL/QR.
+- **OverTLS / SSR:** use a client that explicitly supports the generated protocol/config. Do not assume every generic proxy app supports these formats.
 - **Router VPN IPA:** the current IPA is a controller/importer package until the native Packet Tunnel adapters are linked; it must not be presented as a finished all-mode VPN client yet.
 
 ## Android
@@ -71,6 +75,7 @@ Open `http://127.0.0.1:8788`, import the bundle JSON, enter/select the router en
 - WireGuard: import the config file or scan its QR in WireGuard for Android.
 - AmneziaWG: import the AWG config in an Amnezia-compatible client.
 - Shadowsocks/Hysteria2: import the generated URL/QR in a compatible client.
+- OverTLS/SSR: import the generated client JSON/QR in a compatible client.
 - Router VPN APK: install the generated APK artifact if you want the current controller/importer app. The native all-mode `VpnService` adapters are not linked yet.
 
 ## Windows
@@ -103,6 +108,31 @@ Only the configured application uses the home connection.
 ## Router SOCKS5 service
 
 After a tunnel reaches the home network, the router SOCKS5 endpoint shown in the imported profile works like a normal SOCKS5 proxy using only its IP and port. Authentication is disabled because WAN access to TCP `1080` is blocked by the package firewall and must never be forwarded publicly.
+
+## SOCKS5 + TLS / OverTLS
+
+OverTLS is the preferred extra compatibility proxy when you specifically want a SOCKS5-style proxy carried over public TLS.
+
+```text
+Public TCP:       14443
+TLS endpoint:     Caddy / generated TLS hostname
+Private backend:  127.0.0.1:14444
+```
+
+Use `generated/overtls/overtls-client.json` or the OverTLS entry/QR in the private Device Setup WebGUI. Public TLS terminates at Caddy; OverTLS's plaintext backend is bound only to loopback. **Never WAN-forward TCP 14444.**
+
+OverTLS stays separate from the 20 main Router VPN modes and does not change AUTO ordering.
+
+## ShadowsocksR legacy compatibility
+
+SSR is included only for clients/networks that specifically require ShadowsocksR compatibility.
+
+```text
+Public TCP+UDP: 15443
+Client config:  generated/shadowsocksr/ssr-client.json
+```
+
+Use the SSR entry/QR in the private Device Setup WebGUI or import the generated JSON in an SSR-compatible client. **Prefer Shadowsocks 2022 or OverTLS for new setups; SSR is legacy compatibility and is not part of AUTO.**
 
 ## Port forwarding
 
