@@ -18,7 +18,7 @@ FROM ghcr.io/rosenpass/rosenpass:sha-00569eb AS rosenpass
 
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash ca-certificates curl iproute2 iptables nftables openssl procps python3 wireguard-tools zip \
+ && apt-get install -y --no-install-recommends bash ca-certificates curl iproute2 iptables nftables openssl procps python3 qrencode wireguard-tools zip \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
@@ -34,11 +34,13 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && /bin/bash -n /usr/local/bin/router-vpn-init \
  && /bin/bash -n /src/server/scripts/apply-runtime.sh \
  && /usr/local/bin/rosenpass --version >/dev/null \
+ && command -v qrencode >/dev/null \
  && command -v sysctl >/dev/null \
  && command -v iptables-legacy >/dev/null \
  && command -v ip6tables-legacy >/dev/null \
  && test -x /src/server/scripts/generate-transports.sh \
  && test -x /src/server/scripts/generate-xray-pq.sh \
+ && test -x /src/server/scripts/generate-setup-assets.py \
  && test -x /src/server/scripts/create-bundle-json.py \
  && test -x /src/server/scripts/apply-runtime.sh
 ENTRYPOINT ["/bin/bash", "/usr/local/bin/router-vpn-init"]
