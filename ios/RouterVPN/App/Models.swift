@@ -22,6 +22,20 @@ struct VPNMode: Identifiable, Codable, Hashable {
     }
 }
 
+struct LogicalMode: Identifiable, Codable, Hashable {
+    let id: String
+    let name: String
+    let description: String
+    let baseSelector: Bool
+    let fallback: Bool
+    let variants: [String: String]
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, fallback, variants
+        case baseSelector = "base_selector"
+    }
+}
+
 struct RouterProfile: Identifiable, Codable, Hashable {
     var id: String
     var name: String
@@ -34,6 +48,10 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var socksPort: Int
     var socksUsername: String
     var socksPassword: String
+    var baseTunnel: String?
+    var baseFallback: Bool?
+    var homeLANAccess: Bool?
+    var homeLANCIDRs: [String]?
 
     enum CodingKeys: String, CodingKey {
         case id, name, endpoint
@@ -45,10 +63,15 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case socksPort = "socks_port"
         case socksUsername = "socks_username"
         case socksPassword = "socks_password"
+        case baseTunnel = "base_tunnel"
+        case baseFallback = "base_fallback"
+        case homeLANAccess = "home_lan_access"
+        case homeLANCIDRs = "home_lan_cidrs"
     }
 }
 
 struct ClientBundle: Codable {
+    var bundleVersion: Int
     var endpoint: String
     var apiToken: String
     var routerAPI: String
@@ -60,10 +83,12 @@ struct ClientBundle: Codable {
     var socks5Password: String
     var routerProfiles: [RouterProfile]
     var selectedRouterID: String
+    var logicalModes: [LogicalMode]
     var modes: [VPNMode]
     var profiles: [String: [String: String]]
 
     static let empty = ClientBundle(
+        bundleVersion: 3,
         endpoint: "",
         apiToken: "",
         routerAPI: "http://10.77.0.1:8787",
@@ -75,17 +100,19 @@ struct ClientBundle: Codable {
         socks5Password: "",
         routerProfiles: [],
         selectedRouterID: "",
+        logicalModes: [],
         modes: [],
         profiles: [:]
     )
 
     enum CodingKeys: String, CodingKey {
-        case endpoint, apiToken, routerAPI, adGuardIPv4, adGuardIPv6
+        case bundleVersion, endpoint, apiToken, routerAPI, adGuardIPv4, adGuardIPv6
         case socks5Host, socks5Port, socks5Username, socks5Password
-        case routerProfiles, selectedRouterID, modes, profiles
+        case routerProfiles, selectedRouterID, logicalModes, modes, profiles
     }
 
     init(
+        bundleVersion: Int,
         endpoint: String,
         apiToken: String,
         routerAPI: String,
@@ -97,9 +124,11 @@ struct ClientBundle: Codable {
         socks5Password: String,
         routerProfiles: [RouterProfile],
         selectedRouterID: String,
+        logicalModes: [LogicalMode],
         modes: [VPNMode],
         profiles: [String: [String: String]]
     ) {
+        self.bundleVersion = bundleVersion
         self.endpoint = endpoint
         self.apiToken = apiToken
         self.routerAPI = routerAPI
@@ -111,12 +140,14 @@ struct ClientBundle: Codable {
         self.socks5Password = socks5Password
         self.routerProfiles = routerProfiles
         self.selectedRouterID = selectedRouterID
+        self.logicalModes = logicalModes
         self.modes = modes
         self.profiles = profiles
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        bundleVersion = try values.decodeIfPresent(Int.self, forKey: .bundleVersion) ?? 1
         endpoint = try values.decodeIfPresent(String.self, forKey: .endpoint) ?? ""
         apiToken = try values.decodeIfPresent(String.self, forKey: .apiToken) ?? ""
         routerAPI = try values.decodeIfPresent(String.self, forKey: .routerAPI) ?? "http://10.77.0.1:8787"
@@ -128,6 +159,7 @@ struct ClientBundle: Codable {
         socks5Password = try values.decodeIfPresent(String.self, forKey: .socks5Password) ?? ""
         routerProfiles = try values.decodeIfPresent([RouterProfile].self, forKey: .routerProfiles) ?? []
         selectedRouterID = try values.decodeIfPresent(String.self, forKey: .selectedRouterID) ?? ""
+        logicalModes = try values.decodeIfPresent([LogicalMode].self, forKey: .logicalModes) ?? []
         modes = try values.decodeIfPresent([VPNMode].self, forKey: .modes) ?? []
         profiles = try values.decodeIfPresent([String: [String: String]].self, forKey: .profiles) ?? [:]
 

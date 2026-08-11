@@ -14,6 +14,7 @@ ERRORS: list[str] = []
 
 
 def error(message: str) -> None:
+    """Accumulate repository contract failures and report them together."""
     ERRORS.append(message)
 
 
@@ -111,7 +112,10 @@ for required in (
     if required not in orchestrator_text:
         error(f"SMART/CUSTOM contract missing: {required}")
 
-# ----- Complete first-run onboarding contract -----
+# ----- Current complete first-run onboarding contract -----
+# These checks intentionally validate the current UI generations rather than
+# old v2 wording. ERROR/ERRORS above are ordinary validation bookkeeping, not
+# runtime application errors.
 ui_path = ROOT / "cmd/client/ui.html"
 if ui_path.is_file():
     ui = ui_path.read_text()
@@ -120,18 +124,15 @@ if ui_path.is_file():
         if stale in ui_lower:
             error(f"UI contains stale authenticated SOCKS wording: {stale}")
     for required in (
-        "routervpn.onboarding.web.done.v2",
-        "routervpn.onboarding.web.step.v2",
-        "Run full onboarding again",
-        "Portainer → Stacks → Add stack → Repository",
+        "routervpn.onboarding.web.done.v4",
+        "routervpn.onboarding.web.step.v4",
+        "Setup & guide",
+        "Stacks → Add stack → Repository",
         "WAN_INTERFACE=eth0",
         "LAN_CIDR=192.168.50.0/24",
         "ADGUARD4=192.168.50.133",
-        "router-vpn-init",
-        "router-vpn-finalize",
-        "router-vpn-client-bundle.zip",
+        "router-vpn-bundle.json",
         "asus-merlin-router-vpn-forwards.sh",
-        "TCP      80      → 18080",
         "Never expose 1080, 8786, 8787, 9443",
         "SMART AUTO",
         "CUSTOM",
@@ -139,12 +140,12 @@ if ui_path.is_file():
         "DNS Rescue",
         "Protected DMZ",
         "no authentication",
-        "doctor-current.sh",
         "router-vpn-forward.sh status",
-        "Live WireGuard/AWG/REALITY/QUIC handshakes",
+        "at least 50 TCP handshake samples",
+        "Multi-hop is not mislabeled as ready yet",
     ):
         if required not in ui:
-            error(f"WebGUI missing agreed complete-onboarding text: {required}")
+            error(f"WebGUI missing current onboarding contract: {required}")
 else:
     error("missing cmd/client/ui.html")
 
@@ -167,19 +168,27 @@ for required in (
 ios_path = ROOT / "ios/RouterVPN/App/ContentView.swift"
 ios_text = ios_path.read_text() if ios_path.is_file() else ""
 for required in (
-    "routerVPNOnboardingDoneV2",
-    "routerVPNOnboardingStepV2",
-    "Run full onboarding again",
+    "routerVPNOnboardingDoneV3",
+    "routerVPNOnboardingStepV3",
+    "Run full onboarding",
     "server/portainer-current.yaml",
-    "TCP 80→18080",
-    "router-vpn-forward.sh status",
-    "SMART AUTO",
+    "Never WAN-expose SOCKS5 1080",
+    "AUTO/SMART/CUSTOM",
     "Home AdGuard",
     "Protected DMZ",
-    "native all-mode Packet Tunnel adapters are not linked yet",
+    "fail visibly rather than fake a successful VPN connection",
 ):
     if required not in ios_text:
-        error(f"iOS complete-onboarding contract missing: {required}")
+        error(f"iOS current onboarding contract missing: {required}")
+
+packet_tunnel_path = ROOT / "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift"
+packet_tunnel_text = packet_tunnel_path.read_text() if packet_tunnel_path.is_file() else ""
+for required in (
+    "Link AmneziaWGKit/Xray engine before signing this target.",
+    "completionHandler(error)",
+):
+    if required not in packet_tunnel_text:
+        error(f"iOS preview tunnel must fail explicitly until adapters are linked: {required}")
 
 # ----- Persistent ASUS Merlin WAN forwarding helper -----
 forward_helper = ROOT / "router" / "asus-merlin-router-vpn-forwards.sh"
@@ -216,9 +225,12 @@ finalizer_text = finalizer_path.read_text() if finalizer_path.is_file() else ""
 for required in (
     "Certificate challenge external TCP: 80 -> AI Board TCP 18080",
     "cp /src/router/asus-merlin-router-vpn-forwards.sh",
+    "publish-downloads.sh",
 ):
     if required not in finalizer_text:
         error(f"finalizer missing bundle/onboarding contract: {required}")
+if "zip -qr \"$BASE/router-vpn-client-bundle.zip\"" in finalizer_text:
+    error("finalizer reintroduced persistent private bundle ZIP")
 
 guide_path = ROOT / "docs" / "CURRENT-GUIDE.md"
 guide_text = guide_path.read_text() if guide_path.is_file() else ""
@@ -405,7 +417,7 @@ if ERRORS:
 
 print(
     f"Validated final product contract: {len(numbered)} ordered strength modes + "
-    f"{max(0, len(modes)-len(numbered))} utilities; complete Web/Android/iOS onboarding; "
-    f"persistent ASUS forwarding helper; production compose; {len(active)} active Dockerfiles; "
-    f"pinned dependencies; COPY paths; and RUN shell syntax."
+    f"{max(0, len(modes)-len(numbered))} utilities; current Web/Android/iOS onboarding; "
+    f"explicit iOS preview limitation; persistent ASUS forwarding helper; production compose; "
+    f"{len(active)} active Dockerfiles; pinned dependencies; COPY paths; and RUN shell syntax."
 )

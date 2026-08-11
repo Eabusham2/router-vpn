@@ -1,0 +1,362 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"net"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+
+	"router-vpn/internal/common"
+)
+
+const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#62d5ff"/><stop offset="1" stop-color="#7b68ff"/></linearGradient></defs><rect width="64" height="64" rx="16" fill="#0d1220"/><path d="M32 8 52 16v14c0 13-8.4 22.1-20 27C20.4 52.1 12 43 12 30V16l20-8Z" fill="url(#g)"/><path d="M24 32.5 29.5 38 41 25" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+
+const manifestJSON = `{
+  "name":"Router VPN",
+  "short_name":"Router VPN",
+  "description":"Local controller for your self-hosted Router VPN nodes",
+  "start_url":"/",
+  "scope":"/",
+  "display":"standalone",
+  "background_color":"#0b1020",
+  "theme_color":"#10172a",
+  "icons":[{"src":"/favicon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}`
+
+const serviceWorkerJS = `const CACHE='router-vpn-ui-v1';
+self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['/','/favicon.svg','/manifest.webmanifest']))));
+self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})`
+
+func extraRoutes(h *http.ServeMux, a *app) {
+	h.HandleFunc("/favicon.svg", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "image/svg+xml")
+		w.Header().Set("cache-control", "public, max-age=86400")
+		_, _ = io.WriteString(w, faviconSVG)
+	})
+	h.HandleFunc("/manifest.webmanifest", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/manifest+json")
+		_, _ = io.WriteString(w, manifestJSON)
+	})
+	h.HandleFunc("/sw.js", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/javascript")
+		w.Header().Set("service-worker-allowed", "/")
+		_, _ = io.WriteString(w, serviceWorkerJS)
+	})
+	h.HandleFunc("/api/logical-modes", a.listLogicalModes)
+	h.HandleFunc("/api/connect-logical", a.connectLogical)
+	h.HandleFunc("/api/profile/latency", a.profileLatency)
+	h.HandleFunc("/api/public-ip", a.publicIP)
+	h.HandleFunc("/api/dns/retest", a.retestDNS)
+	h.HandleFunc("/api/emergency-stop", a.emergencyStop)
+}
+
+type latencyRequest struct {
+	ID      string `json:"id"`
+	Samples int    `json:"samples"`
+}
+
+type latencyResponse struct {
+	ID          string    `json:"id"`
+	Port        int       `json:"port"`
+	Samples     int       `json:"samples"`
+	Failed      int       `json:"failed"`
+	MinMs       float64   `json:"min_ms"`
+	MedianMs    float64   `json:"median_ms"`
+	TrimmedMs   float64   `json:"trimmed_mean_ms"`
+	AverageMs   float64   `json:"average_ms"`
+	P90Ms       float64   `json:"p90_ms"`
+	MaxMs       float64   `json:"max_ms"`
+	MeasuredAt  time.Time `json:"measured_at"`
+	Description string    `json:"description"`
+}
+
+func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var q latencyRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	q.Samples = max(50, q.Samples)
+	if q.Samples > 200 {
+		q.Samples = 200
+	}
+
+	a.mu.Lock()
+	p, ok := a.profileByIDLocked(q.ID)
+	a.mu.Unlock()
+	if !ok {
+		http.Error(w, "unknown router profile", http.StatusNotFound)
+		return
+	}
+	if p.Endpoint == "" {
+		http.Error(w, "router profile has no endpoint", http.StatusBadRequest)
+		return
+	}
+
+	port, err := pickTCPProbePort(p.Endpoint)
+	if err != nil {
+		http.Error(w, "node is not reachable on a known TCP listener: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	values := make([]float64, 0, q.Samples)
+	failed := 0
+	for i := 0; i < q.Samples; i++ {
+		started := time.Now()
+		c, dialErr := net.DialTimeout("tcp", net.JoinHostPort(p.Endpoint, fmt.Sprintf("%d", port)), 1500*time.Millisecond)
+		if dialErr != nil {
+			failed++
+			continue
+		}
+		_ = c.Close()
+		values = append(values, float64(time.Since(started).Microseconds())/1000.0)
+		if i%10 == 9 {
+			time.Sleep(15 * time.Millisecond)
+		}
+	}
+	if len(values) < 5 {
+		http.Error(w, "too few successful latency samples", http.StatusBadGateway)
+		return
+	}
+	sort.Float64s(values)
+	minV := values[0]
+	maxV := values[len(values)-1]
+	avgV := average(values)
+	medianV := percentile(values, 0.50)
+	p90V := percentile(values, 0.90)
+	trim := len(values) / 10
+	trimmed := values
+	if len(values)-2*trim >= 3 && trim > 0 {
+		trimmed = values[trim : len(values)-trim]
+	}
+	trimmedV := average(trimmed)
+	now := time.Now().UTC()
+	resp := latencyResponse{
+		ID:          p.ID,
+		Port:        port,
+		Samples:     len(values),
+		Failed:      failed,
+		MinMs:       round3(minV),
+		MedianMs:    round3(medianV),
+		TrimmedMs:   round3(trimmedV),
+		AverageMs:   round3(avgV),
+		P90Ms:       round3(p90V),
+		MaxMs:       round3(maxV),
+		MeasuredAt:  now,
+		Description: "TCP handshake latency; median and 10% trimmed mean resist outliers",
+	}
+
+	a.mu.Lock()
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == p.ID {
+			x := &a.profiles.Profiles[i]
+			x.LatencySamples = resp.Samples
+			x.LatencyMinMs = resp.MinMs
+			x.LatencyMedianMs = resp.MedianMs
+			x.LatencyTrimmedMeanMs = resp.TrimmedMs
+			x.LatencyAverageMs = resp.AverageMs
+			x.LatencyP90Ms = resp.P90Ms
+			x.LatencyMaxMs = resp.MaxMs
+			x.LatencyLastTest = now.Format(time.RFC3339)
+			break
+		}
+	}
+	persistErr := a.persistProfilesLocked()
+	a.mu.Unlock()
+	if persistErr != nil {
+		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func pickTCPProbePort(endpoint string) (int, error) {
+	ports := []int{443, 8388, 10443, 11443, 12443, 13443, 14443, 15443}
+	var last error
+	for _, port := range ports {
+		c, err := net.DialTimeout("tcp", net.JoinHostPort(endpoint, fmt.Sprintf("%d", port)), 1200*time.Millisecond)
+		if err == nil {
+			_ = c.Close()
+			return port, nil
+		}
+		last = err
+	}
+	if last == nil {
+		last = errors.New("no probe ports")
+	}
+	return 0, last
+}
+
+func average(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var total float64
+	for _, v := range values {
+		total += v
+	}
+	return total / float64(len(values))
+}
+
+func percentile(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if len(sorted) == 1 {
+		return sorted[0]
+	}
+	pos := p * float64(len(sorted)-1)
+	lo := int(math.Floor(pos))
+	hi := int(math.Ceil(pos))
+	if lo == hi {
+		return sorted[lo]
+	}
+	frac := pos - float64(lo)
+	return sorted[lo]*(1-frac) + sorted[hi]*frac
+}
+
+func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
+
+func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	a.mu.Lock()
+	connected := a.state.Connected
+	selected := a.profiles.SelectedID
+	a.mu.Unlock()
+	if !connected {
+		http.Error(w, "connect the VPN first so the reported address is the VPN exit", http.StatusConflict)
+		return
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	providers := []string{"https://api64.ipify.org", "https://api.ipify.org"}
+	var result string
+	for _, endpoint := range providers {
+		resp, err := client.Get(endpoint)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		_ = resp.Body.Close()
+		candidate := strings.TrimSpace(string(body))
+		if resp.StatusCode/100 == 2 && net.ParseIP(candidate) != nil {
+			result = candidate
+			break
+		}
+	}
+	if result == "" {
+		http.Error(w, "could not determine public VPN exit address", http.StatusBadGateway)
+		return
+	}
+	a.mu.Lock()
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == selected {
+			a.profiles.Profiles[i].PublicIP = result
+			break
+		}
+	}
+	_ = a.persistProfilesLocked()
+	a.mu.Unlock()
+	_ = json.NewEncoder(w).Encode(map[string]any{"public_ip": result, "router_id": selected})
+}
+
+type dnsBenchmarkPayload struct {
+	Winner  common.DNSBenchmarkResult   `json:"winner"`
+	Results []common.DNSBenchmarkResult `json:"results"`
+}
+
+func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	p, err := a.activeProfile()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.mu.Lock()
+	connected := a.state.Connected
+	a.mu.Unlock()
+	if !connected {
+		http.Error(w, "connect this router first; DNS retest runs from the home node", http.StatusConflict)
+		return
+	}
+
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(p.RouterAPI, "/")+"/api/dns/benchmark", strings.NewReader(`{}`))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+p.APIToken)
+	req.Header.Set("content-type", "application/json")
+	client := &http.Client{Timeout: 45 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		http.Error(w, strings.TrimSpace(string(body)), resp.StatusCode)
+		return
+	}
+	var payload dnsBenchmarkPayload
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid DNS benchmark response", http.StatusBadGateway)
+		return
+	}
+
+	a.mu.Lock()
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == p.ID {
+			x := &a.profiles.Profiles[i]
+			x.DNSResults = payload.Results
+			if payload.Winner.Address != "" {
+				x.FastestDNSHost = payload.Winner.Address
+				x.FastestDNSName = payload.Winner.Name
+				x.FastestDNSLatencyMs = payload.Winner.LatencyMs
+				if x.DNSMode == "fastest" {
+					x.DNSHost = payload.Winner.Address
+				}
+			}
+			break
+		}
+	}
+	persistErr := a.persistProfilesLocked()
+	a.mu.Unlock()
+	if persistErr != nil {
+		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func (a *app) emergencyStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := a.stopMode(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	_, _ = io.WriteString(w, `{"ok":true,"message":"local Router VPN transports stopped"}`)
+}

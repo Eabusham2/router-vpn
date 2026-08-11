@@ -8,14 +8,21 @@ CONF="$ROOT/generated/$PROFILE_ID/$MODE"
 [[ -d "$CONF" ]] || CONF="$ROOT/generated/$MODE"
 need_bin(){ command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1"; exit 1; }; }
 need_file(){ [[ -s "$1" ]] || { echo "missing profile: $1"; exit 1; }; }
+env_value(){
+  local file=${1:?env file} key=${2:?env key}
+  sed -n "s/^${key}=//p" "$file" | tail -n 1
+}
 check_sing(){
-  local dir=$1 file=$2
+  local dir=${1:?sing-box dir} file=${2:?sing-box config}
   need_bin sing-box
   need_file "$dir/$file"
-  sing-box check -D "$dir" -c "$dir/$file" >/dev/null
+  # sing-box resolves relative certificate/key paths against the process CWD on
+  # some builds. Validate from the generated profile directory so cert.pem and
+  # other generated relative assets resolve exactly as they do at runtime.
+  (cd "$dir" && sing-box check -D "$dir" -c "$file" >/dev/null)
 }
 check_naive(){
-  local dir=$1
+  local dir=${1:?naive dir}
   need_bin sing-box
   sing-box version 2>&1 | grep -q 'with_naive_outbound' || { echo 'installed sing-box build lacks Naive outbound support'; exit 1; }
   case "$(uname -s 2>/dev/null || true)" in
@@ -28,13 +35,13 @@ check_naive(){
   check_sing "$dir" sing-box.json
 }
 check_xray(){
-  local file=$1
+  local file=${1:?xray config}
   need_bin xray
   need_file "$file"
   xray run -test -c "$file" >/dev/null
 }
 check_rosenpass(){
-  local dir=$1
+  local dir=${1:?Rosenpass dir}
   need_bin rosenpass
   need_file "$dir/rosenpass.toml"
   need_file "$dir/rosenpass.env"
@@ -43,16 +50,24 @@ check_rosenpass(){
   need_file "$dir/rosenpass-server-public"
 }
 check_max(){
-  local mode=$1
-  local base=$2
+  local mode=${1:-} base=${2:-}
+  [[ -n $mode && -n $base ]] || { echo 'MAX checker requires mode and base'; exit 2; }
   local dir="$ROOT/generated/$PROFILE_ID/$mode"
   [[ -d "$dir" ]] || dir="$ROOT/generated/$mode"
   need_file "$dir/chain.env"
-  # shellcheck disable=SC1090
-  source "$dir/chain.env"
-  [[ ${CHAIN_READY:-0} == 1 ]] || { echo "profile generation did not validate this chain"; exit 1; }
+
+  # Do not source generated chain.env under set -u. Parse the tiny allow-list of
+  # fields the checker needs so an unrelated/generated shell variable can never
+  # make a valid MAX branch appear unavailable.
+  local chain_ready outer_engine pq_base
+  chain_ready=$(env_value "$dir/chain.env" CHAIN_READY)
+  outer_engine=$(env_value "$dir/chain.env" OUTER_ENGINE)
+  pq_base=$(env_value "$dir/chain.env" PQ_BASE)
+  [[ $chain_ready == 1 ]] || { echo 'profile generation did not validate this MAX chain'; exit 1; }
+  [[ $pq_base == 1 ]] || { echo 'MAX chain is missing its Rosenpass-PQ base marker'; exit 1; }
+
   check_sing "$dir" middle-sing-box.json
-  case "${OUTER_ENGINE:-}" in
+  case "$outer_engine" in
     xray) check_xray "$dir/outer-xray.json" ;;
     sing-box|none) ;;
     *) echo "invalid OUTER_ENGINE in $dir/chain.env"; exit 1 ;;
@@ -70,8 +85,9 @@ check_max(){
       need_file "$dir/awg.conf"
       need_file "$dir/awg-socks.conf"
       ;;
+    *) echo "unknown MAX base: $base"; exit 2 ;;
   esac
-  if [[ -f "$dir/rosenpass.toml" ]]; then check_rosenpass "$dir"; fi
+  check_rosenpass "$dir"
 }
 case "$MODE" in
   wg) need_bin wg-quick; need_file "$CONF/wg.conf" ;;
@@ -94,7 +110,7 @@ case "$MODE" in
     for candidate in max-tls-wg max-tls-awg max-quic-wg max-quic-awg; do
       if "$0" "$candidate" >/dev/null 2>&1; then printf 'ready'; exit 0; fi
     done
-    echo "no validated MAX TLS or MAX QUIC branch is installed" >&2
+    echo 'no validated MAX TLS or MAX QUIC branch is installed' >&2
     exit 1
     ;;
   *) echo "unknown mode: $MODE"; exit 2 ;;

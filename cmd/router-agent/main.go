@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"router-vpn/internal/common"
 )
@@ -74,6 +75,7 @@ func main() {
 	h.HandleFunc("/health", s.health)
 	h.HandleFunc("/api/forward", s.forward)
 	h.HandleFunc("/api/forward/clear", s.clear)
+	h.HandleFunc("/api/dns/benchmark", s.dnsBenchmark)
 	log.Printf("router agent listening on %s", c.Listen)
 	log.Fatal(http.ListenAndServe(c.Listen, h))
 }
@@ -84,6 +86,7 @@ func getenv(k, v string) string {
 	}
 	return v
 }
+
 func (s *server) runDAITASink() {
 	pc, err := net.ListenPacket("udp", s.cfg.DAITAListen)
 	if err != nil {
@@ -187,6 +190,138 @@ func (s *server) clear(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `{"ok":true}`)
 }
 
+var dnsCandidates = []struct {
+	Name    string
+	Address string
+}{
+	{"Cloudflare IPv4", "1.1.1.1"},
+	{"Cloudflare IPv4 secondary", "1.0.0.1"},
+	{"Google IPv4", "8.8.8.8"},
+	{"Google IPv4 secondary", "8.8.4.4"},
+	{"Quad9 IPv4", "9.9.9.9"},
+	{"Quad9 IPv4 secondary", "149.112.112.112"},
+	{"AdGuard DNS IPv4", "94.140.14.14"},
+	{"AdGuard DNS IPv4 secondary", "94.140.15.15"},
+	{"Control D IPv4", "76.76.2.0"},
+	{"Control D IPv4 secondary", "76.76.10.0"},
+	{"OpenDNS IPv4", "208.67.222.222"},
+	{"OpenDNS IPv4 secondary", "208.67.220.220"},
+	{"Cloudflare IPv6", "2606:4700:4700::1111"},
+	{"Cloudflare IPv6 secondary", "2606:4700:4700::1001"},
+	{"Google IPv6", "2001:4860:4860::8888"},
+	{"Google IPv6 secondary", "2001:4860:4860::8844"},
+	{"Quad9 IPv6", "2620:fe::fe"},
+	{"Quad9 IPv6 secondary", "2620:fe::9"},
+	{"AdGuard DNS IPv6", "2a10:50c0::ad1:ff"},
+	{"AdGuard DNS IPv6 secondary", "2a10:50c0::ad2:ff"},
+}
+
+func (s *server) dnsBenchmark(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := s.authorized(r); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	results := make([]common.DNSBenchmarkResult, 0, len(dnsCandidates))
+	for _, candidate := range dnsCandidates {
+		values := make([]float64, 0, 5)
+		for _, qtype := range []uint16{1, 28, 1, 28, 1} {
+			if latency, err := dnsProbe(candidate.Address, qtype); err == nil {
+				values = append(values, latency)
+			}
+		}
+		family := "ipv4"
+		if strings.Contains(candidate.Address, ":") {
+			family = "ipv6"
+		}
+		result := common.DNSBenchmarkResult{Name: candidate.Name, Address: candidate.Address, Family: family, Working: len(values) > 0}
+		if len(values) > 0 {
+			sort.Float64s(values)
+			result.LatencyMs = mathRound3(values[len(values)/2])
+		}
+		results = append(results, result)
+	}
+	working := append([]common.DNSBenchmarkResult(nil), results...)
+	sort.SliceStable(working, func(i, j int) bool {
+		if working[i].Working != working[j].Working {
+			return working[i].Working
+		}
+		if !working[i].Working {
+			return working[i].Name < working[j].Name
+		}
+		return working[i].LatencyMs < working[j].LatencyMs
+	})
+	winner := common.DNSBenchmarkResult{Name: "Cloudflare IPv4 fallback", Address: "1.1.1.1", Family: "ipv4", Working: false}
+	for _, item := range working {
+		if item.Working {
+			winner = item
+			break
+		}
+	}
+	w.Header().Set("content-type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"policy":      "fastest-public",
+		"winner":      winner,
+		"results":     results,
+		"tested_from": "home-vpn-node",
+		"test":        "five real DNS A/AAAA UDP queries; median shown",
+	})
+}
+
+func dnsProbe(address string, qtype uint16) (float64, error) {
+	packet := dnsPacket(qtype)
+	network := "udp4"
+	if strings.Contains(address, ":") {
+		network = "udp6"
+	}
+	conn, err := net.DialTimeout(network, net.JoinHostPort(address, "53"), 1250*time.Millisecond)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(1250 * time.Millisecond))
+	started := time.Now()
+	if _, err := conn.Write(packet); err != nil {
+		return 0, err
+	}
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return 0, err
+	}
+	if n < 12 {
+		return 0, errors.New("short DNS response")
+	}
+	rcode := buf[3] & 0x0f
+	if rcode != 0 && rcode != 3 {
+		return 0, fmt.Errorf("DNS rcode %d", rcode)
+	}
+	return float64(time.Since(started).Microseconds()) / 1000.0, nil
+}
+
+func dnsPacket(qtype uint16) []byte {
+	packet := make([]byte, 12)
+	_, _ = rand.Read(packet[:2])
+	packet[2] = 0x01 // recursion desired
+	packet[5] = 0x01 // one question
+	for _, label := range strings.Split("example.com", ".") {
+		packet = append(packet, byte(len(label)))
+		packet = append(packet, label...)
+	}
+	packet = append(packet, 0, byte(qtype>>8), byte(qtype), 0, 1)
+	return packet
+}
+
+func mathRound3(v float64) float64 {
+	if v < 0 {
+		return -mathRound3(-v)
+	}
+	return float64(int(v*1000+0.5)) / 1000
+}
+
 func validateForward(q common.ForwardRequest, reserved []int) error {
 	if q.Protocol != "tcp" && q.Protocol != "udp" && q.Protocol != "both" {
 		return errors.New("protocol must be tcp, udp, or both")
@@ -267,12 +402,14 @@ func allowedRanges(reserved []int) []string {
 	}
 	return out
 }
+
 func portRange(a, b int) string {
 	if a == b {
 		return strconv.Itoa(a)
 	}
 	return fmt.Sprintf("%d-%d", a, b)
 }
+
 func formatDNAT(ip net.IP, port int) string {
 	if ip.To4() == nil {
 		if port > 0 {
@@ -285,6 +422,7 @@ func formatDNAT(ip net.IP, port int) string {
 	}
 	return ip.String()
 }
+
 func nftScript(script string) error {
 	cmd := exec.Command("nft", "-f", "-")
 	cmd.Stdin = bytes.NewBufferString(script)

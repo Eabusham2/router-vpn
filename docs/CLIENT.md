@@ -1,152 +1,182 @@
-# Install and use the client
+# Install and use Router VPN clients
 
-The exact end-to-end sequence is in `docs/FULL-TUTORIAL.md`.
+The complete server/router walkthrough is in `docs/FULL-TUTORIAL.md`. This file focuses on linking devices after the home node exists.
 
-## Private Device Setup WebGUI
+## Recommended link path
 
-After the home-node finalizer completes, open this **only from your home LAN**:
+You normally **do not need `router-vpn-client-bundle.zip`**.
 
-```text
-http://AI_BOARD_IP:8786/router-vpn-device-setup.html
-```
+1. Stay on the home LAN.
+2. Open `http://AI_BOARD_IP:8786/`.
+3. Install the small client package for the device, or use the platform-native/simple protocol instructions.
+4. Link Router VPN with the small private `router-vpn-bundle.json`:
+   - use **Import from home LAN** when the native app exposes it, or
+   - download/import `router-vpn-bundle.json` from Files.
+5. Start with **Raw tunnel** using **Base: Auto**. Auto prefers the saved/default base and can fall back to the other compatible base.
+6. Verify the public exit IP before moving to stronger methods.
 
-It is also included inside `router-vpn-client-bundle.zip`, so you can open the HTML file locally after extracting the private bundle.
+The full private bundle remains available **on demand** for offline recovery/advanced installs; the AI Board does not retain the generated ZIP after delivery.
 
-The page provides:
+## Setup Center
 
-- device picker: iPhone/iPad, Android, macOS, Windows, Linux, other/manual
-- method picker
-- WireGuard and AmneziaWG configs + QR codes
-- Shadowsocks 2022 import URL + QR
-- Hysteria2 import URL + QR
-- Shadowsocks + V2Ray-plugin URL + QR where supported
-- VLESS/REALITY, XHTTP/FinalMask, and Naive H2/H3 generated configs
-- SOCKS5 + TLS / OverTLS client JSON + QR
-- ShadowsocksR legacy client JSON + QR
-- plain internal SOCKS5 IP/port instructions for Potatso-compatible or other SOCKS5 apps
-- copy buttons for URLs/configs
-- native-system vs third-party-app instructions
-- Router VPN custom-app installation guidance per device
+The Setup Center is the server/router onboarding and compatibility surface. It is LAN-only by design and provides:
 
-The QR codes are generated locally on the home node with `qrencode`; the project does not send private configs/keys to an external QR website. Treat the page, ZIP, URLs and QR codes as private credentials.
+- persistent onboarding and full guide
+- ASUS SSH/JFFS/forwarding checks and helper download
+- current fixed WAN listener list and private ports that must never be exposed
+- direct private bundle/profile downloads
+- platform mini packages and checksums
+- WireGuard and AmneziaWG configs / QR codes
+- Shadowsocks 2022 URL/config/QR
+- Hysteria2 URL/config/QR
+- Shadowsocks + V2Ray-plugin material
+- VLESS/REALITY, XHTTP/FinalMask and Naive configs
+- SOCKS5 + TLS / OverTLS
+- ShadowsocksR legacy compatibility
+- plain internal SOCKS5 instructions
+- custom/universal protocol files where a native OS import does not exist
 
-## macOS
+Large packages are requested through the download broker. It prefers the current short-lived GitHub Actions artifact, overlays this node's private profiles in temporary storage, streams the requested package, then deletes that temporary copy. If the GitHub package is unavailable, the AI Board assembles only that requested package from prebuilt binaries already in its runtime image, streams it, then deletes it.
 
-1. Extract the router-generated `router-vpn-client-bundle.zip`.
-2. Open Terminal.
-3. `cd` into the extracted bundle folder.
-4. Run:
+QR images are generated on the home node. Treat the page, private JSON, QR codes and generated profiles as credentials.
+
+## Logical modes and base selection
+
+The app shows one row per **logical** method instead of duplicating WireGuard and AmneziaWG runtime variants. The server still retains the raw 20-mode catalog internally for AUTO and compatibility.
+
+For compatible logical methods, choose:
+
+- **Auto** — preferred base first, alternate compatible base as fallback
+- **WireGuard**
+- **AmneziaWG**
+
+The current logical mapping lives in `configs/client/logical-modes.json`. Availability comes from the real generated-profile checkers; a logical row remains ready when at least one allowed base validates. If the preferred base is unavailable and fallback is valid, the UI should show that explicitly rather than greying the entire logical mode.
+
+## macOS — Apple Silicon and Intel
+
+The Setup Center provides architecture-specific packages on demand. The legacy/full bundle install path remains supported:
 
 ```bash
 bash client/install-macos-final.sh "$PWD"
 ```
 
-5. Start the controller using the command printed by the installer.
-6. Open `http://127.0.0.1:8788`.
-7. Import `router-vpn-bundle.json`.
-8. Enter the home router's current public IPv4, global IPv6, or hostname if it was left blank during router setup.
-9. Save/select the router.
-10. Leave **SOCKS5-only** off for a full-device VPN.
-11. Choose **AUTO** or a manual mode and connect.
-12. Disconnect before switching router profiles.
+If macOS flags a locally-built component:
 
-For app-only SOCKS5 after the VPN reaches home, macOS can also use **System Settings → Network → service → Details → Proxies → SOCKS Proxy** with the home SOCKS host and port `1080`.
-
-## Linux
+1. verify the package/binary checksum against the Setup Center `SHA256SUMS`;
+2. use **System Settings → Privacy & Security → Open Anyway** for that verified Router VPN item;
+3. if necessary, remove quarantine only from the verified extracted Router VPN folder:
 
 ```bash
-cd /path/to/extracted/router-vpn-client-bundle
+xattr -dr com.apple.quarantine /path/to/router-vpn
+```
+
+Do not remove quarantine broadly from Downloads or unrelated files.
+
+The desktop controller stores each imported node separately and can report the public VPN exit independently of the private SOCKS5 address.
+
+## Windows — x64 and ARM64
+
+GitHub Actions produces normal Windows packages and Router VPN's own no-install **Portable ZIPs** for both architectures. The home Setup Center provides the matching package on demand and does not retain a server-side ZIP after delivery.
+
+PortableApps.com/PAF packages are not produced or supported. Use `RouterVPN-Portable-Windows-amd64.zip` or `RouterVPN-Portable-Windows-arm64.zip` for the no-install portable layout.
+
+The existing complete multi-engine shell path can use the Linux transport runtime through WSL2. Native WireGuard/AmneziaWG profile import remains available in matching Windows clients.
+
+## Linux / Unix
+
+Common direct packages are produced for Linux x64 and ARM64. GitHub Actions also builds Linux ARMv7 and the supported BSD/illumos targets listed in the root README.
+
+Legacy Linux install path:
+
+```bash
 sudo bash client/install-linux.sh "$PWD"
 ```
 
-Open `http://127.0.0.1:8788`, import the bundle JSON, enter/select the router endpoint, and connect.
-
 ## iPhone / iPad
 
-- **WireGuard:** import the generated config or scan the WireGuard QR in the WireGuard app.
-- **AmneziaWG:** import the generated AWG config in an Amnezia-compatible client.
-- **Shadowsocks / SOCKS5 testing:** Potatso or another compatible proxy app can use the generated/importable settings when that exact format is supported.
-- **Hysteria2:** use a Hysteria2/sing-box-compatible iOS client and import the generated URL/QR.
-- **OverTLS / SSR:** use a client that explicitly supports the generated protocol/config. Do not assume every generic proxy app supports these formats.
-- **Router VPN IPA:** the current IPA is a controller/importer package until the native Packet Tunnel adapters are linked; it must not be presented as a finished all-mode VPN client yet.
+The SwiftUI Router VPN app supports the native app UX, private bundle import from Files or directly from the home LAN, logical-mode/base selection, home-LAN access settings, forwarding controls and the permanent setup guide.
+
+**Platform tunnel boundary:** the included Packet Tunnel target intentionally fails closed until the actual WireGuard/AmneziaWG and proxy engines are linked and validated. Its `completionHandler(error)` path is therefore an expected limitation, not an accidental build/runtime error. Until those adapters exist, use the generated Setup Center profiles in compatible native clients for live tunnels:
+
+- WireGuard config → WireGuard-compatible client
+- AmneziaWG config → AmneziaWG-compatible client
+- Shadowsocks/Hysteria2/REALITY/etc. → a client that explicitly supports that generated format
+
+The Router VPN UI follows the real NetworkExtension status and does not mark itself connected merely because `startVPNTunnel()` was called.
 
 ## Android
 
-- WireGuard: import the config file or scan its QR in WireGuard for Android.
-- AmneziaWG: import the AWG config in an Amnezia-compatible client.
-- Shadowsocks/Hysteria2: import the generated URL/QR in a compatible client.
-- OverTLS/SSR: import the generated client JSON/QR in a compatible client.
-- Router VPN APK: install the generated APK artifact if you want the current controller/importer app. The native all-mode `VpnService` adapters are not linked yet.
+The APK is currently the native Router VPN controller/importer shell. It must not claim full-device VPN operation until its `VpnService` engine integration is linked and validated.
 
-## Windows
+Live protocol profiles remain importable into matching Android clients from the Setup Center. Android native engine work is tracked separately from the server/runtime readiness so mobile UI status cannot make a server mode appear green by itself.
 
-Use either the normal Windows ZIP or the PortableApps-style ZIP from the GitHub build artifact. The controller is native Windows; the complete multi-engine shell launcher currently uses the Linux transport engines through WSL2. Raw WireGuard/AWG profiles remain importable in their native Windows clients.
+## Multiple routers / nodes
 
-## Add another router
+Each imported node stores separate generated profile material. The desktop/controller surface supports:
 
-1. Import the other router's `router-vpn-bundle.json`.
-2. Enter its endpoint if needed.
-3. Save/select it while disconnected.
+- remembered selected node and use count
+- local coordinates/map
+- sorting by median latency, 10% trimmed mean, usage, distance or name
+- at least 50 TCP handshake samples per requested node test
+- min / median / trimmed mean / average / p90 / max
 
-Each imported router keeps separate private generated profile files.
+Import another node's private JSON while disconnected, then select it.
 
-## SOCKS5-only app mode
+## DNS
 
-1. Enable **SOCKS5-only**.
-2. Connect with Raw WireGuard or AmneziaWG.
-3. Configure the selected application:
+Default: **Home AdGuard**.
 
-```text
-SOCKS5 host: 127.0.0.1
-Port: 1080
-Authentication: none
-Proxy DNS through SOCKS5: enabled
-```
+Other supported policy/configuration choices include:
 
-Only the configured application uses the home connection.
+- fastest measured public DNS from the home exit
+- common primary/secondary IPv4 and IPv6 resolvers
+- custom UDP or TCP DNS
+- DoT
+- DoH
+- DoH3
+- DNS Rescue fallback policy
 
-## Router SOCKS5 service
+The server benchmark performs actual DNS queries and reports median query time rather than treating ICMP ping as DNS latency.
 
-After a tunnel reaches the home network, the router SOCKS5 endpoint shown in the imported profile works like a normal SOCKS5 proxy using only its IP and port. Authentication is disabled because WAN access to TCP `1080` is blocked by the package firewall and must never be forwarded publicly.
+## SOCKS5
+
+The home SOCKS5 service is an internal LAN/tunnel service. It uses its IP + port and currently has no authentication. **Never WAN-forward TCP 1080.**
+
+The app must display that private proxy address separately from the public VPN exit address.
+
+SOCKS5-only application mode is separate from full-device VPN mode.
 
 ## SOCKS5 + TLS / OverTLS
 
-OverTLS is the preferred extra compatibility proxy when you specifically want a SOCKS5-style proxy carried over public TLS.
+Generated compatibility path:
 
 ```text
 Public TCP:       14443
-TLS endpoint:     Caddy / generated TLS hostname
 Private backend:  127.0.0.1:14444
 ```
 
-Use `generated/overtls/overtls-client.json` or the OverTLS entry/QR in the private Device Setup WebGUI. Public TLS terminates at Caddy; OverTLS's plaintext backend is bound only to loopback. **Never WAN-forward TCP 14444.**
+Never WAN-forward backend TCP 14444. OverTLS is a compatibility method outside the main AUTO runtime ladder.
 
-OverTLS stays separate from the 20 main Router VPN modes and does not change AUTO ordering.
+## ShadowsocksR
 
-## ShadowsocksR legacy compatibility
-
-SSR is included only for clients/networks that specifically require ShadowsocksR compatibility.
+Generated legacy compatibility listener:
 
 ```text
 Public TCP+UDP: 15443
-Client config:  generated/shadowsocksr/ssr-client.json
 ```
 
-Use the SSR entry/QR in the private Device Setup WebGUI or import the generated JSON in an SSR-compatible client. **Prefer Shadowsocks 2022 or OverTLS for new setups; SSR is legacy compatibility and is not part of AUTO.**
+Prefer modern Shadowsocks 2022 or other current methods for new setups. SSR remains outside AUTO.
 
-## Port forwarding
+## Port forwarding / Protected DMZ
 
-1. Connect using Raw WireGuard or AmneziaWG.
-2. Choose TCP, UDP, or both.
-3. Enter one external port or a From/To range.
-4. Enter the destination port; use `0` to preserve the same range.
-5. Press **Apply**, or press **Protected DMZ** for all unused ports.
-6. Press **Clear** when finished.
+Inbound forwarding requires an authenticated tunnel peer path, normally WireGuard or AmneziaWG. Proxy-only methods are outbound.
 
-The ASUS router must forward the fixed VPN listeners to the AI Board. Protected DMZ requires a WireGuard/AmneziaWG peer path; proxy-only modes are outbound.
+The client supports TCP, UDP, both, a port/range, optional translated target port and Protected DMZ. Protected DMZ excludes reserved VPN, SSH, DNS, management, Portainer, Setup Center/API and internal SOCKS5 ports.
 
-## Jumbo
+## Jumbo TUN
 
-- Keep normal WireGuard/AWG tunnel MTU on Auto/default.
-- Enable **Jumbo TUN** only for a compatible proxy TUN mode.
-- LAN jumbo payloads are segmented to the internet path MTU as required.
+Keep normal WireGuard/AmneziaWG tunnel MTU on Auto/default. Enable Jumbo TUN only for a compatible proxy/TUN path where the client/server path has been validated.
+
+## Availability / grey-mode rule
+
+Do not hide a broken mode and do not force it green. Generated configuration checks decide readiness. CI regenerates and validates the combined/MAX branches that previously produced relative-certificate and shell-variable errors before the branch is eligible for deployment.

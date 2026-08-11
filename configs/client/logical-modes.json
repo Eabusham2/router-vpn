@@ -1,0 +1,60 @@
+[
+  {
+    "id": "base-raw",
+    "name": "Raw tunnel",
+    "description": "Fastest encrypted base tunnel. Choose WireGuard or AmneziaWG; Auto fallback tries the other base if the preferred one is unavailable.",
+    "base_selector": true,
+    "fallback": true,
+    "variants": {"wg": "wg", "awg": "awg2-fast"}
+  },
+  {
+    "id": "base-pq",
+    "name": "Base tunnel + Rosenpass PQ",
+    "description": "WireGuard-family tunnel with live Rosenpass post-quantum PSK rotation.",
+    "base_selector": true,
+    "fallback": true,
+    "variants": {"wg": "wg-pq", "awg": "awg2-pq"}
+  },
+  {
+    "id": "awg-strong",
+    "name": "AmneziaWG Strong",
+    "description": "Stronger randomized AmneziaWG packet/header obfuscation. This mode is AmneziaWG-only.",
+    "base_selector": false,
+    "fallback": false,
+    "variants": {"awg": "awg2-strong"}
+  },
+  {"id":"shadowsocks","name":"Shadowsocks 2022","description":"Encrypted proxy with basic traffic obfuscation.","base_selector":false,"fallback":false,"variants":{"native":"shadowsocks"}},
+  {"id":"reality-vision","name":"VLESS + REALITY + Vision","description":"HTTPS-style camouflage with Vision flow and Chrome-style uTLS.","base_selector":false,"fallback":false,"variants":{"native":"reality-vision"}},
+  {"id":"hysteria2","name":"Hysteria2 + QUIC + Salamander","description":"QUIC transport with loss resistance and Salamander obfuscation.","base_selector":false,"fallback":false,"variants":{"native":"hysteria2"}},
+  {"id":"reality-pq-vision","name":"PQ VLESS + REALITY + Vision","description":"Hybrid-PQ VLESS payload protection plus REALITY camouflage.","base_selector":false,"fallback":false,"variants":{"native":"reality-pq-vision"}},
+  {"id":"ss-v2ray","name":"Shadowsocks + V2Ray TLS","description":"Shadowsocks 2022 through SIP003 WebSocket/TLS with QUIC UDP fallback.","base_selector":false,"fallback":false,"variants":{"native":"ss-v2ray"}},
+  {"id":"naive-h2","name":"Naive HTTPS HTTP/2","description":"Browser-style HTTPS forward proxy over HTTP/2.","base_selector":false,"fallback":false,"variants":{"native":"naive-h2"}},
+  {"id":"naive-h3","name":"Naive HTTPS HTTP/3 + QUIC","description":"Browser-style HTTPS forward proxy over HTTP/3/QUIC.","base_selector":false,"fallback":false,"variants":{"native":"naive-h3"}},
+  {"id":"split","name":"Dual Transport","description":"REALITY/Vision for TCP plus Hysteria2/QUIC for UDP.","base_selector":false,"fallback":false,"variants":{"native":"split"}},
+  {"id":"reality-xhttp","name":"PQ REALITY + XHTTP + FinalMask","description":"Hybrid-PQ REALITY with XHTTP and FinalMask fragmentation camouflage.","base_selector":false,"fallback":false,"variants":{"native":"reality-xhttp"}},
+  {"id":"max","name":"PQ Dual Transport","description":"PQ REALITY for TCP plus Hysteria2/QUIC for UDP.","base_selector":false,"fallback":false,"variants":{"native":"max"}},
+  {
+    "id": "max-quic",
+    "name": "MAX QUIC",
+    "description": "PQ base tunnel carried through Shadowsocks 2022 and Hysteria2/QUIC. One logical mode; choose WireGuard or AmneziaWG base.",
+    "base_selector": true,
+    "fallback": true,
+    "variants": {"wg": "max-quic-wg", "awg": "max-quic-awg"}
+  },
+  {
+    "id": "max-tls",
+    "name": "MAX TLS",
+    "description": "PQ base tunnel carried through Shadowsocks, PQ VLESS, REALITY, XHTTP and FinalMask. One logical mode; choose WireGuard or AmneziaWG base.",
+    "base_selector": true,
+    "fallback": true,
+    "variants": {"wg": "max-tls-wg", "awg": "max-tls-awg"}
+  },
+  {
+    "id": "all",
+    "name": "ALL",
+    "description": "Strongest validated MAX TLS branch with MAX QUIC fallback. Base preference is honored and may fall back to the other base.",
+    "base_selector": true,
+    "fallback": true,
+    "variants": {"wg": "all", "awg": "all"}
+  }
+]

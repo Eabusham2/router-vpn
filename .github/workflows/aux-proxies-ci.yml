@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   arm64:
-    name: Native ARM64 setup assets + OverTLS + SSR
+    name: Native ARM64 setup assets + ephemeral downloads + mode validation
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -22,10 +22,21 @@ jobs:
 
       - name: Static checks
         run: |
-          python3 -m py_compile server/scripts/generate-setup-assets.py server/scripts/generate-aux-proxies.py
+          python3 -m py_compile \
+            server/scripts/generate-setup-assets.py \
+            server/scripts/generate-aux-proxies.py \
+            server/scripts/build-download-on-demand.py \
+            server/scripts/download-broker.py
+          python3 -m json.tool configs/client/logical-modes.json >/dev/null
+          python3 deploy/validate-repo.py
           bash -n server/finalize/finalize.sh
+          bash -n server/finalize/upgrade-safe.sh
+          bash -n server/scripts/publish-downloads.sh
+          bash -n client/setup-windows-runtime.sh
           bash -n server/aux-proxies/entrypoint.sh
           bash -n server/naive/entrypoint.sh
+          bash -n modes/check-mode.sh
+          bash -n modes/check-combined.sh
           sh -n router/asus-merlin-router-vpn-forwards.sh
 
       - name: Build init ARM64
@@ -50,15 +61,111 @@ jobs:
             test -s /opt/router-vpn/client-bundle/setup-assets.json
             test -s /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             test -s /opt/router-vpn/downloads/router-vpn-device-setup.html
+            test -s /opt/router-vpn/downloads/download-policy.json
             test -s /opt/router-vpn/config/aux/overtls-server.json
             test -s /opt/router-vpn/config/aux/ssr-server.json
             test -s /opt/router-vpn/client-bundle/generated/overtls/overtls-client.json
             test -s /opt/router-vpn/client-bundle/generated/shadowsocksr/ssr-client.json
+            test -s /opt/router-vpn/client-bundle/logical-modes.json
+            test -s /opt/router-vpn/client-bundle/client/Setup-Windows-Runtime.ps1
+            test -s /opt/router-vpn/client-bundle/client/setup-windows-runtime.sh
+            test ! -e /opt/router-vpn/client-bundle/dist
+            test ! -e /opt/router-vpn/router-vpn-client-bundle.zip
+            ! find /opt/router-vpn/downloads -maxdepth 1 -type f -name "*.zip" | grep -q .
             grep -q "WireGuard" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "SOCKS5 + TLS (OverTLS)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
-            grep -q "ShadowsocksR (legacy)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
+            grep -q "ShadowsocksR" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
+            grep -q "router-vpn-windows-portable-amd64.zip" /opt/router-vpn/downloads/router-vpn-device-setup.html
+            ! grep -qi "portableapps" /opt/router-vpn/downloads/router-vpn-device-setup.html
+            grep -q "generated on demand" /opt/router-vpn/downloads/router-vpn-device-setup.html
           '
+          sudo chown -R "$(id -u):$(id -g)" "$TEST_ROOT"
+
+      - name: Verify on-demand home-linked Portable packages
+        run: |
+          set -euo pipefail
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          BROKER=$(docker run -d --rm --platform linux/arm64 --network host \
+            -e ROUTER_VPN_GITHUB_DISABLE=1 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint python3 router-vpn-ci-init:arm64 \
+            /src/server/scripts/download-broker.py --base /opt/router-vpn --port 8786)
+          trap 'docker logs "$BROKER" || true; docker rm -f "$BROKER" >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8786/healthz >/dev/null && break
+            sleep .2
+          done
+          curl -fsS http://127.0.0.1:8786/api/download-policy | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["server_cache"] is False and x["preferred_source"]=="github-actions"'
+
+          require_file() {
+            local archive=$1 path=$2
+            unzip -Z1 "$archive" | grep -Fxq "$path" || { echo "MISSING in $(basename "$archive"): $path" >&2; unzip -Z1 "$archive" >&2; return 1; }
+          }
+          fetch_one() {
+            local name=$1 out=$2 headers=$3
+            curl -fsS -D "$headers" -o "$out" "http://127.0.0.1:8786/$name"
+            if ! grep -Fqi 'X-Router-VPN-Source: local-fallback' "$headers"; then
+              echo "Unexpected package source response for $name:" >&2
+              cat "$headers" >&2
+              return 1
+            fi
+            unzip -tq "$out" >/dev/null
+            ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
+          }
+
+          for arch in amd64 arm64; do
+            portable="$RUNNER_TEMP/home-portable-$arch.zip"
+            fetch_one "router-vpn-windows-portable-$arch.zip" "$portable" "$RUNNER_TEMP/h-$arch"
+            root="RouterVPNPortable-$arch"
+            for path in \
+              "$root/RouterVPNPortable.exe" \
+              "$root/RouterVPNSetupRuntime.exe" \
+              "$root/Setup-Windows-Runtime.ps1" \
+              "$root/README.txt" \
+              "$root/App/RouterVPN/router-vpn-client.exe" \
+              "$root/App/RouterVPN/router-vpn-dns.exe" \
+              "$root/App/RouterVPN/logical-modes.json" \
+              "$root/App/RouterVPN/LICENSE" \
+              "$root/Data/routers.json" \
+              "$root/Data/generated/wg/wg.conf" \
+              "$root/Data/generated/max-tls-wg/chain.env" \
+              "$root/Data/generated/max-quic-awg/chain.env"; do
+              require_file "$portable" "$path"
+            done
+            ! unzip -Z1 "$portable" | grep -q "$root/App/AppInfo/"
+            rm -f "$portable"
+          done
+
+          bundle="$RUNNER_TEMP/home-bundle.zip"
+          fetch_one router-vpn-client-bundle.zip "$bundle" "$RUNNER_TEMP/h-bundle"
+          unzip -Z1 "$bundle" | grep -q '/router-vpn-bundle.json$'
+          rm -f "$bundle"
+          ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
+
+      - name: Validate formerly grey combined and MAX modes
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint /bin/bash router-vpn-ci-init:arm64 -euo pipefail -c '
+              export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
+              export HOMEVPN_PROFILE_ID=home
+              cd /src/modes
+              ./check-combined.sh split
+              ./check-combined.sh max
+              ./check-mode.sh max-quic-wg
+              ./check-mode.sh max-tls-wg
+              mkdir -p /tmp/awg-check-bin
+              for cmd in amneziawg-go awg awg-quick; do
+                printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
+                chmod +x "/tmp/awg-check-bin/$cmd"
+              done
+              export PATH="/tmp/awg-check-bin:$PATH"
+              ./check-mode.sh max-quic-awg
+              ./check-mode.sh max-tls-awg
+              ./check-mode.sh all
+            '
 
       - name: Build auxiliary proxy ARM64 image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .

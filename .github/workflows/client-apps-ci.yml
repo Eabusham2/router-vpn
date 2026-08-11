@@ -1,0 +1,260 @@
+name: Client apps cross-platform CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: client-apps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-unix:
+    name: Desktop, Portable ZIP, and Unix client builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Test Go controller and shared API
+        run: go test ./...
+      - name: Validate repository contracts
+        run: python3 deploy/validate-repo.py
+      - name: Validate logical/raw catalogs
+        run: |
+          python3 -m json.tool configs/client/modes.json >/dev/null
+          python3 -m json.tool configs/client/logical-modes.json >/dev/null
+          python3 - <<'PY'
+          import json
+          raw={m['id'] for m in json.load(open('configs/client/modes.json'))}
+          logical=json.load(open('configs/client/logical-modes.json'))
+          assert len(logical)==16, f'expected 16 logical modes, got {len(logical)}'
+          seen=set()
+          for item in logical:
+              assert item['id'] not in seen, item['id']
+              seen.add(item['id'])
+              assert item['variants'], item['id']
+              for runtime in item['variants'].values():
+                  assert runtime in raw, (item['id'], runtime)
+          for expected in ('base-raw','base-pq','max-quic','max-tls','all'):
+              item=next(x for x in logical if x['id']==expected)
+              assert item['base_selector'] is True, expected
+              assert item['fallback'] is True, expected
+          PY
+      - name: Cross-compile all desktop and Unix targets
+        run: |
+          chmod +x deploy/build-client.sh deploy/package-builds.sh
+          ./deploy/build-client.sh
+          ./deploy/package-builds.sh
+      - name: Verify common architectures and checksums
+        run: |
+          test -x dist/client/router-vpn-client-darwin-amd64
+          test -x dist/client/router-vpn-client-darwin-arm64
+          test -x dist/client/router-vpn-client-linux-amd64
+          test -x dist/client/router-vpn-client-linux-arm64
+          test -s dist/client/router-vpn-client-windows-amd64.exe
+          test -s dist/client/router-vpn-client-windows-arm64.exe
+          test -s dist/packages/RouterVPN-Windows-amd64.zip
+          test -s dist/packages/RouterVPN-Windows-arm64.zip
+          test -s dist/packages/RouterVPN-Portable-Windows-amd64.zip
+          test -s dist/packages/RouterVPN-Portable-Windows-arm64.zip
+          test ! -e dist/packages/RouterVPNPortable-amd64.zip
+          test ! -e dist/packages/RouterVPNPortable-arm64.zip
+          test -s dist/packages/RouterVPN-darwin-amd64.tar.gz
+          test -s dist/packages/RouterVPN-darwin-arm64.tar.gz
+          test -s dist/packages/RouterVPN-linux-amd64.tar.gz
+          test -s dist/packages/RouterVPN-linux-arm64.tar.gz
+          (cd dist/packages && sha256sum -c SHA256SUMS)
+      - name: Verify Windows Portable ZIP layout
+        run: |
+          for arch in amd64 arm64; do
+            root="RouterVPNPortable-$arch"
+            portable="dist/packages/RouterVPN-Portable-Windows-$arch.zip"
+            unzip -tq "$portable" >/dev/null
+            list=$(unzip -Z1 "$portable")
+            for path in \
+              "$root/RouterVPNPortable.exe" \
+              "$root/RouterVPNSetupRuntime.exe" \
+              "$root/Setup-Windows-Runtime.ps1" \
+              "$root/README.txt" \
+              "$root/App/RouterVPN/router-vpn-client.exe" \
+              "$root/App/RouterVPN/router-vpn-dns.exe" \
+              "$root/App/RouterVPN/modes.json" \
+              "$root/App/RouterVPN/logical-modes.json" \
+              "$root/App/RouterVPN/LICENSE" \
+              "$root/App/RouterVPN/modes/check-mode.sh" \
+              "$root/App/RouterVPN/modes/check-combined.sh" \
+              "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" \
+              "$root/App/RouterVPN/client/setup-windows-runtime.sh" \
+              "$root/App/RouterVPN/client/install-xray.sh" \
+              "$root/Data/generated/"; do
+              grep -Fxq "$path" <<<"$list" || { echo "missing $path" >&2; exit 1; }
+            done
+            if grep -qE "^$root/Data/(routers|state|client)\\.json$" <<<"$list"; then
+              echo "generic portable archive incorrectly pre-populates private Data" >&2
+              exit 1
+            fi
+            ! grep -q "$root/App/AppInfo/" <<<"$list"
+          done
+      - name: Verify logical catalog ships on desktop/Unix packages
+        run: |
+          for archive in dist/packages/RouterVPN-Windows-amd64.zip dist/packages/RouterVPN-Windows-arm64.zip; do
+            unzip -Z1 "$archive" | grep -q '/logical-modes.json$'
+            unzip -Z1 "$archive" | grep -q '/LICENSE$'
+          done
+          for archive in \
+            dist/packages/RouterVPN-darwin-amd64.tar.gz \
+            dist/packages/RouterVPN-darwin-arm64.tar.gz \
+            dist/packages/RouterVPN-linux-amd64.tar.gz \
+            dist/packages/RouterVPN-linux-arm64.tar.gz; do
+            tar -tzf "$archive" | grep -q '/logical-modes.json$'
+            tar -tzf "$archive" | grep -q '/LICENSE$'
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: |
+            dist/packages/*
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-portable-smoke:
+    name: Execute Windows Portable ${{ matrix.arch }}
+    needs: desktop-unix
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: artifacts
+      - name: Run Portable self-test and relocation test
+        shell: pwsh
+        env:
+          ROUTER_VPN_ARCH: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arch = $env:ROUTER_VPN_ARCH
+          $archive = (Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Portable-Windows-$arch.zip" | Select-Object -First 1).FullName
+          if (-not $archive) { throw "Missing $arch portable artifact" }
+          $extract = Join-Path $env:RUNNER_TEMP "portable-$arch"
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $archive -DestinationPath $extract -Force
+          $root = Get-ChildItem $extract -Directory | Select-Object -First 1
+          if (-not $root) { throw "No package root in $archive" }
+          $exe = Join-Path $root.FullName 'RouterVPNPortable.exe'
+          if (-not (Test-Path $exe)) { throw "Missing launcher in $archive" }
+          $proc = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Portable $arch self-test failed with $($proc.ExitCode)" }
+          foreach ($relative in @('Data\client.json','Data\routers.json','Data\modes.windows.json','Data\logical-modes.json','Data\windows-runtime.json')) {
+            if (-not (Test-Path (Join-Path $root.FullName $relative))) { throw "Self-test did not create $relative" }
+          }
+          $logical = Get-Content (Join-Path $root.FullName 'Data\logical-modes.json') -Raw | ConvertFrom-Json
+          if ($logical.Count -ne 16) { throw "Expected 16 portable logical modes; got $($logical.Count)" }
+          Start-Sleep -Milliseconds 400
+          try {
+            Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8788/api/status' -TimeoutSec 1 | Out-Null
+            throw 'Portable controller was still running after self-test'
+          } catch {
+            if ($_.Exception.Message -eq 'Portable controller was still running after self-test') { throw }
+          }
+          $movedParent = Join-Path $env:RUNNER_TEMP "relocated-$arch"
+          Remove-Item $movedParent -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $movedParent | Out-Null
+          $moved = Join-Path $movedParent $root.Name
+          Move-Item $root.FullName $moved
+          $proc2 = Start-Process (Join-Path $moved 'RouterVPNPortable.exe') -ArgumentList '--self-test' -Wait -PassThru
+          if ($proc2.ExitCode -ne 0) { throw "Relocated portable $arch self-test failed" }
+
+  android:
+    name: Android native app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Install Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build APK
+        run: gradle -p android --no-daemon :app:assembleDebug
+      - name: Verify APK
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -tq "$APK" >/dev/null
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Android-CI
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  ios-preview:
+    name: iOS/iPadOS UI + Packet Tunnel preview build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        working-directory: ios/RouterVPN
+        run: xcodegen generate
+      - name: Build unsigned preview app and explicit unavailable tunnel extension
+        working-directory: ios/RouterVPN
+        run: |
+          xcodebuild \
+            -project RouterVPN.xcodeproj \
+            -scheme RouterVPN \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM='' \
+            build
+      - name: Package re-signable preview IPA
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          test -d "$APP"
+          test -d "$APP/PlugIns/RouterVPNPacketTunnel.appex"
+          grep -q 'fail visibly rather than fake a successful VPN connection' App/ContentView.swift
+          grep -q 'Link AmneziaWGKit/Xray engine before signing this target.' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'completionHandler(error)' PacketTunnel/PacketTunnelProvider.swift
+          rm -rf build/unsigned
+          mkdir -p build/unsigned/Payload
+          ditto "$APP" build/unsigned/Payload/RouterVPN.app
+          (cd build/unsigned && zip -qry ../RouterVPN-preview-unsigned-resignable.ipa Payload)
+          unzip -tq build/RouterVPN-preview-unsigned-resignable.ipa >/dev/null
+          shasum -a 256 build/RouterVPN-preview-unsigned-resignable.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-Preview-CI
+          path: ios/RouterVPN/build/RouterVPN-preview-unsigned-resignable.ipa
+          if-no-files-found: error
+          retention-days: 1
