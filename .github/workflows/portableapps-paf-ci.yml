@@ -34,11 +34,19 @@ jobs:
             test -s "$zip"
             unzip -tq "$zip" >/dev/null
             root="RouterVPNPortable-$arch"
+            list=$(unzip -Z1 "$zip")
+            grep -qx "$root/RouterVPNPortable.exe" <<<"$list"
+            grep -qx "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" <<<"$list"
+            grep -qx "$root/App/AppInfo/appinfo.ini" <<<"$list"
+            grep -qx "$root/App/AppInfo/installer.ini" <<<"$list"
+            grep -qx "$root/Other/Help/readme.txt" <<<"$list"
+            ! grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$list"
             unzip -p "$zip" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Type=PortableApps.comFormat'
             unzip -p "$zip" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Version=3.9'
+            unzip -p "$zip" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Icons=2'
             unzip -p "$zip" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Start=RouterVPNPortable.exe'
+            unzip -p "$zip" "$root/App/AppInfo/appinfo.ini" | grep -q '^Start2=powershell.exe .*Setup-Windows-Runtime.ps1$'
             unzip -p "$zip" "$root/App/AppInfo/installer.ini" | grep -qx 'RemoveDataDirectory=false'
-            unzip -Z1 "$zip" | grep -qx "$root/Other/"
           done
       - uses: actions/upload-artifact@v4
         with:
