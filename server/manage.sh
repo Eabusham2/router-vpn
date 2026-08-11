@@ -30,8 +30,12 @@ docker compose --env-file "$ENV_FILE" -f "$COMPOSE" run --rm --no-deps \
   --entrypoint /bin/bash finalize -lc \
   'bash /src/server/finalize/adopt-current-markers.sh; exec bash /src/server/finalize/upgrade-safe.sh'
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --no-deps \
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --remove-orphans --no-deps \
   router-agent wireguard awg2 rosenpass transports xray-pq naive ss-v2ray bundle-web socks5
+
+# Clean only stale Router VPN containers/images. Never prune named volumes,
+# unrelated projects, or the global Docker build cache.
+bash "$ROOT_DIR/server/scripts/cleanup-router-vpn-docker.sh"
 
 echo
 echo 'Router VPN is current.'
