@@ -2,6 +2,8 @@
 
 Self-hosted home-exit VPN/proxy platform for an ASUS AI Board / Portainer Docker host, with persistent ASUS Merlin WAN forwarding, a private Setup Center, generated per-node client profiles, and cross-platform client builds.
 
+Router VPN is MIT-licensed open-source software. See `LICENSE`.
+
 ## Normal setup — no giant ZIP required
 
 1. Deploy `server/portainer-current.yaml` from this repository in Portainer.
@@ -10,7 +12,7 @@ Self-hosted home-exit VPN/proxy platform for an ASUS AI Board / Portainer Docker
 4. Install the Router VPN client for the device, then import the small private `router-vpn-bundle.json` from Files **or directly over the home LAN where the native client supports LAN import**.
 5. Start with Raw tunnel / WireGuard, verify the public exit, then use AUTO, SMART AUTO, CUSTOM, or another logical mode.
 
-The complete all-platform ZIP remains an offline/advanced fallback, not the default install path.
+Large client archives are generated only when requested. The Setup Center prefers the current short-lived GitHub Actions build, overlays this node's private profiles in a temporary directory, streams it, and deletes the temporary copy. If no usable GitHub artifact is available, the AI Board assembles only the requested package from prebuilt binaries in its server image, streams it, and deletes it.
 
 ## Mode model
 
@@ -77,31 +79,28 @@ Utility choices remain **AUTO**, **SMART AUTO**, and **CUSTOM**. The canonical m
 
 ## Setup Center
 
-The AI Board Setup Center is the server/router onboarding and recovery surface. It publishes small direct downloads for:
+The AI Board Setup Center is the server/router onboarding and recovery surface. It keeps only lightweight static metadata and provides stable URLs for:
 
 - `router-vpn-bundle.json`
 - `asus-merlin-router-vpn-forwards.sh`
-- platform mini packages for common desktop architectures
-- Windows x64/ARM64 no-install Portable packages and home-linked PortableApps.com Format 3.9 source packages
+- on-demand macOS/Linux/Windows packages
+- Windows x64/ARM64 no-install Portable ZIPs
+- the full private client bundle as an on-demand advanced/offline fallback
 - universal/native protocol configuration and QR guidance
-- checksums
-- the full private bundle as an advanced fallback
 
-It also documents WireGuard, AmneziaWG, Shadowsocks 2022, Hysteria2, Xray/REALITY, SOCKS5, OverTLS, ShadowsocksR and other generated compatibility paths.
+PortableApps.com/PAF packaging is intentionally not supported. The project's own Portable ZIP is retained because it is deterministic, relocation-tested on Windows CI, and does not depend on an interactive third-party packager.
 
 ## Client/build targets
 
-GitHub Actions is the compile/test environment; the AI Board should host/publish already-built clients rather than being used as the iterative build/debug machine.
+GitHub Actions is the compile/test environment; the AI Board hosts runtime services and creates only a requested fallback package from already-built image binaries when a matching GitHub artifact is unavailable.
 
 First-class build targets include:
 
-- iOS / iPadOS IPA project and artifacts
 - Android APK
 - macOS Apple Silicon (`darwin/arm64`)
 - macOS Intel (`darwin/amd64`)
 - Windows x64 and ARM64
 - Windows no-install Portable x64/ARM64
-- PortableApps.com Format 3.9 source packages x64/ARM64 plus official `.paf.exe` artifacts built with the current PortableApps.com Installer
 - Linux x64, ARM64 and ARMv7
 - FreeBSD x64 / ARM64
 - OpenBSD x64 / ARM64
@@ -109,13 +108,13 @@ First-class build targets include:
 - DragonFly BSD x64
 - illumos x64
 
-Common macOS/Linux/Windows packages are also published by the home node when the matching binaries are present.
+The iOS/iPadOS SwiftUI project also builds an **explicit preview IPA**. Its Packet Tunnel target intentionally returns unavailable until real native WireGuard/AmneziaWG/Xray/sing-box adapters are linked; the project does not claim that preview is a working full-device VPN. Immediate working iOS paths remain generated WireGuard/AmneziaWG profiles imported into compatible native clients.
 
 ## Validation policy
 
 A mode is never made green merely to improve the UI. `modes/check-mode.sh` and `modes/check-combined.sh` validate the generated assets used by the client. ARM64 CI explicitly regenerates and checks the previously problematic Dual Transport, PQ Dual Transport, MAX QUIC WG/AWG, MAX TLS WG/AWG and ALL branches.
 
-Windows Portable CI executes the real x64 launcher, checks the 16-mode logical API, releases the local controller, moves the entire package to a different filesystem path, and runs it again. Separate PortableApps CI builds real `.paf.exe` files with the official PortableApps.com Installer and install/upgrade-tests the x64 PAF while verifying that `Data` is preserved.
+Windows Portable CI executes the real x64/ARM64 launcher, checks the 16-mode logical API, releases the local controller, moves the entire package to a different filesystem path, and runs it again.
 
 Production Portainer compose is image-only. Do not treat a Dockerfile build alone as deployment proof; reproduce failures in GitHub Actions first.
 
@@ -129,7 +128,7 @@ This boundary is intentional: the UI must report an unavailable capability rathe
 
 - `docs/FULL-TUTORIAL.md` — full deployment/use guide
 - `docs/CLIENT.md` — client/platform notes
-- `docs/WINDOWS-PORTABLE.md` — Windows Portable, PortableApps 3.9, WSL runtime and relocation behavior
+- `docs/WINDOWS-PORTABLE.md` — Windows Portable ZIP, WSL runtime and relocation behavior
 - `docs/MODES.md` — raw runtime mode details
 - `SECURITY.md` — security boundaries
 - `router/asus-merlin-router-vpn-forwards.sh` — persistent ASUS WAN forwarding helper
