@@ -107,11 +107,13 @@ TXT
   package_zip "RouterVPN-Windows-$arch" "$dir"
 done
 
+# No-install Windows Portable ZIP. This is intentionally our own portable layout,
+# not PortableApps.com Format, so it stays deterministic and fully CI-testable.
 for arch in amd64 arm64; do
   root="$OUT/work/RouterVPNPortable-$arch"
   app="$root/App/RouterVPN"
   data="$root/Data"
-  mkdir -p "$app" "$data/generated" "$root/Other"
+  mkdir -p "$app" "$data/generated"
   copy_runtime "$app"
   cp -a "$ROOT/client" "$app/client"
   cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe"
@@ -131,53 +133,7 @@ then routes Router VPN mode checks/runs through WSL with Windows paths translate
 Move the whole RouterVPNPortable folder together; private imported profiles remain in Data.
 Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.
 TXT
-
   package_zip "RouterVPN-Portable-Windows-$arch" "$root"
-
-  mkdir -p "$root/App/AppInfo" "$root/Other/Help"
-  cp "$root/README.txt" "$root/Other/Help/readme.txt"
-  rm -f "$root/README.txt" "$root/Setup-Windows-Runtime.ps1"
-  cat >"$root/App/AppInfo/appinfo.ini" <<EOF
-[Format]
-Type=PortableApps.comFormat
-Version=3.9
-
-[Details]
-Name=Router VPN Portable ($arch)
-AppId=RouterVPNPortable${arch}Eabusham2
-Publisher=Eabusham2
-Homepage=https://github.com/Eabusham2/router-vpn
-Category=Internet
-Description=Portable Router VPN controller, logical-mode selector, and private profile manager
-Language=English
-
-[License]
-Shareable=true
-OpenSource=true
-Freeware=true
-CommercialUse=true
-EULAVersion=0
-
-[Version]
-PackageVersion=0.7.0.0
-DisplayVersion=0.7.0 Alpha
-
-[Control]
-Icons=2
-Start=RouterVPNPortable.exe
-Start1=RouterVPNPortable.exe
-Name1=Router VPN Portable
-Start2=RouterVPNSetupRuntime.exe
-Name2=Router VPN Portable - Setup Windows Runtime
-EOF
-  cat >"$root/App/AppInfo/installer.ini" <<'EOF'
-[MainDirectories]
-RemoveAppDirectory=true
-RemoveDataDirectory=false
-RemoveOtherDirectory=true
-EOF
-  python3 "$ROOT/deploy/make-portableapps-icons.py" "$root/App/AppInfo"
-  package_zip "RouterVPNPortable-$arch" "$root"
 done
 
 while IFS= read -r binary; do
