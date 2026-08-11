@@ -13,8 +13,9 @@ copy_public(){
 }
 
 # Large packages are deliberately NOT published here. Remove files left by any
-# older release so an upgrade immediately returns the space. The download broker
-# creates only the requested archive under /tmp, streams it, then deletes it.
+# older release, including retired PortableApps files, so upgrades reclaim space.
+# The download broker creates only the requested archive under /tmp, streams it,
+# then deletes it.
 rm -f \
   "$OUT"/router-vpn-macos-*.zip \
   "$OUT"/router-vpn-linux-*.zip \
@@ -31,13 +32,21 @@ copy_public "$BUNDLE/router/asus-merlin-router-vpn-forwards.sh" "asus-merlin-rou
 copy_public "$BUNDLE/modes.json"
 copy_public "$BUNDLE/logical-modes.json"
 
-# Keep the same stable download URLs in the Setup Center. The broker intercepts
-# these names and resolves them GitHub-build-first, local-prebuilt fallback.
+# Keep stable on-demand URLs in the Setup Center. PortableApps was retired;
+# Router VPN's own tested no-install Portable ZIP remains supported.
 python3 - "$BUNDLE/router-vpn-device-setup.html" "$BUNDLE/setup-assets.json" <<'PY'
 from pathlib import Path
 import json,sys
 html=Path(sys.argv[1]); assets=Path(sys.argv[2])
 text=html.read_text()
+
+# Strip links injected by older releases before adding the current set.
+for stale in (
+  "['PortableApps 3.9 x64 source','router-vpn-portableapps-amd64.zip','On-demand home-linked PortableApps source; MIT open source'],",
+  "['PortableApps 3.9 ARM64 source','router-vpn-portableapps-arm64.zip','On-demand home-linked PortableApps source; MIT open source'],",
+):
+    text=text.replace(stale,'')
+
 needle="['Linux x86-64','router-vpn-linux-amd64.zip','x86-64 Linux'],"
 if 'router-vpn-windows-portable-amd64.zip' not in text:
     extra=(
@@ -45,15 +54,11 @@ if 'router-vpn-windows-portable-amd64.zip' not in text:
       "['Windows ARM64','router-vpn-windows-arm64.zip','On-demand Windows ARM64 package'],"
       "['Portable Windows x64','router-vpn-windows-portable-amd64.zip','On-demand home-linked no-install portable folder'],"
       "['Portable Windows ARM64','router-vpn-windows-portable-arm64.zip','On-demand home-linked no-install portable folder'],"
-      "['PortableApps 3.9 x64 source','router-vpn-portableapps-amd64.zip','On-demand home-linked PortableApps source; MIT open source'],"
-      "['PortableApps 3.9 ARM64 source','router-vpn-portableapps-arm64.zip','On-demand home-linked PortableApps source; MIT open source'],"
     )
     if needle not in text:
         raise SystemExit('Setup Center download marker changed; refusing to publish broken download links')
     text=text.replace(needle, needle+''.join(extra), 1)
 
-# Add one small, visible storage/source note without changing the generated UI
-# structure. Repeated finalizers are idempotent.
 if 'Packages are generated on demand' not in text:
     marker='</body>'
     note=(
@@ -75,12 +80,12 @@ wanted=[
  'router-vpn-linux-arm64.zip','router-vpn-linux-amd64.zip',
  'router-vpn-windows-amd64.zip','router-vpn-windows-arm64.zip',
  'router-vpn-windows-portable-amd64.zip','router-vpn-windows-portable-arm64.zip',
- 'router-vpn-portableapps-amd64.zip','router-vpn-portableapps-arm64.zip',
  'router-vpn-client-bundle.zip'
 ]
-arr=data.setdefault('downloads',[])
+arr=[x for x in data.get('downloads',[]) if 'portableapps' not in str(x).lower()]
 for item in wanted:
     if item not in arr: arr.append(item)
+data['downloads']=arr
 data['download_policy']={
   'mode':'on-demand',
   'preferred_source':'github-actions',
@@ -106,4 +111,4 @@ cat >"$OUT/download-policy.json" <<'JSON'
 JSON
 chmod 0600 "$OUT"/* 2>/dev/null || true
 
-echo 'Published lightweight Setup Center only; large client/Portable/PortableApps packages are ephemeral on-demand downloads.'
+echo 'Published lightweight Setup Center only; large client/Portable packages are ephemeral on-demand downloads.'
