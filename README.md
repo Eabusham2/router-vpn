@@ -82,6 +82,7 @@ The AI Board Setup Center is the server/router onboarding and recovery surface. 
 - `router-vpn-bundle.json`
 - `asus-merlin-router-vpn-forwards.sh`
 - platform mini packages for common desktop architectures
+- Windows x64/ARM64 no-install Portable packages and home-linked PortableApps.com Format 3.9 source packages
 - universal/native protocol configuration and QR guidance
 - checksums
 - the full private bundle as an advanced fallback
@@ -99,6 +100,8 @@ First-class build targets include:
 - macOS Apple Silicon (`darwin/arm64`)
 - macOS Intel (`darwin/amd64`)
 - Windows x64 and ARM64
+- Windows no-install Portable x64/ARM64
+- PortableApps.com Format 3.9 source packages x64/ARM64 plus official `.paf.exe` artifacts built with the current PortableApps.com Installer
 - Linux x64, ARM64 and ARMv7
 - FreeBSD x64 / ARM64
 - OpenBSD x64 / ARM64
@@ -112,6 +115,8 @@ Common macOS/Linux/Windows packages are also published by the home node when the
 
 A mode is never made green merely to improve the UI. `modes/check-mode.sh` and `modes/check-combined.sh` validate the generated assets used by the client. ARM64 CI explicitly regenerates and checks the previously problematic Dual Transport, PQ Dual Transport, MAX QUIC WG/AWG, MAX TLS WG/AWG and ALL branches.
 
+Windows Portable CI executes the real x64 launcher, checks the 16-mode logical API, releases the local controller, moves the entire package to a different filesystem path, and runs it again. Separate PortableApps CI builds real `.paf.exe` files with the official PortableApps.com Installer and install/upgrade-tests the x64 PAF while verifying that `Data` is preserved.
+
 Production Portainer compose is image-only. Do not treat a Dockerfile build alone as deployment proof; reproduce failures in GitHub Actions first.
 
 ## Current platform boundary
@@ -124,6 +129,7 @@ This boundary is intentional: the UI must report an unavailable capability rathe
 
 - `docs/FULL-TUTORIAL.md` — full deployment/use guide
 - `docs/CLIENT.md` — client/platform notes
+- `docs/WINDOWS-PORTABLE.md` — Windows Portable, PortableApps 3.9, WSL runtime and relocation behavior
 - `docs/MODES.md` — raw runtime mode details
 - `SECURITY.md` — security boundaries
 - `router/asus-merlin-router-vpn-forwards.sh` — persistent ASUS WAN forwarding helper
