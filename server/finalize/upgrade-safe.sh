@@ -149,12 +149,14 @@ mkdir -p "$BASE/client-bundle/router"
 cp /src/router/asus-merlin-router-vpn-forwards.sh "$BASE/client-bundle/router/"
 chmod 0755 "$BASE/client-bundle/router/asus-merlin-router-vpn-forwards.sh"
 
-# Publish the Setup Center plus direct profile/helper and small platform-specific
-# downloads. Keep the full private bundle only as an advanced/offline fallback.
+# Publish only lightweight static Setup Center files. Large packages, including
+# the private full bundle, are built by the download broker only when requested.
 bash /src/server/scripts/publish-downloads.sh "$BASE"
-cp "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
+# Remove a legacy root-level bundle left by older releases; client-bundle remains
+# the canonical source used for ephemeral on-demand generation.
+rm -f "$BASE/router-vpn-client-bundle.zip"
 
 export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT SS_V2RAY_PORT NAIVE_PORT OVERTLS_PORT SSR_PORT
 bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
 touch "$BASE/.finalized"
-echo 'Credential-preserving upgrade finalization complete with Setup Center, direct downloads, and auxiliary compatibility profiles.'
+echo 'Credential-preserving upgrade finalization complete with Setup Center, ephemeral downloads, and auxiliary compatibility profiles.'
