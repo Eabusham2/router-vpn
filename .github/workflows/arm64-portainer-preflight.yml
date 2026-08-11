@@ -41,6 +41,7 @@ jobs:
           python3 -m json.tool configs/client/modes.json >/dev/null
           find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          sh -n router/asus-merlin-router-vpn-forwards.sh
           if grep -Eq '^[[:space:]]*build:' server/portainer-current.yaml; then
             echo 'ERROR: Portainer production compose must be pull-only; build: is forbidden.' >&2
             exit 1
@@ -59,31 +60,36 @@ jobs:
           rm -rf "$TEST_ROOT"
           mkdir -p "$TEST_ROOT"
           docker run --rm --privileged --platform linux/arm64 \
-            -e WAN_INTERFACE=eth0 \
-            -e LAN_CIDR=192.168.50.0/24 \
-            -e ADGUARD4=192.168.50.133 \
-            -e ENDPOINT=1.1.1.1 \
-            -v "$TEST_ROOT:/opt/router-vpn" \
-            router-vpn-preflight-init:arm64
-          docker run --rm --platform linux/arm64 \
-            -v "$TEST_ROOT:/opt/router-vpn:ro" \
-            alpine:3.22 sh -c 'test -e /opt/router-vpn/.initialized && test -s /opt/router-vpn/config/router-agent.json && test -s /opt/router-vpn/config/transports/server.json && test -s /opt/router-vpn/config/xray/server.json && test -s /opt/router-vpn/downloads/router-vpn-client-bundle.zip'
+            -e WAN_INTERFACE=eth0 -e LAN_CIDR=192.168.50.0/24 \
+            -e ADGUARD4=192.168.50.133 -e ENDPOINT=1.1.1.1 \
+            -v "$TEST_ROOT:/opt/router-vpn" router-vpn-preflight-init:arm64
+          docker run --rm --platform linux/arm64 -v "$TEST_ROOT:/opt/router-vpn:ro" alpine:3.22 sh -c '
+            test -e /opt/router-vpn/.initialized &&
+            test -s /opt/router-vpn/config/router-agent.json &&
+            test -s /opt/router-vpn/config/transports/server.json &&
+            test -s /opt/router-vpn/config/xray/server.json &&
+            test -s /opt/router-vpn/downloads/router-vpn-client-bundle.zip
+          '
 
       - name: Run ARM64 finalizer end to end
         run: |
           TEST_ROOT="$RUNNER_TEMP/router-vpn-preflight"
           docker run --rm --privileged --platform linux/arm64 \
-            -e WAN_INTERFACE=eth0 \
-            -e LAN_CIDR=192.168.50.0/24 \
-            -e ADGUARD4=192.168.50.133 \
-            -e ENDPOINT=1.1.1.1 \
-            -v "$TEST_ROOT:/opt/router-vpn" \
-            --entrypoint /bin/bash \
-            router-vpn-preflight-init:arm64 \
-            /src/server/finalize/current-entrypoint.sh
-          docker run --rm --platform linux/arm64 \
-            -v "$TEST_ROOT:/opt/router-vpn:ro" \
-            alpine:3.22 sh -c 'test -e /opt/router-vpn/.finalized && test -s /opt/router-vpn/downloads/router-vpn-client-bundle.zip && test -s /opt/router-vpn/config/rosenpass/server.toml && test -s /opt/router-vpn/client-bundle/routers.json'
+            -e WAN_INTERFACE=eth0 -e LAN_CIDR=192.168.50.0/24 \
+            -e ADGUARD4=192.168.50.133 -e ENDPOINT=1.1.1.1 \
+            -e OVERTLS_PORT=14443 -e OVERTLS_INTERNAL_PORT=14444 -e SSR_PORT=15443 \
+            -v "$TEST_ROOT:/opt/router-vpn" --entrypoint /bin/bash \
+            router-vpn-preflight-init:arm64 /src/server/finalize/current-entrypoint.sh
+          docker run --rm --platform linux/arm64 -v "$TEST_ROOT:/opt/router-vpn:ro" alpine:3.22 sh -c '
+            test -e /opt/router-vpn/.finalized &&
+            test -s /opt/router-vpn/downloads/router-vpn-client-bundle.zip &&
+            test -s /opt/router-vpn/config/rosenpass/server.toml &&
+            test -s /opt/router-vpn/client-bundle/routers.json &&
+            test -s /opt/router-vpn/client-bundle/setup-assets.json &&
+            test -s /opt/router-vpn/downloads/router-vpn-device-setup.html &&
+            test -s /opt/router-vpn/config/aux/overtls-server.json &&
+            test -s /opt/router-vpn/config/aux/ssr-server.json
+          '
 
       - name: Build router agent image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f deploy/router-agent.Dockerfile -t router-vpn-preflight-agent:arm64 .
@@ -103,15 +109,20 @@ jobs:
       - name: Build SS plus V2Ray image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/ss-v2ray/Dockerfile -t router-vpn-preflight-ss-v2ray:arm64 .
 
+      - name: Build auxiliary proxy image
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-preflight-aux:arm64 .
+
       - name: Smoke-test built ARM64 binaries
         run: |
-          docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-init:arm64 -c 'test -x /usr/local/bin/router-vpn-init && test -x /src/server/scripts/generate-transports.sh && test -x /src/server/scripts/generate-xray-pq.sh && test -x /src/server/scripts/create-bundle-json.py && test -x /src/server/scripts/apply-runtime.sh'
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-init:arm64 -c 'test -x /usr/local/bin/router-vpn-init && test -x /src/server/scripts/generate-setup-assets.py && test -x /src/server/scripts/generate-aux-proxies.py && test -x /src/server/scripts/create-bundle-json.py && test -x /src/server/scripts/apply-runtime.sh'
           docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-agent:arm64 -c 'test -x /usr/local/bin/router-vpn-agent'
           docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-wireguard:arm64 -c 'command -v wg >/dev/null && command -v wg-quick >/dev/null && command -v wireguard-go >/dev/null && wireguard-go --version 2>&1 | grep -qi wireguard'
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/amneziawg-go router-vpn-preflight-awg2:arm64 --version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/rosenpass router-vpn-preflight-rosenpass:arm64 --version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/bin/caddy router-vpn-preflight-naive:arm64 version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/bin/v2ray-plugin router-vpn-preflight-ss-v2ray:arm64 -version >/dev/null
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-preflight-aux:arm64 --version >/dev/null
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-preflight-aux:arm64 -h >/dev/null 2>&1
 
       - name: Report preflight result
         if: always()

@@ -30,6 +30,14 @@ try:
 except Exception:
     fastest_latency=0.0
 
+setup_assets={}
+setup_path=base/'client-bundle'/'setup-assets.json'
+if setup_path.is_file():
+    try:
+        setup_assets=json.load(open(setup_path))
+    except Exception:
+        setup_assets={}
+
 router_profile={
     'id':'home',
     'name':'Home Router',
@@ -66,6 +74,7 @@ bundle={
     'socks5Username':socks_user,
     'socks5Password':socks_password,
     'dnsBenchmark':dns_benchmark,
+    'setupAssets':setup_assets,
     'routerProfiles':[router_profile],
     'selectedRouterID':'home',
     'modes':modes,

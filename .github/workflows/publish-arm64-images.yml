@@ -53,6 +53,9 @@ jobs:
           - name: ss-v2ray
             dockerfile: server/ss-v2ray/Dockerfile
             image: router-vpn-ss-v2ray
+          - name: aux
+            dockerfile: server/aux-proxies/Dockerfile
+            image: router-vpn-aux
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3

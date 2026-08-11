@@ -16,6 +16,9 @@ XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 XHTTP_PORT=${XHTTP_PORT:-11443}
 SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
 NAIVE_PORT=${NAIVE_PORT:-13443}
+OVERTLS_PORT=${OVERTLS_PORT:-14443}
+OVERTLS_INTERNAL_PORT=${OVERTLS_INTERNAL_PORT:-14444}
+SSR_PORT=${SSR_PORT:-15443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 
 for required in \
@@ -26,10 +29,7 @@ for required in \
   [[ -s "$required" ]] || { echo "Base initialization missing $required" >&2; exit 1; }
 done
 
-# Refresh public client code/catalog/builds while preserving this router's generated
-# private WG/AWG/Rosenpass profiles, token, selected endpoint, and keys.
 bash /src/server/finalize/sync-client-runtime.sh "$BASE"
-
 eval "$(python3 /src/server/finalize/detect-settings.py "$BASE")"
 CONFIG_ENDPOINT=${ENDPOINT:-router.invalid}
 
@@ -70,9 +70,6 @@ if ! bash /src/server/scripts/ensure-rosenpass.sh "$BASE" "$CONFIG_ENDPOINT" "$R
     "$BASE/client-bundle/generated/awg2-pq/rosenpass-server-public"
 fi
 
-# Rebuild transport-generated profiles on every redeploy. This migrates older
-# installs from sing-box REALITY to the validated Xray REALITY/Vision implementation
-# while preserving the long-lived WG/AWG/Rosenpass keys above.
 bash /src/server/scripts/generate-transports.sh \
   "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$REALITY_TARGET"
 bash /src/server/scripts/generate-xray-pq.sh \
@@ -118,10 +115,27 @@ if ! bash /src/server/scripts/generate-tls-alternates.sh "$BASE" "$CONFIG_ENDPOI
     "$BASE/client-bundle/generated/naive-h3"
 fi
 
+# Auxiliary compatibility methods are kept outside the 20-mode AUTO catalog.
+# OverTLS uses Caddy TLS on the public port and plaintext only on loopback.
+export OVERTLS_INTERNAL_PORT
+if [[ -s "$BASE/config/tls/settings.env" ]]; then
+  python3 /src/server/scripts/generate-aux-proxies.py \
+    "$BASE" "$CONFIG_ENDPOINT" "$OVERTLS_PORT" "$SSR_PORT"
+else
+  echo 'TLS settings unavailable; disabling OverTLS/SSR compatibility bundle assets.' >&2
+  rm -rf "$BASE/config/aux" "$BASE/client-bundle/generated/overtls" "$BASE/client-bundle/generated/shadowsocksr"
+fi
+
 if ! python3 /src/server/scripts/benchmark-dns.py "$BASE" >/dev/null; then
   echo 'Warning: public DNS benchmark failed; using bundle fallback until next upgrade/redeploy.' >&2
   rm -f "$BASE/config/dns-fastest.json"
 fi
+
+# This is a required user-facing product feature: fail finalization if private
+# setup QR/URL generation breaks instead of silently shipping a half-working UI.
+python3 /src/server/scripts/generate-setup-assets.py "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4"
+[[ -s "$BASE/client-bundle/setup-assets.json" ]]
+[[ -s "$BASE/client-bundle/router-vpn-device-setup.html" ]]
 
 TOKEN=$(python3 - "$BASE/config/router-agent.json" <<'PY'
 import json,sys
@@ -159,33 +173,38 @@ PQ REALITY TCP: $XRAY_PQ_PORT
 XHTTP/FinalMask TCP: $XHTTP_PORT
 SS + V2Ray TLS TCP: $SS_V2RAY_PORT
 Naive HTTPS TCP/UDP: $NAIVE_PORT
+SOCKS5 + TLS / OverTLS TCP: $OVERTLS_PORT
+ShadowsocksR legacy TCP/UDP: $SSR_PORT
 Automatic TLS hostname: $TLS_INFO
 Certificate challenge external TCP: 80 -> AI Board TCP 18080
 Fastest public DNS at home: $DNS_FASTEST
 Default DNS policy: fastest (changeable to Home AdGuard, custom, DoT, DoH, DoH3, or rescue in client)
 SOCKS5 after VPN connects: $ADGUARD4:1080
 SOCKS5 authentication: none
+Private Device Setup WebGUI (home LAN only): http://$ADGUARD4:8786/router-vpn-device-setup.html
 Router API token: $TOKEN
 TXT
 
 python3 /src/server/scripts/create-bundle-json.py \
   "$BASE" "$ENDPOINT" "$TOKEN" "http://$ADGUARD4:8787" "$ADGUARD4" "" ""
 
-# Ship the persistent ASUS Merlin WAN-forward helper with the private bundle so
-# first-run onboarding can configure the router without users reconstructing rules.
 mkdir -p "$BASE/client-bundle/router"
 cp /src/router/asus-merlin-router-vpn-forwards.sh "$BASE/client-bundle/router/"
 chmod 0755 "$BASE/client-bundle/router/asus-merlin-router-vpn-forwards.sh"
 
-rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
+rm -f \
+  "$BASE/downloads/router-vpn-client-bundle.zip" \
+  "$BASE/downloads/router-vpn-device-setup.html" \
+  "$BASE/router-vpn-client-bundle.zip"
+cp "$BASE/client-bundle/router-vpn-device-setup.html" "$BASE/downloads/router-vpn-device-setup.html"
 (
   cd "$BASE/client-bundle"
   zip -qr "$BASE/downloads/router-vpn-client-bundle.zip" .
 )
 cp "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
 
-export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT SS_V2RAY_PORT NAIVE_PORT
+export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT SS_V2RAY_PORT NAIVE_PORT OVERTLS_PORT SSR_PORT
 bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
 touch "$BASE/.finalized"
 
-echo 'Finalization complete: current transport/PQ/TLS profiles generated where supported; SOCKS5 uses IP and port only.'
+echo 'Finalization complete: current transport/PQ/TLS profiles and private setup assets generated; auxiliary OverTLS/SSR remain separate from AUTO.'

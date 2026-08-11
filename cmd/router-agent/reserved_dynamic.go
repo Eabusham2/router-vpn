@@ -38,7 +38,6 @@ func init() {
 			}
 		}
 	}
-	// ACME challenge is intentionally public but must never be handed to DMZ.
 	reserved[80] = true
 
 	root := filepath.Dir(path)
@@ -81,16 +80,23 @@ func init() {
 	addJSONPorts(filepath.Join(root, "transports", "server.json"))
 	addJSONPorts(filepath.Join(root, "xray", "server.json"))
 
-	if x, err := os.ReadFile(filepath.Join(root, "tls", "generated.json")); err == nil {
+	addScalarPorts := func(file string, keys ...string) {
+		x, err := os.ReadFile(file)
+		if err != nil {
+			return
+		}
 		var v map[string]any
-		if json.Unmarshal(x, &v) == nil {
-			for _, key := range []string{"ss_v2ray_port", "naive_port"} {
-				if n, ok := v[key].(float64); ok && n >= 1 && n <= 65535 {
-					reserved[int(n)] = true
-				}
+		if json.Unmarshal(x, &v) != nil {
+			return
+		}
+		for _, key := range keys {
+			if n, ok := v[key].(float64); ok && n >= 1 && n <= 65535 {
+				reserved[int(n)] = true
 			}
 		}
 	}
+	addScalarPorts(filepath.Join(root, "tls", "generated.json"), "ss_v2ray_port", "naive_port")
+	addScalarPorts(filepath.Join(root, "aux", "generated.json"), "overtls_port", "overtls_internal_port", "ssr_port")
 
 	if x, err := os.ReadFile(filepath.Join(root, "rosenpass", "server.toml")); err == nil {
 		for _, m := range regexp.MustCompile(`(?m)["'](?:0\.0\.0\.0|\[::\]):(\d+)["']`).FindAllSubmatch(x, -1) {
@@ -119,5 +125,5 @@ func init() {
 		os.Setenv("ROUTER_VPN_CONFIG", tmp)
 	}
 
-	_ = strings.Builder{} // keep imports stable for older Go formatters
+	_ = strings.Builder{}
 }

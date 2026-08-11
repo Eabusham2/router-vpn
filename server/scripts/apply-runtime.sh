@@ -13,6 +13,8 @@ XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 XHTTP_PORT=${XHTTP_PORT:-11443}
 SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
 NAIVE_PORT=${NAIVE_PORT:-13443}
+OVERTLS_PORT=${OVERTLS_PORT:-14443}
+SSR_PORT=${SSR_PORT:-15443}
 ACME_HTTP_PORT=${ACME_HTTP_PORT:-18080}
 FIREWALL_BACKEND=${ROUTER_VPN_FIREWALL_BACKEND:-auto}
 
@@ -33,8 +35,6 @@ set_sysctl net.ipv6.conf.all.forwarding 1
 set_sysctl net.ipv6.conf.default.forwarding 1
 sysctl -w net.ipv6.conf.all.accept_ra=2 >/dev/null 2>&1 || true
 
-# Return a firewall frontend only when its kernel backend is actually usable.
-# Embedded ARM kernels often ship the command but omit one of the legacy tables.
 pick_filter(){
   local family=$1 candidate
   if [[ $family == 4 ]]; then
@@ -68,10 +68,10 @@ install_iptables_guard(){
   "$ipt4" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
     "$ipt4" -A ROUTER_VPN_GUARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
   "$ipt4" -A ROUTER_VPN_GUARD -s "$LAN" -j ACCEPT
-  for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT"; do
+  for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT" "$SSR_PORT"; do
     "$ipt4" -A ROUTER_VPN_GUARD -p udp --dport "$port" -j ACCEPT
   done
-  for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT"; do
+  for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT" "$OVERTLS_PORT" "$SSR_PORT"; do
     "$ipt4" -A ROUTER_VPN_GUARD -p tcp --dport "$port" -j ACCEPT
   done
   "$ipt4" -A ROUTER_VPN_GUARD -j DROP
@@ -85,10 +85,10 @@ install_iptables_guard(){
     "$ipt6" -A ROUTER_VPN_GUARD -s fe80::/10 -j ACCEPT
     "$ipt6" -A ROUTER_VPN_GUARD -s "$LAN6" -j ACCEPT
     "$ipt6" -A ROUTER_VPN_GUARD -p ipv6-icmp -j ACCEPT
-    for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT"; do
+    for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT" "$SSR_PORT"; do
       "$ipt6" -A ROUTER_VPN_GUARD -p udp --dport "$port" -j ACCEPT
     done
-    for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT"; do
+    for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT" "$OVERTLS_PORT" "$SSR_PORT"; do
       "$ipt6" -A ROUTER_VPN_GUARD -p tcp --dport "$port" -j ACCEPT
     done
     "$ipt6" -A ROUTER_VPN_GUARD -j DROP
@@ -110,8 +110,8 @@ add rule inet router_vpn_guard input iifname "$WAN" ip saddr $LAN accept
 add rule inet router_vpn_guard input iifname "$WAN" ip6 saddr fe80::/10 accept
 add rule inet router_vpn_guard input iifname "$WAN" ip6 saddr $LAN6 accept
 add rule inet router_vpn_guard input iifname "$WAN" meta l4proto 58 accept
-add rule inet router_vpn_guard input iifname "$WAN" udp dport { $WG_PORT, $AWG_PORT, $ROSENPASS_PORT, $HY2_PORT, $SS_PORT, $NAIVE_PORT } accept
-add rule inet router_vpn_guard input iifname "$WAN" tcp dport { $ACME_HTTP_PORT, $REALITY_PORT, $SS_PORT, $XRAY_PQ_PORT, $XHTTP_PORT, $SS_V2RAY_PORT, $NAIVE_PORT } accept
+add rule inet router_vpn_guard input iifname "$WAN" udp dport { $WG_PORT, $AWG_PORT, $ROSENPASS_PORT, $HY2_PORT, $SS_PORT, $NAIVE_PORT, $SSR_PORT } accept
+add rule inet router_vpn_guard input iifname "$WAN" tcp dport { $ACME_HTTP_PORT, $REALITY_PORT, $SS_PORT, $XRAY_PQ_PORT, $XHTTP_PORT, $SS_V2RAY_PORT, $NAIVE_PORT, $OVERTLS_PORT, $SSR_PORT } accept
 add rule inet router_vpn_guard input iifname "$WAN" drop
 NFT
   then
@@ -127,8 +127,6 @@ if [[ $NFT_OK -eq 0 ]]; then
   install_iptables_guard
 fi
 
-# Forwarding is scoped to the VPN peer networks. Pick a backend that proves the
-# relevant filter table exists instead of assuming installed legacy tools work.
 IPT4=$(pick_filter 4) || { echo 'ERROR: no usable IPv4 FORWARD backend.' >&2; exit 1; }
 for subnet in 10.77.0.0/24 10.78.0.0/24; do
   "$IPT4" -C FORWARD -s "$subnet" -j ACCEPT >/dev/null 2>&1 || "$IPT4" -I FORWARD 1 -s "$subnet" -j ACCEPT
