@@ -72,35 +72,49 @@ jobs:
       - name: Verify Windows portable and PortableApps layouts
         run: |
           for arch in amd64 arm64; do
-            for archive in \
-              "dist/packages/RouterVPN-Portable-Windows-$arch.zip" \
-              "dist/packages/RouterVPNPortable-$arch.zip"; do
+            root="RouterVPNPortable-$arch"
+            portable="dist/packages/RouterVPN-Portable-Windows-$arch.zip"
+            paf="dist/packages/RouterVPNPortable-$arch.zip"
+
+            for archive in "$portable" "$paf"; do
               unzip -tq "$archive" >/dev/null
               list=$(unzip -Z1 "$archive")
-              root="RouterVPNPortable-$arch"
               grep -qx "$root/RouterVPNPortable.exe" <<<"$list"
-              grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$list"
               grep -qx "$root/App/RouterVPN/router-vpn-client.exe" <<<"$list"
               grep -qx "$root/App/RouterVPN/router-vpn-dns.exe" <<<"$list"
               grep -qx "$root/App/RouterVPN/modes.json" <<<"$list"
               grep -qx "$root/App/RouterVPN/logical-modes.json" <<<"$list"
               grep -qx "$root/App/RouterVPN/modes/check-mode.sh" <<<"$list"
               grep -qx "$root/App/RouterVPN/modes/check-combined.sh" <<<"$list"
+              grep -qx "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" <<<"$list"
               grep -qx "$root/App/RouterVPN/client/setup-windows-runtime.sh" <<<"$list"
               grep -qx "$root/App/RouterVPN/client/install-xray.sh" <<<"$list"
               grep -qx "$root/Data/generated/" <<<"$list"
-              # Generic GitHub artifacts must not ship somebody's private router state.
               if grep -qE "^$root/Data/(routers|state|client)\\.json$" <<<"$list"; then
-                echo "portable archive incorrectly pre-populates mutable Data files: $archive" >&2
+                echo "generic portable archive incorrectly pre-populates private Data: $archive" >&2
                 exit 1
               fi
             done
 
-            paf="dist/packages/RouterVPNPortable-$arch.zip"
-            list=$(unzip -Z1 "$paf")
-            grep -qx "RouterVPNPortable-$arch/App/AppInfo/appinfo.ini" <<<"$list"
-            unzip -p "$paf" "RouterVPNPortable-$arch/App/AppInfo/appinfo.ini" | grep -qx 'Type=PortableApps.comFormat'
-            unzip -p "$paf" "RouterVPNPortable-$arch/App/AppInfo/appinfo.ini" | grep -qx 'Start=RouterVPNPortable.exe'
+            # Raw portable keeps the convenience setup helper/readme at root.
+            portable_list=$(unzip -Z1 "$portable")
+            grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$portable_list"
+            grep -qx "$root/README.txt" <<<"$portable_list"
+
+            # PortableApps source follows Format 3.9 and keeps runtime setup under App.
+            paf_list=$(unzip -Z1 "$paf")
+            ! grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$paf_list"
+            ! grep -qx "$root/README.txt" <<<"$paf_list"
+            grep -qx "$root/App/AppInfo/appinfo.ini" <<<"$paf_list"
+            grep -qx "$root/App/AppInfo/installer.ini" <<<"$paf_list"
+            grep -qx "$root/Other/" <<<"$paf_list"
+            grep -qx "$root/Other/Help/readme.txt" <<<"$paf_list"
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Type=PortableApps.comFormat'
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Version=3.9'
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Icons=2'
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Start=RouterVPNPortable.exe'
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -q '^Start2=powershell.exe .*Setup-Windows-Runtime.ps1$'
+            unzip -p "$paf" "$root/App/AppInfo/installer.ini" | grep -qx 'RemoveDataDirectory=false'
           done
       - name: Verify logical catalog ships on desktop/Unix packages
         run: |
@@ -170,7 +184,6 @@ jobs:
             $logical = Get-Content (Join-Path $root.FullName 'Data\logical-modes.json') -Raw | ConvertFrom-Json
             if ($logical.Count -ne 16) { throw "Expected 16 portable logical modes; got $($logical.Count)" }
 
-            # Self-test must release 8788 and the package so PortableApps/USB can move.
             Start-Sleep -Milliseconds 400
             try {
               Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8788/api/status' -TimeoutSec 1 | Out-Null
