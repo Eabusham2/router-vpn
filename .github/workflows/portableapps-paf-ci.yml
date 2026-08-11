@@ -1,0 +1,83 @@
+name: PortableApps official PAF CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portableapps-paf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-packages:
+    name: Build PortableApps source packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Build Windows and PortableApps sources
+        run: |
+          chmod +x deploy/build-client.sh deploy/package-builds.sh
+          ./deploy/build-client.sh
+          ./deploy/package-builds.sh
+      - name: Verify PAF source metadata
+        run: |
+          for arch in amd64 arm64; do
+            zip="dist/packages/RouterVPNPortable-$arch.zip"
+            test -s "$zip"
+            unzip -tq "$zip" >/dev/null
+            root="RouterVPNPortable-$arch"
+            unzip -p "$zip" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Type=PortableApps.comFormat'
+            unzip -p "$zip" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Version=3.9'
+            unzip -p "$zip" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Start=RouterVPNPortable.exe'
+            unzip -p "$zip" "$root/App/AppInfo/installer.ini" | grep -qx 'RemoveDataDirectory=false'
+            unzip -Z1 "$zip" | grep -qx "$root/Other/"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-PortableApps-source
+          path: |
+            dist/packages/RouterVPNPortable-amd64.zip
+            dist/packages/RouterVPNPortable-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  build-paf:
+    name: Generate and install-test official PAF
+    needs: source-packages
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-PortableApps-source
+          path: portable-source
+      - name: Generate PAFs with official PortableApps.com Installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/paf | Out-Null
+          ./deploy/build-portableapps-paf.ps1 -PackagesDir "$PWD/portable-source" -OutDir "$PWD/dist/paf"
+      - name: Verify generated PAF files
+        shell: pwsh
+        run: |
+          $amd = Get-ChildItem dist/paf -Filter 'RouterVPNPortable-amd64_*.paf.exe' | Select-Object -First 1
+          $arm = Get-ChildItem dist/paf -Filter 'RouterVPNPortable-arm64_*.paf.exe' | Select-Object -First 1
+          if (-not $amd) { throw 'Missing amd64 official PAF' }
+          if (-not $arm) { throw 'Missing arm64 official PAF' }
+          if ($amd.Length -lt 100000) { throw 'amd64 PAF is unexpectedly small' }
+          if ($arm.Length -lt 100000) { throw 'arm64 PAF is unexpectedly small' }
+          Get-FileHash -Algorithm SHA256 $amd.FullName
+          Get-FileHash -Algorithm SHA256 $arm.FullName
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-PortableApps-PAF
+          path: dist/paf/*.paf.exe
+          if-no-files-found: error
+          retention-days: 14
