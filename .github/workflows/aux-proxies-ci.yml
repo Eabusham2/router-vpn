@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   arm64:
-    name: Native ARM64 setup assets + OverTLS + SSR + mode validation
+    name: Native ARM64 setup assets + portable downloads + mode validation
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +25,8 @@ jobs:
           python3 -m py_compile server/scripts/generate-setup-assets.py server/scripts/generate-aux-proxies.py
           python3 -m json.tool configs/client/logical-modes.json >/dev/null
           bash -n server/finalize/finalize.sh
+          bash -n server/finalize/upgrade-safe.sh
+          bash -n server/scripts/publish-downloads.sh
           bash -n server/aux-proxies/entrypoint.sh
           bash -n server/naive/entrypoint.sh
           bash -n modes/check-mode.sh
@@ -62,7 +64,49 @@ jobs:
             grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "SOCKS5 + TLS (OverTLS)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "ShadowsocksR" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
+            grep -q "router-vpn-windows-portable-amd64.zip" /opt/router-vpn/downloads/router-vpn-device-setup.html
+            grep -q "router-vpn-portableapps-arm64.zip" /opt/router-vpn/downloads/router-vpn-device-setup.html
           '
+
+      - name: Verify home-linked Portable and PortableApps packages
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          for arch in amd64 arm64; do
+            portable="$TEST_ROOT/downloads/router-vpn-windows-portable-$arch.zip"
+            paf="$TEST_ROOT/downloads/router-vpn-portableapps-$arch.zip"
+            test -s "$portable"
+            test -s "$paf"
+            unzip -tq "$portable" >/dev/null
+            unzip -tq "$paf" >/dev/null
+
+            root="RouterVPNPortable-$arch"
+            list=$(unzip -Z1 "$portable")
+            grep -qx "$root/RouterVPNPortable.exe" <<<"$list"
+            grep -qx "$root/App/RouterVPN/router-vpn-client.exe" <<<"$list"
+            grep -qx "$root/App/RouterVPN/router-vpn-dns.exe" <<<"$list"
+            grep -qx "$root/App/RouterVPN/modes.json" <<<"$list"
+            grep -qx "$root/App/RouterVPN/logical-modes.json" <<<"$list"
+            grep -qx "$root/Data/routers.json" <<<"$list"
+            grep -qx "$root/Data/generated/wg/wg.conf" <<<"$list"
+            grep -qx "$root/Data/generated/max-tls-wg/chain.env" <<<"$list"
+            grep -qx "$root/Data/generated/max-quic-awg/chain.env" <<<"$list"
+
+            plist=$(unzip -Z1 "$paf")
+            grep -qx "$root/App/AppInfo/appinfo.ini" <<<"$plist"
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Type=PortableApps.comFormat'
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Start=RouterVPNPortable.exe'
+          done
+          python3 - "$TEST_ROOT/client-bundle/setup-assets.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          got=set(x.get('downloads',[]))
+          expected={
+            'router-vpn-windows-amd64.zip','router-vpn-windows-arm64.zip',
+            'router-vpn-windows-portable-amd64.zip','router-vpn-windows-portable-arm64.zip',
+            'router-vpn-portableapps-amd64.zip','router-vpn-portableapps-arm64.zip'
+          }
+          assert expected <= got, sorted(expected-got)
+          PY
 
       - name: Validate formerly grey combined and MAX modes
         run: |
@@ -83,10 +127,6 @@ jobs:
               ./check-mode.sh max-tls-wg
 
               echo "=== AWG MAX generated profiles ==="
-              # The init validator image does not ship the macOS/Linux AWG client
-              # executables. Stub only command-presence probes here; check-mode still
-              # validates the real generated chain, Xray/sing-box configs, AWG files,
-              # CHAIN_READY/PQ_BASE markers, and Rosenpass assets.
               mkdir -p /tmp/awg-check-bin
               for cmd in amneziawg-go awg awg-quick; do
                 printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
