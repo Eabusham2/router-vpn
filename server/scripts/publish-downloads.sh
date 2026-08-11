@@ -170,16 +170,17 @@ Data contains this home node's private settings, generated profiles and portable
 Move the whole RouterVPNPortable-$arch folder together; do not publish/share it.
 TXT
 
+  # Ordinary no-installer package keeps the root setup helper for convenience.
   (
     cd "$TMP/portable-$arch"
     zip -qr "$OUT/router-vpn-windows-portable-$arch.zip" "RouterVPNPortable-$arch"
   )
 
-  # PortableApps.com Format 3.9 source package. Data is intentionally preserved
-  # across PortableApps upgrades. The AI Board publishes this home-linked source
-  # ZIP; CI separately creates installable .paf.exe artifacts with the official
-  # PortableApps.com Installer.
-  mkdir -p "$root/App/AppInfo"
+  # PortableApps.com Format 3.9 source. Keep the package root clean and expose
+  # Windows engine setup as a second PortableApps Platform menu item.
+  mkdir -p "$root/App/AppInfo" "$root/Other/Help"
+  cp "$root/README.txt" "$root/Other/Help/readme.txt"
+  rm -f "$root/README.txt" "$root/Setup-Windows-Runtime.ps1"
   cat >"$root/App/AppInfo/appinfo.ini" <<EOF
 [Format]
 Type=PortableApps.comFormat
@@ -205,9 +206,15 @@ PackageVersion=0.7.0.0
 DisplayVersion=0.7.0 Alpha
 
 [Control]
-Icons=1
+Icons=2
 Start=RouterVPNPortable.exe
+Start1=RouterVPNPortable.exe
+Name1=Router VPN Portable
+Start2=powershell.exe -NoProfile -ExecutionPolicy Bypass -File App\RouterVPN\client\Setup-Windows-Runtime.ps1
+Name2=Router VPN Portable - Setup Windows Runtime
 ExtractIcon=RouterVPNPortable.exe
+ExtractIcon1=RouterVPNPortable.exe
+ExtractIcon2=RouterVPNPortable.exe
 EOF
   cat >"$root/App/AppInfo/installer.ini" <<'EOF'
 [MainDirectories]
@@ -244,8 +251,8 @@ if 'router-vpn-windows-portable-amd64.zip' not in text:
       "['Windows ARM64','router-vpn-windows-arm64.zip','Windows ARM64 controller/app package'],"
       "['Portable Windows x64','router-vpn-windows-portable-amd64.zip','No-install home-linked portable folder'],"
       "['Portable Windows ARM64','router-vpn-windows-portable-arm64.zip','No-install home-linked portable folder'],"
-      "['PortableApps 3.9 x64 source','router-vpn-portableapps-amd64.zip','Home-linked PortableApps-format source folder; official .paf.exe comes from CI'],"
-      "['PortableApps 3.9 ARM64 source','router-vpn-portableapps-arm64.zip','Home-linked PortableApps-format source folder; official .paf.exe comes from CI'],"
+      "['PortableApps 3.9 x64 source','router-vpn-portableapps-amd64.zip','Home-linked PortableApps source folder with app + runtime setup menu entries; official .paf.exe comes from CI'],"
+      "['PortableApps 3.9 ARM64 source','router-vpn-portableapps-arm64.zip','Home-linked PortableApps source folder with app + runtime setup menu entries; official .paf.exe comes from CI'],"
     )
     if needle not in text:
         raise SystemExit('Setup Center download marker changed; refusing to publish unlinked portable downloads')
