@@ -86,10 +86,12 @@ jobs:
             list=$(unzip -Z1 "$portable")
             grep -qx "$root/RouterVPNPortable.exe" <<<"$list"
             grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$list"
+            grep -qx "$root/README.txt" <<<"$list"
             grep -qx "$root/App/RouterVPN/router-vpn-client.exe" <<<"$list"
             grep -qx "$root/App/RouterVPN/router-vpn-dns.exe" <<<"$list"
             grep -qx "$root/App/RouterVPN/modes.json" <<<"$list"
             grep -qx "$root/App/RouterVPN/logical-modes.json" <<<"$list"
+            grep -qx "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" <<<"$list"
             grep -qx "$root/App/RouterVPN/client/setup-windows-runtime.sh" <<<"$list"
             grep -qx "$root/App/RouterVPN/client/install-xray.sh" <<<"$list"
             grep -qx "$root/Data/routers.json" <<<"$list"
@@ -98,12 +100,17 @@ jobs:
             grep -qx "$root/Data/generated/max-quic-awg/chain.env" <<<"$list"
 
             plist=$(unzip -Z1 "$paf")
+            ! grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$plist"
+            ! grep -qx "$root/README.txt" <<<"$plist"
             grep -qx "$root/App/AppInfo/appinfo.ini" <<<"$plist"
             grep -qx "$root/App/AppInfo/installer.ini" <<<"$plist"
             grep -qx "$root/Other/" <<<"$plist"
+            grep -qx "$root/Other/Help/readme.txt" <<<"$plist"
             unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Type=PortableApps.comFormat'
             unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Version=3.9'
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Icons=2'
             unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Start=RouterVPNPortable.exe'
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -q '^Start2=powershell.exe .*Setup-Windows-Runtime.ps1$'
             unzip -p "$paf" "$root/App/AppInfo/installer.ini" | grep -qx 'RemoveDataDirectory=false'
           done
           python3 - "$TEST_ROOT/client-bundle/setup-assets.json" <<'PY'
