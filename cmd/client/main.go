@@ -25,17 +25,20 @@ import (
 	"router-vpn/internal/common"
 )
 
-//go:embed ui.html
+//go:embed ui.html logical_ui.js
 var uiFS embed.FS
 
 type state struct {
-	Connected bool   `json:"connected"`
-	Mode      string `json:"mode"`
-	RouterID  string `json:"router_id"`
-	DAITA     bool   `json:"daita"`
-	Jumbo     bool   `json:"jumbo"`
-	Socks     bool   `json:"socks"`
-	LastError string `json:"last_error"`
+	Connected   bool   `json:"connected"`
+	Mode        string `json:"mode"`
+	LogicalMode string `json:"logical_mode,omitempty"`
+	RuntimeMode string `json:"runtime_mode,omitempty"`
+	Base        string `json:"base,omitempty"`
+	RouterID    string `json:"router_id"`
+	DAITA       bool   `json:"daita"`
+	Jumbo       bool   `json:"jumbo"`
+	Socks       bool   `json:"socks"`
+	LastError   string `json:"last_error"`
 }
 
 type app struct {
@@ -112,6 +115,7 @@ func main() {
 
 	h := http.NewServeMux()
 	h.HandleFunc("/", a.index)
+	h.HandleFunc("/logical-ui.js", a.logicalUI)
 	h.HandleFunc("/api/status", a.status)
 	h.HandleFunc("/api/modes", a.listModes)
 	h.HandleFunc("/api/info", a.info)
@@ -155,7 +159,18 @@ func getenv(k, v string) string {
 
 func (a *app) index(w http.ResponseWriter, _ *http.Request) {
 	b, _ := uiFS.ReadFile("ui.html")
+	// Keep the established controller shell, then layer the logical-mode UI on top.
+	// This lets old recovery URLs continue to work while every packaged app gets
+	// one logical row per method and per-compatible-mode WG/AWG selection.
+	b = bytes.Replace(b, []byte("</body>"), []byte("<script src=\"/logical-ui.js\"></script></body>"), 1)
 	w.Header().Set("content-type", "text/html; charset=utf-8")
+	w.Header().Set("cache-control", "no-cache")
+	_, _ = w.Write(b)
+}
+
+func (a *app) logicalUI(w http.ResponseWriter, _ *http.Request) {
+	b, _ := uiFS.ReadFile("logical_ui.js")
+	w.Header().Set("content-type", "application/javascript; charset=utf-8")
 	w.Header().Set("cache-control", "no-cache")
 	_, _ = w.Write(b)
 }
@@ -770,6 +785,9 @@ func (a *app) startMode(id string) error {
 	a.cmd = cmd
 	a.state.Connected = true
 	a.state.Mode = id
+	a.state.LogicalMode = ""
+	a.state.RuntimeMode = id
+	a.state.Base = ""
 	a.state.RouterID = p.ID
 	a.state.LastError = ""
 	daitaEnabled := a.state.DAITA
@@ -798,6 +816,9 @@ func (a *app) stopMode() error {
 	a.cmd = nil
 	a.state.Connected = false
 	a.state.Mode = "off"
+	a.state.LogicalMode = ""
+	a.state.RuntimeMode = ""
+	a.state.Base = ""
 	a.mu.Unlock()
 	if coverCancel != nil {
 		coverCancel()
@@ -836,7 +857,11 @@ func (a *app) auto(w http.ResponseWriter, _ *http.Request) {
 		}
 		lat, err := a.testHealth()
 		if err == nil {
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": m.ID, "latency_ms": float64(lat.Microseconds()) / 1000})
+			a.mu.Lock()
+			a.state.LogicalMode = "auto"
+			a.state.RuntimeMode = m.ID
+			a.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": m.ID, "runtime_mode": m.ID, "logical_mode": "auto", "latency_ms": float64(lat.Microseconds()) / 1000})
 			return
 		}
 		_ = a.stopMode()
