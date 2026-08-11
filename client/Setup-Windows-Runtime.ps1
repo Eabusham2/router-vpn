@@ -1,5 +1,5 @@
 param(
-  [string]$PackageRoot = (Split-Path -Parent $PSScriptRoot)
+  [string]$PackageRoot = $PSScriptRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,12 +29,15 @@ if ($LASTEXITCODE -ne 0 -or (($probe -join '') -notmatch 'router-vpn-wsl-ready')
 
 $engineScript = Join-Path $PSScriptRoot 'setup-windows-runtime.sh'
 if (-not (Test-Path $engineScript)) {
-  throw "Missing engine installer: $engineScript"
+  $engineScript = Join-Path $PSScriptRoot 'App\RouterVPN\client\setup-windows-runtime.sh'
+}
+if (-not (Test-Path $engineScript)) {
+  throw "Missing Router VPN WSL engine installer under this package: $engineScript"
 }
 
 $wslScript = (& wsl.exe --exec wslpath -a -u $engineScript 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or -not $wslScript) {
-  throw 'Could not translate the portable Router VPN engine setup path into WSL.'
+  throw 'Could not translate the Router VPN engine setup path into WSL.'
 }
 
 $quoted = $wslScript.Replace("'", "'\"'\"'")
@@ -53,4 +56,4 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ''
 Write-Host 'Router VPN Windows runtime is ready.'
-Write-Host 'Close and reopen RouterVPNPortable.exe so it regenerates the Windows mode catalog and rechecks every method.'
+Write-Host 'Close and reopen RouterVPNPortable.exe (or Start-RouterVPN.ps1) so Router VPN regenerates/rechecks every Windows mode.'
