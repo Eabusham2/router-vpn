@@ -7,6 +7,14 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 HEALTH_URL=${HOMEVPN_HEALTH_URL:-https://connectivitycheck.gstatic.com/generate_204}
 TEST_SECONDS=${HOMEVPN_AUTO_TEST_SECONDS:-6}
 BASE=${HOMEVPN_BASE:-auto}
+RESULT_FILE=${HOMEVPN_ALL_RESULT_FILE:-}
+
+if [[ -n $RESULT_FILE ]]; then
+  mkdir -p "$(dirname -- "$RESULT_FILE")"
+  probe="${RESULT_FILE}.probe.$$"
+  : > "$probe"
+  rm -f "$probe" "$RESULT_FILE"
+fi
 
 if [[ $BASE == auto ]]; then
   BASE=$(python3 - "$ROOT/routers.json" "$PROFILE_ID" <<'PY'
@@ -45,6 +53,11 @@ for candidate in "${candidates[@]}"; do
   pid=$!
   sleep 2
   if kill -0 "$pid" >/dev/null 2>&1 && health; then
+    if [[ -n $RESULT_FILE ]]; then
+      tmp="${RESULT_FILE}.tmp.$$"
+      printf '%s\n' "$candidate" > "$tmp"
+      mv -f "$tmp" "$RESULT_FILE"
+    fi
     echo "ALL connected with $candidate" >&2
     wait "$pid"
     exit $?

@@ -9,9 +9,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"router-vpn/internal/common"
 )
+
+var logicalLaunchEnvMu sync.Mutex
 
 type logicalMode struct {
 	ID           string            `json:"id"`
@@ -250,6 +254,95 @@ func (a *app) persistBasePreference(base string) error {
 	return errors.New("no selected router profile")
 }
 
+func allRuntimeCandidate(runtimeID string) (runtimeCandidate, error) {
+	switch strings.TrimSpace(runtimeID) {
+	case "max-tls-wg", "max-quic-wg":
+		return runtimeCandidate{RuntimeID: strings.TrimSpace(runtimeID), Base: "wg"}, nil
+	case "max-tls-awg", "max-quic-awg":
+		return runtimeCandidate{RuntimeID: strings.TrimSpace(runtimeID), Base: "awg"}, nil
+	default:
+		return runtimeCandidate{}, fmt.Errorf("ALL reported unknown runtime branch %q", strings.TrimSpace(runtimeID))
+	}
+}
+
+func safeProfileIDForRuntimeFile(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "router"
+	}
+	return b.String()
+}
+
+func restoreEnv(key, old string, existed bool) {
+	if existed {
+		_ = os.Setenv(key, old)
+	} else {
+		_ = os.Unsetenv(key)
+	}
+}
+
+func (a *app) startAllLogical(requestedBase string) (runtimeCandidate, error) {
+	p, err := a.activeProfile()
+	if err != nil {
+		return runtimeCandidate{}, err
+	}
+	stateDir := filepath.Dir(a.cfg.StateFile)
+	if stateDir == "" {
+		stateDir = "."
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return runtimeCandidate{}, fmt.Errorf("prepare ALL runtime state: %w", err)
+	}
+	resultFile := filepath.Join(stateDir, ".router-vpn-all-"+safeProfileIDForRuntimeFile(p.ID)+".selected")
+	_ = os.Remove(resultFile)
+
+	preferred := a.preferredBase(requestedBase)
+	logicalLaunchEnvMu.Lock()
+	oldResult, hadResult := os.LookupEnv("HOMEVPN_ALL_RESULT_FILE")
+	oldBase, hadBase := os.LookupEnv("HOMEVPN_BASE")
+	_ = os.Setenv("HOMEVPN_ALL_RESULT_FILE", resultFile)
+	_ = os.Setenv("HOMEVPN_BASE", preferred)
+	err = a.startMode("all")
+	restoreEnv("HOMEVPN_BASE", oldBase, hadBase)
+	restoreEnv("HOMEVPN_ALL_RESULT_FILE", oldResult, hadResult)
+	logicalLaunchEnvMu.Unlock()
+	if err != nil {
+		return runtimeCandidate{}, err
+	}
+
+	seconds := 4*(a.cfg.AutoTestSeconds+3) + 5
+	if seconds < 25 {
+		seconds = 25
+	}
+	deadline := time.Now().Add(time.Duration(seconds) * time.Second)
+	for {
+		b, readErr := os.ReadFile(resultFile)
+		if readErr == nil {
+			_ = os.Remove(resultFile)
+			actual, parseErr := allRuntimeCandidate(string(b))
+			if parseErr != nil {
+				_ = a.stopMode()
+				return runtimeCandidate{}, parseErr
+			}
+			return actual, nil
+		}
+		if !errors.Is(readErr, os.ErrNotExist) {
+			_ = a.stopMode()
+			return runtimeCandidate{}, fmt.Errorf("read ALL runtime selection: %w", readErr)
+		}
+		if time.Now().After(deadline) {
+			_ = a.stopMode()
+			return runtimeCandidate{}, errors.New("ALL did not establish a healthy MAX TLS/QUIC branch before timeout")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, error) {
 	logical, ok := a.logicalModeByID(id)
 	if !ok {
@@ -261,6 +354,13 @@ func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, erro
 			return runtimeCandidate{}, err
 		}
 		return candidate, nil
+	}
+
+	// ALL owns its internal TLS/QUIC and WG/AWG fallback ordering. Launch it once
+	// and wait for the health-tested branch it actually selected so the UI reports
+	// a real fallback rather than merely echoing the requested base.
+	if id == "all" {
+		return a.startAllLogical(requestedBase)
 	}
 
 	candidates := a.candidatesForLogical(logical, requestedBase)

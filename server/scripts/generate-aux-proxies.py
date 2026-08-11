@@ -64,6 +64,9 @@ def main() -> int:
     secrets_path.chmod(0o600)
 
     # Public TLS terminates at Caddy. Plaintext is permitted only on 127.0.0.1.
+    # OverTLS requires the irrelevant half of the config to be absent entirely:
+    # an empty client_settings object still deserializes as a Client and therefore
+    # requires server_host/listen_host; the reverse is true for server_settings.
     overtls_server = {
         'method': 'none',
         'password': '',
@@ -74,13 +77,11 @@ def main() -> int:
             'listen_host': '127.0.0.1',
             'listen_port': internal_port,
         },
-        'client_settings': {},
     }
     overtls_client = {
         'method': 'none',
         'password': '',
         'tunnel_path': tunnel_path,
-        'server_settings': {},
         'client_settings': {
             'disable_tls': False,
             'server_host': endpoint,
