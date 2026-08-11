@@ -43,7 +43,9 @@ check_rosenpass(){
   need_file "$dir/rosenpass-server-public"
 }
 check_max(){
-  local mode=$1 base=$2 dir="$ROOT/generated/$PROFILE_ID/$mode"
+  local mode=$1
+  local base=$2
+  local dir="$ROOT/generated/$PROFILE_ID/$mode"
   [[ -d "$dir" ]] || dir="$ROOT/generated/$mode"
   need_file "$dir/chain.env"
   # shellcheck disable=SC1090
