@@ -9,10 +9,7 @@ COMPOSE="$ROOT_DIR/server/portainer-current.yaml"
 ENV_FILE=/opt/router-vpn/.env
 [[ -s "$ENV_FILE" ]] || { echo 'No existing Router VPN install found at /opt/router-vpn/.env'; exit 1; }
 
-echo 'Pulling the exact prebuilt images pinned by the current production compose...'
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE" pull
-
-echo 'Re-running init/finalizer without compiling on this host...'
+echo 'Refreshing Router VPN: exact GitHub images are preferred; missing custom images build locally from this checkout.'
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --force-recreate init finalize-current
 for container in router-vpn-init router-vpn-finalize; do
   docker wait "$container" >/dev/null 2>&1 || true
@@ -40,6 +37,7 @@ fi
 
 bash "$ROOT_DIR/server/scripts/cleanup-router-vpn-docker.sh"
 echo
-echo 'Upgrade complete from prebuilt images.'
+echo 'Upgrade complete.'
+echo 'Exact GitHub images remain preferred; local source builds are fallback-only.'
 echo 'Current-version profile credentials were preserved by the finalizer migration path.'
-echo 'Large client packages remain on-demand/ephemeral; no permanent bundle ZIP is required.'
+echo 'Large client packages remain on-demand/ephemeral; GitHub artifact first, requested-package local build second.'
