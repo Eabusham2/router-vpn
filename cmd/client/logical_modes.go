@@ -239,9 +239,8 @@ func (a *app) persistBasePreference(base string) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.state.Connected {
-		return errors.New("disconnect before changing the preferred base")
-	}
+	// Changing the preference does not mutate an already-running tunnel; it is
+	// simply the preference used by the next logical-mode launch.
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == a.profiles.SelectedID {
 			a.profiles.Profiles[i].BaseTunnel = base
@@ -302,6 +301,7 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mode is required", http.StatusBadRequest)
 		return
 	}
+	preferred := a.preferredBase(q.Base)
 	if normalizeBase(q.Base) != "auto" {
 		if err := a.persistBasePreference(q.Base); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -313,12 +313,13 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	fallbackUsed := used.Base != "native" && used.Base != "auto" && used.Base != preferred
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok": true,
 		"logical_mode": q.Mode,
 		"runtime_mode": used.RuntimeID,
 		"base": used.Base,
-		"fallback_used": normalizeBase(q.Base) != "auto" && used.Base != normalizeBase(q.Base),
+		"fallback_used": fallbackUsed,
 	})
 }
