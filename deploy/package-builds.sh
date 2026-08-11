@@ -21,9 +21,11 @@ copy_runtime(){
   mkdir -p "$dir/modes" "$dir/generated"
   cp "$ROOT/configs/client/client.json.example" "$dir/client.json"
   cp "$ROOT/configs/client/modes.json" "$dir/modes.json"
+  cp "$ROOT/configs/client/logical-modes.json" "$dir/logical-modes.json"
   cp -a "$ROOT/modes/." "$dir/modes/"
   write_blank_routers "$dir/routers.json"
   cp "$ROOT/docs/MODES.md" "$dir/MODES.md"
+  cp "$ROOT/docs/CLIENT.md" "$dir/CLIENT.md"
   cp "$ROOT/SECURITY.md" "$dir/SECURITY.md"
 }
 
@@ -37,8 +39,55 @@ package_tgz(){
   tar -C "$(dirname "$dir")" -czf "$OUT/$name.tar.gz" "$(basename "$dir")"
 }
 
-# Windows native controller packages. Full tunnel modes use WSL2 because the
-# launchers and upstream engines are Unix-oriented.
+write_windows_app_launcher(){
+  local file=$1
+  cat >"$file" <<'PS1'
+$ErrorActionPreference = 'Stop'
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$env:HOMEVPN_ROOT = $Root
+$env:HOMEVPN_CLIENT_CONFIG = Join-Path $Root 'client.json'
+$client = Join-Path $Root 'router-vpn-client.exe'
+
+function Test-RouterVPNReady {
+  try {
+    $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8788/api/status' -TimeoutSec 1
+    return $r.StatusCode -ge 200 -and $r.StatusCode -lt 300
+  } catch { return $false }
+}
+
+if (-not (Test-RouterVPNReady)) {
+  Start-Process $client -WorkingDirectory $Root
+}
+
+$deadline = (Get-Date).AddSeconds(12)
+while ((Get-Date) -lt $deadline -and -not (Test-RouterVPNReady)) {
+  Start-Sleep -Milliseconds 200
+}
+if (-not (Test-RouterVPNReady)) { throw 'Router VPN controller did not become ready on 127.0.0.1:8788' }
+
+$url = 'http://127.0.0.1:8788/'
+$candidates = @(
+  "$env:ProgramFiles(x86)\Microsoft\Edge\Application\msedge.exe",
+  "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+  "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+  "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe",
+  "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe",
+  "$env:ProgramFiles\BraveSoftware\Brave-Browser\Application\brave.exe",
+  "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe"
+)
+foreach ($browser in $candidates) {
+  if ($browser -and (Test-Path $browser)) {
+    Start-Process $browser -ArgumentList "--app=$url"
+    exit 0
+  }
+}
+Start-Process $url
+PS1
+}
+
+# Windows controller packages. The launcher opens Router VPN in a standalone
+# browser app window when Edge/Chrome/Brave is available. Full tunnel engines
+# that remain Unix-oriented still use WSL2 or native protocol clients.
 for arch in amd64 arm64; do
   dir="$OUT/work/RouterVPN-Windows-$arch"
   mkdir -p "$dir"
@@ -46,33 +95,45 @@ for arch in amd64 arm64; do
   cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$dir/router-vpn-client.exe"
   cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$dir/router-vpn-dns.exe"
   cp "$ROOT/client/install-windows.ps1" "$dir/install-windows.ps1"
-  cat >"$dir/Start-RouterVPN.ps1" <<'PS1'
-$ErrorActionPreference = 'Stop'
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$env:HOMEVPN_ROOT = $Root
-$env:HOMEVPN_CLIENT_CONFIG = Join-Path $Root 'client.json'
-Start-Process (Join-Path $Root 'router-vpn-client.exe') -WorkingDirectory $Root
-Start-Sleep -Milliseconds 900
-Start-Process 'http://127.0.0.1:8788'
-PS1
+  write_windows_app_launcher "$dir/Start-RouterVPN.ps1"
   cat >"$dir/README-WINDOWS.txt" <<'TXT'
-Run Start-RouterVPN.ps1 for the native controller and profile importer.
-For full AUTO/tunnel engines, install WSL2 and run the Linux package inside WSL2.
-Raw profile files can also be imported into matching native WireGuard/Amnezia clients.
+Run Start-RouterVPN.ps1. It starts the local Router VPN controller, verifies that it is
+responding, then opens Router VPN as a standalone Edge/Chrome/Brave app window when
+possible. Imported router profiles and generated private material stay in this folder.
+
+The Windows-native package is a controller/profile manager. Full multi-engine shell paths
+that require Unix transport executables still use WSL2 or matching native protocol apps.
 TXT
   package_zip "RouterVPN-Windows-$arch" "$dir"
 done
 
-# PortableApps-style packages with a native launcher and writable Data folder.
+# Windows Portable + PortableApps packages. Static binaries/catalog/scripts live
+# under App/RouterVPN. All mutable/private state is kept under Data by the native
+# launcher. Both amd64 and arm64 packages use the same tested layout.
 for arch in amd64 arm64; do
   root="$OUT/work/RouterVPNPortable-$arch"
   app="$root/App/RouterVPN"
   data="$root/Data"
-  mkdir -p "$app" "$data"
-  copy_runtime "$data"
+  mkdir -p "$app" "$data/generated"
+  copy_runtime "$app"
   cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe"
   cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe"
   cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe"
+  cat >"$root/README.txt" <<'TXT'
+Double-click RouterVPNPortable.exe.
+
+App/RouterVPN contains immutable Router VPN binaries, raw/logical mode catalogs and scripts.
+Data contains only writable settings, imported private router profiles, state and generated
+per-router profile material. You can move the whole folder between PCs without installing it.
+The launcher opens a standalone browser app window when possible and keeps the controller
+attached to the portable package it launched.
+TXT
+
+  # Ordinary no-installer portable ZIP.
+  package_zip "RouterVPN-Portable-Windows-$arch" "$root"
+
+  # PortableApps.com-format metadata. Root executable + App/AppInfo + Data follows
+  # the PortableApps directory model while preserving the same privacy boundary.
   mkdir -p "$root/App/AppInfo"
   cat >"$root/App/AppInfo/appinfo.ini" <<EOF
 [Format]
@@ -85,21 +146,16 @@ AppId=RouterVPNPortable$arch
 Publisher=Eabusham2
 Homepage=https://github.com/Eabusham2/router-vpn
 Category=Internet
-Description=Portable Router VPN controller and profile importer
+Description=Portable Router VPN controller, logical-mode selector, and private profile manager
 Language=English
 
 [Version]
-PackageVersion=0.6.0.0
-DisplayVersion=0.6.0-alpha
+PackageVersion=0.7.0.0
+DisplayVersion=0.7.0-alpha
 
 [Control]
 Start=RouterVPNPortable.exe
 EOF
-  cat >"$root/README.txt" <<'TXT'
-Double-click RouterVPNPortable.exe. Settings and imported private profiles stay in Data.
-The Windows-native package is a controller/importer. Full multi-engine VPN operation uses
-WSL2 or matching native tunnel engines; do not expose the router SOCKS5 port to WAN.
-TXT
   package_zip "RouterVPNPortable-$arch" "$root"
 done
 
