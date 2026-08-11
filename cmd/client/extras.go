@@ -49,6 +49,8 @@ func extraRoutes(h *http.ServeMux, a *app) {
 		w.Header().Set("service-worker-allowed", "/")
 		_, _ = io.WriteString(w, serviceWorkerJS)
 	})
+	h.HandleFunc("/api/logical-modes", a.listLogicalModes)
+	h.HandleFunc("/api/connect-logical", a.connectLogical)
 	h.HandleFunc("/api/profile/latency", a.profileLatency)
 	h.HandleFunc("/api/public-ip", a.publicIP)
 	h.HandleFunc("/api/dns/retest", a.retestDNS)
@@ -181,8 +183,6 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 }
 
 func pickTCPProbePort(endpoint string) (int, error) {
-	// Prefer the standard REALITY listener. Fall back to other TCP listeners so a
-	// node can still be ranked when one optional transport is intentionally off.
 	ports := []int{443, 8388, 10443, 11443, 12443, 13443, 14443, 15443}
 	var last error
 	for _, port := range ports {
