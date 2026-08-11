@@ -12,10 +12,38 @@ ENV_FILE="$INSTALL/.env"
 DEFAULT_WAN=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')
 DEFAULT_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 DEFAULT_IP=${DEFAULT_IP:-192.168.50.133}
-DEFAULT_PUBLIC=''
-if command -v curl >/dev/null 2>&1; then DEFAULT_PUBLIC=$(curl -4fsS --max-time 4 https://api.ipify.org 2>/dev/null || true)
-elif command -v wget >/dev/null 2>&1; then DEFAULT_PUBLIC=$(wget -qO- -T 4 https://api.ipify.org 2>/dev/null || true)
-fi
+
+detect_public_ipv4() {
+  python3 - <<'PY'
+import ipaddress
+import urllib.request
+
+sources = [
+    ("https://1.1.1.1/cdn-cgi/trace", "trace"),
+    ("https://checkip.amazonaws.com", "plain"),
+    ("https://icanhazip.com", "plain"),
+    ("https://api.ipify.org", "plain"),
+]
+
+for url, kind in sources:
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "router-vpn/1"})
+        body = urllib.request.urlopen(req, timeout=4).read().decode().strip()
+        if kind == "trace":
+            value = next((line[3:].strip() for line in body.splitlines() if line.startswith("ip=")), "")
+        else:
+            value = body.splitlines()[0].strip() if body else ""
+        ip = ipaddress.ip_address(value)
+        if ip.version == 4 and ip.is_global:
+            print(value)
+            raise SystemExit(0)
+    except Exception:
+        continue
+raise SystemExit(1)
+PY
+}
+
+DEFAULT_PUBLIC=$(detect_public_ipv4 || true)
 
 prompt(){
   local variable=$1 text=$2 default=$3 value
@@ -88,7 +116,7 @@ echo
 echo 'Router VPN installed.'
 echo
 echo 'Create these ASUS WAN port forwards to the AI Board:'
-printf '  TCP 80 -> %s:80  (automatic TLS certificate/renewal)\n' "$ADGUARD4"
+printf '  TCP 80 -> %s:18080  (automatic TLS certificate/renewal)\n' "$ADGUARD4"
 printf '  UDP %s -> %s:%s  (WireGuard)\n' "$WG_PORT" "$ADGUARD4" "$WG_PORT"
 printf '  UDP %s -> %s:%s  (AmneziaWG)\n' "$AWG_PORT" "$ADGUARD4" "$AWG_PORT"
 printf '  UDP %s -> %s:%s  (Rosenpass PQ)\n' "$ROSENPASS_PORT" "$ADGUARD4" "$ROSENPASS_PORT"
