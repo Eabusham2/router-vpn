@@ -107,7 +107,7 @@ jobs:
             curl -fsS http://127.0.0.1:8786/healthz >/dev/null && break
             sleep .2
           done
-          curl -fsS http://127.0.0.1:8786/api/download-policy | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["server_cache"] is False and x["preferred_source"]=="github-actions"'
+          curl -fsS http://127.0.0.1:8786/api/download-policy | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["server_cache"] is False and x["preferred_source"]=="github-actions" and x["fallback"]=="router-local-build" and x["local_build_scope"]=="requested-package-only"'
 
           require_file() {
             local archive=$1 path=$2
@@ -116,7 +116,7 @@ jobs:
           fetch_one() {
             local name=$1 out=$2 headers=$3
             curl -fsS -D "$headers" -o "$out" "http://127.0.0.1:8786/$name"
-            if ! grep -Fqi 'X-Router-VPN-Source: local-fallback' "$headers"; then
+            if ! grep -Fqi 'X-Router-VPN-Source: router-local-build' "$headers"; then
               echo "Unexpected package source response for $name:" >&2
               cat "$headers" >&2
               return 1
