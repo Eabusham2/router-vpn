@@ -94,9 +94,13 @@ def main() -> int:
     (aux / 'overtls-server.json').write_text(json.dumps(overtls_server, indent=2) + '\n')
     (gen / 'overtls' / 'overtls-client.json').write_text(json.dumps(overtls_client, indent=2) + '\n')
 
+    # shadowsocksr-native deliberately downgrades AEAD ciphers (including AES-GCM)
+    # to origin/plain because AEAD and SSR protocol/obfs layers are incompatible.
+    # Keep a stream cipher here so the advertised auth_aes128_md5 + TLS-ticket
+    # obfuscation remains an actual SSR compatibility profile at runtime.
     ssr_common = {
         'password': ssr_password,
-        'method': 'aes-256-gcm',
+        'method': 'aes-256-ctr',
         'protocol': 'auth_aes128_md5',
         'protocol_param': '',
         'obfs': 'tls1.2_ticket_auth',
