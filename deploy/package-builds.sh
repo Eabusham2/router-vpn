@@ -114,7 +114,7 @@ for arch in amd64 arm64; do
   root="$OUT/work/RouterVPNPortable-$arch"
   app="$root/App/RouterVPN"
   data="$root/Data"
-  mkdir -p "$app" "$data/generated"
+  mkdir -p "$app" "$data/generated" "$root/Other"
   copy_runtime "$app"
   cp -a "$ROOT/client" "$app/client"
   cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe"
@@ -136,29 +136,43 @@ TXT
   # Ordinary no-installer portable ZIP.
   package_zip "RouterVPN-Portable-Windows-$arch" "$root"
 
-  # PortableApps.com-format metadata. Root executable + App/AppInfo + Data follows
-  # the PortableApps directory model while preserving the same privacy boundary.
+  # Current PortableApps.com Format metadata. The official PAF installer is built
+  # later on a Windows CI runner using the current PortableApps.com Installer.
   mkdir -p "$root/App/AppInfo"
   cat >"$root/App/AppInfo/appinfo.ini" <<EOF
 [Format]
 Type=PortableApps.comFormat
-Version=3.8
+Version=3.9
 
 [Details]
 Name=Router VPN Portable ($arch)
-AppId=RouterVPNPortable$arch
+AppId=RouterVPNPortable${arch}Eabusham2
 Publisher=Eabusham2
 Homepage=https://github.com/Eabusham2/router-vpn
 Category=Internet
 Description=Portable Router VPN controller, logical-mode selector, and private profile manager
 Language=English
 
+[License]
+Shareable=true
+OpenSource=false
+Freeware=true
+CommercialUse=false
+
 [Version]
 PackageVersion=0.7.0.0
-DisplayVersion=0.7.0-alpha
+DisplayVersion=0.7.0 Alpha
 
 [Control]
+Icons=1
 Start=RouterVPNPortable.exe
+ExtractIcon=RouterVPNPortable.exe
+EOF
+  cat >"$root/App/AppInfo/installer.ini" <<'EOF'
+[MainDirectories]
+RemoveAppDirectory=true
+RemoveDataDirectory=false
+RemoveOtherDirectory=true
 EOF
   package_zip "RouterVPNPortable-$arch" "$root"
 done
