@@ -15,12 +15,9 @@ copy_public(){
   cp -f "$src" "$OUT/$name"
 }
 
-# Small direct downloads: these are enough when the Router VPN app/controller is
-# already installed and avoid the much larger all-platform private bundle.
+# Small direct downloads that do not depend on a platform package.
 copy_public "$BUNDLE/router-vpn-bundle.json"
 copy_public "$BUNDLE/CREDENTIALS.txt"
-copy_public "$BUNDLE/router-vpn-device-setup.html" "index.html"
-copy_public "$BUNDLE/router-vpn-device-setup.html"
 copy_public "$BUNDLE/router/asus-merlin-router-vpn-forwards.sh" "asus-merlin-router-vpn-forwards.sh"
 copy_public "$BUNDLE/modes.json"
 copy_public "$BUNDLE/logical-modes.json"
@@ -42,25 +39,59 @@ make_unix_bundle(){
   mkdir -p "$d/router"
   cp "$BUNDLE/router/asus-merlin-router-vpn-forwards.sh" "$d/router/"
   if [[ $os == darwin ]]; then
-    cat >"$d/INSTALL.txt" <<TXT
-Router VPN macOS $arch
-1. Open Terminal and cd into this router-vpn folder.
+    cat >"$d/INSTALL.txt" <<'TXT'
+Router VPN macOS
+1. Open Terminal and cd into this extracted router-vpn folder.
 2. Run: bash client/install-macos-final.sh "$PWD"
-3. If macOS warns about a locally-built Router VPN binary, verify the included binary/checksum source, then use System Settings > Privacy & Security > Open Anyway. The Setup Center has detailed steps.
-4. Open the Router VPN app/controller and import router-vpn-bundle.json or use home-LAN import when available.
+3. Launch Router VPN from ~/Applications after installation.
+4. If macOS warns about a locally-built Router VPN binary, verify the Setup Center checksum first, then use System Settings > Privacy & Security > Open Anyway. Never remove quarantine broadly from Downloads.
 TXT
   else
-    cat >"$d/INSTALL.txt" <<TXT
-Router VPN Linux $arch
-1. Open a terminal and cd into this router-vpn folder.
+    cat >"$d/INSTALL.txt" <<'TXT'
+Router VPN Linux
+1. Open a terminal and cd into this extracted router-vpn folder.
 2. Run: sudo bash client/install-linux.sh "$PWD"
-3. Open the Router VPN app/controller and import router-vpn-bundle.json or use home-LAN import when available.
+3. Start the installed Router VPN controller/app launcher.
 TXT
   fi
   (
     cd "$TMP/$label"
     zip -qr "$OUT/$label.zip" router-vpn
   )
+}
+
+write_windows_launcher(){
+  local file=$1 root_expr=$2 client_expr=$3
+  cat >"$file" <<PS1
+\$ErrorActionPreference = 'Stop'
+\$Root = $root_expr
+\$env:HOMEVPN_ROOT = \$Root
+\$env:HOMEVPN_CLIENT_CONFIG = Join-Path \$Root 'client.json'
+\$client = $client_expr
+function Test-RouterVPNReady {
+  try {
+    \$r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8788/api/status' -TimeoutSec 1
+    return \$r.StatusCode -ge 200 -and \$r.StatusCode -lt 300
+  } catch { return \$false }
+}
+if (-not (Test-RouterVPNReady)) { Start-Process \$client -WorkingDirectory \$Root }
+\$deadline = (Get-Date).AddSeconds(12)
+while ((Get-Date) -lt \$deadline -and -not (Test-RouterVPNReady)) { Start-Sleep -Milliseconds 200 }
+if (-not (Test-RouterVPNReady)) { throw 'Router VPN controller did not become ready on 127.0.0.1:8788' }
+\$url='http://127.0.0.1:8788/'
+\$browsers=@(
+  "\$env:ProgramFiles(x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  "\$env:ProgramFiles\\Microsoft\\Edge\\Application\\msedge.exe",
+  "\$env:ProgramFiles\\Google\\Chrome\\Application\\chrome.exe",
+  "\$env:LOCALAPPDATA\\Google\\Chrome\\Application\\chrome.exe",
+  "\$env:ProgramFiles\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+  "\$env:LOCALAPPDATA\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"
+)
+foreach (\$browser in \$browsers) {
+  if (\$browser -and (Test-Path \$browser)) { Start-Process \$browser -ArgumentList "--app=\$url"; exit 0 }
+}
+Start-Process \$url
+PS1
 }
 
 make_windows_bundle(){
@@ -72,24 +103,97 @@ make_windows_bundle(){
     return 0
   }
   local d="$TMP/$label/router-vpn"
-  mkdir -p "$d/dist" "$d/router"
+  mkdir -p "$d/router"
   cp -a "$BUNDLE/modes" "$BUNDLE/generated" "$d/"
   cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/router-vpn-bundle.json" "$d/"
   [[ -f "$BUNDLE/logical-modes.json" ]] && cp "$BUNDLE/logical-modes.json" "$d/"
-  cp "$client_bin" "$d/dist/router-vpn-client.exe"
-  cp "$dns_bin" "$d/dist/router-vpn-dns.exe"
+  cp "$client_bin" "$d/router-vpn-client.exe"
+  cp "$dns_bin" "$d/router-vpn-dns.exe"
   [[ -f "$BUNDLE/client/install-windows.ps1" ]] && cp "$BUNDLE/client/install-windows.ps1" "$d/"
   cp "$BUNDLE/router/asus-merlin-router-vpn-forwards.sh" "$d/router/"
+  write_windows_launcher "$d/Start-RouterVPN.ps1" '(Split-Path -Parent $MyInvocation.MyCommand.Path)' '(Join-Path $Root "router-vpn-client.exe")'
   cat >"$d/INSTALL.txt" <<TXT
 Router VPN Windows $arch
 1. Extract this folder.
-2. Run install-windows.ps1 when present, or start the included Router VPN controller binary.
-3. Import router-vpn-bundle.json or use home-LAN import when available.
-4. Full multi-engine tunneling must only be shown as ready once the Windows native tunnel adapters are validated; matching native WireGuard/Amnezia profiles remain available in Setup Center.
+2. Run Start-RouterVPN.ps1. It starts the controller, waits until it answers, then opens Router VPN as an Edge/Chrome/Brave app window when possible.
+3. This home-generated package is already linked to this Router VPN node and includes its generated profiles.
+4. Windows-native full multi-engine operation must only be shown ready where the required native/WSL transport engines are actually installed and validated.
 TXT
   (
     cd "$TMP/$label"
     zip -qr "$OUT/$label.zip" router-vpn
+  )
+}
+
+make_windows_portable(){
+  local arch=$1
+  local client_bin="$BUNDLE/dist/router-vpn-client-windows-${arch}.exe"
+  local dns_bin="$BUNDLE/dist/router-vpn-dns-windows-${arch}.exe"
+  local launcher="$BUNDLE/dist/RouterVPNPortable-${arch}.exe"
+  [[ -f "$client_bin" && -f "$dns_bin" && -f "$launcher" ]] || {
+    echo "warning: skipping Windows portable $arch; required binaries are missing" >&2
+    return 0
+  }
+
+  local root="$TMP/portable-$arch/RouterVPNPortable-$arch"
+  local app="$root/App/RouterVPN"
+  local data="$root/Data"
+  mkdir -p "$app/modes" "$data/generated"
+
+  # Immutable application payload.
+  cp -a "$BUNDLE/modes/." "$app/modes/"
+  cp "$BUNDLE/modes.json" "$app/modes.json"
+  cp "$BUNDLE/logical-modes.json" "$app/logical-modes.json"
+  cp "$BUNDLE/client.json" "$app/client.json"
+  cp "$BUNDLE/routers.json" "$app/routers.json"
+  cp "$BUNDLE/router-vpn-bundle.json" "$app/router-vpn-bundle.json"
+  cp "$client_bin" "$app/router-vpn-client.exe"
+  cp "$dns_bin" "$app/router-vpn-dns.exe"
+  cp "$launcher" "$root/RouterVPNPortable.exe"
+
+  # This Setup Center package is private and node-specific, so pre-link its
+  # mutable Data folder to the current home node. The generic GitHub artifact
+  # intentionally keeps Data empty and requires an import instead.
+  cp "$BUNDLE/routers.json" "$data/routers.json"
+  cp -a "$BUNDLE/generated/." "$data/generated/"
+  cat >"$root/README.txt" <<TXT
+Router VPN Portable $arch — home-linked package
+Double-click RouterVPNPortable.exe.
+App/RouterVPN contains immutable binaries/catalog/scripts.
+Data contains this home node's private router settings and generated profiles.
+Move the whole RouterVPNPortable-$arch folder together; do not publish/share it.
+TXT
+
+  (
+    cd "$TMP/portable-$arch"
+    zip -qr "$OUT/router-vpn-windows-portable-$arch.zip" "RouterVPNPortable-$arch"
+  )
+
+  mkdir -p "$root/App/AppInfo"
+  cat >"$root/App/AppInfo/appinfo.ini" <<EOF
+[Format]
+Type=PortableApps.comFormat
+Version=3.8
+
+[Details]
+Name=Router VPN Portable ($arch)
+AppId=RouterVPNPortable$arch
+Publisher=Eabusham2
+Homepage=https://github.com/Eabusham2/router-vpn
+Category=Internet
+Description=Portable Router VPN controller, logical-mode selector, and private node profile manager
+Language=English
+
+[Version]
+PackageVersion=0.7.0.0
+DisplayVersion=0.7.0-alpha
+
+[Control]
+Start=RouterVPNPortable.exe
+EOF
+  (
+    cd "$TMP/portable-$arch"
+    zip -qr "$OUT/router-vpn-portableapps-$arch.zip" "RouterVPNPortable-$arch"
   )
 }
 
@@ -99,6 +203,49 @@ make_unix_bundle linux arm64 router-vpn-linux-arm64
 make_unix_bundle linux amd64 router-vpn-linux-amd64
 make_windows_bundle amd64 router-vpn-windows-amd64
 make_windows_bundle arm64 router-vpn-windows-arm64
+make_windows_portable amd64
+make_windows_portable arm64
+
+# Add the new Windows/portable downloads to the generated Setup Center without
+# duplicating the large HTML generator's mode/QR logic here.
+python3 - "$BUNDLE/router-vpn-device-setup.html" "$BUNDLE/setup-assets.json" <<'PY'
+from pathlib import Path
+import json,sys
+html=Path(sys.argv[1]); assets=Path(sys.argv[2])
+text=html.read_text()
+if 'router-vpn-windows-portable-amd64.zip' not in text:
+    needle="['Linux x86-64','router-vpn-linux-amd64.zip','x86-64 Linux'],"
+    extra=(
+      "['Windows x64','router-vpn-windows-amd64.zip','Windows x86-64 controller/app package'],"
+      "['Windows ARM64','router-vpn-windows-arm64.zip','Windows ARM64 controller/app package'],"
+      "['Portable Windows x64','router-vpn-windows-portable-amd64.zip','No-install home-linked portable folder'],"
+      "['Portable Windows ARM64','router-vpn-windows-portable-arm64.zip','No-install home-linked portable folder'],"
+      "['PortableApps x64','router-vpn-portableapps-amd64.zip','PortableApps-format home-linked package'],"
+      "['PortableApps ARM64','router-vpn-portableapps-arm64.zip','PortableApps-format home-linked package'],"
+    )
+    if needle not in text:
+        raise SystemExit('Setup Center download marker changed; refusing to publish unlinked portable downloads')
+    text=text.replace(needle, needle+''.join(extra), 1)
+    html.write_text(text)
+try:
+    data=json.loads(assets.read_text())
+except Exception:
+    data={}
+wanted=[
+ 'router-vpn-windows-amd64.zip','router-vpn-windows-arm64.zip',
+ 'router-vpn-windows-portable-amd64.zip','router-vpn-windows-portable-arm64.zip',
+ 'router-vpn-portableapps-amd64.zip','router-vpn-portableapps-arm64.zip'
+]
+arr=data.setdefault('downloads',[])
+for item in wanted:
+    if item not in arr: arr.append(item)
+assets.write_text(json.dumps(data,indent=2)+'\n')
+PY
+
+# Publish the patched Setup Center after all download names are known.
+copy_public "$BUNDLE/router-vpn-device-setup.html" "index.html"
+copy_public "$BUNDLE/router-vpn-device-setup.html"
+copy_public "$BUNDLE/setup-assets.json"
 
 # Keep the complete bundle for advanced/offline use, but it is no longer the
 # first/default download path.
@@ -111,10 +258,17 @@ rm -f "$OUT/router-vpn-client-bundle.zip"
 (
   cd "$OUT"
   rm -f SHA256SUMS
-  for f in router-vpn-bundle.json asus-merlin-router-vpn-forwards.sh router-vpn-macos-*.zip router-vpn-linux-*.zip router-vpn-windows-*.zip router-vpn-client-bundle.zip; do
+  for f in \
+    router-vpn-bundle.json \
+    asus-merlin-router-vpn-forwards.sh \
+    router-vpn-macos-*.zip \
+    router-vpn-linux-*.zip \
+    router-vpn-windows-*.zip \
+    router-vpn-portableapps-*.zip \
+    router-vpn-client-bundle.zip; do
     [[ -f $f ]] || continue
     sha256sum "$f" >> SHA256SUMS
   done
 )
 
-echo 'Published Setup Center, direct router profile/helper downloads, macOS/Linux/Windows mini bundles, and full fallback bundle.'
+echo 'Published Setup Center, direct profile/helper downloads, macOS/Linux/Windows bundles, Windows Portable/PortableApps x64+ARM64, and full fallback bundle.'
