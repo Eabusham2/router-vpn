@@ -314,6 +314,11 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fallbackUsed := used.Base != "native" && used.Base != "auto" && used.Base != preferred
+	a.mu.Lock()
+	a.state.LogicalMode = q.Mode
+	a.state.RuntimeMode = used.RuntimeID
+	a.state.Base = used.Base
+	a.mu.Unlock()
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok": true,
