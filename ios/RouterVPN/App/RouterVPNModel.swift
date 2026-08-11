@@ -51,6 +51,7 @@ final class RouterVPNModel: ObservableObject {
             apply(saved)
             message = "Saved router profile loaded"
         }
+        Task { await refreshTunnelStatus() }
     }
 
     var socksSummary: String {
@@ -201,9 +202,52 @@ final class RouterVPNModel: ObservableObject {
             try await manager.saveToPreferences()
             try await manager.loadFromPreferences()
             try manager.connection.startVPNTunnel()
-            connected = true
-            message = auto ? "Connecting with AUTO" : "Connecting \(selectedLogicalMode) • candidates: \(candidates.joined(separator: " → "))"
-        } catch { message = error.localizedDescription }
+            connected = false
+            message = auto ? "Connecting with AUTO…" : "Connecting \(selectedLogicalMode) • candidates: \(candidates.joined(separator: " → "))"
+            await watchConnection(manager, attempts: 32)
+        } catch {
+            connected = false
+            message = error.localizedDescription
+        }
+    }
+
+    private func watchConnection(_ manager: NETunnelProviderManager, attempts: Int) async {
+        for _ in 0..<attempts {
+            switch manager.connection.status {
+            case .connected:
+                connected = true
+                message = "Connected"
+                return
+            case .invalid:
+                connected = false
+                message = "Tunnel configuration is invalid"
+                return
+            case .disconnected:
+                // Give the extension a short initial window to leave disconnected
+                // before treating it as a failed start.
+                try? await Task.sleep(for: .milliseconds(250))
+            case .disconnecting:
+                connected = false
+                message = "Disconnecting…"
+                return
+            case .connecting, .reasserting:
+                connected = false
+                try? await Task.sleep(for: .milliseconds(250))
+            @unknown default:
+                connected = false
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+        connected = manager.connection.status == .connected
+        if !connected {
+            message = "Tunnel did not reach connected state. Check the Packet Tunnel/engine error."
+        }
+    }
+
+    func refreshTunnelStatus() async {
+        let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
+        guard let manager = managers.first else { connected = false; return }
+        connected = manager.connection.status == .connected
     }
 
     func disconnect() {
