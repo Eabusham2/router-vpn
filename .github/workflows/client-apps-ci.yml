@@ -1,0 +1,150 @@
+name: Client apps cross-platform CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: client-apps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-unix:
+    name: Desktop and Unix client builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Test Go controller and shared API
+        run: go test ./...
+      - name: Validate logical/raw catalogs
+        run: |
+          python3 -m json.tool configs/client/modes.json >/dev/null
+          python3 -m json.tool configs/client/logical-modes.json >/dev/null
+          python3 - <<'PY'
+          import json
+          raw={m['id'] for m in json.load(open('configs/client/modes.json'))}
+          logical=json.load(open('configs/client/logical-modes.json'))
+          assert len(logical)==16, f'expected 16 logical modes, got {len(logical)}'
+          seen=set()
+          for item in logical:
+              assert item['id'] not in seen, item['id']
+              seen.add(item['id'])
+              assert item['variants'], item['id']
+              for runtime in item['variants'].values():
+                  assert runtime in raw, (item['id'], runtime)
+          for expected in ('base-raw','base-pq','max-quic','max-tls','all'):
+              item=next(x for x in logical if x['id']==expected)
+              assert item['base_selector'] is True, expected
+              assert item['fallback'] is True, expected
+          PY
+      - name: Cross-compile all desktop and Unix targets
+        run: |
+          chmod +x deploy/build-client.sh deploy/package-builds.sh
+          ./deploy/build-client.sh
+          ./deploy/package-builds.sh
+      - name: Verify common architectures
+        run: |
+          test -x dist/client/router-vpn-client-darwin-amd64
+          test -x dist/client/router-vpn-client-darwin-arm64
+          test -x dist/client/router-vpn-client-linux-amd64
+          test -x dist/client/router-vpn-client-linux-arm64
+          test -s dist/client/router-vpn-client-windows-amd64.exe
+          test -s dist/client/router-vpn-client-windows-arm64.exe
+          test -s dist/packages/RouterVPN-Windows-amd64.zip
+          test -s dist/packages/RouterVPN-Windows-arm64.zip
+          test -s dist/packages/RouterVPN-darwin-amd64.tar.gz
+          test -s dist/packages/RouterVPN-darwin-arm64.tar.gz
+          test -s dist/packages/RouterVPN-linux-amd64.tar.gz
+          test -s dist/packages/RouterVPN-linux-arm64.tar.gz
+          (cd dist/packages && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: |
+            dist/packages/*
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    name: Android native app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Install Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build APK
+        run: gradle -p android --no-daemon :app:assembleDebug
+      - name: Verify APK
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -tq "$APK" >/dev/null
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Android-CI
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    name: iOS and iPadOS native app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        working-directory: ios/RouterVPN
+        run: xcodegen generate
+      - name: Build unsigned device app and Packet Tunnel
+        working-directory: ios/RouterVPN
+        run: |
+          xcodebuild \
+            -project RouterVPN.xcodeproj \
+            -scheme RouterVPN \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM='' \
+            build
+      - name: Package re-signable IPA
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          test -d "$APP"
+          test -d "$APP/PlugIns/RouterVPNPacketTunnel.appex"
+          rm -rf build/unsigned
+          mkdir -p build/unsigned/Payload
+          ditto "$APP" build/unsigned/Payload/RouterVPN.app
+          (cd build/unsigned && zip -qry ../RouterVPN-unsigned-resignable.ipa Payload)
+          unzip -tq build/RouterVPN-unsigned-resignable.ipa >/dev/null
+          unzip -l build/RouterVPN-unsigned-resignable.ipa | grep -q 'Payload/RouterVPN.app/PlugIns/RouterVPNPacketTunnel.appex/'
+          shasum -a 256 build/RouterVPN-unsigned-resignable.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-CI
+          path: ios/RouterVPN/build/RouterVPN-unsigned-resignable.ipa
+          if-no-files-found: error
+          retention-days: 14
