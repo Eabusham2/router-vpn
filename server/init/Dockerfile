@@ -9,6 +9,7 @@ RUN mkdir -p dist \
     done \
  && for arch in amd64 arm64; do \
       CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPNPortable-${arch}.exe" ./cmd/portable-launcher; \
+      CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPNSetupRuntime-${arch}.exe" ./cmd/portable-runtime-setup; \
     done \
  && for target in linux/amd64 linux/arm64; do \
       GOOS=${target%/*}; GOARCH=${target#*/}; \
@@ -47,6 +48,10 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && test -x /src/server/scripts/generate-aux-proxies.py \
  && test -x /src/server/scripts/create-bundle-json.py \
  && test -x /src/server/scripts/apply-runtime.sh \
+ && test -x /src/server/scripts/build-download-on-demand.py \
+ && test -x /src/server/scripts/download-broker.py \
  && test -f /src/dist/RouterVPNPortable-amd64.exe \
- && test -f /src/dist/RouterVPNPortable-arm64.exe
+ && test -f /src/dist/RouterVPNPortable-arm64.exe \
+ && test -f /src/dist/RouterVPNSetupRuntime-amd64.exe \
+ && test -f /src/dist/RouterVPNSetupRuntime-arm64.exe
 ENTRYPOINT ["/bin/bash", "/usr/local/bin/router-vpn-init"]
