@@ -7,6 +7,7 @@ mkdir -p "$BUNDLE"
 # Refresh only public runtime/build files. Never replace generated private profiles,
 # router choices, tokens, or the client config created for this installation.
 cp /src/configs/client/modes.json "$BUNDLE/modes.json"
+cp /src/configs/client/logical-modes.json "$BUNDLE/logical-modes.json"
 rm -rf "$BUNDLE/modes" "$BUNDLE/client" "$BUNDLE/dist"
 cp -a /src/modes "$BUNDLE/modes"
 cp -a /src/client "$BUNDLE/client"
