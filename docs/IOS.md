@@ -24,30 +24,21 @@ The SwiftUI app includes:
 - WG/AWG port-forward controls
 - Packet Tunnel extension target
 
-The current `PacketTunnelProvider.swift` intentionally returns an error explaining that the native WireGuard, AmneziaWG, Xray, and sing-box adapter is not linked. This prevents a signed UI-only app from pretending the VPN connected.
+The current `PacketTunnelProvider.swift` **intentionally fails closed** with an `NSError` and calls `completionHandler(error)` because the native WireGuard/AmneziaWG/Xray/sing-box adapter is not linked yet. That error path is expected preview behavior, not an accidental Go/Swift error or failed exception-handling path. It prevents a signed UI-only build from pretending the VPN connected.
+
+CI compiles both the app and Packet Tunnel target and explicitly checks that this fail-closed behavior remains present until real adapters replace it.
 
 ## GitHub Actions IPA builds
 
-Run **Actions → Build all platforms**.
-
-Without Apple secrets, the workflow builds:
+The client CI builds:
 
 ```text
-RouterVPN-unsigned-resignable.ipa
+RouterVPN-preview-unsigned-resignable.ipa
 ```
 
-This IPA must be re-signed before installation.
+This preview IPA must be re-signed before installation and is **not** advertised as a working full-device VPN while the native tunnel adapters are absent.
 
-With all Apple secrets configured, it also attempts to build:
-
-```text
-RouterVPN-signed.ipa
-RouterVPN.xcarchive
-```
-
-See `docs/BUILDS.md` for the five required secrets, bundle identifiers, and Base64 commands.
-
-Signing does not add the missing tunnel engine. The custom app becomes a working VPN only after a native adapter is linked in `PacketTunnelProvider.swift`.
+Signing by itself does not add the missing tunnel engine. The custom app becomes a working full-device VPN only after native adapters are linked and validated in `PacketTunnelProvider.swift`.
 
 ## Build manually on a Mac
 
@@ -63,7 +54,7 @@ Then:
 1. Select your Apple Developer Team for both targets.
 2. Enable the Packet Tunnel Network Extension entitlement for both App IDs.
 3. Add the required WireGuard/AmneziaWG and proxy-engine libraries to the Packet Tunnel target.
-4. Replace the current explicit placeholder error with the real adapter.
+4. Replace the current explicit fail-closed error with the real adapter implementation.
 5. Build to a device or archive and export.
 
 Bundle identifiers:
