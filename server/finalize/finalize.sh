@@ -192,19 +192,13 @@ mkdir -p "$BASE/client-bundle/router"
 cp /src/router/asus-merlin-router-vpn-forwards.sh "$BASE/client-bundle/router/"
 chmod 0755 "$BASE/client-bundle/router/asus-merlin-router-vpn-forwards.sh"
 
-rm -f \
-  "$BASE/downloads/router-vpn-client-bundle.zip" \
-  "$BASE/downloads/router-vpn-device-setup.html" \
-  "$BASE/router-vpn-client-bundle.zip"
-cp "$BASE/client-bundle/router-vpn-device-setup.html" "$BASE/downloads/router-vpn-device-setup.html"
-(
-  cd "$BASE/client-bundle"
-  zip -qr "$BASE/downloads/router-vpn-client-bundle.zip" .
-)
-cp "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
+# Keep only the lightweight Setup Center/static metadata on disk. All ZIPs,
+# including the full private bundle, are created by the broker per request.
+bash /src/server/scripts/publish-downloads.sh "$BASE"
+rm -f "$BASE/router-vpn-client-bundle.zip"
 
 export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT SS_V2RAY_PORT NAIVE_PORT OVERTLS_PORT SSR_PORT
 bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
 touch "$BASE/.finalized"
 
-echo 'Finalization complete: current transport/PQ/TLS profiles and private setup assets generated; auxiliary OverTLS/SSR remain separate from AUTO.'
+echo 'Finalization complete: current transport/PQ/TLS profiles and ephemeral setup assets generated; auxiliary OverTLS/SSR remain separate from AUTO.'
