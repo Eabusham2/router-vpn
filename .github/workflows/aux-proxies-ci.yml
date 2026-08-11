@@ -28,6 +28,7 @@ jobs:
             server/scripts/build-download-on-demand.py \
             server/scripts/download-broker.py
           python3 -m json.tool configs/client/logical-modes.json >/dev/null
+          python3 deploy/validate-repo.py
           bash -n server/finalize/finalize.sh
           bash -n server/finalize/upgrade-safe.sh
           bash -n server/scripts/publish-downloads.sh
@@ -69,18 +70,19 @@ jobs:
             test -s /opt/router-vpn/client-bundle/client/Setup-Windows-Runtime.ps1
             test -s /opt/router-vpn/client-bundle/client/setup-windows-runtime.sh
             test ! -e /opt/router-vpn/client-bundle/dist
+            test ! -e /opt/router-vpn/router-vpn-client-bundle.zip
             ! find /opt/router-vpn/downloads -maxdepth 1 -type f -name "*.zip" | grep -q .
             grep -q "WireGuard" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "SOCKS5 + TLS (OverTLS)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "ShadowsocksR" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "router-vpn-windows-portable-amd64.zip" /opt/router-vpn/downloads/router-vpn-device-setup.html
-            grep -q "router-vpn-portableapps-arm64.zip" /opt/router-vpn/downloads/router-vpn-device-setup.html
+            ! grep -qi "portableapps" /opt/router-vpn/downloads/router-vpn-device-setup.html
             grep -q "generated on demand" /opt/router-vpn/downloads/router-vpn-device-setup.html
           '
           sudo chown -R "$(id -u):$(id -g)" "$TEST_ROOT"
 
-      - name: Verify on-demand home-linked Portable and PortableApps packages
+      - name: Verify on-demand home-linked Portable packages
         run: |
           set -euo pipefail
           TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
@@ -100,71 +102,39 @@ jobs:
             local archive=$1 path=$2
             unzip -Z1 "$archive" | grep -Fxq "$path" || { echo "MISSING in $(basename "$archive"): $path" >&2; unzip -Z1 "$archive" >&2; return 1; }
           }
-          require_absent() {
-            local archive=$1 path=$2
-            ! unzip -Z1 "$archive" | grep -Fxq "$path" || { echo "UNEXPECTED in $(basename "$archive"): $path" >&2; return 1; }
-          }
-          require_ini() {
-            local archive=$1 path=$2 pattern=$3
-            unzip -p "$archive" "$path" | tr -d '\r' | grep -Eq "$pattern" || { echo "BAD metadata: $pattern" >&2; return 1; }
-          }
           fetch_one() {
             local name=$1 out=$2 headers=$3
             curl -fsS -D "$headers" -o "$out" "http://127.0.0.1:8786/$name"
             grep -Eiq '^X-Router-VPN-Source: local-fallback\r?$' "$headers"
             unzip -tq "$out" >/dev/null
-            # The AI Board persistent directory must stay archive-free after every request.
             ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
           }
 
           for arch in amd64 arm64; do
             portable="$RUNNER_TEMP/home-portable-$arch.zip"
-            paf="$RUNNER_TEMP/home-portableapps-$arch.zip"
-            fetch_one "router-vpn-windows-portable-$arch.zip" "$portable" "$RUNNER_TEMP/h1-$arch"
-            fetch_one "router-vpn-portableapps-$arch.zip" "$paf" "$RUNNER_TEMP/h2-$arch"
-
+            fetch_one "router-vpn-windows-portable-$arch.zip" "$portable" "$RUNNER_TEMP/h-$arch"
             root="RouterVPNPortable-$arch"
             for path in \
               "$root/RouterVPNPortable.exe" \
+              "$root/RouterVPNSetupRuntime.exe" \
               "$root/Setup-Windows-Runtime.ps1" \
               "$root/README.txt" \
               "$root/App/RouterVPN/router-vpn-client.exe" \
               "$root/App/RouterVPN/router-vpn-dns.exe" \
               "$root/App/RouterVPN/logical-modes.json" \
+              "$root/App/RouterVPN/LICENSE" \
               "$root/Data/routers.json" \
               "$root/Data/generated/wg/wg.conf" \
               "$root/Data/generated/max-tls-wg/chain.env" \
               "$root/Data/generated/max-quic-awg/chain.env"; do
               require_file "$portable" "$path"
             done
-
-            require_absent "$paf" "$root/Setup-Windows-Runtime.ps1"
-            require_absent "$paf" "$root/README.txt"
-            for path in \
-              "$root/RouterVPNPortable.exe" \
-              "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" \
-              "$root/App/AppInfo/appinfo.ini" \
-              "$root/App/AppInfo/installer.ini" \
-              "$root/Other/Help/readme.txt" \
-              "$root/Data/routers.json" \
-              "$root/Data/generated/wg/wg.conf" \
-              "$root/Data/generated/max-tls-wg/chain.env" \
-              "$root/Data/generated/max-quic-awg/chain.env"; do
-              require_file "$paf" "$path"
-            done
-            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Type=PortableApps\.comFormat$'
-            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Version=3\.9$'
-            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^OpenSource=true$'
-            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^CommercialUse=true$'
-            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Icons=2$'
-            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Start2=powershell\.exe .*Setup-Windows-Runtime\.ps1$'
-            require_ini "$paf" "$root/App/AppInfo/installer.ini" '^RemoveDataDirectory=false$'
-            rm -f "$portable" "$paf"
+            ! unzip -Z1 "$portable" | grep -q "$root/App/AppInfo/"
+            rm -f "$portable"
           done
 
-          # A full private bundle is also generated only when explicitly requested.
           bundle="$RUNNER_TEMP/home-bundle.zip"
-          fetch_one router-vpn-client-bundle.zip "$bundle" "$RUNNER_TEMP/h3"
+          fetch_one router-vpn-client-bundle.zip "$bundle" "$RUNNER_TEMP/h-bundle"
           unzip -Z1 "$bundle" | grep -q '/router-vpn-bundle.json$'
           rm -f "$bundle"
           ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
@@ -178,16 +148,10 @@ jobs:
               export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
               export HOMEVPN_PROFILE_ID=home
               cd /src/modes
-
-              echo "=== combined profiles ==="
               ./check-combined.sh split
               ./check-combined.sh max
-
-              echo "=== WG MAX profiles ==="
               ./check-mode.sh max-quic-wg
               ./check-mode.sh max-tls-wg
-
-              echo "=== AWG MAX generated profiles ==="
               mkdir -p /tmp/awg-check-bin
               for cmd in amneziawg-go awg awg-quick; do
                 printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
@@ -196,8 +160,6 @@ jobs:
               export PATH="/tmp/awg-check-bin:$PATH"
               ./check-mode.sh max-quic-awg
               ./check-mode.sh max-tls-awg
-
-              echo "=== ALL must have at least one validated MAX branch ==="
               ./check-mode.sh all
             '
 
