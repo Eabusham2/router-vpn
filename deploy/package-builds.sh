@@ -86,8 +86,6 @@ Start-Process $url
 PS1
 }
 
-# Windows controller packages. Full shell-engine operation uses the WSL runtime
-# installed by Setup-Windows-Runtime.ps1 or matching native protocol apps.
 for arch in amd64 arm64; do
   dir="$OUT/work/RouterVPN-Windows-$arch"
   mkdir -p "$dir"
@@ -109,9 +107,6 @@ TXT
   package_zip "RouterVPN-Windows-$arch" "$dir"
 done
 
-# Windows Portable + PortableApps packages. Static binaries/catalog/scripts live
-# under App/RouterVPN. Writable/private state stays under Data. Both amd64 and
-# arm64 use the same launcher and package model.
 for arch in amd64 arm64; do
   root="$OUT/work/RouterVPNPortable-$arch"
   app="$root/App/RouterVPN"
@@ -122,6 +117,7 @@ for arch in amd64 arm64; do
   cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe"
   cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe"
   cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe"
+  cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe"
   cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1"
   cat >"$root/README.txt" <<'TXT'
 Double-click RouterVPNPortable.exe.
@@ -136,11 +132,8 @@ Move the whole RouterVPNPortable folder together; private imported profiles rema
 Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.
 TXT
 
-  # Ordinary no-installer portable ZIP keeps the convenient setup helper at root.
   package_zip "RouterVPN-Portable-Windows-$arch" "$root"
 
-  # PortableApps.com Format keeps only the launcher/help at root. Runtime setup is
-  # exposed as a second PortableApps Platform menu item and lives under App.
   mkdir -p "$root/App/AppInfo" "$root/Other/Help"
   cp "$root/README.txt" "$root/Other/Help/readme.txt"
   rm -f "$root/README.txt" "$root/Setup-Windows-Runtime.ps1"
@@ -174,11 +167,8 @@ Icons=2
 Start=RouterVPNPortable.exe
 Start1=RouterVPNPortable.exe
 Name1=Router VPN Portable
-Start2=powershell.exe -NoProfile -ExecutionPolicy Bypass -File App\RouterVPN\client\Setup-Windows-Runtime.ps1
+Start2=RouterVPNSetupRuntime.exe
 Name2=Router VPN Portable - Setup Windows Runtime
-ExtractIcon=RouterVPNPortable.exe
-ExtractIcon1=RouterVPNPortable.exe
-ExtractIcon2=RouterVPNPortable.exe
 EOF
   cat >"$root/App/AppInfo/installer.ini" <<'EOF'
 [MainDirectories]
@@ -186,10 +176,10 @@ RemoveAppDirectory=true
 RemoveDataDirectory=false
 RemoveOtherDirectory=true
 EOF
+  python3 "$ROOT/deploy/make-portableapps-icons.py" "$root/App/AppInfo"
   package_zip "RouterVPNPortable-$arch" "$root"
 done
 
-# macOS, Linux, BSD, and illumos packages.
 while IFS= read -r binary; do
   file=$(basename "$binary")
   target=${file#router-vpn-client-}
