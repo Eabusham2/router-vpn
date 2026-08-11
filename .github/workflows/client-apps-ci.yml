@@ -3,6 +3,8 @@ name: Client apps cross-platform CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -84,6 +86,7 @@ jobs:
               grep -qx "$root/App/RouterVPN/router-vpn-dns.exe" <<<"$list"
               grep -qx "$root/App/RouterVPN/modes.json" <<<"$list"
               grep -qx "$root/App/RouterVPN/logical-modes.json" <<<"$list"
+              grep -qx "$root/App/RouterVPN/LICENSE" <<<"$list"
               grep -qx "$root/App/RouterVPN/modes/check-mode.sh" <<<"$list"
               grep -qx "$root/App/RouterVPN/modes/check-combined.sh" <<<"$list"
               grep -qx "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" <<<"$list"
@@ -109,6 +112,8 @@ jobs:
             grep -qx "$root/Other/Help/readme.txt" <<<"$paf_list"
             unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Type=PortableApps.comFormat'
             unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Version=3.9'
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'OpenSource=true'
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'CommercialUse=true'
             unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Icons=2'
             unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Start=RouterVPNPortable.exe'
             unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -q '^Start2=powershell.exe .*Setup-Windows-Runtime.ps1$'
@@ -120,6 +125,7 @@ jobs:
             dist/packages/RouterVPN-Windows-amd64.zip \
             dist/packages/RouterVPN-Windows-arm64.zip; do
             unzip -Z1 "$archive" | grep -q '/logical-modes.json$'
+            unzip -Z1 "$archive" | grep -q '/LICENSE$'
           done
           for archive in \
             dist/packages/RouterVPN-darwin-amd64.tar.gz \
@@ -127,6 +133,7 @@ jobs:
             dist/packages/RouterVPN-linux-amd64.tar.gz \
             dist/packages/RouterVPN-linux-arm64.tar.gz; do
             tar -tzf "$archive" | grep -q '/logical-modes.json$'
+            tar -tzf "$archive" | grep -q '/LICENSE$'
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -135,7 +142,7 @@ jobs:
             dist/packages/*
             dist/SHA256SUMS
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   windows-portable-smoke:
     name: Execute Windows Portable ${{ matrix.arch }}
@@ -239,7 +246,7 @@ jobs:
           name: RouterVPN-Android-CI
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   ios:
     name: iOS and iPadOS native app
@@ -283,4 +290,4 @@ jobs:
           name: RouterVPN-iOS-CI
           path: ios/RouterVPN/build/RouterVPN-unsigned-resignable.ipa
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
