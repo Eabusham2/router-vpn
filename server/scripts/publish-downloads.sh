@@ -15,6 +15,27 @@ copy_public(){
   cp -f "$src" "$OUT/$name"
 }
 
+require_input(){
+  local path=$1 label=$2
+  if [[ ! -f "$path" ]]; then
+    echo "ERROR: required $label is missing: $path" >&2
+    echo 'Available bundled dist files:' >&2
+    find "$BUNDLE/dist" -maxdepth 2 -type f -printf '%P\n' 2>/dev/null | sort >&2 || true
+    exit 1
+  fi
+}
+
+require_output(){
+  local path=$1
+  if [[ ! -s "$path" ]]; then
+    echo "ERROR: required published download was not created: $path" >&2
+    echo 'Current downloads directory:' >&2
+    find "$OUT" -maxdepth 1 -type f -printf '%f %s bytes\n' 2>/dev/null | sort >&2 || true
+    exit 1
+  fi
+  echo "Published required download: $(basename "$path") ($(stat -c %s "$path" 2>/dev/null || wc -c <"$path") bytes)"
+}
+
 # Small direct downloads that do not depend on a platform package.
 copy_public "$BUNDLE/router-vpn-bundle.json"
 copy_public "$BUNDLE/CREDENTIALS.txt"
@@ -133,10 +154,16 @@ make_windows_portable(){
   local client_bin="$BUNDLE/dist/router-vpn-client-windows-${arch}.exe"
   local dns_bin="$BUNDLE/dist/router-vpn-dns-windows-${arch}.exe"
   local launcher="$BUNDLE/dist/RouterVPNPortable-${arch}.exe"
-  [[ -f "$client_bin" && -f "$dns_bin" && -f "$launcher" ]] || {
-    echo "warning: skipping Windows portable $arch; required binaries are missing" >&2
-    return 0
-  }
+
+  # Portable and PortableApps are first-class downloads, not optional extras.
+  # Fail finalization here with the exact source path instead of silently
+  # claiming success and leaving a broken Setup Center link.
+  require_input "$client_bin" "Windows $arch Router VPN client"
+  require_input "$dns_bin" "Windows $arch DNS helper"
+  require_input "$launcher" "Windows $arch Portable launcher"
+  require_input "$BUNDLE/logical-modes.json" "logical mode catalog"
+  require_input "$BUNDLE/client/Setup-Windows-Runtime.ps1" "Windows runtime setup wrapper"
+  require_input "$BUNDLE/client/setup-windows-runtime.sh" "Windows WSL engine setup"
 
   local root="$TMP/portable-$arch/RouterVPNPortable-$arch"
   local app="$root/App/RouterVPN"
@@ -175,6 +202,7 @@ TXT
     cd "$TMP/portable-$arch"
     zip -qr "$OUT/router-vpn-windows-portable-$arch.zip" "RouterVPNPortable-$arch"
   )
+  require_output "$OUT/router-vpn-windows-portable-$arch.zip"
 
   # PortableApps.com Format 3.9 source. Keep the package root clean and expose
   # Windows engine setup as a second PortableApps Platform menu item.
@@ -226,6 +254,7 @@ EOF
     cd "$TMP/portable-$arch"
     zip -qr "$OUT/router-vpn-portableapps-$arch.zip" "RouterVPNPortable-$arch"
   )
+  require_output "$OUT/router-vpn-portableapps-$arch.zip"
 }
 
 make_unix_bundle darwin arm64 router-vpn-macos-arm64
@@ -236,6 +265,12 @@ make_windows_bundle amd64 router-vpn-windows-amd64
 make_windows_bundle arm64 router-vpn-windows-arm64
 make_windows_portable amd64
 make_windows_portable arm64
+
+# Portable/PortableApps output is required on every current server image.
+for arch in amd64 arm64; do
+  require_output "$OUT/router-vpn-windows-portable-$arch.zip"
+  require_output "$OUT/router-vpn-portableapps-$arch.zip"
+done
 
 # Add Windows/portable downloads to the Setup Center without duplicating the
 # large mode/QR HTML generator here.
@@ -302,4 +337,4 @@ rm -f "$OUT/router-vpn-client-bundle.zip"
   done
 )
 
-echo 'Published Setup Center, direct profile/helper downloads, macOS/Linux/Windows bundles, Windows Portable/PortableApps 3.9 x64+ARM64 with runtime setup, and full fallback bundle.'
+echo 'Published and verified Setup Center, direct profile/helper downloads, macOS/Linux/Windows bundles, Windows Portable/PortableApps 3.9 x64+ARM64 with runtime setup, and full fallback bundle.'
