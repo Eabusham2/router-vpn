@@ -3,9 +3,9 @@
 
 Large platform packages are never cached in /opt/router-vpn. Each request tries
 the matching GitHub Actions build first, overlays this node's private profiles
-in a temporary directory, streams the result, and deletes it. If that artifact
-is unavailable, only the requested package is assembled from prebuilt fallback
-binaries shipped in the server image and is likewise deleted.
+in a temporary directory, streams the result, and deletes it. If the GitHub
+artifact is unavailable or unusable, the router compiles only the requested
+desktop/Portable package locally from /src, then streams and deletes it.
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ PACKAGE_MAP = _builder.PACKAGE_MAP
 
 MAX_GITHUB_ARTIFACT = 768 * 1024 * 1024
 CHUNK = 1024 * 1024
-BUILD_SLOTS = threading.BoundedSemaphore(value=2)
+BUILD_SLOTS = threading.BoundedSemaphore(value=1)
 
 
 def _api_headers() -> dict[str, str]:
@@ -147,12 +147,12 @@ def fetch_github_package(home_name: str, temp: Path) -> Path:
 def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
     output = temp / name
     source = None
-    source_label = "local-fallback"
+    source_label = "router-local-build"
     try:
         source = fetch_github_package(name, temp)
         source_label = "github"
     except Exception as exc:
-        print(f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}", flush=True)
+        print(f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}; compiling requested package locally", flush=True)
 
     args = [
         "python3", str(BUILDER_PATH),
@@ -164,14 +164,14 @@ def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
     if source is not None:
         args += ["--source-archive", str(source)]
     try:
-        subprocess.run(args, check=True, timeout=120, stdout=subprocess.DEVNULL)
+        subprocess.run(args, check=True, timeout=720, stdout=subprocess.DEVNULL)
     except Exception:
         if source is None:
             raise
-        print(f"download broker: GitHub package customization failed for {name}; using local fallback", flush=True)
+        print(f"download broker: GitHub package customization failed for {name}; compiling requested package locally", flush=True)
         output.unlink(missing_ok=True)
-        subprocess.run(args[:-2], check=True, timeout=120, stdout=subprocess.DEVNULL)
-        source_label = "local-fallback"
+        subprocess.run(args[:-2], check=True, timeout=720, stdout=subprocess.DEVNULL)
+        source_label = "router-local-build"
     return output, source_label
 
 
@@ -218,8 +218,9 @@ class Handler(SimpleHTTPRequestHandler):
             body = json.dumps({
                 "mode": "on-demand",
                 "preferred_source": "github-actions",
-                "fallback": "prebuilt-local-image",
+                "fallback": "router-local-build",
                 "server_cache": False,
+                "local_build_scope": "requested-package-only",
                 "github_artifact_retention_days": 1,
                 "github_sha": os.environ.get("ROUTER_VPN_GITHUB_SHA", "").strip(),
             }, separators=(",", ":")).encode() + b"\n"

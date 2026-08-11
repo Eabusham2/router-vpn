@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Build/customize exactly one Router VPN download in a temporary path.
 
-The AI Board never persists platform archives. A generic GitHub Actions package
-can be supplied with --source-archive; otherwise only the requested package is
-assembled from prebuilt binaries already shipped in the server image. Private
-node data is overlaid locally and the caller is responsible for streaming and
-removing the resulting temporary ZIP.
+The AI Board never persists platform archives. A matching generic GitHub Actions
+package can be supplied with --source-archive. When GitHub is unavailable, the
+AI Board compiles only the requested desktop/Portable Go binaries from /src,
+assembles that one home-linked package in temporary storage, and the caller
+streams/deletes the resulting ZIP.
 """
 from __future__ import annotations
 
@@ -14,11 +14,13 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import subprocess
 import tarfile
 import tempfile
 import zipfile
 
 MAX_UNPACKED = 768 * 1024 * 1024
+LOCAL_BUILD_TIMEOUT = 300
 
 PACKAGE_MAP = {
     "router-vpn-windows-amd64.zip": ("RouterVPN-Windows-amd64.zip", "windows", "amd64"),
@@ -161,7 +163,7 @@ def zip_dir(root: Path, output: Path) -> None:
 def require_dist(src_root: Path, name: str) -> Path:
     p = src_root / "dist" / name
     if not p.is_file():
-        raise FileNotFoundError(f"prebuilt fallback binary missing: {p}")
+        raise FileNotFoundError(f"requested local-build binary missing: {p}")
     return p
 
 
@@ -224,6 +226,60 @@ def build_local(work: Path, name: str, bundle: Path, src_root: Path) -> Path:
     raise ValueError(f"unsupported package family: {family}")
 
 
+def _go_build(go: str, src_root: Path, dist: Path, work: Path, goos: str, goarch: str,
+              package: str, output_name: str, windows_gui: bool = False) -> None:
+    env = os.environ.copy()
+    env.update({
+        "CGO_ENABLED": "0",
+        "GOOS": goos,
+        "GOARCH": goarch,
+        "GOTOOLCHAIN": "local",
+        "GOCACHE": str(work / "go-build-cache"),
+        "GOMODCACHE": str(work / "go-mod-cache"),
+    })
+    ldflags = "-s -w" + (" -H=windowsgui" if windows_gui else "")
+    cmd = [go, "build", "-trimpath", "-ldflags", ldflags, "-o", str(dist / output_name), package]
+    proc = subprocess.run(
+        cmd,
+        cwd=src_root,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=LOCAL_BUILD_TIMEOUT,
+    )
+    if proc.returncode != 0:
+        tail = (proc.stdout or "")[-6000:]
+        raise RuntimeError(f"router-local go build failed for {package} ({goos}/{goarch}):\n{tail}")
+
+
+def compile_requested(work: Path, name: str, src_root: Path) -> Path:
+    _, family, arch = PACKAGE_MAP[name]
+    if family == "bundle":
+        return src_root
+    go = shutil.which("go")
+    if not go:
+        raise FileNotFoundError("router-local fallback requires the bundled Go toolchain")
+
+    goos = "windows" if family in ("windows", "portable") else family
+    compiled = work / "router-local-build"
+    dist = compiled / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+
+    ext = ".exe" if goos == "windows" else ""
+    _go_build(go, src_root, dist, work, goos, arch, "./cmd/client",
+              f"router-vpn-client-{goos}-{arch}{ext}")
+    _go_build(go, src_root, dist, work, goos, arch, "./cmd/dnsproxy",
+              f"router-vpn-dns-{goos}-{arch}{ext}")
+
+    if family == "portable":
+        _go_build(go, src_root, dist, work, "windows", arch, "./cmd/portable-launcher",
+                  f"RouterVPNPortable-{arch}.exe", windows_gui=True)
+        _go_build(go, src_root, dist, work, "windows", arch, "./cmd/portable-runtime-setup",
+                  f"RouterVPNSetupRuntime-{arch}.exe", windows_gui=True)
+    return compiled
+
+
 def build_from_github(work: Path, name: str, source_archive: Path, bundle: Path) -> Path:
     _, family, _ = PACKAGE_MAP[name]
     unpack = work / "github"
@@ -249,6 +305,7 @@ def main() -> int:
     base = Path(args.base).resolve()
     bundle = base / "client-bundle"
     output = Path(args.output).resolve()
+    src_root = Path(args.source_root).resolve()
     if not bundle.is_dir():
         raise SystemExit(f"missing private client bundle: {bundle}")
 
@@ -257,7 +314,8 @@ def main() -> int:
         if args.source_archive:
             root = build_from_github(work, args.name, Path(args.source_archive), bundle)
         else:
-            root = build_local(work, args.name, bundle, Path(args.source_root).resolve())
+            compiled_root = compile_requested(work, args.name, src_root)
+            root = build_local(work, args.name, bundle, compiled_root)
         zip_dir(root, output)
     if not output.is_file() or output.stat().st_size == 0:
         raise SystemExit("package creation returned an empty file")

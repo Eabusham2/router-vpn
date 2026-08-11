@@ -39,14 +39,11 @@ from pathlib import Path
 import json,sys
 html=Path(sys.argv[1]); assets=Path(sys.argv[2])
 text=html.read_text()
-
-# Strip links injected by older releases before adding the current set.
 for stale in (
   "['PortableApps 3.9 x64 source','router-vpn-portableapps-amd64.zip','On-demand home-linked PortableApps source; MIT open source'],",
   "['PortableApps 3.9 ARM64 source','router-vpn-portableapps-arm64.zip','On-demand home-linked PortableApps source; MIT open source'],",
 ):
     text=text.replace(stale,'')
-
 needle="['Linux x86-64','router-vpn-linux-amd64.zip','x86-64 Linux'],"
 if 'router-vpn-windows-portable-amd64.zip' not in text:
     extra=(
@@ -58,19 +55,17 @@ if 'router-vpn-windows-portable-amd64.zip' not in text:
     if needle not in text:
         raise SystemExit('Setup Center download marker changed; refusing to publish broken download links')
     text=text.replace(needle, needle+''.join(extra), 1)
-
 if 'Packages are generated on demand' not in text:
     marker='</body>'
     note=(
       '<div style="max-width:980px;margin:8px auto 24px;padding:0 16px;opacity:.72;font-size:12px">'
-      'Packages are generated on demand: GitHub CI build first, local prebuilt fallback. '
-      'Private home profiles are added only for this download and the server copy is deleted after delivery.'
+      'Packages are generated on demand: matching GitHub CI artifact first, router-side build of only the requested package if GitHub is unavailable. '
+      'Private home profiles and all temporary build/output files are deleted after delivery.'
       '</div>'
     )
     if marker in text:
         text=text.replace(marker,note+marker,1)
 html.write_text(text)
-
 try:
     data=json.loads(assets.read_text())
 except Exception:
@@ -89,7 +84,8 @@ data['downloads']=arr
 data['download_policy']={
   'mode':'on-demand',
   'preferred_source':'github-actions',
-  'fallback':'prebuilt-local-image',
+  'fallback':'router-local-build',
+  'local_build_scope':'requested-package-only',
   'server_cache':False,
   'github_artifact_retention_days':1,
 }
@@ -104,7 +100,8 @@ cat >"$OUT/download-policy.json" <<'JSON'
 {
   "mode": "on-demand",
   "preferred_source": "github-actions",
-  "fallback": "prebuilt-local-image",
+  "fallback": "router-local-build",
+  "local_build_scope": "requested-package-only",
   "server_cache": false,
   "github_artifact_retention_days": 1
 }
