@@ -18,6 +18,13 @@ import (
 const localURL = "http://127.0.0.1:8788/"
 
 func main() {
+	selfTest := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--self-test" {
+			selfTest = true
+		}
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		fatal(err)
@@ -28,6 +35,7 @@ func main() {
 	generatedDir := filepath.Join(dataDir, "generated")
 	modesDir := filepath.Join(appDir, "modes")
 	dataModes := filepath.Join(dataDir, "modes.windows.json")
+	dataLogical := filepath.Join(dataDir, "logical-modes.json")
 
 	for _, dir := range []string{dataDir, generatedDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -47,6 +55,7 @@ func main() {
 	}
 
 	copyDefault(filepath.Join(appDir, "routers.json"), filepath.Join(dataDir, "routers.json"))
+	copyAlways(filepath.Join(appDir, "logical-modes.json"), dataLogical)
 	wslOK, wslReason := prepareWindowsModeCatalog(filepath.Join(appDir, "modes.json"), dataModes, modesDir)
 	if err := ensurePortableConfig(filepath.Join(dataDir, "client.json"), dataModes, modesDir, dataDir); err != nil {
 		fatal(err)
@@ -82,6 +91,20 @@ func main() {
 		fatal(errors.New("local Router VPN controller did not become ready on 127.0.0.1:8788"))
 	}
 
+	if selfTest {
+		if err := runSelfTest(dataDir); err != nil {
+			if started {
+				stopPortableController(cmd)
+			}
+			fatal(err)
+		}
+		if started {
+			stopPortableController(cmd)
+		}
+		fmt.Println("Router VPN Portable self-test: OK")
+		return
+	}
+
 	browserCmd, ownedWindow := openAppWindow(localURL, dataDir)
 	if ownedWindow && browserCmd != nil {
 		_ = browserCmd.Wait()
@@ -100,6 +123,50 @@ func main() {
 			fatal(err)
 		}
 	}
+}
+
+func runSelfTest(dataDir string) error {
+	for _, file := range []string{
+		filepath.Join(dataDir, "client.json"),
+		filepath.Join(dataDir, "routers.json"),
+		filepath.Join(dataDir, "modes.windows.json"),
+		filepath.Join(dataDir, "logical-modes.json"),
+		filepath.Join(dataDir, "windows-runtime.json"),
+	} {
+		if st, err := os.Stat(file); err != nil || st.Size() == 0 {
+			return fmt.Errorf("portable self-test missing generated Data file: %s", file)
+		}
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Get(localURL + "api/logical-modes")
+	if err != nil {
+		return fmt.Errorf("logical mode API: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("logical mode API returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var modes []struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&modes); err != nil {
+		return fmt.Errorf("decode logical modes: %w", err)
+	}
+	if len(modes) != 16 {
+		return fmt.Errorf("portable UI expected 16 logical modes, got %d", len(modes))
+	}
+	forbidden := map[string]bool{
+		"max-quic-wg": true, "max-quic-awg": true,
+		"max-tls-wg": true, "max-tls-awg": true,
+	}
+	for _, mode := range modes {
+		if forbidden[mode.ID] {
+			return fmt.Errorf("raw duplicate mode leaked into portable logical API: %s", mode.ID)
+		}
+	}
+	return nil
 }
 
 func ensurePortableConfig(path, modesFile, modesDir, dataDir string) error {
@@ -145,7 +212,7 @@ func prepareWindowsModeCatalog(src, dst, windowsModesDir string) (bool, string) 
 	wslOK := wslErr == nil
 	reason := "WSL2/default Linux distro is ready"
 	if !wslOK {
-		reason = "Windows full-tunnel runtime needs WSL2 with a default Linux distro; use the package Setup-Windows-Runtime.ps1 or a native protocol client"
+		reason = "Windows full-tunnel runtime needs WSL2 with a default Linux distro; run Setup-Windows-Runtime.ps1 or use a native protocol client"
 	}
 
 	for _, mode := range modes {
@@ -163,8 +230,8 @@ func prepareWindowsModeCatalog(src, dst, windowsModesDir string) (bool, string) 
 				args = append(args, "wsl.exe", "--exec", "bash", strings.TrimRight(linuxModesDir, "/")+"/"+filepath.Base(first))
 				args = append(args, raw[1:]...)
 			} else {
-				msg := "echo '" + strings.ReplaceAll(reason, "'", "") + "' >&2; exit 127"
-				args = append(args, "wsl.exe", "--exec", "sh", "-lc", msg)
+				msg := strings.ReplaceAll(reason, "&", "and")
+				args = append(args, "cmd.exe", "/d", "/c", "echo "+msg+" 1>&2 & exit /b 127")
 			}
 			mode[key] = args
 		}
@@ -301,6 +368,10 @@ func copyDefault(src, dst string) {
 	if _, err := os.Stat(dst); err == nil {
 		return
 	}
+	copyAlways(src, dst)
+}
+
+func copyAlways(src, dst string) {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		fatal(err)
