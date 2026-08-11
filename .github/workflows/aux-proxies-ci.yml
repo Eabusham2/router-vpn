@@ -105,7 +105,7 @@ jobs:
           fetch_one() {
             local name=$1 out=$2 headers=$3
             curl -fsS -D "$headers" -o "$out" "http://127.0.0.1:8786/$name"
-            grep -Eiq '^X-Router-VPN-Source: local-fallback\r?$' "$headers"
+            tr -d '\r' < "$headers" | grep -Fiqx 'X-Router-VPN-Source: local-fallback'
             unzip -tq "$out" >/dev/null
             ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
           }
