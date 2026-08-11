@@ -104,20 +104,23 @@ make_windows_bundle(){
   }
   local d="$TMP/$label/router-vpn"
   mkdir -p "$d/router"
-  cp -a "$BUNDLE/modes" "$BUNDLE/generated" "$d/"
+  cp -a "$BUNDLE/modes" "$BUNDLE/generated" "$BUNDLE/client" "$d/"
   cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/router-vpn-bundle.json" "$d/"
   [[ -f "$BUNDLE/logical-modes.json" ]] && cp "$BUNDLE/logical-modes.json" "$d/"
   cp "$client_bin" "$d/router-vpn-client.exe"
   cp "$dns_bin" "$d/router-vpn-dns.exe"
   [[ -f "$BUNDLE/client/install-windows.ps1" ]] && cp "$BUNDLE/client/install-windows.ps1" "$d/"
+  [[ -f "$BUNDLE/client/Setup-Windows-Runtime.ps1" ]] && cp "$BUNDLE/client/Setup-Windows-Runtime.ps1" "$d/"
+  [[ -f "$BUNDLE/client/setup-windows-runtime.sh" ]] && cp "$BUNDLE/client/setup-windows-runtime.sh" "$d/"
+  [[ -f "$BUNDLE/client/install-xray.sh" ]] && cp "$BUNDLE/client/install-xray.sh" "$d/"
   cp "$BUNDLE/router/asus-merlin-router-vpn-forwards.sh" "$d/router/"
   write_windows_launcher "$d/Start-RouterVPN.ps1" '(Split-Path -Parent $MyInvocation.MyCommand.Path)' '(Join-Path $Root "router-vpn-client.exe")'
   cat >"$d/INSTALL.txt" <<TXT
 Router VPN Windows $arch
 1. Extract this folder.
-2. Run Start-RouterVPN.ps1. It starts the controller, waits until it answers, then opens Router VPN as an Edge/Chrome/Brave app window when possible.
-3. This home-generated package is already linked to this Router VPN node and includes its generated profiles.
-4. Windows-native full multi-engine operation must only be shown ready where the required native/WSL transport engines are actually installed and validated.
+2. Run Setup-Windows-Runtime.ps1 once for the full WSL tunnel/proxy engine set.
+3. Run Start-RouterVPN.ps1. It starts the controller, waits until it answers, then opens Router VPN as an Edge/Chrome/Brave app window when possible.
+4. This home-generated package is already linked to this Router VPN node and includes its generated profiles.
 TXT
   (
     cd "$TMP/$label"
@@ -142,6 +145,7 @@ make_windows_portable(){
 
   # Immutable application payload.
   cp -a "$BUNDLE/modes/." "$app/modes/"
+  cp -a "$BUNDLE/client" "$app/client"
   cp "$BUNDLE/modes.json" "$app/modes.json"
   cp "$BUNDLE/logical-modes.json" "$app/logical-modes.json"
   cp "$BUNDLE/client.json" "$app/client.json"
@@ -150,6 +154,7 @@ make_windows_portable(){
   cp "$client_bin" "$app/router-vpn-client.exe"
   cp "$dns_bin" "$app/router-vpn-dns.exe"
   cp "$launcher" "$root/RouterVPNPortable.exe"
+  cp "$BUNDLE/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1"
 
   # This Setup Center package is private and node-specific, so pre-link its
   # mutable Data folder to the current home node. The generic GitHub artifact
@@ -158,9 +163,10 @@ make_windows_portable(){
   cp -a "$BUNDLE/generated/." "$data/generated/"
   cat >"$root/README.txt" <<TXT
 Router VPN Portable $arch — home-linked package
-Double-click RouterVPNPortable.exe.
+1. Run Setup-Windows-Runtime.ps1 once for full mode support.
+2. Double-click RouterVPNPortable.exe.
 App/RouterVPN contains immutable binaries/catalog/scripts.
-Data contains this home node's private router settings and generated profiles.
+Data contains this home node's private settings, generated profiles and portable browser state.
 Move the whole RouterVPNPortable-$arch folder together; do not publish/share it.
 TXT
 
@@ -206,8 +212,8 @@ make_windows_bundle arm64 router-vpn-windows-arm64
 make_windows_portable amd64
 make_windows_portable arm64
 
-# Add the new Windows/portable downloads to the generated Setup Center without
-# duplicating the large HTML generator's mode/QR logic here.
+# Add Windows/portable downloads to the Setup Center without duplicating the
+# large mode/QR HTML generator here.
 python3 - "$BUNDLE/router-vpn-device-setup.html" "$BUNDLE/setup-assets.json" <<'PY'
 from pathlib import Path
 import json,sys
@@ -271,4 +277,4 @@ rm -f "$OUT/router-vpn-client-bundle.zip"
   done
 )
 
-echo 'Published Setup Center, direct profile/helper downloads, macOS/Linux/Windows bundles, Windows Portable/PortableApps x64+ARM64, and full fallback bundle.'
+echo 'Published Setup Center, direct profile/helper downloads, macOS/Linux/Windows bundles, Windows Portable/PortableApps x64+ARM64 with runtime setup, and full fallback bundle.'
