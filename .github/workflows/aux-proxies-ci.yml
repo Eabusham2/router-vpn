@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   arm64:
-    name: Native ARM64 setup assets + OverTLS + SSR
+    name: Native ARM64 setup assets + OverTLS + SSR + mode validation
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -23,9 +23,12 @@ jobs:
       - name: Static checks
         run: |
           python3 -m py_compile server/scripts/generate-setup-assets.py server/scripts/generate-aux-proxies.py
+          python3 -m json.tool configs/client/logical-modes.json >/dev/null
           bash -n server/finalize/finalize.sh
           bash -n server/aux-proxies/entrypoint.sh
           bash -n server/naive/entrypoint.sh
+          bash -n modes/check-mode.sh
+          bash -n modes/check-combined.sh
           sh -n router/asus-merlin-router-vpn-forwards.sh
 
       - name: Build init ARM64
@@ -54,11 +57,48 @@ jobs:
             test -s /opt/router-vpn/config/aux/ssr-server.json
             test -s /opt/router-vpn/client-bundle/generated/overtls/overtls-client.json
             test -s /opt/router-vpn/client-bundle/generated/shadowsocksr/ssr-client.json
+            test -s /opt/router-vpn/client-bundle/logical-modes.json
             grep -q "WireGuard" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "SOCKS5 + TLS (OverTLS)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "ShadowsocksR" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
           '
+
+      - name: Validate formerly grey combined and MAX modes
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint /bin/bash router-vpn-ci-init:arm64 -euo pipefail -c '
+              export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
+              export HOMEVPN_PROFILE_ID=home
+              cd /src/modes
+
+              echo "=== combined profiles ==="
+              ./check-combined.sh split
+              ./check-combined.sh max
+
+              echo "=== WG MAX profiles ==="
+              ./check-mode.sh max-quic-wg
+              ./check-mode.sh max-tls-wg
+
+              echo "=== AWG MAX generated profiles ==="
+              # The init validator image does not ship the macOS/Linux AWG client
+              # executables. Stub only command-presence probes here; check-mode still
+              # validates the real generated chain, Xray/sing-box configs, AWG files,
+              # CHAIN_READY/PQ_BASE markers, and Rosenpass assets.
+              mkdir -p /tmp/awg-check-bin
+              for cmd in amneziawg-go awg awg-quick; do
+                printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
+                chmod +x "/tmp/awg-check-bin/$cmd"
+              done
+              export PATH="/tmp/awg-check-bin:$PATH"
+              ./check-mode.sh max-quic-awg
+              ./check-mode.sh max-tls-awg
+
+              echo "=== ALL must have at least one validated MAX branch ==="
+              ./check-mode.sh all
+            '
 
       - name: Build auxiliary proxy ARM64 image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
