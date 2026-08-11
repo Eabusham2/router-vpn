@@ -58,7 +58,7 @@ jobs:
           retention-days: 14
 
   build-paf:
-    name: Generate and install-test official PAF
+    name: Generate + install-test official x64 PAF
     needs: source-packages
     runs-on: windows-latest
     steps:
@@ -89,3 +89,47 @@ jobs:
           path: dist/paf/*.paf.exe
           if-no-files-found: error
           retention-days: 14
+
+  arm64-paf-smoke:
+    name: Install + upgrade-test official ARM64 PAF
+    needs: build-paf
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-PortableApps-PAF
+          path: paf
+      - name: Install, execute, upgrade, and preserve Data
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $paf = Get-ChildItem paf -Recurse -Filter 'RouterVPNPortable-arm64_*.paf.exe' | Select-Object -First 1
+          if (-not $paf) { throw 'Missing ARM64 PAF artifact' }
+
+          $dest = Join-Path $env:RUNNER_TEMP 'router-vpn-paf-arm64'
+          Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+
+          $install = Start-Process $paf.FullName -ArgumentList @('/S', "/DESTINATION=$dest\") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "ARM64 PAF install failed with $($install.ExitCode)" }
+          $launcher = Get-ChildItem $dest -Recurse -Filter 'RouterVPNPortable.exe' -File |
+            Where-Object { $_.FullName -notmatch '\\App\\RouterVPN\\' } |
+            Select-Object -First 1
+          if (-not $launcher) { throw 'Installed ARM64 PAF did not contain RouterVPNPortable.exe' }
+
+          $test = Start-Process $launcher.FullName -ArgumentList '--self-test' -Wait -PassThru
+          if ($test.ExitCode -ne 0) { throw "ARM64 PAF launcher self-test failed with $($test.ExitCode)" }
+
+          $root = Split-Path -Parent $launcher.FullName
+          $marker = Join-Path $root 'Data\portableapps-arm64-upgrade-preserve.txt'
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $marker) | Out-Null
+          Set-Content -Path $marker -Value 'preserve-me' -NoNewline
+
+          $upgrade = Start-Process $paf.FullName -ArgumentList @('/S', "/DESTINATION=$dest\") -Wait -PassThru
+          if ($upgrade.ExitCode -ne 0) { throw "ARM64 PAF upgrade failed with $($upgrade.ExitCode)" }
+          if (-not (Test-Path $marker) -or (Get-Content $marker -Raw) -ne 'preserve-me') {
+            throw 'ARM64 PortableApps upgrade did not preserve Data'
+          }
+
+          $test2 = Start-Process $launcher.FullName -ArgumentList '--self-test' -Wait -PassThru
+          if ($test2.ExitCode -ne 0) { throw 'ARM64 PAF launcher failed after upgrade' }
