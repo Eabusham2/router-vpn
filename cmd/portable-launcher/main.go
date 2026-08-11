@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,6 +27,7 @@ func main() {
 	dataDir := filepath.Join(root, "Data")
 	generatedDir := filepath.Join(dataDir, "generated")
 	modesDir := filepath.Join(appDir, "modes")
+	dataModes := filepath.Join(dataDir, "modes.windows.json")
 
 	for _, dir := range []string{dataDir, generatedDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -44,9 +47,11 @@ func main() {
 	}
 
 	copyDefault(filepath.Join(appDir, "routers.json"), filepath.Join(dataDir, "routers.json"))
-	if err := ensurePortableConfig(filepath.Join(dataDir, "client.json"), appDir, dataDir); err != nil {
+	wslOK, wslReason := prepareWindowsModeCatalog(filepath.Join(appDir, "modes.json"), dataModes, modesDir)
+	if err := ensurePortableConfig(filepath.Join(dataDir, "client.json"), dataModes, modesDir, dataDir); err != nil {
 		fatal(err)
 	}
+	writeRuntimeStatus(filepath.Join(dataDir, "windows-runtime.json"), wslOK, wslReason)
 
 	binary := filepath.Join(appDir, "router-vpn-client.exe")
 	started := false
@@ -59,6 +64,7 @@ func main() {
 			"HOMEVPN_CLIENT_CONFIG="+filepath.Join(dataDir, "client.json"),
 			"HOMEVPN_PORTABLE=1",
 			"HOMEVPN_MODES_DIR="+modesDir,
+			"WSLENV="+portableWSLEnv(os.Getenv("WSLENV")),
 			"PATH="+appDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		)
 		cmd.Stdout = os.Stdout
@@ -75,11 +81,20 @@ func main() {
 		}
 		fatal(errors.New("local Router VPN controller did not become ready on 127.0.0.1:8788"))
 	}
-	openAppWindow(localURL)
 
-	// Keep the PortableApps launcher alive with the child it started. This keeps
-	// the writable Data directory self-contained and avoids orphaning the
-	// controller when the portable package itself was responsible for launching it.
+	browserCmd, ownedWindow := openAppWindow(localURL, dataDir)
+	if ownedWindow && browserCmd != nil {
+		_ = browserCmd.Wait()
+		if started {
+			stopPortableController(cmd)
+		}
+		return
+	}
+
+	// On very old/minimal Windows systems where no Chromium-family app-window
+	// browser is available we fall back to the default browser. Keep the launcher
+	// attached to the controller it started so PortableApps knows the package is
+	// still in use. Running RouterVPNPortable.exe again simply reopens the UI.
 	if started && cmd != nil {
 		if err := cmd.Wait(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			fatal(err)
@@ -87,7 +102,7 @@ func main() {
 	}
 }
 
-func ensurePortableConfig(path, appDir, dataDir string) error {
+func ensurePortableConfig(path, modesFile, modesDir, dataDir string) error {
 	cfg := map[string]any{}
 	if b, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(b, &cfg)
@@ -101,11 +116,8 @@ func ensurePortableConfig(path, appDir, dataDir string) error {
 	if _, ok := cfg["auto_test_seconds"]; !ok {
 		cfg["auto_test_seconds"] = 8
 	}
-	// Static code/catalog stays under App. All mutable state and imported private
-	// material stays under Data. Rewriting these paths on every launch also
-	// migrates older portable packages that incorrectly pointed at Data/modes.
-	cfg["modes_file"] = filepath.Join(appDir, "modes.json")
-	cfg["scripts_dir"] = filepath.Join(appDir, "modes")
+	cfg["modes_file"] = modesFile
+	cfg["scripts_dir"] = modesDir
 	cfg["state_file"] = filepath.Join(dataDir, "state.json")
 	cfg["profiles_file"] = filepath.Join(dataDir, "routers.json")
 	b, err := json.MarshalIndent(cfg, "", "  ")
@@ -117,6 +129,103 @@ func ensurePortableConfig(path, appDir, dataDir string) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func prepareWindowsModeCatalog(src, dst, windowsModesDir string) (bool, string) {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		fatal(err)
+	}
+	var modes []map[string]any
+	if err := json.Unmarshal(b, &modes); err != nil {
+		fatal(fmt.Errorf("invalid portable modes.json: %w", err))
+	}
+
+	linuxModesDir, wslErr := wslPath(windowsModesDir)
+	wslOK := wslErr == nil
+	reason := "WSL2/default Linux distro is ready"
+	if !wslOK {
+		reason = "Windows full-tunnel runtime needs WSL2 with a default Linux distro; use the package Setup-Windows-Runtime.ps1 or a native protocol client"
+	}
+
+	for _, mode := range modes {
+		for _, key := range []string{"command", "check_command", "stop_command"} {
+			raw, ok := mode[key].([]any)
+			if !ok || len(raw) == 0 {
+				continue
+			}
+			first, _ := raw[0].(string)
+			if !strings.HasPrefix(first, "./") {
+				continue
+			}
+			args := make([]any, 0, len(raw)+4)
+			if wslOK {
+				args = append(args, "wsl.exe", "--exec", "bash", strings.TrimRight(linuxModesDir, "/")+"/"+filepath.Base(first))
+				args = append(args, raw[1:]...)
+			} else {
+				msg := "echo '" + strings.ReplaceAll(reason, "'", "") + "' >&2; exit 127"
+				args = append(args, "wsl.exe", "--exec", "sh", "-lc", msg)
+			}
+			mode[key] = args
+		}
+	}
+
+	out, err := json.MarshalIndent(modes, "", "  ")
+	if err != nil {
+		fatal(err)
+	}
+	if err := os.WriteFile(dst, append(out, '\n'), 0o600); err != nil {
+		fatal(err)
+	}
+	return wslOK, reason
+}
+
+func wslPath(path string) (string, error) {
+	cmd := exec.Command("wsl.exe", "--exec", "wslpath", "-a", "-u", path)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	}
+	value := strings.TrimSpace(string(out))
+	if value == "" {
+		return "", errors.New("wslpath returned an empty path")
+	}
+	return value, nil
+}
+
+func portableWSLEnv(existing string) string {
+	wanted := []string{
+		"HOMEVPN_ROOT/p", "HOMEVPN_CLIENT_CONFIG/p", "HOMEVPN_PROFILE_ID",
+		"HOMEVPN_ENDPOINT", "HOMEVPN_ADGUARD4", "HOMEVPN_ADGUARD6",
+		"HOMEVPN_SOCKS_HOST", "HOMEVPN_SOCKS_PORT", "HOMEVPN_SOCKS_USER",
+		"HOMEVPN_SOCKS_PASSWORD", "HOMEVPN_DAITA", "HOMEVPN_JUMBO",
+		"HOMEVPN_SOCKS", "HOMEVPN_MTU", "HOMEVPN_PORTABLE",
+	}
+	seen := map[string]bool{}
+	parts := make([]string, 0, len(wanted)+8)
+	for _, part := range strings.Split(existing, ":") {
+		part = strings.TrimSpace(part)
+		if part != "" && !seen[part] {
+			seen[part] = true
+			parts = append(parts, part)
+		}
+	}
+	for _, part := range wanted {
+		if !seen[part] {
+			seen[part] = true
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, ":")
+}
+
+func writeRuntimeStatus(path string, ready bool, message string) {
+	b, _ := json.MarshalIndent(map[string]any{
+		"wsl_ready": ready,
+		"message": message,
+		"checked_at": time.Now().UTC().Format(time.RFC3339),
+	}, "", "  ")
+	_ = os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
 func controllerReady(timeout time.Duration) bool {
@@ -140,33 +249,52 @@ func waitForController(timeout time.Duration) bool {
 	return false
 }
 
-func openAppWindow(url string) {
+func openAppWindow(url, dataDir string) (*exec.Cmd, bool) {
 	if runtime.GOOS != "windows" {
-		return
+		return nil, false
 	}
-	candidates := []struct {
-		path string
-		args []string
-	}{
-		{filepath.Join(os.Getenv("PROGRAMFILES(X86)"), "Microsoft", "Edge", "Application", "msedge.exe"), []string{"--app=" + url}},
-		{filepath.Join(os.Getenv("PROGRAMFILES"), "Microsoft", "Edge", "Application", "msedge.exe"), []string{"--app=" + url}},
-		{filepath.Join(os.Getenv("PROGRAMFILES"), "Google", "Chrome", "Application", "chrome.exe"), []string{"--app=" + url}},
-		{filepath.Join(os.Getenv("PROGRAMFILES(X86)"), "Google", "Chrome", "Application", "chrome.exe"), []string{"--app=" + url}},
-		{filepath.Join(os.Getenv("LOCALAPPDATA"), "Google", "Chrome", "Application", "chrome.exe"), []string{"--app=" + url}},
-		{filepath.Join(os.Getenv("PROGRAMFILES"), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"), []string{"--app=" + url}},
-		{filepath.Join(os.Getenv("LOCALAPPDATA"), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"), []string{"--app=" + url}},
+	profileDir := filepath.Join(dataDir, "BrowserProfile")
+	_ = os.MkdirAll(profileDir, 0o700)
+	candidates := []string{
+		filepath.Join(os.Getenv("PROGRAMFILES(X86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		filepath.Join(os.Getenv("PROGRAMFILES"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		filepath.Join(os.Getenv("PROGRAMFILES"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("PROGRAMFILES(X86)"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("LOCALAPPDATA"), "Google", "Chrome", "Application", "chrome.exe"),
+		filepath.Join(os.Getenv("PROGRAMFILES"), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+		filepath.Join(os.Getenv("LOCALAPPDATA"), "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
 	}
-	for _, candidate := range candidates {
-		if strings.TrimSpace(candidate.path) == "" {
+	for _, browser := range candidates {
+		if strings.TrimSpace(browser) == "" {
 			continue
 		}
-		if st, err := os.Stat(candidate.path); err == nil && !st.IsDir() {
-			if exec.Command(candidate.path, candidate.args...).Start() == nil {
-				return
+		if st, err := os.Stat(browser); err == nil && !st.IsDir() {
+			cmd := exec.Command(browser,
+				"--app="+url,
+				"--user-data-dir="+profileDir,
+				"--no-first-run",
+				"--no-default-browser-check",
+			)
+			if cmd.Start() == nil {
+				return cmd, true
 			}
 		}
 	}
 	_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	return nil, false
+}
+
+func stopPortableController(cmd *exec.Cmd) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	req, _ := http.NewRequest(http.MethodPost, localURL+"api/emergency-stop", bytes.NewReader(nil))
+	if resp, err := client.Do(req); err == nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}
 }
 
 func copyDefault(src, dst string) {
