@@ -96,12 +96,10 @@ jobs:
               fi
             done
 
-            # Raw portable keeps the convenience setup helper/readme at root.
             portable_list=$(unzip -Z1 "$portable")
             grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$portable_list"
             grep -qx "$root/README.txt" <<<"$portable_list"
 
-            # PortableApps source follows Format 3.9 and keeps runtime setup under App.
             paf_list=$(unzip -Z1 "$paf")
             ! grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$paf_list"
             ! grep -qx "$root/README.txt" <<<"$paf_list"
@@ -140,9 +138,17 @@ jobs:
           retention-days: 14
 
   windows-portable-smoke:
-    name: Execute Windows Portable and PortableApps x64
+    name: Execute Windows Portable ${{ matrix.arch }}
     needs: desktop-unix
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -150,18 +156,21 @@ jobs:
           path: artifacts
       - name: Run Portable and PortableApps self-tests and relocation test
         shell: pwsh
+        env:
+          ROUTER_VPN_ARCH: ${{ matrix.arch }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $arch = $env:ROUTER_VPN_ARCH
           $archives = @(
-            (Get-ChildItem artifacts -Recurse -Filter 'RouterVPN-Portable-Windows-amd64.zip' | Select-Object -First 1).FullName,
-            (Get-ChildItem artifacts -Recurse -Filter 'RouterVPNPortable-amd64.zip' | Select-Object -First 1).FullName
+            (Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Portable-Windows-$arch.zip" | Select-Object -First 1).FullName,
+            (Get-ChildItem artifacts -Recurse -Filter "RouterVPNPortable-$arch.zip" | Select-Object -First 1).FullName
           )
-          if ($archives -contains $null) { throw 'Missing x64 portable artifacts' }
+          if ($archives -contains $null) { throw "Missing $arch portable artifacts" }
 
           $index = 0
           foreach ($archive in $archives) {
             $index++
-            $extract = Join-Path $env:RUNNER_TEMP "portable-$index"
+            $extract = Join-Path $env:RUNNER_TEMP "portable-$arch-$index"
             Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
             Expand-Archive -Path $archive -DestinationPath $extract -Force
             $root = Get-ChildItem $extract -Directory | Select-Object -First 1
@@ -170,7 +179,7 @@ jobs:
             if (-not (Test-Path $exe)) { throw "Missing launcher in $archive" }
 
             $proc = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
-            if ($proc.ExitCode -ne 0) { throw "Portable self-test failed for $archive with $($proc.ExitCode)" }
+            if ($proc.ExitCode -ne 0) { throw "Portable $arch self-test failed for $archive with $($proc.ExitCode)" }
 
             foreach ($relative in @(
               'Data\client.json',
@@ -192,13 +201,13 @@ jobs:
               if ($_.Exception.Message -eq 'Portable controller was still running after self-test') { throw }
             }
 
-            $movedParent = Join-Path $env:RUNNER_TEMP "relocated-$index"
+            $movedParent = Join-Path $env:RUNNER_TEMP "relocated-$arch-$index"
             Remove-Item $movedParent -Recurse -Force -ErrorAction SilentlyContinue
             New-Item -ItemType Directory -Path $movedParent | Out-Null
             $moved = Join-Path $movedParent $root.Name
             Move-Item $root.FullName $moved
             $proc2 = Start-Process (Join-Path $moved 'RouterVPNPortable.exe') -ArgumentList '--self-test' -Wait -PassThru
-            if ($proc2.ExitCode -ne 0) { throw "Relocated portable self-test failed for $archive" }
+            if ($proc2.ExitCode -ne 0) { throw "Relocated portable $arch self-test failed for $archive" }
           }
 
   android:
