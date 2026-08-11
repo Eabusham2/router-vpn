@@ -82,6 +82,7 @@ jobs:
             ! grep -qi "portableapps" /opt/router-vpn/downloads/router-vpn-device-setup.html
             grep -q "generated on demand" /opt/router-vpn/downloads/router-vpn-device-setup.html
           '
+          sudo chown -R "$(id -u):$(id -g)" "$TEST_ROOT"
           python3 - <<'PY'
           import json, os, pathlib
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'router-vpn-aux-test'
@@ -91,7 +92,6 @@ jobs:
               assert cfg['protocol'] == 'auth_aes128_md5', (rel, cfg['protocol'])
               assert cfg['obfs'] == 'tls1.2_ticket_auth', (rel, cfg['obfs'])
           PY
-          sudo chown -R "$(id -u):$(id -g)" "$TEST_ROOT"
 
       - name: Verify on-demand home-linked Portable packages
         run: |
