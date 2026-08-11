@@ -79,14 +79,17 @@ jobs:
               list=$(unzip -Z1 "$archive")
               root="RouterVPNPortable-$arch"
               grep -qx "$root/RouterVPNPortable.exe" <<<"$list"
+              grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$list"
               grep -qx "$root/App/RouterVPN/router-vpn-client.exe" <<<"$list"
               grep -qx "$root/App/RouterVPN/router-vpn-dns.exe" <<<"$list"
               grep -qx "$root/App/RouterVPN/modes.json" <<<"$list"
               grep -qx "$root/App/RouterVPN/logical-modes.json" <<<"$list"
               grep -qx "$root/App/RouterVPN/modes/check-mode.sh" <<<"$list"
               grep -qx "$root/App/RouterVPN/modes/check-combined.sh" <<<"$list"
+              grep -qx "$root/App/RouterVPN/client/setup-windows-runtime.sh" <<<"$list"
+              grep -qx "$root/App/RouterVPN/client/install-xray.sh" <<<"$list"
               grep -qx "$root/Data/generated/" <<<"$list"
-              # Mutable/private router state must not be pre-populated in Data.
+              # Generic GitHub artifacts must not ship somebody's private router state.
               if grep -qE "^$root/Data/(routers|state|client)\\.json$" <<<"$list"; then
                 echo "portable archive incorrectly pre-populates mutable Data files: $archive" >&2
                 exit 1
@@ -121,6 +124,69 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
+
+  windows-portable-smoke:
+    name: Execute Windows Portable and PortableApps x64
+    needs: desktop-unix
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: artifacts
+      - name: Run Portable and PortableApps self-tests and relocation test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archives = @(
+            (Get-ChildItem artifacts -Recurse -Filter 'RouterVPN-Portable-Windows-amd64.zip' | Select-Object -First 1).FullName,
+            (Get-ChildItem artifacts -Recurse -Filter 'RouterVPNPortable-amd64.zip' | Select-Object -First 1).FullName
+          )
+          if ($archives -contains $null) { throw 'Missing x64 portable artifacts' }
+
+          $index = 0
+          foreach ($archive in $archives) {
+            $index++
+            $extract = Join-Path $env:RUNNER_TEMP "portable-$index"
+            Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+            Expand-Archive -Path $archive -DestinationPath $extract -Force
+            $root = Get-ChildItem $extract -Directory | Select-Object -First 1
+            if (-not $root) { throw "No package root in $archive" }
+            $exe = Join-Path $root.FullName 'RouterVPNPortable.exe'
+            if (-not (Test-Path $exe)) { throw "Missing launcher in $archive" }
+
+            $proc = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
+            if ($proc.ExitCode -ne 0) { throw "Portable self-test failed for $archive with $($proc.ExitCode)" }
+
+            foreach ($relative in @(
+              'Data\client.json',
+              'Data\routers.json',
+              'Data\modes.windows.json',
+              'Data\logical-modes.json',
+              'Data\windows-runtime.json'
+            )) {
+              if (-not (Test-Path (Join-Path $root.FullName $relative))) { throw "Self-test did not create $relative" }
+            }
+            $logical = Get-Content (Join-Path $root.FullName 'Data\logical-modes.json') -Raw | ConvertFrom-Json
+            if ($logical.Count -ne 16) { throw "Expected 16 portable logical modes; got $($logical.Count)" }
+
+            # Self-test must release 8788 and the package so PortableApps/USB can move.
+            Start-Sleep -Milliseconds 400
+            try {
+              Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8788/api/status' -TimeoutSec 1 | Out-Null
+              throw 'Portable controller was still running after self-test'
+            } catch {
+              if ($_.Exception.Message -eq 'Portable controller was still running after self-test') { throw }
+            }
+
+            $movedParent = Join-Path $env:RUNNER_TEMP "relocated-$index"
+            Remove-Item $movedParent -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Path $movedParent | Out-Null
+            $moved = Join-Path $movedParent $root.Name
+            Move-Item $root.FullName $moved
+            $proc2 = Start-Process (Join-Path $moved 'RouterVPNPortable.exe') -ArgumentList '--self-test' -Wait -PassThru
+            if ($proc2.ExitCode -ne 0) { throw "Relocated portable self-test failed for $archive" }
+          }
 
   android:
     name: Android native app
