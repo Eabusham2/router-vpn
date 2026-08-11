@@ -29,11 +29,7 @@ jobs:
           gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" \
             --jq '.[].name' | while IFS= read -r branch; do
               [ "$branch" = main ] && continue
-              encoded=$(python3 - "$branch" <<'PY'
-import sys, urllib.parse
-print(urllib.parse.quote(sys.argv[1], safe=''))
-PY
-              )
+              encoded=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$branch")
               gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$encoded"
               echo "Deleted non-main branch: $branch"
             done
@@ -60,7 +56,7 @@ PY
           name: RouterVPN-project-package
           path: dist/release/*
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
 
   desktop-unix:
     name: Desktop, Unix, and router validation
@@ -79,10 +75,12 @@ PY
           go test ./...
           python3 deploy/validate-repo.py
           python3 -m json.tool configs/client/modes.json >/dev/null
+          python3 -m json.tool configs/client/logical-modes.json >/dev/null
           find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
           docker compose -f server/portainer-compose.yaml config >/dev/null
           docker compose -f server/compose.yaml config >/dev/null
+          docker compose -f server/portainer-current.yaml config >/dev/null
       - name: Build router images
         run: |
           docker build -f server/init/Dockerfile -t router-vpn-ci-init .
@@ -92,18 +90,21 @@ PY
           docker build -f server/rosenpass/Dockerfile -t router-vpn-ci-rosenpass .
           docker build -f server/naive/Dockerfile -t router-vpn-ci-naive .
           docker build -f server/ss-v2ray/Dockerfile -t router-vpn-ci-ss-v2ray .
+          docker build -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux .
       - name: Build all Go targets
         run: |
           chmod +x deploy/build-client.sh deploy/package-builds.sh
           ./deploy/build-client.sh
-      - name: Package archives and PortableApps layouts
+      - name: Package archives and Portable ZIP layouts
         run: ./deploy/package-builds.sh
       - name: Verify desktop and Unix packages
         run: |
           test -f dist/packages/RouterVPN-Windows-amd64.zip
           test -f dist/packages/RouterVPN-Windows-arm64.zip
-          test -f dist/packages/RouterVPNPortable-amd64.zip
-          test -f dist/packages/RouterVPNPortable-arm64.zip
+          test -f dist/packages/RouterVPN-Portable-Windows-amd64.zip
+          test -f dist/packages/RouterVPN-Portable-Windows-arm64.zip
+          test ! -e dist/packages/RouterVPNPortable-amd64.zip
+          test ! -e dist/packages/RouterVPNPortable-arm64.zip
           test -f dist/packages/RouterVPN-darwin-amd64.tar.gz
           test -f dist/packages/RouterVPN-darwin-arm64.tar.gz
           test -f dist/packages/RouterVPN-linux-amd64.tar.gz
@@ -121,7 +122,7 @@ PY
             dist/packages/*
             dist/SHA256SUMS
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
 
   android:
     name: Android APK
@@ -154,7 +155,7 @@ PY
           name: RouterVPN-Android-APK
           path: dist/mobile/*
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
 
   ios:
     name: iOS IPA
@@ -263,7 +264,7 @@ PY
             ios/RouterVPN/build/RouterVPN-signed.ipa.sha256
             ios/RouterVPN/build/RouterVPN.xcarchive
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
 
   aggregate:
     name: All-platform release bundle
@@ -290,4 +291,4 @@ PY
             RouterVPN-all-platforms.SHA256SUMS
             all-platforms/SHA256SUMS
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
