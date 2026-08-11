@@ -70,6 +70,11 @@ jobs:
             grep -q "router-vpn-windows-portable-amd64.zip" /opt/router-vpn/downloads/router-vpn-device-setup.html
             grep -q "router-vpn-portableapps-arm64.zip" /opt/router-vpn/downloads/router-vpn-device-setup.html
           '
+          # The server intentionally creates private files under umask 077. The
+          # bind mount is therefore root-owned on the hosted runner. Hand the
+          # ephemeral CI copy back to the runner user before host-side ZIP tests;
+          # production permissions remain unchanged.
+          sudo chown -R "$(id -u):$(id -g)" "$TEST_ROOT"
 
       - name: Verify home-linked Portable and PortableApps packages
         run: |
@@ -148,8 +153,6 @@ jobs:
               "$root/Data/generated/max-quic-awg/chain.env"; do
               require_file "$paf" "$path"
             done
-            # Do not require an explicit parent-directory ZIP entry; child files
-            # prove the PortableApps App/Data/Other tree and avoid zip-tool quirks.
             require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Type=PortableApps\.comFormat$'
             require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Version=3\.9$'
             require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Icons=2$'
