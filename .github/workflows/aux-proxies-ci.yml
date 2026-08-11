@@ -27,6 +27,7 @@ jobs:
           bash -n server/finalize/finalize.sh
           bash -n server/finalize/upgrade-safe.sh
           bash -n server/scripts/publish-downloads.sh
+          bash -n client/setup-windows-runtime.sh
           bash -n server/aux-proxies/entrypoint.sh
           bash -n server/naive/entrypoint.sh
           bash -n modes/check-mode.sh
@@ -60,6 +61,8 @@ jobs:
             test -s /opt/router-vpn/client-bundle/generated/overtls/overtls-client.json
             test -s /opt/router-vpn/client-bundle/generated/shadowsocksr/ssr-client.json
             test -s /opt/router-vpn/client-bundle/logical-modes.json
+            test -s /opt/router-vpn/client-bundle/client/Setup-Windows-Runtime.ps1
+            test -s /opt/router-vpn/client-bundle/client/setup-windows-runtime.sh
             grep -q "WireGuard" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "SOCKS5 + TLS (OverTLS)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
@@ -82,10 +85,13 @@ jobs:
             root="RouterVPNPortable-$arch"
             list=$(unzip -Z1 "$portable")
             grep -qx "$root/RouterVPNPortable.exe" <<<"$list"
+            grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$list"
             grep -qx "$root/App/RouterVPN/router-vpn-client.exe" <<<"$list"
             grep -qx "$root/App/RouterVPN/router-vpn-dns.exe" <<<"$list"
             grep -qx "$root/App/RouterVPN/modes.json" <<<"$list"
             grep -qx "$root/App/RouterVPN/logical-modes.json" <<<"$list"
+            grep -qx "$root/App/RouterVPN/client/setup-windows-runtime.sh" <<<"$list"
+            grep -qx "$root/App/RouterVPN/client/install-xray.sh" <<<"$list"
             grep -qx "$root/Data/routers.json" <<<"$list"
             grep -qx "$root/Data/generated/wg/wg.conf" <<<"$list"
             grep -qx "$root/Data/generated/max-tls-wg/chain.env" <<<"$list"
@@ -93,8 +99,12 @@ jobs:
 
             plist=$(unzip -Z1 "$paf")
             grep -qx "$root/App/AppInfo/appinfo.ini" <<<"$plist"
+            grep -qx "$root/App/AppInfo/installer.ini" <<<"$plist"
+            grep -qx "$root/Other/" <<<"$plist"
             unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Type=PortableApps.comFormat'
+            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Version=3.9'
             unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Start=RouterVPNPortable.exe'
+            unzip -p "$paf" "$root/App/AppInfo/installer.ini" | grep -qx 'RemoveDataDirectory=false'
           done
           python3 - "$TEST_ROOT/client-bundle/setup-assets.json" <<'PY'
           import json,sys
