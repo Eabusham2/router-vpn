@@ -22,6 +22,7 @@ if dns_path.is_file():
     except Exception:
         dns_benchmark={}
 winner=dns_benchmark.get('winner') or {}
+dns_results=dns_benchmark.get('results') or []
 fastest_host=str(winner.get('address') or '1.1.1.1')
 fastest_name=str(winner.get('name') or 'Cloudflare IPv4 fallback')
 fastest_latency=winner.get('latency_ms')
@@ -53,15 +54,19 @@ router_profile={
     'daita_host':socks_host,
     'daita_port':45999,
     'daita_rate_kbps':192,
-    'dns_mode':'fastest',
+    'base_tunnel':'wg',
+    'location':'Home',
+    'use_count':0,
+    'dns_mode':'home',
     'dns_protocol':'udp',
-    'dns_host':fastest_host,
+    'dns_host':socks_host,
     'dns_port':53,
     'dns_server_name':'',
     'dns_path':'/dns-query',
     'fastest_dns_host':fastest_host,
     'fastest_dns_name':fastest_name,
     'fastest_dns_latency_ms':fastest_latency,
+    'dns_results':dns_results,
 }
 bundle={
     'endpoint':endpoint,
