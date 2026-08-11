@@ -133,12 +133,14 @@ then routes Router VPN mode checks/runs through WSL with Windows paths translate
 Move the whole RouterVPNPortable folder together; private imported profiles remain in Data.
 TXT
 
-  # Ordinary no-installer portable ZIP.
+  # Ordinary no-installer portable ZIP keeps the convenient setup helper at root.
   package_zip "RouterVPN-Portable-Windows-$arch" "$root"
 
-  # Current PortableApps.com Format metadata. The official PAF installer is built
-  # later on a Windows CI runner using the current PortableApps.com Installer.
-  mkdir -p "$root/App/AppInfo"
+  # PortableApps.com Format keeps only the launcher/help at root. Runtime setup is
+  # exposed as a second PortableApps Platform menu item and lives under App.
+  mkdir -p "$root/App/AppInfo" "$root/Other/Help"
+  cp "$root/README.txt" "$root/Other/Help/readme.txt"
+  rm -f "$root/README.txt" "$root/Setup-Windows-Runtime.ps1"
   cat >"$root/App/AppInfo/appinfo.ini" <<EOF
 [Format]
 Type=PortableApps.comFormat
@@ -164,9 +166,15 @@ PackageVersion=0.7.0.0
 DisplayVersion=0.7.0 Alpha
 
 [Control]
-Icons=1
+Icons=2
 Start=RouterVPNPortable.exe
+Start1=RouterVPNPortable.exe
+Name1=Router VPN Portable
+Start2=powershell.exe -NoProfile -ExecutionPolicy Bypass -File App\RouterVPN\client\Setup-Windows-Runtime.ps1
+Name2=Router VPN Portable - Setup Windows Runtime
 ExtractIcon=RouterVPNPortable.exe
+ExtractIcon1=RouterVPNPortable.exe
+ExtractIcon2=RouterVPNPortable.exe
 EOF
   cat >"$root/App/AppInfo/installer.ini" <<'EOF'
 [MainDirectories]
