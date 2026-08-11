@@ -126,6 +126,7 @@ func main() {
 	h.HandleFunc("/api/options", a.options)
 	h.HandleFunc("/api/forward", a.forward)
 	h.HandleFunc("/api/forward/clear", a.clearForward)
+	extraRoutes(h, a)
 	log.Printf("Router VPN client UI: http://%s", c.Listen)
 	log.Fatal(http.ListenAndServe(c.Listen, h))
 }
@@ -155,6 +156,7 @@ func getenv(k, v string) string {
 func (a *app) index(w http.ResponseWriter, _ *http.Request) {
 	b, _ := uiFS.ReadFile("ui.html")
 	w.Header().Set("content-type", "text/html; charset=utf-8")
+	w.Header().Set("cache-control", "no-cache")
 	_, _ = w.Write(b)
 }
 
@@ -310,6 +312,7 @@ type profileBundle struct {
 	Socks5Port       int                          `json:"socks5Port"`
 	Socks5Username   string                       `json:"socks5Username"`
 	Socks5Password   string                       `json:"socks5Password"`
+	DNSBenchmark     dnsBenchmarkPayload          `json:"dnsBenchmark"`
 	RouterProfiles   []common.RouterProfile       `json:"routerProfiles"`
 	SelectedRouterID string                       `json:"selectedRouterID"`
 	Profiles         map[string]map[string]string `json:"profiles"`
@@ -379,6 +382,14 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.Socks5Password != "" {
 		p.SocksPassword = b.Socks5Password
+	}
+	if len(b.DNSBenchmark.Results) > 0 {
+		p.DNSResults = b.DNSBenchmark.Results
+	}
+	if b.DNSBenchmark.Winner.Address != "" {
+		p.FastestDNSHost = b.DNSBenchmark.Winner.Address
+		p.FastestDNSName = b.DNSBenchmark.Winner.Name
+		p.FastestDNSLatencyMs = b.DNSBenchmark.Winner.LatencyMs
 	}
 	applyProfileDefaults(&p)
 
@@ -543,6 +554,31 @@ func applyProfileDefaults(p *common.RouterProfile) {
 	}
 	if p.DAITARateKbps == 0 {
 		p.DAITARateKbps = 192
+	}
+	if p.BaseTunnel == "" {
+		p.BaseTunnel = "wg"
+	}
+	if p.DNSMode == "" {
+		p.DNSMode = "home"
+	}
+	if p.DNSProtocol == "" {
+		p.DNSProtocol = "udp"
+	}
+	if p.DNSHost == "" {
+		if p.DNSMode == "fastest" && p.FastestDNSHost != "" {
+			p.DNSHost = p.FastestDNSHost
+		} else {
+			p.DNSHost = p.AdGuardIPv4
+		}
+	}
+	if p.DNSPort == 0 {
+		p.DNSPort = 53
+	}
+	if p.DNSPath == "" {
+		p.DNSPath = "/dns-query"
+	}
+	if p.Location == "" {
+		p.Location = p.Name
 	}
 }
 
@@ -737,6 +773,14 @@ func (a *app) startMode(id string) error {
 	a.state.RouterID = p.ID
 	a.state.LastError = ""
 	daitaEnabled := a.state.DAITA
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == p.ID {
+			a.profiles.Profiles[i].UseCount++
+			a.profiles.Profiles[i].LastUsedAt = time.Now().UTC().Format(time.RFC3339)
+			break
+		}
+	}
+	_ = a.persistProfilesLocked()
 	a.mu.Unlock()
 	if daitaEnabled {
 		a.startCoverTraffic(p)
