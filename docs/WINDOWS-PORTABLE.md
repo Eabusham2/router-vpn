@@ -1,8 +1,8 @@
-# Router VPN on Windows — Portable and PortableApps
+# Router VPN on Windows — Portable ZIP
 
-Router VPN ships two related no-system-install layouts plus the normal Windows package.
+Router VPN ships a normal Windows package plus one tested no-system-install Portable ZIP layout. PortableApps.com/PAF packaging was retired because the official packager was not reliable enough in unattended CI; Router VPN does not publish or advertise a PortableApps package.
 
-## 1. Portable ZIP
+## Portable ZIP
 
 Artifacts:
 
@@ -22,7 +22,9 @@ The package layout is intentionally portable:
 ```text
 RouterVPNPortable-ARCH/
   RouterVPNPortable.exe
+  RouterVPNSetupRuntime.exe
   Setup-Windows-Runtime.ps1
+  README.txt
   App/
     RouterVPN/
       router-vpn-client.exe
@@ -31,6 +33,7 @@ RouterVPNPortable-ARCH/
       logical-modes.json
       modes/
       client/
+      LICENSE
   Data/
     ...created/updated at runtime...
 ```
@@ -39,35 +42,16 @@ RouterVPNPortable-ARCH/
 
 The launcher regenerates absolute/WSL paths each time it starts, so moving the **whole** folder to a different drive/path does not bake in the old location.
 
-## 2. PortableApps.com package
+## Home Setup Center portable downloads
 
-The PortableApps source layout uses PortableApps.com Format 3.9 and adds:
-
-```text
-App/AppInfo/appinfo.ini
-App/AppInfo/installer.ini
-Other/
-Data/
-```
-
-GitHub CI uses the current official PortableApps.com Installer to generate installable `.paf.exe` artifacts for x64 and ARM64. The x64 PAF is then installed and executed on a Windows GitHub runner, installed over itself as an upgrade, and checked to confirm `Data` survives.
-
-To use the PAF with PortableApps Platform, use the Platform's **Apps → Install a New App** flow and select the Router VPN `.paf.exe` artifact. Normal upgrades preserve `Data`.
-
-The `.paf.exe` build is generic: it does not contain a specific user's router credentials. Import `router-vpn-bundle.json` after installation.
-
-## 3. Home Setup Center portable downloads
-
-The home node also publishes private, already-linked packages:
+The home node provides private, already-linked packages on demand:
 
 - `router-vpn-windows-portable-amd64.zip`
 - `router-vpn-windows-portable-arm64.zip`
-- `router-vpn-portableapps-amd64.zip`
-- `router-vpn-portableapps-arm64.zip`
 
-These contain the current node's private `Data/routers.json` and generated profile material. Treat them as credentials. Do not publish or share them.
+The Setup Center first tries the matching short-lived GitHub Actions build, overlays the current node's private `Data/routers.json` and generated profiles in a temporary directory, streams the ZIP, then deletes its temporary server copy. If no usable GitHub build is available, the AI Board assembles only the requested package from prebuilt binaries already present in the server image, streams it, then deletes it.
 
-The home PortableApps ZIP is a PortableApps.com Format 3.9 **source/folder package**. The official installable `.paf.exe` is produced in GitHub Actions rather than on the AI Board, so the AI Board remains a host/publisher instead of a Windows build environment.
+These home-linked ZIPs contain private profile material. Treat them as credentials and do not publish or share them.
 
 ## Windows full-mode runtime
 
@@ -79,6 +63,8 @@ Run once:
 .\Setup-Windows-Runtime.ps1
 ```
 
+or use `RouterVPNSetupRuntime.exe`.
+
 The helper verifies/installs the required WSL-side engines, including WireGuard tools, AmneziaWG, Rosenpass, sing-box with Naive support, Xray, Shadowsocks-rust and V2Ray-plugin. It fails visibly if a required engine is still missing.
 
 After setup, close and reopen `RouterVPNPortable.exe`. The launcher regenerates `Data/modes.windows.json`, translating Windows paths into WSL paths and passing the Router VPN runtime environment through `WSLENV`.
@@ -87,7 +73,7 @@ If WSL is not ready, the app reports that dependency as the reason a shell-engin
 
 ## Logical modes
 
-Portable and PortableApps use the same controller binary and logical-mode API as the normal desktop client:
+Portable uses the same controller binary and logical-mode API as the normal desktop client:
 
 - 16 logical user-facing methods
 - raw 20 runtime variants remain internal
