@@ -3,6 +3,13 @@ import base64, json, pathlib, sys
 base=pathlib.Path(sys.argv[1])
 endpoint, token, router_api, socks_host, socks_user, socks_password=sys.argv[2:8]
 modes=json.load(open(base/'client-bundle/modes.json'))
+logical_path=base/'client-bundle'/'logical-modes.json'
+if not logical_path.is_file():
+    logical_path=pathlib.Path(__file__).resolve().parents[2]/'configs'/'client'/'logical-modes.json'
+try:
+    logical_modes=json.load(open(logical_path))
+except Exception:
+    logical_modes=[]
 profiles={}
 for mode_dir in (base/'client-bundle/generated').glob('*'):
     if not mode_dir.is_dir():
@@ -54,7 +61,10 @@ router_profile={
     'daita_host':socks_host,
     'daita_port':45999,
     'daita_rate_kbps':192,
-    'base_tunnel':'wg',
+    'base_tunnel':'auto',
+    'base_fallback':True,
+    'home_lan_access':True,
+    'home_lan_cidrs':['192.168.50.0/24'],
     'location':'Home',
     'use_count':0,
     'dns_mode':'home',
@@ -69,6 +79,7 @@ router_profile={
     'dns_results':dns_results,
 }
 bundle={
+    'bundleVersion':3,
     'endpoint':endpoint,
     'apiToken':token,
     'routerAPI':router_api,
@@ -82,6 +93,7 @@ bundle={
     'setupAssets':setup_assets,
     'routerProfiles':[router_profile],
     'selectedRouterID':'home',
+    'logicalModes':logical_modes,
     'modes':modes,
     'profiles':profiles,
 }
