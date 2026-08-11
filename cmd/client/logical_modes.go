@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -21,37 +23,37 @@ type logicalMode struct {
 }
 
 type logicalVariantStatus struct {
-	Base       string      `json:"base"`
-	RuntimeID  string      `json:"runtime_id"`
-	Available  bool        `json:"available"`
-	Reason     string      `json:"reason,omitempty"`
-	Mode       common.Mode `json:"mode"`
+	Base      string      `json:"base"`
+	RuntimeID string      `json:"runtime_id"`
+	Available bool        `json:"available"`
+	Reason    string      `json:"reason,omitempty"`
+	Mode      common.Mode `json:"mode"`
 }
 
 type logicalModeStatus struct {
-	ID           string                          `json:"id"`
-	Name         string                          `json:"name"`
-	Description  string                          `json:"description"`
-	BaseSelector bool                            `json:"base_selector"`
-	Fallback     bool                            `json:"fallback"`
-	Available    bool                            `json:"available"`
-	Reason       string                          `json:"reason,omitempty"`
-	PreferredBase string                         `json:"preferred_base,omitempty"`
-	ReadyBases   []string                        `json:"ready_bases,omitempty"`
-	Variants     map[string]logicalVariantStatus `json:"variants"`
-	PingMinMs       float64                      `json:"ping_min_ms"`
-	PingMaxMs       float64                      `json:"ping_max_ms"`
-	TrafficMinPct   float64                      `json:"traffic_min_pct"`
-	TrafficMaxPct   float64                      `json:"traffic_max_pct"`
-	SpeedLossMinPct float64                      `json:"speed_loss_min_pct"`
-	SpeedLossMaxPct float64                      `json:"speed_loss_max_pct"`
-	DAITASupported  bool                         `json:"daita_supported"`
-	JumboSupported  bool                         `json:"jumbo_supported"`
+	ID              string                          `json:"id"`
+	Name            string                          `json:"name"`
+	Description     string                          `json:"description"`
+	BaseSelector    bool                            `json:"base_selector"`
+	Fallback        bool                            `json:"fallback"`
+	Available       bool                            `json:"available"`
+	Reason          string                          `json:"reason,omitempty"`
+	PreferredBase   string                          `json:"preferred_base,omitempty"`
+	ReadyBases      []string                        `json:"ready_bases,omitempty"`
+	Variants        map[string]logicalVariantStatus `json:"variants"`
+	PingMinMs       float64                         `json:"ping_min_ms"`
+	PingMaxMs       float64                         `json:"ping_max_ms"`
+	TrafficMinPct   float64                         `json:"traffic_min_pct"`
+	TrafficMaxPct   float64                         `json:"traffic_max_pct"`
+	SpeedLossMinPct float64                         `json:"speed_loss_min_pct"`
+	SpeedLossMaxPct float64                         `json:"speed_loss_max_pct"`
+	DAITASupported  bool                            `json:"daita_supported"`
+	JumboSupported  bool                            `json:"jumbo_supported"`
 }
 
 type runtimeCandidate struct {
-	RuntimeID string
-	Base      string
+	RuntimeID string `json:"runtime_mode"`
+	Base      string `json:"base"`
 }
 
 func loadLogicalModes(path string) ([]logicalMode, error) {
@@ -79,6 +81,28 @@ func loadLogicalModes(path string) ([]logicalMode, error) {
 	return modes, nil
 }
 
+func (a *app) logicalCatalog() []logicalMode {
+	path := filepath.Join(filepath.Dir(a.cfg.ModesFile), "logical-modes.json")
+	modes, err := loadLogicalModes(path)
+	if err == nil && len(modes) > 0 {
+		return modes
+	}
+	// A legacy package may not contain logical-modes.json yet. Keep the local
+	// controller functional instead of crashing, but do not invent compatibility:
+	// each raw runtime mode becomes a single non-fallback logical row.
+	out := make([]logicalMode, 0, len(a.modes))
+	for _, raw := range a.modes {
+		if raw.ID == "smart-auto" || raw.ID == "custom" {
+			continue
+		}
+		out = append(out, logicalMode{
+			ID: raw.ID, Name: raw.Name, Description: raw.Protection,
+			Variants: map[string]string{"native": raw.ID},
+		})
+	}
+	return out
+}
+
 func normalizeBase(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "awg", "amnezia", "amneziawg", "amneziawg2":
@@ -91,7 +115,7 @@ func normalizeBase(value string) string {
 }
 
 func (a *app) logicalModeByID(id string) (logicalMode, bool) {
-	for _, mode := range a.logicalModes {
+	for _, mode := range a.logicalCatalog() {
 		if mode.ID == id {
 			return mode, true
 		}
@@ -145,8 +169,9 @@ func (a *app) candidatesForLogical(mode logicalMode, requestedBase string) []run
 
 func (a *app) logicalStatuses() []logicalModeStatus {
 	preferred := a.preferredBase("auto")
-	out := make([]logicalModeStatus, 0, len(a.logicalModes))
-	for _, logical := range a.logicalModes {
+	catalog := a.logicalCatalog()
+	out := make([]logicalModeStatus, 0, len(catalog))
+	for _, logical := range catalog {
 		status := logicalModeStatus{
 			ID: logical.ID, Name: logical.Name, Description: logical.Description,
 			BaseSelector: logical.BaseSelector, Fallback: logical.Fallback,
@@ -194,8 +219,7 @@ func (a *app) logicalStatuses() []logicalModeStatus {
 		if !status.Available {
 			status.Reason = strings.Join(reasons, " • ")
 		} else if logical.BaseSelector {
-			want := logical.Variants[preferred]
-			if v, ok := status.Variants[preferred]; want != "" && ok && !v.Available && logical.Fallback {
+			if v, ok := status.Variants[preferred]; ok && !v.Available && logical.Fallback {
 				other := "awg"
 				if preferred == "awg" { other = "wg" }
 				if ov, ok := status.Variants[other]; ok && ov.Available {
@@ -208,16 +232,33 @@ func (a *app) logicalStatuses() []logicalModeStatus {
 	return out
 }
 
+func (a *app) persistBasePreference(base string) error {
+	base = normalizeBase(base)
+	if base == "auto" {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.state.Connected {
+		return errors.New("disconnect before changing the preferred base")
+	}
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == a.profiles.SelectedID {
+			a.profiles.Profiles[i].BaseTunnel = base
+			return a.persistProfilesLocked()
+		}
+	}
+	return errors.New("no selected router profile")
+}
+
 func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, error) {
 	logical, ok := a.logicalModeByID(id)
 	if !ok {
-		// Backward compatibility for existing callers/configs that still send a raw
-		// 20-mode ID. New UI surfaces use logical IDs.
 		if _, err := a.mode(id); err != nil {
 			return runtimeCandidate{}, err
 		}
 		candidate := runtimeCandidate{RuntimeID: id, Base: normalizeBase(requestedBase)}
-		if err := a.startModeWithBase(candidate.RuntimeID, candidate.Base, id); err != nil {
+		if err := a.startMode(candidate.RuntimeID); err != nil {
 			return runtimeCandidate{}, err
 		}
 		return candidate, nil
@@ -229,11 +270,55 @@ func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, erro
 	}
 	var failures []string
 	for _, candidate := range candidates {
-		if err := a.startModeWithBase(candidate.RuntimeID, candidate.Base, logical.ID); err != nil {
+		if err := a.startMode(candidate.RuntimeID); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", candidate.Base, err))
 			continue
 		}
 		return candidate, nil
 	}
 	return runtimeCandidate{}, fmt.Errorf("%s unavailable: %s", logical.Name, strings.Join(failures, " • "))
+}
+
+func (a *app) listLogicalModes(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("content-type", "application/json")
+	_ = json.NewEncoder(w).Encode(a.logicalStatuses())
+}
+
+func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var q struct {
+		Mode string `json:"mode"`
+		Base string `json:"base"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	q.Mode = strings.TrimSpace(q.Mode)
+	if q.Mode == "" {
+		http.Error(w, "mode is required", http.StatusBadRequest)
+		return
+	}
+	if normalizeBase(q.Base) != "auto" {
+		if err := a.persistBasePreference(q.Base); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
+	used, err := a.startLogicalMode(q.Mode, q.Base)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok": true,
+		"logical_mode": q.Mode,
+		"runtime_mode": used.RuntimeID,
+		"base": used.Base,
+		"fallback_used": normalizeBase(q.Base) != "auto" && used.Base != normalizeBase(q.Base),
+	})
 }
