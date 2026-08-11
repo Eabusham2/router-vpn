@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import pathlib
+import shutil
 import sys
 
 
@@ -82,9 +83,10 @@ def main() -> int:
     reality_path = generated / "reality-vision" / "sing-box.json"
     reality_xray_path = generated / "reality-vision" / "xray.json"
     hy2_path = generated / "hysteria2" / "sing-box.json"
+    hy2_cert_path = generated / "hysteria2" / "cert.pem"
     pq_xray_path = generated / "reality-pq-vision" / "xray.json"
     pq_wrapper_path = generated / "reality-pq-vision" / "sing-box.json"
-    for path in (reality_path, reality_xray_path, hy2_path, pq_xray_path, pq_wrapper_path):
+    for path in (reality_path, reality_xray_path, hy2_path, hy2_cert_path, pq_xray_path, pq_wrapper_path):
         if not path.is_file():
             raise RuntimeError(f"missing generated prerequisite: {path}")
 
@@ -102,6 +104,8 @@ def main() -> int:
     split_dir = generated / "split"
     write(split_dir / "xray.json", load(reality_xray_path))
     write(split_dir / "sing-box.json", split)
+    shutil.copy2(hy2_cert_path, split_dir / "cert.pem")
+    (split_dir / "cert.pem").chmod(0o600)
     write(
         split_dir / "stack.json",
         manifest(
@@ -128,6 +132,8 @@ def main() -> int:
     max_dir = generated / "max"
     write(max_dir / "xray.json", load(pq_xray_path))
     write(max_dir / "sing-box.json", max_config)
+    shutil.copy2(hy2_cert_path, max_dir / "cert.pem")
+    (max_dir / "cert.pem").chmod(0o600)
     write(
         max_dir / "stack.json",
         manifest(
