@@ -37,17 +37,35 @@ $actualHash = (Get-FileHash -Algorithm SHA256 $installerPaf).Hash.ToLowerInvaria
 if ($actualHash -ne $InstallerSHA256) {
   throw "PortableApps.com Installer SHA256 mismatch: $actualHash"
 }
+Write-Host "Verified official PortableApps.com Installer $InstallerVersion ($actualHash)"
 
+# Do not run the Installer PAF's interactive bootstrap in CI. A PAF is an NSIS/
+# 7-Zip-extractable package; extract the already-hash-verified official package
+# and invoke its command-line packager directly. This avoids a GUI bootstrap
+# hanging on a headless GitHub Windows runner while still using the official
+# PortableApps.comInstaller.exe bits unchanged.
 $toolDestination = Join-Path $work 'PortableAppsTools'
 New-Item -ItemType Directory -Force -Path $toolDestination | Out-Null
-$installArgs = @('/S', "/DESTINATION=$toolDestination\")
-$installerProcess = Start-Process $installerPaf -ArgumentList $installArgs -PassThru
-Wait-ProcessOrFail $installerProcess 120000 'PortableApps.com Installer bootstrap'
-$generator = Get-ChildItem $toolDestination -Recurse -Filter 'PortableApps.comInstaller.exe' -File | Select-Object -First 1
-if (-not $generator) {
-  throw 'PortableApps.com Installer bootstrap completed but PortableApps.comInstaller.exe was not found'
+$sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
+if (-not $sevenZip) {
+  $candidates = @(
+    "$env:ProgramFiles\7-Zip\7z.exe",
+    "$env:ProgramFiles(x86)\7-Zip\7z.exe"
+  )
+  $sevenZip = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 }
-Write-Host "Using PortableApps.com Installer: $($generator.FullName)"
+if (-not $sevenZip) { throw '7-Zip is required on the Windows CI runner to extract the verified PortableApps.com Installer PAF' }
+& $sevenZip x -y "-o$toolDestination" $installerPaf | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "7-Zip could not extract the verified PortableApps.com Installer PAF (exit $LASTEXITCODE)" }
+$generator = Get-ChildItem $toolDestination -Recurse -Filter 'PortableApps.comInstaller.exe' -File |
+  Where-Object { $_.FullName -notmatch '\\Other\\Source\\' } |
+  Select-Object -First 1
+if (-not $generator) {
+  Write-Host 'Extracted PortableApps tool tree:'
+  Get-ChildItem $toolDestination -Recurse -File | Select-Object -ExpandProperty FullName | Out-Host
+  throw 'PortableApps.comInstaller.exe was not found inside the verified official PAF'
+}
+Write-Host "Using official PortableApps.com Installer packager: $($generator.FullName)"
 
 foreach ($arch in @('amd64','arm64')) {
   $zip = Get-ChildItem $PackagesDir -Recurse -Filter "RouterVPNPortable-$arch.zip" -File | Select-Object -First 1
@@ -77,16 +95,25 @@ foreach ($arch in @('amd64','arm64')) {
     }
   }
 
+  Write-Host "Generating official PAF for $arch from $($sourceRoot.FullName)"
   $before = Get-Date
   $gen = Start-Process $generator.FullName -ArgumentList @($sourceRoot.FullName) -WorkingDirectory $sourceParent -PassThru
   Wait-ProcessOrFail $gen 240000 "PortableApps PAF generation ($arch)"
 
-  $paf = Get-ChildItem $sourceParent -Recurse -Filter '*.paf.exe' -File |
-    Where-Object { $_.LastWriteTime -ge $before.AddSeconds(-2) } |
+  # The official packager normally writes beside the source directory. Search
+  # both the source parent and the generator's tree so a minor output-location
+  # difference across installer versions cannot produce a false negative.
+  $paf = @(
+    Get-ChildItem $sourceParent -Recurse -Filter '*.paf.exe' -File -ErrorAction SilentlyContinue
+    Get-ChildItem $toolDestination -Recurse -Filter '*.paf.exe' -File -ErrorAction SilentlyContinue
+  ) |
+    Where-Object { $_.LastWriteTime -ge $before.AddSeconds(-2) -and $_.FullName -ne $installerPaf } |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
   if (-not $paf) {
-    throw "PortableApps.com Installer did not produce a .paf.exe for $arch"
+    Write-Host 'Source parent after PortableApps generation:'
+    Get-ChildItem $sourceParent -Recurse | Select-Object FullName,Length,LastWriteTime | Format-Table -AutoSize | Out-Host
+    throw "PortableApps.com Installer completed but did not produce a .paf.exe for $arch"
   }
   $outPaf = Join-Path $OutDir "RouterVPNPortable-$arch`_0.7.0.paf.exe"
   Copy-Item $paf.FullName $outPaf -Force
@@ -102,7 +129,11 @@ foreach ($arch in @('amd64','arm64')) {
     $launcher = Get-ChildItem $installParent -Recurse -Filter 'RouterVPNPortable.exe' -File |
       Where-Object { $_.FullName -notmatch '\\App\\RouterVPN\\' } |
       Select-Object -First 1
-    if (-not $launcher) { throw 'Installed PAF did not contain RouterVPNPortable.exe' }
+    if (-not $launcher) {
+      Write-Host 'Installed PAF tree:'
+      Get-ChildItem $installParent -Recurse | Select-Object -ExpandProperty FullName | Out-Host
+      throw 'Installed PAF did not contain RouterVPNPortable.exe'
+    }
     Run-PortableSelfTest $launcher.FullName
 
     $installedRoot = Split-Path -Parent $launcher.FullName
