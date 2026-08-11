@@ -4,13 +4,11 @@ BASE=${BASE:-/opt/router-vpn}
 PASS=0
 WARN=0
 FAIL=0
-
 ok(){ printf '✓ %s\n' "$*"; PASS=$((PASS+1)); }
 warn(){ printf '! %s\n' "$*"; WARN=$((WARN+1)); }
 bad(){ printf '✗ %s\n' "$*"; FAIL=$((FAIL+1)); }
 
 printf 'Router VPN doctor\n=================\n'
-
 for f in \
   "$BASE/.initialized" \
   "$BASE/.finalized" \
@@ -23,27 +21,22 @@ for f in \
   "$BASE/client-bundle/modes.json" \
   "$BASE/client-bundle/setup-assets.json" \
   "$BASE/client-bundle/router-vpn-device-setup.html" \
-  "$BASE/downloads/router-vpn-client-bundle.zip" \
-  "$BASE/downloads/router-vpn-device-setup.html"; do
+  "$BASE/downloads/index.html" \
+  "$BASE/downloads/router-vpn-device-setup.html" \
+  "$BASE/downloads/router-vpn-bundle.json" \
+  "$BASE/downloads/setup-assets.json" \
+  "$BASE/downloads/download-policy.json"; do
   [[ -s "$f" ]] && ok "$(basename "$f") present" || bad "missing $f"
 done
 
-for marker in \
-  "$BASE/config/.core-transports-xray-v2" \
-  "$BASE/config/.advanced-profiles-v2" \
-  "$BASE/config/.tls-alternates-v1"; do
+for marker in "$BASE/config/.core-transports-xray-v2" "$BASE/config/.advanced-profiles-v2" "$BASE/config/.tls-alternates-v1"; do
   [[ -s "$marker" ]] && ok "profile marker $(basename "$marker")" || warn "profile marker not present yet: $(basename "$marker")"
 done
-
 for f in "$BASE/config/aux/overtls-server.json" "$BASE/config/aux/ssr-server.json" "$BASE/config/aux/generated.json"; do
   [[ -s "$f" ]] && ok "$(basename "$f") present" || warn "aux compatibility profile unavailable: $f"
 done
 
-containers=(
-  router-vpn-agent router-vpn-wireguard router-vpn-awg2 router-vpn-rosenpass
-  router-vpn-transports router-vpn-xray router-vpn-naive router-vpn-ss-v2ray
-  router-vpn-bundle-web router-vpn-socks5 router-vpn-aux
-)
+containers=(router-vpn-agent router-vpn-wireguard router-vpn-awg2 router-vpn-rosenpass router-vpn-transports router-vpn-xray router-vpn-naive router-vpn-ss-v2ray router-vpn-bundle-web router-vpn-socks5 router-vpn-aux)
 if command -v docker >/dev/null 2>&1; then
   for c in "${containers[@]}"; do
     if docker inspect "$c" >/dev/null 2>&1; then
@@ -53,14 +46,29 @@ if command -v docker >/dev/null 2>&1; then
       warn "$c not created"
     fi
   done
-  if docker exec router-vpn-xray xray run -test -c /etc/xray/config.json >/dev/null 2>&1; then ok 'Xray server config validates'; else bad 'Xray server config validation failed'; fi
-  if docker exec router-vpn-transports sing-box check -c /etc/sing-box/config.json >/dev/null 2>&1; then ok 'sing-box transport server config validates'; else bad 'sing-box transport server config validation failed'; fi
+  docker exec router-vpn-xray xray run -test -c /etc/xray/config.json >/dev/null 2>&1 && ok 'Xray server config validates' || bad 'Xray server config validation failed'
+  docker exec router-vpn-transports sing-box check -c /etc/sing-box/config.json >/dev/null 2>&1 && ok 'sing-box transport server config validates' || bad 'sing-box transport server config validation failed'
   if docker inspect router-vpn-aux >/dev/null 2>&1; then
     docker exec router-vpn-aux overtls-bin --version >/dev/null 2>&1 && ok 'OverTLS binary available' || bad 'OverTLS binary unavailable'
     docker exec router-vpn-aux ssr-server -h >/dev/null 2>&1 && ok 'SSR binary available' || bad 'SSR binary unavailable'
   fi
 else
   bad 'docker command missing'
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  health=$(curl -fsS --max-time 3 http://127.0.0.1:8786/healthz 2>/dev/null || true)
+  [[ $health == ok ]] && ok 'Setup Center broker healthz passes' || bad 'Setup Center broker healthz failed'
+  policy=$(curl -fsS --max-time 3 http://127.0.0.1:8786/api/download-policy 2>/dev/null || true)
+  if POLICY="$policy" python3 - <<'PY'
+import json,os
+try: d=json.loads(os.environ.get('POLICY',''))
+except Exception: raise SystemExit(1)
+raise SystemExit(0 if d.get('mode')=='on-demand' and d.get('server_cache') is False else 1)
+PY
+  then ok 'download broker reports on-demand/no-cache policy'; else bad 'download broker policy is missing or stale'; fi
+else
+  warn 'curl unavailable; broker HTTP checks skipped'
 fi
 
 python3 - "$BASE" <<'PY'
@@ -87,10 +95,12 @@ try:
     a=json.load(open(base/'config/aux/overtls-server.json')); s=a.get('server_settings',{})
     if s.get('listen_host')!='127.0.0.1': errors.append('OverTLS backend is not loopback-only')
     if s.get('disable_tls') is not True: errors.append('OverTLS backend must disable TLS only behind Caddy')
+    if 'client_settings' in a: errors.append('OverTLS server config still contains client_settings')
 except Exception as e: errors.append('OverTLS JSON: '+str(e))
 try:
     a=json.load(open(base/'config/aux/ssr-server.json'))
     if not a.get('udp'): errors.append('SSR UDP is disabled')
+    if a.get('method')!='aes-256-ctr': errors.append('SSR compatibility cipher is not aes-256-ctr')
 except Exception as e: errors.append('SSR JSON: '+str(e))
 try:
     a=json.load(open(base/'client-bundle/setup-assets.json')); ids={x.get('id') for x in a.get('methods',[])}
@@ -107,13 +117,10 @@ required_modes=(wg awg2-fast wg-pq awg2-pq reality-vision reality-pq-vision hyst
 for mode in "${required_modes[@]}"; do [[ -d "$BASE/client-bundle/generated/$mode" ]] && ok "generated/$mode" || warn "generated/$mode unavailable"; done
 for mode in ss-v2ray naive-h2 naive-h3; do [[ -d "$BASE/client-bundle/generated/$mode" ]] && ok "generated/$mode" || warn "optional TLS mode unavailable: $mode"; done
 for mode in overtls shadowsocksr; do [[ -d "$BASE/client-bundle/generated/$mode" ]] && ok "generated/$mode compatibility profile" || warn "compatibility profile unavailable: $mode"; done
-
 for mode in max-tls-wg max-tls-awg max-quic-wg max-quic-awg; do
   env="$BASE/client-bundle/generated/$mode/chain.env"
   if [[ -s "$env" ]] && grep -q '^CHAIN_READY=1$' "$env" && grep -q '^PQ_BASE=1$' "$env"; then ok "$mode validated with PQ base"; else warn "$mode is not validated with PQ base"; fi
 done
-
-if command -v unzip >/dev/null 2>&1 && unzip -tq "$BASE/downloads/router-vpn-client-bundle.zip" >/dev/null 2>&1; then ok 'private client ZIP integrity passes'; else bad 'private client ZIP integrity failed'; fi
 
 if command -v ss >/dev/null 2>&1; then
   listeners=$(ss -lntuH 2>/dev/null || true)

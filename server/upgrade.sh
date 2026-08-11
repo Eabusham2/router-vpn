@@ -5,26 +5,41 @@ command -v docker >/dev/null 2>&1 || { echo 'Docker is required.'; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo 'Docker Compose v2 is required.'; exit 1; }
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-COMPOSE="$ROOT_DIR/server/portainer-compose.yaml"
+COMPOSE="$ROOT_DIR/server/portainer-current.yaml"
 ENV_FILE=/opt/router-vpn/.env
 [[ -s "$ENV_FILE" ]] || { echo 'No existing Router VPN install found at /opt/router-vpn/.env'; exit 1; }
 
-echo 'Building current router images...'
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE" build
+echo 'Pulling the exact prebuilt images pinned by the current production compose...'
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE" pull
 
-echo 'Migrating profiles without rotating already-current credentials...'
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE" run --rm --no-deps \
-  --entrypoint /bin/bash finalize /src/server/finalize/upgrade-safe.sh
+echo 'Re-running init/finalizer without compiling on this host...'
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --force-recreate init finalize-current
+for container in router-vpn-init router-vpn-finalize; do
+  docker wait "$container" >/dev/null 2>&1 || true
+  code=$(docker inspect -f '{{.State.ExitCode}}' "$container" 2>/dev/null || echo 1)
+  if [[ $code != 0 ]]; then
+    echo "$container failed with exit code $code" >&2
+    docker logs "$container" >&2 || true
+    exit "$code"
+  fi
+done
 
-echo 'Restarting long-lived Router VPN services...'
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --no-deps \
-  router-agent wireguard awg2 rosenpass transports xray-pq naive ss-v2ray bundle-web socks5
+echo 'Refreshing long-running services...'
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --remove-orphans
 
-BUNDLE=/opt/router-vpn/downloads/router-vpn-client-bundle.zip
-[[ -s "$BUNDLE" ]] || { echo 'Upgrade completed but client bundle is missing.' >&2; exit 1; }
+test -s /opt/router-vpn/downloads/index.html || { echo 'Upgrade completed but Setup Center index is missing.' >&2; exit 1; }
+test -s /opt/router-vpn/downloads/router-vpn-bundle.json || { echo 'Upgrade completed but the private router bundle is missing.' >&2; exit 1; }
 
+if command -v curl >/dev/null 2>&1; then
+  for _ in $(seq 1 30); do
+    curl -fsS http://127.0.0.1:8786/healthz >/dev/null 2>&1 && break
+    sleep 1
+  done
+  curl -fsS http://127.0.0.1:8786/healthz >/dev/null || { echo 'Setup Center broker health check failed.' >&2; exit 1; }
+fi
+
+bash "$ROOT_DIR/server/scripts/cleanup-router-vpn-docker.sh"
 echo
-echo 'Upgrade complete.'
-echo 'Your current profile-engine credentials are preserved after the one-time migration.'
-echo 'If this upgrade introduced the new profile-engine version, re-download/import the private client bundle once.'
-echo 'Future upgrades with the same profile-engine version keep those credentials stable.'
+echo 'Upgrade complete from prebuilt images.'
+echo 'Current-version profile credentials were preserved by the finalizer migration path.'
+echo 'Large client packages remain on-demand/ephemeral; no permanent bundle ZIP is required.'

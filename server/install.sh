@@ -6,7 +6,7 @@ command -v docker >/dev/null 2>&1 || { echo 'Docker is required.'; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo 'Docker Compose v2 is required.'; exit 1; }
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-COMPOSE="$ROOT_DIR/server/portainer-compose.yaml"
+COMPOSE="$ROOT_DIR/server/portainer-current.yaml"
 INSTALL=/opt/router-vpn
 ENV_FILE="$INSTALL/.env"
 DEFAULT_WAN=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')
@@ -15,46 +15,34 @@ DEFAULT_IP=${DEFAULT_IP:-192.168.50.133}
 
 detect_public_ipv4() {
   python3 - <<'PY'
-import ipaddress
-import urllib.request
-
-sources = [
-    ("https://1.1.1.1/cdn-cgi/trace", "trace"),
-    ("https://checkip.amazonaws.com", "plain"),
-    ("https://icanhazip.com", "plain"),
-    ("https://api.ipify.org", "plain"),
+import ipaddress, urllib.request
+sources=[
+ ('https://1.1.1.1/cdn-cgi/trace','trace'),
+ ('https://checkip.amazonaws.com','plain'),
+ ('https://icanhazip.com','plain'),
+ ('https://api.ipify.org','plain'),
 ]
-
-for url, kind in sources:
+for url,kind in sources:
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "router-vpn/1"})
-        body = urllib.request.urlopen(req, timeout=4).read().decode().strip()
-        if kind == "trace":
-            value = next((line[3:].strip() for line in body.splitlines() if line.startswith("ip=")), "")
-        else:
-            value = body.splitlines()[0].strip() if body else ""
-        ip = ipaddress.ip_address(value)
-        if ip.version == 4 and ip.is_global:
-            print(value)
-            raise SystemExit(0)
+        req=urllib.request.Request(url,headers={'User-Agent':'router-vpn/1'})
+        body=urllib.request.urlopen(req,timeout=4).read().decode().strip()
+        value=next((x[3:].strip() for x in body.splitlines() if x.startswith('ip=')),'') if kind=='trace' else (body.splitlines()[0].strip() if body else '')
+        ip=ipaddress.ip_address(value)
+        if ip.version==4 and ip.is_global:
+            print(value); raise SystemExit(0)
     except Exception:
-        continue
+        pass
 raise SystemExit(1)
 PY
 }
-
 DEFAULT_PUBLIC=$(detect_public_ipv4 || true)
 
-prompt(){
-  local variable=$1 text=$2 default=$3 value
-  read -r -p "$text [$default]: " value
-  printf -v "$variable" '%s' "${value:-$default}"
-}
-
+prompt(){ local variable=$1 text=$2 default=$3 value; read -r -p "$text [$default]: " value; printf -v "$variable" '%s' "${value:-$default}"; }
 prompt WAN_INTERFACE 'AI Board network interface' "${DEFAULT_WAN:-eth0}"
 prompt LAN_CIDR 'Home LAN IPv4 subnet' '192.168.50.0/24'
+prompt LAN_CIDR6 'Home/local IPv6 subnet policy' 'fd00::/8'
 prompt ADGUARD4 'AI Board / AdGuard IPv4 address' "$DEFAULT_IP"
-prompt ENDPOINT 'Router public IP or hostname' "$DEFAULT_PUBLIC"
+prompt ENDPOINT 'Router public IP or hostname (blank is allowed)' "$DEFAULT_PUBLIC"
 prompt WG_PORT 'Raw WireGuard UDP port' '51820'
 prompt AWG_PORT 'AmneziaWG UDP port' '585'
 prompt ROSENPASS_PORT 'Rosenpass PQ UDP port' '51822'
@@ -65,7 +53,10 @@ prompt XRAY_PQ_PORT 'PQ REALITY TCP port' '10443'
 prompt XHTTP_PORT 'XHTTP/FinalMask TCP port' '11443'
 prompt SS_V2RAY_PORT 'Shadowsocks + V2Ray TLS TCP port' '12443'
 prompt NAIVE_PORT 'Naive HTTPS TCP and UDP port' '13443'
-prompt ROUTER_VPN_TLS_NAME 'Optional custom TLS hostname; blank auto-uses public IPv4 via sslip.io' ''
+prompt OVERTLS_PORT 'SOCKS5 + TLS / OverTLS public TCP port' '14443'
+prompt OVERTLS_INTERNAL_PORT 'OverTLS loopback backend TCP port' '14444'
+prompt SSR_PORT 'ShadowsocksR legacy TCP and UDP port' '15443'
+prompt ROUTER_VPN_TLS_NAME 'Optional custom TLS hostname; blank auto-selects one when possible' ''
 prompt REALITY_TARGET 'REALITY camouflage target host:port' 'www.microsoft.com:443'
 
 mkdir -p "$INSTALL"
@@ -73,6 +64,7 @@ umask 077
 cat >"$ENV_FILE" <<ENV
 WAN_INTERFACE=$WAN_INTERFACE
 LAN_CIDR=$LAN_CIDR
+LAN_CIDR6=$LAN_CIDR6
 ADGUARD4=$ADGUARD4
 ENDPOINT=$ENDPOINT
 WG_PORT=$WG_PORT
@@ -85,57 +77,43 @@ XRAY_PQ_PORT=$XRAY_PQ_PORT
 XHTTP_PORT=$XHTTP_PORT
 SS_V2RAY_PORT=$SS_V2RAY_PORT
 NAIVE_PORT=$NAIVE_PORT
+OVERTLS_PORT=$OVERTLS_PORT
+OVERTLS_INTERNAL_PORT=$OVERTLS_INTERNAL_PORT
+SSR_PORT=$SSR_PORT
 ROUTER_VPN_TLS_NAME=$ROUTER_VPN_TLS_NAME
 REALITY_TARGET=$REALITY_TARGET
 ENV
 chmod 600 "$ENV_FILE"
 
-echo 'Building and starting Router VPN...'
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --build
+echo 'Pulling prebuilt Router VPN images from the validated production compose...'
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE" pull
+echo 'Starting Router VPN without compiling on this host...'
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --remove-orphans
 
 for container in router-vpn-init router-vpn-finalize; do
-  if docker inspect "$container" >/dev/null 2>&1; then
-    docker wait "$container" >/dev/null 2>&1 || true
-    code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
-    if [[ $code != 0 ]]; then
-      echo "$container failed with exit code $code" >&2
-      docker logs "$container" >&2 || true
-      exit "$code"
-    fi
+  docker wait "$container" >/dev/null 2>&1 || true
+  code=$(docker inspect -f '{{.State.ExitCode}}' "$container" 2>/dev/null || echo 1)
+  if [[ $code != 0 ]]; then
+    echo "$container failed with exit code $code" >&2
+    docker logs "$container" >&2 || true
+    exit "$code"
   fi
 done
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d
+test -s "$INSTALL/downloads/index.html" || { echo 'Setup Center index was not generated.' >&2; exit 1; }
+test -s "$INSTALL/downloads/router-vpn-bundle.json" || { echo 'Private router bundle was not generated.' >&2; exit 1; }
 
-test -s "$INSTALL/downloads/router-vpn-client-bundle.zip" || {
-  echo 'Client bundle was not generated. Check router-vpn-finalize logs.' >&2
-  exit 1
-}
+if command -v curl >/dev/null 2>&1; then
+  for _ in $(seq 1 30); do
+    curl -fsS http://127.0.0.1:8786/healthz >/dev/null 2>&1 && break
+    sleep 1
+  done
+  curl -fsS http://127.0.0.1:8786/healthz >/dev/null || { echo 'Setup Center broker health check failed.' >&2; exit 1; }
+fi
 
 echo
-echo 'Router VPN installed.'
-echo
-echo 'Create these ASUS WAN port forwards to the AI Board:'
-printf '  TCP 80 -> %s:18080  (automatic TLS certificate/renewal)\n' "$ADGUARD4"
-printf '  UDP %s -> %s:%s  (WireGuard)\n' "$WG_PORT" "$ADGUARD4" "$WG_PORT"
-printf '  UDP %s -> %s:%s  (AmneziaWG)\n' "$AWG_PORT" "$ADGUARD4" "$AWG_PORT"
-printf '  UDP %s -> %s:%s  (Rosenpass PQ)\n' "$ROSENPASS_PORT" "$ADGUARD4" "$ROSENPASS_PORT"
-printf '  TCP %s -> %s:%s  (REALITY/Vision)\n' "$REALITY_PORT" "$ADGUARD4" "$REALITY_PORT"
-printf '  UDP %s -> %s:%s  (Hysteria2/QUIC)\n' "$HY2_PORT" "$ADGUARD4" "$HY2_PORT"
-printf '  TCP+UDP %s -> %s:%s  (Shadowsocks)\n' "$SS_PORT" "$ADGUARD4" "$SS_PORT"
-printf '  TCP %s -> %s:%s  (PQ REALITY)\n' "$XRAY_PQ_PORT" "$ADGUARD4" "$XRAY_PQ_PORT"
-printf '  TCP %s -> %s:%s  (XHTTP/FinalMask)\n' "$XHTTP_PORT" "$ADGUARD4" "$XHTTP_PORT"
-printf '  TCP %s -> %s:%s  (Shadowsocks + V2Ray TLS)\n' "$SS_V2RAY_PORT" "$ADGUARD4" "$SS_V2RAY_PORT"
-printf '  TCP+UDP %s -> %s:%s  (Naive HTTPS H2/H3)\n' "$NAIVE_PORT" "$ADGUARD4" "$NAIVE_PORT"
-echo
-echo 'Do NOT forward TCP 1080, 8786, 8787, Portainer, SSH, or AdGuard admin.'
-echo
-echo "Download the private client bundle on your home LAN:"
-echo "  http://$ADGUARD4:8786/router-vpn-client-bundle.zip"
-echo
-echo 'SOCKS5 after a VPN tunnel connects:'
-echo "  $ADGUARD4:1080"
-echo '  authentication: none'
-echo
-echo 'Diagnostics:'
-echo "  sudo $INSTALL/source/server/scripts/doctor.sh"
+echo 'Router VPN installed from prebuilt images.'
+echo "Setup Center: http://$ADGUARD4:8786/"
+echo 'Use the Setup Center ASUS helper for persistent forwarding; do not expose 8786 to WAN.'
+echo 'Public listeners include OverTLS 14443/TCP and legacy SSR 15443/TCP+UDP when enabled.'
+echo 'Never WAN-forward 1080, 8786, 8787, 14444, 9443, SSH, Portainer, or AdGuard admin.'

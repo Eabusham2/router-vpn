@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """Ephemeral Setup Center download broker.
 
-Large platform packages are never cached in /opt/router-vpn.  Each request tries
-the newest matching GitHub Actions build first, overlays this node's private
-profiles in a temporary directory, streams the result, and deletes it.  If the
-GitHub artifact is unavailable, only the requested package is assembled from
-the prebuilt fallback binaries shipped in this image and is likewise deleted.
+Large platform packages are never cached in /opt/router-vpn. Each request tries
+the matching GitHub Actions build first, overlays this node's private profiles
+in a temporary directory, streams the result, and deletes it. If that artifact
+is unavailable, only the requested package is assembled from prebuilt fallback
+binaries shipped in the server image and is likewise deleted.
 """
 from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import functools
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -19,12 +18,10 @@ import shutil
 import subprocess
 import tempfile
 import threading
-import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-
 from importlib.util import module_from_spec, spec_from_file_location
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -94,6 +91,21 @@ def _pick_member(zf: zipfile.ZipFile, wanted: str) -> zipfile.ZipInfo:
     return item
 
 
+def _artifact_candidates(meta: dict, artifact_name: str, branch: str, head_sha: str) -> list[dict]:
+    candidates: list[dict] = []
+    for item in meta.get("artifacts", []):
+        if item.get("expired") or item.get("name") != artifact_name:
+            continue
+        run = item.get("workflow_run") or {}
+        if branch and run.get("head_branch") != branch:
+            continue
+        if head_sha and run.get("head_sha") != head_sha:
+            continue
+        candidates.append(item)
+    candidates.sort(key=lambda x: (x.get("created_at", ""), int(x.get("id", 0))), reverse=True)
+    return candidates
+
+
 def fetch_github_package(home_name: str, temp: Path) -> Path:
     if os.environ.get("ROUTER_VPN_GITHUB_DISABLE", "").lower() in ("1", "true", "yes"):
         raise RuntimeError("GitHub artifact use disabled")
@@ -103,23 +115,21 @@ def fetch_github_package(home_name: str, temp: Path) -> Path:
 
     repo = os.environ.get("ROUTER_VPN_GITHUB_REPO", "Eabusham2/router-vpn").strip()
     branch = os.environ.get("ROUTER_VPN_GITHUB_BRANCH", "main").strip()
+    head_sha = os.environ.get("ROUTER_VPN_GITHUB_SHA", "").strip().lower()
     artifact_name = os.environ.get("ROUTER_VPN_GITHUB_ARTIFACT", "RouterVPN-client-desktop-unix-ci").strip()
     if "/" not in repo or not artifact_name:
         raise RuntimeError("invalid GitHub artifact configuration")
+    if head_sha and (len(head_sha) != 40 or any(ch not in "0123456789abcdef" for ch in head_sha)):
+        raise RuntimeError("ROUTER_VPN_GITHUB_SHA must be a full 40-character commit SHA")
 
     q = urllib.parse.urlencode({"name": artifact_name, "per_page": 100})
     meta = _read_limited_json(f"https://api.github.com/repos/{repo}/actions/artifacts?{q}")
-    candidates = []
-    for item in meta.get("artifacts", []):
-        if item.get("expired") or item.get("name") != artifact_name:
-            continue
-        run = item.get("workflow_run") or {}
-        if branch and run.get("head_branch") != branch:
-            continue
-        candidates.append(item)
+    candidates = _artifact_candidates(meta, artifact_name, branch, head_sha)
     if not candidates:
-        raise RuntimeError(f"no unexpired {artifact_name} artifact for {branch}")
-    candidates.sort(key=lambda x: (x.get("created_at", ""), int(x.get("id", 0))), reverse=True)
+        scope = branch or "any branch"
+        if head_sha:
+            scope += f" at {head_sha}"
+        raise RuntimeError(f"no unexpired {artifact_name} artifact for {scope}")
 
     outer = temp / "github-actions-artifact.zip"
     _download_limited(candidates[0]["archive_download_url"], outer)
@@ -142,7 +152,6 @@ def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
         source = fetch_github_package(name, temp)
         source_label = "github"
     except Exception as exc:
-        # Do not include credentials in logs; none are placed in URLs or argv.
         print(f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}", flush=True)
 
     args = [
@@ -157,8 +166,6 @@ def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
     try:
         subprocess.run(args, check=True, timeout=120, stdout=subprocess.DEVNULL)
     except Exception:
-        # A GitHub artifact can be stale/incompatible with the current private
-        # bundle. Retry once from this image's already-built binaries.
         if source is None:
             raise
         print(f"download broker: GitHub package customization failed for {name}; using local fallback", flush=True)
@@ -214,6 +221,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "fallback": "prebuilt-local-image",
                 "server_cache": False,
                 "github_artifact_retention_days": 1,
+                "github_sha": os.environ.get("ROUTER_VPN_GITHUB_SHA", "").strip(),
             }, separators=(",", ":")).encode() + b"\n"
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -258,14 +266,10 @@ class Handler(SimpleHTTPRequestHandler):
                         shutil.copyfileobj(f, self.wfile, CHUNK)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
-                # TemporaryDirectory removes the package and any downloaded
-                # GitHub artifact immediately on success, error, or disconnect.
         finally:
             BUILD_SLOTS.release()
 
     def translate_path(self, path: str) -> str:
-        # SimpleHTTPRequestHandler handles normalization; pin it to the static
-        # downloads directory rather than the process working directory.
         original = self.directory
         try:
             self.directory = str(self.server.static_dir)
