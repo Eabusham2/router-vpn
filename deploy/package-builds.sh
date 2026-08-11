@@ -85,48 +85,52 @@ Start-Process $url
 PS1
 }
 
-# Windows controller packages. The launcher opens Router VPN in a standalone
-# browser app window when Edge/Chrome/Brave is available. Full tunnel engines
-# that remain Unix-oriented still use WSL2 or native protocol clients.
+# Windows controller packages. Full shell-engine operation uses the WSL runtime
+# installed by Setup-Windows-Runtime.ps1 or matching native protocol apps.
 for arch in amd64 arm64; do
   dir="$OUT/work/RouterVPN-Windows-$arch"
   mkdir -p "$dir"
   copy_runtime "$dir"
   cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$dir/router-vpn-client.exe"
   cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$dir/router-vpn-dns.exe"
+  cp -a "$ROOT/client" "$dir/client"
   cp "$ROOT/client/install-windows.ps1" "$dir/install-windows.ps1"
+  cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$dir/Setup-Windows-Runtime.ps1"
+  cp "$ROOT/client/setup-windows-runtime.sh" "$ROOT/client/install-xray.sh" "$dir/"
   write_windows_app_launcher "$dir/Start-RouterVPN.ps1"
   cat >"$dir/README-WINDOWS.txt" <<'TXT'
-Run Start-RouterVPN.ps1. It starts the local Router VPN controller, verifies that it is
-responding, then opens Router VPN as a standalone Edge/Chrome/Brave app window when
-possible. Imported router profiles and generated private material stay in this folder.
-
-The Windows-native package is a controller/profile manager. Full multi-engine shell paths
-that require Unix transport executables still use WSL2 or matching native protocol apps.
+Run Start-RouterVPN.ps1 for the Router VPN controller/app window.
+For full Router VPN shell-engine operation, run Setup-Windows-Runtime.ps1 once. It checks
+WSL/Ubuntu, installs the required tunnel/proxy engines, and refuses to claim readiness when an
+engine is still missing. Raw WireGuard/AmneziaWG profiles can also be imported into native apps.
 TXT
   package_zip "RouterVPN-Windows-$arch" "$dir"
 done
 
 # Windows Portable + PortableApps packages. Static binaries/catalog/scripts live
-# under App/RouterVPN. All mutable/private state is kept under Data by the native
-# launcher. Both amd64 and arm64 packages use the same tested layout.
+# under App/RouterVPN. Writable/private state stays under Data. Both amd64 and
+# arm64 use the same launcher and package model.
 for arch in amd64 arm64; do
   root="$OUT/work/RouterVPNPortable-$arch"
   app="$root/App/RouterVPN"
   data="$root/Data"
   mkdir -p "$app" "$data/generated"
   copy_runtime "$app"
+  cp -a "$ROOT/client" "$app/client"
   cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe"
   cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe"
   cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe"
+  cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1"
   cat >"$root/README.txt" <<'TXT'
 Double-click RouterVPNPortable.exe.
 
-App/RouterVPN contains immutable Router VPN binaries, raw/logical mode catalogs and scripts.
-Data contains only writable settings, imported private router profiles, state and generated
-per-router profile material. You can move the whole folder between PCs without installing it.
-The launcher opens a standalone browser app window when possible and keeps the controller
-attached to the portable package it launched.
+App/RouterVPN contains immutable Router VPN binaries, raw/logical mode catalogs, scripts and
+runtime setup helpers. Data contains only writable settings, imported private router profiles,
+state, generated per-router material and the dedicated portable browser profile.
+
+For full shell-engine operation on Windows, run Setup-Windows-Runtime.ps1 once. The launcher
+then routes Router VPN mode checks/runs through WSL with Windows paths translated automatically.
+Move the whole RouterVPNPortable folder together; private imported profiles remain in Data.
 TXT
 
   # Ordinary no-installer portable ZIP.
