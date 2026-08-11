@@ -73,46 +73,91 @@ jobs:
 
       - name: Verify home-linked Portable and PortableApps packages
         run: |
+          set -euo pipefail
           TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+
+          require_file() {
+            local archive=$1 path=$2
+            if ! unzip -Z1 "$archive" | grep -Fxq "$path"; then
+              echo "MISSING in $(basename "$archive"): $path" >&2
+              echo "--- archive contents ---" >&2
+              unzip -Z1 "$archive" >&2
+              return 1
+            fi
+            echo "OK $(basename "$archive"): $path"
+          }
+          require_absent() {
+            local archive=$1 path=$2
+            if unzip -Z1 "$archive" | grep -Fxq "$path"; then
+              echo "UNEXPECTED in $(basename "$archive"): $path" >&2
+              return 1
+            fi
+            echo "OK absent $(basename "$archive"): $path"
+          }
+          require_ini() {
+            local archive=$1 path=$2 pattern=$3
+            if ! unzip -p "$archive" "$path" | tr -d '\r' | grep -Eq "$pattern"; then
+              echo "BAD metadata in $(basename "$archive") $path: expected /$pattern/" >&2
+              echo "--- $path ---" >&2
+              unzip -p "$archive" "$path" | tr -d '\r' >&2 || true
+              return 1
+            fi
+            echo "OK metadata $(basename "$archive"): $pattern"
+          }
+
           for arch in amd64 arm64; do
             portable="$TEST_ROOT/downloads/router-vpn-windows-portable-$arch.zip"
             paf="$TEST_ROOT/downloads/router-vpn-portableapps-$arch.zip"
-            test -s "$portable"
-            test -s "$paf"
+            [[ -s "$portable" ]] || { echo "MISSING archive $portable" >&2; exit 1; }
+            [[ -s "$paf" ]] || { echo "MISSING archive $paf" >&2; exit 1; }
             unzip -tq "$portable" >/dev/null
             unzip -tq "$paf" >/dev/null
 
             root="RouterVPNPortable-$arch"
-            list=$(unzip -Z1 "$portable")
-            grep -qx "$root/RouterVPNPortable.exe" <<<"$list"
-            grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$list"
-            grep -qx "$root/README.txt" <<<"$list"
-            grep -qx "$root/App/RouterVPN/router-vpn-client.exe" <<<"$list"
-            grep -qx "$root/App/RouterVPN/router-vpn-dns.exe" <<<"$list"
-            grep -qx "$root/App/RouterVPN/modes.json" <<<"$list"
-            grep -qx "$root/App/RouterVPN/logical-modes.json" <<<"$list"
-            grep -qx "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" <<<"$list"
-            grep -qx "$root/App/RouterVPN/client/setup-windows-runtime.sh" <<<"$list"
-            grep -qx "$root/App/RouterVPN/client/install-xray.sh" <<<"$list"
-            grep -qx "$root/Data/routers.json" <<<"$list"
-            grep -qx "$root/Data/generated/wg/wg.conf" <<<"$list"
-            grep -qx "$root/Data/generated/max-tls-wg/chain.env" <<<"$list"
-            grep -qx "$root/Data/generated/max-quic-awg/chain.env" <<<"$list"
+            echo "=== HOME-LINKED RAW PORTABLE $arch ==="
+            for path in \
+              "$root/RouterVPNPortable.exe" \
+              "$root/Setup-Windows-Runtime.ps1" \
+              "$root/README.txt" \
+              "$root/App/RouterVPN/router-vpn-client.exe" \
+              "$root/App/RouterVPN/router-vpn-dns.exe" \
+              "$root/App/RouterVPN/modes.json" \
+              "$root/App/RouterVPN/logical-modes.json" \
+              "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" \
+              "$root/App/RouterVPN/client/setup-windows-runtime.sh" \
+              "$root/App/RouterVPN/client/install-xray.sh" \
+              "$root/Data/routers.json" \
+              "$root/Data/generated/wg/wg.conf" \
+              "$root/Data/generated/max-tls-wg/chain.env" \
+              "$root/Data/generated/max-quic-awg/chain.env"; do
+              require_file "$portable" "$path"
+            done
 
-            plist=$(unzip -Z1 "$paf")
-            ! grep -qx "$root/Setup-Windows-Runtime.ps1" <<<"$plist"
-            ! grep -qx "$root/README.txt" <<<"$plist"
-            grep -qx "$root/App/AppInfo/appinfo.ini" <<<"$plist"
-            grep -qx "$root/App/AppInfo/installer.ini" <<<"$plist"
-            grep -qx "$root/Other/" <<<"$plist"
-            grep -qx "$root/Other/Help/readme.txt" <<<"$plist"
-            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Type=PortableApps.comFormat'
-            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Version=3.9'
-            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Icons=2'
-            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -qx 'Start=RouterVPNPortable.exe'
-            unzip -p "$paf" "$root/App/AppInfo/appinfo.ini" | grep -q '^Start2=powershell.exe .*Setup-Windows-Runtime.ps1$'
-            unzip -p "$paf" "$root/App/AppInfo/installer.ini" | grep -qx 'RemoveDataDirectory=false'
+            echo "=== HOME-LINKED PORTABLEAPPS $arch ==="
+            require_absent "$paf" "$root/Setup-Windows-Runtime.ps1"
+            require_absent "$paf" "$root/README.txt"
+            for path in \
+              "$root/RouterVPNPortable.exe" \
+              "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" \
+              "$root/App/AppInfo/appinfo.ini" \
+              "$root/App/AppInfo/installer.ini" \
+              "$root/Other/Help/readme.txt" \
+              "$root/Data/routers.json" \
+              "$root/Data/generated/wg/wg.conf" \
+              "$root/Data/generated/max-tls-wg/chain.env" \
+              "$root/Data/generated/max-quic-awg/chain.env"; do
+              require_file "$paf" "$path"
+            done
+            # Do not require an explicit parent-directory ZIP entry; child files
+            # prove the PortableApps App/Data/Other tree and avoid zip-tool quirks.
+            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Type=PortableApps\.comFormat$'
+            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Version=3\.9$'
+            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Icons=2$'
+            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Start=RouterVPNPortable\.exe$'
+            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Start2=powershell\.exe .*Setup-Windows-Runtime\.ps1$'
+            require_ini "$paf" "$root/App/AppInfo/installer.ini" '^RemoveDataDirectory=false$'
           done
+
           python3 - "$TEST_ROOT/client-bundle/setup-assets.json" <<'PY'
           import json,sys
           x=json.load(open(sys.argv[1]))
@@ -122,7 +167,9 @@ jobs:
             'router-vpn-windows-portable-amd64.zip','router-vpn-windows-portable-arm64.zip',
             'router-vpn-portableapps-amd64.zip','router-vpn-portableapps-arm64.zip'
           }
-          assert expected <= got, sorted(expected-got)
+          missing=sorted(expected-got)
+          assert not missing, f'missing Setup Center downloads: {missing}'
+          print('Setup Center portable download manifest: OK')
           PY
 
       - name: Validate formerly grey combined and MAX modes
