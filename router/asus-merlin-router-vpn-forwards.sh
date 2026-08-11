@@ -70,7 +70,9 @@ validate_settings(){
 
 need_router(){
   [ -d /jffs ] || fail 'This installer must run on the ASUS Asuswrt-Merlin router.'
-  command -v iptables >/dev/null 2>&1 || fail 'iptables is unavailable on this router.'
+  if [ ! -x /usr/sbin/iptables ] && ! command -v iptables >/dev/null 2>&1; then
+    fail 'iptables is unavailable on this router.'
+  fi
 }
 
 wan_if(){
