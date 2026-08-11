@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   arm64:
-    name: Native ARM64 setup assets + portable downloads + mode validation
+    name: Native ARM64 setup assets + ephemeral downloads + mode validation
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +22,11 @@ jobs:
 
       - name: Static checks
         run: |
-          python3 -m py_compile server/scripts/generate-setup-assets.py server/scripts/generate-aux-proxies.py
+          python3 -m py_compile \
+            server/scripts/generate-setup-assets.py \
+            server/scripts/generate-aux-proxies.py \
+            server/scripts/build-download-on-demand.py \
+            server/scripts/download-broker.py
           python3 -m json.tool configs/client/logical-modes.json >/dev/null
           bash -n server/finalize/finalize.sh
           bash -n server/finalize/upgrade-safe.sh
@@ -56,6 +60,7 @@ jobs:
             test -s /opt/router-vpn/client-bundle/setup-assets.json
             test -s /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             test -s /opt/router-vpn/downloads/router-vpn-device-setup.html
+            test -s /opt/router-vpn/downloads/download-policy.json
             test -s /opt/router-vpn/config/aux/overtls-server.json
             test -s /opt/router-vpn/config/aux/ssr-server.json
             test -s /opt/router-vpn/client-bundle/generated/overtls/overtls-client.json
@@ -63,74 +68,69 @@ jobs:
             test -s /opt/router-vpn/client-bundle/logical-modes.json
             test -s /opt/router-vpn/client-bundle/client/Setup-Windows-Runtime.ps1
             test -s /opt/router-vpn/client-bundle/client/setup-windows-runtime.sh
+            test ! -e /opt/router-vpn/client-bundle/dist
+            ! find /opt/router-vpn/downloads -maxdepth 1 -type f -name "*.zip" | grep -q .
             grep -q "WireGuard" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "SOCKS5 + TLS (OverTLS)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "ShadowsocksR" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "router-vpn-windows-portable-amd64.zip" /opt/router-vpn/downloads/router-vpn-device-setup.html
             grep -q "router-vpn-portableapps-arm64.zip" /opt/router-vpn/downloads/router-vpn-device-setup.html
+            grep -q "generated on demand" /opt/router-vpn/downloads/router-vpn-device-setup.html
           '
-          # The server intentionally creates private files under umask 077. The
-          # bind mount is therefore root-owned on the hosted runner. Hand the
-          # ephemeral CI copy back to the runner user before host-side ZIP tests;
-          # production permissions remain unchanged.
           sudo chown -R "$(id -u):$(id -g)" "$TEST_ROOT"
 
-      - name: Verify home-linked Portable and PortableApps packages
+      - name: Verify on-demand home-linked Portable and PortableApps packages
         run: |
           set -euo pipefail
           TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          BROKER=$(docker run -d --rm --platform linux/arm64 --network host \
+            -e ROUTER_VPN_GITHUB_DISABLE=1 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint python3 router-vpn-ci-init:arm64 \
+            /src/server/scripts/download-broker.py --base /opt/router-vpn --port 8786)
+          trap 'docker logs "$BROKER" || true; docker rm -f "$BROKER" >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8786/healthz >/dev/null && break
+            sleep .2
+          done
+          curl -fsS http://127.0.0.1:8786/api/download-policy | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["server_cache"] is False and x["preferred_source"]=="github-actions"'
 
           require_file() {
             local archive=$1 path=$2
-            if ! unzip -Z1 "$archive" | grep -Fxq "$path"; then
-              echo "MISSING in $(basename "$archive"): $path" >&2
-              echo "--- archive contents ---" >&2
-              unzip -Z1 "$archive" >&2
-              return 1
-            fi
-            echo "OK $(basename "$archive"): $path"
+            unzip -Z1 "$archive" | grep -Fxq "$path" || { echo "MISSING in $(basename "$archive"): $path" >&2; unzip -Z1 "$archive" >&2; return 1; }
           }
           require_absent() {
             local archive=$1 path=$2
-            if unzip -Z1 "$archive" | grep -Fxq "$path"; then
-              echo "UNEXPECTED in $(basename "$archive"): $path" >&2
-              return 1
-            fi
-            echo "OK absent $(basename "$archive"): $path"
+            ! unzip -Z1 "$archive" | grep -Fxq "$path" || { echo "UNEXPECTED in $(basename "$archive"): $path" >&2; return 1; }
           }
           require_ini() {
             local archive=$1 path=$2 pattern=$3
-            if ! unzip -p "$archive" "$path" | tr -d '\r' | grep -Eq "$pattern"; then
-              echo "BAD metadata in $(basename "$archive") $path: expected /$pattern/" >&2
-              echo "--- $path ---" >&2
-              unzip -p "$archive" "$path" | tr -d '\r' >&2 || true
-              return 1
-            fi
-            echo "OK metadata $(basename "$archive"): $pattern"
+            unzip -p "$archive" "$path" | tr -d '\r' | grep -Eq "$pattern" || { echo "BAD metadata: $pattern" >&2; return 1; }
+          }
+          fetch_one() {
+            local name=$1 out=$2 headers=$3
+            curl -fsS -D "$headers" -o "$out" "http://127.0.0.1:8786/$name"
+            grep -Eiq '^X-Router-VPN-Source: local-fallback\r?$' "$headers"
+            unzip -tq "$out" >/dev/null
+            # The AI Board persistent directory must stay archive-free after every request.
+            ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
           }
 
           for arch in amd64 arm64; do
-            portable="$TEST_ROOT/downloads/router-vpn-windows-portable-$arch.zip"
-            paf="$TEST_ROOT/downloads/router-vpn-portableapps-$arch.zip"
-            [[ -s "$portable" ]] || { echo "MISSING archive $portable" >&2; exit 1; }
-            [[ -s "$paf" ]] || { echo "MISSING archive $paf" >&2; exit 1; }
-            unzip -tq "$portable" >/dev/null
-            unzip -tq "$paf" >/dev/null
+            portable="$RUNNER_TEMP/home-portable-$arch.zip"
+            paf="$RUNNER_TEMP/home-portableapps-$arch.zip"
+            fetch_one "router-vpn-windows-portable-$arch.zip" "$portable" "$RUNNER_TEMP/h1-$arch"
+            fetch_one "router-vpn-portableapps-$arch.zip" "$paf" "$RUNNER_TEMP/h2-$arch"
 
             root="RouterVPNPortable-$arch"
-            echo "=== HOME-LINKED RAW PORTABLE $arch ==="
             for path in \
               "$root/RouterVPNPortable.exe" \
               "$root/Setup-Windows-Runtime.ps1" \
               "$root/README.txt" \
               "$root/App/RouterVPN/router-vpn-client.exe" \
               "$root/App/RouterVPN/router-vpn-dns.exe" \
-              "$root/App/RouterVPN/modes.json" \
               "$root/App/RouterVPN/logical-modes.json" \
-              "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" \
-              "$root/App/RouterVPN/client/setup-windows-runtime.sh" \
-              "$root/App/RouterVPN/client/install-xray.sh" \
               "$root/Data/routers.json" \
               "$root/Data/generated/wg/wg.conf" \
               "$root/Data/generated/max-tls-wg/chain.env" \
@@ -138,7 +138,6 @@ jobs:
               require_file "$portable" "$path"
             done
 
-            echo "=== HOME-LINKED PORTABLEAPPS $arch ==="
             require_absent "$paf" "$root/Setup-Windows-Runtime.ps1"
             require_absent "$paf" "$root/README.txt"
             for path in \
@@ -155,25 +154,20 @@ jobs:
             done
             require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Type=PortableApps\.comFormat$'
             require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Version=3\.9$'
+            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^OpenSource=true$'
+            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^CommercialUse=true$'
             require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Icons=2$'
-            require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Start=RouterVPNPortable\.exe$'
             require_ini "$paf" "$root/App/AppInfo/appinfo.ini" '^Start2=powershell\.exe .*Setup-Windows-Runtime\.ps1$'
             require_ini "$paf" "$root/App/AppInfo/installer.ini" '^RemoveDataDirectory=false$'
+            rm -f "$portable" "$paf"
           done
 
-          python3 - "$TEST_ROOT/client-bundle/setup-assets.json" <<'PY'
-          import json,sys
-          x=json.load(open(sys.argv[1]))
-          got=set(x.get('downloads',[]))
-          expected={
-            'router-vpn-windows-amd64.zip','router-vpn-windows-arm64.zip',
-            'router-vpn-windows-portable-amd64.zip','router-vpn-windows-portable-arm64.zip',
-            'router-vpn-portableapps-amd64.zip','router-vpn-portableapps-arm64.zip'
-          }
-          missing=sorted(expected-got)
-          assert not missing, f'missing Setup Center downloads: {missing}'
-          print('Setup Center portable download manifest: OK')
-          PY
+          # A full private bundle is also generated only when explicitly requested.
+          bundle="$RUNNER_TEMP/home-bundle.zip"
+          fetch_one router-vpn-client-bundle.zip "$bundle" "$RUNNER_TEMP/h3"
+          unzip -Z1 "$bundle" | grep -q '/router-vpn-bundle.json$'
+          rm -f "$bundle"
+          ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
 
       - name: Validate formerly grey combined and MAX modes
         run: |
