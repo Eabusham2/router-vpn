@@ -7,6 +7,9 @@ RUN mkdir -p dist \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-client-${GOOS}-${GOARCH}${ext}" ./cmd/client; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-dns-${GOOS}-${GOARCH}${ext}" ./cmd/dnsproxy; \
     done \
+ && for arch in amd64 arm64; do \
+      CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPNPortable-${arch}.exe" ./cmd/portable-launcher; \
+    done \
  && for target in linux/amd64 linux/arm64; do \
       GOOS=${target%/*}; GOARCH=${target#*/}; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-agent-${GOOS}-${GOARCH}" ./cmd/router-agent; \
@@ -43,5 +46,7 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && test -x /src/server/scripts/generate-setup-assets.py \
  && test -x /src/server/scripts/generate-aux-proxies.py \
  && test -x /src/server/scripts/create-bundle-json.py \
- && test -x /src/server/scripts/apply-runtime.sh
+ && test -x /src/server/scripts/apply-runtime.sh \
+ && test -f /src/dist/RouterVPNPortable-amd64.exe \
+ && test -f /src/dist/RouterVPNPortable-arm64.exe
 ENTRYPOINT ["/bin/bash", "/usr/local/bin/router-vpn-init"]
