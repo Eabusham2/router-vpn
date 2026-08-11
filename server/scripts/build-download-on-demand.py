@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Build/customize exactly one Router VPN download in a temporary path.
 
-The AI Board never needs to persist platform archives.  A generic package from
+The AI Board never needs to persist platform archives. A generic package from
 GitHub Actions can be supplied with --source-archive; otherwise this script
-assembles the requested package from the prebuilt binaries already shipped in
-the server image.  In both cases only private node data is overlaid locally.
+assembles the requested package from prebuilt binaries already shipped in the
+server image. In both cases only private node data is overlaid locally.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import subprocess
 import tarfile
 import tempfile
 import zipfile
@@ -52,9 +53,10 @@ def safe_extract_zip(src: Path, dst: Path) -> None:
     total = 0
     with zipfile.ZipFile(src) as zf:
         for item in zf.infolist():
-            rel = _safe_rel(item.filename.rstrip("/")) if item.filename.rstrip("/") else None
-            if rel is None:
+            clean = item.filename.rstrip("/")
+            if not clean:
                 continue
+            rel = _safe_rel(clean)
             mode = (item.external_attr >> 16) & 0o170000
             if mode == stat.S_IFLNK:
                 raise ValueError(f"archive symlink is not allowed: {item.filename}")
@@ -127,16 +129,26 @@ def overlay_private(root: Path, family: str, bundle: Path) -> None:
     if family in ("portable", "portableapps"):
         app = root / "App" / "RouterVPN"
         data = root / "Data"
+        if not app.is_dir():
+            raise ValueError("GitHub portable package has no App/RouterVPN payload")
         data.mkdir(parents=True, exist_ok=True)
         copy_file(bundle / "client.json", app / "client.json")
         copy_file(bundle / "routers.json", app / "routers.json")
         copy_file(bundle / "router-vpn-bundle.json", app / "router-vpn-bundle.json")
         copy_file(bundle / "routers.json", data / "routers.json")
         copy_tree(bundle / "generated", data / "generated")
+        if family == "portableapps":
+            for required in (
+                root / "RouterVPNSetupRuntime.exe",
+                root / "App" / "AppInfo" / "appicon.ico",
+                root / "App" / "RouterVPN" / "LICENSE",
+            ):
+                if not required.is_file():
+                    raise ValueError(f"GitHub PortableApps build is stale/incomplete: {required.name}")
         return
 
-    for name in ("client.json", "routers.json", "router-vpn-bundle.json"):
-        copy_file(bundle / name, root / name)
+    for item in ("client.json", "routers.json", "router-vpn-bundle.json"):
+        copy_file(bundle / item, root / item)
     copy_tree(bundle / "generated", root / "generated")
 
 
@@ -154,7 +166,7 @@ def zip_dir(root: Path, output: Path) -> None:
 
 
 def write_appinfo(path: Path, arch: str) -> None:
-    path.write_text(f"""[Format]\nType=PortableApps.comFormat\nVersion=3.9\n\n[Details]\nName=Router VPN Portable ({arch})\nAppId=RouterVPNPortable{arch}Eabusham2\nPublisher=Eabusham2\nHomepage=https://github.com/Eabusham2/router-vpn\nCategory=Internet\nDescription=Portable Router VPN controller, logical-mode selector, and private node profile manager\nLanguage=English\n\n[License]\nShareable=true\nOpenSource=true\nFreeware=true\nCommercialUse=true\nEULAVersion=0\n\n[Version]\nPackageVersion=0.7.0.0\nDisplayVersion=0.7.0 Alpha\n\n[Control]\nIcons=2\nStart=RouterVPNPortable.exe\nStart1=RouterVPNPortable.exe\nName1=Router VPN Portable\nStart2=powershell.exe -NoProfile -ExecutionPolicy Bypass -File App\\RouterVPN\\client\\Setup-Windows-Runtime.ps1\nName2=Router VPN Portable - Setup Windows Runtime\nExtractIcon=RouterVPNPortable.exe\nExtractIcon1=RouterVPNPortable.exe\nExtractIcon2=RouterVPNPortable.exe\n""", encoding="utf-8")
+    path.write_text(f"""[Format]\nType=PortableApps.comFormat\nVersion=3.9\n\n[Details]\nName=Router VPN Portable ({arch})\nAppId=RouterVPNPortable{arch}Eabusham2\nPublisher=Eabusham2\nHomepage=https://github.com/Eabusham2/router-vpn\nCategory=Internet\nDescription=Portable Router VPN controller, logical-mode selector, and private node profile manager\nLanguage=English\n\n[License]\nShareable=true\nOpenSource=true\nFreeware=true\nCommercialUse=true\nEULAVersion=0\n\n[Version]\nPackageVersion=0.7.0.0\nDisplayVersion=0.7.0 Alpha\n\n[Control]\nIcons=2\nStart=RouterVPNPortable.exe\nStart1=RouterVPNPortable.exe\nName1=Router VPN Portable\nStart2=RouterVPNSetupRuntime.exe\nName2=Router VPN Portable - Setup Windows Runtime\n""", encoding="utf-8")
 
 
 def require_dist(src_root: Path, name: str) -> Path:
@@ -168,7 +180,7 @@ def copy_bundle_runtime(bundle: Path, root: Path) -> None:
     copy_tree(bundle / "modes", root / "modes")
     copy_tree(bundle / "client", root / "client")
     copy_tree(bundle / "generated", root / "generated")
-    for name in ("client.json", "routers.json", "modes.json", "logical-modes.json", "router-vpn-bundle.json"):
+    for name in ("client.json", "routers.json", "modes.json", "logical-modes.json", "router-vpn-bundle.json", "LICENSE"):
         copy_file(bundle / name, root / name, required=(name != "logical-modes.json"))
     helper = bundle / "router" / "asus-merlin-router-vpn-forwards.sh"
     if helper.is_file():
@@ -180,8 +192,6 @@ def build_local(work: Path, name: str, bundle: Path, src_root: Path) -> Path:
     if family == "bundle":
         root = work / "router-vpn-client-bundle"
         copy_tree(bundle, root)
-        # Persistent dist was deliberately removed; add only portable public code,
-        # never a second long-lived copy of every platform binary.
         return root
 
     if family in ("portable", "portableapps"):
@@ -193,12 +203,14 @@ def build_local(work: Path, name: str, bundle: Path, src_root: Path) -> Path:
         copy_file(require_dist(src_root, f"router-vpn-client-windows-{arch}.exe"), app / "router-vpn-client.exe")
         copy_file(require_dist(src_root, f"router-vpn-dns-windows-{arch}.exe"), app / "router-vpn-dns.exe")
         copy_file(require_dist(src_root, f"RouterVPNPortable-{arch}.exe"), root / "RouterVPNPortable.exe")
+        copy_file(require_dist(src_root, f"RouterVPNSetupRuntime-{arch}.exe"), root / "RouterVPNSetupRuntime.exe")
         copy_file(bundle / "routers.json", data / "routers.json")
         copy_tree(bundle / "generated", data / "generated")
         readme = (
             f"Router VPN Portable {arch} — home-linked on-demand package\n"
-            "Run Setup-Windows-Runtime.ps1 once for the WSL engine set, then RouterVPNPortable.exe.\n"
+            "Use Setup Windows Runtime once for the WSL engine set, then RouterVPNPortable.exe.\n"
             "Data contains this node's private profiles. Move the whole folder together; do not share it.\n"
+            "Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.\n"
         )
         if family == "portable":
             copy_file(bundle / "client" / "Setup-Windows-Runtime.ps1", root / "Setup-Windows-Runtime.ps1")
@@ -211,6 +223,8 @@ def build_local(work: Path, name: str, bundle: Path, src_root: Path) -> Path:
             write_appinfo(appinfo / "appinfo.ini", arch)
             (appinfo / "installer.ini").write_text("[MainDirectories]\nRemoveAppDirectory=true\nRemoveDataDirectory=false\nRemoveOtherDirectory=true\n", encoding="utf-8")
             (helpdir / "readme.txt").write_text(readme, encoding="utf-8")
+            icon_script = src_root / "deploy" / "make-portableapps-icons.py"
+            subprocess.run(["python3", str(icon_script), str(appinfo)], check=True, timeout=15)
         return root
 
     if family == "windows":
