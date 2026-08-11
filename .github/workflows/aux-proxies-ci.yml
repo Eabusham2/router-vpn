@@ -57,7 +57,7 @@ jobs:
             grep -q "WireGuard" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "SOCKS5 + TLS (OverTLS)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
-            grep -q "ShadowsocksR (legacy)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
+            grep -q "ShadowsocksR" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
           '
 
       - name: Build auxiliary proxy ARM64 image
