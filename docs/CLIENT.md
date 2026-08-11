@@ -15,7 +15,7 @@ You normally **do not need `router-vpn-client-bundle.zip`**.
 5. Start with **Raw tunnel** using **Base: Auto**. Auto prefers the saved/default base and can fall back to the other compatible base.
 6. Verify the public exit IP before moving to stronger methods.
 
-The full ZIP is retained for offline recovery/advanced installs.
+The full private bundle remains available **on demand** for offline recovery/advanced installs; the AI Board does not retain the generated ZIP after delivery.
 
 ## Setup Center
 
@@ -36,6 +36,8 @@ The Setup Center is the server/router onboarding and compatibility surface. It i
 - plain internal SOCKS5 instructions
 - custom/universal protocol files where a native OS import does not exist
 
+Large packages are requested through the download broker. It prefers the current short-lived GitHub Actions artifact, overlays this node's private profiles in temporary storage, streams the requested package, then deletes that temporary copy. If the GitHub package is unavailable, the AI Board assembles only that requested package from prebuilt binaries already in its runtime image, streams it, then deletes it.
+
 QR images are generated on the home node. Treat the page, private JSON, QR codes and generated profiles as credentials.
 
 ## Logical modes and base selection
@@ -52,7 +54,7 @@ The current logical mapping lives in `configs/client/logical-modes.json`. Availa
 
 ## macOS — Apple Silicon and Intel
 
-The Setup Center publishes architecture-specific mini packages when the matching binaries are present. The legacy/full bundle install path remains supported:
+The Setup Center provides architecture-specific packages on demand. The legacy/full bundle install path remains supported:
 
 ```bash
 bash client/install-macos-final.sh "$PWD"
@@ -74,7 +76,9 @@ The desktop controller stores each imported node separately and can report the p
 
 ## Windows — x64 and ARM64
 
-GitHub Actions produces normal and PortableApps-style controller packages for both architectures. The home Setup Center also publishes small Windows x64/ARM64 bundles when the matching binaries are in the server image.
+GitHub Actions produces normal Windows packages and Router VPN's own no-install **Portable ZIPs** for both architectures. The home Setup Center provides the matching package on demand and does not retain a server-side ZIP after delivery.
+
+PortableApps.com/PAF packages are not produced or supported. Use `RouterVPN-Portable-Windows-amd64.zip` or `RouterVPN-Portable-Windows-arm64.zip` for the no-install portable layout.
 
 The existing complete multi-engine shell path can use the Linux transport runtime through WSL2. Native WireGuard/AmneziaWG profile import remains available in matching Windows clients.
 
@@ -92,13 +96,13 @@ sudo bash client/install-linux.sh "$PWD"
 
 The SwiftUI Router VPN app supports the native app UX, private bundle import from Files or directly from the home LAN, logical-mode/base selection, home-LAN access settings, forwarding controls and the permanent setup guide.
 
-**Platform tunnel boundary:** the included Packet Tunnel target must not claim a working full-device tunnel until the actual WireGuard/AmneziaWG and proxy engines are linked and validated. Until then, use the generated Setup Center profiles in compatible native clients for live tunnels:
+**Platform tunnel boundary:** the included Packet Tunnel target intentionally fails closed until the actual WireGuard/AmneziaWG and proxy engines are linked and validated. Its `completionHandler(error)` path is therefore an expected limitation, not an accidental build/runtime error. Until those adapters exist, use the generated Setup Center profiles in compatible native clients for live tunnels:
 
 - WireGuard config → WireGuard-compatible client
 - AmneziaWG config → AmneziaWG-compatible client
 - Shadowsocks/Hysteria2/REALITY/etc. → a client that explicitly supports that generated format
 
-The Router VPN UI now follows the real NetworkExtension status and does not mark itself connected merely because `startVPNTunnel()` was called.
+The Router VPN UI follows the real NetworkExtension status and does not mark itself connected merely because `startVPNTunnel()` was called.
 
 ## Android
 
