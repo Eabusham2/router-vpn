@@ -38,10 +38,13 @@ done
 for target in windows/amd64 windows/arm64; do
   GOOS=${target%/*}
   GOARCH=${target#*/}
-  echo "building portable launcher $GOOS/$GOARCH"
+  echo "building portable launchers $GOOS/$GOARCH"
   env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
     go build -trimpath -ldflags='-s -w -H=windowsgui' \
     -o "dist/client/RouterVPNPortable-${GOARCH}.exe" ./cmd/portable-launcher
+  env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
+    go build -trimpath -ldflags='-s -w -H=windowsgui' \
+    -o "dist/client/RouterVPNSetupRuntime-${GOARCH}.exe" ./cmd/portable-runtime-setup
 done
 
 for target in linux/amd64 linux/arm64; do
