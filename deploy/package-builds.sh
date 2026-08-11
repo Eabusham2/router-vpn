@@ -27,6 +27,7 @@ copy_runtime(){
   cp "$ROOT/docs/MODES.md" "$dir/MODES.md"
   cp "$ROOT/docs/CLIENT.md" "$dir/CLIENT.md"
   cp "$ROOT/SECURITY.md" "$dir/SECURITY.md"
+  cp "$ROOT/LICENSE" "$dir/LICENSE"
 }
 
 package_zip(){
@@ -103,6 +104,7 @@ Run Start-RouterVPN.ps1 for the Router VPN controller/app window.
 For full Router VPN shell-engine operation, run Setup-Windows-Runtime.ps1 once. It checks
 WSL/Ubuntu, installs the required tunnel/proxy engines, and refuses to claim readiness when an
 engine is still missing. Raw WireGuard/AmneziaWG profiles can also be imported into native apps.
+Router VPN is MIT-licensed open-source software; see LICENSE.
 TXT
   package_zip "RouterVPN-Windows-$arch" "$dir"
 done
@@ -131,6 +133,7 @@ state, generated per-router material and the dedicated portable browser profile.
 For full shell-engine operation on Windows, run Setup-Windows-Runtime.ps1 once. The launcher
 then routes Router VPN mode checks/runs through WSL with Windows paths translated automatically.
 Move the whole RouterVPNPortable folder together; private imported profiles remain in Data.
+Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.
 TXT
 
   # Ordinary no-installer portable ZIP keeps the convenient setup helper at root.
@@ -157,9 +160,10 @@ Language=English
 
 [License]
 Shareable=true
-OpenSource=false
+OpenSource=true
 Freeware=true
-CommercialUse=false
+CommercialUse=true
+EULAVersion=0
 
 [Version]
 PackageVersion=0.7.0.0
@@ -221,4 +225,4 @@ cp "$DIST/SHA256SUMS" "$OUT/BINARY-SHA256SUMS"
   find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 )
 rm -rf "$OUT/work"
-printf 'Packaged artifacts in %s\n' "$OUT"
+printf 'Packaged MIT-licensed open-source artifacts in %s\n' "$OUT"
