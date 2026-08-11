@@ -60,6 +60,8 @@ for profile in routers.get('profiles',[]):
     profile['socks_port']=int(profile.get('socks_port') or 1080)
     profile['socks_username']=''
     profile['socks_password']=''
+    profile.setdefault('base_tunnel','wg')
+    profile.setdefault('dns_mode','home')
 routers_path.write_text(json.dumps(routers,indent=2)+'\n')
 PY
 
@@ -87,8 +89,8 @@ if ! python3 /src/server/scripts/benchmark-dns.py "$BASE" >/dev/null; then
   echo 'Warning: DNS benchmark failed; preserving the prior/fallback DNS selection.' >&2
 fi
 
-# The setup UI/QRs are a required user-facing feature. Existing installations
-# must receive them too, so fail rather than silently ship an incomplete bundle.
+# The Setup Center/QRs are a required user-facing feature. Existing installations
+# must receive them too, so fail rather than silently ship an incomplete UI.
 python3 /src/server/scripts/generate-setup-assets.py "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4"
 [[ -s "$BASE/client-bundle/setup-assets.json" ]]
 [[ -s "$BASE/client-bundle/router-vpn-device-setup.html" ]]
@@ -131,10 +133,10 @@ ShadowsocksR legacy TCP/UDP: $SSR_PORT
 Automatic TLS hostname: $TLS_INFO
 Certificate challenge external TCP: 80 -> AI Board TCP 18080
 Fastest public DNS at home: $DNS_FASTEST
-Default DNS policy: fastest (changeable to Home AdGuard, custom, DoT, DoH, DoH3, or rescue in client)
+Default DNS policy: Home AdGuard (changeable to fastest public, common/custom DNS, DoT, DoH, DoH3, or rescue in client)
 SOCKS5 after VPN connects: $ADGUARD4:1080
 SOCKS5 authentication: none
-Private Device Setup WebGUI (home LAN only): http://$ADGUARD4:8786/router-vpn-device-setup.html
+Private Setup Center (home LAN only): http://$ADGUARD4:8786/
 Router API token: $TOKEN
 TXT
 
@@ -147,18 +149,12 @@ mkdir -p "$BASE/client-bundle/router"
 cp /src/router/asus-merlin-router-vpn-forwards.sh "$BASE/client-bundle/router/"
 chmod 0755 "$BASE/client-bundle/router/asus-merlin-router-vpn-forwards.sh"
 
-rm -f \
-  "$BASE/downloads/router-vpn-client-bundle.zip" \
-  "$BASE/downloads/router-vpn-device-setup.html" \
-  "$BASE/router-vpn-client-bundle.zip"
-cp "$BASE/client-bundle/router-vpn-device-setup.html" "$BASE/downloads/router-vpn-device-setup.html"
-(
-  cd "$BASE/client-bundle"
-  zip -qr "$BASE/downloads/router-vpn-client-bundle.zip" .
-)
+# Publish the Setup Center plus direct profile/helper and small platform-specific
+# downloads. Keep the full private bundle only as an advanced/offline fallback.
+bash /src/server/scripts/publish-downloads.sh "$BASE"
 cp "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
 
 export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT SS_V2RAY_PORT NAIVE_PORT OVERTLS_PORT SSR_PORT
 bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
 touch "$BASE/.finalized"
-echo 'Credential-preserving upgrade finalization complete with private setup assets and auxiliary compatibility profiles.'
+echo 'Credential-preserving upgrade finalization complete with Setup Center, direct downloads, and auxiliary compatibility profiles.'
