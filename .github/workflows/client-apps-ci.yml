@@ -243,7 +243,8 @@ jobs:
           APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
           test -d "$APP"
           test -d "$APP/PlugIns/RouterVPNPacketTunnel.appex"
-          grep -q 'native all-mode Packet Tunnel adapters are not linked yet' App/ContentView.swift
+          grep -q 'fail visibly rather than fake a successful VPN connection' App/ContentView.swift
+          grep -q 'Link AmneziaWGKit/Xray engine before signing this target.' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'completionHandler(error)' PacketTunnel/PacketTunnelProvider.swift
           rm -rf build/unsigned
           mkdir -p build/unsigned/Payload
