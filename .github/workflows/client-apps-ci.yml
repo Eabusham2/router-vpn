@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   desktop-unix:
-    name: Desktop and Unix client builds
+    name: Desktop, PortableApps, and Unix client builds
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +50,7 @@ jobs:
           chmod +x deploy/build-client.sh deploy/package-builds.sh
           ./deploy/build-client.sh
           ./deploy/package-builds.sh
-      - name: Verify common architectures
+      - name: Verify common architectures and checksums
         run: |
           test -x dist/client/router-vpn-client-darwin-amd64
           test -x dist/client/router-vpn-client-darwin-arm64
@@ -60,11 +60,59 @@ jobs:
           test -s dist/client/router-vpn-client-windows-arm64.exe
           test -s dist/packages/RouterVPN-Windows-amd64.zip
           test -s dist/packages/RouterVPN-Windows-arm64.zip
+          test -s dist/packages/RouterVPN-Portable-Windows-amd64.zip
+          test -s dist/packages/RouterVPN-Portable-Windows-arm64.zip
+          test -s dist/packages/RouterVPNPortable-amd64.zip
+          test -s dist/packages/RouterVPNPortable-arm64.zip
           test -s dist/packages/RouterVPN-darwin-amd64.tar.gz
           test -s dist/packages/RouterVPN-darwin-arm64.tar.gz
           test -s dist/packages/RouterVPN-linux-amd64.tar.gz
           test -s dist/packages/RouterVPN-linux-arm64.tar.gz
           (cd dist/packages && sha256sum -c SHA256SUMS)
+      - name: Verify Windows portable and PortableApps layouts
+        run: |
+          for arch in amd64 arm64; do
+            for archive in \
+              "dist/packages/RouterVPN-Portable-Windows-$arch.zip" \
+              "dist/packages/RouterVPNPortable-$arch.zip"; do
+              unzip -tq "$archive" >/dev/null
+              list=$(unzip -Z1 "$archive")
+              root="RouterVPNPortable-$arch"
+              grep -qx "$root/RouterVPNPortable.exe" <<<"$list"
+              grep -qx "$root/App/RouterVPN/router-vpn-client.exe" <<<"$list"
+              grep -qx "$root/App/RouterVPN/router-vpn-dns.exe" <<<"$list"
+              grep -qx "$root/App/RouterVPN/modes.json" <<<"$list"
+              grep -qx "$root/App/RouterVPN/logical-modes.json" <<<"$list"
+              grep -qx "$root/App/RouterVPN/modes/check-mode.sh" <<<"$list"
+              grep -qx "$root/App/RouterVPN/modes/check-combined.sh" <<<"$list"
+              grep -qx "$root/Data/generated/" <<<"$list"
+              # Mutable/private router state must not be pre-populated in Data.
+              if grep -qE "^$root/Data/(routers|state|client)\\.json$" <<<"$list"; then
+                echo "portable archive incorrectly pre-populates mutable Data files: $archive" >&2
+                exit 1
+              fi
+            done
+
+            paf="dist/packages/RouterVPNPortable-$arch.zip"
+            list=$(unzip -Z1 "$paf")
+            grep -qx "RouterVPNPortable-$arch/App/AppInfo/appinfo.ini" <<<"$list"
+            unzip -p "$paf" "RouterVPNPortable-$arch/App/AppInfo/appinfo.ini" | grep -qx 'Type=PortableApps.comFormat'
+            unzip -p "$paf" "RouterVPNPortable-$arch/App/AppInfo/appinfo.ini" | grep -qx 'Start=RouterVPNPortable.exe'
+          done
+      - name: Verify logical catalog ships on desktop/Unix packages
+        run: |
+          for archive in \
+            dist/packages/RouterVPN-Windows-amd64.zip \
+            dist/packages/RouterVPN-Windows-arm64.zip; do
+            unzip -Z1 "$archive" | grep -q '/logical-modes.json$'
+          done
+          for archive in \
+            dist/packages/RouterVPN-darwin-amd64.tar.gz \
+            dist/packages/RouterVPN-darwin-arm64.tar.gz \
+            dist/packages/RouterVPN-linux-amd64.tar.gz \
+            dist/packages/RouterVPN-linux-arm64.tar.gz; do
+            tar -tzf "$archive" | grep -q '/logical-modes.json$'
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-client-desktop-unix-ci
