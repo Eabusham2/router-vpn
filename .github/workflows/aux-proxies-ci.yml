@@ -93,7 +93,7 @@ jobs:
               assert cfg['obfs'] == 'tls1.2_ticket_auth', (rel, cfg['obfs'])
           PY
 
-      - name: Verify on-demand home-linked Portable packages
+      - name: Verify on-demand generic Portable packages and separate private node bundle
         run: |
           set -euo pipefail
           TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
@@ -107,16 +107,16 @@ jobs:
             curl -fsS http://127.0.0.1:8786/healthz >/dev/null && break
             sleep .2
           done
-          curl -fsS http://127.0.0.1:8786/api/download-policy | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["server_cache"] is False and x["preferred_source"]=="github-actions" and x["fallback"]=="router-local-build" and x["local_build_scope"]=="requested-package-only"'
+          curl -fsS http://127.0.0.1:8786/api/download-policy | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["server_cache"] is False and x["preferred_source"]=="github-actions" and x["fallback"]=="router-local-generic-build" and x["local_build_scope"]=="requested-generic-package-only" and x["generic_packages_secret_free"] is True and x["node_linking"]=="separate-bundle-or-pairing"'
 
           require_file() {
             local archive=$1 path=$2
             unzip -Z1 "$archive" | grep -Fxq "$path" || { echo "MISSING in $(basename "$archive"): $path" >&2; unzip -Z1 "$archive" >&2; return 1; }
           }
           fetch_one() {
-            local name=$1 out=$2 headers=$3
+            local name=$1 out=$2 headers=$3 expected_source=$4
             curl -fsS -D "$headers" -o "$out" "http://127.0.0.1:8786/$name"
-            if ! grep -Fqi 'X-Router-VPN-Source: router-local-build' "$headers"; then
+            if ! grep -Fqi "X-Router-VPN-Source: $expected_source" "$headers"; then
               echo "Unexpected package source response for $name:" >&2
               cat "$headers" >&2
               return 1
@@ -126,8 +126,8 @@ jobs:
           }
 
           for arch in amd64 arm64; do
-            portable="$RUNNER_TEMP/home-portable-$arch.zip"
-            fetch_one "router-vpn-windows-portable-$arch.zip" "$portable" "$RUNNER_TEMP/h-$arch"
+            portable="$RUNNER_TEMP/generic-portable-$arch.zip"
+            fetch_one "router-vpn-windows-portable-$arch.zip" "$portable" "$RUNNER_TEMP/h-$arch" router-local-generic-build
             root="RouterVPNPortable-$arch"
             for path in \
               "$root/RouterVPNPortable.exe" \
@@ -138,19 +138,21 @@ jobs:
               "$root/App/RouterVPN/router-vpn-dns.exe" \
               "$root/App/RouterVPN/logical-modes.json" \
               "$root/App/RouterVPN/LICENSE" \
-              "$root/Data/routers.json" \
-              "$root/Data/generated/wg/wg.conf" \
-              "$root/Data/generated/max-tls-wg/chain.env" \
-              "$root/Data/generated/max-quic-awg/chain.env"; do
+              "$root/Data/routers.json"; do
               require_file "$portable" "$path"
             done
+            ! unzip -Z1 "$portable" | grep -Eq '(^|/)router-vpn-bundle\.json$'
+            ! unzip -Z1 "$portable" | grep -Eq "$root/(App/RouterVPN/|Data/)generated/.+"
+            unzip -p "$portable" "$root/Data/routers.json" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x.get("selected_id","")=="" and x.get("profiles",[])==[]'
             ! unzip -Z1 "$portable" | grep -q "$root/App/AppInfo/"
             rm -f "$portable"
           done
 
-          bundle="$RUNNER_TEMP/home-bundle.zip"
-          fetch_one router-vpn-client-bundle.zip "$bundle" "$RUNNER_TEMP/h-bundle"
+          bundle="$RUNNER_TEMP/private-node-bundle.zip"
+          fetch_one router-vpn-client-bundle.zip "$bundle" "$RUNNER_TEMP/h-bundle" private-node-bundle
           unzip -Z1 "$bundle" | grep -q '/router-vpn-bundle.json$'
+          unzip -Z1 "$bundle" | grep -q '/generated/wg/wg.conf$'
+          unzip -Z1 "$bundle" | grep -q '/generated/max-tls-wg/chain.env$'
           rm -f "$bundle"
           ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
 
