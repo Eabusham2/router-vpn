@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client};PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}"|tr -cd 'A-Za-z0-9_.-');PROFILE_ID=${PROFILE_ID:-router};ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend first};SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")"&&pwd);SOURCE="$ROOT/generated/$PROFILE_ID/reality-xhttp";[[ -d "$SOURCE" ]]||SOURCE="$ROOT/generated/reality-xhttp";RUN="$ROOT/run";CONF="$RUN/profile-$PROFILE_ID-reality-xhttp";rm -rf "$CONF";mkdir -p "$RUN";cp -a "$SOURCE" "$CONF"
+ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client};SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")"&&pwd)
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/profile-id.sh"
+PROFILE_ID=$(homevpn_profile_id);ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend first};SOURCE="$ROOT/generated/$PROFILE_ID/reality-xhttp";[[ -d "$SOURCE" ]]||SOURCE="$ROOT/generated/reality-xhttp";RUN="$ROOT/run";CONF="$RUN/profile-$PROFILE_ID-reality-xhttp";rm -rf "$CONF";mkdir -p "$RUN";cp -a "$SOURCE" "$CONF"
 python3 - "$CONF/xray.json" "$ENDPOINT" <<'PY'
 import json,sys
 p=sys.argv[1];endpoint=sys.argv[2].strip().strip('[]');x=json.load(open(p))
@@ -12,7 +15,7 @@ json.dump(x,open(p,'w'),indent=2);open(p,'a').write('\n')
 PY
 export HOMEVPN_MODE=reality-xhttp;export HOMEVPN_MTU=${HOMEVPN_MTU:-1320};python3 "$SCRIPT_DIR/mtu-policy.py" apply "$CONF"
 HOMEVPN_PROFILE_ID="$PROFILE_ID" "$SCRIPT_DIR/check-mode.sh" reality-xhttp >/dev/null
-python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json";xray run -test -c "$CONF/xray.json" >/dev/null;sing-box check -D "$CONF" -c "$CONF/sing-box.json" >/dev/null
+HOMEVPN_PROFILE_ID="$PROFILE_ID" python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json";xray run -test -c "$CONF/xray.json" >/dev/null;sing-box check -D "$CONF" -c "$CONF/sing-box.json" >/dev/null
 : >"$RUN/reality-xhttp.pids";sudo xray run -c "$CONF/xray.json" >>"$RUN/reality-xhttp.log" 2>&1 & XPID=$!;echo "$XPID" >>"$RUN/reality-xhttp.pids";sleep 1;kill -0 "$XPID" >/dev/null 2>&1||{ echo 'XHTTP Xray outer process failed to start' >&2;exit 1; }
 CFG="$CONF/sing-box.json"
 if [[ ${HOMEVPN_SOCKS:-false} == true || ${HOMEVPN_JUMBO:-false} == true ]];then TMP="$RUN/reality-xhttp-sing-box.json";python3 - "$CFG" "$TMP" <<'PY'
