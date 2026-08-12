@@ -1,7 +1,6 @@
 package com.eabusham.routervpn;
 
 import android.content.Context;
-import android.util.Base64;
 
 import com.wireguard.android.backend.Tunnel;
 
@@ -64,7 +63,7 @@ final class AndroidModeOrchestrator {
                     candidates.removeIf(c->!c.layers.containsAll(wanted));
                     candidates.sort(Comparator.<Candidate>comparingInt(c->c.layers.size()-wanted.size()).thenComparingInt(c->c.order));
                 }
-                if(candidates.isEmpty())throw new IllegalStateException(custom==null?"No native Android AUTO candidate is available.":"No native Android candidate contains the requested CUSTOM layers.");
+                if(candidates.isEmpty())throw new IllegalStateException(custom==null?"No compliant native Android AUTO candidate is available.":"No compliant native Android candidate contains the requested CUSTOM layers.");
                 Candidate best=null;
                 for(Candidate c:candidates){
                     cb.progress((custom==null?"AUTO":"CUSTOM")+" trying "+c.name+"…");
@@ -145,12 +144,13 @@ final class AndroidModeOrchestrator {
 
     private List<Candidate> collect(File bundle)throws Exception{
         JSONObject root=load(bundle);JSONObject profiles=root.optJSONObject("profiles");JSONArray catalog=root.optJSONArray("modes");
+        boolean strict=AndroidKillSwitchPolicy.strictRequested(root);
         Set<String>direct=new HashSet<>();for(NativeSingBoxController.ModeInfo m:sing.listDirectLibboxModes(bundle))direct.add(m.id);
         List<Candidate>out=new ArrayList<>();if(catalog==null)return out;
         for(int i=0;i<catalog.length();i++){
             JSONObject m=catalog.optJSONObject(i);if(m==null||!m.optBoolean("auto_eligible",false))continue;String id=m.optString("id","");Kind kind=null;
-            if("wg".equals(id)&&has(profiles,"wg","wg.conf"))kind=Kind.WG;
-            else if("awg2-fast".equals(id)&&has(profiles,"awg2-fast","awg.conf"))kind=Kind.AWG;
+            if(!strict&&"wg".equals(id)&&has(profiles,"wg","wg.conf"))kind=Kind.WG;
+            else if(!strict&&"awg2-fast".equals(id)&&has(profiles,"awg2-fast","awg.conf"))kind=Kind.AWG;
             else if(direct.contains(id))kind=Kind.LIBBOX;
             if(kind==null)continue;
             out.add(new Candidate(kind,id,m.optString("name",id),strings(m.optJSONArray("layers")),strings(m.optJSONArray("smart_simplify")),i));
