@@ -1,0 +1,33 @@
+name: Profile ID traversal contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'modes/**'
+      - 'client/**'
+      - '.github/workflows/profile-id-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-id-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile-id-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell syntax
+        run: |
+          bash -n modes/profile-id.sh
+          for f in modes/run-mode.sh modes/run-all.sh modes/run-max.sh modes/run-combined.sh modes/run-xhttp.sh modes/check-mode.sh modes/check-combined.sh; do
+            bash -n "$f"
+          done
+      - name: Run traversal regression tests
+        run: python3 modes/test_profile_id_safety.py
+      - name: Validate Python syntax
+        run: python3 -m py_compile modes/profile_id.py modes/test_profile_id_safety.py
