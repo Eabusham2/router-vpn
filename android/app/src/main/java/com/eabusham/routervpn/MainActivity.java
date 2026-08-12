@@ -115,8 +115,9 @@ public final class MainActivity extends Activity {
         TextView limitation = section(
             "Android capability boundary",
             "Raw WireGuard now has a real full-device Android VPN path through WireGuard's official embedded userspace backend. " +
-            "AmneziaWG, Xray/sing-box layered modes, SMART AUTO/ALL/CUSTOM native execution, kill-switch firewall semantics, " +
-            "multihop, and automatic reconnect are still unavailable in this Android build and are not represented as connected. " +
+            "This build does not fake a live all-mode VPN connection: AmneziaWG, Xray/sing-box layered modes, SMART AUTO/ALL/CUSTOM native execution, kill-switch firewall semantics, " +
+            "multihop, and automatic reconnect are still unavailable and are not represented as connected. " +
+            "Public transport ports include OverTLS 14443 and ShadowsocksR 15443; loopback backend 14444 is never a WAN client port. " +
             "SOCKS5 is only reachable through an active home-router tunnel; never expose TCP 1080 to WAN."
         );
         content.addView(limitation, margins(0, dp(20), 0, dp(20)));
@@ -188,7 +189,7 @@ public final class MainActivity extends Activity {
             case 3:
                 return "On your home LAN open http://AI_BOARD_IP:8786/. Setup Center is authenticated because it can expose private node material. The permanent Setup Center token stays router-local; use it only to authenticate the browser or create a short-lived pairing code.";
             case 4:
-                return "ASUS WAN forwarding is installed with the Setup Center helper. Never expose 1080, 8786, 8787, 14444, 9443, SSH, Portainer, AdGuard admin, or the Setup Center credential itself.";
+                return "ASUS WAN forwarding is installed with the Setup Center helper. Public auxiliary transports are 14443 (OverTLS) and 15443 (ShadowsocksR). Never expose 1080, 8786, 8787, 14444, 9443, SSH, Portainer, AdGuard admin, or the Setup Center credential itself.";
             case 5:
                 return "Link this Android app by importing router-vpn-bundle.json. One-time LAN pairing is also a supported backend path; the permanent Setup Center credential is never stored in the node bundle.";
             case 6:
