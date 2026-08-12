@@ -28,7 +28,12 @@ jobs:
             server/scripts/generate-setup-assets.py \
             server/scripts/generate-aux-proxies.py \
             server/scripts/build-download-on-demand.py \
-            server/scripts/download-broker.py
+            server/scripts/download-broker.py \
+            server/scripts/download_jobs.py \
+            server/scripts/import_payloads.py \
+            server/scripts/normalize-setup-imports.py \
+            server/scripts/ensure-setup-auth.py \
+            server/scripts/pairing.py
           python3 -m json.tool configs/client/logical-modes.json >/dev/null
           python3 deploy/validate-repo.py
           bash -n server/finalize/finalize.sh
@@ -60,10 +65,14 @@ jobs:
             -v "$TEST_ROOT:/opt/router-vpn" --entrypoint /bin/bash \
             router-vpn-ci-init:arm64 /src/server/finalize/current-entrypoint.sh
           docker run --rm --platform linux/arm64 -v "$TEST_ROOT:/opt/router-vpn:ro" alpine:3.22 sh -ec '
+            test -s /opt/router-vpn/config/setup-center.token
+            test "$(stat -c %a /opt/router-vpn/config/setup-center.token)" = 600
             test -s /opt/router-vpn/client-bundle/setup-assets.json
             test -s /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             test -s /opt/router-vpn/downloads/router-vpn-device-setup.html
             test -s /opt/router-vpn/downloads/download-policy.json
+            test ! -e /opt/router-vpn/downloads/router-vpn-bundle.json
+            test ! -e /opt/router-vpn/downloads/CREDENTIALS.txt
             test -s /opt/router-vpn/config/aux/overtls-server.json
             test -s /opt/router-vpn/config/aux/ssr-server.json
             test -s /opt/router-vpn/client-bundle/generated/overtls/overtls-client.json
@@ -74,6 +83,7 @@ jobs:
             test ! -e /opt/router-vpn/client-bundle/dist
             test ! -e /opt/router-vpn/router-vpn-client-bundle.zip
             ! find /opt/router-vpn/downloads -maxdepth 1 -type f -name "*.zip" | grep -q .
+            ! grep -q "setup-center.token" /opt/router-vpn/client-bundle/router-vpn-bundle.json
             grep -q "WireGuard" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "SOCKS5 + TLS (OverTLS)" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
@@ -91,12 +101,22 @@ jobs:
               assert cfg['method'] == 'aes-256-ctr', (rel, cfg['method'])
               assert cfg['protocol'] == 'auth_aes128_md5', (rel, cfg['protocol'])
               assert cfg['obfs'] == 'tls1.2_ticket_auth', (rel, cfg['obfs'])
+          assets=json.loads((root/'client-bundle/setup-assets.json').read_text())
+          assert assets['methodContractVersion'] == 2
+          assert assets['qrPolicy'].startswith('QR is emitted only')
+          by_id={m['id']:m for m in assets['methods']}
+          assert by_id['shadowsocks']['importType']=='sip002' and by_id['shadowsocks']['qrSupported'] is True
+          assert by_id['shadowsocksr']['importType']=='ssr-uri' and by_id['shadowsocksr']['qrSupported'] is True
+          assert by_id['socks5']['qrSupported'] is False
+          assert by_id['overtls']['qrSupported'] is False
           PY
 
-      - name: Verify on-demand generic Portable packages and separate private node bundle
+      - name: Verify authenticated generic packages, private bundle, and one-time pairing
         run: |
           set -euo pipefail
           TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          SETUP_TOKEN=$(tr -d '\r\n' < "$TEST_ROOT/config/setup-center.token")
+          test ${#SETUP_TOKEN} -ge 32
           BROKER=$(docker run -d --rm --platform linux/arm64 --network host \
             -e ROUTER_VPN_GITHUB_DISABLE=1 \
             -v "$TEST_ROOT:/opt/router-vpn:ro" \
@@ -107,7 +127,23 @@ jobs:
             curl -fsS http://127.0.0.1:8786/healthz >/dev/null && break
             sleep .2
           done
-          curl -fsS http://127.0.0.1:8786/api/download-policy | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["server_cache"] is False and x["preferred_source"]=="github-actions" and x["fallback"]=="router-local-generic-build" and x["local_build_scope"]=="requested-generic-package-only" and x["generic_packages_secret_free"] is True and x["node_linking"]=="separate-bundle-or-pairing"'
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8786/)" = 401
+          curl -fsS -H "Authorization: Bearer $SETUP_TOKEN" http://127.0.0.1:8786/ >/dev/null
+          curl -fsS http://127.0.0.1:8786/api/download-policy | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["server_cache"] is False and x["preferred_source"]=="github-actions" and x["fallback"]=="router-local-generic-build" and x["local_build_scope"]=="requested-generic-package-only" and x["generic_packages_secret_free"] is True and x["node_linking"]=="separate-bundle-or-pairing" and x["setup_center_auth"].startswith("required")'
+          curl -fsS http://127.0.0.1:8786/api/pairing/policy | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["lan_only"] is True and x["one_time"] is True and x["apple_local_network_permission_required"] is True'
+
+          PAIR_JSON=$(curl -fsS -X POST -H "Authorization: Bearer $SETUP_TOKEN" -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8786/api/pairing)
+          PAIR_CODE=$(printf '%s' "$PAIR_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["pairing"]["code"])')
+          test ${#PAIR_CODE} -eq 6
+          curl -fsS -X POST -H 'Content-Type: application/json' -d "{\"code\":\"$PAIR_CODE\"}" http://127.0.0.1:8786/api/pairing/redeem > "$RUNNER_TEMP/paired-node.json"
+          python3 - "$RUNNER_TEMP/paired-node.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          assert x.get('routerProfiles')
+          assert x.get('profiles',{}).get('wg',{}).get('wg.conf')
+          assert 'setup-center.token' not in json.dumps(x)
+          PY
+          test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"code\":\"$PAIR_CODE\"}" http://127.0.0.1:8786/api/pairing/redeem)" = 403
 
           require_file() {
             local archive=$1 path=$2
@@ -115,7 +151,7 @@ jobs:
           }
           fetch_one() {
             local name=$1 out=$2 headers=$3 expected_source=$4
-            curl -fsS -D "$headers" -o "$out" "http://127.0.0.1:8786/$name"
+            curl -fsS -H "Authorization: Bearer $SETUP_TOKEN" -D "$headers" -o "$out" "http://127.0.0.1:8786/$name"
             if ! grep -Fqi "X-Router-VPN-Source: $expected_source" "$headers"; then
               echo "Unexpected package source response for $name:" >&2
               cat "$headers" >&2
@@ -153,6 +189,7 @@ jobs:
           unzip -Z1 "$bundle" | grep -q '/router-vpn-bundle.json$'
           unzip -Z1 "$bundle" | grep -q '/generated/wg/wg.conf$'
           unzip -Z1 "$bundle" | grep -q '/generated/max-tls-wg/chain.env$'
+          ! unzip -p "$bundle" '*/router-vpn-bundle.json' | grep -q 'setup-center.token'
           rm -f "$bundle"
           ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
 
