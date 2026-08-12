@@ -1,5 +1,10 @@
 package common
 
+const (
+	RouterProfileSchemaVersion = 2
+	RouterProfileStoreVersion  = 2
+)
+
 type Mode struct {
 	ID              string   `json:"id"`
 	Name            string   `json:"name"`
@@ -39,6 +44,10 @@ type DNSBenchmarkResult struct {
 }
 
 type RouterProfile struct {
+	// SchemaVersion is bumped only for persisted node-profile semantics. Older
+	// files with a missing/zero version are migrated in the client before write.
+	SchemaVersion int `json:"schema_version,omitempty"`
+
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Endpoint      string `json:"endpoint"`
@@ -57,13 +66,15 @@ type RouterProfile struct {
 	BaseFallback  bool   `json:"base_fallback,omitempty"`
 	CustomLayers  []string `json:"custom_layers,omitempty"`
 
-	// Network policy is part of the node profile so every platform can preserve
-	// the same intent even when a particular platform adapter is not implemented
-	// yet. Presence in the data model must never be mistaken for runtime support.
+	// Network policy is persisted so every platform preserves the same user
+	// intent. A field being present here is never proof that its platform runtime
+	// adapter is implemented.
 	HomeLANAccess bool     `json:"home_lan_access,omitempty"`
 	HomeLANCIDRs  []string `json:"home_lan_cidrs,omitempty"`
-	KillSwitch    bool     `json:"kill_switch,omitempty"`
+	KillSwitch    bool     `json:"kill_switch,omitempty"` // legacy compatibility
+	KillSwitchPolicy string `json:"kill_switch_policy,omitempty"`
 	IPv6Mode      string   `json:"ipv6_mode,omitempty"`
+	StartupMode   string   `json:"startup_mode,omitempty"`
 	AutoConnect   bool     `json:"auto_connect,omitempty"`
 
 	// Multihop selection is persisted here, but the dataplane remains unavailable
@@ -78,6 +89,13 @@ type RouterProfile struct {
 	MTUPolicy    string `json:"mtu_policy,omitempty"`
 	ManualMTU    int    `json:"manual_mtu,omitempty"`
 	EffectiveMTU int    `json:"effective_mtu,omitempty"`
+
+	// Diagnostics/privacy preferences are deliberately local and opt-in. They do
+	// not enable telemetry merely by existing in the shared schema.
+	DiagnosticsEnabled       bool `json:"diagnostics_enabled,omitempty"`
+	DiagnosticsRetentionDays int  `json:"diagnostics_retention_days,omitempty"`
+	ShareDiagnostics         bool `json:"share_diagnostics,omitempty"`
+	TelemetryEnabled         bool `json:"telemetry_enabled,omitempty"`
 
 	// PathProbeURL is a private, node-specific proof endpoint used by clients to
 	// distinguish "the Internet works" from "the selected Router VPN path works".
@@ -125,8 +143,9 @@ type RouterProfile struct {
 }
 
 type RouterProfileStore struct {
-	SelectedID string          `json:"selected_id"`
-	Profiles   []RouterProfile `json:"profiles"`
+	SchemaVersion int             `json:"schema_version,omitempty"`
+	SelectedID    string          `json:"selected_id"`
+	Profiles      []RouterProfile `json:"profiles"`
 }
 
 type ClientConfig struct {
