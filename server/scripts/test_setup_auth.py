@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 
@@ -27,7 +28,16 @@ def main() -> int:
         path = auth.ensure_token(base)
         first = path.read_text().strip()
         assert len(first) >= 32
-        assert path.stat().st_mode & 0o777 == 0o600
+        # POSIX mode bits are the production Linux/Docker security contract.
+        # Windows runners do not faithfully model chmod(0600), so validate the
+        # same helper there without pretending NTFS ACLs are POSIX mode bits.
+        if os.name != "nt":
+            assert path.stat().st_mode & 0o777 == 0o600
+        else:
+            assert path.is_file() and path.parent.name == "config"
+            source = (SCRIPT_DIR / "ensure-setup-auth.py").read_text(encoding="utf-8")
+            assert "os.chmod(tmp, 0o600)" in source
+            assert "os.chmod(path, 0o600)" in source
         path2 = auth.ensure_token(base)
         assert path2.read_text().strip() == first, "safe upgrade rotated Setup Center token"
 
