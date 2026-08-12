@@ -24,4 +24,27 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-hostname-') as td
     root=pathlib.Path(td);(root/'run').mkdir();(root/'routers.json').write_text(json.dumps({'selected_id':'node','profiles':[{'id':'node','endpoint':'example.com','kill_switch_policy':'on-connect'}]})+'\n')
     env=os.environ.copy();env.update({'HOMEVPN_ROOT':str(root),'HOMEVPN_PROFILE_ID':'node','HOMEVPN_ENDPOINT':'example.com','HOMEVPN_KILLSWITCH_DRY_RUN':'1'})
     p=subprocess.run([sys.executable,str(SCRIPT),'apply'],env=env,text=True,capture_output=True);assert p.returncode!=0;assert 'literal IPv4/IPv6' in p.stderr
+
+# `always` is source-of-truth reconciled before networking: it can be applied
+# from routers.json even when there is no prior runtime state, and stale state
+# is removed if the current profile policy was changed to off.
+with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-reassert-') as td:
+    root=pathlib.Path(td);(root/'run').mkdir()
+    store={'selected_id':'node','profiles':[{'id':'node','endpoint':'203.0.113.9','kill_switch_policy':'always','home_lan_access':True}]}
+    (root/'routers.json').write_text(json.dumps(store)+'\n')
+    env=os.environ.copy();env.update({'HOMEVPN_ROOT':str(root),'HOMEVPN_KILLSWITCH_DRY_RUN':'1'})
+    p=subprocess.run([sys.executable,str(SCRIPT),'reassert'],env=env,text=True,capture_output=True);assert p.returncode==0,p.stderr
+    state=json.loads((root/'run'/'kill-switch.json').read_text());assert state['policy']=='always' and state['endpoint']=='203.0.113.9' and state['home_lan_access'] is True
+    store['profiles'][0]['kill_switch_policy']='off';(root/'routers.json').write_text(json.dumps(store)+'\n')
+    p=subprocess.run([sys.executable,str(SCRIPT),'reassert'],env=env,text=True,capture_output=True);assert p.returncode==0,p.stderr
+    assert not (root/'run'/'kill-switch.json').exists(),p.stderr
+
+# A corrupted/missing store is allowed only when there is no persisted `always`
+# state. If persistent protection says `always`, reconciliation must fail closed.
+with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-failclosed-') as td:
+    root=pathlib.Path(td);(root/'run').mkdir();(root/'run'/'kill-switch.json').write_text(json.dumps({'policy':'always','profile_id':'node','endpoint':'203.0.113.9'})+'\n')
+    env=os.environ.copy();env.update({'HOMEVPN_ROOT':str(root),'HOMEVPN_KILLSWITCH_DRY_RUN':'1'})
+    p=subprocess.run([sys.executable,str(SCRIPT),'reassert'],env=env,text=True,capture_output=True);assert p.returncode!=0
+    assert 'cannot read routers.json' in p.stderr
+
 print('Kill switch tests: OK')
