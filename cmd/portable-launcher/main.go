@@ -87,6 +87,7 @@ func main() {
 	if !waitForController(12 * time.Second) {
 		if started && cmd != nil && cmd.Process != nil {
 			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
 		}
 		fatal(errors.New("local Router VPN controller did not become ready on 127.0.0.1:8788"))
 	}
@@ -106,22 +107,21 @@ func main() {
 	}
 
 	browserCmd, ownedWindow := openAppWindow(localURL, dataDir)
-	if ownedWindow && browserCmd != nil {
-		_ = browserCmd.Wait()
+	if !ownedWindow || browserCmd == nil {
+		// Portable must own the app-window lifetime. Falling back to an arbitrary
+		// default browser gives us no reliable close signal and can leave the VPN
+		// controller holding the portable directory/USB after the user closes UI.
+		// Fail closed instead; supported Windows installations normally include
+		// Edge, and Chrome/Brave are also accepted.
 		if started {
 			stopPortableController(cmd)
 		}
-		return
+		fatal(errors.New("Portable clean-exit requires Microsoft Edge, Chrome, or Brave app-window support; no lifecycle-owned browser was found"))
 	}
 
-	// On very old/minimal Windows systems where no Chromium-family app-window
-	// browser is available we fall back to the default browser. Keep the launcher
-	// attached to the controller it started so PortableApps knows the package is
-	// still in use. Running RouterVPNPortable.exe again simply reopens the UI.
-	if started && cmd != nil {
-		if err := cmd.Wait(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			fatal(err)
-		}
+	_ = browserCmd.Wait()
+	if started {
+		stopPortableController(cmd)
 	}
 }
 
@@ -178,7 +178,7 @@ func ensurePortableConfig(path, modesFile, modesDir, dataDir string) error {
 		cfg["listen"] = "127.0.0.1:8788"
 	}
 	if _, ok := cfg["health_url"]; !ok {
-		cfg["health_url"] = "https://connectivitycheck.gstatic.com/generate_204"
+		cfg["health_url"] = "http://10.77.0.1:8787/health"
 	}
 	if _, ok := cfg["auto_test_seconds"]; !ok {
 		cfg["auto_test_seconds"] = 8
@@ -347,7 +347,6 @@ func openAppWindow(url, dataDir string) (*exec.Cmd, bool) {
 			}
 		}
 	}
-	_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 	return nil, false
 }
 
