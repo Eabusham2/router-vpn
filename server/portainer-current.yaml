@@ -1,7 +1,7 @@
 name: router-vpn
 services:
   init:
-    image: ghcr.io/eabusham2/router-vpn-init:de861ffc38109eafd8837507eecb92fd53511ec5
+    image: ghcr.io/eabusham2/router-vpn-init:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-init
     network_mode: host
     privileged: true
@@ -31,7 +31,7 @@ services:
     restart: "no"
 
   finalize-current:
-    image: ghcr.io/eabusham2/router-vpn-init:de861ffc38109eafd8837507eecb92fd53511ec5
+    image: ghcr.io/eabusham2/router-vpn-init:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-finalize
     network_mode: host
     privileged: true
@@ -64,7 +64,7 @@ services:
     restart: "no"
 
   router-agent:
-    image: ghcr.io/eabusham2/router-vpn-agent:de861ffc38109eafd8837507eecb92fd53511ec5
+    image: ghcr.io/eabusham2/router-vpn-agent:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-agent
     network_mode: host
     restart: unless-stopped
@@ -77,7 +77,7 @@ services:
       ROUTER_VPN_CONFIG: /etc/router-vpn/router-agent.json
 
   wireguard:
-    image: ghcr.io/eabusham2/router-vpn-wireguard:de861ffc38109eafd8837507eecb92fd53511ec5
+    image: ghcr.io/eabusham2/router-vpn-wireguard:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-wireguard
     network_mode: host
     restart: unless-stopped
@@ -92,7 +92,7 @@ services:
       WG_CONFIG: /data/wg0.conf
 
   awg2:
-    image: ghcr.io/eabusham2/router-vpn-awg2:de861ffc38109eafd8837507eecb92fd53511ec5
+    image: ghcr.io/eabusham2/router-vpn-awg2:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-awg2
     network_mode: host
     restart: unless-stopped
@@ -108,7 +108,7 @@ services:
       AWG_CONFIG: /data/awg0.conf
 
   rosenpass:
-    image: ghcr.io/eabusham2/router-vpn-rosenpass:de861ffc38109eafd8837507eecb92fd53511ec5
+    image: ghcr.io/eabusham2/router-vpn-rosenpass:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-rosenpass
     network_mode: host
     restart: unless-stopped
@@ -149,7 +149,7 @@ services:
     command: ["run", "-c", "/etc/xray/config.json"]
 
   naive:
-    image: ghcr.io/eabusham2/router-vpn-naive:de861ffc38109eafd8837507eecb92fd53511ec5
+    image: ghcr.io/eabusham2/router-vpn-naive:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-naive
     network_mode: host
     restart: unless-stopped
@@ -163,7 +163,7 @@ services:
       ROUTER_VPN_TLS_SETTINGS: /router-vpn/settings.env
 
   ss-v2ray:
-    image: ghcr.io/eabusham2/router-vpn-ss-v2ray:de861ffc38109eafd8837507eecb92fd53511ec5
+    image: ghcr.io/eabusham2/router-vpn-ss-v2ray:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-ss-v2ray
     network_mode: host
     restart: unless-stopped
@@ -177,7 +177,7 @@ services:
       ROUTER_VPN_TLS_SETTINGS: /router-vpn/settings.env
 
   aux-proxies:
-    image: ghcr.io/eabusham2/router-vpn-aux:de861ffc38109eafd8837507eecb92fd53511ec5
+    image: ghcr.io/eabusham2/router-vpn-aux:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-aux
     network_mode: host
     restart: unless-stopped
@@ -189,7 +189,7 @@ services:
       ROUTER_VPN_AUX_DIR: /router-vpn
 
   bundle-web:
-    image: ghcr.io/eabusham2/router-vpn-init:de861ffc38109eafd8837507eecb92fd53511ec5
+    image: ghcr.io/eabusham2/router-vpn-init:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-bundle-web
     network_mode: host
     restart: unless-stopped
@@ -202,7 +202,7 @@ services:
     environment:
       ROUTER_VPN_GITHUB_REPO: Eabusham2/router-vpn
       ROUTER_VPN_GITHUB_BRANCH: main
-      ROUTER_VPN_GITHUB_SHA: de861ffc38109eafd8837507eecb92fd53511ec5
+      ROUTER_VPN_GITHUB_SHA: e2a616278142ff4579a11728f05b081bd7e4d665
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8786/healthz"]
