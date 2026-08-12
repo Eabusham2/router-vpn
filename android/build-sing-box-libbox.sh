@@ -16,7 +16,9 @@ verify_aar() {
   test -s "$AAR"
   unzip -tq "$AAR" >/dev/null
   unzip -l "$AAR" | grep -q 'classes.jar' || { echo 'libbox AAR is missing classes.jar' >&2; return 1; }
-  unzip -l "$AAR" | grep -Eq 'jni/(arm64-v8a|x86_64)/libgojni\.so' || { echo 'libbox AAR is missing gomobile libgojni.so' >&2; return 1; }
+  for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+    unzip -l "$AAR" | grep -q "jni/$abi/libbox\\.so" || { echo "libbox AAR is missing jni/$abi/libbox.so" >&2; return 1; }
+  done
 }
 
 if [[ -s "$AAR" && -f "$STAMP" && $(tr -d '\r\n' <"$STAMP") == "$COMMIT" ]]; then
