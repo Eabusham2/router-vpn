@@ -115,7 +115,25 @@ jobs:
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/wireguard/Dockerfile -t router-vpn-preflight-wireguard:arm64 .
 
       - name: Build AmneziaWG image
-        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/awg2/Dockerfile -t router-vpn-preflight-awg2:arm64 .
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/router-vpn-awg2-arm64.log"
+          for attempt in 1 2; do
+            echo "=== AmneziaWG ARM64 build attempt ${attempt}/2 ==="
+            if docker buildx build --platform linux/arm64 --progress=plain --load -f server/awg2/Dockerfile -t router-vpn-preflight-awg2:arm64 . >"$log" 2>&1; then
+              cat "$log"
+              exit 0
+            fi
+            echo "=== AmneziaWG ARM64 attempt ${attempt} failed ===" >&2
+            tail -n 180 "$log" >&2 || true
+            if [[ $attempt -lt 2 ]]; then
+              echo 'Retrying once to distinguish transient Debian/GitHub fetch failure from deterministic build failure...' >&2
+              sleep 4
+            fi
+          done
+          echo '::error title=ARM64 AmneziaWG build failed::AmneziaWG failed twice; see the build tail above.'
+          exit 1
 
       - name: Build Rosenpass image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/rosenpass/Dockerfile -t router-vpn-preflight-rosenpass:arm64 .
