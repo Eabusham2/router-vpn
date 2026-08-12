@@ -189,7 +189,10 @@ def main() -> int:
     for method in methods:
         if isinstance(method, dict):
             normalize_method(method, endpoint)
-    data["methodContractVersion"] = 3
+    # Keep the established typed import schema version stable; the Setup Center
+    # lane/progress fields below are additive product metadata, not a breaking
+    # change to the import payload contract.
+    data["methodContractVersion"] = 2
     data["methodLaneOrder"] = ["simple-native", "app", "universal", "universal-compat", "manual-app-proxy", "manual-advanced"]
     data["setupCenterMethodLanes"] = list(SETUP_METHOD_LANES)
     data["qrPolicy"] = "QR is emitted only for an actual interoperable import payload; arbitrary JSON/text configs are file/text imports."
