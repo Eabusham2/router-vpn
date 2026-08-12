@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import signal
@@ -9,12 +10,13 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 PROFILE_ID = os.environ.get("HOMEVPN_PROFILE_ID", "")
 SCRIPT_DIR = Path(__file__).resolve().parent
 MODES_PATH = ROOT / "modes.json"
-HEALTH_URL = os.environ.get("HOMEVPN_HEALTH_URL", "https://connectivitycheck.gstatic.com/generate_204")
+DEFAULT_PATH_PROBE_URL = "http://10.77.0.1:8787/health"
 TEST_SECONDS = float(os.environ.get("HOMEVPN_AUTO_TEST_SECONDS", "6"))
 WANT_JUMBO = os.environ.get("HOMEVPN_JUMBO", "false").lower() == "true"
 WANT_DAITA = os.environ.get("HOMEVPN_DAITA", "false").lower() == "true"
@@ -32,6 +34,25 @@ def selected_profile() -> dict:
         return {}
     wanted = PROFILE_ID or store.get("selected_id", "")
     return next((p for p in store.get("profiles", []) if p.get("id") == wanted), store.get("profiles", [{}])[0] if store.get("profiles") else {})
+
+
+def path_probe_url() -> str:
+    explicit = os.environ.get("HOMEVPN_HEALTH_URL", "").strip()
+    value = explicit or str(selected_profile().get("path_probe_url") or DEFAULT_PATH_PROBE_URL).strip()
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").rstrip(".").lower()
+    if parsed.scheme not in {"http", "https"} or not host:
+        raise ValueError("selected router path proof URL is invalid")
+    trusted = host == "localhost" or host.endswith(".localhost") or host.endswith(".local") or host.endswith(".home.arpa")
+    if not trusted:
+        try:
+            ip = ipaddress.ip_address(host)
+            trusted = ip.is_private or ip.is_loopback or ip.is_link_local
+        except ValueError:
+            trusted = False
+    if not trusted:
+        raise ValueError("selected router path proof URL must be private/local")
+    return value
 
 
 def run_command(parts: list[str], *, quiet: bool = False) -> subprocess.CompletedProcess:
@@ -54,8 +75,13 @@ def available(mode: dict) -> bool:
 def health() -> tuple[bool, float]:
     started = time.perf_counter()
     try:
-        with urllib.request.urlopen(HEALTH_URL, timeout=TEST_SECONDS) as r:
-            ok = 200 <= int(getattr(r, "status", 0)) < 300
+        target = path_probe_url()
+        with urllib.request.urlopen(target, timeout=TEST_SECONDS) as r:
+            if not (200 <= int(getattr(r, "status", 0)) < 300):
+                return False, 0.0
+            body = r.read(4096)
+        proof = json.loads(body.decode("utf-8", errors="strict"))
+        ok = isinstance(proof, dict) and proof.get("ok") is True
     except Exception:
         return False, 0.0
     return ok, (time.perf_counter() - started) * 1000.0
@@ -100,7 +126,7 @@ def launch(mode: dict) -> tuple[bool, float]:
 
 
 def wait_selected(mode: dict, latency: float) -> int:
-    print(f"Connected: {mode['name']} ({latency:.1f} ms health check)", flush=True)
+    print(f"Connected: {mode['name']} ({latency:.1f} ms selected-node path proof)", flush=True)
     if current is None:
         return 1
     return current.wait()
@@ -189,7 +215,7 @@ def custom() -> int:
         if ok:
             print("CUSTOM requested: " + ", ".join(requested), flush=True)
             return wait_selected(mode, latency)
-    print("CUSTOM: matching stacks existed but none passed connectivity", file=sys.stderr)
+    print("CUSTOM: matching stacks existed but none passed selected-node path proof", file=sys.stderr)
     return 1
 
 

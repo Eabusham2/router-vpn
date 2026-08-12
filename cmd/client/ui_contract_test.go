@@ -41,7 +41,7 @@ func TestUIHTMLHasUniqueIDsAndValidPageNavigation(t *testing.T) {
 	}
 }
 
-func TestLogicalUIReferencesCoreDOMAndHasNoStaleModeClaim(t *testing.T) {
+func TestLogicalUIReferencesCoreDOMAndMigratesStaleModeClaim(t *testing.T) {
 	htmlBytes, err := os.ReadFile("ui.html")
 	if err != nil { t.Fatal(err) }
 	jsBytes, err := os.ReadFile("logical_ui.js")
@@ -52,12 +52,16 @@ func TestLogicalUIReferencesCoreDOMAndHasNoStaleModeClaim(t *testing.T) {
 			t.Fatalf("logical UI expects missing core DOM id %q", id)
 		}
 	}
-	for _, stale := range []string{"always shows all 20 modes", "PortableApps 3.9"} {
-		if strings.Contains(js, stale) { t.Fatalf("stale UI claim remains: %q", stale) }
+	if strings.Contains(js, "PortableApps 3.9") { t.Fatal("stale PortableApps UI claim remains") }
+	legacy := "The Modes page always shows all 20 modes, layers, overhead estimates and exact availability reasons."
+	if strings.Contains(html, legacy) {
+		if !strings.Contains(js, legacy) || !strings.Contains(js, "The Modes page shows the 16 logical modes") {
+			t.Fatal("legacy 20-raw-mode onboarding text is not migrated to the 16 logical-mode contract")
+		}
 	}
 	for _, required := range []string{
 		"Connection validation", "Selected-node path proof", "policy intent",
-		"/api/session", "reloadModes", "connectLogicalMode",
+		"/api/session", "reloadModes", "connectLogicalMode", "16 logical modes",
 	} {
 		if !strings.Contains(js, required) { t.Fatalf("logical UI contract missing %q", required) }
 	}

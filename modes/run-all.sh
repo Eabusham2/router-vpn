@@ -4,7 +4,7 @@ ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
 PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}" | tr -cd 'A-Za-z0-9_.-')
 PROFILE_ID=${PROFILE_ID:-router}
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-HEALTH_URL=${HOMEVPN_HEALTH_URL:-https://connectivitycheck.gstatic.com/generate_204}
+HEALTH_URL=${HOMEVPN_HEALTH_URL:-http://10.77.0.1:8787/health}
 TEST_SECONDS=${HOMEVPN_AUTO_TEST_SECONDS:-6}
 BASE=${HOMEVPN_BASE:-auto}
 RESULT_FILE=${HOMEVPN_ALL_RESULT_FILE:-}
@@ -33,11 +33,29 @@ esac
 
 health(){
   python3 - "$HEALTH_URL" "$TEST_SECONDS" <<'PY'
-import sys,urllib.request
-url=sys.argv[1]; timeout=float(sys.argv[2])
+import ipaddress,sys,urllib.request
+from urllib.parse import urlparse
+url=sys.argv[1].strip(); timeout=float(sys.argv[2])
 try:
+    parsed=urlparse(url)
+    host=(parsed.hostname or '').rstrip('.').lower()
+    if parsed.scheme not in {'http','https'} or not host:
+        raise SystemExit(1)
+    trusted = host == 'localhost' or host.endswith('.localhost') or host.endswith('.local') or host.endswith('.home.arpa')
+    if not trusted:
+        try:
+            ip=ipaddress.ip_address(host)
+            trusted=ip.is_private or ip.is_loopback or ip.is_link_local
+        except ValueError:
+            trusted=False
+    if not trusted:
+        raise SystemExit(1)
     with urllib.request.urlopen(url,timeout=timeout) as r:
-        if 200 <= r.status < 300: raise SystemExit(0)
+        body=r.read(4096)
+        if 200 <= r.status < 300 and b'"ok"' in body and b'true' in body.lower():
+            raise SystemExit(0)
+except SystemExit:
+    raise
 except Exception:
     pass
 raise SystemExit(1)

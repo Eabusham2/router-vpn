@@ -22,6 +22,8 @@ func TestAndroidNativeWireGuardIsRealAndOtherModesStayGated(t *testing.T) {
 	} {
 		if !strings.Contains(gradle, required) { t.Fatalf("Android native dependency missing %q", required) }
 	}
+	props := repoFile(t, "android/gradle.properties")
+	if !strings.Contains(props, "android.useAndroidX=true") { t.Fatal("WireGuard AndroidX dependency requires android.useAndroidX=true") }
 	controller := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java")
 	for _, required := range []string{
 		"new GoBackend", "backend.setState(this, State.UP, config)",
@@ -45,7 +47,7 @@ func TestWindowsRawWireGuardUsesOfficialNativeTunnelService(t *testing.T) {
 	for _, required := range []string{
 		"WireGuard\\wireguard.exe", "/installtunnelservice", "/uninstalltunnelservice",
 		"WireGuardTunnel`$", "Is-Administrator", "HOMEVPN_PROFILE_ID",
-		"Unsafe WireGuard profile path", "no fake native readiness through WSL",
+		"Unsafe WireGuard profile path", "will not fake native readiness through WSL",
 	} {
 		if !strings.Contains(helper, required) { t.Fatalf("Windows native WireGuard helper missing %q", required) }
 	}
@@ -73,11 +75,11 @@ func TestApplePacketTunnelRemainsFailClosedUntilRealEngineBridgeExists(t *testin
 	} {
 		if !strings.Contains(provider, required) { t.Fatalf("Apple fail-closed boundary missing %q", required) }
 	}
-	if strings.Contains(provider, "completionHandler(nil)") && !strings.Contains(provider, "engineUnavailable") {
-		t.Fatal("Apple Packet Tunnel appears to claim success without the native engine gate")
+	if strings.Contains(provider, "completionHandler(nil)") {
+		t.Fatal("Apple Packet Tunnel claims success even though the real engine bridge is still unavailable")
 	}
 	project := repoFile(t, "ios/RouterVPN/project.yml")
-	for _, required := range []string{"NSLocalNetworkUsageDescription", "_routervpn._tcp", "packet-tunnel-provider"} {
+	for _, required := range []string{"NSLocalNetworkUsageDescription", "com.apple.networkextension.packet-tunnel"} {
 		if !strings.Contains(project, required) { t.Fatalf("Apple local-network/tunnel declaration missing %q", required) }
 	}
 }

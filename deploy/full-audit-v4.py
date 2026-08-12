@@ -31,31 +31,28 @@ def no(rel: str, *parts: str) -> None:
             errors.append(f"{rel}: stale/forbidden marker {part!r}")
 
 
-def hits(needle: str) -> list[str]:
-    out: list[str] = []
-    for p in ROOT.rglob("*"):
-        if not p.is_file() or ".git" in p.parts or "dist" in p.parts:
-            continue
-        rel = p.relative_to(ROOT).as_posix()
-        if rel.startswith("deploy/full-audit"):
-            continue
-        try:
-            text = p.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        if needle in text:
-            out.append(rel)
-    return out
+# Connection trust: selected private node proof only. Generic public-Internet
+# probes may remain only as explicit legacy migration/test fixtures, never as a
+# runtime success criterion.
+need(
+    "cmd/client/main.go",
+    "selected-router path proof",
+    "PathProbeURL",
+    "func (a *app) testHealth",
+    "path proof endpoint did not return the Router VPN proof response",
+)
+need("cmd/client/trust_init.go", "defaultPrivatePathProbeURL", "trustedPathProbeURL", "legacyPublicHealthURL")
+legacy_public_health = "connectivitycheck.gstatic.com/generate_204"
+for rel in ("cmd/client/main.go", "cmd/portable-launcher/main.go", "modes/orchestrate.py", "modes/run-all.sh"):
+    if legacy_public_health in read(rel):
+        errors.append(f"public Internet health proof remains in runtime: {rel}")
+need("modes/orchestrate.py", "DEFAULT_PATH_PROBE_URL", "path_probe_url", "selected router path proof URL must be private/local")
+need("modes/run-all.sh", "http://10.77.0.1:8787/health", "ipaddress.ip_address", "b'\"ok\"'")
 
-
-# Connection trust: selected private node proof only.
-need("cmd/client/main.go", "selected-router path proof", "PathProbeURL", "pathProofTarget")
-public_health = hits("connectivitycheck.gstatic.com/generate_204")
-if public_health:
-    errors.append("public Internet health proof remains in: " + ", ".join(public_health))
-
-# Typed lifecycle/progress/errors/rollback.
-need("cmd/client/session_state.go", "connectionSession", "typedSessionError", "PathProof", "RollbackState", "DNSProof", "/api/session")
+# Typed lifecycle/progress/errors/rollback. Route registration lives in extras.go;
+# session_state.go owns the typed model and handlers.
+need("cmd/client/session_state.go", "connectionSession", "typedSessionError", "PathProof", "RollbackState", "DNSProof", "sessionStatus", "sessionEvents")
+need("cmd/client/extras.go", '"/api/session"', '"/api/session/events"')
 need("cmd/client/session_state_test.go", "path_proof_failed", "DNS must not be fabricated as proven")
 
 # Versioned schema + migrations/onboarding.
@@ -65,7 +62,7 @@ need("internal/common/onboarding.go", "OnboardingSchemaVersion", "LastReopenedAt
 
 # Secret-free generic apps vs private node link material.
 need("deploy/check-generic-package-secrets.py", "generic package contains private bundle", "generic package contains linked router profiles", "package does not ship LICENSE")
-need("server/scripts/build-download-on-demand.py", "safe_extract_zip", "safe_extract_tar", "source package is already linked to a node")
+need("server/scripts/build-download-on-demand.py", "safe_extract_zip", "safe_extract_tar", "assert_generic_tree", "generic package contains linked router profiles", "explicit private node-link bundle")
 publisher = read("server/scripts/publish-downloads.sh")
 for bad in (
     'copy_static "$BUNDLE/router-vpn-bundle.json"',
@@ -107,28 +104,34 @@ need(".github/workflows/keep-main-only.yml", "Unexpected non-main branch", "exit
 
 # Portable clean exit owns app-window/controller lifetime.
 need("cmd/portable-launcher/main.go", "Portable clean-exit requires", "browserCmd.Wait", "stopPortableController", 'localURL+"api/emergency-stop"')
-no("cmd/portable-launcher/main.go", "url.dll,FileProtocolHandler")
+no("cmd/portable-launcher/main.go", "url.dll,FileProtocolHandler", legacy_public_health)
 
-# Main client UI shows actual proof and clearly labels policy-only fields.
-need("cmd/client/logical_ui.js", "Connection validation", "/api/session", "Selected-node path proof", "DNS proof", "policy intent", "not proof that this platform currently enforces it")
-no("cmd/client/logical_ui.js", "always shows all 20 modes")
+# Main client UI shows actual proof and clearly labels policy-only fields. The
+# legacy 20-raw-mode onboarding sentence may exist only as migration input; the
+# rendered replacement must describe the 16 logical-mode contract.
+need("cmd/client/logical_ui.js", "Connection validation", "/api/session", "Selected-node path proof", "DNS proof", "policy intent", "live enforcement stays unavailable until its runtime adapter passes end-to-end tests", "The Modes page shows the 16 logical modes")
+no("cmd/client/logical_ui.js", "PortableApps 3.9")
 
 # Android raw WireGuard = real embedded backend; everything else stays capability-gated.
 need("android/app/build.gradle", "com.wireguard.android:tunnel:1.0.20260102")
+need("android/gradle.properties", "android.useAndroidX=true")
 need("android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java", "GoBackend", "State.UP", "Config.parse", 'optJSONObject("wg")')
 need("android/app/src/main/java/com/eabusham/routervpn/MainActivity.java", "VpnService.prepare(this)", "does not fake a live all-mode VPN connection", "automatic reconnect are still unavailable")
 
 # Windows raw WireGuard = official native tunnel service; raw base must not use WSL.
-need("client/native-wireguard-windows.ps1", "WireGuard\\wireguard.exe", "/installtunnelservice", "/uninstalltunnelservice", "Is-Administrator", "Unsafe WireGuard profile path")
+need("client/native-wireguard-windows.ps1", "WireGuard\\wireguard.exe", "/installtunnelservice", "/uninstalltunnelservice", "Is-Administrator", "Unsafe WireGuard profile path", "will not fake native readiness through WSL")
 if "wsl.exe" in read("client/native-wireguard-windows.ps1"):
     errors.append("native Windows raw WireGuard helper contains WSL")
 need("client/Prepare-Windows-Mode-Catalog-v2.ps1", "$mode.id -eq 'wg'", "native-wireguard-windows.ps1", "requires WSL2/default Linux until its native Windows adapter is implemented")
 need("cmd/client/windows_runtime.go", "Prepare-Windows-Mode-Catalog-v2.ps1")
 need("cmd/portable-launcher/main.go", 'modeID == "wg"', "native-wireguard-windows.ps1")
 
-# Apple remains deliberately fail-closed until its actual native/Go bridge is linked.
-need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift", "Link AmneziaWGKit/Xray engine before signing this target.", "engineUnavailable")
-need("ios/RouterVPN/project.yml", "NSLocalNetworkUsageDescription", "_routervpn._tcp", "packet-tunnel-provider")
+# Apple remains deliberately fail-closed until its actual native/Go bridge is
+# linked. Local-network permission exists, but Bonjour service discovery is not
+# claimed until a real browser/discovery implementation is added.
+need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift", "Link AmneziaWGKit/Xray engine before signing this target.", "completionHandler(error)")
+no("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift", "completionHandler(nil)")
+need("ios/RouterVPN/project.yml", "NSLocalNetworkUsageDescription", "com.apple.networkextension.packet-tunnel")
 
 # Production image refs cannot float latest/main.
 for line in read("server/portainer-current.yaml").splitlines():
