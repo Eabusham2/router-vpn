@@ -15,7 +15,7 @@ verify_aar() {
   test -s "$AAR"
   unzip -tq "$AAR" >/dev/null
   unzip -l "$AAR" | grep -q 'classes.jar' || { echo 'libbox AAR is missing classes.jar' >&2; return 1; }
-  unzip -l "$AAR" | grep -Eq 'jni/(arm64-v8a|x86_64)/libbox\.so' || { echo 'libbox AAR is missing Android native libbox.so' >&2; return 1; }
+  unzip -l "$AAR" | grep -Eq 'jni/(arm64-v8a|x86_64)/libgojni\.so' || { echo 'libbox AAR is missing gomobile libgojni.so' >&2; return 1; }
 }
 
 if [[ -s "$AAR" && -f "$STAMP" && $(tr -d '\r\n' <"$STAMP") == "$COMMIT" ]]; then
@@ -25,7 +25,7 @@ if [[ -s "$AAR" && -f "$STAMP" && $(tr -d '\r\n' <"$STAMP") == "$COMMIT" ]]; the
 fi
 
 command -v git >/dev/null || { echo 'git is required to build pinned sing-box libbox' >&2; exit 1; }
-command -v go >/dev/null || { echo 'Go is required to build sing-box libbox (upstream requires Go 1.24.7+)' >&2; exit 1; }
+command -v go >/dev/null || { echo 'Go 1.24.7+ is required to build sing-box libbox' >&2; exit 1; }
 command -v java >/dev/null || { echo 'Java 17 is required to build sing-box libbox' >&2; exit 1; }
 
 SDKMANAGER="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}/cmdline-tools/latest/bin/sdkmanager"
@@ -38,7 +38,10 @@ yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 "$SDKMANAGER" "ndk;$NDK_VERSION" >/dev/null
 export ANDROID_NDK_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/ndk/$NDK_VERSION"
 export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
-export GOTOOLCHAIN=auto
+# sing-box v1.13.12 declares Go 1.24.7. Force that exact baseline and let
+# modern Go bootstrap the matching toolchain when the runner's ambient Go is
+# different, rather than silently compiling with an arbitrary preinstalled Go.
+export GOTOOLCHAIN=go1.24.7+auto
 
 rm -rf "$VENDOR"
 mkdir -p "$(dirname "$VENDOR")" "$LIBDIR"

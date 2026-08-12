@@ -26,14 +26,16 @@ This generic application package contains no linked home/server node; link nodes
 Router VPN is MIT-licensed open-source software; see LICENSE.
 TXT
 package_zip "RouterVPN-Windows-$arch" "$dir";done
-for arch in amd64 arm64;do root="$OUT/work/RouterVPNPortable-$arch";app="$root/App/RouterVPN";data="$root/Data";mkdir -p "$app" "$data/generated";copy_runtime "$app";cp -a "$ROOT/client" "$app/client";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe";cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe";cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1";write_blank_routers "$data/routers.json";cat >"$root/README.txt" <<'TXT'
+for arch in amd64 arm64;do root="$OUT/work/RouterVPNPortable-$arch";app="$root/App/RouterVPN";data="$root/Data";mkdir -p "$app" "$data/generated";copy_runtime "$app";cp -a "$ROOT/client" "$app/client";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe";cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe";cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1";cat >"$root/README.txt" <<'TXT'
 Double-click RouterVPNPortable.exe.
 App/RouterVPN contains immutable binaries/catalogs/scripts. Data contains writable settings,
 private linked node data, generated profiles, native Windows engines and app-window state.
-The ZIP is generic and contains no linked node. Add nodes separately by import/pairing. Run
-Setup-Windows-Runtime.ps1 once for native layered TUN modes; the pinned sing-box/Xray runtime is
-stored under Data and moves with the Portable folder. Unsupported engines stay grey with an exact
-reason rather than being substituted with a compatibility-layer engine. Move the whole folder.
+The ZIP is generic and contains no linked node. Add nodes separately by import/pairing. On first
+run the launcher creates a blank writable node store under Data; it is not pre-populated in the
+archive. Run Setup-Windows-Runtime.ps1 once for native layered TUN modes; the pinned sing-box/Xray
+runtime is stored under Data and moves with the Portable folder. Unsupported engines stay grey
+with an exact reason rather than being substituted with a compatibility-layer engine. Move the
+whole folder.
 Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.
 TXT
 package_zip "RouterVPN-Portable-Windows-$arch" "$root";done
