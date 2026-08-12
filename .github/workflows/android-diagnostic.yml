@@ -27,6 +27,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
+      - name: Restore pinned native Android AARs
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/app/libs/libbox.aar
+            android/app/libs/libbox.commit
+            android/app/libs/libbox-LICENSE.txt
+            android/app/libs/amneziawg-tunnel.aar
+            android/app/libs/amneziawg-tunnel.commit
+            android/app/libs/amneziawg-tunnel-LICENSE.txt
+          key: routervpn-android-native-${{ runner.os }}-${{ hashFiles('android/build-sing-box-libbox.sh', 'android/build-awg-tunnel.sh') }}
       - name: Install Android SDK components
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
