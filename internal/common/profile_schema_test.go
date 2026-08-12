@@ -55,7 +55,19 @@ func TestManualMTUValidation(t *testing.T) {
 	if err := NormalizeRouterProfile(&p); err != nil { t.Fatal(err) }
 }
 
-func TestMultihopSameNodeRejected(t *testing.T) {
+func TestMultihopRequiresCompleteDistinctNodes(t *testing.T) {
+	for _, p := range []RouterProfile{
+		{MultihopEnabled: true},
+		{MultihopEnabled: true, MultihopEntryID: "entry"},
+		{MultihopEnabled: true, MultihopExitID: "exit"},
+	} {
+		if err := NormalizeRouterProfile(&p); err == nil || !strings.Contains(err.Error(), "requires both") {
+			t.Fatalf("expected incomplete multihop rejection, got %v for %+v", err, p)
+		}
+	}
 	p := RouterProfile{MultihopEnabled: true, MultihopEntryID: "same", MultihopExitID: "same"}
-	if err := NormalizeRouterProfile(&p); err == nil { t.Fatal("expected same-node multihop rejection") }
+	if err := NormalizeRouterProfile(&p); err == nil || !strings.Contains(err.Error(), "different") { t.Fatalf("expected same-node rejection, got %v", err) }
+	p = RouterProfile{MultihopEnabled: true, MultihopEntryID: " entry ", MultihopExitID: " exit "}
+	if err := NormalizeRouterProfile(&p); err != nil { t.Fatal(err) }
+	if p.MultihopEntryID != "entry" || p.MultihopExitID != "exit" { t.Fatalf("multihop IDs were not normalized: %+v", p) }
 }
