@@ -58,6 +58,7 @@ func extraRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/public-ip", a.publicIP)
 	h.HandleFunc("/api/dns/retest", a.retestDNS)
 	h.HandleFunc("/api/emergency-stop", a.emergencyStopTracked)
+	registerMultihopRoutes(h, a)
 }
 
 type latencyRequest struct {
@@ -240,6 +241,10 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	connected := a.state.Connected
 	selected := a.profiles.SelectedID
+	target := selected
+	if a.state.Mode == "multihop" && a.state.RouterID != "" {
+		target = a.state.RouterID
+	}
 	a.mu.Unlock()
 	if !connected {
 		http.Error(w, "connect the VPN first so the reported address is the VPN exit", http.StatusConflict)
@@ -267,14 +272,14 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID == selected {
+		if a.profiles.Profiles[i].ID == target {
 			a.profiles.Profiles[i].PublicIP = result
 			break
 		}
 	}
 	_ = a.persistProfilesLocked()
 	a.mu.Unlock()
-	_ = json.NewEncoder(w).Encode(map[string]any{"public_ip": result, "router_id": selected})
+	_ = json.NewEncoder(w).Encode(map[string]any{"public_ip": result, "router_id": target, "multihop": target != selected})
 }
 
 type dnsBenchmarkPayload struct {
