@@ -2,11 +2,12 @@
 set -euo pipefail
 MODE=${1:?mode}
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
-PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}" | tr -cd 'A-Za-z0-9_.-')
-PROFILE_ID=${PROFILE_ID:-router}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/profile-id.sh"
+PROFILE_ID=$(homevpn_profile_id)
 RUN="$ROOT/run"
 ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend in the app first}
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$RUN"
 
 if [[ $MODE == all ]]; then
