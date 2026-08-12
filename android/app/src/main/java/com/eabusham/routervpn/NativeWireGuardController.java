@@ -1,6 +1,7 @@
 package com.eabusham.routervpn;
 
 import android.content.Context;
+import android.util.Base64;
 
 import com.wireguard.android.backend.GoBackend;
 import com.wireguard.android.backend.Tunnel;
@@ -13,7 +14,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -91,7 +91,7 @@ final class NativeWireGuardController implements Tunnel {
         if (wg == null) throw new IllegalStateException("Node bundle has no raw WireGuard profile.");
         String encoded = wg.optString("wg.conf", "").trim();
         if (encoded.isEmpty()) throw new IllegalStateException("Node bundle has no WireGuard wg.conf.");
-        byte[] decoded = Base64.getDecoder().decode(encoded);
+        byte[] decoded = Base64.decode(encoded, Base64.DEFAULT);
         if (decoded.length <= 0 || decoded.length > 512 * 1024) {
             throw new IllegalStateException("WireGuard profile size is invalid.");
         }
