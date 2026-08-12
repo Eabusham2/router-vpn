@@ -42,6 +42,26 @@ if(-not(Test-Path -LiteralPath $Source -PathType Container)){$legacy=Safe-Under 
 $Runtime=Safe-Under $Root (Join-Path $Root 'runtime\windows');$SingBox=Join-Path $Runtime 'sing-box.exe';$Xray=Join-Path $Runtime 'xray.exe'
 $RunBase=Safe-Under $Root (Join-Path $Root 'run\windows');$RunDir=Safe-Under $RunBase (Join-Path $RunBase (Join-Path $ProfileId $Mode))
 $PidFile=Join-Path $RunDir 'children.pids';$SingConfig=Join-Path $RunDir 'sing-box.json';$XrayConfig=Join-Path $RunDir 'xray.json'
+$KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
+
+function Invoke-KillSwitch([string]$KillAction,[string]$EndpointValue='',[string]$Alias='') {
+  if (-not (Test-Path -LiteralPath $KillSwitch -PathType Leaf)) { throw "Windows kill-switch helper is missing: $KillSwitch" }
+  $args=@('-Action',$KillAction,'-Root',$Root)
+  if ($EndpointValue) { $args += @('-Endpoint',$EndpointValue) }
+  if ($Alias) { $args += @('-TunnelAlias',$Alias) }
+  & $KillSwitch @args
+  if ($LASTEXITCODE -ne 0) { throw "Windows kill-switch action '$KillAction' failed." }
+}
+function Get-TunAlias([string]$ConfigPath) {
+  if ($env:HOMEVPN_SOCKS -eq 'true') { return '' }
+  try {
+    $cfg=Get-Content -Raw -LiteralPath $ConfigPath|ConvertFrom-Json
+    foreach($inbound in @($cfg.inbounds)) {
+      if($inbound -and (Has-Property $inbound 'type') -and $inbound.type -eq 'tun' -and (Has-Property $inbound 'interface_name')) { return [string]$inbound.interface_name }
+    }
+  } catch { }
+  return ''
+}
 
 function Assert-Ready {
   if(-not(Test-Administrator)){throw 'Native Windows TUN modes require an elevated Router VPN process.'}
@@ -52,6 +72,7 @@ function Assert-Ready {
   if(($NeedsXray -contains $Mode)-and -not(Test-Path -LiteralPath $Xray -PathType Leaf)){throw 'xray.exe is missing. Run Setup-Windows-Runtime.ps1.'}
   & $SingBox check -D $Source -c (Join-Path $Source 'sing-box.json') | Out-Null;if($LASTEXITCODE-ne 0){throw "sing-box rejected the generated $Mode profile."}
   if($NeedsXray -contains $Mode){& $Xray run -test -c (Join-Path $Source 'xray.json')|Out-Null;if($LASTEXITCODE-ne 0){throw "Xray rejected the generated $Mode profile."}}
+  Invoke-KillSwitch 'check'
 }
 function Patch-JsonRecursive($Node,[string]$Endpoint,[string]$BaseDir) {
   if($null-eq$Node){return};if($Node-is[System.Array]){foreach($item in $Node){Patch-JsonRecursive $item $Endpoint $BaseDir};return};if($Node-isnot[PSCustomObject]){return}
@@ -91,10 +112,12 @@ function Patch-Xray([string]$Path,[string]$Endpoint){$cfg=Get-Content -Raw -Lite
 switch($Action){
  'check'{Assert-Ready;Write-Output "native Windows $Mode ready";exit 0}
  'status'{if(-not(Test-Path -LiteralPath $PidFile -PathType Leaf)){Write-Output'down';exit 1};$alive=$false;foreach($line in Get-Content -LiteralPath $PidFile -ErrorAction SilentlyContinue){$p=0;if([int]::TryParse(([string]$line).Trim(),[ref]$p)-and(Get-Process -Id $p -ErrorAction SilentlyContinue)){$alive=$true}};if($alive){Write-Output'up';exit 0};Write-Output'down';exit 1}
- 'down'{Stop-PidFile $PidFile;exit 0}
+ 'down'{Stop-PidFile $PidFile;try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message};exit 0}
  'up'{
   Assert-Ready;$Endpoint=[string]$env:HOMEVPN_ENDPOINT;if([string]::IsNullOrWhiteSpace($Endpoint)){throw 'Choose a router backend in the app first.'};$Endpoint=$Endpoint.Trim().Trim('[]');Stop-PidFile $PidFile;if(Test-Path -LiteralPath $RunDir){Remove-Item -LiteralPath $RunDir -Recurse -Force};New-Item -ItemType Directory -Force -Path $RunDir|Out-Null;Copy-Item -Path(Join-Path $Source '*')-Destination $RunDir -Recurse -Force;Patch-SingBox $SingConfig $Endpoint;if($NeedsXray-contains$Mode){Patch-Xray $XrayConfig $Endpoint};&$SingBox check -D $RunDir -c $SingConfig|Out-Null;if($LASTEXITCODE-ne 0){throw 'Patched native Windows sing-box config failed validation.'}
+  $tunAlias=Get-TunAlias $SingConfig
+  Invoke-KillSwitch 'prepare' $Endpoint $tunAlias
   $childPids=New-Object System.Collections.Generic.List[int]
-  try{if($NeedsXray-contains$Mode){&$Xray run -test -c $XrayConfig|Out-Null;if($LASTEXITCODE-ne 0){throw 'Patched native Windows Xray config failed validation.'};$quotedConfig='"'+$XrayConfig+'"';$xp=Start-Process -FilePath $Xray -ArgumentList @('run','-c',$quotedConfig)-WorkingDirectory $RunDir -PassThru -WindowStyle Hidden;$childPids.Add($xp.Id);Start-Sleep -Milliseconds 350;if($xp.HasExited){throw 'Xray exited during native Windows startup.'}};$childPids|Set-Content -Encoding ASCII -LiteralPath $PidFile;&$SingBox run -D $RunDir -c $SingConfig;$exitCode=$LASTEXITCODE;if($exitCode-ne 0){throw "sing-box exited with code $exitCode"}}finally{Stop-PidFile $PidFile}
+  try{if($NeedsXray-contains$Mode){&$Xray run -test -c $XrayConfig|Out-Null;if($LASTEXITCODE-ne 0){throw 'Patched native Windows Xray config failed validation.'};$quotedConfig='"'+$XrayConfig+'"';$xp=Start-Process -FilePath $Xray -ArgumentList @('run','-c',$quotedConfig)-WorkingDirectory $RunDir -PassThru -WindowStyle Hidden;$childPids.Add($xp.Id);Start-Sleep -Milliseconds 350;if($xp.HasExited){throw 'Xray exited during native Windows startup.'}};$childPids|Set-Content -Encoding ASCII -LiteralPath $PidFile;&$SingBox run -D $RunDir -c $SingConfig;$exitCode=$LASTEXITCODE;if($exitCode-ne 0){throw "sing-box exited with code $exitCode"}}finally{Stop-PidFile $PidFile;try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message}}
  }
 }
