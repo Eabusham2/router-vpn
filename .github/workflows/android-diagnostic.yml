@@ -1,0 +1,57 @@
+name: Android libbox diagnostics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Install Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Record toolchain
+        run: |
+          {
+            echo '=== go ==='
+            go version || true
+            go env GOPATH GOTOOLCHAIN || true
+            echo '=== java ==='
+            java -version || true
+            echo '=== sdk ==='
+            echo "ANDROID_HOME=$ANDROID_HOME"
+          } | tee android-diagnostic.log
+      - name: Build APK with complete log
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle -p android --no-daemon --stacktrace --info :app:assembleDebug 2>&1 | tee -a android-diagnostic.log
+      - name: Upload diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Android-build-diagnostic
+          path: android-diagnostic.log
+          if-no-files-found: error
+          retention-days: 1
