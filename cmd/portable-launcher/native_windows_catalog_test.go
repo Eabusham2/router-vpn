@@ -4,42 +4,38 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestPortableCatalogMapsRawWireGuardToNativeWindowsHelper(t *testing.T) {
+func TestPrepareWindowsModeCatalogUsesNativeAdaptersAndFailsClosed(t *testing.T) {
 	root := t.TempDir()
-	app := filepath.Join(root, "App", "RouterVPN")
-	modesDir := filepath.Join(app, "modes")
-	clientDir := filepath.Join(app, "client")
-	if err := os.MkdirAll(modesDir, 0o755); err != nil { t.Fatal(err) }
-	if err := os.MkdirAll(clientDir, 0o755); err != nil { t.Fatal(err) }
-	helper := filepath.Join(clientDir, "native-wireguard-windows.ps1")
-	if err := os.WriteFile(helper, []byte("# test\n"), 0o644); err != nil { t.Fatal(err) }
+	appModes := filepath.Join(root, "App", "RouterVPN", "modes")
+	appClient := filepath.Join(root, "App", "RouterVPN", "client")
+	data := filepath.Join(root, "Data")
+	for _, dir := range []string{appModes, appClient, data} {
+		if err := os.MkdirAll(dir, 0o755); err != nil { t.Fatal(err) }
+	}
+	for _, helper := range []string{"native-wireguard-windows.ps1", "native-windows-mode.ps1"} {
+		if err := os.WriteFile(filepath.Join(appClient, helper), []byte("# helper\n"), 0o600); err != nil { t.Fatal(err) }
+	}
+	modes := []map[string]any{
+		{"id":"wg","command":[]string{"./run-mode.sh","wg"},"check_command":[]string{"./check-mode.sh","wg"},"stop_command":[]string{"./stop-mode.sh","wg"}},
+		{"id":"shadowsocks","command":[]string{"./run-mode.sh","shadowsocks"},"check_command":[]string{"./check-mode.sh","shadowsocks"},"stop_command":[]string{"./stop-mode.sh","shadowsocks"}},
+		{"id":"wg-pq","command":[]string{"./run-mode.sh","wg-pq"},"check_command":[]string{"./check-mode.sh","wg-pq"},"stop_command":[]string{"./stop-mode.sh","wg-pq"}},
+	}
+	src := filepath.Join(root, "modes.json"); dst := filepath.Join(data, "modes.windows.json")
+	b,_ := json.Marshal(modes); if err := os.WriteFile(src,b,0o600); err != nil { t.Fatal(err) }
+	_, _ = prepareWindowsModeCatalog(src,dst,appModes)
+	out,err := os.ReadFile(dst); if err != nil { t.Fatal(err) }
+	var got []map[string]any; if err := json.Unmarshal(out,&got); err != nil { t.Fatal(err) }
+	command := func(i int) []any { return got[i]["command"].([]any) }
+	wg := command(0); if wg[0] != "powershell.exe" || !strings.Contains(wg[5].(string),"native-wireguard-windows.ps1") { t.Fatalf("WG not native: %#v",wg) }
+	ss := command(1); joined := strings.Join(toStrings(ss)," "); if !strings.Contains(joined,"native-windows-mode.ps1") || !strings.Contains(joined,"shadowsocks") { t.Fatalf("layered mode not native: %s",joined) }
+	pq := command(2); joined = strings.Join(toStrings(pq)," "); if pq[0] != "cmd.exe" || !strings.Contains(joined,"no native Windows adapter") { t.Fatalf("unsupported mode not fail-closed: %s",joined) }
+	if strings.Contains(string(out),"wsl.exe") { t.Fatal("Windows catalog must not route through WSL") }
+}
 
-	src := filepath.Join(root, "modes.json")
-	dst := filepath.Join(root, "modes.windows.json")
-	input := []map[string]any{
-		{"id":"wg", "command":[]string{"./run-mode.sh","wg"}, "check_command":[]string{"./check-mode.sh","wg"}, "stop_command":[]string{"./stop-mode.sh","wg"}},
-		{"id":"wg-pq", "command":[]string{"./run-mode.sh","wg-pq"}, "check_command":[]string{"./check-mode.sh","wg-pq"}, "stop_command":[]string{"./stop-mode.sh","wg-pq"}},
-	}
-	b, _ := json.Marshal(input)
-	if err := os.WriteFile(src, b, 0o644); err != nil { t.Fatal(err) }
-	_, _ = prepareWindowsModeCatalog(src, dst, modesDir)
-	outBytes, err := os.ReadFile(dst)
-	if err != nil { t.Fatal(err) }
-	var out []map[string]any
-	if err := json.Unmarshal(outBytes, &out); err != nil { t.Fatal(err) }
-	if len(out) != 2 { t.Fatalf("modes=%d", len(out)) }
-	cmd, ok := out[0]["command"].([]any)
-	if !ok || len(cmd) < 7 || cmd[0] != "powershell.exe" || cmd[len(cmd)-1] != "up" {
-		t.Fatalf("raw WG was not mapped to native PowerShell helper: %#v", out[0]["command"])
-	}
-	if cmd[len(cmd)-2] != helper {
-		t.Fatalf("wrong helper path: %#v", cmd)
-	}
-	pq, ok := out[1]["command"].([]any)
-	if !ok || len(pq) < 1 || pq[0] != "cmd.exe" {
-		t.Fatalf("layered WG-PQ should remain capability-gated when WSL is absent: %#v", out[1]["command"])
-	}
+func toStrings(values []any) []string {
+	out := make([]string,0,len(values)); for _,v := range values { out=append(out,v.(string)) }; return out
 }

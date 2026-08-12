@@ -9,9 +9,10 @@ import (
 )
 
 // prepareWindowsCatalogBeforeMain makes the generic installed Windows package
-// usable without a separate wrapper script. Raw WireGuard is mapped to the
-// official native WireGuard tunnel service; layered modes use WSL only when it
-// is actually available and otherwise fail closed as unavailable.
+// usable without a wrapper. Raw WireGuard maps to the official WireGuard
+// tunnel service. Compatible layered modes map to the pinned native
+// sing-box/Xray TUN adapter; unsupported modes remain fail-closed and WSL is
+// never treated as native readiness.
 func init() {
 	if runtime.GOOS != "windows" {
 		return
@@ -28,8 +29,8 @@ func init() {
 	root := filepath.Dir(absConfig)
 	helper := filepath.Join(root, "client", "Prepare-Windows-Mode-Catalog-v2.ps1")
 	if st, statErr := os.Stat(helper); statErr != nil || st.IsDir() {
-		// Portable has a different immutable App/Data layout and prepares its
-		// catalog in RouterVPNPortable.exe before the controller starts.
+		// Portable has an immutable App/Data layout and prepares its catalog in
+		// RouterVPNPortable.exe before the controller starts.
 		return
 	}
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Root", root)

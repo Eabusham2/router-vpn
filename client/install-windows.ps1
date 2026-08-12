@@ -4,7 +4,11 @@ if (-not (Test-Path "$Bundle\client.json") -or -not (Test-Path "$Bundle\routers.
 $Root = "$env:ProgramData\RouterVPN"
 New-Item -Force -ItemType Directory $Root | Out-Null
 Copy-Item "$Bundle\client.json","$Bundle\routers.json","$Bundle\modes.json" $Root -Force
-Copy-Item "$Bundle\modes","$Bundle\generated" $Root -Recurse -Force
+Copy-Item "$Bundle\modes","$Bundle\generated","$Bundle\client" $Root -Recurse -Force
 Copy-Item "$Bundle\dist\router-vpn-client-windows-amd64.exe" "$Root\router-vpn-client.exe" -Force
-Write-Host 'Windows controller installed. Raw WG/AWG profiles are in:' $Root'\generated'
-Write-Host 'The unified all-engine Windows launcher requires WSL2. Run the Linux installer inside WSL2 for AUTO and proxy modes.'
+$env:HOMEVPN_ROOT = $Root
+$env:HOMEVPN_CLIENT_CONFIG = Join-Path $Root 'client.json'
+Write-Host 'Windows controller installed in' $Root
+Write-Host 'Raw WireGuard uses the official WireGuard for Windows tunnel service.'
+Write-Host 'For native layered TUN modes, run client\Setup-Windows-Runtime.ps1 -PackageRoot' $Root
+Write-Host 'Unsupported engines stay unavailable with an exact readiness reason; Router VPN does not use WSL as a substitute.'
