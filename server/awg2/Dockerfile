@@ -1,11 +1,11 @@
 FROM golang:1.25.12-bookworm AS go-build
 ARG AWG_GO_TAG=v3.0.2
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl gzip tar gcc libc6-dev \
+RUN apt-get -o Acquire::Retries=5 update \
+ && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl gzip tar gcc libc6-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src/amneziawg-go
 RUN mkdir -p /out \
- && curl -fL --retry 5 --retry-delay 2 \
+ && curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
       "https://github.com/amnezia-vpn/amneziawg-go/archive/refs/tags/${AWG_GO_TAG}.tar.gz" \
       -o /tmp/amneziawg-go.tar.gz \
  && tar -xzf /tmp/amneziawg-go.tar.gz -C /src/amneziawg-go --strip-components=1 \
@@ -16,11 +16,11 @@ RUN mkdir -p /out \
 
 FROM debian:bookworm AS tools-build
 ARG AWGTOOLS_TAG=v1.0.20250901
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl gzip tar make gcc libc6-dev pkg-config linux-libc-dev \
+RUN apt-get -o Acquire::Retries=5 update \
+ && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl gzip tar make gcc libc6-dev pkg-config linux-libc-dev \
  && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /src/amneziawg-tools \
- && curl -fL --retry 5 --retry-delay 2 \
+ && curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
       "https://github.com/amnezia-vpn/amneziawg-tools/archive/refs/tags/${AWGTOOLS_TAG}.tar.gz" \
       -o /tmp/amneziawg-tools.tar.gz \
  && tar -xzf /tmp/amneziawg-tools.tar.gz -C /src/amneziawg-tools --strip-components=1 \
@@ -28,8 +28,8 @@ RUN mkdir -p /src/amneziawg-tools \
  && make -C /src/amneziawg-tools/src
 
 FROM debian:bookworm-slim
-RUN apt-get update \
- && apt-get install -y --no-install-recommends bash iproute2 iptables nftables openresolv procps ca-certificates \
+RUN apt-get -o Acquire::Retries=5 update \
+ && apt-get -o Acquire::Retries=5 install -y --no-install-recommends bash iproute2 iptables nftables openresolv procps ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=go-build /out/amneziawg-go /usr/local/bin/amneziawg-go
 COPY --from=tools-build /src/amneziawg-tools/src/wg /usr/bin/awg
