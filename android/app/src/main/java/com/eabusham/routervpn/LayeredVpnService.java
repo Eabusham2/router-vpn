@@ -41,6 +41,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.security.KeyStore;
 import java.security.cert.Certificate;
@@ -75,6 +76,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private ParcelFileDescriptor tunDescriptor;
     private File activeSession;
     private String activeMode = "";
+    private String activeConfig = "";
     private volatile String state = "DOWN";
     private volatile boolean explicitStop;
 
@@ -139,6 +141,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 closeCoreLocked();
                 activeSession = session;
                 activeMode = modeId;
+                activeConfig = config;
                 commandServer = new CommandServer(this, this);
                 commandServer.start();
                 commandServer.startOrReloadService(config, new OverrideOptions());
@@ -165,10 +168,18 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
 
     @Override public void onDestroy() {
         String terminal = state;
-        synchronized (lock) { closeCoreLocked(); }
-        if (!explicitStop && ("UP".equals(terminal) || "STARTING".equals(terminal))) {
-            publish("FAILED", activeMode, "Layered VPN service stopped unexpectedly.");
+        String mode = activeMode;
+        File session;
+        synchronized (lock) {
+            session = activeSession;
+            activeSession = null;
+            closeCoreLocked();
+            activeConfig = "";
         }
+        if (!explicitStop && ("UP".equals(terminal) || "STARTING".equals(terminal))) {
+            publish("FAILED", mode, "Layered VPN service stopped unexpectedly.");
+        }
+        if (session != null) deleteTree(session);
         executor.shutdown();
         super.onDestroy();
     }
@@ -184,6 +195,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             closeCoreLocked();
             activeSession = null;
             activeMode = "";
+            activeConfig = "";
             publish(terminalState, "DOWN".equals(terminalState) ? "" : mode, error);
         }
         if (session != null) deleteTree(session);
@@ -236,8 +248,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 boolean has4 = addRoutes33(builder, options.getInet4RouteAddress(), false);
                 boolean has6 = addRoutes33(builder, options.getInet6RouteAddress(), false);
-                if (!has4 && options.getInet4Address().hasNext()) builder.addRoute(new IpPrefix("0.0.0.0/0"));
-                if (!has6 && options.getInet6Address().hasNext()) builder.addRoute(new IpPrefix("::/0"));
+                if (!has4 && options.getInet4Address().hasNext()) builder.addRoute(new IpPrefix(InetAddress.getByName("0.0.0.0"), 0));
+                if (!has6 && options.getInet6Address().hasNext()) builder.addRoute(new IpPrefix(InetAddress.getByName("::"), 0));
                 addRoutes33(builder, options.getInet4RouteExcludeAddress(), true);
                 addRoutes33(builder, options.getInet6RouteExcludeAddress(), true);
             } else {
@@ -257,11 +269,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         return pfd.getFd();
     }
 
-    private static boolean addRoutes33(Builder builder, RoutePrefixIterator iterator, boolean exclude) {
+    private static boolean addRoutes33(Builder builder, RoutePrefixIterator iterator, boolean exclude) throws Exception {
         boolean any = false;
         while (iterator.hasNext()) {
             RoutePrefix route = iterator.next();
-            IpPrefix prefix = new IpPrefix(route.address() + "/" + route.prefix());
+            IpPrefix prefix = new IpPrefix(InetAddress.getByName(route.address()), route.prefix());
             if (exclude) builder.excludeRoute(prefix); else builder.addRoute(prefix);
             any = true;
         }
@@ -344,6 +356,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             boolean expensive = caps == null || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
             boolean constrained = caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED);
             listener.updateDefaultInterface(links.getInterfaceName(), index, expensive, constrained);
+            CommandServer server = commandServer;
+            if (server != null) server.resetNetwork();
         } catch (Throwable error) { Log.w(TAG, "Default-interface update failed", error); }
     }
 
@@ -427,7 +441,17 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     @Override public void serviceReload() {
-        Log.i(TAG, "libbox requested a service reload; the active config remains authoritative for this session.");
+        executor.execute(() -> {
+            synchronized (lock) {
+                if (commandServer == null || activeConfig.isEmpty()) return;
+                try {
+                    commandServer.startOrReloadService(activeConfig, new OverrideOptions());
+                } catch (Throwable error) {
+                    Log.e(TAG, "libbox reload failed", error);
+                    publish("FAILED", activeMode, safeMessage(error));
+                }
+            }
+        });
     }
 
     @Override public SystemProxyStatus getSystemProxyStatus() { return null; }
@@ -457,7 +481,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         return host + "/" + item.getNetworkPrefixLength();
     }
 
-    private static boolean safeToken(String value) { return value != null && value.matches("[A-Za-z0-9._-]{1,96}") && !value.contains(".."); }
+    private static boolean safeToken(String value) { return value != null && value.matches("[A-Za-z0-9._-]{1,96}") && !value.equals(".") && !value.equals("..") && !value.contains(".."); }
 
     private static byte[] readLimited(File file, int max) throws Exception {
         try (FileInputStream input = new FileInputStream(file); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
