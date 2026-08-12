@@ -15,24 +15,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cleanup-merged-branch:
+  verify-branch-policy:
     name: Keep only main branch
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
-      - name: Delete every non-main branch
+      - name: Verify no unexpected branch exists
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" \
-            --jq '.[].name' | while IFS= read -r branch; do
-              [ "$branch" = main ] && continue
-              encoded=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$branch")
-              gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$encoded"
-              echo "Deleted non-main branch: $branch"
-            done
+          set -euo pipefail
+          mapfile -t extra < <(gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq '.[].name' | grep -vx main || true)
+          if ((${#extra[@]})); then
+            printf 'Unexpected non-main branch(es):\n' >&2
+            printf '  %s\n' "${extra[@]}" >&2
+            printf 'Inspect merge/contents before deleting anything.\n' >&2
+            exit 1
+          fi
+          echo 'Branch policy OK: main is the only branch.'
 
   project-package:
     name: All-in-one router-vpn.zip

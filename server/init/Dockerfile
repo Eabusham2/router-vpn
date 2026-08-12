@@ -37,11 +37,13 @@ WORKDIR /src
 COPY . /src
 COPY --from=binaries /src/dist /src/dist
 COPY server/init/noninteractive.sh /usr/local/bin/router-vpn-init
+COPY server/init/entrypoint-v2.sh /usr/local/bin/router-vpn-init-entrypoint
 RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' {} + \
  && find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod 0755 {} + \
- && sed -i 's/\r$//' /usr/local/bin/router-vpn-init \
- && chmod 0755 /usr/local/bin/router-vpn-init \
+ && sed -i 's/\r$//' /usr/local/bin/router-vpn-init /usr/local/bin/router-vpn-init-entrypoint \
+ && chmod 0755 /usr/local/bin/router-vpn-init /usr/local/bin/router-vpn-init-entrypoint \
  && /bin/bash -n /usr/local/bin/router-vpn-init \
+ && /bin/bash -n /usr/local/bin/router-vpn-init-entrypoint \
  && /bin/bash -n /src/server/scripts/apply-runtime.sh \
  && go version \
  && /usr/local/bin/rosenpass --version >/dev/null \
@@ -61,4 +63,4 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && test -f /src/dist/RouterVPNPortable-arm64.exe \
  && test -f /src/dist/RouterVPNSetupRuntime-amd64.exe \
  && test -f /src/dist/RouterVPNSetupRuntime-arm64.exe
-ENTRYPOINT ["/bin/bash", "/usr/local/bin/router-vpn-init"]
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/router-vpn-init-entrypoint"]
