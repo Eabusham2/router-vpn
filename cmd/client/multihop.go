@@ -203,7 +203,6 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 		a.state.Phase = "failed"
 		a.state.LastError = err.Error()
 		a.state.Connected = false
-		a.state.Since = time.Now().UTC()
 		a.mu.Unlock()
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -219,7 +218,6 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.state.Connected = false
 	a.state.Phase = "multihop:proving-exit"
 	a.state.LastError = ""
-	a.state.Since = time.Now().UTC()
 	a.mu.Unlock()
 
 	if err := a.proveMultihopExit(sel.Exit); err != nil {
@@ -233,14 +231,12 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 		a.state.Phase = "failed"
 		a.state.LastError = "multihop exit proof failed: " + err.Error()
 		a.state.Connected = false
-		a.state.Since = time.Now().UTC()
 		a.mu.Unlock()
 		sessionTrackerFor(a).markRequestFailure("multihop exit proof failed: " + err.Error())
 		http.Error(w, "multihop exit proof failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	now := time.Now().UTC()
 	a.mu.Lock()
 	if a.cmd != cmd {
 		a.mu.Unlock()
@@ -250,10 +246,8 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.state.Connected = true
 	a.state.Phase = "connected"
 	a.state.LastError = ""
-	a.state.Since = now
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == sel.Entry.ID || a.profiles.Profiles[i].ID == sel.Exit.ID {
-			a.profiles.Profiles[i].LastUsed = now.Format(time.RFC3339)
 			a.profiles.Profiles[i].UseCount++
 		}
 	}
