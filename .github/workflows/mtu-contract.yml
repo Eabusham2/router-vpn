@@ -1,0 +1,29 @@
+name: MTU policy contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  mtu-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: MTU policy unit tests
+        run: python3 modes/test_mtu_policy.py
+      - name: Shell syntax
+        run: |
+          bash -n modes/run-mode.sh
+          bash -n modes/run-combined.sh
+          bash -n modes/run-xhttp.sh
+          bash -n modes/run-max.sh
+      - name: Runtime integration markers
+        run: |
+          grep -q 'mtu-policy.py.*apply' modes/run-mode.sh
+          grep -q 'mtu-policy.py.*apply' modes/run-combined.sh
+          grep -q 'mtu-policy.py.*apply' modes/run-xhttp.sh
+          grep -q 'mtu-policy.py.*apply' modes/run-max.sh
