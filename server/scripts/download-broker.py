@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
-"""Ephemeral private Setup Center download broker.
+"""Authenticated ephemeral Router VPN Setup Center/download broker.
 
-Generic desktop/Portable packages prefer the matching same-SHA GitHub Actions
-artifact. If unavailable, the Linux/ARM64 home node compiles only the requested
-GENERIC Go application package. Node linking/private profiles are delivered as a
-separate router-vpn-client-bundle.zip operation and are never baked into public
-application packages.
-
-Android and iOS remain same-SHA GitHub-backed and never pretend the Linux home
-node can reproduce platform-specific mobile/Xcode build pipelines.
-
-Both direct-download compatibility URLs and typed asynchronous download jobs are
-supported. Job outputs live only in private /tmp directories until first delivery,
-cancellation, failure, or TTL expiry.
+Security boundaries:
+- /healthz and generic policy metadata are public to the LAN/container healthcheck.
+- Setup Center HTML/assets, build jobs, direct packages and pairing-code creation
+  require the separate Setup Center access token stored only on the router.
+- The Setup Center token is never included in client/node bundles.
+- Pairing redemption is one-time, short-lived and LAN/local-network only.
+- Generic application packages remain secret-free; private node data is a
+  separate authenticated bundle/pairing operation.
 """
 from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from http import cookies
+import hmac
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -47,6 +45,12 @@ if _jobs_spec is None or _jobs_spec.loader is None:
 _jobs = module_from_spec(_jobs_spec)
 _jobs_spec.loader.exec_module(_jobs)
 
+_pair_spec = spec_from_file_location("router_vpn_pairing", SCRIPT_DIR / "pairing.py")
+if _pair_spec is None or _pair_spec.loader is None:
+    raise RuntimeError("cannot load pairing.py")
+_pairing = module_from_spec(_pair_spec)
+_pair_spec.loader.exec_module(_pairing)
+
 DIRECT_ARTIFACTS = {
     "router-vpn-android.apk": {
         "artifact": "RouterVPN-Android-CI",
@@ -63,17 +67,19 @@ DIRECT_ARTIFACTS = {
 MAX_GITHUB_ARTIFACT = 768 * 1024 * 1024
 MAX_MEMBER = 512 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
+MAX_PAIR_BUNDLE = 64 * 1024 * 1024
 CHUNK = 1024 * 1024
 REQUEST_SLOTS = threading.BoundedSemaphore(value=8)
 BUILD_SLOTS = threading.BoundedSemaphore(value=1)
 PACKAGE_TIMEOUT = 720
 ALLOWED_DOWNLOADS = set(PACKAGE_MAP) | set(DIRECT_ARTIFACTS)
+COOKIE_NAME = "router_vpn_setup"
 
 
 def _api_headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "router-vpn-setup-center/3",
+        "User-Agent": "router-vpn-setup-center/4",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -168,7 +174,6 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     repo, branch, head_sha = _github_scope()
     if not artifact_name:
         raise RuntimeError("invalid GitHub artifact name")
-
     q = urllib.parse.urlencode({"name": artifact_name, "per_page": 100})
     meta = _read_limited_json(f"https://api.github.com/repos/{repo}/actions/artifacts?{q}")
     candidates = _artifact_candidates(meta, artifact_name, branch, head_sha)
@@ -177,7 +182,6 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
         if head_sha:
             scope += f" at {head_sha}"
         raise RuntimeError(f"no unexpired {artifact_name} artifact for {scope}")
-
     outer = temp / (artifact_name + "-artifact.zip")
     _download_limited(candidates[0]["archive_download_url"], outer)
     selected = temp / output_name
@@ -212,11 +216,9 @@ def fetch_direct_mobile(name: str, temp: Path) -> Path:
 def _run_builder(base: Path, name: str, temp: Path, source: Path | None) -> Path:
     output = temp / name
     args = [
-        "python3", str(BUILDER_PATH),
-        "--base", str(base),
+        "python3", str(BUILDER_PATH), "--base", str(base),
         "--source-root", os.environ.get("ROUTER_VPN_FALLBACK_ROOT", "/src"),
-        "--name", name,
-        "--output", str(output),
+        "--name", name, "--output", str(output),
     ]
     if source is not None:
         args += ["--source-archive", str(source)]
@@ -229,24 +231,16 @@ def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
         return fetch_direct_mobile(name, temp), "github"
     if name == "router-vpn-client-bundle.zip":
         return _run_builder(base, name, temp, None), "private-node-bundle"
-
     source = None
     try:
         source = fetch_github_package(name, temp)
     except Exception as exc:
-        print(
-            f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}; compiling requested generic package locally",
-            flush=True,
-        )
-
+        print(f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}; compiling requested generic package locally", flush=True)
     if source is not None:
         try:
             return _run_builder(base, name, temp, source), "github"
         except Exception as exc:
-            print(
-                f"download broker: GitHub package validation/repack failed for {name}: {type(exc).__name__}: {exc}; compiling requested generic package locally",
-                flush=True,
-            )
+            print(f"download broker: GitHub package validation/repack failed for {name}: {type(exc).__name__}: {exc}; compiling requested generic package locally", flush=True)
     return _run_builder(base, name, temp, None), "router-local-generic-build"
 
 
@@ -293,12 +287,13 @@ def _job_route(path: str) -> tuple[str, str] | None:
 
 
 class Handler(SimpleHTTPRequestHandler):
-    server_version = "RouterVPNSetupCenter/3"
+    server_version = "RouterVPNSetupCenter/4"
 
     def end_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
     def _json(self, status: int, obj: dict) -> None:
@@ -306,15 +301,16 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_body_json(self, limit: int = 4096) -> dict:
+    def _read_body_json(self, limit: int = 4096, allow_empty: bool = False) -> dict:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError as exc:
             raise ValueError("invalid Content-Length") from exc
+        if length == 0 and allow_empty:
+            return {}
         if length <= 0 or length > limit:
             raise ValueError("request body size is invalid")
         raw = self.rfile.read(length)
@@ -323,24 +319,126 @@ class Handler(SimpleHTTPRequestHandler):
             raise ValueError("JSON body must be an object")
         return obj
 
+    def _presented_token(self) -> str:
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            return auth[7:].strip()
+        raw_cookie = self.headers.get("Cookie", "")
+        if raw_cookie:
+            jar = cookies.SimpleCookie()
+            try:
+                jar.load(raw_cookie)
+                if COOKIE_NAME in jar:
+                    return jar[COOKIE_NAME].value.strip()
+            except cookies.CookieError:
+                pass
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
+        return str(query.get("token", [""])[0]).strip()
+
+    def _authorized(self) -> bool:
+        supplied = self._presented_token()
+        expected = str(self.server.setup_token)
+        return bool(supplied) and hmac.compare_digest(supplied, expected)
+
+    def _bootstrap_cookie(self) -> bool:
+        parts = urllib.parse.urlsplit(self.path)
+        query = urllib.parse.parse_qs(parts.query, keep_blank_values=True)
+        supplied = str(query.get("token", [""])[0]).strip()
+        if not supplied or not hmac.compare_digest(supplied, str(self.server.setup_token)):
+            return False
+        pairs = [(k, v) for k, values in query.items() if k != "token" for v in values]
+        clean_query = urllib.parse.urlencode(pairs)
+        clean = urllib.parse.urlunsplit(("", "", parts.path or "/", clean_query, parts.fragment))
+        self.send_response(303)
+        self.send_header("Location", clean)
+        self.send_header("Set-Cookie", f"{COOKIE_NAME}={supplied}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400")
+        self.end_headers()
+        return True
+
+    def _require_auth(self) -> bool:
+        if self._authorized():
+            return True
+        path = urllib.parse.urlsplit(self.path).path
+        if path.startswith("/api/") or path in ALLOWED_DOWNLOADS:
+            self._json(401, {"ok": False, "error_code": "authentication_required", "error": "Setup Center authentication required"})
+        else:
+            body = (
+                "<!doctype html><meta charset=utf-8><title>Router VPN authentication required</title>"
+                "<body style='font-family:system-ui;background:#0b1020;color:#eef2ff;padding:32px'>"
+                "<h1>Router VPN Setup Center</h1><p>Authentication is required because this page can contain private node setup material.</p>"
+                "<p>Retrieve the local Setup Center token from <code>/opt/router-vpn/config/setup-center.token</code> on the AI Board, then open this page with <code>?token=...</code> once. The token is converted to an HttpOnly same-site session cookie and removed from the URL.</p></body>"
+            ).encode()
+            self.send_response(401)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        return False
+
     def do_POST(self) -> None:
         path = urllib.parse.urlsplit(self.path).path
-        if path != "/api/download-jobs":
-            self.send_error(404)
+        if path == "/api/pairing/redeem":
+            self._redeem_pairing()
             return
+        if not self._require_auth():
+            return
+        if path == "/api/download-jobs":
+            try:
+                body = self._read_body_json()
+                name = str(body.get("name") or "")
+                job = self.server.jobs.create(name)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error_code": "bad_request", "error": str(exc)})
+                return
+            except RuntimeError as exc:
+                self._json(503, {"ok": False, "error_code": "queue_full", "error": str(exc)})
+                return
+            self._json(202, {"ok": True, "job": job})
+            return
+        if path == "/api/pairing":
+            try:
+                body = self._read_body_json(4096, allow_empty=True)
+                ttl = int(body.get("ttl_seconds") or _pairing.DEFAULT_TTL)
+                pair = self.server.pairing.create(ttl)
+            except (ValueError, RuntimeError) as exc:
+                self._json(400, {"ok": False, "error_code": "pairing_unavailable", "error": str(exc)})
+                return
+            self._json(201, {"ok": True, "pairing": pair})
+            return
+        if path == "/api/auth/logout":
+            self.send_response(204)
+            self.send_header("Set-Cookie", f"{COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
+            self.end_headers()
+            return
+        self.send_error(404)
+
+    def _redeem_pairing(self) -> None:
         try:
             body = self._read_body_json()
-            name = str(body.get("name") or "")
-            job = self.server.jobs.create(name)
-        except ValueError as exc:
-            self._json(400, {"ok": False, "error_code": "bad_request", "error": str(exc)})
+            code = str(body.get("code") or "")
+            self.server.pairing.redeem(code, str(self.client_address[0]))
+            bundle = Path(self.server.base_dir) / "client-bundle" / "router-vpn-bundle.json"
+            if not bundle.is_file():
+                raise RuntimeError("private node bundle is unavailable")
+            if bundle.stat().st_size > MAX_PAIR_BUNDLE:
+                raise RuntimeError("private node bundle exceeds pairing safety limit")
+            data = bundle.read_bytes()
+        except (ValueError, PermissionError) as exc:
+            self._json(403, {"ok": False, "error_code": "pairing_rejected", "error": str(exc)})
             return
         except RuntimeError as exc:
-            self._json(503, {"ok": False, "error_code": "queue_full", "error": str(exc)})
+            self._json(503, {"ok": False, "error_code": "pairing_unavailable", "error": str(exc)})
             return
-        self._json(202, {"ok": True, "job": job})
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Router-VPN-Pairing", "one-time")
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_DELETE(self) -> None:
+        if not self._require_auth():
+            return
         path = urllib.parse.urlsplit(self.path).path
         route = _job_route(path)
         if not route or route[1] != "status":
@@ -361,33 +459,37 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
             return
         if path == "/api/download-policy":
             self._json(200, {
-                "mode": "on-demand",
-                "preferred_source": "github-actions",
-                "fallback": "router-local-generic-build",
-                "server_cache": False,
-                "generic_packages_secret_free": True,
-                "node_linking": "separate-bundle-or-pairing",
+                "mode": "on-demand", "preferred_source": "github-actions",
+                "fallback": "router-local-generic-build", "server_cache": False,
+                "generic_packages_secret_free": True, "node_linking": "separate-bundle-or-pairing",
+                "setup_center_auth": "required-for-private-ui-and-build-actions",
                 "local_build_scope": "requested-generic-package-only",
-                "local_build_platforms": "go-desktop-portable",
-                "mobile_artifacts": "same-sha-github-only",
-                "max_parallel_package_requests": 8,
-                "local_build_slots": 1,
-                "download_jobs": {
-                    "create": "POST /api/download-jobs {name}",
-                    "status": "GET /api/download-jobs/{job_id}",
-                    "cancel": "DELETE /api/download-jobs/{job_id}",
-                    "file": "GET /api/download-jobs/{job_id}/file",
-                    "ready_ttl_seconds": _jobs.JOB_TTL_SECONDS,
-                },
+                "local_build_platforms": "go-desktop-portable", "mobile_artifacts": "same-sha-github-only",
+                "max_parallel_package_requests": 8, "local_build_slots": 1,
+                "download_jobs": {"create": "POST /api/download-jobs {name}", "status": "GET /api/download-jobs/{job_id}", "cancel": "DELETE /api/download-jobs/{job_id}", "file": "GET /api/download-jobs/{job_id}/file", "ready_ttl_seconds": _jobs.JOB_TTL_SECONDS},
                 "github_artifact_retention_days": 1,
                 "github_sha": os.environ.get("ROUTER_VPN_GITHUB_SHA", "").strip(),
             })
+            return
+        if path == "/api/pairing/policy":
+            self._json(200, {
+                "lan_only": True, "one_time": True, "default_ttl_seconds": _pairing.DEFAULT_TTL,
+                "setup_auth_required_to_create": True,
+                "apple_local_network_permission_required": True,
+                "private_node_material_not_discoverable_without_pairing": True,
+            })
+            return
+        if path == "/api/auth/status":
+            self._json(200, {"authentication_required": True, "authenticated": self._authorized()})
+            return
+        if self._bootstrap_cookie():
+            return
+        if not self._require_auth():
             return
 
         route = _job_route(path)
@@ -427,7 +529,6 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", str(meta["content_type"]))
             self.send_header("Content-Disposition", f'attachment; filename="{meta["name"]}"')
             self.send_header("Content-Length", str(size))
-            self.send_header("Cache-Control", "no-store, max-age=0")
             self.send_header("X-Router-VPN-Source", str(meta.get("source") or ""))
             self.send_header("X-Router-VPN-Job", job_id)
             self.end_headers()
@@ -457,7 +558,7 @@ class Handler(SimpleHTTPRequestHandler):
                         self.send_error(504, "package generation timed out")
                         return
                     except Exception as exc:
-                        print(f"download broker: failed {name}: {type(exc).__name__}: {exc}", flush=True)
+                        print(f"download broker: failed {name}: {type(exc).__name__}: {exc}; requested package could not be generated", flush=True)
                         self.send_error(503, "requested package could not be generated")
                         return
                     size = package.stat().st_size
@@ -465,7 +566,6 @@ class Handler(SimpleHTTPRequestHandler):
                     self.send_header("Content-Type", content_type_for(name))
                     self.send_header("Content-Disposition", f'attachment; filename="{name}"')
                     self.send_header("Content-Length", str(size))
-                    self.send_header("Cache-Control", "no-store, max-age=0")
                     self.send_header("X-Router-VPN-Source", source)
                     self.end_headers()
                     try:
@@ -487,7 +587,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.directory = original
 
     def log_message(self, fmt: str, *args) -> None:
-        print("download broker:", fmt % args, flush=True)
+        # Never pass the raw request line or query string to logs: the initial
+        # authenticated browser bootstrap may arrive as /?token=... .
+        print("download broker:", self.command, urllib.parse.urlsplit(self.path).path, flush=True)
 
 
 class Server(ThreadingHTTPServer):
@@ -495,10 +597,17 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address, handler, base_dir: Path, static_dir: Path):
-        super().__init__(address, handler)
         self.base_dir = base_dir
         self.static_dir = static_dir
+        token_path = base_dir / "config" / "setup-center.token"
+        if not token_path.is_file():
+            raise RuntimeError(f"missing Setup Center authentication token: {token_path}")
+        self.setup_token = token_path.read_text(encoding="utf-8").strip()
+        if len(self.setup_token) < 32:
+            raise RuntimeError("Setup Center authentication token is invalid")
         self.jobs = _jobs.DownloadJobManager(base_dir, build_package, content_type_for, BUILD_SLOTS, ALLOWED_DOWNLOADS, max_active=8)
+        self.pairing = _pairing.PairingManager()
+        super().__init__(address, handler)
 
     def server_close(self) -> None:
         self.jobs.close()
@@ -511,13 +620,12 @@ def main() -> int:
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8786)
     args = ap.parse_args()
-
     base = Path(args.base).resolve()
     static = base / "downloads"
     static.mkdir(parents=True, exist_ok=True)
     cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
-    print(f"Router VPN Setup Center on {args.bind}:{args.port}; packages are ephemeral; typed download jobs enabled", flush=True)
+    print(f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated private UI, one-time LAN pairing, ephemeral packages", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

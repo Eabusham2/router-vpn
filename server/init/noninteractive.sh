@@ -16,15 +16,20 @@ REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 umask 077
 mkdir -p "$BASE"/{config/{wireguard,awg2},client-bundle/generated,scripts,logs,downloads}
 
+# Setup Center authentication is a router-local credential. Preserve it across
+# safe upgrades, never print it, and never copy it into a client/node bundle.
+python3 /src/server/scripts/ensure-setup-auth.py "$BASE" >/dev/null
+
 # Private node bundles are always generated on demand. Remove cached credential
-# ZIPs left by older releases even on an already-initialized upgrade path.
-rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
+# ZIPs/files left by older releases even on an already-initialized upgrade path.
+rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip" \
+      "$BASE/downloads/router-vpn-bundle.json" "$BASE/downloads/CREDENTIALS.txt"
 
 rm -rf "$BASE/source"
 mkdir -p "$BASE/source"
 cp -a /src/. "$BASE/source/"
 if [[ -f $BASE/.initialized ]]; then
-  echo 'Router VPN config already initialized; keeping current keys.'
+  echo 'Router VPN config already initialized; keeping current keys and Setup Center access token.'
   /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
   exit 0
 fi
@@ -150,9 +155,10 @@ PQ REALITY TCP: $XRAY_PQ_PORT
 SOCKS5 after VPN: $ADGUARD4:1080
 SOCKS5 username: $SOCKS_USER
 SOCKS5 password: $SOCKS_PASSWORD
-Router API token: $TOKEN
+Router API client-control token: $TOKEN
+Setup Center access credential is NOT in this bundle; it remains only on the router at /opt/router-vpn/config/setup-center.token.
 TXT
 /src/server/scripts/create-bundle-json.py "$BASE" "$ENDPOINT" "$TOKEN" "http://$ADGUARD4:8787" "$ADGUARD4" "$SOCKS_USER" "$SOCKS_PASSWORD"
 touch "$BASE/.initialized"
 /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
-echo 'Initialization complete: private node material prepared; Setup Center serves generic apps and builds the private link bundle only on demand.'
+echo 'Initialization complete: private node material prepared; Setup Center authentication stays router-local and client bundles are built only on demand.'
