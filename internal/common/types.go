@@ -54,7 +54,35 @@ type RouterProfile struct {
 	DAITAPort     int    `json:"daita_port"`
 	DAITARateKbps int    `json:"daita_rate_kbps"`
 	BaseTunnel    string `json:"base_tunnel,omitempty"`
+	BaseFallback  bool   `json:"base_fallback,omitempty"`
 	CustomLayers  []string `json:"custom_layers,omitempty"`
+
+	// Network policy is part of the node profile so every platform can preserve
+	// the same intent even when a particular platform adapter is not implemented
+	// yet. Presence in the data model must never be mistaken for runtime support.
+	HomeLANAccess bool     `json:"home_lan_access,omitempty"`
+	HomeLANCIDRs  []string `json:"home_lan_cidrs,omitempty"`
+	KillSwitch    bool     `json:"kill_switch,omitempty"`
+	IPv6Mode      string   `json:"ipv6_mode,omitempty"`
+	AutoConnect   bool     `json:"auto_connect,omitempty"`
+
+	// Multihop selection is persisted here, but the dataplane remains unavailable
+	// until the real node-to-node route and leak-safe failure handling are built.
+	MultihopEnabled bool   `json:"multihop_enabled,omitempty"`
+	MultihopEntryID string `json:"multihop_entry_id,omitempty"`
+	MultihopExitID  string `json:"multihop_exit_id,omitempty"`
+
+	// MTU policy distinguishes the user's choice from the effective value. Valid
+	// policy values are default, manual, and auto. EffectiveMTU is observational
+	// state written only after the runtime has actually applied/verified a value.
+	MTUPolicy    string `json:"mtu_policy,omitempty"`
+	ManualMTU    int    `json:"manual_mtu,omitempty"`
+	EffectiveMTU int    `json:"effective_mtu,omitempty"`
+
+	// PathProbeURL is a private, node-specific proof endpoint used by clients to
+	// distinguish "the Internet works" from "the selected Router VPN path works".
+	// It is intentionally separate from public endpoint and ordinary health URLs.
+	PathProbeURL string `json:"path_probe_url,omitempty"`
 
 	// Optional location metadata is user-editable. It lets the local UI display
 	// multiple self-hosted nodes on a map without sending the node list to a
