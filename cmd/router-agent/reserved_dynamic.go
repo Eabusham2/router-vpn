@@ -38,7 +38,12 @@ func init() {
 			}
 		}
 	}
-	reserved[80] = true
+	// ACME plus all private Router VPN control/admin listeners are always
+	// protected from generic WAN forwarding even though the admin listeners
+	// themselves bind only to loopback.
+	for _, p := range []int{80, 1080, 8786, 8787, 8789, 8790, 9443} {
+		reserved[p] = true
+	}
 
 	root := filepath.Dir(path)
 	for _, conf := range []string{
@@ -73,7 +78,6 @@ func init() {
 					if n, ok := m[key].(float64); ok && n >= 1 && n <= 65535 {
 						reserved[int(n)] = true
 					}
-				}
 			}
 		}
 	}
