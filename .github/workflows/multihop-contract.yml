@@ -13,12 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: false
       - name: Build-chain unit contract
         run: python3 modes/test_multihop.py
+      - name: Runtime and UI Go contracts
+        run: go test ./cmd/client ./internal/common
       - name: Syntax
         run: |
           python3 -m py_compile modes/multihop.py
           bash -n modes/run-multihop.sh
+          node --check cmd/client/logical_ui.js
       - name: Real-chain markers
         run: |
           grep -q 'detour.*entry-hop' modes/multihop.py
@@ -27,3 +34,7 @@ jobs:
           grep -q 'dns-policy.py.*patch-sing' modes/run-multihop.sh
           grep -q 'sing-box run' modes/run-multihop.sh
           grep -q 'direct_exit_exception.*False' modes/multihop.py
+          grep -q 'HOMEVPN_ROOT=.*filepath.Clean' cmd/client/multihop.go
+          grep -q '/api/multihop/connect' cmd/client/logical_ui.js
+          grep -q 'platform_supported' cmd/client/logical_ui.js
+          grep -q 'multihop requires both an entry node and an exit node' internal/common/profile_schema.go
