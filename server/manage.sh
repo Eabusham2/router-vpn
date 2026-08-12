@@ -2,6 +2,8 @@
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo 'Run with sudo: sudo bash server/manage.sh'; exit 1; }
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+PRODUCTION_COMPOSE="$ROOT_DIR/server/portainer-current.yaml"
+[[ -f "$PRODUCTION_COMPOSE" ]] || { echo "Missing production compose: $PRODUCTION_COMPOSE" >&2; exit 1; }
 
 # Keep terminal management aligned with the image-only Portainer production
 # stack. Router-local compilation is reserved for requested client packages in
