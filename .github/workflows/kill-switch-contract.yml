@@ -19,9 +19,19 @@ jobs:
         run: |
           python3 -m py_compile modes/kill-switch.py modes/mtu-policy.py
           bash -n modes/stop-mode.sh
+          bash -n client/install-linux.sh
       - name: Fail-closed integration
         run: |
           grep -q 'kill-switch.py.*apply' modes/mtu-policy.py
           grep -q 'kill-switch.py.*release' modes/stop-mode.sh
           grep -q 'policy drop' modes/kill-switch.py
           grep -q 'nft.*-c' modes/kill-switch.py
+          grep -q 'action == "reassert"' modes/kill-switch.py
+      - name: Persistent always boot contract
+        run: |
+          grep -q 'nftables' client/install-linux.sh
+          grep -q 'Before=network-pre.target' client/install-linux.sh
+          grep -q 'RequiredBy=network-pre.target' client/install-linux.sh
+          grep -q 'kill-switch.py reassert' client/install-linux.sh
+          grep -q 'router-vpn-killswitch-recovery' client/install-linux.sh
+          grep -q 'kill-switch.py.*force-off' client/install-linux.sh
