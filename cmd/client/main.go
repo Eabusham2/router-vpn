@@ -67,7 +67,7 @@ func main() {
 		c.Listen = "127.0.0.1:8788"
 	}
 	if c.HealthURL == "" {
-		c.HealthURL = "https://connectivitycheck.gstatic.com/generate_204"
+		c.HealthURL = "http://10.77.0.1:8787/health"
 	}
 	if c.AutoTestSeconds == 0 {
 		c.AutoTestSeconds = 8
@@ -413,6 +413,7 @@ func applyProfileDefaults(p *common.RouterProfile) {
 	if p.DNSHost == "" { if p.DNSMode == "fastest" && p.FastestDNSHost != "" { p.DNSHost = p.FastestDNSHost } else { p.DNSHost = p.AdGuardIPv4 } }
 	if p.DNSPort == 0 { p.DNSPort = 53 }
 	if p.DNSPath == "" { p.DNSPath = "/dns-query" }
+	if p.PathProbeURL == "" { p.PathProbeURL = "http://10.77.0.1:8787/health" }
 	if p.Location == "" { p.Location = p.Name }
 }
 
@@ -508,9 +509,9 @@ func (a *app) startMode(id string) error {
 	// connectivity check. The health check itself has the configured timeout.
 	time.Sleep(1200 * time.Millisecond)
 	a.mu.Lock(); a.state.Phase = "checking"; a.mu.Unlock()
-	latency, healthErr := a.testHealth()
+	latency, healthErr := a.testHealth(p)
 	if healthErr != nil {
-		failure := fmt.Errorf("%s started but tunnel health failed: %w", m.Name, healthErr)
+		failure := fmt.Errorf("%s started but selected-router path proof failed: %w", m.Name, healthErr)
 		_ = a.stopMode()
 		a.mu.Lock(); a.state.LastError = failure.Error(); a.state.Phase = "failed"; a.mu.Unlock()
 		return failure
@@ -526,7 +527,7 @@ func (a *app) startMode(id string) error {
 	_ = a.persistProfilesLocked()
 	a.mu.Unlock()
 	if daitaEnabled { a.startCoverTraffic(p) }
-	log.Printf("mode %s health OK in %.2f ms", id, float64(latency.Microseconds())/1000)
+	log.Printf("mode %s selected-router path proof OK in %.2f ms", id, float64(latency.Microseconds())/1000)
 	return nil
 }
 
@@ -556,11 +557,28 @@ func (a *app) auto(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "no working mode: "+strings.Join(failures, " • "), http.StatusServiceUnavailable)
 }
 
-func (a *app) testHealth() (time.Duration, error) {
+func (a *app) testHealth(p common.RouterProfile) (time.Duration, error) {
+	target := strings.TrimSpace(p.PathProbeURL)
+	if target == "" { target = strings.TrimSpace(a.cfg.HealthURL) }
+	if target == "" { return 0, errors.New("selected router has no private path proof URL") }
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.cfg.AutoTestSeconds)*time.Second); defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, a.cfg.HealthURL, nil); t := time.Now(); resp, err := http.DefaultClient.Do(req)
-	if err != nil { return 0, err }; defer resp.Body.Close(); _, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode/100 != 2 { return 0, fmt.Errorf("health %s", resp.Status) }; return time.Since(t), nil
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil { return 0, fmt.Errorf("invalid path proof URL: %w", err) }
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	client := &http.Client{Transport: transport}
+	t := time.Now()
+	resp, err := client.Do(req)
+	if err != nil { return 0, err }
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil { return 0, err }
+	if resp.StatusCode/100 != 2 { return 0, fmt.Errorf("path proof %s", resp.Status) }
+	var proof struct { OK bool `json:"ok"` }
+	if err := json.Unmarshal(body, &proof); err != nil || !proof.OK {
+		return 0, errors.New("path proof endpoint did not return the Router VPN proof response")
+	}
+	return time.Since(t), nil
 }
 
 func (a *app) startCoverTraffic(p common.RouterProfile) {
