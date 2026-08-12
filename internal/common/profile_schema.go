@@ -9,9 +9,9 @@ import (
 type routerProfileWire RouterProfile
 type routerProfileStoreWire RouterProfileStore
 
-// NormalizeRouterProfile upgrades policy-only defaults without claiming that a
-// platform runtime implements those policies. Runtime capability remains a
-// separate, live-tested concern.
+// NormalizeRouterProfile upgrades policy defaults and validates configuration
+// intent. Runtime capability remains a separate live-tested concern: a valid
+// multihop selection does not make an unsupported platform claim multihop.
 func NormalizeRouterProfile(p *RouterProfile) error {
 	if p.SchemaVersion > RouterProfileSchemaVersion {
 		return fmt.Errorf("router profile schema %d is newer than supported schema %d", p.SchemaVersion, RouterProfileSchemaVersion)
@@ -75,8 +75,15 @@ func NormalizeRouterProfile(p *RouterProfile) error {
 		return fmt.Errorf("diagnostics retention must be between 1 and 365 days")
 	}
 
-	if p.MultihopEnabled && p.MultihopEntryID != "" && p.MultihopEntryID == p.MultihopExitID {
-		return fmt.Errorf("multihop entry and exit nodes must be different")
+	p.MultihopEntryID = strings.TrimSpace(p.MultihopEntryID)
+	p.MultihopExitID = strings.TrimSpace(p.MultihopExitID)
+	if p.MultihopEnabled {
+		if p.MultihopEntryID == "" || p.MultihopExitID == "" {
+			return fmt.Errorf("multihop requires both an entry node and an exit node")
+		}
+		if p.MultihopEntryID == p.MultihopExitID {
+			return fmt.Errorf("multihop entry and exit nodes must be different")
+		}
 	}
 	return nil
 }
