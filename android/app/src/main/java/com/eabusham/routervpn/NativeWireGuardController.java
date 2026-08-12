@@ -9,9 +9,10 @@ import com.wireguard.config.Config;
 import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.Base64;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -81,7 +82,8 @@ final class NativeWireGuardController implements Tunnel {
         if (privateBundle.length() <= 0 || privateBundle.length() > 64L * 1024L * 1024L) {
             throw new IllegalStateException("Private node bundle size is invalid.");
         }
-        String json = Files.readString(privateBundle.toPath(), StandardCharsets.UTF_8);
+        byte[] bundleBytes = readLimited(privateBundle, 64 * 1024 * 1024);
+        String json = new String(bundleBytes, StandardCharsets.UTF_8);
         JSONObject root = new JSONObject(json);
         JSONObject profiles = root.optJSONObject("profiles");
         if (profiles == null) throw new IllegalStateException("Node bundle has no generated profiles.");
@@ -94,6 +96,20 @@ final class NativeWireGuardController implements Tunnel {
             throw new IllegalStateException("WireGuard profile size is invalid.");
         }
         return Config.parse(new ByteArrayInputStream(decoded));
+    }
+
+    private static byte[] readLimited(File file, int maxBytes) throws Exception {
+        try (FileInputStream input = new FileInputStream(file); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int total = 0;
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                total += read;
+                if (total > maxBytes) throw new IllegalStateException("Private node bundle exceeds safety limit.");
+                output.write(buffer, 0, read);
+            }
+            return output.toByteArray();
+        }
     }
 
     private static String safeMessage(Throwable error) {
