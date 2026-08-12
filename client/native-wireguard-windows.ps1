@@ -48,33 +48,53 @@ if (-not $wireguard) {
   Fail 'Native Windows WireGuard is unavailable. Install the official WireGuard for Windows package; Router VPN will not fake native readiness through WSL.'
 }
 
+$root = [IO.Path]::GetFullPath([string]$env:HOMEVPN_ROOT)
+$killSwitch = Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
+if (-not (Test-Path -LiteralPath $killSwitch -PathType Leaf)) { Fail "Windows kill-switch helper is missing: $killSwitch" }
 $config = Profile-Path
 $tunnelName = [IO.Path]::GetFileNameWithoutExtension($config)
 $serviceName = "WireGuardTunnel`$$tunnelName"
 
+function Invoke-KillSwitch([string]$KillAction,[string]$EndpointValue='') {
+  $args=@('-Action',$KillAction,'-Root',$root)
+  if ($EndpointValue) { $args += @('-Endpoint',$EndpointValue) }
+  if ($KillAction -eq 'prepare') { $args += @('-TunnelAlias',$tunnelName) }
+  & $killSwitch @args
+  if ($LASTEXITCODE -ne 0) { throw "Windows kill-switch action '$KillAction' failed." }
+}
+
 switch ($Action) {
   'check' {
     if (-not (Is-Administrator)) { Fail 'Native WireGuard needs Administrator rights to manage the Windows tunnel service. Run Router VPN as Administrator.' }
+    try { Invoke-KillSwitch 'check' } catch { Fail $_.Exception.Message }
     Write-Output "Native WireGuard for Windows ready: $wireguard"
     exit 0
   }
   'up' {
     if (-not (Is-Administrator)) { Fail 'Native WireGuard needs Administrator rights to install the Windows tunnel service.' }
-    # Ensure a prior crash/stale service cannot collide with the same deterministic
-    # raw-WireGuard tunnel name. Uninstall is idempotent for our purposes.
-    & $wireguard /uninstalltunnelservice $tunnelName *> $null
-    $process = Start-Process -FilePath $wireguard -ArgumentList @('/installtunnelservice', $config) -Wait -PassThru -NoNewWindow
-    if ($process.ExitCode -ne 0) { Fail "wireguard.exe /installtunnelservice failed with exit code $($process.ExitCode)." }
-    $deadline = (Get-Date).AddSeconds(12)
-    do {
-      $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-      if ($service -and $service.Status -eq 'Running') {
-        Write-Output "Native WireGuard tunnel service is running: $serviceName"
-        exit 0
-      }
-      Start-Sleep -Milliseconds 250
-    } while ((Get-Date) -lt $deadline)
-    Fail "Native WireGuard service did not reach Running state: $serviceName"
+    $endpoint = [string]$env:HOMEVPN_ENDPOINT
+    try {
+      Invoke-KillSwitch 'prepare' $endpoint
+      # Ensure a prior crash/stale service cannot collide with the same deterministic
+      # raw-WireGuard tunnel name. Uninstall is idempotent for our purposes.
+      & $wireguard /uninstalltunnelservice $tunnelName *> $null
+      $process = Start-Process -FilePath $wireguard -ArgumentList @('/installtunnelservice', $config) -Wait -PassThru -NoNewWindow
+      if ($process.ExitCode -ne 0) { throw "wireguard.exe /installtunnelservice failed with exit code $($process.ExitCode)." }
+      $deadline = (Get-Date).AddSeconds(12)
+      do {
+        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($service -and $service.Status -eq 'Running') {
+          Write-Output "Native WireGuard tunnel service is running: $serviceName"
+          exit 0
+        }
+        Start-Sleep -Milliseconds 250
+      } while ((Get-Date) -lt $deadline)
+      throw "Native WireGuard service did not reach Running state: $serviceName"
+    } catch {
+      & $wireguard /uninstalltunnelservice $tunnelName *> $null
+      try { Invoke-KillSwitch 'release' } catch { }
+      Fail $_.Exception.Message
+    }
   }
   'down' {
     if (-not (Is-Administrator)) { Fail 'Native WireGuard needs Administrator rights to remove the Windows tunnel service.' }
@@ -83,6 +103,7 @@ switch ($Action) {
       $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
       if ($service) { Fail "wireguard.exe /uninstalltunnelservice failed with exit code $($process.ExitCode)." }
     }
+    try { Invoke-KillSwitch 'release' } catch { Fail $_.Exception.Message }
     Write-Output "Native WireGuard tunnel stopped: $tunnelName"
   }
   'status' {
