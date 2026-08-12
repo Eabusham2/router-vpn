@@ -171,7 +171,7 @@
   function phaseClass(phase, connected) {
     if (connected && phase === 'connected') return 'chip ok';
     if (phase === 'failed') return 'chip bad';
-    if (phase === 'checking' || phase === 'starting' || String(phase).startsWith('auto:')) return 'chip info';
+    if (phase === 'checking' || phase === 'starting' || String(phase).startsWith('auto:') || String(phase).startsWith('multihop:')) return 'chip info';
     return 'chip';
   }
 
@@ -243,7 +243,7 @@
     const card = document.createElement('div');
     card.id = 'nodePolicyPanel';
     card.className = 'card';
-    card.innerHTML = `<h3>Cross-platform policy intent</h3><div class="notice warn">These values are versioned and preserved across clients. A stored value is <b>not</b> proof that this platform currently enforces it; live enforcement stays unavailable until its runtime adapter passes end-to-end tests.</div><div class="grid3" style="margin-top:12px"><label>Kill switch policy<br><select id="policyKill"><option value="off">Off</option><option value="on-connect">On connect (desired)</option><option value="always">Always (desired)</option></select></label><label>IPv6 policy<br><select id="policyIPv6"><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></label><label>Startup mode<br><select id="policyStartup"><option value="manual">Manual</option><option value="auto">AUTO</option><option value="smart-auto">SMART AUTO</option><option value="last">Last mode</option></select></label><label>MTU policy<br><select id="policyMTU"><option value="default">Default</option><option value="auto">Auto desired</option><option value="manual">Manual desired</option></select></label><label>Manual MTU<br><input id="policyManualMTU" type="number" min="576" max="9000" placeholder="e.g. 1380"></label><label>Diagnostics retention days<br><input id="policyRetention" type="number" min="1" max="365" value="7"></label></div><div class="row"><label class="layer"><input id="policyLAN" type="checkbox"> Allow home LAN while connected</label><label class="layer"><input id="policyDiag" type="checkbox"> Local diagnostics</label><label class="layer"><input id="policyShareDiag" type="checkbox"> Share diagnostics only when explicitly requested</label><label class="layer"><input id="policyTelemetry" type="checkbox"> Telemetry opt-in</label></div><div class="row"><button class="primary" onclick="saveCrossPlatformPolicy()">Save policy intent</button><span id="policyReadiness" class="small warn">Kill-switch, MTU auto-apply and startup automation are not claimed as runtime-enforced here yet.</span></div>`;
+    card.innerHTML = `<h3>Cross-platform policy intent</h3><div class="notice warn">These values are versioned and preserved across clients. A stored value is <b>not</b> proof that this platform currently enforces it; live enforcement stays unavailable until its runtime adapter passes end-to-end tests.</div><div class="grid3" style="margin-top:12px"><label>Kill switch policy<br><select id="policyKill"><option value="off">Off</option><option value="on-connect">On connect</option><option value="always">Always</option></select></label><label>IPv6 policy<br><select id="policyIPv6"><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></label><label>Startup mode<br><select id="policyStartup"><option value="manual">Manual</option><option value="auto">AUTO</option><option value="smart-auto">SMART AUTO</option><option value="last">Last mode</option></select></label><label>MTU policy<br><select id="policyMTU"><option value="default">Default</option><option value="auto">Auto</option><option value="manual">Manual</option></select></label><label>Manual MTU<br><input id="policyManualMTU" type="number" min="576" max="9000" placeholder="e.g. 1380"></label><label>Diagnostics retention days<br><input id="policyRetention" type="number" min="1" max="365" value="7"></label></div><div class="row"><label class="layer"><input id="policyLAN" type="checkbox"> Allow home LAN while connected</label><label class="layer"><input id="policyDiag" type="checkbox"> Local diagnostics</label><label class="layer"><input id="policyShareDiag" type="checkbox"> Share diagnostics only when explicitly requested</label><label class="layer"><input id="policyTelemetry" type="checkbox"> Telemetry opt-in</label></div><div class="row"><button class="primary" onclick="saveCrossPlatformPolicy()">Save policy</button><span id="policyReadiness" class="small warn">Runtime enforcement is capability-gated per platform.</span></div>`;
     const addEdit = [...page.querySelectorAll('.card')].find(x => x.querySelector('#pname'));
     if (addEdit) addEdit.insertAdjacentElement('afterend', card); else page.appendChild(card);
   }
@@ -283,31 +283,162 @@
       share_diagnostics:v('policyShareDiag').checked,
       telemetry_enabled:v('policyTelemetry').checked
     });
-    if (ok) { populatePolicyPanel(); toast('Policy intent saved; runtime readiness remains separately validated.'); }
+    if (ok) { populatePolicyPanel(); toast('Policy saved; enforcement remains separately capability-validated.'); }
   };
 
   const originalLoadProfiles = window.loadProfiles;
   if (typeof originalLoadProfiles === 'function') window.loadProfiles = async function loadProfilesWithPolicy(){const out=await originalLoadProfiles();populatePolicyPanel();return out};
 
-  // Keep the legacy HTML onboarding copy aligned with the logical-mode/download
-  // architecture before the async first-run wizard can open.
+  // ----- Real multihop selector/status for the currently implemented Linux dataplane -----
+  let multihopStatusCache = null;
+  function ensureMultihopPanel() {
+    if (document.getElementById('multihopPanel')) return;
+    const page = document.querySelector('[data-page="nodes"]');
+    if (!page) return;
+    const card = document.createElement('div');
+    card.id = 'multihopPanel';
+    card.className = 'card';
+    card.innerHTML = `<div class="row"><div class="grow"><h3 style="margin:0">Multihop</h3><div class="small">Two distinct Router VPN nodes: client → entry tunnel → entry private SOCKS5 → exit transport → exit node → Internet.</div></div><span id="mhCapability" class="chip">checking</span></div><div id="mhNotice" class="notice warn">Checking this platform's real multihop runtime…</div><div class="grid3" style="margin-top:12px"><label>Entry node<br><select id="mhEntry"></select></label><label>Exit node<br><select id="mhExit"></select></label><label>Entry base<br><select id="mhBase"><option value="wg">WireGuard</option><option value="awg">AmneziaWG</option></select></label><label>Exit transport<br><select id="mhExitMode"><option value="shadowsocks">Shadowsocks</option><option value="hysteria2">Hysteria2</option></select></label><label class="layer" style="align-self:end"><input id="mhEnabled" type="checkbox"> Save multihop on selected control profile</label></div><div id="mhRoutePreview" class="notice" style="margin-top:12px">Choose an entry and exit node.</div><div class="row"><button id="mhSave" onclick="saveMultihopSelection()">Save selection</button><button id="mhConnect" class="primary" onclick="connectMultihop()">Connect multihop</button><button onclick="disconnect()">Disconnect</button><span id="mhRuntimeState" class="small"></span></div>`;
+    const policy = document.getElementById('nodePolicyPanel');
+    if (policy) policy.insertAdjacentElement('afterend', card); else page.appendChild(card);
+    for (const id of ['mhEntry','mhExit','mhBase','mhExitMode','mhEnabled']) {
+      document.getElementById(id)?.addEventListener('change', renderMultihopPreview);
+    }
+  }
+
+  function mhLatency(node) {
+    const value = Number(node?.latency_median_ms || 0);
+    return value > 0 ? `${value.toFixed(1)} ms median` : 'latency not tested';
+  }
+  function mhNodeLabel(node) {
+    return `${node.name || node.id}${node.location ? ' · '+node.location : ''} · ${mhLatency(node)}`;
+  }
+  function mhNode(id) { return (multihopStatusCache?.nodes || []).find(x => x.id === id) || null; }
+
+  function renderMultihopPreview() {
+    const entry = mhNode(document.getElementById('mhEntry')?.value);
+    const exit = mhNode(document.getElementById('mhExit')?.value);
+    const preview = document.getElementById('mhRoutePreview');
+    if (!preview) return;
+    if (!entry || !exit) { preview.textContent = 'Choose an entry and exit node.'; return; }
+    const same = entry.id === exit.id;
+    const base = baseLabel(document.getElementById('mhBase')?.value || 'wg');
+    const transport = document.getElementById('mhExitMode')?.value === 'hysteria2' ? 'Hysteria2' : 'Shadowsocks';
+    preview.className = 'notice' + (same ? ' warn' : '');
+    preview.innerHTML = `<b>${escapeHtml(entry.name || entry.id)}</b> <span class="small">(${escapeHtml(mhLatency(entry))})</span> → <b>${escapeHtml(exit.name || exit.id)}</b> <span class="small">(${escapeHtml(mhLatency(exit))})</span><br><span class="small">Entry ${escapeHtml(base)} split route → private SOCKS5 → exit ${escapeHtml(transport)} full TUN. ${same ? 'Entry and exit must be different.' : 'The exit public endpoint is not opened as a direct firewall exception.'}</span>`;
+  }
+
+  async function refreshMultihopPanel() {
+    ensureMultihopPanel();
+    try {
+      const s = await j('/api/multihop/status');
+      multihopStatusCache = s;
+      const entry = document.getElementById('mhEntry');
+      const exit = document.getElementById('mhExit');
+      const cap = document.getElementById('mhCapability');
+      const notice = document.getElementById('mhNotice');
+      const enabled = document.getElementById('mhEnabled');
+      const connect = document.getElementById('mhConnect');
+      const save = document.getElementById('mhSave');
+      const runtime = document.getElementById('mhRuntimeState');
+      if (!entry || !exit || !cap || !notice || !enabled || !connect || !save || !runtime) return;
+      const oldEntry = entry.value;
+      const oldExit = exit.value;
+      const options = (s.nodes || []).map(n => `<option value="${escapeHtml(n.id)}">${escapeHtml(mhNodeLabel(n))}</option>`).join('');
+      entry.innerHTML = '<option value="">Choose entry</option>' + options;
+      exit.innerHTML = '<option value="">Choose exit</option>' + options;
+      entry.value = (oldEntry && mhNode(oldEntry)) ? oldEntry : (s.entry_id || '');
+      exit.value = (oldExit && mhNode(oldExit)) ? oldExit : (s.exit_id || '');
+      enabled.checked = !!s.enabled;
+      const supported = !!s.platform_supported;
+      cap.textContent = supported ? `${s.platform} ready` : `${s.platform} unavailable`;
+      cap.className = 'chip ' + (supported ? 'ok' : 'bad');
+      notice.className = 'notice ' + (supported ? 'good' : 'warn');
+      notice.innerHTML = supported
+        ? '<b>Linux multihop runtime is implemented.</b> Current proven source path supports WG/AWG entry plus Shadowsocks/Hysteria2 exit. Other exit stacks stay unavailable until they have a validated chaining adapter.'
+        : `<b>Not available on ${escapeHtml(s.platform)} yet.</b> Router VPN will not fake a multihop connection on this platform.`;
+      connect.disabled = !supported;
+      save.disabled = (s.nodes || []).length < 2;
+      runtime.innerHTML = s.connected
+        ? `<span class="ok">Connected · exit ${escapeHtml(mhNode(s.actual_exit_id)?.name || s.actual_exit_id || '')} · ${escapeHtml(s.runtime_exit_mode || '')}</span>`
+        : 'Not connected through multihop.';
+      renderMultihopPreview();
+    } catch (e) {
+      const notice = document.getElementById('mhNotice');
+      if (notice) { notice.className = 'notice warn'; notice.textContent = 'Multihop status unavailable: ' + e.message; }
+    }
+  }
+
+  window.saveMultihopSelection = async function saveMultihopSelection() {
+    if (!currentProfile()) return toast('Select a control profile first', true);
+    const entry = document.getElementById('mhEntry')?.value || '';
+    const exit = document.getElementById('mhExit')?.value || '';
+    const enabled = !!document.getElementById('mhEnabled')?.checked;
+    if (enabled && (!entry || !exit)) return toast('Choose both an entry and exit node', true);
+    if (enabled && entry === exit) return toast('Entry and exit nodes must be different', true);
+    const ok = await saveProfile({multihop_enabled:enabled,multihop_entry_id:entry,multihop_exit_id:exit});
+    if (ok) { await refreshMultihopPanel(); toast('Multihop selection saved.'); }
+    return ok;
+  };
+
+  window.connectMultihop = async function connectMultihop() {
+    if (!multihopStatusCache?.platform_supported) return toast('Real multihop is not implemented on this platform yet.', true);
+    const entry = document.getElementById('mhEntry')?.value || '';
+    const exit = document.getElementById('mhExit')?.value || '';
+    if (!entry || !exit) return toast('Choose both an entry and exit node', true);
+    if (entry === exit) return toast('Entry and exit nodes must be different', true);
+    document.getElementById('mhEnabled').checked = true;
+    if (!await saveMultihopSelection()) return;
+    const base = document.getElementById('mhBase')?.value || 'wg';
+    const exitMode = document.getElementById('mhExitMode')?.value || 'shadowsocks';
+    try {
+      toast('Starting entry hop, private SOCKS handoff and exit transport…');
+      const result = await post('/api/multihop/connect',{entry_id:entry,exit_id:exit,base,exit_mode:exitMode});
+      toast(`Multihop connected: ${result.entry_name || entry} → ${result.exit_name || exit} · ${baseLabel(result.entry_base)} + ${result.exit_mode}`);
+      await refreshMultihopPanel();
+      setTimeout(refreshPublicIP,1200);
+    } catch (_) {}
+  };
+
+  const loadProfilesBeforeMultihop = window.loadProfiles;
+  if (typeof loadProfilesBeforeMultihop === 'function') window.loadProfiles = async function loadProfilesWithMultihop(){const out=await loadProfilesBeforeMultihop();await refreshMultihopPanel();return out};
+  const refreshBeforeMultihop = window.refresh;
+  window.refresh = async function refreshWithMultihopRoute(){
+    await refreshBeforeMultihop();
+    if (lastStatus?.mode !== 'multihop') return;
+    try {
+      const s = await j('/api/multihop/status');
+      multihopStatusCache = s;
+      const entry = mhNode(s.entry_id);
+      const exit = mhNode(s.actual_exit_id || s.exit_id);
+      const base = baseLabel(lastStatus.base || 'wg');
+      const transport = lastStatus.runtime_mode || s.runtime_exit_mode || 'exit transport';
+      connChip.textContent = `Multihop · ${base} → ${transport}`;
+      routerChip.textContent = `${entry?.name || s.entry_id || 'entry'} → ${exit?.name || s.exit_id || 'exit'}`;
+      routeInfo.innerHTML = `<b>${escapeHtml(entry?.name || s.entry_id || 'Entry')}</b> → <b>${escapeHtml(exit?.name || s.exit_id || 'Exit')}</b><br><span class="small">${escapeHtml(base)} split entry → private SOCKS5 → ${escapeHtml(transport)} exit TUN → Internet. Exit proof passed through the exit-only local proxy; public IP is attributed to the exit node.</span>`;
+      await refreshMultihopPanel();
+    } catch (_) {}
+  };
+
+  // Keep legacy onboarding copy aligned with current implementation.
   try {
+    if (Array.isArray(onboardingSteps)) {
+      for (const step of onboardingSteps) {
+        if (typeof step?.body === 'string' && step.body.includes('Multi-hop is not mislabeled as ready yet')) {
+          step.body = step.body.replace('Multi-hop is not mislabeled as ready yet; it requires a validated node-to-node chain with leak-safe routing.', 'Linux now has a capability-gated real two-node multihop path for WG/AWG entry plus Shadowsocks/Hysteria2 exit. Other platforms and exit stacks remain unavailable until their native chaining path is validated.');
+        }
+      }
+    }
     if (Array.isArray(onboardingSteps) && onboardingSteps[5]) {
       onboardingSteps[5].body = `<p>The Router VPN application is generic and can hold multiple nodes. Link this node separately using the authenticated home Setup Center.</p><p><b>Private file path:</b> request <code>router-vpn-bundle.json</code> or the private client bundle on demand, then import it under Nodes. <b>Pairing:</b> create a short-lived one-time LAN code in Setup Center and redeem it from a supported client; the permanent Setup Center access token never goes into the node bundle.</p><p class="small">Apple-family clients must grant Local Network permission before LAN pairing. WireGuard-only users can instead scan/import the real WireGuard profile in a compatible app.</p>`;
     }
     if (Array.isArray(onboardingSteps) && onboardingSteps[8]) {
       onboardingSteps[8].body = onboardingSteps[8].body
-        .replace(
-          'The Modes page always shows all 20 modes, layers, overhead estimates and exact availability reasons.',
-          'The Modes page shows the 16 logical modes, layers, overhead estimates, exact availability reasons and the WireGuard/AmneziaWG base selector where compatible.'
-        )
-        .replace(
-          'WireGuard is the default base; AmneziaWG stays available in advanced node settings.',
-          'WireGuard is the default preference; AmneziaWG remains a selectable/fallback base where supported.'
-        );
+        .replace('The Modes page always shows all 20 modes, layers, overhead estimates and exact availability reasons.','The Modes page shows the 16 logical modes, layers, overhead estimates, exact availability reasons and the WireGuard/AmneziaWG base selector where compatible.')
+        .replace('WireGuard is the default base; AmneziaWG stays available in advanced node settings.','WireGuard is the default preference; AmneziaWG remains a selectable/fallback base where supported.');
     }
     if (Array.isArray(onboardingSteps) && onboardingSteps[12]) {
-      onboardingSteps[12].body = `<p>Emergency stop terminates local Router VPN transports. Connection validation now reports requested and actual mode/base, selected-node path proof, rollback and typed errors.</p><p>Strict firewall kill-switch behavior is preserved as policy intent but is <b>not</b> shown as enforced until the current platform firewall adapter passes end-to-end tests. Setup Center private material is authenticated and pairing codes are LAN-only, short-lived and one-time.</p>`;
+      onboardingSteps[12].body = `<p>Emergency stop terminates local Router VPN transports. Connection validation reports requested and actual mode/base, selected-node path proof, rollback and typed errors.</p><p>Kill-switch enforcement is capability-gated by platform. Setup Center private material is authenticated and pairing codes are LAN-only, short-lived and one-time.</p>`;
     }
   } catch (_) {}
 
@@ -324,9 +455,11 @@
 
   ensureSessionPanel();
   ensurePolicyPanel();
+  ensureMultihopPanel();
   populatePolicyPanel();
   mirrorOnboarding();
   refreshTypedSession();
+  refreshMultihopPanel();
   setInterval(refreshTypedSession, 750);
 
   // The legacy UI init may have already loaded raw rows while this deferred
