@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
-          cache: true
+          cache: false
       - name: Parse native PowerShell
         shell: pwsh
         run: |
@@ -55,4 +55,13 @@ jobs:
           }
       - name: Go native contracts
         shell: pwsh
-        run: go test ./cmd/portable-launcher ./internal/common
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $output = & go test -v ./cmd/portable-launcher ./internal/common 2>&1
+          $exit = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exit -ne 0) {
+            $message = (($output | Select-Object -Last 80) -join "`n").Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+            Write-Output "::error title=Windows Go contract failure::$message"
+            exit $exit
+          }
