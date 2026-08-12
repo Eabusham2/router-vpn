@@ -53,6 +53,10 @@ echo "Installing pinned SagerNet gomobile toolchain v$GOMOBILE_VERSION..."
 GOBIN="$GO_BIN_DIR" go install "github.com/sagernet/gomobile/cmd/gomobile@v$GOMOBILE_VERSION"
 GOBIN="$GO_BIN_DIR" go install "github.com/sagernet/gomobile/cmd/gobind@v$GOMOBILE_VERSION"
 [[ -x "$GO_BIN_DIR/gomobile" && -x "$GO_BIN_DIR/gobind" ]] || { echo 'Pinned gomobile/gobind installation failed' >&2; exit 1; }
+# FindMobile resolves gomobile directly from GOPATH/bin, but gomobile itself
+# locates its gobind child through PATH. Keep both exact pinned binaries visible
+# to that child process rather than depending on runner-specific PATH contents.
+export PATH="$GO_BIN_DIR:$PATH"
 
 rm -rf "$VENDOR"
 mkdir -p "$(dirname "$VENDOR")" "$LIBDIR"
