@@ -15,13 +15,9 @@ func TestUIHTMLHasUniqueIDsAndValidPageNavigation(t *testing.T) {
 	html := string(b)
 	idRe := regexp.MustCompile(`\bid=["']([^"']+)["']`)
 	seen := map[string]int{}
-	for _, m := range idRe.FindAllStringSubmatch(html, -1) {
-		seen[m[1]]++
-	}
+	for _, m := range idRe.FindAllStringSubmatch(html, -1) { seen[m[1]]++ }
 	var duplicates []string
-	for id, count := range seen {
-		if count > 1 { duplicates = append(duplicates, id) }
-	}
+	for id, count := range seen { if count > 1 { duplicates = append(duplicates, id) } }
 	sort.Strings(duplicates)
 	if len(duplicates) > 0 { t.Fatalf("duplicate HTML ids: %v", duplicates) }
 
@@ -32,36 +28,30 @@ func TestUIHTMLHasUniqueIDsAndValidPageNavigation(t *testing.T) {
 	for _, m := range navRe.FindAllStringSubmatch(html, -1) {
 		name := m[1]
 		if name == "" { continue }
-		if !pages[name] && strings.Contains(html, "showPage('"+name+"')") {
-			t.Fatalf("navigation points at missing page %q", name)
-		}
+		if !pages[name] && strings.Contains(html, "showPage('"+name+"')") { t.Fatalf("navigation points at missing page %q", name) }
 	}
-	for _, required := range []string{"connect", "nodes", "modes"} {
-		if !pages[required] { t.Fatalf("required UI page missing: %s", required) }
-	}
+	for _, required := range []string{"connect", "nodes", "modes"} { if !pages[required] { t.Fatalf("required UI page missing: %s", required) } }
 }
 
-func TestLogicalUIReferencesCoreDOMAndMigratesStaleModeClaim(t *testing.T) {
+func TestLogicalUIReferencesCoreDOMAndCurrentProductContracts(t *testing.T) {
 	htmlBytes, err := os.ReadFile("ui.html")
 	if err != nil { t.Fatal(err) }
 	jsBytes, err := os.ReadFile("logical_ui.js")
 	if err != nil { t.Fatal(err) }
 	html, js := string(htmlBytes), string(jsBytes)
 	for _, id := range []string{"mode", "modes", "connChip", "routeInfo"} {
-		if !strings.Contains(html, `id="`+id+`"`) && !strings.Contains(html, `id='`+id+`'`) {
-			t.Fatalf("logical UI expects missing core DOM id %q", id)
-		}
+		if !strings.Contains(html, `id="`+id+`"`) && !strings.Contains(html, `id='`+id+`'`) { t.Fatalf("logical UI expects missing core DOM id %q", id) }
 	}
 	if strings.Contains(js, "PortableApps 3.9") { t.Fatal("stale PortableApps UI claim remains") }
 	legacy := "The Modes page always shows all 20 modes, layers, overhead estimates and exact availability reasons."
 	if strings.Contains(html, legacy) {
-		if !strings.Contains(js, legacy) || !strings.Contains(js, "The Modes page shows the 16 logical modes") {
-			t.Fatal("legacy 20-raw-mode onboarding text is not migrated to the 16 logical-mode contract")
-		}
+		if !strings.Contains(js, legacy) || !strings.Contains(js, "The Modes page shows the 16 logical modes") { t.Fatal("legacy 20-raw-mode onboarding text is not migrated to the 16 logical-mode contract") }
 	}
 	for _, required := range []string{
-		"Connection validation", "Selected-node path proof", "policy intent",
+		"Connection validation", "Selected-node path proof", "Cross-platform policy intent",
 		"/api/session", "reloadModes", "connectLogicalMode", "16 logical modes",
+		"Multihop", "/api/multihop/status", "/api/multihop/connect", "mhEntry", "mhExit",
+		"Entry and exit nodes must be different", "platform_supported", "exit public endpoint is not opened as a direct firewall exception",
 	} {
 		if !strings.Contains(js, required) { t.Fatalf("logical UI contract missing %q", required) }
 	}
