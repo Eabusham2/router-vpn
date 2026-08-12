@@ -1,6 +1,7 @@
 package com.eabusham.routervpn;
 
 import android.content.Context;
+import android.util.Base64;
 
 import org.amnezia.awg.backend.GoBackend;
 import org.amnezia.awg.backend.Tunnel;
@@ -12,7 +13,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -67,7 +67,7 @@ final class NativeAmneziaWGController implements Tunnel {
         if (awg == null) throw new IllegalStateException("Node bundle has no AmneziaWG 2 profile.");
         String encoded = awg.optString("awg.conf", "").trim();
         if (encoded.isEmpty()) throw new IllegalStateException("Node bundle has no AmneziaWG awg.conf.");
-        byte[] decoded = Base64.getDecoder().decode(encoded);
+        byte[] decoded = Base64.decode(encoded, Base64.DEFAULT);
         if (decoded.length <= 0 || decoded.length > 512 * 1024) throw new IllegalStateException("AmneziaWG profile size is invalid.");
         return Config.parse(new ByteArrayInputStream(decoded));
     }
