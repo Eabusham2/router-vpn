@@ -5,28 +5,23 @@ plugins {
 android {
     namespace 'com.eabusham.routervpn'
     compileSdk 36
-    buildToolsVersion '36.0.0'
 
     defaultConfig {
         applicationId 'com.eabusham.routervpn'
-        minSdk 26
+        minSdk 24
         targetSdk 36
-        versionCode 6
-        versionName '0.6.0-alpha'
-    }
-
-    buildTypes {
-        debug {
-            applicationIdSuffix '.debug'
-            versionNameSuffix '-debug'
-        }
-        release {
-            minifyEnabled false
-        }
+        versionCode 1
+        versionName '0.1.0'
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
     }
+}
+
+dependencies {
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    implementation 'com.wireguard.android:tunnel:1.0.20260102'
 }
