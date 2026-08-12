@@ -95,7 +95,9 @@ for required in (
 android = text("android/app/src/main/java/com/eabusham/routervpn/MainActivity.java")
 for required in (
     "Run full onboarding again", "server/portainer-current.yaml",
-    "AUTO / SMART AUTO / CUSTOM", "does not fake a live all-mode VPN connection",
+    "Raw WireGuard now has a real full-device Android VPN path",
+    "SMART AUTO/ALL/CUSTOM native execution",
+    "does not fake a live all-mode VPN connection",
     "14443", "15443", "14444",
 ):
     if required not in android:
