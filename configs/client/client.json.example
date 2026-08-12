@@ -1,6 +1,6 @@
 {
   "listen": "127.0.0.1:8788",
-  "health_url": "https://connectivitycheck.gstatic.com/generate_204",
+  "health_url": "http://10.77.0.1:8787/health",
   "auto_test_seconds": 8,
   "modes_file": "./modes.json",
   "state_file": "./state.json",

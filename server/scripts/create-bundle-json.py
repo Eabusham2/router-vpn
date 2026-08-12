@@ -47,6 +47,7 @@ if setup_path.is_file():
         setup_assets={}
 
 router_profile={
+    'schema_version':2,
     'id':'home',
     'name':'Home Router',
     'endpoint':endpoint,
@@ -63,8 +64,25 @@ router_profile={
     'daita_rate_kbps':192,
     'base_tunnel':'auto',
     'base_fallback':True,
+    'custom_layers':[],
     'home_lan_access':True,
     'home_lan_cidrs':['192.168.50.0/24'],
+    'kill_switch':False,
+    'kill_switch_policy':'off',
+    'ipv6_mode':'auto',
+    'startup_mode':'manual',
+    'auto_connect':False,
+    'multihop_enabled':False,
+    'multihop_entry_id':'',
+    'multihop_exit_id':'',
+    'mtu_policy':'default',
+    'manual_mtu':0,
+    'effective_mtu':0,
+    'diagnostics_enabled':False,
+    'diagnostics_retention_days':7,
+    'share_diagnostics':False,
+    'telemetry_enabled':False,
+    'path_probe_url':'http://10.77.0.1:8787/health',
     'location':'Home',
     'use_count':0,
     'dns_mode':'home',
@@ -79,7 +97,8 @@ router_profile={
     'dns_results':dns_results,
 }
 bundle={
-    'bundleVersion':3,
+    'bundleVersion':4,
+    'profileSchemaVersion':2,
     'endpoint':endpoint,
     'apiToken':token,
     'routerAPI':router_api,
