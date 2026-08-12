@@ -27,7 +27,8 @@ rm -f \
   "$OUT"/SHA256SUMS
 
 # Tiny direct files remain static because keeping these saves work without
-# meaningfully consuming storage.
+# meaningfully consuming storage. These are private node-link/setup files,
+# separate from the secret-free generic application packages.
 copy_public "$BUNDLE/router-vpn-bundle.json"
 copy_public "$BUNDLE/CREDENTIALS.txt"
 copy_public "$BUNDLE/router/asus-merlin-router-vpn-forwards.sh" "asus-merlin-router-vpn-forwards.sh"
@@ -52,15 +53,15 @@ needle="['Linux x86-64','router-vpn-linux-amd64.zip','x86-64 Linux'],"
 extra=[]
 if 'router-vpn-windows-amd64.zip' not in text:
     extra += [
-      "['Windows x64','router-vpn-windows-amd64.zip','On-demand Windows x86-64 package'],",
-      "['Windows ARM64','router-vpn-windows-arm64.zip','On-demand Windows ARM64 package'],",
-      "['Portable Windows x64','router-vpn-windows-portable-amd64.zip','On-demand home-linked no-install portable folder'],",
-      "['Portable Windows ARM64','router-vpn-windows-portable-arm64.zip','On-demand home-linked no-install portable folder'],",
+      "['Windows x64','router-vpn-windows-amd64.zip','On-demand generic Windows x86-64 app; add nodes separately'],",
+      "['Windows ARM64','router-vpn-windows-arm64.zip','On-demand generic Windows ARM64 app; add nodes separately'],",
+      "['Portable Windows x64','router-vpn-windows-portable-amd64.zip','On-demand generic no-install portable app; add nodes separately'],",
+      "['Portable Windows ARM64','router-vpn-windows-portable-arm64.zip','On-demand generic no-install portable app; add nodes separately'],",
     ]
 if 'router-vpn-android.apk' not in text:
     extra += [
-      "['Android APK','router-vpn-android.apk','Same-SHA GitHub-built Android controller/importer APK'],",
-      "['iOS/iPadOS preview IPA','router-vpn-ios-preview.ipa','Unsigned re-signable same-SHA preview; Packet Tunnel engines are intentionally unavailable'],",
+      "['Android APK','router-vpn-android.apk','Same-SHA GitHub-built generic Android controller/importer APK'],",
+      "['iOS/iPadOS preview IPA','router-vpn-ios-preview.ipa','Unsigned re-signable same-SHA generic preview; Packet Tunnel engines are intentionally unavailable'],",
     ]
 if extra:
     if needle not in text:
@@ -68,16 +69,16 @@ if extra:
     text=text.replace(needle, needle+''.join(extra), 1)
 text=text.replace(
     "['Checksums','SHA256SUMS','Verify direct downloads before bypassing OS security warnings']",
-    "['Static-file checksums','SHA256SUMS','SHA-256 for the private profile/helper/Setup Center files; on-demand packages are generated per request']",
+    "['Static-file checksums','SHA256SUMS','SHA-256 for private node-link/helper/Setup Center files; on-demand app packages are generated per request']",
 )
 
-if 'Packages are generated on demand' not in text:
+if 'Generic application packages are generated on demand' not in text:
     marker='</body>'
     note=(
       '<div style="max-width:980px;margin:8px auto 24px;padding:0 16px;opacity:.72;font-size:12px">'
-      'Packages are generated on demand. Desktop/Portable: matching GitHub CI artifact first, then router-side build of only the requested Go client package if unavailable. '
+      'Generic application packages are generated on demand and never contain linked-node secrets. Desktop/Portable: matching same-SHA GitHub CI artifact first, then router-side build of only the requested generic Go client package if unavailable. '
       'Android/iOS: matching same-SHA GitHub mobile artifact; the Linux home node does not fake platform-specific mobile builds. '
-      'Private home profiles and all temporary build/output files are deleted after delivery.'
+      'Add home/server nodes separately by private bundle import or pairing. Private bundle builds and all temporary package files are deleted after delivery.'
       '</div>'
     )
     if marker in text:
@@ -103,11 +104,15 @@ data['downloads']=arr
 data['download_policy']={
   'mode':'on-demand',
   'preferred_source':'github-actions',
-  'fallback':'router-local-build',
-  'local_build_scope':'requested-package-only',
+  'fallback':'router-local-generic-build',
+  'local_build_scope':'requested-generic-package-only',
   'local_build_platforms':'go-desktop-portable',
+  'generic_packages_secret_free':True,
+  'node_linking':'separate-bundle-or-pairing',
   'mobile_artifacts':'same-sha-github-only',
   'server_cache':False,
+  'max_parallel_package_requests':8,
+  'local_build_slots':1,
   'github_artifact_retention_days':1,
 }
 assets.write_text(json.dumps(data,indent=2)+'\n')
@@ -121,17 +126,21 @@ cat >"$OUT/download-policy.json" <<'JSON'
 {
   "mode": "on-demand",
   "preferred_source": "github-actions",
-  "fallback": "router-local-build",
-  "local_build_scope": "requested-package-only",
+  "fallback": "router-local-generic-build",
+  "local_build_scope": "requested-generic-package-only",
   "local_build_platforms": "go-desktop-portable",
+  "generic_packages_secret_free": true,
+  "node_linking": "separate-bundle-or-pairing",
   "mobile_artifacts": "same-sha-github-only",
   "server_cache": false,
+  "max_parallel_package_requests": 8,
+  "local_build_slots": 1,
   "github_artifact_retention_days": 1
 }
 JSON
 
 # This is intentionally the checksum manifest for lightweight static files only.
-# On-demand packages may be customized per request and are not pre-listed here.
+# On-demand packages may be generated per request and are not pre-listed here.
 (
   cd "$OUT"
   for f in \
@@ -144,4 +153,4 @@ JSON
 
 chmod 0600 "$OUT"/* 2>/dev/null || true
 
-echo 'Published lightweight Setup Center only; desktop/Portable packages are ephemeral and mobile downloads are same-SHA GitHub-backed.'
+echo 'Published lightweight Setup Center only; generic desktop/Portable apps are ephemeral, private node linking is separate, and mobile downloads are same-SHA GitHub-backed.'

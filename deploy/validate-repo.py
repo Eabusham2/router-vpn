@@ -113,6 +113,17 @@ for required in ("Link AmneziaWGKit/Xray engine before signing this target.", "c
     if required not in packet:
         error(f"iOS PacketTunnel must fail closed until real engines are linked: {required}")
 
+# Selected-node connection proof must not regress to a generic Internet 2xx.
+client_main = text("cmd/client/main.go")
+for required in (
+    "a.testHealth(p)", "PathProbeURL", "transport.Proxy = nil", "proof.OK",
+    "selected-router path proof failed", "http://10.77.0.1:8787/health",
+):
+    if required not in client_main:
+        error(f"client selected-path proof contract missing: {required}")
+if "connectivitycheck.gstatic.com" in client_main:
+    error("client reintroduced generic public Internet health success as a tunnel proof")
+
 # ASUS helper contract.
 helper = text("router/asus-merlin-router-vpn-forwards.sh")
 for required in (
@@ -135,10 +146,19 @@ if helper:
 
 # Finalizer/download architecture.
 finalizer = text("server/finalize/finalize.sh")
+initializer = text("server/init/noninteractive.sh")
 if "publish-downloads.sh" not in finalizer:
     error("finalizer does not publish lightweight Setup Center assets")
 if 'zip -qr "$BASE/router-vpn-client-bundle.zip"' in finalizer:
     error("finalizer reintroduced a permanent giant client ZIP")
+if "zip -qr" in initializer and "router-vpn-client-bundle.zip" in initializer:
+    error("initializer reintroduced a persistent private credential ZIP")
+for required in (
+    'rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"',
+    "builds the private link bundle only on demand",
+):
+    if required not in initializer:
+        error(f"initializer missing private-bundle cleanup contract: {required}")
 
 broker = text("server/scripts/download-broker.py")
 builder = text("server/scripts/build-download-on-demand.py")
@@ -157,9 +177,28 @@ for required in (
 for required in ("compile_requested", "GOTOOLCHAIN", "LOCAL_BUILD_TIMEOUT"):
     if required not in builder:
         error(f"on-demand builder missing router-local compiler contract: {required}")
-for required in ("router-local-build", "server_cache", "router-vpn-windows-portable-amd64.zip"):
+for required in (
+    "router-local-generic-build",
+    "requested-generic-package-only",
+    "generic_packages_secret_free",
+    "separate-bundle-or-pairing",
+    "server_cache",
+    "router-vpn-windows-portable-amd64.zip",
+):
     if required not in publisher:
-        error(f"Setup Center publisher missing current download policy: {required}")
+        error(f"Setup Center publisher missing current generic/private split policy: {required}")
+if "On-demand home-linked no-install portable folder" in publisher:
+    error("Setup Center publisher still labels generic Portable packages as home-linked")
+
+package_builds = text("deploy/package-builds.sh")
+if "check-generic-package-secrets.py" not in package_builds:
+    error("generic package build does not run the secret/leak scanner")
+
+# Branch cleanup is verification-only. Never blindly delete unknown refs in CI.
+for rel in (".github/workflows/keep-main-only.yml", ".github/workflows/build-all.yml"):
+    workflow = text(rel)
+    if "git/refs/heads" in workflow and "--method DELETE" in workflow:
+        error(f"{rel} blindly deletes branches; inspect merge/content before any deletion")
 
 # Only one production Compose remains. Portainer 2.33 Git stacks are kept
 # image-only; router-local compilation is for requested client packages, not
@@ -245,7 +284,7 @@ for rel, required_values in pins.items():
 
 # Current guide/docs boundaries.
 guide = text("docs/CURRENT-GUIDE.md")
-for required in ("server/portainer-current.yaml", "TCP      80      -> 18080", "14443", "15443", "14444", "DAITA-like", "router-local build of requested package only"):
+for required in ("server/portainer-current.yaml", "TCP      80      -> 18080", "14443", "15443", "14444", "DAITA-like"):
     if required not in guide:
         error(f"CURRENT-GUIDE missing current setup detail: {required}")
 
@@ -257,6 +296,7 @@ if ERRORS:
 
 print(
     f"Validated Router VPN product contract: {len(modes)} raw entries, {len(logical)} logical modes, "
-    "honest platform boundaries, ASUS forwarding, image-only Portainer production, "
-    "GitHub-first/router-local generic client fallback, dynamic ephemeral broker, exact pins and current docs."
+    "selected-node path proof, honest platform boundaries, non-destructive branch policy, ASUS forwarding, "
+    "image-only Portainer production, secret-free generic apps + separate private node linking, "
+    "GitHub-first/router-local generic fallback, dynamic ephemeral broker, exact pins and current docs."
 )

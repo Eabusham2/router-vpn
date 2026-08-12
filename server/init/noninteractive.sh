@@ -15,6 +15,11 @@ XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 umask 077
 mkdir -p "$BASE"/{config/{wireguard,awg2},client-bundle/generated,scripts,logs,downloads}
+
+# Private node bundles are always generated on demand. Remove cached credential
+# ZIPs left by older releases even on an already-initialized upgrade path.
+rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
+
 rm -rf "$BASE/source"
 mkdir -p "$BASE/source"
 cp -a /src/. "$BASE/source/"
@@ -132,12 +137,6 @@ import json,sys
 x=json.load(open('/src/configs/router/socks5.json.example')); x['inbounds'][0]['users'][0]={'username':sys.argv[1],'password':sys.argv[2]}; x['dns']['servers'][0]['server']=sys.argv[3]
 json.dump(x,open('/opt/router-vpn/config/socks5.json','w'),indent=2)
 PY
-cat >"$BASE/client-bundle/client.json" <<CFG
-{"listen":"127.0.0.1:8788","health_url":"https://connectivitycheck.gstatic.com/generate_204","auto_test_seconds":8,"modes_file":"./modes.json","state_file":"./state.json","scripts_dir":"./modes","profiles_file":"./routers.json"}
-CFG
-cat >"$BASE/client-bundle/routers.json" <<CFG
-{"selected_id":"home","profiles":[{"id":"home","name":"Home Router","endpoint":"$ENDPOINT","router_api":"http://$ADGUARD4:8787","api_token":"$TOKEN","adguard_ipv4":"$ADGUARD4","adguard_ipv6":"fd77:77::1","socks_host":"$ADGUARD4","socks_port":1080,"socks_username":"$SOCKS_USER","socks_password":"$SOCKS_PASSWORD","daita_host":"$ADGUARD4","daita_port":45999,"daita_rate_kbps":192}]}
-CFG
 cp /src/configs/client/modes.json "$BASE/client-bundle/modes.json"
 cp -a /src/modes /src/dist /src/client "$BASE/client-bundle/"
 cat >"$BASE/client-bundle/CREDENTIALS.txt" <<TXT
@@ -154,8 +153,6 @@ SOCKS5 password: $SOCKS_PASSWORD
 Router API token: $TOKEN
 TXT
 /src/server/scripts/create-bundle-json.py "$BASE" "$ENDPOINT" "$TOKEN" "http://$ADGUARD4:8787" "$ADGUARD4" "$SOCKS_USER" "$SOCKS_PASSWORD"
-cd "$BASE/client-bundle" && zip -qr "$BASE/downloads/router-vpn-client-bundle.zip" .
-cp "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip"
 touch "$BASE/.initialized"
 /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
-echo 'Initialization complete: http://AI_BOARD_IP:8786/router-vpn-client-bundle.zip'
+echo 'Initialization complete: private node material prepared; Setup Center serves generic apps and builds the private link bundle only on demand.'
