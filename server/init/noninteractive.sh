@@ -22,6 +22,7 @@ python3 /src/server/scripts/ensure-setup-auth.py "$BASE" >/dev/null
 
 # Private node bundles are always generated on demand. Remove cached credential
 # ZIPs/files left by older releases even on an already-initialized upgrade path.
+# The authenticated Setup Center builds the private link bundle only on demand.
 rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bundle.zip" \
       "$BASE/downloads/router-vpn-bundle.json" "$BASE/downloads/CREDENTIALS.txt"
 
