@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Ephemeral private Setup Center download broker.
 
-Desktop/Portable packages prefer the matching same-SHA GitHub Actions artifact.
-If that artifact is unavailable or unusable, the Linux/ARM64 home node compiles
-only the requested Go client package from /src, injects this node's private data
-in temporary storage, streams it, then deletes the temporary build/output.
+Generic desktop/Portable packages prefer the matching same-SHA GitHub Actions
+artifact. If unavailable, the Linux/ARM64 home node compiles only the requested
+GENERIC Go application package. Node linking/private profiles are delivered as a
+separate router-vpn-client-bundle.zip operation and are never baked into public
+application packages.
 
-Android and iOS downloads are also same-SHA GitHub-backed. They intentionally do
-not claim the Linux home node can reproduce platform-specific Android/iOS build
-pipelines (especially Xcode/iOS signing) when those artifacts are unavailable.
+Android and iOS remain same-SHA GitHub-backed and never pretend the Linux home
+node can reproduce platform-specific mobile/Xcode build pipelines.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -50,14 +51,18 @@ DIRECT_ARTIFACTS = {
 }
 
 MAX_GITHUB_ARTIFACT = 768 * 1024 * 1024
+MAX_MEMBER = 512 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 200
 CHUNK = 1024 * 1024
+REQUEST_SLOTS = threading.BoundedSemaphore(value=8)
 BUILD_SLOTS = threading.BoundedSemaphore(value=1)
+PACKAGE_TIMEOUT = 720
 
 
 def _api_headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "router-vpn-setup-center/1",
+        "User-Agent": "router-vpn-setup-center/2",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -93,18 +98,31 @@ def _download_limited(url: str, path: Path) -> None:
         raise RuntimeError("GitHub returned an empty artifact")
 
 
+def _safe_artifact_name(name: str) -> None:
+    normalized = urllib.parse.unquote(name.replace("\\", "/"))
+    p = PurePosixPath(normalized)
+    if p.is_absolute() or any(part in ("", ".", "..") for part in p.parts) or (p.parts and p.parts[0].endswith(":")):
+        raise RuntimeError("GitHub artifact contains an unsafe member path")
+
+
 def _pick_member(zf: zipfile.ZipFile, wanted: str) -> zipfile.ZipInfo:
     matches = []
     for item in zf.infolist():
+        _safe_artifact_name(item.filename.rstrip("/"))
+        mode = (item.external_attr >> 16) & 0o170000
+        if mode == stat.S_IFLNK:
+            raise RuntimeError("GitHub artifact contains a symlink")
+        if item.file_size > MAX_MEMBER:
+            raise RuntimeError("GitHub artifact member exceeds safety limit")
+        if item.compress_size > 0 and item.file_size > 8 * 1024 * 1024:
+            if item.file_size / item.compress_size > MAX_COMPRESSION_RATIO:
+                raise RuntimeError("GitHub artifact member compression ratio is unsafe")
         p = PurePosixPath(item.filename.replace("\\", "/"))
         if p.name == wanted and not item.is_dir():
             matches.append(item)
     if len(matches) != 1:
         raise RuntimeError(f"GitHub artifact contains {len(matches)} copies of {wanted}")
-    item = matches[0]
-    if item.file_size > MAX_GITHUB_ARTIFACT:
-        raise RuntimeError("selected GitHub package exceeds safety limit")
-    return item
+    return matches[0]
 
 
 def _github_scope() -> tuple[str, str, str]:
@@ -180,22 +198,8 @@ def fetch_direct_mobile(name: str, temp: Path) -> Path:
         ) from exc
 
 
-def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
-    if name in DIRECT_ARTIFACTS:
-        return fetch_direct_mobile(name, temp), "github"
-
+def _run_builder(base: Path, name: str, temp: Path, source: Path | None) -> Path:
     output = temp / name
-    source = None
-    source_label = "router-local-build"
-    try:
-        source = fetch_github_package(name, temp)
-        source_label = "github"
-    except Exception as exc:
-        print(
-            f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}; compiling requested package locally",
-            flush=True,
-        )
-
     args = [
         "python3", str(BUILDER_PATH),
         "--base", str(base),
@@ -205,19 +209,34 @@ def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
     ]
     if source is not None:
         args += ["--source-archive", str(source)]
+    subprocess.run(args, check=True, timeout=PACKAGE_TIMEOUT, stdout=subprocess.DEVNULL)
+    return output
+
+
+def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
+    if name in DIRECT_ARTIFACTS:
+        return fetch_direct_mobile(name, temp), "github"
+    if name == "router-vpn-client-bundle.zip":
+        return _run_builder(base, name, temp, None), "private-node-bundle"
+
+    source = None
     try:
-        subprocess.run(args, check=True, timeout=720, stdout=subprocess.DEVNULL)
-    except Exception:
-        if source is None:
-            raise
+        source = fetch_github_package(name, temp)
+    except Exception as exc:
         print(
-            f"download broker: GitHub package customization failed for {name}; compiling requested package locally",
+            f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}; compiling requested generic package locally",
             flush=True,
         )
-        output.unlink(missing_ok=True)
-        subprocess.run(args[:-2], check=True, timeout=720, stdout=subprocess.DEVNULL)
-        source_label = "router-local-build"
-    return output, source_label
+
+    if source is not None:
+        try:
+            return _run_builder(base, name, temp, source), "github"
+        except Exception as exc:
+            print(
+                f"download broker: GitHub package validation/repack failed for {name}: {type(exc).__name__}: {exc}; compiling requested generic package locally",
+                flush=True,
+            )
+    return _run_builder(base, name, temp, None), "router-local-generic-build"
 
 
 @contextmanager
@@ -247,11 +266,12 @@ def content_type_for(name: str) -> str:
 
 
 class Handler(SimpleHTTPRequestHandler):
-    server_version = "RouterVPNSetupCenter/1"
+    server_version = "RouterVPNSetupCenter/2"
 
     def end_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
         super().end_headers()
 
     def do_GET(self) -> None:
@@ -269,11 +289,15 @@ class Handler(SimpleHTTPRequestHandler):
             body = json.dumps({
                 "mode": "on-demand",
                 "preferred_source": "github-actions",
-                "fallback": "router-local-build",
+                "fallback": "router-local-generic-build",
                 "server_cache": False,
-                "local_build_scope": "requested-package-only",
+                "generic_packages_secret_free": True,
+                "node_linking": "separate-bundle-or-pairing",
+                "local_build_scope": "requested-generic-package-only",
                 "local_build_platforms": "go-desktop-portable",
                 "mobile_artifacts": "same-sha-github-only",
+                "max_parallel_package_requests": 8,
+                "local_build_slots": 1,
                 "github_artifact_retention_days": 1,
                 "github_sha": os.environ.get("ROUTER_VPN_GITHUB_SHA", "").strip(),
             }, separators=(",", ":")).encode() + b"\n"
@@ -292,36 +316,41 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def _dynamic(self, name: str) -> None:
-        acquired = BUILD_SLOTS.acquire(timeout=30)
-        if not acquired:
-            self.send_error(503, "download builder is busy; retry shortly")
+        if not REQUEST_SLOTS.acquire(timeout=1):
+            self.send_error(503, "download queue is full; retry shortly")
             return
         try:
-            with request_temp() as temp:
-                try:
-                    package, source = build_package(Path(self.server.base_dir), name, temp)
-                except subprocess.TimeoutExpired:
-                    self.send_error(504, "package generation timed out")
-                    return
-                except Exception as exc:
-                    print(f"download broker: failed {name}: {type(exc).__name__}: {exc}", flush=True)
-                    self.send_error(503, "requested package could not be generated")
-                    return
-                size = package.stat().st_size
-                self.send_response(200)
-                self.send_header("Content-Type", content_type_for(name))
-                self.send_header("Content-Disposition", f'attachment; filename="{name}"')
-                self.send_header("Content-Length", str(size))
-                self.send_header("Cache-Control", "no-store, max-age=0")
-                self.send_header("X-Router-VPN-Source", source)
-                self.end_headers()
-                try:
-                    with package.open("rb") as f:
-                        shutil.copyfileobj(f, self.wfile, CHUNK)
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
+            if not BUILD_SLOTS.acquire(timeout=30):
+                self.send_error(503, "download builder is busy; retry shortly")
+                return
+            try:
+                with request_temp() as temp:
+                    try:
+                        package, source = build_package(Path(self.server.base_dir), name, temp)
+                    except subprocess.TimeoutExpired:
+                        self.send_error(504, "package generation timed out")
+                        return
+                    except Exception as exc:
+                        print(f"download broker: failed {name}: {type(exc).__name__}: {exc}", flush=True)
+                        self.send_error(503, "requested package could not be generated")
+                        return
+                    size = package.stat().st_size
+                    self.send_response(200)
+                    self.send_header("Content-Type", content_type_for(name))
+                    self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                    self.send_header("Content-Length", str(size))
+                    self.send_header("Cache-Control", "no-store, max-age=0")
+                    self.send_header("X-Router-VPN-Source", source)
+                    self.end_headers()
+                    try:
+                        with package.open("rb") as f:
+                            shutil.copyfileobj(f, self.wfile, CHUNK)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+            finally:
+                BUILD_SLOTS.release()
         finally:
-            BUILD_SLOTS.release()
+            REQUEST_SLOTS.release()
 
     def translate_path(self, path: str) -> str:
         original = self.directory

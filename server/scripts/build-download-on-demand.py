@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Build/customize exactly one Router VPN download in a temporary path.
+"""Build exactly one Router VPN download in a temporary path.
 
-The AI Board never persists platform archives. A matching generic GitHub Actions
-package can be supplied with --source-archive. When GitHub is unavailable, the
-AI Board compiles only the requested desktop/Portable Go binaries from /src,
-assembles that one home-linked package in temporary storage, and the caller
-streams/deletes the resulting ZIP.
+Desktop and Portable application packages are GENERIC and secret-free. Installing
+Router VPN and linking a home/server node are separate operations. A matching
+same-SHA GitHub Actions package can be supplied with --source-archive; when it is
+unavailable the home node may compile only the requested generic Go package.
+
+router-vpn-client-bundle.zip is the explicit private node-link bundle and is kept
+separate from application packages. The caller owns the temporary output and is
+expected to stream/delete it after the request.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
@@ -17,10 +21,15 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+import urllib.parse
 import zipfile
 
 MAX_UNPACKED = 768 * 1024 * 1024
+MAX_MEMBERS = 10_000
+MAX_MEMBER = 512 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 200
 LOCAL_BUILD_TIMEOUT = 300
+PROFILE_SCHEMA_VERSION = 2
 
 PACKAGE_MAP = {
     "router-vpn-windows-amd64.zip": ("RouterVPN-Windows-amd64.zip", "windows", "amd64"),
@@ -43,27 +52,59 @@ def generic_name(name: str) -> str | None:
 
 
 def _safe_rel(name: str) -> Path:
-    p = PurePosixPath(name.replace("\\", "/"))
-    if p.is_absolute() or any(part in ("", ".", "..") for part in p.parts):
+    normalized = name.replace("\\", "/")
+    decoded = urllib.parse.unquote(normalized)
+    p = PurePosixPath(decoded)
+    if (
+        p.is_absolute()
+        or decoded.startswith("//")
+        or any(part in ("", ".", "..") for part in p.parts)
+        or (p.parts and p.parts[0].endswith(":"))
+    ):
         raise ValueError(f"unsafe archive path: {name}")
     return Path(*p.parts)
+
+
+def _safe_target(dst: Path, rel: Path) -> Path:
+    base = dst.resolve()
+    target = (dst / rel).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(f"archive path escapes destination: {rel}") from exc
+    return target
+
+
+def _check_zip_member(item: zipfile.ZipInfo) -> None:
+    _safe_rel(item.filename.rstrip("/"))
+    mode = (item.external_attr >> 16) & 0o170000
+    if mode == stat.S_IFLNK:
+        raise ValueError(f"archive symlink is not allowed: {item.filename}")
+    if item.flag_bits & 0x1:
+        raise ValueError(f"encrypted archive member is not allowed: {item.filename}")
+    if item.file_size > MAX_MEMBER:
+        raise ValueError(f"archive member exceeds safety limit: {item.filename}")
+    if item.compress_size > 0 and item.file_size > 8 * 1024 * 1024:
+        if item.file_size / item.compress_size > MAX_COMPRESSION_RATIO:
+            raise ValueError(f"archive member compression ratio is unsafe: {item.filename}")
 
 
 def safe_extract_zip(src: Path, dst: Path) -> None:
     total = 0
     with zipfile.ZipFile(src) as zf:
-        for item in zf.infolist():
+        items = zf.infolist()
+        if len(items) > MAX_MEMBERS:
+            raise ValueError("archive contains too many members")
+        for item in items:
             clean = item.filename.rstrip("/")
             if not clean:
                 continue
-            rel = _safe_rel(clean)
-            mode = (item.external_attr >> 16) & 0o170000
-            if mode == stat.S_IFLNK:
-                raise ValueError(f"archive symlink is not allowed: {item.filename}")
+            _check_zip_member(item)
             total += item.file_size
             if total > MAX_UNPACKED:
                 raise ValueError("archive expands beyond safety limit")
-            target = dst / rel
+            rel = _safe_rel(clean)
+            target = _safe_target(dst, rel)
             if item.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
                 continue
@@ -76,14 +117,19 @@ def safe_extract_tar(src: Path, dst: Path) -> None:
     total = 0
     with tarfile.open(src, "r:gz") as tf:
         members = tf.getmembers()
+        if len(members) > MAX_MEMBERS:
+            raise ValueError("archive contains too many members")
         for item in members:
             clean = item.name.rstrip("/")
             if not clean:
                 continue
-            _safe_rel(clean)
-            if item.issym() or item.islnk() or item.isdev():
+            rel = _safe_rel(clean)
+            _safe_target(dst, rel)
+            if item.issym() or item.islnk() or item.isdev() or item.isfifo():
                 raise ValueError(f"unsafe tar member: {item.name}")
             if item.isfile():
+                if item.size > MAX_MEMBER:
+                    raise ValueError(f"archive member exceeds safety limit: {item.name}")
                 total += item.size
                 if total > MAX_UNPACKED:
                     raise ValueError("archive expands beyond safety limit")
@@ -91,7 +137,7 @@ def safe_extract_tar(src: Path, dst: Path) -> None:
             clean = item.name.rstrip("/")
             if not clean:
                 continue
-            target = dst / _safe_rel(clean)
+            target = _safe_target(dst, _safe_rel(clean))
             if item.isdir():
                 target.mkdir(parents=True, exist_ok=True)
             elif item.isfile():
@@ -117,6 +163,8 @@ def copy_file(src: Path, dst: Path, required: bool = True) -> None:
         if required:
             raise FileNotFoundError(src)
         return
+    if src.is_symlink():
+        raise ValueError(f"refusing to package symlink: {src}")
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
 
@@ -126,31 +174,60 @@ def copy_tree(src: Path, dst: Path, required: bool = True) -> None:
         if required:
             raise FileNotFoundError(src)
         return
+    for path in src.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"refusing to package symlink: {path}")
     shutil.copytree(src, dst, dirs_exist_ok=True)
 
 
-def overlay_private(root: Path, family: str, bundle: Path) -> None:
-    if family == "portable":
-        app = root / "App" / "RouterVPN"
-        data = root / "Data"
-        if not app.is_dir():
-            raise ValueError("GitHub Portable ZIP has no App/RouterVPN payload")
-        data.mkdir(parents=True, exist_ok=True)
-        copy_file(bundle / "client.json", app / "client.json")
-        copy_file(bundle / "routers.json", app / "routers.json")
-        copy_file(bundle / "router-vpn-bundle.json", app / "router-vpn-bundle.json")
-        copy_file(bundle / "routers.json", data / "routers.json")
-        copy_tree(bundle / "generated", data / "generated")
-        return
-    for item in ("client.json", "routers.json", "router-vpn-bundle.json"):
-        copy_file(bundle / item, root / item)
-    copy_tree(bundle / "generated", root / "generated")
+def write_blank_routers(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"schema_version": PROFILE_SCHEMA_VERSION, "selected_id": "", "profiles": []}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(path, 0o600)
+
+
+def copy_generic_runtime(src_root: Path, root: Path) -> None:
+    """Copy only public application/runtime assets; never node-specific material."""
+    copy_tree(src_root / "modes", root / "modes")
+    copy_tree(src_root / "client", root / "client")
+    copy_file(src_root / "configs" / "client" / "client.json.example", root / "client.json")
+    copy_file(src_root / "configs" / "client" / "modes.json", root / "modes.json")
+    copy_file(src_root / "configs" / "client" / "logical-modes.json", root / "logical-modes.json")
+    copy_file(src_root / "docs" / "MODES.md", root / "MODES.md", required=False)
+    copy_file(src_root / "docs" / "CLIENT.md", root / "CLIENT.md", required=False)
+    copy_file(src_root / "SECURITY.md", root / "SECURITY.md", required=False)
+    copy_file(src_root / "LICENSE", root / "LICENSE")
+    write_blank_routers(root / "routers.json")
+    (root / "generated").mkdir(parents=True, exist_ok=True)
+
+
+def assert_generic_tree(root: Path) -> None:
+    """Fail closed if a supposedly generic package contains linked-node data."""
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"generic package contains symlink: {path.relative_to(root)}")
+        if path.is_file() and path.name == "router-vpn-bundle.json":
+            raise ValueError("generic package contains a private router-vpn-bundle.json")
+        if path.is_file() and "generated" in path.relative_to(root).parts:
+            raise ValueError("generic package contains generated per-node material")
+        if path.is_file() and path.name == "routers.json":
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise ValueError(f"generic routers.json is invalid: {path}") from exc
+            if data.get("selected_id") not in (None, "") or data.get("profiles") not in (None, []):
+                raise ValueError("generic package contains linked router profiles")
 
 
 def zip_dir(root: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
         for path in sorted(root.rglob("*")):
+            if path.is_symlink():
+                raise ValueError(f"refusing to archive symlink: {path}")
             rel = Path(root.name) / path.relative_to(root)
             if path.is_dir():
                 info = zipfile.ZipInfo(rel.as_posix().rstrip("/") + "/")
@@ -167,63 +244,58 @@ def require_dist(src_root: Path, name: str) -> Path:
     return p
 
 
-def copy_bundle_runtime(bundle: Path, root: Path) -> None:
-    copy_tree(bundle / "modes", root / "modes")
-    copy_tree(bundle / "client", root / "client")
-    copy_tree(bundle / "generated", root / "generated")
-    for name in ("client.json", "routers.json", "modes.json", "logical-modes.json", "router-vpn-bundle.json", "LICENSE"):
-        copy_file(bundle / name, root / name, required=(name != "logical-modes.json"))
-    helper = bundle / "router" / "asus-merlin-router-vpn-forwards.sh"
-    if helper.is_file():
-        copy_file(helper, root / "router" / helper.name)
+def build_private_bundle(work: Path, base: Path) -> Path:
+    bundle = base / "client-bundle"
+    if not bundle.is_dir():
+        raise FileNotFoundError(f"missing private client bundle: {bundle}")
+    root = work / "router-vpn-client-bundle"
+    copy_tree(bundle, root)
+    return root
 
 
-def build_local(work: Path, name: str, bundle: Path, src_root: Path) -> Path:
+def build_local(work: Path, name: str, src_root: Path, compiled_root: Path, base: Path) -> Path:
     _, family, arch = PACKAGE_MAP[name]
     if family == "bundle":
-        root = work / "router-vpn-client-bundle"
-        copy_tree(bundle, root)
-        return root
+        return build_private_bundle(work, base)
 
     if family == "portable":
         root = work / f"RouterVPNPortable-{arch}"
         app = root / "App" / "RouterVPN"
         data = root / "Data"
         data.mkdir(parents=True, exist_ok=True)
-        copy_bundle_runtime(bundle, app)
-        copy_file(require_dist(src_root, f"router-vpn-client-windows-{arch}.exe"), app / "router-vpn-client.exe")
-        copy_file(require_dist(src_root, f"router-vpn-dns-windows-{arch}.exe"), app / "router-vpn-dns.exe")
-        copy_file(require_dist(src_root, f"RouterVPNPortable-{arch}.exe"), root / "RouterVPNPortable.exe")
-        copy_file(require_dist(src_root, f"RouterVPNSetupRuntime-{arch}.exe"), root / "RouterVPNSetupRuntime.exe")
-        copy_file(bundle / "client" / "Setup-Windows-Runtime.ps1", root / "Setup-Windows-Runtime.ps1")
-        copy_file(bundle / "routers.json", data / "routers.json")
-        copy_tree(bundle / "generated", data / "generated")
+        copy_generic_runtime(src_root, app)
+        copy_file(require_dist(compiled_root, f"router-vpn-client-windows-{arch}.exe"), app / "router-vpn-client.exe")
+        copy_file(require_dist(compiled_root, f"router-vpn-dns-windows-{arch}.exe"), app / "router-vpn-dns.exe")
+        copy_file(require_dist(compiled_root, f"RouterVPNPortable-{arch}.exe"), root / "RouterVPNPortable.exe")
+        copy_file(require_dist(compiled_root, f"RouterVPNSetupRuntime-{arch}.exe"), root / "RouterVPNSetupRuntime.exe")
+        copy_file(src_root / "client" / "Setup-Windows-Runtime.ps1", root / "Setup-Windows-Runtime.ps1")
+        write_blank_routers(data / "routers.json")
+        (data / "generated").mkdir(parents=True, exist_ok=True)
         (root / "README.txt").write_text(
-            f"Router VPN Portable {arch} — home-linked on-demand package\n"
-            "Run Setup-Windows-Runtime.ps1 once for the WSL engine set, then RouterVPNPortable.exe.\n"
-            "Data contains this node's private profiles. Move the whole folder together; do not share it.\n"
+            f"Router VPN Portable {arch} — generic application package\n"
+            "Double-click RouterVPNPortable.exe, then link/import one or more Router VPN nodes separately.\n"
+            "No home/server node, token, or generated private profile is baked into this ZIP.\n"
+            "Move the whole folder together; writable Router VPN state stays under Data.\n"
             "Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.\n",
             encoding="utf-8",
         )
+        assert_generic_tree(root)
         return root
 
+    root = work / "router-vpn"
+    copy_generic_runtime(src_root, root)
     if family == "windows":
-        root = work / "router-vpn"
-        copy_bundle_runtime(bundle, root)
-        copy_file(require_dist(src_root, f"router-vpn-client-windows-{arch}.exe"), root / "router-vpn-client.exe")
-        copy_file(require_dist(src_root, f"router-vpn-dns-windows-{arch}.exe"), root / "router-vpn-dns.exe")
-        return root
-
-    if family in ("darwin", "linux"):
-        root = work / "router-vpn"
-        copy_bundle_runtime(bundle, root)
-        copy_file(require_dist(src_root, f"router-vpn-client-{family}-{arch}"), root / "router-vpn-client")
-        copy_file(require_dist(src_root, f"router-vpn-dns-{family}-{arch}"), root / "router-vpn-dns")
+        copy_file(require_dist(compiled_root, f"router-vpn-client-windows-{arch}.exe"), root / "router-vpn-client.exe")
+        copy_file(require_dist(compiled_root, f"router-vpn-dns-windows-{arch}.exe"), root / "router-vpn-dns.exe")
+    elif family in ("darwin", "linux"):
+        copy_file(require_dist(compiled_root, f"router-vpn-client-{family}-{arch}"), root / "router-vpn-client")
+        copy_file(require_dist(compiled_root, f"router-vpn-dns-{family}-{arch}"), root / "router-vpn-dns")
         (root / "router-vpn-client").chmod(0o755)
         (root / "router-vpn-dns").chmod(0o755)
-        return root
-
-    raise ValueError(f"unsupported package family: {family}")
+    else:
+        raise ValueError(f"unsupported package family: {family}")
+    assert_generic_tree(root)
+    return root
 
 
 def _go_build(go: str, src_root: Path, dist: Path, work: Path, goos: str, goarch: str,
@@ -238,9 +310,8 @@ def _go_build(go: str, src_root: Path, dist: Path, work: Path, goos: str, goarch
         "GOMODCACHE": str(work / "go-mod-cache"),
     })
     ldflags = "-s -w" + (" -H=windowsgui" if windows_gui else "")
-    cmd = [go, "build", "-trimpath", "-ldflags", ldflags, "-o", str(dist / output_name), package]
     proc = subprocess.run(
-        cmd,
+        [go, "build", "-trimpath", "-ldflags", ldflags, "-o", str(dist / output_name), package],
         cwd=src_root,
         env=env,
         stdout=subprocess.PIPE,
@@ -265,13 +336,9 @@ def compile_requested(work: Path, name: str, src_root: Path) -> Path:
     compiled = work / "router-local-build"
     dist = compiled / "dist"
     dist.mkdir(parents=True, exist_ok=True)
-
     ext = ".exe" if goos == "windows" else ""
-    _go_build(go, src_root, dist, work, goos, arch, "./cmd/client",
-              f"router-vpn-client-{goos}-{arch}{ext}")
-    _go_build(go, src_root, dist, work, goos, arch, "./cmd/dnsproxy",
-              f"router-vpn-dns-{goos}-{arch}{ext}")
-
+    _go_build(go, src_root, dist, work, goos, arch, "./cmd/client", f"router-vpn-client-{goos}-{arch}{ext}")
+    _go_build(go, src_root, dist, work, goos, arch, "./cmd/dnsproxy", f"router-vpn-dns-{goos}-{arch}{ext}")
     if family == "portable":
         _go_build(go, src_root, dist, work, "windows", arch, "./cmd/portable-launcher",
                   f"RouterVPNPortable-{arch}.exe", windows_gui=True)
@@ -280,8 +347,7 @@ def compile_requested(work: Path, name: str, src_root: Path) -> Path:
     return compiled
 
 
-def build_from_github(work: Path, name: str, source_archive: Path, bundle: Path) -> Path:
-    _, family, _ = PACKAGE_MAP[name]
+def build_from_github(work: Path, source_archive: Path) -> Path:
     unpack = work / "github"
     unpack.mkdir()
     if source_archive.name.endswith(".tar.gz"):
@@ -289,7 +355,7 @@ def build_from_github(work: Path, name: str, source_archive: Path, bundle: Path)
     else:
         safe_extract_zip(source_archive, unpack)
     root = one_root(unpack)
-    overlay_private(root, family, bundle)
+    assert_generic_tree(root)
     return root
 
 
@@ -302,21 +368,22 @@ def main() -> int:
     ap.add_argument("--source-archive")
     args = ap.parse_args()
 
-    base = Path(args.base).resolve()
-    bundle = base / "client-bundle"
     output = Path(args.output).resolve()
+    base = Path(args.base).resolve()
     src_root = Path(args.source_root).resolve()
-    if not bundle.is_dir():
-        raise SystemExit(f"missing private client bundle: {bundle}")
+    family = PACKAGE_MAP[args.name][1]
 
     with tempfile.TemporaryDirectory(prefix="router-vpn-one-package-") as td:
         work = Path(td)
         if args.source_archive:
-            root = build_from_github(work, args.name, Path(args.source_archive), bundle)
+            if family == "bundle":
+                raise SystemExit("private node bundle cannot be sourced from a public generic artifact")
+            root = build_from_github(work, Path(args.source_archive))
         else:
             compiled_root = compile_requested(work, args.name, src_root)
-            root = build_local(work, args.name, bundle, compiled_root)
+            root = build_local(work, args.name, src_root, compiled_root, base)
         zip_dir(root, output)
+
     if not output.is_file() or output.stat().st_size == 0:
         raise SystemExit("package creation returned an empty file")
     os.chmod(output, 0o600)

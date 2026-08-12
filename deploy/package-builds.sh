@@ -10,6 +10,7 @@ mkdir -p "$OUT"
 write_blank_routers(){
   cat >"$1" <<'JSON'
 {
+  "schema_version": 2,
   "selected_id": "",
   "profiles": []
 }
@@ -102,6 +103,7 @@ Run Start-RouterVPN.ps1 for the Router VPN controller/app window.
 For full Router VPN shell-engine operation, run Setup-Windows-Runtime.ps1 once. It checks
 WSL/Ubuntu, installs the required tunnel/proxy engines, and refuses to claim readiness when an
 engine is still missing. Raw WireGuard/AmneziaWG profiles can also be imported into native apps.
+This is a generic application package: link/import Router VPN nodes separately after install.
 Router VPN is MIT-licensed open-source software; see LICENSE.
 TXT
   package_zip "RouterVPN-Windows-$arch" "$dir"
@@ -121,6 +123,7 @@ for arch in amd64 arm64; do
   cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe"
   cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe"
   cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1"
+  write_blank_routers "$data/routers.json"
   cat >"$root/README.txt" <<'TXT'
 Double-click RouterVPNPortable.exe.
 
@@ -128,9 +131,10 @@ App/RouterVPN contains immutable Router VPN binaries, raw/logical mode catalogs,
 runtime setup helpers. Data contains only writable settings, imported private router profiles,
 state, generated per-router material and the dedicated portable browser profile.
 
-For full shell-engine operation on Windows, run Setup-Windows-Runtime.ps1 once. The launcher
-then routes Router VPN mode checks/runs through WSL with Windows paths translated automatically.
-Move the whole RouterVPNPortable folder together; private imported profiles remain in Data.
+The distributed ZIP is generic and contains no linked home/server node. Add nodes separately by
+file import or pairing after launch. For full shell-engine operation on Windows, run
+Setup-Windows-Runtime.ps1 once. The launcher routes Router VPN mode checks/runs through WSL with
+Windows paths translated automatically. Move the whole RouterVPNPortable folder together.
 Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.
 TXT
   package_zip "RouterVPN-Portable-Windows-$arch" "$root"
@@ -152,7 +156,7 @@ while IFS= read -r binary; do
   cp "$binary" "$dir/router-vpn-client"
   cp "$DIST/dnsproxy/router-vpn-dns-${os}-${arch}" "$dir/router-vpn-dns"
   chmod +x "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/modes/"*.sh
-  cat >"$dir/start-router-vpn.sh" <<'SH'
+  cat >"$dir/start-router-vpn.sh" <<'SH2'
 #!/usr/bin/env sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -160,10 +164,13 @@ export HOMEVPN_ROOT="$ROOT"
 export HOMEVPN_CLIENT_CONFIG="$ROOT/client.json"
 cd "$ROOT"
 exec ./router-vpn-client
-SH
+SH2
   chmod +x "$dir/start-router-vpn.sh"
   package_tgz "$name" "$dir"
 done < <(find "$DIST/client" -maxdepth 1 -type f -name 'router-vpn-client-*' | sort)
+
+# Public CI application archives must remain generic and carry the MIT license.
+python3 "$ROOT/deploy/check-generic-package-secrets.py" "$OUT"
 
 cp "$DIST/SHA256SUMS" "$OUT/BINARY-SHA256SUMS"
 (
@@ -171,4 +178,4 @@ cp "$DIST/SHA256SUMS" "$OUT/BINARY-SHA256SUMS"
   find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 )
 rm -rf "$OUT/work"
-printf 'Packaged MIT-licensed open-source artifacts in %s\n' "$OUT"
+printf 'Packaged MIT-licensed secret-free generic artifacts in %s\n' "$OUT"
