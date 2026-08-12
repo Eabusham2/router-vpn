@@ -2,9 +2,11 @@
 set -euo pipefail
 MODE=${1:?combined mode}
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
-PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}" | tr -cd 'A-Za-z0-9_.-'); PROFILE_ID=${PROFILE_ID:-router}
-ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend first}
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/profile-id.sh"
+PROFILE_ID=$(homevpn_profile_id)
+ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend first}
 SOURCE="$ROOT/generated/$PROFILE_ID/$MODE"; [[ -d "$SOURCE" ]] || SOURCE="$ROOT/generated/$MODE"
 RUN="$ROOT/run"; CONF="$RUN/profile-$PROFILE_ID-$MODE"; rm -rf "$CONF"; mkdir -p "$RUN"; cp -a "$SOURCE" "$CONF"
 python3 - "$CONF" "$ENDPOINT" <<'PY'
@@ -28,8 +30,8 @@ for p in root.glob('*.json'):
 PY
 export HOMEVPN_MODE="$MODE"; export HOMEVPN_MTU=${HOMEVPN_MTU:-1380}
 python3 "$SCRIPT_DIR/mtu-policy.py" apply "$CONF"
-"$SCRIPT_DIR/check-combined.sh" "$MODE" >/dev/null
-python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json"
+HOMEVPN_PROFILE_ID="$PROFILE_ID" "$SCRIPT_DIR/check-combined.sh" "$MODE" >/dev/null
+HOMEVPN_PROFILE_ID="$PROFILE_ID" python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json"
 : >"$RUN/$MODE.pids"; start_bg(){ "$@" >>"$RUN/$MODE.log" 2>&1 & echo $! >>"$RUN/$MODE.pids"; }
 CFG="$CONF/sing-box.json";TMP="$RUN/$MODE-sing-box.json"
 if [[ ${HOMEVPN_SOCKS:-false} == true || ${HOMEVPN_JUMBO:-false} == true ]]; then
