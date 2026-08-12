@@ -82,15 +82,37 @@ jobs:
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
           docker compose -f server/portainer-current.yaml config >/dev/null
       - name: Build router images
+        shell: bash
         run: |
-          docker build -f server/init/Dockerfile -t router-vpn-ci-init .
-          docker build -f deploy/router-agent.Dockerfile -t router-vpn-ci-agent .
-          docker build -f server/wireguard/Dockerfile -t router-vpn-ci-wireguard .
-          docker build -f server/awg2/Dockerfile -t router-vpn-ci-awg2 .
-          docker build -f server/rosenpass/Dockerfile -t router-vpn-ci-rosenpass .
-          docker build -f server/naive/Dockerfile -t router-vpn-ci-naive .
-          docker build -f server/ss-v2ray/Dockerfile -t router-vpn-ci-ss-v2ray .
-          docker build -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux .
+          set -euo pipefail
+          build_image() {
+            local name=$1 dockerfile=$2 tag=$3
+            local log="/tmp/router-vpn-build-${name}.log"
+            for attempt in 1 2; do
+              echo "=== Build ${name} (attempt ${attempt}/2) ==="
+              if docker build --progress=plain -f "$dockerfile" -t "$tag" . >"$log" 2>&1; then
+                cat "$log"
+                echo "=== ${name}: OK ==="
+                return 0
+              fi
+              echo "=== ${name}: attempt ${attempt} failed ===" >&2
+              tail -n 180 "$log" >&2 || true
+              if [[ $attempt -lt 2 ]]; then
+                echo "Retrying ${name} once to distinguish transient registry/network failure from a deterministic build failure..." >&2
+                sleep 4
+              fi
+            done
+            echo "::error title=Router image build failed::${name} failed twice; see the build tail above."
+            return 1
+          }
+          build_image init server/init/Dockerfile router-vpn-ci-init
+          build_image router-agent deploy/router-agent.Dockerfile router-vpn-ci-agent
+          build_image wireguard server/wireguard/Dockerfile router-vpn-ci-wireguard
+          build_image amneziawg server/awg2/Dockerfile router-vpn-ci-awg2
+          build_image rosenpass server/rosenpass/Dockerfile router-vpn-ci-rosenpass
+          build_image naive server/naive/Dockerfile router-vpn-ci-naive
+          build_image ss-v2ray server/ss-v2ray/Dockerfile router-vpn-ci-ss-v2ray
+          build_image aux-proxies server/aux-proxies/Dockerfile router-vpn-ci-aux
       - name: Build all Go targets
         run: |
           chmod +x deploy/build-client.sh deploy/package-builds.sh
