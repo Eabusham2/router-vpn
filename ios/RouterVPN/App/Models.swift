@@ -36,7 +36,21 @@ struct LogicalMode: Identifiable, Codable, Hashable {
     }
 }
 
+struct DNSBenchmarkResult: Codable, Hashable {
+    var name: String
+    var address: String
+    var family: String?
+    var latencyMs: Double?
+    var working: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case name, address, family, working
+        case latencyMs = "latency_ms"
+    }
+}
+
 struct RouterProfile: Identifiable, Codable, Hashable {
+    var schemaVersion: Int?
     var id: String
     var name: String
     var endpoint: String
@@ -48,13 +62,58 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var socksPort: Int
     var socksUsername: String
     var socksPassword: String
+    var daitaHost: String?
+    var daitaPort: Int?
+    var daitaRateKbps: Int?
     var baseTunnel: String?
     var baseFallback: Bool?
+    var customLayers: [String]?
     var homeLANAccess: Bool?
     var homeLANCIDRs: [String]?
+    var killSwitch: Bool?
+    var killSwitchPolicy: String?
+    var ipv6Mode: String?
+    var startupMode: String?
+    var autoConnect: Bool?
+    var multihopEnabled: Bool?
+    var multihopEntryID: String?
+    var multihopExitID: String?
+    var mtuPolicy: String?
+    var manualMTU: Int?
+    var effectiveMTU: Int?
+    var diagnosticsEnabled: Bool?
+    var diagnosticsRetentionDays: Int?
+    var shareDiagnostics: Bool?
+    var telemetryEnabled: Bool?
+    var pathProbeURL: String?
+    var location: String?
+    var latitude: Double?
+    var longitude: Double?
+    var useCount: Int?
+    var lastUsedAt: String?
+    var latencySamples: Int?
+    var latencyMinMs: Double?
+    var latencyMedianMs: Double?
+    var latencyTrimmedMeanMs: Double?
+    var latencyAverageMs: Double?
+    var latencyP90Ms: Double?
+    var latencyMaxMs: Double?
+    var latencyLastTest: String?
+    var publicIP: String?
+    var dnsMode: String?
+    var dnsProtocol: String?
+    var dnsHost: String?
+    var dnsPort: Int?
+    var dnsServerName: String?
+    var dnsPath: String?
+    var fastestDNSHost: String?
+    var fastestDNSName: String?
+    var fastestDNSLatencyMs: Double?
+    var dnsResults: [DNSBenchmarkResult]?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, endpoint
+        case id, name, endpoint, location, latitude, longitude
+        case schemaVersion = "schema_version"
         case routerAPI = "router_api"
         case apiToken = "api_token"
         case adGuardIPv4 = "adguard_ipv4"
@@ -63,15 +122,57 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case socksPort = "socks_port"
         case socksUsername = "socks_username"
         case socksPassword = "socks_password"
+        case daitaHost = "daita_host"
+        case daitaPort = "daita_port"
+        case daitaRateKbps = "daita_rate_kbps"
         case baseTunnel = "base_tunnel"
         case baseFallback = "base_fallback"
+        case customLayers = "custom_layers"
         case homeLANAccess = "home_lan_access"
         case homeLANCIDRs = "home_lan_cidrs"
+        case killSwitch = "kill_switch"
+        case killSwitchPolicy = "kill_switch_policy"
+        case ipv6Mode = "ipv6_mode"
+        case startupMode = "startup_mode"
+        case autoConnect = "auto_connect"
+        case multihopEnabled = "multihop_enabled"
+        case multihopEntryID = "multihop_entry_id"
+        case multihopExitID = "multihop_exit_id"
+        case mtuPolicy = "mtu_policy"
+        case manualMTU = "manual_mtu"
+        case effectiveMTU = "effective_mtu"
+        case diagnosticsEnabled = "diagnostics_enabled"
+        case diagnosticsRetentionDays = "diagnostics_retention_days"
+        case shareDiagnostics = "share_diagnostics"
+        case telemetryEnabled = "telemetry_enabled"
+        case pathProbeURL = "path_probe_url"
+        case useCount = "use_count"
+        case lastUsedAt = "last_used_at"
+        case latencySamples = "latency_samples"
+        case latencyMinMs = "latency_min_ms"
+        case latencyMedianMs = "latency_median_ms"
+        case latencyTrimmedMeanMs = "latency_trimmed_mean_ms"
+        case latencyAverageMs = "latency_average_ms"
+        case latencyP90Ms = "latency_p90_ms"
+        case latencyMaxMs = "latency_max_ms"
+        case latencyLastTest = "latency_last_test"
+        case publicIP = "public_ip"
+        case dnsMode = "dns_mode"
+        case dnsProtocol = "dns_protocol"
+        case dnsHost = "dns_host"
+        case dnsPort = "dns_port"
+        case dnsServerName = "dns_server_name"
+        case dnsPath = "dns_path"
+        case fastestDNSHost = "fastest_dns_host"
+        case fastestDNSName = "fastest_dns_name"
+        case fastestDNSLatencyMs = "fastest_dns_latency_ms"
+        case dnsResults = "dns_results"
     }
 }
 
 struct ClientBundle: Codable {
     var bundleVersion: Int
+    var profileSchemaVersion: Int
     var endpoint: String
     var apiToken: String
     var routerAPI: String
@@ -88,7 +189,8 @@ struct ClientBundle: Codable {
     var profiles: [String: [String: String]]
 
     static let empty = ClientBundle(
-        bundleVersion: 3,
+        bundleVersion: 4,
+        profileSchemaVersion: 2,
         endpoint: "",
         apiToken: "",
         routerAPI: "http://10.77.0.1:8787",
@@ -106,13 +208,14 @@ struct ClientBundle: Codable {
     )
 
     enum CodingKeys: String, CodingKey {
-        case bundleVersion, endpoint, apiToken, routerAPI, adGuardIPv4, adGuardIPv6
+        case bundleVersion, profileSchemaVersion, endpoint, apiToken, routerAPI, adGuardIPv4, adGuardIPv6
         case socks5Host, socks5Port, socks5Username, socks5Password
         case routerProfiles, selectedRouterID, logicalModes, modes, profiles
     }
 
     init(
         bundleVersion: Int,
+        profileSchemaVersion: Int,
         endpoint: String,
         apiToken: String,
         routerAPI: String,
@@ -129,6 +232,7 @@ struct ClientBundle: Codable {
         profiles: [String: [String: String]]
     ) {
         self.bundleVersion = bundleVersion
+        self.profileSchemaVersion = profileSchemaVersion
         self.endpoint = endpoint
         self.apiToken = apiToken
         self.routerAPI = routerAPI
@@ -148,6 +252,10 @@ struct ClientBundle: Codable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         bundleVersion = try values.decodeIfPresent(Int.self, forKey: .bundleVersion) ?? 1
+        profileSchemaVersion = try values.decodeIfPresent(Int.self, forKey: .profileSchemaVersion) ?? 1
+        guard profileSchemaVersion <= 2 else {
+            throw DecodingError.dataCorruptedError(forKey: .profileSchemaVersion, in: values, debugDescription: "Router profile schema is newer than this app supports")
+        }
         endpoint = try values.decodeIfPresent(String.self, forKey: .endpoint) ?? ""
         apiToken = try values.decodeIfPresent(String.self, forKey: .apiToken) ?? ""
         routerAPI = try values.decodeIfPresent(String.self, forKey: .routerAPI) ?? "http://10.77.0.1:8787"

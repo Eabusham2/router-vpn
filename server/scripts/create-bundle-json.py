@@ -96,6 +96,19 @@ router_profile={
     'fastest_dns_latency_ms':fastest_latency,
     'dns_results':dns_results,
 }
+client_config={
+    'listen':'127.0.0.1:8788',
+    'health_url':'http://10.77.0.1:8787/health',
+    'auto_test_seconds':8,
+    'modes_file':'./modes.json',
+    'state_file':'./state.json',
+    'scripts_dir':'./modes',
+    'profiles_file':'./routers.json',
+}
+json.dump(client_config,open(base/'client-bundle/client.json','w'),indent=2)
+open(base/'client-bundle/client.json','a').write('\n')
+json.dump({'schema_version':2,'selected_id':'home','profiles':[router_profile]},open(base/'client-bundle/routers.json','w'),indent=2)
+open(base/'client-bundle/routers.json','a').write('\n')
 bundle={
     'bundleVersion':4,
     'profileSchemaVersion':2,
