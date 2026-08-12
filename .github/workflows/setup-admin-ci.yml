@@ -1,0 +1,36 @@
+name: Setup Center admin seam
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: setup-admin-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python syntax
+        run: |
+          python3 -m py_compile \
+            server/scripts/download-broker.py \
+            server/scripts/setup-center-server.py \
+            server/scripts/test_setup_center_server.py
+      - name: Setup Center admin proxy tests
+        run: python3 server/scripts/test_setup_center_server.py
+      - name: Router-agent admin tests
+        run: go test ./cmd/router-agent -run 'Admin|Peer|Listener' -count=1
+      - name: Production compose uses authenticated wrapper only
+        run: |
+          grep -F 'entrypoint: ["python3", "/src/server/scripts/setup-center-server.py"]' server/portainer-current.yaml
+          ! grep -E '8789:|:8789|0\.0\.0\.0:8789' server/portainer-current.yaml
+          grep -F '/opt/router-vpn:/opt/router-vpn:ro' server/portainer-current.yaml
