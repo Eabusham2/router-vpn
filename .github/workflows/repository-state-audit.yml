@@ -1,0 +1,40 @@
+name: Repository state audit
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  state:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require exactly one main branch and no open PRs/issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t branches < <(gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq '.[].name')
+          if [ "${#branches[@]}" -ne 1 ] || [ "${branches[0]}" != main ]; then
+            printf 'Repository must contain exactly one branch named main. Found: %s\n' "${branches[*]}" >&2
+            exit 1
+          fi
+
+          open_prs=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" --jq 'length' | awk '{s+=$1} END{print s+0}')
+          if [ "$open_prs" -ne 0 ]; then
+            echo "Repository must have zero open pull requests; found $open_prs." >&2
+            exit 1
+          fi
+
+          open_issues=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" --jq '[.[] | select(.pull_request == null)] | length' | awk '{s+=$1} END{print s+0}')
+          if [ "$open_issues" -ne 0 ]; then
+            echo "Repository must have zero open issues; found $open_issues." >&2
+            exit 1
+          fi
+
+          echo 'Repository state OK: main only, no open PRs, no open issues.'
