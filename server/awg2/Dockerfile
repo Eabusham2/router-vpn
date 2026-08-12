@@ -4,28 +4,44 @@ RUN apt-get -o Acquire::Retries=5 update \
  && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl gzip tar gcc libc6-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src/amneziawg-go
-RUN mkdir -p /out \
- && curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
-      "https://github.com/amnezia-vpn/amneziawg-go/archive/refs/tags/${AWG_GO_TAG}.tar.gz" \
-      -o /tmp/amneziawg-go.tar.gz \
- && tar -xzf /tmp/amneziawg-go.tar.gz -C /src/amneziawg-go --strip-components=1 \
- && rm -f /tmp/amneziawg-go.tar.gz \
- && go mod download \
- && go mod verify \
- && go build -ldflags '-linkmode external -extldflags "-fno-PIC -static"' -v -o /out/amneziawg-go .
+RUN set -eux; \
+    mkdir -p /out; \
+    fetch_tar() { \
+      out="$1"; shift; \
+      for url in "$@"; do \
+        if curl -fL --retry 5 --retry-all-errors --retry-delay 2 "$url" -o "$out"; then return 0; fi; \
+      done; \
+      return 1; \
+    }; \
+    fetch_tar /tmp/amneziawg-go.tar.gz \
+      "https://codeload.github.com/amnezia-vpn/amneziawg-go/tar.gz/refs/tags/${AWG_GO_TAG}" \
+      "https://github.com/amnezia-vpn/amneziawg-go/archive/refs/tags/${AWG_GO_TAG}.tar.gz"; \
+    tar -xzf /tmp/amneziawg-go.tar.gz -C /src/amneziawg-go --strip-components=1; \
+    rm -f /tmp/amneziawg-go.tar.gz; \
+    go mod download; \
+    go mod verify; \
+    go build -ldflags '-linkmode external -extldflags "-fno-PIC -static"' -v -o /out/amneziawg-go .
 
 FROM debian:bookworm AS tools-build
 ARG AWGTOOLS_TAG=v1.0.20250901
 RUN apt-get -o Acquire::Retries=5 update \
  && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl gzip tar make gcc libc6-dev pkg-config linux-libc-dev \
  && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /src/amneziawg-tools \
- && curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
-      "https://github.com/amnezia-vpn/amneziawg-tools/archive/refs/tags/${AWGTOOLS_TAG}.tar.gz" \
-      -o /tmp/amneziawg-tools.tar.gz \
- && tar -xzf /tmp/amneziawg-tools.tar.gz -C /src/amneziawg-tools --strip-components=1 \
- && rm -f /tmp/amneziawg-tools.tar.gz \
- && make -C /src/amneziawg-tools/src
+RUN set -eux; \
+    mkdir -p /src/amneziawg-tools; \
+    fetch_tar() { \
+      out="$1"; shift; \
+      for url in "$@"; do \
+        if curl -fL --retry 5 --retry-all-errors --retry-delay 2 "$url" -o "$out"; then return 0; fi; \
+      done; \
+      return 1; \
+    }; \
+    fetch_tar /tmp/amneziawg-tools.tar.gz \
+      "https://codeload.github.com/amnezia-vpn/amneziawg-tools/tar.gz/refs/tags/${AWGTOOLS_TAG}" \
+      "https://github.com/amnezia-vpn/amneziawg-tools/archive/refs/tags/${AWGTOOLS_TAG}.tar.gz"; \
+    tar -xzf /tmp/amneziawg-tools.tar.gz -C /src/amneziawg-tools --strip-components=1; \
+    rm -f /tmp/amneziawg-tools.tar.gz; \
+    make -C /src/amneziawg-tools/src
 
 FROM debian:bookworm-slim
 RUN apt-get -o Acquire::Retries=5 update \

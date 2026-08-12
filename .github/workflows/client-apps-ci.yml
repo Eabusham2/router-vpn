@@ -93,7 +93,6 @@ jobs:
               "$root/App/RouterVPN/modes/check-mode.sh" \
               "$root/App/RouterVPN/modes/check-combined.sh" \
               "$root/App/RouterVPN/client/Setup-Windows-Runtime.ps1" \
-              "$root/App/RouterVPN/client/setup-windows-runtime.sh" \
               "$root/App/RouterVPN/client/install-xray.sh" \
               "$root/Data/generated/"; do
               grep -Fxq "$path" <<<"$list" || { echo "missing $path" >&2; exit 1; }

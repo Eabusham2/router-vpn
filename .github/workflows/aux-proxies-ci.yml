@@ -39,7 +39,6 @@ jobs:
           bash -n server/finalize/finalize.sh
           bash -n server/finalize/upgrade-safe.sh
           bash -n server/scripts/publish-downloads.sh
-          bash -n client/setup-windows-runtime.sh
           bash -n server/aux-proxies/entrypoint.sh
           bash -n server/naive/entrypoint.sh
           bash -n modes/check-mode.sh
@@ -79,7 +78,6 @@ jobs:
             test -s /opt/router-vpn/client-bundle/generated/shadowsocksr/ssr-client.json
             test -s /opt/router-vpn/client-bundle/logical-modes.json
             test -s /opt/router-vpn/client-bundle/client/Setup-Windows-Runtime.ps1
-            test -s /opt/router-vpn/client-bundle/client/setup-windows-runtime.sh
             test ! -e /opt/router-vpn/client-bundle/dist
             test ! -e /opt/router-vpn/router-vpn-client-bundle.zip
             ! find /opt/router-vpn/downloads -maxdepth 1 -type f -name "*.zip" | grep -q .

@@ -5,13 +5,21 @@ ARG AWGTOOLS_TAG=v1.0.20250901
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl gzip tar make gcc libc6-dev pkg-config linux-libc-dev \
  && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /src/amneziawg-tools \
- && curl -fL --retry 5 --retry-delay 2 \
-      "https://github.com/amnezia-vpn/amneziawg-tools/archive/refs/tags/${AWGTOOLS_TAG}.tar.gz" \
-      -o /tmp/amneziawg-tools.tar.gz \
- && tar -xzf /tmp/amneziawg-tools.tar.gz -C /src/amneziawg-tools --strip-components=1 \
- && rm -f /tmp/amneziawg-tools.tar.gz \
- && make -C /src/amneziawg-tools/src
+RUN set -eux; \
+    mkdir -p /src/amneziawg-tools; \
+    fetch_tar() { \
+      out="$1"; shift; \
+      for url in "$@"; do \
+        if curl -fL --retry 5 --retry-all-errors --retry-delay 2 "$url" -o "$out"; then return 0; fi; \
+      done; \
+      return 1; \
+    }; \
+    fetch_tar /tmp/amneziawg-tools.tar.gz \
+      "https://codeload.github.com/amnezia-vpn/amneziawg-tools/tar.gz/refs/tags/${AWGTOOLS_TAG}" \
+      "https://github.com/amnezia-vpn/amneziawg-tools/archive/refs/tags/${AWGTOOLS_TAG}.tar.gz"; \
+    tar -xzf /tmp/amneziawg-tools.tar.gz -C /src/amneziawg-tools --strip-components=1; \
+    rm -f /tmp/amneziawg-tools.tar.gz; \
+    make -C /src/amneziawg-tools/src
 
 FROM debian:bookworm-slim
 RUN apt-get update \
