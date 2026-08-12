@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
-PROFILE_ID=$(printf '%s' "${HOMEVPN_PROFILE_ID:-router}" | tr -cd 'A-Za-z0-9_.-')
-PROFILE_ID=${PROFILE_ID:-router}
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/profile-id.sh"
+PROFILE_ID=$(homevpn_profile_id)
 HEALTH_URL=${HOMEVPN_HEALTH_URL:-http://10.77.0.1:8787/health}
 TEST_SECONDS=${HOMEVPN_AUTO_TEST_SECONDS:-6}
 BASE=${HOMEVPN_BASE:-auto}
@@ -67,7 +68,7 @@ for candidate in "${candidates[@]}"; do
     continue
   fi
   echo "ALL trying $candidate" >&2
-  bash "$SCRIPT_DIR/run-max.sh" "$candidate" &
+  HOMEVPN_PROFILE_ID="$PROFILE_ID" bash "$SCRIPT_DIR/run-max.sh" "$candidate" &
   pid=$!
   sleep 2
   if kill -0 "$pid" >/dev/null 2>&1 && health; then
