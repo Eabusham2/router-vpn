@@ -1,0 +1,736 @@
+package main
+
+import (
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+const defaultAdminMutationListen = "127.0.0.1:8790"
+
+type adminPeerPolicy struct {
+	Interface  string   `json:"interface"`
+	PublicKey  string   `json:"public_key"`
+	AllowedIPs []string `json:"allowed_ips,omitempty"`
+	CreatedAt  int64    `json:"created_at"`
+}
+
+type adminForwardRule struct {
+	ID         string `json:"id"`
+	Protocol   string `json:"protocol"`
+	From       int    `json:"from"`
+	To         int    `json:"to"`
+	TargetIP   string `json:"target_ip"`
+	TargetPort int    `json:"target_port"`
+	Enabled    bool   `json:"enabled"`
+	CreatedAt  int64  `json:"created_at"`
+	UpdatedAt  int64  `json:"updated_at"`
+}
+
+type adminPersistentState struct {
+	Version          int                 `json:"version"`
+	ForwardingMaster bool                `json:"forwarding_master"`
+	LANAccess        bool                `json:"lan_access"`
+	BannedPeers      []adminPeerPolicy   `json:"banned_peers"`
+	RevokedPeers     []adminPeerPolicy   `json:"revoked_peers"`
+	ForwardRules     []adminForwardRule  `json:"forward_rules"`
+	UpdatedAt        int64               `json:"updated_at"`
+}
+
+type adminMutationServer struct {
+	token      string
+	cfg        cfg
+	statePath  string
+	lanCIDR4   string
+	lanCIDR6   string
+	mu         sync.Mutex
+	state      adminPersistentState
+	tunnelNets []*net.IPNet
+}
+
+func init() {
+	if strings.HasSuffix(os.Args[0], ".test") || os.Getenv("ROUTER_VPN_DISABLE_ADMIN_PLANE") == "1" {
+		return
+	}
+	go startAdminMutationPlane()
+}
+
+func startAdminMutationPlane() {
+	tokenPath := getenv("ROUTER_VPN_ADMIN_TOKEN_FILE", "/etc/router-vpn/setup-center.token")
+	configPath := getenv("ROUTER_VPN_CONFIG", getenv("HOMEVPN_ROUTER_CONFIG", "/etc/router-vpn/router-agent.json"))
+	statePath := getenv("ROUTER_VPN_ADMIN_STATE", "/var/lib/router-vpn/admin-state.json")
+	listen := getenv("ROUTER_VPN_ADMIN_MUTATION_LISTEN", defaultAdminMutationListen)
+	host, _, err := net.SplitHostPort(listen)
+	ip := net.ParseIP(host)
+	if err != nil || ip == nil || !ip.IsLoopback() {
+		log.Printf("router admin mutation plane disabled: listen address must be loopback")
+		return
+	}
+	var token string
+	var c cfg
+	for attempt := 0; attempt < 60; attempt++ {
+		if b, err := os.ReadFile(tokenPath); err == nil {
+			token = strings.TrimSpace(string(b))
+		}
+		if b, err := os.ReadFile(configPath); err == nil {
+			_ = json.Unmarshal(b, &c)
+		}
+		if len(token) >= 32 && c.WANInterface != "" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if len(token) < 32 || c.WANInterface == "" {
+		log.Printf("router admin mutation plane disabled: setup token/config unavailable")
+		return
+	}
+	if c.NftTable == "" {
+		c.NftTable = "router_vpn"
+	}
+	a := &adminMutationServer{
+		token:     token,
+		cfg:       c,
+		statePath: statePath,
+		lanCIDR4:  strings.TrimSpace(getenv("ROUTER_VPN_LAN_CIDR", "192.168.50.0/24")),
+		lanCIDR6:  strings.TrimSpace(getenv("ROUTER_VPN_LAN_CIDR6", "fd00::/8")),
+	}
+	for _, raw := range c.TunnelCIDRs {
+		_, n, err := net.ParseCIDR(raw)
+		if err == nil {
+			a.tunnelNets = append(a.tunnelNets, n)
+		}
+	}
+	if err := a.loadState(); err != nil {
+		log.Printf("router admin mutation plane disabled: %v", err)
+		return
+	}
+	if err := a.applyPolicy(); err != nil {
+		log.Printf("router admin mutation initial policy: %v", err)
+	}
+	go func() {
+		// main() recreates the router_vpn NAT table during startup. Reapply the
+		// persisted admin forwarding rules after that initialization settles.
+		time.Sleep(2 * time.Second)
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if err := a.applyPolicy(); err != nil {
+			log.Printf("router admin mutation startup policy retry: %v", err)
+		}
+		if err := a.applyForwardRules(); err != nil {
+			log.Printf("router admin mutation startup forward restore: %v", err)
+		}
+		a.applyRevocations()
+	}()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/admin/settings", a.settings)
+	mux.HandleFunc("/api/admin/forwarding", a.forwarding)
+	mux.HandleFunc("/api/admin/forwarding/", a.forwardingByID)
+	mux.HandleFunc("/api/admin/clients/ban", a.ban)
+	mux.HandleFunc("/api/admin/clients/unban", a.unban)
+	mux.HandleFunc("/api/admin/clients/revoke", a.revoke)
+	server := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
+	log.Printf("router persistent admin mutation plane listening on %s", listen)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("router admin mutation plane stopped: %v", err)
+	}
+}
+
+func defaultAdminState() adminPersistentState {
+	return adminPersistentState{Version: 1, ForwardingMaster: true, LANAccess: true, BannedPeers: []adminPeerPolicy{}, RevokedPeers: []adminPeerPolicy{}, ForwardRules: []adminForwardRule{}}
+}
+
+func (a *adminMutationServer) loadState() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if b, err := os.ReadFile(a.statePath); err == nil {
+		var state adminPersistentState
+		if err := json.Unmarshal(b, &state); err != nil {
+			return fmt.Errorf("invalid admin state: %w", err)
+		}
+		if state.Version != 1 {
+			return fmt.Errorf("unsupported admin state version %d", state.Version)
+		}
+		a.state = normalizeAdminState(state)
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read admin state: %w", err)
+	}
+	a.state = defaultAdminState()
+	return a.persistLocked()
+}
+
+func normalizeAdminState(state adminPersistentState) adminPersistentState {
+	if state.Version == 0 {
+		state.Version = 1
+	}
+	if state.BannedPeers == nil {
+		state.BannedPeers = []adminPeerPolicy{}
+	}
+	if state.RevokedPeers == nil {
+		state.RevokedPeers = []adminPeerPolicy{}
+	}
+	if state.ForwardRules == nil {
+		state.ForwardRules = []adminForwardRule{}
+	}
+	sort.Slice(state.ForwardRules, func(i, j int) bool { return state.ForwardRules[i].ID < state.ForwardRules[j].ID })
+	return state
+}
+
+func (a *adminMutationServer) persistLocked() error {
+	a.state.UpdatedAt = time.Now().Unix()
+	if err := os.MkdirAll(filepath.Dir(a.statePath), 0700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(a.state, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := a.statePath + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, 0600); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, a.statePath)
+}
+
+func (a *adminMutationServer) authorized(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+a.token)) == 1
+}
+
+func (a *adminMutationServer) require(w http.ResponseWriter, r *http.Request, methods ...string) bool {
+	if !a.authorized(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	for _, method := range methods {
+		if r.Method == method {
+			return true
+		}
+	}
+	w.Header().Set("Allow", strings.Join(methods, ", "))
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	return false
+}
+
+func decodeAdminJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *adminMutationServer) settings(w http.ResponseWriter, r *http.Request) {
+	if !a.require(w, r, http.MethodGet, http.MethodPut) {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if r.Method == http.MethodPut {
+		var q struct {
+			ForwardingMaster *bool `json:"forwarding_master"`
+			LANAccess        *bool `json:"lan_access"`
+		}
+		if err := decodeAdminJSON(w, r, &q); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if q.ForwardingMaster != nil {
+			a.state.ForwardingMaster = *q.ForwardingMaster
+		}
+		if q.LANAccess != nil {
+			a.state.LANAccess = *q.LANAccess
+		}
+		if err := a.persistLocked(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if err := a.applyPolicyLocked(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+	writeAdminJSON(w, http.StatusOK, map[string]any{
+		"ok": true,
+		"settings": map[string]any{
+			"forwarding_master": a.state.ForwardingMaster,
+			"lan_access": a.state.LANAccess,
+			"updated_at": a.state.UpdatedAt,
+		},
+		"capabilities": map[string]any{
+			"ban_unban": true,
+			"peer_revoke": true,
+			"forwarding_master": true,
+			"forwarding_rule_crud": true,
+			"lan_access_write": true,
+			"persistent_state": true,
+			"server_update": false,
+			"recovery_actions": false,
+		},
+		"state_path": a.statePath,
+	})
+}
+
+func (a *adminMutationServer) forwarding(w http.ResponseWriter, r *http.Request) {
+	if !a.require(w, r, http.MethodGet, http.MethodPost) {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if r.Method == http.MethodPost {
+		var q adminForwardRule
+		if err := decodeAdminJSON(w, r, &q); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := a.validateAdminForward(&q); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		now := time.Now().Unix()
+		if q.ID == "" {
+			q.ID = fmt.Sprintf("rule-%d", time.Now().UnixNano())
+			q.CreatedAt = now
+		}
+		q.UpdatedAt = now
+		replaced := false
+		for i := range a.state.ForwardRules {
+			if a.state.ForwardRules[i].ID == q.ID {
+				if q.CreatedAt == 0 {
+					q.CreatedAt = a.state.ForwardRules[i].CreatedAt
+				}
+				a.state.ForwardRules[i] = q
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			a.state.ForwardRules = append(a.state.ForwardRules, q)
+		}
+		if err := a.persistLocked(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if err := a.applyForwardRulesLocked(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "master": a.state.ForwardingMaster, "rules": a.state.ForwardRules})
+}
+
+func (a *adminMutationServer) forwardingByID(w http.ResponseWriter, r *http.Request) {
+	if !a.require(w, r, http.MethodDelete) {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/admin/forwarding/")
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "bad rule id", http.StatusBadRequest)
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := a.state.ForwardRules[:0]
+	found := false
+	for _, rule := range a.state.ForwardRules {
+		if rule.ID == id {
+			found = true
+			continue
+		}
+		out = append(out, rule)
+	}
+	if !found {
+		http.Error(w, "rule not found", http.StatusNotFound)
+		return
+	}
+	a.state.ForwardRules = out
+	if err := a.persistLocked(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if err := a.applyForwardRulesLocked(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "rules": a.state.ForwardRules})
+}
+
+func (a *adminMutationServer) validateAdminForward(q *adminForwardRule) error {
+	q.Protocol = strings.ToLower(strings.TrimSpace(q.Protocol))
+	if q.Protocol != "tcp" && q.Protocol != "udp" && q.Protocol != "both" {
+		return errors.New("protocol must be tcp, udp, or both")
+	}
+	if q.From < 1 || q.To < q.From || q.To > 65535 || q.To-q.From > 4096 {
+		return errors.New("invalid or too-large range")
+	}
+	if q.TargetPort < 0 || q.TargetPort > 65535 {
+		return errors.New("invalid target port")
+	}
+	for _, p := range a.cfg.ReservedPorts {
+		if p >= q.From && p <= q.To {
+			return fmt.Errorf("range includes reserved port %d", p)
+		}
+	}
+	if q.TargetPort > 0 && q.From != q.To {
+		return errors.New("custom target port requires a single external port")
+	}
+	ip := net.ParseIP(strings.TrimSpace(q.TargetIP))
+	if ip == nil || !a.inTunnel(ip) {
+		return errors.New("target_ip must be a Router VPN tunnel peer address")
+	}
+	q.TargetIP = ip.String()
+	return nil
+}
+
+func (a *adminMutationServer) inTunnel(ip net.IP) bool {
+	for _, n := range a.tunnelNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *adminMutationServer) ban(w http.ResponseWriter, r *http.Request) {
+	if !a.require(w, r, http.MethodPost) {
+		return
+	}
+	var q adminPeerPolicy
+	if err := decodeAdminJSON(w, r, &q); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := a.validatePeerPolicy(&q); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if peerPolicyIndex(a.state.RevokedPeers, q.PublicKey) >= 0 {
+		http.Error(w, "peer is revoked; it cannot be unblocked by the reversible ban control", http.StatusConflict)
+		return
+	}
+	q.CreatedAt = time.Now().Unix()
+	idx := peerPolicyIndex(a.state.BannedPeers, q.PublicKey)
+	if idx >= 0 {
+		a.state.BannedPeers[idx] = q
+	} else {
+		a.state.BannedPeers = append(a.state.BannedPeers, q)
+	}
+	if err := a.persistLocked(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if err := a.applyPolicyLocked(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "banned": q})
+}
+
+func (a *adminMutationServer) unban(w http.ResponseWriter, r *http.Request) {
+	if !a.require(w, r, http.MethodPost) {
+		return
+	}
+	var q struct { PublicKey string `json:"public_key"` }
+	if err := decodeAdminJSON(w, r, &q); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	q.PublicKey = strings.TrimSpace(q.PublicKey)
+	if q.PublicKey == "" {
+		http.Error(w, "public_key is required", http.StatusBadRequest)
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if peerPolicyIndex(a.state.RevokedPeers, q.PublicKey) >= 0 {
+		http.Error(w, "peer is revoked; revoke is intentionally not cleared by unban", http.StatusConflict)
+		return
+	}
+	out := a.state.BannedPeers[:0]
+	for _, peer := range a.state.BannedPeers {
+		if peer.PublicKey != q.PublicKey {
+			out = append(out, peer)
+		}
+	}
+	a.state.BannedPeers = out
+	if err := a.persistLocked(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if err := a.applyPolicyLocked(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "public_key": q.PublicKey, "banned": false})
+}
+
+func (a *adminMutationServer) revoke(w http.ResponseWriter, r *http.Request) {
+	if !a.require(w, r, http.MethodPost) {
+		return
+	}
+	var q adminPeerPolicy
+	if err := decodeAdminJSON(w, r, &q); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := a.validatePeerPolicy(&q); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	q.CreatedAt = time.Now().Unix()
+	if idx := peerPolicyIndex(a.state.RevokedPeers, q.PublicKey); idx >= 0 {
+		a.state.RevokedPeers[idx] = q
+	} else {
+		a.state.RevokedPeers = append(a.state.RevokedPeers, q)
+	}
+	if idx := peerPolicyIndex(a.state.BannedPeers, q.PublicKey); idx >= 0 {
+		a.state.BannedPeers[idx] = q
+	} else {
+		a.state.BannedPeers = append(a.state.BannedPeers, q)
+	}
+	if err := a.persistLocked(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if err := a.applyPolicyLocked(); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	removed, detail := removeLivePeer(q.Interface, q.PublicKey)
+	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": q, "live_peer_removed": removed, "detail": detail})
+}
+
+func (a *adminMutationServer) validatePeerPolicy(q *adminPeerPolicy) error {
+	q.Interface = strings.TrimSpace(q.Interface)
+	q.PublicKey = strings.TrimSpace(q.PublicKey)
+	if q.Interface == "" || q.PublicKey == "" {
+		return errors.New("interface and public_key are required")
+	}
+	if strings.ContainsAny(q.Interface, " /\\\t\r\n") {
+		return errors.New("invalid interface")
+	}
+	clean := []string{}
+	seen := map[string]bool{}
+	for _, raw := range q.AllowedIPs {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		ip, n, err := net.ParseCIDR(raw)
+		if err != nil || !a.inTunnel(ip) {
+			return fmt.Errorf("allowed IP %q is not a Router VPN tunnel address", raw)
+		}
+		// Bans intentionally target peer addresses, not arbitrary broad prefixes.
+		ones, bits := n.Mask.Size()
+		if (bits == 32 && ones != 32) || (bits == 128 && ones != 128) {
+			return fmt.Errorf("allowed IP %q must be a host route", raw)
+		}
+		value := ip.String()
+		if !seen[value] {
+			seen[value] = true
+			clean = append(clean, value)
+		}
+	}
+	if len(clean) == 0 {
+		return errors.New("at least one tunnel peer allowed_ip host route is required")
+	}
+	q.AllowedIPs = clean
+	return nil
+}
+
+func peerPolicyIndex(items []adminPeerPolicy, publicKey string) int {
+	for i := range items {
+		if items[i].PublicKey == publicKey {
+			return i
+		}
+	}
+	return -1
+}
+
+func (a *adminMutationServer) applyPolicy() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.applyPolicyLocked()
+}
+
+func (a *adminMutationServer) applyPolicyLocked() error {
+	const table = "router_vpn_admin"
+	var b strings.Builder
+	fmt.Fprintf(&b, "delete table inet %s\n", table)
+	// delete may fail when the table is absent; perform it separately and ignore.
+	_ = nftScript(b.String())
+	b.Reset()
+	fmt.Fprintf(&b, "add table inet %s\n", table)
+	fmt.Fprintf(&b, "add chain inet %s input { type filter hook input priority -10; policy accept; }\n", table)
+	fmt.Fprintf(&b, "add chain inet %s forward { type filter hook forward priority -10; policy accept; }\n", table)
+	for _, peer := range a.state.BannedPeers {
+		for _, raw := range peer.AllowedIPs {
+			ip := net.ParseIP(raw)
+			if ip == nil {
+				continue
+			}
+			family := "ip"
+			if ip.To4() == nil {
+				family = "ip6"
+			}
+			fmt.Fprintf(&b, "add rule inet %s input %s saddr %s drop comment %q\n", table, family, ip.String(), "router-vpn banned peer")
+			fmt.Fprintf(&b, "add rule inet %s forward %s saddr %s drop comment %q\n", table, family, ip.String(), "router-vpn banned peer")
+		}
+	}
+	if !a.state.ForwardingMaster {
+		for _, raw := range a.cfg.TunnelCIDRs {
+			_, n, err := net.ParseCIDR(raw)
+			if err != nil {
+				continue
+			}
+			family := "ip"
+			if n.IP.To4() == nil {
+				family = "ip6"
+			}
+			fmt.Fprintf(&b, "add rule inet %s forward iifname %q %s daddr %s drop comment %q\n", table, a.cfg.WANInterface, family, n.String(), "router-vpn forwarding master off")
+		}
+	}
+	if !a.state.LANAccess {
+		for _, raw := range a.cfg.TunnelCIDRs {
+			_, src, err := net.ParseCIDR(raw)
+			if err != nil {
+				continue
+			}
+			dstRaw := a.lanCIDR4
+			family := "ip"
+			if src.IP.To4() == nil {
+				dstRaw = a.lanCIDR6
+				family = "ip6"
+			}
+			if _, _, err := net.ParseCIDR(dstRaw); err != nil {
+				continue
+			}
+			fmt.Fprintf(&b, "add rule inet %s forward %s saddr %s %s daddr %s drop comment %q\n", table, family, src.String(), family, dstRaw, "router-vpn LAN access off")
+		}
+	}
+	return nftScript(b.String())
+}
+
+func (a *adminMutationServer) applyForwardRules() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.applyForwardRulesLocked()
+}
+
+func (a *adminMutationServer) applyForwardRulesLocked() error {
+	// Admin-owned rules are tagged so they can be rebuilt without deleting
+	// tunnel-client-owned rules in the same Router VPN prerouting chain.
+	out, err := exec.Command("nft", "-a", "list", "chain", "inet", a.cfg.NftTable, "prerouting").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("list forwarding chain: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	var deletes strings.Builder
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, "router-vpn admin rule") || !strings.Contains(line, "# handle ") {
+			continue
+		}
+		parts := strings.Split(line, "# handle ")
+		if len(parts) != 2 {
+			continue
+		}
+		handle := strings.Fields(parts[1])
+		if len(handle) == 0 {
+			continue
+		}
+		if _, err := strconv.Atoi(handle[0]); err != nil {
+			continue
+		}
+		fmt.Fprintf(&deletes, "delete rule inet %s prerouting handle %s\n", a.cfg.NftTable, handle[0])
+	}
+	if deletes.Len() > 0 {
+		if err := nftScript(deletes.String()); err != nil {
+			return err
+		}
+	}
+	var adds strings.Builder
+	for _, rule := range a.state.ForwardRules {
+		if !rule.Enabled {
+			continue
+		}
+		protos := []string{rule.Protocol}
+		if rule.Protocol == "both" {
+			protos = []string{"tcp", "udp"}
+		}
+		ports := strconv.Itoa(rule.From)
+		if rule.To != rule.From {
+			ports = fmt.Sprintf("%d-%d", rule.From, rule.To)
+		}
+		for _, proto := range protos {
+			target := net.ParseIP(rule.TargetIP)
+			if target == nil {
+				continue
+			}
+			fmt.Fprintf(&adds, "add rule inet %s prerouting iifname %q %s dport %s dnat to %s comment %q\n", a.cfg.NftTable, a.cfg.WANInterface, proto, ports, formatDNAT(target, rule.TargetPort), "router-vpn admin rule "+rule.ID)
+		}
+	}
+	if adds.Len() == 0 {
+		return nil
+	}
+	return nftScript(adds.String())
+}
+
+func removeLivePeer(iface, publicKey string) (bool, string) {
+	commands := []string{"wg", "awg"}
+	var details []string
+	removed := false
+	for _, command := range commands {
+		if _, err := exec.LookPath(command); err != nil {
+			continue
+		}
+		out, err := exec.Command(command, "set", iface, "peer", publicKey, "remove").CombinedOutput()
+		if err == nil {
+			removed = true
+			details = append(details, command+": removed")
+			continue
+		}
+		details = append(details, fmt.Sprintf("%s: %v: %s", command, err, strings.TrimSpace(string(out))))
+	}
+	if len(details) == 0 {
+		return false, "no WireGuard-family control tool is installed for this interface"
+	}
+	return removed, strings.Join(details, "; ")
+}
+
+func (a *adminMutationServer) applyRevocations() {
+	a.mu.Lock()
+	items := append([]adminPeerPolicy(nil), a.state.RevokedPeers...)
+	a.mu.Unlock()
+	for _, peer := range items {
+		removed, detail := removeLivePeer(peer.Interface, peer.PublicKey)
+		log.Printf("reapply revoked peer %s on %s removed=%v detail=%s", peer.PublicKey, peer.Interface, removed, detail)
+	}
+}
