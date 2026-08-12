@@ -112,6 +112,9 @@ final class NativeSingBoxController {
         if (!session.mkdir()) throw new IllegalStateException("Cannot create layered session.");
         int total = 0;
         try {
+            if (AndroidKillSwitchPolicy.strictRequested(root)) {
+                writeFile(new File(session, AndroidKillSwitchPolicy.SESSION_MARKER), new byte[]{'1','\n'});
+            }
             JSONArray names = profile.names();
             if (names == null) throw new IllegalStateException("Selected mode profile is empty.");
             for (int i = 0; i < names.length(); i++) {
