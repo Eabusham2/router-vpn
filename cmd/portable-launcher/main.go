@@ -210,12 +210,22 @@ func prepareWindowsModeCatalog(src, dst, windowsModesDir string) (bool, string) 
 
 	linuxModesDir, wslErr := wslPath(windowsModesDir)
 	wslOK := wslErr == nil
-	reason := "WSL2/default Linux distro is ready"
+	reason := "WSL2/default Linux distro is ready for layered Router VPN shell engines"
 	if !wslOK {
-		reason = "Windows full-tunnel runtime needs WSL2 with a default Linux distro; run Setup-Windows-Runtime.ps1 or use a native protocol client"
+		reason = "Layered Router VPN modes need WSL2/default Linux until their native Windows adapters are implemented; run Setup-Windows-Runtime.ps1"
 	}
 
+	// Raw WireGuard is special-cased to the real native Windows tunnel service.
+	// It never claims native readiness by proxying the raw base through WSL.
+	nativeWGHelper := filepath.Join(filepath.Dir(windowsModesDir), "client", "native-wireguard-windows.ps1")
 	for _, mode := range modes {
+		modeID, _ := mode["id"].(string)
+		if modeID == "wg" && fileExists(nativeWGHelper) {
+			mode["command"] = []any{"powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", nativeWGHelper, "up"}
+			mode["check_command"] = []any{"powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", nativeWGHelper, "check"}
+			mode["stop_command"] = []any{"powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", nativeWGHelper, "down"}
+			continue
+		}
 		for _, key := range []string{"command", "check_command", "stop_command"} {
 			raw, ok := mode[key].([]any)
 			if !ok || len(raw) == 0 {
@@ -245,6 +255,11 @@ func prepareWindowsModeCatalog(src, dst, windowsModesDir string) (bool, string) 
 		fatal(err)
 	}
 	return wslOK, reason
+}
+
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
 }
 
 func wslPath(path string) (string, error) {
