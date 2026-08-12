@@ -14,7 +14,7 @@ function Assert-SafeZip([string]$ZipPath) {
     }
   } finally { $archive.Dispose() }
 }
-function Install-PinnedArchive([string]$Name,[string]$Url,[string]$Sha256,[string]$ExeName,[string]$Destination) {
+function Install-PinnedArchive([string]$Name,[string]$Url,[string]$Sha256,[string]$ExeName,[string]$Destination,[string[]]$CompanionPatterns=@()) {
   $temp = Join-Path ([IO.Path]::GetTempPath()) ('router-vpn-'+[Guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $temp -Force | Out-Null
   $zip = Join-Path $temp "$Name.zip"
@@ -30,6 +30,14 @@ function Install-PinnedArchive([string]$Name,[string]$Url,[string]$Sha256,[strin
     if (-not $exe) { throw "$Name archive did not contain $ExeName" }
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $Destination $ExeName) -Force
+    # Keep runtime companions shipped beside the verified executable. This is
+    # needed for engines that use a bundled DLL (for example Naive/Chromium
+    # support) and for Xray's geo data. The containing archive was hash-checked
+    # before extraction, so these companions inherit the same provenance.
+    foreach ($pattern in $CompanionPatterns) {
+      Get-ChildItem -LiteralPath $exe.Directory.FullName -File -Filter $pattern -ErrorAction SilentlyContinue |
+        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Destination $_.Name) -Force }
+    }
   } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
@@ -75,8 +83,8 @@ switch ($arch) {
 }
 $sbUrl = "https://github.com/SagerNet/sing-box/releases/download/v$SingBoxVersion/$sbAsset"
 $xrUrl = "https://github.com/XTLS/Xray-core/releases/download/v$XrayVersion/$xrAsset"
-Install-PinnedArchive "sing-box-$SingBoxVersion" $sbUrl $sbSha 'sing-box.exe' $Runtime
-Install-PinnedArchive "xray-$XrayVersion" $xrUrl $xrSha 'xray.exe' $Runtime
+Install-PinnedArchive "sing-box-$SingBoxVersion" $sbUrl $sbSha 'sing-box.exe' $Runtime @('*.dll')
+Install-PinnedArchive "xray-$XrayVersion" $xrUrl $xrSha 'xray.exe' $Runtime @('*.dll','*.dat')
 
 & (Join-Path $Runtime 'sing-box.exe') version | Select-Object -First 1
 if ($LASTEXITCODE -ne 0) { throw 'sing-box runtime verification failed.' }
