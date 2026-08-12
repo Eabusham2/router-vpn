@@ -16,7 +16,7 @@ func TestPortableCleanExitSourceContract(t *testing.T) {
 		"Portable clean-exit requires Microsoft Edge, Chrome, or Brave app-window support",
 		"_ = browserCmd.Wait()",
 		"stopPortableController(cmd)",
-		"/api/emergency-stop",
+		`localURL+"api/emergency-stop"`,
 		"http://10.77.0.1:8787/health",
 	} {
 		if !strings.Contains(s, required) {
