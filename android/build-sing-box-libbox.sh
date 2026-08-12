@@ -5,6 +5,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 VERSION=1.13.12
 COMMIT=1086ab2563320e0da0c23b3a491d8dfa0939dff4
 NDK_VERSION=28.0.13004108
+GOMOBILE_VERSION=0.1.12
 VENDOR="$ROOT/.vendor/sing-box"
 LIBDIR="$ROOT/app/libs"
 AAR="$LIBDIR/libbox.aar"
@@ -42,6 +43,16 @@ export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
 # modern Go bootstrap the matching toolchain when the runner's ambient Go is
 # different, rather than silently compiling with an arbitrary preinstalled Go.
 export GOTOOLCHAIN=go1.24.7+auto
+
+# The official sing-box v1.13.12 Makefile's lib_install target pins these exact
+# SagerNet mobile tools. build_libbox calls FindMobile() before doing any bind
+# work and deliberately fails if gomobile/gobind are absent from GOPATH/bin.
+GO_BIN_DIR="$(go env GOPATH)/bin"
+mkdir -p "$GO_BIN_DIR"
+echo "Installing pinned SagerNet gomobile toolchain v$GOMOBILE_VERSION..."
+GOBIN="$GO_BIN_DIR" go install "github.com/sagernet/gomobile/cmd/gomobile@v$GOMOBILE_VERSION"
+GOBIN="$GO_BIN_DIR" go install "github.com/sagernet/gomobile/cmd/gobind@v$GOMOBILE_VERSION"
+[[ -x "$GO_BIN_DIR/gomobile" && -x "$GO_BIN_DIR/gobind" ]] || { echo 'Pinned gomobile/gobind installation failed' >&2; exit 1; }
 
 rm -rf "$VENDOR"
 mkdir -p "$(dirname "$VENDOR")" "$LIBDIR"
