@@ -7,3 +7,7 @@ run/
 .DS_Store
 .idea/
 .vscode/
+android/.vendor/
+android/app/libs/amneziawg-tunnel.aar
+android/app/libs/amneziawg-tunnel.commit
+android/app/libs/amneziawg-tunnel-LICENSE.txt

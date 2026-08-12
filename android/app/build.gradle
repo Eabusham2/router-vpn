@@ -21,7 +21,18 @@ android {
     }
 }
 
+def awgAar = file('libs/amneziawg-tunnel.aar')
+tasks.register('prepareAmneziaWgTunnel', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'bash', 'build-awg-tunnel.sh'
+    outputs.file awgAar
+}
+tasks.named('preBuild').configure { dependsOn tasks.named('prepareAmneziaWgTunnel') }
+
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
     implementation 'com.wireguard.android:tunnel:1.0.20260102'
+    // Built from the exact official AmneziaWG Android 2.0.0 source commit by
+    // android/build-awg-tunnel.sh. No moving JitPack/Maven coordinate is used.
+    implementation files('libs/amneziawg-tunnel.aar')
 }
