@@ -12,7 +12,7 @@ Router VPN is MIT-licensed open-source software. See `LICENSE`.
 4. Install the Router VPN client for the device, then import the small private `router-vpn-bundle.json` from Files **or directly over the home LAN where the native client supports LAN import**.
 5. Start with Raw tunnel / WireGuard, verify the public exit, then use AUTO, SMART AUTO, CUSTOM, or another logical mode.
 
-Large client archives are generated only when requested. The Setup Center prefers the current short-lived GitHub Actions build, overlays this node's private profiles in a temporary directory, streams it, and deletes the temporary copy. If no usable GitHub artifact is available, the AI Board assembles only the requested package from prebuilt binaries in its server image, streams it, and deletes it.
+Large client archives are generated only when requested. The Setup Center prefers the matching short-lived GitHub Actions artifact, overlays this node's private profiles in a temporary directory, streams it, and deletes the temporary copy. If no usable GitHub artifact is available, the AI Board compiles only the requested client package locally, applies the private node data in temporary storage, streams it, and deletes the temporary build/output.
 
 ## Mode model
 
@@ -92,7 +92,7 @@ PortableApps.com/PAF packaging is intentionally not supported. The project's own
 
 ## Client/build targets
 
-GitHub Actions is the compile/test environment; the AI Board hosts runtime services and creates only a requested fallback package from already-built image binaries when a matching GitHub artifact is unavailable.
+GitHub Actions is the normal compile/test environment. The production Portainer server stack stays exact-SHA image-only. The AI Board carries a bounded Go toolchain only so the private Setup Center can compile **one requested client package** when its matching GitHub artifact is unavailable; that temporary build is deleted after delivery.
 
 First-class build targets include:
 
@@ -126,7 +126,7 @@ This boundary is intentional: the UI must report an unavailable capability rathe
 
 ## More documentation
 
-- `docs/FULL-TUTORIAL.md` — full deployment/use guide
+- `docs/CURRENT-GUIDE.md` — authoritative full deployment/use guide
 - `docs/CLIENT.md` — client/platform notes
 - `docs/WINDOWS-PORTABLE.md` — Windows Portable ZIP, WSL runtime and relocation behavior
 - `docs/MODES.md` — raw runtime mode details

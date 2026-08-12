@@ -1,24 +1,25 @@
 # Install everything
 
-The complete current instructions are in:
+Use the authoritative current guide:
 
 ```text
-docs/FULL-TUTORIAL.md
+docs/CURRENT-GUIDE.md
 ```
 
-That guide covers:
+It covers:
 
-- Portainer Git deployment
-- SSH installation
-- all seven default WAN forwards
-- private client-bundle download
-- Windows, PortableApps, macOS, Linux, and Unix packages
-- Android APK
-- unsigned and optionally signed IPA
-- AUTO and all 19 manual modes
-- DAITA-like and Jumbo switches
-- normal no-auth SOCKS5 by IP and port
-- port, range, TCP/UDP/both, target-port, and protected-DMZ forwarding
-- diagnostics and honest platform limitations
+- image-only exact-SHA Portainer server deployment
+- dynamic private Setup Center/download broker
+- GitHub-first client downloads with router-local requested-package compile fallback
+- ASUS SSH/JFFS forwarding helper
+- full current WAN port map including OverTLS `14443` and SSR `15443`
+- protected/private ports including `14444`
+- 16 logical modes + WG/AWG base selection
+- AUTO / SMART AUTO / CUSTOM / MAX / ALL
+- DNS, LAN access, DAITA-like traffic padding, MTU/Jumbo guidance
+- platform-specific downloads
+- normal Windows Portable ZIP x64/ARM64
+- Android/iOS limitations
+- real vs browser-safe testing
 
-Build and Apple-signing details are in `docs/BUILDS.md`.
+PortableApps/PAF is not part of the current product.

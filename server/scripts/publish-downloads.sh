@@ -14,7 +14,7 @@ copy_public(){
 
 # Large packages are deliberately NOT published here. Remove files left by any
 # older release, including retired PortableApps files, so upgrades reclaim space.
-# The download broker creates only the requested archive under /tmp, streams it,
+# The download broker creates only the requested package under /tmp, streams it,
 # then deletes it.
 rm -f \
   "$OUT"/router-vpn-macos-*.zip \
@@ -22,6 +22,8 @@ rm -f \
   "$OUT"/router-vpn-windows-*.zip \
   "$OUT"/router-vpn-portableapps-*.zip \
   "$OUT"/router-vpn-client-bundle.zip \
+  "$OUT"/router-vpn-android.apk \
+  "$OUT"/router-vpn-ios-preview.ipa \
   "$OUT"/SHA256SUMS
 
 # Tiny direct files remain static because keeping these saves work without
@@ -39,33 +41,49 @@ from pathlib import Path
 import json,sys
 html=Path(sys.argv[1]); assets=Path(sys.argv[2])
 text=html.read_text()
+
 for stale in (
   "['PortableApps 3.9 x64 source','router-vpn-portableapps-amd64.zip','On-demand home-linked PortableApps source; MIT open source'],",
   "['PortableApps 3.9 ARM64 source','router-vpn-portableapps-arm64.zip','On-demand home-linked PortableApps source; MIT open source'],",
 ):
     text=text.replace(stale,'')
+
 needle="['Linux x86-64','router-vpn-linux-amd64.zip','x86-64 Linux'],"
-if 'router-vpn-windows-portable-amd64.zip' not in text:
-    extra=(
-      "['Windows x64','router-vpn-windows-amd64.zip','On-demand Windows x86-64 package'],"
-      "['Windows ARM64','router-vpn-windows-arm64.zip','On-demand Windows ARM64 package'],"
-      "['Portable Windows x64','router-vpn-windows-portable-amd64.zip','On-demand home-linked no-install portable folder'],"
-      "['Portable Windows ARM64','router-vpn-windows-portable-arm64.zip','On-demand home-linked no-install portable folder'],"
-    )
+extra=[]
+if 'router-vpn-windows-amd64.zip' not in text:
+    extra += [
+      "['Windows x64','router-vpn-windows-amd64.zip','On-demand Windows x86-64 package'],",
+      "['Windows ARM64','router-vpn-windows-arm64.zip','On-demand Windows ARM64 package'],",
+      "['Portable Windows x64','router-vpn-windows-portable-amd64.zip','On-demand home-linked no-install portable folder'],",
+      "['Portable Windows ARM64','router-vpn-windows-portable-arm64.zip','On-demand home-linked no-install portable folder'],",
+    ]
+if 'router-vpn-android.apk' not in text:
+    extra += [
+      "['Android APK','router-vpn-android.apk','Same-SHA GitHub-built Android controller/importer APK'],",
+      "['iOS/iPadOS preview IPA','router-vpn-ios-preview.ipa','Unsigned re-signable same-SHA preview; Packet Tunnel engines are intentionally unavailable'],",
+    ]
+if extra:
     if needle not in text:
         raise SystemExit('Setup Center download marker changed; refusing to publish broken download links')
     text=text.replace(needle, needle+''.join(extra), 1)
+text=text.replace(
+    "['Checksums','SHA256SUMS','Verify direct downloads before bypassing OS security warnings']",
+    "['Static-file checksums','SHA256SUMS','SHA-256 for the private profile/helper/Setup Center files; on-demand packages are generated per request']",
+)
+
 if 'Packages are generated on demand' not in text:
     marker='</body>'
     note=(
       '<div style="max-width:980px;margin:8px auto 24px;padding:0 16px;opacity:.72;font-size:12px">'
-      'Packages are generated on demand: matching GitHub CI artifact first, router-side build of only the requested package if GitHub is unavailable. '
+      'Packages are generated on demand. Desktop/Portable: matching GitHub CI artifact first, then router-side build of only the requested Go client package if unavailable. '
+      'Android/iOS: matching same-SHA GitHub mobile artifact; the Linux home node does not fake platform-specific mobile builds. '
       'Private home profiles and all temporary build/output files are deleted after delivery.'
       '</div>'
     )
     if marker in text:
         text=text.replace(marker,note+marker,1)
 html.write_text(text)
+
 try:
     data=json.loads(assets.read_text())
 except Exception:
@@ -75,6 +93,7 @@ wanted=[
  'router-vpn-linux-arm64.zip','router-vpn-linux-amd64.zip',
  'router-vpn-windows-amd64.zip','router-vpn-windows-arm64.zip',
  'router-vpn-windows-portable-amd64.zip','router-vpn-windows-portable-arm64.zip',
+ 'router-vpn-android.apk','router-vpn-ios-preview.ipa',
  'router-vpn-client-bundle.zip'
 ]
 arr=[x for x in data.get('downloads',[]) if 'portableapps' not in str(x).lower()]
@@ -86,6 +105,8 @@ data['download_policy']={
   'preferred_source':'github-actions',
   'fallback':'router-local-build',
   'local_build_scope':'requested-package-only',
+  'local_build_platforms':'go-desktop-portable',
+  'mobile_artifacts':'same-sha-github-only',
   'server_cache':False,
   'github_artifact_retention_days':1,
 }
@@ -102,10 +123,25 @@ cat >"$OUT/download-policy.json" <<'JSON'
   "preferred_source": "github-actions",
   "fallback": "router-local-build",
   "local_build_scope": "requested-package-only",
+  "local_build_platforms": "go-desktop-portable",
+  "mobile_artifacts": "same-sha-github-only",
   "server_cache": false,
   "github_artifact_retention_days": 1
 }
 JSON
+
+# This is intentionally the checksum manifest for lightweight static files only.
+# On-demand packages may be customized per request and are not pre-listed here.
+(
+  cd "$OUT"
+  for f in \
+    router-vpn-bundle.json CREDENTIALS.txt asus-merlin-router-vpn-forwards.sh \
+    modes.json logical-modes.json index.html router-vpn-device-setup.html \
+    setup-assets.json download-policy.json; do
+      [[ -f "$f" ]] && sha256sum "$f"
+  done
+) >"$OUT/SHA256SUMS"
+
 chmod 0600 "$OUT"/* 2>/dev/null || true
 
-echo 'Published lightweight Setup Center only; large client/Portable packages are ephemeral on-demand downloads.'
+echo 'Published lightweight Setup Center only; desktop/Portable packages are ephemeral and mobile downloads are same-SHA GitHub-backed.'

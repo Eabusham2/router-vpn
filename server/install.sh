@@ -85,7 +85,7 @@ REALITY_TARGET=$REALITY_TARGET
 ENV
 chmod 600 "$ENV_FILE"
 
-echo 'Starting Router VPN: exact GitHub images are preferred; missing custom images build locally from this checkout.'
+echo 'Starting Router VPN from exact published images...'
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --remove-orphans
 
 for container in router-vpn-init router-vpn-finalize; do
@@ -111,9 +111,9 @@ fi
 
 echo
 echo 'Router VPN installed.'
-echo 'Exact GitHub images are the normal path; source builds occur only when a custom image is unavailable.'
 echo "Setup Center: http://$ADGUARD4:8786/"
-echo 'Client packages use GitHub artifacts first and compile only the requested package locally if that artifact is unavailable.'
+echo 'Server services use exact published images for reliable Portainer-compatible deployment.'
+echo 'Client downloads use GitHub artifacts first and compile only the requested package on this host if that artifact is unavailable.'
 echo 'Use the Setup Center ASUS helper for persistent forwarding; do not expose 8786 to WAN.'
 echo 'Public listeners include OverTLS 14443/TCP and legacy SSR 15443/TCP+UDP when enabled.'
 echo 'Never WAN-forward 1080, 8786, 8787, 14444, 9443, SSH, Portainer, or AdGuard admin.'

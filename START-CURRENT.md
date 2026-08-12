@@ -1,43 +1,30 @@
 # Router VPN — start here
 
-Use only these current entrypoints:
+Current entrypoints:
 
-- Full setup + mode guide: `docs/CURRENT-GUIDE.md`
+- Full setup/product guide: `docs/CURRENT-GUIDE.md`
 - Current implementation boundaries: `docs/CURRENT-STATUS.md`
 - Portainer stack: `server/portainer-current.yaml`
-- Persistent ASUS Merlin WAN-forward helper: `router/asus-merlin-router-vpn-forwards.sh`
-- Terminal install/update manager: `server/manage.sh`
-- macOS client installer: `client/install-macos-final.sh`
-- Linux client installer: `client/install-linux.sh`
-- Router/AI-Board diagnostics: `server/scripts/doctor-current.sh`
-- Mode source of truth: `configs/client/modes.json`
-- Single cross-platform build workflow: `.github/workflows/build-all.yml`
+- ASUS forwarding helper: `router/asus-merlin-router-vpn-forwards.sh`
+- Terminal manager: `server/manage.sh`
+- Diagnostics: `server/scripts/doctor-current.sh`
+- Raw mode catalog: `configs/client/modes.json`
+- Logical app catalog: `configs/client/logical-modes.json`
 
-## First install
-
-Use the complete sequence in `docs/CURRENT-GUIDE.md`:
+## Normal deployment
 
 ```text
-Portainer home node
+GitHub CI green
+→ Portainer server/portainer-current.yaml
+→ exact-SHA image-only server stack
 → verify init/finalizer + running services
-→ download private client bundle
-→ install persistent ASUS Merlin WAN forwards
-→ install/import client
-→ choose DNS/mode/options
-→ run optional checks + live off-LAN tests
+→ private Setup Center :8786
+→ ASUS helper
+→ install/pair client
+→ off-LAN real tunnel test
 ```
 
-The desktop WebGUI also opens the complete first-run onboarding automatically. Its progress is saved; **Finish** keeps it dismissed later; **Help & setup → Run full onboarding again** reopens it without erasing the saved router profile.
-
-## Portainer
-
-Deploy this repository using:
-
-```text
-server/portainer-current.yaml
-```
-
-Normal environment values:
+Normal Portainer environment:
 
 ```text
 WAN_INTERFACE=eth0
@@ -45,58 +32,18 @@ LAN_CIDR=192.168.50.0/24
 ADGUARD4=192.168.50.133
 ```
 
-`ENDPOINT` is optional and may stay unset/blank for automatic public-IP detection.
+`ENDPOINT` is optional.
 
-The current stack preserves current-version profile credentials across normal redeploys. Older profile-engine layouts migrate once; after a migration, download/import the newly generated private client bundle once.
+## Client downloads
 
-## Client bundle
-
-On the home LAN:
+Open the private Setup Center on the LAN:
 
 ```text
-http://192.168.50.133:8786/router-vpn-client-bundle.zip
+http://192.168.50.133:8786/
 ```
 
-The ZIP includes the generated profiles plus:
+Client packages are GitHub-artifact-first. If the matching client artifact is unavailable, the AI Board compiles only the requested package locally. Private customization and build output are temporary and deleted after delivery.
 
-```text
-router/asus-merlin-router-vpn-forwards.sh
-```
+PortableApps/PAF is not supported; normal Router VPN Portable ZIP x64/ARM64 is supported.
 
-The default ASUS mapping uses **external TCP 80 → AI Board TCP 18080** for the ACME challenge. Do not WAN-expose `1080`, `8786`, `8787`, `9443`, SSH, Portainer, or AdGuard admin.
-
-## Client
-
-macOS:
-
-```bash
-bash client/install-macos-final.sh "$PWD"
-```
-
-Linux:
-
-```bash
-sudo bash client/install-linux.sh "$PWD"
-```
-
-Then open:
-
-```text
-http://127.0.0.1:8788
-```
-
-## Verify
-
-On the AI Board/Docker host:
-
-```bash
-sudo bash server/scripts/doctor-current.sh
-```
-
-On the ASUS router after installing the bundled helper:
-
-```bash
-/jffs/scripts/router-vpn-forward.sh status
-```
-
-The safe checks do not print private keys/passwords and do not pretend a live VPN handshake occurred. Live mode success requires an actual connection/health check from off-LAN.
+Never WAN-expose `1080`, `8786`, `8787`, `14444`, `9443`, SSH, Portainer, or AdGuard admin.

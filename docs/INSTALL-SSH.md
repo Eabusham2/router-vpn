@@ -1,66 +1,41 @@
-# Install or repair through SSH
+# Install or repair Router VPN through SSH
 
-## 1. Open Terminal
-
-On Mac: Command + Space → type `Terminal` → Return.
-
-## 2. SSH to the AI Board Linux host
+Portainer is the normal ASUS AI Board deployment path. This terminal path is for Docker hosts where SSH access is actually available.
 
 ```bash
-ssh YOUR_AI_BOARD_USERNAME@192.168.50.133
-```
-
-Type `yes` once, then enter the AI Board Linux password.
-
-For a custom SSH port:
-
-```bash
-ssh -p PORT YOUR_AI_BOARD_USERNAME@192.168.50.133
-```
-
-## 3. Clone only the private project repo
-
-```bash
-cd /tmp
-rm -rf router-vpn
 git clone https://github.com/Eabusham2/router-vpn.git
 cd router-vpn
-```
-
-Use `Eabusham2` as the username and a fine-grained read-only token as the password.
-
-## 4. Install
-
-```bash
 sudo ./server/install.sh
 ```
 
-At the endpoint question, leave it blank. Choose the public IPv4, global IPv6, or hostname later inside the client app.
+The repository is public; a Git token is not normally required.
 
-To identify the AI Board interface:
+`server/install.sh` uses the same **image-only** `server/portainer-current.yaml` as Portainer. It does not turn the server host into the normal image build environment.
 
-```bash
-ip route show default
-```
-
-Use the name after `dev`, commonly `eth0`.
-
-## 5. Diagnose
+Update later with:
 
 ```bash
-sudo /opt/router-vpn/source/server/scripts/doctor.sh
+sudo ./server/upgrade.sh
 ```
 
-## 6. Get the bundle
+or:
 
 ```bash
-sudo /opt/router-vpn/source/server/scripts/export-client.sh
+sudo ./server/manage.sh
 ```
 
-Or download it on the home LAN:
+Diagnostics:
+
+```bash
+sudo bash server/scripts/doctor-current.sh
+```
+
+Setup Center:
 
 ```text
-http://192.168.50.133:8786/router-vpn-client-bundle.zip
+http://AI_BOARD_IP:8786/
 ```
 
-Changing the home public IP does not require rebuilding the client. Edit the selected router endpoint in the app while disconnected.
+Client downloads remain GitHub-artifact-first; if the matching client artifact is unavailable, the Setup Center can compile only that requested client package locally and deletes the temporary build afterward.
+
+Do not WAN-forward `8786`.

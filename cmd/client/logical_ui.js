@@ -155,6 +155,28 @@
   };
   document.addEventListener('change', e => { if (e.target?.id === 'modeBase') basePickerTouch(); });
 
+  // Keep the legacy HTML onboarding copy aligned with the logical-mode/download
+  // architecture before the async first-run wizard can open.
+  try {
+    if (Array.isArray(onboardingSteps) && onboardingSteps[5]) {
+      onboardingSteps[5].body = onboardingSteps[5].body.replace(
+        'checksums and small macOS/Linux packages.',
+        'checksums, platform-specific packages and the normal Windows Portable ZIPs.'
+      );
+    }
+    if (Array.isArray(onboardingSteps) && onboardingSteps[8]) {
+      onboardingSteps[8].body = onboardingSteps[8].body
+        .replace(
+          'The Modes page always shows all 20 modes, layers, overhead estimates and exact availability reasons.',
+          'The Modes page shows the 16 logical modes, layers, overhead estimates, exact availability reasons and the WireGuard/AmneziaWG base selector where compatible.'
+        )
+        .replace(
+          'WireGuard is the default base; AmneziaWG stays available in advanced node settings.',
+          'WireGuard is the default preference; AmneziaWG remains a selectable/fallback base where supported.'
+        );
+    }
+  } catch (_) {}
+
   // The legacy UI init may have already loaded raw rows while this deferred
   // extension was parsed. Replace them immediately with the logical catalog.
   queueMicrotask(() => reloadModes());

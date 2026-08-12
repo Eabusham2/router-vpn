@@ -1,6 +1,6 @@
 # Install and use Router VPN clients
 
-The complete server/router walkthrough is in `docs/FULL-TUTORIAL.md`. This file focuses on linking devices after the home node exists.
+The complete server/router walkthrough is in `docs/CURRENT-GUIDE.md`. This file focuses on linking devices after the home node exists.
 
 ## Recommended link path
 
@@ -25,7 +25,7 @@ The Setup Center is the server/router onboarding and compatibility surface. It i
 - ASUS SSH/JFFS/forwarding checks and helper download
 - current fixed WAN listener list and private ports that must never be exposed
 - direct private bundle/profile downloads
-- platform mini packages and checksums
+- platform packages and checksums
 - WireGuard and AmneziaWG configs / QR codes
 - Shadowsocks 2022 URL/config/QR
 - Hysteria2 URL/config/QR
@@ -36,7 +36,7 @@ The Setup Center is the server/router onboarding and compatibility surface. It i
 - plain internal SOCKS5 instructions
 - custom/universal protocol files where a native OS import does not exist
 
-Large packages are requested through the download broker. It prefers the current short-lived GitHub Actions artifact, overlays this node's private profiles in temporary storage, streams the requested package, then deletes that temporary copy. If the GitHub package is unavailable, the AI Board assembles only that requested package from prebuilt binaries already in its runtime image, streams it, then deletes it.
+Large packages are requested through the download broker. It prefers the matching short-lived GitHub Actions artifact, overlays this node's private profiles in temporary storage, streams the requested package, then deletes that temporary copy. If the GitHub artifact is unavailable, the AI Board compiles **only the requested client package** locally with the bounded runtime Go toolchain, applies the private node data in temporary storage, streams it, then deletes the temporary build/output.
 
 QR images are generated on the home node. Treat the page, private JSON, QR codes and generated profiles as credentials.
 
@@ -80,7 +80,7 @@ GitHub Actions produces normal Windows packages and Router VPN's own no-install 
 
 PortableApps.com/PAF packages are not produced or supported. Use `RouterVPN-Portable-Windows-amd64.zip` or `RouterVPN-Portable-Windows-arm64.zip` for the no-install portable layout.
 
-The existing complete multi-engine shell path can use the Linux transport runtime through WSL2. Native WireGuard/AmneziaWG profile import remains available in matching Windows clients.
+The existing complete multi-engine shell path can use the Linux transport runtime through WSL2. Native WireGuard/AmneziaWG profile import remains available in matching Windows clients. WSL execution alone is not claimed as a complete full-device Windows tunnel.
 
 ## Linux / Unix
 
@@ -96,11 +96,7 @@ sudo bash client/install-linux.sh "$PWD"
 
 The SwiftUI Router VPN app supports the native app UX, private bundle import from Files or directly from the home LAN, logical-mode/base selection, home-LAN access settings, forwarding controls and the permanent setup guide.
 
-**Platform tunnel boundary:** the included Packet Tunnel target intentionally fails closed until the actual WireGuard/AmneziaWG and proxy engines are linked and validated. Its `completionHandler(error)` path is therefore an expected limitation, not an accidental build/runtime error. Until those adapters exist, use the generated Setup Center profiles in compatible native clients for live tunnels:
-
-- WireGuard config → WireGuard-compatible client
-- AmneziaWG config → AmneziaWG-compatible client
-- Shadowsocks/Hysteria2/REALITY/etc. → a client that explicitly supports that generated format
+**Platform tunnel boundary:** the included Packet Tunnel target intentionally fails closed until the actual WireGuard/AmneziaWG and proxy engines are linked and validated. Its `completionHandler(error)` path is therefore an expected limitation, not an accidental build/runtime error. Until those adapters exist, use the generated Setup Center profiles in compatible native clients.
 
 The Router VPN UI follows the real NetworkExtension status and does not mark itself connected merely because `startVPNTunnel()` was called.
 
@@ -108,7 +104,7 @@ The Router VPN UI follows the real NetworkExtension status and does not mark its
 
 The APK is currently the native Router VPN controller/importer shell. It must not claim full-device VPN operation until its `VpnService` engine integration is linked and validated.
 
-Live protocol profiles remain importable into matching Android clients from the Setup Center. Android native engine work is tracked separately from the server/runtime readiness so mobile UI status cannot make a server mode appear green by itself.
+Live protocol profiles remain importable into matching Android clients from the Setup Center. Android native engine work is tracked separately from server/runtime readiness so mobile UI status cannot make a server mode appear green by itself.
 
 ## Multiple routers / nodes
 
@@ -136,15 +132,13 @@ Other supported policy/configuration choices include:
 - DoH3
 - DNS Rescue fallback policy
 
-The server benchmark performs actual DNS queries and reports median query time rather than treating ICMP ping as DNS latency.
+The server benchmark performs actual DNS queries and reports query timing rather than treating ICMP ping as DNS latency.
 
 ## SOCKS5
 
 The home SOCKS5 service is an internal LAN/tunnel service. It uses its IP + port and currently has no authentication. **Never WAN-forward TCP 1080.**
 
 The app must display that private proxy address separately from the public VPN exit address.
-
-SOCKS5-only application mode is separate from full-device VPN mode.
 
 ## SOCKS5 + TLS / OverTLS
 
@@ -172,10 +166,6 @@ Prefer modern Shadowsocks 2022 or other current methods for new setups. SSR rema
 Inbound forwarding requires an authenticated tunnel peer path, normally WireGuard or AmneziaWG. Proxy-only methods are outbound.
 
 The client supports TCP, UDP, both, a port/range, optional translated target port and Protected DMZ. Protected DMZ excludes reserved VPN, SSH, DNS, management, Portainer, Setup Center/API and internal SOCKS5 ports.
-
-## Jumbo TUN
-
-Keep normal WireGuard/AmneziaWG tunnel MTU on Auto/default. Enable Jumbo TUN only for a compatible proxy/TUN path where the client/server path has been validated.
 
 ## Availability / grey-mode rule
 

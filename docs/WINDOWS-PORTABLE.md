@@ -49,7 +49,7 @@ The home node provides private, already-linked packages on demand:
 - `router-vpn-windows-portable-amd64.zip`
 - `router-vpn-windows-portable-arm64.zip`
 
-The Setup Center first tries the matching short-lived GitHub Actions build, overlays the current node's private `Data/routers.json` and generated profiles in a temporary directory, streams the ZIP, then deletes its temporary server copy. If no usable GitHub build is available, the AI Board assembles only the requested package from prebuilt binaries already present in the server image, streams it, then deletes it.
+The Setup Center first tries the matching short-lived GitHub Actions artifact, overlays the current node's private data in a temporary directory, streams the ZIP, then deletes the temporary copy. If no usable GitHub artifact is available, the ARM64 AI Board compiles only the requested Windows Portable architecture locally, builds that one private ZIP in temporary storage, streams it, then deletes the temporary build/output.
 
 These home-linked ZIPs contain private profile material. Treat them as credentials and do not publish or share them.
 

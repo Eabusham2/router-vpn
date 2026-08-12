@@ -45,10 +45,19 @@ jobs:
           find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
           sh -n router/asus-merlin-router-vpn-forwards.sh
-          if grep -Eq '^[[:space:]]*build:' server/portainer-current.yaml; then
-            echo 'ERROR: Portainer production compose must be pull-only; build: is forbidden.' >&2
-            exit 1
-          fi
+          python3 - <<'PY'
+          import pathlib,re
+          text=pathlib.Path('server/portainer-current.yaml').read_text()
+          if re.search(r'(?m)^\s*build:\s*$', text):
+              raise SystemExit('ERROR: Portainer production compose must stay image-only')
+          if re.search(r'(?m)^\s*context:\s*https?://', text):
+              raise SystemExit('ERROR: remote Git Docker build contexts are forbidden')
+          if '/src/server/scripts/download-broker.py' not in text or 'ROUTER_VPN_GITHUB_SHA:' not in text:
+              raise SystemExit('ERROR: production :8786 dynamic broker contract is missing')
+          tags=re.findall(r'ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux):([0-9a-f]{40})', text)
+          if not tags or len(set(tags)) != 1:
+              raise SystemExit('ERROR: custom production images must share one exact source SHA')
+          PY
           docker compose -f server/portainer-current.yaml config >/dev/null
 
       - name: Set up Docker Buildx
@@ -122,7 +131,7 @@ jobs:
 
       - name: Smoke-test built ARM64 binaries
         run: |
-          docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-init:arm64 -c 'test -x /usr/local/bin/router-vpn-init && test -x /src/server/scripts/generate-setup-assets.py && test -x /src/server/scripts/generate-aux-proxies.py && test -x /src/server/scripts/create-bundle-json.py && test -x /src/server/scripts/build-download-on-demand.py && test -x /src/server/scripts/download-broker.py && test -x /src/server/scripts/apply-runtime.sh'
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-init:arm64 -c 'test -x /usr/local/bin/router-vpn-init && test -x /src/server/scripts/generate-setup-assets.py && test -x /src/server/scripts/generate-aux-proxies.py && test -x /src/server/scripts/create-bundle-json.py && test -x /src/server/scripts/build-download-on-demand.py && test -x /src/server/scripts/download-broker.py && test -x /src/server/scripts/apply-runtime.sh && command -v go >/dev/null'
           docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-agent:arm64 -c 'test -x /usr/local/bin/router-vpn-agent'
           docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-wireguard:arm64 -c 'command -v wg >/dev/null && command -v wg-quick >/dev/null && command -v wireguard-go >/dev/null && wireguard-go --version 2>&1 | grep -qi wireguard'
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/amneziawg-go router-vpn-preflight-awg2:arm64 --version >/dev/null

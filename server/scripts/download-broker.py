@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Ephemeral Setup Center download broker.
+"""Ephemeral private Setup Center download broker.
 
-Large platform packages are never cached in /opt/router-vpn. Each request tries
-the matching GitHub Actions build first, overlays this node's private profiles
-in a temporary directory, streams the result, and deletes it. If the GitHub
-artifact is unavailable or unusable, the router compiles only the requested
-desktop/Portable package locally from /src, then streams and deletes it.
+Desktop/Portable packages prefer the matching same-SHA GitHub Actions artifact.
+If that artifact is unavailable or unusable, the Linux/ARM64 home node compiles
+only the requested Go client package from /src, injects this node's private data
+in temporary storage, streams it, then deletes the temporary build/output.
+
+Android and iOS downloads are also same-SHA GitHub-backed. They intentionally do
+not claim the Linux home node can reproduce platform-specific Android/iOS build
+pipelines (especially Xcode/iOS signing) when those artifacts are unavailable.
 """
 from __future__ import annotations
 
@@ -32,6 +35,19 @@ if _spec is None or _spec.loader is None:
 _builder = module_from_spec(_spec)
 _spec.loader.exec_module(_builder)
 PACKAGE_MAP = _builder.PACKAGE_MAP
+
+DIRECT_ARTIFACTS = {
+    "router-vpn-android.apk": {
+        "artifact": "RouterVPN-Android-CI",
+        "member": "app-debug.apk",
+        "content_type": "application/vnd.android.package-archive",
+    },
+    "router-vpn-ios-preview.ipa": {
+        "artifact": "RouterVPN-iOS-Preview-CI",
+        "member": "RouterVPN-preview-unsigned-resignable.ipa",
+        "content_type": "application/octet-stream",
+    },
+}
 
 MAX_GITHUB_ARTIFACT = 768 * 1024 * 1024
 CHUNK = 1024 * 1024
@@ -91,6 +107,17 @@ def _pick_member(zf: zipfile.ZipFile, wanted: str) -> zipfile.ZipInfo:
     return item
 
 
+def _github_scope() -> tuple[str, str, str]:
+    repo = os.environ.get("ROUTER_VPN_GITHUB_REPO", "Eabusham2/router-vpn").strip()
+    branch = os.environ.get("ROUTER_VPN_GITHUB_BRANCH", "main").strip()
+    head_sha = os.environ.get("ROUTER_VPN_GITHUB_SHA", "").strip().lower()
+    if "/" not in repo:
+        raise RuntimeError("invalid GitHub repository")
+    if head_sha and (len(head_sha) != 40 or any(ch not in "0123456789abcdef" for ch in head_sha)):
+        raise RuntimeError("ROUTER_VPN_GITHUB_SHA must be a full 40-character commit SHA")
+    return repo, branch, head_sha
+
+
 def _artifact_candidates(meta: dict, artifact_name: str, branch: str, head_sha: str) -> list[dict]:
     candidates: list[dict] = []
     for item in meta.get("artifacts", []):
@@ -106,21 +133,12 @@ def _artifact_candidates(meta: dict, artifact_name: str, branch: str, head_sha: 
     return candidates
 
 
-def fetch_github_package(home_name: str, temp: Path) -> Path:
+def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_name: str) -> Path:
     if os.environ.get("ROUTER_VPN_GITHUB_DISABLE", "").lower() in ("1", "true", "yes"):
         raise RuntimeError("GitHub artifact use disabled")
-    generic = _builder.generic_name(home_name)
-    if not generic:
-        raise RuntimeError("this download has no generic GitHub package")
-
-    repo = os.environ.get("ROUTER_VPN_GITHUB_REPO", "Eabusham2/router-vpn").strip()
-    branch = os.environ.get("ROUTER_VPN_GITHUB_BRANCH", "main").strip()
-    head_sha = os.environ.get("ROUTER_VPN_GITHUB_SHA", "").strip().lower()
-    artifact_name = os.environ.get("ROUTER_VPN_GITHUB_ARTIFACT", "RouterVPN-client-desktop-unix-ci").strip()
-    if "/" not in repo or not artifact_name:
-        raise RuntimeError("invalid GitHub artifact configuration")
-    if head_sha and (len(head_sha) != 40 or any(ch not in "0123456789abcdef" for ch in head_sha)):
-        raise RuntimeError("ROUTER_VPN_GITHUB_SHA must be a full 40-character commit SHA")
+    repo, branch, head_sha = _github_scope()
+    if not artifact_name:
+        raise RuntimeError("invalid GitHub artifact name")
 
     q = urllib.parse.urlencode({"name": artifact_name, "per_page": 100})
     meta = _read_limited_json(f"https://api.github.com/repos/{repo}/actions/artifacts?{q}")
@@ -131,11 +149,11 @@ def fetch_github_package(home_name: str, temp: Path) -> Path:
             scope += f" at {head_sha}"
         raise RuntimeError(f"no unexpired {artifact_name} artifact for {scope}")
 
-    outer = temp / "github-actions-artifact.zip"
+    outer = temp / (artifact_name + "-artifact.zip")
     _download_limited(candidates[0]["archive_download_url"], outer)
-    selected = temp / generic
+    selected = temp / output_name
     with zipfile.ZipFile(outer) as zf:
-        item = _pick_member(zf, generic)
+        item = _pick_member(zf, wanted)
         with zf.open(item) as r, selected.open("wb") as w:
             shutil.copyfileobj(r, w, CHUNK)
     outer.unlink(missing_ok=True)
@@ -144,7 +162,28 @@ def fetch_github_package(home_name: str, temp: Path) -> Path:
     return selected
 
 
+def fetch_github_package(home_name: str, temp: Path) -> Path:
+    generic = _builder.generic_name(home_name)
+    if not generic:
+        raise RuntimeError("this download has no generic GitHub package")
+    artifact_name = os.environ.get("ROUTER_VPN_GITHUB_ARTIFACT", "RouterVPN-client-desktop-unix-ci").strip()
+    return fetch_artifact_member(artifact_name, generic, temp, generic)
+
+
+def fetch_direct_mobile(name: str, temp: Path) -> Path:
+    spec = DIRECT_ARTIFACTS[name]
+    try:
+        return fetch_artifact_member(spec["artifact"], spec["member"], temp, name)
+    except Exception as exc:
+        raise RuntimeError(
+            f"{name} requires its same-SHA GitHub mobile artifact; the Linux home node does not fake a platform-specific mobile build fallback: {exc}"
+        ) from exc
+
+
 def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
+    if name in DIRECT_ARTIFACTS:
+        return fetch_direct_mobile(name, temp), "github"
+
     output = temp / name
     source = None
     source_label = "router-local-build"
@@ -152,7 +191,10 @@ def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
         source = fetch_github_package(name, temp)
         source_label = "github"
     except Exception as exc:
-        print(f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}; compiling requested package locally", flush=True)
+        print(
+            f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}; compiling requested package locally",
+            flush=True,
+        )
 
     args = [
         "python3", str(BUILDER_PATH),
@@ -168,7 +210,10 @@ def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
     except Exception:
         if source is None:
             raise
-        print(f"download broker: GitHub package customization failed for {name}; compiling requested package locally", flush=True)
+        print(
+            f"download broker: GitHub package customization failed for {name}; compiling requested package locally",
+            flush=True,
+        )
         output.unlink(missing_ok=True)
         subprocess.run(args[:-2], check=True, timeout=720, stdout=subprocess.DEVNULL)
         source_label = "router-local-build"
@@ -193,6 +238,12 @@ def cleanup_stale_temp() -> None:
                 path.unlink()
         except OSError:
             pass
+
+
+def content_type_for(name: str) -> str:
+    if name in DIRECT_ARTIFACTS:
+        return str(DIRECT_ARTIFACTS[name]["content_type"])
+    return "application/zip"
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -221,6 +272,8 @@ class Handler(SimpleHTTPRequestHandler):
                 "fallback": "router-local-build",
                 "server_cache": False,
                 "local_build_scope": "requested-package-only",
+                "local_build_platforms": "go-desktop-portable",
+                "mobile_artifacts": "same-sha-github-only",
                 "github_artifact_retention_days": 1,
                 "github_sha": os.environ.get("ROUTER_VPN_GITHUB_SHA", "").strip(),
             }, separators=(",", ":")).encode() + b"\n"
@@ -233,7 +286,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         name = path.lstrip("/")
-        if "/" not in name and name in PACKAGE_MAP:
+        if "/" not in name and (name in PACKAGE_MAP or name in DIRECT_ARTIFACTS):
             self._dynamic(name)
             return
         super().do_GET()
@@ -256,7 +309,7 @@ class Handler(SimpleHTTPRequestHandler):
                     return
                 size = package.stat().st_size
                 self.send_response(200)
-                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Type", content_type_for(name))
                 self.send_header("Content-Disposition", f'attachment; filename="{name}"')
                 self.send_header("Content-Length", str(size))
                 self.send_header("Cache-Control", "no-store, max-age=0")

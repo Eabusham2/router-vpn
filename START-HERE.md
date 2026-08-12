@@ -1,11 +1,13 @@
 # Router VPN — start here
 
-Use these current guides:
+Use these current sources:
 
-1. **Install and use everything:** `docs/FULL-TUTORIAL.md`
-2. **All 19 modes and overhead:** `docs/MODES.md`
-3. **Windows, macOS, Linux, Unix, APK, and IPA builds:** `docs/BUILDS.md`
-4. **Implementation status and honest limitations:** `docs/STATUS.md`
-5. **iPhone/iPad details:** `docs/IOS.md`
+1. **Authoritative setup/product guide:** `docs/CURRENT-GUIDE.md`
+2. **Current implementation status and honest limitations:** `docs/CURRENT-STATUS.md`
+3. **Client/platform notes:** `docs/CLIENT.md`
+4. **Build/artifact details:** `docs/BUILDS.md`
+5. **Windows Portable ZIP:** `docs/WINDOWS-PORTABLE.md`
+6. **Raw runtime-mode details:** `docs/MODES.md`
+7. **Production Portainer stack:** `server/portainer-current.yaml`
 
-Do not use an older copied tutorial. The router endpoint is selected or imported at runtime and is not compiled into the apps.
+The app presents 16 logical modes while the server retains 20 raw runtime profiles internally. Do not use an older copied tutorial or obsolete deployment Compose file.
