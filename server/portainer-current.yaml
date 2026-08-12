@@ -195,7 +195,7 @@ services:
     restart: unless-stopped
     depends_on:
       finalize-current: {condition: service_completed_successfully}
-    entrypoint: ["python3", "/src/server/scripts/download-broker.py"]
+    entrypoint: ["python3", "/src/server/scripts/setup-center-server.py"]
     command: ["--base", "/opt/router-vpn", "--bind", "0.0.0.0", "--port", "8786"]
     volumes:
       - /opt/router-vpn:/opt/router-vpn:ro
