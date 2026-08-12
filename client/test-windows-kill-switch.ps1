@@ -13,9 +13,14 @@ try {
   $lanPlan = (& $script -Action plan -Endpoint '2001:db8::7' -Policy 'always' -HomeLANAccess 'true' -TunnelAlias 'router-vpn-max' -StateRoot $temp | ConvertFrom-Json)
   if (-not $lanPlan.home_lan_access -or $lanPlan.policy -ne 'always') { throw 'LAN/always plan is wrong' }
 
-  $bad = & $script -Action plan -Endpoint 'vpn.example.com' -Policy 'on-connect' -StateRoot $temp 2>&1
-  if ($LASTEXITCODE -eq 0) { throw 'hostname endpoint was accepted by strict kill switch' }
-  if (($bad | Out-String) -notmatch 'literal IPv4/IPv6') { throw 'hostname rejection did not explain pre-tunnel DNS risk' }
+  $caught = $null
+  try {
+    & $script -Action plan -Endpoint 'vpn.example.com' -Policy 'on-connect' -StateRoot $temp | Out-Null
+  } catch {
+    $caught = $_.Exception.Message
+  }
+  if (-not $caught) { throw 'hostname endpoint was accepted by strict kill switch' }
+  if ($caught -notmatch 'literal IPv4/IPv6') { throw "hostname rejection did not explain pre-tunnel DNS risk: $caught" }
 
   $source = Get-Content -Raw -LiteralPath $script
   foreach ($marker in @(
