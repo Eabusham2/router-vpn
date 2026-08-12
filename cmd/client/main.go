@@ -38,6 +38,7 @@ type state struct {
 	DAITA       bool   `json:"daita"`
 	Jumbo       bool   `json:"jumbo"`
 	Socks       bool   `json:"socks"`
+	Phase       string `json:"phase,omitempty"`
 	LastError   string `json:"last_error"`
 }
 
@@ -107,7 +108,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	a := &app{cfg: c, modes: modes, state: state{Mode: "off"}}
+	a := &app{cfg: c, modes: modes, state: state{Mode: "off", Phase: "off"}}
 	if err = a.loadProfiles(); err != nil {
 		log.Fatal(err)
 	}
@@ -224,7 +225,7 @@ func (a *app) saveProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.mu.Lock()
-	if a.state.Connected { a.mu.Unlock(); http.Error(w, "disconnect before changing router settings", http.StatusConflict); return }
+	if a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" { a.mu.Unlock(); http.Error(w, "disconnect before changing router settings", http.StatusConflict); return }
 	found := false
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == p.ID { a.profiles.Profiles[i] = p; found = true; break }
@@ -243,7 +244,7 @@ func (a *app) selectProfile(w http.ResponseWriter, r *http.Request) {
 	if json.NewDecoder(r.Body).Decode(&q) != nil { http.Error(w, "bad json", http.StatusBadRequest); return }
 	if !validProfileID(q.ID) { http.Error(w, "invalid router profile id", http.StatusBadRequest); return }
 	a.mu.Lock()
-	if a.state.Connected { a.mu.Unlock(); http.Error(w, "disconnect before switching routers", http.StatusConflict); return }
+	if a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" { a.mu.Unlock(); http.Error(w, "disconnect before switching routers", http.StatusConflict); return }
 	if _, ok := a.profileByIDLocked(q.ID); !ok { a.mu.Unlock(); http.Error(w, "unknown router profile", http.StatusNotFound); return }
 	a.profiles.SelectedID = q.ID
 	a.state.RouterID = q.ID
@@ -258,7 +259,7 @@ func (a *app) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	if json.NewDecoder(r.Body).Decode(&q) != nil { http.Error(w, "bad json", http.StatusBadRequest); return }
 	if !validProfileID(q.ID) { http.Error(w, "invalid router profile id", http.StatusBadRequest); return }
 	a.mu.Lock()
-	if a.state.Connected { a.mu.Unlock(); http.Error(w, "disconnect before deleting a router", http.StatusConflict); return }
+	if a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" { a.mu.Unlock(); http.Error(w, "disconnect before deleting a router", http.StatusConflict); return }
 	if _, ok := a.profileByIDLocked(q.ID); !ok { a.mu.Unlock(); http.Error(w, "unknown router profile", http.StatusNotFound); return }
 	out := a.profiles.Profiles[:0]
 	for _, p := range a.profiles.Profiles { if p.ID != q.ID { out = append(out, p) } }
@@ -345,7 +346,7 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.mu.Lock()
-	if a.state.Connected { a.mu.Unlock(); http.Error(w, "disconnect before importing a router", http.StatusConflict); return }
+	if a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" { a.mu.Unlock(); http.Error(w, "disconnect before importing a router", http.StatusConflict); return }
 	a.profiles.Profiles = append(a.profiles.Profiles, p)
 	a.profiles.SelectedID = p.ID
 	a.state.RouterID = p.ID
@@ -457,7 +458,7 @@ func (a *app) mode(id string) (common.Mode, error) { for _, m := range a.modes {
 func (a *app) connect(w http.ResponseWriter, r *http.Request) {
 	var q struct { Mode string `json:"mode"` }
 	if json.NewDecoder(r.Body).Decode(&q) != nil { http.Error(w, "bad json", http.StatusBadRequest); return }
-	if err := a.startMode(q.Mode); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	if err := a.startMode(q.Mode); err != nil { http.Error(w, err.Error(), http.StatusServiceUnavailable); return }
 	fmt.Fprint(w, `{"ok":true}`)
 }
 
@@ -470,6 +471,11 @@ func (a *app) options(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `{"ok":true}`)
 }
 
+// startMode is the safety boundary for every normal mode launch. A process start
+// is not a VPN connection. The mode is marked starting, then health-checked
+// through the resulting network path. Any failed launch is rolled back before
+// returning to the caller, so manual Connect and logical-mode fallback cannot
+// leave a dead full-tunnel route installed while claiming success.
 func (a *app) startMode(id string) error {
 	p, err := a.activeProfile(); if err != nil { return err }
 	m, err := a.mode(id); if err != nil { return err }
@@ -478,41 +484,76 @@ func (a *app) startMode(id string) error {
 	if daita && !m.DAITASupported { return errors.New("DAITA is not available for this mode") }
 	if jumbo && !m.JumboSupported { return errors.New("Jumbo TUN is not available for this mode; leave it off for WireGuard/AWG") }
 	if err = a.stopMode(); err != nil { return err }
+
 	a.mu.Lock()
 	env := append(os.Environ(), fmt.Sprintf("HOMEVPN_DAITA=%t", a.state.DAITA), fmt.Sprintf("HOMEVPN_JUMBO=%t", a.state.Jumbo), fmt.Sprintf("HOMEVPN_SOCKS=%t", a.state.Socks), fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU), "HOMEVPN_PROFILE_ID="+p.ID, "HOMEVPN_ENDPOINT="+p.Endpoint, "HOMEVPN_ADGUARD4="+p.AdGuardIPv4, "HOMEVPN_ADGUARD6="+p.AdGuardIPv6, "HOMEVPN_SOCKS_HOST="+p.SocksHost, fmt.Sprintf("HOMEVPN_SOCKS_PORT=%d", p.SocksPort), "HOMEVPN_SOCKS_USER="+p.SocksUsername, "HOMEVPN_SOCKS_PASSWORD="+p.SocksPassword)
 	a.mu.Unlock()
 	if len(m.Command) == 0 { return errors.New("mode has no command") }
 	cmd := exec.Command(m.Command[0], m.Command[1:]...); cmd.Env = env; cmd.Dir = a.cfg.ScriptsDir; cmd.Stdout = os.Stdout; cmd.Stderr = os.Stderr
 	if err = cmd.Start(); err != nil { return err }
-	a.mu.Lock(); a.cmd = cmd; a.state.Connected = true; a.state.Mode = id; a.state.LogicalMode = ""; a.state.RuntimeMode = id; a.state.Base = ""; a.state.RouterID = p.ID; a.state.LastError = ""; daitaEnabled := a.state.DAITA
-	for i := range a.profiles.Profiles { if a.profiles.Profiles[i].ID == p.ID { a.profiles.Profiles[i].UseCount++; a.profiles.Profiles[i].LastUsedAt = time.Now().UTC().Format(time.RFC3339); break } }
-	_ = a.persistProfilesLocked(); a.mu.Unlock()
-	if daitaEnabled { a.startCoverTraffic(p) }
+
+	a.mu.Lock()
+	a.cmd = cmd
+	a.state.Connected = false
+	a.state.Mode = id
+	a.state.LogicalMode = ""
+	a.state.RuntimeMode = id
+	a.state.Base = ""
+	a.state.RouterID = p.ID
+	a.state.Phase = "starting"
+	a.state.LastError = ""
+	a.mu.Unlock()
+
+	// Give the runtime a short window to create the interface/proxy before the
+	// connectivity check. The health check itself has the configured timeout.
 	time.Sleep(1200 * time.Millisecond)
+	a.mu.Lock(); a.state.Phase = "checking"; a.mu.Unlock()
+	latency, healthErr := a.testHealth()
+	if healthErr != nil {
+		failure := fmt.Errorf("%s started but tunnel health failed: %w", m.Name, healthErr)
+		_ = a.stopMode()
+		a.mu.Lock(); a.state.LastError = failure.Error(); a.state.Phase = "failed"; a.mu.Unlock()
+		return failure
+	}
+
+	a.mu.Lock()
+	a.state.Connected = true
+	a.state.Phase = "connected"
+	daitaEnabled := a.state.DAITA
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == p.ID { a.profiles.Profiles[i].UseCount++; a.profiles.Profiles[i].LastUsedAt = time.Now().UTC().Format(time.RFC3339); break }
+	}
+	_ = a.persistProfilesLocked()
+	a.mu.Unlock()
+	if daitaEnabled { a.startCoverTraffic(p) }
+	log.Printf("mode %s health OK in %.2f ms", id, float64(latency.Microseconds())/1000)
 	return nil
 }
 
 func (a *app) stopMode() error {
-	a.mu.Lock(); cmd := a.cmd; modeID := a.state.Mode; coverCancel := a.daitaCancel; a.daitaCancel = nil; a.cmd = nil; a.state.Connected = false; a.state.Mode = "off"; a.state.LogicalMode = ""; a.state.RuntimeMode = ""; a.state.Base = ""; a.mu.Unlock()
+	a.mu.Lock(); cmd := a.cmd; modeID := a.state.Mode; coverCancel := a.daitaCancel; a.daitaCancel = nil; a.cmd = nil; a.state.Connected = false; a.state.Mode = "off"; a.state.LogicalMode = ""; a.state.RuntimeMode = ""; a.state.Base = ""; a.state.Phase = "stopping"; a.mu.Unlock()
 	if coverCancel != nil { coverCancel() }
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(os.Interrupt); done := make(chan error, 1); go func() { done <- cmd.Wait() }()
-		select { case <-done: case <-time.After(3 * time.Second): _ = cmd.Process.Kill() }
+		select { case <-done: case <-time.After(3 * time.Second): _ = cmd.Process.Kill(); <-done }
 	}
 	if modeID != "off" { if m, err := a.mode(modeID); err == nil && len(m.StopCommand) > 0 { c := exec.Command(m.StopCommand[0], m.StopCommand[1:]...); c.Dir = a.cfg.ScriptsDir; _ = c.Run() } }
+	a.mu.Lock(); a.state.Phase = "off"; a.mu.Unlock()
 	return nil
 }
 
 func (a *app) auto(w http.ResponseWriter, _ *http.Request) {
 	if _, err := a.activeProfile(); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
+	var failures []string
 	for _, m := range a.modes {
 		if !m.AutoEligible { continue }
-		if err := a.startMode(m.ID); err != nil { continue }
-		lat, err := a.testHealth()
-		if err == nil { a.mu.Lock(); a.state.LogicalMode = "auto"; a.state.RuntimeMode = m.ID; a.mu.Unlock(); _ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": m.ID, "runtime_mode": m.ID, "logical_mode": "auto", "latency_ms": float64(lat.Microseconds()) / 1000}); return }
-		_ = a.stopMode()
+		a.mu.Lock(); a.state.Phase = "auto:trying:"+m.ID; a.mu.Unlock()
+		if err := a.startMode(m.ID); err != nil { failures = append(failures, m.ID+": "+err.Error()); continue }
+		a.mu.Lock(); a.state.LogicalMode = "auto"; a.state.RuntimeMode = m.ID; a.state.Phase = "connected"; a.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": m.ID, "runtime_mode": m.ID, "logical_mode": "auto"}); return
 	}
-	http.Error(w, "no working mode", http.StatusServiceUnavailable)
+	a.mu.Lock(); a.state.LastError = strings.Join(failures, " • "); a.state.Phase = "failed"; a.mu.Unlock()
+	http.Error(w, "no working mode: "+strings.Join(failures, " • "), http.StatusServiceUnavailable)
 }
 
 func (a *app) testHealth() (time.Duration, error) {
