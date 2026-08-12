@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -33,6 +34,19 @@ type multihopSelection struct {
 	ExitMode string
 }
 
+type multihopNodeSummary struct {
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	Location        string  `json:"location,omitempty"`
+	Endpoint        string  `json:"endpoint,omitempty"`
+	BaseTunnel      string  `json:"base_tunnel,omitempty"`
+	Latitude        float64 `json:"latitude,omitempty"`
+	Longitude       float64 `json:"longitude,omitempty"`
+	LatencyMedianMs float64 `json:"latency_median_ms,omitempty"`
+	LatencyTrimmed  float64 `json:"latency_trimmed_mean_ms,omitempty"`
+	LatencyP90Ms    float64 `json:"latency_p90_ms,omitempty"`
+}
+
 func registerMultihopRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/multihop/status", a.multihopStatus)
 	h.HandleFunc("/api/multihop/connect", a.multihopConnect)
@@ -45,6 +59,19 @@ func profileByID(profiles []common.RouterProfile, id string) (common.RouterProfi
 		}
 	}
 	return common.RouterProfile{}, false
+}
+
+func multihopNodeSummaries(profiles []common.RouterProfile) []multihopNodeSummary {
+	out := make([]multihopNodeSummary, 0, len(profiles))
+	for _, p := range profiles {
+		out = append(out, multihopNodeSummary{
+			ID: p.ID, Name: p.Name, Location: p.Location, Endpoint: p.Endpoint,
+			BaseTunnel: p.BaseTunnel, Latitude: p.Latitude, Longitude: p.Longitude,
+			LatencyMedianMs: p.LatencyMedianMs, LatencyTrimmed: p.LatencyTrimmedMeanMs,
+			LatencyP90Ms: p.LatencyP90Ms,
+		})
+	}
+	return out
 }
 
 func resolveMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
@@ -122,8 +149,18 @@ func (a *app) multihopStatus(w http.ResponseWriter, r *http.Request) {
 		"connected": state.Connected && state.Mode == "multihop",
 		"actual_exit_id": func() string { if state.Mode == "multihop" { return state.RouterID }; return "" }(),
 		"runtime_exit_mode": func() string { if state.Mode == "multihop" { return state.RuntimeMode }; return "" }(),
-		"profiles": profiles,
+		"nodes": multihopNodeSummaries(profiles),
 	})
+}
+
+func multihopCommand(a *app, sel multihopSelection) *exec.Cmd {
+	cmd := exec.Command("bash", "run-multihop.sh", sel.Entry.ID, sel.Exit.ID, sel.Base, sel.ExitMode, sel.Control.ID)
+	cmd.Dir = a.cfg.ScriptsDir
+	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd
 }
 
 func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
@@ -160,11 +197,7 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd := exec.Command("bash", "run-multihop.sh", sel.Entry.ID, sel.Exit.ID, sel.Base, sel.ExitMode, sel.Control.ID)
-	cmd.Dir = a.cfg.ScriptsDir
-	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT=.")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := multihopCommand(a, sel)
 	if err := cmd.Start(); err != nil {
 		a.mu.Lock()
 		a.state.Phase = "failed"
