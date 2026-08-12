@@ -143,9 +143,17 @@ if 'zip -qr "$BASE/router-vpn-client-bundle.zip"' in finalizer:
 broker = text("server/scripts/download-broker.py")
 builder = text("server/scripts/build-download-on-demand.py")
 publisher = text("server/scripts/publish-downloads.sh")
-for required in ("router-local-build", "requested-package-only", "ROUTER_VPN_GITHUB_SHA"):
+for required in (
+    "router-local-generic-build",
+    "requested-generic-package-only",
+    "generic_packages_secret_free",
+    "separate-bundle-or-pairing",
+    "REQUEST_SLOTS",
+    "BUILD_SLOTS",
+    "ROUTER_VPN_GITHUB_SHA",
+):
     if required not in broker:
-        error(f"download broker missing current fallback contract: {required}")
+        error(f"download broker missing hardened generic/fallback contract: {required}")
 for required in ("compile_requested", "GOTOOLCHAIN", "LOCAL_BUILD_TIMEOUT"):
     if required not in builder:
         error(f"on-demand builder missing router-local compiler contract: {required}")
@@ -250,5 +258,5 @@ if ERRORS:
 print(
     f"Validated Router VPN product contract: {len(modes)} raw entries, {len(logical)} logical modes, "
     "honest platform boundaries, ASUS forwarding, image-only Portainer production, "
-    "GitHub-first/router-local client package fallback, dynamic ephemeral broker, exact pins and current docs."
+    "GitHub-first/router-local generic client fallback, dynamic ephemeral broker, exact pins and current docs."
 )
