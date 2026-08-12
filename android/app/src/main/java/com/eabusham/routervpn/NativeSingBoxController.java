@@ -3,6 +3,7 @@ package com.eabusham.routervpn;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.util.Base64;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -14,7 +15,6 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
 
 /** Prepares bounded app-private libbox sessions; no large configs cross Binder. */
@@ -59,13 +59,13 @@ final class NativeSingBoxController {
             JSONObject mode = modes.optJSONObject(i);
             if (mode == null) continue;
             String id = mode.optString("id", "").trim();
-            if (id.isEmpty()) continue;
+            if (!safeToken(id)) continue;
             JSONObject profile = profiles.optJSONObject(id);
             if (profile == null) continue;
             String encoded = profile.optString("sing-box.json", "").trim();
             if (encoded.isEmpty()) continue;
             byte[] config;
-            try { config = Base64.getDecoder().decode(encoded); }
+            try { config = Base64.decode(encoded, Base64.DEFAULT); }
             catch (IllegalArgumentException invalid) { continue; }
             if (config.length == 0 || config.length > MAX_CONFIG) continue;
             if (!isDirectFullDeviceConfig(new String(config, StandardCharsets.UTF_8))) continue;
@@ -83,7 +83,7 @@ final class NativeSingBoxController {
         if (profile == null) throw new IllegalStateException("The selected mode has no generated profile.");
         String configEncoded = profile.optString("sing-box.json", "").trim();
         if (configEncoded.isEmpty()) throw new IllegalStateException("The selected mode has no sing-box config.");
-        byte[] config = Base64.getDecoder().decode(configEncoded);
+        byte[] config = Base64.decode(configEncoded, Base64.DEFAULT);
         if (config.length == 0 || config.length > MAX_CONFIG) throw new IllegalStateException("sing-box config size is invalid.");
         if (!isDirectFullDeviceConfig(new String(config, StandardCharsets.UTF_8))) {
             throw new IllegalStateException("This mode still depends on another local engine and is not a direct embedded libbox mode.");
@@ -104,7 +104,7 @@ final class NativeSingBoxController {
                 if (!safeFileName(name)) throw new IllegalStateException("Unsafe profile filename: " + name);
                 String encoded = profile.optString(name, "").trim();
                 if (encoded.isEmpty()) continue;
-                byte[] decoded = Base64.getDecoder().decode(encoded);
+                byte[] decoded = Base64.decode(encoded, Base64.DEFAULT);
                 if (decoded.length > MAX_PROFILE_FILE) throw new IllegalStateException("Profile file is too large: " + name);
                 total += decoded.length;
                 if (total > MAX_PROFILE_TOTAL) throw new IllegalStateException("Selected mode profile exceeds safety limit.");
@@ -168,8 +168,12 @@ final class NativeSingBoxController {
         } catch (Exception invalid) { return false; }
     }
 
-    private static boolean safeToken(String value) { return value != null && value.matches("[A-Za-z0-9._-]{1,96}") && !value.contains(".."); }
-    private static boolean safeFileName(String value) { return value != null && value.matches("[A-Za-z0-9._-]{1,128}") && !value.contains(".."); }
+    private static boolean safeToken(String value) {
+        return value != null && value.matches("[A-Za-z0-9._-]{1,96}") && !value.equals(".") && !value.equals("..") && !value.contains("..");
+    }
+    private static boolean safeFileName(String value) {
+        return value != null && value.matches("[A-Za-z0-9._-]{1,128}") && !value.equals(".") && !value.equals("..") && !value.contains("..");
+    }
 
     private static byte[] readLimited(File file, int max) throws Exception {
         try (FileInputStream input = new FileInputStream(file); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
