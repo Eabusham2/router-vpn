@@ -40,9 +40,6 @@ CONTRACTS = {
     "socks5": ("socks5-manual", "manual-app-proxy", False, False, "tunnel-private-only"),
 }
 
-# Setup Center Methods is deliberately limited to protocols a normal/native or
-# third-party client can actually configure. Complex Router VPN orchestration
-# stays in the Router VPN app instead of masquerading as a generic import.
 SETUP_METHOD_LANES = ("simple-native", "universal", "universal-compat", "manual-app-proxy")
 
 
@@ -66,12 +63,8 @@ def normalize_method(method: dict, endpoint: str) -> None:
     elif ident == "hysteria2" and method.get("url"):
         imports.validate_hysteria2_uri(str(method["url"]))
 
-    # Compact QR exists only where an actual client import contract exists.
     if qr_supported:
-        if ident == "wireguard":
-            payload = str(method.get("config") or "")
-        else:
-            payload = str(method.get("url") or "")
+        payload = str(method.get("config") or "") if ident == "wireguard" else str(method.get("url") or "")
         if not payload:
             method["qrSupported"] = False
             method["qrPayload"] = ""
@@ -82,8 +75,6 @@ def normalize_method(method: dict, endpoint: str) -> None:
     else:
         method["qrPayload"] = ""
         method["qrPngBase64"] = ""
-
-    # Retained only for older consumers. methodLane is authoritative.
     method["simple"] = lane in ("simple-native", "universal") or ident == "router-vpn-app"
 
 
@@ -93,8 +84,48 @@ def _replace_required(html: str, old: str, new: str, label: str) -> str:
     return html.replace(old, new, 1)
 
 
+def _replace_wizard(html: str) -> str:
+    start = html.find("const WIZKEY='routervpn.setupcenter.done.v4'")
+    end = html.find("</script></body></html>", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Setup Center wizard template drifted")
+    wizard = r'''const WIZKEY='routervpn.setupcenter.done.v5',WIZSTEP='routervpn.setupcenter.step.v5';
+const wiz=[
+ {title:'Welcome',body:'This onboarding starts from zero and keeps setup separate from day-to-day Router VPN use. It teaches the action, sends you to the correct page, and checks server-side steps when Setup Center can verify them.',action:'Check Setup Center',kind:'health'},
+ {title:'Verify the home node',body:'Confirm the Router VPN server is running before downloading or linking anything. The check reads the authenticated router-agent status through Setup Center; it does not expose an admin port.',action:'Check server',kind:'admin-status'},
+ {title:'Choose the simplest usable method',body:'Start with Simple/native. WireGuard is the baseline. AmneziaWG, Shadowsocks and Hysteria2 are shown only when a real import contract exists. Complex Router VPN stacks belong in the Router VPN app.',action:'Open methods',kind:'tab',tab:'devices'},
+ {title:'Install Router VPN once',body:'For the full feature set, install the generic app for this device. The package is secret-free and is not tied to this home. You can link this node and additional nodes after installation.',action:'Open downloads',kind:'tab',tab:'downloads'},
+ {title:'Link this node separately',body:'Use the authenticated private node-link bundle or one-time LAN pairing. This keeps one Router VPN install usable with multiple homes/nodes instead of baking a node into the installer.',action:'Open downloads',kind:'tab',tab:'downloads'},
+ {title:'Understand modes and bases',body:'WireGuard and AmneziaWG are selectable base paths. AUTO stops at the first proven working mode; SMART AUTO connects, then tests simplification and restores the last known-good stack if reduction fails; CUSTOM is explicit composition.',action:'Open modes',kind:'tab',tab:'modes'},
+ {title:'DNS policy',body:'Home AdGuard is the home default. Router VPN also offers measured public/common/custom/encrypted choices and DNS Rescue. A resolver is not considered proven merely because it appears in the list; the app must apply and validate it on the active path.',action:'Open guide',kind:'tab',tab:'guide'},
+ {title:'Home LAN access',body:'Choose whether tunnel peers may reach the home LAN. The Server page now enforces this as a persistent router policy instead of storing a decorative preference.',action:'Check LAN policy',kind:'admin-settings'},
+ {title:'Connected clients and access control',body:'The Server page shows real WireGuard/AmneziaWG handshake age and transfer counters. Ban is reversible network blocking. Revoke also removes the live peer and persists the revocation.',action:'Open Server',kind:'tab',tab:'server-admin'},
+ {title:'Port forwarding',body:'Use the persistent forwarding master and rules only for tunnel peer addresses. Reserved Router VPN and management ports are blocked from generic forwarding. Leave the master off when you do not need inbound forwarding.',action:'Check forwarding',kind:'admin-forwarding'},
+ {title:'First connection',body:'In the Router VPN app, start with WireGuard Raw, then try AUTO or the recommended REALITY path. Connection state must be backed by selected-node path proof; a generic public HTTP success is not enough.',action:'Show app downloads',kind:'tab',tab:'downloads'},
+ {title:'Verify and learn recovery',body:'Verify public exit IP, DNS and IPv4/IPv6 behavior in the app. If a mode is unavailable, use its exact readiness reason instead of forcing it. Server status and policy can be rechecked here at any time.',action:'Run final server check',kind:'admin-status'},
+ {title:'Finished',body:'Setup onboarding is complete. It will stay completed on this browser, and Run full onboarding can reopen it whenever you want. Day-to-day connect/disconnect belongs in the real Router VPN app, not this web page.',action:'Finish',kind:'finish'}
+];
+let wi=+(localStorage.getItem(WIZSTEP)||0);
+function wizResult(text,kind=''){const box=$('wizardActionResult');if(!box)return;box.textContent=text;box.className='small '+kind}
+function startWizard(force=false){if(force||localStorage.getItem(WIZKEY)!=='1'){$('wizard').hidden=false;renderWiz()}}
+function renderWiz(){wi=Math.max(0,Math.min(wi,wiz.length-1));localStorage.setItem(WIZSTEP,wi);const s=wiz[wi];$('wizardProgress').textContent=`Step ${wi+1} of ${wiz.length}`;$('wizardTitle').textContent=s.title;$('wizardBody').innerHTML=`<p>${s.body}</p><div class="row"><button class="btn primary" onclick="wizardAction()">${s.action}</button><span id="wizardActionResult" class="small"></span></div>`;$('wizardNext').textContent=wi===wiz.length-1?'Finish':'Next'}
+async function wizardAction(){const s=wiz[wi];wizResult('Working…');try{
+ if(s.kind==='health'){const r=await fetch('/healthz',{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);wizResult('Setup Center is reachable and this page is authenticated.','ok');return}
+ if(s.kind==='admin-status'){const r=await fetch('/api/admin/status',{cache:'no-store'}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||`HTTP ${r.status}`);const n=(d.listeners||[]).length;wizResult(`Server check passed • ${n} listener(s) visible • ${(d.active_reserved_ports||[]).length} protected listener(s) active.`,'ok');return}
+ if(s.kind==='admin-settings'){const r=await fetch('/api/admin/settings',{cache:'no-store'}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||`HTTP ${r.status}`);wizResult(`LAN access is ${d.settings&&d.settings.lan_access?'ON':'OFF'}; forwarding master is ${d.settings&&d.settings.forwarding_master?'ON':'OFF'}. Change them on Server.`,'ok');gotoTab('server-admin');if(window.refreshServerAdmin)refreshServerAdmin();return}
+ if(s.kind==='admin-forwarding'){const r=await fetch('/api/admin/forwarding',{cache:'no-store'}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||`HTTP ${r.status}`);wizResult(`Forwarding master ${d.master?'ON':'OFF'} • ${(d.rules||[]).length} persistent rule(s).`,'ok');gotoTab('server-admin');if(window.refreshServerAdmin)refreshServerAdmin();return}
+ if(s.kind==='tab'){gotoTab(s.tab);if(s.tab==='server-admin'&&window.refreshServerAdmin)refreshServerAdmin();wizResult('Opened the page for this action.','ok');return}
+ if(s.kind==='finish'){localStorage.setItem(WIZKEY,'1');localStorage.setItem(WIZSTEP,'0');$('wizard').hidden=true;return}
+ }catch(e){wizResult('Check failed: '+e.message,'bad')}}
+function wizardNext(){if(wi===wiz.length-1){localStorage.setItem(WIZKEY,'1');localStorage.setItem(WIZSTEP,'0');$('wizard').hidden=true;return}wi++;renderWiz()}
+function wizardBack(){if(wi>0)wi--;renderWiz()}
+function closeWizard(){$('wizard').hidden=true}
+if(localStorage.getItem(WIZKEY)!=='1')startWizard(false);
+'''
+    return html[:start] + wizard + html[end:]
+
+
 def patch_html(html: str) -> str:
-    """Patch the legacy generator surface without weakening its private-data model."""
     html = _replace_required(
         html,
         '<a class="btn" href="/router-vpn-bundle.json" download>Download router profile</a>',
@@ -116,9 +147,6 @@ def patch_html(html: str) -> str:
 <div class="card simple"><h3>4. Manual / custom</h3><p>Advanced Router VPN stacks and CUSTOM composition belong in the Router VPN app or the full guide. They are not advertised as ordinary QR/config imports.</p><button onclick="gotoTab('guide')">Open advanced guide</button></div>'''
     html = _replace_required(html, old_cards, new_cards, "setup lane order")
 
-    # Do not leave a stale direct JSON link after private node data stopped being
-    # statically published. The explicit private node-link ZIP is generated
-    # ephemerally and contains router-vpn-bundle.json for file import.
     html = _replace_required(
         html,
         "const downloads=[['Router profile only','router-vpn-bundle.json','For an already-installed Router VPN app/controller'],",
@@ -166,7 +194,15 @@ $('downloads').innerHTML=downloads.map(x=>{const async=asyncDownloadName(x[1]);r
     old_methods = "const availableMethods=(DATA.methods||[]).filter(x=>x.available);availableMethods.sort((a,b)=>(b.simple?1:0)-(a.simple?1:0)||a.label.localeCompare(b.label));for(const m of availableMethods){const o=document.createElement('option');o.value=m.id;o.textContent=(m.simple?'Easy — ':'Advanced — ')+m.label;$('method').appendChild(o)}"
     new_methods = "const setupMethodLanes=new Set(['simple-native','universal','universal-compat','manual-app-proxy']);const laneNames={'simple-native':'Simple/native','universal':'Third-party','universal-compat':'Compatibility','manual-app-proxy':'Manual proxy'};const laneOrder=DATA.methodLaneOrder||[];const availableMethods=(DATA.methods||[]).filter(x=>x.available&&setupMethodLanes.has(x.methodLane));availableMethods.sort((a,b)=>laneOrder.indexOf(a.methodLane)-laneOrder.indexOf(b.methodLane)||a.label.localeCompare(b.label));for(const m of availableMethods){const o=document.createElement('option');o.value=m.id;o.textContent=(laneNames[m.methodLane]||'Method')+' — '+m.label;$('method').appendChild(o)}"
     html = _replace_required(html, old_methods, new_methods, "simple-only Methods selector")
-    return html
+
+    # Kill stale browser/PWA/WSL product claims in the generated final surface.
+    for old, new in (
+        ("Mac local controller: http://127.0.0.1:8788", "Desktop app: launch Router VPN; localhost controller is an internal compatibility surface"),
+        ("Open the Router VPN local app/PWA at 127.0.0.1:8788 and import router-vpn-bundle.json.", "Open the Router VPN desktop app and link/import this node separately. The localhost controller is not the final daily-use UI."),
+        ("For the full multi-engine controller, use the matching Windows build and WSL2 transport environment described in repository docs.", "Use the matching Windows build. Layered modes stay disabled with an exact reason until the native Windows TUN adapter for that mode is available; WSL is not counted as native support."),
+    ):
+        html = html.replace(old, new)
+    return _replace_wizard(html)
 
 
 def main() -> int:
@@ -189,14 +225,18 @@ def main() -> int:
     for method in methods:
         if isinstance(method, dict):
             normalize_method(method, endpoint)
-    # Keep the established typed import schema version stable; the Setup Center
-    # lane/progress fields below are additive product metadata, not a breaking
-    # change to the import payload contract.
     data["methodContractVersion"] = 2
     data["methodLaneOrder"] = ["simple-native", "app", "universal", "universal-compat", "manual-app-proxy", "manual-advanced"]
     data["setupCenterMethodLanes"] = list(SETUP_METHOD_LANES)
     data["qrPolicy"] = "QR is emitted only for an actual interoperable import payload; arbitrary JSON/text configs are file/text imports."
     data["downloadUI"] = "authenticated-async-jobs-with-progress-cancel"
+    data["setupOnboarding"] = {
+        "version": 5,
+        "auto_show_until_completed": True,
+        "persistent_browser_progress": True,
+        "action_driven_checks": ["health", "admin-status", "admin-settings", "admin-forwarding"],
+        "daily_use_surface": "native-app-not-setup-center",
+    }
     assets_path.write_text(json.dumps(data, indent=2) + "\n")
     assets_path.chmod(0o600)
     html_path.write_text(patch_html(generator.build_html(data)))
