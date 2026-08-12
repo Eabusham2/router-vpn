@@ -34,7 +34,8 @@ jobs:
           grep -q 'dns-policy.py.*patch-sing' modes/run-multihop.sh
           grep -q 'sing-box run' modes/run-multihop.sh
           grep -q 'direct_exit_exception.*False' modes/multihop.py
-          grep -q 'HOMEVPN_ROOT=.*filepath.Clean' cmd/client/multihop.go
+          grep -q 'filepath.Clean(getenv("HOMEVPN_ROOT"' cmd/client/multihop.go
+          grep -q '"HOMEVPN_ROOT="+root' cmd/client/multihop.go
           grep -q '/api/multihop/connect' cmd/client/logical_ui.js
           grep -q 'platform_supported' cmd/client/logical_ui.js
           grep -q 'multihop requires both an entry node and an exit node' internal/common/profile_schema.go
