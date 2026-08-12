@@ -119,6 +119,14 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             File sessionsRoot = new File(getFilesDir(), "layered-sessions").getCanonicalFile();
             File session = new File(sessionsRoot, sessionId).getCanonicalFile();
             if (!session.getParentFile().equals(sessionsRoot) || !session.isDirectory()) throw new IllegalStateException("Layered session is missing or unsafe.");
+            if (new File(session, AndroidKillSwitchPolicy.SESSION_MARKER).isFile()) {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    throw new IllegalStateException("Strict Android kill switch requires Android 10 or newer lockdown APIs.");
+                }
+                if (!isAlwaysOn() || !isLockdownEnabled()) {
+                    throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
+                }
+            }
             File configFile = new File(session, "sing-box.json").getCanonicalFile();
             if (!configFile.getParentFile().equals(session) || !configFile.isFile()) throw new IllegalStateException("Layered session has no sing-box.json.");
             String config = new String(readLimited(configFile, MAX_CONFIG), java.nio.charset.StandardCharsets.UTF_8);
@@ -128,7 +136,6 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if ((!base.isDirectory() && !base.mkdirs()) || (!temp.isDirectory() && !temp.mkdirs())) throw new IllegalStateException("Cannot create libbox runtime directories.");
             SetupOptions setup = new SetupOptions();
             setup.setBasePath(base.getAbsolutePath());
-            // Critical: relative cert/config assets such as hysteria2 cert.pem resolve inside this private session.
             setup.setWorkingPath(session.getAbsolutePath());
             setup.setTempPath(temp.getAbsolutePath());
             setup.setFixAndroidStack(true);
@@ -225,7 +232,6 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 .apply();
     }
 
-    // PlatformInterface: libbox delegates Android TUN creation and socket protection here.
     @Override public LocalDNSTransport localDNSTransport() { return null; }
     @Override public boolean usePlatformAutoDetectInterfaceControl() { return true; }
     @Override public void autoDetectInterfaceControl(int fd) throws Exception {
@@ -432,7 +438,6 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     @Override public void clearDNSCache() { }
     @Override public void sendNotification(io.nekohasekai.libbox.Notification notification) { }
 
-    // CommandServerHandler. State callbacks never turn FAILED/REVOKED into a false clean DOWN state.
     @Override public void serviceStop() {
         executor.execute(() -> {
             if ("FAILED".equals(state) || "REVOKED".equals(state)) return;
