@@ -4,10 +4,10 @@ set -euo pipefail
 BUNDLE=${1:-$(pwd)}
 [[ -f "$BUNDLE/client.json" && -f "$BUNDLE/routers.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf git make gcc libc6-dev golang-go curl python3 tar cmake clang pkg-config libsodium-dev cargo rustc
+DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf nftables git make gcc libc6-dev golang-go curl python3 tar cmake clang pkg-config libsodium-dev cargo rustc
 "$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
-mkdir -p "$ROOT" /usr/local/bin /usr/local/lib
+mkdir -p "$ROOT" /usr/local/bin /usr/local/lib /usr/local/sbin
 cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -86,6 +86,38 @@ if ! command -v amneziawg-go >/dev/null || ! command -v awg-quick >/dev/null; th
   make -C "$TMP/amneziawg-tools/src" install WITH_WGQUICK=yes PREFIX=/usr/local
 fi
 chmod +x "$ROOT/modes/"*.sh 2>/dev/null || true
+
+# `always` must exist before normal networking, not merely after the GUI starts.
+# RequiredBy + Before makes a failed persistent reassertion stop network-pre from
+# completing instead of booting into an unprotected state. With no selected
+# always policy the helper exits successfully and networking proceeds normally.
+cat >/etc/systemd/system/router-vpn-killswitch-early.service <<UNIT
+[Unit]
+Description=Router VPN persistent always kill switch
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target
+
+[Service]
+Type=oneshot
+Environment=HOMEVPN_ROOT=$ROOT
+ExecStart=/usr/bin/python3 $ROOT/modes/kill-switch.py reassert
+
+[Install]
+RequiredBy=network-pre.target
+UNIT
+
+cat >/usr/local/sbin/router-vpn-killswitch-recovery <<'RECOVERY'
+#!/usr/bin/env sh
+set -eu
+ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
+export HOMEVPN_ROOT="$ROOT"
+python3 "$ROOT/modes/kill-switch.py" force-off
+systemctl reset-failed router-vpn-killswitch-early.service 2>/dev/null || true
+printf '%s\n' 'Router VPN persistent kill switch force-disabled. Reboot or restart networking when ready.'
+RECOVERY
+chmod 755 /usr/local/sbin/router-vpn-killswitch-recovery
+
 cat >/etc/systemd/system/router-vpn-client.service <<UNIT
 [Unit]
 Description=Router VPN client controller
@@ -103,5 +135,11 @@ Restart=on-failure
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
+systemctl enable router-vpn-killswitch-early.service
+# Starting this after package installation reconciles an existing selected
+# `always` policy immediately. A failure is intentional and must stop install
+# rather than silently claiming persistent protection.
+systemctl start router-vpn-killswitch-early.service
 systemctl enable --now router-vpn-client
 printf 'Open http://127.0.0.1:8788\n'
+printf 'Emergency local recovery: sudo router-vpn-killswitch-recovery\n'
