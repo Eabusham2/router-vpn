@@ -2,11 +2,11 @@
 """Fail-closed Router VPN client kill switch for shell/native Unix runtimes.
 
 Linux enforcement uses a dedicated nftables output chain with policy drop. Only
-loopback, the selected Router VPN public endpoint, active Router VPN tunnel
-interfaces, essential local link maintenance, and (optionally) private LAN
-ranges are allowed. The rule batch is validated before an atomic nftables
-transaction is committed. Unsupported platforms fail closed when protection is
-requested instead of pretending the policy is active.
+loopback, the physical Router VPN entry endpoint, active Router VPN tunnel
+interfaces, essential link maintenance, and (optionally) private LAN ranges are
+allowed. For multihop, the policy may belong to one control profile while the
+physical public exception belongs to a different entry profile; both IDs are
+persisted so `always` can be reasserted correctly before networking on reboot.
 """
 from __future__ import annotations
 
@@ -25,17 +25,27 @@ from typing import Any
 TABLE = "router_vpn_killswitch"
 PRIVATE_V4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16")
 PRIVATE_V6 = ("fc00::/7", "fe80::/10")
+ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
 
 
 def root_dir() -> Path:
     return Path(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client")).resolve()
 
 
-def safe_profile_id() -> str:
-    value = os.environ.get("HOMEVPN_PROFILE_ID", "router")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", value):
-        raise RuntimeError("invalid HOMEVPN_PROFILE_ID")
+def validate_profile_id(value: str, label: str) -> str:
+    value = str(value or "").strip()
+    if not ID_RE.fullmatch(value):
+        raise RuntimeError(f"invalid {label}")
     return value
+
+
+def safe_profile_id() -> str:
+    return validate_profile_id(os.environ.get("HOMEVPN_PROFILE_ID", "router"), "HOMEVPN_PROFILE_ID")
+
+
+def policy_profile_id(runtime_id: str) -> str:
+    value = os.environ.get("HOMEVPN_POLICY_PROFILE_ID", "").strip()
+    return validate_profile_id(value, "HOMEVPN_POLICY_PROFILE_ID") if value else runtime_id
 
 
 def read_store(root: Path) -> dict[str, Any]:
@@ -55,13 +65,11 @@ def profile_from_store(store: dict[str, Any], profile_id: str) -> dict[str, Any]
     return None
 
 
-def load_profile(root: Path) -> dict[str, Any]:
-    store = read_store(root)
-    selected = safe_profile_id()
-    profile = profile_from_store(store, selected)
-    if profile is not None:
-        return profile
-    raise RuntimeError(f"selected Router VPN profile {selected!r} was not found")
+def required_profile(store: dict[str, Any], profile_id: str, role: str) -> dict[str, Any]:
+    profile = profile_from_store(store, profile_id)
+    if profile is None:
+        raise RuntimeError(f"{role} Router VPN profile {profile_id!r} was not found")
+    return profile
 
 
 def resolve_literal_endpoint(endpoint: str) -> list[ipaddress._BaseAddress]:
@@ -96,11 +104,9 @@ def nft_prefix() -> list[str]:
 
 
 def run_nft(args: list[str], *, check: bool = True, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    cmd = nft_prefix() + args
-    proc = subprocess.run(cmd, input=input_text, text=True, capture_output=True, timeout=8, check=False)
+    proc = subprocess.run(nft_prefix() + args, input=input_text, text=True, capture_output=True, timeout=8, check=False)
     if check and proc.returncode != 0:
-        msg = (proc.stderr or proc.stdout or "nftables command failed").strip()
-        raise RuntimeError(msg)
+        raise RuntimeError((proc.stderr or proc.stdout or "nftables command failed").strip())
     return proc
 
 
@@ -177,12 +183,21 @@ def remove_table() -> None:
         run_nft(["delete", "table", "inet", TABLE])
 
 
-def apply() -> int:
-    root = root_dir()
-    profile = load_profile(root)
+def policy_value(profile: dict[str, Any]) -> str:
     policy = str(profile.get("kill_switch_policy") or "off").strip().lower()
     if policy not in {"off", "on-connect", "always"}:
         raise RuntimeError(f"unsupported kill switch policy: {policy}")
+    return policy
+
+
+def apply() -> int:
+    root = root_dir()
+    store = read_store(root)
+    runtime_id = safe_profile_id()
+    control_id = policy_profile_id(runtime_id)
+    runtime_profile = required_profile(store, runtime_id, "runtime/entry")
+    control_profile = required_profile(store, control_id, "policy/control")
+    policy = policy_value(control_profile)
     if policy == "off":
         if read_state(root):
             remove_table()
@@ -191,9 +206,9 @@ def apply() -> int:
         return 0
     if not sys.platform.startswith("linux"):
         raise RuntimeError(f"strict kill switch is not implemented for {sys.platform}; refusing protected connect")
-    endpoint = os.environ.get("HOMEVPN_ENDPOINT") or str(profile.get("endpoint") or "")
+    endpoint = os.environ.get("HOMEVPN_ENDPOINT") or str(runtime_profile.get("endpoint") or "")
     endpoint_ips = resolve_literal_endpoint(endpoint)
-    lan_access = bool(profile.get("home_lan_access", False))
+    lan_access = bool(control_profile.get("home_lan_access", False))
     rules = render_rules(endpoint_ips, lan_access, replace=table_exists() if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1" else False)
     if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1":
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, prefix="router-vpn-killswitch-", suffix=".nft") as f:
@@ -209,14 +224,15 @@ def apply() -> int:
                 pass
     write_state(root, {
         "policy": policy,
-        "profile_id": safe_profile_id(),
+        "profile_id": runtime_id,
+        "policy_profile_id": control_id,
         "endpoint": endpoint,
         "endpoint_ips": [str(ip) for ip in endpoint_ips],
         "home_lan_access": lan_access,
         "platform": sys.platform,
         "enforced": os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1",
     })
-    print(f"strict kill switch {policy} applied for {endpoint}", file=sys.stderr)
+    print(f"strict kill switch {policy} applied for physical entry {endpoint}", file=sys.stderr)
     return 0
 
 
@@ -248,27 +264,40 @@ def reassert() -> int:
             raise
         print("no Router VPN profile store; no persistent always policy to reassert", file=sys.stderr)
         return 0
-    selected = str(state.get("profile_id") or store.get("selected_id") or "").strip()
-    if not selected:
+
+    control_id = str(state.get("policy_profile_id") or store.get("selected_id") or "").strip()
+    if not control_id:
         if state_always:
-            raise RuntimeError("persistent always kill-switch state has no profile id")
+            raise RuntimeError("persistent always kill-switch state has no policy profile id")
         print("no selected Router VPN profile; no persistent always policy to reassert", file=sys.stderr)
         return 0
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", selected):
-        raise RuntimeError("persistent kill-switch profile id is invalid")
-    profile = profile_from_store(store, selected)
-    if profile is None:
+    control_id = validate_profile_id(control_id, "persistent kill-switch policy profile id")
+    control_profile = profile_from_store(store, control_id)
+    if control_profile is None:
         if state_always:
-            raise RuntimeError(f"persistent always kill-switch profile {selected!r} no longer exists; use force-off recovery locally")
+            raise RuntimeError(f"persistent always kill-switch policy profile {control_id!r} no longer exists; use force-off recovery locally")
         return 0
-    current_policy = str(profile.get("kill_switch_policy") or "off").strip().lower()
+    current_policy = policy_value(control_profile)
     if current_policy != "always":
         remove_table()
         state_path(root).unlink(missing_ok=True)
         print("persistent always state cleared because the current profile policy is no longer always", file=sys.stderr)
         return 0
-    os.environ["HOMEVPN_PROFILE_ID"] = selected
-    os.environ["HOMEVPN_ENDPOINT"] = str(profile.get("endpoint") or state.get("endpoint") or "")
+
+    # If no runtime state exists yet, a multihop-enabled control profile protects
+    # its physical entry endpoint before networking; otherwise it protects itself.
+    runtime_id = str(state.get("profile_id") or "").strip()
+    if not runtime_id:
+        candidate = str(control_profile.get("multihop_entry_id") or "").strip() if bool(control_profile.get("multihop_enabled")) else ""
+        runtime_id = candidate or control_id
+    runtime_id = validate_profile_id(runtime_id, "persistent kill-switch runtime profile id")
+    runtime_profile = profile_from_store(store, runtime_id)
+    if runtime_profile is None:
+        raise RuntimeError(f"persistent always kill-switch runtime/entry profile {runtime_id!r} no longer exists; use force-off recovery locally")
+
+    os.environ["HOMEVPN_PROFILE_ID"] = runtime_id
+    os.environ["HOMEVPN_POLICY_PROFILE_ID"] = control_id
+    os.environ["HOMEVPN_ENDPOINT"] = str(runtime_profile.get("endpoint") or state.get("endpoint") or "")
     return apply()
 
 
