@@ -73,8 +73,12 @@ services:
       finalize-current: {condition: service_completed_successfully}
     volumes:
       - /opt/router-vpn/config:/etc/router-vpn:ro
+      - /opt/router-vpn/admin-state:/var/lib/router-vpn
     environment:
       ROUTER_VPN_CONFIG: /etc/router-vpn/router-agent.json
+      ROUTER_VPN_ADMIN_STATE: /var/lib/router-vpn/admin-state.json
+      ROUTER_VPN_LAN_CIDR: ${LAN_CIDR:-192.168.50.0/24}
+      ROUTER_VPN_LAN_CIDR6: ${LAN_CIDR6:-fd00::/8}
 
   wireguard:
     image: ghcr.io/eabusham2/router-vpn-wireguard:e2a616278142ff4579a11728f05b081bd7e4d665
@@ -195,6 +199,8 @@ services:
     restart: unless-stopped
     depends_on:
       finalize-current: {condition: service_completed_successfully}
+    # setup-center-server.py is the authenticated LAN surface and imports
+    # /src/server/scripts/download-broker.py internally for download/pairing APIs.
     entrypoint: ["python3", "/src/server/scripts/setup-center-server.py"]
     command: ["--base", "/opt/router-vpn", "--bind", "0.0.0.0", "--port", "8786"]
     volumes:
