@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Bounded asynchronous download jobs for the Router VPN Setup Center broker."""
+from __future__ import annotations
+
+import secrets
+from pathlib import Path
+import shutil
+import tempfile
+import threading
+import time
+from typing import Callable
+
+
+JOB_TTL_SECONDS = 15 * 60
+MAX_HISTORY = 64
+
+
+class DownloadJobManager:
+    def __init__(self, base: Path, build_func: Callable, content_type_func: Callable, build_slots: threading.BoundedSemaphore, allowed_names: set[str], max_active: int = 8):
+        self.base = Path(base)
+        self.build_func = build_func
+        self.content_type_func = content_type_func
+        self.build_slots = build_slots
+        self.allowed_names = set(allowed_names)
+        self.max_active = max_active
+        self.lock = threading.Lock()
+        self.jobs: dict[str, dict] = {}
+        self.closed = threading.Event()
+        self.reaper = threading.Thread(target=self._reaper_loop, name="router-vpn-download-job-reaper", daemon=True)
+        self.reaper.start()
+
+    def _public(self, job: dict) -> dict:
+        out = {k: v for k, v in job.items() if k not in ("work_dir", "path", "cancel_requested")}
+        out["status_url"] = f"/api/download-jobs/{job['id']}"
+        if job.get("status") == "ready":
+            out["download_url"] = f"/api/download-jobs/{job['id']}/file"
+        return out
+
+    def _trim_history_locked(self) -> None:
+        terminal = [j for j in self.jobs.values() if j.get("status") in ("failed", "cancelled", "delivered", "delivery-interrupted", "expired")]
+        terminal.sort(key=lambda j: float(j.get("updated_epoch", 0)))
+        while len(self.jobs) > MAX_HISTORY and terminal:
+            old = terminal.pop(0)
+            self.jobs.pop(old["id"], None)
+
+    def create(self, name: str) -> dict:
+        if name not in self.allowed_names:
+            raise ValueError("unsupported download")
+        now = time.time()
+        with self.lock:
+            active = sum(1 for j in self.jobs.values() if j.get("status") in ("queued", "building", "ready", "delivering"))
+            if active >= self.max_active:
+                raise RuntimeError("download queue is full")
+            job_id = secrets.token_urlsafe(12)
+            while job_id in self.jobs:
+                job_id = secrets.token_urlsafe(12)
+            job = {
+                "id": job_id,
+                "name": name,
+                "status": "queued",
+                "phase": "queued",
+                "progress": 5,
+                "source": "",
+                "size": 0,
+                "error_code": "",
+                "error": "",
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+                "expires_in_seconds": JOB_TTL_SECONDS,
+                "updated_epoch": now,
+                "cancel_requested": False,
+                "work_dir": "",
+                "path": "",
+            }
+            self.jobs[job_id] = job
+            self._trim_history_locked()
+        threading.Thread(target=self._run, args=(job_id,), name=f"router-vpn-download-{job_id[:8]}", daemon=True).start()
+        return self.status(job_id)
+
+    def _update(self, job_id: str, **changes) -> None:
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return
+            job.update(changes)
+            now = time.time()
+            job["updated_epoch"] = now
+            job["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+    def _cancelled(self, job_id: str) -> bool:
+        with self.lock:
+            job = self.jobs.get(job_id)
+            return not job or bool(job.get("cancel_requested")) or self.closed.is_set()
+
+    def _cleanup_dir(self, path: str) -> None:
+        if not path:
+            return
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+    def _run(self, job_id: str) -> None:
+        work = tempfile.mkdtemp(prefix="router-vpn-job-")
+        Path(work).chmod(0o700)
+        self._update(job_id, work_dir=work)
+        acquired = False
+        try:
+            if self._cancelled(job_id):
+                self._update(job_id, status="cancelled", phase="cancelled", progress=0, error_code="cancelled", error="download job cancelled")
+                return
+            self._update(job_id, status="queued", phase="waiting-for-build-slot", progress=10)
+            acquired = self.build_slots.acquire(timeout=30)
+            if not acquired:
+                raise RuntimeError("download builder is busy")
+            if self._cancelled(job_id):
+                self._update(job_id, status="cancelled", phase="cancelled", progress=0, error_code="cancelled", error="download job cancelled")
+                return
+            self._update(job_id, status="building", phase="resolving-artifact-or-building", progress=25)
+            with self.lock:
+                job = self.jobs.get(job_id)
+                if not job:
+                    return
+                name = str(job["name"])
+            package, source = self.build_func(self.base, name, Path(work))
+            if self._cancelled(job_id):
+                self._update(job_id, status="cancelled", phase="cancelled", progress=0, error_code="cancelled", error="download job cancelled")
+                return
+            if not package.is_file() or package.stat().st_size <= 0:
+                raise RuntimeError("package creation returned an empty file")
+            self._update(job_id, status="ready", phase="ready", progress=100, source=source, size=package.stat().st_size, path=str(package), expires_in_seconds=JOB_TTL_SECONDS)
+            # Ready output remains only in the private /tmp job directory until
+            # first delivery, cancellation, or TTL expiry.
+            work = ""
+        except TimeoutError:
+            self._update(job_id, status="failed", phase="failed", progress=0, error_code="timeout", error="package generation timed out")
+        except Exception as exc:
+            code = "builder_busy" if "builder is busy" in str(exc).lower() else "build_failed"
+            self._update(job_id, status="failed", phase="failed", progress=0, error_code=code, error=str(exc)[:500])
+        finally:
+            if acquired:
+                self.build_slots.release()
+            if work:
+                self._cleanup_dir(work)
+                self._update(job_id, work_dir="", path="")
+
+    def status(self, job_id: str) -> dict:
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                raise KeyError(job_id)
+            return self._public(dict(job))
+
+    def begin_delivery(self, job_id: str) -> tuple[Path, dict]:
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                raise KeyError(job_id)
+            if job.get("status") != "ready":
+                raise RuntimeError(f"download job is {job.get('status')}")
+            path = Path(str(job.get("path") or ""))
+            if not path.is_file():
+                raise RuntimeError("download job output is missing")
+            job["status"] = "delivering"
+            job["phase"] = "delivering"
+            job["updated_epoch"] = time.time()
+            meta = self._public(dict(job))
+            meta["content_type"] = self.content_type_func(str(job["name"]))
+            return path, meta
+
+    def finish_delivery(self, job_id: str, success: bool) -> None:
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return
+            work = str(job.get("work_dir") or "")
+            job["work_dir"] = ""
+            job["path"] = ""
+            job["status"] = "delivered" if success else "delivery-interrupted"
+            job["phase"] = job["status"]
+            job["progress"] = 100 if success else 0
+            if not success:
+                job["error_code"] = "client_disconnected"
+                job["error"] = "download delivery was interrupted; temporary output was deleted"
+            job["updated_epoch"] = time.time()
+        self._cleanup_dir(work)
+
+    def cancel(self, job_id: str) -> dict:
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                raise KeyError(job_id)
+            job["cancel_requested"] = True
+            work = ""
+            if job.get("status") in ("queued", "ready"):
+                work = str(job.get("work_dir") or "")
+                job["work_dir"] = ""
+                job["path"] = ""
+                job["status"] = "cancelled"
+                job["phase"] = "cancelled"
+                job["progress"] = 0
+                job["error_code"] = "cancelled"
+                job["error"] = "download job cancelled"
+                job["updated_epoch"] = time.time()
+            out = self._public(dict(job))
+        self._cleanup_dir(work)
+        return out
+
+    def _reaper_loop(self) -> None:
+        while not self.closed.wait(30):
+            cutoff = time.time() - JOB_TTL_SECONDS
+            doomed: list[tuple[str, str]] = []
+            with self.lock:
+                for job_id, job in self.jobs.items():
+                    if job.get("status") == "ready" and float(job.get("updated_epoch", 0)) < cutoff:
+                        work = str(job.get("work_dir") or "")
+                        job["work_dir"] = ""
+                        job["path"] = ""
+                        job["status"] = "expired"
+                        job["phase"] = "expired"
+                        job["progress"] = 0
+                        job["error_code"] = "expired"
+                        job["error"] = "download job expired before delivery"
+                        job["updated_epoch"] = time.time()
+                        doomed.append((job_id, work))
+                self._trim_history_locked()
+            for _, work in doomed:
+                self._cleanup_dir(work)
+
+    def close(self) -> None:
+        self.closed.set()
+        with self.lock:
+            work_dirs = [str(j.get("work_dir") or "") for j in self.jobs.values()]
+            for job in self.jobs.values():
+                job["cancel_requested"] = True
+        for work in work_dirs:
+            self._cleanup_dir(work)

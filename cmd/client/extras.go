@@ -35,6 +35,7 @@ self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})`
 
 func extraRoutes(h *http.ServeMux, a *app) {
+	initSessionTracker(a)
 	h.HandleFunc("/favicon.svg", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "image/svg+xml")
 		w.Header().Set("cache-control", "public, max-age=86400")
@@ -50,11 +51,13 @@ func extraRoutes(h *http.ServeMux, a *app) {
 		_, _ = io.WriteString(w, serviceWorkerJS)
 	})
 	h.HandleFunc("/api/logical-modes", a.listLogicalModes)
-	h.HandleFunc("/api/connect-logical", a.connectLogical)
+	h.HandleFunc("/api/connect-logical", a.connectLogicalTracked)
+	h.HandleFunc("/api/session", a.sessionStatus)
+	h.HandleFunc("/api/session/events", a.sessionEvents)
 	h.HandleFunc("/api/profile/latency", a.profileLatency)
 	h.HandleFunc("/api/public-ip", a.publicIP)
 	h.HandleFunc("/api/dns/retest", a.retestDNS)
-	h.HandleFunc("/api/emergency-stop", a.emergencyStop)
+	h.HandleFunc("/api/emergency-stop", a.emergencyStopTracked)
 }
 
 type latencyRequest struct {

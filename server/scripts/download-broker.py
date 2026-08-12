@@ -9,6 +9,10 @@ application packages.
 
 Android and iOS remain same-SHA GitHub-backed and never pretend the Linux home
 node can reproduce platform-specific mobile/Xcode build pipelines.
+
+Both direct-download compatibility URLs and typed asynchronous download jobs are
+supported. Job outputs live only in private /tmp directories until first delivery,
+cancellation, failure, or TTL expiry.
 """
 from __future__ import annotations
 
@@ -37,6 +41,12 @@ _builder = module_from_spec(_spec)
 _spec.loader.exec_module(_builder)
 PACKAGE_MAP = _builder.PACKAGE_MAP
 
+_jobs_spec = spec_from_file_location("router_vpn_download_jobs", SCRIPT_DIR / "download_jobs.py")
+if _jobs_spec is None or _jobs_spec.loader is None:
+    raise RuntimeError("cannot load download_jobs.py")
+_jobs = module_from_spec(_jobs_spec)
+_jobs_spec.loader.exec_module(_jobs)
+
 DIRECT_ARTIFACTS = {
     "router-vpn-android.apk": {
         "artifact": "RouterVPN-Android-CI",
@@ -57,12 +67,13 @@ CHUNK = 1024 * 1024
 REQUEST_SLOTS = threading.BoundedSemaphore(value=8)
 BUILD_SLOTS = threading.BoundedSemaphore(value=1)
 PACKAGE_TIMEOUT = 720
+ALLOWED_DOWNLOADS = set(PACKAGE_MAP) | set(DIRECT_ARTIFACTS)
 
 
 def _api_headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "router-vpn-setup-center/2",
+        "User-Agent": "router-vpn-setup-center/3",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     token = os.environ.get("GITHUB_TOKEN", "").strip()
@@ -249,14 +260,15 @@ def request_temp():
 
 def cleanup_stale_temp() -> None:
     temp = Path(tempfile.gettempdir())
-    for path in temp.glob("router-vpn-request-*"):
-        try:
-            if path.is_dir():
-                shutil.rmtree(path)
-            else:
-                path.unlink()
-        except OSError:
-            pass
+    for pattern in ("router-vpn-request-*", "router-vpn-job-*", "router-vpn-one-package-*"):
+        for path in temp.glob(pattern):
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+            except OSError:
+                pass
 
 
 def content_type_for(name: str) -> str:
@@ -265,14 +277,82 @@ def content_type_for(name: str) -> str:
     return "application/zip"
 
 
+def _job_route(path: str) -> tuple[str, str] | None:
+    prefix = "/api/download-jobs/"
+    if not path.startswith(prefix):
+        return None
+    rest = path[len(prefix):]
+    if not rest:
+        return None
+    parts = rest.split("/")
+    if len(parts) == 1:
+        return parts[0], "status"
+    if len(parts) == 2 and parts[1] == "file":
+        return parts[0], "file"
+    return None
+
+
 class Handler(SimpleHTTPRequestHandler):
-    server_version = "RouterVPNSetupCenter/2"
+    server_version = "RouterVPNSetupCenter/3"
 
     def end_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
         super().end_headers()
+
+    def _json(self, status: int, obj: dict) -> None:
+        body = json.dumps(obj, separators=(",", ":")).encode() + b"\n"
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_body_json(self, limit: int = 4096) -> dict:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("invalid Content-Length") from exc
+        if length <= 0 or length > limit:
+            raise ValueError("request body size is invalid")
+        raw = self.rfile.read(length)
+        obj = json.loads(raw)
+        if not isinstance(obj, dict):
+            raise ValueError("JSON body must be an object")
+        return obj
+
+    def do_POST(self) -> None:
+        path = urllib.parse.urlsplit(self.path).path
+        if path != "/api/download-jobs":
+            self.send_error(404)
+            return
+        try:
+            body = self._read_body_json()
+            name = str(body.get("name") or "")
+            job = self.server.jobs.create(name)
+        except ValueError as exc:
+            self._json(400, {"ok": False, "error_code": "bad_request", "error": str(exc)})
+            return
+        except RuntimeError as exc:
+            self._json(503, {"ok": False, "error_code": "queue_full", "error": str(exc)})
+            return
+        self._json(202, {"ok": True, "job": job})
+
+    def do_DELETE(self) -> None:
+        path = urllib.parse.urlsplit(self.path).path
+        route = _job_route(path)
+        if not route or route[1] != "status":
+            self.send_error(404)
+            return
+        job_id, _ = route
+        try:
+            job = self.server.jobs.cancel(job_id)
+        except KeyError:
+            self._json(404, {"ok": False, "error_code": "not_found", "error": "download job not found"})
+            return
+        self._json(200, {"ok": True, "job": job})
 
     def do_GET(self) -> None:
         path = urllib.parse.urlsplit(self.path).path
@@ -286,7 +366,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(body)
             return
         if path == "/api/download-policy":
-            body = json.dumps({
+            self._json(200, {
                 "mode": "on-demand",
                 "preferred_source": "github-actions",
                 "fallback": "router-local-generic-build",
@@ -298,22 +378,68 @@ class Handler(SimpleHTTPRequestHandler):
                 "mobile_artifacts": "same-sha-github-only",
                 "max_parallel_package_requests": 8,
                 "local_build_slots": 1,
+                "download_jobs": {
+                    "create": "POST /api/download-jobs {name}",
+                    "status": "GET /api/download-jobs/{job_id}",
+                    "cancel": "DELETE /api/download-jobs/{job_id}",
+                    "file": "GET /api/download-jobs/{job_id}/file",
+                    "ready_ttl_seconds": _jobs.JOB_TTL_SECONDS,
+                },
                 "github_artifact_retention_days": 1,
                 "github_sha": os.environ.get("ROUTER_VPN_GITHUB_SHA", "").strip(),
-            }, separators=(",", ":")).encode() + b"\n"
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+            })
             return
 
+        route = _job_route(path)
+        if route:
+            job_id, action = route
+            if action == "status":
+                try:
+                    job = self.server.jobs.status(job_id)
+                except KeyError:
+                    self._json(404, {"ok": False, "error_code": "not_found", "error": "download job not found"})
+                    return
+                self._json(200, {"ok": True, "job": job})
+                return
+            if action == "file":
+                self._job_file(job_id)
+                return
+
         name = path.lstrip("/")
-        if "/" not in name and (name in PACKAGE_MAP or name in DIRECT_ARTIFACTS):
+        if "/" not in name and name in ALLOWED_DOWNLOADS:
             self._dynamic(name)
             return
         super().do_GET()
+
+    def _job_file(self, job_id: str) -> None:
+        try:
+            package, meta = self.server.jobs.begin_delivery(job_id)
+        except KeyError:
+            self._json(404, {"ok": False, "error_code": "not_found", "error": "download job not found"})
+            return
+        except RuntimeError as exc:
+            self._json(409, {"ok": False, "error_code": "not_ready", "error": str(exc)})
+            return
+        success = False
+        try:
+            size = package.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", str(meta["content_type"]))
+            self.send_header("Content-Disposition", f'attachment; filename="{meta["name"]}"')
+            self.send_header("Content-Length", str(size))
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("X-Router-VPN-Source", str(meta.get("source") or ""))
+            self.send_header("X-Router-VPN-Job", job_id)
+            self.end_headers()
+            with package.open("rb") as f:
+                shutil.copyfileobj(f, self.wfile, CHUNK)
+            success = True
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as exc:
+            print(f"download broker: delivery failed {job_id}: {type(exc).__name__}: {exc}", flush=True)
+        finally:
+            self.server.jobs.finish_delivery(job_id, success)
 
     def _dynamic(self, name: str) -> None:
         if not REQUEST_SLOTS.acquire(timeout=1):
@@ -372,6 +498,11 @@ class Server(ThreadingHTTPServer):
         super().__init__(address, handler)
         self.base_dir = base_dir
         self.static_dir = static_dir
+        self.jobs = _jobs.DownloadJobManager(base_dir, build_package, content_type_for, BUILD_SLOTS, ALLOWED_DOWNLOADS, max_active=8)
+
+    def server_close(self) -> None:
+        self.jobs.close()
+        super().server_close()
 
 
 def main() -> int:
@@ -386,7 +517,7 @@ def main() -> int:
     static.mkdir(parents=True, exist_ok=True)
     cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
-    print(f"Router VPN Setup Center on {args.bind}:{args.port}; packages are ephemeral", flush=True)
+    print(f"Router VPN Setup Center on {args.bind}:{args.port}; packages are ephemeral; typed download jobs enabled", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

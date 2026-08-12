@@ -35,6 +35,13 @@ copy_public "$BUNDLE/router/asus-merlin-router-vpn-forwards.sh" "asus-merlin-rou
 copy_public "$BUNDLE/modes.json"
 copy_public "$BUNDLE/logical-modes.json"
 
+# Normalize the generated Setup Center into typed import lanes. This is where
+# legacy "QR = arbitrary config text" behavior is removed: QR remains only for
+# actual interoperable import payloads (WireGuard, SIP002, Hysteria2, SSR).
+if [[ -f "$BUNDLE/setup-assets.json" && -f "$BUNDLE/router-vpn-device-setup.html" ]]; then
+  python3 /src/server/scripts/normalize-setup-imports.py "$BASE"
+fi
+
 # Keep stable on-demand URLs in the Setup Center. PortableApps was retired;
 # Router VPN's own tested no-install Portable ZIP remains supported.
 python3 - "$BUNDLE/router-vpn-device-setup.html" "$BUNDLE/setup-assets.json" <<'PY'
@@ -78,7 +85,8 @@ if 'Generic application packages are generated on demand' not in text:
       '<div style="max-width:980px;margin:8px auto 24px;padding:0 16px;opacity:.72;font-size:12px">'
       'Generic application packages are generated on demand and never contain linked-node secrets. Desktop/Portable: matching same-SHA GitHub CI artifact first, then router-side build of only the requested generic Go client package if unavailable. '
       'Android/iOS: matching same-SHA GitHub mobile artifact; the Linux home node does not fake platform-specific mobile builds. '
-      'Add home/server nodes separately by private bundle import or pairing. Private bundle builds and all temporary package files are deleted after delivery.'
+      'Add home/server nodes separately by private bundle import or pairing. Private bundle builds and all temporary package files are deleted after delivery. '
+      'The broker also exposes typed asynchronous download jobs so clients can show queued/building/ready progress and cancel safely.'
       '</div>'
     )
     if marker in text:
@@ -113,6 +121,13 @@ data['download_policy']={
   'server_cache':False,
   'max_parallel_package_requests':8,
   'local_build_slots':1,
+  'download_jobs':{
+    'create':'POST /api/download-jobs {name}',
+    'status':'GET /api/download-jobs/{job_id}',
+    'cancel':'DELETE /api/download-jobs/{job_id}',
+    'file':'GET /api/download-jobs/{job_id}/file',
+    'ready_ttl_seconds':900,
+  },
   'github_artifact_retention_days':1,
 }
 assets.write_text(json.dumps(data,indent=2)+'\n')
@@ -135,6 +150,13 @@ cat >"$OUT/download-policy.json" <<'JSON'
   "server_cache": false,
   "max_parallel_package_requests": 8,
   "local_build_slots": 1,
+  "download_jobs": {
+    "create": "POST /api/download-jobs {name}",
+    "status": "GET /api/download-jobs/{job_id}",
+    "cancel": "DELETE /api/download-jobs/{job_id}",
+    "file": "GET /api/download-jobs/{job_id}/file",
+    "ready_ttl_seconds": 900
+  },
   "github_artifact_retention_days": 1
 }
 JSON
@@ -153,4 +175,4 @@ JSON
 
 chmod 0600 "$OUT"/* 2>/dev/null || true
 
-echo 'Published lightweight Setup Center only; generic desktop/Portable apps are ephemeral, private node linking is separate, and mobile downloads are same-SHA GitHub-backed.'
+echo 'Published lightweight Setup Center only; typed imports and async download jobs enabled; generic desktop/Portable apps are ephemeral, private node linking is separate, and mobile downloads are same-SHA GitHub-backed.'
