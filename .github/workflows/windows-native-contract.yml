@@ -1,1 +1,77 @@
-name: placeholder
+name: Windows native contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - name: Parse native PowerShell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            'client/native-wireguard-windows.ps1',
+            'client/native-windows-mode.ps1',
+            'client/windows-kill-switch.ps1',
+            'client/test-windows-kill-switch.ps1',
+            'client/Prepare-Windows-Mode-Catalog-v2.ps1',
+            'client/Setup-Windows-Runtime.ps1',
+            'client/install-windows.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "${file}: $($_.Message) at $($_.Extent.Text)" }
+              throw "PowerShell parser rejected $file"
+            }
+          }
+      - name: Windows firewall primitives
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @('Get-NetFirewallProfile','Set-NetFirewallProfile','New-NetFirewallRule','Get-NetFirewallRule','Remove-NetFirewallRule')) {
+            if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { throw "Missing Windows firewall primitive: $name" }
+          }
+          ./client/test-windows-kill-switch.ps1
+      - name: Assert no current WSL dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            'client/Setup-Windows-Runtime.ps1',
+            'client/Prepare-Windows-Mode-Catalog-v2.ps1',
+            'client/native-windows-mode.ps1',
+            'cmd/client/windows_runtime.go',
+            'cmd/portable-launcher/main.go',
+            'deploy/package-builds.sh'
+          )
+          foreach ($file in $files) {
+            $body = (Get-Content -Raw $file).ToLowerInvariant()
+            if ($body.Contains('wsl.exe') -or $body.Contains('requires wsl2')) { throw "Current Windows runtime still depends on WSL: $file" }
+          }
+      - name: Go native contracts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $output = & go test -v ./cmd/portable-launcher ./internal/common 2>&1
+          $exit = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exit -ne 0) {
+            $message = (($output | Select-Object -Last 80) -join "`n").Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
+            Write-Output "::error title=Windows Go contract failure::$message"
+            exit $exit
+          }
