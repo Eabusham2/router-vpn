@@ -1,0 +1,29 @@
+name: Multihop contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  multihop-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build-chain unit contract
+        run: python3 modes/test_multihop.py
+      - name: Syntax
+        run: |
+          python3 -m py_compile modes/multihop.py
+          bash -n modes/run-multihop.sh
+      - name: Real-chain markers
+        run: |
+          grep -q 'detour.*entry-hop' modes/multihop.py
+          grep -q 'AllowedIPs = {allowed}' modes/multihop.py
+          grep -q 'HOMEVPN_POLICY_PROFILE_ID' modes/run-multihop.sh
+          grep -q 'dns-policy.py.*patch-sing' modes/run-multihop.sh
+          grep -q 'sing-box run' modes/run-multihop.sh
+          grep -q 'direct_exit_exception.*False' modes/multihop.py
