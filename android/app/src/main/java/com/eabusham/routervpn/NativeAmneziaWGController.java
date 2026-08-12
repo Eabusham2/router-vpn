@@ -31,6 +31,7 @@ final class NativeAmneziaWGController implements Tunnel {
     void connect(File privateBundle, Callback callback) {
         executor.execute(() -> {
             try {
+                if (AndroidKillSwitchPolicy.strictRequested(privateBundle)) throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
                 Config config = loadConfig(privateBundle);
                 State result = backend.setState(this, State.UP, config);
                 state = result;
@@ -48,9 +49,7 @@ final class NativeAmneziaWGController implements Tunnel {
                 State result = backend.setState(this, State.DOWN, null);
                 state = result;
                 callback.done(result, "Native Android AmneziaWG disconnected.", null);
-            } catch (Throwable error) {
-                callback.done(state, "AmneziaWG disconnect failed: " + safeMessage(error), error);
-            }
+            } catch (Throwable error) { callback.done(state, "AmneziaWG disconnect failed: " + safeMessage(error), error); }
         });
     }
 
@@ -75,11 +74,7 @@ final class NativeAmneziaWGController implements Tunnel {
     private static byte[] readLimited(File file, int maxBytes) throws Exception {
         try (FileInputStream input = new FileInputStream(file); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192]; int total = 0, read;
-            while ((read = input.read(buffer)) != -1) {
-                total += read;
-                if (total > maxBytes) throw new IllegalStateException("Private node bundle exceeds safety limit.");
-                output.write(buffer, 0, read);
-            }
+            while ((read = input.read(buffer)) != -1) { total += read; if (total > maxBytes) throw new IllegalStateException("Private node bundle exceeds safety limit."); output.write(buffer, 0, read); }
             return output.toByteArray();
         }
     }
