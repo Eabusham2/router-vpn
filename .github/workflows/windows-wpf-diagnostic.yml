@@ -1,0 +1,21 @@
+name: Windows WPF diagnostic
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wpf:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and self-test native WPF app under Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/RouterVPN-Windows-App.ps1 -SelfTest
+          if($LASTEXITCODE -ne 0){ throw "Windows PowerShell 5.1 WPF self-test failed with exit code $LASTEXITCODE" }
