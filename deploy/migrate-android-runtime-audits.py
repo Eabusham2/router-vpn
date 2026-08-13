@@ -39,12 +39,18 @@ new_orch_go = 'for _,required:=range []string{"AndroidPathProbe.prove(bundle","N
 if old_orch_go in gt: gt = gt.replace(old_orch_go,new_orch_go,1)
 wg_marker = '"AndroidKillSwitchPolicy.strictRequested(privateBundle)"}'
 wg_add = '"AndroidKillSwitchPolicy.strictRequested(privateBundle)","AndroidNativeProfilePolicy.patchWireGuardLikeConfig","AndroidPathProbe.prove(privateBundle, 8000)","recoverAfterNetworkChange","network-transition recovery failed closed"}'
-# There are two controller lists; upgrade both exactly.
 if gt.count(wg_marker) == 2:
     gt = gt.replace(wg_marker,wg_add,2)
 
-sing_anchor = '\tsing:=repoFile(t,"android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java")\n\tfor _,required:=range []string{"isDirectFullDeviceConfig","MAX_PROFILE_FILE","MAX_PROFILE_TOTAL","cleanupOldSessions","LayeredVpnService"}{if !strings.Contains(sing,required){t.Fatalf("Android embedded libbox runtime missing %q",required)}}\n'
-if 'xray:=repoFile(t,"android/app/src/main/java/com/eabusham/routervpn/NativeXrayController.java")' not in gt:
+# The first run is followed by gofmt, so idempotency must use semantic markers,
+# not the compact pre-format source spelling.
+xray_audit_present = (
+    'Android native Xray controller missing %q' in gt
+    and 'Android native Xray VpnService missing %q' in gt
+    and 'Android native DNS/MTU policy missing %q' in gt
+)
+if not xray_audit_present:
+    sing_anchor = '\tsing:=repoFile(t,"android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java")\n\tfor _,required:=range []string{"isDirectFullDeviceConfig","MAX_PROFILE_FILE","MAX_PROFILE_TOTAL","cleanupOldSessions","LayeredVpnService"}{if !strings.Contains(sing,required){t.Fatalf("Android embedded libbox runtime missing %q",required)}}\n'
     if gt.count(sing_anchor) != 1:
         raise SystemExit(f"native Go Xray insertion anchor mismatch: {gt.count(sing_anchor)}")
     go_insert = sing_anchor + '''\txray:=repoFile(t,"android/app/src/main/java/com/eabusham/routervpn/NativeXrayController.java")
