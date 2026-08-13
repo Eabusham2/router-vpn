@@ -79,17 +79,20 @@ jobs:
           fi
       - name: Verify native GTK package contract
         run: |
-          archive="dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz"
+          arch='${{ matrix.arch }}'
+          archive="dist/linux-native/RouterVPN-linux-$arch.tar.gz"
           test -s "$archive"
-          tar -tzf "$archive" | grep -q '^RouterVPN-linux-${{ matrix.arch }}/router-vpn-app$'
-          tar -tzf "$archive" | grep -q '^RouterVPN-linux-${{ matrix.arch }}/LICENSE$'
-          ! tar -tzf "$archive" | grep -q 'router-vpn-bundle.json'
-          test ! -d "dist/linux-native/work-${{ matrix.arch }}"
+          members="$RUNNER_TEMP/linux-native-$arch-members.txt"
+          tar -tzf "$archive" > "$members"
+          grep -Fxq "RouterVPN-linux-$arch/router-vpn-app" "$members"
+          grep -Fxq "RouterVPN-linux-$arch/LICENSE" "$members"
+          ! grep -Fq 'router-vpn-bundle.json' "$members"
+          test ! -d "dist/linux-native/work-$arch"
           grep -Fq 'gtk_window_new' client/linux/routervpn-gtk.c
           grep -Fq 'gtk_notebook_new' client/linux/routervpn-gtk.c
           grep -Fq 'http://127.0.0.1:8788' client/linux/routervpn-gtk.c
           ! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' client/linux/routervpn-gtk.c
-          sha256sum -c "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.sha256"
+          (cd dist/linux-native && sha256sum -c "RouterVPN-linux-$arch.sha256")
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Linux-Native-${{ matrix.arch }}-CI
