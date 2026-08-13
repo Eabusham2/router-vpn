@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-SRC="$ROOT/client/macos/RouterVPNMacApp.swift"
+SRC="$ROOT/client/macos/RouterVPNMacNative.swift"
 OUT=${1:?usage: build-native-app.sh OUT_DIR [amd64|arm64]}
 ARCH=${2:-arm64}
 case "$ARCH" in
