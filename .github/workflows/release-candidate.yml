@@ -1,0 +1,284 @@
+name: Router VPN release candidate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-audit:
+    name: Source security and release-gap audits
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Go source contracts
+        run: go test ./...
+      - name: Repository contracts
+        run: |
+          python3 deploy/validate-repo.py
+          python3 deploy/full-audit-v4.py
+          python3 deploy/release-gap-audit.py
+          python3 android/test_android_runtime_contract.py
+          python3 android/test_android_multihop_contract.py
+          python3 modes/test_profile_id_safety.py
+      - name: Setup Center and AI Help contracts
+        run: |
+          python3 server/scripts/test_ai_help_provider.py
+          python3 server/scripts/test_setup_center_ai.py
+          python3 server/scripts/test_setup_center_entrypoint.py
+          sh -n server/scripts/run-setup-center.sh
+
+  generic-builds:
+    name: Generic desktop and Windows packages
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Build and package generic clients
+        run: |
+          chmod +x deploy/build-client.sh deploy/package-builds.sh
+          ./deploy/build-client.sh
+          ./deploy/package-builds.sh
+          (cd dist/packages && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-generic-release-candidate
+          path: |
+            dist/packages/*
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-native-smoke:
+    name: Windows native + Portable ${{ matrix.arch }}
+    needs: generic-builds
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-generic-release-candidate
+          path: artifacts
+      - name: Execute Portable native WPF self-test and relocation
+        shell: pwsh
+        env:
+          ROUTER_VPN_ARCH: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $arch=$env:ROUTER_VPN_ARCH
+          $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Portable-Windows-$arch.zip" | Select-Object -First 1).FullName
+          if(-not $archive){throw "Missing Portable $arch package"}
+          $extract=Join-Path $env:RUNNER_TEMP "portable-$arch"
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive $archive $extract -Force
+          $root=Get-ChildItem $extract -Directory | Select-Object -First 1
+          $exe=Join-Path $root.FullName 'RouterVPNPortable.exe'
+          $p=Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
+          if($p.ExitCode-ne 0){throw "Portable native WPF self-test failed: $($p.ExitCode)"}
+          foreach($rel in @('Data\client.json','Data\routers.json','Data\modes.windows.json','Data\logical-modes.json','Data\windows-runtime.json')){
+            if(-not(Test-Path(Join-Path $root.FullName $rel))){throw "Missing self-test output $rel"}
+          }
+          try{Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8788/api/status' -TimeoutSec 1|Out-Null;throw 'Portable controller remained alive after self-test'}catch{if($_.Exception.Message-eq'Portable controller remained alive after self-test'){throw}}
+          $movedParent=Join-Path $env:RUNNER_TEMP "portable-moved-$arch"
+          Remove-Item $movedParent -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory $movedParent|Out-Null
+          $moved=Join-Path $movedParent $root.Name
+          Move-Item $root.FullName $moved
+          $p2=Start-Process (Join-Path $moved 'RouterVPNPortable.exe') -ArgumentList '--self-test' -Wait -PassThru
+          if($p2.ExitCode-ne 0){throw 'Relocated Portable native WPF self-test failed'}
+      - name: Verify installed package uses native WPF entrypoint
+        shell: pwsh
+        run: |
+          $arch=$env:ROUTER_VPN_ARCH
+          $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Windows-$arch.zip" | Select-Object -First 1).FullName
+          $extract=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          Expand-Archive $archive $extract -Force
+          $root=Get-ChildItem $extract -Directory|Select-Object -First 1
+          $start=Get-Content (Join-Path $root.FullName 'Start-RouterVPN.ps1') -Raw
+          if($start-notmatch'RouterVPN-Windows-App\.ps1'){throw 'Installed package does not launch native WPF app'}
+          if($start-match'msedge\.exe|chrome\.exe|--app='){throw 'Installed package regressed to a browser shell'}
+        env:
+          ROUTER_VPN_ARCH: ${{ matrix.arch }}
+
+  android:
+    name: Android native APK
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Install Android SDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Runtime contracts and APK
+        run: |
+          python3 android/test_android_runtime_contract.py
+          python3 android/test_android_multihop_contract.py
+          gradle -p android --no-daemon :app:assembleDebug
+          test -s android/app/build/outputs/apk/debug/app-debug.apk
+          unzip -tq android/app/build/outputs/apk/debug/app-debug.apk >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Android-release-candidate
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  ios:
+    name: iOS/iPadOS real WireGuard PacketTunnel
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Prepare exact pinned WireGuardKit
+        run: sh ios/RouterVPN/prepare-wireguard-kit.sh
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate and build unsigned native app
+        working-directory: ios/RouterVPN
+        run: |
+          xcodegen generate
+          xcodebuild \
+            -project RouterVPN.xcodeproj \
+            -scheme RouterVPN \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM='' \
+            build
+      - name: Verify pinned engine, extension and package IPA
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          WG="$PWD/build/DerivedData/SourcePackages/checkouts/wireguard-apple"
+          test -d "$APP/PlugIns/RouterVPNPacketTunnel.appex"
+          test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
+          grep -Fq 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift
+          grep -Fq 'body["node_id"] as? String == expectedNodeID' PacketTunnel/PacketTunnelProvider.swift
+          rm -rf build/unsigned && mkdir -p build/unsigned/Payload
+          ditto "$APP" build/unsigned/Payload/RouterVPN.app
+          (cd build/unsigned && zip -qry ../RouterVPN-native-wg-unsigned-resignable.ipa Payload)
+          unzip -tq build/RouterVPN-native-wg-unsigned-resignable.ipa >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-release-candidate
+          path: ios/RouterVPN/build/RouterVPN-native-wg-unsigned-resignable.ipa
+          if-no-files-found: error
+          retention-days: 1
+
+  macos:
+    name: macOS native AppKit amd64 + arm64
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Build native macOS packages
+        run: |
+          chmod +x client/macos/build-native-app.sh deploy/package-macos-native.sh
+          ./deploy/package-macos-native.sh
+          (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-macOS-release-candidate
+          path: |
+            dist/macos-native/RouterVPN-darwin-amd64.tar.gz
+            dist/macos-native/RouterVPN-darwin-arm64.tar.gz
+            dist/macos-native/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  linux:
+    name: Linux native GTK ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Install GTK native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file binutils
+      - name: Build native Linux package
+        run: |
+          chmod +x client/linux/build-native-app.sh deploy/package-linux-native.sh
+          ./deploy/package-linux-native.sh '${{ matrix.arch }}'
+          sha256sum -c "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Linux-${{ matrix.arch }}-release-candidate
+          path: |
+            dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz
+            dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  aggregate:
+    name: Aggregate one-SHA native release candidate
+    needs: [source-audit, generic-builds, windows-native-smoke, android, ios, macos, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-release-candidate'
+          path: dist/release-candidate
+          merge-multiple: false
+      - name: Manifest artifact tree
+        run: |
+          find dist/release-candidate -type f -print | sort
+          find dist/release-candidate -type f -print0 | sort -z | xargs -0 sha256sum > dist/RELEASE-CANDIDATE-SHA256SUMS
+          test -s dist/RELEASE-CANDIDATE-SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-release-candidate-${{ github.sha }}
+          path: |
+            dist/release-candidate/**
+            dist/RELEASE-CANDIDATE-SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
