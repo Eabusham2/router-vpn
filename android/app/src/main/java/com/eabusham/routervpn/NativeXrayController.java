@@ -88,7 +88,7 @@ final class NativeXrayController {
         if (raw.length <= 0 || raw.length > MAX_CONFIG) throw new IllegalStateException("Xray config size is invalid.");
         JSONObject config = new JSONObject(new String(raw, StandardCharsets.UTF_8));
         String proxyTag = validatedProxyTag(config);
-        patchForAndroidTun(config, proxyTag, selectedMtu(root));
+        patchForAndroidTun(config, proxyTag, AndroidNativeProfilePolicy.selectedMtu(root, 1380));
         byte[] patched = (config.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
         if (patched.length > MAX_CONFIG) throw new IllegalStateException("Patched Xray config exceeds safety limit.");
 
@@ -120,8 +120,8 @@ final class NativeXrayController {
             }
             JSONObject meta = new JSONObject()
                     .put("modeId", modeId)
-                    .put("dns", selectedPlainDns(root))
-                    .put("mtu", selectedMtu(root));
+                    .put("dns", AndroidNativeProfilePolicy.selectedPlainUdpDns(root))
+                    .put("mtu", AndroidNativeProfilePolicy.selectedMtu(root, 1380));
             writeFile(new File(session, META_FILE), (meta.toString() + "\n").getBytes(StandardCharsets.UTF_8));
             return new SessionInfo(sessionId, modeId);
         } catch (Throwable error) {

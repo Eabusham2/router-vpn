@@ -242,7 +242,7 @@ public final class MainActivity extends Activity {
             case 5: return "Add router-vpn-bundle.json for each router. Router linking is a data operation: the app is installed once, keeps multiple node bundles in bounded Android app-private storage, and never relies on the server's repeated display id as a local filename.";
             case 6: return "Choose an active router for single-hop. Raw WG/AWG, self-contained libbox, and native self-contained Xray modes are real choices. AUTO tests native candidates; SMART tries simpler candidates and restores the last proven mode if reduction fails. ALL tests the strongest available Android-native protection branch first and truthfully falls back only after a failed proof. Strict policy excludes raw WG/AWG and requires proven Android Always-on plus lockdown for embedded libbox/Xray.";
             case 7: return "Multihop requires two different stored nodes. Current proven Android graph is standard WireGuard entry → Shadowsocks or Hysteria2 exit → Internet. The app builds one VpnService graph and requires private proof from the selected exit before Connected. AWG-entry/mixed ALL/MAX multihop stays unavailable. Expect more latency.";
-            case 8: return "CUSTOM selects only a native candidate containing all requested layers. A TUN UP state alone is never AUTO or multihop success: selected-node/exit private path proof must pass. Selected DNS is applied to embedded libbox sessions and IP-based native Xray sessions; final DNS/leak proof remains a release gate.";
+            case 8: return "CUSTOM selects only a native candidate containing all requested layers. A TUN UP state alone is never AUTO or multihop success: selected-node/exit private path proof must pass. Selected DNS transport is fully enforced by embedded libbox modes. Native WG/AWG/Xray enforce only literal-IP UDP DNS and fail closed for DoH/DoT/H3/TCP selections instead of silently downgrading them; final DNS/leak proof remains a release gate.";
             case 9: return "Run setup check, server doctor, and ASUS forwarding status. Final release still requires live exit-IP, DNS, leak, reconnect, kill-switch, multihop-failure and network-transition checks on real devices and off-LAN networks.";
             default: return "Finish dismisses onboarding; reopen it any time. Router VPN deliberately greys or rejects combinations it cannot prove rather than reporting a fake Connected state.";
         }
@@ -639,11 +639,12 @@ public final class MainActivity extends Activity {
         if (nativeStatusView == null || wireGuard == null || amneziaWG == null || singBox == null || xray == null) return;
         Tunnel.State w = wireGuard.getState();
         org.amnezia.awg.backend.Tunnel.State a = amneziaWG.getState();
+        String we = wireGuard.getError(), ae = amneziaWG.getError();
         String ls = singBox.getState(), lm = singBox.getMode(), le = singBox.getError();
         String xs = xray.getState(), xm = xray.getMode(), xe = xray.getError();
         if (!"STARTING".equals(ls) && !"STOPPING".equals(ls)) layeredBusy = false;
         if (!"STARTING".equals(xs) && !"STOPPING".equals(xs)) xrayBusy = false;
-        nativeStatusView.setText("Native Android VPN\nWireGuard: " + w + "\nAmneziaWG 2: " + a + "\nNative Xray: " + xs + (xm.isEmpty() ? "" : " — " + xm) + (xe.isEmpty() ? "" : "\nLast Xray error: " + xe) + "\nLayered/multihop: " + ls + (lm.isEmpty() ? "" : " — " + lm) + (le.isEmpty() ? "" : "\nLast layered error: " + le) + (automationBusy ? "\nAUTO/SMART/CUSTOM: testing…" : "") + (multihopBusy ? "\nMultihop: starting/proving exit…" : ""));
+        nativeStatusView.setText("Native Android VPN\nWireGuard: " + w + (we.isEmpty() ? "" : "\nLast WireGuard error: " + we) + "\nAmneziaWG 2: " + a + (ae.isEmpty() ? "" : "\nLast AmneziaWG error: " + ae) + "\nNative Xray: " + xs + (xm.isEmpty() ? "" : " — " + xm) + (xe.isEmpty() ? "" : "\nLast Xray error: " + xe) + "\nLayered/multihop: " + ls + (lm.isEmpty() ? "" : " — " + lm) + (le.isEmpty() ? "" : "\nLast layered error: " + le) + (automationBusy ? "\nAUTO/SMART/CUSTOM/ALL: testing/proving…" : "") + (multihopBusy ? "\nMultihop: starting/proving exit…" : ""));
         boolean rawBlocked = layeredActiveOrBusy(), layeredBlocked = rawActiveOrBusy();
         nativeDisconnectButton.setEnabled(!automationBusy && !multihopBusy && !wgBusy && w == Tunnel.State.UP);
         awgDisconnectButton.setEnabled(!automationBusy && !multihopBusy && !awgBusy && a == org.amnezia.awg.backend.Tunnel.State.UP);
