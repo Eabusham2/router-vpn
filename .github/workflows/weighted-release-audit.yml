@@ -22,7 +22,7 @@ jobs:
       - name: Score legacy and recovered source/live release gates
         run: |
           python3 deploy/weighted-release-audit.py | tee "$RUNNER_TEMP/weighted-release.json"
-          python3 deploy/recovered-release-audit-v3.py | tee "$RUNNER_TEMP/recovered-release.json"
+          python3 deploy/recovered-release-audit-v4.py | tee "$RUNNER_TEMP/recovered-release.json"
           python3 - "$RUNNER_TEMP/weighted-release.json" "$RUNNER_TEMP/recovered-release.json" <<'PY'
           import json,sys
           legacy=json.load(open(sys.argv[1])); recovered=json.load(open(sys.argv[2]))
