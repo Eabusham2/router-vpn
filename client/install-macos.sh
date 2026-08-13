@@ -36,7 +36,7 @@ if ! command -v rosenpass >/dev/null; then
   echo 'Building Rosenpass for PQ-WireGuard/PQ-AmneziaWG...'
   TMP_RP=$(mktemp -d)
   if git clone --filter=blob:none https://github.com/rosenpass/rosenpass "$TMP_RP/rosenpass" \
-    && (cd "$TMP_RP/rosenpass" && git checkout 00569eb && cargo build --release --bin rosenpass) \
+    && (cd "$TMP_RP/rosenpass" && git checkout 00569eb273016a10d2e75e5142236f06f7c3d4b3 && cargo build --release --bin rosenpass) \
     && [[ -x "$TMP_RP/rosenpass/target/release/rosenpass" ]]; then
     sudo install -m 755 "$TMP_RP/rosenpass/target/release/rosenpass" /usr/local/bin/rosenpass
   else
@@ -60,12 +60,10 @@ fi
 if ! command -v amneziawg-go >/dev/null || ! command -v awg >/dev/null || ! command -v awg-quick >/dev/null; then
   TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
   echo 'Building AmneziaWG userspace engine...'
-  git clone --branch v3.0.2 --depth 1 https://github.com/amnezia-vpn/amneziawg-go "$TMP/amneziawg-go"
-  (cd "$TMP/amneziawg-go" && GOTOOLCHAIN=auto go mod download && GOTOOLCHAIN=auto go mod verify && GOTOOLCHAIN=auto go build -trimpath -o amneziawg-go .)
+  git clone https://github.com/amnezia-vpn/amneziawg-go "$TMP/amneziawg-go"
+  (cd "$TMP/amneziawg-go" && git checkout 0527dfa47639714dd8f5c9ffbd9d40d19083f0ba && GOTOOLCHAIN=auto go mod download && GOTOOLCHAIN=auto go mod verify && GOTOOLCHAIN=auto go build -trimpath -o amneziawg-go .)
   sudo install -m 755 "$TMP/amneziawg-go/amneziawg-go" /usr/local/bin/amneziawg-go
 
-  # Fetch the exact tools commit directly. A normal clone followed by checkout
-  # can fail with "unable to read tree" on shallow/partial Git object stores.
   git init "$TMP/amneziawg-tools"
   git -C "$TMP/amneziawg-tools" remote add origin https://github.com/amnezia-vpn/amneziawg-tools.git
   git -C "$TMP/amneziawg-tools" fetch --depth=1 origin 05434cab7d91bbbc607d18ec5fade91f4b83774c
