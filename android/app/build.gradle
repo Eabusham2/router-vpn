@@ -23,7 +23,6 @@ android {
 
 def awgAar = file('libs/amneziawg-tunnel.aar')
 def libboxAar = file('libs/libbox.aar')
-def libxrayAar = file('libs/libxray.aar')
 
 tasks.register('prepareAmneziaWgTunnel', Exec) {
     workingDir rootProject.projectDir
@@ -37,16 +36,9 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     outputs.file libboxAar
 }
 
-tasks.register('prepareXrayLibXray', Exec) {
-    workingDir rootProject.projectDir
-    commandLine 'bash', 'build-xray-libxray.sh'
-    outputs.file libxrayAar
-}
-
 tasks.named('preBuild').configure {
     dependsOn tasks.named('prepareAmneziaWgTunnel')
     dependsOn tasks.named('prepareSingBoxLibbox')
-    dependsOn tasks.named('prepareXrayLibXray')
 }
 
 dependencies {
@@ -55,13 +47,10 @@ dependencies {
     // Built from the exact official AmneziaWG Android 2.0.0 source commit by
     // android/build-awg-tunnel.sh. No moving JitPack/Maven coordinate is used.
     implementation files('libs/amneziawg-tunnel.aar')
-    // Built from official sing-box v1.13.12 commit
-    // 1086ab2563320e0da0c23b3a491d8dfa0939dff4 by the upstream libbox mobile
-    // build command. This gives Router VPN a real embedded Android TUN engine
-    // without depending on a moving third-party AAR repository.
+    // One pinned gomobile runtime built by android/build-sing-box-libbox.sh:
+    // sing-box v1.13.12 at 1086ab2563320e0da0c23b3a491d8dfa0939dff4
+    // plus libXray at 294fb37343205b9b0cb7b7b1b423d3d4b60d9998, whose
+    // go.mod pins Xray-core v26.7.11 (50231eaff98c). Keeping both engines in
+    // the same libbox AAR avoids duplicate go.Seq/libgojni runtimes in one APK.
     implementation files('libs/libbox.aar')
-    // Built from official XTLS/libXray commit
-    // 294fb37343205b9b0cb7b7b1b423d3d4b60d9998, whose go.mod pins Xray-core
-    // v26.7.11 at 50231eaff98c. The build script also pins gomobile.
-    implementation files('libs/libxray.aar')
 }
