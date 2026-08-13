@@ -65,6 +65,9 @@ final class AndroidMultihopController {
 
         JSONObject entry = loadBundle(entryBundle);
         JSONObject exit = loadBundle(exitBundle);
+        String entryIdentity = AndroidNodeStore.stableNodeIdentity(entry);
+        String exitIdentity = AndroidNodeStore.stableNodeIdentity(exit);
+        if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
         WgConfig wg = parseWireGuard(entry);
         JSONObject exitProfile = requiredProfile(exit, exitMode);
         String encodedConfig = exitProfile.optString("sing-box.json", "").trim();
@@ -180,20 +183,16 @@ final class AndroidMultihopController {
         String mtu = iface.getOrDefault("mtu", "").trim();
         if (!mtu.isEmpty()) { try { result.mtu = Integer.parseInt(mtu); } catch (NumberFormatException e) { throw new IllegalStateException("Entry WireGuard MTU is invalid."); } }
         if (result.mtu != 0 && (result.mtu < 1280 || result.mtu > 9000)) throw new IllegalStateException("Entry WireGuard MTU is outside the safe range.");
-        String keepalive = peer.getOrDefault("persistentkeepalive", "").trim();
-        if (!keepalive.isEmpty()) { try { result.keepalive = Integer.parseInt(keepalive); } catch (NumberFormatException e) { throw new IllegalStateException("Entry WireGuard keepalive is invalid."); } }
-        if (result.keepalive < 0 || result.keepalive > 65535) throw new IllegalStateException("Entry WireGuard keepalive is outside the valid range.");
         return result;
     }
 
     private static final class WgConfig {
-        String privateKey, publicKey, preSharedKey, host; List<String> addresses, allowedIps; int port, mtu, keepalive;
+        String privateKey, publicKey, preSharedKey, host; List<String> addresses, allowedIps; int port, mtu;
         JSONObject toEndpointJson() throws Exception {
             JSONObject endpoint = new JSONObject().put("type", "wireguard").put("tag", "entry-wg").put("address", new JSONArray(addresses)).put("private_key", privateKey);
             if (mtu != 0) endpoint.put("mtu", mtu);
             JSONObject peer = new JSONObject().put("address", host).put("port", port).put("public_key", publicKey).put("allowed_ips", new JSONArray(allowedIps));
             if (!preSharedKey.isEmpty()) peer.put("pre_shared_key", preSharedKey);
-            if (keepalive > 0) peer.put("persistent_keepalive_interval", keepalive);
             endpoint.put("peers", new JSONArray().put(peer));
             return endpoint;
         }
