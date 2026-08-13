@@ -1,0 +1,87 @@
+name: Linux native app
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'client/linux/**'
+      - 'deploy/package-linux-native.sh'
+      - 'cmd/client/**'
+      - 'cmd/dnsproxy/**'
+      - 'internal/common/**'
+      - 'modes/**'
+      - 'client/**'
+      - 'configs/client/**'
+      - 'deploy/check-generic-package-secrets.py'
+      - '.github/workflows/linux-native-app.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'client/linux/**'
+      - 'deploy/package-linux-native.sh'
+      - 'cmd/client/**'
+      - 'cmd/dnsproxy/**'
+      - 'internal/common/**'
+      - 'modes/**'
+      - 'client/**'
+      - 'configs/client/**'
+      - 'deploy/check-generic-package-secrets.py'
+      - '.github/workflows/linux-native-app.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-linux:
+    name: Native GTK ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Install native GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file
+      - name: Test controller and shared contracts
+        run: go test ./cmd/client ./internal/common
+      - name: Build and package native Linux app
+        run: |
+          chmod +x client/linux/build-native-app.sh deploy/package-linux-native.sh
+          ./deploy/package-linux-native.sh '${{ matrix.arch }}'
+      - name: Verify native GTK package contract
+        run: |
+          archive="dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz"
+          test -s "$archive"
+          tar -tzf "$archive" | grep -q '^RouterVPN-linux-${{ matrix.arch }}/router-vpn-app$'
+          tar -tzf "$archive" | grep -q '^RouterVPN-linux-${{ matrix.arch }}/LICENSE$'
+          ! tar -tzf "$archive" | grep -q 'router-vpn-bundle.json'
+          test ! -d "dist/linux-native/work-${{ matrix.arch }}"
+          grep -Fq 'gtk_window_new' client/linux/routervpn-gtk.c
+          grep -Fq 'gtk_notebook_new' client/linux/routervpn-gtk.c
+          grep -Fq 'http://127.0.0.1:8788' client/linux/routervpn-gtk.c
+          ! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' client/linux/routervpn-gtk.c
+          sha256sum -c "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Linux-Native-${{ matrix.arch }}-CI
+          path: |
+            dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz
+            dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.sha256
+          if-no-files-found: error
+          retention-days: 1
