@@ -33,7 +33,15 @@ set_sysctl(){
 set_sysctl net.ipv4.ip_forward 1
 set_sysctl net.ipv6.conf.all.forwarding 1
 set_sysctl net.ipv6.conf.default.forwarding 1
-sysctl -w net.ipv6.conf.all.accept_ra=2 >/dev/null 2>&1 || true
+# Keep SLAAC/router advertisements working on the real WAN interface even
+# while IPv6 forwarding is enabled.  all.accept_ra alone is not sufficient
+# for an already-created interface on every host/kernel.
+set_sysctl net.ipv6.conf.all.accept_ra 2
+set_sysctl net.ipv6.conf.default.accept_ra 2
+set_sysctl "net.ipv6.conf.${WAN}.accept_ra" 2
+set_sysctl "net.ipv6.conf.${WAN}.autoconf" 1
+sysctl -w "net.ipv6.conf.${WAN}.accept_ra_pinfo=1" >/dev/null 2>&1 || true
+sysctl -w "net.ipv6.conf.${WAN}.accept_ra_defrtr=1" >/dev/null 2>&1 || true
 
 pick_filter(){
   local family=$1 candidate
