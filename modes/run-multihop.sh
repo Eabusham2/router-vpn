@@ -8,7 +8,7 @@ POLICY_ID=${5:?control/policy profile id}
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 RUN="$ROOT/run/multihop"
-rm -rf "$RUN"
+HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUN"
 mkdir -p "$RUN"
 python3 "$SCRIPT_DIR/multihop.py" build "$ENTRY_ID" "$EXIT_ID" "$ENTRY_BASE" "$EXIT_MODE" "$RUN" >/dev/null
 # shellcheck disable=SC1090
@@ -23,6 +23,7 @@ cleanup(){
   if (( ENTRY_UP )); then sudo "$QUICK_TOOL" down "$ENTRY_CONF" >/dev/null 2>&1 || true; fi
   HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$ENTRY_ID" HOMEVPN_POLICY_PROFILE_ID="$POLICY_ID" HOMEVPN_ENDPOINT="$ENTRY_ENDPOINT" \
     python3 "$SCRIPT_DIR/kill-switch.py" release >/dev/null 2>&1 || true
+  HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUN" >/dev/null 2>&1 || true
   exit "$status"
 }
 trap cleanup EXIT INT TERM HUP

@@ -17,7 +17,8 @@ $KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 $PidFile=Join-Path $RuntimeDir 'native-multihop.pid'
 function Kill([string]$Kind){& $KillSwitch -Action $Kind -Root $Root -Endpoint $Endpoint -TunnelAlias $TunnelAlias;if($LASTEXITCODE-ne 0){throw "Windows kill-switch $Kind failed."}}
 function Stop-Owned{if(Test-Path -LiteralPath $PidFile){$n=0;if([int]::TryParse((Get-Content -Raw -LiteralPath $PidFile).Trim(),[ref]$n)-and$n-gt 0){Stop-Process -Id $n -Force -ErrorAction SilentlyContinue};Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue}}
-if($Action-eq'down'){Stop-Owned;try{Kill 'release'}catch{Write-Warning $_.Exception.Message};exit 0}
+function Remove-PrivateRuntime{if(Test-Path -LiteralPath $RuntimeDir){[IO.Directory]::Delete($RuntimeDir,$true)}}
+if($Action-eq'down'){Stop-Owned;try{Kill 'release'}catch{Write-Warning $_.Exception.Message};Remove-PrivateRuntime;exit 0}
 if(-not(Test-Administrator)){throw 'Native Windows multihop requires an elevated Router VPN process.'}
 if(-not(Test-Path -LiteralPath $Config -PathType Leaf)){throw 'Prepared multihop sing-box.json is missing.'}
 if(-not(Test-Path -LiteralPath $SingBox -PathType Leaf)){throw 'Pinned native sing-box.exe is missing. Run Setup-Windows-Runtime.ps1.'}
@@ -39,4 +40,5 @@ try{
 }finally{
   Stop-Owned
   try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
+  Remove-PrivateRuntime
 }

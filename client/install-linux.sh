@@ -31,7 +31,28 @@ install -m 755 "$DNS_BIN" /usr/local/bin/router-vpn-dns
 if ! command -v sing-box >/dev/null || [[ ! -s /usr/local/lib/libcronet.so && ! -s /usr/local/bin/libcronet.so ]]; then
   SB_VER=1.13.12
   TMP_SB=$(mktemp -d)
-  curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/sing-box-${SB_VER}-linux-${SB_ARCH}.tar.gz" | tar -xz -C "$TMP_SB"
+  SB_TGZ="$TMP_SB/sing-box.tar.gz"
+case "$SB_ARCH" in
+  arm64) SB_SHA256=1ffa3b48ad6fa98f9fd810482e39bdd5b6157782ef11ce37d67bdcfd9338547a ;;
+  amd64) SB_SHA256=1540533adb3df24f5ad5f14b5c7ca3dbc2401b10a1c1eb278fcadcada47ec6c4 ;;
+  *) echo "Unsupported sing-box architecture: $SB_ARCH" >&2; exit 1 ;;
+esac
+curl --proto '=https' --tlsv1.2 -fL "https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/sing-box-${SB_VER}-linux-${SB_ARCH}.tar.gz" -o "$SB_TGZ"
+printf '%s  %s\n' "$SB_SHA256" "$SB_TGZ" | sha256sum -c -
+python3 - "$SB_TGZ" <<'PYARCHIVE'
+import pathlib,sys,tarfile
+p=pathlib.Path(sys.argv[1])
+if p.stat().st_size>256*1024*1024: raise SystemExit('archive too large')
+c=0; total=0
+with tarfile.open(p,'r:gz') as tf:
+    for m in tf.getmembers():
+        c+=1; total+=max(0,m.size); q=pathlib.PurePosixPath(m.name)
+        if q.is_absolute() or '..' in q.parts: raise SystemExit('unsafe archive path')
+        if m.issym() or m.islnk() or m.isdev() or m.isfifo(): raise SystemExit('unsafe archive member')
+        if not (m.isdir() or m.isfile()): raise SystemExit('unsupported archive member')
+        if c>4096 or total>1024*1024*1024: raise SystemExit('archive expansion too large')
+PYARCHIVE
+tar --no-same-owner --no-same-permissions -xzf "$SB_TGZ" -C "$TMP_SB"
   SB_DIR="$TMP_SB/sing-box-${SB_VER}-linux-${SB_ARCH}"
   install -m 755 "$SB_DIR/sing-box" /usr/local/bin/sing-box
   CRONET=$(find "$SB_DIR" -type f -name libcronet.so -print -quit)
@@ -48,7 +69,7 @@ if ! command -v rosenpass >/dev/null; then
   echo 'Installing Rosenpass for PQ-WireGuard/PQ-AmneziaWG...'
   TMP_RP=$(mktemp -d)
   if git clone https://github.com/rosenpass/rosenpass "$TMP_RP/rosenpass" \
-    && (cd "$TMP_RP/rosenpass" && git checkout 00569eb && cargo build --release --bin rosenpass) \
+    && (cd "$TMP_RP/rosenpass" && git checkout 00569eb273016a10d2e75e5142236f06f7c3d4b3 && [[ $(git rev-parse HEAD) == 00569eb273016a10d2e75e5142236f06f7c3d4b3 ]] && cargo build --release --bin rosenpass) \
     && [[ -x "$TMP_RP/rosenpass/target/release/rosenpass" ]]; then
     install -m 755 "$TMP_RP/rosenpass/target/release/rosenpass" /usr/local/bin/rosenpass
   else
@@ -77,7 +98,10 @@ if ! command -v v2ray-plugin >/dev/null; then
 fi
 if ! command -v amneziawg-go >/dev/null || ! command -v awg-quick >/dev/null; then
   TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-  git clone --branch v3.0.2 --depth 1 https://github.com/amnezia-vpn/amneziawg-go "$TMP/amneziawg-go"
+  git clone --filter=blob:none --no-checkout https://github.com/amnezia-vpn/amneziawg-go "$TMP/amneziawg-go"
+  git -C "$TMP/amneziawg-go" fetch --depth=1 origin 0527dfa47639714dd8f5c9ffbd9d40d19083f0ba
+  git -C "$TMP/amneziawg-go" checkout --detach 0527dfa47639714dd8f5c9ffbd9d40d19083f0ba
+  [[ $(git -C "$TMP/amneziawg-go" rev-parse HEAD) == 0527dfa47639714dd8f5c9ffbd9d40d19083f0ba ]]
   (cd "$TMP/amneziawg-go" && GOTOOLCHAIN=auto go mod download && GOTOOLCHAIN=auto go mod verify && GOTOOLCHAIN=auto go build -trimpath -o amneziawg-go .)
   install -m 755 "$TMP/amneziawg-go/amneziawg-go" /usr/local/bin/amneziawg-go
   git clone https://github.com/amnezia-vpn/amneziawg-tools "$TMP/amneziawg-tools"

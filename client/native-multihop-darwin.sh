@@ -57,6 +57,7 @@ cleanup() {
   trap - EXIT INT TERM HUP
   stop_owned
   release_guard
+  HOMEVPN_ROOT="$ROOT" python3 "$ROOT/modes/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM HUP
 
