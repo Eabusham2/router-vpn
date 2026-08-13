@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
-import base64, json, pathlib, sys
+import base64, json, pathlib, re, subprocess, sys
 base=pathlib.Path(sys.argv[1])
 endpoint, token, router_api, socks_host, socks_user, socks_password=sys.argv[2:8]
+proof_script=pathlib.Path(__file__).with_name('ensure-node-proof.py')
+subprocess.run([sys.executable,str(proof_script),str(base)],check=True,stdout=subprocess.DEVNULL)
+agent_config=json.load(open(base/'config'/'router-agent.json'))
+node_proof_id=str(agent_config.get('node_id') or '').strip()
+if not re.fullmatch(r'[0-9a-f]{64}',node_proof_id):
+    raise SystemExit('router-agent node proof id is missing or invalid')
 modes=json.load(open(base/'client-bundle/modes.json'))
 logical_path=base/'client-bundle'/'logical-modes.json'
 if not logical_path.is_file():
@@ -50,6 +56,7 @@ router_profile={
     'schema_version':2,
     'id':'home',
     'name':'Home Router',
+    'node_proof_id':node_proof_id,
     'endpoint':endpoint,
     'router_api':router_api,
     'api_token':token,
@@ -112,6 +119,7 @@ open(base/'client-bundle/routers.json','a').write('\n')
 bundle={
     'bundleVersion':4,
     'profileSchemaVersion':2,
+    'nodeProofId':node_proof_id,
     'endpoint':endpoint,
     'apiToken':token,
     'routerAPI':router_api,
