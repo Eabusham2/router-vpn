@@ -69,9 +69,12 @@ for wf in(ROOT/".github"/"workflows").glob("*.yml"):
  if"--method DELETE"in text and"git/refs/heads"in text:errors.append(f"workflow blindly deletes branches: {wf.relative_to(ROOT)}")
 need(".github/workflows/keep-main-only.yml","Unexpected non-main branch","exit 1")
 
-# Current controller UI: 16 logical modes, typed validation, policy capability truth, real Linux multihop UI.
-need("cmd/portable-launcher/main.go","Portable clean-exit requires","browserCmd.Wait","stopPortableController",'localURL+"api/emergency-stop"')
-no("cmd/portable-launcher/main.go","url.dll,FileProtocolHandler",legacy_public_health)
+# Current controller/native app UI: 16 logical modes, typed validation, real Windows WPF shell, real Linux multihop UI.
+need("cmd/portable-launcher/main.go","RouterVPN-Windows-App.ps1","openNativeApp(nativeApp)","nativeCmd.Wait()","-SelfTest","stopPortableController",'localURL+"api/emergency-stop"')
+no("cmd/portable-launcher/main.go","url.dll,FileProtocolHandler",legacy_public_health,"openAppWindow","browserCmd","msedge.exe","chrome.exe","--app=","BrowserProfile")
+need("client/RouterVPN-Windows-App.ps1","PresentationFramework","http://127.0.0.1:8788","ShowDialog()","-SelfTest","/api/status","/api/profiles","/api/logical-modes","/api/auto","/api/connect-logical","/api/disconnect","/api/profile/select","/api/profile/latency","/api/public-ip","/api/dns/retest","/api/emergency-stop")
+need("deploy/package-builds.sh","RouterVPN-Windows-App.ps1","Native Router VPN Windows app is missing","api/emergency-stop","native Windows Router VPN WPF app")
+no("deploy/package-builds.sh","--app=$url","msedge.exe","chrome.exe")
 need("cmd/client/logical_ui.js","Connection validation","/api/session","Selected-node path proof","DNS proof","Cross-platform policy intent","The Modes page shows the 16 logical modes","/api/multihop/status","/api/multihop/connect","platform_supported","Entry and exit nodes must be different","exit public endpoint is not opened as a direct firewall exception")
 no("cmd/client/logical_ui.js","PortableApps 3.9")
 need("cmd/client/ui_contract_test.go","/api/multihop/status","/api/multihop/connect","platform_supported")
