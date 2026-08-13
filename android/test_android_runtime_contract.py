@@ -22,6 +22,8 @@ xray = text("NativeXrayController.java")
 orch = text("AndroidModeOrchestrator.java")
 probe = text("AndroidPathProbe.java")
 store = text("AndroidNodeStore.java")
+multihop = text("AndroidMultihopController.java")
+multihop_runtime = text("AndroidMultihopRuntime.java")
 main = text("MainActivity.java")
 gradle = (ROOT / "app" / "build.gradle").read_text(encoding="utf-8")
 xray_build = (ROOT / "build-xray-libxray.sh").read_text(encoding="utf-8")
@@ -37,8 +39,6 @@ for marker in (
     'publish("FAILED"',
 ):
     assert marker in service, f"LayeredVpnService missing strict/lifecycle marker: {marker}"
-
-# Network transitions must reach libbox rather than only repainting UI state.
 assert "updateDefaultInterface" in service
 assert "resetNetwork()" in service
 assert "registerDefaultNetworkCallback" in service
@@ -58,7 +58,7 @@ assert 'android:name=".XrayVpnService"' in manifest
 # app-owned fd, enforce strict lockdown, prove the selected node, and re-prove
 # after an underlying-network transition.
 for marker in (
-    "implements" if False else "new DialerController()",
+    "new DialerController()",
     "protect((int) fd)",
     "registerDialerController",
     "registerListenerController",
@@ -75,9 +75,8 @@ for marker in (
 ):
     assert marker in xray_service, f"XrayVpnService missing runtime marker: {marker}"
 
-# Controller accepts only a real generated remote proxy, replaces local-only
-# ingress with the Android TUN, explicitly routes that TUN to proxy, and stages
-# bounded app-private data.
+# Native Xray must never silently reinterpret one sidecar of split/MAX as the
+# full mode. Direct profiles get a real Android TUN and bounded private staging.
 for marker in (
     "validatedProxyTag",
     '"routervpn-tun"',
@@ -87,8 +86,12 @@ for marker in (
     "cleanupOldSessions",
     "AndroidKillSwitchPolicy.strictRequested(root)",
     "isLoopbackHost",
+    "isCompositeProfile",
+    'profile.has("stack.json")',
+    'profile.has("chain.env")',
+    "cannot be represented truthfully by native Xray alone",
 ):
-    assert marker in xray, f"NativeXrayController missing safety marker: {marker}"
+    assert marker in xray, f"NativeXrayController missing safety/truth marker: {marker}"
 
 # Raw backend strict-policy behavior is intentionally fail closed until its own
 # lockdown state can be proven by Router VPN.
@@ -96,15 +99,25 @@ for name, source in (("WireGuard", wg), ("AmneziaWG", awg)):
     assert "AndroidKillSwitchPolicy.strictRequested(privateBundle)" in source, f"{name} no longer checks strict policy"
     assert "AndroidKillSwitchPolicy.requirementMessage()" in source, f"{name} no longer explains strict refusal"
 
-# AUTO/SMART/CUSTOM may only claim success after a selected-node private proof.
-assert "AndroidPathProbe.prove(bundle" in orch
-assert "No candidate passed selected-node path proof" in orch
-assert 'if(!strict&&"wg".equals(id)' in orch
-assert 'else if(!strict&&"awg2-fast".equals(id)' in orch
-assert "Kind { WG, AWG, LIBBOX, XRAY }" in orch
-assert "xray.listDirectXrayModes" in orch
-assert "startXray(bundle,c.id)" in orch
-assert "SMART AUTO could not restore its last-known-good mode" in orch
+# AUTO/SMART/CUSTOM/ALL may only claim success after selected-node private proof.
+for marker in (
+    "AndroidPathProbe.prove(bundle",
+    "No candidate passed selected-node path proof",
+    'if(!strict&&"wg".equals(id)',
+    'else if(!strict&&"awg2-fast".equals(id)',
+    "Kind { WG, AWG, LIBBOX, XRAY }",
+    "xray.listDirectXrayModes",
+    "startXray(bundle,c.id)",
+    "SMART AUTO could not restore its last-known-good mode",
+    "void all(File bundle,Callback cb)",
+    "protectionRank",
+    "vless-pq",
+    "ALL failed closed because no Android-native branch passed selected-node path proof",
+    "Composite desktop MAX chains remain separate and are never faked on Android",
+):
+    assert marker in orch, f"AndroidModeOrchestrator missing truth marker: {marker}"
+assert "collect(bundle,false)" in orch, "ALL must inspect all actually native candidates, not just AUTO ordering"
+assert "comparingInt(AndroidModeOrchestrator::protectionRank).reversed()" in orch, "ALL must try strongest native policy first"
 
 # Embedded libbox candidates must be full-device and self-contained, and staged
 # private state must remain bounded.
@@ -117,10 +130,31 @@ for marker in (
 ):
     assert marker in sing, f"NativeSingBoxController missing safety marker: {marker}"
 
+# Real Android multihop is one graph: WG entry endpoint -> supported remote exit
+# outbound -> Internet. Entry/exit must differ and exit proof is mandatory.
+for marker in (
+    'proxy.put("detour", "entry-wg")',
+    '"type", "wireguard"',
+    '"tag", "entry-wg"',
+    "stableNodeIdentity(entry)",
+    "stableNodeIdentity(exit)",
+    "Entry and exit resolve to the same Router VPN node identity",
+    '"shadowsocks".equals(exitMode)',
+    '"hysteria2".equals(exitMode)',
+    "Exit proxy already has a detour",
+    "MAX_TOTAL",
+):
+    assert marker in multihop, f"AndroidMultihopController missing graph/safety marker: {marker}"
+for marker in (
+    "AndroidPathProbe.prove(prepared.exitBundle",
+    "Exit-node private path proof failed",
+    "WireGuard entry →",
+    "if (started) singBox.stop()",
+):
+    assert marker in multihop_runtime, f"AndroidMultihopRuntime missing exit-proof/fail-closed marker: {marker}"
+
 # Path proof is private-node proof, not a public-IP-only or generic {ok:true}
-# success heuristic. New bundles carry the stable public node fingerprint and
-# legacy bundles derive the exact same value from their WireGuard server public
-# key; supplied and derived identities must agree.
+# success heuristic. Supplied and derived stable identities must agree.
 for marker in (
     "isPrivate(address)",
     "AndroidNodeStore.stableNodeIdentity(bundle)",
@@ -140,18 +174,26 @@ for marker in (
     assert marker in store, f"AndroidNodeStore missing stable identity marker: {marker}"
 assert 'return body.optBoolean("ok", false);' not in probe, "generic ok-only proof must not return success"
 
-# UI/onboarding must describe the actually implemented strict/multihop/Xray boundary.
-assert "Strict embedded libbox/Xray sessions require" in main
-assert "Always-on" in main and "Block connections without VPN" in main
-assert "WireGuard entry plus a different stored node" in main
-assert "Shadowsocks or Hysteria2 exit" in main
-assert "AWG-entry multihop" in main
-assert "private NativeXrayController xray;" in main
-assert "private void chooseXrayMode()" in main
-assert "Native Xray:" in main
+# UI/onboarding must describe the actually implemented strict/multihop/Xray/ALL boundary.
+for marker in (
+    "Strict embedded libbox/Xray sessions require",
+    "Always-on",
+    "Block connections without VPN",
+    "WireGuard entry plus a different stored node",
+    "Shadowsocks or Hysteria2 exit",
+    "AWG-entry multihop",
+    "private NativeXrayController xray;",
+    "private void chooseXrayMode()",
+    "Native Xray:",
+    "private Button allButton",
+    "private boolean pendingAll",
+    "private void requestAll()",
+    "orchestrator.all(",
+    "ALL — strongest proven Android-native branch",
+):
+    assert marker in main, f"MainActivity missing runtime-truth UX marker: {marker}"
 assert "strict-kill-switch branches remain visibly gated" not in main
 
-# The policy marker must be staged only when the selected router requests it.
 assert "SESSION_MARKER" in policy
 assert '"always".equals(policy)' in policy
 assert '"lockdown".equals(policy)' in policy
