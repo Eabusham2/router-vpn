@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+OUT=${1:?usage: build-native-app.sh OUT_BINARY}
+SRC="$ROOT/client/linux/routervpn-gtk.c"
+
+for pkg in gtk+-3.0 libcurl json-glib-1.0; do
+  pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
+done
+mkdir -p "$(dirname "$OUT")"
+
+gcc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong \
+  "$SRC" -o "$OUT" \
+  $(pkg-config --cflags --libs gtk+-3.0 libcurl json-glib-1.0)
+chmod 755 "$OUT"
+
+file "$OUT"
+ldd "$OUT" | grep -q 'libgtk-3'
+ldd "$OUT" | grep -q 'libcurl'
+ldd "$OUT" | grep -q 'libjson-glib'
+! ldd "$OUT" | grep -Ei 'webkit|cef|chromium|electron'
+! grep -Eq 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' "$SRC"
+grep -Fq 'gtk_window_new' "$SRC"
+grep -Fq 'gtk_notebook_new' "$SRC"
+grep -Fq 'http://127.0.0.1:8788' "$SRC"
+grep -Fq '/api/connect-logical' "$SRC"
+grep -Fq '/api/emergency-stop' "$SRC"
+"$OUT" --self-test
+
+echo "Built native Linux GTK Router VPN app at $OUT"
