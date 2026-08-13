@@ -22,8 +22,13 @@ func TestTypedSessionObservesConnectionAndFailure(t *testing.T) {
 	if !s.Connected || s.PathProof != "passed" || s.Phase != "connected" {
 		t.Fatalf("connection proof state not recorded: %+v", s)
 	}
-	if s.DNSProof.Status != "not-proven" {
+	// The async DNS verifier may already be checking, but it must never inherit
+	// "passed" merely because the tunnel/path proof connected successfully.
+	if s.DNSProof.Status == "passed" {
 		t.Fatalf("DNS must not be fabricated as proven: %+v", s.DNSProof)
+	}
+	if s.DNSProof.Status != "not-proven" && s.DNSProof.Status != "checking" {
+		t.Fatalf("unexpected pre-proof DNS state: %+v", s.DNSProof)
 	}
 	if len(s.Events) < 3 {
 		t.Fatalf("expected progress events, got %d", len(s.Events))
