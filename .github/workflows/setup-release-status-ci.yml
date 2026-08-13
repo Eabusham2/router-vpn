@@ -1,0 +1,36 @@
+name: Setup Center release status
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: setup-release-status-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-status:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax
+        run: |
+          python3 -m py_compile \
+            server/scripts/setup-center-product-server.py \
+            server/scripts/setup_center_release_status.py \
+            server/scripts/test_setup_center_release.py
+      - name: Authenticated release/recovery contract
+        run: python3 server/scripts/test_setup_center_release.py
+      - name: Exact-SHA image-only production boundary
+        run: |
+          grep -F 'entrypoint: ["python3", "/src/server/scripts/setup-center-product-server.py"]' server/portainer-current.yaml
+          grep -F '/src/server/scripts/setup-center-product-server.py' server/scripts/run-setup-center.sh
+          grep -F '/opt/router-vpn:/opt/router-vpn:ro' server/portainer-current.yaml
+          ! grep -F 'build:' server/portainer-current.yaml
+          ! grep -F '/var/run/docker.sock' server/portainer-current.yaml
