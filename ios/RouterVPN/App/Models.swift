@@ -53,6 +53,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var schemaVersion: Int?
     var id: String
     var name: String
+    var nodeProofID: String?
     var endpoint: String
     var routerAPI: String
     var apiToken: String
@@ -114,6 +115,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, name, endpoint, location, latitude, longitude
         case schemaVersion = "schema_version"
+        case nodeProofID = "node_proof_id"
         case routerAPI = "router_api"
         case apiToken = "api_token"
         case adGuardIPv4 = "adguard_ipv4"
@@ -173,6 +175,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
 struct ClientBundle: Codable {
     var bundleVersion: Int
     var profileSchemaVersion: Int
+    var nodeProofID: String
     var endpoint: String
     var apiToken: String
     var routerAPI: String
@@ -191,6 +194,7 @@ struct ClientBundle: Codable {
     static let empty = ClientBundle(
         bundleVersion: 4,
         profileSchemaVersion: 2,
+        nodeProofID: "",
         endpoint: "",
         apiToken: "",
         routerAPI: "http://10.77.0.1:8787",
@@ -209,6 +213,7 @@ struct ClientBundle: Codable {
 
     enum CodingKeys: String, CodingKey {
         case bundleVersion, profileSchemaVersion, endpoint, apiToken, routerAPI, adGuardIPv4, adGuardIPv6
+        case nodeProofID = "nodeProofId"
         case socks5Host, socks5Port, socks5Username, socks5Password
         case routerProfiles, selectedRouterID, logicalModes, modes, profiles
     }
@@ -216,6 +221,7 @@ struct ClientBundle: Codable {
     init(
         bundleVersion: Int,
         profileSchemaVersion: Int,
+        nodeProofID: String,
         endpoint: String,
         apiToken: String,
         routerAPI: String,
@@ -233,6 +239,7 @@ struct ClientBundle: Codable {
     ) {
         self.bundleVersion = bundleVersion
         self.profileSchemaVersion = profileSchemaVersion
+        self.nodeProofID = nodeProofID
         self.endpoint = endpoint
         self.apiToken = apiToken
         self.routerAPI = routerAPI
@@ -256,6 +263,7 @@ struct ClientBundle: Codable {
         guard profileSchemaVersion <= 2 else {
             throw DecodingError.dataCorruptedError(forKey: .profileSchemaVersion, in: values, debugDescription: "Router profile schema is newer than this app supports")
         }
+        nodeProofID = try values.decodeIfPresent(String.self, forKey: .nodeProofID) ?? ""
         endpoint = try values.decodeIfPresent(String.self, forKey: .endpoint) ?? ""
         apiToken = try values.decodeIfPresent(String.self, forKey: .apiToken) ?? ""
         routerAPI = try values.decodeIfPresent(String.self, forKey: .routerAPI) ?? "http://10.77.0.1:8787"
@@ -271,14 +279,24 @@ struct ClientBundle: Codable {
         modes = try values.decodeIfPresent([VPNMode].self, forKey: .modes) ?? []
         profiles = try values.decodeIfPresent([String: [String: String]].self, forKey: .profiles) ?? [:]
 
-        if endpoint.isEmpty, let selected = routerProfiles.first(where: { $0.id == selectedRouterID }) ?? routerProfiles.first {
-            endpoint = selected.endpoint
-            routerAPI = selected.routerAPI
-            apiToken = selected.apiToken
-            adGuardIPv4 = selected.adGuardIPv4
-            adGuardIPv6 = selected.adGuardIPv6
-            socks5Host = selected.socksHost
-            socks5Port = selected.socksPort
+        if let selected = routerProfiles.first(where: { $0.id == selectedRouterID }) ?? routerProfiles.first {
+            if endpoint.isEmpty {
+                endpoint = selected.endpoint
+                routerAPI = selected.routerAPI
+                apiToken = selected.apiToken
+                adGuardIPv4 = selected.adGuardIPv4
+                adGuardIPv6 = selected.adGuardIPv6
+                socks5Host = selected.socksHost
+                socks5Port = selected.socksPort
+            }
+            if nodeProofID.isEmpty { nodeProofID = selected.nodeProofID ?? "" }
+        }
+        if !nodeProofID.isEmpty && !nodeProofID.range(of: "^[0-9a-f]{64}$", options: .regularExpression).map({ _ in true })! {
+            throw DecodingError.dataCorruptedError(forKey: .nodeProofID, in: values, debugDescription: "Router node proof id is invalid")
+        }
+        if let selected = routerProfiles.first(where: { $0.id == selectedRouterID }) ?? routerProfiles.first,
+           let nested = selected.nodeProofID, !nested.isEmpty, !nodeProofID.isEmpty, nested != nodeProofID {
+            throw DecodingError.dataCorruptedError(forKey: .nodeProofID, in: values, debugDescription: "Router bundle node proof ids disagree")
         }
         socks5Username = ""
         socks5Password = ""
