@@ -7,8 +7,12 @@ import shlex
 import sys
 from pathlib import Path
 
+from profile_id import validate_profile_id
+
 ROOT = Path(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
-PROFILE_ID = os.environ.get("HOMEVPN_PROFILE_ID", "")
+PROFILE_ID = os.environ.get("HOMEVPN_PROFILE_ID", "").strip()
+if PROFILE_ID:
+    PROFILE_ID = validate_profile_id(PROFILE_ID, default="")
 
 KNOWN_TLS_NAMES = {
     "1.1.1.1": "cloudflare-dns.com",
@@ -31,7 +35,9 @@ def load_profile() -> dict:
         store = json.loads(path.read_text())
     except Exception:
         return {}
-    selected = PROFILE_ID or store.get("selected_id", "")
+    selected = PROFILE_ID or str(store.get("selected_id") or "").strip()
+    if selected:
+        selected = validate_profile_id(selected, default="")
     profiles = store.get("profiles", [])
     for p in profiles:
         if p.get("id") == selected:
@@ -44,8 +50,6 @@ def infer_server_name(host: str, explicit: str) -> str:
         return explicit
     if host in KNOWN_TLS_NAMES:
         return KNOWN_TLS_NAMES[host]
-    # A hostname can normally authenticate itself. An arbitrary IP cannot, so leave
-    # it blank and let validation/client UI explain that a TLS name is needed.
     if ":" not in host and any(c.isalpha() for c in host):
         return host
     return ""
@@ -79,7 +83,7 @@ def settings() -> dict:
         protocol = "rescue"
         host = host or fastest
         port = port or 443
-    else:  # custom
+    else:
         protocol = {"doh": "https", "dot": "tls", "doh3": "h3"}.get(protocol, protocol)
         if not port:
             port = 443 if protocol in ("https", "h3") else 853 if protocol == "tls" else 53
@@ -120,8 +124,6 @@ def choose_detour(cfg: dict) -> str:
 
 def sing_server(s: dict, detour: str) -> dict:
     protocol = s["protocol"]
-    # Rescue is deliberately conservative in sing-box: encrypted HTTPS on 443.
-    # The raw WG/AWG helper performs the longer DoH -> DoT -> TCP -> UDP fallback.
     if protocol == "rescue":
         protocol = "https"
         if not s["server_name"]:
