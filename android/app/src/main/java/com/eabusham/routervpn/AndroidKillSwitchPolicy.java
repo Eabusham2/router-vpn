@@ -33,7 +33,7 @@ final class AndroidKillSwitchPolicy {
     }
 
     static String requirementMessage() {
-        return "Strict kill switch requires Android Always-on VPN plus ‘Block connections without VPN’ for Router VPN. Open Android VPN settings, enable both, then connect an embedded libbox mode. Raw WG/AWG backends are not accepted as strict until Router VPN can prove their lockdown service state.";
+        return "Strict kill switch requires Android Always-on VPN plus ‘Block connections without VPN’ for Router VPN. Open Android VPN settings, enable both, then connect an embedded libbox or native Xray mode. Raw WG/AWG backends are not accepted as strict until Router VPN can prove their lockdown service state.";
     }
 
     private static JSONObject selectedProfile(JSONObject bundle) {
