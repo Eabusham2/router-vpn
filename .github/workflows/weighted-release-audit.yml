@@ -30,6 +30,7 @@ jobs:
           assert legacy['manual_live_weight'] == 12.0, legacy
           assert recovered['source_weight'] == 88.0, recovered
           assert recovered['manual_live_weight'] == 12.0, recovered
+          assert recovered['score_percent'] >= 84.5, recovered
           print(f"Legacy weighted score: {legacy['score_percent']:.2f}%")
           print(f"Recovered-contract full release score: {recovered['score_percent']:.2f}%")
           print(f"Recovered source earned: {recovered['source_earned']:.2f}/88.00%")
