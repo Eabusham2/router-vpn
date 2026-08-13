@@ -44,11 +44,12 @@ jobs:
       - name: Push only the validated live wiring changes
         run: |
           set -euo pipefail
-          if git diff --quiet -- cmd/client/main.go server/portainer-current.yaml deploy/full-audit-v4.py; then
+          files=(cmd/client/main.go server/portainer-current.yaml deploy/full-audit-v4.py deploy/release-gap-audit.py)
+          if git diff --quiet -- "${files[@]}"; then
             echo 'Release-gap wiring is already applied.'
             exit 0
           fi
-          git add cmd/client/main.go server/portainer-current.yaml deploy/full-audit-v4.py
+          git add -- "${files[@]}"
           git commit -m 'Wire atomic imports and AI-aware Setup Center'
           git pull --rebase origin main
           git push origin HEAD:main
