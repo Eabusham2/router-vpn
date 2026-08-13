@@ -88,7 +88,7 @@ def selected_dns_proof() -> bool:
             "cmd/client/session_state.go",
             "proveDNSAsync",
             "DNSProof",
-            'Status: "checking"',
+            'DNSProof.Status = "checking"',
             '"dns-proof"',
             "t.session.DNSProof = proof",
         )
