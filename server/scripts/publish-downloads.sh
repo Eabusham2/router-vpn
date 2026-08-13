@@ -25,6 +25,7 @@ rm -f \
   "$OUT"/router-vpn-android.apk \
   "$OUT"/router-vpn-ios-preview.ipa \
   "$OUT"/router-vpn-ios.ipa \
+  "$OUT"/router-vpn-ios.ipa \
   "$OUT"/router-vpn-bundle.json \
   "$OUT"/CREDENTIALS.txt \
   "$OUT"/SHA256SUMS
