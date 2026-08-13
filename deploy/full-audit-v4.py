@@ -18,7 +18,7 @@ def no(rel:str,*parts:str)->None:
   if part in text:errors.append(f"{rel}: stale/forbidden marker {part!r}")
 
 # Connection truth: success is exact selected-node/private-path proof, not generic Internet reachability or ok=true.
-need("cmd/client/main.go","selected-router path proof","PathProbeURL","func (a *app) testHealth","validateSelectedNodeProof(p, body)","NodeProofID string `json:\"nodeProofId\"`","derivedNodeID, proofErr := expectedNodeProofID(p)","p.NodeProofID = derivedNodeID")
+need("cmd/client/main.go","selected-router path proof","PathProbeURL","func (a *app) testHealth","validateSelectedNodeProof(p, body)","NodeProofID","newStagedBundle(","nodeProofIDFromWGConfig(wgData)","p.NodeProofID = derivedNodeID")
 need("cmd/client/node_proof.go","router-vpn-private-agent-v1","router-vpn-node-proof-v1\\n","generated","wg.conf","p.NodeProofID","proof.NodeID != expected","proof.Proof != desktopNodeProofKind","selected router has no saved WireGuard identity profile")
 need("cmd/client/node_proof_test.go","ok-only","wrong-node","wrong-kind","not-ok","persisted proof mismatch accepted")
 need("cmd/client/trust_init.go","defaultPrivatePathProbeURL","trustedPathProbeURL","legacyPublicHealthURL")

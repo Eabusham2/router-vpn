@@ -43,7 +43,8 @@ require(
 require(
     "cmd/client/main.go",
     "validateSelectedNodeProof(p, body)",
-    "derivedNodeID, proofErr := expectedNodeProofID(p)",
+    "newStagedBundle(",
+    "nodeProofIDFromWGConfig(wgData)",
     "p.NodeProofID = derivedNodeID",
 )
 require(

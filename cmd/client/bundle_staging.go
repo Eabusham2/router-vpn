@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	maxBundleModes       = 64
-	maxBundleFiles       = 4096
-	maxBundleFileBytes   = 16 << 20
-	maxBundleTotalBytes  = 96 << 20
-	maxBundleNameBytes   = 128
+	maxBundleModes      = 64
+	maxBundleFiles      = 4096
+	maxBundleFileBytes  = 16 << 20
+	maxBundleTotalBytes = 96 << 20
+	maxBundleNameBytes  = 128
 )
 
 func safeBundleToken(value string) bool {
