@@ -24,6 +24,13 @@ def need(rel: str, *markers: str) -> None:
             errors.append(f"{rel}: missing native-download marker {marker!r}")
 
 
+def forbid(rel: str, *markers: str) -> None:
+    body = text(rel)
+    for marker in markers:
+        if marker in body:
+            errors.append(f"{rel}: forbidden floating/unsafe native-download marker {marker!r}")
+
+
 def load(name: str, rel: str):
     path = ROOT / rel
     spec = importlib.util.spec_from_file_location(name, path)
@@ -103,9 +110,9 @@ need(
 )
 
 broker = text("server/scripts/download-broker.py")
-for forbidden in ("latest.zip", "/releases/latest", "refs/heads/main"):
-    if forbidden in broker:
-        errors.append(f"download broker contains floating artifact source {forbidden!r}")
+for floating in ("latest.zip", "/releases/latest", "refs/heads/main"):
+    if floating in broker:
+        errors.append(f"download broker contains floating artifact source {floating!r}")
 
 builder_text = text("server/scripts/build-download-on-demand.py")
 for marker in ("LOCAL_BUILD_TIMEOUT", "compile_requested", "may compile only the requested generic Go package", "safe_extract_zip", "safe_extract_tar"):
@@ -116,6 +123,68 @@ scanner = text("deploy/check-generic-package-secrets.py")
 for marker in ("generic package contains private bundle", "generic package contains linked router profiles", "package does not ship LICENSE"):
     if marker not in scanner:
         errors.append(f"generic package leak scanner missing {marker!r}")
+
+# Native runtime installers must be pinned to immutable bytes/objects. Version
+# labels alone are not enough when the upstream release/tag can be retargeted.
+need(
+    "client/install-xray.sh",
+    "VERSION=v26.7.11",
+    "EXPECTED_SHA256=",
+    "Xray archive checksum mismatch",
+    "p.is_absolute()",
+    '".." in p.parts',
+    "stat.S_ISLNK",
+    "max_archive",
+    "max_members",
+    "max_total",
+    "zf.open(binary",
+)
+forbid("client/install-xray.sh", "releases/latest", "extractall(", "extract(")
+
+need(
+    "client/install-macos-complete.sh",
+    "VERSION=1.13.12",
+    "43eef86f0ea4a79c3696974f397a963c46a457ee46d1ffac9aa913944a5fc986",
+    "f3275316451bf1983bc059599c69c8ed0232d53a619d15cfd535f95cc9a4477a",
+    "shasum -a 256",
+    "tar -tzf",
+)
+forbid("client/install-macos-complete.sh", "curl -fsSL", "| tar -xz")
+
+need(
+    "client/install-macos.sh",
+    "00569eb273016a10d2e75e5142236f06f7c3d4b3",
+    "0527dfa47639714dd8f5c9ffbd9d40d19083f0ba",
+    "05434cab7d91bbbc607d18ec5fade91f4b83774c",
+    "e9af1cdd2549d528deb20a4ab8d61c5fbe51f306",
+)
+forbid("client/install-macos.sh", "git checkout 00569eb ", "--branch v3.0.2")
+
+need(
+    "client/install-linux.sh",
+    "1ffa3b48ad6fa98f9fd810482e39bdd5b6157782ef11ce37d67bdcfd9338547a",
+    "1540533adb3df24f5ad5f14b5c7ca3dbc2401b10a1c1eb278fcadcada47ec6c4",
+    "00569eb273016a10d2e75e5142236f06f7c3d4b3",
+    "0527dfa47639714dd8f5c9ffbd9d40d19083f0ba",
+    "05434cab7d91bbbc607d18ec5fade91f4b83774c",
+    "e9af1cdd2549d528deb20a4ab8d61c5fbe51f306",
+    "sha256sum",
+)
+forbid("client/install-linux.sh", "git checkout 00569eb ", "--branch v3.0.2", "curl -fsSL")
+
+need(
+    "server/awg2/Dockerfile",
+    "AWG_GO_COMMIT=0527dfa47639714dd8f5c9ffbd9d40d19083f0ba",
+    "AWGTOOLS_COMMIT=5e882890fbca2316f8ca40e992789d24f67f0118",
+)
+forbid("server/awg2/Dockerfile", "AWG_GO_TAG=", "AWGTOOLS_TAG=", "refs/tags/${AWG")
+need(
+    "server/rosenpass/Dockerfile",
+    "AWGTOOLS_COMMIT=5e882890fbca2316f8ca40e992789d24f67f0118",
+)
+forbid("server/rosenpass/Dockerfile", "AWGTOOLS_TAG=", "refs/tags/${AWG")
+need("server/aux-proxies/Dockerfile", "SSR_COMMIT=227127c4bc5a6555e0556693d084c96860e75b5e")
+forbid("server/aux-proxies/Dockerfile", "SSR_TAG=", '--branch "${SSR_TAG}"')
 
 if errors:
     print("NATIVE DOWNLOAD POLICY AUDIT: FAIL", file=sys.stderr)
