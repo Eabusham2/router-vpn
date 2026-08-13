@@ -32,16 +32,23 @@ ACTUAL="$(git -C "$WG" rev-parse HEAD)"
 }
 
 MANIFEST="$WG/Package.swift"
+HEADER="$WG/Sources/WireGuardKitC/WireGuardKitC.h"
 [ -f "$MANIFEST" ] || { echo "WireGuardKit Package.swift missing" >&2; exit 1; }
+[ -f "$HEADER" ] || { echo "WireGuardKitC.h missing" >&2; exit 1; }
 FIRST="$(sed -n '1p' "$MANIFEST")"
 [ "$FIRST" = '// swift-tools-version:5.3' ] || {
   echo "Unexpected pinned WireGuardKit manifest header: $FIRST" >&2
   exit 1
 }
+grep -Fq '#include "key.h"' "$HEADER" || { echo "Unexpected pinned WireGuardKitC header" >&2; exit 1; }
+if grep -Fq '#include <sys/types.h>' "$HEADER"; then
+  echo "Pinned WireGuardKitC header unexpectedly already contains sys/types.h" >&2
+  exit 1
+fi
 
-# Upstream's pinned manifest declares tools 5.3 while using platform constants
-# introduced in PackageDescription 5.5. Patch only that compatibility header;
-# the source checkout itself remains pinned and verified at PIN above.
+# Compatibility patches are deliberately tiny and applied only after exact-SHA verification:
+# 1) upstream declares Swift tools 5.3 while using PackageDescription 5.5 platform constants;
+# 2) Xcode 16.4 modular C import requires BSD u_int*/u_char declarations before use.
 TMP_MANIFEST="$MANIFEST.routervpn.tmp"
 {
   printf '%s\n' '// swift-tools-version:5.5'
@@ -49,16 +56,31 @@ TMP_MANIFEST="$MANIFEST.routervpn.tmp"
 } > "$TMP_MANIFEST"
 mv "$TMP_MANIFEST" "$MANIFEST"
 
+TMP_HEADER="$HEADER.routervpn.tmp"
+awk '
+  !done && $0 == "#include \"key.h\"" {
+    print "#include <sys/types.h>"
+    print ""
+    done=1
+  }
+  { print }
+  END { if (!done) exit 7 }
+' "$HEADER" > "$TMP_HEADER"
+mv "$TMP_HEADER" "$HEADER"
+
 [ "$(sed -n '1p' "$MANIFEST")" = '// swift-tools-version:5.5' ] || exit 1
+grep -Fq '#include <sys/types.h>' "$HEADER" || exit 1
 [ "$(git -C "$WG" rev-parse HEAD)" = "$PIN" ] || exit 1
 
-# Fail if anything besides the single manifest compatibility edit changed.
+# Fail if anything besides the two audited compatibility edits changed.
 STATUS="$(git -C "$WG" status --porcelain)"
-[ "$STATUS" = ' M Package.swift' ] || {
+EXPECTED=" M Package.swift
+ M Sources/WireGuardKitC/WireGuardKitC.h"
+[ "$STATUS" = "$EXPECTED" ] || {
   echo "Unexpected WireGuardKit working tree changes:" >&2
   printf '%s\n' "$STATUS" >&2
   exit 1
 }
 
 printf '%s\n' "$PIN" > "$DEPS/wireguard-apple.pin"
-echo "Prepared WireGuardKit $PIN with local SwiftPM manifest compatibility header."
+echo "Prepared WireGuardKit $PIN with audited Xcode compatibility patches."
