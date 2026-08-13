@@ -85,13 +85,15 @@ def ios_map() -> bool:
     return (
         mod.has("ios/RouterVPN/App/RouterVPNApp.swift", "ProductRootView()")
         and mod.has("ios/RouterVPN/project.yml", "sources: [App, Resources]")
+        and mod.has("ios/RouterVPN/App/ProductRootView.swift", "RouterVPNNodeMapSheet", "Nodes & Map")
         and mod.has(
-            "ios/RouterVPN/App/ProductRootView.swift",
+            "ios/RouterVPN/App/NodeMapSheet.swift",
             "import MapKit",
-            "Map(",
+            "Map {",
             "latitude",
             "longitude",
             "No real node coordinates",
+            "never invents map locations",
         )
     )
 
