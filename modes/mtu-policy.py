@@ -5,13 +5,13 @@ import ipaddress,json,os
 from pathlib import Path
 import re,socket,subprocess,sys,tempfile
 from typing import Any
+from profile_id import validate_profile_id
 MIN_MTU=576;MAX_PROBE_MTU=1500
 
 def root_dir()->Path:return Path(os.environ.get('HOMEVPN_ROOT','/opt/router-vpn-client')).resolve()
 def profile_id()->str:
- value=os.environ.get('HOMEVPN_PROFILE_ID','router')
- if not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}',value):raise SystemExit('invalid HOMEVPN_PROFILE_ID')
- return value
+ try:return validate_profile_id(os.environ.get('HOMEVPN_PROFILE_ID','router'),default='')
+ except ValueError as exc:raise SystemExit('invalid HOMEVPN_PROFILE_ID') from exc
 def load_store(root:Path)->tuple[dict[str,Any],dict[str,Any]|None]:
  try:store=json.loads((root/'routers.json').read_text(encoding='utf-8'))
  except Exception:return{},None
