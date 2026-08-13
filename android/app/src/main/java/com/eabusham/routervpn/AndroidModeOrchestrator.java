@@ -24,7 +24,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-/** Android AUTO/SMART/CUSTOM chooses only native candidates and requires selected-node path proof. */
+/** Android AUTO/SMART/CUSTOM/ALL chooses only native candidates and requires selected-node path proof. */
 final class AndroidModeOrchestrator {
     interface Callback {
         void progress(String message);
@@ -34,7 +34,7 @@ final class AndroidModeOrchestrator {
     private enum Kind { WG, AWG, LIBBOX, XRAY }
     private static final class Candidate {
         final Kind kind; final String id,name; final List<String> layers,simplify; final int order;
-        Candidate(Kind kind,String id,String name,List<String> layers,List<String> simplify,int order){this.kind=kind;this.id=id;this.name=name;this.layers=layers;this.simplify=simplify;this.order=order;}
+        Candidate(Kind kind,String id,String name,List<String> layers,List<String>simplify,int order){this.kind=kind;this.id=id;this.name=name;this.layers=layers;this.simplify=simplify;this.order=order;}
     }
 
     private final NativeWireGuardController wg;
@@ -51,13 +51,14 @@ final class AndroidModeOrchestrator {
 
     void auto(File bundle, boolean smart, Callback cb){run(bundle,smart,null,cb);}
     void custom(File bundle,List<String> requested,Callback cb){run(bundle,false,new ArrayList<>(requested),cb);}
+    void all(File bundle,Callback cb){runAll(bundle,cb);}
 
     private void run(File bundle,boolean smart,List<String> custom,Callback cb){
         if(running){cb.finished(false,"","Another Android mode selection is already running.");return;}
         running=true;
         executor.execute(()->{
             try{
-                List<Candidate> candidates=collect(bundle);
+                List<Candidate> candidates=collect(bundle,true);
                 if(custom!=null){
                     Set<String>wanted=new HashSet<>();for(String layer:custom){String v=layer==null?"":layer.trim().toLowerCase();if(!v.isEmpty())wanted.add(v);}
                     if(wanted.isEmpty())throw new IllegalStateException("CUSTOM requires at least one layer.");
@@ -79,6 +80,56 @@ final class AndroidModeOrchestrator {
                 cb.finished(false,"",safe(error));
             }finally{running=false;}
         });
+    }
+
+    private void runAll(File bundle,Callback cb){
+        if(running){cb.finished(false,"","Another Android mode selection is already running.");return;}
+        running=true;
+        executor.execute(()->{
+            try{
+                List<Candidate> candidates=collect(bundle,false);
+                candidates.sort(Comparator.<Candidate>comparingInt(AndroidModeOrchestrator::protectionRank).reversed().thenComparingInt(c->c.order));
+                if(candidates.isEmpty())throw new IllegalStateException("ALL found no truthful Android-native branch. Composite desktop MAX sidecar chains are not silently downgraded.");
+                Candidate best=null;
+                for(Candidate c:candidates){
+                    cb.progress("ALL testing protected Android-native branch "+c.name+"…");
+                    if(startAndProve(bundle,c,cb)){best=c;break;}
+                }
+                if(best==null)throw new IllegalStateException("ALL failed closed because no Android-native branch passed selected-node path proof.");
+                current=best;
+                cb.finished(true,best.id,"ALL selected the strongest available Android-native branch that passed selected-node path proof: "+best.name+". Composite desktop MAX chains remain separate and are never faked on Android.");
+            }catch(Throwable error){
+                try{stopCurrent();}catch(Throwable ignored){}
+                cb.finished(false,"",safe(error));
+            }finally{running=false;}
+        });
+    }
+
+    /**
+     * Stable Android ALL protection ordering. This is not a benchmark score: it
+     * is a deterministic policy over catalog security layers, and only candidates
+     * with a real embedded engine are ever ranked. Runtime proof still decides
+     * whether the branch is accepted.
+     */
+    private static int protectionRank(Candidate c){
+        int score=0;
+        Set<String> layers=new HashSet<>(c.layers);
+        if(layers.contains("vless-pq"))score+=1000;
+        if(layers.contains("rosenpass-pq"))score+=900;
+        if(layers.contains("reality"))score+=400;
+        if(layers.contains("xhttp"))score+=300;
+        if(layers.contains("finalmask"))score+=250;
+        if(layers.contains("protocol-split"))score+=220;
+        if(layers.contains("hysteria2"))score+=180;
+        if(layers.contains("quic"))score+=100;
+        if(layers.contains("xtls-vision"))score+=90;
+        if(layers.contains("utls-chrome"))score+=80;
+        if(layers.contains("strong-obfuscation"))score+=70;
+        if(layers.contains("shadowsocks2022"))score+=60;
+        if(layers.contains("amneziawg2"))score+=40;
+        if(layers.contains("wireguard"))score+=20;
+        score+=Math.min(50,layers.size());
+        return score;
     }
 
     private Candidate smartReduce(File bundle,Candidate best,List<Candidate> all,Callback cb)throws Exception{
@@ -152,14 +203,14 @@ final class AndroidModeOrchestrator {
     private void stopLibbox()throws Exception{sing.stop();long end=System.currentTimeMillis()+8000;while(System.currentTimeMillis()<end){String s=sing.getState();if("DOWN".equals(s)||"FAILED".equals(s)||"REVOKED".equals(s))return;Thread.sleep(150);}}
     private void stopXray()throws Exception{xray.stop();long end=System.currentTimeMillis()+8000;while(System.currentTimeMillis()<end){String s=xray.getState();if("DOWN".equals(s)||"FAILED".equals(s)||"REVOKED".equals(s))return;Thread.sleep(150);}}
 
-    private List<Candidate> collect(File bundle)throws Exception{
+    private List<Candidate> collect(File bundle,boolean autoOnly)throws Exception{
         JSONObject root=load(bundle);JSONObject profiles=root.optJSONObject("profiles");JSONArray catalog=root.optJSONArray("modes");
         boolean strict=AndroidKillSwitchPolicy.strictRequested(root);
         Set<String>direct=new HashSet<>();for(NativeSingBoxController.ModeInfo m:sing.listDirectLibboxModes(bundle))direct.add(m.id);
         Set<String>directXray=new HashSet<>();for(NativeXrayController.ModeInfo m:xray.listDirectXrayModes(bundle))directXray.add(m.id);
         List<Candidate>out=new ArrayList<>();if(catalog==null)return out;
         for(int i=0;i<catalog.length();i++){
-            JSONObject m=catalog.optJSONObject(i);if(m==null||!m.optBoolean("auto_eligible",false))continue;String id=m.optString("id","");Kind kind=null;
+            JSONObject m=catalog.optJSONObject(i);if(m==null||(autoOnly&&!m.optBoolean("auto_eligible",false)))continue;String id=m.optString("id","");Kind kind=null;
             if(!strict&&"wg".equals(id)&&has(profiles,"wg","wg.conf"))kind=Kind.WG;
             else if(!strict&&"awg2-fast".equals(id)&&has(profiles,"awg2-fast","awg.conf"))kind=Kind.AWG;
             else if(direct.contains(id))kind=Kind.LIBBOX;
