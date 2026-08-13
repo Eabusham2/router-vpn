@@ -31,7 +31,7 @@ final class AndroidModeOrchestrator {
         void finished(boolean success, String modeId, String message);
     }
 
-    private enum Kind { WG, AWG, LIBBOX }
+    private enum Kind { WG, AWG, LIBBOX, XRAY }
     private static final class Candidate {
         final Kind kind; final String id,name; final List<String> layers,simplify; final int order;
         Candidate(Kind kind,String id,String name,List<String> layers,List<String> simplify,int order){this.kind=kind;this.id=id;this.name=name;this.layers=layers;this.simplify=simplify;this.order=order;}
@@ -40,11 +40,12 @@ final class AndroidModeOrchestrator {
     private final NativeWireGuardController wg;
     private final NativeAmneziaWGController awg;
     private final NativeSingBoxController sing;
+    private final NativeXrayController xray;
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
     private volatile boolean running;
     private volatile Candidate current;
 
-    AndroidModeOrchestrator(Context context, NativeWireGuardController wg, NativeAmneziaWGController awg, NativeSingBoxController sing){this.wg=wg;this.awg=awg;this.sing=sing;}
+    AndroidModeOrchestrator(Context context, NativeWireGuardController wg, NativeAmneziaWGController awg, NativeSingBoxController sing, NativeXrayController xray){this.wg=wg;this.awg=awg;this.sing=sing;this.xray=xray;}
     boolean isRunning(){return running;}
     void close(){executor.shutdownNow();}
 
@@ -103,6 +104,7 @@ final class AndroidModeOrchestrator {
         boolean up;
         if(c.kind==Kind.WG)up=startWg(bundle);
         else if(c.kind==Kind.AWG)up=startAwg(bundle);
+        else if(c.kind==Kind.XRAY)up=startXray(bundle,c.id);
         else up=startLibbox(bundle,c.id);
         if(!up){cb.progress(c.name+" failed to establish a native VPN TUN.");stopCurrent();return false;}
         boolean proof;
@@ -127,6 +129,12 @@ final class AndroidModeOrchestrator {
         while(System.currentTimeMillis()<end){String s=sing.getState();if("UP".equals(s))return true;if("FAILED".equals(s)||"REVOKED".equals(s))return false;Thread.sleep(200);}
         return false;
     }
+    private boolean startXray(File bundle,String id)throws Exception{
+        NativeXrayController.SessionInfo session=xray.prepareSession(bundle,id);xray.start(session);
+        long end=System.currentTimeMillis()+25000L;
+        while(System.currentTimeMillis()<end){String s=xray.getState();if("UP".equals(s))return true;if("FAILED".equals(s)||"REVOKED".equals(s))return false;Thread.sleep(200);}
+        return false;
+    }
 
     private void stopCurrent()throws Exception{
         Candidate c=current;
@@ -134,24 +142,28 @@ final class AndroidModeOrchestrator {
             if(wg.getState()==Tunnel.State.UP)stopWg();
             if(awg.getState()==org.amnezia.awg.backend.Tunnel.State.UP)stopAwg();
             String ls=sing.getState();if("UP".equals(ls)||"STARTING".equals(ls))stopLibbox();
+            String xs=xray.getState();if("UP".equals(xs)||"STARTING".equals(xs))stopXray();
             return;
         }
-        if(c.kind==Kind.WG)stopWg();else if(c.kind==Kind.AWG)stopAwg();else stopLibbox();current=null;
+        if(c.kind==Kind.WG)stopWg();else if(c.kind==Kind.AWG)stopAwg();else if(c.kind==Kind.XRAY)stopXray();else stopLibbox();current=null;
     }
     private void stopWg()throws Exception{CountDownLatch l=new CountDownLatch(1);wg.disconnect((s,m,e)->l.countDown());l.await(8,TimeUnit.SECONDS);}
     private void stopAwg()throws Exception{CountDownLatch l=new CountDownLatch(1);awg.disconnect((s,m,e)->l.countDown());l.await(8,TimeUnit.SECONDS);}
     private void stopLibbox()throws Exception{sing.stop();long end=System.currentTimeMillis()+8000;while(System.currentTimeMillis()<end){String s=sing.getState();if("DOWN".equals(s)||"FAILED".equals(s)||"REVOKED".equals(s))return;Thread.sleep(150);}}
+    private void stopXray()throws Exception{xray.stop();long end=System.currentTimeMillis()+8000;while(System.currentTimeMillis()<end){String s=xray.getState();if("DOWN".equals(s)||"FAILED".equals(s)||"REVOKED".equals(s))return;Thread.sleep(150);}}
 
     private List<Candidate> collect(File bundle)throws Exception{
         JSONObject root=load(bundle);JSONObject profiles=root.optJSONObject("profiles");JSONArray catalog=root.optJSONArray("modes");
         boolean strict=AndroidKillSwitchPolicy.strictRequested(root);
         Set<String>direct=new HashSet<>();for(NativeSingBoxController.ModeInfo m:sing.listDirectLibboxModes(bundle))direct.add(m.id);
+        Set<String>directXray=new HashSet<>();for(NativeXrayController.ModeInfo m:xray.listDirectXrayModes(bundle))directXray.add(m.id);
         List<Candidate>out=new ArrayList<>();if(catalog==null)return out;
         for(int i=0;i<catalog.length();i++){
             JSONObject m=catalog.optJSONObject(i);if(m==null||!m.optBoolean("auto_eligible",false))continue;String id=m.optString("id","");Kind kind=null;
             if(!strict&&"wg".equals(id)&&has(profiles,"wg","wg.conf"))kind=Kind.WG;
             else if(!strict&&"awg2-fast".equals(id)&&has(profiles,"awg2-fast","awg.conf"))kind=Kind.AWG;
             else if(direct.contains(id))kind=Kind.LIBBOX;
+            else if(directXray.contains(id))kind=Kind.XRAY;
             if(kind==null)continue;
             out.add(new Candidate(kind,id,m.optString("name",id),strings(m.optJSONArray("layers")),strings(m.optJSONArray("smart_simplify")),i));
         }
