@@ -56,9 +56,12 @@ need("server/scripts/pairing.py","one_time","lan_source","MAX_FAILURES_PER_MINUT
 need("server/scripts/download-broker.py","hmac.compare_digest","HttpOnly; SameSite=Strict","/api/pairing/redeem","apple_local_network_permission_required")
 need("server/scripts/test_broker_security.py","status == 401","status == 403","X-Router-VPN-Pairing")
 
-# Router agent trust/forwarding boundaries.
-need("cmd/router-agent/main.go","ConstantTimeCompare","source is not a tunnel peer","validateForward","allowedRanges","formatDNAT")
+# Router agent trust/forwarding boundaries and stable public node identity proof.
+need("cmd/router-agent/main.go","ConstantTimeCompare","source is not a tunnel peer","validateForward","allowedRanges","formatDNAT","NodeID","validNodeID","router-vpn-private-agent-v1")
 need("cmd/router-agent/main_test.go","missing bearer token was authorized","Protected DMZ","IPv6")
+need("cmd/router-agent/node_proof_test.go","TestValidNodeIDRequiresLowercaseSHA256Hex","TestPrivateHealthReturnsExactNodeIdentity","router-vpn-private-agent-v1")
+need("server/scripts/ensure-node-proof.py","router-vpn-node-proof-v1\\n","config[\"node_id\"] = node_id","WireGuard server public key")
+need("server/scripts/create-bundle-json.py","nodeProofId","node_proof_id","ensure-node-proof.py")
 
 # Main-only discipline.
 for wf in(ROOT/".github"/"workflows").glob("*.yml"):
@@ -87,11 +90,20 @@ need("modes/kill-switch.py","policy drop",'action == "reassert"',"current profil
 need("modes/test_kill_switch.py","router-vpn-killswitch-reassert-","router-vpn-killswitch-multihop-","cannot read routers.json")
 need("client/install-linux.sh","nftables","Before=network-pre.target","RequiredBy=network-pre.target","kill-switch.py reassert","router-vpn-killswitch-recovery","force-off")
 
-# Android: real raw WG only; other engines stay explicitly gated.
+# Android: real raw WG/AWG, embedded libbox AUTO/SMART/CUSTOM, and narrow WG->SS/Hysteria2 multihop.
 need("android/app/build.gradle","com.wireguard.android:tunnel:1.0.20260102")
 need("android/gradle.properties","android.useAndroidX=true")
-need("android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java","GoBackend","State.UP","Config.parse",'optJSONObject("wg")')
-need("android/app/src/main/java/com/eabusham/routervpn/MainActivity.java","VpnService.prepare(this)","does not fake a live all-mode VPN connection","automatic reconnect are still unavailable")
+need("android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java","GoBackend","State.UP","Config.parse",'optJSONObject("wg")',"AndroidKillSwitchPolicy.strictRequested(privateBundle)")
+need("android/app/src/main/java/com/eabusham/routervpn/NativeAmneziaWGController.java","org.amnezia.awg.backend.GoBackend","State.UP","Config.parse",'optJSONObject("awg2-fast")',"AndroidKillSwitchPolicy.strictRequested(privateBundle)")
+need("android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java","isDirectFullDeviceConfig","MAX_PROFILE_FILE","MAX_PROFILE_TOTAL","cleanupOldSessions")
+need("android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java","AndroidPathProbe.prove(bundle","No candidate passed selected-node path proof","SMART AUTO could not restore its last-known-good mode")
+need("android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java","MAX_NODES = 24","stableNodeIdentity","router-nodes-v1","return stable.substring(0, 32)")
+need("android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java",'"shadowsocks".equals(exitMode)','"hysteria2".equals(exitMode)','proxy.put("detour", "entry-wg")','put("type", "wireguard")',"AndroidNodeStore.stableNodeIdentity(entry)")
+need("android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java","AndroidPathProbe.prove(prepared.exitBundle",'"FAILED".equals(state)','"REVOKED".equals(state)',"Exit-node private path proof failed; multihop was disconnected.")
+need("android/app/src/main/java/com/eabusham/routervpn/AndroidPathProbe.java","AndroidNodeStore.stableNodeIdentity(bundle)","expectedNode.equals(body.optString(\"node_id\"","PROOF_KIND.equals(body.optString(\"proof\"")
+need("android/app/src/main/java/com/eabusham/routervpn/MainActivity.java","VpnService.prepare(this)","Connect embedded layered mode","AUTO — first proven working mode","SMART AUTO — simplify and restore safely","Multihop — choose entry → exit","Strict embedded libbox sessions require","AWG-entry multihop")
+need("android/test_android_runtime_contract.py","Android runtime truth contract: PASS")
+need("android/test_android_multihop_contract.py","android multihop source contract: OK")
 
 # Windows: official WG plus native pinned sing-box/Xray TUN and strict Windows Firewall policy.
 need("client/native-wireguard-windows.ps1","WireGuard\\wireguard.exe","/installtunnelservice","/uninstalltunnelservice","Is-Administrator","Unsafe WireGuard profile path","will not fake native readiness through WSL","windows-kill-switch.ps1","Invoke-KillSwitch 'prepare'","Invoke-KillSwitch 'release'")
@@ -108,10 +120,12 @@ for rel in("client/native-windows-mode.ps1","client/Setup-Windows-Runtime.ps1","
  text=read(rel).lower()
  if"wsl.exe"in text or"requires wsl2"in text:errors.append(f"current Windows runtime still depends on WSL: {rel}")
 
-# Apple remains explicitly fail-closed until a real PacketTunnel engine bridge is linked.
-need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift","Link AmneziaWGKit/Xray engine before signing this target.","completionHandler(error)")
-no("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift","completionHandler(nil)")
-need("ios/RouterVPN/project.yml","NSLocalNetworkUsageDescription","com.apple.networkextension.packet-tunnel")
+# Apple: real pinned native WireGuard PacketTunnel; unsupported engines and strict lifecycle stay fail closed.
+need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift","import WireGuardKit","WireGuardAdapter(with: self)","RouterVPNWireGuardConfig.parse","strict Apple kill switch requested","AmneziaWG, layered, ALL/MAX and multihop remain unavailable","deriveNodeProof",'body["node_id"] as? String == expectedNodeID','body["proof"] as? String == Self.proofKind',"completionHandler(nil)")
+no("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift","Link AmneziaWGKit/Xray engine before signing this target.")
+need("ios/RouterVPN/PacketTunnel/WireGuardQuickConfig.swift","PrivateKey(base64Key:","IPAddressRange(from:","DNSServer(from:","scripts/hooks are never executed","profile exceeds the 1 MiB safety limit")
+need("ios/RouterVPN/App/Models.swift","nodeProofID","node_proof_id","nodeProofId","Router bundle node proof ids disagree")
+need("ios/RouterVPN/project.yml","NSLocalNetworkUsageDescription","com.apple.networkextension.packet-tunnel","WireGuardKit","2fec12a6e1f6e3460b6ee483aa00ad29cddadab1","Build pinned wireguard-go bridge","libwg-go.a")
 
 # Production images remain exact/non-floating.
 for line in read("server/portainer-current.yaml").splitlines():
