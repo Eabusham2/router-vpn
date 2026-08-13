@@ -299,11 +299,11 @@ func (a *app) proveMultihopExit(exit common.RouterProfile) error {
 			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			_ = resp.Body.Close()
 			if readErr == nil && resp.StatusCode/100 == 2 {
-				var payload map[string]any
-				if json.Unmarshal(body, &payload) == nil && payload["ok"] == true {
+				if err := validateSelectedNodeProof(exit, body); err == nil {
 					return nil
+				} else {
+					last = err
 				}
-				last = errors.New("exit proof endpoint did not return the Router VPN proof response")
 			} else if readErr != nil {
 				last = readErr
 			} else {
