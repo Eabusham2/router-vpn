@@ -286,6 +286,7 @@ func (a *app) deleteProfile(w http.ResponseWriter, r *http.Request) {
 
 type profileBundle struct {
 	Endpoint string `json:"endpoint"`
+	NodeProofID string `json:"nodeProofId"`
 	APIToken string `json:"apiToken"`
 	RouterAPI string `json:"routerAPI"`
 	AdGuardIPv4 string `json:"adGuardIPv4"`
@@ -317,6 +318,11 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 	} else if strings.TrimSpace(p.Endpoint) != "" {
 		endpoint, err := normalizeEndpoint(p.Endpoint); if err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }; p.Endpoint = endpoint
 	}
+	if top := strings.TrimSpace(b.NodeProofID); top != "" {
+		if !common.ValidNodeProofID(top) { http.Error(w, "invalid router bundle node proof id", http.StatusBadRequest); return }
+		if p.NodeProofID != "" && p.NodeProofID != top { http.Error(w, "router bundle node proof ids disagree", http.StatusBadRequest); return }
+		p.NodeProofID = top
+	}
 	if b.RouterAPI != "" { p.RouterAPI = b.RouterAPI }
 	if b.APIToken != "" { p.APIToken = b.APIToken }
 	if b.AdGuardIPv4 != "" { p.AdGuardIPv4 = b.AdGuardIPv4 }
@@ -345,6 +351,13 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 			if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
 		}
 	}
+	derivedNodeID, proofErr := expectedNodeProofID(p)
+	if proofErr != nil {
+		_ = os.RemoveAll(profileRoot)
+		http.Error(w, "router bundle identity proof failed: "+proofErr.Error(), http.StatusBadRequest)
+		return
+	}
+	p.NodeProofID = derivedNodeID
 	a.mu.Lock()
 	if a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" { a.mu.Unlock(); http.Error(w, "disconnect before importing a router", http.StatusConflict); return }
 	a.profiles.Profiles = append(a.profiles.Profiles, p)
@@ -574,10 +587,7 @@ func (a *app) testHealth(p common.RouterProfile) (time.Duration, error) {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if err != nil { return 0, err }
 	if resp.StatusCode/100 != 2 { return 0, fmt.Errorf("path proof %s", resp.Status) }
-	var proof struct { OK bool `json:"ok"` }
-	if err := json.Unmarshal(body, &proof); err != nil || !proof.OK {
-		return 0, errors.New("path proof endpoint did not return the Router VPN proof response")
-	}
+	if err := validateSelectedNodeProof(p, body); err != nil { return 0, err }
 	return time.Since(t), nil
 }
 
