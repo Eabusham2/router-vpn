@@ -48,8 +48,6 @@ def release_gate() -> bool:
 
 def controller_multihop_platform(platform: str) -> bool:
     text = mod.body("cmd/client/multihop.go")
-    # Current controller explicitly rejects every non-Linux platform. A future
-    # implementation may remove that guard or use a platform capability helper.
     if 'runtime.GOOS != "linux"' in text:
         return False
     return f'"{platform}"' in text or "platform_supported" in text
@@ -65,13 +63,35 @@ def ios_map() -> bool:
     return ("Map(" in text or "MapKit" in text) and "latitude" in text.lower() and "longitude" in text.lower()
 
 
+def selected_dns_proof() -> bool:
+    return (
+        mod.has(
+            "cmd/client/dns_proof.go",
+            "proveSelectedDNS",
+            "verifyKernelDNSRuntime",
+            "verifySingBoxDNSRuntime",
+            "net.DefaultResolver.LookupHost",
+            "selected-dns",
+            "hijack-dns",
+        )
+        and mod.has(
+            "cmd/client/session_state.go",
+            "proveDNSAsync",
+            "DNSProof",
+            'Status: "checking"',
+            '"dns-proof"',
+            'Status = "passed"',
+        )
+    )
+
+
 mod.RECOVERED = [
     {"name":"strict macOS kill-switch enforcement","weight":1.0,"pass":lambda: mod.has("modes/kill-switch.py","darwin","apply_darwin") and mod.has("modes/darwin_kill_switch.py","com.apple/router-vpn","pfctl","utun") and mod.has("cmd/client/main.go","HOMEVPN_KILLSWITCH_REFRESH=1"),"note":"scoped fail-closed PF enforcement must be wired into the shipping controller/runtime"},
     {"name":"authenticated release/update status and safe recovery surface","weight":0.5,"pass":release_gate,"note":"read-only exact-SHA recovery/status composed over existing auth; no Docker socket/build path"},
     {"name":"Windows native typed connection progress","weight":0.17,"pass":lambda: windows_shipping_has("/api/session/events"),"note":"shipping WPF app must consume typed session attempt/fallback/rollback events"},
     {"name":"macOS native typed connection progress","weight":0.17,"pass":lambda: shipping_has("client/macos/build-native-app.sh",("client/macos/RouterVPNMacProduct.swift","client/macos/RouterVPNMacNative.swift","client/macos/RouterVPNMacApp.swift"),"/api/session/events"),"note":"shipping AppKit source selected by build-native-app.sh must consume typed session events"},
     {"name":"Linux native typed connection progress","weight":0.16,"pass":lambda: shipping_has("client/linux/build-native-app.sh",("client/linux/routervpn-gtk.c",),"/api/session/events"),"note":"shipping GTK app must consume typed session events"},
-    {"name":"selected DNS end-to-end proof plumbing","weight":0.5,"pass":lambda: mod.has("cmd/client/session_state.go","DNSProof","passed") and any(x in mod.body("cmd/client/extras.go") for x in ("/api/dns/proof","selected DNS proof")),"note":"home-node benchmarking alone is not proof the active client uses the selected resolver through the tunnel"},
+    {"name":"selected DNS end-to-end proof plumbing","weight":0.5,"pass":selected_dns_proof,"note":"active runtime enforcement plus live OS resolver success is required; home-node benchmarking alone earns no credit"},
     {"name":"Windows desktop real multihop parity","weight":0.25,"pass":lambda: controller_multihop_platform("windows") and windows_shipping_has("/api/multihop/status","/api/multihop/connect"),"note":"Windows must run and expose a real entry->exit dataplane, not only display config"},
     {"name":"macOS desktop real multihop parity","weight":0.25,"pass":lambda: controller_multihop_platform("darwin") and shipping_has("client/macos/build-native-app.sh",("client/macos/RouterVPNMacProduct.swift","client/macos/RouterVPNMacNative.swift","client/macos/RouterVPNMacApp.swift"),"/api/multihop/status","/api/multihop/connect"),"note":"macOS must run and expose a real entry->exit dataplane"},
     {"name":"Windows native IA + real-coordinate map","weight":0.2,"pass":lambda: windows_shipping_has("Map","latitude","longitude","Forwarding","Settings","Help"),"note":"shipping WPF app needs requested product IA and functional real-coordinate node map"},
