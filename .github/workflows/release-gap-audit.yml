@@ -1,0 +1,29 @@
+name: Release gap audit
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gap-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Compile and test shared source contracts
+        run: go test ./cmd/client ./internal/common
+      - name: Run strict native AI identity release-gap audit
+        run: python3 deploy/release-gap-audit.py
