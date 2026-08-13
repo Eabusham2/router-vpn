@@ -6,10 +6,10 @@ import Foundation
 final class RouterVPNModel: ObservableObject {
     @Published var modes: [VPNMode] = []
     @Published var logicalModes: [LogicalMode] = []
-    @Published var selectedMode = "wg" // legacy/raw runtime mode for compatibility
+    @Published var selectedMode = "wg"
     @Published var selectedLogicalMode = "base-raw"
-    @Published var basePreference = "auto" // auto, wg, awg
-    @Published var baseFallback = true
+    @Published var basePreference = "wg"
+    @Published var baseFallback = false
     @Published var homeLANAccess = true
     @Published var homeLANCIDRs = ["192.168.50.0/24"]
     @Published var lanImportHost = "192.168.50.133"
@@ -33,18 +33,10 @@ final class RouterVPNModel: ObservableObject {
 
     private(set) var bundle: ClientBundle?
     private let bundleKey = "router-vpn.bundle"
-    private let baseKey = "router-vpn.base-preference"
-    private let fallbackKey = "router-vpn.base-fallback"
-    private let lanAccessKey = "router-vpn.home-lan-access"
-    private let lanCIDRsKey = "router-vpn.home-lan-cidrs"
     private let lanImportKey = "router-vpn.lan-import-host"
 
     init() {
         let defaults = UserDefaults.standard
-        basePreference = defaults.string(forKey: baseKey) ?? "auto"
-        if defaults.object(forKey: fallbackKey) != nil { baseFallback = defaults.bool(forKey: fallbackKey) }
-        if defaults.object(forKey: lanAccessKey) != nil { homeLANAccess = defaults.bool(forKey: lanAccessKey) }
-        if let cidrs = defaults.stringArray(forKey: lanCIDRsKey), !cidrs.isEmpty { homeLANCIDRs = cidrs }
         lanImportHost = defaults.string(forKey: lanImportKey) ?? "192.168.50.133"
         if let data = defaults.data(forKey: bundleKey),
            let saved = try? JSONDecoder().decode(ClientBundle.self, from: data) {
@@ -63,7 +55,15 @@ final class RouterVPNModel: ObservableObject {
         logicalModes.first(where: { $0.id == selectedLogicalMode })
     }
 
-    var baseSelectorEnabled: Bool { currentLogicalMode?.baseSelector == true }
+    var iosRunnableLogicalModes: [LogicalMode] {
+        logicalModes.filter { $0.id == "base-raw" && $0.variants["wg"] == "wg" }
+    }
+
+    var iosManualModeSupported: Bool {
+        selectedLogicalMode == "base-raw" && currentLogicalMode?.variants["wg"] == "wg"
+    }
+
+    var baseSelectorEnabled: Bool { false }
 
     func importBundle(_ data: Data) throws {
         guard data.count <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
@@ -111,13 +111,8 @@ final class RouterVPNModel: ObservableObject {
         current.modes = modes
         current.logicalModes = logicalModes
         bundle = current
-        let defaults = UserDefaults.standard
-        if let data = try? JSONEncoder().encode(current) { defaults.set(data, forKey: bundleKey) }
-        defaults.set(basePreference, forKey: baseKey)
-        defaults.set(baseFallback, forKey: fallbackKey)
-        defaults.set(homeLANAccess, forKey: lanAccessKey)
-        defaults.set(homeLANCIDRs, forKey: lanCIDRsKey)
-        defaults.set(lanImportHost, forKey: lanImportKey)
+        if let data = try? JSONEncoder().encode(current) { UserDefaults.standard.set(data, forKey: bundleKey) }
+        UserDefaults.standard.set(lanImportHost, forKey: lanImportKey)
         message = "Router profile saved on this device"
     }
 
@@ -132,16 +127,16 @@ final class RouterVPNModel: ObservableObject {
         socksPort = String(decoded.socks5Port)
         socksUsername = ""
         socksPassword = ""
+        basePreference = "wg"
+        baseFallback = false
         if let selected = decoded.routerProfiles.first(where: { $0.id == decoded.selectedRouterID }) ?? decoded.routerProfiles.first {
-            if let base = selected.baseTunnel, ["auto", "wg", "awg"].contains(base) { basePreference = base }
-            if let fallback = selected.baseFallback { baseFallback = fallback }
             if let access = selected.homeLANAccess { homeLANAccess = access }
             if let cidrs = selected.homeLANCIDRs, !cidrs.isEmpty { homeLANCIDRs = cidrs }
         }
-        if !logicalModes.contains(where: { $0.id == selectedLogicalMode }) {
-            selectedLogicalMode = logicalModes.first?.id ?? "base-raw"
+        if !iosRunnableLogicalModes.contains(where: { $0.id == selectedLogicalMode }) {
+            selectedLogicalMode = iosRunnableLogicalModes.first?.id ?? "base-raw"
         }
-        selectedMode = modeCandidates().first ?? modes.first?.id ?? "wg"
+        selectedMode = "wg"
     }
 
     private func legacyLogicalModes(_ oldModes: [VPNMode]) -> [LogicalMode] {
@@ -151,33 +146,18 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func modeCandidates() -> [String] {
-        guard let logical = currentLogicalMode else { return selectedMode.isEmpty ? [] : [selectedMode] }
-        if !logical.baseSelector {
-            if let native = logical.variants["native"] { return [native] }
-            return Array(logical.variants.values.prefix(1))
-        }
-        let primary: String
-        switch basePreference {
-        case "awg": primary = "awg"
-        case "wg": primary = "wg"
-        default: primary = "wg"
-        }
-        let secondary = primary == "wg" ? "awg" : "wg"
-        var keys = [primary]
-        if baseFallback && logical.fallback { keys.append(secondary) }
-        var result: [String] = []
-        for key in keys {
-            if let mode = logical.variants[key], !result.contains(mode) { result.append(mode) }
-        }
-        if result.isEmpty, let native = logical.variants["native"] { result.append(native) }
-        return result
+        iosManualModeSupported ? ["wg"] : []
     }
 
     func connect() async {
         saveRouter()
         guard let bundle else { message = "Configure your home router first"; return }
         let candidates = modeCandidates()
-        guard auto || !candidates.isEmpty else { message = "Selected logical mode has no usable runtime variant"; return }
+        if !auto && candidates.isEmpty {
+            connected = false
+            message = "This iOS build currently supports manual Raw WireGuard only. Other modes remain visible as unavailable until their native engines are linked and proven."
+            return
+        }
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences()
             let manager = managers.first ?? NETunnelProviderManager()
@@ -185,15 +165,11 @@ final class RouterVPNModel: ObservableObject {
             proto.providerBundleIdentifier = "com.eabusham.routervpn.PacketTunnel"
             proto.serverAddress = bundle.endpoint
             proto.providerConfiguration = [
-                "mode": auto ? "auto" : (candidates.first ?? "wg"),
-                "modeCandidates": auto ? [] : candidates,
-                "logicalMode": auto ? "auto" : selectedLogicalMode,
-                "basePreference": basePreference,
-                "baseFallback": baseFallback,
-                "homeLANAccess": homeLANAccess,
-                "homeLANCIDRs": homeLANAccess ? homeLANCIDRs : [],
-                "daita": daita,
-                "jumbo": jumbo,
+                "mode": auto ? "auto" : "wg",
+                "modeCandidates": auto ? [] : ["wg"],
+                "logicalMode": auto ? "auto" : "base-raw",
+                "basePreference": "wg",
+                "baseFallback": false,
                 "bundle": try JSONEncoder().encode(bundle)
             ]
             manager.protocolConfiguration = proto
@@ -203,7 +179,7 @@ final class RouterVPNModel: ObservableObject {
             try await manager.loadFromPreferences()
             try manager.connection.startVPNTunnel()
             connected = false
-            message = auto ? "Connecting with AUTO…" : "Connecting \(selectedLogicalMode) • candidates: \(candidates.joined(separator: " → "))"
+            message = auto ? "Connecting with AUTO → native WireGuard…" : "Connecting native WireGuard…"
             await watchConnection(manager, attempts: 32)
         } catch {
             connected = false
@@ -216,15 +192,13 @@ final class RouterVPNModel: ObservableObject {
             switch manager.connection.status {
             case .connected:
                 connected = true
-                message = "Connected"
+                message = "Connected • native WireGuard • selected-node proof passed"
                 return
             case .invalid:
                 connected = false
                 message = "Tunnel configuration is invalid"
                 return
             case .disconnected:
-                // Give the extension a short initial window to leave disconnected
-                // before treating it as a failed start.
                 try? await Task.sleep(for: .milliseconds(250))
             case .disconnecting:
                 connected = false
