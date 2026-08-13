@@ -15,10 +15,11 @@ def text(name: str) -> str:
 service = text("LayeredVpnService.java")
 policy = text("AndroidKillSwitchPolicy.java")
 wg = text("NativeWireGuardController.java")
-awg = text("NativeAmneziaWGController.java")
+awg = text("NativeAmneziaWgController.java")
 sing = text("NativeSingBoxController.java")
 orch = text("AndroidModeOrchestrator.java")
 probe = text("AndroidPathProbe.java")
+store = text("AndroidNodeStore.java")
 main = text("MainActivity.java")
 
 # Strict Android policy must be enforced by the actual VpnService, not UI text.
@@ -62,18 +63,26 @@ for marker in (
     assert marker in sing, f"NativeSingBoxController missing safety marker: {marker}"
 
 # Path proof is private-node proof, not a public-IP-only or generic {ok:true}
-# success heuristic. The bundle's stable public node fingerprint must match the
-# private router-agent response exactly.
+# success heuristic. New bundles carry the stable public node fingerprint and
+# legacy bundles derive the exact same value from their WireGuard server public
+# key; supplied and derived identities must agree.
 for marker in (
     "isPrivate(address)",
-    'bundle.optString("nodeProofId"',
-    'profile.optString("node_proof_id"',
+    "AndroidNodeStore.stableNodeIdentity(bundle)",
     'expectedNode.matches("[0-9a-f]{64}")',
     'expectedNode.equals(body.optString("node_id"',
     'PROOF_KIND.equals(body.optString("proof"',
     "HTTP/1.1 200",
 ):
     assert marker in probe, f"AndroidPathProbe missing selected-node identity marker: {marker}"
+for marker in (
+    'NODE_PROOF_DOMAIN = "router-vpn-node-proof-v1\\n"',
+    'bundle.optString("nodeProofId"',
+    'profile.optString("node_proof_id"',
+    "wireGuardPeerPublicKey(bundle)",
+    "!supplied.equals(derived)",
+):
+    assert marker in store, f"AndroidNodeStore missing stable identity marker: {marker}"
 assert 'return body.optBoolean("ok", false);' not in probe, "generic ok-only proof must not return success"
 
 # UI/onboarding must describe the actually implemented strict/multihop boundary.
