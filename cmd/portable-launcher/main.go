@@ -32,7 +32,7 @@ func main() {
 	nativeOK,nativeReason:=prepareWindowsModeCatalog(filepath.Join(appDir,"modes.json"),dataModes,modesDir);if err:=ensurePortableConfig(filepath.Join(dataDir,"client.json"),dataModes,modesDir,dataDir);err!=nil{fatal(err)};writeRuntimeStatus(filepath.Join(dataDir,"windows-runtime.json"),nativeOK,nativeReason,dataDir)
 	binary:=filepath.Join(appDir,"router-vpn-client.exe");started:=false;var cmd *exec.Cmd
 	if !controllerReady(250*time.Millisecond){cmd=exec.Command(binary);cmd.Dir=dataDir;cmd.Env=append(os.Environ(),"HOMEVPN_ROOT="+dataDir,"HOMEVPN_CLIENT_CONFIG="+filepath.Join(dataDir,"client.json"),"HOMEVPN_PORTABLE=1","HOMEVPN_MODES_DIR="+modesDir,"PATH="+appDir+string(os.PathListSeparator)+os.Getenv("PATH"));cmd.Stdout=os.Stdout;cmd.Stderr=os.Stderr;if err:=cmd.Start();err!=nil{fatal(err)};started=true}
-	if !waitForController(12*time.Second){if started&&cmd!=nil&&cmd.Process!=nil{_=cmd.Process.Kill();_,_=cmd.Process.Wait()};fatal(errors.New("local Router VPN controller did not become ready on 127.0.0.1:8788"))}
+	if !waitForController(30*time.Second){if started&&cmd!=nil&&cmd.Process!=nil{_=cmd.Process.Kill();_,_=cmd.Process.Wait()};fatal(errors.New("local Router VPN controller did not become ready on 127.0.0.1:8788 within 30 seconds"))}
 	if selfTest{if err:=runSelfTest(dataDir,nativeApp);err!=nil{if started{stopPortableController(cmd)};fatal(err)};if started{stopPortableController(cmd)};fmt.Println("Router VPN Portable self-test: OK");return}
 	nativeCmd,err:=openNativeApp(nativeApp);if err!=nil{if started{stopPortableController(cmd)};fatal(err)}
 	if err=nativeCmd.Wait();err!=nil{if started{stopPortableController(cmd)};fatal(fmt.Errorf("native Windows app exited unsuccessfully: %w",err))}
