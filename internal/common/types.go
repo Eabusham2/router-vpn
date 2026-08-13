@@ -50,6 +50,7 @@ type RouterProfile struct {
 
 	ID            string `json:"id"`
 	Name          string `json:"name"`
+	NodeProofID   string `json:"node_proof_id,omitempty"`
 	Endpoint      string `json:"endpoint"`
 	RouterAPI     string `json:"router_api"`
 	APIToken      string `json:"api_token"`
@@ -99,7 +100,7 @@ type RouterProfile struct {
 
 	// PathProbeURL is a private, node-specific proof endpoint used by clients to
 	// distinguish "the Internet works" from "the selected Router VPN path works".
-	// It is intentionally separate from public endpoint and ordinary health URLs.
+	// NodeProofID binds that endpoint response to this exact imported server.
 	PathProbeURL string `json:"path_probe_url,omitempty"`
 
 	// Optional location metadata is user-editable. It lets the local UI display
