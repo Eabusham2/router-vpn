@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'android/migrate-mainactivity-xray.py'
+      - 'android/test_android_runtime_contract.py'
       - '.github/workflows/android-xray-wiring.yml'
   workflow_dispatch:
 
