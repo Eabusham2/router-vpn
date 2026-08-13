@@ -236,7 +236,6 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$PWD/build/DerivedData" \
-            -disableAutomaticPackageResolution NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM='' \
@@ -255,7 +254,7 @@ jobs:
           grep -q 'import WireGuardKit' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'RouterVPNWireGuardConfig.parse' PacketTunnel/PacketTunnelProvider.swift
-          grep -q 'strict Apple kill switch requested' <(tr '[:upper:]' '[:lower:]' < PacketTunnel/PacketTunnelProvider.swift)
+          grep -q 'strict apple kill switch requested' <(tr '[:upper:]' '[:lower:]' < PacketTunnel/PacketTunnelProvider.swift)
           grep -q 'body\["node_id"\] as? String == expectedNodeID' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'body\["proof"\] as? String == Self.proofKind' PacketTunnel/PacketTunnelProvider.swift
           ! grep -q 'Link AmneziaWGKit/Xray engine before signing this target.' PacketTunnel/PacketTunnelProvider.swift
