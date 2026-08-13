@@ -57,8 +57,8 @@ class SetupCenterReleaseTests(unittest.TestCase):
                 os.environ["ROUTER_VPN_GITHUB_SHA"] = old
 
     def test_production_and_launcher_use_product_wrapper(self):
-        root = HERE.parents[1]
-        compose = (root / "portainer-current.yaml").read_text(encoding="utf-8")
+        server_dir = HERE.parent
+        compose = (server_dir / "portainer-current.yaml").read_text(encoding="utf-8")
         launcher = (HERE / "run-setup-center.sh").read_text(encoding="utf-8")
         marker = "/src/server/scripts/setup-center-product-server.py"
         self.assertIn(marker, compose)
