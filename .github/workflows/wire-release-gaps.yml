@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'deploy/wire-release-gaps.py'
+      - 'deploy/finalize-release-wiring.py'
       - '.github/workflows/wire-release-gaps.yml'
   workflow_dispatch:
 
@@ -34,22 +35,20 @@ jobs:
           git config user.email 'router-vpn-ci@users.noreply.github.com'
           git fetch origin main
           git rebase origin/main
-          python3 deploy/wire-release-gaps.py
+          python3 deploy/finalize-release-wiring.py
           gofmt -w cmd/client/main.go cmd/client/bundle_staging.go cmd/client/bundle_staging_test.go
           go test ./cmd/client ./internal/common
-          python3 deploy/release-gap-audit.py || true
+          python3 deploy/full-audit-v4.py
+          python3 deploy/release-gap-audit.py
           git diff --check
-      - name: Push only the live-file wiring changes
+      - name: Push only the validated live wiring changes
         run: |
           set -euo pipefail
-          if git diff --quiet -- cmd/client/main.go server/portainer-current.yaml cmd/client/bundle_staging.go cmd/client/bundle_staging_test.go; then
+          if git diff --quiet -- cmd/client/main.go server/portainer-current.yaml deploy/full-audit-v4.py; then
             echo 'Release-gap wiring is already applied.'
             exit 0
           fi
-          git add cmd/client/main.go server/portainer-current.yaml cmd/client/bundle_staging.go cmd/client/bundle_staging_test.go
+          git add cmd/client/main.go server/portainer-current.yaml deploy/full-audit-v4.py
           git commit -m 'Wire atomic imports and AI-aware Setup Center'
-          # Rebase once more in case main moved while tests were running. The patch
-          # is idempotent and touches only the two live integration files plus the
-          # already-committed helper/tests.
           git pull --rebase origin main
           git push origin HEAD:main
