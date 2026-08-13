@@ -21,39 +21,101 @@ final class NativeAmneziaWGController implements Tunnel {
     interface Callback { void done(State state, String message, Throwable error); }
     private final GoBackend backend;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final AndroidUnderlyingNetworkMonitor networkMonitor;
     private volatile State state = State.DOWN;
+    private volatile Config activeConfig;
+    private volatile File activeBundle;
+    private volatile String lastError = "";
 
-    NativeAmneziaWGController(Context context) { backend = new GoBackend(context.getApplicationContext()); }
+    NativeAmneziaWGController(Context context) {
+        Context app = context.getApplicationContext();
+        backend = new GoBackend(app);
+        networkMonitor = new AndroidUnderlyingNetworkMonitor(app);
+    }
     @Override public String getName() { return "routervpn-awg"; }
     @Override public void onStateChange(State newState) { state = newState; }
     State getState() { return state; }
+    String getError() { return lastError; }
 
     void connect(File privateBundle, Callback callback) {
         executor.execute(() -> {
             try {
+                networkMonitor.stop();
+                clearActive();
                 if (AndroidKillSwitchPolicy.strictRequested(privateBundle)) throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
                 Config config = loadConfig(privateBundle);
                 State result = backend.setState(this, State.UP, config);
                 state = result;
-                callback.done(result, "Native Android AmneziaWG 2 is active through the official embedded userspace backend with the selected enforceable DNS address and MTU policy.", null);
+                if (result != State.UP) throw new IllegalStateException("AmneziaWG backend did not enter UP state.");
+                if (!AndroidPathProbe.prove(privateBundle, 8000)) {
+                    backend.setState(this, State.DOWN, null);
+                    state = State.DOWN;
+                    throw new IllegalStateException("Native AmneziaWG failed selected-node private path proof.");
+                }
+                activeConfig = config;
+                activeBundle = privateBundle;
+                lastError = "";
+                networkMonitor.start(() -> executor.execute(this::recoverAfterNetworkChange));
+                callback.done(State.UP, "Native Android AmneziaWG 2 is active with selected DNS/MTU and selected-node private path proof.", null);
             } catch (Throwable error) {
-                state = State.DOWN;
+                failClosed(error);
                 callback.done(State.DOWN, "Native AmneziaWG failed: " + safeMessage(error), error);
             }
         });
     }
 
+    private void recoverAfterNetworkChange() {
+        Config config = activeConfig;
+        File bundle = activeBundle;
+        if (state != State.UP || config == null || bundle == null) return;
+        try {
+            lastError = "Underlying network changed; AmneziaWG is re-establishing and revalidating the selected node.";
+            backend.setState(this, State.DOWN, null);
+            State result = backend.setState(this, State.UP, config);
+            state = result;
+            if (result != State.UP || !AndroidPathProbe.prove(bundle, 10000)) {
+                throw new IllegalStateException("AmneziaWG did not recover a proven selected-node path after the underlying network changed.");
+            }
+            lastError = "";
+        } catch (Throwable error) {
+            failClosed(new IllegalStateException("AmneziaWG network-transition recovery failed closed: " + safeMessage(error), error));
+        }
+    }
+
     void disconnect(Callback callback) {
         executor.execute(() -> {
+            networkMonitor.stop();
+            clearActive();
             try {
                 State result = backend.setState(this, State.DOWN, null);
                 state = result;
+                lastError = "";
                 callback.done(result, "Native Android AmneziaWG disconnected.", null);
-            } catch (Throwable error) { callback.done(state, "AmneziaWG disconnect failed: " + safeMessage(error), error); }
+            } catch (Throwable error) {
+                lastError = safeMessage(error);
+                callback.done(state, "AmneziaWG disconnect failed: " + lastError, error);
+            }
         });
     }
 
-    void close() { executor.shutdown(); }
+    void close() {
+        networkMonitor.stop();
+        clearActive();
+        executor.shutdown();
+    }
+
+    private void failClosed(Throwable error) {
+        networkMonitor.stop();
+        try { backend.setState(this, State.DOWN, null); } catch (Throwable ignored) { }
+        state = State.DOWN;
+        lastError = safeMessage(error);
+        clearActive();
+    }
+
+    private void clearActive() {
+        activeConfig = null;
+        activeBundle = null;
+    }
 
     private static Config loadConfig(File privateBundle) throws Exception {
         if (!privateBundle.isFile()) throw new IllegalStateException("Import/link a Router VPN node first.");
