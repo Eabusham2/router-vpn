@@ -14,7 +14,7 @@ if old in ft:
 elif new not in ft:
     raise SystemExit("full-audit Xray service marker drifted")
 android_gradle = 'need("android/app/build.gradle","com.wireguard.android:tunnel:1.0.20260102")\n'
-combined = android_gradle + '''need("android/app/build.gradle","libs/libbox.aar","one pinned gomobile runtime")
+combined = android_gradle + '''need("android/app/build.gradle","libs/libbox.aar")
 no("android/app/build.gradle","libs/libxray.aar","prepareXrayLibXray")
 need("android/build-sing-box-libbox.sh","LIBXRAY_COMMIT=294fb37343205b9b0cb7b7b1b423d3d4b60d9998","XRAY_CORE_VERSION=v1.260327.1-0.20260711155151-50231eaff98c","GO_TOOLCHAIN=go1.26.3","exactly one gomobile go.Seq runtime class","github.com/xtls/libxray=$XRAY_VENDOR")
 need("android/routervpn_xray_bridge.go","RouterXrayDialerController","RouterXrayRegisterDialerController","RouterXrayRegisterListenerController","RouterXraySetDNS","RouterXrayResetDNS","RouterXrayInvoke","net.DefaultResolver","controller.ProtectFd(int64(fd))")
@@ -23,6 +23,8 @@ if 'android/routervpn_xray_bridge.go' not in ft:
     if ft.count(android_gradle) != 1:
         raise SystemExit(f"full-audit combined runtime insertion anchor mismatch: {ft.count(android_gradle)}")
     ft = ft.replace(android_gradle, combined, 1)
+else:
+    ft = ft.replace('need("android/app/build.gradle","libs/libbox.aar","one pinned gomobile runtime")', 'need("android/app/build.gradle","libs/libbox.aar")')
 full.write_text(ft, encoding="utf-8")
 
 gt = go.read_text(encoding="utf-8")
