@@ -21,7 +21,6 @@ def text(rel: str) -> str:
         return ""
     return p.read_text()
 
-# Raw runtime catalog + logical app catalog.
 try:
     modes = json.loads(text("configs/client/modes.json"))
 except Exception as exc:
@@ -74,7 +73,6 @@ for required in (
     if required not in all_text:
         error(f"ALL fallback/reporting contract missing: {required}")
 
-# Honest platform/UI boundaries.
 ui = text("cmd/client/ui.html")
 logical_ui = text("cmd/client/logical_ui.js")
 for required in (
@@ -147,7 +145,6 @@ for required in (
     if required not in project:
         error(f"iOS pinned native build contract missing: {required}")
 
-# Selected-node connection proof must bind success to the exact imported node, not generic Internet or ok=true.
 client_main = text("cmd/client/main.go")
 for required in (
     "a.testHealth(p)", "PathProbeURL", "transport.Proxy = nil", "validateSelectedNodeProof(p, body)",
@@ -171,7 +168,6 @@ for required in ("ok-only", "wrong-node", "wrong-kind", "not-ok", "persisted pro
 if "connectivitycheck.gstatic.com" in client_main:
     error("client reintroduced generic public Internet health success as a tunnel proof")
 
-# Windows user-facing packages must use a native WPF app, not a browser/WebView app-window.
 windows_app = text("client/RouterVPN-Windows-App.ps1")
 for required in (
     "PresentationFramework", "http://127.0.0.1:8788", "ShowDialog()", "SelfTest",
@@ -187,7 +183,6 @@ for forbidden in ("msedge.exe", "chrome.exe", "--app=", "openAppWindow", "browse
     if forbidden in portable:
         error(f"Windows Portable still launches a browser shell: {forbidden}")
 
-# ASUS helper contract.
 helper = text("router/asus-merlin-router-vpn-forwards.sh")
 for required in (
     "ACME_EXTERNAL_PORT=${ACME_EXTERNAL_PORT:-80}",
@@ -207,7 +202,6 @@ if helper:
     if check.returncode:
         error("ASUS forwarding helper shell syntax failed")
 
-# Finalizer/download architecture.
 finalizer = text("server/finalize/finalize.sh")
 initializer = text("server/init/noninteractive.sh")
 if "publish-downloads.sh" not in finalizer:
@@ -257,15 +251,11 @@ package_builds = text("deploy/package-builds.sh")
 if "check-generic-package-secrets.py" not in package_builds:
     error("generic package build does not run the secret/leak scanner")
 
-# Branch cleanup is verification-only. Never blindly delete unknown refs in CI.
 for rel in (".github/workflows/keep-main-only.yml", ".github/workflows/build-all.yml"):
     workflow = text(rel)
     if "git/refs/heads" in workflow and "--method DELETE" in workflow:
         error(f"{rel} blindly deletes branches; inspect merge/content before any deletion")
 
-# Only one production Compose remains. Portainer 2.33 Git stacks are kept
-# image-only; router-local compilation is for requested client packages, not
-# Portainer service images.
 for legacy in ("server/portainer-compose.yaml", "server/compose.yaml"):
     if (ROOT / legacy).exists():
         error(f"retired legacy deployment compose still exists: {legacy}")
@@ -316,8 +306,6 @@ if shutil.which("docker") and compose_path.is_file():
     if check.returncode:
         error("production compose config failed: " + (check.stderr.strip().splitlines()[-1] if check.stderr else "unknown"))
 
-# Terminal management uses the same image-only production compose and does not
-# quietly switch back to a local server build path.
 for rel in ("server/install.sh", "server/upgrade.sh", "server/manage.sh"):
     body = text(rel)
     if "server/portainer-current.yaml" not in body:
@@ -327,7 +315,6 @@ for rel in ("server/install.sh", "server/upgrade.sh", "server/manage.sh"):
     if re.search(r"docker\s+compose\b[^\n]*\bbuild\b", body):
         error(f"{rel} explicitly builds server images")
 
-# Important dependency/source pins.
 pins = {
     "server/init/Dockerfile": (
         "golang:1.24-bookworm", "ghcr.io/sagernet/sing-box:v1.13.12",
@@ -344,7 +331,7 @@ pins = {
     ),
     "server/naive/Dockerfile": ("pocat/naiveproxy:v2.11.4", "forward_proxy"),
     "server/ss-v2ray/Dockerfile": ("golang:1.23.12-alpine", "V2RAY_PLUGIN_COMMIT=e9af1cdd2549d528deb20a4ab8d61c5fbe51f306", "ghcr.io/shadowsocks/ssserver-rust:v1.24.0"),
-    "server/aux-proxies/Dockerfile": ("OVERTLS_VERSION=0.3.12", "SSR_TAG=0.9.4"),
+    "server/aux-proxies/Dockerfile": ("OVERTLS_VERSION=0.3.12", "SSR_COMMIT=227127c4bc5a6555e0556693d084c96860e75b5e"),
 }
 for rel, required_values in pins.items():
     body = text(rel)
@@ -352,7 +339,6 @@ for rel, required_values in pins.items():
         if value not in body:
             error(f"{rel} missing required pin: {value}")
 
-# Current guide/docs boundaries.
 guide = text("docs/CURRENT-GUIDE.md")
 for required in ("server/portainer-current.yaml", "TCP      80      -> 18080", "14443", "15443", "14444", "DAITA-like"):
     if required not in guide:
