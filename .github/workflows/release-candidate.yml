@@ -196,7 +196,7 @@ jobs:
         run: |
           chmod +x client/linux/build-native-app.sh deploy/package-linux-native.sh
           ./deploy/package-linux-native.sh '${{ matrix.arch }}'
-          sha256sum -c "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.sha256"
+          (cd dist/linux-native && sha256sum -c "RouterVPN-linux-${{ matrix.arch }}.sha256")
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Linux-${{ matrix.arch }}-release-candidate
