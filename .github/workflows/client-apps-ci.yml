@@ -223,6 +223,9 @@ jobs:
           cache: false
       - name: Install XcodeGen
         run: brew install xcodegen
+      - name: Prepare exact WireGuardKit checkout
+        working-directory: ios/RouterVPN
+        run: sh prepare-wireguard-kit.sh
       - name: Generate project
         working-directory: ios/RouterVPN
         run: xcodegen generate
@@ -245,11 +248,13 @@ jobs:
         run: |
           APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
           EXT="$APP/PlugIns/RouterVPNPacketTunnel.appex"
-          WG="$PWD/build/DerivedData/SourcePackages/checkouts/wireguard-apple"
+          WG="$PWD/.deps/wireguard-apple"
           test -d "$APP"
           test -d "$EXT"
           test -d "$WG"
           test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5'
+          test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
           test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
           grep -q 'import WireGuardKit' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift
