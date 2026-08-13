@@ -7,6 +7,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidPathProbe.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/MainActivity.java'
       - 'android/test_android_multihop_contract.py'
       - '.github/workflows/android-multihop-contract.yml'
   pull_request:
@@ -15,6 +16,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidPathProbe.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/MainActivity.java'
       - 'android/test_android_multihop_contract.py'
       - '.github/workflows/android-multihop-contract.yml'
   workflow_dispatch:
