@@ -55,6 +55,42 @@ func TestManualMTUValidation(t *testing.T) {
 	if err := NormalizeRouterProfile(&p); err != nil { t.Fatal(err) }
 }
 
+func TestNodeProofIDValidationAndRoundTrip(t *testing.T) {
+	valid := strings.Repeat("a1", 32)
+	if !ValidNodeProofID(valid) { t.Fatal("valid lowercase SHA-256 node proof id rejected") }
+	for _, invalid := range []string{
+		"",
+		strings.Repeat("a", 63),
+		strings.Repeat("a", 65),
+		strings.Repeat("A", 64),
+		strings.Repeat("g", 64),
+		strings.Repeat("0", 63) + "/",
+	} {
+		if invalid != "" && ValidNodeProofID(invalid) { t.Fatalf("invalid node proof id accepted: %q", invalid) }
+	}
+	p := RouterProfile{ID: "node", NodeProofID: "  " + valid + "  "}
+	if err := NormalizeRouterProfile(&p); err != nil { t.Fatal(err) }
+	if p.NodeProofID != valid { t.Fatalf("node proof id was not normalized: %q", p.NodeProofID) }
+	b, err := json.Marshal(p)
+	if err != nil { t.Fatal(err) }
+	var out RouterProfile
+	if err := json.Unmarshal(b, &out); err != nil { t.Fatal(err) }
+	if out.NodeProofID != valid { t.Fatalf("node proof id did not survive round trip: %q", out.NodeProofID) }
+}
+
+func TestMalformedNodeProofIDFailsClosed(t *testing.T) {
+	for _, raw := range []string{
+		`{"id":"node","node_proof_id":"abc"}`,
+		`{"id":"node","node_proof_id":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`,
+		`{"id":"node","node_proof_id":"gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"}`,
+	} {
+		var p RouterProfile
+		if err := json.Unmarshal([]byte(raw), &p); err == nil || !strings.Contains(err.Error(), "invalid node proof id") {
+			t.Fatalf("expected malformed node proof rejection, got %v for %s", err, raw)
+		}
+	}
+}
+
 func TestMultihopRequiresCompleteDistinctNodes(t *testing.T) {
 	for _, p := range []RouterProfile{
 		{MultihopEnabled: true},
