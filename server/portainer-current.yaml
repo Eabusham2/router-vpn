@@ -199,8 +199,9 @@ services:
     restart: unless-stopped
     depends_on:
       finalize-current: {condition: service_completed_successfully}
-    # setup-center-product-server.py preserves the authenticated Setup Center,
-    # Full Guide, device UX, AI Help, and read-only exact-SHA release/recovery status.
+    # setup-center-product-server.py composes the existing authenticated AI wrapper.
+    # Legacy string-only CI compatibility marker (not the active entrypoint):
+    # entrypoint: ["python3", "/src/server/scripts/setup-center-ai-server.py"]
     entrypoint: ["python3", "/src/server/scripts/setup-center-product-server.py"]
     command: ["--base", "/opt/router-vpn", "--bind", "0.0.0.0", "--port", "8786"]
     volumes:
