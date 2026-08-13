@@ -14,7 +14,6 @@ import ipaddress
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import socket
 import subprocess
@@ -22,10 +21,11 @@ import sys
 import tempfile
 from typing import Any
 
+from profile_id import validate_profile_id as _shared_validate_profile_id
+
 TABLE = "router_vpn_killswitch"
 PRIVATE_V4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16")
 PRIVATE_V6 = ("fc00::/7", "fe80::/10")
-ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
 
 
 def root_dir() -> Path:
@@ -33,10 +33,11 @@ def root_dir() -> Path:
 
 
 def validate_profile_id(value: str, label: str) -> str:
-    value = str(value or "").strip()
-    if not ID_RE.fullmatch(value):
-        raise RuntimeError(f"invalid {label}")
-    return value
+    raw = str(value or "").strip()
+    try:
+        return _shared_validate_profile_id(raw, default="")
+    except ValueError as exc:
+        raise RuntimeError(f"invalid {label}") from exc
 
 
 def safe_profile_id() -> str:
@@ -253,7 +254,6 @@ def release(force: bool = False) -> int:
 
 
 def reassert() -> int:
-    """Reconcile persistent always policy before normal networking is allowed."""
     root = root_dir()
     state = read_state(root)
     state_always = state.get("policy") == "always"
@@ -284,8 +284,6 @@ def reassert() -> int:
         print("persistent always state cleared because the current profile policy is no longer always", file=sys.stderr)
         return 0
 
-    # If no runtime state exists yet, a multihop-enabled control profile protects
-    # its physical entry endpoint before networking; otherwise it protects itself.
     runtime_id = str(state.get("profile_id") or "").strip()
     if not runtime_id:
         candidate = str(control_profile.get("multihop_entry_id") or "").strip() if bool(control_profile.get("multihop_enabled")) else ""
