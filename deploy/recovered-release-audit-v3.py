@@ -30,8 +30,14 @@ def shipping_has(build_rel: str, candidates: tuple[str, ...], *markers: str) -> 
 
 def windows_shipping_has(*markers: str) -> bool:
     package = mod.body("deploy/package-builds.sh")
-    rel = "client/RouterVPN-Windows-App.ps1"
-    return Path(rel).name in package and mod.has(rel, *markers)
+    entry = "client/RouterVPN-Windows-App.ps1"
+    product = "client/RouterVPN-Windows-Product.ps1"
+    return (
+        Path(entry).name in package
+        and 'cp -a "$ROOT/client"' in package
+        and mod.has(entry, Path(product).name, "PresentationFramework", "ShowDialog()")
+        and mod.has(product, *markers)
+    )
 
 
 def release_gate() -> bool:
@@ -130,7 +136,7 @@ mod.RECOVERED = [
     {"name":"selected DNS end-to-end proof plumbing","weight":0.5,"pass":selected_dns_proof,"note":"active runtime enforcement plus live OS resolver success is required; home-node benchmarking alone earns no credit"},
     {"name":"Windows desktop real multihop parity","weight":0.25,"pass":lambda: controller_multihop_platform("windows") and windows_shipping_has("/api/multihop/status","/api/multihop/connect"),"note":"Windows must run and expose a real entry->exit dataplane, not only display config"},
     {"name":"macOS desktop real multihop parity","weight":0.25,"pass":lambda: controller_multihop_platform("darwin") and shipping_has("client/macos/build-native-app.sh",("client/macos/RouterVPNMacProduct.swift","client/macos/RouterVPNMacNative.swift","client/macos/RouterVPNMacApp.swift"),"/api/multihop/status","/api/multihop/connect"),"note":"macOS must run and expose a real entry->exit dataplane"},
-    {"name":"Windows native IA + real-coordinate map","weight":0.2,"pass":lambda: windows_shipping_has("Map","latitude","longitude","Forwarding","Settings","Help"),"note":"shipping WPF app needs requested product IA and functional real-coordinate node map"},
+    {"name":"Windows native IA + real-coordinate map","weight":0.2,"pass":lambda: windows_shipping_has("MapCanvas","latitude","longitude","No real node coordinates","Forwarding","Settings","Help"),"note":"shipping WPF app needs requested product IA and functional real-coordinate node map"},
     {"name":"macOS native IA + real-coordinate map","weight":0.2,"pass":lambda: shipping_has("client/macos/build-native-app.sh",("client/macos/RouterVPNMacProduct.swift","client/macos/RouterVPNMacNative.swift","client/macos/RouterVPNMacApp.swift"),"MapKit","MKMapView","latitude","longitude","Forwarding","Settings","Help"),"note":"shipping AppKit app needs product IA and only real stored coordinates"},
     {"name":"Linux native IA + real-coordinate map","weight":0.2,"pass":lambda: shipping_has("client/linux/build-native-app.sh",("client/linux/routervpn-gtk-product.c","client/linux/routervpn-gtk.c"),"Map","latitude","longitude","Forwarding","Settings","Help"),"note":"shipping GTK app needs product IA and real-coordinate map"},
     {"name":"Android native IA + real-coordinate map","weight":0.2,"pass":android_map,"note":"Android needs native node/map product surface using stored coordinates"},
