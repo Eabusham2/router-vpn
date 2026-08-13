@@ -22,39 +22,101 @@ final class NativeWireGuardController implements Tunnel {
     interface Callback { void done(State state, String message, Throwable error); }
     private final GoBackend backend;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final AndroidUnderlyingNetworkMonitor networkMonitor;
     private volatile State state = State.DOWN;
+    private volatile Config activeConfig;
+    private volatile File activeBundle;
+    private volatile String lastError = "";
 
-    NativeWireGuardController(Context context) { backend = new GoBackend(context.getApplicationContext()); }
+    NativeWireGuardController(Context context) {
+        Context app = context.getApplicationContext();
+        backend = new GoBackend(app);
+        networkMonitor = new AndroidUnderlyingNetworkMonitor(app);
+    }
     @Override public String getName() { return "routervpn"; }
     @Override public void onStateChange(State newState) { state = newState; }
     State getState() { return state; }
+    String getError() { return lastError; }
 
     void connect(File privateBundle, Callback callback) {
         executor.execute(() -> {
             try {
+                networkMonitor.stop();
+                clearActive();
                 if (AndroidKillSwitchPolicy.strictRequested(privateBundle)) throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
                 Config config = loadWireGuardConfig(privateBundle);
                 State result = backend.setState(this, State.UP, config);
                 state = result;
-                callback.done(result, "Native Android WireGuard is active through the official userspace backend with the selected enforceable DNS address and MTU policy.", null);
+                if (result != State.UP) throw new IllegalStateException("WireGuard backend did not enter UP state.");
+                if (!AndroidPathProbe.prove(privateBundle, 8000)) {
+                    backend.setState(this, State.DOWN, null);
+                    state = State.DOWN;
+                    throw new IllegalStateException("Native WireGuard failed selected-node private path proof.");
+                }
+                activeConfig = config;
+                activeBundle = privateBundle;
+                lastError = "";
+                networkMonitor.start(() -> executor.execute(this::recoverAfterNetworkChange));
+                callback.done(State.UP, "Native Android WireGuard is active with selected DNS/MTU and selected-node private path proof.", null);
             } catch (Throwable error) {
-                state = State.DOWN;
+                failClosed(error);
                 callback.done(State.DOWN, "Native WireGuard failed: " + safeMessage(error), error);
             }
         });
     }
 
+    private void recoverAfterNetworkChange() {
+        Config config = activeConfig;
+        File bundle = activeBundle;
+        if (state != State.UP || config == null || bundle == null) return;
+        try {
+            lastError = "Underlying network changed; WireGuard is re-establishing and revalidating the selected node.";
+            backend.setState(this, State.DOWN, null);
+            State result = backend.setState(this, State.UP, config);
+            state = result;
+            if (result != State.UP || !AndroidPathProbe.prove(bundle, 10000)) {
+                throw new IllegalStateException("WireGuard did not recover a proven selected-node path after the underlying network changed.");
+            }
+            lastError = "";
+        } catch (Throwable error) {
+            failClosed(new IllegalStateException("WireGuard network-transition recovery failed closed: " + safeMessage(error), error));
+        }
+    }
+
     void disconnect(Callback callback) {
         executor.execute(() -> {
+            networkMonitor.stop();
+            clearActive();
             try {
                 State result = backend.setState(this, State.DOWN, null);
                 state = result;
+                lastError = "";
                 callback.done(result, "Native Android WireGuard disconnected.", null);
-            } catch (Throwable error) { callback.done(state, "WireGuard disconnect failed: " + safeMessage(error), error); }
+            } catch (Throwable error) {
+                lastError = safeMessage(error);
+                callback.done(state, "WireGuard disconnect failed: " + lastError, error);
+            }
         });
     }
 
-    void close() { executor.shutdown(); }
+    void close() {
+        networkMonitor.stop();
+        clearActive();
+        executor.shutdown();
+    }
+
+    private void failClosed(Throwable error) {
+        networkMonitor.stop();
+        try { backend.setState(this, State.DOWN, null); } catch (Throwable ignored) { }
+        state = State.DOWN;
+        lastError = safeMessage(error);
+        clearActive();
+    }
+
+    private void clearActive() {
+        activeConfig = null;
+        activeBundle = null;
+    }
 
     private static Config loadWireGuardConfig(File privateBundle) throws Exception {
         if (!privateBundle.isFile()) throw new IllegalStateException("Import/link a Router VPN node first.");
