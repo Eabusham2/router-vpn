@@ -24,6 +24,7 @@ rm -f \
   "$OUT"/router-vpn-client-bundle.zip \
   "$OUT"/router-vpn-android.apk \
   "$OUT"/router-vpn-ios-preview.ipa \
+  "$OUT"/router-vpn-ios.ipa \
   "$OUT"/router-vpn-bundle.json \
   "$OUT"/CREDENTIALS.txt \
   "$OUT"/SHA256SUMS
@@ -64,7 +65,7 @@ if 'router-vpn-windows-amd64.zip' not in text:
 if 'router-vpn-android.apk' not in text:
     extra += [
       "['Android APK','router-vpn-android.apk','Same-SHA GitHub-built generic Android controller/importer APK'],",
-      "['iOS/iPadOS preview IPA','router-vpn-ios-preview.ipa','Unsigned re-signable same-SHA generic preview; Packet Tunnel engines are intentionally unavailable'],",
+      "['iOS/iPadOS native WireGuard IPA','router-vpn-ios.ipa','Unsigned re-signable same-SHA native WireGuard PacketTunnel build'],",
     ]
 if extra:
     if needle not in text:
@@ -79,7 +80,7 @@ if 'Generic application packages are generated on demand' not in text:
     note=(
       '<div style="max-width:980px;margin:8px auto 24px;padding:0 16px;opacity:.72;font-size:12px">'
       'This Setup Center is authenticated because it can contain private node setup material. Generic application packages are generated on demand and never contain linked-node secrets. '
-      'Desktop/Portable: matching same-SHA GitHub CI artifact first, then router-side build of only the requested generic Go client package if unavailable. Android/iOS: matching same-SHA GitHub mobile artifact; the Linux home node does not fake platform-specific mobile builds. '
+      'Desktop/Portable: matching same-SHA release/native GitHub artifact first, then router-side build of only the requested generic Go client package if unavailable. Android/iOS: matching same-SHA native GitHub artifact only; the Linux home node does not fake platform-specific mobile builds. '
       'Add nodes separately by authenticated private-bundle import or one-time LAN pairing. Pairing codes are short-lived and one-use; Apple-family clients must grant local-network permission before LAN pairing. '
       'Private bundle builds and all temporary package files are deleted after delivery. Typed asynchronous download jobs expose queued/building/ready progress and cancellation.'
       '</div>'
@@ -96,7 +97,7 @@ wanted=[
  'router-vpn-linux-arm64.zip','router-vpn-linux-amd64.zip',
  'router-vpn-windows-amd64.zip','router-vpn-windows-arm64.zip',
  'router-vpn-windows-portable-amd64.zip','router-vpn-windows-portable-arm64.zip',
- 'router-vpn-android.apk','router-vpn-ios-preview.ipa','router-vpn-client-bundle.zip'
+ 'router-vpn-android.apk','router-vpn-ios.ipa','router-vpn-client-bundle.zip'
 ]
 arr=[x for x in data.get('downloads',[]) if 'portableapps' not in str(x).lower()]
 for item in wanted:

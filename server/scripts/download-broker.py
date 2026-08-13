@@ -51,18 +51,13 @@ if _pair_spec is None or _pair_spec.loader is None:
 _pairing = module_from_spec(_pair_spec)
 _pair_spec.loader.exec_module(_pairing)
 
-DIRECT_ARTIFACTS = {
-    "router-vpn-android.apk": {
-        "artifact": "RouterVPN-Android-CI",
-        "member": "app-debug.apk",
-        "content_type": "application/vnd.android.package-archive",
-    },
-    "router-vpn-ios-preview.ipa": {
-        "artifact": "RouterVPN-iOS-Preview-CI",
-        "member": "RouterVPN-preview-unsigned-resignable.ipa",
-        "content_type": "application/octet-stream",
-    },
-}
+_policy_spec = spec_from_file_location("router_vpn_native_artifact_policy", SCRIPT_DIR / "native_artifact_policy.py")
+if _policy_spec is None or _policy_spec.loader is None:
+    raise RuntimeError("cannot load native_artifact_policy.py")
+_artifact_policy = module_from_spec(_policy_spec)
+_policy_spec.loader.exec_module(_artifact_policy)
+NATIVE_PACKAGE_ARTIFACTS = _artifact_policy.NATIVE_PACKAGE_ARTIFACTS
+DIRECT_ARTIFACTS = _artifact_policy.DIRECT_ARTIFACTS
 
 MAX_GITHUB_ARTIFACT = 768 * 1024 * 1024
 MAX_MEMBER = 512 * 1024 * 1024
@@ -195,18 +190,32 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     return selected
 
 
+def _fetch_first_artifact(sources, temp: Path, output_name: str) -> Path:
+    failures = []
+    for artifact_name, wanted in sources:
+        try:
+            return fetch_artifact_member(str(artifact_name), str(wanted), temp, output_name)
+        except Exception as exc:
+            failures.append(f"{artifact_name}: {type(exc).__name__}: {exc}")
+    raise RuntimeError("; ".join(failures) if failures else "no GitHub artifact sources configured")
+
+
 def fetch_github_package(home_name: str, temp: Path) -> Path:
     generic = _builder.generic_name(home_name)
     if not generic:
         raise RuntimeError("this download has no generic GitHub package")
-    artifact_name = os.environ.get("ROUTER_VPN_GITHUB_ARTIFACT", "RouterVPN-client-desktop-unix-ci").strip()
-    return fetch_artifact_member(artifact_name, generic, temp, generic)
+    override = os.environ.get("ROUTER_VPN_GITHUB_ARTIFACT", "").strip()
+    if override:
+        sources = ((override, generic),)
+    else:
+        sources = NATIVE_PACKAGE_ARTIFACTS.get(home_name, (("RouterVPN-client-desktop-unix-ci", generic),))
+    return _fetch_first_artifact(sources, temp, generic)
 
 
 def fetch_direct_mobile(name: str, temp: Path) -> Path:
     spec = DIRECT_ARTIFACTS[name]
     try:
-        return fetch_artifact_member(spec["artifact"], spec["member"], temp, name)
+        return _fetch_first_artifact(spec["sources"], temp, name)
     except Exception as exc:
         raise RuntimeError(
             f"{name} requires its same-SHA GitHub mobile artifact; the Linux home node does not fake a platform-specific mobile build fallback: {exc}"
