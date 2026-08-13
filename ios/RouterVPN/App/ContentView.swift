@@ -70,40 +70,23 @@ private struct ConnectView: View {
                     }
 
                     NativeCard {
-                        Toggle("AUTO — choose the lightest healthy mode", isOn: $model.auto)
+                        Toggle("AUTO — native WireGuard on this iOS build", isOn: $model.auto)
                         if !model.auto {
                             Picker("Mode", selection: $model.selectedLogicalMode) {
-                                ForEach(model.logicalModes) { mode in Text(mode.name).tag(mode.id) }
+                                ForEach(model.iosRunnableLogicalModes) { mode in
+                                    Text("\(mode.name) — WireGuard").tag(mode.id)
+                                }
                             }
                             .pickerStyle(.menu)
-
-                            if model.baseSelectorEnabled {
-                                Text("Tunnel base").font(.caption).foregroundStyle(.secondary)
-                                Picker("Tunnel base", selection: $model.basePreference) {
-                                    Text("Auto").tag("auto")
-                                    Text("WireGuard").tag("wg")
-                                    Text("AmneziaWG").tag("awg")
-                                }
-                                .pickerStyle(.segmented)
-                                Toggle("Fall back to the other base if needed", isOn: $model.baseFallback)
-                            }
+                            Text("Manual iOS support is intentionally limited to Raw WireGuard until additional PacketTunnel engines are linked and proven.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
 
                         Divider()
-                        Toggle("Full access to my home LAN", isOn: $model.homeLANAccess)
-                        if model.homeLANAccess {
-                            TextField("Home LAN CIDR", text: Binding(
-                                get: { model.homeLANCIDRs.first ?? "192.168.50.0/24" },
-                                set: { model.homeLANCIDRs = [$0] }
-                            ))
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        }
-
-                        DisclosureGroup("Advanced") {
-                            Toggle("DAITA-like cover traffic", isOn: $model.daita)
-                            Toggle("Jumbo TUN", isOn: $model.jumbo)
-                        }
+                        Label("Native engine: WireGuard", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("LAN Off, DAITA-like cover traffic, Jumbo TUN override, AmneziaWG, layered modes, ALL/MAX, SMART/CUSTOM and multihop are not exposed as working controls on this iOS build. The imported WireGuard profile supplies routes, DNS and MTU.")
+                            .font(.caption).foregroundStyle(.secondary)
 
                         Button {
                             if model.connected { model.disconnect() }
@@ -117,16 +100,11 @@ private struct ConnectView: View {
                     }
 
                     NativeCard {
-                        Text("Current selection").font(.headline)
-                        if model.auto {
-                            Text("AUTO will test validated modes in order and stop at the first healthy one.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        } else if let logical = model.currentLogicalMode {
-                            Text(logical.name).bold()
-                            Text(logical.description).font(.caption).foregroundStyle(.secondary)
-                            Text("Runtime candidates: \(model.modeCandidates().joined(separator: " → "))")
-                                .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
-                        }
+                        Text("Connection truth").font(.headline)
+                        Text(model.auto ? "AUTO currently resolves to the proven native WireGuard path on iOS." : "Manual mode: Raw WireGuard.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Connected is reported only after the PacketTunnel starts and the selected node returns the exact private node-identity proof.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
 
                     NativeCard {
@@ -161,7 +139,7 @@ private struct NodesView: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("Import directly from home LAN") { Task { await model.importFromLAN() } }
                     Button("Import router-vpn-bundle.json from Files") { importing = true }
-                    Text("LAN import downloads only the small private router profile JSON, not the massive all-platform ZIP.")
+                    Text("Router linking is a small node-data operation; it does not reinstall the app or download the all-platform package.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -182,7 +160,9 @@ private struct NodesView: View {
 
                 Section("Incoming forwarding") {
                     Picker("Protocol", selection: $model.forwardProtocol) {
-                        Text("Both").tag("both"); Text("TCP").tag("tcp"); Text("UDP").tag("udp")
+                        Text("Both").tag("both")
+                        Text("TCP").tag("tcp")
+                        Text("UDP").tag("udp")
                     }
                     TextField("External start", text: $model.forwardFrom).keyboardType(.numberPad)
                     TextField("External end", text: $model.forwardTo).keyboardType(.numberPad)
@@ -192,7 +172,7 @@ private struct NodesView: View {
                         Button("Protected DMZ") { Task { await model.applyForward(dmz: true) } }
                         Button("Clear") { Task { await model.clearForward() } }
                     }
-                    Text("Forwarding is authenticated through the tunnel and requires a WireGuard/AmneziaWG peer path.")
+                    Text("Forwarding is authenticated through the tunnel and requires a real peer path; proxy-only modes cannot fake DNAT semantics.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -203,36 +183,26 @@ private struct NodesView: View {
 
 private struct DNSView: View {
     @EnvironmentObject var model: RouterVPNModel
-    @AppStorage("routerVPN.dnsChoice") private var choice = "home"
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("DNS policy") {
-                    Picker("Use", selection: $choice) {
-                        Text("Home AdGuard").tag("home")
-                        Text("Fastest measured public DNS").tag("fastest")
-                        Text("DNS Rescue").tag("rescue")
-                        Text("Custom / encrypted").tag("custom")
-                    }
-                    Text("Home AdGuard is the default. The server-side Setup Center benchmarks public resolvers from the home exit; the native app will consume those measured results from the bundle/API.")
+                Section("Current iOS DNS behavior") {
+                    Label("DNS comes from the imported native WireGuard profile", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("The home Setup Center benchmarks and selects DNS from the home exit. This iOS PacketTunnel applies the DNS servers embedded in wg.conf. An in-app DNS override is not shown until it has a real runtime effect.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Common resolvers included in server benchmark") {
-                    ResolverRow(name: "Cloudflare", values: "1.1.1.1 • 1.0.0.1 • IPv6")
-                    ResolverRow(name: "Google", values: "8.8.8.8 • 8.8.4.4 • IPv6")
-                    ResolverRow(name: "Quad9", values: "9.9.9.9 • 149.112.112.112 • IPv6")
+                Section("Home resolver") {
+                    Text(model.bundle?.adGuardIPv4 ?? "10.77.0.1")
+                        .textSelection(.enabled)
+                    Text("Home AdGuard remains the normal tunnel DNS when that address is present in the imported profile.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("DNS")
         }
     }
-}
-
-private struct ResolverRow: View {
-    let name: String
-    let values: String
-    var body: some View { VStack(alignment: .leading) { Text(name).bold(); Text(values).font(.caption).foregroundStyle(.secondary) } }
 }
 
 private struct MethodsView: View {
@@ -242,19 +212,22 @@ private struct MethodsView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("One logical mode is shown once. WireGuard/AmneziaWG is a base selector only where both variants really exist; fallback can try the other base automatically.")
+                    Text("The home node can generate all Router VPN methods. This iOS app currently executes only native WireGuard; the rest remain visible for capability truth and Setup Center use, not as fake connect buttons.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(model.logicalModes) { mode in
-                    VStack(alignment: .leading, spacing: 5) {
+                    let available = mode.id == "base-raw" && mode.variants["wg"] == "wg"
+                    VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(mode.name).bold()
                             Spacer()
-                            if mode.baseSelector { Text("WG / AWG").font(.caption2).padding(5).background(.blue.opacity(0.15), in: Capsule()) }
+                            Text(available ? "Native WG available" : "Unavailable in this iOS build")
+                                .font(.caption2)
+                                .foregroundStyle(available ? .green : .secondary)
                         }
                         Text(mode.description).font(.caption).foregroundStyle(.secondary)
-                        if mode.baseSelector {
-                            Text("WireGuard: \(mode.variants["wg"] ?? "—") • AmneziaWG: \(mode.variants["awg"] ?? "—")")
+                        if !available {
+                            Text("Use the home Setup Center for proven external/native configuration where supported, or another Router VPN platform build with the required engine.")
                                 .font(.caption2).foregroundStyle(.secondary)
                         }
                     }
@@ -275,8 +248,8 @@ private struct SetupView: View {
             Form {
                 Section("Always available") {
                     Button("Run full onboarding") { showingOnboarding = true }
-                    if let url = lanURL("") { Link("Open home Setup Center", destination: url) }
-                    Text("The Setup Center is the server/router guide and recovery surface. The Router VPN app is the daily-use VPN client.")
+                    if let url = lanURL("") { Link("Open Full Guide / home Setup Center", destination: url) }
+                    Text("The Full Guide remains independently accessible after onboarding is completed or dismissed.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -285,7 +258,7 @@ private struct SetupView: View {
                     if let u = lanURL("asus-merlin-router-vpn-forwards.sh") { Link("ASUS Merlin forwarding helper", destination: u) }
                     if let u = lanURL("router-vpn-device-setup.html") { Link("Universal / native setup page", destination: u) }
                     if let u = lanURL("SHA256SUMS") { Link("Checksums", destination: u) }
-                    Text("The full ZIP stays available only as an offline/advanced fallback.")
+                    Text("The full ZIP is an advanced/offline fallback. Normal app setup links node data separately.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -293,16 +266,16 @@ private struct SetupView: View {
                     Label("SOCKS5 — internal/LAN only", systemImage: "arrow.left.arrow.right")
                     Label("SOCKS5 + TLS / OverTLS", systemImage: "lock.shield")
                     Label("Shadowsocks 2022", systemImage: "network")
-                    Label("ShadowsocksR — legacy compatibility", systemImage: "clock.arrow.circlepath")
+                    Label("Hysteria2", systemImage: "bolt.horizontal.circle")
                     Label("WireGuard / AmneziaWG native configs", systemImage: "shield")
                     Label("Custom / universal protocol configs", systemImage: "doc.text")
-                    Text("Exact QR/config/download details are generated by your home node because they contain node-specific keys and secrets.")
+                    Text("Exact QR/config/download instructions are generated by your home node because they contain node-specific values and must match the deployed server.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
-                Section("macOS security note") {
-                    Text("If macOS blocks a locally-built Router VPN component, verify it came from your bundle/build, then use System Settings → Privacy & Security → Open Anyway. The Setup Center keeps the current exact steps.")
-                        .font(.caption)
+                Section("Apple distribution truth") {
+                    Text("The CI artifact is unsigned/re-signable. A normal long-term iOS distribution path still requires Apple signing/provisioning. Router VPN does not recommend disabling iOS or macOS platform security globally.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Setup")
@@ -332,15 +305,24 @@ private struct NativeOnboardingView: View {
         NavigationStack {
             VStack(spacing: 16) {
                 ProgressView(value: Double(step + 1), total: Double(lastStep + 1))
-                ScrollView { onboardingContent.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical) }
+                ScrollView {
+                    onboardingContent
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical)
+                }
                 HStack {
                     Button("Back") { if step > 0 { step -= 1 } }.disabled(step == 0)
                     Spacer()
                     Button("Close") { isPresented = false }
                     Spacer()
                     Button(step == lastStep ? "Finish" : "Next") {
-                        if step == lastStep { done = true; step = 0; isPresented = false }
-                        else { step += 1 }
+                        if step == lastStep {
+                            done = true
+                            step = 0
+                            isPresented = false
+                        } else {
+                            step += 1
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -353,28 +335,31 @@ private struct NativeOnboardingView: View {
     @ViewBuilder private var onboardingContent: some View {
         switch step {
         case 0:
-            OnboardingPage(title: "Start simple", text: "If the home node is already deployed, you do not need the giant ZIP. Stay on home Wi‑Fi, enter the AI Board LAN IP, and tap Import directly from home LAN in Nodes. The app downloads the small private router profile and links itself.")
+            OnboardingPage(title: "Start simple", text: "If the home node is already deployed, stay on home Wi‑Fi and link this app with the small private router profile. Installing the app and adding a router are separate operations.")
         case 1:
             VStack(alignment: .leading, spacing: 12) {
-                OnboardingPage(title: "Link this app", text: "Default AI Board address is usually 192.168.50.133. LAN import and Files import are both supported.")
+                OnboardingPage(title: "Add your router", text: "Default AI Board address is usually 192.168.50.133. Enter the LAN IP/hostname and import directly, or choose router-vpn-bundle.json from Files. iOS Local Network permission may be requested for LAN linking.")
                 TextField("AI Board LAN IP / hostname", text: $model.lanImportHost)
-                    .textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button("Import from LAN now") { Task { await model.importFromLAN() } }.buttonStyle(.borderedProminent)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Import from LAN now") { Task { await model.importFromLAN() } }
+                    .buttonStyle(.borderedProminent)
                 Button("Choose router-vpn-bundle.json") { importing = true }
                 Text(model.message).font(.caption).foregroundStyle(.secondary)
             }
         case 2:
-            OnboardingPage(title: "If the server is not deployed yet", text: "On the ASUS AI Board open Portainer → Stacks → Add stack → Repository. Use server/portainer-current.yaml. Normal values: WAN_INTERFACE=eth0, LAN_CIDR=192.168.50.0/24, ADGUARD4=192.168.50.133. Leave ENDPOINT blank for auto-detection.")
+            OnboardingPage(title: "Deploy the home node from zero", text: "On the ASUS AI Board open Portainer → Stacks → Add stack → Repository and use server/portainer-current.yaml. Normal values include WAN_INTERFACE=eth0, LAN_CIDR=192.168.50.0/24 and ADGUARD4=192.168.50.133. Leave ENDPOINT blank for auto-detection when appropriate.")
         case 3:
-            OnboardingPage(title: "ASUS router forwarding", text: "Enable SSH/JFFS scripts on the ASUS router, then use the Setup Center's current forwarding helper. It preserves existing nat-start/firewall-start content and checks the router firewall backend. Never WAN-expose SOCKS5 1080, Setup Center 8786, router API 8787, Portainer, AdGuard admin, or SSH.")
+            OnboardingPage(title: "ASUS router forwarding", text: "Enable the required ASUS SSH/JFFS support, then use the current Setup Center forwarding helper. It preserves existing nat-start/firewall-start content and checks the firewall backend. Never WAN-expose SOCKS5 1080, Setup Center 8786, router API 8787, Portainer, AdGuard admin, SSH, or the OverTLS loopback backend.")
         case 4:
-            OnboardingPage(title: "Choose how you connect", text: "AUTO is the simple default. Manual mode selection shows each logical mode once. Where both bases exist, choose Auto, WireGuard, or AmneziaWG and optionally allow automatic fallback to the other base. Full home-LAN access is enabled by default.")
+            OnboardingPage(title: "Connect on iPhone or iPad", text: "AUTO currently uses the proven native WireGuard PacketTunnel. Manual mode currently offers Raw WireGuard only. The app does not present AmneziaWG, layered, SMART/CUSTOM, ALL/MAX or multihop as working iOS controls until those engines and lifecycles are implemented and validated.")
         case 5:
-            OnboardingPage(title: "Native / universal methods", text: "The home Setup Center exposes WireGuard, AmneziaWG, Shadowsocks 2022, Hysteria2, REALITY/Xray, SOCKS5, SOCKS5+TLS/OverTLS, ShadowsocksR legacy, and custom/universal configs with node-specific download/QR instructions. Use the Router VPN app when you want AUTO/SMART/CUSTOM and multi-mode behavior.")
+            OnboardingPage(title: "Other methods", text: "The home Setup Center can expose proven native/external instructions and QR/config downloads for WireGuard, AmneziaWG, Shadowsocks 2022, Hysteria2, REALITY/Xray, SOCKS5, SOCKS5+TLS/OverTLS and other supported methods. Availability there does not imply this iOS PacketTunnel embeds every engine.")
         case 6:
-            OnboardingPage(title: "DNS, forwarding, and safety", text: "Home AdGuard is the default. Public DNS candidates are benchmarked from the home exit, including secondary IPv4 resolvers. Incoming forwarding/Protected DMZ requires a WG/AWG peer path. The app will never claim a kill switch or remote peer kick until the platform/backend implementation is actually validated.")
+            OnboardingPage(title: "DNS, LAN, forwarding and safety", text: "The current iOS WireGuard path applies DNS, routes and MTU from the imported wg.conf. LAN Off, in-app DNS override, DAITA-like padding and Jumbo override are not shown as active controls yet. Strict Apple kill-switch requests fail closed until a true always-on/lockdown lifecycle can be proven. Forwarding requires an authenticated real peer path.")
         default:
-            OnboardingPage(title: "Ready", text: "The full guide remains available in Setup at all times. Finishing only hides first-run onboarding; it never deletes your router profile. The native Packet Tunnel engine is linked separately from this UI and will fail visibly rather than fake a successful VPN connection if an engine is unavailable.")
+            OnboardingPage(title: "Ready", text: "The Full Guide remains available in Setup at all times. The PacketTunnel uses pinned native WireGuard and requires exact selected-node private identity proof before reporting success. Unsupported engines fail visibly rather than fake a successful VPN connection.")
         }
     }
 }
@@ -382,10 +367,21 @@ private struct NativeOnboardingView: View {
 private struct OnboardingPage: View {
     let title: String
     let text: String
-    var body: some View { VStack(alignment: .leading, spacing: 10) { Text(title).font(.title2.bold()); Text(text); }.frame(maxWidth: .infinity, alignment: .leading) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.title2.bold())
+            Text(text)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }
 
 private struct NativeCard<Content: View>: View {
     @ViewBuilder let content: Content
-    var body: some View { VStack(alignment: .leading, spacing: 12) { content }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18)) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) { content }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+    }
 }
