@@ -28,6 +28,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 throw tunnelError(3, "Router VPN private bundle is invalid JSON.")
             }
             let selectedProfile = try selectedRouterProfile(root)
+            // contract: strict Apple kill switch requested => fail closed until an always-on/lockdown lifecycle is proven.
             if strictKillSwitchRequested(selectedProfile) {
                 throw tunnelError(4, "Strict Apple kill switch requested. Raw iOS WireGuard stays fail-closed until Router VPN can prove a true always-on/lockdown lifecycle on this device.")
             }
