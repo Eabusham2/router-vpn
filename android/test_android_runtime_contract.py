@@ -26,7 +26,8 @@ multihop = text("AndroidMultihopController.java")
 multihop_runtime = text("AndroidMultihopRuntime.java")
 main = text("MainActivity.java")
 gradle = (ROOT / "app" / "build.gradle").read_text(encoding="utf-8")
-xray_build = (ROOT / "build-xray-libxray.sh").read_text(encoding="utf-8")
+combined_build = (ROOT / "build-sing-box-libbox.sh").read_text(encoding="utf-8")
+bridge = (ROOT / "routervpn_xray_bridge.go").read_text(encoding="utf-8")
 manifest = (ROOT / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
 
 # Strict Android policy must be enforced by the actual VpnService, not UI text.
@@ -43,25 +44,47 @@ assert "updateDefaultInterface" in service
 assert "resetNetwork()" in service
 assert "registerDefaultNetworkCallback" in service
 
-# Native Xray is pinned to the wrapper commit that itself pins Xray-core v26.7.11.
+# Android must package exactly one gomobile Go runtime. The combined libbox AAR
+# includes sing-box plus the exact libXray revision whose go.mod pins Xray-core
+# v26.7.11; a standalone libxray.aar dependency would reintroduce duplicate
+# go.Seq/JNI runtime classes.
 for marker in (
+    "1086ab2563320e0da0c23b3a491d8dfa0939dff4",
     "294fb37343205b9b0cb7b7b1b423d3d4b60d9998",
-    "50231eaff98c",
-    "MOBILE_VERSION=v0.0.0-20260709172247-6129f5bee9d5",
-    "libgojni.so",
+    "v1.260327.1-0.20260711155151-50231eaff98c",
+    "GO_TOOLCHAIN=go1.26.3",
+    "RouterXrayDialerController.class",
+    "exactly one gomobile go.Seq runtime class",
+    "github.com/xtls/libxray=$XRAY_VENDOR",
 ):
-    assert marker in xray_build, f"Pinned Xray build missing marker: {marker}"
-assert "prepareXrayLibXray" in gradle and "libs/libxray.aar" in gradle
+    assert marker in combined_build, f"Combined Android Go build missing marker: {marker}"
+for marker in (
+    "RouterXrayDialerController",
+    "RouterXrayRegisterDialerController",
+    "RouterXrayRegisterListenerController",
+    "RouterXraySetDNS",
+    "RouterXrayResetDNS",
+    "RouterXrayInvoke",
+    "net.DefaultResolver",
+    "controller.ProtectFd(int64(fd))",
+):
+    assert marker in bridge, f"Combined Xray bridge missing marker: {marker}"
+assert "libs/libbox.aar" in gradle
+assert "libs/libxray.aar" not in gradle
+assert "prepareXrayLibXray" not in gradle
 assert 'android:name=".XrayVpnService"' in manifest
 
-# Xray VpnService must own the TUN, protect core sockets, inject only the
-# app-owned fd, enforce strict lockdown, prove the selected node, and re-prove
-# after an underlying-network transition.
+# Xray VpnService must own the TUN, protect core and bootstrap-DNS sockets,
+# inject only the app-owned fd, enforce strict lockdown, prove the selected
+# node, and re-prove after an underlying-network transition.
 for marker in (
-    "new DialerController()",
+    "new RouterXrayDialerController()",
     "protect((int) fd)",
-    "registerDialerController",
-    "registerListenerController",
+    "routerXrayRegisterDialerController",
+    "routerXrayRegisterListenerController",
+    "routerXraySetDNS",
+    "routerXrayResetDNS",
+    "routerXrayBridgeRevision",
     'env.put("xray.tun.fd"',
     '"runXrayFromJson"',
     '"getXrayState"',
@@ -69,11 +92,12 @@ for marker in (
     "isAlwaysOn()",
     "isLockdownEnabled()",
     "AndroidPathProbe.prove(activeBundle",
-    "NET_CAPABILITY_NOT_VPN",
+    "AndroidUnderlyingNetworkMonitor",
     "restartAfterNetworkChange",
-    'publish("FAILED"',
+    'shutdown("FAILED"',
 ):
     assert marker in xray_service, f"XrayVpnService missing runtime marker: {marker}"
+assert "import libXray." not in xray_service, "Xray service must not bind a second gomobile package"
 
 # Native Xray must never silently reinterpret one sidecar of split/MAX as the
 # full mode. Direct profiles get a real Android TUN and bounded private staging.
