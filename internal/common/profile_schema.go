@@ -9,6 +9,19 @@ import (
 type routerProfileWire RouterProfile
 type routerProfileStoreWire RouterProfileStore
 
+func ValidNodeProofID(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
 // NormalizeRouterProfile upgrades policy defaults and validates configuration
 // intent. Runtime capability remains a separate live-tested concern: a valid
 // multihop selection does not make an unsupported platform claim multihop.
@@ -17,6 +30,11 @@ func NormalizeRouterProfile(p *RouterProfile) error {
 		return fmt.Errorf("router profile schema %d is newer than supported schema %d", p.SchemaVersion, RouterProfileSchemaVersion)
 	}
 	p.SchemaVersion = RouterProfileSchemaVersion
+
+	p.NodeProofID = strings.TrimSpace(p.NodeProofID)
+	if p.NodeProofID != "" && !ValidNodeProofID(p.NodeProofID) {
+		return fmt.Errorf("invalid node proof id")
+	}
 
 	p.KillSwitchPolicy = strings.ToLower(strings.TrimSpace(p.KillSwitchPolicy))
 	if p.KillSwitchPolicy == "" {
