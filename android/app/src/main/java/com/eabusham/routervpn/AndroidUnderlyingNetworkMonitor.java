@@ -13,6 +13,7 @@ final class AndroidUnderlyingNetworkMonitor {
     private final ConnectivityManager connectivity;
     private ConnectivityManager.NetworkCallback callback;
     private Network current;
+    private boolean initialized;
 
     AndroidUnderlyingNetworkMonitor(Context context) {
         connectivity = (ConnectivityManager) context.getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -28,8 +29,9 @@ final class AndroidUnderlyingNetworkMonitor {
             @Override public void onAvailable(Network network) {
                 boolean changed;
                 synchronized (AndroidUnderlyingNetworkMonitor.this) {
-                    changed = current != null && !current.equals(network);
+                    changed = initialized && (current == null || !current.equals(network));
                     current = network;
+                    initialized = true;
                 }
                 if (changed) listener.changed();
             }
@@ -48,5 +50,6 @@ final class AndroidUnderlyingNetworkMonitor {
             callback = null;
         }
         current = null;
+        initialized = false;
     }
 }
