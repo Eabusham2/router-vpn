@@ -151,8 +151,8 @@ for required in (
 client_main = text("cmd/client/main.go")
 for required in (
     "a.testHealth(p)", "PathProbeURL", "transport.Proxy = nil", "validateSelectedNodeProof(p, body)",
-    "selected-router path proof failed", "http://10.77.0.1:8787/health", "NodeProofID string `json:\"nodeProofId\"`",
-    "derivedNodeID, proofErr := expectedNodeProofID(p)", "p.NodeProofID = derivedNodeID",
+    "selected-router path proof failed", "http://10.77.0.1:8787/health", "NodeProofID",
+    "newStagedBundle(", "nodeProofIDFromWGConfig(wgData)", "p.NodeProofID = derivedNodeID",
 ):
     if required not in client_main:
         error(f"client selected-path proof contract missing: {required}")
