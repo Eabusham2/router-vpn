@@ -3,6 +3,7 @@
 from __future__ import annotations
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +50,35 @@ def release_gate() -> bool:
         and mod.no("server/portainer-current.yaml", "build:", "/var/run/docker.sock")
         and mod.has(".github/workflows/setup-release-status-ci.yml", "test_setup_center_release.py", "/var/run/docker.sock")
     )
+
+
+def macos_killswitch_gate() -> bool:
+    structural = (
+        mod.has("modes/darwin_kill_switch.py", "com.apple/router-vpn", "pfctl", "utun", "darwin_baseline_utun", "darwin_tunnel_interfaces")
+        and mod.no("modes/darwin_kill_switch.py", "/etc/pf.conf")
+        and mod.has("modes/kill-switch-platform.py", "darwin_apply", "darwin_watch", "darwin_release", "darwin_reassert", "apply_darwin", "remove_darwin")
+        and mod.has("modes/mtu-policy-platform.py", 'HERE / "mtu-policy.py"', "CORE.enforce_kill_switch", "kill-switch-platform.py")
+        and mod.has("modes/run-platform.sh", "run-mode.sh", "run-combined.sh", "run-max.sh", "run-xhttp.sh", "run-all.sh", "mtu-policy-platform.py", "stop-mode-platform.sh")
+        and mod.has("modes/stop-mode-platform.sh", "stop-mode.sh", "kill-switch-platform.py", "release")
+        and mod.has("modes/orchestrate-platform.py", "stop-mode.sh", "stop-mode-platform.sh")
+        and mod.has("internal/common/mode_platform.go", 'platform != "darwin"', "orchestrate-platform.py", "stop-mode-platform.sh")
+        and mod.has("deploy/test_macos_killswitch_contract.py", "macOS strict kill-switch source contract: OK")
+    )
+    if not structural:
+        return False
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "deploy" / "test_macos_killswitch_contract.py")],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except Exception:
+        return False
+    return proc.returncode == 0 and "macOS strict kill-switch source contract: OK" in proc.stdout
 
 
 def controller_multihop_platform(platform: str) -> bool:
@@ -128,7 +158,7 @@ def selected_dns_proof() -> bool:
 
 
 mod.RECOVERED = [
-    {"name":"strict macOS kill-switch enforcement","weight":1.0,"pass":lambda: mod.has("modes/kill-switch.py","darwin","apply_darwin") and mod.has("modes/darwin_kill_switch.py","com.apple/router-vpn","pfctl","utun") and mod.has("cmd/client/main.go","HOMEVPN_KILLSWITCH_REFRESH=1"),"note":"scoped fail-closed PF enforcement must be wired into the shipping controller/runtime"},
+    {"name":"strict macOS kill-switch enforcement","weight":1.0,"pass":macos_killswitch_gate,"note":"scoped fail-closed PF backend plus platform launch/stop/SMART/ALL wiring must pass the non-mutating recovered contract"},
     {"name":"authenticated release/update status and safe recovery surface","weight":0.5,"pass":release_gate,"note":"read-only exact-SHA recovery/status composed over existing auth; no Docker socket/build path"},
     {"name":"Windows native typed connection progress","weight":0.17,"pass":lambda: windows_shipping_has("/api/session/events"),"note":"shipping WPF app must consume typed session attempt/fallback/rollback events"},
     {"name":"macOS native typed connection progress","weight":0.17,"pass":lambda: shipping_has("client/macos/build-native-app.sh",("client/macos/RouterVPNMacProduct.swift","client/macos/RouterVPNMacNative.swift","client/macos/RouterVPNMacApp.swift"),"/api/session/events"),"note":"shipping AppKit source selected by build-native-app.sh must consume typed session events"},
