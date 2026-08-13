@@ -51,5 +51,30 @@ if new_display not in mt:
     mt = mt.replace(old_display, new_display, 1)
 
 mt = mt.replace('(automationBusy ? "\\nAUTO/SMART/CUSTOM: testing…" : "")', '(automationBusy ? "\\nAUTO/SMART/CUSTOM/ALL: testing/proving…" : "")')
+
+open_old = '''    private void openBundlePicker() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+'''
+open_new = '''    private void openBundlePicker() {
+        if (rawActiveOrBusy() || layeredActiveOrBusy()) { toast("Disconnect the current VPN before adding/selecting router data"); return; }
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+'''
+if "Disconnect the current VPN before adding/selecting router data" not in mt:
+    if mt.count(open_old) != 1:
+        raise SystemExit(f"MainActivity bundle-picker guard anchor mismatch: {mt.count(open_old)}")
+    mt = mt.replace(open_old, open_new, 1)
+
+result_old = '''        if (code != IMPORT_BUNDLE || result != RESULT_OK || data == null) return;
+        Uri uri = data.getData();
+'''
+result_new = '''        if (code != IMPORT_BUNDLE || result != RESULT_OK || data == null) return;
+        if (rawActiveOrBusy() || layeredActiveOrBusy()) { toast("VPN became active; router import was cancelled to preserve the running session identity"); return; }
+        Uri uri = data.getData();
+'''
+if "VPN became active; router import was cancelled" not in mt:
+    if mt.count(result_old) != 1:
+        raise SystemExit(f"MainActivity import-result guard anchor mismatch: {mt.count(result_old)}")
+    mt = mt.replace(result_old, result_new, 1)
+
 main.write_text(mt, encoding="utf-8")
-print("Applied native Android DNS/MTU/recovery truth migration")
+print("Applied native Android DNS/MTU/recovery/identity truth migration")
