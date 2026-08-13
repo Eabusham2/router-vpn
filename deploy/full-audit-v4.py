@@ -17,8 +17,10 @@ def no(rel:str,*parts:str)->None:
  for part in parts:
   if part in text:errors.append(f"{rel}: stale/forbidden marker {part!r}")
 
-# Connection truth: success is selected-node/private-path proof, not generic Internet reachability.
-need("cmd/client/main.go","selected-router path proof","PathProbeURL","func (a *app) testHealth","path proof endpoint did not return the Router VPN proof response")
+# Connection truth: success is exact selected-node/private-path proof, not generic Internet reachability or ok=true.
+need("cmd/client/main.go","selected-router path proof","PathProbeURL","func (a *app) testHealth","validateSelectedNodeProof(p, body)","NodeProofID string `json:\"nodeProofId\"`","derivedNodeID, proofErr := expectedNodeProofID(p)","p.NodeProofID = derivedNodeID")
+need("cmd/client/node_proof.go","router-vpn-private-agent-v1","router-vpn-node-proof-v1\\n","generated","wg.conf","p.NodeProofID","proof.NodeID != expected","proof.Proof != desktopNodeProofKind","selected router has no saved WireGuard identity profile")
+need("cmd/client/node_proof_test.go","ok-only","wrong-node","wrong-kind","not-ok","persisted proof mismatch accepted")
 need("cmd/client/trust_init.go","defaultPrivatePathProbeURL","trustedPathProbeURL","legacyPublicHealthURL")
 legacy_public_health="connectivitycheck.gstatic.com/generate_204"
 for rel in("cmd/client/main.go","cmd/portable-launcher/main.go","modes/orchestrate.py","modes/run-all.sh"):
@@ -30,8 +32,8 @@ need("cmd/client/extras.go",'"/api/session"','"/api/session/events"','a.state.Mo
 need("cmd/client/session_state_test.go","path_proof_failed","DNS must not be fabricated as proven")
 
 # Versioned profile/onboarding state.
-need("internal/common/types.go","RouterProfileSchemaVersion","RouterProfileStoreVersion","KillSwitchPolicy","MTUPolicy","DiagnosticsEnabled","PathProbeURL","MultihopEnabled","MultihopEntryID","MultihopExitID")
-need("internal/common/profile_schema.go","NormalizeRouterProfile","NormalizeRouterProfileStore","HomeLANAccess","newer than supported schema","multihop requires both an entry node and an exit node","multihop entry and exit nodes must be different")
+need("internal/common/types.go","RouterProfileSchemaVersion","RouterProfileStoreVersion","NodeProofID","KillSwitchPolicy","MTUPolicy","DiagnosticsEnabled","PathProbeURL","MultihopEnabled","MultihopEntryID","MultihopExitID")
+need("internal/common/profile_schema.go","NormalizeRouterProfile","NormalizeRouterProfileStore","ValidNodeProofID","invalid node proof id","HomeLANAccess","newer than supported schema","multihop requires both an entry node and an exit node","multihop entry and exit nodes must be different")
 need("internal/common/profile_schema_test.go","TestMultihopRequiresCompleteDistinctNodes","requires both","different")
 need("internal/common/onboarding.go","OnboardingSchemaVersion","LastReopenedAt",'"connection-validation"')
 
