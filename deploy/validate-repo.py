@@ -95,13 +95,26 @@ for required in (
 android = text("android/app/src/main/java/com/eabusham/routervpn/MainActivity.java")
 for required in (
     "Run full onboarding again", "server/portainer-current.yaml",
-    "Raw WireGuard and AmneziaWG 2 now have real full-device Android VPN paths",
-    "SMART AUTO/ALL/CUSTOM native execution",
-    "does not fake a live all-mode VPN connection",
-    "14443", "15443", "14444",
+    "Connect native WireGuard", "Connect native AmneziaWG 2",
+    "Connect embedded layered mode", "AUTO — first proven working mode",
+    "SMART AUTO — simplify and restore safely", "Multihop — choose entry → exit",
+    "Strict embedded libbox sessions require", "Shadowsocks or Hysteria2 exit",
+    "AWG-entry multihop", "Network changes reset libbox",
 ):
     if required not in android:
         error(f"Android onboarding/capability contract missing: {required}")
+for rel, required_values in {
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidPathProbe.java": (
+        "AndroidNodeStore.stableNodeIdentity(bundle)", 'body.optString("node_id"', 'body.optString("proof"',
+    ),
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java": (
+        'proxy.put("detour", "entry-wg")', '"shadowsocks".equals(exitMode)', '"hysteria2".equals(exitMode)',
+    ),
+}.items():
+    body = text(rel)
+    for required in required_values:
+        if required not in body:
+            error(f"{rel} missing current Android runtime truth: {required}")
 
 ios = text("ios/RouterVPN/App/ContentView.swift")
 for required in (
@@ -111,9 +124,28 @@ for required in (
     if required not in ios:
         error(f"iOS app contract missing: {required}")
 packet = text("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift")
-for required in ("Link AmneziaWGKit/Xray engine before signing this target.", "completionHandler(error)"):
+for required in (
+    "import WireGuardKit", "WireGuardAdapter(with: self)", "RouterVPNWireGuardConfig.parse",
+    "strict Apple kill switch requested", "AmneziaWG, layered, ALL/MAX and multihop remain unavailable",
+    "deriveNodeProof", 'body["node_id"] as? String == expectedNodeID',
+    'body["proof"] as? String == Self.proofKind', "completionHandler(nil)",
+):
     if required not in packet:
-        error(f"iOS PacketTunnel must fail closed until real engines are linked: {required}")
+        error(f"iOS native WireGuard PacketTunnel missing current truth: {required}")
+if "Link AmneziaWGKit/Xray engine before signing this target." in packet:
+    error("iOS PacketTunnel still contains the retired unavailable-engine stub")
+models = text("ios/RouterVPN/App/Models.swift")
+for required in ("nodeProofID", "node_proof_id", "nodeProofId", "Router bundle node proof ids disagree"):
+    if required not in models:
+        error(f"iOS bundle model does not preserve stable node proof identity: {required}")
+project = text("ios/RouterVPN/project.yml")
+for required in (
+    "NSLocalNetworkUsageDescription", "com.apple.networkextension.packet-tunnel",
+    "WireGuardKit", "2fec12a6e1f6e3460b6ee483aa00ad29cddadab1",
+    "Build pinned wireguard-go bridge", "libwg-go.a",
+):
+    if required not in project:
+        error(f"iOS pinned native build contract missing: {required}")
 
 # Selected-node connection proof must not regress to a generic Internet 2xx.
 client_main = text("cmd/client/main.go")
