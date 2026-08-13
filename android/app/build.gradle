@@ -23,6 +23,7 @@ android {
 
 def awgAar = file('libs/amneziawg-tunnel.aar')
 def libboxAar = file('libs/libbox.aar')
+def libxrayAar = file('libs/libxray.aar')
 
 tasks.register('prepareAmneziaWgTunnel', Exec) {
     workingDir rootProject.projectDir
@@ -36,9 +37,16 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     outputs.file libboxAar
 }
 
+tasks.register('prepareXrayLibXray', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'bash', 'build-xray-libxray.sh'
+    outputs.file libxrayAar
+}
+
 tasks.named('preBuild').configure {
     dependsOn tasks.named('prepareAmneziaWgTunnel')
     dependsOn tasks.named('prepareSingBoxLibbox')
+    dependsOn tasks.named('prepareXrayLibXray')
 }
 
 dependencies {
@@ -52,4 +60,8 @@ dependencies {
     // build command. This gives Router VPN a real embedded Android TUN engine
     // without depending on a moving third-party AAR repository.
     implementation files('libs/libbox.aar')
+    // Built from official XTLS/libXray commit
+    // 294fb37343205b9b0cb7b7b1b423d3d4b60d9998, whose go.mod pins Xray-core
+    // v26.7.11 at 50231eaff98c. The build script also pins gomobile.
+    implementation files('libs/libxray.aar')
 }
