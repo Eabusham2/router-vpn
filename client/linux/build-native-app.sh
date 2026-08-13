@@ -17,8 +17,13 @@ chmod 755 "$OUT"
 
 file "$OUT"
 ldd "$OUT" | grep -q 'libgtk-3'
-ldd "$OUT" | grep -q 'libcurl'
 ldd "$OUT" | grep -q 'libjson-glib'
+# Runner pkg-config may choose dynamic or static libcurl. Require the API symbol,
+# not one particular linkage form.
+if ! nm -a "$OUT" 2>/dev/null | grep -q 'curl_easy_init' && ! nm -D "$OUT" 2>/dev/null | grep -q 'curl_easy_init'; then
+  echo 'Native Linux app does not contain/reference required libcurl API.' >&2
+  exit 1
+fi
 ! ldd "$OUT" | grep -Ei 'webkit|cef|chromium|electron'
 ! grep -Eq 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' "$SRC"
 grep -Fq 'gtk_window_new' "$SRC"

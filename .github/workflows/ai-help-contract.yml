@@ -1,24 +1,12 @@
-name: AI Help contract
+name: AI Help and Setup Center guide contract
 
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'server/scripts/ai_help_provider.py'
-      - 'server/scripts/setup-center-ai-server.py'
-      - 'server/scripts/setup-center-server.py'
-      - 'server/scripts/test_ai_help_provider.py'
-      - 'server/scripts/test_setup_center_ai.py'
-      - '.github/workflows/ai-help-contract.yml'
+    paths: ['server/scripts/**', '.github/workflows/ai-help-contract.yml']
   push:
     branches: [main]
-    paths:
-      - 'server/scripts/ai_help_provider.py'
-      - 'server/scripts/setup-center-ai-server.py'
-      - 'server/scripts/setup-center-server.py'
-      - 'server/scripts/test_ai_help_provider.py'
-      - 'server/scripts/test_setup_center_ai.py'
-      - '.github/workflows/ai-help-contract.yml'
+    paths: ['server/scripts/**', '.github/workflows/ai-help-contract.yml']
   workflow_dispatch:
 
 permissions:
@@ -30,27 +18,47 @@ concurrency:
 
 jobs:
   contract:
-    name: Server-side provider + authenticated Setup Center integration
+    name: Provider + authenticated Setup Center + Full Guide lifecycle
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Compile provider and wrapper
+      - name: Compile provider wrapper guide and UX patch
         run: |
           python3 -m py_compile \
             server/scripts/ai_help_provider.py \
             server/scripts/setup-center-ai-server.py \
+            server/scripts/setup_center_guide.py \
+            server/scripts/setup_center_ux_patch.py \
             server/scripts/test_ai_help_provider.py \
-            server/scripts/test_setup_center_ai.py
-      - name: Test bounded provider integration
-        run: python3 server/scripts/test_ai_help_provider.py
-      - name: Test authenticated Setup Center integration
-        run: python3 server/scripts/test_setup_center_ai.py
-      - name: Verify browser never receives provider credentials
+            server/scripts/test_setup_center_ai.py \
+            server/scripts/test_setup_center_guide.py \
+            server/scripts/test_setup_center_ux_patch.py \
+            server/scripts/test_setup_center_entrypoint.py
+          sh -n server/scripts/run-setup-center.sh
+          sh -n server/scripts/configure-ai-help.sh
+      - name: Run provider and Setup Center contracts
+        run: |
+          python3 server/scripts/test_ai_help_provider.py
+          python3 server/scripts/test_setup_center_ai.py
+          python3 server/scripts/test_setup_center_guide.py
+          python3 server/scripts/test_setup_center_ux_patch.py
+          python3 server/scripts/test_setup_center_entrypoint.py
+      - name: Verify browser and command line never receive provider credentials
         run: |
           ! grep -Eqi 'api\.openai\.com|openai-api\.key|Authorization:[[:space:]]*Bearer|sk-[A-Za-z0-9]' server/scripts/setup-center-ai-server.py
           grep -Fq "credentials:'same-origin'" server/scripts/setup-center-ai-server.py
           grep -Fq 'self._require_auth()' server/scripts/setup-center-ai-server.py
           grep -Fq 'store": False' server/scripts/ai_help_provider.py
           grep -Fq 'https://api.openai.com/v1/responses' server/scripts/ai_help_provider.py
+          grep -Fq 'DEFAULT_MODEL_FILE = "/opt/router-vpn/config/openai-model"' server/scripts/ai_help_provider.py
           grep -Fq 'MAX_CONCURRENT = 2' server/scripts/ai_help_provider.py
           grep -Fq 'MAX_REQUESTS_PER_MINUTE = 6' server/scripts/ai_help_provider.py
+          grep -Fq 'setup-center-ai-server.py' server/scripts/run-setup-center.sh
+          ! grep -Eq 'OPENAI_API_KEY=|--api-key|sk-' server/scripts/run-setup-center.sh
+          grep -Fq 'stty -echo' server/scripts/configure-ai-help.sh
+          grep -Fq 'chmod 600' server/scripts/configure-ai-help.sh
+          ! grep -Eq 'printf.*\$KEY.*>&2|echo.*\$KEY' server/scripts/configure-ai-help.sh
+          grep -Fq 'routervpn.setup-guide.v1' server/scripts/setup_center_guide.py
+          grep -Fq 'if(!state.completed)setTimeout(show,250)' server/scripts/setup_center_guide.py
+          grep -Fq 'Download for this device' server/scripts/setup_center_ux_patch.py
+          grep -Fq "text.includes('no servers found')" server/scripts/setup_center_ux_patch.py
