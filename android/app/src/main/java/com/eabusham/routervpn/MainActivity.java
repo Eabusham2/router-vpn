@@ -738,6 +738,7 @@ public final class MainActivity extends Activity {
     }
 
     private void openBundlePicker() {
+        if (rawActiveOrBusy() || layeredActiveOrBusy()) { toast("Disconnect the current VPN before adding/selecting router data"); return; }
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("application/json");
@@ -753,6 +754,7 @@ public final class MainActivity extends Activity {
         if (code == PREPARE_AUTO) { if (result == RESULT_OK) startPendingAutomation(); else { pendingCustomLayers = null; pendingSmart = false; pendingAll = false; statusView.setText("VPN permission denied; automatic/ALL mode selection did not start."); refreshNativeState(); } return; }
         if (code == PREPARE_MULTIHOP) { if (result == RESULT_OK) startPendingMultihop(); else { pendingEntryNode = null; pendingExitNode = null; pendingExitMode = ""; multihopBusy = false; statusView.setText("VPN permission denied; multihop stayed disconnected."); refreshNativeState(); } return; }
         if (code != IMPORT_BUNDLE || result != RESULT_OK || data == null) return;
+        if (rawActiveOrBusy() || layeredActiveOrBusy()) { toast("VPN became active; router import was cancelled to preserve the running session identity"); return; }
         Uri uri = data.getData();
         if (uri == null) return;
         try (InputStream in = getContentResolver().openInputStream(uri)) {
