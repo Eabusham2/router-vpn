@@ -13,9 +13,9 @@ func nativeDarwinMultihopCommand(a *app, sel multihopSelection) (*exec.Cmd, erro
 	if err != nil {
 		return nil, err
 	}
-	helper := filepath.Join(root, "client", "native-multihop-darwin.sh")
+	helper := filepath.Join(root, "modes", "native-multihop-darwin.sh")
 	if _, err = os.Stat(helper); err != nil {
-		helper = filepath.Join(filepath.Dir(a.cfg.ScriptsDir), "client", "native-multihop-darwin.sh")
+		helper = filepath.Join(a.cfg.ScriptsDir, "native-multihop-darwin.sh")
 	}
 	if st, statErr := os.Stat(helper); statErr != nil || st.IsDir() {
 		return nil, errors.New("native macOS multihop helper is missing")
