@@ -186,6 +186,19 @@ forbid("server/rosenpass/Dockerfile", "AWGTOOLS_TAG=", "refs/tags/${AWG")
 need("server/aux-proxies/Dockerfile", "SSR_COMMIT=227127c4bc5a6555e0556693d084c96860e75b5e")
 forbid("server/aux-proxies/Dockerfile", "SSR_TAG=", '--branch "${SSR_TAG}"')
 
+# Private multihop staging must be removed on disconnect/failure on every desktop.
+need(
+    "modes/cleanup-private-runtime.py",
+    'relative_to(run_root)',
+    '{"multihop", "native-multihop"}',
+    'target == run_root',
+    'shutil.rmtree(target)',
+)
+need("modes/run-multihop.sh", "cleanup-private-runtime.py")
+forbid("modes/run-multihop.sh", 'rm -rf "$RUN"')
+need("client/native-multihop-darwin.sh", "cleanup-private-runtime.py")
+need("client/native-multihop-windows.ps1", "Remove-PrivateRuntime", "[IO.Directory]::Delete($RuntimeDir,$true)")
+
 if errors:
     print("NATIVE DOWNLOAD POLICY AUDIT: FAIL", file=sys.stderr)
     for err in errors:
