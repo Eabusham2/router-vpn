@@ -18,7 +18,7 @@ one(
 '    private Button layeredConnectButton, layeredDisconnectButton, xrayConnectButton, xrayDisconnectButton, autoButton, smartButton, customButton;\n    private Button allButton;\n')
 one(
 '    private boolean wgBusy, awgBusy, layeredBusy, xrayBusy, automationBusy, multihopBusy, pendingSmart;\n',
-'    private boolean wgBusy, awgBusy, layeredBusy, xrayBusy, automationBusy, multihopBusy, pendingSmart, pendingAll;\n')
+'    private boolean wgBusy, awgBusy, layeredBusy, xrayBusy, automationBusy, multihopBusy, pendingSmart;\n    private boolean pendingAll;\n')
 anchor='''        customButton = button("CUSTOM — choose required layers");
         customButton.setOnClickListener(v -> chooseCustomLayers());
         c.addView(customButton, margins(0, dp(8), 0, 0));
