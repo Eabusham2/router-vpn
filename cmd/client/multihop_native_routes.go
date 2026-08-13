@@ -22,7 +22,7 @@ func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
 }
 
 func nativeMultihopPlatformSupported() bool {
-	return runtime.GOOS == "windows"
+	return runtime.GOOS == "windows" || runtime.GOOS == "darwin"
 }
 
 func resolveNativeMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
@@ -39,7 +39,7 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 	if base == "" || base == "auto" { base = normalizeBase(entry.BaseTunnel) }
 	if base == "" || base == "auto" { base = normalizeBase(control.BaseTunnel) }
 	if base == "" || base == "auto" { base = "wg" }
-	if base != "wg" { return multihopSelection{}, errors.New("first native Windows multihop path supports standard WireGuard entry only") }
+	if base != "wg" { return multihopSelection{}, errors.New("first native Windows/macOS multihop path supports standard WireGuard entry only") }
 	exitMode := strings.TrimSpace(q.ExitMode); if exitMode == "" { exitMode = "shadowsocks" }
 	if exitMode != "shadowsocks" && exitMode != "hysteria2" { return multihopSelection{}, errors.New("native desktop multihop supports only Shadowsocks or Hysteria2 as the exit transport") }
 	return multihopSelection{Control: control, Entry: entry, Exit: exit, Base: base, ExitMode: exitMode}, nil
@@ -66,6 +66,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 
 func nativeMultihopPlatformCommand(a *app, sel multihopSelection) (*exec.Cmd, error) {
 	if runtime.GOOS == "windows" { return nativeWindowsMultihopCommand(a, sel) }
+	if runtime.GOOS == "darwin" { return nativeDarwinMultihopCommand(a, sel) }
 	return nil, errors.New("real native multihop is not implemented on this desktop platform")
 }
 
