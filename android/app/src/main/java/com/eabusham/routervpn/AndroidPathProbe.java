@@ -18,10 +18,14 @@ import java.nio.charset.StandardCharsets;
 final class AndroidPathProbe {
     private static final int MAX_BUNDLE = 64 * 1024 * 1024;
     private static final int MAX_RESPONSE = 16 * 1024;
+    private static final String PROOF_KIND = "router-vpn-private-agent-v1";
 
     static boolean prove(File privateBundle, int timeoutMillis) throws Exception {
         JSONObject bundle = load(privateBundle);
         JSONObject profile = selectedProfile(bundle);
+        String expectedNode = bundle.optString("nodeProofId", "").trim();
+        if (expectedNode.isEmpty() && profile != null) expectedNode = profile.optString("node_proof_id", "").trim();
+        if (!expectedNode.matches("[0-9a-f]{64}")) throw new IllegalStateException("Router bundle is missing a valid stable node proof id.");
         String target = profile == null ? "" : profile.optString("path_probe_url", "").trim();
         if (target.isEmpty()) target = "http://10.77.0.1:8787/health";
         URI uri = new URI(target);
@@ -46,7 +50,9 @@ final class AndroidPathProbe {
             String headers = text.substring(0, split);
             if (!(headers.startsWith("HTTP/1.1 200 ") || headers.startsWith("HTTP/1.0 200 "))) return false;
             JSONObject body = new JSONObject(text.substring(split + 4).trim());
-            return body.optBoolean("ok", false);
+            return body.optBoolean("ok", false)
+                    && expectedNode.equals(body.optString("node_id", "").trim())
+                    && PROOF_KIND.equals(body.optString("proof", "").trim());
         }
     }
 
