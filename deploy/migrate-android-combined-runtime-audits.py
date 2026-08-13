@@ -52,8 +52,8 @@ if 'combinedBuild := repoFile(t, "android/build-sing-box-libbox.sh")' not in gt:
 \tfor _, required := range []string{"RouterXrayDialerController", "RouterXrayRegisterDialerController", "RouterXrayRegisterListenerController", "RouterXraySetDNS", "RouterXrayResetDNS", "RouterXrayInvoke", "net.DefaultResolver", "controller.ProtectFd(int64(fd))"} {
 \t\tif !strings.Contains(bridge, required) { t.Fatalf("Android combined Xray bridge missing %q", required) }
 \t}
-\tgradle := repoFile(t, "android/app/build.gradle")
-\tif !strings.Contains(gradle, "libs/libbox.aar") || strings.Contains(gradle, "libs/libxray.aar") || strings.Contains(gradle, "prepareXrayLibXray") {
+\tcombinedGradle := repoFile(t, "android/app/build.gradle")
+\tif !strings.Contains(combinedGradle, "libs/libbox.aar") || strings.Contains(combinedGradle, "libs/libxray.aar") || strings.Contains(combinedGradle, "prepareXrayLibXray") {
 \t\tt.Fatal("Android Gradle must package one combined libbox Go runtime and no standalone libXray AAR")
 \t}
 '''
