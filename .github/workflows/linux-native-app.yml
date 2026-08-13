@@ -61,9 +61,22 @@ jobs:
       - name: Test controller and shared contracts
         run: go test ./cmd/client ./internal/common
       - name: Build and package native Linux app
+        shell: bash
         run: |
+          set +e
           chmod +x client/linux/build-native-app.sh deploy/package-linux-native.sh
-          ./deploy/package-linux-native.sh '${{ matrix.arch }}'
+          ./deploy/package-linux-native.sh '${{ matrix.arch }}' >"$RUNNER_TEMP/linux-native-build.log" 2>&1
+          rc=$?
+          cat "$RUNNER_TEMP/linux-native-build.log"
+          if [ "$rc" -ne 0 ]; then
+            while IFS= read -r line; do
+              line=${line//'%'/'%25'}
+              line=${line//$'\r'/'%0D'}
+              line=${line//$'\n'/'%0A'}
+              echo "::error title=Linux native ${{ matrix.arch }} build::${line}"
+            done < <(tail -n 20 "$RUNNER_TEMP/linux-native-build.log")
+            exit "$rc"
+          fi
       - name: Verify native GTK package contract
         run: |
           archive="dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz"
