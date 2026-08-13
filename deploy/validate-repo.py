@@ -333,8 +333,15 @@ pins = {
         "golang:1.24-bookworm", "ghcr.io/sagernet/sing-box:v1.13.12",
         "ghcr.io/xtls/xray-core:26.7.11", "ghcr.io/rosenpass/rosenpass:sha-00569eb",
     ),
-    "server/awg2/Dockerfile": ("golang:1.25.12-bookworm", "AWG_GO_TAG=v3.0.2", "AWGTOOLS_TAG=v1.0.20250901"),
-    "server/rosenpass/Dockerfile": ("ghcr.io/rosenpass/rosenpass:sha-00569eb", "AWGTOOLS_TAG=v1.0.20250901"),
+    "server/awg2/Dockerfile": (
+        "golang:1.25.12-bookworm",
+        "AWG_GO_COMMIT=0527dfa47639714dd8f5c9ffbd9d40d19083f0ba",
+        "AWGTOOLS_COMMIT=5e882890fbca2316f8ca40e992789d24f67f0118",
+    ),
+    "server/rosenpass/Dockerfile": (
+        "ghcr.io/rosenpass/rosenpass:sha-00569eb",
+        "AWGTOOLS_COMMIT=5e882890fbca2316f8ca40e992789d24f67f0118",
+    ),
     "server/naive/Dockerfile": ("pocat/naiveproxy:v2.11.4", "forward_proxy"),
     "server/ss-v2ray/Dockerfile": ("golang:1.23.12-alpine", "V2RAY_PLUGIN_COMMIT=e9af1cdd2549d528deb20a4ab8d61c5fbe51f306", "ghcr.io/shadowsocks/ssserver-rust:v1.24.0"),
     "server/aux-proxies/Dockerfile": ("OVERTLS_VERSION=0.3.12", "SSR_TAG=0.9.4"),
