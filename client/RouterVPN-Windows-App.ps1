@@ -143,7 +143,13 @@ if ($SelfTest) {
     foreach ($api in @('/api/status','/api/profiles','/api/logical-modes','/api/auto','/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/public-ip','/api/dns/retest','/api/emergency-stop')) {
         if ($source -notlike "*$api*") { throw "Native WPF self-test missing API contract: $api" }
     }
-    if ($source -match '--app=|WebBrowser|WebView2|msedge\.exe|chrome\.exe') { throw 'Native WPF app must not embed or launch a browser app-window.' }
+    $markup = $Xaml.OuterXml
+    foreach ($forbidden in @(('Web'+'Browser'),('WebView'+'2'))) {
+        if ($markup -match [regex]::Escape($forbidden)) { throw "Native WPF XAML must not embed $forbidden." }
+    }
+    foreach ($forbidden in @(('--'+'app='),('ms'+'edge.exe'),('ch'+'rome.exe'))) {
+        if ($source.Contains($forbidden)) { throw "Native WPF app must not launch a browser app-window: $forbidden" }
+    }
     Write-Host 'Router VPN native Windows WPF self-test: OK'
     exit 0
 }
@@ -198,7 +204,8 @@ function Refresh-RouterVPN {
         $ModesGrid.ItemsSource = $modes
         $ModeCombo.ItemsSource = @($modes | Where-Object { $_.available })
         if (-not $ModeCombo.SelectedValue -and $ModeCombo.Items.Count -gt 0) { $ModeCombo.SelectedIndex = 0 }
-        $HeaderDetail.Text = "Native Windows app • $($profileItems.Count) linked node(s) • $(@($modes | Where-Object available).Count)/$($modes.Count) modes ready"
+        $readyCount = @($modes | Where-Object { $_.available }).Count
+        $HeaderDetail.Text = "Native Windows app • $($profileItems.Count) linked node(s) • $readyCount/$($modes.Count) modes ready"
     } catch {
         $StateText.Text = 'Controller unavailable'
         $StateDot.Fill = '#FF5D6C'
