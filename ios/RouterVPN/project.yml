@@ -1,12 +1,16 @@
 name: RouterVPN
 options:
   bundleIdPrefix: com.eabusham.routervpn
+packages:
+  WireGuardKit:
+    url: https://github.com/WireGuard/wireguard-apple
+    revision: 2fec12a6e1f6e3460b6ee483aa00ad29cddadab1
 settings:
   base:
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.7.0"
-    CURRENT_PROJECT_VERSION: "7"
+    MARKETING_VERSION: "0.8.0"
+    CURRENT_PROJECT_VERSION: "8"
     GENERATE_INFOPLIST_FILE: YES
     DEVELOPMENT_TEAM: ""
 targets:
@@ -33,6 +37,19 @@ targets:
     type: app-extension
     platform: iOS
     sources: [PacketTunnel]
+    preBuildScripts:
+      - name: Build pinned wireguard-go bridge
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          PIN=2fec12a6e1f6e3460b6ee483aa00ad29cddadab1
+          DERIVED_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
+          WG_ROOT="$DERIVED_ROOT/SourcePackages/checkouts/wireguard-apple"
+          test -d "$WG_ROOT/Sources/WireGuardKitGo"
+          ACTUAL="$(git -C "$WG_ROOT" rev-parse HEAD)"
+          test "$ACTUAL" = "$PIN" || { echo "WireGuardKit checkout mismatch: $ACTUAL" >&2; exit 1; }
+          make -C "$WG_ROOT/Sources/WireGuardKitGo" build
+          test -s "$CONFIGURATION_BUILD_DIR/libwg-go.a"
     settings:
       base:
         PRODUCT_NAME: RouterVPNPacketTunnel
@@ -41,4 +58,9 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Router VPN Tunnel
         INFOPLIST_KEY_NSExtension_NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
         INFOPLIST_KEY_NSExtension_NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(CONFIGURATION_BUILD_DIR)"
         SKIP_INSTALL: YES
+    dependencies:
+      - package: WireGuardKit
+        product: WireGuardKit
