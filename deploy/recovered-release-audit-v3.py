@@ -3,7 +3,6 @@
 from __future__ import annotations
 import importlib.util
 from pathlib import Path
-import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,8 +58,18 @@ def android_map() -> bool:
 
 
 def ios_map() -> bool:
-    text = mod.body("ios/RouterVPN/App/ContentView.swift")
-    return ("Map(" in text or "MapKit" in text) and "latitude" in text.lower() and "longitude" in text.lower()
+    return (
+        mod.has("ios/RouterVPN/App/RouterVPNApp.swift", "ProductRootView()")
+        and mod.has("ios/RouterVPN/project.yml", "sources: [App, Resources]")
+        and mod.has(
+            "ios/RouterVPN/App/ProductRootView.swift",
+            "import MapKit",
+            "Map(",
+            "latitude",
+            "longitude",
+            "No real node coordinates",
+        )
+    )
 
 
 def selected_dns_proof() -> bool:
@@ -73,6 +82,7 @@ def selected_dns_proof() -> bool:
             "net.DefaultResolver.LookupHost",
             "selected-dns",
             "hijack-dns",
+            'result.Status = "passed"',
         )
         and mod.has(
             "cmd/client/session_state.go",
@@ -80,7 +90,7 @@ def selected_dns_proof() -> bool:
             "DNSProof",
             'Status: "checking"',
             '"dns-proof"',
-            'Status = "passed"',
+            "t.session.DNSProof = proof",
         )
     )
 
