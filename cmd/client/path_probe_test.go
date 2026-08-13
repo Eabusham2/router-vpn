@@ -1,33 +1,40 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"router-vpn/internal/common"
 )
 
-func TestSelectedProfilePathProofOverridesLegacyConfigAndRequiresRouterProof(t *testing.T) {
+func TestSelectedProfilePathProofOverridesLegacyConfigAndRequiresExactNodeProof(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOMEVPN_ROOT", root)
+	profile := common.RouterProfile{ID: "router-test"}
+	expectedNodeID := writeTestWGIdentity(t, root, profile.ID)
+
 	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		_, _ = fmt.Fprintf(w, `{"ok":true,"node_id":%q,"proof":%q}`, expectedNodeID, desktopNodeProofKind)
 	}))
 	defer good.Close()
+	profile.PathProbeURL = good.URL
 
 	a := &app{cfg: common.ClientConfig{HealthURL: "http://127.0.0.1:1/not-used", AutoTestSeconds: 1}}
-	if _, err := a.testHealth(common.RouterProfile{PathProbeURL: good.URL}); err != nil {
-		t.Fatalf("selected profile path proof should override legacy config URL: %v", err)
+	if _, err := a.testHealth(profile); err != nil {
+		t.Fatalf("selected profile exact path proof should override legacy config URL: %v", err)
 	}
 
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("generic internet success"))
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer bad.Close()
-	if _, err := a.testHealth(common.RouterProfile{PathProbeURL: bad.URL}); err == nil || !strings.Contains(err.Error(), "proof response") {
-		t.Fatalf("generic 2xx must not count as Router VPN path proof, got %v", err)
+	profile.PathProbeURL = bad.URL
+	if _, err := a.testHealth(profile); err == nil {
+		t.Fatal("generic ok=true must not count as exact Router VPN node path proof")
 	}
 }
 
