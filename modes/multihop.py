@@ -24,7 +24,8 @@ import shutil
 import sys
 from typing import Any
 
-ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
+from profile_id import validate_profile_id
+
 SUPPORTED_EXIT = {"shadowsocks": "shadowsocks", "hysteria2": "hysteria2"}
 PROOF_PORT = 1099
 
@@ -34,10 +35,10 @@ def root_dir() -> Path:
 
 
 def valid_id(value: str, label: str) -> str:
-    value = str(value or "").strip()
-    if not ID_RE.fullmatch(value):
-        raise RuntimeError(f"invalid {label}")
-    return value
+    try:
+        return validate_profile_id(str(value or "").strip(), default="")
+    except ValueError as exc:
+        raise RuntimeError(f"invalid {label}") from exc
 
 
 def safe_under(parent: Path, child: Path) -> Path:
