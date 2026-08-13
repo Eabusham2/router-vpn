@@ -147,16 +147,45 @@ for required in (
     if required not in project:
         error(f"iOS pinned native build contract missing: {required}")
 
-# Selected-node connection proof must not regress to a generic Internet 2xx.
+# Selected-node connection proof must bind success to the exact imported node, not generic Internet or ok=true.
 client_main = text("cmd/client/main.go")
 for required in (
-    "a.testHealth(p)", "PathProbeURL", "transport.Proxy = nil", "proof.OK",
-    "selected-router path proof failed", "http://10.77.0.1:8787/health",
+    "a.testHealth(p)", "PathProbeURL", "transport.Proxy = nil", "validateSelectedNodeProof(p, body)",
+    "selected-router path proof failed", "http://10.77.0.1:8787/health", "NodeProofID string `json:\"nodeProofId\"`",
+    "derivedNodeID, proofErr := expectedNodeProofID(p)", "p.NodeProofID = derivedNodeID",
 ):
     if required not in client_main:
         error(f"client selected-path proof contract missing: {required}")
+node_proof = text("cmd/client/node_proof.go")
+for required in (
+    "router-vpn-private-agent-v1", "router-vpn-node-proof-v1\\n", "generated", "wg.conf",
+    "p.NodeProofID", "proof.NodeID != expected", "proof.Proof != desktopNodeProofKind",
+    "selected router has no saved WireGuard identity profile",
+):
+    if required not in node_proof:
+        error(f"desktop exact node-proof contract missing: {required}")
+node_proof_test = text("cmd/client/node_proof_test.go")
+for required in ("ok-only", "wrong-node", "wrong-kind", "not-ok", "persisted proof mismatch accepted"):
+    if required not in node_proof_test:
+        error(f"desktop node-proof negative test missing: {required}")
 if "connectivitycheck.gstatic.com" in client_main:
     error("client reintroduced generic public Internet health success as a tunnel proof")
+
+# Windows user-facing packages must use a native WPF app, not a browser/WebView app-window.
+windows_app = text("client/RouterVPN-Windows-App.ps1")
+for required in (
+    "PresentationFramework", "http://127.0.0.1:8788", "ShowDialog()", "SelfTest",
+    "/api/status", "/api/profiles", "/api/logical-modes", "/api/connect-logical", "/api/emergency-stop",
+):
+    if required not in windows_app:
+        error(f"native Windows app contract missing: {required}")
+portable = text("cmd/portable-launcher/main.go")
+for required in ("RouterVPN-Windows-App.ps1", "openNativeApp(nativeApp)", "nativeCmd.Wait()", "-SelfTest"):
+    if required not in portable:
+        error(f"Windows Portable native-app lifecycle missing: {required}")
+for forbidden in ("msedge.exe", "chrome.exe", "--app=", "openAppWindow", "browserCmd"):
+    if forbidden in portable:
+        error(f"Windows Portable still launches a browser shell: {forbidden}")
 
 # ASUS helper contract.
 helper = text("router/asus-merlin-router-vpn-forwards.sh")
@@ -330,7 +359,7 @@ if ERRORS:
 
 print(
     f"Validated Router VPN product contract: {len(modes)} raw entries, {len(logical)} logical modes, "
-    "selected-node path proof, honest platform boundaries, non-destructive branch policy, ASUS forwarding, "
+    "exact selected-node identity proof, honest native-app/platform boundaries, non-destructive branch policy, ASUS forwarding, "
     "image-only Portainer production, secret-free generic apps + separate private node linking, "
     "GitHub-first/router-local generic fallback, dynamic ephemeral broker, exact pins and current docs."
 )
