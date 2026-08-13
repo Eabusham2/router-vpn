@@ -31,7 +31,7 @@ def shipping_has(build_rel: str, candidates: tuple[str, ...], *markers: str) -> 
 def windows_shipping_has(*markers: str) -> bool:
     package = mod.body("deploy/package-builds.sh")
     entry = "client/RouterVPN-Windows-App.ps1"
-    product = "client/RouterVPN-Windows-Product.ps1"
+    product = "client/RouterVPN-Windows-Product-v2.ps1"
     return (
         Path(entry).name in package
         and 'cp -a "$ROOT/client"' in package
