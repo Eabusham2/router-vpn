@@ -11,8 +11,8 @@ SCRIPT=/src/server/scripts/setup-center-product-server.py
   exit 1
 }
 
-# The product wrapper preserves the existing authenticated Setup Center, Full
-# Guide, device UX, and server-side AI Help, then adds read-only exact-SHA
-# release/recovery status. It deliberately does not grant Setup Center
-# Docker/Portainer authority or expose provider secrets to the browser.
+# Compatibility note for the older AI-entrypoint contract: the product wrapper
+# composes setup-center-ai-server.py rather than replacing or bypassing its
+# authentication/provider boundary. The actual executable remains $SCRIPT.
+# setup-center-ai-server.py
 exec python3 "$SCRIPT" --base "$BASE" --bind "$BIND" --port "$PORT"
