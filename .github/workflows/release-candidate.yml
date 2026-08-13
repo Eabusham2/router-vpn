@@ -32,7 +32,9 @@ jobs:
           python3 deploy/weighted-release-audit.py > "$RUNNER_TEMP/weighted.json"
           python3 - "$RUNNER_TEMP/weighted.json" <<'PY'
           import json,sys
-          r=json.load(open(sys.argv[1])); assert r['source_weight']==88.0 and r['manual_live_weight']==12.0, r
+          r=json.load(open(sys.argv[1]))
+          assert r['source_weight']==88.0 and r['manual_live_weight']==12.0, r
+          assert r['source_score_percent']==100.0, r
           print('weighted full release score',r['score_percent'],'source completion',r['source_score_percent'])
           PY
           python3 android/test_android_runtime_contract.py
