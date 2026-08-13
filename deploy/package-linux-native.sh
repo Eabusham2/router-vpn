@@ -72,10 +72,17 @@ than being substituted with a fake compatibility path.
 TXT
 
 tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
-tar -tzf "$OUT/$name.tar.gz" >/dev/null
-tar -tzf "$OUT/$name.tar.gz" | grep -q "^$name/router-vpn-app$"
-tar -tzf "$OUT/$name.tar.gz" | grep -q "^$name/LICENSE$"
-! tar -tzf "$OUT/$name.tar.gz" | grep -q 'router-vpn-bundle.json'
+# Materialize the archive listing once. With pipefail, `tar -t | grep -q` can
+# make tar receive SIGPIPE after grep finds an early match, falsely failing a
+# valid package with "tar: stdout: write error".
+archive_list="$work/archive-members.txt"
+tar -tzf "$OUT/$name.tar.gz" > "$archive_list"
+grep -Fxq "$name/router-vpn-app" "$archive_list"
+grep -Fxq "$name/LICENSE" "$archive_list"
+if grep -Fq 'router-vpn-bundle.json' "$archive_list"; then
+  echo 'Native Linux package unexpectedly contains a private router bundle.' >&2
+  exit 1
+fi
 
 # Scan the finished public archive. The scanner intentionally requires an archive;
 # scanning the work directory before tar creation would always fail with "no packages found".
