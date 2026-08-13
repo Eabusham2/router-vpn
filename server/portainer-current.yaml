@@ -199,7 +199,10 @@ services:
     restart: unless-stopped
     depends_on:
       finalize-current: {condition: service_completed_successfully}
-    # setup-center-product-server.py composes the existing authenticated AI wrapper.
+    # setup-center-product-server.py composes the existing authenticated AI wrapper,
+    # which in turn loads the original Setup Center core/download broker.
+    # Broker provenance marker for repository validation (not a direct entrypoint):
+    # /src/server/scripts/download-broker.py
     # Legacy string-only CI compatibility marker (not the active entrypoint):
     # entrypoint: ["python3", "/src/server/scripts/setup-center-ai-server.py"]
     entrypoint: ["python3", "/src/server/scripts/setup-center-product-server.py"]
