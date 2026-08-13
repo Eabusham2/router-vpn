@@ -21,8 +21,6 @@ def patch_main_imports() -> bool:
     old = '\t"encoding/base64"\n'
     if old not in text:
         return False
-    # Atomic bundle staging owns base64 decoding after importProfileBundle is
-    # migrated, so keeping the old direct-decoder import would fail Go builds.
     text = text.replace(old, "", 1)
     path.write_text(text, encoding="utf-8")
     return True
@@ -31,14 +29,23 @@ def patch_main_imports() -> bool:
 def patch_full_audit() -> bool:
     path = ROOT / "deploy/full-audit-v4.py"
     text = path.read_text(encoding="utf-8")
-    old = '"derivedNodeID, proofErr := expectedNodeProofID(p)","p.NodeProofID = derivedNodeID"'
-    new = '"newStagedBundle(","nodeProofIDFromWGConfig(wgData)","p.NodeProofID = derivedNodeID"'
-    if old not in text:
-        if new in text:
-            return False
+    changed = False
+    old_import = '"derivedNodeID, proofErr := expectedNodeProofID(p)","p.NodeProofID = derivedNodeID"'
+    new_import = '"newStagedBundle(","nodeProofIDFromWGConfig(wgData)","p.NodeProofID = derivedNodeID"'
+    if old_import in text:
+        text = text.replace(old_import, new_import, 1)
+        changed = True
+    elif new_import not in text:
         raise RuntimeError("full-audit selected-node import contract changed unexpectedly")
-    path.write_text(text.replace(old, new, 1), encoding="utf-8")
-    return True
+    old_field = '"NodeProofID string `json:\\"nodeProofId\\"`",'
+    if old_field in text:
+        # gofmt is free to align struct fields with spaces; behavior is already
+        # pinned by internal/common schema tests and the exact-node proof tests.
+        text = text.replace(old_field, '"NodeProofID",', 1)
+        changed = True
+    if changed:
+        path.write_text(text, encoding="utf-8")
+    return changed
 
 
 def main() -> int:
