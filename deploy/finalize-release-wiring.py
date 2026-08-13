@@ -21,8 +21,7 @@ def patch_main_imports() -> bool:
     old = '\t"encoding/base64"\n'
     if old not in text:
         return False
-    text = text.replace(old, "", 1)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text.replace(old, "", 1), encoding="utf-8")
     return True
 
 
@@ -59,12 +58,35 @@ def patch_release_gap_audit() -> bool:
     raise RuntimeError("release-gap selected-node import contract changed unexpectedly")
 
 
+def patch_validate_repo() -> bool:
+    path = ROOT / "deploy/validate-repo.py"
+    text = path.read_text(encoding="utf-8")
+    changed = False
+    old_field = '"NodeProofID string `json:\\"nodeProofId\\"`",'
+    if old_field in text:
+        text = text.replace(old_field, '"NodeProofID",', 1)
+        changed = True
+    elif '"NodeProofID",' not in text:
+        raise RuntimeError("validate-repo NodeProofID contract changed unexpectedly")
+    old_import = '"derivedNodeID, proofErr := expectedNodeProofID(p)", "p.NodeProofID = derivedNodeID",'
+    new_import = '"newStagedBundle(", "nodeProofIDFromWGConfig(wgData)", "p.NodeProofID = derivedNodeID",'
+    if old_import in text:
+        text = text.replace(old_import, new_import, 1)
+        changed = True
+    elif new_import not in text:
+        raise RuntimeError("validate-repo selected-node import contract changed unexpectedly")
+    if changed:
+        path.write_text(text, encoding="utf-8")
+    return changed
+
+
 def main() -> int:
     wire.main()
     changed = []
     if patch_main_imports(): changed.append("cmd/client/main.go import cleanup")
     if patch_full_audit(): changed.append("deploy/full-audit-v4.py atomic import contract")
     if patch_release_gap_audit(): changed.append("deploy/release-gap-audit.py atomic import contract")
+    if patch_validate_repo(): changed.append("deploy/validate-repo.py atomic import contract")
     print("final release wiring cleanup:", ", ".join(changed) if changed else "nothing (already finalized)")
     return 0
 
