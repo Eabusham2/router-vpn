@@ -14,6 +14,7 @@ name="RouterVPN-linux-$ARCH"
 work="$OUT/work-$ARCH"
 dir="$work/$name"
 rm -rf "$work"
+rm -f "$OUT/$name.tar.gz" "$OUT/$name.sha256"
 mkdir -p "$dir/modes" "$dir/generated" "$dir/client" "$OUT"
 
 cp "$ROOT/configs/client/client.json.example" "$dir/client.json"
@@ -70,12 +71,19 @@ the normal Router VPN Linux runtime setup; unsupported mode checks remain unavai
 than being substituted with a fake compatibility path.
 TXT
 
-python3 "$ROOT/deploy/check-generic-package-secrets.py" "$work"
 tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
 tar -tzf "$OUT/$name.tar.gz" >/dev/null
 tar -tzf "$OUT/$name.tar.gz" | grep -q "^$name/router-vpn-app$"
 tar -tzf "$OUT/$name.tar.gz" | grep -q "^$name/LICENSE$"
 ! tar -tzf "$OUT/$name.tar.gz" | grep -q 'router-vpn-bundle.json'
-sha256sum "$OUT/$name.tar.gz" > "$OUT/$name.sha256"
+
+# Scan the finished public archive. The scanner intentionally requires an archive;
+# scanning the work directory before tar creation would always fail with "no packages found".
+python3 "$ROOT/deploy/check-generic-package-secrets.py" "$OUT"
+(
+  cd "$OUT"
+  sha256sum "$name.tar.gz" > "$name.sha256"
+  sha256sum -c "$name.sha256"
+)
 rm -rf "$work"
 echo "Packaged native Linux Router VPN app: $OUT/$name.tar.gz"
