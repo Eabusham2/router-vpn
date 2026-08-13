@@ -52,8 +52,9 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 if (Thread.currentThread().isInterrupted() || closed.get()) throw new InterruptedException("Multihop start cancelled.");
                 String state = singBox.getState();
                 if ("UP".equals(state)) break;
-                if ("ERROR".equals(state)) throw new IllegalStateException(nonEmpty(singBox.getError(), "Embedded multihop engine failed."));
-                if ("DOWN".equals(state) && System.currentTimeMillis() + 500L < deadline) { Thread.sleep(250L); continue; }
+                if ("FAILED".equals(state) || "REVOKED".equals(state)) {
+                    throw new IllegalStateException(nonEmpty(singBox.getError(), "Embedded multihop engine entered terminal state " + state + "."));
+                }
                 Thread.sleep(250L);
             }
             if (!"UP".equals(singBox.getState())) throw new IllegalStateException("Embedded multihop engine did not reach UP before timeout.");
