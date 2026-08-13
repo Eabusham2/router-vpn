@@ -36,7 +36,7 @@ final class NativeWireGuardController implements Tunnel {
                 Config config = loadWireGuardConfig(privateBundle);
                 State result = backend.setState(this, State.UP, config);
                 state = result;
-                callback.done(result, "Native Android WireGuard is active through the official userspace backend.", null);
+                callback.done(result, "Native Android WireGuard is active through the official userspace backend with the selected enforceable DNS address and MTU policy.", null);
             } catch (Throwable error) {
                 state = State.DOWN;
                 callback.done(State.DOWN, "Native WireGuard failed: " + safeMessage(error), error);
@@ -69,7 +69,8 @@ final class NativeWireGuardController implements Tunnel {
         if (encoded.isEmpty()) throw new IllegalStateException("Node bundle has no WireGuard wg.conf.");
         byte[] decoded = Base64.decode(encoded, Base64.DEFAULT);
         if (decoded.length <= 0 || decoded.length > 512 * 1024) throw new IllegalStateException("WireGuard profile size is invalid.");
-        return Config.parse(new ByteArrayInputStream(decoded));
+        String patched = AndroidNativeProfilePolicy.patchWireGuardLikeConfig(root, new String(decoded, StandardCharsets.UTF_8), 1420);
+        return Config.parse(new ByteArrayInputStream(patched.getBytes(StandardCharsets.UTF_8)));
     }
 
     private static byte[] readLimited(File file, int maxBytes) throws Exception {
