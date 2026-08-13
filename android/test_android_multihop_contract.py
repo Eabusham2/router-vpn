@@ -13,8 +13,14 @@ required_store = [
     "MAX_NODES = 24",
     "MAX_BUNDLE = 32 * 1024 * 1024",
     "router-nodes-v1",
-    "deriveId",
+    "stableNodeIdentity",
+    'NODE_PROOF_DOMAIN = "router-vpn-node-proof-v1\\n"',
     "wireGuardPeerPublicKey",
+    'top.matches("[0-9a-f]{64}")',
+    'nested.matches("[0-9a-f]{64}")',
+    "!top.equals(nested)",
+    "!supplied.equals(derived)",
+    "return stable.substring(0, 32)",
     'matches("[0-9a-f]{32}")',
     "atomicWrite",
     "getFD().sync()",
@@ -28,6 +34,9 @@ required_builder = [
     '"shadowsocks".equals(exitMode)',
     '"hysteria2".equals(exitMode)',
     'entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())',
+    "AndroidNodeStore.stableNodeIdentity(entry)",
+    "AndroidNodeStore.stableNodeIdentity(exit)",
+    "entryIdentity.equals(exitIdentity)",
     '"entry-wg"',
     'put("type", "wireguard")',
     'proxy.put("detour", "entry-wg")',
@@ -42,6 +51,7 @@ for token in required_builder:
     assert token in builder, f"multihop builder lost contract: {token}"
 for unsupported in ['"all".equals(exitMode)', '"max".equals(exitMode)', '"awg2-fast".equals(exitMode)', '"awg2-strong".equals(exitMode)']:
     assert unsupported not in builder, f"unsupported Android multihop branch became accepted: {unsupported}"
+assert "persistent_keepalive_interval" not in builder, "pinned sing-box 1.13.12 WireGuardPeer has no persistent keepalive option"
 
 required_runtime = [
     "AndroidPathProbe.prove(prepared.exitBundle",
@@ -77,7 +87,7 @@ for token in required_ui:
 # The exit proof must identify the actual selected exit node, not accept a
 # generic private health response from whichever node happened to answer.
 for token in [
-    'bundle.optString("nodeProofId"',
+    "AndroidNodeStore.stableNodeIdentity(bundle)",
     'expectedNode.matches("[0-9a-f]{64}")',
     'expectedNode.equals(body.optString("node_id"',
     'PROOF_KIND.equals(body.optString("proof"',
