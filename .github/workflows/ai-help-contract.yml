@@ -1,0 +1,56 @@
+name: AI Help contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/scripts/ai_help_provider.py'
+      - 'server/scripts/setup-center-ai-server.py'
+      - 'server/scripts/setup-center-server.py'
+      - 'server/scripts/test_ai_help_provider.py'
+      - 'server/scripts/test_setup_center_ai.py'
+      - '.github/workflows/ai-help-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'server/scripts/ai_help_provider.py'
+      - 'server/scripts/setup-center-ai-server.py'
+      - 'server/scripts/setup-center-server.py'
+      - 'server/scripts/test_ai_help_provider.py'
+      - 'server/scripts/test_setup_center_ai.py'
+      - '.github/workflows/ai-help-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-help-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Server-side provider + authenticated Setup Center integration
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile provider and wrapper
+        run: |
+          python3 -m py_compile \
+            server/scripts/ai_help_provider.py \
+            server/scripts/setup-center-ai-server.py \
+            server/scripts/test_ai_help_provider.py \
+            server/scripts/test_setup_center_ai.py
+      - name: Test bounded provider integration
+        run: python3 server/scripts/test_ai_help_provider.py
+      - name: Test authenticated Setup Center integration
+        run: python3 server/scripts/test_setup_center_ai.py
+      - name: Verify browser never receives provider credentials
+        run: |
+          ! grep -Eqi 'api\.openai\.com|openai-api\.key|Authorization:[[:space:]]*Bearer|sk-[A-Za-z0-9]' server/scripts/setup-center-ai-server.py
+          grep -Fq "credentials:'same-origin'" server/scripts/setup-center-ai-server.py
+          grep -Fq 'self._require_auth()' server/scripts/setup-center-ai-server.py
+          grep -Fq 'store": False' server/scripts/ai_help_provider.py
+          grep -Fq 'https://api.openai.com/v1/responses' server/scripts/ai_help_provider.py
+          grep -Fq 'MAX_CONCURRENT = 2' server/scripts/ai_help_provider.py
+          grep -Fq 'MAX_REQUESTS_PER_MINUTE = 6' server/scripts/ai_help_provider.py
