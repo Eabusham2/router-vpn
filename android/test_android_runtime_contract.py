@@ -15,7 +15,7 @@ def text(name: str) -> str:
 service = text("LayeredVpnService.java")
 policy = text("AndroidKillSwitchPolicy.java")
 wg = text("NativeWireGuardController.java")
-awg = text("NativeAmneziaWgController.java")
+awg = text("NativeAmneziaWGController.java")
 sing = text("NativeSingBoxController.java")
 orch = text("AndroidModeOrchestrator.java")
 probe = text("AndroidPathProbe.java")
