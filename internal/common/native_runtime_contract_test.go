@@ -58,7 +58,7 @@ func TestAndroidNativeWireGuardAmneziaWGLayeredAndNarrowMultihopAreReal(t *testi
 		}
 	}
 	xrayService := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/XrayVpnService.java")
-	for _, required := range []string{"registerDialerController", "registerListenerController", `env.put("xray.tun.fd"`, "AndroidPathProbe.prove(activeBundle", "restartAfterNetworkChange", "isLockdownEnabled()"} {
+	for _, required := range []string{"routerXrayRegisterDialerController", "routerXrayRegisterListenerController", "routerXraySetDNS", "routerXrayResetDNS", "routerXrayBridgeRevision", `env.put("xray.tun.fd"`, "AndroidPathProbe.prove(activeBundle", "restartAfterNetworkChange", "isLockdownEnabled()"} {
 		if !strings.Contains(xrayService, required) {
 			t.Fatalf("Android native Xray VpnService missing %q", required)
 		}
@@ -68,6 +68,22 @@ func TestAndroidNativeWireGuardAmneziaWGLayeredAndNarrowMultihopAreReal(t *testi
 		if !strings.Contains(nativePolicy, required) {
 			t.Fatalf("Android native DNS/MTU policy missing %q", required)
 		}
+	}
+	combinedBuild := repoFile(t, "android/build-sing-box-libbox.sh")
+	for _, required := range []string{"LIBXRAY_COMMIT=294fb37343205b9b0cb7b7b1b423d3d4b60d9998", "XRAY_CORE_VERSION=v1.260327.1-0.20260711155151-50231eaff98c", "GO_TOOLCHAIN=go1.26.3", "exactly one gomobile go.Seq runtime class", "github.com/xtls/libxray=$XRAY_VENDOR"} {
+		if !strings.Contains(combinedBuild, required) {
+			t.Fatalf("Android combined Go runtime build missing %q", required)
+		}
+	}
+	bridge := repoFile(t, "android/routervpn_xray_bridge.go")
+	for _, required := range []string{"RouterXrayDialerController", "RouterXrayRegisterDialerController", "RouterXrayRegisterListenerController", "RouterXraySetDNS", "RouterXrayResetDNS", "RouterXrayInvoke", "net.DefaultResolver", "controller.ProtectFd(int64(fd))"} {
+		if !strings.Contains(bridge, required) {
+			t.Fatalf("Android combined Xray bridge missing %q", required)
+		}
+	}
+	combinedGradle := repoFile(t, "android/app/build.gradle")
+	if !strings.Contains(combinedGradle, "libs/libbox.aar") || strings.Contains(combinedGradle, "libs/libxray.aar") || strings.Contains(combinedGradle, "prepareXrayLibXray") {
+		t.Fatal("Android Gradle must package one combined libbox Go runtime and no standalone libXray AAR")
 	}
 	orchestrator := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java")
 	for _, required := range []string{"AndroidPathProbe.prove(bundle", "No candidate passed selected-node path proof", "SMART AUTO could not restore its last-known-good mode", "void all(File bundle,Callback cb)", "protectionRank", "ALL failed closed because no Android-native branch passed selected-node path proof"} {
