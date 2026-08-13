@@ -64,7 +64,10 @@ for marker in (
     "Last WireGuard error:",
     "Last AmneziaWG error:",
     "AUTO/SMART/CUSTOM/ALL: testing/proving",
+    "Disconnect the current VPN before adding/selecting router data",
+    "VPN became active; router import was cancelled to preserve the running session identity",
+    "Disconnect the current VPN before changing the active router",
 ):
-    assert marker in main, f"MainActivity missing native truth marker {marker}"
+    assert marker in main, f"MainActivity missing native truth/identity marker {marker}"
 
 print("Android native DNS/MTU/recovery contract: PASS")
