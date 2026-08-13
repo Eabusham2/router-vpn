@@ -1,0 +1,21 @@
+name: Windows product diagnostic
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  product-self-test:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Windows PowerShell 5.1 product self-test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/RouterVPN-Windows-App.ps1 -SelfTest
+          if($LASTEXITCODE -ne 0){ throw "Native Windows product self-test failed with exit code $LASTEXITCODE" }
