@@ -22,10 +22,10 @@ final class AndroidPathProbe {
 
     static boolean prove(File privateBundle, int timeoutMillis) throws Exception {
         JSONObject bundle = load(privateBundle);
+        AndroidNodeStore.validateBundle(bundle);
         JSONObject profile = selectedProfile(bundle);
-        String expectedNode = bundle.optString("nodeProofId", "").trim();
-        if (expectedNode.isEmpty() && profile != null) expectedNode = profile.optString("node_proof_id", "").trim();
-        if (!expectedNode.matches("[0-9a-f]{64}")) throw new IllegalStateException("Router bundle is missing a valid stable node proof id.");
+        String expectedNode = AndroidNodeStore.stableNodeIdentity(bundle);
+        if (!expectedNode.matches("[0-9a-f]{64}")) throw new IllegalStateException("Router bundle cannot derive a valid stable node proof id.");
         String target = profile == null ? "" : profile.optString("path_probe_url", "").trim();
         if (target.isEmpty()) target = "http://10.77.0.1:8787/health";
         URI uri = new URI(target);
