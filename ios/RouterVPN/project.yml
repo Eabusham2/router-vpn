@@ -3,8 +3,7 @@ options:
   bundleIdPrefix: com.eabusham.routervpn
 packages:
   WireGuardKit:
-    url: https://github.com/WireGuard/wireguard-apple
-    revision: 2fec12a6e1f6e3460b6ee483aa00ad29cddadab1
+    path: .deps/wireguard-apple
 settings:
   base:
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
@@ -43,11 +42,11 @@ targets:
         script: |
           set -euo pipefail
           PIN=2fec12a6e1f6e3460b6ee483aa00ad29cddadab1
-          DERIVED_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
-          WG_ROOT="$DERIVED_ROOT/SourcePackages/checkouts/wireguard-apple"
+          WG_ROOT="$SRCROOT/.deps/wireguard-apple"
           test -d "$WG_ROOT/Sources/WireGuardKitGo"
           ACTUAL="$(git -C "$WG_ROOT" rev-parse HEAD)"
           test "$ACTUAL" = "$PIN" || { echo "WireGuardKit checkout mismatch: $ACTUAL" >&2; exit 1; }
+          test "$(sed -n '1p' "$WG_ROOT/Package.swift")" = '// swift-tools-version:5.5'
           make -C "$WG_ROOT/Sources/WireGuardKitGo" build
           test -s "$CONFIGURATION_BUILD_DIR/libwg-go.a"
     settings:
