@@ -53,6 +53,7 @@ public final class MainActivity extends Activity {
     private TextView statusView, endpointView, socksView, modesView, nativeStatusView;
     private Button nativeConnectButton, nativeDisconnectButton, awgConnectButton, awgDisconnectButton;
     private Button layeredConnectButton, layeredDisconnectButton, xrayConnectButton, xrayDisconnectButton, autoButton, smartButton, customButton;
+    private Button allButton;
     private Button manageNodesButton, multihopButton;
     private String socksAddress = "";
 
@@ -69,6 +70,7 @@ public final class MainActivity extends Activity {
     private AndroidNodeStore.Node pendingEntryNode, pendingExitNode;
     private String pendingExitMode = "";
     private boolean wgBusy, awgBusy, layeredBusy, xrayBusy, automationBusy, multihopBusy, pendingSmart;
+    private boolean pendingAll;
     private List<String> pendingCustomLayers;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -151,6 +153,9 @@ public final class MainActivity extends Activity {
         customButton = button("CUSTOM — choose required layers");
         customButton.setOnClickListener(v -> chooseCustomLayers());
         c.addView(customButton, margins(0, dp(8), 0, 0));
+        allButton = button("ALL — strongest proven Android-native branch");
+        allButton.setOnClickListener(v -> requestAll());
+        c.addView(allButton, margins(0, dp(8), 0, 0));
 
         multihopButton = button("Multihop — choose entry → exit");
         multihopButton.setOnClickListener(v -> chooseMultihop());
@@ -178,7 +183,7 @@ public final class MainActivity extends Activity {
         modesView = section("Modes in active bundle", "Not imported");
         c.addView(modesView, margins(0, dp(12), 0, 0));
         c.addView(section("Android capability boundary",
-                "Raw WireGuard and AmneziaWG 2 use embedded userspace backends. Self-contained generated sing-box profiles use pinned libbox, and self-contained Reality/XHTTP profiles use pinned Xray-core v26.7.11 through a dedicated Android VpnService. AUTO/SMART/CUSTOM require selected-node private path proof. Real Android multihop is currently limited to a standard WireGuard entry plus a different stored node using a self-contained Shadowsocks or Hysteria2 exit; the exit node must pass private path proof before Connected. AWG-entry multihop and composite MAX/mixed sidecar chains remain gated; native Xray is available for self-contained Xray profiles. Strict embedded libbox/Xray sessions require Android 10+ Always-on plus lockdown/Block connections without VPN; raw strict WG/AWG fail closed. Multihop adds latency by design. Network changes reset/revalidate libbox and native Xray, but final reconnect/leak behavior still needs real-device validation. SOCKS5 remains tunnel/LAN-only; never expose TCP 1080 to WAN."), margins(0, dp(20), 0, dp(20)));
+                "Raw WireGuard and AmneziaWG 2 use embedded userspace backends. Self-contained generated sing-box profiles use pinned libbox, and self-contained Reality/XHTTP profiles use pinned Xray-core v26.7.11 through a dedicated Android VpnService. AUTO/SMART/CUSTOM/ALL require selected-node private path proof. Real Android multihop is currently limited to a standard WireGuard entry plus a different stored node using a self-contained Shadowsocks or Hysteria2 exit; the exit node must pass private path proof before Connected. AWG-entry multihop and composite MAX/mixed sidecar chains remain gated; ALL ranks only real Android-native branches strongest-to-weaker and never relabels a partial MAX sidecar as ALL. Strict embedded libbox/Xray sessions require Android 10+ Always-on plus lockdown/Block connections without VPN; raw strict WG/AWG fail closed. Multihop adds latency by design. Network changes reset/revalidate libbox and native Xray, but final reconnect/leak behavior still needs real-device validation. SOCKS5 remains tunnel/LAN-only; never expose TCP 1080 to WAN."), margins(0, dp(20), 0, dp(20)));
 
         ScrollView s = new ScrollView(this);
         s.addView(c);
@@ -229,13 +234,13 @@ public final class MainActivity extends Activity {
 
     private String onboardingText(int s) {
         switch (s) {
-            case 0: return "Complete path: deploy home node → authenticated Setup Center → Add Router/import or secure LAN pairing → choose active node → choose native/direct/AUTO/SMART/CUSTOM or compatible multihop → Android VPN consent → selected-node proof. Progress is saved; only Finish marks completion.";
+            case 0: return "Complete path: deploy home node → authenticated Setup Center → Add Router/import or secure LAN pairing → choose active node → choose native/direct/AUTO/SMART/CUSTOM/ALL or compatible multihop → Android VPN consent → selected-node proof. Progress is saved; only Finish marks completion.";
             case 1: return "Deploy the home node with server/portainer-current.yaml. Production services remain exact-image/SHA pinned; normal deployment never silently compiles from source.";
             case 2: return "Verify init/finalize and long-running services are healthy before WAN exposure. Optional AI Board check: sudo bash server/scripts/doctor-current.sh.";
             case 3: return "On the home LAN open http://AI_BOARD_IP:8786/. Setup Center is authenticated because it can expose private node material. Keep the permanent credential router-local; pairing codes are short-lived.";
             case 4: return "ASUS forwarding exposes only intended public VPN/auxiliary ports. Never expose SOCKS5 1080, Setup Center 8786, health/admin/Portainer/AdGuard/SSH or private credentials to WAN.";
             case 5: return "Add router-vpn-bundle.json for each router. Router linking is a data operation: the app is installed once, keeps multiple node bundles in bounded Android app-private storage, and never relies on the server's repeated display id as a local filename.";
-            case 6: return "Choose an active router for single-hop. Raw WG/AWG, self-contained libbox, and native self-contained Xray modes are real choices. AUTO tests native candidates; SMART tries simpler candidates and restores the last proven mode if reduction fails. Strict policy excludes raw WG/AWG and requires proven Android Always-on plus lockdown for embedded libbox/Xray.";
+            case 6: return "Choose an active router for single-hop. Raw WG/AWG, self-contained libbox, and native self-contained Xray modes are real choices. AUTO tests native candidates; SMART tries simpler candidates and restores the last proven mode if reduction fails. ALL tests the strongest available Android-native protection branch first and truthfully falls back only after a failed proof. Strict policy excludes raw WG/AWG and requires proven Android Always-on plus lockdown for embedded libbox/Xray.";
             case 7: return "Multihop requires two different stored nodes. Current proven Android graph is standard WireGuard entry → Shadowsocks or Hysteria2 exit → Internet. The app builds one VpnService graph and requires private proof from the selected exit before Connected. AWG-entry/mixed ALL/MAX multihop stays unavailable. Expect more latency.";
             case 8: return "CUSTOM selects only a native candidate containing all requested layers. A TUN UP state alone is never AUTO or multihop success: selected-node/exit private path proof must pass. Selected DNS is applied to embedded libbox sessions and IP-based native Xray sessions; final DNS/leak proof remains a release gate.";
             case 9: return "Run setup check, server doctor, and ASUS forwarding status. Final release still requires live exit-IP, DNS, leak, reconnect, kill-switch, multihop-failure and network-transition checks on real devices and off-LAN networks.";
@@ -498,6 +503,7 @@ public final class MainActivity extends Activity {
     private void requestAutomation(boolean smart, List<String> custom) {
         if (rawActiveOrBusy() || layeredActiveOrBusy()) { toast("Disconnect the current VPN before AUTO/SMART/CUSTOM"); return; }
         if (!bundleReady()) return;
+        pendingAll = false;
         pendingSmart = smart;
         pendingCustomLayers = custom == null ? null : new ArrayList<>(custom);
         Intent p = VpnService.prepare(this);
@@ -505,10 +511,23 @@ public final class MainActivity extends Activity {
         else startPendingAutomation();
     }
 
+    private void requestAll() {
+        if (rawActiveOrBusy() || layeredActiveOrBusy()) { toast("Disconnect the current VPN before ALL"); return; }
+        if (!bundleReady()) return;
+        pendingAll = true;
+        pendingSmart = false;
+        pendingCustomLayers = null;
+        Intent p = VpnService.prepare(this);
+        if (p != null) { statusView.setText("Waiting for Android VPN permission for ALL…"); startActivityForResult(p, PREPARE_AUTO); }
+        else startPendingAutomation();
+    }
+
     private void startPendingAutomation() {
         final boolean smart = pendingSmart;
+        final boolean all = pendingAll;
         final List<String> custom = pendingCustomLayers;
         pendingSmart = false;
+        pendingAll = false;
         pendingCustomLayers = null;
         automationBusy = true;
         refreshNativeState();
@@ -516,7 +535,8 @@ public final class MainActivity extends Activity {
             public void progress(String m) { runOnUiThread(() -> { statusView.setText(m); refreshNativeState(); }); }
             public void finished(boolean ok, String id, String m) { runOnUiThread(() -> { automationBusy = false; statusView.setText(m); if (!ok) toast(m); refreshNativeState(); }); }
         };
-        if (custom != null) orchestrator.custom(getFileStreamPath(BUNDLE_FILE), custom, cb);
+        if (all) orchestrator.all(getFileStreamPath(BUNDLE_FILE), cb);
+        else if (custom != null) orchestrator.custom(getFileStreamPath(BUNDLE_FILE), custom, cb);
         else orchestrator.auto(getFileStreamPath(BUNDLE_FILE), smart, cb);
     }
 
@@ -637,6 +657,7 @@ public final class MainActivity extends Activity {
         autoButton.setEnabled(autoEnabled);
         smartButton.setEnabled(autoEnabled);
         customButton.setEnabled(autoEnabled);
+        allButton.setEnabled(autoEnabled);
         multihopButton.setEnabled(autoEnabled && storedNodeCount() >= 2);
     }
 
@@ -728,7 +749,7 @@ public final class MainActivity extends Activity {
         if (code == PREPARE_NATIVE_AWG) { if (result == RESULT_OK) connectNativeAmneziaWG(); else statusView.setText("VPN permission denied; AmneziaWG stayed disconnected."); return; }
         if (code == PREPARE_LAYERED) { if (result == RESULT_OK) startPendingLayered(); else { pendingLayeredMode = null; statusView.setText("VPN permission denied; no layered session was created."); refreshNativeState(); } return; }
         if (code == PREPARE_XRAY) { if (result == RESULT_OK) startPendingXray(); else { pendingXrayMode = null; xrayBusy = false; statusView.setText("VPN permission denied; native Xray stayed disconnected."); refreshNativeState(); } return; }
-        if (code == PREPARE_AUTO) { if (result == RESULT_OK) startPendingAutomation(); else { pendingCustomLayers = null; pendingSmart = false; statusView.setText("VPN permission denied; automatic mode selection did not start."); refreshNativeState(); } return; }
+        if (code == PREPARE_AUTO) { if (result == RESULT_OK) startPendingAutomation(); else { pendingCustomLayers = null; pendingSmart = false; pendingAll = false; statusView.setText("VPN permission denied; automatic/ALL mode selection did not start."); refreshNativeState(); } return; }
         if (code == PREPARE_MULTIHOP) { if (result == RESULT_OK) startPendingMultihop(); else { pendingEntryNode = null; pendingExitNode = null; pendingExitMode = ""; multihopBusy = false; statusView.setText("VPN permission denied; multihop stayed disconnected."); refreshNativeState(); } return; }
         if (code != IMPORT_BUNDLE || result != RESULT_OK || data == null) return;
         Uri uri = data.getData();
