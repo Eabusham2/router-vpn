@@ -1,0 +1,57 @@
+name: Wire native downloads
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/scripts/native_artifact_policy.py'
+      - 'server/scripts/test_native_artifact_policy.py'
+      - 'deploy/wire-native-downloads.py'
+      - 'deploy/native-download-policy-audit.py'
+      - '.github/workflows/wire-native-downloads.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wire-native-downloads-main
+  cancel-in-progress: false
+
+jobs:
+  wire:
+    if: github.repository == 'Eabusham2/router-vpn'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebase to latest main and apply idempotent native download routing
+        run: |
+          set -euo pipefail
+          git config user.name 'router-vpn-ci'
+          git config user.email 'router-vpn-ci@users.noreply.github.com'
+          git fetch origin main
+          git rebase origin/main
+          python3 deploy/wire-native-downloads.py
+          python3 -m py_compile \
+            server/scripts/native_artifact_policy.py \
+            server/scripts/test_native_artifact_policy.py \
+            server/scripts/download-broker.py \
+            deploy/native-download-policy-audit.py
+          python3 server/scripts/test_native_artifact_policy.py
+          python3 deploy/native-download-policy-audit.py
+          bash -n server/scripts/publish-downloads.sh
+          git diff --check
+      - name: Push only validated broker and publisher wiring
+        run: |
+          set -euo pipefail
+          files=(server/scripts/download-broker.py server/scripts/publish-downloads.sh)
+          if git diff --quiet -- "${files[@]}"; then
+            echo 'Native download routing already applied.'
+            exit 0
+          fi
+          git add -- "${files[@]}"
+          git commit -m 'Prefer same-SHA native application artifacts'
+          git pull --rebase origin main
+          git push origin HEAD:main
