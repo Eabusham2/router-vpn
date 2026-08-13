@@ -10,8 +10,10 @@ brew install wireguard-tools go make git python sing-box shadowsocks-rust || tru
 "$BUNDLE/client/install-xray.sh"
 
 ROOT=/opt/router-vpn-client
-sudo mkdir -p "$ROOT" /usr/local/bin
+sudo mkdir -p "$ROOT" "$ROOT/client" /usr/local/bin
 sudo cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
+[[ -f "$BUNDLE/client/native-multihop-darwin.sh" ]] || { echo 'This bundle is missing the native macOS multihop helper.' >&2; exit 1; }
+sudo install -m 755 "$BUNDLE/client/native-multihop-darwin.sh" "$ROOT/client/native-multihop-darwin.sh"
 ARCH=$(uname -m)
 case "$ARCH" in
   arm64)
