@@ -6,10 +6,6 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkCapabilities;
-import android.net.NetworkRequest;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
@@ -24,10 +20,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import libXray.DialerController;
-import libXray.LibXray;
+import libbox.Libbox;
+import libbox.RouterXrayDialerController;
 
-/** Full-device Xray-core Android VpnService using the exact pinned libXray mobile wrapper. */
+/** Full-device Xray-core Android VpnService inside Router VPN's one pinned gomobile runtime. */
 public final class XrayVpnService extends VpnService {
     static final String ACTION_START = "com.eabusham.routervpn.XRAY_START";
     static final String ACTION_STOP = "com.eabusham.routervpn.XRAY_STOP";
@@ -39,21 +35,21 @@ public final class XrayVpnService extends VpnService {
     private static final int NOTIFICATION_ID = 7111;
     private static final int MAX_CONFIG = 4 * 1024 * 1024;
     private static final int MAX_META = 64 * 1024;
+    private static final String EXPECTED_LIBXRAY_REVISION = "294fb37343205b9b0cb7b7b1b423d3d4b60d9998";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Object lock = new Object();
     private ParcelFileDescriptor tun;
     private File activeSession;
     private String activeMode = "";
+    private String activeDns = "";
     private JSONObject activeConfig;
     private volatile String state = "DOWN";
     private volatile boolean explicitStop;
-    private ConnectivityManager connectivity;
-    private ConnectivityManager.NetworkCallback networkCallback;
-    private Network underlyingNetwork;
+    private AndroidUnderlyingNetworkMonitor networkMonitor;
     private boolean controllerRegistered;
 
-    private final DialerController socketProtector = new DialerController() {
+    private final RouterXrayDialerController socketProtector = new RouterXrayDialerController() {
         @Override public boolean protectFd(long fd) {
             if (fd < 0 || fd > Integer.MAX_VALUE) return false;
             return protect((int) fd);
@@ -62,7 +58,7 @@ public final class XrayVpnService extends VpnService {
 
     @Override public void onCreate() {
         super.onCreate();
-        connectivity = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        networkMonitor = new AndroidUnderlyingNetworkMonitor(this);
         ensureNotificationChannel();
     }
 
@@ -118,11 +114,12 @@ public final class XrayVpnService extends VpnService {
                 tun = established;
                 activeSession = session;
                 activeMode = modeId;
+                activeDns = dns;
                 activeConfig = config;
             }
             registerSocketProtection();
             runCoreAndProve();
-            registerUnderlyingNetworkMonitor();
+            networkMonitor.start(() -> executor.execute(this::restartAfterNetworkChange));
             publish("UP", modeId, "");
             updateForeground("Native Xray active: " + modeId);
         } catch (Throwable error) {
@@ -138,20 +135,27 @@ public final class XrayVpnService extends VpnService {
     }
 
     private void registerSocketProtection() throws Exception {
+        if (!EXPECTED_LIBXRAY_REVISION.equals(Libbox.routerXrayBridgeRevision())) {
+            throw new IllegalStateException("Combined Android Xray bridge revision does not match the pinned Router VPN source contract.");
+        }
         if (controllerRegistered) return;
-        LibXray.registerDialerController(socketProtector);
-        LibXray.registerListenerController(socketProtector);
+        Libbox.routerXrayRegisterDialerController(socketProtector);
+        Libbox.routerXrayRegisterListenerController(socketProtector);
         controllerRegistered = true;
     }
 
     private void runCoreAndProve() throws Exception {
         JSONObject config;
         ParcelFileDescriptor descriptor;
+        String dns;
         synchronized (lock) {
             config = activeConfig == null ? null : new JSONObject(activeConfig.toString());
             descriptor = tun;
+            dns = activeDns;
         }
         if (config == null || descriptor == null || descriptor.getFileDescriptor() == null || !descriptor.getFileDescriptor().valid()) throw new IllegalStateException("Xray runtime has no valid Android TUN.");
+        String dnsError = Libbox.routerXraySetDNS(socketProtector, dns);
+        if (dnsError != null && !dnsError.isEmpty()) throw new IllegalStateException("Unable to install protected Xray bootstrap DNS: " + dnsError);
         JSONObject env = config.optJSONObject("env");
         if (env == null) env = new JSONObject();
         env.put("xray.tun.fd", Integer.toString(descriptor.getFd()));
@@ -160,9 +164,9 @@ public final class XrayVpnService extends VpnService {
                 .put("apiVersion", 1)
                 .put("method", "runXrayFromJson")
                 .put("payload", new JSONObject().put("configJSON", config.toString()));
-        requireInvokeSuccess(LibXray.invoke(request.toString()), "start Xray");
+        requireInvokeSuccess(Libbox.routerXrayInvoke(request.toString()), "start Xray");
         JSONObject stateRequest = new JSONObject().put("apiVersion", 1).put("method", "getXrayState");
-        JSONObject stateResponse = requireInvokeSuccess(LibXray.invoke(stateRequest.toString()), "read Xray state");
+        JSONObject stateResponse = requireInvokeSuccess(Libbox.routerXrayInvoke(stateRequest.toString()), "read Xray state");
         JSONObject data = stateResponse.optJSONObject("data");
         if (data == null || !data.optBoolean("running", false)) throw new IllegalStateException("Pinned Xray core did not report a running state.");
         File activeBundle = getFileStreamPath(AndroidNodeStore.ACTIVE_BUNDLE);
@@ -174,38 +178,6 @@ public final class XrayVpnService extends VpnService {
         JSONObject response = new JSONObject(raw);
         if (!response.optBoolean("success", false)) throw new IllegalStateException("libXray failed to " + action + ": " + response.optString("error", "unknown error"));
         return response;
-    }
-
-    private void registerUnderlyingNetworkMonitor() {
-        synchronized (lock) {
-            if (networkCallback != null) return;
-            NetworkRequest request = new NetworkRequest.Builder()
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                    .build();
-            networkCallback = new ConnectivityManager.NetworkCallback() {
-                @Override public void onAvailable(Network network) { executor.execute(() -> underlyingAvailable(network)); }
-                @Override public void onLost(Network network) { executor.execute(() -> underlyingLost(network)); }
-            };
-            connectivity.registerNetworkCallback(request, networkCallback);
-        }
-    }
-
-    private void underlyingAvailable(Network network) {
-        if (network == null || explicitStop) return;
-        boolean restart;
-        synchronized (lock) {
-            restart = underlyingNetwork != null && !underlyingNetwork.equals(network) && "UP".equals(state);
-            underlyingNetwork = network;
-        }
-        if (!restart) return;
-        restartAfterNetworkChange();
-    }
-
-    private void underlyingLost(Network network) {
-        synchronized (lock) {
-            if (underlyingNetwork != null && underlyingNetwork.equals(network)) underlyingNetwork = null;
-        }
     }
 
     private void restartAfterNetworkChange() {
@@ -229,8 +201,11 @@ public final class XrayVpnService extends VpnService {
     private void stopCoreOnly() {
         try {
             JSONObject request = new JSONObject().put("apiVersion", 1).put("method", "stopXray");
-            requireInvokeSuccess(LibXray.invoke(request.toString()), "stop Xray");
-        } catch (Throwable ignored) { }
+            requireInvokeSuccess(Libbox.routerXrayInvoke(request.toString()), "stop Xray");
+        } catch (Throwable ignored) {
+        } finally {
+            try { Libbox.routerXrayResetDNS(); } catch (Throwable ignored) { }
+        }
     }
 
     @Override public void onRevoke() {
@@ -264,6 +239,7 @@ public final class XrayVpnService extends VpnService {
             closeCoreLocked(true);
             activeSession = null;
             activeMode = "";
+            activeDns = "";
             activeConfig = null;
             publish(terminalState, "DOWN".equals(terminalState) ? "" : mode, error);
         }
@@ -273,16 +249,12 @@ public final class XrayVpnService extends VpnService {
     }
 
     private void closeCoreLocked(boolean closeTun) {
+        if (networkMonitor != null) networkMonitor.stop();
         stopCoreOnly();
         if (closeTun && tun != null) {
             try { tun.close(); } catch (Throwable ignored) { }
             tun = null;
         }
-        if (networkCallback != null) {
-            try { connectivity.unregisterNetworkCallback(networkCallback); } catch (Throwable ignored) { }
-            networkCallback = null;
-        }
-        underlyingNetwork = null;
     }
 
     private void publish(String newState, String mode, String error) {
