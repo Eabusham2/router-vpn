@@ -1,0 +1,70 @@
+name: Repair current CI contract drift
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/self-repair-current-ci.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebase on live main
+        run: git pull --rebase origin main
+      - name: Apply exact bounded repairs
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def exact(path, old, new, count=1):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != count:
+                  raise SystemExit(f'{path}: expected {count} occurrence(s) of {old!r}, got {n}')
+              p.write_text(s.replace(old, new, count))
+
+          exact(
+              'android/build-sing-box-libbox.sh',
+              'GO_TOOLCHAIN=go1.26.3\n',
+              'GO_TOOLCHAIN=go1.26.3\nGO_MOD_VERSION=${GO_TOOLCHAIN#go}\n[[ "$GO_MOD_VERSION" =~ ^[0-9]+\\.[0-9]+(\\.[0-9]+)?$ ]] || { echo "invalid Go module directive version: $GO_MOD_VERSION" >&2; exit 1; }\n',
+          )
+          exact(
+              'android/build-sing-box-libbox.sh',
+              '  go mod edit -go="$GO_TOOLCHAIN"\n',
+              '  go mod edit -go="$GO_MOD_VERSION"\n',
+          )
+          exact(
+              'deploy/validate-repo.py',
+              '"Strict embedded libbox sessions require", "Shadowsocks or Hysteria2 exit",\n    "AWG-entry multihop", "Network changes reset libbox",',
+              '"Strict embedded libbox/Xray sessions require", "Shadowsocks or Hysteria2 exit",\n    "AWG-entry multihop", "Network changes reset/revalidate libbox and native Xray",',
+          )
+          exact(
+              '.github/workflows/setup-admin-ci.yml',
+              'entrypoint: ["python3", "/src/server/scripts/setup-center-server.py"]',
+              'entrypoint: ["python3", "/src/server/scripts/setup-center-ai-server.py"]',
+          )
+          PY
+      - name: Validate repaired contracts
+        run: |
+          bash -n android/build-sing-box-libbox.sh
+          python3 deploy/validate-repo.py
+          grep -F 'entrypoint: ["python3", "/src/server/scripts/setup-center-ai-server.py"]' server/portainer-current.yaml
+          ! grep -E '8789:|:8789|0\.0\.0\.0:8789' server/portainer-current.yaml
+          grep -F '/opt/router-vpn:/opt/router-vpn:ro' server/portainer-current.yaml
+      - name: Commit repairs and remove one-shot workflow
+        run: |
+          git config user.name 'router-vpn-ci'
+          git config user.email 'router-vpn-ci@users.noreply.github.com'
+          git rm .github/workflows/self-repair-current-ci.yml
+          git add android/build-sing-box-libbox.sh deploy/validate-repo.py .github/workflows/setup-admin-ci.yml
+          git commit -m 'Fix Android build and current CI contracts'
+          git pull --rebase origin main
+          git push origin HEAD:main
