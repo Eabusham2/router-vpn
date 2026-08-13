@@ -53,8 +53,32 @@ def controller_multihop_platform(platform: str) -> bool:
 
 
 def android_map() -> bool:
-    text = mod.body("android/app/src/main/java/com/eabusham/routervpn/MainActivity.java")
-    return any(x in text for x in ("GoogleMap", "MapView", "Mapbox", "MapLibre")) and "latitude" in text.lower() and "longitude" in text.lower()
+    return (
+        mod.has("android/app/src/main/AndroidManifest.xml", 'android:name=".ProductActivity"', "android.intent.category.LAUNCHER")
+        and mod.has(
+            "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
+            "RouterVpnNodeMapView",
+            "latitude",
+            "longitude",
+            "Home / Connect",
+            "Nodes / Map",
+            "Modes",
+            "DNS",
+            "Advanced",
+            "Forwarding",
+            "Settings",
+            "Help",
+            "never guesses a location",
+        )
+        and mod.has(
+            "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
+            "Canvas",
+            "Marker",
+            "latitude",
+            "longitude",
+            "No real node coordinates",
+        )
+    )
 
 
 def ios_map() -> bool:
