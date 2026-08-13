@@ -39,8 +39,6 @@ def patch_full_audit() -> bool:
         raise RuntimeError("full-audit selected-node import contract changed unexpectedly")
     old_field = '"NodeProofID string `json:\\"nodeProofId\\"`",'
     if old_field in text:
-        # gofmt is free to align struct fields with spaces; behavior is already
-        # pinned by internal/common schema tests and the exact-node proof tests.
         text = text.replace(old_field, '"NodeProofID",', 1)
         changed = True
     if changed:
@@ -48,11 +46,25 @@ def patch_full_audit() -> bool:
     return changed
 
 
+def patch_release_gap_audit() -> bool:
+    path = ROOT / "deploy/release-gap-audit.py"
+    text = path.read_text(encoding="utf-8")
+    old = '    "derivedNodeID, proofErr := expectedNodeProofID(p)",\n    "p.NodeProofID = derivedNodeID",'
+    new = '    "newStagedBundle(",\n    "nodeProofIDFromWGConfig(wgData)",\n    "p.NodeProofID = derivedNodeID",'
+    if old in text:
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+        return True
+    if new in text:
+        return False
+    raise RuntimeError("release-gap selected-node import contract changed unexpectedly")
+
+
 def main() -> int:
     wire.main()
     changed = []
     if patch_main_imports(): changed.append("cmd/client/main.go import cleanup")
     if patch_full_audit(): changed.append("deploy/full-audit-v4.py atomic import contract")
+    if patch_release_gap_audit(): changed.append("deploy/release-gap-audit.py atomic import contract")
     print("final release wiring cleanup:", ", ".join(changed) if changed else "nothing (already finalized)")
     return 0
 
