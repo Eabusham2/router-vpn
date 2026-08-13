@@ -61,17 +61,28 @@ for marker in (
 ):
     assert marker in sing, f"NativeSingBoxController missing safety marker: {marker}"
 
-# Path proof is private-node proof, not a public-IP-only success heuristic.
-assert "isPrivate(address)" in probe
-assert 'body.optBoolean("ok", false)' in probe
-assert "HTTP/1.1 200" in probe
+# Path proof is private-node proof, not a public-IP-only or generic {ok:true}
+# success heuristic. The bundle's stable public node fingerprint must match the
+# private router-agent response exactly.
+for marker in (
+    "isPrivate(address)",
+    'bundle.optString("nodeProofId"',
+    'profile.optString("node_proof_id"',
+    'expectedNode.matches("[0-9a-f]{64}")',
+    'expectedNode.equals(body.optString("node_id"',
+    'PROOF_KIND.equals(body.optString("proof"',
+    "HTTP/1.1 200",
+):
+    assert marker in probe, f"AndroidPathProbe missing selected-node identity marker: {marker}"
+assert 'return body.optBoolean("ok", false);' not in probe, "generic ok-only proof must not return success"
 
-# UI/onboarding must not regress to claiming that strict libbox is entirely
-# unavailable after the runtime gained verified Android lockdown support.
-assert "Strict policy is enforced for embedded libbox" in main
+# UI/onboarding must describe the actually implemented strict/multihop boundary.
+assert "Strict embedded libbox sessions require" in main
 assert "Always-on" in main and "Block connections without VPN" in main
+assert "WireGuard entry plus a different stored node" in main
+assert "Shadowsocks or Hysteria2 exit" in main
+assert "AWG-entry multihop" in main
 assert "strict-kill-switch branches remain visibly gated" not in main
-assert "multihop" in main.lower()
 
 # The policy marker must be staged only when the selected router requests it.
 assert "SESSION_MARKER" in policy
