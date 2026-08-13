@@ -24,6 +24,7 @@ import (
 type cfg struct {
 	Listen        string   `json:"listen"`
 	Token         string   `json:"token"`
+	NodeID        string   `json:"node_id"`
 	TunnelCIDRs   []string `json:"tunnel_cidrs"`
 	WANInterface  string   `json:"wan_interface"`
 	ReservedPorts []int    `json:"reserved_ports"`
@@ -56,6 +57,9 @@ func main() {
 	if c.WANInterface == "" {
 		log.Fatal("wan_interface is required")
 	}
+	if !validNodeID(c.NodeID) {
+		log.Fatal("node_id is required and must be a lowercase SHA-256 hex value")
+	}
 	if c.DAITAListen == "" {
 		c.DAITAListen = "0.0.0.0:45999"
 	}
@@ -85,6 +89,18 @@ func getenv(k, v string) string {
 		return x
 	}
 	return v
+}
+
+func validNodeID(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, c := range value {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *server) runDAITASink() {
@@ -120,7 +136,11 @@ func (s *server) runDAITASink() {
 
 func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("content-type", "application/json")
-	fmt.Fprint(w, `{"ok":true}`)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":      true,
+		"node_id": s.cfg.NodeID,
+		"proof":   "router-vpn-private-agent-v1",
+	})
 }
 
 func (s *server) authorized(r *http.Request) (net.IP, error) {
