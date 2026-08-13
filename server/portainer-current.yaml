@@ -199,9 +199,9 @@ services:
     restart: unless-stopped
     depends_on:
       finalize-current: {condition: service_completed_successfully}
-    # setup-center-server.py is the authenticated LAN surface and imports
-    # /src/server/scripts/download-broker.py internally for download/pairing APIs.
-    entrypoint: ["python3", "/src/server/scripts/setup-center-ai-server.py"]
+    # setup-center-product-server.py preserves the authenticated Setup Center,
+    # Full Guide, device UX, AI Help, and read-only exact-SHA release/recovery status.
+    entrypoint: ["python3", "/src/server/scripts/setup-center-product-server.py"]
     command: ["--base", "/opt/router-vpn", "--bind", "0.0.0.0", "--port", "8786"]
     volumes:
       - /opt/router-vpn:/opt/router-vpn:ro
