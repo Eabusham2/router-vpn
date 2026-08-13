@@ -66,7 +66,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             wireGuardAdapter = adapter
             adapter.start(tunnelConfiguration: tunnelConfiguration) { [weak self] adapterError in
                 guard let self else {
-                    completionHandler(self?.tunnelError(10, "Router VPN PacketTunnel was released during startup."))
+                    completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 10, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during startup."]))
                     return
                 }
                 if let adapterError {
