@@ -20,7 +20,7 @@ enum RouterVPNWireGuardConfig {
         var peerSections: [[String: [String]]] = []
         var currentSection = ""
 
-        for (index, rawLine) in text.split(whereSeparator: \ .isNewline).enumerated() {
+        for (index, rawLine) in text.split(whereSeparator: { $0.isNewline }).enumerated() {
             var line = String(rawLine)
             if let hash = line.firstIndex(of: "#") { line = String(line[..<hash]) }
             if let semi = line.firstIndex(of: ";") { line = String(line[..<semi]) }
