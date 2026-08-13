@@ -94,9 +94,7 @@ final class AndroidNativeProfilePolicy {
         int effective = p.optInt("effective_mtu", 0);
         if ("manual".equals(policy)) return validMtu(manual) ? manual : base;
         if ("auto".equals(policy)) return validMtu(effective) ? effective : base;
-        // EffectiveMTU is written only after a runtime has actually verified it;
-        // honor that observation when present even after policy returns to default.
-        return validMtu(effective) ? effective : base;
+        return base;
     }
 
     static JSONObject selectedProfile(JSONObject bundle) {
