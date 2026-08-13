@@ -44,7 +44,14 @@ jobs:
       - name: Push only the validated live wiring changes
         run: |
           set -euo pipefail
-          files=(cmd/client/main.go server/portainer-current.yaml deploy/full-audit-v4.py deploy/release-gap-audit.py)
+          files=(
+            cmd/client/main.go
+            cmd/client/bundle_staging.go
+            cmd/client/bundle_staging_test.go
+            server/portainer-current.yaml
+            deploy/full-audit-v4.py
+            deploy/release-gap-audit.py
+          )
           if git diff --quiet -- "${files[@]}"; then
             echo 'Release-gap wiring is already applied.'
             exit 0
