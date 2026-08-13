@@ -62,7 +62,7 @@ final class NativeXrayController {
             String id = mode.optString("id", "").trim();
             if (!safeToken(id)) continue;
             JSONObject profile = profiles.optJSONObject(id);
-            if (profile == null) continue;
+            if (profile == null || isCompositeProfile(profile)) continue;
             String encoded = profile.optString(CONFIG_FILE, "").trim();
             if (encoded.isEmpty()) continue;
             byte[] config;
@@ -81,6 +81,7 @@ final class NativeXrayController {
         JSONObject profiles = root.optJSONObject("profiles");
         JSONObject profile = profiles == null ? null : profiles.optJSONObject(modeId);
         if (profile == null) throw new IllegalStateException("The selected mode has no generated profile.");
+        if (isCompositeProfile(profile)) throw new IllegalStateException("The selected mode is a composite/multi-engine profile and cannot be represented truthfully by native Xray alone.");
         String encoded = profile.optString(CONFIG_FILE, "").trim();
         if (encoded.isEmpty()) throw new IllegalStateException("The selected mode has no Xray config.");
         byte[] raw = Base64.decode(encoded, Base64.DEFAULT);
@@ -141,6 +142,17 @@ final class NativeXrayController {
     String getState() { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(STATE_KEY, "DOWN"); }
     String getMode() { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(MODE_KEY, ""); }
     String getError() { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(ERROR_KEY, ""); }
+
+    private static boolean isCompositeProfile(JSONObject profile) {
+        // These files are generated only for protocol-split/MAX/multi-engine
+        // graphs. Their xray.json is one sidecar, not the semantic whole mode.
+        // Native Xray must never silently downgrade such a mode to that sidecar.
+        return profile.has("stack.json")
+                || profile.has("chain.env")
+                || profile.has("middle-sing-box.json")
+                || profile.has("outer-xray.json")
+                || profile.has("outer-sing-box.json");
+    }
 
     private static boolean isDirectXrayConfig(String text) {
         try { validatedProxyTag(new JSONObject(text)); return true; } catch (Throwable invalid) { return false; }
