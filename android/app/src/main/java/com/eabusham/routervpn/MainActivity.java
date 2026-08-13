@@ -43,6 +43,7 @@ public final class MainActivity extends Activity {
     private static final int PREPARE_LAYERED = 1004;
     private static final int PREPARE_AUTO = 1005;
     private static final int PREPARE_MULTIHOP = 1006;
+    private static final int PREPARE_XRAY = 1007;
     private static final String BUNDLE_FILE = AndroidNodeStore.ACTIVE_BUNDLE;
     private static final String PREFS = "router-vpn";
     private static final String ONBOARDING_DONE = "onboarding_done_v6";
@@ -51,21 +52,23 @@ public final class MainActivity extends Activity {
 
     private TextView statusView, endpointView, socksView, modesView, nativeStatusView;
     private Button nativeConnectButton, nativeDisconnectButton, awgConnectButton, awgDisconnectButton;
-    private Button layeredConnectButton, layeredDisconnectButton, autoButton, smartButton, customButton;
+    private Button layeredConnectButton, layeredDisconnectButton, xrayConnectButton, xrayDisconnectButton, autoButton, smartButton, customButton;
     private Button manageNodesButton, multihopButton;
     private String socksAddress = "";
 
     private NativeWireGuardController wireGuard;
     private NativeAmneziaWGController amneziaWG;
     private NativeSingBoxController singBox;
+    private NativeXrayController xray;
     private AndroidModeOrchestrator orchestrator;
     private AndroidNodeStore nodeStore;
     private AndroidMultihopRuntime multihop;
 
     private NativeSingBoxController.ModeInfo pendingLayeredMode;
+    private NativeXrayController.ModeInfo pendingXrayMode;
     private AndroidNodeStore.Node pendingEntryNode, pendingExitNode;
     private String pendingExitMode = "";
-    private boolean wgBusy, awgBusy, layeredBusy, automationBusy, multihopBusy, pendingSmart;
+    private boolean wgBusy, awgBusy, layeredBusy, xrayBusy, automationBusy, multihopBusy, pendingSmart;
     private List<String> pendingCustomLayers;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -74,7 +77,8 @@ public final class MainActivity extends Activity {
         wireGuard = new NativeWireGuardController(this);
         amneziaWG = new NativeAmneziaWGController(this);
         singBox = new NativeSingBoxController(this);
-        orchestrator = new AndroidModeOrchestrator(this, wireGuard, amneziaWG, singBox);
+        xray = new NativeXrayController(this);
+        orchestrator = new AndroidModeOrchestrator(this, wireGuard, amneziaWG, singBox, xray);
         nodeStore = new AndroidNodeStore(this);
         multihop = new AndroidMultihopRuntime(this, singBox);
         setContentView(buildUi());
@@ -124,6 +128,13 @@ public final class MainActivity extends Activity {
         awgDisconnectButton.setOnClickListener(v -> disconnectNativeAmneziaWG());
         c.addView(awgDisconnectButton, margins(0, dp(8), 0, 0));
 
+        xrayConnectButton = button("Connect native Xray mode");
+        xrayConnectButton.setOnClickListener(v -> chooseXrayMode());
+        c.addView(xrayConnectButton, margins(0, dp(8), 0, 0));
+        xrayDisconnectButton = button("Disconnect native Xray");
+        xrayDisconnectButton.setOnClickListener(v -> disconnectXray());
+        c.addView(xrayDisconnectButton, margins(0, dp(8), 0, 0));
+
         layeredConnectButton = button("Connect embedded layered mode");
         layeredConnectButton.setOnClickListener(v -> chooseLayeredMode());
         c.addView(layeredConnectButton, margins(0, dp(8), 0, 0));
@@ -167,7 +178,7 @@ public final class MainActivity extends Activity {
         modesView = section("Modes in active bundle", "Not imported");
         c.addView(modesView, margins(0, dp(12), 0, 0));
         c.addView(section("Android capability boundary",
-                "Raw WireGuard and AmneziaWG 2 use embedded userspace backends. Self-contained generated sing-box profiles use pinned libbox through Android VpnService. AUTO/SMART/CUSTOM require selected-node private path proof. Real Android multihop is currently limited to a standard WireGuard entry plus a different stored node using a self-contained Shadowsocks or Hysteria2 exit; the exit node must pass private path proof before Connected. AWG-entry multihop, mixed local-engine profiles and unsupported ALL/MAX branches remain gated. Strict embedded libbox sessions require Android 10+ Always-on plus lockdown/Block connections without VPN; raw strict WG/AWG fail closed. Multihop adds latency by design. Network changes reset libbox, but final reconnect/leak behavior still needs real-device validation. SOCKS5 remains tunnel/LAN-only; never expose TCP 1080 to WAN."), margins(0, dp(20), 0, dp(20)));
+                "Raw WireGuard and AmneziaWG 2 use embedded userspace backends. Self-contained generated sing-box profiles use pinned libbox, and self-contained Reality/XHTTP profiles use pinned Xray-core v26.7.11 through a dedicated Android VpnService. AUTO/SMART/CUSTOM require selected-node private path proof. Real Android multihop is currently limited to a standard WireGuard entry plus a different stored node using a self-contained Shadowsocks or Hysteria2 exit; the exit node must pass private path proof before Connected. AWG-entry multihop and composite MAX/mixed sidecar chains remain gated; native Xray is available for self-contained Xray profiles. Strict embedded libbox/Xray sessions require Android 10+ Always-on plus lockdown/Block connections without VPN; raw strict WG/AWG fail closed. Multihop adds latency by design. Network changes reset/revalidate libbox and native Xray, but final reconnect/leak behavior still needs real-device validation. SOCKS5 remains tunnel/LAN-only; never expose TCP 1080 to WAN."), margins(0, dp(20), 0, dp(20)));
 
         ScrollView s = new ScrollView(this);
         s.addView(c);
@@ -224,9 +235,9 @@ public final class MainActivity extends Activity {
             case 3: return "On the home LAN open http://AI_BOARD_IP:8786/. Setup Center is authenticated because it can expose private node material. Keep the permanent credential router-local; pairing codes are short-lived.";
             case 4: return "ASUS forwarding exposes only intended public VPN/auxiliary ports. Never expose SOCKS5 1080, Setup Center 8786, health/admin/Portainer/AdGuard/SSH or private credentials to WAN.";
             case 5: return "Add router-vpn-bundle.json for each router. Router linking is a data operation: the app is installed once, keeps multiple node bundles in bounded Android app-private storage, and never relies on the server's repeated display id as a local filename.";
-            case 6: return "Choose an active router for single-hop. Raw WG/AWG and self-contained libbox modes are real choices. AUTO tests native candidates; SMART tries simpler candidates and restores the last proven mode if reduction fails. Strict policy excludes raw WG/AWG and requires proven Android Always-on plus lockdown for embedded libbox.";
+            case 6: return "Choose an active router for single-hop. Raw WG/AWG, self-contained libbox, and native self-contained Xray modes are real choices. AUTO tests native candidates; SMART tries simpler candidates and restores the last proven mode if reduction fails. Strict policy excludes raw WG/AWG and requires proven Android Always-on plus lockdown for embedded libbox/Xray.";
             case 7: return "Multihop requires two different stored nodes. Current proven Android graph is standard WireGuard entry → Shadowsocks or Hysteria2 exit → Internet. The app builds one VpnService graph and requires private proof from the selected exit before Connected. AWG-entry/mixed ALL/MAX multihop stays unavailable. Expect more latency.";
-            case 8: return "CUSTOM selects only a native candidate containing all requested layers. A TUN UP state alone is never AUTO or multihop success: selected-node/exit private path proof must pass. Selected DNS is applied to normal embedded libbox sessions; final DNS/leak proof remains a release gate.";
+            case 8: return "CUSTOM selects only a native candidate containing all requested layers. A TUN UP state alone is never AUTO or multihop success: selected-node/exit private path proof must pass. Selected DNS is applied to embedded libbox sessions and IP-based native Xray sessions; final DNS/leak proof remains a release gate.";
             case 9: return "Run setup check, server doctor, and ASUS forwarding status. Final release still requires live exit-IP, DNS, leak, reconnect, kill-switch, multihop-failure and network-transition checks on real devices and off-LAN networks.";
             default: return "Finish dismisses onboarding; reopen it any time. Router VPN deliberately greys or rejects combinations it cannot prove rather than reporting a fake Connected state.";
         }
@@ -255,10 +266,12 @@ public final class MainActivity extends Activity {
                     .append(hasRawAmneziaWG(b) ? "✓ Raw AmneziaWG 2 profile available\n" : "! Raw AmneziaWG 2 profile missing\n");
             List<NativeSingBoxController.ModeInfo> direct = singBox.listDirectLibboxModes(getFileStreamPath(BUNDLE_FILE));
             r.append(!direct.isEmpty() ? "✓ " + direct.size() + " direct embedded libbox mode(s) available\n" : "! No self-contained libbox profile available\n");
+            List<NativeXrayController.ModeInfo> directXray = xray.listDirectXrayModes(getFileStreamPath(BUNDLE_FILE));
+            r.append(!directXray.isEmpty() ? "✓ " + directXray.size() + " native Xray mode(s) available\n" : "! No self-contained native Xray profile available\n");
             boolean utilities = hasMode(m, "all") && hasMode(m, "smart-auto") && hasMode(m, "custom");
             r.append(utilities ? "✓ Bundle catalogs ALL / SMART AUTO / CUSTOM\n" : "! Utility mode catalog incomplete\n");
             boolean strict = AndroidKillSwitchPolicy.strictRequested(b);
-            r.append(strict ? "✓ Strict policy requested: embedded libbox requires proven Android Always-on + Block connections without VPN; raw WG/AWG fail closed.\n" : "ℹ Strict kill switch is not requested for the active node.\n");
+            r.append(strict ? "✓ Strict policy requested: embedded libbox/Xray requires proven Android Always-on + Block connections without VPN; raw WG/AWG fail closed.\n" : "ℹ Strict kill switch is not requested for the active node.\n");
         } catch (Exception x) {
             r.append("✗ Add/link a Router VPN node first: ").append(x.getMessage()).append('\n');
         }
@@ -295,7 +308,10 @@ public final class MainActivity extends Activity {
 
     private boolean layeredActiveOrBusy() {
         String s = singBox == null ? "DOWN" : singBox.getState();
-        return layeredBusy || automationBusy || multihopBusy || "STARTING".equals(s) || "UP".equals(s) || "STOPPING".equals(s);
+        String xs = xray == null ? "DOWN" : xray.getState();
+        return layeredBusy || xrayBusy || automationBusy || multihopBusy
+                || "STARTING".equals(s) || "UP".equals(s) || "STOPPING".equals(s)
+                || "STARTING".equals(xs) || "UP".equals(xs) || "STOPPING".equals(xs);
     }
 
     private boolean rawActiveOrBusy() {
@@ -348,6 +364,70 @@ public final class MainActivity extends Activity {
     private void disconnectNativeAmneziaWG() {
         setAwgBusy(true, "AmneziaWG disconnecting…");
         amneziaWG.disconnect((s, m, e) -> runOnUiThread(() -> { setAwgBusy(false, "AmneziaWG: " + s); statusView.setText(m); if (e != null) toast(m); refreshNativeState(); }));
+    }
+
+
+    private void chooseXrayMode() {
+        if (rawActiveOrBusy() || layeredActiveOrBusy()) { toast("Disconnect the current VPN before starting native Xray"); return; }
+        if (!bundleReady()) return;
+        try {
+            List<NativeXrayController.ModeInfo> modes = xray.listDirectXrayModes(getFileStreamPath(BUNDLE_FILE));
+            if (modes.isEmpty()) {
+                new AlertDialog.Builder(this).setTitle("No native Xray mode")
+                        .setMessage("This node has no self-contained Xray profile. Composite Xray+local-sidecar profiles stay gated instead of being reported as native Xray.")
+                        .setPositiveButton("OK", null).show();
+                return;
+            }
+            CharSequence[] labels = new CharSequence[modes.size()];
+            for (int i = 0; i < modes.size(); i++) labels[i] = modes.get(i).name + " [" + modes.get(i).id + "]";
+            new AlertDialog.Builder(this).setTitle("Choose native Xray mode").setItems(labels, (d, which) -> requestXray(modes.get(which))).setNegativeButton("Cancel", null).show();
+        } catch (Exception e) { toast("Xray mode scan failed: " + e.getMessage()); }
+    }
+
+    private void requestXray(NativeXrayController.ModeInfo mode) {
+        if (rawActiveOrBusy() || layeredActiveOrBusy()) { refreshNativeState(); return; }
+        pendingXrayMode = mode;
+        Intent permission = VpnService.prepare(this);
+        if (permission != null) {
+            statusView.setText("Waiting for Android VPN permission for native Xray " + mode.name + "…");
+            startActivityForResult(permission, PREPARE_XRAY);
+        } else startPendingXray();
+    }
+
+    private void startPendingXray() {
+        NativeXrayController.ModeInfo mode = pendingXrayMode;
+        pendingXrayMode = null;
+        if (mode == null) return;
+        if (rawActiveOrBusy() || layeredActiveOrBusy()) { statusView.setText("Another VPN became active; native Xray start cancelled."); refreshNativeState(); return; }
+        try {
+            NativeXrayController.SessionInfo session = xray.prepareSession(getFileStreamPath(BUNDLE_FILE), mode.id);
+            xrayBusy = true;
+            statusView.setText("Starting native Xray " + mode.name + " and proving selected node…");
+            xray.start(session);
+            scheduleXrayRefresh();
+        } catch (Exception e) {
+            xrayBusy = false;
+            statusView.setText("Native Xray start failed: " + e.getMessage());
+            toast(e.getMessage());
+            refreshNativeState();
+        }
+    }
+
+    private void disconnectXray() {
+        if (xray == null) return;
+        xrayBusy = true;
+        xray.stop();
+        statusView.setText("Stopping native Xray VPN…");
+        scheduleXrayRefresh();
+    }
+
+    private void scheduleXrayRefresh() {
+        long[] delays = {250, 750, 1500, 3000};
+        for (long delay : delays) handler.postDelayed(() -> {
+            refreshNativeState();
+            String state = xray.getState();
+            if (!"STARTING".equals(state) && !"STOPPING".equals(state)) xrayBusy = false;
+        }, delay);
     }
 
     private void chooseLayeredMode() {
@@ -536,17 +616,21 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshNativeState() {
-        if (nativeStatusView == null || wireGuard == null || amneziaWG == null || singBox == null) return;
+        if (nativeStatusView == null || wireGuard == null || amneziaWG == null || singBox == null || xray == null) return;
         Tunnel.State w = wireGuard.getState();
         org.amnezia.awg.backend.Tunnel.State a = amneziaWG.getState();
         String ls = singBox.getState(), lm = singBox.getMode(), le = singBox.getError();
+        String xs = xray.getState(), xm = xray.getMode(), xe = xray.getError();
         if (!"STARTING".equals(ls) && !"STOPPING".equals(ls)) layeredBusy = false;
-        nativeStatusView.setText("Native Android VPN\nWireGuard: " + w + "\nAmneziaWG 2: " + a + "\nLayered/multihop: " + ls + (lm.isEmpty() ? "" : " — " + lm) + (le.isEmpty() ? "" : "\nLast layered error: " + le) + (automationBusy ? "\nAUTO/SMART/CUSTOM: testing…" : "") + (multihopBusy ? "\nMultihop: starting/proving exit…" : ""));
+        if (!"STARTING".equals(xs) && !"STOPPING".equals(xs)) xrayBusy = false;
+        nativeStatusView.setText("Native Android VPN\nWireGuard: " + w + "\nAmneziaWG 2: " + a + "\nNative Xray: " + xs + (xm.isEmpty() ? "" : " — " + xm) + (xe.isEmpty() ? "" : "\nLast Xray error: " + xe) + "\nLayered/multihop: " + ls + (lm.isEmpty() ? "" : " — " + lm) + (le.isEmpty() ? "" : "\nLast layered error: " + le) + (automationBusy ? "\nAUTO/SMART/CUSTOM: testing…" : "") + (multihopBusy ? "\nMultihop: starting/proving exit…" : ""));
         boolean rawBlocked = layeredActiveOrBusy(), layeredBlocked = rawActiveOrBusy();
         nativeDisconnectButton.setEnabled(!automationBusy && !multihopBusy && !wgBusy && w == Tunnel.State.UP);
         awgDisconnectButton.setEnabled(!automationBusy && !multihopBusy && !awgBusy && a == org.amnezia.awg.backend.Tunnel.State.UP);
+        xrayDisconnectButton.setEnabled(!automationBusy && !multihopBusy && !xrayBusy && ("UP".equals(xs) || "STARTING".equals(xs)));
         nativeConnectButton.setEnabled(!wgBusy && !awgBusy && !rawBlocked && a != org.amnezia.awg.backend.Tunnel.State.UP);
         awgConnectButton.setEnabled(!wgBusy && !awgBusy && !rawBlocked && w != Tunnel.State.UP);
+        xrayConnectButton.setEnabled(!xrayBusy && !layeredBlocked && !"UP".equals(xs) && !"STARTING".equals(xs) && !"STOPPING".equals(xs));
         layeredConnectButton.setEnabled(!layeredBusy && !layeredBlocked && !"UP".equals(ls) && !"STARTING".equals(ls) && !"STOPPING".equals(ls));
         layeredDisconnectButton.setEnabled(!automationBusy && (multihopBusy || "UP".equals(ls) || "STARTING".equals(ls)));
         boolean autoEnabled = !rawActiveOrBusy() && !layeredActiveOrBusy();
@@ -643,6 +727,7 @@ public final class MainActivity extends Activity {
         if (code == PREPARE_NATIVE_WG) { if (result == RESULT_OK) connectNativeWireGuard(); else statusView.setText("VPN permission denied; WireGuard stayed disconnected."); return; }
         if (code == PREPARE_NATIVE_AWG) { if (result == RESULT_OK) connectNativeAmneziaWG(); else statusView.setText("VPN permission denied; AmneziaWG stayed disconnected."); return; }
         if (code == PREPARE_LAYERED) { if (result == RESULT_OK) startPendingLayered(); else { pendingLayeredMode = null; statusView.setText("VPN permission denied; no layered session was created."); refreshNativeState(); } return; }
+        if (code == PREPARE_XRAY) { if (result == RESULT_OK) startPendingXray(); else { pendingXrayMode = null; xrayBusy = false; statusView.setText("VPN permission denied; native Xray stayed disconnected."); refreshNativeState(); } return; }
         if (code == PREPARE_AUTO) { if (result == RESULT_OK) startPendingAutomation(); else { pendingCustomLayers = null; pendingSmart = false; statusView.setText("VPN permission denied; automatic mode selection did not start."); refreshNativeState(); } return; }
         if (code == PREPARE_MULTIHOP) { if (result == RESULT_OK) startPendingMultihop(); else { pendingEntryNode = null; pendingExitNode = null; pendingExitMode = ""; multihopBusy = false; statusView.setText("VPN permission denied; multihop stayed disconnected."); refreshNativeState(); } return; }
         if (code != IMPORT_BUNDLE || result != RESULT_OK || data == null) return;
