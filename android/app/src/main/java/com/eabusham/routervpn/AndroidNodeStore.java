@@ -25,6 +25,7 @@ final class AndroidNodeStore {
     private static final String PREFS = "router-vpn";
     private static final String ACTIVE_ID = "active_node_id_v1";
     private static final String STORE_DIR = "router-nodes-v1";
+    private static final String NODE_PROOF_DOMAIN = "router-vpn-node-proof-v1\n";
 
     static final class Node {
         final String id;
@@ -123,15 +124,36 @@ final class AndroidNodeStore {
         return new Node(id, name, endpoint, file);
     }
 
+    /**
+     * Stable public identity shared with router-agent. New bundles carry it
+     * explicitly; legacy bundles derive the same value from the WireGuard server
+     * public key, so endpoint/DDNS changes update one stored node instead of
+     * creating duplicates. If both forms exist they must agree.
+     */
+    static String stableNodeIdentity(JSONObject bundle) throws Exception {
+        JSONObject profile = selectedProfile(bundle);
+        String top = bundle.optString("nodeProofId", "").trim();
+        String nested = profile == null ? "" : profile.optString("node_proof_id", "").trim();
+        if (!top.isEmpty() && !top.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("Router bundle nodeProofId is invalid.");
+        if (!nested.isEmpty() && !nested.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("Router profile node proof id is invalid.");
+        if (!top.isEmpty() && !nested.isEmpty() && !top.equals(nested)) throw new IllegalArgumentException("Router bundle node proof ids disagree.");
+        String supplied = !top.isEmpty() ? top : nested;
+        String peerKey = wireGuardPeerPublicKey(bundle);
+        if (!peerKey.isEmpty()) {
+            String derived = hex(MessageDigest.getInstance("SHA-256").digest((NODE_PROOF_DOMAIN + peerKey).getBytes(StandardCharsets.UTF_8)));
+            if (!supplied.isEmpty() && !supplied.equals(derived)) throw new IllegalArgumentException("Router bundle node proof does not match its WireGuard server public key.");
+            return derived;
+        }
+        return supplied;
+    }
+
     static String deriveId(JSONObject bundle, byte[] raw) throws Exception {
+        String stable = stableNodeIdentity(bundle);
+        if (!stable.isEmpty()) return stable.substring(0, 32);
         String endpoint = bundle.optString("endpoint", "").trim().toLowerCase();
         String routerApi = bundle.optString("routerAPI", "").trim().toLowerCase();
-        String peerKey = wireGuardPeerPublicKey(bundle);
-        String identity;
-        if (!peerKey.isEmpty()) identity = "router-vpn-node-v1\n" + endpoint + "\n" + routerApi + "\n" + peerKey;
-        else identity = "router-vpn-node-v1-fallback\n" + endpoint + "\n" + routerApi + "\n" + hex(MessageDigest.getInstance("SHA-256").digest(raw));
-        byte[] digest = MessageDigest.getInstance("SHA-256").digest(identity.getBytes(StandardCharsets.UTF_8));
-        return hex(digest).substring(0, 32);
+        String fallback = "router-vpn-node-v1-fallback\n" + endpoint + "\n" + routerApi + "\n" + hex(MessageDigest.getInstance("SHA-256").digest(raw));
+        return hex(MessageDigest.getInstance("SHA-256").digest(fallback.getBytes(StandardCharsets.UTF_8))).substring(0, 32);
     }
 
     private static String wireGuardPeerPublicKey(JSONObject bundle) {
@@ -158,6 +180,9 @@ final class AndroidNodeStore {
         if (bundle == null || !bundle.has("profiles") || !bundle.has("modes") || !bundle.has("routerProfiles")) throw new IllegalArgumentException("This is not a complete Router VPN node bundle.");
         JSONObject profiles = bundle.optJSONObject("profiles");
         if (profiles == null || profiles.length() == 0) throw new IllegalArgumentException("Router VPN node bundle has no generated profiles.");
+        try { stableNodeIdentity(bundle); }
+        catch (RuntimeException error) { throw error; }
+        catch (Exception error) { throw new IllegalArgumentException("Router VPN node identity validation failed.", error); }
     }
 
     private static JSONObject selectedProfile(JSONObject bundle) {
