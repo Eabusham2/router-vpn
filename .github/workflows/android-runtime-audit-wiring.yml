@@ -6,6 +6,7 @@ on:
     paths:
       - 'deploy/migrate-android-runtime-audits.py'
       - 'deploy/migrate-weighted-android-runtime.py'
+      - 'deploy/migrate-android-combined-runtime-audits.py'
       - '.github/workflows/android-runtime-audit-wiring.yml'
   workflow_dispatch:
 
@@ -25,6 +26,7 @@ jobs:
         run: |
           python3 deploy/migrate-android-runtime-audits.py
           python3 deploy/migrate-weighted-android-runtime.py
+          python3 deploy/migrate-android-combined-runtime-audits.py
           gofmt -w internal/common/native_runtime_contract_test.go
       - name: Validate migrated audits
         run: |
@@ -50,6 +52,6 @@ jobs:
           git config user.name 'router-vpn-ci'
           git config user.email 'router-vpn-ci@users.noreply.github.com'
           git add deploy/full-audit-v4.py deploy/weighted-release-audit.py internal/common/native_runtime_contract_test.go
-          git commit -m 'Audit native Android Xray ALL DNS and recovery'
+          git commit -m 'Audit one combined Android Go runtime'
           git pull --rebase origin main
           git push origin HEAD:main
