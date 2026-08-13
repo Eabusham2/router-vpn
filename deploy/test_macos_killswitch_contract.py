@@ -13,14 +13,25 @@ def text(rel: str) -> str:
     return p.read_text(encoding="utf-8", errors="strict")
 
 
-# Scoped PF backend: no global pf.conf rewrite or security disable path.
+# Scoped PF backend. Reading /etc/pf.conf to verify Apple's existing anchor
+# namespace is allowed; rewriting/reloading the global configuration is not.
 darwin = text("modes/darwin_kill_switch.py")
 assert 'PF_ANCHOR = "com.apple/router-vpn"' in darwin
 assert "pfctl" in darwin and "utun" in darwin
 assert "darwin_baseline_utun" in darwin and "darwin_tunnel_interfaces" in darwin
 assert "newly-created Router VPN utun" in darwin
-assert "/etc/pf.conf" not in darwin
 assert "-X" in darwin and "-E" in darwin
+for forbidden in (
+    'Path("/etc/pf.conf").write_text',
+    "Path('/etc/pf.conf').write_text",
+    'open("/etc/pf.conf", "w")',
+    "open('/etc/pf.conf', 'w')",
+    'open("/etc/pf.conf","w")',
+    "open('/etc/pf.conf','w')",
+    'pfctl(), "-f", "/etc/pf.conf"',
+    "pfctl(), '-f', '/etc/pf.conf'",
+):
+    assert forbidden not in darwin, forbidden
 
 # Platform dispatcher preserves Linux and owns Darwin apply/watch/release/always.
 dispatch = text("modes/kill-switch-platform.py")
