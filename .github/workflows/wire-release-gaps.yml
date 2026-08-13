@@ -38,6 +38,7 @@ jobs:
           python3 deploy/finalize-release-wiring.py
           gofmt -w cmd/client/main.go cmd/client/bundle_staging.go cmd/client/bundle_staging_test.go
           go test ./cmd/client ./internal/common
+          python3 deploy/validate-repo.py
           python3 deploy/full-audit-v4.py
           python3 deploy/release-gap-audit.py
           git diff --check
@@ -49,6 +50,7 @@ jobs:
             cmd/client/bundle_staging.go
             cmd/client/bundle_staging_test.go
             server/portainer-current.yaml
+            deploy/validate-repo.py
             deploy/full-audit-v4.py
             deploy/release-gap-audit.py
           )
@@ -57,6 +59,6 @@ jobs:
             exit 0
           fi
           git add -- "${files[@]}"
-          git commit -m 'Wire atomic imports and AI-aware Setup Center'
+          git commit -m 'Wire atomic imports and current repository validator'
           git pull --rebase origin main
           git push origin HEAD:main
