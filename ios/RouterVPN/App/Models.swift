@@ -279,7 +279,8 @@ struct ClientBundle: Codable {
         modes = try values.decodeIfPresent([VPNMode].self, forKey: .modes) ?? []
         profiles = try values.decodeIfPresent([String: [String: String]].self, forKey: .profiles) ?? [:]
 
-        if let selected = routerProfiles.first(where: { $0.id == selectedRouterID }) ?? routerProfiles.first {
+        let selected = routerProfiles.first(where: { $0.id == selectedRouterID }) ?? routerProfiles.first
+        if let selected {
             if endpoint.isEmpty {
                 endpoint = selected.endpoint
                 routerAPI = selected.routerAPI
@@ -289,14 +290,19 @@ struct ClientBundle: Codable {
                 socks5Host = selected.socksHost
                 socks5Port = selected.socksPort
             }
-            if nodeProofID.isEmpty { nodeProofID = selected.nodeProofID ?? "" }
+            let nested = (selected.nodeProofID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !nested.isEmpty && nested.range(of: "^[0-9a-f]{64}$", options: .regularExpression) == nil {
+                throw DecodingError.dataCorruptedError(forKey: .nodeProofID, in: values, debugDescription: "Router profile node proof id is invalid")
+            }
+            if nodeProofID.isEmpty {
+                nodeProofID = nested
+            } else if !nested.isEmpty && nested != nodeProofID {
+                throw DecodingError.dataCorruptedError(forKey: .nodeProofID, in: values, debugDescription: "Router bundle node proof ids disagree")
+            }
         }
-        if !nodeProofID.isEmpty && !nodeProofID.range(of: "^[0-9a-f]{64}$", options: .regularExpression).map({ _ in true })! {
+        nodeProofID = nodeProofID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !nodeProofID.isEmpty && nodeProofID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) == nil {
             throw DecodingError.dataCorruptedError(forKey: .nodeProofID, in: values, debugDescription: "Router node proof id is invalid")
-        }
-        if let selected = routerProfiles.first(where: { $0.id == selectedRouterID }) ?? routerProfiles.first,
-           let nested = selected.nodeProofID, !nested.isEmpty, !nodeProofID.isEmpty, nested != nodeProofID {
-            throw DecodingError.dataCorruptedError(forKey: .nodeProofID, in: values, debugDescription: "Router bundle node proof ids disagree")
         }
         socks5Username = ""
         socks5Password = ""
