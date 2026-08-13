@@ -212,17 +212,21 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  ios-preview:
-    name: iOS/iPadOS UI + Packet Tunnel preview build
+  ios-native-wg:
+    name: iOS/iPadOS native WireGuard PacketTunnel build
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project
         working-directory: ios/RouterVPN
         run: xcodegen generate
-      - name: Build unsigned preview app and explicit unavailable tunnel extension
+      - name: Build unsigned native WireGuard app and PacketTunnel
         working-directory: ios/RouterVPN
         run: |
           xcodebuild \
@@ -232,28 +236,42 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$PWD/build/DerivedData" \
+            -disableAutomaticPackageResolution NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM='' \
             build
-      - name: Package re-signable preview IPA
+      - name: Verify pinned engine and fail-closed runtime contract
         working-directory: ios/RouterVPN
         run: |
           APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          EXT="$APP/PlugIns/RouterVPNPacketTunnel.appex"
+          WG="$PWD/build/DerivedData/SourcePackages/checkouts/wireguard-apple"
           test -d "$APP"
-          test -d "$APP/PlugIns/RouterVPNPacketTunnel.appex"
-          grep -q 'fail visibly rather than fake a successful VPN connection' App/ContentView.swift
-          grep -q 'Link AmneziaWGKit/Xray engine before signing this target.' PacketTunnel/PacketTunnelProvider.swift
-          grep -q 'completionHandler(error)' PacketTunnel/PacketTunnelProvider.swift
+          test -d "$EXT"
+          test -d "$WG"
+          test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
+          grep -q 'import WireGuardKit' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'RouterVPNWireGuardConfig.parse' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'strict Apple kill switch requested' <(tr '[:upper:]' '[:lower:]' < PacketTunnel/PacketTunnelProvider.swift)
+          grep -q 'body\["node_id"\] as? String == expectedNodeID' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'body\["proof"\] as? String == Self.proofKind' PacketTunnel/PacketTunnelProvider.swift
+          ! grep -q 'Link AmneziaWGKit/Xray engine before signing this target.' PacketTunnel/PacketTunnelProvider.swift
+      - name: Package unsigned re-signable native IPA
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
           rm -rf build/unsigned
           mkdir -p build/unsigned/Payload
           ditto "$APP" build/unsigned/Payload/RouterVPN.app
-          (cd build/unsigned && zip -qry ../RouterVPN-preview-unsigned-resignable.ipa Payload)
-          unzip -tq build/RouterVPN-preview-unsigned-resignable.ipa >/dev/null
-          shasum -a 256 build/RouterVPN-preview-unsigned-resignable.ipa
+          (cd build/unsigned && zip -qry ../RouterVPN-native-wg-unsigned-resignable.ipa Payload)
+          unzip -tq build/RouterVPN-native-wg-unsigned-resignable.ipa >/dev/null
+          shasum -a 256 build/RouterVPN-native-wg-unsigned-resignable.ipa
       - uses: actions/upload-artifact@v4
         with:
-          name: RouterVPN-iOS-Preview-CI
-          path: ios/RouterVPN/build/RouterVPN-preview-unsigned-resignable.ipa
+          name: RouterVPN-iOS-Native-WireGuard-CI
+          path: ios/RouterVPN/build/RouterVPN-native-wg-unsigned-resignable.ipa
           if-no-files-found: error
           retention-days: 1
