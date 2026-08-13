@@ -63,6 +63,8 @@ grep -Fq 'MKMapView' "$SRC"
 grep -Fq 'http://127.0.0.1:8788' "$SRC"
 grep -Fq '/api/connect-logical' "$SRC"
 grep -Fq '/api/session/events' "$SRC"
+grep -Fq '/api/multihop/status' "$SRC"
+grep -Fq '/api/multihop/connect' "$SRC"
 grep -Fq '/api/emergency-stop' "$SRC"
 ! otool -L "$BIN" | grep -q '/WebKit.framework/'
 
