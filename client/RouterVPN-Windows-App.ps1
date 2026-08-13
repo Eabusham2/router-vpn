@@ -9,10 +9,10 @@ if ($BaseUrl -ne 'http://127.0.0.1:8788') {
     throw 'Router VPN native Windows app only talks to the fixed local controller at http://127.0.0.1:8788.'
 }
 
-# Stable package/Portable entrypoint. The real shipping product file remains
-# beside this file and uses PresentationFramework with a native ShowDialog().
+# Stable package/Portable entrypoint. The shipping product file stays beside
+# this file and uses PresentationFramework with a native ShowDialog().
 Add-Type -AssemblyName PresentationFramework
-$Product = Join-Path $PSScriptRoot 'RouterVPN-Windows-Product.ps1'
+$Product = Join-Path $PSScriptRoot 'RouterVPN-Windows-Product-v2.ps1'
 if (-not (Test-Path -LiteralPath $Product)) {
     throw "Router VPN native Windows product shell is missing: $Product"
 }
