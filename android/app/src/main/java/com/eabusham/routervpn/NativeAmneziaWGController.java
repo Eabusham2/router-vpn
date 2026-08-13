@@ -35,7 +35,7 @@ final class NativeAmneziaWGController implements Tunnel {
                 Config config = loadConfig(privateBundle);
                 State result = backend.setState(this, State.UP, config);
                 state = result;
-                callback.done(result, "Native Android AmneziaWG 2 is active through the official embedded userspace backend.", null);
+                callback.done(result, "Native Android AmneziaWG 2 is active through the official embedded userspace backend with the selected enforceable DNS address and MTU policy.", null);
             } catch (Throwable error) {
                 state = State.DOWN;
                 callback.done(State.DOWN, "Native AmneziaWG failed: " + safeMessage(error), error);
@@ -62,13 +62,15 @@ final class NativeAmneziaWGController implements Tunnel {
         JSONObject profiles = root.optJSONObject("profiles");
         if (profiles == null) throw new IllegalStateException("Node bundle has no generated profiles.");
         JSONObject awg = profiles.optJSONObject("awg2-fast");
-        if (awg == null) awg = profiles.optJSONObject("awg2-strong");
+        int fallbackMtu = 1400;
+        if (awg == null) { awg = profiles.optJSONObject("awg2-strong"); fallbackMtu = 1360; }
         if (awg == null) throw new IllegalStateException("Node bundle has no AmneziaWG 2 profile.");
         String encoded = awg.optString("awg.conf", "").trim();
         if (encoded.isEmpty()) throw new IllegalStateException("Node bundle has no AmneziaWG awg.conf.");
         byte[] decoded = Base64.decode(encoded, Base64.DEFAULT);
         if (decoded.length <= 0 || decoded.length > 512 * 1024) throw new IllegalStateException("AmneziaWG profile size is invalid.");
-        return Config.parse(new ByteArrayInputStream(decoded));
+        String patched = AndroidNativeProfilePolicy.patchWireGuardLikeConfig(root, new String(decoded, StandardCharsets.UTF_8), fallbackMtu);
+        return Config.parse(new ByteArrayInputStream(patched.getBytes(StandardCharsets.UTF_8)));
     }
 
     private static byte[] readLimited(File file, int maxBytes) throws Exception {
