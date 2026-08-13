@@ -1,0 +1,55 @@
+name: Windows product diagnostic v2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  product-self-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Provision zip CLI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if(-not (Get-Command zip.exe -ErrorAction SilentlyContinue)) {
+            choco install zip -y --no-progress
+            if($LASTEXITCODE -ne 0){ throw "zip setup failed" }
+          }
+          if(-not (Get-Command zip.exe -ErrorAction SilentlyContinue)){ throw 'zip.exe unavailable' }
+      - name: Windows product self-test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/RouterVPN-Windows-App.ps1 -SelfTest
+          if($LASTEXITCODE -ne 0){ throw "Native Windows product self-test failed" }
+      - name: Build generic packages
+        shell: bash
+        run: |
+          ./deploy/build-client.sh
+          ./deploy/package-builds.sh
+      - name: Portable amd64 direct self-test and relocation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $archive=(Resolve-Path 'dist/packages/RouterVPN-Portable-Windows-amd64.zip').Path
+          $extract=Join-Path $env:RUNNER_TEMP 'portable-direct-amd64'
+          Expand-Archive $archive $extract -Force
+          $root=Get-ChildItem $extract -Directory | Select-Object -First 1
+          & (Join-Path $root.FullName 'RouterVPNPortable.exe') --self-test
+          if($LASTEXITCODE -ne 0){ throw 'Portable direct self-test failed' }
+          $movedParent=Join-Path $env:RUNNER_TEMP 'portable-direct-moved-amd64'
+          New-Item -ItemType Directory -Path $movedParent -Force | Out-Null
+          $moved=Join-Path $movedParent $root.Name
+          Move-Item $root.FullName $moved
+          & (Join-Path $moved 'RouterVPNPortable.exe') --self-test
+          if($LASTEXITCODE -ne 0){ throw 'Relocated Portable direct self-test failed' }
