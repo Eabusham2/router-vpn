@@ -12,14 +12,18 @@ class SetupCenterAIIntegrationTests(unittest.TestCase):
         for m in ("/api/ai-help/status","/api/ai-help","credentials:'same-origin'",'maxlength="4000"'): self.assertIn(m,p)
         for m in ("Authorization","openai-api.key","sk-","api.openai.com"): self.assertNotIn(m,p)
     def test_ai_guide_and_device_ux_each_injected_once(self):
-        h=object.__new__(mod.Handler); rendered=h._inject_admin_ui("<html><body><main>Setup</main></body></html>")
-        for marker in ('id="rvpn-ai-help"','id="rvpn-guide-open"','id="rvpn-device-download"'):
+        h=object.__new__(mod.Handler)
+        base='<html><body><div id="tabs"></div><div id="wizard" class="overlay"></div></body></html>'
+        rendered=h._inject_product_ui(base)
+        for marker in ('id="routerVpnServerAdminScript"','id="rvpn-ai-help"','id="rvpn-guide-open"','id="rvpn-device-download"'):
             self.assertIn(marker,rendered); self.assertEqual(rendered.count(marker),1)
-        self.assertIn("Router VPN Setup Center",rendered); self.assertIn("routervpn.setup-guide.v1",rendered); self.assertIn("Download for this device",rendered)
-        again=h._inject_admin_ui(rendered)
-        for marker in ('id="rvpn-ai-help"','id="rvpn-guide-open"','id="rvpn-device-download"'): self.assertEqual(again.count(marker),1)
+        self.assertIn("routervpn.setup-guide.v1",rendered); self.assertIn("Download for this device",rendered)
+        again=h._inject_product_ui(rendered)
+        for marker in ('id="routerVpnServerAdminScript"','id="rvpn-ai-help"','id="rvpn-guide-open"','id="rvpn-device-download"'): self.assertEqual(again.count(marker),1)
     def test_routes_reuse_auth_boundary(self):
         s=MODULE.read_text(encoding="utf-8"); self.assertIn('urlparse(self.path).path == "/api/ai-help/status"',s); self.assertIn('urlparse(self.path).path != "/api/ai-help"',s); self.assertGreaterEqual(s.count("self._require_auth()"),2); self.assertIn("16 * 1024",s); self.assertIn("Transfer-Encoding",s); self.assertIn("Never return provider/key internals",s)
+    def test_real_setup_html_path_uses_product_injector(self):
+        s=MODULE.read_text(encoding="utf-8"); self.assertIn("def _serve_setup_html",s); self.assertIn("self._inject_product_ui",s); self.assertIn("_core._inject_admin_ui(text)",s)
     def test_disabled_until_private_config(self):
         old=os.environ.pop("ROUTER_VPN_AI_MODEL",None)
         try:

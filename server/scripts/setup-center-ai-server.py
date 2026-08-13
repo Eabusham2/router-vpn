@@ -14,8 +14,13 @@ HERE = Path(__file__).resolve().parent
 
 def _load(name: str, filename: str):
     spec = importlib.util.spec_from_file_location(name, HERE / filename)
-    if spec is None or spec.loader is None: raise RuntimeError(f"cannot load {filename}")
-    module = importlib.util.module_from_spec(spec); sys.modules[name] = module; spec.loader.exec_module(module); return module
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {filename}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
 
 _core = _load("routervpn_setup_center_core", "setup-center-server.py")
 _ai = _load("routervpn_ai_help_provider", "ai_help_provider.py")
@@ -35,59 +40,121 @@ AI_PANEL = r'''
 class Handler(_core.Handler):
     def _send_ai_json(self, status: int, payload: dict) -> None:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        self.send_response(status); self.send_header("Content-Type", "application/json; charset=utf-8"); self.send_header("Cache-Control", "no-store"); self.send_header("X-Content-Type-Options", "nosniff"); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
 
     @staticmethod
     def _before_body(text: str, fragment: str) -> str:
         return text.replace("</body>", fragment + "\n</body>", 1) if "</body>" in text else text + fragment
 
-    def _inject_admin_ui(self, text: str) -> str:
-        enriched = super()._inject_admin_ui(text)
-        if 'id="rvpn-guide-open"' not in enriched: enriched = self._before_body(enriched, _guide.GUIDE_PANEL)
-        if 'id="rvpn-device-download"' not in enriched: enriched = self._before_body(enriched, _ux.UX_PATCH)
-        if 'id="rvpn-ai-help"' not in enriched: enriched = self._before_body(enriched, AI_PANEL)
+    def _inject_product_ui(self, text: str) -> str:
+        # The core Setup Center uses a module-level injector, not a Handler
+        # method. Reuse it first so the existing Server admin surface remains
+        # authoritative, then add product extensions exactly once.
+        enriched = _core._inject_admin_ui(text)
+        if 'id="rvpn-guide-open"' not in enriched:
+            enriched = self._before_body(enriched, _guide.GUIDE_PANEL)
+        if 'id="rvpn-device-download"' not in enriched:
+            enriched = self._before_body(enriched, _ux.UX_PATCH)
+        if 'id="rvpn-ai-help"' not in enriched:
+            enriched = self._before_body(enriched, AI_PANEL)
         return enriched
 
+    def _serve_setup_html(self, name: str) -> None:
+        path = Path(self.server.static_dir) / name
+        if not path.is_file():
+            self.send_error(404)
+            return
+        try:
+            text = self._inject_product_ui(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self._json(500, {"ok": False, "error_code": "setup_ui_error", "error": str(exc)})
+            return
+        raw = text.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def _ai_context(self) -> dict:
-        return {"setup_center":"authenticated", "request_source":self.client_address[0] if self.client_address else "unknown", "path":urlparse(self.path).path}
+        return {"setup_center": "authenticated", "request_source": self.client_address[0] if self.client_address else "unknown", "path": urlparse(self.path).path}
 
     def do_GET(self) -> None:
         if urlparse(self.path).path == "/api/ai-help/status":
-            if not self._require_auth(): return
-            self._send_ai_json(200, self.server.ai_provider.status()); return
+            if not self._require_auth():
+                return
+            self._send_ai_json(200, self.server.ai_provider.status())
+            return
         super().do_GET()
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/ai-help": super().do_POST(); return
-        if not self._require_auth(): return
-        if self.headers.get("Transfer-Encoding"): self._send_ai_json(400, {"error":"chunked request bodies are not accepted"}); return
-        try: length = int(self.headers.get("Content-Length", "0"))
-        except ValueError: length = -1
-        if length <= 0 or length > 16 * 1024: self._send_ai_json(413 if length > 16 * 1024 else 400, {"error":"invalid AI Help request size"}); return
-        try: payload = json.loads(self.rfile.read(length).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError): self._send_ai_json(400, {"error":"invalid JSON"}); return
-        if not isinstance(payload, dict) or not isinstance(payload.get("question", ""), str): self._send_ai_json(400, {"error":"question must be text"}); return
+        if urlparse(self.path).path != "/api/ai-help":
+            super().do_POST()
+            return
+        if not self._require_auth():
+            return
+        if self.headers.get("Transfer-Encoding"):
+            self._send_ai_json(400, {"error": "chunked request bodies are not accepted"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = -1
+        if length <= 0 or length > 16 * 1024:
+            self._send_ai_json(413 if length > 16 * 1024 else 400, {"error": "invalid AI Help request size"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._send_ai_json(400, {"error": "invalid JSON"})
+            return
+        if not isinstance(payload, dict) or not isinstance(payload.get("question", ""), str):
+            self._send_ai_json(400, {"error": "question must be text"})
+            return
         try:
             result = self.server.ai_provider.ask(payload.get("question", ""), context=self._ai_context(), client_id=self.client_address[0] if self.client_address else "unknown")
-        except _ai.AIHelpError as exc: self._send_ai_json(503, {"error":str(exc)}); return
+        except _ai.AIHelpError as exc:
+            self._send_ai_json(503, {"error": str(exc)})
+            return
         except Exception:
             # Never return provider/key internals to the browser.
-            self._send_ai_json(502, {"error":"AI Help provider failed"}); return
+            self._send_ai_json(502, {"error": "AI Help provider failed"})
+            return
         self._send_ai_json(200, result)
 
 
 class Server(_core.Server):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs); self.ai_provider = _ai.AIHelpProvider()
+        super().__init__(*args, **kwargs)
+        self.ai_provider = _ai.AIHelpProvider()
 
 
 def main() -> int:
-    ap=argparse.ArgumentParser(); ap.add_argument("--base",default="/opt/router-vpn"); ap.add_argument("--bind",default="0.0.0.0"); ap.add_argument("--port",type=int,default=8786); args=ap.parse_args()
-    base=Path(args.base).resolve(); static=base/"downloads"; static.mkdir(parents=True,exist_ok=True); _core._broker.cleanup_stale_temp(); server=Server((args.bind,args.port),Handler,base,static)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base", default="/opt/router-vpn")
+    ap.add_argument("--bind", default="0.0.0.0")
+    ap.add_argument("--port", type=int, default=8786)
+    args = ap.parse_args()
+    base = Path(args.base).resolve()
+    static = base / "downloads"
+    static.mkdir(parents=True, exist_ok=True)
+    _core._broker.cleanup_stale_temp()
+    server = Server((args.bind, args.port), Handler, base, static)
     print(f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + Full Guide + device UX + server-side AI Help", flush=True)
-    try: server.serve_forever(poll_interval=0.5)
-    except KeyboardInterrupt: pass
-    finally: server.server_close()
+    try:
+        server.serve_forever(poll_interval=0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
     return 0
 
-if __name__ == "__main__": raise SystemExit(main())
+
+if __name__ == "__main__":
+    raise SystemExit(main())
