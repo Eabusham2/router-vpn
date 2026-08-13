@@ -1,0 +1,78 @@
+name: macOS native app
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'client/macos/**'
+      - 'deploy/package-macos-native.sh'
+      - 'cmd/client/**'
+      - 'cmd/dnsproxy/**'
+      - 'internal/common/**'
+      - 'modes/**'
+      - 'client/**'
+      - 'configs/client/**'
+      - 'deploy/check-generic-package-secrets.py'
+      - '.github/workflows/macos-native-app.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'client/macos/**'
+      - 'deploy/package-macos-native.sh'
+      - 'cmd/client/**'
+      - 'cmd/dnsproxy/**'
+      - 'internal/common/**'
+      - 'modes/**'
+      - 'client/**'
+      - 'configs/client/**'
+      - 'deploy/check-generic-package-secrets.py'
+      - '.github/workflows/macos-native-app.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-macos:
+    name: Native AppKit packages amd64 + arm64
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Test controller and shared contracts
+        run: go test ./cmd/client ./internal/common
+      - name: Build native macOS packages
+        run: |
+          chmod +x client/macos/build-native-app.sh deploy/package-macos-native.sh
+          ./deploy/package-macos-native.sh
+      - name: Verify native AppKit package contract
+        run: |
+          for arch in amd64 arm64; do
+            archive="dist/macos-native/RouterVPN-darwin-$arch.tar.gz"
+            test -s "$archive"
+            tar -tzf "$archive" | grep -q "^RouterVPN-darwin-$arch/RouterVPN.app/Contents/MacOS/RouterVPN$"
+            tar -tzf "$archive" | grep -q "^RouterVPN-darwin-$arch/LICENSE$"
+            ! tar -tzf "$archive" | grep -q 'router-vpn-bundle.json'
+          done
+          (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
+          test ! -d dist/macos-native/work
+          grep -Fq 'NSWindow(' client/macos/RouterVPNMacApp.swift
+          grep -Fq 'NSTabViewController' client/macos/RouterVPNMacApp.swift
+          grep -Fq 'http://127.0.0.1:8788' client/macos/RouterVPNMacApp.swift
+          ! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' client/macos/RouterVPNMacApp.swift
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-macOS-Native-CI
+          path: |
+            dist/macos-native/RouterVPN-darwin-amd64.tar.gz
+            dist/macos-native/RouterVPN-darwin-arm64.tar.gz
+            dist/macos-native/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
