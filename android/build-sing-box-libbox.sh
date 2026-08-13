@@ -42,6 +42,14 @@ verify_aar() {
     echo 'combined libbox AAR is missing Xray dialer-controller bridge' >&2
     return 1
   }
+  javap -classpath "$classes" libbox.Libbox | grep -q 'routerXraySetDNS' || {
+    echo 'combined libbox AAR is missing protected Xray DNS bridge' >&2
+    return 1
+  }
+  javap -classpath "$classes" libbox.Libbox | grep -q 'routerXrayResetDNS' || {
+    echo 'combined libbox AAR is missing Xray DNS reset bridge' >&2
+    return 1
+  }
   javap -classpath "$classes" libbox.Libbox | grep -q 'routerXrayBridgeRevision' || {
     echo 'combined libbox AAR is missing Xray revision trust marker' >&2
     return 1
@@ -130,12 +138,25 @@ install -m 0644 "$ROOT/routervpn_xray_bridge.go" "$VENDOR/experimental/libbox/ro
   cd "$VENDOR"
   # A local replace makes the immutable libXray checkout part of the one bound
   # libbox package. v0.0.0 is only a syntactic module requirement; the exact
-  # source is the verified replacement above.
+  # source is the verified replacement above. The temporary module checkout is
+  # deliberately lifted to libXray's required Go version, then tidied so Go's
+  # MVS graph is explicit before any compile. Repository go.mod/go.sum files are
+  # never changed by this disposable build workspace.
+  go mod edit -go="$GO_TOOLCHAIN"
   go mod edit -require=github.com/xtls/libxray@v0.0.0
   go mod edit -replace="github.com/xtls/libxray=$XRAY_VENDOR"
+  go mod tidy
   resolved=$(go list -m -f '{{.Version}}' github.com/xtls/xray-core)
   [[ "$resolved" == "$XRAY_CORE_VERSION" ]] || {
     echo "combined module resolved unexpected Xray-core: $resolved" >&2
+    exit 1
+  }
+  grep -Fq "github.com/xtls/libxray v0.0.0" go.mod || {
+    echo 'combined module lost the pinned local libXray requirement' >&2
+    exit 1
+  }
+  grep -Fq "replace github.com/xtls/libxray => $XRAY_VENDOR" go.mod || {
+    echo 'combined module lost the exact local libXray replacement' >&2
     exit 1
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
