@@ -128,7 +128,11 @@ Add-Type -AssemblyName WindowsBase
       </TabItem>
     </TabControl>
 
-    <TextBlock Grid.Row="2" Name="Footer" Margin="4,12,4,0" Foreground="#7E90B6" Text="Router VPN native Windows shell • controller bound to 127.0.0.1 only"/>
+    <Grid Grid.Row="2" Margin="4,12,4,0">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <TextBlock Name="Footer" Foreground="#7E90B6" VerticalAlignment="Center" Text="Router VPN native Windows shell • controller bound to 127.0.0.1 only"/>
+      <Button Grid.Column="1" Name="TutorialButton" Content="Run Tutorial" Background="#33415F"/>
+    </Grid>
   </Grid>
 </Window>
 '@
@@ -136,7 +140,7 @@ Add-Type -AssemblyName WindowsBase
 $Reader = New-Object System.Xml.XmlNodeReader $Xaml
 $Window = [Windows.Markup.XamlReader]::Load($Reader)
 if ($SelfTest) {
-    foreach ($required in @('StateText','RouterCombo','ModeCombo','AutoButton','ConnectButton','DisconnectButton','NodesGrid','ModesGrid','PublicIpButton','EmergencyButton')) {
+    foreach ($required in @('StateText','RouterCombo','ModeCombo','AutoButton','ConnectButton','DisconnectButton','NodesGrid','ModesGrid','PublicIpButton','EmergencyButton','TutorialButton')) {
         if (-not $Window.FindName($required)) { throw "Native WPF self-test missing control: $required" }
     }
     $source = Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw
@@ -159,6 +163,68 @@ $StateText = Get-Control 'StateText'; $StateDot = Get-Control 'StateDot'; $Heade
 $RouterCombo = Get-Control 'RouterCombo'; $ModeCombo = Get-Control 'ModeCombo'; $BaseCombo = Get-Control 'BaseCombo'
 $ConnectionDetail = Get-Control 'ConnectionDetail'; $LastErrorText = Get-Control 'LastErrorText'; $ProofText = Get-Control 'ProofText'
 $NodesGrid = Get-Control 'NodesGrid'; $ModesGrid = Get-Control 'ModesGrid'; $DiagnosticsBox = Get-Control 'DiagnosticsBox'
+$TutorialButton = Get-Control 'TutorialButton'
+
+
+$RouterVPNOnboardingDir = Join-Path $PSScriptRoot '.routervpn-state'
+$RouterVPNOnboardingFile = Join-Path $RouterVPNOnboardingDir 'windows-onboarding-v1.json'
+$RouterVPNTutorialPages = @(
+    @{ title='1. Install once; add routers as data'; body='Router VPN is installed once. Add Router is a private data operation: use secure home-LAN pairing/direct import when available, or import the small router-vpn-bundle.json file. Never treat linking as a reinstall.' },
+    @{ title='2. Choose the router and mode'; body='Select the intended node first. Choose AUTO for the first proven working branch or an available manual logical mode. Tunnel base can be Auto, WireGuard, or AmneziaWG only when that mode reports the base ready; unavailable combinations stay unavailable.' },
+    @{ title='3. DNS, LAN, MTU/Jumbo, and kill switch'; body='DNS is selected for the VPN path, not merely displayed. Home/fastest/custom/encrypted choices must match what the runtime can enforce. LAN Off must block ordinary home-LAN access while preserving only the minimum control path. MTU/Jumbo must have runtime effect. Strict kill-switch requests fail closed on unsupported lifecycle states.' },
+    @{ title='4. Multihop and forwarding'; body='Multihop means entry node → different exit node → Internet and adds latency. Use it only when the selected pair/modes are compatible and the exit node passes private proof. Incoming forwarding has master plus per-rule state; TCP/UDP/both, ranges and targets must match the actual tunnel mode. Proxy-only modes cannot fake DNAT.' },
+    @{ title='5. Connect, disconnect, and permissions'; body='Connect/AUTO may request the platform privileges required for a full-device VPN. Watch phase/progress instead of assuming success from a process starting. Disconnect is explicit; emergency stop is for failed transitions or recovery. Never disable Windows security globally to make Router VPN work.' },
+    @{ title='6. Prove the path'; body='Connected is accepted only after the exact selected-router private identity/path proof succeeds. Public exit proof is separate: use Diagnostics → Prove public VPN exit. Retest DNS through the VPN path when DNS behavior is in question.' },
+    @{ title='7. Troubleshoot and recover'; body='Use Methods to read availability/reasons, Diagnostics for path/DNS proof, 50-sample node latency when needed, and Emergency stop for rollback. If a mode is grey/unavailable, fix its stated prerequisite instead of forcing it. Setup Center Full Guide remains the complete home-node/setup reference.' },
+    @{ title='8. Rerun any time'; body='This tutorial is separate from Setup Center onboarding. Finish marks only this Windows-app tutorial complete. The Run Tutorial button stays available permanently so you can restart from step 1 at any time.' }
+)
+
+function Get-RouterVPNOnboardingState {
+    if (Test-Path -LiteralPath $RouterVPNOnboardingFile) {
+        try {
+            $state = Get-Content -LiteralPath $RouterVPNOnboardingFile -Raw | ConvertFrom-Json
+            $step = [Math]::Max(0, [Math]::Min($RouterVPNTutorialPages.Count - 1, [int]$state.step))
+            return @{ step=$step; completed=[bool]$state.completed }
+        } catch { }
+    }
+    return @{ step=0; completed=$false }
+}
+
+function Save-RouterVPNOnboardingState([int]$Step, [bool]$Completed) {
+    try {
+        New-Item -ItemType Directory -Force -Path $RouterVPNOnboardingDir | Out-Null
+        $tmp = "$RouterVPNOnboardingFile.tmp"
+        @{ step=$Step; completed=$Completed; updated_at=(Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json -Compress | Set-Content -LiteralPath $tmp -Encoding UTF8
+        Move-Item -LiteralPath $tmp -Destination $RouterVPNOnboardingFile -Force
+    } catch {
+        # Never redirect Portable state into Registry/AppData merely because the
+        # package location is not writable. The tutorial can still run; it will
+        # simply reopen next launch until state can be saved beside the package.
+    }
+}
+
+function Show-RouterVPNTutorial([switch]$Force) {
+    $state = Get-RouterVPNOnboardingState
+    if ($Force) { $state = @{ step=0; completed=$false }; Save-RouterVPNOnboardingState 0 $false }
+    if ($state.completed -and -not $Force) { return }
+    $step = [int]$state.step
+    while ($true) {
+        $page = $RouterVPNTutorialPages[$step]
+        $last = ($step -eq $RouterVPNTutorialPages.Count - 1)
+        $instructions = if ($last) { "`n`nYes = Finish • No = Back • Cancel = Close and resume later" } else { "`n`nYes = Next • No = Back • Cancel = Close and resume later" }
+        $result = [System.Windows.MessageBox]::Show(
+            [string]$page.body + $instructions,
+            "Router VPN tutorial — " + [string]$page.title,
+            [System.Windows.MessageBoxButton]::YesNoCancel,
+            [System.Windows.MessageBoxImage]::Information
+        )
+        if ($result -eq [System.Windows.MessageBoxResult]::Cancel) { Save-RouterVPNOnboardingState $step $false; return }
+        if ($result -eq [System.Windows.MessageBoxResult]::No) { if ($step -gt 0) { $step-- }; Save-RouterVPNOnboardingState $step $false; continue }
+        if ($last) { Save-RouterVPNOnboardingState 0 $true; return }
+        $step++
+        Save-RouterVPNOnboardingState $step $false
+    }
+}
 
 function Invoke-RouterVPN {
     param([string]$Path, [string]$Method = 'GET', $Body = $null, [int]$TimeoutSec = 45)
@@ -214,6 +280,7 @@ function Refresh-RouterVPN {
 }
 
 (Get-Control 'RefreshButton').Add_Click({ Refresh-RouterVPN })
+$TutorialButton.Add_Click({ Show-RouterVPNTutorial -Force })
 (Get-Control 'AutoButton').Add_Click({
     try {
         $StateText.Text = 'AUTO connecting…'; $StateDot.Fill = '#F2B84B'
@@ -281,4 +348,5 @@ $Timer.Add_Tick({ Refresh-RouterVPN })
 $Window.Add_Closed({ $Timer.Stop() })
 Refresh-RouterVPN
 $Timer.Start()
+$Window.Add_ContentRendered({ Show-RouterVPNTutorial })
 [void]$Window.ShowDialog()

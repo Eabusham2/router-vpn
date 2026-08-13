@@ -3,6 +3,8 @@ import Foundation
 
 private let routerVPNBaseURL = URL(string: "http://127.0.0.1:8788")!
 private let nativeAppContractVersion = 1
+private let onboardingDoneKey = "RouterVPNNativeOnboardingDoneV1"
+private let onboardingStepKey = "RouterVPNNativeOnboardingStepV1"
 
 private struct StatusPayload: Decodable {
     let connected: Bool?
@@ -127,11 +129,62 @@ private final class RouterVPNWindowController: NSWindowController {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.refreshStatus()
         }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if !UserDefaults.standard.bool(forKey: onboardingDoneKey) { self.showTutorial(force: false) }
+        }
     }
 
     required init?(coder: NSCoder) { nil }
 
     deinit { refreshTimer?.invalidate() }
+
+    @objc private func showTutorialAction() { showTutorial(force: true) }
+
+    private func showTutorial(force: Bool) {
+        let pages: [(String, String)] = [
+            ("1. Install once; add routers as data", "Router VPN is installed once. Add Router is private node data: use secure home-LAN pairing/direct import where offered, or import router-vpn-bundle.json. Linking a router is not an app reinstall."),
+            ("2. Select node, mode, and base", "Choose the intended router first. AUTO tries proven candidates; manual mode uses only available logical modes. Tunnel base Auto/WireGuard/AmneziaWG is valid only where the runtime reports that base ready. Grey/unavailable combinations stay unavailable."),
+            ("3. DNS, LAN, MTU/Jumbo, kill switch", "DNS must be enforced through the selected VPN path. LAN Off blocks ordinary home-LAN reachability while preserving the minimum control plane. MTU/Jumbo must change the runtime, not just UI state. Strict kill-switch semantics fail closed where a lifecycle cannot be proven."),
+            ("4. Multihop and forwarding", "Real multihop is entry → different exit → Internet and adds latency; only compatible pairs may run and the exit needs private proof. Forwarding master/per-rule state, protocols, ranges and targets must match the actual dataplane; proxy-only modes cannot fake DNAT."),
+            ("5. Permissions, connect, disconnect", "A full-device VPN may require platform/admin privileges from the local controller/runtime. Watch connection phase/progress. Disconnect is explicit and Emergency stop is the rollback path. For trusted local builds use the specific Privacy & Security → Open Anyway flow; never disable Gatekeeper globally."),
+            ("6. Prove the selected path and exit", "Connected is not accepted until the exact selected-router private identity/path proof passes. Public VPN exit proof is a separate Diagnostics action. Retest DNS through the VPN when DNS behavior is in question."),
+            ("7. Troubleshoot and support", "Use Methods for readiness reasons, Nodes for selection/latency, Diagnostics for exit/DNS proof, and Emergency stop for recovery. Setup Center Full Guide covers server deployment, secure pairing/import, forwarding and home-node administration."),
+            ("8. Rerun any time", "This native macOS tutorial is separate from Setup Center onboarding. Finish marks only this app tutorial complete. Run Tutorial stays available permanently so you can restart from step 1.")
+        ]
+        if force {
+            UserDefaults.standard.set(false, forKey: onboardingDoneKey)
+            UserDefaults.standard.set(0, forKey: onboardingStepKey)
+        } else if UserDefaults.standard.bool(forKey: onboardingDoneKey) { return }
+        var step = max(0, min(pages.count - 1, UserDefaults.standard.integer(forKey: onboardingStepKey)))
+        while true {
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "Router VPN tutorial — \(pages[step].0)"
+            alert.informativeText = pages[step].1
+            alert.addButton(withTitle: step == pages.count - 1 ? "Finish" : "Next")
+            alert.addButton(withTitle: step == 0 ? "Close & resume later" : "Back")
+            alert.addButton(withTitle: "Close & resume later")
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                if step == pages.count - 1 {
+                    UserDefaults.standard.set(true, forKey: onboardingDoneKey)
+                    UserDefaults.standard.set(0, forKey: onboardingStepKey)
+                    return
+                }
+                step += 1
+                UserDefaults.standard.set(step, forKey: onboardingStepKey)
+                continue
+            }
+            if response == .alertSecondButtonReturn && step > 0 {
+                step -= 1
+                UserDefaults.standard.set(step, forKey: onboardingStepKey)
+                continue
+            }
+            UserDefaults.standard.set(step, forKey: onboardingStepKey)
+            return
+        }
+    }
 
     private func makeButton(_ title: String, action: Selector) -> NSButton {
         let button = NSButton(title: title, target: self, action: action)
@@ -163,6 +216,7 @@ private final class RouterVPNWindowController: NSWindowController {
         statusLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         titleRow.addArrangedSubview(title)
         titleRow.addArrangedSubview(NSView())
+        titleRow.addArrangedSubview(makeButton("Run Tutorial", action: #selector(showTutorialAction)))
         titleRow.addArrangedSubview(statusLabel)
         root.addArrangedSubview(titleRow)
 

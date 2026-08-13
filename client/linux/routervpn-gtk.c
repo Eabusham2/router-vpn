@@ -439,6 +439,132 @@ static GtkWidget *scroll_text(GtkWidget **view_out) {
     return scroll;
 }
 
+static const char *const tutorial_titles[] = {
+    "1. Install once; add routers as data",
+    "2. Select node, mode, and base",
+    "3. DNS, LAN, MTU/Jumbo, kill switch",
+    "4. Multihop and forwarding",
+    "5. Permissions, connect, disconnect",
+    "6. Prove the selected path and exit",
+    "7. Troubleshoot and support",
+    "8. Rerun any time"
+};
+static const char *const tutorial_bodies[] = {
+    "Router VPN is installed once. Add Router is private node data: use secure home-LAN pairing/direct import where offered, or import router-vpn-bundle.json. Linking a router is not an app reinstall.",
+    "Choose the intended router first. AUTO tries proven candidates; manual mode uses only available logical modes. Tunnel base Auto/WireGuard/AmneziaWG is valid only where the runtime reports that base ready. Grey/unavailable combinations stay unavailable.",
+    "DNS must be enforced through the VPN path. LAN Off blocks ordinary home-LAN reachability while preserving only the minimum control plane. MTU/Jumbo must have runtime effect. Strict kill-switch semantics fail closed where a lifecycle cannot be proven.",
+    "Real multihop is entry node → different exit node → Internet and adds latency. Only compatible pairs may run and the exit must pass private proof. Forwarding master/per-rule state, protocols, ranges and targets must match the actual dataplane; proxy-only modes cannot fake DNAT.",
+    "A full-device VPN may require system/admin privileges. Watch connection phase/progress instead of assuming a process start means success. Disconnect is explicit and Emergency stop is the rollback path. Do not disable platform security globally.",
+    "Connected is not accepted until the exact selected-router private identity/path proof passes. Public VPN exit proof is a separate Diagnostics action. Retest DNS through the VPN when DNS behavior is in question.",
+    "Use Methods for readiness reasons, Nodes for selection/latency, Diagnostics for exit/DNS proof, and Emergency stop for recovery. Setup Center Full Guide covers server deployment, secure pairing/import, forwarding and home-node administration.",
+    "This native Linux tutorial is separate from Setup Center onboarding. Finish marks only this app tutorial complete. Run Tutorial stays available permanently so you can restart from step 1."
+};
+
+typedef struct { GtkWidget *assistant; char *state_path; } TutorialState;
+
+static char *tutorial_state_path(void) {
+    char *dir = g_build_filename(g_get_user_config_dir(), "router-vpn", NULL);
+    (void)g_mkdir_with_parents(dir, 0700);
+    char *path = g_build_filename(dir, "linux-onboarding-v1.ini", NULL);
+    g_free(dir);
+    return path;
+}
+
+static void tutorial_load(const char *path, gboolean *done, gint *step) {
+    *done = FALSE; *step = 0;
+    GKeyFile *key = g_key_file_new();
+    GError *error = NULL;
+    if (g_key_file_load_from_file(key, path, G_KEY_FILE_NONE, &error)) {
+        *done = g_key_file_get_boolean(key, "onboarding", "completed", NULL);
+        *step = g_key_file_get_integer(key, "onboarding", "step", NULL);
+        if (*step < 0 || *step >= (gint)G_N_ELEMENTS(tutorial_titles)) *step = 0;
+    }
+    if (error != NULL) g_error_free(error);
+    g_key_file_unref(key);
+}
+
+static void tutorial_save(const char *path, gboolean done, gint step) {
+    GKeyFile *key = g_key_file_new();
+    g_key_file_set_boolean(key, "onboarding", "completed", done);
+    g_key_file_set_integer(key, "onboarding", "step", step);
+    g_key_file_set_string(key, "onboarding", "updated", "local-app-state");
+    char *data = g_key_file_to_data(key, NULL, NULL);
+    if (data != NULL) { (void)g_file_set_contents(path, data, -1, NULL); g_free(data); }
+    g_key_file_unref(key);
+}
+
+static void tutorial_prepare(GtkAssistant *assistant, GtkWidget *page, gpointer data) {
+    (void)page;
+    TutorialState *state = data;
+    tutorial_save(state->state_path, FALSE, gtk_assistant_get_current_page(assistant));
+}
+
+static void tutorial_cancel(GtkAssistant *assistant, gpointer data) {
+    TutorialState *state = data;
+    tutorial_save(state->state_path, FALSE, gtk_assistant_get_current_page(assistant));
+    gtk_widget_destroy(GTK_WIDGET(assistant));
+}
+
+static void tutorial_apply(GtkAssistant *assistant, gpointer data) {
+    TutorialState *state = data;
+    tutorial_save(state->state_path, TRUE, 0);
+    gtk_widget_destroy(GTK_WIDGET(assistant));
+}
+
+static void tutorial_destroy(GtkWidget *widget, gpointer data) {
+    (void)widget;
+    TutorialState *state = data;
+    g_free(state->state_path);
+    g_free(state);
+}
+
+static void show_tutorial(App *app, gboolean force) {
+    gboolean done = FALSE; gint step = 0;
+    char *path = tutorial_state_path();
+    tutorial_load(path, &done, &step);
+    if (force) { done = FALSE; step = 0; tutorial_save(path, FALSE, 0); }
+    if (done && !force) { g_free(path); return; }
+
+    GtkWidget *assistant = gtk_assistant_new();
+    gtk_window_set_title(GTK_WINDOW(assistant), "Router VPN Tutorial");
+    gtk_window_set_default_size(GTK_WINDOW(assistant), 700, 420);
+    gtk_window_set_transient_for(GTK_WINDOW(assistant), GTK_WINDOW(app->window));
+    gtk_window_set_modal(GTK_WINDOW(assistant), TRUE);
+    for (guint i = 0; i < G_N_ELEMENTS(tutorial_titles); i++) {
+        GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
+        gtk_container_set_border_width(GTK_CONTAINER(box), 24);
+        GtkWidget *title = gtk_label_new(NULL);
+        char *markup = g_markup_printf_escaped("<span size='x-large' weight='bold'>%s</span>", tutorial_titles[i]);
+        gtk_label_set_markup(GTK_LABEL(title), markup); g_free(markup);
+        gtk_widget_set_halign(title, GTK_ALIGN_START);
+        GtkWidget *body = gtk_label_new(tutorial_bodies[i]);
+        gtk_label_set_line_wrap(GTK_LABEL(body), TRUE);
+        gtk_widget_set_halign(body, GTK_ALIGN_START);
+        gtk_label_set_xalign(GTK_LABEL(body), 0.0f);
+        gtk_box_pack_start(GTK_BOX(box), title, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(box), body, FALSE, FALSE, 0);
+        gtk_widget_show_all(box);
+        gint page = gtk_assistant_append_page(GTK_ASSISTANT(assistant), box);
+        gtk_assistant_set_page_title(GTK_ASSISTANT(assistant), box, tutorial_titles[i]);
+        gtk_assistant_set_page_complete(GTK_ASSISTANT(assistant), box, TRUE);
+        gtk_assistant_set_page_type(GTK_ASSISTANT(assistant), box, i == G_N_ELEMENTS(tutorial_titles)-1 ? GTK_ASSISTANT_PAGE_CONFIRM : (page == 0 ? GTK_ASSISTANT_PAGE_INTRO : GTK_ASSISTANT_PAGE_CONTENT));
+    }
+    TutorialState *state = g_new0(TutorialState, 1);
+    state->assistant = assistant; state->state_path = path;
+    g_signal_connect(assistant, "prepare", G_CALLBACK(tutorial_prepare), state);
+    g_signal_connect(assistant, "cancel", G_CALLBACK(tutorial_cancel), state);
+    g_signal_connect(assistant, "close", G_CALLBACK(tutorial_apply), state);
+    g_signal_connect(assistant, "apply", G_CALLBACK(tutorial_apply), state);
+    g_signal_connect(assistant, "destroy", G_CALLBACK(tutorial_destroy), state);
+    gtk_assistant_set_current_page(GTK_ASSISTANT(assistant), step);
+    gtk_widget_show_all(assistant);
+}
+
+static void on_tutorial(GtkButton *button, gpointer data) {
+    (void)button;
+    show_tutorial((App *)data, TRUE);
+}
+
 static GtkWidget *make_button(const char *label, GCallback callback, App *app) {
     GtkWidget *button = gtk_button_new_with_label(label);
     g_signal_connect(button, "clicked", callback, app);
@@ -461,6 +587,7 @@ static void build_ui(App *app) {
     gtk_box_pack_start(GTK_BOX(header), title, TRUE, TRUE, 0);
     app->status = gtk_label_new("Checking…");
     gtk_box_pack_end(GTK_BOX(header), app->status, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(header), make_button("Run Tutorial", G_CALLBACK(on_tutorial), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(root), header, FALSE, FALSE, 0);
 
     app->detail = gtk_label_new("");
@@ -673,6 +800,7 @@ int main(int argc, char **argv) {
     refresh_all(&app);
     (void)g_timeout_add_seconds(2, refresh_timer, &app);
     gtk_widget_show_all(app.window);
+    show_tutorial(&app, FALSE);
     gtk_main();
 
     g_free(app.package_root);
