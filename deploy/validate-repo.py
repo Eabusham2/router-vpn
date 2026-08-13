@@ -98,8 +98,8 @@ for required in (
     "Connect native WireGuard", "Connect native AmneziaWG 2",
     "Connect embedded layered mode", "AUTO — first proven working mode",
     "SMART AUTO — simplify and restore safely", "Multihop — choose entry → exit",
-    "Strict embedded libbox sessions require", "Shadowsocks or Hysteria2 exit",
-    "AWG-entry multihop", "Network changes reset libbox",
+    "Strict embedded libbox/Xray sessions require", "Shadowsocks or Hysteria2 exit",
+    "AWG-entry multihop", "Network changes reset/revalidate libbox and native Xray",
 ):
     if required not in android:
         error(f"Android onboarding/capability contract missing: {required}")
