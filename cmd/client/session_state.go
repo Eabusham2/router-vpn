@@ -75,14 +75,16 @@ type observedConnection struct {
 }
 
 type sessionTracker struct {
-	a            *app
-	mu           sync.Mutex
-	session      *connectionSession
-	lastKey      string
-	requestedMode string
-	requestedBase string
-	declaredAt   time.Time
-	seq          uint64
+	a                   *app
+	mu                  sync.Mutex
+	session             *connectionSession
+	lastKey             string
+	requestedMode       string
+	requestedBase       string
+	declaredAt          time.Time
+	seq                 uint64
+	dnsProofRunning     bool
+	dnsProofLastAttempt time.Time
 }
 
 var sessionTrackers sync.Map
@@ -198,6 +200,8 @@ func (t *sessionTracker) startLocked(s observedConnection, phase string) {
 		Events: []connectionEvent{},
 	}
 	t.lastKey = ""
+	t.dnsProofRunning = false
+	t.dnsProofLastAttempt = time.Time{}
 }
 
 func (t *sessionTracker) observe(s observedConnection) {
@@ -240,9 +244,11 @@ func (t *sessionTracker) observe(s observedConnection) {
 	t.session.Connected = s.Connected
 	t.session.Error = typedError(s.LastError)
 	t.session.ExitIP = s.Profile.PublicIP
-	t.session.DNSProof.Mode = s.Profile.DNSMode
-	t.session.DNSProof.Host = s.Profile.DNSHost
-	t.session.DNSProof.LatencyMs = s.Profile.FastestDNSLatencyMs
+	if t.session.DNSProof.Status == "not-proven" {
+		t.session.DNSProof.Mode = s.Profile.DNSMode
+		t.session.DNSProof.Host = s.Profile.DNSHost
+		t.session.DNSProof.LatencyMs = 0
+	}
 	if s.Connected && phase == "connected" {
 		t.session.PathProof = "passed"
 	} else if strings.Contains(strings.ToLower(s.LastError), "path proof") {
@@ -251,6 +257,16 @@ func (t *sessionTracker) observe(s observedConnection) {
 	} else if phase == "starting" || phase == "checking" || strings.HasPrefix(phase, "auto:") {
 		t.session.PathProof = "pending"
 	}
+
+	if s.Connected && phase == "connected" && t.session.PathProof == "passed" && t.session.DNSProof.Status != "passed" && !t.dnsProofRunning && (t.dnsProofLastAttempt.IsZero() || time.Since(t.dnsProofLastAttempt) >= 30*time.Second) {
+		t.dnsProofRunning = true
+		t.dnsProofLastAttempt = time.Now()
+		t.session.DNSProof.Status = "checking"
+		t.session.DNSProof.Reason = "verifying active selected-DNS enforcement and OS resolver path"
+		sessionID := t.session.ID
+		go t.proveDNSAsync(sessionID, s, runtimeID)
+	}
+
 	if phase == "stopping" && t.session.StopReason == "" {
 		if t.session.Connected {
 			t.session.StopReason = "user-or-mode-switch"
@@ -278,6 +294,18 @@ func (t *sessionTracker) observe(s observedConnection) {
 		end := now
 		t.session.EndedAt = &end
 	}
+}
+
+func (t *sessionTracker) proveDNSAsync(sessionID string, s observedConnection, runtimeID string) {
+	proof := proveSelectedDNS(t.a, s, runtimeID)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.session == nil || t.session.ID != sessionID {
+		return
+	}
+	t.dnsProofRunning = false
+	t.session.DNSProof = proof
+	t.eventLocked("dns-proof", t.session.Phase, proof.Reason, t.session.Connected, t.session.ActualMode, t.session.ActualBase)
 }
 
 func (t *sessionTracker) eventLocked(kind, phase, message string, connected bool, runtimeID, base string) {
