@@ -7,6 +7,8 @@ COMMIT=1086ab2563320e0da0c23b3a491d8dfa0939dff4
 LIBXRAY_COMMIT=294fb37343205b9b0cb7b7b1b423d3d4b60d9998
 XRAY_CORE_VERSION=v1.260327.1-0.20260711155151-50231eaff98c
 GO_TOOLCHAIN=go1.26.3
+GO_MOD_VERSION=${GO_TOOLCHAIN#go}
+[[ "$GO_MOD_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "invalid Go module directive version: $GO_MOD_VERSION" >&2; exit 1; }
 NDK_VERSION=28.0.13004108
 GOMOBILE_VERSION=0.1.12
 VENDOR="$ROOT/.vendor/sing-box"
@@ -142,7 +144,7 @@ install -m 0644 "$ROOT/routervpn_xray_bridge.go" "$VENDOR/experimental/libbox/ro
   # deliberately lifted to libXray's required Go version, then tidied so Go's
   # MVS graph is explicit before any compile. Repository go.mod/go.sum files are
   # never changed by this disposable build workspace.
-  go mod edit -go="$GO_TOOLCHAIN"
+  go mod edit -go="$GO_MOD_VERSION"
   go mod edit -require=github.com/xtls/libxray@v0.0.0
   go mod edit -replace="github.com/xtls/libxray=$XRAY_VENDOR"
   go mod tidy
