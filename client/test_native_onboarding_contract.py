@@ -22,6 +22,7 @@ for name, source in (("Windows", win), ("macOS", mac), ("Linux", linux)):
 for marker in (
     "Show-RouterVPNTutorial", "windows-onboarding-v1.json", ".routervpn-state",
     "Close and resume later", "Save-RouterVPNOnboardingState 0 $true",
+    "Join-Path $PSScriptRoot '.routervpn-state'",
 ):
     assert marker in win, f"Windows onboarding missing {marker}"
 
