@@ -1,0 +1,35 @@
+name: Weighted release audit
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weighted-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  score:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Score source CI and unresolved live release gates
+        run: |
+          python3 deploy/weighted-release-audit.py | tee "$RUNNER_TEMP/weighted-release.json"
+          python3 - "$RUNNER_TEMP/weighted-release.json" <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1]))
+          assert r['source_weight'] == 88.0, r
+          assert r['manual_live_weight'] == 12.0, r
+          print(f"Weighted full release score: {r['score_percent']:.2f}%")
+          print(f"Source/CI gate completion: {r['source_score_percent']:.2f}% of the 88% source allocation")
+          failed=[g for g in r['gates'] if not g['pass']]
+          for g in failed:
+              print(f"UNRESOLVED [{g['kind']}] {g['weight']}%: {g['name']} {g['note']}")
+          PY
