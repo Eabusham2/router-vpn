@@ -1,5 +1,5 @@
 FROM golang:1.25.12-bookworm AS go-build
-ARG AWG_GO_TAG=v3.0.2
+ARG AWG_GO_COMMIT=0527dfa47639714dd8f5c9ffbd9d40d19083f0ba
 RUN apt-get -o Acquire::Retries=5 update \
  && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl gzip tar gcc libc6-dev \
  && rm -rf /var/lib/apt/lists/*
@@ -14,8 +14,8 @@ RUN set -eux; \
       return 1; \
     }; \
     fetch_tar /tmp/amneziawg-go.tar.gz \
-      "https://codeload.github.com/amnezia-vpn/amneziawg-go/tar.gz/refs/tags/${AWG_GO_TAG}" \
-      "https://github.com/amnezia-vpn/amneziawg-go/archive/refs/tags/${AWG_GO_TAG}.tar.gz"; \
+      "https://codeload.github.com/amnezia-vpn/amneziawg-go/tar.gz/${AWG_GO_COMMIT}" \
+      "https://github.com/amnezia-vpn/amneziawg-go/archive/${AWG_GO_COMMIT}.tar.gz"; \
     tar -xzf /tmp/amneziawg-go.tar.gz -C /src/amneziawg-go --strip-components=1; \
     rm -f /tmp/amneziawg-go.tar.gz; \
     go mod download; \
@@ -23,7 +23,7 @@ RUN set -eux; \
     go build -ldflags '-linkmode external -extldflags "-fno-PIC -static"' -v -o /out/amneziawg-go .
 
 FROM debian:bookworm AS tools-build
-ARG AWGTOOLS_TAG=v1.0.20250901
+ARG AWGTOOLS_COMMIT=5e882890fbca2316f8ca40e992789d24f67f0118
 RUN apt-get -o Acquire::Retries=5 update \
  && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl gzip tar make gcc libc6-dev pkg-config linux-libc-dev \
  && rm -rf /var/lib/apt/lists/*
@@ -37,8 +37,8 @@ RUN set -eux; \
       return 1; \
     }; \
     fetch_tar /tmp/amneziawg-tools.tar.gz \
-      "https://codeload.github.com/amnezia-vpn/amneziawg-tools/tar.gz/refs/tags/${AWGTOOLS_TAG}" \
-      "https://github.com/amnezia-vpn/amneziawg-tools/archive/refs/tags/${AWGTOOLS_TAG}.tar.gz"; \
+      "https://codeload.github.com/amnezia-vpn/amneziawg-tools/tar.gz/${AWGTOOLS_COMMIT}" \
+      "https://github.com/amnezia-vpn/amneziawg-tools/archive/${AWGTOOLS_COMMIT}.tar.gz"; \
     tar -xzf /tmp/amneziawg-tools.tar.gz -C /src/amneziawg-tools --strip-components=1; \
     rm -f /tmp/amneziawg-tools.tar.gz; \
     make -C /src/amneziawg-tools/src
