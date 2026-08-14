@@ -1,0 +1,130 @@
+name: Product reconciliation patch
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/product-reconciliation-patch.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reconcile Setup Center product contract
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p=Path('server/scripts/generate-setup-assets.py')
+          s=p.read_text()
+
+          def rep(old,new,label):
+              global s
+              if old not in s:
+                  raise SystemExit(f'missing expected source for {label}')
+              s=s.replace(old,new,1)
+
+          rep(
+          '''        "router-vpn-app", "Router VPN app / controller", "Recommended full experience",
+                  config="Import router-vpn-bundle.json in the Router VPN app/controller. The app exposes AUTO, SMART AUTO, CUSTOM, all validated modes, DNS selection, node profiles, SOCKS5-only and forwarding.",
+                  apps=["Router VPN desktop controller", "Router VPN PWA", "Router VPN mobile controller/importer"],
+                  note="Best when you want the complete Router VPN feature set. Desktop currently provides the full local controller. Mobile builds must not be described as native all-mode VPNs until their platform tunnel adapters are validated.",
+                  native="Uses Router VPN itself; protocol-specific native apps remain available below.", simple=True,''',
+          '''        "router-vpn-app", "Router VPN app", "Recommended full experience",
+                  config="Install the generic Router VPN app once, then import router-vpn-bundle.json as a node. Add more nodes later without reinstalling. The native app exposes the full Router VPN orchestration supported by that platform, including AUTO, SMART AUTO, CUSTOM, DNS, node management and real readiness reasons.",
+                  apps=["Router VPN"],
+                  note="Recommended for Router VPN stacks. Windows, macOS, Linux and Android use native daily-use app surfaces. iOS has a real WireGuard PacketTunnel today; unsupported iOS layers remain unavailable rather than being faked.",
+                  native="Use the installed Router VPN native app. Protocol-specific third-party apps remain available below.", simple=False,''',
+          'Router VPN recommended lane')
+
+          rep('apps=["Shadowsocks", "sing-box", "Potatso-compatible clients", "Router VPN"],',
+              'apps=["Shadowsocks", "sing-box", "Router VPN"],', 'unverified Potatso claim')
+          rep('note="Compact SIP002 URL plus full sing-box config.", native="Import into a compatible app.", simple=True,',
+              'note="Compact SIP002 URL plus full sing-box config using the public Router VPN endpoint. Potatso is not advertised for this profile until a live off-LAN import and traffic test passes.", native="Import into a SIP002-compatible app.", simple=True,', 'Shadowsocks truth')
+          rep('native="Requires an OverTLS-compatible client."\n    ))',
+              'native="Requires an OverTLS-compatible client.", simple=True\n    ))', 'OverTLS simple method')
+          rep('note="Legacy compatibility only; prefer Shadowsocks 2022 or modern Router VPN modes.", native="Requires an SSR-compatible client."\n    ))',
+              'note="Legacy compatibility only; prefer Shadowsocks 2022 or modern Router VPN modes.", native="Requires an SSR-compatible client.", simple=True\n    ))', 'SSR simple method')
+          rep('apps=["Potatso", "Browsers/apps with SOCKS5", "macOS SOCKS proxy"],',
+              'apps=["Browsers/apps with SOCKS5", "macOS SOCKS proxy", "compatible SOCKS5 apps"],', 'SOCKS app claims')
+          rep('native="macOS supports a per-network SOCKS proxy; other platforms typically use an app."\n    ))',
+              'native="macOS supports a per-network SOCKS proxy; other platforms typically use an app. Potatso is not advertised until the exact internal-SOCKS workflow is live-tested.", simple=True\n    ))', 'SOCKS simple method')
+
+          rep('const availableMethods=(DATA.methods||[]).filter(x=>x.available);availableMethods.sort((a,b)=>(b.simple?1:0)-(a.simple?1:0)||a.label.localeCompare(b.label));for(const m of availableMethods){const o=document.createElement(\'option\');o.value=m.id;o.textContent=(m.simple?\'Easy — \':\'Advanced — \')+m.label;$(\'method\').appendChild(o)}',
+              'const availableMethods=(DATA.methods||[]).filter(x=>x.available&&x.simple&&x.id!==\'router-vpn-app\');availableMethods.sort((a,b)=>a.label.localeCompare(b.label));for(const m of availableMethods){const o=document.createElement(\'option\');o.value=m.id;o.textContent=m.label;$(\'method\').appendChild(o)}', 'Methods external-only filter')
+
+          rep('Multi-hop is intentionally not labeled ready here yet. A real multi-hop feature must route one validated self-hosted node through another without leaking DNS or bypassing kill-switch policy; the UI must not pretend that exists before the chain adapter is tested.',
+              'Real multihop is available on Linux and native Windows/macOS and on Android for its supported narrow path. It requires two different linked nodes, exact exit-node proof, DNS through the exit path and fail-closed rollback. iOS and unsupported entry/exit transport combinations remain unavailable with an exact reason.', 'multihop guide truth')
+          rep('The desktop controller has <b>Off</b> and an emergency local transport stop. A strict firewall kill switch and remote “kick every peer” control are not advertised as ready until their platform-specific firewall/peer implementations are tested. This avoids a cosmetic switch that could leak traffic.',
+              'Strict kill-switch enforcement is implemented on Linux/macOS and current Windows/Android paths, with platform-specific policy and fail-closed behavior. iOS strict policy intentionally fails closed until a true Apple lockdown lifecycle is implemented. Setup Center peer ban/revoke controls are separate server-admin actions and never substitute for a client kill switch.', 'kill-switch guide truth')
+          rep('Mac local controller: http://127.0.0.1:8788',
+              'Router VPN app: launch the installed native app; 127.0.0.1:8788 is an internal controller API only', 'localhost user guidance')
+          rep('Every generated method stays available in Devices & methods.',
+              'Devices & methods shows only simple external/native-compatible methods. Complex Router VPN stacks stay in the Router VPN app.', 'wizard method boundary')
+
+          pattern=r'    devices=\{.*?\n    \}\n    modes ='
+          new='''    devices={
+              "ios":{"label":"iPhone / iPad","customApp":"Router VPN for iOS is a real native SwiftUI app with a real WireGuard PacketTunnel and exact-node proof. Other Router VPN layers, strict Apple kill switch and multihop remain unavailable until their native Apple dataplanes are implemented.","steps":["Install the Router VPN iOS build through the actual distribution path in use and grant VPN permission.","Import router-vpn-bundle.json to add the node; the installer itself stays generic and secret-free.","For the simple third-party path, import the WireGuard config/QR in WireGuard for iOS.","Do not interpret a greyed mode as a UI bug: unsupported iOS engines remain unavailable with an exact reason."]},
+              "android":{"label":"Android","customApp":"Router VPN Android is a native app using VpnService with native WireGuard/AmneziaWG and combined layered runtime support, AUTO/SMART/CUSTOM orchestration, kill-switch policy and a narrow real multihop path. Physical-device leak/reconnect validation is still a release gate.","steps":["Install the Router VPN Android APK and grant VPN permission.","Import router-vpn-bundle.json to add a node; add more nodes later without reinstalling.","Use Nodes, Modes, DNS and Advanced in the native app; unavailable combinations show the runtime reason.","For simple third-party setup, choose a supported method below and import its standard config/URI."]},
+              "macos":{"label":"macOS","customApp":"Router VPN macOS is a native AppKit/MapKit application. The localhost controller is internal implementation detail, not the daily UI.","steps":["Download the matching Apple Silicon or Intel package.","Install/open RouterVPN.app and follow the verified Gatekeeper guidance if macOS prompts.","Import router-vpn-bundle.json to add the home node; add additional nodes later without reinstalling.","Use the native Nodes/map, Modes and connection-validation surfaces; remaining rich settings parity is being completed in the app itself."]},
+              "windows":{"label":"Windows","customApp":"Router VPN Windows is a native WPF application for x64 and ARM64 with native full-device runtime paths. WSL is not counted or required as the Windows VPN implementation.","steps":["Download the Windows x64/ARM64 or Portable package matching the device.","Run the native Router VPN application and complete any required runtime setup as Administrator.","Import router-vpn-bundle.json to add the node; the generic app contains no home secrets.","Use the native app for Router VPN stacks; use a simple third-party method below only when you intentionally want that protocol alone."]},
+              "linux":{"label":"Linux","customApp":"Router VPN Linux uses a native GTK daily-use application with native tunnel/runtime orchestration; the local controller API remains internal.","steps":["Download the matching Linux package and install the required native runtime dependencies.","Launch the Router VPN GTK app rather than opening a localhost web page.","Import router-vpn-bundle.json and add/remove nodes independently of the app installation.","Use the app for complex Router VPN stacks or choose a simple external method below."]},
+              "manual":{"label":"Other / manual","customApp":"Use only a protocol-specific standard config/URL for a simple method that the target client explicitly supports. Router VPN does not invent unsupported native imports.","steps":["Choose a simple method below.","Read whether it is a full VPN, proxy, or LAN/tunnel-only method before importing it.","Use its real public endpoint when the protocol is remotely reachable; SOCKS5 1080 remains private and must never be WAN-exposed.","Never expose management, Setup Center, Portainer, SSH, AdGuard admin or internal backend ports to WAN."]},
+          }
+          modes ='''
+          s2,n=re.subn(pattern,new,s,flags=re.S)
+          if n!=1:
+              raise SystemExit(f'device guidance replacement count={n}')
+          s=s2
+
+          p.write_text(s)
+
+          test=Path('server/scripts/test_setup_methods_contract.py')
+          test.write_text(r'''#!/usr/bin/env python3
+          from pathlib import Path
+          import re
+          s=Path(__file__).with_name("generate-setup-assets.py").read_text()
+          assert "Router VPN PWA" not in s
+          assert "WSL2 transport environment" not in s
+          assert "Open the Router VPN local app/PWA" not in s
+          assert "Multi-hop is intentionally not labeled ready here yet" not in s
+          assert "const availableMethods=(DATA.methods||[]).filter(x=>x.available&&x.simple&&x.id!==\'router-vpn-app\')" in s
+          block=s[s.index('"router-vpn-app"'):s.index('"wireguard"')]
+          assert "simple=False" in block
+          for ident in ("wireguard","amneziawg2","shadowsocks","hysteria2","overtls","shadowsocksr","socks5"):
+              m=re.search(r'"'+re.escape(ident)+r'".*?\)\)',s,re.S)
+              assert m and "simple=True" in m.group(0), ident
+          for ident in ("ss-v2ray","reality-vision","reality-pq-vision","reality-xhttp","naive-h2","naive-h3"):
+              assert ident in s
+          assert "Potatso-compatible clients" not in s
+          assert 'apps=["Potatso"' not in s
+          print("Setup Center simple-method/product-guidance contract OK")
+          ''')
+          test.chmod(0o755)
+
+          rc=Path('.github/workflows/release-candidate.yml')
+          r=rc.read_text()
+          needle='          python3 server/scripts/test_setup_center_ux_patch.py\n'
+          if needle not in r:
+              raise SystemExit('release-candidate Setup Center test anchor missing')
+          if 'test_setup_methods_contract.py' not in r:
+              r=r.replace(needle,needle+'          python3 server/scripts/test_setup_methods_contract.py\n',1)
+          rc.write_text(r)
+          PY
+          python3 -m py_compile server/scripts/generate-setup-assets.py server/scripts/test_setup_methods_contract.py
+          python3 server/scripts/test_setup_methods_contract.py
+          python3 deploy/validate-repo.py
+          git rm .github/workflows/product-reconciliation-patch.yml
+          git config user.name 'Router VPN CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'Reconcile Setup Center methods and native platform guidance'
+          git push origin HEAD:main
