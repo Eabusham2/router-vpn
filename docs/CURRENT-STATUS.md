@@ -50,12 +50,14 @@ The **production Portainer server stack is exact-SHA image-only**. Production sh
 Client package downloads use:
 
 ```text
-matching GitHub artifact
-→ bounded router-local requested-package build fallback when needed
-→ temporary private node/profile injection
+matching same-SHA GitHub artifact
+→ bounded router-local build of the requested generic desktop/Portable package when needed
+→ validate/package the generic secret-free application
 → stream
 → cleanup
 ```
+
+Private node data is linked/imported separately after installation and is never baked into the generic installer or Portable package. One installed application can link multiple Router VPN nodes without reinstalling.
 
 The router-local fallback is bounded to the requested generic client package and is tested on native ARM64. PortableApps/PAF is retired; normal Router VPN Portable ZIP x64/ARM64 remains supported.
 
@@ -99,13 +101,17 @@ The SwiftUI application uses a real pinned WireGuardKit PacketTunnel for raw Wir
 
 Router VPN supports catalog/default MTU, manual MTU, safe PMTU-based auto selection, effective-MTU proof metadata, per-path auto-MTU memory and explicit Jumbo (`9000`) policy where requested.
 
-A stronger **throughput-aware MTU optimizer** that tests multiple safe candidates over the proven tunnel path and remembers the best-performing candidate is still product work; the PMTU ceiling alone must not be described as a throughput benchmark.
+The current source also implements a bounded **throughput-aware MTU optimizer** after the selected private Router VPN path is proven. It tests safe candidate MTUs with bidirectional packet success, RTT and private-tunnel transfer-rate measurements, persists the winner by path context, and restores the original MTU if optimization fails. Windows has a native PowerShell implementation and Unix-like platforms use the shared optimizer contract. This remains subject to physical performance/path-change validation; it is not evidence that Jumbo or any specific MTU works Internet-wide.
 
 ## Setup Center Methods
 
 Setup Center Methods is for simple, interoperable external/native-compatible configurations. Complex Router VPN stacks remain in the Router VPN app. Current method metadata explicitly distinguishes public direct tunnels/proxies from private/tunnel-only SOCKS5 and records whether an import/QR contract is actually supported.
 
 External-app compatibility remains a live gate: remotely usable Methods must be tested off-LAN with real import → connect → DNS → HTTP → correct-exit proof. SOCKS5 `1080` remains private and must not be exposed to WAN merely to make a third-party client work.
+
+## Custom standard-protocol exits
+
+`CUSTOM` in Router VPN currently means choosing compatible Router VPN transport layers/base behavior for a linked Router VPN node. It is **not** a generic arbitrary external-exit adapter. The current node schema does not advertise an OpenVPN exit engine, and no OpenVPN checkbox/import should be added without a real dataplane. Existing WireGuard, SOCKS5 and Shadowsocks support is exposed only through the concrete Router VPN/node or simple-Method contracts that actually exist; unsupported arbitrary external exits must remain unadvertised.
 
 ## AI Help
 
