@@ -30,10 +30,6 @@ function Install-PinnedArchive([string]$Name,[string]$Url,[string]$Sha256,[strin
     if (-not $exe) { throw "$Name archive did not contain $ExeName" }
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $Destination $ExeName) -Force
-    # Keep runtime companions shipped beside the verified executable. This is
-    # needed for engines that use a bundled DLL (for example Naive/Chromium
-    # support) and for Xray's geo data. The containing archive was hash-checked
-    # before extraction, so these companions inherit the same provenance.
     foreach ($pattern in $CompanionPatterns) {
       Get-ChildItem -LiteralPath $exe.Directory.FullName -File -Filter $pattern -ErrorAction SilentlyContinue |
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Destination $_.Name) -Force }
@@ -63,7 +59,9 @@ if ($Portable) {
 }
 $Runtime = Join-Path $DataRoot 'runtime\windows'
 $Prep = Join-Path $HelpersRoot 'Prepare-Windows-Mode-Catalog-v2.ps1'
+$OpenVPNSetup = Join-Path $HelpersRoot 'Install-RouterVPN-OpenVPN.ps1'
 if (-not (Test-Path -LiteralPath $Prep -PathType Leaf)) { throw "Missing Windows catalog helper: $Prep" }
+if (-not (Test-Path -LiteralPath $OpenVPNSetup -PathType Leaf)) { throw "Missing OpenVPN setup helper: $OpenVPNSetup" }
 
 $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 switch ($arch) {
@@ -91,8 +89,15 @@ if ($LASTEXITCODE -ne 0) { throw 'sing-box runtime verification failed.' }
 & (Join-Path $Runtime 'xray.exe') version | Select-Object -First 2
 if ($LASTEXITCODE -ne 0) { throw 'Xray runtime verification failed.' }
 
+# OpenVPN needs a Windows driver/service, so its exact-version helper performs
+# the one normal UAC elevation itself. It uses the official 2.7.5 x64/ARM64 MSI,
+# checks exact asset size and a valid OpenVPN Authenticode signature, and then
+# verifies the installed openvpn.exe before returning.
+& $OpenVPNSetup
+if ($LASTEXITCODE -ne 0) { throw 'OpenVPN runtime setup failed.' }
+
 & $Prep -Root $DataRoot -Source $ModesSource -ModesDir $ModesDir -HelpersRoot $HelpersRoot
 if ($LASTEXITCODE -ne 0) { throw 'Windows mode-catalog preparation failed.' }
 Write-Host ''
-Write-Host "Router VPN native Windows runtime is ready: sing-box $SingBoxVersion + Xray $XrayVersion."
-Write-Host 'No WSL is used. Reopen Router VPN so readiness checks re-evaluate the native modes.'
+Write-Host "Router VPN native Windows runtime is ready: sing-box $SingBoxVersion + Xray $XrayVersion + OpenVPN 2.7.x."
+Write-Host 'No WSL is used. Reopen Router VPN so readiness checks re-evaluate the native modes and custom external nodes.'
