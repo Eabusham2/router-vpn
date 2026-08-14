@@ -17,15 +17,6 @@ jobs:
         with:
           go-version: '1.24.x'
           cache: false
-      - name: Provision zip CLI
-        shell: pwsh
-        run: |
-          $ErrorActionPreference='Stop'
-          if(-not (Get-Command zip.exe -ErrorAction SilentlyContinue)) {
-            choco install zip -y --no-progress
-            if($LASTEXITCODE -ne 0){ throw "zip setup failed" }
-          }
-          if(-not (Get-Command zip.exe -ErrorAction SilentlyContinue)){ throw 'zip.exe unavailable' }
       - name: Windows product self-test
         shell: pwsh
         run: |
@@ -35,6 +26,21 @@ jobs:
       - name: Build generic packages
         shell: bash
         run: |
+          set -euo pipefail
+          TOOL_DIR="$(cygpath -u "$RUNNER_TEMP")/routervpn-tools"
+          mkdir -p "$TOOL_DIR"
+          cat >"$TOOL_DIR/zip" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          while (($#)) && [[ "$1" == -* ]]; do shift; done
+          if (($# != 2)); then
+            echo 'zip shim expects one output archive and one input tree' >&2
+            exit 2
+          fi
+          /c/Windows/System32/tar.exe -a -c -f "$1" "$2"
+          SH
+          chmod +x "$TOOL_DIR/zip"
+          export PATH="$TOOL_DIR:$PATH"
           ./deploy/build-client.sh
           ./deploy/package-builds.sh
       - name: Portable amd64 direct self-test and relocation
