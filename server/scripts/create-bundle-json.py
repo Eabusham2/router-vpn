@@ -53,9 +53,10 @@ if setup_path.is_file():
         setup_assets={}
 
 router_profile={
-    'schema_version':2,
+    'schema_version':3,
     'id':'home',
     'name':'Home Router',
+    'node_kind':'router-vpn',
     'node_proof_id':node_proof_id,
     'endpoint':endpoint,
     'router_api':router_api,
@@ -85,6 +86,10 @@ router_profile={
     'mtu_policy':'default',
     'manual_mtu':0,
     'effective_mtu':0,
+    'effective_mtu_source':'',
+    'effective_mtu_path_key':'',
+    'effective_underlay_pmtu':0,
+    'effective_mtu_tested_at':'',
     'diagnostics_enabled':False,
     'diagnostics_retention_days':7,
     'share_diagnostics':False,
@@ -114,11 +119,11 @@ client_config={
 }
 json.dump(client_config,open(base/'client-bundle/client.json','w'),indent=2)
 open(base/'client-bundle/client.json','a').write('\n')
-json.dump({'schema_version':2,'selected_id':'home','profiles':[router_profile]},open(base/'client-bundle/routers.json','w'),indent=2)
+json.dump({'schema_version':3,'selected_id':'home','profiles':[router_profile]},open(base/'client-bundle/routers.json','w'),indent=2)
 open(base/'client-bundle/routers.json','a').write('\n')
 bundle={
     'bundleVersion':4,
-    'profileSchemaVersion':2,
+    'profileSchemaVersion':3,
     'nodeProofId':node_proof_id,
     'endpoint':endpoint,
     'apiToken':token,
