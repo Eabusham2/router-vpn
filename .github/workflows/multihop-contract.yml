@@ -26,7 +26,7 @@ jobs:
           python3 -m py_compile modes/multihop.py
           bash -n modes/run-multihop.sh
           node --check cmd/client/logical_ui.js
-      - name: Real-chain markers
+      - name: Real-chain and shipping-route markers
         run: |
           grep -q 'detour.*entry-hop' modes/multihop.py
           grep -q 'AllowedIPs = {allowed}' modes/multihop.py
@@ -36,6 +36,10 @@ jobs:
           grep -q 'direct_exit_exception.*False' modes/multihop.py
           grep -q 'filepath.Clean(getenv("HOMEVPN_ROOT"' cmd/client/multihop.go
           grep -q '"HOMEVPN_ROOT="+root' cmd/client/multihop.go
+          grep -q 'registerDesktopMultihopRoutes(h, a)' cmd/client/extras.go
+          grep -q 'runtime.GOOS == "windows" || runtime.GOOS == "darwin"' cmd/client/multihop_native_routes.go
+          grep -q 'nativeWindowsMultihopCommand' cmd/client/multihop_native_routes.go
+          grep -q 'nativeDarwinMultihopCommand' cmd/client/multihop_native_routes.go
           grep -q '/api/multihop/connect' cmd/client/logical_ui.js
           grep -q 'platform_supported' cmd/client/logical_ui.js
           grep -q 'multihop requires both an entry node and an exit node' internal/common/profile_schema.go
