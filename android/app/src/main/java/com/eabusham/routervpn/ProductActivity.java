@@ -5,8 +5,10 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.text.InputType;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -73,6 +75,9 @@ public final class ProductActivity extends Activity {
         Button connect = button("Open Router VPN Connect — WG / AWG / libbox / Xray / AUTO / SMART / CUSTOM / ALL");
         connect.setOnClickListener(v -> openConnect());
         root.addView(connect, margins(0, dp(14), 0, 0));
+        Button pair = button("Pair home node from authenticated Setup Center");
+        pair.setOnClickListener(v -> showPairDialog());
+        root.addView(pair, margins(0, dp(8), 0, 0));
         Button nodes = button("Choose Router VPN or external node");
         nodes.setOnClickListener(v -> showNodes());
         root.addView(nodes, margins(0, dp(8), 0, 0));
@@ -106,7 +111,7 @@ public final class ProductActivity extends Activity {
             String counts = routerCount + " Router VPN node" + (routerCount == 1 ? "" : "s") + " • " + externalCount + " external exit" + (externalCount == 1 ? "" : "s");
             if (externalWithoutCoordinates > 0) counts += " • " + externalWithoutCoordinates + " external list-only (no real coordinates)";
             if (active == null) {
-                summaryView.setText(items.isEmpty() ? "No linked nodes — import a Router VPN bundle or add an external custom exit." : counts + "\nChoose a Router VPN node for normal modes, or an external exit for direct/hopped custom-exit use.");
+                summaryView.setText(items.isEmpty() ? "No linked nodes — pair/import a Router VPN bundle or add an external custom exit." : counts + "\nChoose a Router VPN node for normal modes, or an external exit for direct/hopped custom-exit use.");
             } else {
                 summaryView.setText("Active Router VPN: " + active.name + "\n" + active.subtitle() + "\n" + counts);
             }
@@ -116,11 +121,58 @@ public final class ProductActivity extends Activity {
         }
     }
 
+    private void showPairDialog() {
+        LinearLayout fields = new LinearLayout(this);
+        fields.setOrientation(LinearLayout.VERTICAL);
+        fields.setPadding(dp(20), dp(4), dp(20), 0);
+        EditText host = new EditText(this);
+        host.setHint("AI Board LAN IP / hostname");
+        host.setSingleLine(true);
+        host.setText("192.168.50.133");
+        EditText code = new EditText(this);
+        code.setHint("6-digit one-time pairing code");
+        code.setSingleLine(true);
+        code.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        fields.addView(host);
+        fields.addView(code);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Pair Router VPN home node")
+                .setMessage("Create the short-lived code in the authenticated private Setup Center. Pairing is accepted only from private/local addresses, the code is one-time, and Router VPN does not enable Android-wide cleartext HTTP for this flow.")
+                .setView(fields)
+                .setPositiveButton("Pair", (dialog, which) -> {
+                    String h = host.getText().toString();
+                    String c = code.getText().toString();
+                    summaryView.setText("Pairing with home Setup Center…");
+                    AndroidPairingClient.redeem(h, c, (bundle, error) -> runOnUiThread(() -> {
+                        if (error != null) {
+                            summaryView.setText("LAN pairing failed: " + safe(error));
+                            toast("LAN pairing failed: " + safe(error));
+                            return;
+                        }
+                        try {
+                            AndroidNodeStore.Node node = nodeStore.importBundle(bundle);
+                            refreshNodes();
+                            toast("Paired and selected " + node.name);
+                        } catch (Exception importError) {
+                            summaryView.setText("Paired bundle rejected: " + safe(importError));
+                            toast("Paired bundle rejected: " + safe(importError));
+                        }
+                    }));
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     private void showNodes() {
         try {
             List<AndroidUnifiedNodeCatalog.Item> items = catalog.list();
             if (items.isEmpty()) {
-                dialog("Nodes / Map", "No nodes yet. Open Router VPN Connect to import a home-node bundle or Custom Exits to add a private external WireGuard/SOCKS5/Shadowsocks/Hysteria2 exit.");
+                new AlertDialog.Builder(this).setTitle("Nodes / Map")
+                        .setMessage("No nodes yet. Pair a home node with a one-time Setup Center code, import a Router VPN bundle in Connect, or add a private external WireGuard/SOCKS5/Shadowsocks/Hysteria2 exit.")
+                        .setPositiveButton("Pair home node", (d, w) -> showPairDialog())
+                        .setNeutralButton("Open Connect", (d, w) -> openConnect())
+                        .setNegativeButton("Close", null).show();
                 return;
             }
             String[] labels = new String[items.size()];
@@ -131,6 +183,7 @@ public final class ProductActivity extends Activity {
             new AlertDialog.Builder(this).setTitle("Nodes / Map")
                     .setMessage("Router VPN nodes become the active home node. External nodes open the direct/hopped custom-exit flow. External entries with no real coordinates remain list-only.")
                     .setItems(labels, (d, which) -> chooseCatalogItem(items.get(which)))
+                    .setPositiveButton("Pair another home node", (d, w) -> showPairDialog())
                     .setNegativeButton("Close", null).show();
         } catch (Exception error) { toast(safe(error)); }
     }
@@ -180,9 +233,9 @@ public final class ProductActivity extends Activity {
 
     private void showHelp() {
         new AlertDialog.Builder(this).setTitle("Help")
-                .setMessage("Install Router VPN once and link private node data separately. Router VPN nodes provide normal modes/AUTO/SMART/CUSTOM; external nodes can connect directly or as Router VPN WireGuard entry → external exit. Every external connection requires the exact expected public exit IP before success. Direct Android external exits also require Always-on VPN plus ‘Block connections without VPN’. Generic Internet access is never treated as selected-path proof.")
-                .setPositiveButton("Open Connect", (d, w) -> openConnect())
-                .setNeutralButton("External exits", (d, w) -> openStandardExits())
+                .setMessage("Install Router VPN once and link private node data separately. The preferred LAN flow redeems a one-time code created in the authenticated Setup Center; file import remains available in Connect. Router VPN nodes provide normal modes/AUTO/SMART/CUSTOM; external nodes can connect directly or as Router VPN WireGuard entry → external exit. Every external connection requires the exact expected public exit IP before success. Direct Android external exits also require Always-on VPN plus ‘Block connections without VPN’. Generic Internet access is never treated as selected-path proof.")
+                .setPositiveButton("Pair home node", (d, w) -> showPairDialog())
+                .setNeutralButton("Open Connect", (d, w) -> openConnect())
                 .setNegativeButton("Close", null).show();
     }
 
