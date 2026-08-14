@@ -1,0 +1,45 @@
+name: MTU throughput optimizer contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'modes/mtu-throughput-tuner.py'
+      - '.github/workflows/mtu-throughput-contract.yml'
+  pull_request:
+    paths:
+      - 'modes/mtu-throughput-tuner.py'
+      - '.github/workflows/mtu-throughput-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile optimizer
+        run: python3 -m py_compile modes/mtu-throughput-tuner.py
+      - name: Run deterministic optimizer self-test
+        run: python3 modes/mtu-throughput-tuner.py --self-test
+      - name: Check fail-closed contract markers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('modes/mtu-throughput-tuner.py').read_text()
+          required=[
+            'prove_node(profile)',
+            'enforce_kill_switch()',
+            'set_interface_mtu(alias, family, original)',
+            '"effective_mtu_source"] = "auto-throughput"',
+            'HOMEVPN_MTU_OPTIMIZE_FORCE',
+            'private_ip(host)',
+            'candidate_mtus(ceiling)',
+            'pick_winner(results)',
+          ]
+          for marker in required:
+            assert marker in s, marker
+          print('MTU optimizer fail-closed contract OK')
+          PY
