@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - 'modes/mtu-throughput-tuner.py'
+      - 'client/Optimize-RouterVPN-MTU.ps1'
       - '.github/workflows/mtu-throughput-contract.yml'
   pull_request:
     paths:
       - 'modes/mtu-throughput-tuner.py'
+      - 'client/Optimize-RouterVPN-MTU.ps1'
       - '.github/workflows/mtu-throughput-contract.yml'
   workflow_dispatch:
 
@@ -16,7 +18,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  unix-contract:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -41,5 +43,27 @@ jobs:
           ]
           for marker in required:
             assert marker in s, marker
-          print('MTU optimizer fail-closed contract OK')
+          print('Unix MTU optimizer fail-closed contract OK')
           PY
+
+  windows-contract:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $tokens=$null;$errors=$null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'client/Optimize-RouterVPN-MTU.ps1'),[ref]$tokens,[ref]$errors)|Out-Null
+          if($errors.Count){$errors|ForEach-Object{Write-Error $_};exit 1}
+      - name: Run deterministic Windows self-test
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/Optimize-RouterVPN-MTU.ps1 -Action self-test
+      - name: Check Windows fail-closed contract markers
+        shell: powershell
+        run: |
+          $s=Get-Content -Raw client/Optimize-RouterVPN-MTU.ps1
+          foreach($marker in @('Prove-Node $profile','Ensure-KillSwitch $profile $alias','Set-Mtu $alias $family $original','effective_mtu_source','auto-throughput','Find-NetRoute','Set-NetIPInterface')){
+            if(-not $s.Contains($marker)){throw "missing contract marker: $marker"}
+          }
+          Write-Host 'Windows MTU optimizer fail-closed contract OK'
