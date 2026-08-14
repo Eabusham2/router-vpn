@@ -172,8 +172,8 @@ jobs:
           $legacy = Get-Content -Raw -LiteralPath 'cmd/client/standard_exit_platform_routes.go'
           if (-not $legacy.Contains('windowsOpenVPNStandardExitCommand')) { throw 'legacy standard-exit API disagrees with unified Windows OpenVPN support' }
           $package = Get-Content -Raw -LiteralPath 'deploy/package-builds.sh'
-          if (-not $package.Contains('cp -a "$ROOT/client" "$tmp/"')) { throw 'installed Windows package does not include client helpers' }
-          if (-not $package.Contains('cp -a "$ROOT/client" "$tmp/App/RouterVPN/"')) { throw 'Windows Portable does not include client helpers' }
+          if (-not $package.Contains('cp -a "$ROOT/client" "$dir/client"')) { throw 'installed Windows package does not include the current client helper tree' }
+          if (-not $package.Contains('cp -a "$ROOT/client" "$app/client"')) { throw 'Windows Portable does not include the current client helper tree' }
 
   android:
     runs-on: ubuntu-24.04
