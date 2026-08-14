@@ -2,15 +2,20 @@ import Foundation
 
 extension RouterVPNModel {
     func removeNode(_ id: String) {
-        guard var value = bundle else { message = "No node bundle is loaded"; return }
-        guard value.routerProfiles.contains(where: { $0.id == id }) else { message = "Node not found"; return }
-        value.routerProfiles.removeAll(where: { $0.id == id })
-        if value.selectedRouterID == id {
-            value.selectedRouterID = value.routerProfiles.first?.id ?? ""
-        }
         do {
-            let data = try JSONEncoder().encode(value)
-            try importBundle(data)
+            let replacement = try IOSNodeBundleStore.shared.remove(profileID: id, current: bundle)
+            if let replacement {
+                try importBundle(replacement)
+            } else {
+                bundle = nil
+                modes = []
+                logicalModes = []
+                endpoint = ""
+                apiToken = ""
+                routerAPI = "http://10.77.0.1:8787"
+                socksHost = "10.77.0.1"
+                UserDefaults.standard.removeObject(forKey: "router-vpn.bundle")
+            }
             message = "Removed linked node from this app. Router VPN itself remains installed."
         } catch {
             message = "Could not remove node: \(error.localizedDescription)"
@@ -24,9 +29,6 @@ extension RouterVPNModel {
         latitudeText: String,
         longitudeText: String
     ) {
-        guard var value = bundle,
-              let index = value.routerProfiles.firstIndex(where: { $0.id == id })
-        else { message = "Node not found"; return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty, trimmedName.count <= 120 else {
             message = "Node name must be 1–120 characters"
@@ -46,14 +48,19 @@ extension RouterVPNModel {
                 return
             }
         }
-        value.routerProfiles[index].name = trimmedName
         let trimmedLocation = location.trimmingCharacters(in: .whitespacesAndNewlines)
-        value.routerProfiles[index].location = trimmedLocation.isEmpty ? nil : trimmedLocation
-        value.routerProfiles[index].latitude = latitude
-        value.routerProfiles[index].longitude = longitude
         do {
-            let data = try JSONEncoder().encode(value)
-            try importBundle(data)
+            let replacement = try IOSNodeBundleStore.shared.updateMetadata(
+                profileID: id,
+                current: bundle,
+                name: trimmedName,
+                location: trimmedLocation.isEmpty ? nil : trimmedLocation,
+                latitude: latitude,
+                longitude: longitude
+            )
+            if bundle?.routerProfiles.contains(where: { $0.id == id }) == true {
+                try importBundle(replacement)
+            }
             message = "Updated local node metadata"
         } catch {
             message = "Could not update node metadata: \(error.localizedDescription)"
