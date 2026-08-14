@@ -65,6 +65,18 @@ final class RouterVPNModel: ObservableObject {
 
     var baseSelectorEnabled: Bool { false }
 
+    private var selectedRouterProfile: RouterProfile? {
+        guard let bundle else { return nil }
+        return bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
+    }
+
+    private var strictKillSwitchEnabled: Bool {
+        guard let profile = selectedRouterProfile else { return false }
+        if profile.killSwitch == true { return true }
+        let policy = (profile.killSwitchPolicy ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["strict", "always", "enabled", "on", "lockdown"].contains(policy)
+    }
+
     func importBundle(_ data: Data) throws {
         guard data.count <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
         let decoded = try JSONDecoder().decode(ClientBundle.self, from: data)
@@ -172,14 +184,35 @@ final class RouterVPNModel: ObservableObject {
                 "baseFallback": false,
                 "bundle": try JSONEncoder().encode(bundle)
             ]
+
+            // NetworkExtension owns the route-lockdown boundary on Apple
+            // platforms. For a strict Router VPN policy, include all routable
+            // traffic, make tunnel routes authoritative, and only exclude local
+            // networks when the imported node policy says LAN access is off.
+            let strict = strictKillSwitchEnabled
+            proto.includeAllNetworks = strict
+            proto.enforceRoutes = strict
+            proto.excludeLocalNetworks = strict ? !homeLANAccess : false
+            proto.excludeAPNs = false
+            proto.excludeCellularServices = false
+
             manager.protocolConfiguration = proto
             manager.localizedDescription = routerName
             manager.isEnabled = true
+            if strict {
+                manager.onDemandRules = [NEOnDemandRuleConnect()]
+                manager.isOnDemandEnabled = true
+            } else {
+                manager.isOnDemandEnabled = false
+                manager.onDemandRules = []
+            }
             try await manager.saveToPreferences()
             try await manager.loadFromPreferences()
             try manager.connection.startVPNTunnel()
             connected = false
-            message = auto ? "Connecting with AUTO → native WireGuard…" : "Connecting native WireGuard…"
+            message = strict
+                ? (auto ? "Connecting with AUTO → native WireGuard • strict route lockdown…" : "Connecting native WireGuard • strict route lockdown…")
+                : (auto ? "Connecting with AUTO → native WireGuard…" : "Connecting native WireGuard…")
             await watchConnection(manager, attempts: 32)
         } catch {
             connected = false
@@ -192,7 +225,9 @@ final class RouterVPNModel: ObservableObject {
             switch manager.connection.status {
             case .connected:
                 connected = true
-                message = "Connected • native WireGuard • selected-node proof passed"
+                message = strictKillSwitchEnabled
+                    ? "Connected • native WireGuard • strict route lockdown • selected-node proof passed"
+                    : "Connected • native WireGuard • selected-node proof passed"
                 return
             case .invalid:
                 connected = false
@@ -227,7 +262,18 @@ final class RouterVPNModel: ObservableObject {
     func disconnect() {
         Task {
             let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
-            managers.first?.connection.stopVPNTunnel()
+            guard let manager = managers.first else {
+                connected = false
+                message = "Disconnected"
+                return
+            }
+            // An explicit user disconnect is an intentional emergency-off
+            // action. Disable on-demand first so NetworkExtension does not
+            // immediately reconnect a strict profile behind the user's back.
+            manager.isOnDemandEnabled = false
+            manager.onDemandRules = []
+            try? await manager.saveToPreferences()
+            manager.connection.stopVPNTunnel()
             connected = false
             message = "Disconnected"
         }
