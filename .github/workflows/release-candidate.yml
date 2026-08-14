@@ -215,11 +215,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: {pattern: '*-release-candidate', path: dist/release-candidate, merge-multiple: false}
-      - name: Manifest artifact tree
+      - name: Manifest and verify artifact tree
         run: |
-          find dist/release-candidate -type f -print | sort
-          find dist/release-candidate -type f -print0 | sort -z | xargs -0 sha256sum > dist/RELEASE-CANDIDATE-SHA256SUMS
+          (cd dist && find release-candidate -type f -print | sort)
+          (cd dist && find release-candidate -type f -print0 | sort -z | xargs -0 sha256sum > RELEASE-CANDIDATE-SHA256SUMS)
           test -s dist/RELEASE-CANDIDATE-SHA256SUMS
+          (cd dist && sha256sum -c RELEASE-CANDIDATE-SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-release-candidate-${{ github.sha }}
