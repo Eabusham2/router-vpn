@@ -28,15 +28,17 @@ jobs:
         run: go test ./...
       - name: Validate repository contracts
         run: python3 deploy/validate-repo.py
-      - name: Validate logical/raw catalogs
+      - name: Validate logical/raw catalogs and master base model
         run: |
           python3 -m json.tool configs/client/modes.json >/dev/null
           python3 -m json.tool configs/client/logical-modes.json >/dev/null
           python3 - <<'PY'
           import json
-          raw={m['id'] for m in json.load(open('configs/client/modes.json'))}
+          raw_list=json.load(open('configs/client/modes.json'))
+          raw={m['id'] for m in raw_list}
           logical=json.load(open('configs/client/logical-modes.json'))
-          assert len(logical)==16, f'expected 16 logical modes, got {len(logical)}'
+          assert len(raw_list)==20, f'expected 20 raw runtime modes, got {len(raw_list)}'
+          assert len(logical)==16, f'expected 16 logical app modes, got {len(logical)}'
           seen=set()
           for item in logical:
               assert item['id'] not in seen, item['id']
@@ -48,6 +50,9 @@ jobs:
               item=next(x for x in logical if x['id']==expected)
               assert item['base_selector'] is True, expected
               assert item['fallback'] is True, expected
+          ui=open('cmd/client/logical_ui.js',encoding='utf-8').read()
+          for marker in ('value="auto">Base: Auto','value="wg">Base: WireGuard','value="awg">Base: AmneziaWG'):
+              assert marker in ui, marker
           PY
       - name: Cross-compile all desktop and Unix targets
         run: |
@@ -212,24 +217,27 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  ios-native-wg:
-    name: iOS/iPadOS native WireGuard PacketTunnel build
+  ios-native:
+    name: iOS/iPadOS native WireGuard + Libbox PacketTunnel build
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          go-version: '1.26.3'
           cache: false
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Prepare exact WireGuardKit checkout
         working-directory: ios/RouterVPN
         run: sh prepare-wireguard-kit.sh
+      - name: Prepare exact Libbox XCFramework before Xcode dependency resolution
+        working-directory: ios/RouterVPN
+        run: ./prepare-libbox.sh
       - name: Generate project
         working-directory: ios/RouterVPN
         run: xcodegen generate
-      - name: Build unsigned native WireGuard app and PacketTunnel
+      - name: Build unsigned native WireGuard + Libbox app and PacketTunnel
         working-directory: ios/RouterVPN
         run: |
           xcodebuild \
@@ -243,7 +251,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM='' \
             build
-      - name: Verify pinned engine and fail-closed runtime contract
+      - name: Verify pinned engines and strict runtime contract
         working-directory: ios/RouterVPN
         run: |
           APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
@@ -252,13 +260,18 @@ jobs:
           test -d "$APP"
           test -d "$EXT"
           test -d "$WG"
+          test -d .deps/Libbox.xcframework
+          test -s .deps/libbox-LICENSE.txt
           test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
           test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5'
           test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
           test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
           grep -q 'import WireGuardKit' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'RouterVPNWireGuardConfig.parse' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'startLibbox' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'RouterVPNLibboxEngine' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'strict apple kill switch requested' <(tr '[:upper:]' '[:lower:]' < PacketTunnel/PacketTunnelProvider.swift)
           grep -q 'body\["node_id"\] as? String == expectedNodeID' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'body\["proof"\] as? String == Self.proofKind' PacketTunnel/PacketTunnelProvider.swift
@@ -270,12 +283,12 @@ jobs:
           rm -rf build/unsigned
           mkdir -p build/unsigned/Payload
           ditto "$APP" build/unsigned/Payload/RouterVPN.app
-          (cd build/unsigned && zip -qry ../RouterVPN-native-wg-unsigned-resignable.ipa Payload)
-          unzip -tq build/RouterVPN-native-wg-unsigned-resignable.ipa >/dev/null
-          shasum -a 256 build/RouterVPN-native-wg-unsigned-resignable.ipa
+          (cd build/unsigned && zip -qry ../RouterVPN-native-unsigned-resignable.ipa Payload)
+          unzip -tq build/RouterVPN-native-unsigned-resignable.ipa >/dev/null
+          shasum -a 256 build/RouterVPN-native-unsigned-resignable.ipa
       - uses: actions/upload-artifact@v4
         with:
-          name: RouterVPN-iOS-Native-WireGuard-CI
-          path: ios/RouterVPN/build/RouterVPN-native-wg-unsigned-resignable.ipa
+          name: RouterVPN-iOS-Native-CI
+          path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa
           if-no-files-found: error
           retention-days: 1
