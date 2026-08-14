@@ -162,12 +162,14 @@ private struct NodesView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Fastest way to link this app") {
+                Section("Fastest secure way to link this app") {
                     TextField("AI Board LAN IP / hostname", text: $model.lanImportHost)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Button("Import directly from home LAN") { Task { await model.importFromLAN() } }
+                    SecureField("6-digit one-time pairing code", text: $model.lanPairingCode)
+                        .keyboardType(.numberPad)
+                    Button("Pair from home LAN") { Task { await model.importFromLAN() } }
                     Button("Import router-vpn-bundle.json from Files") { importing = true }
-                    Text("Install once, then link node data separately. Adding another router never reinstalls the app.")
+                    Text("Create the short-lived code in the authenticated home Setup Center. The code is redeemed once and is never stored by the app. Install once, then link node data separately; adding another router never reinstalls the app.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -280,11 +282,11 @@ private struct SetupView: View {
                 }
 
                 Section("Small direct downloads") {
-                    if let u = lanURL("router-vpn-bundle.json") { Link("Private router profile JSON", destination: u) }
+                    if let u = lanURL("router-vpn-bundle.json") { Link("Private router profile JSON — Setup Center sign-in required", destination: u) }
                     if let u = lanURL("asus-merlin-router-vpn-forwards.sh") { Link("ASUS Merlin forwarding helper", destination: u) }
                     if let u = lanURL("router-vpn-device-setup.html") { Link("Universal / native setup page", destination: u) }
                     if let u = lanURL("SHA256SUMS") { Link("Checksums", destination: u) }
-                    Text("The full ZIP is an advanced/offline fallback. Normal app setup links node data separately.")
+                    Text("Normal app linking uses the one-time pairing flow above. The full ZIP is an advanced/offline fallback.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -358,15 +360,18 @@ private struct NativeOnboardingView: View {
     @ViewBuilder private var onboardingContent: some View {
         switch step {
         case 0:
-            OnboardingPage(title: "Start simple", text: "If the home node is already deployed, stay on home Wi‑Fi and link this app with the small private router profile. Installing the app and adding a router are separate operations.")
+            OnboardingPage(title: "Start simple", text: "If the home node is already deployed, stay on home Wi‑Fi and link this app with a one-time Setup Center pairing code or the private router profile file. Installing the app and adding a router are separate operations.")
         case 1:
             VStack(alignment: .leading, spacing: 12) {
-                OnboardingPage(title: "Add your router", text: "Default AI Board address is usually 192.168.50.133. Enter the LAN IP/hostname and import directly, or choose router-vpn-bundle.json from Files. iOS Local Network permission may be requested for LAN linking.")
+                OnboardingPage(title: "Add your router", text: "In the authenticated Setup Center create a short-lived 6-digit pairing code. Enter the AI Board LAN IP/hostname and code below, or choose router-vpn-bundle.json from Files. Pairing is LAN-only, one-time, and the code is not saved on this device. iOS Local Network permission may be requested.")
                 TextField("AI Board LAN IP / hostname", text: $model.lanImportHost)
                     .textFieldStyle(.roundedBorder)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Button("Import from LAN now") { Task { await model.importFromLAN() } }
+                SecureField("6-digit one-time pairing code", text: $model.lanPairingCode)
+                    .textFieldStyle(.roundedBorder)
+                    .keyboardType(.numberPad)
+                Button("Pair from LAN now") { Task { await model.importFromLAN() } }
                     .buttonStyle(.borderedProminent)
                 Button("Choose router-vpn-bundle.json") { importing = true }
                 Text(model.message).font(.caption).foregroundStyle(.secondary)
