@@ -14,6 +14,19 @@ jobs:
   state:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject tracked generated Python artifacts
+        run: |
+          set -euo pipefail
+          tracked_generated="$(git ls-files | grep -E '(^|/)__pycache__/|\.py[co]$' || true)"
+          if [ -n "$tracked_generated" ]; then
+            echo 'Generated Python cache/bytecode must not be tracked:' >&2
+            printf '%s\n' "$tracked_generated" >&2
+            exit 1
+          fi
+          echo 'No tracked Python cache/bytecode artifacts.'
+
       - name: Require exactly one main branch and no open PRs/issues
         env:
           GH_TOKEN: ${{ github.token }}

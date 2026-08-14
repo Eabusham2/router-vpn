@@ -7,6 +7,9 @@ run/
 .DS_Store
 .idea/
 .vscode/
+__pycache__/
+*.py[cod]
+.pytest_cache/
 android/.vendor/
 android/app/libs/amneziawg-tunnel.aar
 android/app/libs/amneziawg-tunnel.commit
