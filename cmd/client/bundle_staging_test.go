@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -77,7 +78,12 @@ func TestBundleStagingCommitsAtomicallyWithPrivateModes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm()&0o077 != 0 {
+	// Windows does not implement POSIX mode bits; Go reports synthesized 0666
+	// even when the file is protected by the user's Windows ACL. The 0600 mode
+	// contract is therefore enforced on Unix, while Windows is covered by path,
+	// staging, secret-containment and package tests rather than a fake mode-bit
+	// assertion the OS cannot represent.
+	if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("staged private profile permissions too broad: %o", st.Mode().Perm())
 	}
 	stage.cleanup()
