@@ -90,38 +90,32 @@ def generic_config(gen: pathlib.Path, ident: str, label: str, rel: str, note: st
 def build_methods(gen: pathlib.Path, endpoint: str, socks_host: str) -> list[dict]:
     methods: list[dict] = []
     methods.append(asset(
-        "router-vpn-app", "Router VPN app / controller", "Recommended full experience",
-        config="Import router-vpn-bundle.json in the Router VPN app/controller. The app exposes AUTO, SMART AUTO, CUSTOM, all validated modes, DNS selection, node profiles, SOCKS5-only and forwarding.",
-        apps=["Router VPN desktop controller", "Router VPN PWA", "Router VPN mobile controller/importer"],
-        note="Best when you want the complete Router VPN feature set. Desktop currently provides the full local controller. Mobile builds must not be described as native all-mode VPNs until their platform tunnel adapters are validated.",
-        native="Uses Router VPN itself; protocol-specific native apps remain available below.", simple=True,
-    ))
-    methods.append(asset(
         "wireguard", "WireGuard Raw", "Simple VPN", config=read_text(gen/"wg"/"wg.conf"),
         apps=["WireGuard", "Router VPN"],
-        note="Fastest and simplest full-tunnel profile. Recommended first connectivity test.",
-        native="Import with the WireGuard app/profile provider.", simple=True,
+        note="Fastest and simplest full-tunnel profile. Recommended first independent-client connectivity test.",
+        native="WireGuard app: add/import a tunnel, choose the generated .conf or scan its QR, approve the OS VPN permission, then connect.", simple=True,
     ))
     methods.append(asset(
         "amneziawg2", "AmneziaWG 2", "Simple obfuscated VPN", config=read_text(gen/"awg2-fast"/"awg.conf"),
         apps=["AmneziaVPN / AmneziaWG", "Router VPN"],
-        note="WireGuard-family tunnel with packet/header obfuscation. It remains an optional base; WireGuard is the default.",
-        native="Requires an AmneziaWG-compatible app.", simple=True,
+        note="WireGuard-family tunnel with packet/header obfuscation.",
+        native="Amnezia-compatible app: import the generated AWG config, approve VPN permission, then connect.", simple=True,
     ))
 
     ss = outbound(gen/"shadowsocks"/"sing-box.json"); ss_url=""
-    if endpoint and ss:
+    if endpoint and endpoint != "router.invalid" and ss:
         ui=urllib.parse.quote(str(ss.get("method") or ""),safe="")+":"+urllib.parse.quote(str(ss.get("password") or ""),safe="")
         ss_url=f"ss://{ui}@{hostport(endpoint,int(ss.get('server_port') or 8388))}/#Router%20VPN%20Shadowsocks"
     methods.append(asset(
         "shadowsocks", "Shadowsocks 2022", "Simple proxy", url=ss_url,
         config=read_text(gen/"shadowsocks"/"sing-box.json"),
-        apps=["Shadowsocks", "sing-box", "Potatso-compatible clients", "Router VPN"],
-        note="Compact SIP002 URL plus full sing-box config.", native="Import into a compatible app.", simple=True,
+        apps=["Shadowsocks/SIP002-compatible client", "sing-box", "Router VPN"],
+        note="Uses the public node endpoint. If a public endpoint is not known yet, Setup Center keeps the config available but does not fabricate a public QR.",
+        native="Import the SIP002 URL/QR in a client that explicitly supports its Shadowsocks 2022 method.", simple=True,
     ))
 
     hy=outbound(gen/"hysteria2"/"sing-box.json"); hy_url=""
-    if endpoint and hy:
+    if endpoint and endpoint != "router.invalid" and hy:
         tls=hy.get("tls") if isinstance(hy.get("tls"),dict) else {}; obfs=hy.get("obfs") if isinstance(hy.get("obfs"),dict) else {}; q=[]
         if tls.get("server_name"): q.append(("sni",str(tls["server_name"])))
         pin=cert_sha256(gen/"hysteria2"/"cert.pem")
@@ -132,49 +126,34 @@ def build_methods(gen: pathlib.Path, endpoint: str, socks_host: str) -> list[dic
     methods.append(asset(
         "hysteria2", "Hysteria2 + QUIC", "Simple QUIC VPN/proxy", url=hy_url,
         config=read_text(gen/"hysteria2"/"sing-box.json"), apps=["Hysteria2", "sing-box", "Router VPN"],
-        note="QUIC transport with generated import URL and full config.", native="Requires a Hysteria2/sing-box-compatible client.", simple=True,
+        note="Public-endpoint Hysteria2 import URL plus full config.", native="Import into a Hysteria2/sing-box-compatible client.", simple=True,
     ))
-
-    sslocal=read_json(gen/"ss-v2ray"/"sslocal.json"); sv_url=""
-    if endpoint and isinstance(sslocal, dict) and sslocal:
-        ui=urllib.parse.quote(str(sslocal.get("method") or ""),safe="")+":"+urllib.parse.quote(str(sslocal.get("password") or ""),safe="")
-        plugin=str(sslocal.get("plugin") or "")+(";"+str(sslocal.get("plugin_opts")) if sslocal.get("plugin_opts") else "")
-        sv_url=f"ss://{ui}@{hostport(endpoint,int(sslocal.get('server_port') or 12443))}/?"+urllib.parse.urlencode({"plugin":plugin})+"#Router%20VPN%20SS%2BV2Ray"
-    methods.append(asset(
-        "ss-v2ray", "Shadowsocks + V2Ray TLS", "Advanced proxy", url=sv_url,
-        config=read_text(gen/"ss-v2ray"/"sslocal.json"), apps=["SIP003/V2Ray-plugin Shadowsocks client", "Router VPN"],
-        note="TLS/WebSocket compatibility path; UDP uses the generated fallback path where supported.", native="No native OS import."
-    ))
-
-    methods += [
-        generic_config(gen,"reality-vision","VLESS + REALITY + Vision","reality-vision/xray.json","Recommended HTTPS-like camouflage stack.",["Xray-compatible client","Router VPN"]),
-        generic_config(gen,"reality-pq-vision","PQ VLESS + REALITY + Vision","reality-pq-vision/xray.json","Hybrid-PQ VLESS payload protection with REALITY/Vision.",["Xray-compatible client","Router VPN"]),
-        generic_config(gen,"reality-xhttp","PQ REALITY + XHTTP + FinalMask","reality-xhttp/xray.json","Advanced XHTTP/FinalMask configuration when generated and validated.",["Xray-compatible client","Router VPN"]),
-        generic_config(gen,"naive-h2","Naive HTTPS H2","naive-h2/sing-box.json","HTTPS forward-proxy transport over HTTP/2.",["Naive/sing-box compatible client","Router VPN"]),
-        generic_config(gen,"naive-h3","Naive HTTPS H3","naive-h3/sing-box.json","HTTPS/QUIC transport over HTTP/3.",["Naive/sing-box compatible client","Router VPN"]),
-    ]
 
     overtls=read_text(gen/"overtls"/"overtls-client.json")
     methods.append(asset(
-        "overtls", "SOCKS5 + TLS (OverTLS)", "Compatibility proxy", config=overtls,
-        apps=["OverTLS-compatible clients"],
-        note="Public TLS terminates at the home node; backend 14444 stays loopback-only. Separate from the 20-mode AUTO ladder.",
-        native="Requires an OverTLS-compatible client."
+        "overtls", "SOCKS5 + TLS (OverTLS)", "Simple compatibility proxy", config=overtls,
+        apps=["OverTLS-compatible client"],
+        note="Public TLS terminates on the home node; backend 14444 stays loopback-only. This is separate from Router VPN's logical-mode catalog.",
+        native="Import the generated OverTLS client config in an explicitly compatible client.", simple=True,
     ))
     ssr=read_text(gen/"shadowsocksr"/"ssr-client.json")
     methods.append(asset(
         "shadowsocksr", "ShadowsocksR", "Legacy compatibility", config=ssr,
-        apps=["ShadowsocksR-compatible clients"],
-        note="Legacy compatibility only; prefer Shadowsocks 2022 or modern Router VPN modes.", native="Requires an SSR-compatible client."
+        apps=["ShadowsocksR-compatible client"],
+        note="Legacy compatibility only; prefer WireGuard, Shadowsocks 2022, Hysteria2, or Router VPN.", native="Import only into an SSR-compatible client.", simple=True,
     ))
 
-    socks=f"SOCKS5 host: {socks_host}\nPort: 1080\nAuthentication: none\nUse only after the VPN reaches home."
-    methods.append(asset(
-        "socks5", "SOCKS5 (inside VPN)", "App proxy", config=socks,
-        apps=["Potatso", "Browsers/apps with SOCKS5", "macOS SOCKS proxy"],
-        note="Plain internal app proxy; never WAN-forward TCP 1080. The Router VPN app separately shows the public exit IP so this private address is not confused with your internet-facing IP.",
-        native="macOS supports a per-network SOCKS proxy; other platforms typically use an app."
-    ))
+    # SOCKS5 is intentionally private and only useful after the device already
+    # has a route home. Never turn its LAN host into a WAN QR or expose 1080.
+    socks=f"SOCKS5 host: {socks_host}\nPort: 1080\nAuthentication: none\nUse only after the device already reaches home through Router VPN/WireGuard/AmneziaWG."
+    item=asset(
+        "socks5", "SOCKS5 (inside VPN)", "Private app proxy", config=socks,
+        apps=["Potatso (manual SOCKS5 profile)", "Apps with SOCKS5 support", "Router VPN"],
+        note="Private in-tunnel proxy only. Never WAN-forward TCP 1080. The private host is intentional and is not the public VPN exit IP.",
+        native=f"Potatso/manual client: add SOCKS5 host {socks_host}, port 1080, no authentication, only after the device is already connected home through a VPN tunnel.", simple=True,
+    )
+    item["qrPayload"]=""; item["qrPngBase64"]=""
+    methods.append(item)
     return methods
 
 
@@ -242,7 +221,7 @@ const guideSteps=[
 ['Test & forward','Confirm the public exit IP, DNS and IPv4/IPv6 behavior. For inbound forwarding, stay on a WireGuard/AWG peer path and use the app Port forwarding page.']
 ];
 function stepHTML(items){return items.map((x,i)=>`<div class="step"><div class="num">${i+1}</div><div><h3 style="margin:4px 0">${x[0]}</h3><p>${x[1]}</p></div></div>`).join('')}$('quickSteps').innerHTML=stepHTML(guideSteps);$('fullGuide').innerHTML=stepHTML(guideSteps)+`<h3>Useful commands</h3><pre>ASUS status: /jffs/scripts/router-vpn-forward.sh status\nASUS firewall: /usr/sbin/iptables --version\nExisting ASUS GUI forwards: nvram get vts_rulelist\nMac local controller: http://127.0.0.1:8788\nHome Setup Center: http://${DATA.socksHost}:8786/</pre>`;
-const downloads=[['Router profile only','router-vpn-bundle.json','For an already-installed Router VPN app/controller'],['ASUS forwarding helper','asus-merlin-router-vpn-forwards.sh','Persistent Merlin NAT/FORWARD helper'],['macOS Apple Silicon','router-vpn-macos-arm64.zip','M1/M2/M3/M4 and later arm64 Macs'],['macOS Intel','router-vpn-macos-amd64.zip','Intel Macs'],['Linux ARM64','router-vpn-linux-arm64.zip','ARM64 Linux'],['Linux x86-64','router-vpn-linux-amd64.zip','x86-64 Linux'],['Complete private fallback','router-vpn-client-bundle.zip','All platforms/profiles; largest download'],['Checksums','SHA256SUMS','Verify direct downloads before bypassing OS security warnings']];$('downloads').innerHTML=downloads.map(x=>`<div class="download"><div><b>${x[0]}</b><div class="small">${x[2]}</div></div><a class="btn" href="/${x[1]}" download>Download</a></div>`).join('');
+const downloads=[['Node data only','router-vpn-bundle.json','Private node data for an already-installed Router VPN app'],['Windows x64','router-vpn-windows-amd64.zip','Native installed app'],['Windows ARM64','router-vpn-windows-arm64.zip','Native installed app'],['Windows Portable x64','router-vpn-windows-portable-amd64.zip','Normal portable app; no PAF/PortableApps wrapper'],['Windows Portable ARM64','router-vpn-windows-portable-arm64.zip','Normal portable app; no PAF/PortableApps wrapper'],['macOS Apple Silicon','router-vpn-macos-arm64.zip','Native AppKit app'],['macOS Intel','router-vpn-macos-amd64.zip','Native AppKit app'],['Linux ARM64','router-vpn-linux-arm64.zip','Native GTK app'],['Linux x86-64','router-vpn-linux-amd64.zip','Native GTK app'],['Android','router-vpn-android.apk','Native Android VpnService app'],['iPhone / iPad','router-vpn-ios.ipa','Native iOS/iPadOS app; signing may be required'],['ASUS forwarding helper','asus-merlin-router-vpn-forwards.sh','Persistent Merlin NAT/FORWARD helper'],['Private node-link bundle','router-vpn-client-bundle.zip','Separate private node data for an already-installed Router VPN app; extract router-vpn-bundle.json for file import'],['Checksums','SHA256SUMS','Verify downloads before bypassing OS security warnings']];$('downloads').innerHTML=downloads.map(x=>`<div class="download"><div><b>${x[0]}</b><div class="small">${x[2]}</div></div><a class="btn" href="/${x[1]}" download>Download</a></div>`).join('');
 const devices=DATA.devices||{};for(const [id,d] of Object.entries(devices)){const o=document.createElement('option');o.value=id;o.textContent=d.label||id;$('device').appendChild(o)}
 const availableMethods=(DATA.methods||[]).filter(x=>x.available);availableMethods.sort((a,b)=>(b.simple?1:0)-(a.simple?1:0)||a.label.localeCompare(b.label));for(const m of availableMethods){const o=document.createElement('option');o.value=m.id;o.textContent=(m.simple?'Easy — ':'Advanced — ')+m.label;$('method').appendChild(o)}
 function renderDevice(){const d=devices[$('device').value]||{};$('deviceHelp').innerHTML=`<h3>${d.label||''}</h3><p>${d.customApp||''}</p><ol>${(d.steps||[]).map(s=>`<li>${s}</li>`).join('')}</ol>`}
@@ -252,8 +231,8 @@ const layerLabel=x=>({'wireguard':'WireGuard','amneziawg2':'AmneziaWG 2','rosenp
 $('routerInstall').textContent=`# On your Mac/Linux computer\ncurl -fsS http://${DATA.socksHost}:8786/asus-merlin-router-vpn-forwards.sh -o /tmp/router-vpn-forwards.sh\nssh ROUTER_USER@192.168.50.1 'cat > /tmp/router-vpn-forwards.sh && chmod 755 /tmp/router-vpn-forwards.sh' < /tmp/router-vpn-forwards.sh\nssh ROUTER_USER@192.168.50.1 'sh /tmp/router-vpn-forwards.sh install && /jffs/scripts/router-vpn-forward.sh status'`;
 async function copyText(id){const v=$(id).textContent;try{await navigator.clipboard.writeText(v)}catch{const t=document.createElement('textarea');t.value=v;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove()}}
 const WIZKEY='routervpn.setupcenter.done.v4',WIZSTEP='routervpn.setupcenter.step.v4';const wiz=[
-['Welcome',`This wizard covers the complete path without requiring the huge ZIP. Choose a simple protocol or Router VPN app, deploy the home node, enable safe router SSH, install forwarding, install/link the client, choose DNS, connect, test, and optionally configure port forwarding.`],
-['Choose a client method',`<b>Easiest full feature set:</b> Router VPN app/controller + router-vpn-bundle.json.<br><b>Simplest single tunnel:</b> WireGuard config/QR.<br><b>Other simple methods:</b> AmneziaWG, Shadowsocks or Hysteria2. Every generated method stays available in Devices & methods.`],
+['Welcome',`Install the generic native Router VPN app once, then link one or many private nodes by bundle/pairing. This wizard covers the complete path without requiring the huge ZIP. Choose a simple protocol or Router VPN app, deploy the home node, enable safe router SSH, install forwarding, install/link the client, choose DNS, connect, test, and optionally configure port forwarding.`],
+['Choose a client method',`<b>Easiest full feature set:</b> Router VPN native app + router-vpn-bundle.json or one-time pairing.<br><b>Simplest single tunnel:</b> WireGuard config/QR.<br><b>Other simple methods:</b> AmneziaWG, Shadowsocks or Hysteria2. Every generated method stays available in Devices & methods.`],
 ['Deploy Portainer stack',`Repository: <code>Eabusham2/router-vpn</code><br>Compose: <code>server/portainer-current.yaml</code><br>Set <code>WAN_INTERFACE=eth0</code>, <code>LAN_CIDR=192.168.50.0/24</code>, <code>ADGUARD4=${DATA.socksHost}</code>. Leave ENDPOINT blank for automatic detection unless you intentionally need to override it.`],
 ['Enable ASUS SSH',`ASUS GUI → Administration → System → enable SSH for <b>LAN only</b>. Test <code>ssh ROUTER_USER@192.168.50.1</code>. Never expose SSH to WAN.`],
 ['Check current router rules',`Before changing forwarding, inspect <code>/usr/sbin/iptables --version</code>, <code>nvram get vts_rulelist</code>, existing JFFS hooks, and any prior Router VPN status. This protects custom firewall scripts from being overwritten.`],
@@ -280,12 +259,12 @@ def main() -> int:
     methods = build_methods(gen, endpoint, socks_host)
 
     devices={
-      "ios":{"label":"iPhone / iPad","customApp":"Router VPN mobile is the onboarding/controller/import surface. Until the native Packet Tunnel adapters are validated, use the generated WireGuard/AWG/Hysteria2/etc. profiles in compatible iOS clients rather than claiming every mode is native in the IPA.","steps":["For quickest setup, scan the WireGuard QR in the WireGuard app.","For AmneziaWG, import the generated AWG profile in a compatible app.","For Shadowsocks/Hysteria2/OverTLS/SSR, choose the matching method below and use a compatible client.","Keep router-vpn-bundle.json private; it can be imported into Router VPN controller surfaces."]},
-      "android":{"label":"Android","customApp":"Router VPN Android provides onboarding/controller/import. Native all-mode VpnService adapters must be validated before being advertised as complete.","steps":["WireGuard: import config/QR in WireGuard for Android.","AmneziaWG: import AWG config in a compatible client.","Shadowsocks/Hysteria2: use the generated URL/QR in a compatible app.","Use the Router VPN app/controller for the complete profile catalog and setup guidance where supported."]},
-      "macos":{"label":"macOS","customApp":"Full local Router VPN controller is supported. Install the small package matching Apple Silicon or Intel, then import router-vpn-bundle.json.","steps":["Download the matching small macOS package from Downloads.","Extract it, cd into router-vpn, and run bash client/install-macos-final.sh \"$PWD\".","Open the Router VPN local app/PWA at 127.0.0.1:8788 and import router-vpn-bundle.json.","If macOS quarantines a verified local build, follow the checksum + Privacy & Security steps in Downloads."]},
-      "windows":{"label":"Windows","customApp":"Use the Router VPN Windows controller package from GitHub build artifacts/releases when available. Raw WireGuard/AWG profiles can be imported into native clients immediately.","steps":["For the simplest path use WireGuard and import the generated profile.","For the full multi-engine controller, use the matching Windows build and WSL2 transport environment described in repository docs.","Import router-vpn-bundle.json after installation."]},
-      "linux":{"label":"Linux","customApp":"Full local Router VPN controller is supported on x86-64 and ARM64 using the small platform package.","steps":["Download the matching Linux package.","Extract it and run sudo bash client/install-linux.sh \"$PWD\".","Open the local Router VPN UI and import router-vpn-bundle.json."]},
-      "manual":{"label":"Other / manual","customApp":"Use a protocol-specific generated config/URL/QR. Router VPN does not invent unsupported native imports.","steps":["Choose a method below.","Copy/import its URL or config into a client that explicitly supports that protocol.","Never expose management/SOCKS/setup ports to WAN."]},
+      "ios":{"label":"iPhone / iPad","customApp":"Router VPN is a real native app. Raw WireGuard uses the PacketTunnel engine today; unsupported layered/AWG/multihop combinations stay visibly unavailable instead of being faked.","steps":["Install Router VPN or a simple compatible protocol app.","Import/pair router-vpn-bundle.json to add this node without reinstalling Router VPN.","For independent WireGuard, import/scan the generated profile in the WireGuard app.","Only choose a Setup Center Method whose client explicitly supports that protocol."]},
+      "android":{"label":"Android","customApp":"Router VPN Android is a native VpnService app with native WireGuard/AmneziaWG and supported layered engines. Unsupported combinations fail closed with a reason.","steps":["Install the Router VPN APK.","Import/pair router-vpn-bundle.json to add this node; add later nodes the same way.","Approve Android VPN permission on first connection.","For an independent simple client, import the matching WireGuard/AWG/Shadowsocks/Hysteria2 method below."]},
+      "macos":{"label":"macOS","customApp":"Router VPN is a native AppKit application. Install once, then import/pair one or many Router VPN nodes.","steps":["Download the package matching Apple Silicon or Intel.","Install/launch Router VPN and grant required network permissions.","Import/pair router-vpn-bundle.json.","Use Nodes/Map, Modes, DNS, Advanced, Forwarding, Settings and Help inside the native app."]},
+      "windows":{"label":"Windows","customApp":"Router VPN is a native Windows application; WSL is not part of the product path. Installed and normal Portable packages are available for x64 and ARM64.","steps":["Download the matching Installed or Portable package.","Launch Router VPN with the privileges required for full-device tunnel/firewall operations and approve Windows network prompts.","Import/pair router-vpn-bundle.json; add more nodes later without reinstalling.","Use WireGuard separately only when you intentionally want the simplest independent profile."]},
+      "linux":{"label":"Linux","customApp":"Router VPN is a native GTK application on x86-64 and ARM64.","steps":["Download the matching Linux package.","Install/launch Router VPN and grant the required TUN/firewall privileges.","Import/pair router-vpn-bundle.json.","Use the native app for complex modes/stacks; Methods below are only simple external-client options."]},
+      "manual":{"label":"Other / manual","customApp":"Use only a simple generated protocol that another client explicitly supports. Complex Router VPN stacks are not exported as fake universal imports.","steps":["Choose a simple Method below.","Follow its exact client/import guidance.","If no compact interoperable QR exists, use the config/manual fields instead.","Never expose Setup Center, admin, SSH or private SOCKS5 ports to WAN."]},
     }
     modes = read_json(base/"client-bundle"/"modes.json")
     if not isinstance(modes, list):

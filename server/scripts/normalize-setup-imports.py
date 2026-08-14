@@ -54,7 +54,7 @@ def normalize_method(method: dict, endpoint: str) -> None:
     method["proxyOnly"] = not full_vpn and ident not in ("router-vpn-app",)
     method["endpointScope"] = endpoint_scope
 
-    if ident == "shadowsocks" and method.get("config") and endpoint:
+    if ident == "shadowsocks" and method.get("config") and endpoint and endpoint != "router.invalid":
         method["url"] = imports.shadowsocks_from_singbox(str(method["config"]), endpoint)
     elif ident == "ss-v2ray" and method.get("config") and endpoint:
         method["url"] = imports.shadowsocks_plugin_from_json(str(method["config"]), endpoint)
@@ -65,7 +65,7 @@ def normalize_method(method: dict, endpoint: str) -> None:
 
     if qr_supported:
         payload = str(method.get("config") or "") if ident == "wireguard" else str(method.get("url") or "")
-        if not payload:
+        if not payload or "router.invalid" in payload.lower():
             method["qrSupported"] = False
             method["qrPayload"] = ""
             method["qrPngBase64"] = ""
@@ -75,13 +75,15 @@ def normalize_method(method: dict, endpoint: str) -> None:
     else:
         method["qrPayload"] = ""
         method["qrPngBase64"] = ""
-    method["simple"] = lane in ("simple-native", "universal") or ident == "router-vpn-app"
+    method["simple"] = lane in SETUP_METHOD_LANES or ident == "router-vpn-app"
 
 
 def _replace_required(html: str, old: str, new: str, label: str) -> str:
-    if old not in html:
-        raise RuntimeError(f"Setup Center UI template drifted before {label} patch")
-    return html.replace(old, new, 1)
+    if old in html:
+        return html.replace(old, new, 1)
+    if new in html:
+        return html
+    raise RuntimeError(f"Setup Center UI template drifted before {label} patch")
 
 
 def _replace_wizard(html: str) -> str:

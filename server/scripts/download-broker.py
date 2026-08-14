@@ -95,9 +95,15 @@ def _read_limited_json(url: str) -> dict:
     return json.loads(raw)
 
 
-def _download_limited(url: str, path: Path) -> None:
+def _download_limited(url: str, path: Path, progress=None) -> None:
     total = 0
+    if progress:
+        progress("downloading", 28)
     with _urlopen(url, timeout=25) as r, path.open("wb") as w:
+        try:
+            expected = int(r.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            expected = 0
         while True:
             chunk = r.read(CHUNK)
             if not chunk:
@@ -106,6 +112,8 @@ def _download_limited(url: str, path: Path) -> None:
             if total > MAX_GITHUB_ARTIFACT:
                 raise RuntimeError("GitHub artifact exceeds safety limit")
             w.write(chunk)
+            if progress and expected > 0:
+                progress("downloading", min(39, 28 + int(11 * total / expected)))
     if total == 0:
         raise RuntimeError("GitHub returned an empty artifact")
 
@@ -163,9 +171,11 @@ def _artifact_candidates(meta: dict, artifact_name: str, branch: str, head_sha: 
     return candidates
 
 
-def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_name: str) -> Path:
+def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_name: str, progress=None) -> Path:
     if os.environ.get("ROUTER_VPN_GITHUB_DISABLE", "").lower() in ("1", "true", "yes"):
         raise RuntimeError("GitHub artifact use disabled")
+    if progress:
+        progress("locating", 15)
     repo, branch, head_sha = _github_scope()
     if not artifact_name:
         raise RuntimeError("invalid GitHub artifact name")
@@ -178,7 +188,9 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
             scope += f" at {head_sha}"
         raise RuntimeError(f"no unexpired {artifact_name} artifact for {scope}")
     outer = temp / (artifact_name + "-artifact.zip")
-    _download_limited(candidates[0]["archive_download_url"], outer)
+    _download_limited(candidates[0]["archive_download_url"], outer, progress=progress)
+    if progress:
+        progress("validating", 42)
     selected = temp / output_name
     with zipfile.ZipFile(outer) as zf:
         item = _pick_member(zf, wanted)
@@ -190,17 +202,17 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     return selected
 
 
-def _fetch_first_artifact(sources, temp: Path, output_name: str) -> Path:
+def _fetch_first_artifact(sources, temp: Path, output_name: str, progress=None) -> Path:
     failures = []
     for artifact_name, wanted in sources:
         try:
-            return fetch_artifact_member(str(artifact_name), str(wanted), temp, output_name)
+            return fetch_artifact_member(str(artifact_name), str(wanted), temp, output_name, progress=progress)
         except Exception as exc:
             failures.append(f"{artifact_name}: {type(exc).__name__}: {exc}")
     raise RuntimeError("; ".join(failures) if failures else "no GitHub artifact sources configured")
 
 
-def fetch_github_package(home_name: str, temp: Path) -> Path:
+def fetch_github_package(home_name: str, temp: Path, progress=None) -> Path:
     generic = _builder.generic_name(home_name)
     if not generic:
         raise RuntimeError("this download has no generic GitHub package")
@@ -209,20 +221,20 @@ def fetch_github_package(home_name: str, temp: Path) -> Path:
         sources = ((override, generic),)
     else:
         sources = NATIVE_PACKAGE_ARTIFACTS.get(home_name, (("RouterVPN-client-desktop-unix-ci", generic),))
-    return _fetch_first_artifact(sources, temp, generic)
+    return _fetch_first_artifact(sources, temp, generic, progress=progress)
 
 
-def fetch_direct_mobile(name: str, temp: Path) -> Path:
+def fetch_direct_mobile(name: str, temp: Path, progress=None) -> Path:
     spec = DIRECT_ARTIFACTS[name]
     try:
-        return _fetch_first_artifact(spec["sources"], temp, name)
+        return _fetch_first_artifact(spec["sources"], temp, name, progress=progress)
     except Exception as exc:
         raise RuntimeError(
             f"{name} requires its same-SHA GitHub mobile artifact; the Linux home node does not fake a platform-specific mobile build fallback: {exc}"
         ) from exc
 
 
-def _run_builder(base: Path, name: str, temp: Path, source: Path | None) -> Path:
+def _run_builder(base: Path, name: str, temp: Path, source: Path | None, progress=None) -> Path:
     output = temp / name
     args = [
         "python3", str(BUILDER_PATH), "--base", str(base),
@@ -231,26 +243,41 @@ def _run_builder(base: Path, name: str, temp: Path, source: Path | None) -> Path
     ]
     if source is not None:
         args += ["--source-archive", str(source)]
+    if progress:
+        progress("building", 58)
     subprocess.run(args, check=True, timeout=PACKAGE_TIMEOUT, stdout=subprocess.DEVNULL)
+    if progress:
+        progress("packaging", 84)
     return output
 
 
-def build_package(base: Path, name: str, temp: Path) -> tuple[Path, str]:
+def build_package(base: Path, name: str, temp: Path, progress=None) -> tuple[Path, str]:
+    if progress:
+        progress("locating", 15)
     if name in DIRECT_ARTIFACTS:
-        return fetch_direct_mobile(name, temp), "github"
+        result = fetch_direct_mobile(name, temp, progress=progress)
+        if progress:
+            progress("validating", 90)
+        return result, "github"
     if name == "router-vpn-client-bundle.zip":
-        return _run_builder(base, name, temp, None), "private-node-bundle"
+        if progress:
+            progress("packaging", 70)
+        return _run_builder(base, name, temp, None, progress=progress), "private-node-bundle"
     source = None
     try:
-        source = fetch_github_package(name, temp)
+        source = fetch_github_package(name, temp, progress=progress)
     except Exception as exc:
         print(f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}; compiling requested generic package locally", flush=True)
     if source is not None:
         try:
-            return _run_builder(base, name, temp, source), "github"
+            if progress:
+                progress("validating", 48)
+            return _run_builder(base, name, temp, source, progress=progress), "github"
         except Exception as exc:
             print(f"download broker: GitHub package validation/repack failed for {name}: {type(exc).__name__}: {exc}; compiling requested generic package locally", flush=True)
-    return _run_builder(base, name, temp, None), "router-local-generic-build"
+    if progress:
+        progress("building", 58)
+    return _run_builder(base, name, temp, None, progress=progress), "router-local-generic-build"
 
 
 @contextmanager
@@ -541,8 +568,15 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("X-Router-VPN-Source", str(meta.get("source") or ""))
             self.send_header("X-Router-VPN-Job", job_id)
             self.end_headers()
+            sent = 0
             with package.open("rb") as f:
-                shutil.copyfileobj(f, self.wfile, CHUNK)
+                while True:
+                    chunk = f.read(CHUNK)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    sent += len(chunk)
+                    self.server.jobs.update_delivery(job_id, sent, size)
             success = True
         except (BrokenPipeError, ConnectionResetError):
             pass

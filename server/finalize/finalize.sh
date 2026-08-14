@@ -178,7 +178,7 @@ ShadowsocksR legacy TCP/UDP: $SSR_PORT
 Automatic TLS hostname: $TLS_INFO
 Certificate challenge external TCP: 80 -> AI Board TCP 18080
 Fastest public DNS at home: $DNS_FASTEST
-Default DNS policy: fastest (changeable to Home AdGuard, custom, DoT, DoH, DoH3, or rescue in client)
+Default DNS policy: Home AdGuard (changeable to Fastest measured, common/custom UDP/TCP, DoT, DoH, DoH3, or Rescue in the client)
 SOCKS5 after VPN connects: $ADGUARD4:1080
 SOCKS5 authentication: none
 Private Device Setup WebGUI (home LAN only): http://$ADGUARD4:8786/router-vpn-device-setup.html
