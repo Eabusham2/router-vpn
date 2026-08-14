@@ -124,12 +124,26 @@ for required in (
 packet = text("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift")
 for required in (
     "import WireGuardKit", "WireGuardAdapter(with: self)", "RouterVPNWireGuardConfig.parse",
-    "strict Apple kill switch requested", "AmneziaWG, layered, ALL/MAX and multihop remain unavailable",
-    "deriveNodeProof", 'body["node_id"] as? String == expectedNodeID',
-    'body["proof"] as? String == Self.proofKind', "completionHandler(nil)",
+    "strict Apple kill switch requested", 'case "libbox":', 'case "external-libbox":',
+    "RouterVPNLibboxEngine", "proveExternalExit", "deriveNodeProof",
+    'body["node_id"] as? String == expectedNodeID', 'body["proof"] as? String == Self.proofKind', "completionHandler(nil)",
 ):
     if required not in packet:
-        error(f"iOS native WireGuard PacketTunnel missing current truth: {required}")
+        error(f"iOS PacketTunnel missing current WireGuard/Libbox truth: {required}")
+selector = text("ios/RouterVPN/App/IOSRuntimeSelection.swift")
+for required in (
+    'case libbox = "libbox"', "sing-box.json",
+    "Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable instead of faking Connected.",
+):
+    if required not in selector:
+        error(f"iOS runtime selection truth boundary missing: {required}")
+external_ios = text("ios/RouterVPN/App/RouterVPNModelExternal.swift")
+for required in (
+    "external-libbox", "External OpenVPN — unavailable on iOS until a pinned native Apple OpenVPN dataplane exists",
+    "exact public-exit proof",
+):
+    if required not in external_ios:
+        error(f"iOS external-node truth boundary missing: {required}")
 if "Link AmneziaWGKit/Xray engine before signing this target." in packet:
     error("iOS PacketTunnel still contains the retired unavailable-engine stub")
 models = text("ios/RouterVPN/App/Models.swift")
