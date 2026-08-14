@@ -1,0 +1,34 @@
+name: macOS native installer contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/install-macos-final.sh'
+      - 'client/install-macos-complete.sh'
+      - '.github/workflows/macos-native-installer-contract.yml'
+  pull_request:
+    paths:
+      - 'client/install-macos-final.sh'
+      - 'client/install-macos-complete.sh'
+      - '.github/workflows/macos-native-installer-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax and native-app-only contract
+        run: |
+          bash -n client/install-macos-final.sh
+          bash -n client/install-macos-complete.sh
+          grep -Fq 'RouterVPN.app/Contents/MacOS/RouterVPN" --self-test' client/install-macos-final.sh
+          grep -Fq 'standard-exits.json' client/install-macos-final.sh
+          grep -Fq 'routers.json' client/install-macos-final.sh
+          grep -Fq 'native AppKit app is the daily-use UI' client/install-macos-complete.sh
+          ! grep -Eq 'Google Chrome|Microsoft Edge|Brave Browser|Chromium|--app=' client/install-macos-final.sh
+          ! grep -Eq 'Open http://127\.0\.0\.1:8788|open http://127\.0\.0\.1:8788' client/install-macos-final.sh client/install-macos-complete.sh

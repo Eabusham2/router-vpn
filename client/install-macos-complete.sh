@@ -2,7 +2,7 @@
 set -euo pipefail
 [[ $EUID -ne 0 ]] || { echo 'Run this as your normal Mac user, not with sudo.'; exit 1; }
 BUNDLE=${1:-$(pwd)}
-[[ -f "$BUNDLE/client/install-macos-current.sh" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
+[[ -f "$BUNDLE/client/install-macos-current.sh" ]] || { echo 'Run from the extracted Router VPN client package.'; exit 1; }
 
 bash "$BUNDLE/client/install-macos-current.sh" "$BUNDLE"
 
@@ -32,4 +32,4 @@ if ! /usr/local/bin/sing-box version 2>&1 | grep -q 'with_naive_outbound'; then
   sudo launchctl kickstart -k system/com.routervpn.client >/dev/null 2>&1 || true
 fi
 
-echo 'macOS client engines are installed. Open http://127.0.0.1:8788'
+echo 'macOS Router VPN engines/controller prerequisites are installed. The native AppKit app is the daily-use UI; http://127.0.0.1:8788 is recovery/API plumbing only.'
