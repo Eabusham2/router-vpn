@@ -159,11 +159,23 @@ func TestWindowsRawAndLayeredNativeRuntimeIsRealAndUnsupportedModesStayGated(t *
 	}
 }
 
-func TestApplePacketTunnelRunsPinnedNativeWireGuardAndKeepsUnsupportedModesFailClosed(t *testing.T) {
+func TestApplePacketTunnelRunsPinnedWireGuardAndLibboxAndKeepsUnsupportedModesFailClosed(t *testing.T) {
 	provider := repoFile(t, "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift")
-	for _, required := range []string{"import WireGuardKit", "WireGuardAdapter(with: self)", "RouterVPNWireGuardConfig.parse", "strict Apple kill switch requested", "AmneziaWG, layered, ALL/MAX and multihop remain unavailable", "deriveNodeProof", "nodeProofDomain", `body["node_id"] as? String == expectedNodeID`, `body["proof"] as? String == Self.proofKind`, "completionHandler(nil)"} {
+	for _, required := range []string{"import WireGuardKit", "WireGuardAdapter(with: self)", "RouterVPNWireGuardConfig.parse", "strict Apple kill switch requested", `case "libbox":`, `case "external-libbox":`, "RouterVPNLibboxEngine", "proveExternalExit", "deriveNodeProof", "nodeProofDomain", `body["node_id"] as? String == expectedNodeID`, `body["proof"] as? String == Self.proofKind`, "completionHandler(nil)"} {
 		if !strings.Contains(provider, required) {
-			t.Fatalf("Apple native WireGuard runtime missing %q", required)
+			t.Fatalf("Apple PacketTunnel runtime missing %q", required)
+		}
+	}
+	selector := repoFile(t, "ios/RouterVPN/App/IOSRuntimeSelection.swift")
+	for _, required := range []string{`case libbox = "libbox"`, "sing-box.json", "Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable instead of faking Connected."} {
+		if !strings.Contains(selector, required) {
+			t.Fatalf("Apple runtime selection truth boundary missing %q", required)
+		}
+	}
+	external := repoFile(t, "ios/RouterVPN/App/RouterVPNModelExternal.swift")
+	for _, required := range []string{"external-libbox", "External OpenVPN — unavailable on iOS until a pinned native Apple OpenVPN dataplane exists", "exact public-exit proof"} {
+		if !strings.Contains(external, required) {
+			t.Fatalf("Apple external-node truth boundary missing %q", required)
 		}
 	}
 	if strings.Contains(provider, "Link AmneziaWGKit/Xray engine before signing this target.") {
