@@ -49,10 +49,81 @@ struct DNSBenchmarkResult: Codable, Hashable {
     }
 }
 
+struct ExternalWireGuardConfig: Codable, Hashable {
+    var privateKey: String
+    var addresses: [String]
+    var peerPublicKey: String
+    var presharedKey: String?
+    var endpoint: String
+    var allowedIPs: [String]
+    var dns: [String]?
+    var mtu: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case addresses, endpoint, dns, mtu
+        case privateKey = "private_key"
+        case peerPublicKey = "peer_public_key"
+        case presharedKey = "preshared_key"
+        case allowedIPs = "allowed_ips"
+    }
+}
+
+struct ExternalOpenVPNConfig: Codable, Hashable {
+    var config: String
+    var username: String?
+    var password: String?
+}
+
+struct ExternalShadowsocksConfig: Codable, Hashable {
+    var server: String
+    var port: Int
+    var method: String
+    var password: String
+}
+
+struct ExternalSOCKS5Config: Codable, Hashable {
+    var host: String
+    var port: Int
+    var username: String?
+    var password: String?
+}
+
+struct ExternalHysteria2Config: Codable, Hashable {
+    var server: String
+    var port: Int
+    var password: String
+    var tlsServerName: String
+
+    enum CodingKeys: String, CodingKey {
+        case server, port, password
+        case tlsServerName = "tls_server_name"
+    }
+}
+
+struct ExternalNodeConfig: Codable, Hashable {
+    var protocolName: String
+    var expectedPublicIP: String
+    var wireGuard: ExternalWireGuardConfig?
+    var openVPN: ExternalOpenVPNConfig?
+    var shadowsocks: ExternalShadowsocksConfig?
+    var socks5: ExternalSOCKS5Config?
+    var hysteria2: ExternalHysteria2Config?
+
+    enum CodingKeys: String, CodingKey {
+        case wireGuard = "wireguard"
+        case openVPN = "openvpn"
+        case shadowsocks, socks5, hysteria2
+        case protocolName = "protocol"
+        case expectedPublicIP = "expected_public_ip"
+    }
+}
+
 struct RouterProfile: Identifiable, Codable, Hashable {
     var schemaVersion: Int?
     var id: String
     var name: String
+    var nodeKind: String?
+    var external: ExternalNodeConfig?
     var nodeProofID: String?
     var endpoint: String
     var routerAPI: String
@@ -82,6 +153,10 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var mtuPolicy: String?
     var manualMTU: Int?
     var effectiveMTU: Int?
+    var effectiveMTUSource: String?
+    var effectiveMTUPathKey: String?
+    var effectiveUnderlayPMTU: Int?
+    var effectiveMTUTestedAt: String?
     var diagnosticsEnabled: Bool?
     var diagnosticsRetentionDays: Int?
     var shareDiagnostics: Bool?
@@ -112,9 +187,15 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var fastestDNSLatencyMs: Double?
     var dnsResults: [DNSBenchmarkResult]?
 
+    var normalizedNodeKind: String {
+        let value = (nodeKind ?? "router-vpn").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return value.isEmpty ? "router-vpn" : value
+    }
+
     enum CodingKeys: String, CodingKey {
-        case id, name, endpoint, location, latitude, longitude
+        case id, name, endpoint, location, latitude, longitude, external
         case schemaVersion = "schema_version"
+        case nodeKind = "node_kind"
         case nodeProofID = "node_proof_id"
         case routerAPI = "router_api"
         case apiToken = "api_token"
@@ -143,6 +224,10 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case mtuPolicy = "mtu_policy"
         case manualMTU = "manual_mtu"
         case effectiveMTU = "effective_mtu"
+        case effectiveMTUSource = "effective_mtu_source"
+        case effectiveMTUPathKey = "effective_mtu_path_key"
+        case effectiveUnderlayPMTU = "effective_underlay_pmtu"
+        case effectiveMTUTestedAt = "effective_mtu_tested_at"
         case diagnosticsEnabled = "diagnostics_enabled"
         case diagnosticsRetentionDays = "diagnostics_retention_days"
         case shareDiagnostics = "share_diagnostics"
@@ -193,7 +278,7 @@ struct ClientBundle: Codable {
 
     static let empty = ClientBundle(
         bundleVersion: 4,
-        profileSchemaVersion: 2,
+        profileSchemaVersion: 3,
         nodeProofID: "",
         endpoint: "",
         apiToken: "",
@@ -260,7 +345,7 @@ struct ClientBundle: Codable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         bundleVersion = try values.decodeIfPresent(Int.self, forKey: .bundleVersion) ?? 1
         profileSchemaVersion = try values.decodeIfPresent(Int.self, forKey: .profileSchemaVersion) ?? 1
-        guard profileSchemaVersion <= 2 else {
+        guard profileSchemaVersion <= 3 else {
             throw DecodingError.dataCorruptedError(forKey: .profileSchemaVersion, in: values, debugDescription: "Router profile schema is newer than this app supports")
         }
         nodeProofID = try values.decodeIfPresent(String.self, forKey: .nodeProofID) ?? ""
@@ -281,23 +366,26 @@ struct ClientBundle: Codable {
 
         let selected = routerProfiles.first(where: { $0.id == selectedRouterID }) ?? routerProfiles.first
         if let selected {
-            if endpoint.isEmpty {
-                endpoint = selected.endpoint
+            if endpoint.isEmpty { endpoint = selected.endpoint }
+            // Only Router VPN nodes may populate the privileged/control-plane
+            // compatibility fields. An external node can coexist in the same
+            // profile model without inheriting Router VPN admin credentials.
+            if selected.normalizedNodeKind == "router-vpn" {
                 routerAPI = selected.routerAPI
                 apiToken = selected.apiToken
                 adGuardIPv4 = selected.adGuardIPv4
                 adGuardIPv6 = selected.adGuardIPv6
                 socks5Host = selected.socksHost
                 socks5Port = selected.socksPort
-            }
-            let nested = (selected.nodeProofID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !nested.isEmpty && nested.range(of: "^[0-9a-f]{64}$", options: .regularExpression) == nil {
-                throw DecodingError.dataCorruptedError(forKey: .nodeProofID, in: values, debugDescription: "Router profile node proof id is invalid")
-            }
-            if nodeProofID.isEmpty {
-                nodeProofID = nested
-            } else if !nested.isEmpty && nested != nodeProofID {
-                throw DecodingError.dataCorruptedError(forKey: .nodeProofID, in: values, debugDescription: "Router bundle node proof ids disagree")
+                let nested = (selected.nodeProofID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !nested.isEmpty && nested.range(of: "^[0-9a-f]{64}$", options: .regularExpression) == nil {
+                    throw DecodingError.dataCorruptedError(forKey: .nodeProofID, in: values, debugDescription: "Router profile node proof id is invalid")
+                }
+                if nodeProofID.isEmpty {
+                    nodeProofID = nested
+                } else if !nested.isEmpty && nested != nodeProofID {
+                    throw DecodingError.dataCorruptedError(forKey: .nodeProofID, in: values, debugDescription: "Router bundle node proof ids disagree")
+                }
             }
         }
         nodeProofID = nodeProofID.trimmingCharacters(in: .whitespacesAndNewlines)
