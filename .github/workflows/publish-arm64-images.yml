@@ -4,17 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - 'server/**'
-      - '!server/portainer-current.yaml'
-      - 'deploy/**'
-      - 'modes/**'
-      - 'cmd/**'
-      - 'internal/**'
-      - 'configs/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/publish-arm64-images.yml'
 
 permissions:
   contents: read
