@@ -382,7 +382,7 @@ private struct NativeOnboardingView: View {
         case 6:
             OnboardingPage(title: "DNS, LAN, forwarding and safety", text: "WireGuardKit uses DNS/routes/MTU from wg.conf; Libbox applies the selected raw profile in-engine and gives NetworkExtension its tunnel DNS/routes. Strict policy configures includeAllNetworks + enforceRoutes, on-demand reconnect and LAN exclusion from the imported policy, then fails closed if PacketTunnel sees a mismatch. Physical Wi‑Fi/cellular/reconnect/sleep leak testing is still required before final release.")
         default:
-            OnboardingPage(title: "Ready", text: "The Full Guide remains available in Setup. The PacketTunnel uses pinned WireGuardKit and pinned Libbox 1.13.12 where the imported mode provides a valid sing-box profile. Connected always requires exact selected-node private identity proof. Unsupported engines remain visibly unavailable rather than simulating a successful VPN.")
+            OnboardingPage(title: "Ready", text: "The Full Guide remains available in Setup. The PacketTunnel uses pinned WireGuardKit and pinned Libbox 1.13.12 where the imported mode provides a valid sing-box profile. Connected always requires exact selected-node private identity proof. Unsupported engines fail visibly rather than fake a successful VPN connection.")
         }
     }
 }
