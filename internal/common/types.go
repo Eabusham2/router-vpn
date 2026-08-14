@@ -1,8 +1,8 @@
 package common
 
 const (
-	RouterProfileSchemaVersion = 2
-	RouterProfileStoreVersion  = 2
+	RouterProfileSchemaVersion = 3
+	RouterProfileStoreVersion  = 3
 )
 
 type Mode struct {
@@ -43,6 +43,55 @@ type DNSBenchmarkResult struct {
 	Working   bool    `json:"working"`
 }
 
+// ExternalWireGuardConfig is private node data for a non-Router-VPN WireGuard
+// peer. These values may contain credentials and therefore belong only in the
+// separately linked private profile store, never in generic installers.
+type ExternalWireGuardConfig struct {
+	PrivateKey   string   `json:"private_key"`
+	Addresses    []string `json:"addresses"`
+	PeerPublicKey string  `json:"peer_public_key"`
+	PresharedKey string   `json:"preshared_key,omitempty"`
+	Endpoint     string   `json:"endpoint"`
+	AllowedIPs   []string `json:"allowed_ips"`
+	DNS          []string `json:"dns,omitempty"`
+	MTU          int      `json:"mtu,omitempty"`
+}
+
+// ExternalOpenVPNConfig stores an imported .ovpn profile as private node data.
+// Runtime support is deliberately separate: accepting/persisting the profile
+// must never make the UI claim that an OpenVPN dataplane is available.
+type ExternalOpenVPNConfig struct {
+	Config   string `json:"config"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
+type ExternalShadowsocksConfig struct {
+	Server   string `json:"server"`
+	Port     int    `json:"port"`
+	Method   string `json:"method"`
+	Password string `json:"password"`
+}
+
+type ExternalSOCKS5Config struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
+// ExternalNodeConfig is a tagged union. Exactly one protocol-specific block is
+// accepted. This avoids a generic map of arbitrary launcher arguments and makes
+// imported external nodes auditable before a runtime adapter is allowed to use
+// their private credentials.
+type ExternalNodeConfig struct {
+	Protocol    string                     `json:"protocol"`
+	WireGuard   *ExternalWireGuardConfig   `json:"wireguard,omitempty"`
+	OpenVPN     *ExternalOpenVPNConfig     `json:"openvpn,omitempty"`
+	Shadowsocks *ExternalShadowsocksConfig `json:"shadowsocks,omitempty"`
+	SOCKS5      *ExternalSOCKS5Config      `json:"socks5,omitempty"`
+}
+
 type RouterProfile struct {
 	// SchemaVersion is bumped only for persisted node-profile semantics. Older
 	// files with a missing/zero version are migrated in the client before write.
@@ -50,6 +99,8 @@ type RouterProfile struct {
 
 	ID            string `json:"id"`
 	Name          string `json:"name"`
+	NodeKind      string `json:"node_kind,omitempty"` // router-vpn | external
+	External      *ExternalNodeConfig `json:"external,omitempty"`
 	NodeProofID   string `json:"node_proof_id,omitempty"`
 	Endpoint      string `json:"endpoint"`
 	RouterAPI     string `json:"router_api"`
@@ -103,14 +154,15 @@ type RouterProfile struct {
 	ShareDiagnostics         bool `json:"share_diagnostics,omitempty"`
 	TelemetryEnabled         bool `json:"telemetry_enabled,omitempty"`
 
-	// PathProbeURL is a private, node-specific proof endpoint used by clients to
-	// distinguish "the Internet works" from "the selected Router VPN path works".
-	// NodeProofID binds that endpoint response to this exact imported server.
+	// PathProbeURL is a private, node-specific proof endpoint used by Router VPN
+	// nodes to distinguish "the Internet works" from "the selected node works".
+	// External protocols use protocol-specific validation until an equivalent
+	// cryptographic/identity proof is available.
 	PathProbeURL string `json:"path_probe_url,omitempty"`
 
 	// Optional location metadata is user-editable. It lets the local UI display
-	// multiple self-hosted nodes on a map without sending the node list to a
-	// third-party map/geolocation service.
+	// multiple self-hosted or custom external nodes on a map without sending the
+	// node list to a third-party map/geolocation service.
 	Location  string  `json:"location,omitempty"`
 	Latitude  float64 `json:"latitude,omitempty"`
 	Longitude float64 `json:"longitude,omitempty"`
@@ -129,13 +181,13 @@ type RouterProfile struct {
 	LatencyMaxMs         float64 `json:"latency_max_ms,omitempty"`
 	LatencyLastTest      string  `json:"latency_last_test,omitempty"`
 
-	// Last public exit address observed while this profile was active. This is
-	// shown next to SOCKS5 so the UI does not confuse the internal proxy address
-	// with the public internet exit address.
+	// Last public exit address observed while this profile was active.
 	PublicIP string `json:"public_ip,omitempty"`
 
 	// DNS is applied inside the selected VPN path. DNSMode values are home,
-	// fastest, custom, doh, dot, doh3, and rescue. Home AdGuard is the default.
+	// fastest, custom, doh, dot, doh3, and rescue. Home AdGuard is the default for
+	// Router VPN nodes; external-node adapters must not claim Home AdGuard unless
+	// they can actually route to it.
 	DNSMode             string               `json:"dns_mode,omitempty"`
 	DNSProtocol         string               `json:"dns_protocol,omitempty"`
 	DNSHost             string               `json:"dns_host,omitempty"`
