@@ -5,8 +5,8 @@ struct ContentView: View {
     @EnvironmentObject var model: RouterVPNModel
     @State private var importing = false
     @State private var showingOnboarding = false
-    @AppStorage("routerVPNOnboardingDoneV3") private var onboardingDone = false
-    @AppStorage("routerVPNOnboardingStepV3") private var onboardingStep = 0
+    @AppStorage("routerVPNOnboardingDoneV4") private var onboardingDone = false
+    @AppStorage("routerVPNOnboardingStepV4") private var onboardingStep = 0
 
     var body: some View {
         TabView {
@@ -17,7 +17,7 @@ struct ContentView: View {
             DNSView()
                 .tabItem { Label("DNS", systemImage: "network") }
             MethodsView()
-                .tabItem { Label("Methods", systemImage: "square.stack.3d.up") }
+                .tabItem { Label("Modes", systemImage: "square.stack.3d.up") }
             SetupView(showingOnboarding: $showingOnboarding)
                 .tabItem { Label("Setup", systemImage: "wrench.and.screwdriver") }
         }
@@ -50,6 +50,15 @@ struct ContentView: View {
 private struct ConnectView: View {
     @EnvironmentObject var model: RouterVPNModel
 
+    private var selectedMode: LogicalMode? {
+        model.logicalModes.first(where: { $0.id == model.selectedLogicalMode })
+    }
+
+    private var selectedRuntimeLabel: String {
+        guard let selectedMode else { return "No runnable mode" }
+        return model.runtimeLabel(for: selectedMode)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -61,6 +70,10 @@ private struct ConnectView: View {
                                     .font(.title2.bold())
                                 Text(model.endpoint.isEmpty ? "No node selected" : model.endpoint)
                                     .font(.caption).foregroundStyle(.secondary)
+                                if model.connected {
+                                    Text("Engine: \(model.activeEngine) • raw profile: \(model.activeRawProfile)")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
                             }
                             Spacer()
                             Image(systemName: model.connected ? "checkmark.shield.fill" : "shield")
@@ -70,22 +83,31 @@ private struct ConnectView: View {
                     }
 
                     NativeCard {
-                        Toggle("AUTO — native WireGuard on this iOS build", isOn: $model.auto)
+                        Toggle("AUTO — try only real iOS WireGuardKit / Libbox modes", isOn: $model.auto)
                         if !model.auto {
                             Picker("Mode", selection: $model.selectedLogicalMode) {
                                 ForEach(model.iosRunnableLogicalModes) { mode in
-                                    Text("\(mode.name) — WireGuard").tag(mode.id)
+                                    Text("\(mode.name) — \(model.runtimeLabel(for: mode))").tag(mode.id)
                                 }
                             }
                             .pickerStyle(.menu)
-                            Text("Manual iOS support is intentionally limited to Raw WireGuard until additional PacketTunnel engines are linked and proven.")
+
+                            if let selectedMode {
+                                Label(selectedRuntimeLabel, systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text(model.runtimeReason(for: selectedMode))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                Text("This imported node does not contain an iOS-runnable WireGuardKit or Libbox mode.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Text("AUTO reports each attempt and tries only modes the imported bundle can actually run. WireGuardKit is preferred first. With strict Apple route lockdown, AUTO fails closed after a failed attempt instead of cycling through a transition that could create a leak gap.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
 
                         Divider()
-                        Label("Native engine: WireGuard", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Text("LAN Off, DAITA-like cover traffic, Jumbo TUN override, AmneziaWG, layered modes, ALL/MAX, SMART/CUSTOM and multihop are not exposed as working controls on this iOS build. The imported WireGuard profile supplies routes, DNS and MTU.")
+                        Text("AmneziaWG-only, Xray-only, ALL/MAX composites and iOS multihop remain unavailable until their real Apple dataplanes exist. They are never CSS-forced Ready.")
                             .font(.caption).foregroundStyle(.secondary)
 
                         Button {
@@ -97,20 +119,26 @@ private struct ConnectView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
+                        .disabled(!model.auto && !model.iosManualModeSupported)
                     }
 
                     NativeCard {
                         Text("Connection truth").font(.headline)
-                        Text(model.auto ? "AUTO currently resolves to the proven native WireGuard path on iOS." : "Manual mode: Raw WireGuard.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text("Connected is reported only after the PacketTunnel starts and the selected node returns the exact private node-identity proof.")
+                        if model.auto {
+                            Text("AUTO readiness comes from the imported node's actual WG/sing-box profiles, not from a hard-coded iOS list.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else if let selectedMode {
+                            Text("Manual: \(selectedMode.name) • \(model.runtimeLabel(for: selectedMode))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text("Connected is reported only after NetworkExtension starts the selected engine and the exact selected-node private identity proof succeeds. Libbox proof is forced through its private in-engine proxy.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 
                     NativeCard {
                         Text("SOCKS5 after VPN").font(.headline)
                         Text(model.socksSummary).textSelection(.enabled)
-                        Text("This is an internal/LAN app proxy, not a WAN-exposed service.")
+                        Text("This remains an internal/LAN tunnel proxy, not a WAN-exposed service.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 
@@ -139,7 +167,7 @@ private struct NodesView: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("Import directly from home LAN") { Task { await model.importFromLAN() } }
                     Button("Import router-vpn-bundle.json from Files") { importing = true }
-                    Text("Router linking is a small node-data operation; it does not reinstall the app or download the all-platform package.")
+                    Text("Install once, then link node data separately. Adding another router never reinstalls the app.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -172,7 +200,7 @@ private struct NodesView: View {
                         Button("Protected DMZ") { Task { await model.applyForward(dmz: true) } }
                         Button("Clear") { Task { await model.clearForward() } }
                     }
-                    Text("Forwarding is authenticated through the tunnel and requires a real peer path; proxy-only modes cannot fake DNAT semantics.")
+                    Text("Forwarding is authenticated through a real peer path; proxy-only modes cannot fake DNAT semantics.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -188,15 +216,15 @@ private struct DNSView: View {
         NavigationStack {
             Form {
                 Section("Current iOS DNS behavior") {
-                    Label("DNS comes from the imported native WireGuard profile", systemImage: "checkmark.circle.fill")
+                    Label("DNS is enforced inside the selected PacketTunnel engine", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                    Text("The home Setup Center benchmarks and selects DNS from the home exit. This iOS PacketTunnel applies the DNS servers embedded in wg.conf. An in-app DNS override is not shown until it has a real runtime effect.")
+                    Text("WireGuardKit uses the DNS embedded in the imported wg.conf. Libbox applies the selected raw profile's in-engine DNS and exposes that DNS address to NetworkExtension. A saved DNS choice is not counted as proof unless the active runtime enforces it.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Home resolver") {
                     Text(model.bundle?.adGuardIPv4 ?? "10.77.0.1")
                         .textSelection(.enabled)
-                    Text("Home AdGuard remains the normal tunnel DNS when that address is present in the imported profile.")
+                    Text("Home AdGuard remains the normal tunnel DNS where the selected profile carries it. Full per-resolver benchmark/sort UI parity remains part of the cross-platform visual/settings audit.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -212,29 +240,27 @@ private struct MethodsView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("The home node can generate all Router VPN methods. This iOS app currently executes only native WireGuard; the rest remain visible for capability truth and Setup Center use, not as fake connect buttons.")
+                    Text("This is the native Router VPN mode catalog, not Setup Center's simple third-party Methods list. A mode is iOS Ready only when the imported node contains a real WireGuardKit or Libbox runtime profile that this build can execute.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(model.logicalModes) { mode in
-                    let available = mode.id == "base-raw" && mode.variants["wg"] == "wg"
+                    let available = model.iosRunnableLogicalModes.contains(where: { $0.id == mode.id })
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(mode.name).bold()
                             Spacer()
-                            Text(available ? "Native WG available" : "Unavailable in this iOS build")
+                            Text(available ? model.runtimeLabel(for: mode) : "Unavailable")
                                 .font(.caption2)
                                 .foregroundStyle(available ? .green : .secondary)
                         }
                         Text(mode.description).font(.caption).foregroundStyle(.secondary)
-                        if !available {
-                            Text("Use the home Setup Center for proven external/native configuration where supported, or another Router VPN platform build with the required engine.")
-                                .font(.caption2).foregroundStyle(.secondary)
-                        }
+                        Text(model.runtimeReason(for: mode))
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 3)
                 }
             }
-            .navigationTitle("Methods")
+            .navigationTitle("Modes")
         }
     }
 }
@@ -262,19 +288,18 @@ private struct SetupView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
-                Section("Router-side methods") {
-                    Label("SOCKS5 — internal/LAN only", systemImage: "arrow.left.arrow.right")
-                    Label("SOCKS5 + TLS / OverTLS", systemImage: "lock.shield")
+                Section("Router-side simple Methods") {
+                    Label("WireGuard / supported native configs", systemImage: "shield")
                     Label("Shadowsocks 2022", systemImage: "network")
                     Label("Hysteria2", systemImage: "bolt.horizontal.circle")
-                    Label("WireGuard / AmneziaWG native configs", systemImage: "shield")
-                    Label("Custom / universal protocol configs", systemImage: "doc.text")
-                    Text("Exact QR/config/download instructions are generated by your home node because they contain node-specific values and must match the deployed server.")
+                    Label("SOCKS5 — internal/LAN only", systemImage: "arrow.left.arrow.right")
+                    Label("SOCKS5 + TLS / OverTLS", systemImage: "lock.shield")
+                    Text("Setup Center exposes only simple external-app Methods with truthful import/QR metadata. Complex Router VPN stacks stay in the Router VPN app.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
                 Section("Apple distribution truth") {
-                    Text("The CI artifact is unsigned/re-signable. A normal long-term iOS distribution path still requires Apple signing/provisioning. Router VPN does not recommend disabling iOS or macOS platform security globally.")
+                    Text("CI artifacts are unsigned/re-signable. Long-term iOS distribution still requires Apple signing/provisioning. Router VPN does not recommend globally disabling Apple platform security.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -320,9 +345,7 @@ private struct NativeOnboardingView: View {
                             done = true
                             step = 0
                             isPresented = false
-                        } else {
-                            step += 1
-                        }
+                        } else { step += 1 }
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -349,17 +372,17 @@ private struct NativeOnboardingView: View {
                 Text(model.message).font(.caption).foregroundStyle(.secondary)
             }
         case 2:
-            OnboardingPage(title: "Deploy the home node from zero", text: "On the ASUS AI Board open Portainer → Stacks → Add stack → Repository and use server/portainer-current.yaml. Normal values include WAN_INTERFACE=eth0, LAN_CIDR=192.168.50.0/24 and ADGUARD4=192.168.50.133. Leave ENDPOINT blank for auto-detection when appropriate.")
+            OnboardingPage(title: "Deploy the home node from zero", text: "On the ASUS AI Board open Portainer → Stacks → Add stack → Repository and use server/portainer-current.yaml. Normal values include WAN_INTERFACE=eth0, LAN_CIDR=192.168.50.0/24 and ADGUARD4=192.168.50.133. Leave ENDPOINT blank for auto-detection when appropriate. Verify one-shot init/finalize exit 0 and long-running services are healthy before router forwards.")
         case 3:
             OnboardingPage(title: "ASUS router forwarding", text: "Enable the required ASUS SSH/JFFS support, then use the current Setup Center forwarding helper. It preserves existing nat-start/firewall-start content and checks the firewall backend. Never WAN-expose SOCKS5 1080, Setup Center 8786, router API 8787, Portainer, AdGuard admin, SSH, or the OverTLS loopback backend.")
         case 4:
-            OnboardingPage(title: "Connect on iPhone or iPad", text: "AUTO currently uses the proven native WireGuard PacketTunnel. Manual mode currently offers Raw WireGuard only. The app does not present AmneziaWG, layered, SMART/CUSTOM, ALL/MAX or multihop as working iOS controls until those engines and lifecycles are implemented and validated.")
+            OnboardingPage(title: "Connect on iPhone or iPad", text: "AUTO now evaluates the imported node and tries only modes this build can truly run through WireGuardKit or pinned Libbox 1.13.12. Manual mode lists the same real set. Each attempt remains Connecting until the PacketTunnel engine starts and the exact selected-node private proof passes through that engine. AWG-only, Xray-only, ALL/MAX and multihop stay unavailable until their Apple dataplanes are real.")
         case 5:
-            OnboardingPage(title: "Other methods", text: "The home Setup Center can expose proven native/external instructions and QR/config downloads for WireGuard, AmneziaWG, Shadowsocks 2022, Hysteria2, REALITY/Xray, SOCKS5, SOCKS5+TLS/OverTLS and other supported methods. Availability there does not imply this iOS PacketTunnel embeds every engine.")
+            OnboardingPage(title: "Simple external methods vs Router VPN modes", text: "Setup Center is for simple, proven external/native-compatible Methods and exact setup instructions. The Router VPN app owns complex layered modes. A Setup Center QR/config being available does not imply every third-party app supports it, and a Router VPN mode being listed does not make it iOS Ready without a real imported runtime profile.")
         case 6:
-            OnboardingPage(title: "DNS, LAN, forwarding and safety", text: "The current iOS WireGuard path applies DNS, routes and MTU from the imported wg.conf. LAN Off, in-app DNS override, DAITA-like padding and Jumbo override are not shown as active controls yet. Strict Apple kill-switch requests fail closed until a true always-on/lockdown lifecycle can be proven. Forwarding requires an authenticated real peer path.")
+            OnboardingPage(title: "DNS, LAN, forwarding and safety", text: "WireGuardKit uses DNS/routes/MTU from wg.conf; Libbox applies the selected raw profile in-engine and gives NetworkExtension its tunnel DNS/routes. Strict policy configures includeAllNetworks + enforceRoutes, on-demand reconnect and LAN exclusion from the imported policy, then fails closed if PacketTunnel sees a mismatch. Physical Wi‑Fi/cellular/reconnect/sleep leak testing is still required before final release.")
         default:
-            OnboardingPage(title: "Ready", text: "The Full Guide remains available in Setup at all times. The PacketTunnel uses pinned native WireGuard and requires exact selected-node private identity proof before reporting success. Unsupported engines fail visibly rather than fake a successful VPN connection.")
+            OnboardingPage(title: "Ready", text: "The Full Guide remains available in Setup. The PacketTunnel uses pinned WireGuardKit and pinned Libbox 1.13.12 where the imported mode provides a valid sing-box profile. Connected always requires exact selected-node private identity proof. Unsupported engines remain visibly unavailable rather than simulating a successful VPN.")
         }
     }
 }
