@@ -180,16 +180,20 @@ func (a *app) status(w http.ResponseWriter, _ *http.Request) {
 
 func (a *app) info(w http.ResponseWriter, _ *http.Request) {
 	p, _ := a.activeProfile()
+	a.mu.Lock()
+	selectedID := a.profiles.SelectedID
+	a.mu.Unlock()
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"router": p, "selected_id": a.profiles.SelectedID, "profiles_file": a.cfg.ProfilesFile,
+		"router": publicProfileFor(p), "selected_id": selectedID, "profiles_file": a.cfg.ProfilesFile,
 		"client_listen": a.cfg.Listen, "health_url": a.cfg.HealthURL, "auto_test_secs": a.cfg.AutoTestSeconds,
 	})
 }
 
 func (a *app) listProfiles(w http.ResponseWriter, _ *http.Request) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	_ = json.NewEncoder(w).Encode(a.profiles)
+	store := publicProfileStoreFor(a.profiles)
+	a.mu.Unlock()
+	_ = json.NewEncoder(w).Encode(store)
 }
 
 func validProfileID(id string) bool {
@@ -285,7 +289,7 @@ func (a *app) saveProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "profile": p})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "profile": publicProfileFor(p)})
 }
 
 func (a *app) selectProfile(w http.ResponseWriter, r *http.Request) {
@@ -556,7 +560,7 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "profile": p, "profiles_written": len(b.Profiles)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "profile": publicProfileFor(p), "profiles_written": len(b.Profiles)})
 }
 
 func (a *app) loadProfiles() error {
