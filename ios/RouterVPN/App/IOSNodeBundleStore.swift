@@ -14,24 +14,19 @@ final class IOSNodeBundleStore {
     }
 
     func link(_ incomingData: Data, preserving current: ClientBundle?) throws -> Data {
-        if let current {
-            _ = try store(current, replaceExistingRecord: true)
-        }
+        if let current { _ = try store(current, replaceExistingRecord: true) }
         let incoming = try JSONDecoder().decode(ClientBundle.self, from: incomingData)
         return try store(incoming, replaceExistingRecord: true)
     }
 
     func profiles(current: ClientBundle?) -> [RouterProfile] {
+        if let current { _ = try? store(current, replaceExistingRecord: true) }
         var result: [RouterProfile] = []
         var seen = Set<String>()
-        for data in records.values {
-            guard let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data) else { continue }
+        for key in records.keys.sorted() {
+            guard let data = records[key],
+                  let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data) else { continue }
             for profile in bundle.routerProfiles where seen.insert(profile.id).inserted {
-                result.append(profile)
-            }
-        }
-        if let current {
-            for profile in current.routerProfiles where seen.insert(profile.id).inserted {
                 result.append(profile)
             }
         }
@@ -42,12 +37,12 @@ final class IOSNodeBundleStore {
     }
 
     func bundleData(containing profileID: String, current: ClientBundle?) -> Data? {
-        if let current, current.routerProfiles.contains(where: { $0.id == profileID }) {
-            return try? JSONEncoder().encode(current)
-        }
-        for data in records.values {
-            guard let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
-                  bundle.routerProfiles.contains(where: { $0.id == profileID }) else { continue }
+        if let current { _ = try? store(current, replaceExistingRecord: true) }
+        let wanted = canonicalProfileID(profileID, current: current)
+        for key in records.keys.sorted() {
+            guard let data = records[key],
+                  let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  bundle.routerProfiles.contains(where: { $0.id == wanted }) else { continue }
             return data
         }
         return nil
@@ -55,16 +50,18 @@ final class IOSNodeBundleStore {
 
     func remove(profileID: String, current: ClientBundle?) throws -> Data? {
         if let current { _ = try store(current, replaceExistingRecord: true) }
-        for (key, data) in records {
-            guard var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
-                  bundle.routerProfiles.contains(where: { $0.id == profileID }) else { continue }
-            bundle.routerProfiles.removeAll(where: { $0.id == profileID })
+        let wanted = canonicalProfileID(profileID, current: current)
+        for key in records.keys.sorted() {
+            guard let data = records[key],
+                  var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  bundle.routerProfiles.contains(where: { $0.id == wanted }) else { continue }
+            bundle.routerProfiles.removeAll(where: { $0.id == wanted })
             if bundle.routerProfiles.isEmpty {
                 records.removeValue(forKey: key)
                 try persist()
                 return firstBundleData()
             }
-            if bundle.selectedRouterID == profileID { bundle.selectedRouterID = bundle.routerProfiles[0].id }
+            if bundle.selectedRouterID == wanted { bundle.selectedRouterID = bundle.routerProfiles[0].id }
             let replacement = try JSONEncoder().encode(bundle)
             records[key] = replacement
             try persist()
@@ -82,9 +79,11 @@ final class IOSNodeBundleStore {
         longitude: Double?
     ) throws -> Data {
         if let current { _ = try store(current, replaceExistingRecord: true) }
-        for (key, data) in records {
-            guard var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
-                  let index = bundle.routerProfiles.firstIndex(where: { $0.id == profileID }) else { continue }
+        let wanted = canonicalProfileID(profileID, current: current)
+        for key in records.keys.sorted() {
+            guard let data = records[key],
+                  var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  let index = bundle.routerProfiles.firstIndex(where: { $0.id == wanted }) else { continue }
             bundle.routerProfiles[index].name = name
             bundle.routerProfiles[index].location = location
             bundle.routerProfiles[index].latitude = latitude
@@ -109,10 +108,10 @@ final class IOSNodeBundleStore {
             let oldID = profile.id
             if profile.normalizedNodeKind == "router-vpn" {
                 let proof = (profile.nodeProofID?.isEmpty == false ? profile.nodeProofID! : bundle.nodeProofID).lowercased()
-                guard proof.count == 64, proof.allSatisfy({ $0.isHexDigit }) else {
+                guard isProofID(proof) else {
                     throw NSError(domain: "RouterVPN.NodeStore", code: 2, userInfo: [NSLocalizedDescriptionKey: "Router VPN node bundle is missing its 64-hex selected-node proof identity"])
                 }
-                profile.id = "rvpn-" + String(proof.prefix(16))
+                profile.id = deterministicRouterID(proof)
                 profile.nodeProofID = proof
                 if bundle.nodeProofID.isEmpty { bundle.nodeProofID = proof }
             } else {
@@ -157,8 +156,24 @@ final class IOSNodeBundleStore {
         return normalized
     }
 
+    private func canonicalProfileID(_ id: String, current: ClientBundle?) -> String {
+        guard let current,
+              let profile = current.routerProfiles.first(where: { $0.id == id }),
+              profile.normalizedNodeKind == "router-vpn" else { return id }
+        let proof = (profile.nodeProofID?.isEmpty == false ? profile.nodeProofID! : current.nodeProofID).lowercased()
+        return isProofID(proof) ? deterministicRouterID(proof) : id
+    }
+
+    private func deterministicRouterID(_ proof: String) -> String {
+        "rvpn-" + String(proof.prefix(16))
+    }
+
+    private func isProofID(_ value: String) -> Bool {
+        value.count == 64 && value.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil
+    }
+
     private func recordKey(_ bundle: ClientBundle) -> String {
-        if bundle.nodeProofID.count == 64, bundle.nodeProofID.allSatisfy({ $0.isHexDigit }) {
+        if isProofID(bundle.nodeProofID.lowercased()) {
             return "router-" + bundle.nodeProofID.lowercased()
         }
         return "bundle-" + bundle.selectedRouterID
@@ -180,11 +195,5 @@ final class IOSNodeBundleStore {
     private func persist() throws {
         let data = try JSONEncoder().encode(records)
         UserDefaults.standard.set(data, forKey: defaultsKey)
-    }
-}
-
-private extension Character {
-    var isHexDigit: Bool {
-        isNumber || ("a"..."f").contains(String(self).lowercased())
     }
 }
