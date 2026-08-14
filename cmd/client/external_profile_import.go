@@ -63,7 +63,9 @@ func (a *app) externalProfileImport(w http.ResponseWriter, r *http.Request) {
 		p.ID = newID()
 	}
 	p.Name = strings.TrimSpace(p.Name)
-	if p.Name == "" { p.Name = "External " + strings.ToUpper(p.External.Protocol) }
+	if p.Name == "" {
+		p.Name = "External " + strings.ToUpper(p.External.Protocol)
+	}
 	if strings.TrimSpace(p.Endpoint) == "" {
 		if exit, exitErr := standardExitFromExternalProfile(p); exitErr == nil {
 			p.Endpoint = exit.Server
@@ -87,13 +89,28 @@ func (a *app) externalProfileImport(w http.ResponseWriter, r *http.Request) {
 }
 
 func decodeExternalImport(raw []byte) (common.RouterProfile, error) {
-	var direct common.RouterProfile
-	if err := json.Unmarshal(raw, &direct); err == nil && (direct.NodeKind != "" || direct.External != nil) {
+	// Decide the wire shape before unmarshalling into RouterProfile. Its custom
+	// UnmarshalJSON intentionally normalizes an omitted node_kind to router-vpn,
+	// so using the normalized struct to distinguish a bundle envelope from a
+	// direct profile misclassifies envelopes as blank Router VPN profiles.
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &shape); err != nil {
+		return common.RouterProfile{}, errors.New("external import JSON must be an object")
+	}
+	if _, isEnvelope := shape["routerProfiles"]; !isEnvelope {
+		var direct common.RouterProfile
+		if err := json.Unmarshal(raw, &direct); err != nil {
+			return common.RouterProfile{}, err
+		}
+		if direct.NodeKind != "external" || direct.External == nil {
+			return common.RouterProfile{}, errors.New("direct import is not a schema-v3 external node profile")
+		}
 		return direct, nil
 	}
+
 	var envelope externalProfileImportEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return common.RouterProfile{}, errors.New("external import must be a schema-v3 profile or bundle envelope")
+		return common.RouterProfile{}, err
 	}
 	if len(envelope.RouterProfiles) == 0 {
 		return common.RouterProfile{}, errors.New("external bundle contains no profiles")
@@ -101,13 +118,20 @@ func decodeExternalImport(raw []byte) (common.RouterProfile, error) {
 	var candidates []common.RouterProfile
 	for _, candidate := range envelope.RouterProfiles {
 		kind := strings.ToLower(strings.TrimSpace(candidate.NodeKind))
-		if kind == "external" || candidate.External != nil { candidates = append(candidates, candidate) }
+		if kind == "external" && candidate.External != nil {
+			candidates = append(candidates, candidate)
+		}
 	}
-	if len(candidates) == 0 { return common.RouterProfile{}, errors.New("bundle contains no external custom node") }
+	if len(candidates) == 0 {
+		return common.RouterProfile{}, errors.New("bundle contains no external custom node")
+	}
 	if envelope.SelectedRouterID != "" {
 		for _, candidate := range candidates {
-			if candidate.ID == envelope.SelectedRouterID { return candidate, nil }
+			if candidate.ID == envelope.SelectedRouterID {
+				return candidate, nil
+			}
 		}
+		return common.RouterProfile{}, errors.New("selected external profile is not present in the bundle")
 	}
 	if len(candidates) != 1 {
 		return common.RouterProfile{}, errors.New("bundle contains multiple external nodes; import one selected external profile at a time")
@@ -116,6 +140,10 @@ func decodeExternalImport(raw []byte) (common.RouterProfile, error) {
 }
 
 func profileIDExists(profiles []common.RouterProfile, id string) bool {
-	for _, p := range profiles { if p.ID == id { return true } }
+	for _, p := range profiles {
+		if p.ID == id {
+			return true
+		}
+	}
 	return false
 }
