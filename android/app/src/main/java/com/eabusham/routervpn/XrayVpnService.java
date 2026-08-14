@@ -20,8 +20,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import libbox.Libbox;
-import libbox.RouterXrayDialerController;
+import io.nekohasekai.libbox.Libbox;
+import io.nekohasekai.libbox.RouterXrayDialerController;
 
 /** Full-device Xray-core Android VpnService inside Router VPN's one pinned gomobile runtime. */
 public final class XrayVpnService extends VpnService {
