@@ -78,18 +78,23 @@ type RouterProfile struct {
 	StartupMode   string   `json:"startup_mode,omitempty"`
 	AutoConnect   bool     `json:"auto_connect,omitempty"`
 
-	// Multihop selection is persisted here, but the dataplane remains unavailable
-	// until the real node-to-node route and leak-safe failure handling are built.
+	// Multihop intent is shared across platforms. Runtime adapters still fail
+	// closed whenever a requested platform/hop combination is not implemented.
 	MultihopEnabled bool   `json:"multihop_enabled,omitempty"`
 	MultihopEntryID string `json:"multihop_entry_id,omitempty"`
 	MultihopExitID  string `json:"multihop_exit_id,omitempty"`
 
-	// MTU policy distinguishes the user's choice from the effective value. Valid
-	// policy values are default, manual, and auto. EffectiveMTU is observational
-	// state written only after the runtime has actually applied/verified a value.
-	MTUPolicy    string `json:"mtu_policy,omitempty"`
-	ManualMTU    int    `json:"manual_mtu,omitempty"`
-	EffectiveMTU int    `json:"effective_mtu,omitempty"`
+	// MTU policy distinguishes the user's choice from observed/applied state.
+	// Auto mode records the exact path-context key and underlay PMTU used to
+	// choose an effective MTU so UIs can distinguish auto/manual/default rather
+	// than displaying a number with no provenance.
+	MTUPolicy             string `json:"mtu_policy,omitempty"`
+	ManualMTU             int    `json:"manual_mtu,omitempty"`
+	EffectiveMTU          int    `json:"effective_mtu,omitempty"`
+	EffectiveMTUSource    string `json:"effective_mtu_source,omitempty"`
+	EffectiveMTUPathKey   string `json:"effective_mtu_path_key,omitempty"`
+	EffectiveUnderlayPMTU int    `json:"effective_underlay_pmtu,omitempty"`
+	EffectiveMTUTestedAt  string `json:"effective_mtu_tested_at,omitempty"`
 
 	// Diagnostics/privacy preferences are deliberately local and opt-in. They do
 	// not enable telemetry merely by existing in the shared schema.
