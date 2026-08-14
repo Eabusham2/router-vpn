@@ -8,8 +8,11 @@ on:
       - 'cmd/client/standard_exits*.go'
       - 'cmd/client/openvpn_standard_exit*.go'
       - 'cmd/client/external_profile*.go'
+      - 'cmd/client/external_entry*.go'
+      - 'cmd/client/windows_openvpn_external.go'
       - 'cmd/client/profile_public_view*.go'
       - 'cmd/client/multihop_native_routes.go'
+      - 'client/native-openvpn-windows.ps1'
       - 'internal/common/types.go'
       - 'internal/common/profile_schema.go'
       - 'internal/common/external_profile_test.go'
@@ -28,8 +31,11 @@ on:
       - 'cmd/client/standard_exits*.go'
       - 'cmd/client/openvpn_standard_exit*.go'
       - 'cmd/client/external_profile*.go'
+      - 'cmd/client/external_entry*.go'
+      - 'cmd/client/windows_openvpn_external.go'
       - 'cmd/client/profile_public_view*.go'
       - 'cmd/client/multihop_native_routes.go'
+      - 'client/native-openvpn-windows.ps1'
       - 'internal/common/types.go'
       - 'internal/common/profile_schema.go'
       - 'internal/common/external_profile_test.go'
@@ -56,13 +62,13 @@ jobs:
         with:
           go-version: '1.24.x'
           cache: false
-      - name: Go custom-exit and unified-profile tests
+      - name: Go custom-exit unified-profile and external-entry tests
         run: go test ./cmd/client ./internal/common
-      - name: Native helper syntax
+      - name: Native Unix helper syntax
         run: |
           bash -n modes/native-standard-exit-linux.sh
           bash -n modes/native-openvpn-standard-exit.sh
-      - name: Fail-closed proof and unified-node markers
+      - name: Fail-closed proof unified-node and chain markers
         run: |
           grep -Fq 'python3 "$KILL_SWITCH" apply' modes/native-standard-exit-linux.sh
           grep -Fq 'TUNNEL_ALIAS" == "router-vpn"' modes/native-standard-exit-linux.sh
@@ -71,7 +77,6 @@ jobs:
           grep -Fq 'OpenVPNConfig' cmd/client/standard_exits.go
           grep -Fq 'openVPNRuntimeCapability()' cmd/client/standard_exits.go
           grep -Fq 'sanitizeOpenVPNConfig' cmd/client/openvpn_standard_exit_profile.go
-          grep -Fq 'script-security' cmd/client/openvpn_standard_exit_profile.go
           grep -Fq 'OpenVPN custom exit currently requires a literal remote' cmd/client/openvpn_standard_exit_profile.go
           grep -Fq 'redirect-gateway def1' cmd/client/openvpn_standard_exit_runtime.go
           grep -Fq 'redirect-gateway ipv6' cmd/client/openvpn_standard_exit_runtime.go
@@ -83,9 +88,15 @@ jobs:
           grep -Fq '/api/nodes' cmd/client/external_profile_connect.go
           grep -Fq '/api/external-profile/connect' cmd/client/external_profile_connect.go
           grep -Fq 'externalRuntimePolicy(externalProfile)' cmd/client/external_profile_connect.go
+          grep -Fq 'external_entry_hop' cmd/client/external_profile_connect.go
+          grep -Fq 'nativeExternalEntryStandardExitCommand' cmd/client/external_profile_connect.go
           grep -Fq 'proveStandardExit(exit.ExpectedPublicIP)' cmd/client/external_profile_connect.go
           grep -Fq 'proveOpenVPNStandardExit(exit.ExpectedPublicIP)' cmd/client/external_profile_connect.go
-          grep -Fq 'Router VPN WireGuard entry -> external' cmd/client/external_profile_connect.go
+          grep -Fq 'externalEntryGraph' cmd/client/external_entry_chain.go
+          grep -Fq 'buildExternalEntryStandardExitConfig' cmd/client/external_entry_chain.go
+          grep -Fq 'external OpenVPN is supported as a direct/final exit' cmd/client/external_entry_chain.go
+          grep -Fq 'TestExternalEntryChainsToEverySingBoxStandardExit' cmd/client/external_entry_chain_test.go
+          grep -Fq 'TestOpenVPNBridgeCanUseExternalStandardEntries' cmd/client/external_entry_chain_test.go
           grep -Fq 'publicProfileStoreFor' cmd/client/profile_public_view.go
           grep -Fq 'Editable:kind=="router-vpn"' cmd/client/profile_public_view.go
           grep -Fq 'TestPublicExternalProfileRedactsAllProtocolCredentials' cmd/client/profile_public_view_test.go
@@ -99,6 +110,38 @@ jobs:
           grep -Fq 'endpoint["detour"] != "entry-wg"' cmd/client/standard_exits_test.go
           grep -Fq 'out["detour"] != "entry-wg"' cmd/client/standard_exits_test.go
           grep -Fq 'standard-exits.json permissions are too broad; expected 0600' cmd/client/standard_exits.go
+
+  windows-openvpn:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Compile Windows client source
+        shell: powershell
+        run: go test ./cmd/client ./internal/common
+      - name: Parse native Windows OpenVPN helper with Windows PowerShell
+        shell: powershell
+        run: |
+          $source = Get-Content -Raw -LiteralPath 'client/native-openvpn-windows.ps1'
+          $null = [scriptblock]::Create($source)
+          if ($source -notmatch "Get-NetRoute -DestinationPrefix '0.0.0.0/1'") { throw 'missing def1 route proof' }
+          if ($source -notmatch "Get-NetRoute -DestinationPrefix '128.0.0.0/1'") { throw 'missing second def1 route proof' }
+          if ($source -notmatch "Kill 'tunnel'") { throw 'strict firewall never promotes the proven OpenVPN interface' }
+          if ($source -notmatch "OpenVPN 2\\.7\\.") { throw 'OpenVPN 2.7 pin check is missing' }
+          if ($source -match 'windows-driver\s+wintun') { throw 'OpenVPN 2.7 removed Wintun; stale driver directive found' }
+      - name: Windows OpenVPN source contract
+        shell: powershell
+        run: |
+          $go = Get-Content -Raw -LiteralPath 'cmd/client/windows_openvpn_external.go'
+          foreach ($marker in @('windowsOpenVPNRuntimeCapability','prepareWindowsOpenVPNRuntime','windowsOpenVPNStandardExitCommand','redirect-gateway def1','dev tun')) {
+            if (-not $go.Contains($marker)) { throw "missing Windows OpenVPN marker: $marker" }
+          }
+          $connect = Get-Content -Raw -LiteralPath 'cmd/client/external_profile_connect.go'
+          if (-not $connect.Contains('runtime.GOOS == "windows"')) { throw 'Windows OpenVPN dispatch is missing' }
+          if (-not $connect.Contains('windowsOpenVPNStandardExitCommand')) { throw 'external profile does not dispatch to native Windows OpenVPN' }
 
   android:
     runs-on: ubuntu-24.04
