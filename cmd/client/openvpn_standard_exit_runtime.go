@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,9 +27,14 @@ func openVPNDNSLines(control common.RouterProfile, direct bool) ([]string, error
 	if mode == "" { mode = "home" }
 	switch mode {
 	case "home":
-		if direct { return nil, errors.New("Home AdGuard DNS requires a Router VPN entry; choose Fastest, Custom, DoH, DoT or Rescue for a direct OpenVPN exit") }
-		host = strings.TrimSpace(control.AdGuardIPv4); if host == "" { host = strings.TrimSpace(control.AdGuardIPv6) }
-		protocol, port, sni = "udp", 53, ""
+		// A chained OpenVPN data channel is carried through the entry WireGuard
+		// endpoint by a loopback SOCKS bridge, but that bridge is not an OS route
+		// to the entry node's private AdGuard address. Do not pretend 10.77/10.78
+		// DNS remains reachable after OpenVPN owns the default route.
+		if direct {
+			return nil, errors.New("Home AdGuard DNS requires a Router VPN DNS bridge; choose Fastest, Custom, DoH, DoT or Rescue for a direct OpenVPN exit")
+		}
+		return nil, errors.New("Home AdGuard DNS over a Router VPN -> OpenVPN hop is not enabled until private DNS is explicitly bridged through the entry; choose Fastest, Custom, DoH, DoT or Rescue")
 	case "fastest":
 		host = strings.TrimSpace(control.FastestDNSHost); protocol, port, sni = "udp", 53, ""
 	case "doh":
@@ -82,18 +85,32 @@ func writePrivateFile(path, text string) error {
 	return os.Chmod(path, 0o600)
 }
 
-func prepareOpenVPNRuntime(root string, control common.RouterProfile, exit standardExit, direct bool) (string, string, error) {
-	if !direct { return "", "", errors.New("OpenVPN through a Router VPN entry is not enabled until the TCP-over-entry-SOCKS lifecycle passes the strict multihop matrix") }
+func openVPNProtocolIsTCP(proto string) bool {
+	switch strings.ToLower(strings.TrimSpace(proto)) {
+	case "tcp", "tcp-client", "tcp4", "tcp4-client", "tcp6", "tcp6-client":
+		return true
+	default:
+		return false
+	}
+}
+
+func prepareOpenVPNRuntime(root string, control, entry common.RouterProfile, exit standardExit, direct bool) (string, string, error) {
 	if err := normalizeOpenVPNStandardExit(&exit); err != nil { return "", "", err }
 	binary, err := findOpenVPNBinary(); if err != nil { return "", "", err }
 	if err = checkOpenVPN27(binary); err != nil { return "", "", err }
+	if !direct {
+		if entry.ID == "" { return "", "", errors.New("OpenVPN hop requires a linked Router VPN entry") }
+		if !openVPNProtocolIsTCP(exit.Method) {
+			return "", "", errors.New("Router VPN -> external OpenVPN hopping currently supports TCP OpenVPN profiles only because OpenVPN SOCKS5 transport is TCP; UDP profiles remain unavailable instead of leaking around the entry")
+		}
+	}
 	dnsLines, err := openVPNDNSLines(control, direct); if err != nil { return "", "", err }
 	lanLines, err := openVPNLANLines(control); if err != nil { return "", "", err }
-	base := filepath.Join(root, "run", "openvpn-standard-exit")
-	if err = os.MkdirAll(base, 0o700); err != nil { return "", "", err }
-	nonce := make([]byte, 12); if _, err = rand.Read(nonce); err != nil { return "", "", err }
-	dir := filepath.Join(base, hex.EncodeToString(nonce)); if err = os.Mkdir(dir, 0o700); err != nil { return "", "", err }
+	dir, err := newOpenVPNRuntimeDir(root); if err != nil { return "", "", err }
 	cleanup := func(e error) (string, string, error) { _ = os.RemoveAll(dir); return "", "", e }
+	if !direct {
+		if _, err = writeOpenVPNEntryBridge(root, dir, entry); err != nil { return cleanup(err) }
+	}
 	configPath := filepath.Join(dir, "client.ovpn")
 	lines := []string{
 		strings.TrimSpace(exit.OpenVPNConfig), "", "# Router VPN-owned policy below",
@@ -102,6 +119,7 @@ func prepareOpenVPNRuntime(root string, control common.RouterProfile, exit stand
 		"pull-filter ignore \"route \"", "pull-filter ignore \"route-ipv6\"",
 		"pull-filter ignore \"dhcp-option DNS\"", "pull-filter ignore \"dns \"", "connect-retry-max 1",
 	}
+	if !direct { lines = append(lines, fmt.Sprintf("socks-proxy 127.0.0.1 %d", openVPNEntrySOCKSPort)) }
 	if strings.ToLower(strings.TrimSpace(control.IPv6Mode)) == "off" { lines = append(lines, "block-ipv6") } else { lines = append(lines, "redirect-gateway ipv6") }
 	if runtime.GOOS == "linux" { lines = append(lines, "dev router-vpn", "dev-type tun") } else { lines = append(lines, "dev tun", "dev-node utun") }
 	lines = append(lines, dnsLines...); lines = append(lines, lanLines...)
@@ -115,15 +133,21 @@ func prepareOpenVPNRuntime(root string, control common.RouterProfile, exit stand
 	return dir, binary, nil
 }
 
-func openVPNStandardExitCommand(a *app, control common.RouterProfile, exit standardExit, direct bool) (*exec.Cmd, error) {
+func openVPNStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit, direct bool) (*exec.Cmd, error) {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
-	dir, binary, err := prepareOpenVPNRuntime(root, control, exit, direct); if err != nil { return nil, err }
+	dir, binary, err := prepareOpenVPNRuntime(root, control, entry, exit, direct); if err != nil { return nil, err }
 	helper := filepath.Join(root, "modes", "native-openvpn-standard-exit.sh")
 	if _, err = os.Stat(helper); err != nil { helper = filepath.Join(a.cfg.ScriptsDir, "native-openvpn-standard-exit.sh") }
 	if st, statErr := os.Stat(helper); statErr != nil || st.IsDir() { _ = os.RemoveAll(dir); return nil, errors.New("native OpenVPN standard-exit helper is missing") }
-	cmd := exec.Command("bash", helper, "up", dir, exit.Server, binary)
+	endpoint := exit.Server
+	runtimeProfileID := control.ID
+	if !direct {
+		endpoint = entry.Endpoint
+		runtimeProfileID = entry.ID
+	}
+	cmd := exec.Command("bash", helper, "up", dir, endpoint, binary)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+control.ID, "HOMEVPN_POLICY_PROFILE_ID="+control.ID, "HOMEVPN_ENDPOINT="+exit.Server)
+	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+runtimeProfileID, "HOMEVPN_POLICY_PROFILE_ID="+control.ID, "HOMEVPN_ENDPOINT="+endpoint)
 	cmd.Stdout = os.Stdout; cmd.Stderr = os.Stderr
 	return cmd, nil
 }
@@ -167,21 +191,32 @@ func (a *app) standardExitConnectDispatch(w http.ResponseWriter, r *http.Request
 
 func (a *app) openVPNStandardExitConnect(w http.ResponseWriter, r *http.Request, q standardExitConnectRequest, exit standardExit) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" { http.Error(w, "native OpenVPN custom exits are source-enabled on Linux/macOS first; this platform remains unavailable instead of faking Connected", http.StatusNotImplemented); return }
-	if !q.Direct { http.Error(w, "OpenVPN custom exit through a Router VPN entry is not release-ready yet; direct external OpenVPN is supported first", http.StatusNotImplemented); return }
-	a.mu.Lock(); control, ok := a.profileByIDLocked(a.profiles.SelectedID); a.mu.Unlock()
+	if !q.Direct && normalizeBase(q.Base) != "" && normalizeBase(q.Base) != "auto" && normalizeBase(q.Base) != "wg" { http.Error(w, "OpenVPN custom exit hopping currently requires a standard WireGuard Router VPN entry", http.StatusBadRequest); return }
+	a.mu.Lock(); control, ok := a.profileByIDLocked(a.profiles.SelectedID); profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...); a.mu.Unlock()
 	if !ok { http.Error(w, "select a Router VPN policy profile first", http.StatusBadRequest); return }
-	sessionTrackerFor(a).declareRequest("standard-exit", "external")
+	entry := common.RouterProfile{}
+	if !q.Direct {
+		entryID := strings.TrimSpace(q.EntryID); if entryID == "" { entryID = strings.TrimSpace(control.MultihopEntryID) }
+		entry, ok = profileByID(profiles, entryID); if !ok { http.Error(w, "choose a linked Router VPN entry node", http.StatusBadRequest); return }
+		if strings.TrimSpace(entry.Endpoint) == "" { http.Error(w, "entry node needs a public endpoint", http.StatusBadRequest); return }
+	}
+	sessionBase := "external"; if !q.Direct { sessionBase = "wg" }
+	sessionTrackerFor(a).declareRequest("standard-exit", sessionBase)
 	if err := a.stopMode(); err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusInternalServerError); return }
-	cmd, err := openVPNStandardExitCommand(a, control, exit, true); if err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusBadRequest); return }
+	cmd, err := openVPNStandardExitCommand(a, control, entry, exit, q.Direct); if err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusBadRequest); return }
 	if err = cmd.Start(); err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusInternalServerError); return }
 	stateID := "standard:" + exit.ID
-	a.mu.Lock(); a.cmd = cmd; a.state.Mode = "standard-exit"; a.state.LogicalMode = "standard-exit"; a.state.RuntimeMode = "standard-openvpn"; a.state.Base = "external"; a.state.RouterID = stateID; a.state.Connected = false; a.state.Phase = "standard-exit:openvpn:proving-public-exit"; a.state.LastError = ""; a.mu.Unlock()
+	a.mu.Lock(); a.cmd = cmd; a.state.Mode = "standard-exit"; a.state.LogicalMode = "standard-exit"; a.state.RuntimeMode = "standard-openvpn"; a.state.Base = sessionBase; a.state.RouterID = stateID; a.state.Connected = false; a.state.Phase = "standard-exit:openvpn:proving-public-exit"; a.state.LastError = ""; a.mu.Unlock()
 	if err = proveOpenVPNStandardExit(exit.ExpectedPublicIP); err != nil {
 		_ = a.stopMode(); msg := "OpenVPN standard exit proof failed: " + err.Error()
-		a.mu.Lock(); a.state.Mode = "standard-exit"; a.state.LogicalMode = "standard-exit"; a.state.RuntimeMode = "standard-openvpn"; a.state.Base = "external"; a.state.RouterID = stateID; a.state.Phase = "failed"; a.state.LastError = msg; a.state.Connected = false; a.mu.Unlock()
+		a.mu.Lock(); a.state.Mode = "standard-exit"; a.state.LogicalMode = "standard-exit"; a.state.RuntimeMode = "standard-openvpn"; a.state.Base = sessionBase; a.state.RouterID = stateID; a.state.Phase = "failed"; a.state.LastError = msg; a.state.Connected = false; a.mu.Unlock()
 		sessionTrackerFor(a).markRequestFailure(msg); http.Error(w, msg, http.StatusBadGateway); return
 	}
-	a.mu.Lock(); if a.cmd != cmd { a.mu.Unlock(); http.Error(w, "OpenVPN runtime changed during proof", http.StatusConflict); return }; a.state.Connected = true; a.state.Phase = "connected"; a.state.LastError = ""; a.mu.Unlock()
+	a.mu.Lock(); if a.cmd != cmd { a.mu.Unlock(); http.Error(w, "OpenVPN runtime changed during proof", http.StatusConflict); return }; a.state.Connected = true; a.state.Phase = "connected"; a.state.LastError = ""; if !q.Direct { for i := range a.profiles.Profiles { if a.profiles.Profiles[i].ID == entry.ID { a.profiles.Profiles[i].UseCount++ } } }; persistErr := a.persistProfilesLocked(); a.mu.Unlock()
+	if persistErr != nil { _ = a.stopMode(); sessionTrackerFor(a).markRequestFailure(persistErr.Error()); http.Error(w, persistErr.Error(), http.StatusInternalServerError); return }
+	route := "client OpenVPN TUN -> direct external OpenVPN node -> Internet"
+	entryID, entryName := "", ""
+	if !q.Direct { route = "client OpenVPN TUN -> loopback SOCKS -> Router VPN WireGuard entry -> external OpenVPN node -> Internet"; entryID = entry.ID; entryName = entry.Name }
 	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": "standard-exit", "direct": true, "standard_exit_id": exit.ID, "standard_exit_name": exit.Name, "protocol": "openvpn", "expected_public_ip": exit.ExpectedPublicIP, "exit_path_proof": "expected-public-ip-passed", "route": "client OpenVPN TUN -> direct external OpenVPN node -> Internet"})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": "standard-exit", "direct": q.Direct, "entry_id": entryID, "entry_name": entryName, "standard_exit_id": exit.ID, "standard_exit_name": exit.Name, "protocol": "openvpn", "expected_public_ip": exit.ExpectedPublicIP, "exit_path_proof": "expected-public-ip-passed", "route": route})
 }
