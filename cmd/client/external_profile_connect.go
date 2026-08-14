@@ -31,7 +31,7 @@ func (a *app) externalProfileCapabilities(w http.ResponseWriter, r *http.Request
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"node_kind": "external",
 		"desktop_runtime": runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
-		"protocols": standardExitCapabilities(),
+		"protocols": externalProfileProtocolCapabilities(),
 		"direct": true,
 		"router_vpn_entry_hop": true,
 		"external_entry_hop": true,
@@ -107,6 +107,7 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 
 	if exit.Protocol == "openvpn" {
 		cap := openVPNRuntimeCapability()
+		if runtime.GOOS == "windows" { cap = windowsOpenVPNRuntimeCapability() }
 		if !cap.Supported { http.Error(w, cap.Reason, http.StatusNotImplemented); return }
 		if !direct && !openVPNProtocolIsTCP(exit.Method) { http.Error(w, "OpenVPN final-exit hopping currently supports TCP OpenVPN profiles only; UDP remains fail-closed instead of bypassing the entry", http.StatusBadRequest); return }
 	}
@@ -119,7 +120,8 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 	var cmdErr error
 	var proofErr error
 	if exit.Protocol == "openvpn" {
-		cmd, err := openVPNStandardExitCommand(a, policy, entry, exit, direct)
+		var cmd *exec.Cmd
+		if runtime.GOOS == "windows" { cmd, err = windowsOpenVPNStandardExitCommand(a, policy, entry, exit, direct) } else { cmd, err = openVPNStandardExitCommand(a, policy, entry, exit, direct) }
 		if err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusBadRequest); return }
 		if err = cmd.Start(); err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusInternalServerError); return }
 		a.mu.Lock(); a.cmd=cmd; a.state.Mode="external-node"; a.state.LogicalMode="external-node"; a.state.RuntimeMode="external-openvpn"; a.state.Base=sessionBase; a.state.RouterID=externalProfile.ID; a.state.Connected=false; a.state.Phase="external-node:openvpn:proving-public-exit"; a.state.LastError=""; a.mu.Unlock()
