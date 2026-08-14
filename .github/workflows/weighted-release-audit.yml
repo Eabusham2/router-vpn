@@ -24,20 +24,41 @@ jobs:
           python3 deploy/weighted-release-audit.py | tee "$RUNNER_TEMP/weighted-release.json"
           python3 deploy/recovered-release-audit-v4.py | tee "$RUNNER_TEMP/recovered-release.json"
           python3 - "$RUNNER_TEMP/weighted-release.json" "$RUNNER_TEMP/recovered-release.json" <<'PY'
-          import json,sys
+          import json,os,sys
           legacy=json.load(open(sys.argv[1])); recovered=json.load(open(sys.argv[2]))
           assert legacy['source_weight'] == 88.0, legacy
           assert legacy['manual_live_weight'] == 12.0, legacy
           assert recovered['source_weight'] == 88.0, recovered
           assert recovered['manual_live_weight'] == 12.0, recovered
-          assert recovered['score_percent'] >= 84.5, recovered
-          print(f"Legacy weighted score: {legacy['score_percent']:.2f}%")
-          print(f"Recovered-contract full release score: {recovered['score_percent']:.2f}%")
-          print(f"Recovered source earned: {recovered['source_earned']:.2f}/88.00%")
-          for g in recovered['recovered_gates']:
-              if not g['pass']:
-                  print(f"RECOVERED GAP [{g['weight']}%]: {g['name']} - {g['note']}")
-          failed=[g for g in legacy['gates'] if not g['pass']]
-          for g in failed:
-              print(f"LEGACY UNRESOLVED [{g['kind']}] {g['weight']}%: {g['name']} {g['note']}")
+
+          legacy_failed=[g for g in recovered.get('legacy_gates',[]) if g['kind']=='source' and not g['pass']]
+          recovered_failed=[g for g in recovered['recovered_gates'] if not g['pass']]
+          summary=[
+              f"## Weighted Router VPN release audit",
+              f"- Legacy weighted score: **{legacy['score_percent']:.2f}%**",
+              f"- Recovered-contract full release score: **{recovered['score_percent']:.2f}%**",
+              f"- Recovered source earned: **{recovered['source_earned']:.2f}/88.00**",
+              "",
+              "### Failed source gates",
+          ]
+          if not legacy_failed and not recovered_failed:
+              summary.append('- None')
+          for g in legacy_failed:
+              text=f"LEGACY SOURCE GAP [{g['weight']}%]: {g['name']}"
+              summary.append('- '+text)
+              print(f"::error title=Legacy source gate::{text}")
+          for g in recovered_failed:
+              text=f"RECOVERED GAP [{g['weight']}%]: {g['name']} - {g['note']}"
+              summary.append('- '+text)
+              print(f"::error title=Recovered source gate::{text}")
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as fh:
+              fh.write('\n'.join(summary)+'\n')
+
+          if recovered['score_percent'] < 84.5:
+              raise SystemExit(
+                  f"recovered score {recovered['score_percent']:.2f}% < 84.50%; "
+                  f"legacy_failed={[g['name'] for g in legacy_failed]}; "
+                  f"recovered_failed={[g['name'] for g in recovered_failed]}"
+              )
+          print(f"Weighted release threshold passed at {recovered['score_percent']:.2f}%")
           PY
