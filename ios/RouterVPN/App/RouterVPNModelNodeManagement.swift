@@ -7,14 +7,8 @@ extension RouterVPNModel {
             if let replacement {
                 try importBundle(replacement)
             } else {
-                bundle = nil
-                modes = []
-                logicalModes = []
-                endpoint = ""
-                apiToken = ""
-                routerAPI = "http://10.77.0.1:8787"
-                socksHost = "10.77.0.1"
-                UserDefaults.standard.removeObject(forKey: "router-vpn.bundle")
+                let empty = try JSONEncoder().encode(ClientBundle.empty)
+                try importBundle(empty)
             }
             message = "Removed linked node from this app. Router VPN itself remains installed."
         } catch {
