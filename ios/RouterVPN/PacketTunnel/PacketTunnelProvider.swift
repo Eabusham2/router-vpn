@@ -28,9 +28,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 throw tunnelError(3, "Router VPN private bundle is invalid JSON.")
             }
             let selectedProfile = try selectedRouterProfile(root)
-            // contract: strict Apple kill switch requested => fail closed until an always-on/lockdown lifecycle is proven.
             if strictKillSwitchRequested(selectedProfile) {
-                throw tunnelError(4, "Strict Apple kill switch requested. Raw iOS WireGuard stays fail-closed until Router VPN can prove a true always-on/lockdown lifecycle on this device.")
+                // Fail closed if the host app did not actually request Apple's
+                // route-lockdown controls. This prevents a decorative strict
+                // policy from being accepted by the packet-tunnel engine.
+                guard tunnelProtocol.includeAllNetworks, tunnelProtocol.enforceRoutes else {
+                    throw tunnelError(4, "strict Apple kill switch requested but NetworkExtension route lockdown is not enabled")
+                }
+                let allowLAN = selectedProfile["home_lan_access"] as? Bool ?? true
+                guard tunnelProtocol.excludeLocalNetworks == !allowLAN else {
+                    throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy")
+                }
             }
 
             let requestedMode = (provider["mode"] as? String ?? "wg").lowercased()
@@ -41,23 +49,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             } else if requestedMode == "wg" || requestedCandidates.contains("wg") {
                 mode = "wg"
             } else {
-                throw tunnelError(5, "This iOS build currently has a real native WireGuard engine only. AmneziaWG, layered, ALL/MAX and multihop remain unavailable rather than reporting a fake Connected state.")
+                throw tunnelError(6, "This iOS build currently has a real native WireGuard engine only. AmneziaWG, layered, ALL/MAX and multihop remain unavailable rather than reporting a fake Connected state.")
             }
-            guard mode == "wg" else { throw tunnelError(6, "Unsupported iOS tunnel mode.") }
+            guard mode == "wg" else { throw tunnelError(7, "Unsupported iOS tunnel mode.") }
 
             let wgText = try wireGuardProfile(root)
             let tunnelConfiguration = try RouterVPNWireGuardConfig.parse(wgText, name: "Router VPN")
             guard tunnelConfiguration.peers.count == 1 else {
-                throw tunnelError(7, "Router VPN iOS node proof requires exactly one generated WireGuard server peer.")
+                throw tunnelError(8, "Router VPN iOS node proof requires exactly one generated WireGuard server peer.")
             }
             let derivedNodeID = deriveNodeProof(from: tunnelConfiguration.peers[0].publicKey.base64Key)
             let suppliedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
             if !suppliedNodeID.isEmpty && suppliedNodeID != derivedNodeID {
-                throw tunnelError(8, "Router bundle node identity does not match its WireGuard server public key.")
+                throw tunnelError(9, "Router bundle node identity does not match its WireGuard server public key.")
             }
             let expectedNodeID = suppliedNodeID.isEmpty ? derivedNodeID : suppliedNodeID
             guard expectedNodeID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
-                throw tunnelError(9, "Router VPN node proof id is invalid.")
+                throw tunnelError(10, "Router VPN node proof id is invalid.")
             }
             let proofURL = try selectedProofURL(selectedProfile)
 
@@ -67,12 +75,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             wireGuardAdapter = adapter
             adapter.start(tunnelConfiguration: tunnelConfiguration) { [weak self] adapterError in
                 guard let self else {
-                    completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 10, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during startup."]))
+                    completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 11, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during startup."]))
                     return
                 }
                 if let adapterError {
                     self.wireGuardAdapter = nil
-                    completionHandler(self.tunnelError(11, "WireGuard engine failed to start: \(adapterError.localizedDescription)"))
+                    completionHandler(self.tunnelError(12, "WireGuard engine failed to start: \(adapterError.localizedDescription)"))
                     return
                 }
                 self.proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID) { proofError in
