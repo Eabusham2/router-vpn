@@ -104,7 +104,7 @@ def android_map() -> bool:
             "Forwarding",
             "Settings",
             "Help",
-            "never guesses a location",
+            "if (!item.hasCoordinates()) continue;",
         )
         and mod.has(
             "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
@@ -112,6 +112,7 @@ def android_map() -> bool:
             "Marker",
             "latitude",
             "longitude",
+            "Double.isFinite",
             "No real node coordinates",
         )
     )
