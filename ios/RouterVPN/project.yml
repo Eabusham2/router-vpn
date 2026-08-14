@@ -37,7 +37,7 @@ targets:
     platform: iOS
     sources: [PacketTunnel]
     preBuildScripts:
-      - name: Build pinned wireguard-go bridge
+      - name: Build pinned WireGuard and Libbox bridges
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
@@ -49,6 +49,10 @@ targets:
           test "$(sed -n '1p' "$WG_ROOT/Package.swift")" = '// swift-tools-version:5.5'
           make -C "$WG_ROOT/Sources/WireGuardKitGo" build
           test -s "$CONFIGURATION_BUILD_DIR/libwg-go.a"
+          "$SRCROOT/prepare-libbox.sh"
+          test -d "$SRCROOT/.deps/Libbox.xcframework"
+          test -s "$SRCROOT/.deps/libbox-LICENSE.txt"
+          test "$(tr -d '\r\n' < "$SRCROOT/.deps/Libbox.xcframework.pin")" = '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator'
     settings:
       base:
         PRODUCT_NAME: RouterVPNPacketTunnel
@@ -63,3 +67,5 @@ targets:
     dependencies:
       - package: WireGuardKit
         product: WireGuardKit
+      - framework: .deps/Libbox.xcframework
+        embed: false
