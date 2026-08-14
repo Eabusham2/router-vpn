@@ -13,6 +13,9 @@ on:
       - 'cmd/client/profile_public_view*.go'
       - 'cmd/client/multihop_native_routes.go'
       - 'client/native-openvpn-windows.ps1'
+      - 'client/Install-RouterVPN-OpenVPN.ps1'
+      - 'client/Setup-Windows-Runtime.ps1'
+      - 'deploy/package-builds.sh'
       - 'internal/common/types.go'
       - 'internal/common/profile_schema.go'
       - 'internal/common/external_profile_test.go'
@@ -36,6 +39,9 @@ on:
       - 'cmd/client/profile_public_view*.go'
       - 'cmd/client/multihop_native_routes.go'
       - 'client/native-openvpn-windows.ps1'
+      - 'client/Install-RouterVPN-OpenVPN.ps1'
+      - 'client/Setup-Windows-Runtime.ps1'
+      - 'deploy/package-builds.sh'
       - 'internal/common/types.go'
       - 'internal/common/profile_schema.go'
       - 'internal/common/external_profile_test.go'
@@ -68,21 +74,27 @@ jobs:
         run: |
           bash -n modes/native-standard-exit-linux.sh
           bash -n modes/native-openvpn-standard-exit.sh
-      - name: Fail-closed proof unified-node and chain markers
+      - name: Fail-closed proof unified-node API and chain markers
         run: |
           grep -Fq 'python3 "$KILL_SWITCH" apply' modes/native-standard-exit-linux.sh
           grep -Fq 'TUNNEL_ALIAS" == "router-vpn"' modes/native-standard-exit-linux.sh
           grep -Fq 'proveStandardExit(exit.ExpectedPublicIP)' cmd/client/standard_exit_runtime.go
           grep -Fq '127.0.0.1", "listen_port":1099' cmd/client/standard_exit_runtime.go
           grep -Fq 'OpenVPNConfig' cmd/client/standard_exits.go
-          grep -Fq 'openVPNRuntimeCapability()' cmd/client/standard_exits.go
           grep -Fq 'sanitizeOpenVPNConfig' cmd/client/openvpn_standard_exit_profile.go
           grep -Fq 'OpenVPN custom exit currently requires a literal remote' cmd/client/openvpn_standard_exit_profile.go
           grep -Fq 'redirect-gateway def1' cmd/client/openvpn_standard_exit_runtime.go
           grep -Fq 'redirect-gateway ipv6' cmd/client/openvpn_standard_exit_runtime.go
           grep -Fq 'proveOpenVPNStandardExit(exit.ExpectedPublicIP)' cmd/client/openvpn_standard_exit_runtime.go
-          grep -Fq 'registerStandardExitDispatchRoutes(h, a)' cmd/client/multihop_native_routes.go
+          grep -Fq 'registerPlatformStandardExitRoutes(h, a)' cmd/client/multihop_native_routes.go
           grep -Fq 'registerExternalProfileRoutes(h, a)' cmd/client/multihop_native_routes.go
+          ! grep -Fq 'registerStandardExitDispatchRoutes(h, a)' cmd/client/multihop_native_routes.go
+          grep -Fq 'externalProfileProtocolCapabilities()' cmd/client/multihop_native_routes.go
+          grep -Fq 'registerPlatformStandardExitRoutes' cmd/client/standard_exit_platform_routes.go
+          grep -Fq 'platformStandardExitCapabilitiesHandler' cmd/client/standard_exit_platform_routes.go
+          grep -Fq 'windowsOpenVPNStandardExitCommand' cmd/client/standard_exit_platform_routes.go
+          grep -Fq 'nativeExternalEntryStandardExitCommand' cmd/client/standard_exit_platform_routes.go
+          grep -Fq 'external OpenVPN is supported as a direct/final exit but not yet as an upstream hop' cmd/client/standard_exit_platform_routes.go
           grep -Fq 'standardExitFromExternalProfile' cmd/client/external_profile_standard_exit.go
           grep -Fq 'validateStandardExit(&exit)' cmd/client/external_profile_standard_exit.go
           grep -Fq '/api/nodes' cmd/client/external_profile_connect.go
@@ -122,17 +134,32 @@ jobs:
       - name: Compile Windows client source
         shell: powershell
         run: go test ./cmd/client ./internal/common
-      - name: Parse native Windows OpenVPN helper with Windows PowerShell
+      - name: Parse native Windows OpenVPN helpers with Windows PowerShell
         shell: powershell
         run: |
+          foreach ($path in @('client/native-openvpn-windows.ps1','client/Install-RouterVPN-OpenVPN.ps1','client/Setup-Windows-Runtime.ps1')) {
+            $source = Get-Content -Raw -LiteralPath $path
+            $null = [scriptblock]::Create($source)
+          }
           $source = Get-Content -Raw -LiteralPath 'client/native-openvpn-windows.ps1'
-          $null = [scriptblock]::Create($source)
           if ($source -notmatch "Get-NetRoute -DestinationPrefix '0.0.0.0/1'") { throw 'missing def1 route proof' }
           if ($source -notmatch "Get-NetRoute -DestinationPrefix '128.0.0.0/1'") { throw 'missing second def1 route proof' }
           if ($source -notmatch "Kill 'tunnel'") { throw 'strict firewall never promotes the proven OpenVPN interface' }
           if ($source -notmatch "OpenVPN 2\\.7\\.") { throw 'OpenVPN 2.7 pin check is missing' }
           if ($source -match 'windows-driver\s+wintun') { throw 'OpenVPN 2.7 removed Wintun; stale driver directive found' }
-      - name: Windows OpenVPN source contract
+      - name: Pinned zero-knowledge OpenVPN setup contract
+        shell: powershell
+        run: |
+          $setup = Get-Content -Raw -LiteralPath 'client/Install-RouterVPN-OpenVPN.ps1'
+          foreach ($marker in @("OpenVPNVersion = '2.7.5'","OpenVPNBuild = 'I001'",'swupdate.openvpn.org/community/releases','5865472','6234112','Get-AuthenticodeSignature','OpenVPN','Start-Process -FilePath ''powershell.exe'' -Verb RunAs','msiexec.exe','arm64','x64')) {
+            if (-not $setup.Contains($marker)) { throw "missing pinned OpenVPN setup marker: $marker" }
+          }
+          if ($setup -match 'latest') { throw 'OpenVPN setup must not use a floating latest URL' }
+          $runtime = Get-Content -Raw -LiteralPath 'client/Setup-Windows-Runtime.ps1'
+          foreach ($marker in @('Install-RouterVPN-OpenVPN.ps1','& $OpenVPNSetup','OpenVPN 2.7.x')) {
+            if (-not $runtime.Contains($marker)) { throw "Windows runtime setup does not own OpenVPN setup: $marker" }
+          }
+      - name: Windows OpenVPN source and package contract
         shell: powershell
         run: |
           $go = Get-Content -Raw -LiteralPath 'cmd/client/windows_openvpn_external.go'
@@ -142,6 +169,11 @@ jobs:
           $connect = Get-Content -Raw -LiteralPath 'cmd/client/external_profile_connect.go'
           if (-not $connect.Contains('runtime.GOOS == "windows"')) { throw 'Windows OpenVPN dispatch is missing' }
           if (-not $connect.Contains('windowsOpenVPNStandardExitCommand')) { throw 'external profile does not dispatch to native Windows OpenVPN' }
+          $legacy = Get-Content -Raw -LiteralPath 'cmd/client/standard_exit_platform_routes.go'
+          if (-not $legacy.Contains('windowsOpenVPNStandardExitCommand')) { throw 'legacy standard-exit API disagrees with unified Windows OpenVPN support' }
+          $package = Get-Content -Raw -LiteralPath 'deploy/package-builds.sh'
+          if (-not $package.Contains('cp -a "$ROOT/client" "$tmp/"')) { throw 'installed Windows package does not include client helpers' }
+          if (-not $package.Contains('cp -a "$ROOT/client" "$tmp/App/RouterVPN/"')) { throw 'Windows Portable does not include client helpers' }
 
   android:
     runs-on: ubuntu-24.04
