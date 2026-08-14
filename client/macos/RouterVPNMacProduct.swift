@@ -20,6 +20,15 @@ final class ProductAPI {
         var req = URLRequest(url: url); req.httpMethod = method; req.timeoutInterval = timeout; req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body { req.httpBody = try JSONSerialization.data(withJSONObject: body); req.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        return try perform(req, timeout: timeout)
+    }
+    func requestRaw(_ path: String, body: Data, timeout: TimeInterval = 15) throws -> Data {
+        guard let url = URL(string: path, relativeTo: routerVPNProductBaseURL) else { throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid local API path"]) }
+        var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = timeout; req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData; req.httpBody = body
+        req.setValue("application/json", forHTTPHeaderField: "Accept"); req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return try perform(req, timeout: timeout)
+    }
+    private func perform(_ req: URLRequest, timeout: TimeInterval) throws -> Data {
         let sem = DispatchSemaphore(value: 0); var data = Data(); var code = 0; var err: Error?
         let task = session.dataTask(with: req) { d, r, e in data = d ?? Data(); code = (r as? HTTPURLResponse)?.statusCode ?? 0; err = e; sem.signal() }
         task.resume()
@@ -64,6 +73,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Router VPN"; window.minSize = NSSize(width: 980, height: 650); window.center()
         super.init(window: window); buildUI(); refreshAll(); timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshLive() }
+        appendHelp("Install once; pair/import Router VPN or external node data separately. Nodes & Map can securely pair, import, select, remove and latency-test linked nodes without reinstalling the app.")
     }
     required init?(coder: NSCoder) { nil }
     deinit { timer?.invalidate() }
@@ -96,7 +106,11 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
 
     func nodesMapView() -> NSView {
         let split = NSSplitView(); split.isVertical = true; split.dividerStyle = .thin
-        map.delegate = self; map.showsCompass = true; map.showsScale = true; split.addArrangedSubview(map); let right = NSStackView(); right.orientation = .vertical; right.spacing = 8; right.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8); right.addArrangedSubview(scroll(nodesText)); let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Select highlighted map node", #selector(selectMapNode))); row.addArrangedSubview(button("50-sample latency", #selector(latencySelected))); right.addArrangedSubview(row); split.addArrangedSubview(right); split.setPosition(650, ofDividerAt: 0); return split
+        map.delegate = self; map.showsCompass = true; map.showsScale = true; split.addArrangedSubview(map)
+        let right = NSStackView(); right.orientation = .vertical; right.spacing = 8; right.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8); right.addArrangedSubview(scroll(nodesText))
+        let row = NSStackView(); row.orientation = .horizontal; row.spacing = 6
+        row.addArrangedSubview(button("Pair", #selector(pairNode))); row.addArrangedSubview(button("Import", #selector(importNode))); row.addArrangedSubview(button("Select", #selector(selectMapNode))); row.addArrangedSubview(button("Remove", #selector(removeNode))); row.addArrangedSubview(button("50-sample latency", #selector(latencySelected)))
+        right.addArrangedSubview(row); split.addArrangedSubview(right); split.setPosition(650, ofDividerAt: 0); return split
     }
 
     func dnsView() -> NSView { let s = NSStackView(); s.orientation = .vertical; s.spacing = 10; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18); let note = NSTextField(wrappingLabelWithString: "Selected DNS policy and home-node DNS benchmark. Benchmarking is not mislabeled as end-to-end resolver proof."); note.textColor = .secondaryLabelColor; s.addArrangedSubview(note); s.addArrangedSubview(button("Retest home-exit DNS benchmark", #selector(retestDNS))); s.addArrangedSubview(scroll(dnsText)); return s }
@@ -111,7 +125,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Connect real multihop", #selector(connectMultihop))); row.addArrangedSubview(button("Refresh multihop readiness", #selector(refreshAdvancedAction))); row.addArrangedSubview(button("Emergency stop", #selector(emergencyStop))); s.addArrangedSubview(row); s.addArrangedSubview(scroll(advancedText)); return s
     }
     func settingsView() -> NSView { let s = NSStackView(); s.orientation = .vertical; s.spacing = 10; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18); s.addArrangedSubview(scroll(settingsText)); return s }
-    func helpView() -> NSView { let s = NSStackView(); s.orientation = .vertical; s.spacing = 10; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18); let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Prove public VPN exit", #selector(publicExit))); row.addArrangedSubview(button("Emergency stop", #selector(emergencyStop))); row.addArrangedSubview(button("Refresh", #selector(refreshAction))); s.addArrangedSubview(row); s.addArrangedSubview(scroll(helpText)); return s }
+    func helpView() -> NSView { let s = NSStackView(); s.orientation = .vertical; s.spacing = 10; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18); let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Pair/add node", #selector(pairNode))); row.addArrangedSubview(button("Prove public VPN exit", #selector(publicExit))); row.addArrangedSubview(button("Emergency stop", #selector(emergencyStop))); row.addArrangedSubview(button("Refresh", #selector(refreshAction))); s.addArrangedSubview(row); s.addArrangedSubview(scroll(helpText)); return s }
     func forwardingView() -> NSView { let s = NSStackView(); s.orientation = .vertical; s.spacing = 8; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18); let note = NSTextField(wrappingLabelWithString: "Forwarding is sent only to the selected Router VPN node through its authenticated private router API. Enter the node-supported JSON rule payload; proxy-only modes cannot fake arbitrary DNAT."); note.textColor = .secondaryLabelColor; s.addArrangedSubview(note); forwardInput.isEditable = true; forwardInput.font = .monospacedSystemFont(ofSize: 12, weight: .regular); forwardInput.string = "{\n  \"enabled\": true\n}"; let inputScroll = NSScrollView(); inputScroll.hasVerticalScroller = true; inputScroll.documentView = forwardInput; inputScroll.heightAnchor.constraint(equalToConstant: 130).isActive = true; s.addArrangedSubview(inputScroll); let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Apply forwarding payload", #selector(applyForward))); row.addArrangedSubview(button("Clear forwarding", #selector(clearForward))); s.addArrangedSubview(row); s.addArrangedSubview(scroll(forwardOutput)); return s }
 
     func asyncAction(_ work: @escaping () throws -> String) { DispatchQueue.global(qos: .userInitiated).async { [weak self] in guard let self else { return }; do { let message = try work(); DispatchQueue.main.async { self.appendHelp(message); self.refreshAll() } } catch { DispatchQueue.main.async { self.errorLabel.stringValue = error.localizedDescription; self.appendHelp("ERROR: \(error.localizedDescription)"); self.refreshLive() } } } }
@@ -132,8 +146,33 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     @objc func refreshAction() { refreshAll() }
     @objc func refreshAdvancedAction() { refreshAdvanced() }
     @objc func selectRouter() { let i = routerPopup.indexOfSelectedItem; guard i >= 0 && i < routerIDs.count else { return }; let id = routerIDs[i]; asyncAction { _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": id], timeout: 10); return "Selected router \(id)" } }
-    @objc func selectMapNode() { guard let a = map.selectedAnnotations.first as? RouterAnnotation else { appendHelp("Select a real-coordinate map pin first."); return }; asyncAction { _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": a.routerID], timeout: 10); return "Selected map node \(a.title ?? a.routerID)" } }
+    @objc func selectMapNode() { guard let a = map.selectedAnnotations.first as? RouterAnnotation else { appendHelp("Select a real-coordinate map pin first, or use the Router selector on Home."); return }; asyncAction { _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": a.routerID], timeout: 10); return "Selected map node \(a.title ?? a.routerID)" } }
     @objc func latencySelected() { let id: String; if let a = map.selectedAnnotations.first as? RouterAnnotation { id = a.routerID } else if routerPopup.indexOfSelectedItem >= 0 && routerPopup.indexOfSelectedItem < routerIDs.count { id = routerIDs[routerPopup.indexOfSelectedItem] } else { appendHelp("Select a node first."); return }; asyncAction { String(data: try self.api.request("/api/profile/latency", method: "POST", body: ["id": id, "samples": 50], timeout: 180), encoding: .utf8) ?? "" } }
+    @objc func pairNode() {
+        let alert = NSAlert(); alert.messageText = "Pair Router VPN home node"; alert.informativeText = "Create a short-lived 6-digit code in the authenticated private Setup Center. Pairing is private-LAN only and the code is one-time."
+        alert.addButton(withTitle: "Pair"); alert.addButton(withTitle: "Cancel")
+        let stack = NSStackView(); stack.orientation = .vertical; stack.spacing = 8; stack.frame = NSRect(x: 0, y: 0, width: 360, height: 86)
+        let host = NSTextField(string: "192.168.50.133"); host.placeholderString = "AI Board LAN IP / hostname"
+        let code = NSSecureTextField(string: ""); code.placeholderString = "6-digit one-time pairing code"
+        stack.addArrangedSubview(host); stack.addArrangedSubview(code); alert.accessoryView = stack
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let h = host.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), c = code.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard c.count == 6, c.allSatisfy({ $0.isNumber }) else { appendHelp("Pairing code must be exactly 6 digits."); return }
+        asyncAction { String(data: try self.api.request("/api/profile/pair", method: "POST", body: ["host": h, "code": c], timeout: 20), encoding: .utf8) ?? "Node paired" }
+    }
+    @objc func importNode() {
+        let panel = NSOpenPanel(); panel.title = "Import Router VPN node bundle"; panel.allowedFileTypes = ["json"]; panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { let data = try Data(contentsOf: url, options: [.mappedIfSafe]); guard data.count <= 32 * 1024 * 1024 else { throw NSError(domain: "RouterVPNMac", code: 20, userInfo: [NSLocalizedDescriptionKey: "Router bundle is larger than 32 MiB."]) }; asyncAction { String(data: try self.api.requestRaw("/api/profile/import", body: data, timeout: 25), encoding: .utf8) ?? "Node imported" } } catch { errorLabel.stringValue = error.localizedDescription; appendHelp("Import failed: \(error.localizedDescription)") }
+    }
+    @objc func removeNode() {
+        let id: String
+        if let a = map.selectedAnnotations.first as? RouterAnnotation { id = a.routerID }
+        else { let i = routerPopup.indexOfSelectedItem; guard i >= 0 && i < routerIDs.count else { appendHelp("Select a node first."); return }; id = routerIDs[i] }
+        let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Remove linked node?"; alert.informativeText = "This removes the node from this app; it does not uninstall Router VPN or change the home server."; alert.addButton(withTitle: "Remove"); alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        asyncAction { _ = try self.api.request("/api/profile/delete", method: "POST", body: ["id": id], timeout: 10); return "Removed node \(id)" }
+    }
     @objc func applyForward() { guard let d = forwardInput.string.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: d), let body = obj as? [String: Any] else { appendHelp("Forwarding payload must be a JSON object."); return }; asyncAction { String(data: try self.api.request("/api/forward", method: "POST", body: body, timeout: 20), encoding: .utf8) ?? "" } }
     @objc func clearForward() { asyncAction { String(data: try self.api.request("/api/forward/clear", method: "POST", body: [:], timeout: 20), encoding: .utf8) ?? "Forwarding cleared" } }
 
@@ -158,9 +197,9 @@ final class ProductDelegate: NSObject, NSApplicationDelegate {
 }
 
 func runProductSelfTest() -> Int32 {
-    let required = ["/api/status", "/api/profiles", "/api/logical-modes", "/api/auto", "/api/connect-logical", "/api/disconnect", "/api/profile/select", "/api/profile/latency", "/api/public-ip", "/api/dns/retest", "/api/emergency-stop", "/api/session/events", "/api/multihop/status", "/api/multihop/connect", "/api/forward", "/api/forward/clear"]
+    let required = ["/api/status", "/api/profiles", "/api/logical-modes", "/api/auto", "/api/connect-logical", "/api/disconnect", "/api/profile/select", "/api/profile/latency", "/api/profile/pair", "/api/profile/import", "/api/profile/delete", "/api/public-ip", "/api/dns/retest", "/api/emergency-stop", "/api/session/events", "/api/multihop/status", "/api/multihop/connect", "/api/forward", "/api/forward/clear"]
     let tabs = ["Home", "Nodes & Map", "Modes", "DNS", "Advanced", "Forwarding", "Settings", "Help"]
-    guard routerVPNProductBaseURL.absoluteString == "http://127.0.0.1:8788", routerVPNProductContractVersion == 2, required.count == 16, tabs.count == 8 else { return 2 }
+    guard routerVPNProductBaseURL.absoluteString == "http://127.0.0.1:8788", routerVPNProductContractVersion == 2, required.count == 19, tabs.count == 8 else { return 2 }
     print("Router VPN native macOS product self-test: OK")
     return 0
 }
