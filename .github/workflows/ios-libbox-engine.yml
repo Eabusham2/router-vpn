@@ -6,11 +6,17 @@ on:
     paths:
       - 'ios/RouterVPN/prepare-libbox.sh'
       - 'ios/RouterVPN/test_libbox_build_contract.py'
+      - 'ios/RouterVPN/test_libbox_link_contract.py'
+      - 'ios/RouterVPN/project.yml'
+      - 'ios/RouterVPN/PacketTunnel/Libbox*.swift'
       - '.github/workflows/ios-libbox-engine.yml'
   pull_request:
     paths:
       - 'ios/RouterVPN/prepare-libbox.sh'
       - 'ios/RouterVPN/test_libbox_build_contract.py'
+      - 'ios/RouterVPN/test_libbox_link_contract.py'
+      - 'ios/RouterVPN/project.yml'
+      - 'ios/RouterVPN/PacketTunnel/Libbox*.swift'
       - '.github/workflows/ios-libbox-engine.yml'
   workflow_dispatch:
 
@@ -26,12 +32,14 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
-      - name: Static pin contract
-        run: python3 ios/RouterVPN/test_libbox_build_contract.py
+      - name: Static pin and link contracts
+        run: |
+          python3 ios/RouterVPN/test_libbox_build_contract.py
+          python3 ios/RouterVPN/test_libbox_link_contract.py
       - name: Build exact Apple Libbox XCFramework
         working-directory: ios/RouterVPN
         run: ./prepare-libbox.sh
-      - name: Verify exact pin and slices
+      - name: Verify exact pin slices and generated API
         working-directory: ios/RouterVPN
         run: |
           test -d .deps/Libbox.xcframework
@@ -44,3 +52,28 @@ jobs:
           assert ('ios','') in plats, plats
           assert ('ios','simulator') in plats, plats
           PY
+          HEADER=$(find .deps/Libbox.xcframework -path '*/Headers/Libbox.h' -print -quit)
+          test -s "$HEADER"
+          echo '=== exact pinned Libbox PlatformInterface/command signatures ==='
+          grep -nE 'PlatformInterface|CommandServer|StartOrReloadService|OpenTun|openTun|LibboxVersion|SetupOptions' "$HEADER" | head -n 240
+          grep -Fq 'LibboxVersion' "$HEADER"
+          grep -Fq 'LibboxPlatformInterface' "$HEADER"
+          grep -Fq 'LibboxCommandServer' "$HEADER"
+      - name: Prepare pinned WireGuardKit and compile PacketTunnel import probe
+        working-directory: ios/RouterVPN
+        run: |
+          sh prepare-wireguard-kit.sh
+          brew install xcodegen
+          xcodegen generate
+          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/LibboxProbeDerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' build
+          grep -Fq 'import Libbox' PacketTunnel/LibboxCompileProbe.swift
+          grep -Fq 'LibboxVersion()' PacketTunnel/LibboxCompileProbe.swift
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Libbox-1.13.12-signature
+          path: |
+            ios/RouterVPN/.deps/Libbox.xcframework/**/Headers/Libbox.h
+            ios/RouterVPN/.deps/Libbox.xcframework.pin
+            ios/RouterVPN/.deps/libbox-LICENSE.txt
+          if-no-files-found: error
+          retention-days: 1
