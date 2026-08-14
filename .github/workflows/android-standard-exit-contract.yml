@@ -1,0 +1,26 @@
+name: Android custom standard exit contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExit*.java'
+      - 'android/test_android_standard_exit_contract.py'
+      - '.github/workflows/android-standard-exit-contract.yml'
+  pull_request:
+    paths:
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExit*.java'
+      - 'android/test_android_standard_exit_contract.py'
+      - '.github/workflows/android-standard-exit-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source contract
+        run: python3 android/test_android_standard_exit_contract.py
