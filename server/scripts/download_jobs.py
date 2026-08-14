@@ -2,6 +2,7 @@
 """Bounded asynchronous download jobs for the Router VPN Setup Center broker."""
 from __future__ import annotations
 
+import inspect
 import secrets
 from pathlib import Path
 import shutil
@@ -26,6 +27,11 @@ class DownloadJobManager:
         self.lock = threading.Lock()
         self.jobs: dict[str, dict] = {}
         self.closed = threading.Event()
+        try:
+            params = inspect.signature(build_func).parameters
+            self.build_accepts_progress = "progress" in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        except (TypeError, ValueError):
+            self.build_accepts_progress = False
         self.reaper = threading.Thread(target=self._reaper_loop, name="router-vpn-download-job-reaper", daemon=True)
         self.reaper.start()
 
@@ -60,8 +66,11 @@ class DownloadJobManager:
                 "status": "queued",
                 "phase": "queued",
                 "progress": 5,
+                "phase_history": ["queued"],
                 "source": "",
                 "size": 0,
+                "bytes_sent": 0,
+                "bytes_total": 0,
                 "error_code": "",
                 "error": "",
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
@@ -82,10 +91,34 @@ class DownloadJobManager:
             job = self.jobs.get(job_id)
             if not job:
                 return
+            new_phase = changes.get("phase")
+            if isinstance(new_phase, str) and new_phase and new_phase != job.get("phase"):
+                history = job.setdefault("phase_history", [])
+                if not history or history[-1] != new_phase:
+                    history.append(new_phase)
+                    if len(history) > 32:
+                        del history[:-32]
             job.update(changes)
             now = time.time()
             job["updated_epoch"] = now
             job["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+    def _progress_callback(self, job_id: str):
+        allowed = {
+            "locating": 15,
+            "downloading": 28,
+            "validating": 42,
+            "building": 58,
+            "packaging": 78,
+        }
+        def report(phase: str, progress: int | None = None) -> None:
+            if self._cancelled(job_id):
+                return
+            phase = str(phase or "building").strip().lower()
+            floor = allowed.get(phase, 25)
+            value = floor if progress is None else max(floor, min(94, int(progress)))
+            self._update(job_id, status="building", phase=phase, progress=value)
+        return report
 
     def _cancelled(self, job_id: str) -> bool:
         with self.lock:
@@ -118,21 +151,26 @@ class DownloadJobManager:
             if self._cancelled(job_id):
                 self._update(job_id, status="cancelled", phase="cancelled", progress=0, error_code="cancelled", error="download job cancelled")
                 return
-            self._update(job_id, status="building", phase="resolving-artifact-or-building", progress=25)
+            report = self._progress_callback(job_id)
+            report("locating", 15)
             with self.lock:
                 job = self.jobs.get(job_id)
                 if not job:
                     return
                 name = str(job["name"])
-            package, source = self.build_func(self.base, name, Path(work))
+            if self.build_accepts_progress:
+                package, source = self.build_func(self.base, name, Path(work), progress=report)
+            else:
+                report("building", 58)
+                package, source = self.build_func(self.base, name, Path(work))
+                report("packaging", 85)
             if self._cancelled(job_id):
                 self._update(job_id, status="cancelled", phase="cancelled", progress=0, error_code="cancelled", error="download job cancelled")
                 return
             if not package.is_file() or package.stat().st_size <= 0:
                 raise RuntimeError("package creation returned an empty file")
-            self._update(job_id, status="ready", phase="ready", progress=100, source=source, size=package.stat().st_size, path=str(package), expires_in_seconds=JOB_TTL_SECONDS)
-            # Ready output remains only in the private /tmp job directory until
-            # first delivery, cancellation, or TTL expiry.
+            size = package.stat().st_size
+            self._update(job_id, status="ready", phase="ready", progress=100, source=source, size=size, bytes_total=size, path=str(package), expires_in_seconds=JOB_TTL_SECONDS)
             work = ""
         except TimeoutError:
             self._update(job_id, status="failed", phase="failed", progress=0, error_code="timeout", error="package generation timed out")
@@ -143,6 +181,7 @@ class DownloadJobManager:
             if acquired:
                 self.build_slots.release()
             if work:
+                self._update(job_id, phase="cleanup", progress=100)
                 self._cleanup_dir(work)
                 self._update(job_id, work_dir="", path="")
 
@@ -164,11 +203,22 @@ class DownloadJobManager:
             if not path.is_file():
                 raise RuntimeError("download job output is missing")
             job["status"] = "delivering"
-            job["phase"] = "delivering"
+            if not job.get("phase_history") or job["phase_history"][-1] != "streaming":
+                job.setdefault("phase_history", []).append("streaming")
+            job["phase"] = "streaming"
+            job["progress"] = 0
+            job["bytes_sent"] = 0
+            job["bytes_total"] = path.stat().st_size
             job["updated_epoch"] = time.time()
             meta = self._public(dict(job))
             meta["content_type"] = self.content_type_func(str(job["name"]))
             return path, meta
+
+    def update_delivery(self, job_id: str, sent: int, total: int) -> None:
+        total = max(0, int(total))
+        sent = max(0, min(int(sent), total if total else int(sent)))
+        progress = min(99, int((sent * 100) / total)) if total else 0
+        self._update(job_id, status="delivering", phase="streaming", progress=progress, bytes_sent=sent, bytes_total=total)
 
     def finish_delivery(self, job_id: str, success: bool) -> None:
         with self.lock:
@@ -176,16 +226,26 @@ class DownloadJobManager:
             if not job:
                 return
             work = str(job.get("work_dir") or "")
+        self._update(job_id, status="delivering", phase="cleanup", progress=100)
+        self._cleanup_dir(work)
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return
             job["work_dir"] = ""
             job["path"] = ""
             job["status"] = "delivered" if success else "delivery-interrupted"
-            job["phase"] = job["status"]
+            final_phase = "delivered" if success else "delivery-interrupted"
+            if not job.get("phase_history") or job["phase_history"][-1] != final_phase:
+                job.setdefault("phase_history", []).append(final_phase)
+            job["phase"] = final_phase
             job["progress"] = 100 if success else 0
-            if not success:
+            if success:
+                job["bytes_sent"] = job.get("bytes_total", 0)
+            else:
                 job["error_code"] = "client_disconnected"
                 job["error"] = "download delivery was interrupted; temporary output was deleted"
             job["updated_epoch"] = time.time()
-        self._cleanup_dir(work)
 
     def cancel(self, job_id: str) -> dict:
         with self.lock:
@@ -200,6 +260,7 @@ class DownloadJobManager:
                 job["path"] = ""
                 job["status"] = "cancelled"
                 job["phase"] = "cancelled"
+                job.setdefault("phase_history", []).append("cancelled")
                 job["progress"] = 0
                 job["error_code"] = "cancelled"
                 job["error"] = "download job cancelled"
@@ -220,6 +281,7 @@ class DownloadJobManager:
                         job["path"] = ""
                         job["status"] = "expired"
                         job["phase"] = "expired"
+                        job.setdefault("phase_history", []).append("expired")
                         job["progress"] = 0
                         job["error_code"] = "expired"
                         job["error"] = "download job expired before delivery"
