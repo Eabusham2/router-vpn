@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Resolve/apply Router VPN MTU policy and enforce pre-connect leak policy."""
 from __future__ import annotations
-import ipaddress,json,os
+import datetime,hashlib,ipaddress,json,os
 from pathlib import Path
 import re,socket,subprocess,sys,tempfile
 from typing import Any
 from profile_id import validate_profile_id
-MIN_MTU=576;MAX_PROBE_MTU=1500
+MIN_MTU=576;MAX_PROBE_MTU=1500;AUTO_CACHE_HOURS=24
 
 def root_dir()->Path:return Path(os.environ.get('HOMEVPN_ROOT','/opt/router-vpn-client')).resolve()
 def profile_id()->str:
@@ -74,6 +74,23 @@ def choose_effective(profile:dict[str,Any]|None,default_mtu:int,endpoint:str)->t
  outer,status=probe_underlay(endpoint)
  if outer is None:return default_mtu,'auto-fallback',None
  safety=max(60,MAX_PROBE_MTU-default_mtu);effective=max(MIN_MTU,min(default_mtu,outer-safety));return effective,'auto-proven',outer
+def path_context_key(endpoint:str,mode:str)->str:
+ base=os.environ.get('HOMEVPN_BASE','').strip().lower();logical=os.environ.get('HOMEVPN_LOGICAL_MODE','').strip().lower();family=os.environ.get('HOMEVPN_IP_FAMILY','').strip().lower()
+ raw='|'.join([endpoint.strip().lower(),mode.strip().lower(),logical,base,family])
+ return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24]
+def cached_auto(profile:dict[str,Any]|None,key:str)->tuple[int,str,int|None]|None:
+ if not isinstance(profile,dict) or str(profile.get('mtu_policy')or'').lower()!='auto':return None
+ if str(profile.get('effective_mtu_path_key')or'')!=key:return None
+ try:mtu=int(profile.get('effective_mtu')or 0);outer=int(profile.get('effective_underlay_pmtu')or 0)
+ except(TypeError,ValueError):return None
+ if not MIN_MTU<=mtu<=9000:return None
+ raw=str(profile.get('effective_mtu_tested_at')or'')
+ try:
+  tested=datetime.datetime.fromisoformat(raw.replace('Z','+00:00'));now=datetime.datetime.now(datetime.timezone.utc)
+  if tested.tzinfo is None:tested=tested.replace(tzinfo=datetime.timezone.utc)
+  if now-tested>datetime.timedelta(hours=AUTO_CACHE_HOURS):return None
+ except(ValueError,TypeError):return None
+ return mtu,'auto-cache',outer or None
 def patch_json(value:Any,mtu:int)->bool:
  changed=False
  if isinstance(value,dict):
@@ -100,9 +117,10 @@ def apply_tree(conf:Path,mtu:int)->int:
    try:changed+=int(patch_conf(path,mtu))
    except UnicodeDecodeError:pass
  return changed
-def persist_effective(root:Path,store:dict[str,Any],profile:dict[str,Any]|None,mtu:int)->None:
+def persist_effective(root:Path,store:dict[str,Any],profile:dict[str,Any]|None,mtu:int,source:str,path_key:str,outer:int|None)->None:
  if profile is None or not store:return
- profile['effective_mtu']=mtu;path=root/'routers.json';path.parent.mkdir(parents=True,exist_ok=True);fd,tmp_name=tempfile.mkstemp(prefix='routers.json.',dir=str(path.parent))
+ profile['effective_mtu']=mtu;profile['effective_mtu_source']=source;profile['effective_mtu_path_key']=path_key;profile['effective_underlay_pmtu']=int(outer or 0);profile['effective_mtu_tested_at']=datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z')
+ path=root/'routers.json';path.parent.mkdir(parents=True,exist_ok=True);fd,tmp_name=tempfile.mkstemp(prefix='routers.json.',dir=str(path.parent))
  try:
   with os.fdopen(fd,'w',encoding='utf-8')as f:json.dump(store,f,indent=2);f.write('\n');f.flush();os.fsync(f.fileno())
   os.replace(tmp_name,path)
@@ -124,12 +142,15 @@ def main()->int:
  except ValueError:print('refusing to patch MTU outside HOMEVPN_ROOT/run',file=sys.stderr);return 2
  try:enforce_kill_switch()
  except RuntimeError as exc:print(str(exc),file=sys.stderr);return 1
- store,profile=load_store(root);mode=os.environ.get('HOMEVPN_MODE','').strip()
+ store,profile=load_store(root);mode=os.environ.get('HOMEVPN_MODE','').strip();endpoint=os.environ.get('HOMEVPN_ENDPOINT','');key=path_context_key(endpoint,mode)
  try:fallback=int(os.environ.get('HOMEVPN_MTU','1380'))
  except ValueError:fallback=1380
- default_mtu=catalog_default(root,mode,fallback);endpoint=os.environ.get('HOMEVPN_ENDPOINT','');effective,source,outer=choose_effective(profile,default_mtu,endpoint);changed=apply_tree(conf,effective)
- if changed>0:persist_effective(root,store,profile,effective)
+ default_mtu=catalog_default(root,mode,fallback)
+ reuse=cached_auto(profile,key) if os.environ.get('HOMEVPN_JUMBO','false').lower()!='true' else None
+ if reuse is not None:effective,source,outer=reuse
+ else:effective,source,outer=choose_effective(profile,default_mtu,endpoint)
+ changed=apply_tree(conf,effective);persist_effective(root,store,profile,effective,source,key,outer)
  details=f'MTU {effective} ({source}'
  if outer is not None:details+=f', underlay PMTU {outer}'
- details+=f', patched {changed} config file(s))';print(details,file=sys.stderr);return 0
+ details+=f', path {key}, patched {changed} config file(s))';print(details,file=sys.stderr);return 0
 if __name__=='__main__':raise SystemExit(main())
