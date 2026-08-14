@@ -15,9 +15,13 @@ new_call = 's = replace_between(s, devices_start, devices_end, new_devices, "nat
 if old_call not in s:
     raise SystemExit('device replacement call not found')
 s = s.replace(old_call, new_call, 1)
-# The normalizer owns the hero-card replacement; changing this generic phrase
-# before normalization makes its source-drift check correctly fail.
+# The normalizer owns hero-card and Methods-selector replacement.
 s = s.replace('    "app/controller": "native app",\n', '')
+start = s.find('# The Methods picker itself must never re-surface arbitrary advanced stacks.')
+end = s.find('old_downloads = ', start)
+if start < 0 or end < 0:
+    raise SystemExit('temporary Methods selector patch block not found')
+s = s[:start] + s[end:]
 # Match the normalizer's permanent node-link label so its patch is idempotent.
 s = s.replace("['Private recovery bundle','router-vpn-client-bundle.zip','Explicit private fallback/recovery bundle']", "['Private node-link bundle','router-vpn-client-bundle.zip','Separate private node data for an already-installed Router VPN app; extract router-vpn-bundle.json for file import']")
 p.write_text(s, encoding='utf-8')
@@ -41,8 +45,6 @@ s = s.replace(
     'method["simple"] = lane in SETUP_METHOD_LANES or ident == "router-vpn-app"',
     1,
 )
-# A QR containing the unresolved placeholder is worse than no QR. Keep the
-# config/manual method visible but fail closed on compact public import data.
 old = '''        if not payload:\n            method["qrSupported"] = False\n            method["qrPayload"] = ""\n            method["qrPngBase64"] = ""\n        else:\n'''
 new = '''        if not payload or "router.invalid" in payload.lower():\n            method["qrSupported"] = False\n            method["qrPayload"] = ""\n            method["qrPngBase64"] = ""\n        else:\n'''
 if old not in s:
