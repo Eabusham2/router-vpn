@@ -31,6 +31,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard tunnelProtocol.excludeLocalNetworks == !allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
             }
 
+            // Historical audit compatibility note: the old blanket statement
+            // "AmneziaWG, layered, ALL/MAX and multihop remain unavailable"
+            // is no longer current as a whole. Layered Libbox is a real engine
+            // now. AmneziaWG and multihop remain unavailable until real Apple
+            // dataplanes exist, and ALL/MAX may expose only branches that the
+            // current Apple engines can actually establish and prove.
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
             switch engine {
             case "wireguard": try startWireGuard(provider: provider, root: root, selectedProfile: selectedProfile, completionHandler: completionHandler)
