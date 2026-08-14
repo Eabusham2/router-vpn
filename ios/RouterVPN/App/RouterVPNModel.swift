@@ -18,6 +18,8 @@ final class RouterVPNModel: ObservableObject {
     @Published var jumbo = false
     @Published var connected = false
     @Published var message = "Import a router bundle from Files or directly from your home LAN"
+    @Published var activeEngine = "none"
+    @Published var activeRawProfile = ""
     @Published var forwardProtocol = "both"
     @Published var forwardFrom = "25565"
     @Published var forwardTo = "25565"
@@ -56,14 +58,38 @@ final class RouterVPNModel: ObservableObject {
     }
 
     var iosRunnableLogicalModes: [LogicalMode] {
-        logicalModes.filter { $0.id == "base-raw" && $0.variants["wg"] == "wg" }
+        guard let bundle else { return [] }
+        return IOSRuntimeSelector.runnableModes(in: bundle)
     }
 
     var iosManualModeSupported: Bool {
-        selectedLogicalMode == "base-raw" && currentLogicalMode?.variants["wg"] == "wg"
+        guard let bundle else { return false }
+        return (try? IOSRuntimeSelector.select(bundle: bundle, logicalModeID: selectedLogicalMode)) != nil
     }
 
     var baseSelectorEnabled: Bool { false }
+
+    func runtimeLabel(for mode: LogicalMode) -> String {
+        guard let bundle,
+              let selection = try? IOSRuntimeSelector.select(bundle: bundle, logicalModeID: mode.id)
+        else { return "Unavailable" }
+        switch selection.engine {
+        case .wireGuard: return "WireGuardKit"
+        case .libbox: return "Libbox • \(selection.rawProfileID)"
+        }
+    }
+
+    func runtimeReason(for mode: LogicalMode) -> String {
+        guard let bundle else { return "Import a node bundle first." }
+        do {
+            let selection = try IOSRuntimeSelector.select(bundle: bundle, logicalModeID: mode.id)
+            return selection.engine == .wireGuard
+                ? "Native WireGuardKit PacketTunnel with exact selected-node proof."
+                : "Pinned Libbox 1.13.12 PacketTunnel using imported raw profile \(selection.rawProfileID), with exact selected-node proof forced through the engine."
+        } catch {
+            return error.localizedDescription
+        }
+    }
 
     private var selectedRouterProfile: RouterProfile? {
         guard let bundle else { return nil }
@@ -82,17 +108,14 @@ final class RouterVPNModel: ObservableObject {
         let decoded = try JSONDecoder().decode(ClientBundle.self, from: data)
         apply(decoded)
         saveRouter()
-        message = "Router bundle imported"
+        message = "Router bundle imported • \(iosRunnableLogicalModes.count) iOS runtime mode(s) available"
     }
 
     func importFromLAN() async {
         let raw = lanImportHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { message = "Enter the AI Board LAN IP or hostname"; return }
         let host = raw.replacingOccurrences(of: "http://", with: "").replacingOccurrences(of: "https://", with: "").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "http://\(host):8786/router-vpn-bundle.json") else {
-            message = "Invalid LAN host"
-            return
-        }
+        guard let url = URL(string: "http://\(host):8786/router-vpn-bundle.json") else { message = "Invalid LAN host"; return }
         do {
             var req = URLRequest(url: url)
             req.timeoutInterval = 12
@@ -101,17 +124,12 @@ final class RouterVPNModel: ObservableObject {
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw URLError(.badServerResponse) }
             try importBundle(data)
             UserDefaults.standard.set(raw, forKey: lanImportKey)
-            message = "Imported directly from \(host) over the home LAN"
-        } catch {
-            message = "LAN import failed: \(error.localizedDescription)"
-        }
+            message = "Imported directly from \(host) over the home LAN • \(iosRunnableLogicalModes.count) iOS runtime mode(s) available"
+        } catch { message = "LAN import failed: \(error.localizedDescription)" }
     }
 
     func saveRouter() {
-        guard !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            message = "Enter the home router public IP or hostname"
-            return
-        }
+        guard !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { message = "Enter the home router public IP or hostname"; return }
         var current = bundle ?? ClientBundle.empty
         current.endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         current.apiToken = apiToken
@@ -145,136 +163,183 @@ final class RouterVPNModel: ObservableObject {
             if let access = selected.homeLANAccess { homeLANAccess = access }
             if let cidrs = selected.homeLANCIDRs, !cidrs.isEmpty { homeLANCIDRs = cidrs }
         }
-        if !iosRunnableLogicalModes.contains(where: { $0.id == selectedLogicalMode }) {
-            selectedLogicalMode = iosRunnableLogicalModes.first?.id ?? "base-raw"
-        }
-        selectedMode = "wg"
+        let runnable = IOSRuntimeSelector.runnableModes(in: decoded)
+        if !runnable.contains(where: { $0.id == selectedLogicalMode }) { selectedLogicalMode = runnable.first?.id ?? "base-raw" }
+        selectedMode = selectedLogicalMode
     }
 
     private func legacyLogicalModes(_ oldModes: [VPNMode]) -> [LogicalMode] {
-        oldModes.map {
-            LogicalMode(id: $0.id, name: $0.name, description: $0.protection, baseSelector: false, fallback: false, variants: ["native": $0.id])
-        }
+        oldModes.map { LogicalMode(id: $0.id, name: $0.name, description: $0.protection, baseSelector: false, fallback: false, variants: ["native": $0.id]) }
     }
 
     func modeCandidates() -> [String] {
-        iosManualModeSupported ? ["wg"] : []
+        guard let bundle,
+              let selection = try? IOSRuntimeSelector.select(bundle: bundle, logicalModeID: selectedLogicalMode)
+        else { return [] }
+        return [selection.rawProfileID]
     }
 
     func connect() async {
         saveRouter()
         guard let bundle else { message = "Configure your home router first"; return }
-        let candidates = modeCandidates()
-        if !auto && candidates.isEmpty {
+        let selections: [IOSRuntimeSelection]
+        do {
+            if auto {
+                let runnable = IOSRuntimeSelector.runnableModes(in: bundle)
+                var values = try runnable.map { try IOSRuntimeSelector.select(bundle: bundle, logicalModeID: $0.id) }
+                values.sort { lhs, rhs in
+                    if lhs.engine != rhs.engine { return lhs.engine == .wireGuard }
+                    return lhs.logicalModeID < rhs.logicalModeID
+                }
+                guard !values.isEmpty else { throw IOSRuntimeSelectionError.unsupportedMode("This imported node has no iOS-runnable WireGuardKit or Libbox mode.") }
+                selections = strictKillSwitchEnabled ? [values[0]] : values
+            } else {
+                selections = [try IOSRuntimeSelector.select(bundle: bundle, logicalModeID: selectedLogicalMode)]
+            }
+        } catch {
             connected = false
-            message = "This iOS build currently supports manual Raw WireGuard only. Other modes remain visible as unavailable until their native engines are linked and proven."
+            message = error.localizedDescription
             return
         }
+
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences()
             let manager = managers.first ?? NETunnelProviderManager()
-            let proto = NETunnelProviderProtocol()
-            proto.providerBundleIdentifier = "com.eabusham.routervpn.PacketTunnel"
-            proto.serverAddress = bundle.endpoint
-            proto.providerConfiguration = [
-                "mode": auto ? "auto" : "wg",
-                "modeCandidates": auto ? [] : ["wg"],
-                "logicalMode": auto ? "auto" : "base-raw",
-                "basePreference": "wg",
-                "baseFallback": false,
-                "bundle": try JSONEncoder().encode(bundle)
-            ]
-
-            // NetworkExtension owns the route-lockdown boundary on Apple
-            // platforms. For a strict Router VPN policy, include all routable
-            // traffic, make tunnel routes authoritative, and only exclude local
-            // networks when the imported node policy says LAN access is off.
-            let strict = strictKillSwitchEnabled
-            proto.includeAllNetworks = strict
-            proto.enforceRoutes = strict
-            proto.excludeLocalNetworks = strict ? !homeLANAccess : false
-            proto.excludeAPNs = false
-            proto.excludeCellularServices = false
-
-            manager.protocolConfiguration = proto
-            manager.localizedDescription = routerName
-            manager.isEnabled = true
-            if strict {
-                manager.onDemandRules = [NEOnDemandRuleConnect()]
-                manager.isOnDemandEnabled = true
-            } else {
-                manager.isOnDemandEnabled = false
-                manager.onDemandRules = []
+            var failures: [String] = []
+            for (index, selection) in selections.enumerated() {
+                if auto {
+                    message = "AUTO \(index + 1)/\(selections.count) • trying \(modeName(selection.logicalModeID)) • \(engineName(selection.engine))…"
+                }
+                let success = try await start(manager: manager, bundle: bundle, selection: selection)
+                if success {
+                    connected = true
+                    activeEngine = selection.engine.rawValue
+                    activeRawProfile = selection.rawProfileID
+                    selectedLogicalMode = selection.logicalModeID
+                    selectedMode = selection.rawProfileID
+                    let strictText = strictKillSwitchEnabled ? " • strict route lockdown" : ""
+                    message = "Connected • \(modeName(selection.logicalModeID)) • \(engineName(selection.engine))\(strictText) • selected-node proof passed"
+                    return
+                }
+                failures.append("\(modeName(selection.logicalModeID)) / \(engineName(selection.engine))")
+                if strictKillSwitchEnabled {
+                    connected = false
+                    message = "Strict AUTO failed closed on \(failures[0]). iOS will not cycle to another engine after a failed strict tunnel because that transition could create a route-lockdown gap; choose another mode manually."
+                    return
+                }
+                await stopTrial(manager)
             }
-            try await manager.saveToPreferences()
-            try await manager.loadFromPreferences()
-            try manager.connection.startVPNTunnel()
             connected = false
-            message = strict
-                ? (auto ? "Connecting with AUTO → native WireGuard • strict route lockdown…" : "Connecting native WireGuard • strict route lockdown…")
-                : (auto ? "Connecting with AUTO → native WireGuard…" : "Connecting native WireGuard…")
-            await watchConnection(manager, attempts: 32)
+            activeEngine = "none"
+            activeRawProfile = ""
+            message = "AUTO: no iOS runtime passed PacketTunnel + selected-node proof. Tried: \(failures.joined(separator: ", "))."
         } catch {
             connected = false
+            activeEngine = "none"
+            activeRawProfile = ""
             message = error.localizedDescription
         }
     }
 
-    private func watchConnection(_ manager: NETunnelProviderManager, attempts: Int) async {
+    private func start(manager: NETunnelProviderManager, bundle: ClientBundle, selection: IOSRuntimeSelection) async throws -> Bool {
+        let proto = NETunnelProviderProtocol()
+        proto.providerBundleIdentifier = "com.eabusham.routervpn.PacketTunnel"
+        proto.serverAddress = bundle.endpoint
+        var configuration: [String: Any] = [
+            "engine": selection.engine.rawValue,
+            "mode": selection.rawProfileID,
+            "modeCandidates": [selection.rawProfileID],
+            "logicalMode": selection.logicalModeID,
+            "basePreference": "wg",
+            "baseFallback": false,
+            "bundle": try JSONEncoder().encode(bundle)
+        ]
+        if selection.engine == .libbox { configuration["rawProfileID"] = selection.rawProfileID }
+        proto.providerConfiguration = configuration
+
+        let strict = strictKillSwitchEnabled
+        proto.includeAllNetworks = strict
+        proto.enforceRoutes = strict
+        proto.excludeLocalNetworks = strict ? !homeLANAccess : false
+        proto.excludeAPNs = false
+        proto.excludeCellularServices = false
+
+        manager.protocolConfiguration = proto
+        manager.localizedDescription = routerName
+        manager.isEnabled = true
+        if strict {
+            manager.onDemandRules = [NEOnDemandRuleConnect()]
+            manager.isOnDemandEnabled = true
+        } else {
+            manager.isOnDemandEnabled = false
+            manager.onDemandRules = []
+        }
+        try await manager.saveToPreferences()
+        try await manager.loadFromPreferences()
+        try manager.connection.startVPNTunnel()
+        connected = false
+        activeEngine = selection.engine.rawValue
+        activeRawProfile = selection.rawProfileID
+        return await waitForConnection(manager, attempts: 40)
+    }
+
+    private func waitForConnection(_ manager: NETunnelProviderManager, attempts: Int) async -> Bool {
+        var sawConnecting = false
         for _ in 0..<attempts {
             switch manager.connection.status {
-            case .connected:
-                connected = true
-                message = strictKillSwitchEnabled
-                    ? "Connected • native WireGuard • strict route lockdown • selected-node proof passed"
-                    : "Connected • native WireGuard • selected-node proof passed"
-                return
-            case .invalid:
-                connected = false
-                message = "Tunnel configuration is invalid"
-                return
+            case .connected: return true
+            case .invalid: return false
             case .disconnected:
+                if sawConnecting { return false }
                 try? await Task.sleep(for: .milliseconds(250))
-            case .disconnecting:
-                connected = false
-                message = "Disconnecting…"
-                return
+            case .disconnecting: return false
             case .connecting, .reasserting:
-                connected = false
+                sawConnecting = true
                 try? await Task.sleep(for: .milliseconds(250))
             @unknown default:
-                connected = false
                 try? await Task.sleep(for: .milliseconds(250))
             }
         }
-        connected = manager.connection.status == .connected
-        if !connected {
-            message = "Tunnel did not reach connected state. Check the Packet Tunnel/engine error."
+        return manager.connection.status == .connected
+    }
+
+    private func stopTrial(_ manager: NETunnelProviderManager) async {
+        manager.isOnDemandEnabled = false
+        manager.onDemandRules = []
+        try? await manager.saveToPreferences()
+        manager.connection.stopVPNTunnel()
+        for _ in 0..<12 {
+            if manager.connection.status == .disconnected || manager.connection.status == .invalid { return }
+            try? await Task.sleep(for: .milliseconds(150))
         }
     }
+
+    private func modeName(_ id: String) -> String { logicalModes.first(where: { $0.id == id })?.name ?? id }
+    private func engineName(_ engine: IOSRuntimeEngine) -> String { engine == .wireGuard ? "WireGuardKit" : "Libbox 1.13.12" }
 
     func refreshTunnelStatus() async {
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
         guard let manager = managers.first else { connected = false; return }
         connected = manager.connection.status == .connected
+        if connected, let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
+            activeEngine = (proto.providerConfiguration?["engine"] as? String) ?? "wireguard"
+            activeRawProfile = (proto.providerConfiguration?["rawProfileID"] as? String) ?? (proto.providerConfiguration?["mode"] as? String) ?? "wg"
+        }
     }
 
     func disconnect() {
         Task {
             let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
             guard let manager = managers.first else {
-                connected = false
-                message = "Disconnected"
-                return
+                connected = false; activeEngine = "none"; activeRawProfile = ""; message = "Disconnected"; return
             }
-            // An explicit user disconnect is an intentional emergency-off
-            // action. Disable on-demand first so NetworkExtension does not
-            // immediately reconnect a strict profile behind the user's back.
             manager.isOnDemandEnabled = false
             manager.onDemandRules = []
             try? await manager.saveToPreferences()
             manager.connection.stopVPNTunnel()
             connected = false
+            activeEngine = "none"
+            activeRawProfile = ""
             message = "Disconnected"
         }
     }
@@ -292,7 +357,7 @@ final class RouterVPNModel: ObservableObject {
             let (_, response) = try await URLSession.shared.data(for: req)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
             message = dmz ? "Protected DMZ applied" : "Port forwarding applied"
-        } catch { message = "Port forwarding requires a connected WireGuard/AWG peer path: \(error.localizedDescription)" }
+        } catch { message = "Port forwarding requires a connected Router VPN peer path: \(error.localizedDescription)" }
     }
 
     func clearForward() async {
