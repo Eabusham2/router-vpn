@@ -31,16 +31,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard tunnelProtocol.excludeLocalNetworks == !allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
             }
 
-            // Historical audit compatibility note: the old blanket statement
-            // "AmneziaWG, layered, ALL/MAX and multihop remain unavailable"
-            // is no longer current as a whole. Layered Libbox is a real engine
-            // now. AmneziaWG and multihop remain unavailable until real Apple
-            // dataplanes exist, and ALL/MAX may expose only branches that the
-            // current Apple engines can actually establish and prove.
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
             switch engine {
             case "wireguard": try startWireGuard(provider: provider, root: root, selectedProfile: selectedProfile, completionHandler: completionHandler)
             case "libbox": try startLibbox(provider: provider, root: root, selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
+            case "external-libbox": try startExternalLibbox(selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
             default: throw tunnelError(6, "Unsupported Router VPN iOS engine \(engine).")
             }
         } catch { completionHandler(error) }
@@ -84,6 +79,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    private func startExternalLibbox(selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
+        let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile)
+        let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
+        do { try engine.start(files: runtime.files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
+        proveExternalExit(expectedPublicIP: runtime.expectedPublicIP, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
+            guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 18, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during external-exit proof."])); return }
+            if let proofError { engine.stop(); self.libboxEngine = nil; completionHandler(proofError); return }
+            completionHandler(nil)
+        }
+    }
+
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         proofTask?.cancel(); proofTask = nil; proofSession?.invalidateAndCancel(); proofSession = nil
         if let engine = libboxEngine { engine.stop(); libboxEngine = nil }
@@ -98,9 +104,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func proveSelectedNode(url: URL, expectedNodeID: String, proxyPort: Int?, completion: @escaping (Error?) -> Void) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 5; configuration.timeoutIntervalForResource = 6; configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        if let proxyPort {
-            configuration.connectionProxyDictionary = [kCFNetworkProxiesHTTPEnable as String: 1, kCFNetworkProxiesHTTPProxy as String: "127.0.0.1", kCFNetworkProxiesHTTPPort as String: proxyPort]
-        }
+        if let proxyPort { configuration.connectionProxyDictionary = [kCFNetworkProxiesHTTPEnable as String: 1, kCFNetworkProxiesHTTPProxy as String: "127.0.0.1", kCFNetworkProxiesHTTPPort as String: proxyPort] }
         let session = URLSession(configuration: configuration); proofSession = session
         var request = URLRequest(url: url); request.timeoutInterval = 5; request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData; request.setValue("application/json", forHTTPHeaderField: "Accept")
         proofTask = session.dataTask(with: request) { [weak self] data, response, error in
@@ -112,6 +116,28 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard let body = try JSONSerialization.jsonObject(with: data) as? [String: Any], body["ok"] as? Bool == true, body["node_id"] as? String == expectedNodeID, body["proof"] as? String == Self.proofKind else { throw self.tunnelError(22, "Selected-node private path proof identity did not match the imported router bundle.") }
                 completion(nil)
             } catch { completion(error) }
+        }
+        proofTask?.resume()
+    }
+
+    private func proveExternalExit(expectedPublicIP: String, proxyPort: Int, completion: @escaping (Error?) -> Void) {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 5; configuration.timeoutIntervalForResource = 6; configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.connectionProxyDictionary = [kCFNetworkProxiesHTTPEnable as String: 1, kCFNetworkProxiesHTTPProxy as String: "127.0.0.1", kCFNetworkProxiesHTTPPort as String: proxyPort]
+        let session = URLSession(configuration: configuration); proofSession = session
+        let endpoint = expectedPublicIP.contains(":") ? "https://api64.ipify.org" : "https://api.ipify.org"
+        var request = URLRequest(url: URL(string: endpoint)!); request.timeoutInterval = 5; request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData; request.setValue("text/plain", forHTTPHeaderField: "Accept")
+        proofTask = session.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return }
+            defer { self.proofTask = nil; self.proofSession?.finishTasksAndInvalidate(); self.proofSession = nil }
+            if let error { completion(self.tunnelError(23, "External public-exit proof failed: \(error.localizedDescription)")); return }
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data, !data.isEmpty, data.count <= 256, let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) else { completion(self.tunnelError(24, "External public-exit proof returned an invalid response.")); return }
+            let matches: Bool
+            if let wanted = IPv4Address(expectedPublicIP), let seen = IPv4Address(text) { matches = wanted == seen }
+            else if let wanted = IPv6Address(expectedPublicIP), let seen = IPv6Address(text) { matches = wanted == seen }
+            else { matches = false }
+            guard matches else { completion(self.tunnelError(25, "External exit reached \(text), expected \(expectedPublicIP).")); return }
+            completion(nil)
         }
         proofTask?.resume()
     }
