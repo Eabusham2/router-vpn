@@ -171,7 +171,7 @@ require(
 )
 require(
     "ios/RouterVPN/prepare-libbox.sh",
-    "SING_BOX_VERSION=1.13.12",
+    "VERSION=1.13.12",
     "GO_TOOLCHAIN=go1.26.3",
     "Libbox.xcframework",
 )
