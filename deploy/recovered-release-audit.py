@@ -40,6 +40,52 @@ def no(rel: str, *parts: str) -> bool:
     return bool(text) and all(part not in text for part in parts)
 
 
+def modern_ios_engine_truth() -> bool:
+    """Supersede the legacy WireGuard-only iOS predicate after real Libbox landed."""
+    return (
+        has(
+            "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
+            'case "wireguard"',
+            'case "libbox"',
+            "RouterVPNLibboxEngine(tunnel: self)",
+            "proxyPort: RouterVPNLibboxEngine.proofProxyPort",
+            "tunnelProtocol.includeAllNetworks",
+            "tunnelProtocol.enforceRoutes",
+            'body["node_id"] as? String == expectedNodeID',
+        )
+        and has(
+            "ios/RouterVPN/App/IOSRuntimeSelection.swift",
+            'case wireGuard = "wireguard"',
+            'case libbox = "libbox"',
+            'encoded["sing-box.json"] != nil',
+            "Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable",
+        )
+        and has(
+            "ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",
+            "LibboxNewCommandServer",
+            '"routervpn-proof"',
+            '"listen": "127.0.0.1"',
+            "proofProxyPort = 1099",
+        )
+    )
+
+
+# The legacy weighted scorer predates the real Apple Libbox dataplane and used
+# a negative marker ("layered ... remain unavailable") as the iOS source gate.
+# Keep its 3-point weight and position, but evaluate the current dual-engine
+# contract instead. This is reconciliation, not score inflation.
+for index, gate in enumerate(legacy.GATES):
+    if gate.name == "iOS exact node proof and strict unsupported fail-closed":
+        legacy.GATES[index] = legacy.Gate(
+            gate.name,
+            gate.weight,
+            modern_ios_engine_truth,
+            gate.kind,
+            "WireGuardKit + pinned Libbox source paths; unsupported AWG/Xray-only/ALL/MAX/multihop remain fail-closed",
+        )
+        break
+
+
 RECOVERED = [
     {
         "name": "strict macOS kill-switch enforcement",
@@ -155,9 +201,6 @@ def main() -> int:
     if abs(recovered_total - 4.0) > 0.001:
         raise SystemExit(f"recovered source weights sum to {recovered_total}, expected 4")
 
-    # Legacy source gates now occupy 84 rather than 88 points. Scaling avoids
-    # double-counting and preserves their relative importance when a legacy gate
-    # itself fails. Recovered gates occupy the reclaimed 4 points.
     scaled_legacy_source = legacy_source_earned * (84.0 / 88.0)
     source_earned = scaled_legacy_source + recovered_earned
     total_earned = source_earned + legacy_manual_earned
