@@ -1,0 +1,46 @@
+name: iOS pinned Libbox engine contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/RouterVPN/prepare-libbox.sh'
+      - 'ios/RouterVPN/test_libbox_build_contract.py'
+      - '.github/workflows/ios-libbox-engine.yml'
+  pull_request:
+    paths:
+      - 'ios/RouterVPN/prepare-libbox.sh'
+      - 'ios/RouterVPN/test_libbox_build_contract.py'
+      - '.github/workflows/ios-libbox-engine.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apple-libbox:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Static pin contract
+        run: python3 ios/RouterVPN/test_libbox_build_contract.py
+      - name: Build exact Apple Libbox XCFramework
+        working-directory: ios/RouterVPN
+        run: ./prepare-libbox.sh
+      - name: Verify exact pin and slices
+        working-directory: ios/RouterVPN
+        run: |
+          test -d .deps/Libbox.xcframework
+          test -s .deps/libbox-LICENSE.txt
+          grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
+          python3 - <<'PY'
+          import plistlib
+          p=plistlib.load(open('.deps/Libbox.xcframework/Info.plist','rb'))
+          plats={(x.get('SupportedPlatform'),x.get('SupportedPlatformVariant','')) for x in p['AvailableLibraries']}
+          assert ('ios','') in plats, plats
+          assert ('ios','simulator') in plats, plats
+          PY

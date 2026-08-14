@@ -15,3 +15,4 @@ android/app/libs/amneziawg-tunnel.aar
 android/app/libs/amneziawg-tunnel.commit
 android/app/libs/amneziawg-tunnel-LICENSE.txt
 ios/RouterVPN/.deps/
+ios/RouterVPN/build/
