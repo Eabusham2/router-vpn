@@ -8,6 +8,7 @@ on:
       - 'cmd/client/standard_exits*.go'
       - 'cmd/client/openvpn_standard_exit*.go'
       - 'cmd/client/external_profile*.go'
+      - 'cmd/client/profile_public_view*.go'
       - 'cmd/client/multihop_native_routes.go'
       - 'internal/common/types.go'
       - 'internal/common/profile_schema.go'
@@ -23,6 +24,7 @@ on:
       - 'cmd/client/standard_exits*.go'
       - 'cmd/client/openvpn_standard_exit*.go'
       - 'cmd/client/external_profile*.go'
+      - 'cmd/client/profile_public_view*.go'
       - 'cmd/client/multihop_native_routes.go'
       - 'internal/common/types.go'
       - 'internal/common/profile_schema.go'
@@ -70,11 +72,16 @@ jobs:
           grep -Fq 'registerExternalProfileRoutes(h, a)' cmd/client/multihop_native_routes.go
           grep -Fq 'standardExitFromExternalProfile' cmd/client/external_profile_standard_exit.go
           grep -Fq 'validateStandardExit(&exit)' cmd/client/external_profile_standard_exit.go
+          grep -Fq '/api/nodes' cmd/client/external_profile_connect.go
           grep -Fq '/api/external-profile/connect' cmd/client/external_profile_connect.go
           grep -Fq 'externalRuntimePolicy(externalProfile)' cmd/client/external_profile_connect.go
           grep -Fq 'proveStandardExit(exit.ExpectedPublicIP)' cmd/client/external_profile_connect.go
           grep -Fq 'proveOpenVPNStandardExit(exit.ExpectedPublicIP)' cmd/client/external_profile_connect.go
           grep -Fq 'Router VPN WireGuard entry -> external' cmd/client/external_profile_connect.go
+          grep -Fq 'publicProfileStoreFor' cmd/client/profile_public_view.go
+          grep -Fq 'Editable:kind=="router-vpn"' cmd/client/profile_public_view.go
+          grep -Fq 'TestPublicExternalProfileRedactsAllProtocolCredentials' cmd/client/profile_public_view_test.go
+          grep -Fq 'TestPublicProfileStoreDoesNotLeakExternalWireGuardKeys' cmd/client/profile_public_view_test.go
           grep -Fq 'RouterProfileSchemaVersion = 3' internal/common/types.go
           grep -Fq 'NodeKind' internal/common/types.go
           grep -Fq 'ExpectedPublicIP' internal/common/types.go
