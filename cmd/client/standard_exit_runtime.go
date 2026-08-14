@@ -24,13 +24,14 @@ type standardExitConnectRequest struct {
 	EntryID        string `json:"entry_id"`
 	StandardExitID string `json:"standard_exit_id"`
 	Base           string `json:"base"`
+	Direct         bool   `json:"direct"`
 }
 
 func registerStandardExitRuntimeRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/standard-exit/connect", a.standardExitConnect)
 }
 
-func selectedStandardExitDNS(control common.RouterProfile) (map[string]any, error) {
+func selectedStandardExitDNS(control common.RouterProfile, direct bool) (map[string]any, error) {
 	mode := strings.ToLower(strings.TrimSpace(control.DNSMode))
 	protocol := strings.ToLower(strings.TrimSpace(control.DNSProtocol))
 	host := strings.TrimSpace(control.DNSHost)
@@ -42,6 +43,9 @@ func selectedStandardExitDNS(control common.RouterProfile) (map[string]any, erro
 
 	switch mode {
 	case "", "home":
+		if direct {
+			return nil, errors.New("Home AdGuard DNS requires a Router VPN entry; choose Fastest, Custom, DoH, DoT, DoH3 or Rescue for a direct external node")
+		}
 		host = strings.TrimSpace(control.AdGuardIPv4)
 		if host == "" { host = strings.TrimSpace(control.AdGuardIPv6) }
 		protocol = "udp"; port = 53; serverName = ""; detour = "entry-wg"
@@ -88,15 +92,56 @@ func selectedStandardExitDNS(control common.RouterProfile) (map[string]any, erro
 func buildNativeStandardExitConfig(control common.RouterProfile, entryWG nativeWG, exit standardExit) (map[string]any, error) {
 	endpoint, outbound, err := standardExitRuntimeParts(exit, "entry-wg")
 	if err != nil { return nil, err }
-	dnsServer, err := selectedStandardExitDNS(control)
+	dnsServer, err := selectedStandardExitDNS(control, false)
 	if err != nil { return nil, err }
 	endpoints := []any{nativeWGEndpoint(entryWG)}
 	if endpoint != nil { endpoints = append(endpoints, endpoint) }
 	outbounds := []any{}
 	if outbound != nil { outbounds = append(outbounds, outbound) }
+	return standardExitConfig(control, dnsServer, endpoints, outbounds), nil
+}
+
+func directStandardExitRuntimeParts(e standardExit) (map[string]any, map[string]any, error) {
+	if err := validateStandardExit(&e); err != nil { return nil, nil, err }
+	if e.Protocol == "wireguard" {
+		peer := map[string]any{"address":e.Server, "port":e.ServerPort, "public_key":e.WGPeerPublicKey, "allowed_ips":e.WGAllowedIPs}
+		if e.WGPreSharedKey != "" { peer["pre_shared_key"] = e.WGPreSharedKey }
+		endpoint := map[string]any{"type":"wireguard", "tag":"custom-exit", "address":e.WGAddresses, "private_key":e.WGPrivateKey, "peers":[]any{peer}}
+		if e.WGMTU != 0 { endpoint["mtu"] = e.WGMTU }
+		return endpoint, nil, nil
+	}
+	out := map[string]any{"tag":"custom-exit", "server":e.Server, "server_port":e.ServerPort}
+	switch e.Protocol {
+	case "socks5":
+		out["type"] = "socks"; out["version"] = "5"
+		if e.Username != "" { out["username"] = e.Username; out["password"] = e.Password }
+	case "shadowsocks":
+		out["type"] = "shadowsocks"; out["method"] = e.Method; out["password"] = e.Secret
+	case "hysteria2":
+		out["type"] = "hysteria2"; out["password"] = e.Secret
+		out["tls"] = map[string]any{"enabled":true, "server_name":e.TLSServerName}
+	default:
+		return nil, nil, fmt.Errorf("unsupported direct standard-node protocol %q", e.Protocol)
+	}
+	return nil, out, nil
+}
+
+func buildDirectStandardExitConfig(control common.RouterProfile, exit standardExit) (map[string]any, error) {
+	endpoint, outbound, err := directStandardExitRuntimeParts(exit)
+	if err != nil { return nil, err }
+	dnsServer, err := selectedStandardExitDNS(control, true)
+	if err != nil { return nil, err }
+	endpoints := []any{}
+	outbounds := []any{}
+	if endpoint != nil { endpoints = append(endpoints, endpoint) }
+	if outbound != nil { outbounds = append(outbounds, outbound) }
+	return standardExitConfig(control, dnsServer, endpoints, outbounds), nil
+}
+
+func standardExitConfig(control common.RouterProfile, dnsServer map[string]any, endpoints, outbounds []any) map[string]any {
 	mtu := 1280
 	if control.EffectiveMTU >= 1280 && control.EffectiveMTU <= 9000 { mtu = control.EffectiveMTU }
-	cfg := map[string]any{
+	return map[string]any{
 		"log": map[string]any{"level":"warn", "timestamp":true},
 		"dns": map[string]any{"servers":[]any{dnsServer}, "final":"selected-dns"},
 		"inbounds": []any{
@@ -110,7 +155,6 @@ func buildNativeStandardExitConfig(control common.RouterProfile, entryWG nativeW
 			"final":"custom-exit", "auto_detect_interface":true,
 		},
 	}
-	return cfg, nil
 }
 
 func prepareNativeStandardExit(root string, control, entry common.RouterProfile, exit standardExit) (string, string, error) {
@@ -120,20 +164,40 @@ func prepareNativeStandardExit(root string, control, entry common.RouterProfile,
 	if err != nil { return "", "", err }
 	cfg, err := buildNativeStandardExitConfig(control, wg, exit)
 	if err != nil { return "", "", err }
+	return writeStandardExitRuntime(root, cfg)
+}
+
+func prepareDirectStandardExit(root string, control common.RouterProfile, exit standardExit) (string, string, error) {
+	cfg, err := buildDirectStandardExitConfig(control, exit)
+	if err != nil { return "", "", err }
+	return writeStandardExitRuntime(root, cfg)
+}
+
+func writeStandardExitRuntime(root string, cfg map[string]any) (string, string, error) {
 	base := filepath.Join(root, "run", "native-standard-exit")
-	if err = os.MkdirAll(base, 0o700); err != nil { return "", "", err }
-	random := make([]byte, 12); if _, err = rand.Read(random); err != nil { return "", "", err }
+	if err := os.MkdirAll(base, 0o700); err != nil { return "", "", err }
+	random := make([]byte, 12); if _, err := rand.Read(random); err != nil { return "", "", err }
 	runtimeDir := filepath.Join(base, hex.EncodeToString(random))
-	if err = os.Mkdir(runtimeDir, 0o700); err != nil { return "", "", err }
+	if err := os.Mkdir(runtimeDir, 0o700); err != nil { return "", "", err }
 	raw, err := json.MarshalIndent(cfg, "", "  "); if err != nil { _ = os.RemoveAll(runtimeDir); return "", "", err }
 	if len(raw) > 4<<20 { _ = os.RemoveAll(runtimeDir); return "", "", errors.New("prepared standard exit config exceeds safety limit") }
 	if err = os.WriteFile(filepath.Join(runtimeDir, "sing-box.json"), append(raw, '\n'), 0o600); err != nil { _ = os.RemoveAll(runtimeDir); return "", "", err }
 	return runtimeDir, "router-vpn", nil
 }
 
-func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit) (*exec.Cmd, error) {
+func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit, direct bool) (*exec.Cmd, error) {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
-	runtimeDir, tunAlias, err := prepareNativeStandardExit(root, control, entry, exit)
+	var runtimeDir, tunAlias, endpoint, runtimeProfileID string
+	var err error
+	if direct {
+		runtimeDir, tunAlias, err = prepareDirectStandardExit(root, control, exit)
+		endpoint = exit.Server
+		runtimeProfileID = control.ID
+	} else {
+		runtimeDir, tunAlias, err = prepareNativeStandardExit(root, control, entry, exit)
+		endpoint = entry.Endpoint
+		runtimeProfileID = entry.ID
+	}
 	if err != nil { return nil, err }
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -141,22 +205,22 @@ func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit
 		helper := filepath.Join(root, "client", "native-multihop-windows.ps1")
 		if _, err = os.Stat(helper); err != nil { helper = filepath.Join(filepath.Dir(a.cfg.ScriptsDir), "client", "native-multihop-windows.ps1") }
 		if st, statErr := os.Stat(helper); statErr != nil || st.IsDir() { return nil, errors.New("native Windows standard-exit helper is missing") }
-		cmd = exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "up", "-RuntimeDir", runtimeDir, "-Endpoint", entry.Endpoint, "-TunnelAlias", tunAlias)
+		cmd = exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "up", "-RuntimeDir", runtimeDir, "-Endpoint", endpoint, "-TunnelAlias", tunAlias)
 	case "darwin":
 		helper := filepath.Join(root, "modes", "native-multihop-darwin.sh")
 		if _, err = os.Stat(helper); err != nil { helper = filepath.Join(a.cfg.ScriptsDir, "native-multihop-darwin.sh") }
 		if st, statErr := os.Stat(helper); statErr != nil || st.IsDir() { return nil, errors.New("native macOS standard-exit helper is missing") }
-		cmd = exec.Command("bash", helper, "up", runtimeDir, entry.Endpoint, tunAlias)
+		cmd = exec.Command("bash", helper, "up", runtimeDir, endpoint, tunAlias)
 	case "linux":
 		helper := filepath.Join(root, "modes", "native-standard-exit-linux.sh")
 		if _, err = os.Stat(helper); err != nil { helper = filepath.Join(a.cfg.ScriptsDir, "native-standard-exit-linux.sh") }
 		if st, statErr := os.Stat(helper); statErr != nil || st.IsDir() { return nil, errors.New("native Linux standard-exit helper is missing") }
-		cmd = exec.Command("bash", helper, "up", runtimeDir, entry.Endpoint, tunAlias)
+		cmd = exec.Command("bash", helper, "up", runtimeDir, endpoint, tunAlias)
 	default:
 		return nil, errors.New("native standard exit runtime is implemented on Windows, macOS and Linux only")
 	}
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+entry.ID, "HOMEVPN_POLICY_PROFILE_ID="+control.ID, "HOMEVPN_ENDPOINT="+entry.Endpoint)
+	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+runtimeProfileID, "HOMEVPN_POLICY_PROFILE_ID="+control.ID, "HOMEVPN_ENDPOINT="+endpoint)
 	cmd.Stdout = os.Stdout; cmd.Stderr = os.Stderr
 	return cmd, nil
 }
@@ -191,23 +255,30 @@ func (a *app) standardExitConnect(w http.ResponseWriter, r *http.Request) {
 	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" && runtime.GOOS != "linux" { http.Error(w, "custom standard exit runtime is unavailable on this platform instead of faking a connection", http.StatusNotImplemented); return }
 	var q standardExitConnectRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil { http.Error(w, "bad json", http.StatusBadRequest); return }
-	if normalizeBase(q.Base) != "" && normalizeBase(q.Base) != "auto" && normalizeBase(q.Base) != "wg" { http.Error(w, "custom standard exits currently require a standard WireGuard entry", http.StatusBadRequest); return }
+	if !q.Direct && normalizeBase(q.Base) != "" && normalizeBase(q.Base) != "auto" && normalizeBase(q.Base) != "wg" { http.Error(w, "custom standard exits currently require a standard WireGuard entry", http.StatusBadRequest); return }
 	a.mu.Lock(); control, ok := a.profileByIDLocked(a.profiles.SelectedID); profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...); a.mu.Unlock()
-	if !ok { http.Error(w, "select a Router VPN control profile first", http.StatusBadRequest); return }
-	entryID := strings.TrimSpace(q.EntryID); if entryID == "" { entryID = strings.TrimSpace(control.MultihopEntryID) }
-	entry, ok := profileByID(profiles, entryID); if !ok { http.Error(w, "choose a linked Router VPN entry node", http.StatusBadRequest); return }
-	if strings.TrimSpace(entry.Endpoint) == "" { http.Error(w, "entry node needs a public endpoint", http.StatusBadRequest); return }
+	if !ok { http.Error(w, "select a Router VPN control profile first; direct external nodes reuse its DNS/LAN/kill-switch policy but do not route through that Router VPN node", http.StatusBadRequest); return }
 	exit, err := standardExitByID(strings.TrimSpace(q.StandardExitID)); if err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
-	sessionTrackerFor(a).declareRequest("standard-exit", "wg")
+	entry := common.RouterProfile{}
+	if !q.Direct {
+		entryID := strings.TrimSpace(q.EntryID); if entryID == "" { entryID = strings.TrimSpace(control.MultihopEntryID) }
+		entry, ok = profileByID(profiles, entryID); if !ok { http.Error(w, "choose a linked Router VPN entry node", http.StatusBadRequest); return }
+		if strings.TrimSpace(entry.Endpoint) == "" { http.Error(w, "entry node needs a public endpoint", http.StatusBadRequest); return }
+	}
+	sessionBase := "wg"; if q.Direct { sessionBase = "external" }
+	sessionTrackerFor(a).declareRequest("standard-exit", sessionBase)
 	if err = a.stopMode(); err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusInternalServerError); return }
-	cmd, err := nativeStandardExitCommand(a, control, entry, exit); if err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusBadRequest); return }
+	cmd, err := nativeStandardExitCommand(a, control, entry, exit, q.Direct); if err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusBadRequest); return }
 	if err = cmd.Start(); err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusInternalServerError); return }
 	stateID := "standard:"+exit.ID
-	a.mu.Lock(); a.cmd=cmd; a.state.Mode="standard-exit"; a.state.LogicalMode="standard-exit"; a.state.RuntimeMode="standard-"+exit.Protocol; a.state.Base="wg"; a.state.RouterID=stateID; a.state.Connected=false; a.state.Phase="standard-exit:proving-public-exit"; a.state.LastError=""; a.mu.Unlock()
+	a.mu.Lock(); a.cmd=cmd; a.state.Mode="standard-exit"; a.state.LogicalMode="standard-exit"; a.state.RuntimeMode="standard-"+exit.Protocol; a.state.Base=sessionBase; a.state.RouterID=stateID; a.state.Connected=false; a.state.Phase="standard-exit:proving-public-exit"; a.state.LastError=""; a.mu.Unlock()
 	if err = proveStandardExit(exit.ExpectedPublicIP); err != nil {
-		_ = a.stopMode(); msg := "standard exit proof failed: "+err.Error(); a.mu.Lock(); a.state.Mode="standard-exit";a.state.LogicalMode="standard-exit";a.state.RuntimeMode="standard-"+exit.Protocol;a.state.Base="wg";a.state.RouterID=stateID;a.state.Phase="failed";a.state.LastError=msg;a.state.Connected=false;a.mu.Unlock();sessionTrackerFor(a).markRequestFailure(msg);http.Error(w,msg,http.StatusBadGateway);return
+		_ = a.stopMode(); msg := "standard exit proof failed: "+err.Error(); a.mu.Lock(); a.state.Mode="standard-exit";a.state.LogicalMode="standard-exit";a.state.RuntimeMode="standard-"+exit.Protocol;a.state.Base=sessionBase;a.state.RouterID=stateID;a.state.Phase="failed";a.state.LastError=msg;a.state.Connected=false;a.mu.Unlock();sessionTrackerFor(a).markRequestFailure(msg);http.Error(w,msg,http.StatusBadGateway);return
 	}
-	a.mu.Lock(); if a.cmd!=cmd { a.mu.Unlock(); http.Error(w,"standard exit runtime changed during proof",http.StatusConflict);return }; a.state.Connected=true;a.state.Phase="connected";a.state.LastError="";for i:=range a.profiles.Profiles{if a.profiles.Profiles[i].ID==entry.ID{a.profiles.Profiles[i].UseCount++}};persistErr:=a.persistProfilesLocked();a.mu.Unlock()
+	a.mu.Lock(); if a.cmd!=cmd { a.mu.Unlock(); http.Error(w,"standard exit runtime changed during proof",http.StatusConflict);return }; a.state.Connected=true;a.state.Phase="connected";a.state.LastError="";if !q.Direct { for i:=range a.profiles.Profiles{if a.profiles.Profiles[i].ID==entry.ID{a.profiles.Profiles[i].UseCount++}} };persistErr:=a.persistProfilesLocked();a.mu.Unlock()
 	if persistErr!=nil{_ = a.stopMode();sessionTrackerFor(a).markRequestFailure(persistErr.Error());http.Error(w,persistErr.Error(),http.StatusInternalServerError);return}
-	w.Header().Set("content-type","application/json"); _ = json.NewEncoder(w).Encode(map[string]any{"ok":true,"mode":"standard-exit","entry_id":entry.ID,"entry_name":entry.Name,"standard_exit_id":exit.ID,"standard_exit_name":exit.Name,"protocol":exit.Protocol,"expected_public_ip":exit.ExpectedPublicIP,"exit_path_proof":"expected-public-ip-passed","route":"client TUN -> entry WireGuard -> custom standard exit -> Internet"})
+	route := "client TUN -> entry WireGuard -> custom standard exit -> Internet"
+	entryID := entry.ID; entryName := entry.Name
+	if q.Direct { route = "client TUN -> direct external standard node -> Internet"; entryID=""; entryName="" }
+	w.Header().Set("content-type","application/json"); _ = json.NewEncoder(w).Encode(map[string]any{"ok":true,"mode":"standard-exit","direct":q.Direct,"entry_id":entryID,"entry_name":entryName,"standard_exit_id":exit.ID,"standard_exit_name":exit.Name,"protocol":exit.Protocol,"expected_public_ip":exit.ExpectedPublicIP,"exit_path_proof":"expected-public-ip-passed","route":route})
 }
