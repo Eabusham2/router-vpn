@@ -14,6 +14,7 @@ import (
 
 func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
 	registerStandardExitRoutes(h)
+	registerStandardExitRuntimeRoutes(h, a)
 	if runtime.GOOS == "linux" {
 		registerMultihopRoutes(h, a)
 		return
