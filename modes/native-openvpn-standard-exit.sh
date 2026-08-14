@@ -19,12 +19,21 @@ RUN_ROOT=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.join(sys.ar
 case "$RUNTIME_DIR/" in "$RUN_ROOT"/*) ;; *) echo 'refusing OpenVPN runtime outside HOMEVPN_ROOT/run' >&2; exit 2;; esac
 
 CONFIG="$RUNTIME_DIR/client.ovpn"
+BRIDGE_CONFIG="$RUNTIME_DIR/entry-bridge.json"
 PID_FILE="$RUNTIME_DIR/openvpn.pid"
+BRIDGE_PID_FILE="$RUNTIME_DIR/entry-bridge.pid"
 KILL_SWITCH="$ROOT/modes/kill-switch-platform.py"
 [[ -f "$CONFIG" ]] || { echo 'prepared OpenVPN client.ovpn is missing' >&2; exit 1; }
 [[ -f "$KILL_SWITCH" ]] || { echo 'Router VPN platform kill switch is missing' >&2; exit 1; }
 [[ -x "$OPENVPN_BIN" ]] || { echo 'OpenVPN runtime is missing/not executable' >&2; exit 1; }
 "$OPENVPN_BIN" --version | head -n1 | grep -Eq '^OpenVPN 2\.7\.' || { echo 'Router VPN requires OpenVPN 2.7.x for custom exits' >&2; exit 1; }
+
+SINGBOX=''
+if [[ -f "$BRIDGE_CONFIG" ]]; then
+  SINGBOX=$(command -v sing-box || true)
+  [[ -n "$SINGBOX" ]] || { echo 'sing-box is required for Router VPN -> OpenVPN hopping' >&2; exit 1; }
+  "$SINGBOX" check -D "$RUNTIME_DIR" -c "$BRIDGE_CONFIG" >/dev/null
+fi
 
 root_prefix=()
 if [[ $(id -u) -ne 0 ]]; then
@@ -33,18 +42,25 @@ if [[ $(id -u) -ne 0 ]]; then
   root_prefix=("$SUDO" -n)
 fi
 
+kill_pid() {
+  local pid=${1:-}
+  [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) || return 0
+  kill -INT "$pid" 2>/dev/null || "${root_prefix[@]}" kill -INT "$pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    kill -0 "$pid" 2>/dev/null || "${root_prefix[@]}" kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  kill -TERM "$pid" 2>/dev/null || "${root_prefix[@]}" kill -TERM "$pid" 2>/dev/null || true
+}
+
 stop_owned() {
   if [[ -f "$PID_FILE" ]]; then
-    pid=$(cat "$PID_FILE" 2>/dev/null || true)
-    if [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )); then
-      "${root_prefix[@]}" kill -INT "$pid" 2>/dev/null || true
-      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-        "${root_prefix[@]}" kill -0 "$pid" 2>/dev/null || break
-        sleep 0.1
-      done
-      "${root_prefix[@]}" kill -TERM "$pid" 2>/dev/null || true
-    fi
+    kill_pid "$(cat "$PID_FILE" 2>/dev/null || true)"
     rm -f "$PID_FILE"
+  fi
+  if [[ -f "$BRIDGE_PID_FILE" ]]; then
+    kill_pid "$(cat "$BRIDGE_PID_FILE" 2>/dev/null || true)"
+    rm -f "$BRIDGE_PID_FILE"
   fi
 }
 
@@ -65,9 +81,9 @@ trap cleanup EXIT INT TERM HUP
 
 if [[ "$ACTION" == "down" ]]; then cleanup; fi
 
-# Apply the Router VPN policy before OpenVPN creates any full-tunnel route.
-# Linux permits only the owned router-vpn TUN; macOS begins with only the
-# literal external endpoint and promotes the newly-created routed utun.
+# Apply strict policy before either the Router VPN entry bridge or final
+# OpenVPN TUN can emit traffic. For a hop, ENDPOINT is the physical Router VPN
+# entry endpoint; the external OpenVPN server is reachable only inside entry-wg.
 HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_POLICY_PROFILE_ID="$POLICY_PROFILE_ID" HOMEVPN_ENDPOINT="$ENDPOINT" \
   python3 "$KILL_SWITCH" apply
 
@@ -79,15 +95,44 @@ if [[ "$ACTION" == "check" ]]; then
 fi
 
 stop_owned
+BRIDGE_PID=''
+if [[ -f "$BRIDGE_CONFIG" ]]; then
+  "$SINGBOX" run -D "$RUNTIME_DIR" -c "$BRIDGE_CONFIG" &
+  BRIDGE_PID=$!
+  printf '%s\n' "$BRIDGE_PID" > "$BRIDGE_PID_FILE"
+  python3 - <<'PY'
+import socket,time
+last=None
+for _ in range(50):
+    try:
+        s=socket.create_connection(('127.0.0.1',1100),timeout=.15);s.close();raise SystemExit(0)
+    except OSError as exc:
+        last=exc;time.sleep(.1)
+raise SystemExit(f'Router VPN OpenVPN entry bridge did not become ready: {last}')
+PY
+fi
+
 "${root_prefix[@]}" "$OPENVPN_BIN" --config "$CONFIG" &
 child=$!
 printf '%s\n' "$child" > "$PID_FILE"
 sleep 0.5
-if ! "${root_prefix[@]}" kill -0 "$child" 2>/dev/null; then
+if ! kill -0 "$child" 2>/dev/null && ! "${root_prefix[@]}" kill -0 "$child" 2>/dev/null; then
   wait "$child" || true
   echo 'OpenVPN exited during native standard-exit startup' >&2
   exit 1
 fi
+
+# macOS kill-switch promotion is handled by kill-switch-platform.py's watcher
+# once the newly-created OpenVPN utun owns the public route. Linux's strict
+# nftables policy already allows only the owned router-vpn TUN plus the physical
+# endpoint exception.
+while kill -0 "$child" 2>/dev/null || "${root_prefix[@]}" kill -0 "$child" 2>/dev/null; do
+  if [[ -n "$BRIDGE_PID" ]] && ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+    echo 'Router VPN entry bridge exited while OpenVPN hop was active' >&2
+    exit 1
+  fi
+  sleep 0.25
+done
 wait "$child"
 status=$?
 if (( status != 0 )); then echo "OpenVPN standard exit exited with code $status" >&2; exit "$status"; fi
