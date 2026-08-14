@@ -36,8 +36,12 @@ jobs:
           import json
           raw_list=json.load(open('configs/client/modes.json'))
           raw={m['id'] for m in raw_list}
+          orchestrators={'smart-auto','custom'}
+          runtime_ids=raw-orchestrators
           logical=json.load(open('configs/client/logical-modes.json'))
-          assert len(raw_list)==20, f'expected 20 raw runtime modes, got {len(raw_list)}'
+          assert len(raw_list)==22, f'expected 22 catalog entries (20 runtimes + SMART AUTO + CUSTOM), got {len(raw_list)}'
+          assert orchestrators <= raw, f'missing orchestrator entries: {orchestrators-raw}'
+          assert len(runtime_ids)==20, f'expected 20 raw runtime modes, got {len(runtime_ids)}: {sorted(runtime_ids)}'
           assert len(logical)==16, f'expected 16 logical app modes, got {len(logical)}'
           seen=set()
           for item in logical:
@@ -45,7 +49,7 @@ jobs:
               seen.add(item['id'])
               assert item['variants'], item['id']
               for runtime in item['variants'].values():
-                  assert runtime in raw, (item['id'], runtime)
+                  assert runtime in runtime_ids, (item['id'], runtime)
           for expected in ('base-raw','base-pq','max-quic','max-tls','all'):
               item=next(x for x in logical if x['id']==expected)
               assert item['base_selector'] is True, expected
