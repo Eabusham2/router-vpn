@@ -59,6 +59,7 @@ public final class ProductActivity extends Activity {
         nav.addView(navButton("Modes", v -> showModes()));
         nav.addView(navButton("DNS", v -> showDns()));
         nav.addView(navButton("Advanced", v -> showAdvanced()));
+        nav.addView(navButton("Custom Exits", v -> openStandardExits()));
         nav.addView(navButton("Forwarding", v -> showForwarding()));
         nav.addView(navButton("Settings", v -> openSettings()));
         nav.addView(navButton("Help", v -> showHelp()));
@@ -81,6 +82,9 @@ public final class ProductActivity extends Activity {
         Button nodes = button("Choose active node");
         nodes.setOnClickListener(v -> showNodes());
         root.addView(nodes, margins(0, dp(8), 0, 0));
+        Button customExit = button("Custom standard exits — WG / SOCKS5 / Shadowsocks / Hysteria2");
+        customExit.setOnClickListener(v -> openStandardExits());
+        root.addView(customExit, margins(0, dp(8), 0, 0));
 
         TextView footer = text("Forwarding/server administration stays on the authenticated private Setup Center surface; the Android client never pretends a proxy-only mode can perform arbitrary DNAT.", 13, false);
         root.addView(footer, margins(0, dp(18), 0, dp(16)));
@@ -140,7 +144,7 @@ public final class ProductActivity extends Activity {
     }
 
     private void showModes() {
-        dialog("Modes", "Open Connect for truthful runtime readiness plus WireGuard, AmneziaWG, embedded libbox/Xray, AUTO, SMART AUTO, CUSTOM, ALL, and compatible multihop. Unavailable combinations remain unavailable instead of being CSS-forced ready.");
+        dialog("Modes", "Open Connect for truthful runtime readiness plus WireGuard, AmneziaWG, embedded libbox/Xray, AUTO, SMART AUTO, CUSTOM, ALL, compatible Router VPN multihop, and the separate Custom Exits screen. Unavailable combinations remain unavailable instead of being CSS-forced ready.");
     }
 
     private void showDns() {
@@ -160,7 +164,7 @@ public final class ProductActivity extends Activity {
         String kill = p.optString("kill_switch_policy", "off");
         boolean lan = p.optBoolean("home_lan_access", true);
         boolean multihop = p.optBoolean("multihop_enabled", false);
-        dialog("Advanced", "LAN access: " + (lan ? "On" : "Off") + "\nKill switch: " + kill + "\nMTU: " + mtu + (customMtu > 0 ? " / " + customMtu : "") + "\nMultihop profile: " + (multihop ? "Enabled" : "Off") + "\n\nRuntime support remains fail-closed when Android cannot enforce a requested policy.");
+        dialog("Advanced", "LAN access: " + (lan ? "On" : "Off") + "\nKill switch: " + kill + "\nMTU: " + mtu + (customMtu > 0 ? " / " + customMtu : "") + "\nMultihop profile: " + (multihop ? "Enabled" : "Off") + "\nCustom standard exits: separate native screen\n\nRuntime support remains fail-closed when Android cannot enforce a requested policy.");
     }
 
     private void showForwarding() {
@@ -168,11 +172,12 @@ public final class ProductActivity extends Activity {
     }
 
     private void openSettings() { startActivity(new Intent(Settings.ACTION_VPN_SETTINGS)); }
+    private void openStandardExits() { startActivity(new Intent(this, StandardExitActivity.class)); }
 
     private void showHelp() {
         new AlertDialog.Builder(this).setTitle("Help")
-                .setMessage("Install Router VPN once, link node data separately, select the intended node, then open Connect. Connected means selected-node private path proof passed — generic Internet access is not enough. Use the Connect screen's Run full onboarding again for the complete Android setup tutorial.")
-                .setPositiveButton("Open Connect", (d, w) -> openConnect()).setNegativeButton("Close", null).show();
+                .setMessage("Install Router VPN once, link node data separately, select the intended node, then open Connect. Connected means selected-node private path proof passed — generic Internet access is not enough. Custom Exits uses the linked Router VPN WireGuard node as entry and requires an exact expected public exit IP before success. Use the Connect screen's Run full onboarding again for the complete Android setup tutorial.")
+                .setPositiveButton("Open Connect", (d, w) -> openConnect()).setNeutralButton("Custom Exits",(d,w)->openStandardExits()).setNegativeButton("Close", null).show();
     }
 
     private void openConnect() { startActivity(new Intent(this, MainActivity.class)); }
