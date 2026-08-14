@@ -13,6 +13,7 @@ import (
 )
 
 func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
+	registerStandardExitRoutes(h)
 	if runtime.GOOS == "linux" {
 		registerMultihopRoutes(h, a)
 		return
@@ -48,6 +49,9 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet { http.Error(w, "GET only", http.StatusMethodNotAllowed); return }
 	a.mu.Lock(); control, _ := a.profileByIDLocked(a.profiles.SelectedID); profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...); state := a.state; a.mu.Unlock()
+	store, storeErr := loadStandardExitStore()
+	standard := []standardExitSummary{}
+	if storeErr == nil { for _, e := range store.Exits { standard = append(standard, standardExitSummaryFor(e)) } }
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"platform": runtime.GOOS,
@@ -57,6 +61,9 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"enabled": control.MultihopEnabled,
 		"supported_entry_bases": []string{"wg"},
 		"supported_exit_modes": []string{"shadowsocks", "hysteria2"},
+		"standard_exit_capabilities": standardExitCapabilities(),
+		"standard_exits": standard,
+		"standard_exit_store_error": func() string { if storeErr != nil { return storeErr.Error() }; return "" }(),
 		"connected": state.Connected && state.Mode == "multihop",
 		"actual_exit_id": func() string { if state.Mode == "multihop" { return state.RouterID }; return "" }(),
 		"runtime_exit_mode": func() string { if state.Mode == "multihop" { return state.RuntimeMode }; return "" }(),
