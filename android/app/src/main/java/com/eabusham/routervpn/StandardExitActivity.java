@@ -19,6 +19,7 @@ import java.util.List;
 
 /** Native custom standard-exit management and connection screen. */
 public final class StandardExitActivity extends Activity {
+    static final String EXTRA_EXIT_ID = "routervpn.standard_exit_id";
     private static final int PREPARE_STANDARD_EXIT = 2101;
     private AndroidNodeStore nodeStore;
     private AndroidStandardExitStore exitStore;
@@ -29,6 +30,7 @@ public final class StandardExitActivity extends Activity {
     private AndroidStandardExitStore.Entry pendingExit;
     private boolean pendingDirect;
     private boolean busy;
+    private boolean requestedExitHandled;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -40,8 +42,17 @@ public final class StandardExitActivity extends Activity {
         refresh();
     }
 
-    @Override protected void onResume() { super.onResume(); refresh(); }
+    @Override protected void onResume() { super.onResume(); refresh(); openRequestedExitOnce(); }
     @Override protected void onDestroy() { if (runtime != null) runtime.close(); super.onDestroy(); }
+
+    private void openRequestedExitOnce() {
+        if (requestedExitHandled) return;
+        String id = getIntent() == null ? "" : getIntent().getStringExtra(EXTRA_EXIT_ID);
+        if (id == null || id.trim().isEmpty()) return;
+        requestedExitHandled = true;
+        try { showExitActions(exitStore.get(id.trim())); }
+        catch (Exception error) { toast("External node unavailable: " + safe(error)); }
+    }
 
     private View buildUi() {
         int pad = dp(18);
