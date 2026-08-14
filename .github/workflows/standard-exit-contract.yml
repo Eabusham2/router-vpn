@@ -43,7 +43,9 @@ jobs:
           grep -Fq '127.0.0.1", "listen_port":1099' cmd/client/standard_exit_runtime.go
           grep -Fq 'Protocol: "openvpn", Supported: false' cmd/client/standard_exits.go
           grep -Fq 'standard-exits.json permissions are too broad; expected 0600' cmd/client/standard_exits.go
-          grep -Fq 'detour":"entry-wg"' cmd/client/standard_exits.go
+          grep -Fq 'standardExitRuntimeParts(e,"entry-wg")' cmd/client/standard_exits_test.go
+          grep -Fq 'endpoint["detour"]!="entry-wg"' cmd/client/standard_exits_test.go
+          grep -Fq 'out["detour"]!="entry-wg"' cmd/client/standard_exits_test.go
 
   android:
     runs-on: ubuntu-24.04
