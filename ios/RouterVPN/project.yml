@@ -37,7 +37,7 @@ targets:
     platform: iOS
     sources: [PacketTunnel]
     preBuildScripts:
-      - name: Build pinned WireGuard and Libbox bridges
+      - name: Build pinned wireguard-go bridge and Libbox bridge
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
