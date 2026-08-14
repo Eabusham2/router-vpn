@@ -56,6 +56,9 @@ require(
     "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
     'body["node_id"] as? String == expectedNodeID',
     'body["proof"] as? String == Self.proofKind',
+    "WireGuardAdapter(with: self)",
+    "RouterVPNLibboxEngine",
+    "startLibbox",
 )
 
 # Desktop private bundle import must use bounded atomic staging, not write directly
@@ -158,28 +161,46 @@ require(
     "retention-days: 1",
 )
 
-# iOS must use the real pinned WireGuard preparation path in CI; a stale preview
-# build that skips the exact checkout/compatibility preparation is not release-safe.
+# iOS must prepare both pinned engines before Xcode resolves the local
+# XCFramework dependency; CI artifact naming must reflect the real dual engine.
 require(
     "ios/RouterVPN/prepare-wireguard-kit.sh",
     "2fec12a6e1f6e3460b6ee483aa00ad29cddadab1",
     "sys/types.h",
     "swift-tools-version:5.5",
 )
+require(
+    "ios/RouterVPN/prepare-libbox.sh",
+    "SING_BOX_VERSION=1.13.12",
+    "GO_TOOLCHAIN=go1.26.3",
+    "Libbox.xcframework",
+)
 client_ci = read(".github/workflows/client-apps-ci.yml")
-for marker in ("prepare-wireguard-kit.sh", "RouterVPN-iOS-Native-WireGuard-CI"):
+for marker in (
+    "prepare-wireguard-kit.sh",
+    "prepare-libbox.sh",
+    "RouterVPN-iOS-Native-CI",
+    "iOS/iPadOS native WireGuard + Libbox PacketTunnel build",
+):
     if marker not in client_ci:
         errors.append(f"client-apps CI missing real iOS native marker: {marker}")
 
-# AI Help must use a real authenticated server-side provider. Credentials are a
-# private file and must never be embedded in the browser panel or command line.
+# AI Help must use a real authenticated server-side provider. Provider/model/key
+# configuration remains private; the browser receives only bounded status/answer
+# objects and same-origin authenticated calls.
 require(
     "server/scripts/ai_help_provider.py",
     "https://api.openai.com/v1/responses",
+    "https://generativelanguage.googleapis.com/v1beta/models",
+    "https://api.anthropic.com/v1/messages",
+    "https://api.deepseek.com/chat/completions",
+    "https://api.x.ai/v1/responses",
+    "https://api.moonshot.ai/v1/chat/completions",
+    '"aiboard": "local"',
     '"store": False',
     "MAX_CONCURRENT = 2",
     "MAX_REQUESTS_PER_MINUTE = 6",
-    "openai-api.key",
+    "ai-api.key",
     "permissions are too broad",
 )
 require(
@@ -188,9 +209,16 @@ require(
     "/api/ai-help",
     "self._require_auth()",
     "credentials:'same-origin'",
-    "Never return provider/key internals",
+    "self.server.ai_provider.status()",
+    "self.server.ai_provider.ask(",
 )
-forbid("server/scripts/setup-center-ai-server.py", "sk-", "Authorization: Bearer", "OPENAI_API_KEY")
+forbid(
+    "server/scripts/setup-center-ai-server.py",
+    "sk-",
+    "OPENAI_API_KEY",
+    "self.server.ai_provider.key_file",
+    "self.server.ai_provider.base_url_file",
+)
 require(
     "server/scripts/run-setup-center.sh",
     "setup-center-ai-server.py",
