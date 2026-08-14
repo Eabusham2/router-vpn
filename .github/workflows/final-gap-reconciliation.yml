@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - server/scripts/_final_gap_patch.py
+      - server/scripts/_fix_gap_patch.py
       - .github/workflows/final-gap-reconciliation.yml
 
 permissions:
@@ -20,7 +21,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 server/scripts/_fix_gap_patch.py
           python3 server/scripts/_final_gap_patch.py
+          rm -f server/scripts/_fix_gap_patch.py
           python3 -m py_compile server/scripts/download-broker.py server/scripts/generate-setup-assets.py server/scripts/download_jobs.py modes/mtu-policy.py server/scripts/ai_help_provider.py server/scripts/setup-center-ai-server.py
           python3 server/scripts/test_download_jobs.py
           python3 server/scripts/test_setup_imports.py
