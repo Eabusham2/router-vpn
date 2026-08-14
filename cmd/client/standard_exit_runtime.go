@@ -100,7 +100,7 @@ func buildNativeStandardExitConfig(control common.RouterProfile, entryWG nativeW
 		"log": map[string]any{"level":"warn", "timestamp":true},
 		"dns": map[string]any{"servers":[]any{dnsServer}, "final":"selected-dns"},
 		"inbounds": []any{
-			map[string]any{"type":"tun", "tag":"tun-in", "interface_name":"router-vpn-standard-exit", "address":[]any{"172.29.91.1/30", "fd29:91::1/126"}, "mtu":mtu, "auto_route":true, "strict_route":true, "stack":"system"},
+			map[string]any{"type":"tun", "tag":"tun-in", "interface_name":"router-vpn", "address":[]any{"172.29.91.1/30", "fd29:91::1/126"}, "mtu":mtu, "auto_route":true, "strict_route":true, "stack":"system"},
 			map[string]any{"type":"mixed", "tag":"standard-exit-proof", "listen":"127.0.0.1", "listen_port":1099},
 		},
 		"endpoints": endpoints,
@@ -128,7 +128,7 @@ func prepareNativeStandardExit(root string, control, entry common.RouterProfile,
 	raw, err := json.MarshalIndent(cfg, "", "  "); if err != nil { _ = os.RemoveAll(runtimeDir); return "", "", err }
 	if len(raw) > 4<<20 { _ = os.RemoveAll(runtimeDir); return "", "", errors.New("prepared standard exit config exceeds safety limit") }
 	if err = os.WriteFile(filepath.Join(runtimeDir, "sing-box.json"), append(raw, '\n'), 0o600); err != nil { _ = os.RemoveAll(runtimeDir); return "", "", err }
-	return runtimeDir, "router-vpn-standard-exit", nil
+	return runtimeDir, "router-vpn", nil
 }
 
 func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit) (*exec.Cmd, error) {
@@ -147,8 +147,13 @@ func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit
 		if _, err = os.Stat(helper); err != nil { helper = filepath.Join(a.cfg.ScriptsDir, "native-multihop-darwin.sh") }
 		if st, statErr := os.Stat(helper); statErr != nil || st.IsDir() { return nil, errors.New("native macOS standard-exit helper is missing") }
 		cmd = exec.Command("bash", helper, "up", runtimeDir, entry.Endpoint, tunAlias)
+	case "linux":
+		helper := filepath.Join(root, "modes", "native-standard-exit-linux.sh")
+		if _, err = os.Stat(helper); err != nil { helper = filepath.Join(a.cfg.ScriptsDir, "native-standard-exit-linux.sh") }
+		if st, statErr := os.Stat(helper); statErr != nil || st.IsDir() { return nil, errors.New("native Linux standard-exit helper is missing") }
+		cmd = exec.Command("bash", helper, "up", runtimeDir, entry.Endpoint, tunAlias)
 	default:
-		return nil, errors.New("native standard exit runtime is currently implemented on Windows and macOS; Linux wiring is separate")
+		return nil, errors.New("native standard exit runtime is implemented on Windows, macOS and Linux only")
 	}
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+entry.ID, "HOMEVPN_POLICY_PROFILE_ID="+control.ID, "HOMEVPN_ENDPOINT="+entry.Endpoint)
@@ -183,10 +188,10 @@ func proveStandardExit(expected string) error {
 
 func (a *app) standardExitConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost { http.Error(w, "POST only", http.StatusMethodNotAllowed); return }
-	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" { http.Error(w, "custom standard exit runtime is not yet wired on this platform; it remains unavailable instead of faking a connection", http.StatusNotImplemented); return }
+	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" && runtime.GOOS != "linux" { http.Error(w, "custom standard exit runtime is unavailable on this platform instead of faking a connection", http.StatusNotImplemented); return }
 	var q standardExitConnectRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil { http.Error(w, "bad json", http.StatusBadRequest); return }
-	if normalizeBase(q.Base) != "" && normalizeBase(q.Base) != "auto" && normalizeBase(q.Base) != "wg" { http.Error(w, "native custom standard exits currently require a standard WireGuard entry", http.StatusBadRequest); return }
+	if normalizeBase(q.Base) != "" && normalizeBase(q.Base) != "auto" && normalizeBase(q.Base) != "wg" { http.Error(w, "custom standard exits currently require a standard WireGuard entry", http.StatusBadRequest); return }
 	a.mu.Lock(); control, ok := a.profileByIDLocked(a.profiles.SelectedID); profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...); a.mu.Unlock()
 	if !ok { http.Error(w, "select a Router VPN control profile first", http.StatusBadRequest); return }
 	entryID := strings.TrimSpace(q.EntryID); if entryID == "" { entryID = strings.TrimSpace(control.MultihopEntryID) }
