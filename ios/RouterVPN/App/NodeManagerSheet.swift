@@ -1,21 +1,48 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RouterVPNNodeManagerSheet: View {
     @EnvironmentObject var model: RouterVPNModel
     @Environment(\.dismiss) private var dismiss
     @State private var editing: RouterProfile?
+    @State private var importing = false
+    @State private var pairHost = "192.168.50.133"
+    @State private var pairCode = ""
 
     var body: some View {
         NavigationStack {
-            Group {
+            List {
+                Section("Add / link node data") {
+                    TextField("AI Board LAN IP / hostname", text: $pairHost)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("6-digit one-time pairing code", text: $pairCode)
+                        .keyboardType(.numberPad)
+                    HStack {
+                        Button("Pair from home LAN") {
+                            let host = pairHost
+                            let code = pairCode
+                            pairCode = ""
+                            Task { await model.linkFromLAN(host: host, code: code) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Button("Import node bundle") { importing = true }
+                            .buttonStyle(.bordered)
+                    }
+                    Text("Pairing/importing adds a node bundle to the per-node store; it does not reinstall Router VPN or overwrite another home's raw WG/Libbox assets.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 if model.allNodeProfiles.isEmpty {
-                    ContentUnavailableView(
-                        "No linked nodes",
-                        systemImage: "point.3.connected.trianglepath.dotted",
-                        description: Text("Use the Nodes tab to pair a Router VPN home node or import a node bundle. Installing Router VPN and linking node data are separate operations.")
-                    )
+                    Section {
+                        ContentUnavailableView(
+                            "No linked nodes",
+                            systemImage: "point.3.connected.trianglepath.dotted",
+                            description: Text("Pair a Router VPN home node or import a validated node bundle above.")
+                        )
+                    }
                 } else {
-                    List {
+                    Section("Linked nodes") {
                         ForEach(model.allNodeProfiles) { profile in
                             nodeRow(profile)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -27,24 +54,38 @@ struct RouterVPNNodeManagerSheet: View {
                                 }
                         }
                     }
-                    .listStyle(.insetGrouped)
+                }
+
+                Section("Status") {
+                    Text(model.message)
+                        .font(.caption)
+                        .textSelection(.enabled)
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Linked Nodes")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Pair / Import") {
-                        dismiss()
-                        model.message = "Open the Nodes tab to redeem a one-time Setup Center pairing code or import router-vpn-bundle.json."
-                    }
-                }
             }
             .sheet(item: $editing) { profile in
                 RouterVPNNodeMetadataEditor(profile: profile)
                     .environmentObject(model)
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+                guard case .success(let url) = result, url.startAccessingSecurityScopedResource() else {
+                    if case .failure(let error) = result { model.message = "Import failed: \(error.localizedDescription)" }
+                    return
+                }
+                defer { url.stopAccessingSecurityScopedResource() }
+                do {
+                    let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                    guard data.count <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
+                    try model.linkNodeBundle(data)
+                } catch {
+                    model.message = "Import failed: \(error.localizedDescription)"
+                }
             }
         }
     }
