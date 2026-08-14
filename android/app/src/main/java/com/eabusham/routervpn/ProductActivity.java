@@ -5,7 +5,6 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.provider.Settings;
-import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.HorizontalScrollView;
@@ -14,25 +13,24 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Native daily-use product shell. The engine-heavy MainActivity remains the Connect surface. */
+/** Native daily-use product shell. The engine-heavy MainActivity remains the Router VPN Connect surface. */
 public final class ProductActivity extends Activity {
     private AndroidNodeStore nodeStore;
+    private AndroidStandardExitStore exitStore;
+    private AndroidUnifiedNodeCatalog catalog;
     private RouterVpnNodeMapView mapView;
     private TextView summaryView;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         nodeStore = new AndroidNodeStore(this);
+        exitStore = new AndroidStandardExitStore(this);
+        catalog = new AndroidUnifiedNodeCatalog(nodeStore, exitStore);
         setContentView(buildUi());
         refreshNodes();
     }
@@ -45,10 +43,8 @@ public final class ProductActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(pad, pad, pad, pad);
 
-        TextView title = text("Router VPN", 28, true);
-        root.addView(title);
-        TextView subtitle = text("Native Android product dashboard — install once, link many private nodes", 14, false);
-        root.addView(subtitle, margins(0, dp(4), 0, dp(12)));
+        root.addView(text("Router VPN", 28, true));
+        root.addView(text("Native Android dashboard — install once, link Router VPN nodes and private external exits separately", 14, false), margins(0, dp(4), 0, dp(12)));
 
         HorizontalScrollView navScroll = new HorizontalScrollView(this);
         navScroll.setHorizontalScrollBarEnabled(false);
@@ -66,28 +62,25 @@ public final class ProductActivity extends Activity {
         navScroll.addView(nav);
         root.addView(navScroll, margins(0, 0, 0, dp(12)));
 
-        summaryView = text("No active Router VPN node.", 16, true);
+        summaryView = text("No linked nodes yet.", 16, true);
         root.addView(summaryView, margins(0, dp(4), 0, dp(10)));
 
-        TextView mapTitle = text("Nodes & Map", 20, true);
-        root.addView(mapTitle);
-        TextView mapTruth = text("Only latitude/longitude already stored in a linked node bundle is plotted. Router VPN never guesses a location.", 13, false);
-        root.addView(mapTruth, margins(0, dp(2), 0, dp(8)));
+        root.addView(text("Nodes & Map", 20, true));
+        root.addView(text("Router VPN and external nodes share one list. Only real latitude/longitude stored with a node is plotted; Router VPN never geolocates or guesses an address from an IP.", 13, false), margins(0, dp(2), 0, dp(8)));
         mapView = new RouterVpnNodeMapView(this);
         root.addView(mapView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(300)));
 
-        Button connect = button("Open Connect — native WG/AWG/libbox/Xray/AUTO/SMART/CUSTOM/ALL");
+        Button connect = button("Open Router VPN Connect — WG / AWG / libbox / Xray / AUTO / SMART / CUSTOM / ALL");
         connect.setOnClickListener(v -> openConnect());
         root.addView(connect, margins(0, dp(14), 0, 0));
-        Button nodes = button("Choose active node");
+        Button nodes = button("Choose Router VPN or external node");
         nodes.setOnClickListener(v -> showNodes());
         root.addView(nodes, margins(0, dp(8), 0, 0));
-        Button customExit = button("Custom standard exits — WG / SOCKS5 / Shadowsocks / Hysteria2");
+        Button customExit = button("External exits — direct or Router VPN WG entry → exit");
         customExit.setOnClickListener(v -> openStandardExits());
         root.addView(customExit, margins(0, dp(8), 0, 0));
 
-        TextView footer = text("Forwarding/server administration stays on the authenticated private Setup Center surface; the Android client never pretends a proxy-only mode can perform arbitrary DNAT.", 13, false);
-        root.addView(footer, margins(0, dp(18), 0, dp(16)));
+        root.addView(text("Forwarding/server administration stays on the authenticated private Setup Center surface; the Android client never exposes an admin token and never pretends a proxy-only path can perform arbitrary DNAT.", 13, false), margins(0, dp(18), 0, dp(16)));
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
@@ -95,80 +88,91 @@ public final class ProductActivity extends Activity {
     }
 
     private void refreshNodes() {
-        if (nodeStore == null || mapView == null || summaryView == null) return;
+        if (catalog == null || mapView == null || summaryView == null) return;
         try {
-            List<AndroidNodeStore.Node> nodes = nodeStore.list();
+            List<AndroidUnifiedNodeCatalog.Item> items = catalog.list();
             String activeId = nodeStore.activeId();
             List<RouterVpnNodeMapView.Marker> markers = new ArrayList<>();
-            AndroidNodeStore.Node active = null;
-            for (AndroidNodeStore.Node node : nodes) {
-                if (node.id.equals(activeId)) active = node;
-                JSONObject profile = selectedProfile(node.file);
-                if (profile == null || !profile.has("latitude") || !profile.has("longitude")) continue;
-                double latitude = profile.optDouble("latitude", Double.NaN);
-                double longitude = profile.optDouble("longitude", Double.NaN);
-                if (!Double.isFinite(latitude) || !Double.isFinite(longitude)) continue;
-                if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) continue;
-                markers.add(new RouterVpnNodeMapView.Marker(node.id, node.name, latitude, longitude, node.id.equals(activeId)));
+            AndroidUnifiedNodeCatalog.Item active = null;
+            int routerCount = 0, externalCount = 0, externalWithoutCoordinates = 0;
+            for (AndroidUnifiedNodeCatalog.Item item : items) {
+                if (item.isRouterVpn()) routerCount++; else { externalCount++; if (!item.hasCoordinates()) externalWithoutCoordinates++; }
+                if (item.isRouterVpn() && item.id.equals(activeId)) active = item;
+                if (!item.hasCoordinates()) continue;
+                String label = item.isRouterVpn() ? item.name : item.name + " — " + item.protocol;
+                markers.add(new RouterVpnNodeMapView.Marker(item.kind + ":" + item.id, label, item.latitude, item.longitude, item.isRouterVpn() && item.id.equals(activeId)));
             }
             mapView.setMarkers(markers);
+            String counts = routerCount + " Router VPN node" + (routerCount == 1 ? "" : "s") + " • " + externalCount + " external exit" + (externalCount == 1 ? "" : "s");
+            if (externalWithoutCoordinates > 0) counts += " • " + externalWithoutCoordinates + " external list-only (no real coordinates)";
             if (active == null) {
-                summaryView.setText(nodes.isEmpty() ? "No linked Router VPN nodes — open Connect to import one." : "Choose an active node from Nodes / Map.");
+                summaryView.setText(items.isEmpty() ? "No linked nodes — import a Router VPN bundle or add an external custom exit." : counts + "\nChoose a Router VPN node for normal modes, or an external exit for direct/hopped custom-exit use.");
             } else {
-                JSONObject p = selectedProfile(active.file);
-                String location = p == null ? "" : p.optString("location", "").trim();
-                String latency = p == null ? "" : numericText(p, "latency_median_ms", " ms median");
-                summaryView.setText(active.name + "\n" + active.endpoint + (location.isEmpty() ? "" : "\n" + location) + (latency.isEmpty() ? "" : " · " + latency));
+                summaryView.setText("Active Router VPN: " + active.name + "\n" + active.subtitle() + "\n" + counts);
             }
         } catch (Exception error) {
-            summaryView.setText("Node store unavailable: " + error.getMessage());
+            summaryView.setText("Node catalog unavailable: " + safe(error));
             mapView.setMarkers(new ArrayList<>());
         }
     }
 
     private void showNodes() {
         try {
-            List<AndroidNodeStore.Node> nodes = nodeStore.list();
-            if (nodes.isEmpty()) {
-                dialog("Nodes / Map", "No linked nodes yet. Open Connect and use Add / import router bundle. Linking is data; it never reinstalls the app.");
+            List<AndroidUnifiedNodeCatalog.Item> items = catalog.list();
+            if (items.isEmpty()) {
+                dialog("Nodes / Map", "No nodes yet. Open Router VPN Connect to import a home-node bundle or Custom Exits to add a private external WireGuard/SOCKS5/Shadowsocks/Hysteria2 exit.");
                 return;
             }
-            String[] names = new String[nodes.size()];
-            for (int i = 0; i < nodes.size(); i++) names[i] = nodes.get(i).toString();
-            new AlertDialog.Builder(this).setTitle("Nodes / Map — choose active node")
-                    .setItems(names, (d, which) -> {
-                        try { nodeStore.select(nodes.get(which).id); refreshNodes(); toast("Selected " + nodes.get(which).name); }
-                        catch (Exception error) { toast(error.getMessage()); }
-                    }).setNegativeButton("Close", null).show();
-        } catch (Exception error) { toast(error.getMessage()); }
+            String[] labels = new String[items.size()];
+            for (int i = 0; i < items.size(); i++) {
+                AndroidUnifiedNodeCatalog.Item item = items.get(i);
+                labels[i] = (item.isRouterVpn() ? "Router VPN • " : "External • ") + item.toString();
+            }
+            new AlertDialog.Builder(this).setTitle("Nodes / Map")
+                    .setMessage("Router VPN nodes become the active home node. External nodes open the direct/hopped custom-exit flow. External entries with no real coordinates remain list-only.")
+                    .setItems(labels, (d, which) -> chooseCatalogItem(items.get(which)))
+                    .setNegativeButton("Close", null).show();
+        } catch (Exception error) { toast(safe(error)); }
+    }
+
+    private void chooseCatalogItem(AndroidUnifiedNodeCatalog.Item item) {
+        if (item.isRouterVpn()) {
+            try { nodeStore.select(item.id); refreshNodes(); toast("Selected " + item.name); }
+            catch (Exception error) { toast(safe(error)); }
+            return;
+        }
+        Intent intent = new Intent(this, StandardExitActivity.class);
+        intent.putExtra(StandardExitActivity.EXTRA_EXIT_ID, item.id);
+        startActivity(intent);
     }
 
     private void showModes() {
-        dialog("Modes", "Open Connect for truthful runtime readiness plus WireGuard, AmneziaWG, embedded libbox/Xray, AUTO, SMART AUTO, CUSTOM, ALL, compatible Router VPN multihop, and the separate Custom Exits screen. Unavailable combinations remain unavailable instead of being CSS-forced ready.");
+        dialog("Modes", "Router VPN nodes use truthful WG/AWG/libbox/Xray readiness plus AUTO, SMART AUTO, CUSTOM, ALL and supported multihop. External nodes use the separate direct/hopped standard-exit runtime. Unavailable combinations stay unavailable instead of being CSS-forced ready.");
     }
 
     private void showDns() {
-        JSONObject p = activeProfile();
-        if (p == null) { dialog("DNS", "Choose/link an active node first."); return; }
+        JSONObject p = activeRouterProfile();
+        if (p == null) { dialog("DNS", "Choose/link a Router VPN node for Router VPN DNS policy. Direct Android external exits currently use encrypted Rescue DNS through the selected external exit; they never pretend Home AdGuard is reachable through an unrelated provider."); return; }
         String mode = p.optString("dns_mode", "home");
         String host = p.optString("dns_host", "");
         String latency = numericText(p, "fastest_dns_latency_ms", " ms");
-        dialog("DNS", "Selected mode: " + mode + "\nResolver: " + (host.isEmpty() ? "profile/default" : host) + "\nMeasured DNS RTT: " + (latency.isEmpty() ? "not measured" : latency) + "\n\nConnected status still requires runtime DNS enforcement/proof; a saved selection alone is not proof.");
+        dialog("DNS", "Selected Router VPN mode: " + mode + "\nResolver: " + (host.isEmpty() ? "profile/default" : host) + "\nMeasured DNS RTT: " + (latency.isEmpty() ? "not measured" : latency) + "\n\nConnected status still requires runtime DNS enforcement/proof; a saved selection alone is not proof.");
     }
 
     private void showAdvanced() {
-        JSONObject p = activeProfile();
-        if (p == null) { dialog("Advanced", "Choose/link an active node first."); return; }
-        String mtu = p.optString("mtu_mode", "default");
-        int customMtu = p.optInt("custom_mtu", 0);
+        JSONObject p = activeRouterProfile();
+        if (p == null) { dialog("Advanced", "No active Router VPN profile. External custom exits enforce their own full-device runtime and exact public-exit proof; direct Android external exits additionally require system lockdown."); return; }
+        String mtu = p.optString("mtu_policy", "default");
+        int customMtu = p.optInt("manual_mtu", 0);
+        int effectiveMtu = p.optInt("effective_mtu", 0);
         String kill = p.optString("kill_switch_policy", "off");
         boolean lan = p.optBoolean("home_lan_access", true);
         boolean multihop = p.optBoolean("multihop_enabled", false);
-        dialog("Advanced", "LAN access: " + (lan ? "On" : "Off") + "\nKill switch: " + kill + "\nMTU: " + mtu + (customMtu > 0 ? " / " + customMtu : "") + "\nMultihop profile: " + (multihop ? "Enabled" : "Off") + "\nCustom standard exits: separate native screen\n\nRuntime support remains fail-closed when Android cannot enforce a requested policy.");
+        dialog("Advanced", "LAN access: " + (lan ? "On" : "Off") + "\nKill switch: " + kill + "\nMTU policy: " + mtu + (customMtu > 0 ? " / manual " + customMtu : "") + (effectiveMtu > 0 ? " / effective " + effectiveMtu : "") + "\nRouter VPN multihop profile: " + (multihop ? "Enabled" : "Off") + "\nExternal exits: direct or via Router VPN WireGuard entry\n\nRuntime support remains fail-closed when Android cannot enforce a requested policy.");
     }
 
     private void showForwarding() {
-        dialog("Forwarding", "Incoming forwarding is owned by the authenticated private home-node Setup Center/router-agent surface. This client does not expose an admin token or Docker/Portainer authority and does not fake DNAT in proxy-only modes. Use Setup Center Forwarding to manage master state and TCP/UDP/both rules, then validate them off-LAN.");
+        dialog("Forwarding", "Incoming forwarding is owned by the authenticated private home-node Setup Center/router-agent surface. This client does not expose an admin token or Docker/Portainer authority and does not fake DNAT in proxy-only/external modes. Use Setup Center Forwarding, then validate rules off-LAN.");
     }
 
     private void openSettings() { startActivity(new Intent(Settings.ACTION_VPN_SETTINGS)); }
@@ -176,41 +180,20 @@ public final class ProductActivity extends Activity {
 
     private void showHelp() {
         new AlertDialog.Builder(this).setTitle("Help")
-                .setMessage("Install Router VPN once, link node data separately, select the intended node, then open Connect. Connected means selected-node private path proof passed — generic Internet access is not enough. Custom Exits uses the linked Router VPN WireGuard node as entry and requires an exact expected public exit IP before success. Use the Connect screen's Run full onboarding again for the complete Android setup tutorial.")
-                .setPositiveButton("Open Connect", (d, w) -> openConnect()).setNeutralButton("Custom Exits",(d,w)->openStandardExits()).setNegativeButton("Close", null).show();
+                .setMessage("Install Router VPN once and link private node data separately. Router VPN nodes provide normal modes/AUTO/SMART/CUSTOM; external nodes can connect directly or as Router VPN WireGuard entry → external exit. Every external connection requires the exact expected public exit IP before success. Direct Android external exits also require Always-on VPN plus ‘Block connections without VPN’. Generic Internet access is never treated as selected-path proof.")
+                .setPositiveButton("Open Connect", (d, w) -> openConnect())
+                .setNeutralButton("External exits", (d, w) -> openStandardExits())
+                .setNegativeButton("Close", null).show();
     }
 
     private void openConnect() { startActivity(new Intent(this, MainActivity.class)); }
 
-    private JSONObject activeProfile() {
+    private JSONObject activeRouterProfile() {
         try {
             String active = nodeStore.activeId();
             if (active.isEmpty()) return null;
-            return selectedProfile(nodeStore.file(active));
+            return AndroidUnifiedNodeCatalog.selectedProfile(nodeStore.file(active));
         } catch (Exception ignored) { return null; }
-    }
-
-    private static JSONObject selectedProfile(File file) throws Exception {
-        if (file == null || !file.isFile() || file.length() <= 0 || file.length() > AndroidNodeStore.MAX_BUNDLE) return null;
-        byte[] raw;
-        try (FileInputStream in = new FileInputStream(file); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buf = new byte[8192]; int n, total = 0;
-            while ((n = in.read(buf)) != -1) {
-                total += n;
-                if (total > AndroidNodeStore.MAX_BUNDLE) throw new IllegalArgumentException("node bundle is too large");
-                out.write(buf, 0, n);
-            }
-            raw = out.toByteArray();
-        }
-        JSONObject bundle = new JSONObject(new String(raw, StandardCharsets.UTF_8));
-        JSONArray profiles = bundle.optJSONArray("routerProfiles");
-        if (profiles == null || profiles.length() == 0) return null;
-        String wanted = bundle.optString("selectedRouterID", "").trim();
-        for (int i = 0; i < profiles.length(); i++) {
-            JSONObject p = profiles.optJSONObject(i);
-            if (p != null && wanted.equals(p.optString("id", ""))) return p;
-        }
-        return profiles.optJSONObject(0);
     }
 
     private static String numericText(JSONObject p, String key, String suffix) {
@@ -219,11 +202,10 @@ public final class ProductActivity extends Activity {
         return Double.isFinite(value) ? String.format(java.util.Locale.US, "%.2f%s", value, suffix) : "";
     }
 
+    private static String safe(Throwable error) { String value=error==null?"":error.getMessage(); return value==null||value.trim().isEmpty()?"Router VPN node error":value.trim(); }
     private void dialog(String title, String message) { new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show(); }
     private void toast(String message) { Toast.makeText(this, message == null ? "Router VPN" : message, Toast.LENGTH_LONG).show(); }
-    private TextView text(String value, int sp, boolean bold) {
-        TextView v = new TextView(this); v.setText(value); v.setTextSize(sp); v.setTextColor(0xff14213d); if (bold) v.setTypeface(v.getTypeface(), android.graphics.Typeface.BOLD); return v;
-    }
+    private TextView text(String value, int sp, boolean bold) { TextView v = new TextView(this); v.setText(value); v.setTextSize(sp); v.setTextColor(0xff14213d); if (bold) v.setTypeface(v.getTypeface(), android.graphics.Typeface.BOLD); return v; }
     private Button button(String value) { Button b = new Button(this); b.setText(value); b.setAllCaps(false); return b; }
     private Button navButton(String value, View.OnClickListener listener) { Button b = button(value); b.setOnClickListener(listener); return b; }
     private LinearLayout.LayoutParams margins(int l, int t, int r, int b) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); p.setMargins(l, t, r, b); return p; }
