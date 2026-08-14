@@ -1,0 +1,190 @@
+import Foundation
+
+@MainActor
+final class IOSNodeBundleStore {
+    static let shared = IOSNodeBundleStore()
+    private let defaultsKey = "router-vpn.ios.node-bundles.v1"
+    private var records: [String: Data] = [:]
+
+    private init() {
+        if let raw = UserDefaults.standard.data(forKey: defaultsKey),
+           let decoded = try? JSONDecoder().decode([String: Data].self, from: raw) {
+            records = decoded
+        }
+    }
+
+    func link(_ incomingData: Data, preserving current: ClientBundle?) throws -> Data {
+        if let current {
+            _ = try store(current, replaceExistingRecord: true)
+        }
+        let incoming = try JSONDecoder().decode(ClientBundle.self, from: incomingData)
+        return try store(incoming, replaceExistingRecord: true)
+    }
+
+    func profiles(current: ClientBundle?) -> [RouterProfile] {
+        var result: [RouterProfile] = []
+        var seen = Set<String>()
+        for data in records.values {
+            guard let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data) else { continue }
+            for profile in bundle.routerProfiles where seen.insert(profile.id).inserted {
+                result.append(profile)
+            }
+        }
+        if let current {
+            for profile in current.routerProfiles where seen.insert(profile.id).inserted {
+                result.append(profile)
+            }
+        }
+        return result.sorted {
+            if $0.normalizedNodeKind != $1.normalizedNodeKind { return $0.normalizedNodeKind < $1.normalizedNodeKind }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    func bundleData(containing profileID: String, current: ClientBundle?) -> Data? {
+        if let current, current.routerProfiles.contains(where: { $0.id == profileID }) {
+            return try? JSONEncoder().encode(current)
+        }
+        for data in records.values {
+            guard let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  bundle.routerProfiles.contains(where: { $0.id == profileID }) else { continue }
+            return data
+        }
+        return nil
+    }
+
+    func remove(profileID: String, current: ClientBundle?) throws -> Data? {
+        if let current { _ = try store(current, replaceExistingRecord: true) }
+        for (key, data) in records {
+            guard var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  bundle.routerProfiles.contains(where: { $0.id == profileID }) else { continue }
+            bundle.routerProfiles.removeAll(where: { $0.id == profileID })
+            if bundle.routerProfiles.isEmpty {
+                records.removeValue(forKey: key)
+                try persist()
+                return firstBundleData()
+            }
+            if bundle.selectedRouterID == profileID { bundle.selectedRouterID = bundle.routerProfiles[0].id }
+            let replacement = try JSONEncoder().encode(bundle)
+            records[key] = replacement
+            try persist()
+            return replacement
+        }
+        throw NSError(domain: "RouterVPN.NodeStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "Linked node was not found in the iOS node store"])
+    }
+
+    func updateMetadata(
+        profileID: String,
+        current: ClientBundle?,
+        name: String,
+        location: String?,
+        latitude: Double?,
+        longitude: Double?
+    ) throws -> Data {
+        if let current { _ = try store(current, replaceExistingRecord: true) }
+        for (key, data) in records {
+            guard var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  let index = bundle.routerProfiles.firstIndex(where: { $0.id == profileID }) else { continue }
+            bundle.routerProfiles[index].name = name
+            bundle.routerProfiles[index].location = location
+            bundle.routerProfiles[index].latitude = latitude
+            bundle.routerProfiles[index].longitude = longitude
+            let replacement = try JSONEncoder().encode(bundle)
+            records[key] = replacement
+            try persist()
+            return replacement
+        }
+        throw NSError(domain: "RouterVPN.NodeStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "Linked node was not found in the iOS node store"])
+    }
+
+    private func store(_ source: ClientBundle, replaceExistingRecord: Bool) throws -> Data {
+        var bundle = source
+        guard !bundle.routerProfiles.isEmpty else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 1, userInfo: [NSLocalizedDescriptionKey: "Node bundle contains no Router VPN or external profiles"])
+        }
+        var selectedID = bundle.selectedRouterID
+        var localIDs = Set<String>()
+        for index in bundle.routerProfiles.indices {
+            var profile = bundle.routerProfiles[index]
+            let oldID = profile.id
+            if profile.normalizedNodeKind == "router-vpn" {
+                let proof = (profile.nodeProofID?.isEmpty == false ? profile.nodeProofID! : bundle.nodeProofID).lowercased()
+                guard proof.count == 64, proof.allSatisfy({ $0.isHexDigit }) else {
+                    throw NSError(domain: "RouterVPN.NodeStore", code: 2, userInfo: [NSLocalizedDescriptionKey: "Router VPN node bundle is missing its 64-hex selected-node proof identity"])
+                }
+                profile.id = "rvpn-" + String(proof.prefix(16))
+                profile.nodeProofID = proof
+                if bundle.nodeProofID.isEmpty { bundle.nodeProofID = proof }
+            } else {
+                let trimmed = profile.id.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, trimmed.count <= 96,
+                      trimmed.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-" }),
+                      !trimmed.contains("..") else {
+                    throw NSError(domain: "RouterVPN.NodeStore", code: 3, userInfo: [NSLocalizedDescriptionKey: "External node id is unsafe"])
+                }
+                profile.id = trimmed
+            }
+            guard localIDs.insert(profile.id).inserted else {
+                throw NSError(domain: "RouterVPN.NodeStore", code: 4, userInfo: [NSLocalizedDescriptionKey: "Node bundle contains duplicate node ids"])
+            }
+            if selectedID == oldID { selectedID = profile.id }
+            bundle.routerProfiles[index] = profile
+        }
+        if !bundle.routerProfiles.contains(where: { $0.id == selectedID }) { selectedID = bundle.routerProfiles[0].id }
+        bundle.selectedRouterID = selectedID
+        if let selected = bundle.routerProfiles.first(where: { $0.id == selectedID }) {
+            bundle.endpoint = selected.endpoint
+            if selected.normalizedNodeKind == "router-vpn" {
+                bundle.apiToken = selected.apiToken
+                bundle.routerAPI = selected.routerAPI
+                bundle.adGuardIPv4 = selected.adGuardIPv4
+                bundle.adGuardIPv6 = selected.adGuardIPv6
+                bundle.socks5Host = selected.socksHost
+                bundle.socks5Port = selected.socksPort
+            } else {
+                bundle.apiToken = ""; bundle.routerAPI = ""; bundle.adGuardIPv4 = ""; bundle.adGuardIPv6 = ""
+                bundle.socks5Host = ""; bundle.socks5Port = 1080
+            }
+        }
+        let key = recordKey(bundle)
+        let existingIDs = globalProfileIDs(excludingRecord: replaceExistingRecord ? key : nil)
+        for profile in bundle.routerProfiles where existingIDs.contains(profile.id) {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 5, userInfo: [NSLocalizedDescriptionKey: "A different linked bundle already uses node id \(profile.id)"])
+        }
+        let normalized = try JSONEncoder().encode(bundle)
+        records[key] = normalized
+        try persist()
+        return normalized
+    }
+
+    private func recordKey(_ bundle: ClientBundle) -> String {
+        if bundle.nodeProofID.count == 64, bundle.nodeProofID.allSatisfy({ $0.isHexDigit }) {
+            return "router-" + bundle.nodeProofID.lowercased()
+        }
+        return "bundle-" + bundle.selectedRouterID
+    }
+
+    private func globalProfileIDs(excludingRecord: String?) -> Set<String> {
+        var ids = Set<String>()
+        for (key, data) in records where key != excludingRecord {
+            guard let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data) else { continue }
+            for profile in bundle.routerProfiles { ids.insert(profile.id) }
+        }
+        return ids
+    }
+
+    private func firstBundleData() -> Data? {
+        records.keys.sorted().compactMap { records[$0] }.first
+    }
+
+    private func persist() throws {
+        let data = try JSONEncoder().encode(records)
+        UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+}
+
+private extension Character {
+    var isHexDigit: Bool {
+        isNumber || ("a"..."f").contains(String(self).lowercased())
+    }
+}
