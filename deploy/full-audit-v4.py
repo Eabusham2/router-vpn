@@ -133,8 +133,10 @@ for rel in("client/native-windows-mode.ps1","client/Setup-Windows-Runtime.ps1","
  text=read(rel).lower()
  if"wsl.exe"in text or"requires wsl2"in text:errors.append(f"current Windows runtime still depends on WSL: {rel}")
 
-# Apple: real pinned native WireGuard PacketTunnel; unsupported engines and strict lifecycle stay fail closed.
-need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift","import WireGuardKit","WireGuardAdapter(with: self)","RouterVPNWireGuardConfig.parse","strict Apple kill switch requested","AmneziaWG, layered, ALL/MAX and multihop remain unavailable","deriveNodeProof",'body["node_id"] as? String == expectedNodeID','body["proof"] as? String == Self.proofKind',"completionHandler(nil)")
+# Apple: pinned WireGuardKit plus validated Libbox PacketTunnel; unsupported engines remain fail closed.
+need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift","import WireGuardKit","WireGuardAdapter(with: self)","RouterVPNWireGuardConfig.parse","strict Apple kill switch requested",'case "libbox":','case "external-libbox":',"RouterVPNLibboxEngine","proveExternalExit","deriveNodeProof",'body["node_id"] as? String == expectedNodeID','body["proof"] as? String == Self.proofKind',"completionHandler(nil)")
+need("ios/RouterVPN/App/IOSRuntimeSelection.swift",'case libbox = "libbox"',"sing-box.json","Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable instead of faking Connected.")
+need("ios/RouterVPN/App/RouterVPNModelExternal.swift","external-libbox","External OpenVPN — unavailable on iOS until a pinned native Apple OpenVPN dataplane exists","exact public-exit proof")
 no("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift","Link AmneziaWGKit/Xray engine before signing this target.")
 need("ios/RouterVPN/PacketTunnel/WireGuardQuickConfig.swift","PrivateKey(base64Key:","IPAddressRange(from:","DNSServer(from:","scripts/hooks are never executed","profile exceeds the 1 MiB safety limit")
 need("ios/RouterVPN/App/Models.swift","nodeProofID","node_proof_id","nodeProofId","Router bundle node proof ids disagree")
