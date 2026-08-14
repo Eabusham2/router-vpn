@@ -2,6 +2,7 @@ import Foundation
 import Libbox
 
 final class RouterVPNLibboxEngine {
+    static let proofProxyPort = 1099
     private weak var tunnel: PacketTunnelProvider?
     private let platform: RouterVPNLibboxPlatform
     private var server: LibboxCommandServer?
@@ -19,94 +20,58 @@ final class RouterVPNLibboxEngine {
     func start(files: [String: Data], strict: Bool) throws {
         try RouterVPNLibboxCompileProbe.verifyPinnedRuntime()
         guard server == nil else { throw error("Libbox service is already running") }
-        let safeFiles = try validate(files)
-        guard let config = safeFiles["sing-box.json"], let text = String(data: config, encoding: .utf8) else {
-            throw error("Libbox profile is missing UTF-8 sing-box.json")
-        }
-        configContent = text
-        platform.includeAllNetworksRequested = strict
-
+        let safeFiles = try validateAndInjectProof(files)
+        guard let config = safeFiles["sing-box.json"], let text = String(data: config, encoding: .utf8) else { throw error("Libbox profile is missing UTF-8 sing-box.json") }
+        configContent = text; platform.includeAllNetworksRequested = strict
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appendingPathComponent("routervpn-libbox-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: base, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        let work = base.appendingPathComponent("working", isDirectory: true)
-        let temp = base.appendingPathComponent("temp", isDirectory: true)
-        try fm.createDirectory(at: work, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        try fm.createDirectory(at: temp, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        for (name, data) in safeFiles {
-            let destination = base.appendingPathComponent(name, isDirectory: false)
-            try data.write(to: destination, options: [.atomic])
-            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
-        }
+        let work = base.appendingPathComponent("working", isDirectory: true), temp = base.appendingPathComponent("temp", isDirectory: true)
+        try fm.createDirectory(at: work, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]); try fm.createDirectory(at: temp, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        for (name, data) in safeFiles { let destination = base.appendingPathComponent(name); try data.write(to: destination, options: [.atomic]); try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path) }
         runtimeRoot = base
-
-        let setup = LibboxSetupOptions()
-        setup.basePath = base.path
-        setup.workingPath = work.path
-        setup.tempPath = temp.path
-        setup.logMaxLines = 1000
-        var setupError: NSError?
-        LibboxSetup(setup, &setupError)
-        if let setupError { throw error("Libbox setup failed: \(setupError.localizedDescription)") }
+        let setup = LibboxSetupOptions(); setup.basePath = base.path; setup.workingPath = work.path; setup.tempPath = temp.path; setup.logMaxLines = 1000
+        var setupError: NSError?; LibboxSetup(setup, &setupError); if let setupError { throw error("Libbox setup failed: \(setupError.localizedDescription)") }
         LibboxSetMemoryLimit(true)
-
-        var createError: NSError?
-        let created = LibboxNewCommandServer(platform, platform, &createError)
+        var createError: NSError?; let created = LibboxNewCommandServer(platform, platform, &createError)
         if let createError { throw error("Libbox command server creation failed: \(createError.localizedDescription)") }
         guard let created else { throw error("Libbox command server creation returned nil") }
         server = created
-        do {
-            try created.start()
-            try startService()
-        } catch {
-            stop()
-            throw error
-        }
+        do { try created.start(); try startService() } catch { stop(); throw error }
     }
 
     func stop() {
-        if let server {
-            try? server.closeService()
-            server.close()
-        }
-        server = nil
-        platform.reset()
-        configContent = ""
-        if let runtimeRoot { try? FileManager.default.removeItem(at: runtimeRoot) }
-        runtimeRoot = nil
+        if let server { try? server.closeService(); server.close() }
+        server = nil; platform.reset(); configContent = ""
+        if let runtimeRoot { try? FileManager.default.removeItem(at: runtimeRoot) }; runtimeRoot = nil
     }
-
     func pause() { server?.pause() }
     func wake() { server?.wake() }
-
-    private func startService() throws {
-        guard let server, !configContent.isEmpty else { throw error("Libbox service is not configured") }
-        try server.startOrReloadService(configContent, options: LibboxOverrideOptions())
-    }
-
+    private func startService() throws { guard let server, !configContent.isEmpty else { throw error("Libbox service is not configured") }; try server.startOrReloadService(configContent, options: LibboxOverrideOptions()) }
     private func closeService() throws { try server?.closeService() }
     private func reloadService() throws { try startService() }
 
-    private func validate(_ files: [String: Data]) throws -> [String: Data] {
+    private func validateAndInjectProof(_ files: [String: Data]) throws -> [String: Data] {
         guard !files.isEmpty, files.count <= 64 else { throw error("Libbox profile file count is invalid") }
-        let regex = try NSRegularExpression(pattern: "^[A-Za-z0-9._-]{1,128}$")
-        var total = 0
+        let regex = try NSRegularExpression(pattern: "^[A-Za-z0-9._-]{1,128}$"); var total = 0; var result = files
         for (name, data) in files {
             let range = NSRange(name.startIndex..<name.endIndex, in: name)
-            guard regex.firstMatch(in: name, range: range)?.range == range,
-                  name != ".", name != "..", !name.contains("..") else { throw error("Unsafe Libbox asset name: \(name)") }
+            guard regex.firstMatch(in: name, range: range)?.range == range, name != ".", name != "..", !name.contains("..") else { throw error("Unsafe Libbox asset name: \(name)") }
             guard data.count <= 4 * 1024 * 1024 else { throw error("Libbox asset too large: \(name)") }
-            total += data.count
-            guard total <= 12 * 1024 * 1024 else { throw error("Libbox profile exceeds total size limit") }
+            total += data.count; guard total <= 12 * 1024 * 1024 else { throw error("Libbox profile exceeds total size limit") }
         }
-        guard let config = files["sing-box.json"],
-              let object = try? JSONSerialization.jsonObject(with: config), object is [String: Any] else {
-            throw error("Libbox sing-box.json is not a JSON object")
+        guard let config = files["sing-box.json"], var object = try JSONSerialization.jsonObject(with: config) as? [String: Any] else { throw error("Libbox sing-box.json is not a JSON object") }
+        var inbounds = object["inbounds"] as? [[String: Any]] ?? []
+        for inbound in inbounds {
+            if (inbound["tag"] as? String) == "routervpn-proof" { throw error("Libbox profile reserves inbound tag routervpn-proof") }
+            if (inbound["listen"] as? String) == "127.0.0.1", (inbound["listen_port"] as? Int) == Self.proofProxyPort { throw error("Libbox profile already uses Router VPN proof port \(Self.proofProxyPort)") }
         }
-        return files
+        inbounds.append(["type": "mixed", "tag": "routervpn-proof", "listen": "127.0.0.1", "listen_port": Self.proofProxyPort])
+        object["inbounds"] = inbounds
+        let patched = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        guard patched.count <= 4 * 1024 * 1024 else { throw error("Patched Libbox sing-box.json exceeds safety limit") }
+        result["sing-box.json"] = patched
+        return result
     }
-
-    private func error(_ message: String) -> NSError {
-        NSError(domain: "RouterVPN.LibboxEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
-    }
+    private func error(_ message: String) -> NSError { NSError(domain: "RouterVPN.LibboxEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
 }
