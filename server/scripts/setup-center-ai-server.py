@@ -6,6 +6,8 @@ import argparse
 import importlib.util
 import json
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -30,10 +32,11 @@ _ux = _load("routervpn_setup_center_ux", "setup_center_ux_patch.py")
 AI_PANEL = r'''
 <style>
 #rvpn-ai-help{position:fixed;right:22px;bottom:22px;z-index:1000;width:min(440px,calc(100vw - 32px));background:#111827;color:#f8fafc;border:1px solid #334155;border-radius:18px;box-shadow:0 20px 60px #0008;overflow:hidden;font:14px/1.45 system-ui}
-#rvpn-ai-help summary{cursor:pointer;padding:14px 16px;font-weight:750;list-style:none;background:#172033}#rvpn-ai-help .rvpn-ai-body{padding:14px;display:grid;gap:10px}#rvpn-ai-help textarea{box-sizing:border-box;width:100%;min-height:100px;resize:vertical;background:#0b1220;color:#f8fafc;border:1px solid #334155;border-radius:12px;padding:10px}#rvpn-ai-help button{border:0;border-radius:11px;padding:9px 14px;background:#3157e3;color:white;font-weight:700;cursor:pointer}#rvpn-ai-answer{white-space:pre-wrap;max-height:260px;overflow:auto;background:#0b1220;border-radius:12px;padding:10px;display:none}#rvpn-ai-status{color:#94a3b8;font-size:12px}
+#rvpn-ai-help summary{cursor:pointer;padding:14px 16px;font-weight:750;list-style:none;background:#172033}#rvpn-ai-help .rvpn-ai-body{padding:14px;display:grid;gap:10px}#rvpn-ai-help textarea{box-sizing:border-box;width:100%;min-height:100px;resize:vertical;background:#0b1220;color:#f8fafc;border:1px solid #334155;border-radius:12px;padding:10px}#rvpn-ai-help button{border:0;border-radius:11px;padding:9px 14px;background:#3157e3;color:white;font-weight:700;cursor:pointer}#rvpn-ai-help button:disabled{opacity:.55;cursor:not-allowed}#rvpn-ai-answer{white-space:pre-wrap;max-height:300px;overflow:auto;background:#0b1220;border-radius:12px;padding:10px;display:none}#rvpn-ai-status{color:#94a3b8;font-size:12px}
+@media(max-width:560px){#rvpn-ai-help{right:12px;bottom:12px;width:calc(100vw - 24px)}}
 </style>
-<details id="rvpn-ai-help"><summary>AI Help</summary><div class="rvpn-ai-body"><div id="rvpn-ai-status">Checking provider…</div><textarea id="rvpn-ai-question" maxlength="4000" placeholder="Ask about setup, DNS, forwarding, kill switch, multihop, or a failed connection…"></textarea><button id="rvpn-ai-ask" type="button">Ask AI Help</button><div id="rvpn-ai-answer"></div><small>Provider keys stay server-side. Do not paste private keys, passwords, tokens, or full private bundles.</small></div></details>
-<script>(()=>{const status=document.getElementById('rvpn-ai-status'),ask=document.getElementById('rvpn-ai-ask'),q=document.getElementById('rvpn-ai-question'),answer=document.getElementById('rvpn-ai-answer');const show=(t,b=false)=>{answer.style.display='block';answer.textContent=t;answer.style.color=b?'#fda4af':'#e2e8f0'};async function refresh(){try{const r=await fetch('/api/ai-help/status',{credentials:'same-origin',cache:'no-store'}),j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);status.textContent=j.available?`OpenAI AI Help ready • ${j.model}`:`AI Help unavailable • ${j.reason||'not configured'}`;ask.disabled=!j.available}catch(e){status.textContent='AI Help status unavailable';ask.disabled=true}}ask.addEventListener('click',async()=>{const question=q.value.trim();if(!question)return;ask.disabled=true;show('Thinking…');try{const r=await fetch('/api/ai-help',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({question})}),j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);show(j.answer||'No answer returned.')}catch(e){show(e.message||'AI Help failed',true)}finally{await refresh()}});refresh()})();</script>
+<details id="rvpn-ai-help"><summary>AI Help</summary><div class="rvpn-ai-body"><div id="rvpn-ai-status">Checking provider…</div><textarea id="rvpn-ai-question" maxlength="4000" placeholder="Ask about setup, DNS, forwarding, kill switch, multihop, MTU, a method, or a failed connection…"></textarea><button id="rvpn-ai-ask" type="button">Ask AI Help</button><div id="rvpn-ai-answer"></div><small>The server supplies bounded Router VPN docs, this Setup Center surface, and non-secret live status. Provider keys stay server-side. Do not paste private keys, passwords, tokens, or full private bundles.</small></div></details>
+<script>(()=>{const status=document.getElementById('rvpn-ai-status'),ask=document.getElementById('rvpn-ai-ask'),q=document.getElementById('rvpn-ai-question'),answer=document.getElementById('rvpn-ai-answer');const show=(t,b=false)=>{answer.style.display='block';answer.textContent=t;answer.style.color=b?'#fda4af':'#e2e8f0'};const label=p=>({openai:'OpenAI',gemini:'Gemini',anthropic:'Claude',deepseek:'DeepSeek',xai:'Grok/xAI',moonshot:'Kimi/Moonshot',local:'Local AI Board'}[p]||p||'AI');async function refresh(){try{const r=await fetch('/api/ai-help/status',{credentials:'same-origin',cache:'no-store'}),j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);const web=j.web_access?' • web search on':'';status.textContent=j.available?`${label(j.provider)} ready • ${j.model}${web}`:`AI Help unavailable • ${j.reason||'not configured'}`;ask.disabled=!j.available}catch(e){status.textContent='AI Help status unavailable';ask.disabled=true}}ask.addEventListener('click',async()=>{const question=q.value.trim();if(!question)return;ask.disabled=true;show('Thinking…');try{const r=await fetch('/api/ai-help',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({question})}),j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);show(j.answer||'No answer returned.')}catch(e){show(e.message||'AI Help failed',true)}finally{await refresh()}});refresh()})();</script>
 '''
 
 
@@ -53,9 +56,6 @@ class Handler(_core.Handler):
         return text.replace("</body>", fragment + "\n</body>", 1) if "</body>" in text else text + fragment
 
     def _inject_product_ui(self, text: str) -> str:
-        # The core Setup Center uses a module-level injector, not a Handler
-        # method. Reuse it first so the existing Server admin surface remains
-        # authoritative, then add product extensions exactly once.
         enriched = _core._inject_admin_ui(text)
         if 'id="rvpn-guide-open"' not in enriched:
             enriched = self._before_body(enriched, _guide.GUIDE_PANEL)
@@ -82,8 +82,53 @@ class Handler(_core.Handler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _loopback_admin_json(self, base: str, path: str) -> dict:
+        """Read a bounded server-side admin snapshot; browser never sees token."""
+        request = urllib.request.Request(
+            base.rstrip("/") + path,
+            headers={"Authorization": "Bearer " + str(self.server.setup_token), "Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=1.5) as response:
+                raw = response.read(256 * 1024 + 1)
+            if len(raw) > 256 * 1024:
+                return {"ok": False, "error": "admin snapshot too large"}
+            value = json.loads(raw.decode("utf-8"))
+            return value if isinstance(value, dict) else {"ok": False, "error": "invalid admin snapshot"}
+        except (OSError, urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            return {"ok": False, "error": type(exc).__name__}
+
+    @staticmethod
+    def _client_summary(value: dict) -> dict:
+        rows = value.get("clients") if isinstance(value, dict) else []
+        rows = rows if isinstance(rows, list) else []
+        states: dict[str, int] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            state = str(row.get("state") or "unknown")[:64]
+            states[state] = states.get(state, 0) + 1
+        coverage = value.get("coverage") if isinstance(value.get("coverage"), dict) else {}
+        return {"ok": bool(value.get("ok")), "count": len(rows), "states": states, "coverage": coverage}
+
     def _ai_context(self) -> dict:
-        return {"setup_center": "authenticated", "request_source": self.client_address[0] if self.client_address else "unknown", "path": urlparse(self.path).path}
+        status = self._loopback_admin_json(_core.ADMIN_READ_BASE, "/api/admin/status")
+        clients = self._client_summary(self._loopback_admin_json(_core.ADMIN_READ_BASE, "/api/admin/clients"))
+        settings_raw = self._loopback_admin_json(_core.ADMIN_MUTATION_BASE, "/api/admin/settings")
+        settings = settings_raw.get("settings") if isinstance(settings_raw.get("settings"), dict) else {}
+        safe_settings = {k: settings.get(k) for k in ("forwarding_master", "lan_access") if k in settings}
+        return {
+            "setup_center": "authenticated",
+            "request_source": self.client_address[0] if self.client_address else "unknown",
+            "page": {
+                "path": urlparse(self.path).path,
+                "surface": "Setup Center",
+                "areas": ["Setup", "Methods", "Downloads", "Full Guide", "Server", "Connected Clients", "Forwarding", "AI Help"],
+            },
+            "live": {"status": status, "clients": clients, "settings": safe_settings},
+            "repository_context": _ai.load_repo_context(),
+        }
 
     def do_GET(self) -> None:
         if urlparse(self.path).path == "/api/ai-help/status":
@@ -118,12 +163,14 @@ class Handler(_core.Handler):
             self._send_ai_json(400, {"error": "question must be text"})
             return
         try:
-            result = self.server.ai_provider.ask(payload.get("question", ""), context=self._ai_context(), client_id=self.client_address[0] if self.client_address else "unknown")
+            result = self.server.ai_provider.ask(
+                payload.get("question", ""), context=self._ai_context(),
+                client_id=self.client_address[0] if self.client_address else "unknown",
+            )
         except _ai.AIHelpError as exc:
             self._send_ai_json(503, {"error": str(exc)})
             return
         except Exception:
-            # Never return provider/key internals to the browser.
             self._send_ai_json(502, {"error": "AI Help provider failed"})
             return
         self._send_ai_json(200, result)
@@ -146,7 +193,7 @@ def main() -> int:
     static.mkdir(parents=True, exist_ok=True)
     _core._broker.cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
-    print(f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + Full Guide + device UX + server-side AI Help", flush=True)
+    print(f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + Full Guide + device UX + multi-provider server-side AI Help", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
