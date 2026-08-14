@@ -1,7 +1,7 @@
 import Foundation
 import Libbox
-import Network
-import NetworkExtension
+@preconcurrency import Network
+@preconcurrency import NetworkExtension
 
 /// Minimal Router VPN NetworkExtension bridge for the exact pinned Libbox 1.13.12 API.
 /// It intentionally implements only Router VPN policy and does not inherit another app's UI/preferences model.
@@ -91,8 +91,13 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         ret0_.pointee = fallbackFD
     }
 
-    func usePlatformAutoDetectInterfaceControl() -> Bool { false }
-    func autoDetectInterfaceControl(_: Int32) throws {}
+    // Libbox renamed these callbacks across adjacent mobile-binding generations.
+    // Keep both spellings so the pinned XCFramework and source contract remain compatible.
+    func usePlatformAutoDetectControl() -> Bool { false }
+    func usePlatformAutoDetectInterfaceControl() -> Bool { usePlatformAutoDetectControl() }
+    func autoDetectControl(_: Int32) throws {}
+    func autoDetectInterfaceControl(_ fd: Int32) throws { try autoDetectControl(fd) }
+
     func findConnectionOwner(_ ipProtocol: Int32, sourceAddress: String?, sourcePort: Int32, destinationAddress: String?, destinationPort: Int32) throws -> LibboxConnectionOwner { throw error("Process-owner lookup is intentionally unavailable inside the Router VPN iOS extension") }
     func useProcFS() -> Bool { false }
     func writeLog(_ message: String?) { if let message { onLog?(message) } }
@@ -112,7 +117,14 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         guard let path = monitor?.currentPath else { throw error("Default-interface monitor has not started") }
         if path.status == .unsatisfied { return InterfaceIterator([]) }
         let values = path.availableInterfaces.map { item -> LibboxNetworkInterface in
-            let result = LibboxNetworkInterface(); result.name = item.name; result.index = Int32(item.index)
+            let result = LibboxNetworkInterface()
+            result.name = item.name
+            result.index = Int32(item.index)
+            result.mtu = 0
+            result.flags = 0
+            result.addresses = StringIterator([])
+            result.dnsServer = StringIterator([])
+            result.metered = path.isExpensive
             switch item.type { case .wifi: result.type = LibboxInterfaceTypeWIFI; case .cellular: result.type = LibboxInterfaceTypeCellular; case .wiredEthernet: result.type = LibboxInterfaceTypeEthernet; default: result.type = LibboxInterfaceTypeOther }
             return result
         }
@@ -139,7 +151,8 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         if proxy.httpEnabled == enabled { return }
         proxy.httpEnabled = enabled; proxy.httpsEnabled = enabled; settings.proxySettings = proxy; try apply(settings, to: tunnel)
     }
-    func sendNotification(_: LibboxNotification?) throws {}
+    func send(_: LibboxNotification?) throws {}
+    func sendNotification(_ notification: LibboxNotification?) throws { try send(notification) }
     func localDNSTransport() -> (any LibboxLocalDNSTransportProtocol)? { nil }
     func systemCertificates() -> (any LibboxStringIteratorProtocol)? { nil }
     func reset() { networkSettings = nil; monitor?.cancel(); monitor = nil }
@@ -155,10 +168,25 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         if let failure { throw failure }
     }
     private func error(_ message: String) -> NSError { NSError(domain: "RouterVPN.LibboxPlatform", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+
     final class InterfaceIterator: NSObject, LibboxNetworkInterfaceIteratorProtocol {
         private var iterator: IndexingIterator<[LibboxNetworkInterface]>; private var pending: LibboxNetworkInterface?
         init(_ values: [LibboxNetworkInterface]) { iterator = values.makeIterator() }
         func hasNext() -> Bool { pending = iterator.next(); return pending != nil }
         func next() -> LibboxNetworkInterface? { pending }
+    }
+
+    final class StringIterator: NSObject, LibboxStringIteratorProtocol {
+        private let values: [String]
+        private var index = 0
+        init(_ values: [String]) { self.values = values }
+        func len() -> Int32 { Int32(values.count) }
+        func hasNext() -> Bool { index < values.count }
+        func next() -> String {
+            guard index < values.count else { return "" }
+            let value = values[index]
+            index += 1
+            return value
+        }
     }
 }
