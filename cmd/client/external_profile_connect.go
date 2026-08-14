@@ -19,6 +19,7 @@ type externalProfileConnectRequest struct {
 }
 
 func registerExternalProfileRoutes(h *http.ServeMux, a *app) {
+	h.HandleFunc("/api/nodes", a.listPublicNodes)
 	h.HandleFunc("/api/external-profile/connect", a.externalProfileConnect)
 	h.HandleFunc("/api/external-profile/capabilities", a.externalProfileCapabilities)
 }
