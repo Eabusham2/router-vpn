@@ -67,27 +67,35 @@ The router-local fallback is bounded to the requested generic client package and
 
 Router VPN ships a native WPF daily-use application for x64 and ARM64. The native runtime has elevated full-device TUN paths for the supported layered modes, applies Router VPN DNS policy inside the TUN runtime, and has a Windows firewall kill-switch helper. Raw/native WireGuard and native multihop paths are part of the Windows implementation; WSL is not counted as the Windows VPN implementation.
 
-**Still a release gate:** physical Windows validation must prove full-device routing, DNS behavior, strict leak blocking, reconnect/network-change behavior and all supported Windows packaging/install variants. Do not infer that gate merely from CI/package success.
+Windows also has a source-implemented custom standard-exit path for saved WireGuard, SOCKS5, Shadowsocks and Hysteria2 exits behind a linked Router VPN WireGuard entry. It withholds Connected until the expected public exit IP is observed through the forced custom-exit path.
+
+**Still a release gate:** physical Windows validation must prove full-device routing, DNS behavior, strict leak blocking, reconnect/network-change behavior, custom-exit traffic and all supported Windows packaging/install variants. Do not infer that gate merely from CI/package success.
 
 ### macOS
 
-Router VPN ships a native AppKit/MapKit application. Native macOS routing, PF kill-switch handling and real native multihop are implemented. Physical macOS visual/network validation plus signing/notarization remain release work.
+Router VPN ships a native AppKit/MapKit application. Native macOS routing, PF kill-switch handling and real native multihop are implemented. Saved WireGuard/SOCKS5/Shadowsocks/Hysteria2 custom standard exits use the same strict native desktop entry→exit model and expected-public-IP proof.
+
+The current installer now installs and opens the real AppKit `RouterVPN.app`; it no longer creates a Chrome/Edge/Brave browser-app wrapper. The loopback controller remains private implementation/recovery plumbing. Physical macOS visual/network/custom-exit validation plus signing/notarization remain release work.
 
 ### Linux
 
-Router VPN ships a native GTK application. Linux has the broadest native runtime coverage, nftables kill-switch handling and real multihop. Distro/runtime/desktop integration and live leak-negative validation remain release gates.
+Router VPN ships a native GTK application. Linux has the broadest native runtime coverage, nftables kill-switch handling and real multihop. Its custom standard-exit runtime applies the fail-closed nftables policy before the full-device `router-vpn` TUN starts and proves the expected public exit IP. Distro/runtime/desktop integration and live leak-negative/custom-exit validation remain release gates.
 
 ### Android
 
 Android is a native `VpnService` application, not a controller-only shell. It has real WireGuard and AmneziaWG paths, the pinned combined libbox/Xray runtime for supported layered modes, AUTO/SMART/CUSTOM orchestration, strict-policy handling, exact selected-node proof and a real narrow multihop path (standard WireGuard entry to supported Shadowsocks/Hysteria2 exit).
 
-**Current boundary:** incompatible mixed-engine/AWG-entry multihop combinations remain unavailable rather than simulated. Physical Android VPN-permission, lockdown, reconnect, DNS/IPv4/IPv6 and leak-negative tests remain release gates.
+Android now also has an app-private typed custom-exit store and native Custom Exits product screen for WireGuard, SOCKS5, Shadowsocks and Hysteria2. The libbox graph is one full-device VPN path (`TUN → custom exit → Router VPN WireGuard entry`) and success is withheld until a forced loopback proof request observes the saved expected public exit IP.
+
+**Current boundary:** incompatible mixed-engine/AWG-entry multihop combinations remain unavailable rather than simulated. Physical Android VPN-permission, lockdown, reconnect, DNS/IPv4/IPv6, custom-exit traffic and leak-negative tests remain release gates.
 
 ### iOS / iPadOS
 
 The SwiftUI application uses a real pinned WireGuardKit PacketTunnel for raw WireGuard and exact selected-node path proof. When strict policy is requested, the host configures NetworkExtension route lockdown (`includeAllNetworks` + `enforceRoutes`), aligns local-network exclusion with the imported LAN policy and enables on-demand reconnect; the PacketTunnel refuses strict mode unless those controls are actually active.
 
-**Current boundary:** iOS still has a real native WireGuard dataplane only. AmneziaWG, layered modes, ALL/MAX and multihop remain unavailable until real Apple dataplanes exist; they must never report fake Connected state.
+A reproducible Apple Libbox foundation is now being source-integrated from the exact Router VPN sing-box 1.13.12 commit (`1086ab2563320e0da0c23b3a491d8dfa0939dff4`) as an iOS/iOS-Simulator `Libbox.xcframework`. Until the PacketTunnel bridge itself compiles and is wired, this does **not** earn layered-engine readiness.
+
+**Current boundary:** the shipping iOS PacketTunnel still has a real native WireGuard dataplane only. AmneziaWG, layered modes, ALL/MAX, multihop and custom standard exits remain unavailable until real Apple dataplanes exist; they must never report fake Connected state.
 
 ## Multihop / kill switch
 
@@ -111,7 +119,18 @@ External-app compatibility remains a live gate: remotely usable Methods must be 
 
 ## Custom standard-protocol exits
 
-`CUSTOM` in Router VPN currently means choosing compatible Router VPN transport layers/base behavior for a linked Router VPN node. It is **not** a generic arbitrary external-exit adapter. The current node schema does not advertise an OpenVPN exit engine, and no OpenVPN checkbox/import should be added without a real dataplane. Existing WireGuard, SOCKS5 and Shadowsocks support is exposed only through the concrete Router VPN/node or simple-Method contracts that actually exist; unsupported arbitrary external exits must remain unadvertised.
+Custom standard exits are separate from Router VPN's `CUSTOM` transport-layer selector and separate from Setup Center Methods. They let the daily app use a linked Router VPN WireGuard node as an entry and then force full-device traffic through a saved external standard exit.
+
+Current source support:
+
+- **WireGuard exit** — Windows/macOS/Linux/Android
+- **SOCKS5 exit** — Windows/macOS/Linux/Android
+- **Shadowsocks exit** — Windows/macOS/Linux/Android
+- **Hysteria2 exit** — Windows/macOS/Linux/Android
+- **OpenVPN exit** — intentionally unavailable on the exact pinned sing-box 1.13.12 runtime because that Apple/mobile/runtime build does not include the OpenVPN endpoint. No fake OpenVPN checkbox/Connected state is permitted.
+- **iOS custom exits** — still unavailable until the new Apple Libbox PacketTunnel bridge is real.
+
+Desktop custom-exit secrets stay in local `standard-exits.json` with private-file/non-symlink checks; Android uses app-private storage. List/status APIs expose redacted summaries only. Every supported custom exit requires an expected public exit IP and must pass that exact path proof before Connected.
 
 ## AI Help
 
@@ -124,7 +143,7 @@ AI Help is server-side and provider-neutral. Current adapters cover OpenAI, Goog
 - `8786` Setup Center stays private.
 - `1080`, `8787`, `14444`, `9443`, SSH and admin services stay off WAN.
 - A mode becomes Ready only because its real generated configuration/runtime validates.
-- `Connected` requires exact selected-node private-path proof, not generic Internet reachability.
+- `Connected` requires exact selected-node/private-exit proof, not generic Internet reachability.
 - Unsupported platform features stay unavailable with a real reason; UI/CSS must never force them Ready.
 
 Use `docs/CURRENT-GUIDE.md` for setup/operation detail and `docs/NATIVE-APPS.md` for native application boundaries.
