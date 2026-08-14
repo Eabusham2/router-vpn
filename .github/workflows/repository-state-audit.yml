@@ -27,6 +27,17 @@ jobs:
           fi
           echo 'No tracked Python cache/bytecode artifacts.'
 
+      - name: Reject self-mutating source workflows
+        run: |
+          set -euo pipefail
+          mutators="$(grep -RIlE 'git[[:space:]]+push[[:space:]]+origin[[:space:]]+HEAD:main' .github/workflows || true)"
+          if [ -n "$mutators" ]; then
+            echo 'CI workflows must not rewrite source and push directly to main:' >&2
+            printf '%s\n' "$mutators" >&2
+            exit 1
+          fi
+          echo 'No self-mutating source workflows.'
+
       - name: Require exactly one main branch and no open PRs/issues
         env:
           GH_TOKEN: ${{ github.token }}
