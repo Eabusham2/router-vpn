@@ -91,8 +91,8 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         ret0_.pointee = fallbackFD
     }
 
-    func usePlatformAutoDetectControl() -> Bool { false }
-    func autoDetectControl(_: Int32) throws {}
+    func usePlatformAutoDetectInterfaceControl() -> Bool { false }
+    func autoDetectInterfaceControl(_: Int32) throws {}
     func findConnectionOwner(_ ipProtocol: Int32, sourceAddress: String?, sourcePort: Int32, destinationAddress: String?, destinationPort: Int32) throws -> LibboxConnectionOwner { throw error("Process-owner lookup is intentionally unavailable inside the Router VPN iOS extension") }
     func useProcFS() -> Bool { false }
     func writeLog(_ message: String?) { if let message { onLog?(message) } }
@@ -139,7 +139,7 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         if proxy.httpEnabled == enabled { return }
         proxy.httpEnabled = enabled; proxy.httpsEnabled = enabled; settings.proxySettings = proxy; try apply(settings, to: tunnel)
     }
-    func send(_: LibboxNotification?) throws {}
+    func sendNotification(_: LibboxNotification?) throws {}
     func localDNSTransport() -> (any LibboxLocalDNSTransportProtocol)? { nil }
     func systemCertificates() -> (any LibboxStringIteratorProtocol)? { nil }
     func reset() { networkSettings = nil; monitor?.cancel(); monitor = nil }
