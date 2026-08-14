@@ -13,11 +13,12 @@ final class RouterVPNModel: ObservableObject {
     @Published var homeLANAccess = true
     @Published var homeLANCIDRs = ["192.168.50.0/24"]
     @Published var lanImportHost = "192.168.50.133"
+    @Published var lanPairingCode = ""
     @Published var auto = true
     @Published var daita = false
     @Published var jumbo = false
     @Published var connected = false
-    @Published var message = "Import a router bundle from Files or directly from your home LAN"
+    @Published var message = "Import a router bundle from Files or pair from your home LAN"
     @Published var activeEngine = "none"
     @Published var activeRawProfile = ""
     @Published var forwardProtocol = "both"
@@ -114,18 +115,31 @@ final class RouterVPNModel: ObservableObject {
     func importFromLAN() async {
         let raw = lanImportHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { message = "Enter the AI Board LAN IP or hostname"; return }
+        let code = lanPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard code.count == 6, code.allSatisfy(\.isNumber) else {
+            message = "Enter the 6-digit one-time pairing code shown by the authenticated Setup Center"
+            return
+        }
         let host = raw.replacingOccurrences(of: "http://", with: "").replacingOccurrences(of: "https://", with: "").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: "http://\(host):8786/router-vpn-bundle.json") else { message = "Invalid LAN host"; return }
+        guard !host.contains("/"), let url = URL(string: "http://\(host):8786/api/pairing/redeem") else { message = "Invalid LAN host"; return }
         do {
             var req = URLRequest(url: url)
+            req.httpMethod = "POST"
             req.timeoutInterval = 12
             req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: ["code": code])
             let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw URLError(.badServerResponse) }
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard http.statusCode == 200 else {
+                if http.statusCode == 401 || http.statusCode == 403 { throw NSError(domain: "RouterVPN.Pairing", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Pairing code is invalid, expired, already used, or this request is not from the home LAN"]) }
+                throw URLError(.badServerResponse)
+            }
             try importBundle(data)
+            lanPairingCode = ""
             UserDefaults.standard.set(raw, forKey: lanImportKey)
-            message = "Imported directly from \(host) over the home LAN • \(iosRunnableLogicalModes.count) iOS runtime mode(s) available"
-        } catch { message = "LAN import failed: \(error.localizedDescription)" }
+            message = "Paired securely with \(host) over the home LAN • \(iosRunnableLogicalModes.count) iOS runtime mode(s) available"
+        } catch { message = "LAN pairing failed: \(error.localizedDescription)" }
     }
 
     func saveRouter() {
