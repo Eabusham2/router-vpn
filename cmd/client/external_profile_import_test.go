@@ -11,7 +11,7 @@ func TestDecodeExternalImportDirectAndEnvelope(t *testing.T) {
 	direct := []byte(`{
 	  "schema_version":3,"id":"ext-wg","name":"External WG","node_kind":"external",
 	  "endpoint":"203.0.113.8",
-	  "external":{"protocol":"wireguard","expected_public_ip":"203.0.113.9","wireguard":{"private_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","peer_public_key":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=","address":["10.10.0.2/32"],"endpoint":"203.0.113.8:51820","allowed_ips":["0.0.0.0/0"]}}
+	  "external":{"protocol":"wireguard","expected_public_ip":"203.0.113.9","wireguard":{"private_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","peer_public_key":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=","addresses":["10.10.0.2/32"],"endpoint":"203.0.113.8:51820","allowed_ips":["0.0.0.0/0"]}}
 	}`)
 	p, err := decodeExternalImport(direct)
 	if err != nil { t.Fatalf("direct external profile rejected: %v", err) }
@@ -33,10 +33,10 @@ func TestExternalImportNormalizationRejectsRouterVPNAdminFields(t *testing.T) {
 		NodeKind: "external",
 		Endpoint: "203.0.113.8",
 		APIToken: "must-not-be-accepted",
-		External: &common.ExternalProfile{
+		External: &common.ExternalNodeConfig{
 			Protocol: "socks5",
 			ExpectedPublicIP: "203.0.113.9",
-			SOCKS5: &common.ExternalSOCKS5Profile{Server: "203.0.113.8", Port: 1080},
+			SOCKS5: &common.ExternalSOCKS5Config{Host: "203.0.113.8", Port: 1080},
 		},
 	}
 	if err := common.NormalizeRouterProfile(&p); err == nil {
@@ -46,8 +46,8 @@ func TestExternalImportNormalizationRejectsRouterVPNAdminFields(t *testing.T) {
 
 func TestDecodeExternalImportRequiresUnambiguousSelection(t *testing.T) {
 	payload := []byte(`{"routerProfiles":[
-	 {"schema_version":3,"id":"a","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.1","socks5":{"server":"203.0.113.2","port":1080}}},
-	 {"schema_version":3,"id":"b","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.3","socks5":{"server":"203.0.113.4","port":1080}}}
+	 {"schema_version":3,"id":"a","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.1","socks5":{"host":"203.0.113.2","port":1080}}},
+	 {"schema_version":3,"id":"b","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.3","socks5":{"host":"203.0.113.4","port":1080}}}
 	]}`)
 	if _, err := decodeExternalImport(payload); err == nil {
 		t.Fatal("ambiguous multi-external import unexpectedly accepted")
