@@ -16,6 +16,10 @@ on:
       - 'modes/native-standard-exit-linux.sh'
       - 'modes/native-openvpn-standard-exit.sh'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExit*.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidDirectStandardExitController.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java'
       - 'android/test_android_standard_exit_contract.py'
       - '.github/workflows/standard-exit-contract.yml'
   pull_request:
@@ -32,6 +36,10 @@ on:
       - 'modes/native-standard-exit-linux.sh'
       - 'modes/native-openvpn-standard-exit.sh'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExit*.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidDirectStandardExitController.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java'
       - 'android/test_android_standard_exit_contract.py'
       - '.github/workflows/standard-exit-contract.yml'
   workflow_dispatch:
@@ -98,9 +106,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Android custom-exit source contract
         run: python3 android/test_android_standard_exit_contract.py
-      - name: Native product UI exposure
+      - name: Native unified-node product contract
         run: |
-          grep -Fq 'Custom Exits' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
-          grep -Fq 'StandardExitActivity' android/app/src/main/AndroidManifest.xml
+          grep -Fq 'AndroidUnifiedNodeCatalog' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
+          grep -Fq 'Router VPN and external nodes share one list' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
+          grep -Fq 'external list-only (no real coordinates)' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
+          grep -Fq 'EXTRA_EXIT_ID' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
+          grep -Fq 'KIND_EXTERNAL' android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java
+          grep -Fq 'never infer them from an IP' android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java
+          grep -Fq 'Connect direct external exit' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
+          grep -Fq 'Router VPN WireGuard entry → external exit' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
+          grep -Fq 'EXTRA_EXIT_ID' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
           grep -Fq 'VpnService.prepare(this)' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
           grep -Fq 'OpenVPN unavailable' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
+          grep -Fq 'StandardExitActivity' android/app/src/main/AndroidManifest.xml
