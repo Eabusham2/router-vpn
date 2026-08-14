@@ -4,18 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - 'server/**'
-      - 'deploy/**'
-      - 'modes/**'
-      - 'cmd/**'
-      - 'internal/**'
-      - 'configs/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/arm64-portainer-preflight.yml'
-      - '.github/workflows/aux-proxies-ci.yml'
-      - '.github/workflows/build-all.yml'
 
 permissions:
   contents: read
