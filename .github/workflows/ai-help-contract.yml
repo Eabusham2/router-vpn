@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   contract:
-    name: Provider + authenticated Setup Center + Full Guide lifecycle
+    name: Multi-provider + authenticated Setup Center + Full Guide lifecycle
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -43,18 +43,36 @@ jobs:
           python3 server/scripts/test_setup_center_guide.py
           python3 server/scripts/test_setup_center_ux_patch.py
           python3 server/scripts/test_setup_center_entrypoint.py
-      - name: Verify browser and command line never receive provider credentials
+      - name: Verify provider-neutral secret and endpoint contract
         run: |
-          ! grep -Eqi 'api\.openai\.com|openai-api\.key|Authorization:[[:space:]]*Bearer|sk-[A-Za-z0-9]' server/scripts/setup-center-ai-server.py
+          ! grep -Eqi 'Authorization:[[:space:]]*Bearer|sk-[A-Za-z0-9]' server/scripts/setup-center-ai-server.py
           grep -Fq "credentials:'same-origin'" server/scripts/setup-center-ai-server.py
           grep -Fq 'self._require_auth()' server/scripts/setup-center-ai-server.py
           grep -Fq 'store": False' server/scripts/ai_help_provider.py
-          grep -Fq 'https://api.openai.com/v1/responses' server/scripts/ai_help_provider.py
-          grep -Fq 'DEFAULT_MODEL_FILE = "/opt/router-vpn/config/openai-model"' server/scripts/ai_help_provider.py
-          grep -Fq 'MAX_CONCURRENT = 2' server/scripts/ai_help_provider.py
-          grep -Fq 'MAX_REQUESTS_PER_MINUTE = 6' server/scripts/ai_help_provider.py
+          for marker in \
+            'https://api.openai.com/v1/responses' \
+            'https://api.x.ai/v1/responses' \
+            'https://generativelanguage.googleapis.com/v1beta/models' \
+            'https://api.anthropic.com/v1/messages' \
+            'https://api.deepseek.com/chat/completions' \
+            'https://api.moonshot.ai/v1/chat/completions' \
+            'DEFAULT_PROVIDER_FILE = CONFIG_DIR + "/ai-provider"' \
+            'DEFAULT_MODEL_FILE = CONFIG_DIR + "/ai-model"' \
+            'DEFAULT_KEY_FILE = CONFIG_DIR + "/ai-api.key"' \
+            'DEFAULT_BASE_URL_FILE = CONFIG_DIR + "/ai-base-url"' \
+            '"claude": "anthropic"' \
+            '"grok": "xai"' \
+            '"kimi": "moonshot"' \
+            '"aiboard": "local"' \
+            'MAX_CONCURRENT = 2' \
+            'MAX_REQUESTS_PER_MINUTE = 6'; do
+            grep -Fq "$marker" server/scripts/ai_help_provider.py
+          done
+          grep -Fq 'plain HTTP local AI is limited to loopback/private addresses' server/scripts/ai_help_provider.py
           grep -Fq 'setup-center-ai-server.py' server/scripts/run-setup-center.sh
           ! grep -Eq 'OPENAI_API_KEY=|--api-key|sk-' server/scripts/run-setup-center.sh
+          grep -Fq 'openai | gemini | anthropic | deepseek | xai | moonshot | local' server/scripts/configure-ai-help.sh
+          grep -Fq 'Aliases accepted: claude, grok, kimi, google, aiboard.' server/scripts/configure-ai-help.sh
           grep -Fq 'stty -echo' server/scripts/configure-ai-help.sh
           grep -Fq 'chmod 600' server/scripts/configure-ai-help.sh
           ! grep -Eq 'printf.*\$KEY.*>&2|echo.*\$KEY' server/scripts/configure-ai-help.sh
