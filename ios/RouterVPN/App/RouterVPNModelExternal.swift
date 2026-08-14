@@ -2,7 +2,9 @@ import Foundation
 @preconcurrency import NetworkExtension
 
 extension RouterVPNModel {
-    var allNodeProfiles: [RouterProfile] { bundle?.routerProfiles ?? [] }
+    var allNodeProfiles: [RouterProfile] {
+        IOSNodeBundleStore.shared.profiles(current: bundle)
+    }
 
     var selectedNodeProfile: RouterProfile? {
         guard let bundle else { return nil }
@@ -26,10 +28,15 @@ extension RouterVPNModel {
         return "Router VPN node — WireGuardKit / Libbox modes + exact private node proof"
     }
 
+    /// Selects a linked node together with the exact full bundle that owns its
+    /// raw runtime profiles. This is what makes multiple Router VPN homes real
+    /// on iOS instead of merely keeping several metadata rows beside one set of
+    /// node-specific wg/sing-box files.
     func selectNode(_ id: String) {
-        guard var value = bundle,
+        guard let data = IOSNodeBundleStore.shared.bundleData(containing: id, current: bundle),
+              var value = try? JSONDecoder().decode(ClientBundle.self, from: data),
               let selected = value.routerProfiles.first(where: { $0.id == id })
-        else { message = "Node not found"; return }
+        else { message = "Node not found in the linked iOS bundle store"; return }
         value.selectedRouterID = selected.id
         value.endpoint = selected.endpoint
         if selected.normalizedNodeKind == "router-vpn" {
@@ -46,10 +53,20 @@ extension RouterVPNModel {
             value.socks5Host = ""; value.socks5Port = 1080; value.socks5Username = ""; value.socks5Password = ""
         }
         do {
-            let data = try JSONEncoder().encode(value)
-            try importBundle(data)
+            let selectedData = try JSONEncoder().encode(value)
+            try importBundle(selectedData)
             message = "Selected \(selected.name) • \(nodeRuntimeSummary(selected))"
         } catch { message = "Could not select node: \(error.localizedDescription)" }
+    }
+
+    /// Add/link a complete node bundle while preserving the current bundle in
+    /// the per-node store first. Router VPN bundles get a deterministic id from
+    /// their 64-hex selected-node proof so every home keeps its own raw profile
+    /// assets. External-only bundles retain their validated profile ids.
+    func linkNodeBundle(_ data: Data) throws {
+        let normalized = try IOSNodeBundleStore.shared.link(data, preserving: bundle)
+        try importBundle(normalized)
+        message = "Linked node bundle • \(allNodeProfiles.count) node(s) available without reinstalling Router VPN"
     }
 
     func connectSelectedExternal() async {
