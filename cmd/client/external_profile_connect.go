@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -43,10 +44,6 @@ func externalRuntimePolicy(profile common.RouterProfile) (common.RouterProfile, 
 	policy := profile
 	if err := common.NormalizeRouterProfile(&policy); err != nil { return common.RouterProfile{}, err }
 	if policy.NodeKind != "external" { return common.RouterProfile{}, errors.New("selected profile is not an external node") }
-	// Fresh external nodes must not inherit Home AdGuard just because Router VPN
-	// nodes default to it. If the user has not selected an external-node DNS
-	// policy yet, use the existing encrypted Rescue policy through the external
-	// exit. An explicit custom/fastest/DoH/DoT/DoH3 selection remains untouched.
 	if strings.TrimSpace(policy.DNSMode) == "" {
 		policy.DNSMode = "rescue"
 		policy.DNSProtocol = "https"
@@ -115,9 +112,7 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionBase := "external"
-	if !direct {
-		if entryKind == "router-vpn" { sessionBase = "wg" } else { sessionBase = "external" }
-	}
+	if !direct && entryKind == "router-vpn" { sessionBase = "wg" }
 	sessionTrackerFor(a).declareRequest("external-node", sessionBase)
 	if err = a.stopMode(); err != nil { sessionTrackerFor(a).markRequestFailure(err.Error()); http.Error(w, err.Error(), http.StatusInternalServerError); return }
 
@@ -133,10 +128,8 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 			a.mu.Lock(); if a.cmd != cmd { cmdErr = errors.New("OpenVPN external-node runtime changed during exit proof") }; a.mu.Unlock()
 		}
 	} else {
-		var cmd interface{ Start() error }
+		var realCmd *exec.Cmd
 		var realCmdErr error
-		var realCmd = (*exec.Cmd)(nil)
-		_ = cmd
 		if !direct && entryKind == "external" {
 			realCmd, realCmdErr = nativeExternalEntryStandardExitCommand(a, policy, entry, exit)
 		} else {
