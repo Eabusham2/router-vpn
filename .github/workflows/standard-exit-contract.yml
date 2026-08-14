@@ -6,7 +6,9 @@ on:
     paths:
       - 'cmd/client/standard_exit*.go'
       - 'cmd/client/standard_exits*.go'
+      - 'cmd/client/openvpn_standard_exit*.go'
       - 'modes/native-standard-exit-linux.sh'
+      - 'modes/native-openvpn-standard-exit.sh'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExit*.java'
       - 'android/test_android_standard_exit_contract.py'
       - '.github/workflows/standard-exit-contract.yml'
@@ -14,7 +16,9 @@ on:
     paths:
       - 'cmd/client/standard_exit*.go'
       - 'cmd/client/standard_exits*.go'
+      - 'cmd/client/openvpn_standard_exit*.go'
       - 'modes/native-standard-exit-linux.sh'
+      - 'modes/native-openvpn-standard-exit.sh'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExit*.java'
       - 'android/test_android_standard_exit_contract.py'
       - '.github/workflows/standard-exit-contract.yml'
@@ -34,18 +38,29 @@ jobs:
           cache: false
       - name: Go custom-exit tests
         run: go test ./cmd/client
-      - name: Linux helper and fail-closed markers
+      - name: Native helper syntax
         run: |
           bash -n modes/native-standard-exit-linux.sh
+          bash -n modes/native-openvpn-standard-exit.sh
+      - name: Fail-closed and proof markers
+        run: |
           grep -Fq 'python3 "$KILL_SWITCH" apply' modes/native-standard-exit-linux.sh
           grep -Fq 'TUNNEL_ALIAS" == "router-vpn"' modes/native-standard-exit-linux.sh
           grep -Fq 'proveStandardExit(exit.ExpectedPublicIP)' cmd/client/standard_exit_runtime.go
           grep -Fq '127.0.0.1", "listen_port":1099' cmd/client/standard_exit_runtime.go
-          grep -Fq 'Protocol: "openvpn", Supported: false' cmd/client/standard_exits.go
+          grep -Fq 'OpenVPNConfig' cmd/client/standard_exits.go
+          grep -Fq 'openVPNRuntimeCapability()' cmd/client/standard_exits.go
+          grep -Fq 'sanitizeOpenVPNConfig' cmd/client/openvpn_standard_exit_profile.go
+          grep -Fq 'script-security' cmd/client/openvpn_standard_exit_profile.go
+          grep -Fq 'OpenVPN custom exit currently requires a literal remote' cmd/client/openvpn_standard_exit_profile.go
+          grep -Fq 'redirect-gateway def1' cmd/client/openvpn_standard_exit_runtime.go
+          grep -Fq 'redirect-gateway ipv6' cmd/client/openvpn_standard_exit_runtime.go
+          grep -Fq 'proveOpenVPNStandardExit(exit.ExpectedPublicIP)' cmd/client/openvpn_standard_exit_runtime.go
+          grep -Fq 'registerStandardExitDispatchRoutes(h, a)' cmd/client/multihop_native_routes.go
+          grep -Fq 'native OpenVPN adapter' cmd/client/standard_exits_test.go
+          grep -Fq 'endpoint["detour"] != "entry-wg"' cmd/client/standard_exits_test.go
+          grep -Fq 'out["detour"] != "entry-wg"' cmd/client/standard_exits_test.go
           grep -Fq 'standard-exits.json permissions are too broad; expected 0600' cmd/client/standard_exits.go
-          grep -Fq 'standardExitRuntimeParts(e,"entry-wg")' cmd/client/standard_exits_test.go
-          grep -Fq 'endpoint["detour"]!="entry-wg"' cmd/client/standard_exits_test.go
-          grep -Fq 'out["detour"]!="entry-wg"' cmd/client/standard_exits_test.go
 
   android:
     runs-on: ubuntu-24.04
