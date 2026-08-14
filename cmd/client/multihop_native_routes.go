@@ -14,7 +14,10 @@ import (
 
 func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
 	registerStandardExitRoutes(h)
-	registerStandardExitRuntimeRoutes(h, a)
+	// Keep one public custom-exit endpoint. The dispatcher sends OpenVPN to the
+	// native OpenVPN adapter and all sing-box-capable protocols to the existing
+	// standard-exit graph, so the UI never has to fake a second product lane.
+	registerStandardExitDispatchRoutes(h, a)
 	if runtime.GOOS == "linux" {
 		registerMultihopRoutes(h, a)
 		return
