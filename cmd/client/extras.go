@@ -58,7 +58,10 @@ func extraRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/public-ip", a.publicIP)
 	h.HandleFunc("/api/dns/retest", a.retestDNS)
 	h.HandleFunc("/api/emergency-stop", a.emergencyStopTracked)
-	registerMultihopRoutes(h, a)
+	// Linux keeps its native WG/AWG split-entry chain. Windows and macOS route
+	// to their real native desktop multihop launchers instead of accidentally
+	// exposing the Linux-only handler and returning a false unsupported result.
+	registerDesktopMultihopRoutes(h, a)
 }
 
 type latencyRequest struct {
