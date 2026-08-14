@@ -14,6 +14,9 @@ import (
 )
 
 func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
+	// Pairing belongs to the shared local controller so every native desktop UI
+	// gets the same private-address checks and hardened bundle import path.
+	registerPairingRoute(h, a)
 	// Legacy standard-exits.json remains readable for compatibility while new
 	// custom nodes live in the unified profile store. The platform wrapper keeps
 	// both APIs on the same Windows/OpenVPN and external-entry dataplanes.
