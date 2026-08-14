@@ -14,11 +14,10 @@ import (
 )
 
 func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
-	registerStandardExitRoutes(h)
 	// Legacy standard-exits.json remains readable for compatibility while new
-	// custom nodes can live in the unified profile store without duplicating
-	// private credentials. Both paths share the same runtime validators/proof.
-	registerStandardExitDispatchRoutes(h, a)
+	// custom nodes live in the unified profile store. The platform wrapper keeps
+	// both APIs on the same Windows/OpenVPN and external-entry dataplanes.
+	registerPlatformStandardExitRoutes(h, a)
 	registerExternalProfileRoutes(h, a)
 	if runtime.GOOS == "linux" {
 		registerMultihopRoutes(h, a)
@@ -76,13 +75,13 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"enabled": control.MultihopEnabled,
 		"supported_entry_bases": []string{"wg"},
 		"supported_exit_modes": []string{"shadowsocks", "hysteria2"},
-		"standard_exit_capabilities": standardExitCapabilities(),
+		"standard_exit_capabilities": externalProfileProtocolCapabilities(),
 		"standard_exits": standard,
 		"external_profiles": external,
 		"standard_exit_store_error": func() string { if storeErr != nil { return storeErr.Error() }; return "" }(),
-		"connected": state.Connected && (state.Mode == "multihop" || state.Mode == "external-node"),
-		"actual_exit_id": func() string { if state.Mode == "multihop" || state.Mode == "external-node" { return state.RouterID }; return "" }(),
-		"runtime_exit_mode": func() string { if state.Mode == "multihop" || state.Mode == "external-node" { return state.RuntimeMode }; return "" }(),
+		"connected": state.Connected && (state.Mode == "multihop" || state.Mode == "external-node" || state.Mode == "standard-exit"),
+		"actual_exit_id": func() string { if state.Mode == "multihop" || state.Mode == "external-node" || state.Mode == "standard-exit" { return state.RouterID }; return "" }(),
+		"runtime_exit_mode": func() string { if state.Mode == "multihop" || state.Mode == "external-node" || state.Mode == "standard-exit" { return state.RuntimeMode }; return "" }(),
 		"nodes": multihopNodeSummaries(profiles),
 	})
 }
