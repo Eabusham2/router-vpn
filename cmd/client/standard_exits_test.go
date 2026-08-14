@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"router-vpn/internal/common"
 )
 
 func testWGKey(seed byte) string { return base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string([]byte{seed}), 32))) }
@@ -88,17 +90,13 @@ func TestStandardExitCompilerOwnsDetour(t *testing.T) {
 }
 
 func TestOpenVPNSelectedDNSContract(t *testing.T) {
-	control := commonTestRouterProfile()
-	control.DNSMode = "fastest"; control.FastestDNSHost = "1.1.1.1"
+	control := common.RouterProfile{ID: "policy", AdGuardIPv4: "10.77.0.1", FastestDNSHost: "1.1.1.1", IPv6Mode: "auto"}
+	control.DNSMode = "fastest"
 	lines, err := openVPNDNSLines(control, true); if err != nil { t.Fatal(err) }
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "dns server -1 address 1.1.1.1:53") || !strings.Contains(joined, "transport plain") { t.Fatalf("unexpected DNS lines: %s", joined) }
 	control.DNSMode = "home"; if _, err = openVPNDNSLines(control, true); err == nil { t.Fatal("direct OpenVPN must not pretend Home AdGuard is reachable") }
 	control.DNSMode = "doh3"; if _, err = openVPNDNSLines(control, true); err == nil { t.Fatal("OpenVPN must fail closed for unsupported DoH3 transport") }
-}
-
-func commonTestRouterProfile() common.RouterProfile {
-	return common.RouterProfile{ID: "policy", AdGuardIPv4: "10.77.0.1", FastestDNSHost: "1.1.1.1", IPv6Mode: "auto"}
 }
 
 func TestStandardExitStoreIsPrivateAndRedactionDoesNotLeak(t *testing.T) {
