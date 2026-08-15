@@ -14,6 +14,10 @@ $SocketTimeoutMs = 750
 $ProofKind = 'router-vpn-private-agent-v1'
 
 function Has-Property($Object,[string]$Name) { return $null -ne $Object -and ($Object.PSObject.Properties.Name -contains $Name) }
+function Hash-Text([string]$Label,[string]$Text) {
+  $sha=[Security.Cryptography.SHA256]::Create()
+  try{$bytes=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Label+[char]0+$Text));return(-join($bytes|ForEach-Object{$_.ToString('x2')})).Substring(0,24)}finally{$sha.Dispose()}
+}
 function Require-Admin {
   $id=[Security.Principal.WindowsIdentity]::GetCurrent();$p=New-Object Security.Principal.WindowsPrincipal($id)
   if(-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Optimize MTU requires Administrator rights to change the live tunnel interface.'}
@@ -92,9 +96,34 @@ function Bench-Candidate($Ip,[int]$Port,[int]$Mtu){
 function Pick-Winner($Results){
   $good=@($Results|Where-Object{$_.working-and[double]$_.success_ratio-ge.90});if(-not$good){throw'No MTU candidate passed the private tunnel benchmark.'};$fastest=($good|Measure-Object -Property mbps -Maximum).Maximum;$near=@($good|Where-Object{[double]$_.mbps-ge([double]$fastest*.97)});$bestRtt=($near|Measure-Object -Property median_rtt_ms -Minimum).Minimum;return $near|Where-Object{[double]$_.median_rtt_ms-le([double]$bestRtt+.25)}|Sort-Object mtu -Descending|Select-Object -First 1
 }
-function Path-Key($Profile){$raw=([string]$Profile.endpoint).Trim().ToLowerInvariant()+'|'+([string]$env:HOMEVPN_MODE).Trim().ToLowerInvariant()+'|'+([string]$env:HOMEVPN_LOGICAL_MODE).Trim().ToLowerInvariant()+'|'+([string]$env:HOMEVPN_BASE).Trim().ToLowerInvariant()+'|'+([string]$env:HOMEVPN_IP_FAMILY).Trim().ToLowerInvariant();$sha=[Security.Cryptography.SHA256]::Create();$bytes=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($raw));return(-join($bytes|ForEach-Object{$_.ToString('x2')})).Substring(0,24)}
+function Resolve-EndpointIP([string]$Endpoint){
+  $candidate=$null;if([Net.IPAddress]::TryParse($Endpoint.Trim().Trim('[',']'),[ref]$candidate)){return$candidate}
+  try{return[Net.Dns]::GetHostAddresses($Endpoint)|Select-Object -First 1}catch{return$null}
+}
+function Get-NetworkFingerprint($Profile){
+  if($env:HOMEVPN_NETWORK_CONTEXT){return Hash-Text 'network-override-v1' ([string]$env:HOMEVPN_NETWORK_CONTEXT)}
+  $endpoint=([string]$Profile.endpoint).Trim();$ip=Resolve-EndpointIP $endpoint;$parts=New-Object 'System.Collections.Generic.List[string]';$parts.Add('v1');$parts.Add('windows')
+  if($ip){
+    $parts.Add('family='+$(if($ip.AddressFamily-eq[Net.Sockets.AddressFamily]::InterNetworkV6){'6'}else{'4'}))
+    try{$route=Find-NetRoute -RemoteIPAddress $ip.IPAddressToString|Sort-Object RouteMetric,InterfaceMetric|Select-Object -First 1;if($route){$parts.Add('if='+[string]$route.InterfaceAlias);$parts.Add('index='+[string]$route.InterfaceIndex);$parts.Add('next='+[string]$route.NextHop);$fam=if($ip.AddressFamily-eq[Net.Sockets.AddressFamily]::InterNetworkV6){'IPv6'}else{'IPv4'};$local=Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily $fam -ErrorAction SilentlyContinue|Where-Object{$_.IPAddress-notmatch'^(169\.254\.|fe80:)'}|Select-Object -First 1;if($local){$parts.Add('source='+[string]$local.IPAddress)}}}catch{$parts.Add('route=unavailable')}
+  }else{$parts.Add('endpoint-resolution=failed')}
+  return Hash-Text 'network-route-v1' ([string]::Join('|',$parts))
+}
+function Get-GeneratedProfileFingerprint($Profile){
+  $id=if(Has-Property $Profile 'id'){([string]$Profile.id).Trim()}else{([string]$env:HOMEVPN_PROFILE_ID).Trim()};$mode=([string]$env:HOMEVPN_MODE).Trim();$root=[string]$env:HOMEVPN_ROOT
+  if([string]::IsNullOrWhiteSpace($root)-or[string]::IsNullOrWhiteSpace($mode)){return Hash-Text 'generated-profile-v1' ('missing|'+$id+'|'+$mode)}
+  $candidates=@();if($id){$candidates+=Join-Path (Join-Path (Join-Path $root 'generated') $id) $mode};$candidates+=Join-Path (Join-Path $root 'generated') $mode;$dir=$null;foreach($candidate in $candidates){if(Test-Path -LiteralPath $candidate -PathType Container){$dir=Get-Item -LiteralPath $candidate;break}}
+  if(-not$dir){return Hash-Text 'generated-profile-v1' ('missing|'+$id+'|'+$mode)}
+  $files=@(Get-ChildItem -LiteralPath $dir.FullName -File -Recurse|Sort-Object FullName);if($files.Count-gt128){throw'Generated MTU path profile has too many files.'};$total=[int64]0;$parts=New-Object 'System.Collections.Generic.List[string]'
+  foreach($file in $files){if($file.Length-gt4MB){throw'Generated MTU path profile file exceeds safety limit.'};$total+=$file.Length;if($total-gt16MB){throw'Generated MTU path profile exceeds safety limit.'};$rel=$file.FullName.Substring($dir.FullName.Length).TrimStart([char]'\',[char]'/');$hash=(Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant();$parts.Add($rel+'='+$hash)}
+  return Hash-Text 'generated-profile-v1' ([string]::Join('|',$parts))
+}
+function Path-Context($Profile){
+  $endpoint=([string]$Profile.endpoint).Trim().ToLowerInvariant();$mode=([string]$env:HOMEVPN_MODE).Trim().ToLowerInvariant();$logical=([string]$env:HOMEVPN_LOGICAL_MODE).Trim().ToLowerInvariant();$base=([string]$env:HOMEVPN_BASE).Trim().ToLowerInvariant();$family=([string]$env:HOMEVPN_IP_FAMILY).Trim().ToLowerInvariant();$id=if(Has-Property $Profile 'id'){([string]$Profile.id).Trim().ToLowerInvariant()}else{([string]$env:HOMEVPN_PROFILE_ID).Trim().ToLowerInvariant()};if(-not$family){$ip=Resolve-EndpointIP $endpoint;if($ip){$family=if($ip.AddressFamily-eq[Net.Sockets.AddressFamily]::InterNetworkV6){'6'}else{'4'}}else{$family='unknown'}};$network=Get-NetworkFingerprint $Profile;$generated=Get-GeneratedProfileFingerprint $Profile;$raw=[string]::Join('|',@($endpoint,$mode,$logical,$base,$family,$id,$network,$generated));[pscustomobject]@{Key=(Hash-Text 'mtu-path-v2' $raw);Network=$network;Generated=$generated}
+}
+function Path-Key($Profile){return(Path-Context $Profile).Key}
 function Persist-Winner($Ctx,$Winner,$Results){
-  $p=$Ctx.Profile;$p|Add-Member effective_mtu ([int]$Winner.mtu) -Force;$p|Add-Member effective_mtu_source 'auto-throughput' -Force;$p|Add-Member effective_mtu_path_key (Path-Key $p) -Force;$p|Add-Member effective_mtu_tested_at ([DateTime]::UtcNow.ToString('o')) -Force;$p|Add-Member effective_mtu_mbps ([double]$Winner.mbps) -Force;$p|Add-Member effective_mtu_median_rtt_ms ([double]$Winner.median_rtt_ms) -Force;$p|Add-Member effective_mtu_success_ratio ([double]$Winner.success_ratio) -Force;$p|Add-Member effective_mtu_candidates @($Results) -Force
+  $p=$Ctx.Profile;$path=Path-Context $p;$p|Add-Member effective_mtu ([int]$Winner.mtu) -Force;$p|Add-Member effective_mtu_source 'auto-throughput' -Force;$p|Add-Member effective_mtu_path_key $path.Key -Force;$p|Add-Member effective_mtu_network_fingerprint $path.Network -Force;$p|Add-Member effective_mtu_profile_fingerprint $path.Generated -Force;$p|Add-Member effective_mtu_tested_at ([DateTime]::UtcNow.ToString('o')) -Force;$p|Add-Member effective_mtu_mbps ([double]$Winner.mbps) -Force;$p|Add-Member effective_mtu_median_rtt_ms ([double]$Winner.median_rtt_ms) -Force;$p|Add-Member effective_mtu_success_ratio ([double]$Winner.success_ratio) -Force;$p|Add-Member effective_mtu_candidates @($Results) -Force
   $tmp=$Ctx.Path+'.mtu.tmp';[IO.File]::WriteAllText($tmp,(($Ctx.Store|ConvertTo-Json -Depth 100)+"`n"),(New-Object Text.UTF8Encoding($false)));Move-Item -LiteralPath $tmp -Destination $Ctx.Path -Force
 }
 function Ensure-KillSwitch($Profile,[string]$Alias){
@@ -105,7 +134,8 @@ function Ensure-KillSwitch($Profile,[string]$Alias){
 }
 
 if($Action-eq'self-test'){
-  $sample=@([pscustomobject]@{mtu=1380;working=$true;success_ratio=1.0;mbps=100.0;median_rtt_ms=10.0},[pscustomobject]@{mtu=1360;working=$true;success_ratio=1.0;mbps=102.0;median_rtt_ms=9.9},[pscustomobject]@{mtu=1340;working=$false;success_ratio=.5;mbps=130.0;median_rtt_ms=8.0});if((Pick-Winner $sample).mtu-ne1380){throw'Winner tie policy self-test failed'};if((Candidate-Mtus 1380)[0]-ne1380){throw'Candidate ceiling self-test failed'};Write-Output'MTU throughput optimizer Windows self-test OK';exit 0
+  $sample=@([pscustomobject]@{mtu=1380;working=$true;success_ratio=1.0;mbps=100.0;median_rtt_ms=10.0},[pscustomobject]@{mtu=1360;working=$true;success_ratio=1.0;mbps=102.0;median_rtt_ms=9.9},[pscustomobject]@{mtu=1340;working=$false;success_ratio=.5;mbps=130.0;median_rtt_ms=8.0});if((Pick-Winner $sample).mtu-ne1380){throw'Winner tie policy self-test failed'};if((Candidate-Mtus 1380)[0]-ne1380){throw'Candidate ceiling self-test failed'}
+  $profile=[pscustomobject]@{id='node';endpoint='203.0.113.10'};$old=[string]$env:HOMEVPN_NETWORK_CONTEXT;try{$env:HOMEVPN_NETWORK_CONTEXT='wifi-a';$first=Path-Key $profile;$env:HOMEVPN_NETWORK_CONTEXT='cellular-b';$second=Path-Key $profile;if($first-eq$second){throw'Network-change path-key self-test failed'}}finally{$env:HOMEVPN_NETWORK_CONTEXT=$old};Write-Output'MTU throughput optimizer Windows self-test OK';exit 0
 }
 
 Require-Admin;$ctx=Read-Store;$profile=$ctx.Profile;$policy=if(Has-Property $profile 'mtu_policy'){([string]$profile.mtu_policy).ToLowerInvariant()}else{'default'};if($policy-ne'auto'-and$env:HOMEVPN_MTU_OPTIMIZE_FORCE-notin@('1','true','yes')){throw'Set this node MTU policy to Auto before running Optimize MTU.'};if($env:HOMEVPN_JUMBO-eq'true'){throw'Jumbo is explicit; disable Jumbo before automatic MTU optimization.'}
