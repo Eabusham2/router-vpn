@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  // Compatibility asset only. Native apps own daily controls; the loopback
+  // Compatibility asset only. native apps own daily controls; the loopback
   // browser root is diagnostics only. Keep this manifest explicit so audits
   // can verify where the retired browser product contracts moved without
   // reintroducing mutating UI behavior.
