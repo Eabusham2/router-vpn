@@ -18,6 +18,7 @@ source change
 → GitHub Actions
 → ARM64/runtime/client validation
 → exact-SHA server images + short-lived client artifacts
+→ exact-SHA production compose materialization
 → physical/off-LAN/manual release gates
 → production
 ```
@@ -26,15 +27,23 @@ The **production Portainer stack stays exact-SHA image-only**. The router-local 
 
 ## 2. Portainer deployment
 
-Use:
+The tracked file:
 
 ```text
-Repository: https://github.com/Eabusham2/router-vpn.git
-Reference:  refs/heads/main
-Compose:    server/portainer-current.yaml
+server/portainer-current.yaml
 ```
 
-The repository is public, so Git repository authentication is normally off.
+is the image-only production **template/baseline**, not proof that its embedded SHA equals the newest `main`. Do not directly redeploy that tracked baseline as a newer release merely because the filename says `current`.
+
+For an actual release, use the artifact from the GitHub Actions workflow:
+
+```text
+Exact-SHA production compose
+→ RouterVPN-production-compose-<40-character-release-SHA>
+→ RouterVPN-Portainer-<40-character-release-SHA>.yaml
+```
+
+The generated YAML must be for the exact verified `main` SHA, its checksum must pass, `Publish ARM64 Portainer images` must have succeeded for that same SHA, and every Router VPN custom image tag plus `ROUTER_VPN_GITHUB_SHA` in the generated file must equal that SHA. See `docs/PRODUCTION-RELEASE.md` for the release contract.
 
 Normal environment values:
 
@@ -341,15 +350,9 @@ Use `server/scripts/configure-ai-help.sh` locally on the Router VPN host to conf
 
 Browser/source-safe checks include Setup Center load, `/healthz`, syntax/contracts, package generation/checksums, exact-SHA builds and endpoint metadata. Real VPN checks require actual VPN permission/handshake/TUN, route change, tunneled DNS, public-IP proof, IPv6 behavior, fail-closed/leak-negative transitions, off-LAN reachability and forwarding where applicable. A green page or CI job is not a green live VPN path.
 
-For Portainer production update:
+For a Portainer production update, first choose one verified exact `main` SHA and require the exact-head build/release gates, including **Publish ARM64 Portainer images** and **Exact-SHA production compose**, to succeed for that same SHA. Download the `RouterVPN-production-compose-<sha>` artifact, verify its `.sha256`, verify all Router VPN custom image tags and `ROUTER_VPN_GITHUB_SHA` equal the selected SHA, then deliberately update the `router-vpn` stack using that generated YAML. Full procedure: `docs/PRODUCTION-RELEASE.md`.
 
-```text
-Stacks
-→ router-vpn
-→ Pull and redeploy
-```
-
-Keep the existing environment unless a release explicitly adds a required variable. Production remains exact-SHA image-only. Do not deploy an old RC merely because it once passed.
+Keep the existing environment unless a release explicitly adds a required variable. Production remains exact-SHA image-only. Do not deploy the tracked baseline, an older generated compose, or an old RC merely because it once passed.
 
 After update verify:
 
@@ -358,6 +361,7 @@ router-vpn-init       Exited (0)
 router-vpn-finalize   Exited (0)
 all long-running services Running
 http://192.168.50.133:8786/healthz = 200
+running Router VPN custom images/provenance = selected release SHA
 ```
 
 Do not reinstall the ASUS helper unless its Router VPN port/helper logic changed or the router lost its hooks; inspect current state first.
@@ -378,4 +382,4 @@ ASUS router:
 
 If a mode is unavailable, inspect the real checker/runtime reason. Never force it green in UI only.
 
-Use `docs/CURRENT-STATUS.md` for the current source-vs-live release boundary, `docs/NATIVE-APPS.md` for native application specifics and `docs/CLIENT.md` for linking/client notes.
+Use `docs/CURRENT-STATUS.md` for the current source-vs-live release boundary, `docs/NATIVE-APPS.md` for native application specifics, `docs/CLIENT.md` for linking/client notes, and `docs/PRODUCTION-RELEASE.md` for exact-SHA production materialization/deployment.

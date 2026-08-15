@@ -26,7 +26,7 @@ jobs:
           mkdir -p dist/production-release
           out="dist/production-release/RouterVPN-Portainer-${GITHUB_SHA}.yaml"
           python3 deploy/materialize-production-compose.py --sha "$GITHUB_SHA" --output "$out"
-          grep -Fq "Router VPN exact release compose: ${GITHUB_SHA}" "$out"
+          grep -Fq "GENERATED exact-SHA Router VPN production compose: ${GITHUB_SHA}" "$out"
           test "$(grep -Eo 'ghcr\.io/eabusham2/router-vpn-(init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux):[0-9a-f]{40}' "$out" | sed 's/.*://' | sort -u)" = "$GITHUB_SHA"
           test "$(sed -n 's/^[[:space:]]*ROUTER_VPN_GITHUB_SHA:[[:space:]]*\([0-9a-f]\{40\}\)[[:space:]]*$/\1/p' "$out")" = "$GITHUB_SHA"
           (cd dist/production-release && sha256sum "$(basename "$out")" > "$(basename "$out").sha256")
