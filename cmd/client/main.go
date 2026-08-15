@@ -742,6 +742,7 @@ func normalizeEndpoint(value string) (string, error) {
 			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-') {
 				return "", errors.New("invalid router hostname")
 			}
+		}
 	}
 	return strings.ToLower(value), nil
 }
