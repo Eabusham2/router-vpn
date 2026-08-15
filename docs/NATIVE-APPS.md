@@ -10,7 +10,7 @@ The Windows daily-use application is native WPF (`PresentationFramework`) and ta
 
 Windows source includes native raw WireGuard, full-device layered TUN/DNS paths, a Windows firewall kill-switch helper and real multihop where supported. WSL is not counted as the native Windows VPN implementation.
 
-Validated custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. A native OpenVPN 2.7 Windows adapter/helper path is implemented where the required pinned runtime/helper and requested direct/hop graph can be represented safely. Unsupported graphs fail closed; every supported custom exit withholds Connected until its expected public exit is proven.
+Validated Windows custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. OpenVPN 2.7 profile import and native helper/adapter source remain implemented because Windows OpenVPN is still a target, but current product capability reports it unavailable until strict Windows lifecycle cleanup passes native leak tests. Unsupported graphs fail closed; every supported custom exit withholds Connected until its expected public exit is proven.
 
 ## macOS
 
@@ -57,6 +57,10 @@ Native node managers support current/recent, last-used, measured-latency and nam
 A private router bundle import is data, not application installation. Generic packages contain no linked router secrets. The desktop importer stages decoded private files in a bounded `0700` temporary tree, uses `0600` files, validates names/counts/sizes and the WireGuard server-public-key-derived node identity, then atomically commits the generated profile. A failed import must not leave a partially visible node.
 
 The stable public proof identity is derived from the server WireGuard public key. `Connected` requires the private Router VPN proof endpoint or the custom exit proof path to return/observe the exact expected identity/exit. Generic Internet reachability or `{"ok":true}` alone is not VPN path proof.
+
+## Forwarding ownership
+
+Daily client forwarding is explicit and owned by the authenticated requesting tunnel peer. A peer clear operation must remove only that peer's rules. Broad Protected DMZ is intentionally an authenticated Setup Center/server-admin action because it must reserve infrastructure ports and avoid collisions with enabled explicit forwarding ranges.
 
 ## Truth boundary
 
