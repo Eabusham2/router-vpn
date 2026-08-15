@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 OUT=${1:?usage: build-native-app.sh OUT_BINARY}
-SRC="$ROOT/client/linux/routervpn-gtk-product-v3.c"
+SRC="$ROOT/client/linux/routervpn-gtk-product-v4.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
@@ -36,6 +36,9 @@ grep -Fq '/api/profile/pair' "$SRC" "$CORE"
 grep -Fq '/api/profile/import' "$SRC" "$CORE"
 grep -Fq '/api/profile/delete' "$SRC" "$CORE"
 grep -Fq '/api/profile/latency' "$SRC" "$CORE"
+grep -Fq '/api/external-profile/import' "$SRC"
+grep -Fq '/api/external-profile/connect' "$SRC"
+grep -Fq '/api/nodes' "$SRC"
 grep -Fq 'latitude' "$SRC" "$CORE"
 grep -Fq 'longitude' "$SRC" "$CORE"
 grep -Fq 'Nodes & Map' "$SRC" "$CORE"
