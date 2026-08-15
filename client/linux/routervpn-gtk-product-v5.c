@@ -194,7 +194,7 @@ static GtkWidget *build_help_page_v5(App *app) {
 static void build_ui_v5(App *app) {
     app->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(app->window), "Router VPN");
-    gtk_window_set_default_size(GTK_WINDOW(app->window), 1120, 740);
+    gtk_window_set_default_size(GTK_WINDOW(app->window), 960, 680);
     GtkNotebook *tabs = GTK_NOTEBOOK(gtk_notebook_new());
 
     GtkWidget *home = build_home_page(app);
