@@ -1,3 +1,5 @@
+#pragma push_macro("main")
+#undef main
 #define main routervpn_product_core_main
 #define build_ui routervpn_product_core_build_ui
 #define self_test routervpn_product_core_self_test
@@ -5,6 +7,7 @@
 #undef self_test
 #undef build_ui
 #undef main
+#pragma pop_macro("main")
 
 /*
  * Product v3 keeps the proven GTK/runtime shell above intact while making the
