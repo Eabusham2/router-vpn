@@ -76,6 +76,77 @@ static void on_connect_external_node(GtkButton *button, gpointer data) {
     refresh_all(app);
 }
 
+static char *json_external_hop_body(const char *profile_id, const char *entry_id) {
+    JsonBuilder *builder = json_builder_new();
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "profile_id");
+    json_builder_add_string_value(builder, profile_id != NULL ? profile_id : "");
+    json_builder_set_member_name(builder, "entry_id");
+    json_builder_add_string_value(builder, entry_id != NULL ? entry_id : "");
+    json_builder_end_object(builder);
+    JsonNode *root = json_builder_get_root(builder);
+    JsonGenerator *generator = json_generator_new();
+    json_generator_set_root(generator, root);
+    char *body = json_generator_to_data(generator, NULL);
+    json_node_free(root);
+    g_object_unref(generator);
+    g_object_unref(builder);
+    return body;
+}
+
+static void on_connect_external_via_entry(GtkButton *button, gpointer data) {
+    (void)button;
+    App *app = data;
+    const char *exit_id = active_router_id(app);
+    if (exit_id == NULL || exit_id[0] == '\0') {
+        append_diag(app, "External hop failed: select the external exit node first.");
+        return;
+    }
+
+    GtkWidget *dialog = gtk_dialog_new_with_buttons(
+        "Connect external exit through an entry", GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
+        "_Cancel", GTK_RESPONSE_CANCEL, "_Connect", GTK_RESPONSE_ACCEPT, NULL);
+    GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 14);
+    GtkWidget *note = gtk_label_new(
+        "Exit is the currently selected node. Choose a different Router VPN or supported external entry. "
+        "External WireGuard, SOCKS5, Shadowsocks and Hysteria2 can be upstream entries; OpenVPN remains final-exit only.");
+    gtk_label_set_xalign(GTK_LABEL(note), 0.0f);
+    gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
+    GtkWidget *combo = gtk_combo_box_text_new();
+    guint choices = 0;
+    for (guint i = 0; i < app->router_ids->len; i++) {
+        const char *candidate = g_ptr_array_index(app->router_ids, i);
+        if (candidate == NULL || candidate[0] == '\0' || g_strcmp0(candidate, exit_id) == 0) continue;
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), candidate);
+        choices++;
+    }
+    if (choices > 0) gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
+    gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), gtk_label_new("Entry node"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), combo, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), box, TRUE, TRUE, 0);
+    gtk_widget_show_all(dialog);
+
+    if (choices == 0) {
+        append_diag(app, "External hop failed: link/import a second node to use as the entry.");
+    } else if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        gchar *entry_id = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(combo));
+        if (entry_id == NULL || entry_id[0] == '\0') {
+            append_diag(app, "External hop failed: select an entry node.");
+        } else {
+            char *body = json_external_hop_body(exit_id, entry_id);
+            post_and_log(app, "/api/external-profile/connect", body, 180000,
+                         "External exit via selected entry (exact public-exit proof required)");
+            g_free(body);
+            refresh_all(app);
+        }
+        g_free(entry_id);
+    }
+    gtk_widget_destroy(dialog);
+}
+
 static GtkWidget *build_nodes_page_v4(App *app) {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_container_set_border_width(GTK_CONTAINER(box), 10);
@@ -99,6 +170,7 @@ static GtkWidget *build_nodes_page_v4(App *app) {
     gtk_box_pack_start(GTK_BOX(row), make_button("Pair home node", G_CALLBACK(on_pair_node), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(row), make_button("Import node JSON", G_CALLBACK(on_import_any_node), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(row), make_button("Connect external direct", G_CALLBACK(on_connect_external_node), app), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(row), make_button("External via entry", G_CALLBACK(on_connect_external_via_entry), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(row), make_button("Remove selected node", G_CALLBACK(on_remove_node), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(row), make_button("Run 50-sample latency", G_CALLBACK(on_latency_node), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), row, FALSE, FALSE, 0);
@@ -118,16 +190,16 @@ static void build_ui_v4(App *app) {
     add_tab(tabs, make_info_page("Advanced", "MTU/Jumbo, LAN access, kill switch, Router VPN multihop and external entry/exit compatibility remain controller-owned so native UI cannot claim settings the dataplane did not apply."), "Advanced");
     add_tab(tabs, make_info_page("Forwarding", "Incoming forwarding is available only when the active routable Router VPN dataplane can implement it. Proxy-only/external modes never pretend arbitrary DNAT is available."), "Forwarding");
     add_tab(tabs, make_info_page("Settings", "Router VPN Linux talks only to the fixed local controller at 127.0.0.1:8788. External protocol credentials remain in the private 0600 profile store and are redacted from public node/profile APIs."), "Settings");
-    add_tab(tabs, make_info_page("Help", "Pair a Router VPN home node or import validated Router VPN/external JSON. External direct connect succeeds only after its exact expected public exit is proven. Use Setup Center Full Guide for server/router administration."), "Help");
+    add_tab(tabs, make_info_page("Help", "Pair a Router VPN home node or import validated Router VPN/external JSON. External direct or entry->exit connect succeeds only after its exact expected public exit is proven. Use Setup Center Full Guide for server/router administration."), "Help");
     gtk_container_add(GTK_CONTAINER(app->window), tabs_widget);
 }
 
 static int self_test_v4(void) {
     if (routervpn_product_v3_self_test() != 0) return 2;
     static const char *const external_paths[] = {
-        "/api/external-profile/import", "/api/external-profile/connect", "/api/nodes"
+        "/api/external-profile/import", "/api/external-profile/connect", "/api/nodes", "entry_id"
     };
-    if (G_N_ELEMENTS(external_paths) != 3 || external_paths[0][0] != '/') return 3;
+    if (G_N_ELEMENTS(external_paths) != 4 || external_paths[0][0] != '/') return 3;
     puts("Router VPN native Linux unified external-node product self-test: OK");
     return 0;
 }
