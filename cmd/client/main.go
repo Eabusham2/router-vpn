@@ -344,6 +344,7 @@ func (a *app) deleteProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid router profile id", http.StatusBadRequest)
 		return
 	}
+
 	a.mu.Lock()
 	if a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" {
 		a.mu.Unlock()
@@ -355,7 +356,17 @@ func (a *app) deleteProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown router profile", http.StatusNotFound)
 		return
 	}
-	out := a.profiles.Profiles[:0]
+	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	stage, err := stageGeneratedProfileDeletion(root, q.ID)
+	if err != nil {
+		a.mu.Unlock()
+		http.Error(w, "cannot safely stage router profile deletion: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	oldStore := a.profiles
+	oldStore.Profiles = append([]common.RouterProfile(nil), a.profiles.Profiles...)
+	oldRouterID := a.state.RouterID
+	out := make([]common.RouterProfile, 0, len(a.profiles.Profiles))
 	for _, p := range a.profiles.Profiles {
 		if p.ID != q.ID {
 			out = append(out, p)
@@ -369,23 +380,24 @@ func (a *app) deleteProfile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.state.RouterID = a.profiles.SelectedID
-	err := a.persistProfilesLocked()
+	persistErr := a.persistProfilesLocked()
+	if persistErr != nil {
+		a.profiles = oldStore
+		a.state.RouterID = oldRouterID
+		rollbackErr := stage.rollback()
+		a.mu.Unlock()
+		if rollbackErr != nil {
+			http.Error(w, fmt.Sprintf("delete metadata failed: %v; profile rollback also failed: %v", persistErr, rollbackErr), http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
+		return
+	}
 	a.mu.Unlock()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
-	generatedRoot := filepath.Join(root, "generated")
-	target := filepath.Join(generatedRoot, q.ID)
-	rel, relErr := filepath.Rel(generatedRoot, target)
-	if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		http.Error(w, "unsafe router profile path", http.StatusInternalServerError)
-		return
-	}
-	if err := os.RemoveAll(target); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if err := stage.commitCleanup(); err != nil {
+		// The profile is already removed from the active namespace and metadata;
+		// a private tombstone is safer than restoring an already-confirmed delete.
+		log.Printf("profile %s deleted but private tombstone cleanup failed: %v", q.ID, err)
 	}
 	fmt.Fprint(w, `{"ok":true}`)
 }
@@ -826,10 +838,6 @@ func (a *app) options(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `{"ok":true}`)
 }
 
-// startMode is the safety boundary for every normal mode launch. A process start
-// is not a VPN connection. The public/manual form releases an on-connect policy
-// after a terminal failure; AUTO/logical fallback uses startModeAttempt(...,true)
-// so protection stays held while another candidate is about to be tried.
 func (a *app) startMode(id string) error {
 	return a.startModeAttempt(id, false)
 }
@@ -855,10 +863,6 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	if jumbo && !m.JumboSupported {
 		return errors.New("Jumbo TUN is not available for this mode; leave it off for WireGuard/AWG")
 	}
-	// Switching from an existing/failed runtime to a new candidate is a protected
-	// transition, not a manual disconnect. Keep on-connect/always firewall policy
-	// installed until the new candidate has either proven its path or the caller
-	// decides there are no more recovery candidates.
 	if err = a.stopModeWithIntent(true); err != nil {
 		return err
 	}
