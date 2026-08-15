@@ -25,5 +25,12 @@ jobs:
           cache: false
       - name: Compile and test shared source contracts
         run: go test ./cmd/client ./internal/common
+      - name: Test safe-upgrade generated credential preservation
+        run: |
+          python3 server/scripts/test_preserve_generated_state.py
+          bash -n server/scripts/generate-transports.sh
+          bash -n server/scripts/generate-xray-pq.sh
+          bash -n server/scripts/generate-tls-alternates.sh
+          bash -n server/scripts/generate-advanced-profiles.sh
       - name: Run strict native AI identity release-gap audit
         run: python3 deploy/release-gap-audit.py
