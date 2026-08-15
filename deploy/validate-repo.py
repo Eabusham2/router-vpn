@@ -330,12 +330,29 @@ if shutil.which("docker") and compose_path.is_file():
 
 for rel in ("server/install.sh", "server/upgrade.sh", "server/manage.sh"):
     body = text(rel)
-    if "server/portainer-current.yaml" not in body:
-        error(f"{rel} is not aligned to production compose")
+    if "ROUTER_VPN_PRODUCTION_COMPOSE" not in body:
+        error(f"{rel} does not require the generated exact-SHA production compose")
+    if "verify-production-compose.py" not in body and rel != "server/manage.sh":
+        error(f"{rel} does not verify the generated exact-SHA production compose")
+    if rel == "server/manage.sh" and "server/portainer-current.yaml baseline is intentionally rejected" not in body:
+        error("server/manage.sh does not clearly reject the tracked production baseline")
+    if re.search(r"COMPOSE=.*server/portainer-current\.yaml", body):
+        error(f"{rel} silently reintroduced the tracked baseline as a deploy target")
     if "portainer-compose.yaml" in body:
         error(f"{rel} reintroduced legacy build compose")
     if re.search(r"docker\s+compose\b[^\n]*\bbuild\b", body):
         error(f"{rel} explicitly builds server images")
+
+for rel, markers in {
+    "deploy/materialize-production-compose.py": ("GENERATED exact-SHA Router VPN production compose", "server/portainer-current.yaml"),
+    "server/scripts/verify-production-compose.py": ("not a generated exact-SHA Router VPN production compose", "moving Router VPN image tag"),
+    ".github/workflows/production-release-compose.yml": ("Exact-SHA production compose", "GITHUB_SHA", "RouterVPN-production-compose-"),
+    "docs/PRODUCTION-RELEASE.md": ("template/baseline", "Exact-SHA production compose", "verify-production-compose.py"),
+}.items():
+    body = text(rel)
+    for marker in markers:
+        if marker not in body:
+            error(f"{rel} missing exact-SHA production release marker: {marker}")
 
 pins = {
     "server/init/Dockerfile": (
