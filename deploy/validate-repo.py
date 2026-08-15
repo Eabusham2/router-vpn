@@ -339,7 +339,8 @@ for rel in ("server/install.sh", "server/upgrade.sh", "server/manage.sh"):
 
 pins = {
     "server/init/Dockerfile": (
-        "golang:1.24-bookworm", "ghcr.io/sagernet/sing-box:v1.13.12",
+        "golang:1.24.13-alpine", "golang:1.24.13-bookworm",
+        "ghcr.io/sagernet/sing-box:v1.13.12",
         "ghcr.io/xtls/xray-core:26.7.11", "ghcr.io/rosenpass/rosenpass:sha-00569eb",
     ),
     "server/awg2/Dockerfile": (
