@@ -9,6 +9,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 HERE = Path(__file__).resolve().parent
+FORWARDING_EXTENSION_BASE = "http://127.0.0.1:8791"
+FORWARDING_EXTENSION_PREFIX = "/api/admin/forwarding-extension"
 
 
 def _load(name: str, filename: str):
@@ -32,13 +34,39 @@ class Handler(_ai.Handler):
             enriched = self._before_body(enriched, _release.RELEASE_PANEL)
         return enriched
 
+    def _proxy_forwarding_extension(self, method: str) -> bool:
+        path = urlparse(self.path).path
+        if not (path == FORWARDING_EXTENSION_PREFIX or path.startswith(FORWARDING_EXTENSION_PREFIX + "/")):
+            return False
+        if not self._require_auth():
+            return True
+        self._proxy_admin(FORWARDING_EXTENSION_BASE, path, method)
+        return True
+
     def do_GET(self) -> None:
+        if self._proxy_forwarding_extension("GET"):
+            return
         if urlparse(self.path).path == "/api/release-status":
             if not self._require_auth():
                 return
             self._send_ai_json(200, _release.release_status(Path(self.server.base_dir)))
             return
         super().do_GET()
+
+    def do_POST(self) -> None:
+        if self._proxy_forwarding_extension("POST"):
+            return
+        super().do_POST()
+
+    def do_PUT(self) -> None:
+        if self._proxy_forwarding_extension("PUT"):
+            return
+        super().do_PUT()
+
+    def do_DELETE(self) -> None:
+        if self._proxy_forwarding_extension("DELETE"):
+            return
+        super().do_DELETE()
 
 
 class Server(_ai.Server):
@@ -57,7 +85,7 @@ def main() -> int:
     _ai._core._broker.cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
     print(
-        f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + Full Guide + device UX + release/recovery status + server-side AI Help",
+        f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + Full Guide + device UX + forwarding ownership/Protected DMZ + release/recovery status + server-side AI Help",
         flush=True,
     )
     try:
