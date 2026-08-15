@@ -91,9 +91,6 @@ func (a *app) logicalCatalog() []logicalMode {
 	if err == nil && len(modes) > 0 {
 		return modes
 	}
-	// A legacy package may not contain logical-modes.json yet. Keep the local
-	// controller functional instead of crashing, but do not invent compatibility:
-	// each raw runtime mode becomes a single non-fallback logical row.
 	out := make([]logicalMode, 0, len(a.modes))
 	for _, raw := range a.modes {
 		if raw.ID == "smart-auto" || raw.ID == "custom" {
@@ -243,8 +240,6 @@ func (a *app) persistBasePreference(base string) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// Changing the preference does not mutate an already-running tunnel; it is
-	// simply the preference used by the next logical-mode launch.
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == a.profiles.SelectedID {
 			a.profiles.Profiles[i].BaseTunnel = base
@@ -356,9 +351,6 @@ func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, erro
 		return candidate, nil
 	}
 
-	// ALL owns its internal TLS/QUIC and WG/AWG fallback ordering. Launch it once
-	// and wait for the health-tested branch it actually selected so the UI reports
-	// a real fallback rather than merely echoing the requested base.
 	if id == "all" {
 		return a.startAllLogical(requestedBase)
 	}
@@ -369,11 +361,14 @@ func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, erro
 	}
 	var failures []string
 	for _, candidate := range candidates {
-		if err := a.startMode(candidate.RuntimeID); err != nil {
+		if err := a.startModeAttempt(candidate.RuntimeID, true); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", candidate.Base, err))
 			continue
 		}
 		return candidate, nil
+	}
+	if err := a.releaseTransitionKillSwitch(); err != nil {
+		failures = append(failures, err.Error())
 	}
 	return runtimeCandidate{}, fmt.Errorf("%s unavailable: %s", logical.Name, strings.Join(failures, " • "))
 }
