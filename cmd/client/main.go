@@ -556,7 +556,6 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	finalProfileRoot := filepath.Join(root, "generated", p.ID)
 	a.profiles.Profiles = append(a.profiles.Profiles, p)
 	a.profiles.SelectedID = p.ID
 	a.state.RouterID = p.ID
@@ -568,7 +567,13 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	if err != nil {
-		_ = os.RemoveAll(finalProfileRoot)
+		cleanup, cleanupErr := stageGeneratedProfileDeletion(stage.baseRoot, p.ID)
+		if cleanupErr == nil {
+			cleanupErr = cleanup.commitCleanup()
+		}
+		if cleanupErr != nil {
+			log.Printf("router profile metadata rollback left a private generated profile tombstone/orphan: %v", cleanupErr)
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -737,7 +742,6 @@ func normalizeEndpoint(value string) (string, error) {
 			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-') {
 				return "", errors.New("invalid router hostname")
 			}
-		}
 	}
 	return strings.ToLower(value), nil
 }
