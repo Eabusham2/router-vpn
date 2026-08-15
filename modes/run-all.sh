@@ -83,7 +83,10 @@ for candidate in "${candidates[@]}"; do
   fi
   kill "$pid" >/dev/null 2>&1 || true
   wait "$pid" >/dev/null 2>&1 || true
-  HOMEVPN_ROOT="$ROOT" bash "$SCRIPT_DIR/stop-mode.sh" >/dev/null 2>&1 || true
+  # Another ALL branch is about to be tried. Tear down the failed runtime while
+  # retaining on-connect/always protection so there is no cleartext gap between
+  # MAX TLS/QUIC or WG/AWG fallback candidates.
+  HOMEVPN_KILLSWITCH_HOLD=1 HOMEVPN_ROOT="$ROOT" bash "$SCRIPT_DIR/stop-mode.sh" >/dev/null 2>&1 || true
   sleep 0.3
 done
 
