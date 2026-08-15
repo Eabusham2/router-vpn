@@ -486,7 +486,23 @@ func formatDNAT(ip net.IP, port int) string {
 	return ip.String()
 }
 
+func prioritizeExplicitForwarding(script string) string {
+	lines := strings.Split(script, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "add rule ") && strings.Contains(trimmed, `comment "router-vpn admin rule `) {
+			prefix := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = prefix + "insert rule " + strings.TrimPrefix(trimmed, "add rule ")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func nftScript(script string) error {
+	// Explicit Setup Center rules are more specific than Protected DMZ and must
+	// take precedence immediately. Protected DMZ itself uses a different tag and
+	// remains appended as the fallback for otherwise-unused allowed ports.
+	script = prioritizeExplicitForwarding(script)
 	cmd := exec.Command("nft", "-f", "-")
 	cmd.Stdin = bytes.NewBufferString(script)
 	out, err := cmd.CombinedOutput()
