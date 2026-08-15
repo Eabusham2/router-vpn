@@ -3,6 +3,7 @@ name: Windows product diagnostic v2
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -17,6 +18,9 @@ jobs:
         with:
           go-version: '1.24.x'
           cache: false
+      - name: Desktop icon generator self-test
+        shell: pwsh
+        run: python deploy/materialize-desktop-icons.py --self-test
       - name: Windows product self-test
         shell: pwsh
         run: |
@@ -43,6 +47,54 @@ jobs:
           export PATH="$TOOL_DIR:$PATH"
           ./deploy/build-client.sh
           ./deploy/package-builds.sh
+      - name: Normal Windows amd64 launcher and installer contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $archive=(Resolve-Path 'dist/packages/RouterVPN-Windows-amd64.zip').Path
+          $extract=Join-Path $env:RUNNER_TEMP 'normal-amd64'
+          Expand-Archive $archive $extract -Force
+          $root=Get-ChildItem $extract -Directory | Select-Object -First 1
+          foreach($name in @('RouterVPN.exe','RouterVPN.ico','RouterVPN.png','install-windows.ps1')){
+            if(-not(Test-Path (Join-Path $root.FullName $name))){ throw "Normal package missing $name" }
+          }
+          $p=Start-Process -FilePath (Join-Path $root.FullName 'RouterVPN.exe') -ArgumentList '--self-test' -Wait -PassThru
+          if($p.ExitCode -ne 0){ throw "Normal Windows launcher self-test failed with exit code $($p.ExitCode)" }
+
+          # Install into an isolated ProgramData tree so CI proves the Start Menu
+          # integration and upgrade-state preservation without changing the runner.
+          $sandbox=Join-Path $env:RUNNER_TEMP 'routervpn-programdata'
+          New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
+          $realProgramData=$env:ProgramData
+          try {
+            $env:ProgramData=$sandbox
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root.FullName 'install-windows.ps1') -Bundle $root.FullName
+            if($LASTEXITCODE -ne 0){ throw 'Windows installer first pass failed' }
+            $installed=Join-Path $sandbox 'RouterVPN'
+            $shortcut=Join-Path $sandbox 'Microsoft\Windows\Start Menu\Programs\Router VPN.lnk'
+            foreach($path in @((Join-Path $installed 'RouterVPN.exe'),(Join-Path $installed 'RouterVPN.ico'),$shortcut)){
+              if(-not(Test-Path -LiteralPath $path)){ throw "Installed application integration missing: $path" }
+            }
+            Set-Content -LiteralPath (Join-Path $installed 'routers.json') -Encoding UTF8 -Value '{"schema_version":3,"selected_id":"sentinel","profiles":[{"id":"sentinel","name":"keep-me"}]}'
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root.FullName 'install-windows.ps1') -Bundle $root.FullName
+            if($LASTEXITCODE -ne 0){ throw 'Windows installer upgrade pass failed' }
+            $stored=Get-Content -Raw -LiteralPath (Join-Path $installed 'routers.json') | ConvertFrom-Json
+            if($stored.selected_id -ne 'sentinel'){ throw 'Windows upgrade replaced the existing linked-node store' }
+            $p2=Start-Process -FilePath (Join-Path $installed 'RouterVPN.exe') -ArgumentList '--self-test' -Wait -PassThru
+            if($p2.ExitCode -ne 0){ throw "Installed Router VPN self-test failed with exit code $($p2.ExitCode)" }
+          } finally {
+            $env:ProgramData=$realProgramData
+          }
+      - name: Normal Windows arm64 archive contract
+        shell: pwsh
+        run: |
+          $archive=(Resolve-Path 'dist/packages/RouterVPN-Windows-arm64.zip').Path
+          $extract=Join-Path $env:RUNNER_TEMP 'normal-arm64'
+          Expand-Archive $archive $extract -Force
+          $root=Get-ChildItem $extract -Directory | Select-Object -First 1
+          foreach($name in @('RouterVPN.exe','RouterVPN.ico','RouterVPN.png','router-vpn-client.exe')){
+            if(-not(Test-Path (Join-Path $root.FullName $name))){ throw "ARM64 normal package missing $name" }
+          }
       - name: Portable amd64 direct self-test and relocation
         shell: pwsh
         run: |
@@ -54,6 +106,7 @@ jobs:
           $exe=Join-Path $root.FullName 'RouterVPNPortable.exe'
           $p=Start-Process -FilePath $exe -ArgumentList '--self-test' -Wait -PassThru
           if($p.ExitCode -ne 0){ throw "Portable direct self-test failed with exit code $($p.ExitCode)" }
+          if(-not(Test-Path (Join-Path $root.FullName 'App\RouterVPN\RouterVPN.ico'))){ throw 'Portable app icon missing' }
           $movedParent=Join-Path $env:RUNNER_TEMP 'portable-direct-moved-amd64'
           New-Item -ItemType Directory -Path $movedParent -Force | Out-Null
           $moved=Join-Path $movedParent $root.Name
