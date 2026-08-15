@@ -19,7 +19,10 @@ import (
 
 const mtuRetestTimeout = 2 * time.Minute
 
-func registerMTURetestRoute(h *http.ServeMux, a *app) { h.HandleFunc("/api/mtu/retest", a.retestMTU) }
+func registerMTURetestRoute(h *http.ServeMux, a *app) {
+	h.HandleFunc("/api/mtu/retest", a.retestMTU)
+	registerDNSPolicyRoute(h, a)
+}
 
 func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost { http.Error(w, "POST only", http.StatusMethodNotAllowed); return }
