@@ -27,8 +27,55 @@ func safeBundleToken(value string) bool {
 	return true
 }
 
+func canonicalBundleRoot(root string) (string, error) {
+	clean := filepath.Clean(root)
+	if err := os.MkdirAll(clean, 0o700); err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		return "", fmt.Errorf("resolve client root: %w", err)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return "", err
+	}
+	st, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !st.IsDir() {
+		return "", errors.New("client root is not a directory")
+	}
+	return resolved, nil
+}
+
+func ensurePrivateDirectoryNoSymlink(path string) error {
+	st, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			return err
+		}
+		st, err = os.Lstat(path)
+	}
+	if err != nil {
+		return err
+	}
+	if st.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("private bundle directory must not be a symlink: %s", filepath.Base(path))
+	}
+	if !st.IsDir() {
+		return fmt.Errorf("private bundle path is not a directory: %s", filepath.Base(path))
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		return err
+	}
+	return nil
+}
+
 type stagedBundle struct {
 	root       string
+	baseRoot   string
 	profileDir string
 	files      int
 	bytes      int64
@@ -38,12 +85,16 @@ func newStagedBundle(root, profileID string) (*stagedBundle, error) {
 	if !validProfileID(profileID) {
 		return nil, errors.New("invalid router profile id")
 	}
-	generated := filepath.Join(filepath.Clean(root), "generated")
-	if err := os.MkdirAll(generated, 0o700); err != nil {
+	baseRoot, err := canonicalBundleRoot(root)
+	if err != nil {
 		return nil, err
 	}
-	stagingRoot := filepath.Join(filepath.Clean(root), ".bundle-staging")
-	if err := os.MkdirAll(stagingRoot, 0o700); err != nil {
+	generated := filepath.Join(baseRoot, "generated")
+	if err := ensurePrivateDirectoryNoSymlink(generated); err != nil {
+		return nil, err
+	}
+	stagingRoot := filepath.Join(baseRoot, ".bundle-staging")
+	if err := ensurePrivateDirectoryNoSymlink(stagingRoot); err != nil {
 		return nil, err
 	}
 	tmp, err := os.MkdirTemp(stagingRoot, "import-")
@@ -59,7 +110,7 @@ func newStagedBundle(root, profileID string) (*stagedBundle, error) {
 		_ = os.RemoveAll(tmp)
 		return nil, err
 	}
-	return &stagedBundle{root: tmp, profileDir: profileDir}, nil
+	return &stagedBundle{root: tmp, baseRoot: baseRoot, profileDir: profileDir}, nil
 }
 
 func (s *stagedBundle) cleanup() {
@@ -123,13 +174,28 @@ func (s *stagedBundle) commit(root, profileID string) error {
 	if !validProfileID(profileID) {
 		return errors.New("invalid router profile id")
 	}
-	generated := filepath.Join(filepath.Clean(root), "generated")
+	baseRoot, err := canonicalBundleRoot(root)
+	if err != nil {
+		return err
+	}
+	if s == nil || s.baseRoot == "" || baseRoot != s.baseRoot {
+		return errors.New("client root changed during staged bundle import")
+	}
+	generated := filepath.Join(baseRoot, "generated")
+	// Re-check at commit time so replacing the validated directory with a symlink
+	// after staging cannot redirect the atomic move outside the profile root.
+	if err := ensurePrivateDirectoryNoSymlink(generated); err != nil {
+		return err
+	}
 	final := filepath.Join(generated, profileID)
 	rel, err := filepath.Rel(generated, final)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return errors.New("unsafe generated profile destination")
 	}
-	if _, err := os.Stat(final); err == nil {
+	if st, err := os.Lstat(final); err == nil {
+		if st.Mode()&os.ModeSymlink != 0 {
+			return errors.New("generated router profile destination is a symlink")
+		}
 		return errors.New("generated router profile destination already exists")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
