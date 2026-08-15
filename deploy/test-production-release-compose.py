@@ -20,6 +20,19 @@ DOCS = [
     ROOT / "docs/INSTALL-PORTAINER.md",
     ROOT / "docs/INSTALL-SSH.md",
 ]
+ACTIVE_ONBOARDING = [
+    ROOT / "server/scripts/setup_center_guide.py",
+    ROOT / "server/scripts/generate-setup-assets.py",
+    ROOT / "ios/RouterVPN/App/ContentView.swift",
+    ROOT / "android/app/src/main/java/com/eabusham/routervpn/MainActivity.java",
+]
+UNSAFE_ONBOARDING = [
+    "Create a stack from the Router VPN repository using <code>server/portainer-current.yaml</code>",
+    "Compose path: server/portainer-current.yaml",
+    "Compose: <code>server/portainer-current.yaml</code>",
+    "and use server/portainer-current.yaml",
+    "Deploy the home node with server/portainer-current.yaml",
+]
 
 
 def main() -> int:
@@ -53,6 +66,13 @@ def main() -> int:
             assert "Exact-SHA production compose" in text, f"{path} omits exact-SHA release workflow"
             assert "PRODUCTION-RELEASE.md" in text, f"{path} omits production release contract"
             assert "tracked" in text and "template" in text, f"{path} does not distinguish tracked template"
+
+        for path in ACTIVE_ONBOARDING:
+            text = path.read_text(encoding="utf-8")
+            assert "Exact-SHA production compose" in text, f"{path} omits exact-SHA release workflow"
+            assert "server/portainer-current.yaml" in text and "template/baseline" in text, f"{path} does not label tracked compose as baseline"
+            for unsafe in UNSAFE_ONBOARDING:
+                assert unsafe not in text, f"{path} revives unsafe baseline deployment wording: {unsafe}"
 
         bad = subprocess.run(
             [sys.executable, str(SCRIPT), "--sha", "not-a-sha", "--input", str(SOURCE), "--output", str(out)],

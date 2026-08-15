@@ -235,7 +235,7 @@ public final class MainActivity extends Activity {
     private String onboardingText(int s) {
         switch (s) {
             case 0: return "Complete path: deploy home node → authenticated Setup Center → Add Router/import or secure LAN pairing → choose active node → choose native/direct/AUTO/SMART/CUSTOM/ALL or compatible multihop → Android VPN consent → selected-node proof. Progress is saved; only Finish marks completion.";
-            case 1: return "Deploy the home node with server/portainer-current.yaml. Production services remain exact-image/SHA pinned; normal deployment never silently compiles from source.";
+            case 1: return "Deploy the home node from a generated exact-SHA production compose for one verified main release SHA. Require Publish ARM64 Portainer images and Exact-SHA production compose to be green for that same SHA, verify the generated RouterVPN-Portainer-RELEASE_SHA.yaml checksum plus image/broker pins, and use that YAML in Portainer. The tracked server/portainer-current.yaml is only a template/baseline; it is never silently treated as latest.";
             case 2: return "Verify init/finalize and long-running services are healthy before WAN exposure. Optional AI Board check: sudo bash server/scripts/doctor-current.sh.";
             case 3: return "On the home LAN open http://AI_BOARD_IP:8786/. Setup Center is authenticated because it can expose private node material. Keep the permanent credential router-local; pairing codes are short-lived.";
             case 4: return "ASUS forwarding exposes only intended public VPN/auxiliary ports. Never expose SOCKS5 1080, Setup Center 8786, health/admin/Portainer/AdGuard/SSH or private credentials to WAN.";

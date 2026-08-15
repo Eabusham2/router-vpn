@@ -42,9 +42,9 @@ GUIDE_PANEL = r'''
     <section class="rg-step" data-step="1">
       <h3>2. Deploy the home node from zero</h3>
       <ol>
-        <li>Open Portainer on the ASUS AI Board/Docker host.</li>
-        <li>Create a stack from the Router VPN repository using <code>server/portainer-current.yaml</code>.</li>
-        <li>Keep production image-only and exact-SHA pinned. Do not add a <code>build:</code> section to the production stack.</li>
+        <li>Choose one verified exact <code>main</code> release SHA after its source/native/runtime gates and <b>Publish ARM64 Portainer images</b> are green.</li>
+        <li>Download and checksum-verify the same-SHA <b>Exact-SHA production compose</b> artifact; use its generated <code>RouterVPN-Portainer-RELEASE_SHA.yaml</code> as the Portainer stack definition.</li>
+        <li>The tracked <code>server/portainer-current.yaml</code> is only a reproducible template/baseline. Keep production image-only and never add a <code>build:</code> section.</li>
         <li>Use the real WAN interface and home-LAN CIDR. The endpoint can stay blank when automatic public-address detection is appropriate.</li>
         <li>Let initialization/finalization finish, then open Setup Center and use its health/admin surfaces before linking clients.</li>
       </ol>

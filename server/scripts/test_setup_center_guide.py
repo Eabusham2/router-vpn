@@ -39,13 +39,17 @@ class SetupCenterGuideTests(unittest.TestCase):
             "Installing an app does not link it to your home",
             "install the app once and can add more routers without reinstalling",
             "Deploy the home node from zero",
+            "Exact-SHA production compose",
+            "RouterVPN-Portainer-RELEASE_SHA.yaml",
             "server/portainer-current.yaml",
+            "template/baseline",
             "ASUS router forwarding",
             "Link after install",
             "one-time LAN pairing",
             "router-vpn-bundle.json",
         ):
             self.assertIn(marker, self.guide)
+        self.assertNotIn("Create a stack from the Router VPN repository using <code>server/portainer-current.yaml</code>", self.guide)
 
     def test_method_hierarchy_is_explicit_and_capability_honest(self):
         ordered = [
