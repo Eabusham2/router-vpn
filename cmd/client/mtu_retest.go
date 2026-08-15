@@ -120,12 +120,16 @@ func mtuRetestCommand(root, scriptsDir string) (*exec.Cmd, error) {
 		}
 		return exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Action", "optimize"), nil
 	}
-	script := filepath.Join(filepath.Clean(scriptsDir), "mtu-throughput-tuner.py")
+	name := "mtu-throughput-tuner.py"
+	if runtime.GOOS == "darwin" {
+		name = "mtu-throughput-tuner-platform.py"
+	}
+	script := filepath.Join(filepath.Clean(scriptsDir), name)
 	if !safeMTUScriptPath(root, script) {
 		return nil, errors.New("unsafe MTU optimizer path")
 	}
 	if info, err := os.Stat(script); err != nil || !info.Mode().IsRegular() {
-		return nil, errors.New("MTU throughput tuner is not installed")
+		return nil, fmt.Errorf("MTU throughput tuner %s is not installed", name)
 	}
 	python, err := exec.LookPath("python3")
 	if err != nil {
