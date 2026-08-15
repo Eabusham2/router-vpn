@@ -81,7 +81,7 @@ static void on_pair_node(GtkButton *button, gpointer data) {
     gtk_label_set_xalign(GTK_LABEL(note), 0.0f);
     GtkWidget *host = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(host), "AI Board LAN IP / hostname");
-    gtk_entry_set_text(GTK_ENTRY(host), "192.168.50.133");
+    gtk_entry_set_text(GTK_ENTRY(host), "");
     GtkWidget *code = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(code), "6-digit one-time pairing code");
     gtk_entry_set_visibility(GTK_ENTRY(code), FALSE);

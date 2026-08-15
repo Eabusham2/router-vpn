@@ -11,8 +11,8 @@ final class RouterVPNModel: ObservableObject {
     @Published var basePreference = "wg"
     @Published var baseFallback = false
     @Published var homeLANAccess = true
-    @Published var homeLANCIDRs = ["192.168.50.0/24"]
-    @Published var lanImportHost = "192.168.50.133"
+    @Published var homeLANCIDRs: [String] = []
+    @Published var lanImportHost = ""
     @Published var lanPairingCode = ""
     @Published var auto = true
     @Published var daita = false
@@ -40,7 +40,7 @@ final class RouterVPNModel: ObservableObject {
 
     init() {
         let defaults = UserDefaults.standard
-        lanImportHost = defaults.string(forKey: lanImportKey) ?? "192.168.50.133"
+        lanImportHost = defaults.string(forKey: lanImportKey) ?? ""
         if let data = defaults.data(forKey: bundleKey),
            let saved = try? JSONDecoder().decode(ClientBundle.self, from: data) {
             apply(saved)

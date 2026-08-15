@@ -188,7 +188,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let alert = NSAlert(); alert.messageText = "Pair Router VPN home node"; alert.informativeText = "Create a short-lived 6-digit code in the authenticated private Setup Center. Pairing is private-LAN only and the code is one-time."
         alert.addButton(withTitle: "Pair"); alert.addButton(withTitle: "Cancel")
         let stack = NSStackView(); stack.orientation = .vertical; stack.spacing = 8; stack.frame = NSRect(x: 0, y: 0, width: 360, height: 86)
-        let host = NSTextField(string: "192.168.50.133"); host.placeholderString = "AI Board LAN IP / hostname"
+        let host = NSTextField(string: ""); host.placeholderString = "AI Board LAN IP / hostname"
         let code = NSSecureTextField(string: ""); code.placeholderString = "6-digit one-time pairing code"
         stack.addArrangedSubview(host); stack.addArrangedSubview(code); alert.accessoryView = stack
         guard alert.runModal() == .alertFirstButtonReturn else { return }

@@ -143,7 +143,7 @@ Default policy is Home AdGuard. Other choices include fastest measured public DN
 Private home SOCKS5:
 
 ```text
-192.168.50.133:1080
+LINKED_NODE_PRIVATE_HOST:1080
 ```
 
 Trusted LAN/tunnel only, no authentication. **Never WAN-forward TCP 1080.**

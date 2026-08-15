@@ -4,23 +4,23 @@ import json, os, pathlib, subprocess, sys, tempfile
 
 SCRIPT=pathlib.Path(__file__).with_name('multihop.py')
 
-def wg_conf(endpoint='router.invalid:51820',allowed='10.77.0.0/24, 192.168.50.0/24'):
+def wg_conf(endpoint='router.invalid:51820',allowed='10.77.0.0/24, 192.168.250.0/24'):
     return f'''[Interface]\nAddress = 10.77.0.2/24\nPrivateKey = test\n[Peer]\nPublicKey = test\nEndpoint = {endpoint}\nAllowedIPs = {allowed}\n'''
 
 def awg_conf():
-    return '''[Interface]\nAddress = 10.78.0.2/24\nPrivateKey = test\nJc = 3\n[Peer]\nPublicKey = test\nEndpoint = router.invalid:585\nAllowedIPs = 10.78.0.0/24, 192.168.50.0/24\n'''
+    return '''[Interface]\nAddress = 10.78.0.2/24\nPrivateKey = test\nJc = 3\n[Peer]\nPublicKey = test\nEndpoint = router.invalid:585\nAllowedIPs = 10.78.0.0/24, 192.168.250.0/24\n'''
 
 def exit_cfg(kind):
     outbound={'type':kind,'tag':'proxy','server':'router.invalid','server_port':8388 if kind=='shadowsocks' else 8443}
     if kind=='shadowsocks': outbound.update({'method':'2022-blake3-aes-256-gcm','password':'secret'})
     else: outbound.update({'password':'secret','tls':{'enabled':True,'server_name':'router-vpn.home','certificate_path':'cert.pem'}})
-    return {'log':{'level':'warn'},'dns':{'servers':[{'type':'udp','tag':'home-dns','server':'192.168.50.133','server_port':53,'detour':'proxy'}],'final':'home-dns'},'inbounds':[{'type':'tun','tag':'tun-in','interface_name':'router-vpn','address':['172.19.0.1/30'],'mtu':1380,'auto_route':True,'strict_route':True}],'outbounds':[outbound,{'type':'direct','tag':'direct'}],'route':{'rules':[{'protocol':'dns','action':'hijack-dns'}],'auto_detect_interface':True,'final':'proxy'}}
+    return {'log':{'level':'warn'},'dns':{'servers':[{'type':'udp','tag':'home-dns','server':'192.168.250.10','server_port':53,'detour':'proxy'}],'final':'home-dns'},'inbounds':[{'type':'tun','tag':'tun-in','interface_name':'router-vpn','address':['172.19.0.1/30'],'mtu':1380,'auto_route':True,'strict_route':True}],'outbounds':[outbound,{'type':'direct','tag':'direct'}],'route':{'rules':[{'protocol':'dns','action':'hijack-dns'}],'auto_detect_interface':True,'final':'proxy'}}
 
 def setup_root(td):
     root=pathlib.Path(td);(root/'run').mkdir();
     store={'selected_id':'control','profiles':[
       {'id':'control','name':'Control','endpoint':'198.51.100.9','kill_switch_policy':'always','multihop_enabled':True,'multihop_entry_id':'entry','multihop_exit_id':'exit'},
-      {'id':'entry','name':'Entry','endpoint':'203.0.113.11','socks_host':'192.168.50.133','socks_port':1080,'socks_username':'u','socks_password':'p'},
+      {'id':'entry','name':'Entry','endpoint':'203.0.113.11','socks_host':'192.168.250.10','socks_port':1080,'socks_username':'u','socks_password':'p'},
       {'id':'exit','name':'Exit','endpoint':'203.0.113.12','path_probe_url':'http://10.77.0.1:8787/health'},
     ]}
     (root/'routers.json').write_text(json.dumps(store)+'\n')
@@ -44,13 +44,13 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-multihop-') as td:
         out,manifest=build(root,base,mode)
         assert manifest['entry_id']=='entry' and manifest['exit_id']=='exit' and manifest['direct_exit_exception'] is False
         entry=(out/'entry'/('wg.conf' if base=='wg' else 'awg.conf')).read_text()
-        assert '203.0.113.11:' in entry and 'AllowedIPs = 192.168.50.133/32' in entry
+        assert '203.0.113.11:' in entry and 'AllowedIPs = 192.168.250.10/32' in entry
         assert '0.0.0.0/0' not in entry and '::/0' not in entry
         cfg=json.loads((out/'exit'/'sing-box.json').read_text())
         proxy=next(x for x in cfg['outbounds'] if x.get('tag')=='proxy')
         hop=next(x for x in cfg['outbounds'] if x.get('tag')=='entry-hop')
         assert proxy['server']=='203.0.113.12' and proxy['detour']=='entry-hop'
-        assert hop['server']=='192.168.50.133' and hop['server_port']==1080 and hop['username']=='u' and hop['password']=='p'
+        assert hop['server']=='192.168.250.10' and hop['server_port']==1080 and hop['username']=='u' and hop['password']=='p'
         assert not any(x.get('tag')=='direct' for x in cfg['outbounds'])
         assert cfg['route']['final']=='proxy'
         assert any(x.get('tag')=='multihop-proof' and x.get('type')=='mixed' for x in cfg['inbounds'])

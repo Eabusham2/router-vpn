@@ -377,7 +377,7 @@ private struct NativeOnboardingView: View {
                 Text(model.message).font(.caption).foregroundStyle(.secondary)
             }
         case 2:
-            OnboardingPage(title: "Deploy the home node from zero", text: "On the ASUS AI Board open Portainer → Stacks → Add stack → Repository and use server/portainer-current.yaml. Normal values include WAN_INTERFACE=eth0, LAN_CIDR=192.168.50.0/24 and ADGUARD4=192.168.50.133. Leave ENDPOINT blank for auto-detection when appropriate. Verify one-shot init/finalize exit 0 and long-running services are healthy before router forwards.")
+            OnboardingPage(title: "Deploy the home node from zero", text: "On the ASUS AI Board open Portainer → Stacks → Add stack → Repository and use server/portainer-current.yaml. Set WAN_INTERFACE to the deployment's WAN interface, LAN_CIDR to the deployment's LAN CIDR, and ADGUARD4 to the AI Board/Home AdGuard LAN address. Leave ENDPOINT blank for auto-detection when appropriate. Verify one-shot init/finalize exit 0 and long-running services are healthy before router forwards.")
         case 3:
             OnboardingPage(title: "ASUS router forwarding", text: "Enable the required ASUS SSH/JFFS support, then use the current Setup Center forwarding helper. It preserves existing nat-start/firewall-start content and checks the firewall backend. Never WAN-expose SOCKS5 1080, Setup Center 8786, router API 8787, Portainer, AdGuard admin, SSH, or the OverTLS loopback backend.")
         case 4:

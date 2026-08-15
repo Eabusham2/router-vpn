@@ -166,7 +166,7 @@ public final class ProductActivity extends Activity {
         EditText host = new EditText(this);
         host.setHint("AI Board LAN IP / hostname");
         host.setSingleLine(true);
-        host.setText("192.168.50.133");
+        host.setText("");
         EditText code = new EditText(this);
         code.setHint("6-digit one-time pairing code");
         code.setSingleLine(true);
