@@ -16,6 +16,7 @@ SING_BOX_IMAGE=${SING_BOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.12}
 XRAY_IMAGE=${XRAY_IMAGE:-ghcr.io/xtls/xray-core:26.7.11}
 sb(){ if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm -v "$BASE:$BASE" "$SING_BOX_IMAGE" "$@"; fi; }
 xr(){ if command -v xray >/dev/null 2>&1; then xray "$@"; else docker run --rm -v "$BASE:$BASE" "$XRAY_IMAGE" "$@"; fi; }
+umask 077
 
 for required in \
   "$BASE/config/xray/server.json" \
@@ -55,13 +56,19 @@ trap rollback EXIT
 TARGET_HOST=${REALITY_TARGET%:*}
 TARGET_PORT=${REALITY_TARGET##*:}
 [[ $TARGET_PORT =~ ^[0-9]+$ ]] || { TARGET_HOST=$REALITY_TARGET; TARGET_PORT=443; }
-UUID=$(xr uuid | awk 'NF{print $1; exit}')
-PAIR=$(xr x25519)
-REALITY_PRIVATE=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /privatekey/ {print $2; exit}')
-REALITY_PASSWORD=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /password|publickey/ {print $2; exit}')
-SHORT_ID=$(openssl rand -hex 8)
+PRESERVED=$(python3 /src/server/scripts/preserve-generated-state.py advanced "$BASE" 2>/dev/null || true)
+if [[ -n "$PRESERVED" ]]; then
+  eval "$PRESERVED"
+  echo 'Preserving existing XHTTP REALITY identity for same-deployment upgrade.' >&2
+else
+  UUID=$(xr uuid | awk 'NF{print $1; exit}')
+  PAIR=$(xr x25519)
+  REALITY_PRIVATE=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /privatekey/ {print $2; exit}')
+  REALITY_PASSWORD=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /password|publickey/ {print $2; exit}')
+  SHORT_ID=$(openssl rand -hex 8)
+fi
 for value in UUID REALITY_PRIVATE REALITY_PASSWORD SHORT_ID; do
-  [[ -n ${!value} ]] || { echo "Failed generating $value" >&2; exit 1; }
+  [[ -n ${!value} ]] || { echo "Failed generating/preserving $value" >&2; exit 1; }
 done
 
 python3 - "$BASE" "$ENDPOINT" "$ADGUARD4" "$WG_PORT" "$AWG_PORT" "$SS_PORT" "$HY2_PORT" "$XHTTP_PORT" "$TARGET_HOST" "$TARGET_PORT" "$UUID" "$REALITY_PRIVATE" "$REALITY_PASSWORD" "$SHORT_ID" "$LOCAL_RELAY_PORT" "$XHTTP_PATH" <<'PY'
