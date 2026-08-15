@@ -87,7 +87,12 @@ def _replace_required(html: str, old: str, new: str, label: str) -> str:
 
 
 def _replace_wizard(html: str) -> str:
+    # Historical generator revisions used v4; the reconciled generator already
+    # emits a static v5 wizard. In both cases normalize to the same action-driven
+    # v5 contract instead of treating the current template as drift.
     start = html.find("const WIZKEY='routervpn.setupcenter.done.v4'")
+    if start < 0:
+        start = html.find("const WIZKEY='routervpn.setupcenter.done.v5'")
     end = html.find("</script></body></html>", start)
     if start < 0 or end < 0:
         raise RuntimeError("Setup Center wizard template drifted")
@@ -98,9 +103,9 @@ const wiz=[
  {title:'Choose the simplest usable method',body:'Start with Simple/native. WireGuard is the baseline. AmneziaWG, Shadowsocks and Hysteria2 are shown only when a real import contract exists. Complex Router VPN stacks belong in the Router VPN app.',action:'Open methods',kind:'tab',tab:'devices'},
  {title:'Install Router VPN once',body:'For the full feature set, install the generic app for this device. The package is secret-free and is not tied to this home. You can link this node and additional nodes after installation.',action:'Open downloads',kind:'tab',tab:'downloads'},
  {title:'Link this node separately',body:'Use the authenticated private node-link bundle or one-time LAN pairing. This keeps one Router VPN install usable with multiple homes/nodes instead of baking a node into the installer.',action:'Open downloads',kind:'tab',tab:'downloads'},
- {title:'Understand modes and bases',body:'WireGuard and AmneziaWG are selectable base paths. AUTO stops at the first proven working mode; SMART AUTO connects, then tests simplification and restores the last known-good stack if reduction fails; CUSTOM is explicit composition.',action:'Open modes',kind:'tab',tab:'modes'},
- {title:'DNS policy',body:'Home AdGuard is the home default. Router VPN also offers measured public/common/custom/encrypted choices and DNS Rescue. A resolver is not considered proven merely because it appears in the list; the app must apply and validate it on the active path.',action:'Open guide',kind:'tab',tab:'guide'},
- {title:'Home LAN access',body:'Choose whether tunnel peers may reach the home LAN. The Server page now enforces this as a persistent router policy instead of storing a decorative preference.',action:'Check LAN policy',kind:'admin-settings'},
+ {title:'Understand modes and bases',body:'WireGuard and AmneziaWG are selectable base paths. AUTO stops at the first proven working mode; SMART AUTO connects, then tests simplification and restores the last known-good stack if reduction fails; CUSTOM is explicit composition. The native app shows layers, engineering latency/traffic/speed estimates, runtime readiness and the exact live reason.',action:'Open modes',kind:'tab',tab:'modes'},
+ {title:'DNS policy',body:'Home AdGuard is the home default. Router VPN also offers Fastest measured, Custom UDP/TCP, DoT, DoH, DoH3, Rescue and common IPv4/IPv6 choices. Resolver RTT means real A/AAAA DNS query time from the selected home node, not ICMP; the active session still has to prove what was applied.',action:'Open guide',kind:'tab',tab:'guide'},
+ {title:'Home LAN access',body:'Choose whether tunnel peers may reach the home LAN. The Server page enforces this as a persistent router policy instead of storing a decorative preference.',action:'Check LAN policy',kind:'admin-settings'},
  {title:'Connected clients and access control',body:'The Server page shows real WireGuard/AmneziaWG handshake age and transfer counters. Ban is reversible network blocking. Revoke also removes the live peer and persists the revocation.',action:'Open Server',kind:'tab',tab:'server-admin'},
  {title:'Port forwarding',body:'Use the persistent forwarding master and rules only for tunnel peer addresses. Reserved Router VPN and management ports are blocked from generic forwarding. Leave the master off when you do not need inbound forwarding.',action:'Check forwarding',kind:'admin-forwarding'},
  {title:'First connection',body:'In the Router VPN app, start with WireGuard Raw, then try AUTO or the recommended REALITY path. Connection state must be backed by selected-node path proof; a generic public HTTP success is not enough.',action:'Show app downloads',kind:'tab',tab:'downloads'},
@@ -140,9 +145,9 @@ def patch_html(html: str) -> str:
         '<div class="card hero"><h2>Choose the easiest path</h2><div class="grid2">',
         "setup lane grid",
     )
-    old_cards = '''<div class="card simple"><h3>1. Router VPN app</h3><p>Best overall. Install the small platform package, import <code>router-vpn-bundle.json</code>, then choose WireGuard, AUTO, SMART AUTO, CUSTOM or any validated mode in the app.</p><button onclick="gotoTab('downloads')">Get the app/controller</button></div>
+    old_cards = '''<div class="card simple"><h3>1. Router VPN app</h3><p>Best overall. Install the small platform package, pair/import <code>router-vpn-bundle.json</code>, then choose WireGuard, AUTO, SMART AUTO, CUSTOM or any validated mode in the app.</p><button onclick="gotoTab('downloads')">Get the app/controller</button></div>
 <div class="card simple"><h3>2. WireGuard only</h3><p>Fastest simple setup. Use the WireGuard config/QR from Devices & methods. It is the default base and the first connectivity test.</p><button onclick="gotoTab('devices')">Show WireGuard setup</button></div>
-<div class="card simple"><h3>3. Compatible protocol app</h3><p>Use Shadowsocks, Hysteria2, AmneziaWG, Xray, OverTLS or another compatible app without installing the full Router VPN controller.</p><button onclick="gotoTab('devices')">Choose a method</button></div>'''
+<div class="card simple"><h3>3. Compatible protocol app</h3><p>Use AmneziaWG, Shadowsocks, Hysteria2, OverTLS, ShadowsocksR, or the private in-tunnel SOCKS5 method only with clients that explicitly support that simple protocol. Complex Router VPN stacks stay in the Router VPN app.</p><button onclick="gotoTab('devices')">Choose a method</button></div>'''
     new_cards = '''<div class="card simple"><h3>1. Simple / native</h3><p>Start with an interoperable protocol your platform or a normal client can configure directly. WireGuard is the baseline; AmneziaWG, Shadowsocks and Hysteria2 appear only with their truthful import contract.</p><button onclick="gotoTab('devices')">Choose a simple method</button></div>
 <div class="card simple"><h3>2. Router VPN app — recommended</h3><p>Install Router VPN once, then link this node separately. Use the app for logical modes, AUTO / SMART AUTO / CUSTOM, DNS policy and the full Router VPN feature set.</p><button onclick="gotoTab('downloads')">Get Router VPN</button></div>
 <div class="card simple"><h3>3. Universal third-party client</h3><p>Use only the compatible protocols listed under Devices & methods. The Setup Center does not pretend complex Router VPN stacks are generic third-party imports.</p><button onclick="gotoTab('devices')">Show compatible methods</button></div>
@@ -197,7 +202,6 @@ $('downloads').innerHTML=downloads.map(x=>{const async=asyncDownloadName(x[1]);r
     new_methods = "const setupMethodLanes=new Set(['simple-native','universal','universal-compat','manual-app-proxy']);const laneNames={'simple-native':'Simple/native','universal':'Third-party','universal-compat':'Compatibility','manual-app-proxy':'Manual proxy'};const laneOrder=DATA.methodLaneOrder||[];const availableMethods=(DATA.methods||[]).filter(x=>x.available&&setupMethodLanes.has(x.methodLane));availableMethods.sort((a,b)=>laneOrder.indexOf(a.methodLane)-laneOrder.indexOf(b.methodLane)||a.label.localeCompare(b.label));for(const m of availableMethods){const o=document.createElement('option');o.value=m.id;o.textContent=(laneNames[m.methodLane]||'Method')+' — '+m.label;$('method').appendChild(o)}"
     html = _replace_required(html, old_methods, new_methods, "simple-only Methods selector")
 
-    # Kill stale browser/PWA/WSL product claims in the generated final surface.
     for old, new in (
         ("Mac local controller: http://127.0.0.1:8788", "Desktop app: launch Router VPN; localhost controller is an internal compatibility surface"),
         ("Open the Router VPN local app/PWA at 127.0.0.1:8788 and import router-vpn-bundle.json.", "Open the Router VPN desktop app and link/import this node separately. The localhost controller is not the final daily-use UI."),
