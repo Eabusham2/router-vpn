@@ -37,15 +37,19 @@ func (a *app) releaseTransitionKillSwitch() error {
 	a.mu.Lock()
 	profileID := a.profiles.SelectedID
 	a.mu.Unlock()
-	if profileID == "" {
-		return nil
-	}
 	helper := filepath.Join(a.cfg.ScriptsDir, "kill-switch-platform.py")
 	cmd := exec.Command("python3", helper, "release")
 	cmd.Dir = a.cfg.ScriptsDir
 	env := envWithValue(os.Environ(), killSwitchHoldEnv, "0")
 	env = envWithValue(env, "HOMEVPN_ROOT", filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client")))
-	env = envWithValue(env, "HOMEVPN_PROFILE_ID", profileID)
+	// Release is intentionally independent of a currently selected profile: the
+	// persisted kill-switch state is authoritative. This lets a restarted
+	// controller clear a stale on-connect firewall even when its in-memory mode
+	// is off or the formerly selected profile has since disappeared. When a
+	// profile is selected, pass it only as extra context for platform helpers.
+	if profileID != "" {
+		env = envWithValue(env, "HOMEVPN_PROFILE_ID", profileID)
+	}
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
