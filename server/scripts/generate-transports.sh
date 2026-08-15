@@ -8,6 +8,7 @@ HY2_PORT=${5:-8443}
 SS_PORT=${6:-8388}
 REALITY_TARGET=${7:-www.microsoft.com:443}
 SING_BOX_IMAGE=${SING_BOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.12}
+umask 077
 
 mkdir -p "$BASE/config/transports" \
   "$BASE/client-bundle/generated/hysteria2" \
@@ -20,15 +21,38 @@ sb(){
   if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm "$SING_BOX_IMAGE" "$@"; fi
 }
 
-SS_KEY=$(openssl rand -base64 32 | tr -d '\n')
-HY2_PASSWORD=$(openssl rand -base64 24 | tr -d '\n=/+' | head -c 28)
+PRESERVED=$(python3 /src/server/scripts/preserve-generated-state.py transports "$BASE" 2>/dev/null || true)
+if [[ -n "$PRESERVED" ]]; then
+  eval "$PRESERVED"
+  echo 'Preserving existing Shadowsocks/Hysteria2 credentials for same-deployment upgrade.' >&2
+else
+  SS_KEY=$(openssl rand -base64 32 | tr -d '\n')
+  HY2_PASSWORD=$(openssl rand -base64 24 | tr -d '\n=/+' | head -c 28)
+fi
 
 CERT_NAME=${ROUTER_VPN_TLS_NAME:-router-vpn.home}
-SAN="DNS:$CERT_NAME"
-openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 825 \
-  -subj "/CN=$CERT_NAME" -addext "subjectAltName=$SAN" \
-  -keyout "$BASE/config/transports/key.pem" -out "$BASE/config/transports/cert.pem" >/dev/null 2>&1
-cp "$BASE/config/transports/cert.pem" "$BASE/client-bundle/generated/hysteria2/cert.pem"
+CERT_PATH="$BASE/config/transports/cert.pem"
+KEY_PATH="$BASE/config/transports/key.pem"
+cert_ok=0
+if [[ -s "$CERT_PATH" && -s "$KEY_PATH" ]] \
+  && openssl x509 -in "$CERT_PATH" -noout >/dev/null 2>&1 \
+  && openssl pkey -in "$KEY_PATH" -noout >/dev/null 2>&1 \
+  && openssl x509 -in "$CERT_PATH" -noout -ext subjectAltName 2>/dev/null | grep -Fq "DNS:$CERT_NAME"; then
+  cert_pub=$(openssl x509 -in "$CERT_PATH" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+  key_pub=$(openssl pkey -in "$KEY_PATH" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+  if [[ -n "$cert_pub" && "$cert_pub" == "$key_pub" ]]; then
+    cert_ok=1
+  fi
+fi
+if (( cert_ok == 0 )); then
+  SAN="DNS:$CERT_NAME"
+  openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 825 \
+    -subj "/CN=$CERT_NAME" -addext "subjectAltName=$SAN" \
+    -keyout "$KEY_PATH" -out "$CERT_PATH" >/dev/null 2>&1
+else
+  echo 'Preserving existing valid Hysteria2 TLS certificate/private key.' >&2
+fi
+cp "$CERT_PATH" "$BASE/client-bundle/generated/hysteria2/cert.pem"
 
 python3 - "$BASE" "$ENDPOINT" "$ADGUARD4" "$HY2_PORT" "$SS_PORT" "$SS_KEY" "$HY2_PASSWORD" "$CERT_NAME" <<'PY'
 import json,sys,os
@@ -77,7 +101,7 @@ chmod 600 "$BASE/config/transports/"* "$BASE/client-bundle/generated/hysteria2/c
 # initialization those mounts do not exist yet, so validate a temporary copy
 # whose TLS paths point at the generated files without changing production paths.
 CHECK_CONFIG="$BASE/config/transports/server.check.json"
-python3 - "$BASE/config/transports/server.json" "$CHECK_CONFIG" "$BASE/config/transports/cert.pem" "$BASE/config/transports/key.pem" <<'PY'
+python3 - "$BASE/config/transports/server.json" "$CHECK_CONFIG" "$CERT_PATH" "$KEY_PATH" <<'PY'
 import json,sys
 src,dst,cert,key=sys.argv[1:]
 x=json.load(open(src))
