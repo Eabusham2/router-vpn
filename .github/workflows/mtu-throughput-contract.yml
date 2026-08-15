@@ -8,9 +8,13 @@ on:
       - 'modes/mtu-policy.py'
       - 'modes/test_mtu_policy.py'
       - 'modes/mtu-throughput-tuner.py'
+      - 'modes/mtu-throughput-tuner-platform.py'
+      - 'modes/kill-switch-platform.py'
       - 'client/Optimize-RouterVPN-MTU.ps1'
       - 'cmd/client/mtu_retest.go'
+      - 'cmd/client/mtu_retest_test.go'
       - 'cmd/client/extras.go'
+      - 'deploy/package-builds.sh'
       - '.github/workflows/mtu-throughput-contract.yml'
   pull_request:
     paths:
@@ -18,9 +22,13 @@ on:
       - 'modes/mtu-policy.py'
       - 'modes/test_mtu_policy.py'
       - 'modes/mtu-throughput-tuner.py'
+      - 'modes/mtu-throughput-tuner-platform.py'
+      - 'modes/kill-switch-platform.py'
       - 'client/Optimize-RouterVPN-MTU.ps1'
       - 'cmd/client/mtu_retest.go'
+      - 'cmd/client/mtu_retest_test.go'
       - 'cmd/client/extras.go'
+      - 'deploy/package-builds.sh'
       - '.github/workflows/mtu-throughput-contract.yml'
   workflow_dispatch:
 
@@ -32,19 +40,27 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Compile MTU policy and optimizer
-        run: python3 -m py_compile modes/network_context.py modes/mtu-policy.py modes/mtu-throughput-tuner.py modes/test_mtu_policy.py
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Compile MTU policy and optimizers
+        run: python3 -m py_compile modes/network_context.py modes/mtu-policy.py modes/mtu-throughput-tuner.py modes/mtu-throughput-tuner-platform.py modes/test_mtu_policy.py
       - name: Run deterministic MTU policy/network tests
         run: python3 modes/test_mtu_policy.py
-      - name: Run deterministic optimizer self-test
-        run: python3 modes/mtu-throughput-tuner.py --self-test
+      - name: Run deterministic direct and platform-wrapper optimizer self-tests
+        run: |
+          python3 modes/mtu-throughput-tuner.py --self-test
+          python3 modes/mtu-throughput-tuner-platform.py --self-test
       - name: Check fail-closed network-specific contract markers
         run: |
           python3 - <<'PY'
           from pathlib import Path
           s=Path('modes/mtu-throughput-tuner.py').read_text()
+          wrapper=Path('modes/mtu-throughput-tuner-platform.py').read_text()
           policy=Path('modes/mtu-policy.py').read_text()
           route=Path('cmd/client/mtu_retest.go').read_text()
+          package=Path('deploy/package-builds.sh').read_text()
           required=[
             'prove_node(profile)',
             'enforce_kill_switch()',
@@ -59,11 +75,14 @@ jobs:
           ]
           for marker in required:
             assert marker in s or marker in policy, marker
-          for marker in ['/api/mtu/retest','mtuRetestTimeout = 2 * time.Minute','connect the selected Router VPN node first','set this node MTU policy to Auto before Retest']:
+          for marker in ['kill-switch-platform.py','CORE.enforce_kill_switch = enforce_platform_kill_switch']:
+            assert marker in wrapper, marker
+          for marker in ['/api/mtu/retest','mtuRetestTimeout = 2 * time.Minute','connect the selected Router VPN node first','set this node MTU policy to Auto before Retest','mtu-throughput-tuner-platform.py','Optimize-RouterVPN-MTU.ps1']:
             assert marker in route, marker
-          print('Unix MTU optimizer + local Retest fail-closed contract OK')
+          assert 'cp -a "$ROOT/modes/." "$dir/modes/"' in package
+          print('Unix/macOS MTU optimizer + packaged local Retest fail-closed contract OK')
           PY
-      - name: Go client MTU Retest seam compiles
+      - name: Go client MTU Retest and Portable path seam compiles
         run: go test ./cmd/client -count=1
 
   windows-contract:
