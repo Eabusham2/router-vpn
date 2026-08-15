@@ -109,18 +109,21 @@ func publicProfileFor(p common.RouterProfile) publicProfile {
 	return out
 }
 
-func publicProfileStoreFor(store common.RouterProfileStore) publicProfileStore {
-	store=sortPublicProfileStore(store,"current")
+func publicProfileStoreForOrder(store common.RouterProfileStore, order string) publicProfileStore {
+	store=sortPublicProfileStore(store,order)
 	out:=publicProfileStore{SchemaVersion:store.SchemaVersion,SelectedID:store.SelectedID,Profiles:make([]publicProfile,0,len(store.Profiles))}
 	for _,p:=range store.Profiles{out.Profiles=append(out.Profiles,publicProfileFor(p))}
 	return out
 }
 
+func publicProfileStoreFor(store common.RouterProfileStore) publicProfileStore {
+	return publicProfileStoreForOrder(store,"current")
+}
+
 func (a *app) listPublicNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method!=http.MethodGet{http.Error(w,"GET only",http.StatusMethodNotAllowed);return}
 	a.mu.Lock();store:=a.profiles;a.mu.Unlock()
-	store=sortPublicProfileStore(store,r.URL.Query().Get("sort"))
 	w.Header().Set("content-type","application/json")
 	w.Header().Set("cache-control","no-store")
-	_ = json.NewEncoder(w).Encode(publicProfileStoreFor(store))
+	_ = json.NewEncoder(w).Encode(publicProfileStoreForOrder(store,r.URL.Query().Get("sort")))
 }
