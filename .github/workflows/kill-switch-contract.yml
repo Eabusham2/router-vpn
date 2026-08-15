@@ -13,12 +13,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
       - name: Unit contract
-        run: python3 modes/test_kill_switch.py
+        run: |
+          python3 modes/test_kill_switch.py
+          go test ./cmd/client -run 'KillSwitch|EnvWithValue'
+      - name: Transition state machine
+        run: python3 deploy/test-killswitch-transition-contract.py
       - name: Syntax
         run: |
-          python3 -m py_compile modes/kill-switch.py modes/mtu-policy.py
+          python3 -m py_compile modes/kill-switch.py modes/mtu-policy.py modes/orchestrate.py deploy/test-killswitch-transition-contract.py
           bash -n modes/stop-mode.sh
+          bash -n modes/stop-mode-platform.sh
+          bash -n modes/run-all.sh
           bash -n client/install-linux.sh
       - name: Fail-closed integration
         run: |
@@ -30,6 +40,7 @@ jobs:
           assert 'with_name("kill-switch.py")' in mtu
           assert '[sys.executable, str(helper), "apply"]' in mtu
           assert 'kill-switch.py' in stop and 'release' in stop
+          assert 'HOMEVPN_KILLSWITCH_HOLD' in stop
           assert 'policy drop' in ks
           assert 'nft' in ks and '"-c"' in ks and '"-f"' in ks
           assert 'action == "reassert"' in ks
