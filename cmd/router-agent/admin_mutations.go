@@ -656,18 +656,34 @@ func (a *adminMutationServer) applyPolicyLocked() error {
 }
 
 func renderLANAccessOffRules(table string, tunnelCIDRs []string, lanCIDR4, lanCIDR6 string) string {
-	var b strings.Builder
+	parsed := make([]*net.IPNet, 0, len(tunnelCIDRs))
 	for _, raw := range tunnelCIDRs {
-		_, src, err := net.ParseCIDR(raw)
-		if err != nil {
-			continue
+		if _, n, err := net.ParseCIDR(raw); err == nil {
+			parsed = append(parsed, n)
 		}
+	}
+	var b strings.Builder
+	for _, src := range parsed {
 		family, dst := "ip", lanCIDR4
 		if src.IP.To4() == nil {
 			family, dst = "ip6", lanCIDR6
 		}
-		if _, _, err := net.ParseCIDR(dst); err != nil {
+		_, lanNet, err := net.ParseCIDR(dst)
+		if err != nil {
 			continue
+		}
+		lanOnes, lanBits := lanNet.Mask.Size()
+		for _, tunnelDst := range parsed {
+			tunnelOnes, tunnelBits := tunnelDst.Mask.Size()
+			sameFamily := (src.IP.To4() != nil) == (tunnelDst.IP.To4() != nil)
+			if !sameFamily || lanBits != tunnelBits || lanOnes > tunnelOnes || !lanNet.Contains(tunnelDst.IP) {
+				continue
+			}
+			// A broad LAN range such as fd00::/8 may contain Router VPN's own ULA
+			// tunnel CIDRs. Exempt those overlay destinations first so LAN OFF does
+			// not cut the private control plane or peer overlay before the LAN drop.
+			fmt.Fprintf(&b, "add rule inet %s input %s saddr %s %s daddr %s accept comment %q\n", table, family, src.String(), family, tunnelDst.String(), "router-vpn private tunnel overlay")
+			fmt.Fprintf(&b, "add rule inet %s forward %s saddr %s %s daddr %s accept comment %q\n", table, family, src.String(), family, tunnelDst.String(), "router-vpn private tunnel overlay")
 		}
 		fmt.Fprintf(&b, "add rule inet %s input %s saddr %s %s daddr %s drop comment %q\n", table, family, src.String(), family, dst, "router-vpn LAN access off")
 		fmt.Fprintf(&b, "add rule inet %s forward %s saddr %s %s daddr %s drop comment %q\n", table, family, src.String(), family, dst, "router-vpn LAN access off")
