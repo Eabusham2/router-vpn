@@ -376,7 +376,7 @@ add chain inet %s prerouting { type nat hook prerouting priority dstnat; policy 
 	return nftScript(script)
 }
 
-func (s *server) applyForward(ip net.IP, q common.ForwardRequest) error {
+func peerForwardScript(table, wan string, ip net.IP, q common.ForwardRequest) string {
 	protos := []string{q.Protocol}
 	if q.Protocol == "both" {
 		protos = []string{"tcp", "udp"}
@@ -388,9 +388,16 @@ func (s *server) applyForward(ip net.IP, q common.ForwardRequest) error {
 		if q.To != q.From {
 			ports = fmt.Sprintf("%d-%d", q.From, q.To)
 		}
-		fmt.Fprintf(&b, "add rule inet %s prerouting iifname %q %s dport %s dnat to %s comment %q\n", s.cfg.NftTable, s.cfg.WANInterface, proto, ports, formatDNAT(ip, q.TargetPort), marker)
+		// Explicit forwarding is more specific than broad Protected DMZ. Insert
+		// it at the head so a newly-created peer rule wins immediately, even
+		// before the periodic DMZ reassertion recomputes its unused ranges.
+		fmt.Fprintf(&b, "insert rule inet %s prerouting iifname %q %s dport %s dnat to %s comment %q\n", table, wan, proto, ports, formatDNAT(ip, q.TargetPort), marker)
 	}
-	return nftScript(b.String())
+	return b.String()
+}
+
+func (s *server) applyForward(ip net.IP, q common.ForwardRequest) error {
+	return nftScript(peerForwardScript(s.cfg.NftTable, s.cfg.WANInterface, ip, q))
 }
 
 const peerForwardCommentPrefix = "router-vpn peer forward "
