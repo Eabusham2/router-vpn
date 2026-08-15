@@ -59,9 +59,10 @@ SH
 Router VPN for macOS
 ====================
 
-Open RouterVPN.app for the native AppKit client. The app owns the local controller lifecycle when
-it starts it and talks only to http://127.0.0.1:8788. It does not open or embed a website/WebView.
-The archive is generic and contains no linked home node. Add/import your router separately.
+Open RouterVPN.app for the native AppKit client. The app includes the Router VPN application icon,
+owns the local controller lifecycle when it starts it, and talks only to http://127.0.0.1:8788. It
+does not open or embed a website/WebView. The archive is generic and contains no linked home node.
+Add/import your router separately.
 
 start-router-vpn.sh is a convenience launcher for the same native app. Keep RouterVPN.app beside
 router-vpn-client, client.json, routers.json, modes/, generated/, and the rest of this folder.
@@ -74,8 +75,11 @@ Router VPN is MIT-licensed; see LICENSE.
 TXT
 
   tar -C "$WORK" -czf "$OUT/$name.tar.gz" "$name"
-  tar -tzf "$OUT/$name.tar.gz" >/dev/null
-  tar -tzf "$OUT/$name.tar.gz" | grep -q "^$name/RouterVPN.app/Contents/MacOS/RouterVPN$"
+  archive_list="$WORK/$name-members.txt"
+  tar -tzf "$OUT/$name.tar.gz" > "$archive_list"
+  grep -Fxq "$name/RouterVPN.app/Contents/MacOS/RouterVPN" "$archive_list"
+  grep -Fxq "$name/RouterVPN.app/Contents/Resources/RouterVPN.icns" "$archive_list"
+  [[ "$(plutil -extract CFBundleIconFile raw -o - "$dir/RouterVPN.app/Contents/Info.plist")" == "RouterVPN" ]]
 done
 
 python3 "$ROOT/deploy/check-generic-package-secrets.py" "$OUT"
