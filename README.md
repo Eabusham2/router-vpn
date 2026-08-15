@@ -76,7 +76,7 @@ Utility choices remain **AUTO**, **SMART AUTO**, and **CUSTOM**. Canonical mappi
 - private SOCKS5
 - OverTLS compatibility
 - ShadowsocksR legacy compatibility
-- authenticated forwarding / Protected DMZ on eligible peer-capable paths
+- authenticated peer-owned explicit forwarding on eligible tunnel paths; broad Protected DMZ is an authenticated Setup Center/server-admin action
 - persistent ASUS Merlin forwarding helper
 - authenticated Setup Center, Connected Clients and policy controls
 - dynamic client-download jobs with progress/cancel/fallback handling
@@ -112,7 +112,7 @@ CI also compiles supported controller/package targets for Linux ARMv7, BSD and i
 
 ### Windows
 
-Source includes native raw WireGuard, full-device layered TUN/DNS paths, Windows firewall kill-switch handling, real multihop where supported and validated custom exits. WireGuard/SOCKS5/Shadowsocks/Hysteria2 custom exits are supported. A native OpenVPN 2.7 Windows helper/adapter path is implemented where the required pinned runtime/helper and requested graph are supported. WSL is not counted as the native Windows VPN implementation.
+Source includes native raw WireGuard, full-device layered TUN/DNS paths, Windows firewall kill-switch handling, real multihop where supported and validated custom exits. WireGuard/SOCKS5/Shadowsocks/Hysteria2 custom exits are supported. The native OpenVPN 2.7 Windows import/helper/adapter work remains in source because Windows OpenVPN is still a project target, but the current product capability intentionally reports it unavailable until strict Windows lifecycle cleanup passes native leak tests. WSL is not counted as the native Windows VPN implementation.
 
 ### macOS
 
@@ -132,13 +132,13 @@ The PacketTunnel uses pinned WireGuardKit for real raw WireGuard and the pinned 
 
 ## Custom standard-protocol exits
 
-Custom exits are separate from Router VPN `CUSTOM` transport selection and Setup Center Methods. Current source support:
+Custom exits are separate from Router VPN `CUSTOM` transport selection and Setup Center Methods. Current product capability:
 
 - WireGuard — Windows/macOS/Linux/Android/iOS
 - SOCKS5 — Windows/macOS/Linux/Android/iOS
 - Shadowsocks — Windows/macOS/Linux/Android/iOS
 - Hysteria2 — Windows/macOS/Linux/Android/iOS
-- OpenVPN 2.7 — Windows/macOS/Linux where the required runtime/helper and requested direct/hop policy are safely supported
+- OpenVPN 2.7 — Linux/macOS where the required runtime and requested direct/hop policy are safely supported; Windows import/helper/adapter source exists but remains unavailable until native strict lifecycle/leak validation passes
 
 Private external-profile credentials stay in platform-private storage. Public list/status/profile APIs expose redacted summaries only. Connected requires exact selected-node/private-exit proof or exact expected-public-exit proof; generic Internet reachability is insufficient.
 
