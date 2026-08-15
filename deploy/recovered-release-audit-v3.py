@@ -159,6 +159,7 @@ def selected_dns_proof() -> bool:
 
 
 LINUX_SHIPPING = (
+    "client/linux/routervpn-gtk-product-v4.c",
     "client/linux/routervpn-gtk-product-v3.c",
     "client/linux/routervpn-gtk-product.c",
     "client/linux/routervpn-gtk.c",
