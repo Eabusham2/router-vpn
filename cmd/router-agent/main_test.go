@@ -22,6 +22,7 @@ func TestForwardValidationPreservesProtocolRangesTargetAndRejectsPeerDMZ(t *test
 			t.Fatalf("valid forward rejected: %+v: %v", q, err)
 		}
 	}
+	// Protected DMZ is an authenticated Setup Center admin action; the peer API must reject it.
 	invalid := []common.ForwardRequest{
 		{Protocol: "both", DMZ: true},
 		{Protocol: "icmp", From: 5000, To: 5000},
