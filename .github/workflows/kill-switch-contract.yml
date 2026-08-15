@@ -22,11 +22,19 @@ jobs:
           bash -n client/install-linux.sh
       - name: Fail-closed integration
         run: |
-          grep -q 'kill-switch.py.*apply' modes/mtu-policy.py
-          grep -q 'kill-switch.py.*release' modes/stop-mode.sh
-          grep -q 'policy drop' modes/kill-switch.py
-          grep -q 'nft.*-c' modes/kill-switch.py
-          grep -q 'action == "reassert"' modes/kill-switch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          mtu=Path('modes/mtu-policy.py').read_text()
+          stop=Path('modes/stop-mode.sh').read_text()
+          ks=Path('modes/kill-switch.py').read_text()
+          assert 'with_name("kill-switch.py")' in mtu
+          assert '[sys.executable, str(helper), "apply"]' in mtu
+          assert 'kill-switch.py' in stop and 'release' in stop
+          assert 'policy drop' in ks
+          assert 'nft' in ks and '"-c"' in ks and '"-f"' in ks
+          assert 'action == "reassert"' in ks
+          print('Linux kill-switch fail-closed integration markers: OK')
+          PY
       - name: Persistent always boot contract
         run: |
           grep -q 'nftables' client/install-linux.sh
