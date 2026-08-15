@@ -4,7 +4,9 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 OUT=${1:?usage: build-native-app.sh OUT_BINARY}
 SRC="$ROOT/client/linux/routervpn-gtk-product-v4.c"
+LEGACY="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
+SHIPPED=("$SRC" "$LEGACY" "$CORE")
 
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
@@ -31,28 +33,32 @@ if ! grep -q 'curl_easy_init' <<<"$SYMBOLS" && ! grep -q 'curl_easy_init' <<<"$D
   echo 'Native Linux app does not contain/reference required libcurl API.' >&2
   exit 1
 fi
-! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' "$SRC" "$CORE"
-grep -Fq 'gtk_window_new' "$SRC" "$CORE"
-grep -Fq 'gtk_notebook_new' "$SRC" "$CORE"
-grep -Fq 'http://127.0.0.1:8788' "$SRC" "$CORE"
-grep -Fq '/api/connect-logical' "$SRC" "$CORE"
-grep -Fq '/api/emergency-stop' "$SRC" "$CORE"
-grep -Fq '/api/session/events' "$SRC" "$CORE"
-grep -Fq '/api/profile/pair' "$SRC" "$CORE"
-grep -Fq '/api/profile/import' "$SRC" "$CORE"
-grep -Fq '/api/profile/delete' "$SRC" "$CORE"
-grep -Fq '/api/profile/latency' "$SRC" "$CORE"
+# v4 is the shipping translation unit and intentionally composes v3 -> core via
+# source includes. Contract checks must therefore inspect the whole composed
+# source graph instead of only v4 + core, or inherited native features are
+# falsely reported missing.
+! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' "${SHIPPED[@]}"
+grep -Fq 'gtk_window_new' "${SHIPPED[@]}"
+grep -Fq 'gtk_notebook_new' "${SHIPPED[@]}"
+grep -Fq 'http://127.0.0.1:8788' "${SHIPPED[@]}"
+grep -Fq '/api/connect-logical' "${SHIPPED[@]}"
+grep -Fq '/api/emergency-stop' "${SHIPPED[@]}"
+grep -Fq '/api/session/events' "${SHIPPED[@]}"
+grep -Fq '/api/profile/pair' "${SHIPPED[@]}"
+grep -Fq '/api/profile/import' "${SHIPPED[@]}"
+grep -Fq '/api/profile/delete' "${SHIPPED[@]}"
+grep -Fq '/api/profile/latency' "${SHIPPED[@]}"
 grep -Fq '/api/external-profile/import' "$SRC"
 grep -Fq '/api/external-profile/connect' "$SRC"
 grep -Fq '/api/nodes' "$SRC"
-grep -Fq 'latitude' "$SRC" "$CORE"
-grep -Fq 'longitude' "$SRC" "$CORE"
-grep -Fq 'Nodes & Map' "$SRC" "$CORE"
-grep -Fq 'Forwarding' "$SRC" "$CORE"
-grep -Fq 'Settings' "$SRC" "$CORE"
-grep -Fq 'Help' "$SRC" "$CORE"
-grep -Fq 'ensure_controller' "$SRC" "$CORE"
-grep -Fq 'shutdown_controller' "$SRC" "$CORE"
+grep -Fq 'latitude' "${SHIPPED[@]}"
+grep -Fq 'longitude' "${SHIPPED[@]}"
+grep -Fq 'Nodes & Map' "${SHIPPED[@]}"
+grep -Fq 'Forwarding' "${SHIPPED[@]}"
+grep -Fq 'Settings' "${SHIPPED[@]}"
+grep -Fq 'Help' "${SHIPPED[@]}"
+grep -Fq 'ensure_controller' "${SHIPPED[@]}"
+grep -Fq 'shutdown_controller' "${SHIPPED[@]}"
 "$OUT" --self-test
 
 echo "Built native Linux GTK Router VPN product shell at $OUT"
