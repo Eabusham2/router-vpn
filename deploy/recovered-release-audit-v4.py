@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Correct two stale v3 source predicates, then run the recovered scorer."""
+"""Correct stale recovered-audit source predicates, then run the scorer."""
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -16,6 +16,17 @@ new_multihop = '''def controller_multihop_platform(platform: str) -> bool:\n    
 if old_multihop not in source:
     raise SystemExit("v4 patch failed: v3 multihop predicate changed")
 source = source.replace(old_multihop, new_multihop, 1)
+
+# The shipping Linux v4 translation unit composes v3, which composes the core
+# product source. Audit the same source graph the compiler sees rather than
+# treating inherited native features as absent merely because their marker is
+# physically located in an included source file.
+linux_anchor = '''LINUX_SHIPPING = (\n    "client/linux/routervpn-gtk-product-v4.c",\n    "client/linux/routervpn-gtk-product-v3.c",\n    "client/linux/routervpn-gtk-product.c",\n    "client/linux/routervpn-gtk.c",\n)\n'''
+linux_helper = linux_anchor + '''\n\ndef linux_shipping_has(*markers: str) -> bool:\n    rel = shipping_source("client/linux/build-native-app.sh", LINUX_SHIPPING)\n    if not rel:\n        return False\n    if rel == "client/linux/routervpn-gtk-product-v4.c":\n        text = "\\n".join(mod.body(p) for p in LINUX_SHIPPING[:3])\n        return bool(text) and all(marker in text for marker in markers)\n    if rel == "client/linux/routervpn-gtk-product-v3.c":\n        text = "\\n".join(mod.body(p) for p in LINUX_SHIPPING[1:3])\n        return bool(text) and all(marker in text for marker in markers)\n    return mod.has(rel, *markers)\n'''
+if linux_anchor not in source:
+    raise SystemExit("v4 patch failed: v3 Linux shipping source tuple changed")
+source = source.replace(linux_anchor, linux_helper, 1)
+source = source.replace('shipping_has("client/linux/build-native-app.sh",LINUX_SHIPPING,', 'linux_shipping_has(')
 
 # v3's executable macOS kill-switch contract already distinguishes harmless
 # read-only /etc/pf.conf references from mutation/reload patterns. v4 therefore
