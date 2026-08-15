@@ -395,8 +395,6 @@ func (a *app) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	if err := stage.commitCleanup(); err != nil {
-		// The profile is already removed from the active namespace and metadata;
-		// a private tombstone is safer than restoring an already-confirmed delete.
 		log.Printf("profile %s deleted but private tombstone cleanup failed: %v", q.ID, err)
 	}
 	fmt.Fprint(w, `{"ok":true}`)
@@ -973,6 +971,15 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 			c.Dir = a.cfg.ScriptsDir
 			c.Env = a.stopCommandEnv(holdKillSwitch)
 			_ = c.Run()
+		}
+	}
+	if !holdKillSwitch {
+		if err := a.releaseTransitionKillSwitch(); err != nil {
+			a.mu.Lock()
+			a.state.Phase = "failed"
+			a.state.LastError = err.Error()
+			a.mu.Unlock()
+			return err
 		}
 	}
 	a.mu.Lock()
