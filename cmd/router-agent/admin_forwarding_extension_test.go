@@ -18,28 +18,62 @@ func TestForwardingExtensionOwnerValidation(t *testing.T) {
 	}
 }
 
-func TestProtectedDMZUsesOnlyUnreservedRanges(t *testing.T) {
+func TestProtectedDMZUsesOnlyOtherwiseUnusedUnreservedRanges(t *testing.T) {
 	s := &adminForwardingExtensionServer{cfg: cfg{
 		NftTable:      "router_vpn",
 		WANInterface:  "eth0",
 		ReservedPorts: []int{22, 53, 8786},
 	}}
-	script := s.protectedDMZScript(adminProtectedDMZ{TargetIP: "10.77.0.25", Protocol: "both", Enabled: true})
+	admin := defaultAdminState()
+	admin.ForwardRules = []adminForwardRule{
+		{ID: "minecraft", Protocol: "tcp", From: 25565, To: 25567, TargetIP: "10.77.0.9", Enabled: true},
+		{ID: "disabled", Protocol: "udp", From: 30000, To: 30002, TargetIP: "10.77.0.10", Enabled: false},
+	}
+	ranges := protectedDMZAllowedRanges(s.cfg.ReservedPorts, admin.ForwardRules)
+	for _, blocked := range []int{22, 53, 8786, 25565, 25566, 25567} {
+		if rangesContainPort(ranges, blocked) {
+			t.Fatalf("Protected DMZ ranges unexpectedly include blocked/explicit port %d: %v", blocked, ranges)
+		}
+	}
+	for _, allowed := range []int{21, 23, 25564, 25568, 30000, 65535} {
+		if !rangesContainPort(ranges, allowed) {
+			t.Fatalf("Protected DMZ ranges unexpectedly exclude unused port %d: %v", allowed, ranges)
+		}
+	}
+
+	script := s.protectedDMZScript(adminProtectedDMZ{TargetIP: "10.77.0.25", Protocol: "both", Enabled: true}, admin)
 	if script == "" || !strings.Contains(script, adminProtectedDMZComment) {
 		t.Fatal("Protected DMZ must emit tagged nft rules")
 	}
-	if strings.Contains(script, "dport 22 ") || strings.Contains(script, "dport 53 ") || strings.Contains(script, "dport 8786 ") {
-		t.Fatal("Protected DMZ must never forward a reserved port")
-	}
-	wantRules := len(allowedRanges(s.cfg.ReservedPorts)) * 2
+	wantRules := len(ranges) * 2
 	if got := strings.Count(script, "add rule inet router_vpn prerouting"); got != wantRules {
 		t.Fatalf("Protected DMZ rule count = %d, want %d", got, wantRules)
 	}
 }
 
+func rangesContainPort(ranges []string, wanted int) bool {
+	for _, raw := range ranges {
+		var from, to int
+		if strings.Contains(raw, "-") {
+			if _, err := fmt.Sscanf(raw, "%d-%d", &from, &to); err != nil {
+				continue
+			}
+		} else {
+			if _, err := fmt.Sscanf(raw, "%d", &from); err != nil {
+				continue
+			}
+			to = from
+		}
+		if wanted >= from && wanted <= to {
+			return true
+		}
+	}
+	return false
+}
+
 func TestProtectedDMZIPv6Formatting(t *testing.T) {
 	s := &adminForwardingExtensionServer{cfg: cfg{NftTable: "router_vpn", WANInterface: "eth0", ReservedPorts: []int{22}}}
-	script := s.protectedDMZScript(adminProtectedDMZ{TargetIP: "fd77:77::25", Protocol: "tcp", Enabled: true})
+	script := s.protectedDMZScript(adminProtectedDMZ{TargetIP: "fd77:77::25", Protocol: "tcp", Enabled: true}, defaultAdminState())
 	if !strings.Contains(script, "dnat to fd77:77::25") {
 		t.Fatalf("unexpected IPv6 DNAT syntax: %s", script)
 	}
