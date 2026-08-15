@@ -2,12 +2,58 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct RouterVPNNodeManagerSheet: View {
+    private enum NodeSort: String, CaseIterable, Identifiable {
+        case current = "Current / recent"
+        case latency = "Lowest latency"
+        case recent = "Last used"
+        case name = "Name"
+        var id: String { rawValue }
+    }
+
     @EnvironmentObject var model: RouterVPNModel
     @Environment(\.dismiss) private var dismiss
     @State private var editing: RouterProfile?
     @State private var importing = false
     @State private var pairHost = "192.168.50.133"
     @State private var pairCode = ""
+    @State private var nodeSort: NodeSort = .current
+
+    private var measuredProfiles: [RouterProfile] {
+        model.allNodeProfiles.filter { (($0.latencySamples ?? 0) > 0) && (($0.latencyMedianMs ?? 0) > 0) }
+    }
+
+    private var sortedProfiles: [RouterProfile] {
+        let selected = model.bundle?.selectedRouterID ?? ""
+        return model.allNodeProfiles.sorted { lhs, rhs in
+            let lname = lhs.name.isEmpty ? lhs.id.lowercased() : lhs.name.lowercased()
+            let rname = rhs.name.isEmpty ? rhs.id.lowercased() : rhs.name.lowercased()
+            switch nodeSort {
+            case .name:
+                return lname == rname ? lhs.id < rhs.id : lname < rname
+            case .recent:
+                let lused = lhs.lastUsedAt ?? ""
+                let rused = rhs.lastUsedAt ?? ""
+                if lused != rused { return lused > rused }
+                if (lhs.useCount ?? 0) != (rhs.useCount ?? 0) { return (lhs.useCount ?? 0) > (rhs.useCount ?? 0) }
+                return lname == rname ? lhs.id < rhs.id : lname < rname
+            case .latency:
+                let lm = ((lhs.latencySamples ?? 0) > 0) && ((lhs.latencyMedianMs ?? 0) > 0)
+                let rm = ((rhs.latencySamples ?? 0) > 0) && ((rhs.latencyMedianMs ?? 0) > 0)
+                if lm != rm { return lm }
+                if lm, (lhs.latencyMedianMs ?? 0) != (rhs.latencyMedianMs ?? 0) { return (lhs.latencyMedianMs ?? 0) < (rhs.latencyMedianMs ?? 0) }
+                if lm, (lhs.latencyP90Ms ?? 0) != (rhs.latencyP90Ms ?? 0) { return (lhs.latencyP90Ms ?? 0) < (rhs.latencyP90Ms ?? 0) }
+                return lname == rname ? lhs.id < rhs.id : lname < rname
+            case .current:
+                let lc = lhs.id == selected
+                let rc = rhs.id == selected
+                if lc != rc { return lc }
+                let lused = lhs.lastUsedAt ?? ""
+                let rused = rhs.lastUsedAt ?? ""
+                if lused != rused { return lused > rused }
+                return lname == rname ? lhs.id < rhs.id : lname < rname
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -42,8 +88,25 @@ struct RouterVPNNodeManagerSheet: View {
                         )
                     }
                 } else {
+                    Section("Node order") {
+                        Picker("Sort", selection: $nodeSort) {
+                            ForEach(NodeSort.allCases) { sort in
+                                Text(sort.rawValue).tag(sort)
+                            }
+                        }
+                        Button("Select lowest-latency node") {
+                            guard measuredProfiles.count >= 2,
+                                  let best = measuredProfiles.min(by: { ($0.latencyMedianMs ?? .infinity) < ($1.latencyMedianMs ?? .infinity) }) else { return }
+                            model.selectNode(best.id)
+                            nodeSort = .latency
+                        }
+                        .disabled(measuredProfiles.count < 2)
+                        Text(measuredProfiles.count < 2 ? "Run the 50-sample latency test on at least two usable nodes before automatic lowest-latency selection." : "Lowest-latency selection uses measured median latency; untested nodes are never guessed as fastest.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+
                     Section("Linked nodes") {
-                        ForEach(model.allNodeProfiles) { profile in
+                        ForEach(sortedProfiles) { profile in
                             nodeRow(profile)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     Button(role: .destructive) {
@@ -121,6 +184,10 @@ struct RouterVPNNodeManagerSheet: View {
             }
             if let median = profile.latencyMedianMs {
                 Text(String(format: "Latency median %.1f ms", median))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            if let lastUsed = profile.lastUsedAt, !lastUsed.isEmpty {
+                Text("Last used: \(lastUsed)")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             if profile.normalizedNodeKind == "external", let expected = profile.external?.expectedPublicIP, !expected.isEmpty {
