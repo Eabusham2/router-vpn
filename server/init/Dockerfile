@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS binaries
+FROM golang:1.24.13-alpine AS binaries
 WORKDIR /src
 COPY . .
 RUN mkdir -p dist \
@@ -22,7 +22,7 @@ RUN mkdir -p dist \
 # if a supported Windows/Portable component is unexpectedly absent. The
 # native AppKit/GTK SDK environments are intentionally not installed here;
 # macOS/Linux desktop fallback requires the exact-SHA native GitHub artifact.
-FROM golang:1.24-bookworm AS go-toolchain
+FROM golang:1.24.13-bookworm AS go-toolchain
 
 FROM ghcr.io/sagernet/sing-box:v1.13.12 AS singbox
 FROM ghcr.io/xtls/xray-core:26.7.11 AS xray

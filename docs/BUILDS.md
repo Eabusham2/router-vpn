@@ -37,7 +37,7 @@ Generic checked packages are produced for supported targets including:
 
 Windows package CI builds the native WPF product and executes normal installed-package plus Portable amd64/arm64 self-test/relocation gates. The normal package includes `RouterVPN.exe`, Start Menu/icon integration and the WPF daily-use app. Windows source includes native full-device runtime paths; WSL is not counted as the native Windows VPN implementation.
 
-The AI Board can assemble the complete requested Windows/Portable package from same-image prebuilt Go components plus the shipped WPF/runtime sources and deterministic Router VPN icons. If one supported Windows Go component is unexpectedly absent, only that requested component may be rebuilt with the bounded Go toolchain.
+The AI Board can assemble the complete requested Windows/Portable package from same-image prebuilt Go components plus the shipped WPF/runtime sources and deterministic Router VPN icons. If one supported Windows Go component is unexpectedly absent, only that requested component may be rebuilt with the bounded, patch-pinned Go 1.24.13 toolchain.
 
 CI execution still does not replace physical Windows full-device routing, DNS/IPv4/IPv6, leak-negative, reconnect/network-change and custom-exit testing.
 

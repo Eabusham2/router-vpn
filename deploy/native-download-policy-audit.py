@@ -132,9 +132,16 @@ for marker in (
 
 need(
     "server/init/Dockerfile",
+    "FROM golang:1.24.13-alpine AS binaries",
+    "FROM golang:1.24.13-bookworm AS go-toolchain",
     'dist/RouterVPN-${arch}.exe',
     "prebuilt components",
     "native AppKit/GTK SDK environments are intentionally not installed here",
+)
+forbid(
+    "server/init/Dockerfile",
+    "FROM golang:1.24-alpine AS binaries",
+    "FROM golang:1.24-bookworm AS go-toolchain",
 )
 
 fallback_test = subprocess.run(
