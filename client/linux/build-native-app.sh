@@ -88,12 +88,16 @@ grep -Fq 'Help' "${SHIPPED[@]}"
 grep -Fq 'ensure_controller' "${SHIPPED[@]}"
 grep -Fq 'shutdown_controller' "${SHIPPED[@]}"
 # Visual QA contract discovered post-GitHub: the shipping app must own a
-# persistent native first-run tutorial and a dedicated Diagnostics surface.
+# persistent native first-run tutorial, a dedicated Diagnostics surface and
+# truthful empty-state action availability.
 grep -Fq '#include "routervpn-gtk-product-v4-embedded.c"' "$SRC"
 grep -Fq 'linux-onboarding-v5.done' "$SRC"
 grep -Fq 'Run Tutorial' "$SRC"
 grep -Fq 'Diagnostics' "$SRC"
 grep -Fq '/api/session/events?after=0' "$SRC"
+grep -Fq 'apply_action_sensitivity_v5' "$SRC"
+grep -Fq 'gtk_widget_set_sensitive' "$SRC"
+grep -Fq 'truthful-empty-state-actions' "$SRC"
 "$OUT" --self-test
 
 echo "Built native Linux GTK Router VPN product shell at $OUT"

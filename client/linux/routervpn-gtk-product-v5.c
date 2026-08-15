@@ -84,6 +84,52 @@ static void on_run_tutorial_v5(GtkButton *button, gpointer data) {
     show_onboarding_v5((App *)data, TRUE);
 }
 
+static GtkWidget *find_button_v5(GtkWidget *root, const char *label) {
+    if (root == NULL) return NULL;
+    if (GTK_IS_BUTTON(root)) {
+        const char *current = gtk_button_get_label(GTK_BUTTON(root));
+        if (g_strcmp0(current, label) == 0) return root;
+    }
+    if (!GTK_IS_CONTAINER(root)) return NULL;
+    GList *children = gtk_container_get_children(GTK_CONTAINER(root));
+    GtkWidget *match = NULL;
+    for (GList *item = children; item != NULL && match == NULL; item = item->next) {
+        match = find_button_v5(GTK_WIDGET(item->data), label);
+    }
+    g_list_free(children);
+    return match;
+}
+
+static void remember_button_v5(App *app, GtkWidget *root, const char *key, const char *label) {
+    GtkWidget *button = find_button_v5(root, label);
+    if (button != NULL) g_object_set_data(G_OBJECT(app->window), key, button);
+}
+
+static void set_remembered_sensitive_v5(App *app, const char *key, gboolean sensitive) {
+    GtkWidget *widget = g_object_get_data(G_OBJECT(app->window), key);
+    if (widget != NULL) gtk_widget_set_sensitive(widget, sensitive);
+}
+
+static void apply_action_sensitivity_v5(App *app, gboolean connected) {
+    gboolean has_node = app->router_ids != NULL && app->router_ids->len > 0;
+    gboolean has_mode = has_node && app->mode_combo != NULL &&
+                        gtk_combo_box_get_active(GTK_COMBO_BOX(app->mode_combo)) >= 0;
+
+    if (app->router_combo != NULL) gtk_widget_set_sensitive(app->router_combo, has_node);
+    if (app->mode_combo != NULL) gtk_widget_set_sensitive(app->mode_combo, has_node);
+    if (app->base_combo != NULL) gtk_widget_set_sensitive(app->base_combo, has_node);
+
+    set_remembered_sensitive_v5(app, "router-vpn-home-auto-v5", has_node);
+    set_remembered_sensitive_v5(app, "router-vpn-home-disconnect-v5", connected);
+    set_remembered_sensitive_v5(app, "router-vpn-home-public-v5", connected);
+    set_remembered_sensitive_v5(app, "router-vpn-home-dns-v5", connected);
+    set_remembered_sensitive_v5(app, "router-vpn-modes-connect-v5", has_mode);
+    set_remembered_sensitive_v5(app, "router-vpn-diag-public-v5", connected);
+    set_remembered_sensitive_v5(app, "router-vpn-diag-dns-v5", connected);
+    /* Emergency stop deliberately remains available even while disconnected so
+       a stale helper/runtime can always be torn down. */
+}
+
 static gboolean refresh_diagnostics_page_v5(gpointer data) {
     App *app = data;
     GtkWidget *view = g_object_get_data(G_OBJECT(app->window), "router-vpn-diagnostics-v5");
@@ -93,6 +139,18 @@ static gboolean refresh_diagnostics_page_v5(gpointer data) {
     gboolean ok_status = api_request("/api/status", "GET", NULL, 1800, &status, &err_status);
     gboolean ok_session = api_request("/api/session", "GET", NULL, 1800, &session, &err_session);
     gboolean ok_events = api_request("/api/session/events?after=0", "GET", NULL, 1800, &events, &err_events);
+    gboolean connected = FALSE;
+    if (ok_status && status.data != NULL) {
+        JsonNode *root = parse_json(status.data);
+        if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
+            JsonObject *obj = json_node_get_object(root);
+            connected = json_object_has_member(obj, "connected") &&
+                        json_object_get_boolean_member(obj, "connected");
+        }
+        if (root != NULL) json_node_free(root);
+    }
+    apply_action_sensitivity_v5(app, connected);
+
     GString *text = g_string_new("Router VPN native diagnostics\n\n");
     g_string_append_printf(text, "Status:\n%s\n\n", ok_status && status.data != NULL ? status.data : (err_status != NULL ? err_status : "unavailable"));
     g_string_append_printf(text, "Session / selected-path proof:\n%s\n\n", ok_session && session.data != NULL ? session.data : (err_session != NULL ? err_session : "unavailable"));
@@ -138,24 +196,41 @@ static void build_ui_v5(App *app) {
     gtk_window_set_title(GTK_WINDOW(app->window), "Router VPN");
     gtk_window_set_default_size(GTK_WINDOW(app->window), 1120, 740);
     GtkNotebook *tabs = GTK_NOTEBOOK(gtk_notebook_new());
-    add_tab(tabs, build_home_page(app), "Home / Connect");
+
+    GtkWidget *home = build_home_page(app);
+    add_tab(tabs, home, "Home / Connect");
+    remember_button_v5(app, home, "router-vpn-home-auto-v5", "AUTO Connect");
+    remember_button_v5(app, home, "router-vpn-home-disconnect-v5", "Disconnect");
+    remember_button_v5(app, home, "router-vpn-home-public-v5", "Prove public VPN exit");
+    remember_button_v5(app, home, "router-vpn-home-dns-v5", "Retest DNS");
+
     add_tab(tabs, build_nodes_page_v4(app), "Nodes & Map");
-    add_tab(tabs, build_modes_page(app), "Modes");
+
+    GtkWidget *modes = build_modes_page(app);
+    add_tab(tabs, modes, "Modes");
+    remember_button_v5(app, modes, "router-vpn-modes-connect-v5", "Connect Selected");
+
     add_tab(tabs, make_info_page("DNS", "Selected DNS is controller-owned and session-proven. Home shows typed dns-proof events; a saved DNS choice alone is never proof."), "DNS");
     add_tab(tabs, make_info_page("Advanced", "MTU/Jumbo, LAN access, kill switch, Router VPN multihop and external entry/exit compatibility remain controller-owned so native UI cannot claim settings the dataplane did not apply."), "Advanced");
     add_tab(tabs, make_info_page("Forwarding", "Incoming forwarding is available only when the active routable Router VPN dataplane can implement it. Proxy-only/external modes never pretend arbitrary DNAT is available."), "Forwarding");
     add_tab(tabs, make_info_page("Settings", "Router VPN Linux talks only to the fixed local controller at 127.0.0.1:8788. External protocol credentials remain in the private 0600 profile store and are redacted from public node/profile APIs."), "Settings");
     add_tab(tabs, build_help_page_v5(app), "Help");
-    add_tab(tabs, build_diagnostics_page_v5(app), "Diagnostics");
+
+    GtkWidget *diagnostics = build_diagnostics_page_v5(app);
+    add_tab(tabs, diagnostics, "Diagnostics");
+    remember_button_v5(app, diagnostics, "router-vpn-diag-public-v5", "Prove public VPN exit");
+    remember_button_v5(app, diagnostics, "router-vpn-diag-dns-v5", "Retest DNS");
+
     gtk_container_add(GTK_CONTAINER(app->window), GTK_WIDGET(tabs));
 }
 
 static int self_test_v5(void) {
     if (self_test_v4() != 0) return 2;
     static const char *const visual_contract[] = {
-        "Diagnostics", "Run Tutorial", "linux-onboarding-v5.done", "/api/session/events?after=0"
+        "Diagnostics", "Run Tutorial", "linux-onboarding-v5.done",
+        "/api/session/events?after=0", "truthful-empty-state-actions"
     };
-    if (G_N_ELEMENTS(visual_contract) != 4 || visual_contract[0][0] != 'D') return 3;
+    if (G_N_ELEMENTS(visual_contract) != 5 || visual_contract[0][0] != 'D') return 3;
     puts("Router VPN native Linux v5 onboarding/diagnostics product self-test: OK");
     return 0;
 }
