@@ -27,6 +27,7 @@ public final class ProductActivity extends Activity {
     private AndroidUnifiedNodeCatalog catalog;
     private RouterVpnNodeMapView mapView;
     private TextView summaryView;
+    private String nodeSort = AndroidUnifiedNodeCatalog.SORT_CURRENT;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -72,6 +73,18 @@ public final class ProductActivity extends Activity {
         mapView = new RouterVpnNodeMapView(this);
         root.addView(mapView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(300)));
 
+        HorizontalScrollView nodeOrderScroll = new HorizontalScrollView(this);
+        nodeOrderScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout nodeOrder = new LinearLayout(this);
+        nodeOrder.setOrientation(LinearLayout.HORIZONTAL);
+        nodeOrder.addView(navButton("Current / recent", v -> setNodeSort(AndroidUnifiedNodeCatalog.SORT_CURRENT)));
+        nodeOrder.addView(navButton("Last used", v -> setNodeSort(AndroidUnifiedNodeCatalog.SORT_LAST_USED)));
+        nodeOrder.addView(navButton("Lowest latency", v -> setNodeSort(AndroidUnifiedNodeCatalog.SORT_LATENCY)));
+        nodeOrder.addView(navButton("Name", v -> setNodeSort(AndroidUnifiedNodeCatalog.SORT_NAME)));
+        nodeOrder.addView(navButton("Select lowest measured", v -> selectLowestLatencyNode()));
+        nodeOrderScroll.addView(nodeOrder);
+        root.addView(nodeOrderScroll, margins(0, dp(8), 0, 0));
+
         Button connect = button("Open Router VPN Connect — WG / AWG / libbox / Xray / AUTO / SMART / CUSTOM / ALL");
         connect.setOnClickListener(v -> openConnect());
         root.addView(connect, margins(0, dp(14), 0, 0));
@@ -92,10 +105,35 @@ public final class ProductActivity extends Activity {
         return scroll;
     }
 
+    private void setNodeSort(String order) {
+        nodeSort = order;
+        refreshNodes();
+        toast("Node order: " + order.replace('-', ' '));
+    }
+
+    private void selectLowestLatencyNode() {
+        try {
+            AndroidUnifiedNodeCatalog.Item best = catalog.lowestLatency();
+            if (best == null) {
+                toast("Run real latency measurements on at least two usable nodes first; current selection was kept.");
+                return;
+            }
+            if (!best.isRouterVpn()) {
+                toast("Lowest measured external exit is " + best.name + "; open it to connect with exact exit proof.");
+                chooseCatalogItem(best);
+                return;
+            }
+            nodeStore.select(best.id);
+            nodeSort = AndroidUnifiedNodeCatalog.SORT_LATENCY;
+            refreshNodes();
+            toast("Selected lowest measured median-latency node: " + best.name);
+        } catch (Exception error) { toast(safe(error)); }
+    }
+
     private void refreshNodes() {
         if (catalog == null || mapView == null || summaryView == null) return;
         try {
-            List<AndroidUnifiedNodeCatalog.Item> items = catalog.list();
+            List<AndroidUnifiedNodeCatalog.Item> items = catalog.list(nodeSort);
             String activeId = nodeStore.activeId();
             List<RouterVpnNodeMapView.Marker> markers = new ArrayList<>();
             AndroidUnifiedNodeCatalog.Item active = null;
@@ -108,7 +146,7 @@ public final class ProductActivity extends Activity {
                 markers.add(new RouterVpnNodeMapView.Marker(item.kind + ":" + item.id, label, item.latitude, item.longitude, item.isRouterVpn() && item.id.equals(activeId)));
             }
             mapView.setMarkers(markers);
-            String counts = routerCount + " Router VPN node" + (routerCount == 1 ? "" : "s") + " • " + externalCount + " external exit" + (externalCount == 1 ? "" : "s");
+            String counts = routerCount + " Router VPN node" + (routerCount == 1 ? "" : "s") + " • " + externalCount + " external exit" + (externalCount == 1 ? "" : "s") + " • order " + nodeSort.replace('-', ' ');
             if (externalWithoutCoordinates > 0) counts += " • " + externalWithoutCoordinates + " external list-only (no real coordinates)";
             if (active == null) {
                 summaryView.setText(items.isEmpty() ? "No linked nodes — pair/import a Router VPN bundle or add an external custom exit." : counts + "\nChoose a Router VPN node for normal modes, or an external exit for direct/hopped custom-exit use.");
@@ -166,7 +204,7 @@ public final class ProductActivity extends Activity {
 
     private void showNodes() {
         try {
-            List<AndroidUnifiedNodeCatalog.Item> items = catalog.list();
+            List<AndroidUnifiedNodeCatalog.Item> items = catalog.list(nodeSort);
             if (items.isEmpty()) {
                 new AlertDialog.Builder(this).setTitle("Nodes / Map")
                         .setMessage("No nodes yet. Pair a home node with a one-time Setup Center code, import a Router VPN bundle in Connect, or add a private external WireGuard/SOCKS5/Shadowsocks/Hysteria2 exit.")
@@ -180,7 +218,7 @@ public final class ProductActivity extends Activity {
                 AndroidUnifiedNodeCatalog.Item item = items.get(i);
                 labels[i] = (item.isRouterVpn() ? "Router VPN • " : "External • ") + item.toString();
             }
-            new AlertDialog.Builder(this).setTitle("Nodes / Map")
+            new AlertDialog.Builder(this).setTitle("Nodes / Map — " + nodeSort.replace('-', ' '))
                     .setMessage("Router VPN nodes become the active home node. External nodes open the direct/hopped custom-exit flow. External entries with no real coordinates remain list-only.")
                     .setItems(labels, (d, which) -> chooseCatalogItem(items.get(which)))
                     .setPositiveButton("Pair another home node", (d, w) -> showPairDialog())
