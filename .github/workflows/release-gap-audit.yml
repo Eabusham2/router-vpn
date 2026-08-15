@@ -34,3 +34,5 @@ jobs:
           bash -n server/scripts/generate-advanced-profiles.sh
       - name: Run strict native AI identity release-gap audit
         run: python3 deploy/release-gap-audit.py
+      - name: Guard cross-platform mode DNS and responsive product parity
+        run: python3 deploy/product-parity-audit.py
