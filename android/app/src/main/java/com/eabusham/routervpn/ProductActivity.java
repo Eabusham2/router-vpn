@@ -238,16 +238,11 @@ public final class ProductActivity extends Activity {
     }
 
     private void showModes() {
-        dialog("Modes", "Router VPN nodes use truthful WG/AWG/libbox/Xray readiness plus AUTO, SMART AUTO, CUSTOM, ALL and supported multihop. External nodes use the separate direct/hopped standard-exit runtime. Unavailable combinations stay unavailable instead of being CSS-forced ready.");
+        AndroidProductParity.showModes(this, nodeStore);
     }
 
     private void showDns() {
-        JSONObject p = activeRouterProfile();
-        if (p == null) { dialog("DNS", "Choose/link a Router VPN node for Router VPN DNS policy. Direct Android external exits currently use encrypted Rescue DNS through the selected external exit; they never pretend Home AdGuard is reachable through an unrelated provider."); return; }
-        String mode = p.optString("dns_mode", "home");
-        String host = p.optString("dns_host", "");
-        String latency = numericText(p, "fastest_dns_latency_ms", " ms");
-        dialog("DNS", "Selected Router VPN mode: " + mode + "\nResolver: " + (host.isEmpty() ? "profile/default" : host) + "\nMeasured DNS RTT: " + (latency.isEmpty() ? "not measured" : latency) + "\n\nConnected status still requires runtime DNS enforcement/proof; a saved selection alone is not proof.");
+        AndroidProductParity.showDNS(this, nodeStore);
     }
 
     private void showAdvanced() {
