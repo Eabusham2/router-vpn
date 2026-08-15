@@ -81,7 +81,11 @@ require(
     "DNS-over-HTTPS", "DNS-over-HTTP/3", "DNS Rescue", "/api/dns/policy", "/api/dns/retest",
     "Cloudflare IPv6", "Google IPv6", "Quad9 IPv6", "gtk_notebook_set_scrollable",
 )
-require("client/linux/routervpn-gtk-product-v4.c", "No real node coordinates", "latitude", "longitude")
+# The tracked v4 source is embedded into the v5 build and contains the actual
+# coordinate fields/map path. The explicit empty-state phrase is generated in
+# the embedded build layer, so the source guard checks real coordinate facts
+# here rather than requiring a build-generated string.
+require("client/linux/routervpn-gtk-product-v4.c", "latitude", "longitude", "Map")
 
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProductParity.java",
