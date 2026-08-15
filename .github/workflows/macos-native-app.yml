@@ -6,6 +6,7 @@ on:
     paths:
       - 'client/macos/**'
       - 'deploy/package-macos-native.sh'
+      - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
       - 'internal/common/**'
@@ -19,6 +20,7 @@ on:
     paths:
       - 'client/macos/**'
       - 'deploy/package-macos-native.sh'
+      - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
       - 'internal/common/**'
@@ -46,6 +48,8 @@ jobs:
         with:
           go-version: '1.24.x'
           cache: false
+      - name: Desktop icon generator self-test
+        run: python3 deploy/materialize-desktop-icons.py --self-test
       - name: Test controller and shared contracts
         run: go test ./cmd/client ./internal/common
       - name: Build native macOS packages
@@ -57,9 +61,20 @@ jobs:
           for arch in amd64 arm64; do
             archive="dist/macos-native/RouterVPN-darwin-$arch.tar.gz"
             test -s "$archive"
-            tar -tzf "$archive" | grep -q "^RouterVPN-darwin-$arch/RouterVPN.app/Contents/MacOS/RouterVPN$"
-            tar -tzf "$archive" | grep -q "^RouterVPN-darwin-$arch/LICENSE$"
-            ! tar -tzf "$archive" | grep -q 'router-vpn-bundle.json'
+            members="$RUNNER_TEMP/macos-$arch-members.txt"
+            tar -tzf "$archive" > "$members"
+            grep -Fxq "RouterVPN-darwin-$arch/RouterVPN.app/Contents/MacOS/RouterVPN" "$members"
+            grep -Fxq "RouterVPN-darwin-$arch/RouterVPN.app/Contents/Resources/RouterVPN.icns" "$members"
+            grep -Fxq "RouterVPN-darwin-$arch/RouterVPN.app/Contents/Info.plist" "$members"
+            grep -Fxq "RouterVPN-darwin-$arch/LICENSE" "$members"
+            ! grep -Fq 'router-vpn-bundle.json' "$members"
+            inspect="$RUNNER_TEMP/macos-$arch-inspect"
+            mkdir -p "$inspect"
+            tar -xzf "$archive" -C "$inspect"
+            plist="$inspect/RouterVPN-darwin-$arch/RouterVPN.app/Contents/Info.plist"
+            icon="$inspect/RouterVPN-darwin-$arch/RouterVPN.app/Contents/Resources/RouterVPN.icns"
+            test -s "$icon"
+            test "$(plutil -extract CFBundleIconFile raw -o - "$plist")" = 'RouterVPN'
           done
           (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
           test ! -d dist/macos-native/work
