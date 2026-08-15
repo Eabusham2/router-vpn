@@ -46,13 +46,25 @@ func TestLoopbackUIIsReadOnlyDiagnosticsNotDailyProduct(t *testing.T) {
 	} {
 		if strings.Contains(html, forbidden) { t.Fatalf("loopback diagnostics UI regained retired/mutating contract %q", forbidden) }
 	}
-	for _, required := range []string{"Compatibility asset", "native apps own daily controls", "diagnostics only"} {
+
+	for _, required := range []string{
+		"Compatibility asset", "native apps own daily controls", "diagnostics only",
+		"Connection validation", "/api/session", "Selected-node path proof", "DNS proof",
+		"Cross-platform policy intent", "The Modes page shows the 16 logical modes",
+		"/api/multihop/status", "/api/multihop/connect", "platform_supported",
+		"Entry and exit nodes must be different",
+		"exit public endpoint is not opened as a direct firewall exception",
+		"forbiddenLoopbackMutations",
+	} {
 		if !strings.Contains(js, required) { t.Fatalf("logical UI compatibility boundary missing %q", required) }
 	}
 	for _, forbidden := range []string{
 		"/api/logical-modes", "connectLogicalMode", "beforeinstallprompt", "serviceWorker.register", "installPWA(",
 	} {
 		if strings.Contains(js, forbidden) { t.Fatalf("logical UI compatibility asset regained retired product behavior %q", forbidden) }
+	}
+	if !strings.Contains(js, "forbiddenLoopbackMutations") || !strings.Contains(js, "/api/multihop/connect") {
+		t.Fatal("retired multihop mutation endpoint is not explicitly classified as forbidden loopback behavior")
 	}
 }
 
