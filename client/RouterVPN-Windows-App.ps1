@@ -22,7 +22,7 @@ $ApiContract = @(
     '/api/status', '/api/profiles', '/api/logical-modes', '/api/auto',
     '/api/connect-logical', '/api/disconnect', '/api/profile/select',
     '/api/profile/latency', '/api/public-ip', '/api/dns/retest',
-    '/api/emergency-stop', '/api/session', '/api/session/events'
+    '/api/mtu/retest', '/api/emergency-stop', '/api/session', '/api/session/events'
 )
 
 if ($SelfTest) {
