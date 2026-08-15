@@ -8,6 +8,7 @@ RUN mkdir -p dist \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-dns-${GOOS}-${GOARCH}${ext}" ./cmd/dnsproxy; \
     done \
  && for arch in amd64 arm64; do \
+      CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPN-${arch}.exe" ./cmd/windows-app-launcher; \
       CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPNPortable-${arch}.exe" ./cmd/portable-launcher; \
       CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPNSetupRuntime-${arch}.exe" ./cmd/portable-runtime-setup; \
     done \
@@ -16,8 +17,10 @@ RUN mkdir -p dist \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-agent-${GOOS}-${GOARCH}" ./cmd/router-agent; \
     done
 
-# Runtime Go exists only for the private on-demand fallback: when the matching
-# GitHub artifact is unavailable, compile exactly the requested client package.
+# Runtime Go exists only for the bounded requested-package fallback. The normal
+# path assembles from the exact-image prebuilt components above. Go is used only
+# if a supported Windows/Portable component is unexpectedly absent; native
+# AppKit/GTK SDK environments are intentionally not installed here.
 FROM golang:1.24-bookworm AS go-toolchain
 
 FROM ghcr.io/sagernet/sing-box:v1.13.12 AS singbox
@@ -59,6 +62,8 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && test -x /src/server/scripts/apply-runtime.sh \
  && test -x /src/server/scripts/build-download-on-demand.py \
  && test -x /src/server/scripts/download-broker.py \
+ && test -f /src/dist/RouterVPN-amd64.exe \
+ && test -f /src/dist/RouterVPN-arm64.exe \
  && test -f /src/dist/RouterVPNPortable-amd64.exe \
  && test -f /src/dist/RouterVPNPortable-arm64.exe \
  && test -f /src/dist/RouterVPNSetupRuntime-amd64.exe \

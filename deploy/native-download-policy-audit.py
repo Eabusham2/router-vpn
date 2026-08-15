@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,9 +116,38 @@ for floating in ("latest.zip", "/releases/latest", "refs/heads/main"):
         errors.append(f"download broker contains floating artifact source {floating!r}")
 
 builder_text = text("server/scripts/build-download-on-demand.py")
-for marker in ("LOCAL_BUILD_TIMEOUT", "compile_requested", "may compile only the requested generic Go package", "safe_extract_zip", "safe_extract_tar"):
+for marker in (
+    "LOCAL_BUILD_TIMEOUT",
+    "compile_requested",
+    "same-image prebuilt components",
+    "same-SHA native GitHub artifact is required",
+    "RouterVPN-{arch}.exe",
+    "materialize_icons",
+    "controller-only substitute",
+    "safe_extract_zip",
+    "safe_extract_tar",
+):
     if marker not in builder_text:
         errors.append(f"router-local fallback contract missing {marker!r}")
+
+need(
+    "server/init/Dockerfile",
+    'dist/RouterVPN-${arch}.exe',
+    "prebuilt components",
+    "native AppKit/GTK SDK environments are intentionally not installed here",
+)
+
+fallback_test = subprocess.run(
+    [sys.executable, str(ROOT / "deploy" / "test-router-local-package-fallback.py")],
+    cwd=ROOT,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    check=False,
+    timeout=30,
+)
+if fallback_test.returncode != 0:
+    errors.append("router-local complete-package fallback behavior test failed: " + (fallback_test.stdout or "").strip()[-4000:])
 
 scanner = text("deploy/check-generic-package-secrets.py")
 for marker in ("generic package contains private bundle", "generic package contains linked router profiles", "package does not ship LICENSE"):
