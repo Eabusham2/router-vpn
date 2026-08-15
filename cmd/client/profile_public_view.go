@@ -44,6 +44,9 @@ type publicProfile struct {
 	EffectiveMTUPathKey string `json:"effective_mtu_path_key,omitempty"`
 	EffectiveUnderlayPMTU int `json:"effective_underlay_pmtu,omitempty"`
 	EffectiveMTUTestedAt string `json:"effective_mtu_tested_at,omitempty"`
+	EffectiveMTUMbps float64 `json:"effective_mtu_mbps,omitempty"`
+	EffectiveMTUMedianRTTMs float64 `json:"effective_mtu_median_rtt_ms,omitempty"`
+	EffectiveMTUSuccessRatio float64 `json:"effective_mtu_success_ratio,omitempty"`
 	DiagnosticsEnabled bool `json:"diagnostics_enabled,omitempty"`
 	DiagnosticsRetentionDays int `json:"diagnostics_retention_days,omitempty"`
 	ShareDiagnostics bool `json:"share_diagnostics,omitempty"`
@@ -93,6 +96,7 @@ func publicProfileFor(p common.RouterProfile) publicProfile {
 		MultihopEnabled:p.MultihopEnabled, MultihopEntryID:p.MultihopEntryID, MultihopExitID:p.MultihopExitID,
 		MTUPolicy:p.MTUPolicy, ManualMTU:p.ManualMTU, EffectiveMTU:p.EffectiveMTU, EffectiveMTUSource:p.EffectiveMTUSource,
 		EffectiveMTUPathKey:p.EffectiveMTUPathKey, EffectiveUnderlayPMTU:p.EffectiveUnderlayPMTU, EffectiveMTUTestedAt:p.EffectiveMTUTestedAt,
+		EffectiveMTUMbps:p.EffectiveMTUMbps, EffectiveMTUMedianRTTMs:p.EffectiveMTUMedianRTTMs, EffectiveMTUSuccessRatio:p.EffectiveMTUSuccessRatio,
 		DiagnosticsEnabled:p.DiagnosticsEnabled, DiagnosticsRetentionDays:p.DiagnosticsRetentionDays, ShareDiagnostics:p.ShareDiagnostics, TelemetryEnabled:p.TelemetryEnabled,
 		Location:p.Location, Latitude:p.Latitude, Longitude:p.Longitude, UseCount:p.UseCount, LastUsedAt:p.LastUsedAt,
 		LatencySamples:p.LatencySamples, LatencyMinMs:p.LatencyMinMs, LatencyMedianMs:p.LatencyMedianMs,
