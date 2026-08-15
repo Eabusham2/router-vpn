@@ -197,13 +197,14 @@ func (s *server) clear(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", 405)
 		return
 	}
-	if _, err := s.authorized(r); err != nil {
+	ip, err := s.authorized(r)
+	if err != nil {
 		http.Error(w, err.Error(), 403)
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := nftScript(fmt.Sprintf("flush chain inet %s prerouting\n", s.cfg.NftTable)); err != nil {
+	if err := s.clearPeerForwarding(ip); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -347,7 +348,7 @@ func validateForward(q common.ForwardRequest, reserved []int) error {
 		return errors.New("protocol must be tcp, udp, or both")
 	}
 	if q.DMZ {
-		return nil
+		return errors.New("Protected DMZ is an authenticated Setup Center admin action; tunnel peers may create only explicit owned forwarding rules")
 	}
 	if q.From < 1 || q.To < q.From || q.To > 65535 || q.To-q.From > 4096 {
 		return errors.New("invalid or too-large range")
@@ -375,26 +376,68 @@ add chain inet %s prerouting { type nat hook prerouting priority dstnat; policy 
 	return nftScript(script)
 }
 
-func (s *server) applyForward(ip net.IP, q common.ForwardRequest) error {
+func peerForwardScript(table, wan string, ip net.IP, q common.ForwardRequest) string {
 	protos := []string{q.Protocol}
 	if q.Protocol == "both" {
 		protos = []string{"tcp", "udp"}
 	}
 	var b strings.Builder
+	marker := peerForwardComment(ip)
 	for _, proto := range protos {
-		if q.DMZ {
-			for _, r := range allowedRanges(s.cfg.ReservedPorts) {
-				fmt.Fprintf(&b, "add rule inet %s prerouting iifname %q %s dport %s dnat to %s\n", s.cfg.NftTable, s.cfg.WANInterface, proto, r, formatDNAT(ip, 0))
-			}
-			continue
-		}
 		ports := strconv.Itoa(q.From)
 		if q.To != q.From {
 			ports = fmt.Sprintf("%d-%d", q.From, q.To)
 		}
-		fmt.Fprintf(&b, "add rule inet %s prerouting iifname %q %s dport %s dnat to %s\n", s.cfg.NftTable, s.cfg.WANInterface, proto, ports, formatDNAT(ip, q.TargetPort))
+		// Explicit forwarding is more specific than broad Protected DMZ. Insert
+		// it at the head so a newly-created peer rule wins immediately, even
+		// before the periodic DMZ reassertion recomputes its unused ranges.
+		fmt.Fprintf(&b, "insert rule inet %s prerouting iifname %q %s dport %s dnat to %s comment %q\n", table, wan, proto, ports, formatDNAT(ip, q.TargetPort), marker)
 	}
-	return nftScript(b.String())
+	return b.String()
+}
+
+func (s *server) applyForward(ip net.IP, q common.ForwardRequest) error {
+	return nftScript(peerForwardScript(s.cfg.NftTable, s.cfg.WANInterface, ip, q))
+}
+
+const peerForwardCommentPrefix = "router-vpn peer forward "
+
+func peerForwardComment(ip net.IP) string {
+	return peerForwardCommentPrefix + ip.String()
+}
+
+func peerForwardDeleteScript(chainListing, table string, ip net.IP) string {
+	marker := fmt.Sprintf("comment %q", peerForwardComment(ip))
+	var b strings.Builder
+	for _, line := range strings.Split(chainListing, "\n") {
+		if !strings.Contains(line, marker) || !strings.Contains(line, "# handle ") {
+			continue
+		}
+		parts := strings.Split(line, "# handle ")
+		if len(parts) != 2 {
+			continue
+		}
+		fields := strings.Fields(parts[1])
+		if len(fields) == 0 {
+			continue
+		}
+		if _, err := strconv.Atoi(fields[0]); err == nil {
+			fmt.Fprintf(&b, "delete rule inet %s prerouting handle %s\n", table, fields[0])
+		}
+	}
+	return b.String()
+}
+
+func (s *server) clearPeerForwarding(ip net.IP) error {
+	out, err := exec.Command("nft", "-a", "list", "chain", "inet", s.cfg.NftTable, "prerouting").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("list peer forwarding chain: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	script := peerForwardDeleteScript(string(out), s.cfg.NftTable, ip)
+	if script == "" {
+		return nil
+	}
+	return nftScript(script)
 }
 
 func allowedRanges(reserved []int) []string {
@@ -443,7 +486,23 @@ func formatDNAT(ip net.IP, port int) string {
 	return ip.String()
 }
 
+func prioritizeExplicitForwarding(script string) string {
+	lines := strings.Split(script, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "add rule ") && strings.Contains(trimmed, `comment "router-vpn admin rule `) {
+			prefix := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = prefix + "insert rule " + strings.TrimPrefix(trimmed, "add rule ")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func nftScript(script string) error {
+	// Explicit Setup Center rules are more specific than Protected DMZ and must
+	// take precedence immediately. Protected DMZ itself uses a different tag and
+	// remains appended as the fallback for otherwise-unused allowed ports.
+	script = prioritizeExplicitForwarding(script)
 	cmd := exec.Command("nft", "-f", "-")
 	cmd.Stdin = bytes.NewBufferString(script)
 	out, err := cmd.CombinedOutput()

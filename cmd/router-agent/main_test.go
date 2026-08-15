@@ -10,20 +10,21 @@ import (
 	"router-vpn/internal/common"
 )
 
-func TestForwardValidationPreservesProtocolRangesTargetAndDMZ(t *testing.T) {
+func TestForwardValidationPreservesProtocolRangesTargetAndRejectsPeerDMZ(t *testing.T) {
 	reserved := []int{22, 53, 80, 443, 585, 1080, 8786, 8787, 9443, 14444, 51820}
 	valid := []common.ForwardRequest{
 		{Protocol: "tcp", From: 5000, To: 5000, TargetPort: 6000},
 		{Protocol: "udp", From: 6000, To: 6010},
 		{Protocol: "both", From: 7000, To: 7000},
-		{Protocol: "both", DMZ: true},
 	}
 	for _, q := range valid {
 		if err := validateForward(q, reserved); err != nil {
 			t.Fatalf("valid forward rejected: %+v: %v", q, err)
 		}
 	}
+	// Protected DMZ is an authenticated Setup Center admin action; the peer API must reject it.
 	invalid := []common.ForwardRequest{
+		{Protocol: "both", DMZ: true},
 		{Protocol: "icmp", From: 5000, To: 5000},
 		{Protocol: "tcp", From: 443, To: 443},
 		{Protocol: "udp", From: 6000, To: 6002, TargetPort: 7000},
@@ -37,17 +38,17 @@ func TestForwardValidationPreservesProtocolRangesTargetAndDMZ(t *testing.T) {
 	}
 }
 
-func TestProtectedDMZExcludesSensitivePorts(t *testing.T) {
+func TestLegacyReservedRangeHelperStillExcludesSensitivePorts(t *testing.T) {
 	reserved := []int{22, 53, 80, 443, 585, 1080, 8786, 8787, 9443, 14444, 51820}
 	ranges := allowedRanges(reserved)
 	for _, protected := range reserved {
 		if rangeContains(ranges, protected) {
-			t.Fatalf("Protected DMZ leaked reserved port %d through ranges %v", protected, ranges)
+			t.Fatalf("reserved range helper leaked protected port %d through ranges %v", protected, ranges)
 		}
 	}
 	for _, allowed := range []int{1, 5000, 65535} {
 		if !rangeContains(ranges, allowed) {
-			t.Fatalf("Protected DMZ unexpectedly omitted allowed port %d from %v", allowed, ranges)
+			t.Fatalf("reserved range helper unexpectedly omitted allowed port %d from %v", allowed, ranges)
 		}
 	}
 }
@@ -69,6 +70,60 @@ func fmtSscanfRange(value string, a, b *int) (int, error) {
 	n, err := fmt.Sscanf(value, "%d", a)
 	*b = *a
 	return n, err
+}
+
+func TestPeerForwardRulesAreOwnerTaggedAndSelectiveClearIsolated(t *testing.T) {
+	peerA := net.ParseIP("10.77.0.2")
+	peerB := net.ParseIP("10.77.0.20")
+	if peerForwardComment(peerA) == peerForwardComment(peerB) {
+		t.Fatal("peer forwarding owner comments collided")
+	}
+	listing := `table inet router_vpn {
+	chain prerouting {
+		iifname "eth0" tcp dport 25565 dnat to 10.77.0.2 comment "router-vpn peer forward 10.77.0.2" # handle 7
+		iifname "eth0" udp dport 25565 dnat to 10.77.0.20 comment "router-vpn peer forward 10.77.0.20" # handle 8
+		iifname "eth0" tcp dport 30000 dnat to 10.77.0.9 comment "router-vpn admin rule minecraft" # handle 9
+		iifname "eth0" tcp dport 1-21 dnat to 10.77.0.25 comment "router-vpn protected dmz" # handle 10
+	}
+}`
+	script := peerForwardDeleteScript(listing, "router_vpn", peerA)
+	if !strings.Contains(script, "handle 7") {
+		t.Fatalf("own forwarding handle missing from selective clear: %q", script)
+	}
+	for _, forbidden := range []string{"handle 8", "handle 9", "handle 10"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("selective clear crossed forwarding ownership boundary (%s): %q", forbidden, script)
+		}
+	}
+}
+
+func TestPeerExplicitForwardIsInsertedAheadOfProtectedDMZ(t *testing.T) {
+	q := common.ForwardRequest{Protocol: "both", From: 25565, To: 25565}
+	script := peerForwardScript("router_vpn", "eth0", net.ParseIP("10.77.0.2"), q)
+	if got := strings.Count(script, "insert rule inet router_vpn prerouting"); got != 2 {
+		t.Fatalf("peer explicit both-protocol forward should insert two head rules, got %d: %q", got, script)
+	}
+	if strings.Contains(script, "add rule inet router_vpn prerouting") {
+		t.Fatalf("peer explicit forwarding was appended behind possible Protected DMZ rules: %q", script)
+	}
+	if !strings.Contains(script, peerForwardComment(net.ParseIP("10.77.0.2"))) {
+		t.Fatalf("peer ownership comment missing from inserted forward: %q", script)
+	}
+}
+
+func TestSetupCenterExplicitForwardIsPrioritizedButDMZRemainsFallback(t *testing.T) {
+	input := "add rule inet router_vpn prerouting iifname \"eth0\" tcp dport 30000 dnat to 10.77.0.9 comment \"router-vpn admin rule minecraft\"\n" +
+		"add rule inet router_vpn prerouting iifname \"eth0\" tcp dport 1-65535 dnat to 10.77.0.25 comment \"router-vpn admin protected dmz\"\n"
+	got := prioritizeExplicitForwarding(input)
+	if !strings.Contains(got, "insert rule inet router_vpn prerouting iifname \"eth0\" tcp dport 30000") {
+		t.Fatalf("Setup Center explicit rule was not prioritized: %q", got)
+	}
+	if !strings.Contains(got, "add rule inet router_vpn prerouting iifname \"eth0\" tcp dport 1-65535") {
+		t.Fatalf("Protected DMZ should remain appended fallback: %q", got)
+	}
+	if strings.Contains(got, "insert rule inet router_vpn prerouting iifname \"eth0\" tcp dport 1-65535") {
+		t.Fatalf("Protected DMZ was incorrectly promoted ahead of explicit forwarding: %q", got)
+	}
 }
 
 func TestDNATFormattingIPv4AndIPv6(t *testing.T) {

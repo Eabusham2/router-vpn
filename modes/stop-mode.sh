@@ -17,7 +17,13 @@ sudo pkill -f 'sing-box run.*router-vpn-client/generated' >/dev/null 2>&1 || tru
 sudo pkill -f 'sing-box run.*router-vpn-client/run' >/dev/null 2>&1 || true
 sudo pkill -f 'rosenpass exchange-config.*router-vpn-client/generated' >/dev/null 2>&1 || true
 sudo pkill -f 'router-vpn-dns.*127.0.0.1:53' >/dev/null 2>&1 || true
-# on-connect protection is released only after all tunnel processes/interfaces
-# are down. 'always' policy intentionally remains fail-closed while disconnected.
-python3 "$SCRIPT_DIR/kill-switch.py" release >/dev/null 2>&1 || true
+# Manual/final disconnect releases on-connect protection only after all tunnel
+# processes/interfaces are down. During AUTO/SMART/fallback recovery the caller
+# sets HOMEVPN_KILLSWITCH_HOLD=1 so the fail-closed firewall remains installed
+# between candidates. 'always' policy intentionally remains active either way.
+if [[ ${HOMEVPN_KILLSWITCH_HOLD:-0} != 1 ]]; then
+  python3 "$SCRIPT_DIR/kill-switch.py" release >/dev/null 2>&1 || true
+else
+  echo 'Router VPN transition cleanup complete; strict kill switch remains held.' >&2
+fi
 exit 0

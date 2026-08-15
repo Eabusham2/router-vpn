@@ -7,6 +7,7 @@ SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
 NAIVE_PORT=${NAIVE_PORT:-13443}
 SS_V2RAY_PATH=${SS_V2RAY_PATH:-/cdn/assets}
 SING_BOX_IMAGE=${SING_BOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.12}
+umask 077
 
 sb(){
   if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm -v "$BASE:$BASE" "$SING_BOX_IMAGE" "$@"; fi
@@ -33,13 +34,19 @@ if [[ -z "$TLS_NAME" ]]; then
   exit 1
 fi
 
-SS_V2RAY_PASSWORD=$(openssl rand -base64 32 | tr -d '\n')
-NAIVE_USER=rvpn$(openssl rand -hex 4)
-NAIVE_PASSWORD=$(openssl rand -base64 24 | tr -d '\n=/+' | head -c 28)
 mkdir -p "$BASE/config/tls" \
   "$BASE/client-bundle/generated/ss-v2ray" \
   "$BASE/client-bundle/generated/naive-h2" \
   "$BASE/client-bundle/generated/naive-h3"
+PRESERVED=$(python3 /src/server/scripts/preserve-generated-state.py tls "$BASE" 2>/dev/null || true)
+if [[ -n "$PRESERVED" ]]; then
+  eval "$PRESERVED"
+  echo 'Preserving existing SS+V2Ray/Naive credentials for same-deployment upgrade.' >&2
+else
+  SS_V2RAY_PASSWORD=$(openssl rand -base64 32 | tr -d '\n')
+  NAIVE_USER=rvpn$(openssl rand -hex 4)
+  NAIVE_PASSWORD=$(openssl rand -base64 24 | tr -d '\n=/+' | head -c 28)
+fi
 
 cat >"$BASE/config/tls/settings.env" <<EOF
 TLS_NAME='$TLS_NAME'

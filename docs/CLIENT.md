@@ -71,7 +71,7 @@ PortableApps.com/PAF packages are not produced or supported. Use `RouterVPN-Port
 
 Windows source includes native raw WireGuard, full-device layered TUN/DNS paths, a Windows firewall kill switch and real multihop where supported. WSL is **not** counted as the native Windows VPN implementation.
 
-Validated custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2 through the standard external runtime. A native OpenVPN 2.7 adapter/helper path is also implemented where the required pinned runtime/helper and requested direct/hop policy can be represented safely. Unsupported graphs fail closed and Connected is withheld until the expected public exit is proven.
+Validated Windows custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2 through the standard external runtime. OpenVPN 2.7 profile import and a native helper/adapter path remain implemented because Windows OpenVPN is still a project target, but the current product capability deliberately reports it unavailable until strict Windows lifecycle cleanup passes native leak tests. Unsupported graphs fail closed and Connected is withheld until the expected public exit is proven.
 
 Physical Windows full-device routing, DNS/IPv4/IPv6, reconnect/network-change, leak-negative, custom-exit and package-variant testing remain release gates.
 
@@ -124,13 +124,13 @@ Coordinate-less nodes remain usable in the list. Never invent map coordinates or
 
 Custom standard exits are separate from Router VPN's `CUSTOM` transport selector and separate from Setup Center Methods. They can be direct exits or, where the platform/runtime safely supports it, be reached through a selected entry while preserving one fail-closed full-device path.
 
-Current source support:
+Current product capability:
 
 - WireGuard — Windows/macOS/Linux/Android/iOS
 - SOCKS5 — Windows/macOS/Linux/Android/iOS
 - Shadowsocks — Windows/macOS/Linux/Android/iOS
 - Hysteria2 — Windows/macOS/Linux/Android/iOS
-- OpenVPN 2.7 — Windows/macOS/Linux only where the required runtime/helper and requested direct/hop policy are supported
+- OpenVPN 2.7 — Linux/macOS where the required runtime and requested direct/hop policy are supported; Windows import/helper/adapter source exists but remains unavailable until native strict lifecycle/leak validation passes
 
 Desktop secrets stay in private `0600` controller storage; Android uses app-private storage; iOS uses its private per-node bundle store. Public profile/node APIs expose redacted summaries only.
 
@@ -167,7 +167,9 @@ Prefer modern Shadowsocks 2022 for new setups.
 
 ## Port forwarding / Protected DMZ
 
-Inbound forwarding requires an authenticated peer-capable path, normally WireGuard or AmneziaWG. Proxy-only modes do not magically gain arbitrary inbound forwarding. Protected DMZ excludes reserved VPN, SSH, DNS, management, Portainer, Setup Center/API and internal SOCKS5 ports.
+Explicit inbound forwarding from a daily Router VPN app requires an authenticated peer-capable path, normally WireGuard or AmneziaWG, and is owned by that requesting tunnel peer. Clearing peer forwarding removes only that peer's rules. Proxy-only modes do not magically gain arbitrary inbound forwarding.
+
+**Protected DMZ is broader and is intentionally an authenticated Setup Center/server-admin action, not a peer-app mutation.** It excludes reserved VPN, SSH, DNS, management, Portainer, Setup Center/API and internal SOCKS5 ports, and also excludes enabled explicit forwarding ranges so ownership does not collide.
 
 ## Availability / truth rule
 

@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -13,11 +14,11 @@ func testMutationServer(t *testing.T) *adminMutationServer {
 	_, n4, _ := net.ParseCIDR("10.77.0.0/24")
 	_, n6, _ := net.ParseCIDR("fd77:77::/64")
 	return &adminMutationServer{
-		token:     "t0123456789012345678901234567890123456789",
-		cfg:       cfg{WANInterface: "eth0", ReservedPorts: []int{22, 53, 1080, 8786, 8787, 8789, 8790, 9443}, NftTable: "router_vpn", TunnelCIDRs: []string{"10.77.0.0/24", "fd77:77::/64"}},
-		statePath: filepath.Join(t.TempDir(), "admin-state.json"),
-		lanCIDR4:  "192.168.50.0/24",
-		lanCIDR6:  "fd00::/8",
+		token:      "t0123456789012345678901234567890123456789",
+		cfg:        cfg{WANInterface: "eth0", ReservedPorts: []int{22, 53, 1080, 8786, 8787, 8789, 8790, 9443}, NftTable: "router_vpn", TunnelCIDRs: []string{"10.77.0.0/24", "fd77:77::/64"}},
+		statePath:  filepath.Join(t.TempDir(), "admin-state.json"),
+		lanCIDR4:   "192.168.50.0/24",
+		lanCIDR6:   "fd00::/8",
 		tunnelNets: []*net.IPNet{n4, n6},
 	}
 }
@@ -61,6 +62,48 @@ func TestValidateAdminForward(t *testing.T) {
 		if err := a.validateAdminForward(&bad); err == nil {
 			t.Fatalf("expected validation error for %+v", bad)
 		}
+	}
+}
+
+func TestLANAccessOffBlocksHomeLANButPreservesOverlappingTunnelOverlay(t *testing.T) {
+	rules := renderLANAccessOffRules(
+		"router_vpn_admin",
+		[]string{"10.77.0.0/24", "10.78.0.0/24", "fd77:77::/64", "fd78:78::/64"},
+		"192.168.50.0/24",
+		"fd00::/8",
+	)
+	for _, want := range []string{
+		"input ip saddr 10.77.0.0/24 ip daddr 192.168.50.0/24 drop",
+		"forward ip saddr 10.77.0.0/24 ip daddr 192.168.50.0/24 drop",
+		"input ip6 saddr fd77:77::/64 ip6 daddr fd00::/8 drop",
+		"forward ip6 saddr fd77:77::/64 ip6 daddr fd00::/8 drop",
+	} {
+		if !strings.Contains(rules, want) {
+			t.Fatalf("LAN-off rules missing %q:\n%s", want, rules)
+		}
+	}
+
+	ipv6Drop := "input ip6 saddr fd77:77::/64 ip6 daddr fd00::/8 drop"
+	dropAt := strings.Index(rules, ipv6Drop)
+	if dropAt < 0 {
+		t.Fatalf("IPv6 LAN drop missing:\n%s", rules)
+	}
+	for _, allow := range []string{
+		"input ip6 saddr fd77:77::/64 ip6 daddr fd77:77::/64 accept",
+		"input ip6 saddr fd77:77::/64 ip6 daddr fd78:78::/64 accept",
+		"forward ip6 saddr fd77:77::/64 ip6 daddr fd77:77::/64 accept",
+		"forward ip6 saddr fd77:77::/64 ip6 daddr fd78:78::/64 accept",
+	} {
+		allowAt := strings.Index(rules, allow)
+		if allowAt < 0 {
+			t.Fatalf("overlapping Router VPN overlay exemption missing %q:\n%s", allow, rules)
+		}
+		if allowAt > dropAt {
+			t.Fatalf("overlay exemption appears after broad LAN drop %q:\n%s", allow, rules)
+		}
+	}
+	if strings.Contains(rules, "input ip saddr 10.77.0.0/24 ip daddr 10.77.0.0/24 accept") {
+		t.Fatalf("non-overlapping IPv4 tunnel CIDR was unnecessarily exempted:\n%s", rules)
 	}
 }
 

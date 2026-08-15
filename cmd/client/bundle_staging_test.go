@@ -24,6 +24,111 @@ func TestSafeBundleTokenRejectsTraversalSeparatorsAndDriveSyntax(t *testing.T) {
 	}
 }
 
+func TestBundleStagingRejectsSymlinkedPrivateRoots(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows CI may not grant symlink privileges; containment is covered by path tests there")
+	}
+	for _, name := range []string{"generated", ".bundle-staging"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			outside := t.TempDir()
+			if err := os.Symlink(outside, filepath.Join(root, name)); err != nil {
+				t.Fatal(err)
+			}
+			stage, err := newStagedBundle(root, "router-test")
+			if stage != nil {
+				stage.cleanup()
+			}
+			if err == nil {
+				t.Fatalf("symlinked %s root was accepted", name)
+			}
+			entries, readErr := os.ReadDir(outside)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("symlinked %s wrote outside client root: %v", name, entries)
+			}
+		})
+	}
+}
+
+func TestBundleCommitRejectsGeneratedSymlinkSwapAfterStaging(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows CI may not grant symlink privileges; containment is covered by path tests there")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	stage, err := newStagedBundle(root, "router-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stage.cleanup()
+	if err := stage.writeProfiles(map[string]map[string]string{
+		"wg": {"wg.conf": base64.StdEncoding.EncodeToString([]byte("private"))},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	generated := filepath.Join(root, "generated")
+	if err := os.Remove(generated); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, generated); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.commit(root, "router-test"); err == nil {
+		t.Fatal("commit accepted generated-directory symlink swapped in after staging")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("commit escaped through generated-directory symlink: %v", entries)
+	}
+}
+
+func TestBundleCommitRejectsClientRootRetargetAfterStaging(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows CI may not grant symlink privileges; containment is covered by path tests there")
+	}
+	parent := t.TempDir()
+	realA := filepath.Join(parent, "root-a")
+	realB := filepath.Join(parent, "root-b")
+	if err := os.Mkdir(realA, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(realB, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "client-root")
+	if err := os.Symlink(realA, link); err != nil {
+		t.Fatal(err)
+	}
+	stage, err := newStagedBundle(link, "router-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stage.cleanup()
+	if err := stage.writeProfiles(map[string]map[string]string{
+		"wg": {"wg.conf": base64.StdEncoding.EncodeToString([]byte("private"))},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realB, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := stage.commit(link, "router-test"); err == nil {
+		t.Fatal("commit accepted client-root symlink retargeted after staging")
+	}
+	if _, err := os.Stat(filepath.Join(realB, "generated", "router-test")); !os.IsNotExist(err) {
+		t.Fatalf("retargeted client root received private profile: %v", err)
+	}
+}
+
 func TestBundleStagingFailureLeavesNoGeneratedProfile(t *testing.T) {
 	root := t.TempDir()
 	stage, err := newStagedBundle(root, "router-test")

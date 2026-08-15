@@ -7,6 +7,7 @@ spec=importlib.util.spec_from_file_location('router_vpn_killswitch',SCRIPT);mod=
 
 rules=mod.render_rules([mod.ipaddress.ip_address('203.0.113.7'),mod.ipaddress.ip_address('2001:db8::7')],False,False)
 assert 'policy drop' in rules and '203.0.113.7' in rules and '2001:db8::7' in rules
+assert 'ct state established,related accept' not in rules
 assert '192.168.0.0/16' not in rules
 rules_lan=mod.render_rules([mod.ipaddress.ip_address('203.0.113.7')],True,False)
 assert '192.168.0.0/16' in rules_lan and 'fc00::/7' in rules_lan

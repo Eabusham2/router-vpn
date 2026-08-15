@@ -57,10 +57,13 @@ def path_probe_url() -> str:
     return value
 
 
-def run_command(parts: list[str], *, quiet: bool = False) -> subprocess.CompletedProcess:
+def run_command(parts: list[str], *, quiet: bool = False, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     stdout = subprocess.DEVNULL if quiet else None
     stderr = subprocess.DEVNULL if quiet else None
-    return subprocess.run(parts, cwd=SCRIPT_DIR, env=os.environ.copy(), stdout=stdout, stderr=stderr, check=False)
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(parts, cwd=SCRIPT_DIR, env=env, stdout=stdout, stderr=stderr, check=False)
 
 
 def available(mode: dict) -> bool:
@@ -85,7 +88,7 @@ def health() -> tuple[bool, float]:
     return ok, (time.perf_counter() - started) * 1000.0
 
 
-def stop_current() -> None:
+def stop_current(hold_kill_switch: bool = False) -> None:
     global current, current_mode
     if current is not None and current.poll() is None:
         try:
@@ -93,22 +96,26 @@ def stop_current() -> None:
         except Exception:
             try: current.kill()
             except Exception: pass
-    run_command(["bash", str(SCRIPT_DIR / "stop-mode.sh")], quiet=True)
+    extra = {"HOMEVPN_KILLSWITCH_HOLD": "1"} if hold_kill_switch else None
+    run_command(["bash", str(SCRIPT_DIR / "stop-mode.sh")], quiet=True, extra_env=extra)
     current = None; current_mode = None
 
 
 def launch(mode: dict) -> tuple[bool, float]:
     global current, current_mode
-    stop_current()
+    # This is an internal candidate transition, not a user-requested disconnect.
+    # Keep on-connect/always protection installed while the old runtime is torn
+    # down and the next candidate is prepared/probed.
+    stop_current(True)
     if not available(mode): return False, 0.0
     cmd = mode.get("command") or []
     if not cmd: return False, 0.0
     print(f"Trying {mode['name']}", flush=True)
     current = subprocess.Popen(cmd, cwd=SCRIPT_DIR, env=os.environ.copy()); current_mode = mode
     time.sleep(1.6)
-    if current.poll() is not None: stop_current(); return False, 0.0
+    if current.poll() is not None: stop_current(True); return False, 0.0
     ok, latency = health()
-    if not ok: stop_current(); return False, 0.0
+    if not ok: stop_current(True); return False, 0.0
     return True, latency
 
 
@@ -174,9 +181,10 @@ def custom() -> int:
 
 
 def cleanup_signal(signum, _frame):
-    stop_current(); raise SystemExit(128 + signum)
+    # A signal/final exit is a real disconnect, not a candidate transition.
+    stop_current(False); raise SystemExit(128 + signum)
 
 signal.signal(signal.SIGINT, cleanup_signal); signal.signal(signal.SIGTERM, cleanup_signal)
 if len(sys.argv) != 2 or sys.argv[1] not in {"smart", "custom"}: raise SystemExit("usage: orchestrate.py smart|custom")
 try: raise SystemExit(smart_auto() if sys.argv[1] == "smart" else custom())
-finally: stop_current()
+finally: stop_current(False)

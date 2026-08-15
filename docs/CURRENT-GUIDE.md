@@ -275,9 +275,9 @@ CI also compiles supported ARMv7/BSD/illumos controller targets where documented
 
 ### Windows
 
-The daily-use app is native WPF. Raw/native WireGuard, native full-device layered TUN paths, Router VPN DNS policy, Windows firewall kill-switch handling and real multihop source paths are implemented. WSL is not counted as the native Windows VPN implementation. Validated custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2, plus a fail-closed OpenVPN 2.7 desktop path where the required runtime/helper and requested graph are supported. Expected public exit must be proven before Connected.
+The daily-use app is native WPF. Raw/native WireGuard, native full-device layered TUN paths, Router VPN DNS policy, Windows firewall kill-switch handling and real multihop source paths are implemented. WSL is not counted as the native Windows VPN implementation. Validated custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. OpenVPN 2.7 profile import and native helper/adapter source remain implemented because Windows OpenVPN is still a project target, but current product capability reports it unavailable until strict Windows lifecycle cleanup passes native leak tests. Expected public exit must be proven before Connected for every supported exit.
 
-**Release gate:** physical Windows full-device routing, DNS/IPv4/IPv6, leak-negative behavior, reconnect/network change, custom exits and installed/Portable package variants.
+**Release gate:** physical Windows full-device routing, DNS/IPv4/IPv6, leak-negative behavior, reconnect/network change, custom exits and installed/Portable package variants. Windows OpenVPN remains unavailable until its native strict lifecycle/leak gate passes.
 
 ### macOS
 
@@ -309,19 +309,23 @@ The app supports multiple linked/saved Router VPN nodes without reinstalling. Na
 
 Coordinates are displayed only when actually known. Coordinate-less nodes remain usable in lists and are never assigned invented locations.
 
-Custom standard-protocol exits are separate from Router VPN `CUSTOM` transport selection and from Setup Center Methods. Current source support:
+Custom standard-protocol exits are separate from Router VPN `CUSTOM` transport selection and from Setup Center Methods. Current product capability:
 
 - WireGuard — Windows/macOS/Linux/Android/iOS
 - SOCKS5 — Windows/macOS/Linux/Android/iOS
 - Shadowsocks — Windows/macOS/Linux/Android/iOS
 - Hysteria2 — Windows/macOS/Linux/Android/iOS
-- OpenVPN — Windows/macOS/Linux only where the native OpenVPN 2.7 runtime/helper and requested direct/hop policy are supported
+- OpenVPN — Linux/macOS where the native OpenVPN 2.7 runtime and requested direct/hop policy are supported; Windows import/helper/adapter source remains a target but is unavailable until native strict lifecycle/leak validation passes
 
 Private external-profile credentials stay private; public list/status APIs expose redacted summaries. Connected requires exact expected-public-exit proof.
 
-## 10. LAN access / public IP / MTU
+## 10. LAN access / forwarding / public IP / MTU
 
-LAN access is explicit. Connected state shows the real public exit separately from private proxy addresses.
+LAN access is explicit. When LAN access is OFF, tunnel peers are blocked from ordinary access to both the AI Board's home-LAN address space and forwarded home-LAN destinations, while the private tunnel control path remains available for the minimum recovery/control plane.
+
+Explicit inbound forwarding requested by a daily client is authenticated and peer-owned; clearing it removes only that peer's tagged rules. Broad **Protected DMZ** is an authenticated Setup Center/server-admin action, not a tunnel-peer shortcut. Its allowed ranges exclude reserved infrastructure ports and enabled explicit forwarding ranges.
+
+Connected state shows the real public exit separately from private proxy addresses.
 
 DAITA-like traffic padding is bounded cover traffic; it is not exact Mullvad DAITA/Maybenot.
 
