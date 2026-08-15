@@ -35,7 +35,7 @@ Implemented with validation/fail-closed checks:
 - private SOCKS5
 - OverTLS compatibility
 - ShadowsocksR legacy compatibility
-- forwarding / Protected DMZ
+- peer-owned explicit forwarding plus authenticated Setup Center/server-admin Protected DMZ
 - persistent ASUS Merlin forwarding helper
 - authenticated Setup Center admin surface, Connected Clients and persistent policy controls
 - dynamic download jobs with progress/cancel/fallback handling
@@ -67,11 +67,11 @@ The router-local fallback is bounded to the requested generic client package and
 
 Router VPN ships a native WPF daily-use application for x64 and ARM64. The native runtime has elevated full-device TUN paths for supported layered modes, applies Router VPN DNS policy inside the TUN runtime, and has a Windows firewall kill-switch helper. Raw/native WireGuard and native multihop paths are part of the Windows implementation; WSL is not counted as the Windows VPN implementation.
 
-Windows has validated external-profile import and direct/entry→exit connect flows for supported custom exits. WireGuard, SOCKS5, Shadowsocks and Hysteria2 use the standard external runtime. A native OpenVPN 2.7 Windows adapter/helper is also source-implemented; it remains fail-closed when the required pinned OpenVPN runtime/helper is absent or when a requested hop cannot be safely represented. Every supported external exit withholds Connected until its expected public exit is proven.
+Windows has validated external-profile import and direct/entry→exit connect flows for supported custom exits. WireGuard, SOCKS5, Shadowsocks and Hysteria2 use the standard external runtime. OpenVPN 2.7 profile import and a native Windows helper/adapter remain source-implemented because Windows OpenVPN is still a project target, but `openVPNRuntimeCapability()` intentionally reports OpenVPN unavailable on Windows until strict lifecycle cleanup passes native leak tests. Every currently supported external exit withholds Connected until its expected public exit is proven.
 
 The Nodes/Map product surface exposes current/recent, last-used, lowest measured latency and name ordering plus 50-sample latency testing. Automatic lowest-latency selection requires at least two measured usable nodes; unmeasured nodes are not guessed fastest.
 
-**Still a release gate:** physical Windows validation must prove full-device routing, DNS behavior, strict leak blocking, reconnect/network-change behavior, custom-exit traffic and all supported Windows packaging/install variants. Do not infer that gate merely from CI/package success.
+**Still a release gate:** physical Windows validation must prove full-device routing, DNS behavior, strict leak blocking, reconnect/network-change behavior, custom-exit traffic and all supported Windows packaging/install variants. Windows OpenVPN additionally remains unavailable until the native strict lifecycle/leak gate is passed; source helper presence alone does not make it supported.
 
 ### macOS
 
@@ -115,6 +115,7 @@ The Linked Nodes UI supports current/recent, last-used, measured-latency and nam
 - Android has a deliberately narrower real multihop subset.
 - iOS full Router VPN multihop remains unavailable; external-node direct Libbox support does not pretend otherwise.
 - Strict kill-switch source paths exist for Linux/macOS/Windows/Android and strict Apple route-lockdown is wired on iOS.
+- Linux strict nftables policy does not preserve blanket pre-existing public established flows; only explicitly allowed endpoint/tunnel/LAN/link-maintenance paths survive.
 - Physical negative-leak validation during connect/fallback/reconnect/crash/sleep/network-change/DNS/IPv4/IPv6/LAN-policy transitions is still mandatory before final release.
 
 ## MTU / Jumbo
@@ -133,15 +134,21 @@ External-app compatibility remains a live gate: remotely usable Methods must be 
 
 Custom standard exits are separate from Router VPN's `CUSTOM` transport-layer selector and separate from Setup Center Methods. They can be direct external exits or, where the platform/runtime supports it, be reached through a selected Router VPN/external entry while preserving one fail-closed full-device path.
 
-Current source support:
+Current product capability:
 
 - **WireGuard exit** — Windows/macOS/Linux/Android/iOS
 - **SOCKS5 exit** — Windows/macOS/Linux/Android/iOS
 - **Shadowsocks exit** — Windows/macOS/Linux/Android/iOS
 - **Hysteria2 exit** — Windows/macOS/Linux/Android/iOS
-- **OpenVPN exit** — native source path on Windows/macOS/Linux where the required OpenVPN 2.7 runtime/helper and requested direct/hop policy are supported; unavailable on Android/iOS
+- **OpenVPN exit** — Linux/macOS where the required OpenVPN 2.7 runtime and requested direct/hop policy are supported; Windows import/helper/adapter source exists but remains unavailable until native strict lifecycle/leak validation passes; unavailable on Android/iOS
 
 Desktop external-profile secrets stay in private 0600 controller storage; Android uses app-private storage; iOS keeps full node bundles in its per-node private bundle store. Public list/status/profile APIs expose redacted summaries only. Every supported external exit requires an expected public exit IP and must pass that exact path proof before Connected.
+
+## Forwarding / LAN policy
+
+Explicit daily-client inbound forwarding is authenticated and peer-owned. Peer clear deletes only that peer's tagged rules and cannot flush Setup Center/admin or another peer's forwarding state. Broad Protected DMZ is an authenticated Setup Center/server-admin action; its allowed ranges exclude reserved infrastructure and enabled explicit admin forwards.
+
+When LAN access is OFF, Router VPN drops both tunnel-peer traffic addressed to the AI Board's home-LAN address space and forwarded traffic from tunnel peers into the home LAN, while private tunnel control destinations remain available for the minimum recovery/control plane.
 
 ## AI Help
 
