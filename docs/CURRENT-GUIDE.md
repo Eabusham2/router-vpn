@@ -1,15 +1,15 @@
 # Router VPN — Current Guide
 
-This is the authoritative setup and product guide for the current `main` branch.
+This is the authoritative setup and product guide for the current `main` branch. Source/build success is not a substitute for the separate physical-device, off-LAN, leak-negative, signing, visual-QA and production-deploy release gates.
 
 ## 1. Architecture
 
 Router VPN has two user-facing parts:
 
 1. **Home Setup Center** on the home AI Board at private port `8786`.
-2. **Router VPN client/controller** for day-to-day use.
+2. **Router VPN app** for day-to-day VPN use.
 
-The server keeps the 20 raw runtime profiles internally for validation/AUTO compatibility, while the app presents **16 logical modes** so WireGuard vs AmneziaWG is a base choice instead of duplicate rows.
+The server keeps the established 20 raw runtime profiles internally for validation/AUTO compatibility, while the app presents **16 logical modes** so WireGuard vs AmneziaWG is a base choice instead of duplicate rows.
 
 Normal development/release flow:
 
@@ -18,10 +18,11 @@ source change
 → GitHub Actions
 → ARM64/runtime/client validation
 → exact-SHA server images + short-lived client artifacts
+→ physical/off-LAN/manual release gates
 → production
 ```
 
-The **Portainer server stack stays image-only** for reliability. The router-local build fallback applies to **client downloads**: when the matching GitHub client artifact is unavailable, the AI Board compiles only the requested client package, streams it, and deletes temporary build/output files.
+The **production Portainer stack stays exact-SHA image-only**. The router-local build fallback applies only to requested generic client downloads when the matching GitHub artifact is unavailable; it never turns production into a moving source build.
 
 ## 2. Portainer deployment
 
@@ -33,7 +34,7 @@ Reference:  refs/heads/main
 Compose:    server/portainer-current.yaml
 ```
 
-The repository is public, so Git repository authentication is normally **off**.
+The repository is public, so Git repository authentication is normally off.
 
 Normal environment values:
 
@@ -68,7 +69,7 @@ router-vpn-bundle-web
 router-vpn-socks5
 ```
 
-`router-vpn-bundle-web` is now the **dynamic Setup Center/download broker**, not the retired BusyBox static ZIP server.
+`router-vpn-bundle-web` is the dynamic authenticated Setup Center/download broker, not the retired BusyBox static ZIP server.
 
 ## 3. Setup Center
 
@@ -86,23 +87,23 @@ http://192.168.50.133:8786/healthz
 
 Never WAN-forward `8786`.
 
-The Setup Center provides onboarding, guide, private node data, platform downloads, normal Windows Portable ZIPs, WireGuard/SS/SSR imports, SOCKS/OverTLS details, ASUS helper and diagnostics.
+The Setup Center provides onboarding, Full Guide, private node linking/pairing data, platform downloads, Simple Methods, ASUS helper/status guidance, Connected Clients, forwarding controls, recovery/diagnostics and server-side AI Help.
 
 ### Client download policy
 
 ```text
-matching GitHub Actions artifact
+matching same-SHA GitHub artifact
 ↓ if unavailable/unusable
-router-local build of requested package only
+bounded router-local build of requested generic package only
 ↓
-inject private node data in temporary storage
+validate/package the generic secret-free application
 ↓
 stream
 ↓
-delete temporary build/output
+cleanup temporary build/output
 ```
 
-The AI Board does **not** permanently cache every platform package. PortableApps/PAF is retired; normal Router VPN Portable ZIP x64/ARM64 remains supported.
+Private node data is linked/imported separately after installation and is never baked into a public generic installer or Portable package. One installed app can link multiple nodes without reinstalling. PortableApps/PAF is retired; normal Router VPN Portable ZIP x64/ARM64 remains supported.
 
 ## 4. ASUS Merlin forwarding
 
@@ -144,7 +145,7 @@ SSH
 AdGuard admin
 ```
 
-The helper preserves unrelated JFFS hooks. Current Router VPN hook calls are:
+The helper preserves unrelated JFFS hook contents. Current Router VPN hook calls are:
 
 ```text
 router-vpn-forward.sh apply-nat
@@ -163,6 +164,8 @@ Status:
 ```bash
 ssh ROUTER_USER@192.168.50.1 '/jffs/scripts/router-vpn-forward.sh status'
 ```
+
+Inspect current router state before reinstalling/updating hooks; preserve unrelated JFFS scripts.
 
 ## 5. Logical modes
 
@@ -187,16 +190,16 @@ The app exposes 16 logical modes:
 | MAX TLS | Auto / WireGuard / AmneziaWG |
 | ALL | Auto / WireGuard / AmneziaWG |
 
-If a preferred base fails and the alternate succeeds, the app must report the real fallback. It must not silently claim the original base remained active.
+If a preferred base fails and the alternate succeeds, the app reports the real fallback rather than claiming the original base stayed active.
 
 ### AUTO
-Tries eligible modes from lightest/fastest upward and keeps the first healthy path.
+Tries eligible modes from lightest/fastest upward and keeps the first proven healthy path.
 
 ### SMART AUTO
-Connects first, remembers the last-good stack, tests safe simplifications, and restores the last-good stack if a reduction fails.
+Connects first, remembers the last-good stack, tests safe simplifications, and restores the last-good stack if reduction fails.
 
 ### CUSTOM
-Selects the lightest validated stack satisfying all requested properties without redundant layers.
+Selects the lightest validated stack satisfying requested properties without redundant layers.
 
 ### MAX / ALL
 MAX uses validated strong layered branches. ALL health-tests strongest MAX TLS branches first and then MAX QUIC fallback branches. Incompatible outer transports are alternatives, not fake nested layers.
@@ -213,17 +216,29 @@ Choices include:
 - DoH3
 - DNS Rescue
 
-Fastest uses **real DNS query RTT**, not ICMP ping. The app should show active selection clearly, include primary/secondary addresses where relevant, and support retesting.
+Fastest uses real DNS query RTT, not ICMP ping. Active selection and primary/secondary addresses are shown where relevant and can be retested. DNS policy is not itself proof that DNS actually traversed the selected VPN path; live leak-negative validation remains required.
 
-## 7. SOCKS / compatibility services
+## 7. Simple Methods and compatibility services
 
-Plain SOCKS5:
+Setup Center **Simple Methods** are interoperable external/native-compatible configurations. Complex Router VPN logical stacks stay in the Router VPN app.
+
+Current Simple Methods:
+
+- WireGuard Raw
+- AmneziaWG 2
+- Shadowsocks 2022
+- Hysteria2 + QUIC
+- SOCKS5 + TLS / OverTLS compatibility
+- ShadowsocksR legacy compatibility
+- private in-tunnel SOCKS5
+
+Public import URLs/QRs are emitted only when the required public endpoint/config is actually known. Private SOCKS5 remains:
 
 ```text
 192.168.50.133:1080
 ```
 
-Trusted LAN/tunnel only, no authentication. Never WAN-forward `1080`.
+It is trusted LAN/tunnel only, no authentication, and must never be WAN-forwarded.
 
 OverTLS:
 
@@ -242,9 +257,11 @@ ShadowsocksR legacy compatibility:
 
 Prefer modern Shadowsocks 2022 for new setups.
 
+External-app compatibility remains a **live off-LAN gate**: import → connect → tunneled DNS → HTTP → exact public-exit proof must succeed in a genuinely compatible external client.
+
 ## 8. Platforms and honest boundaries
 
-Main targets:
+Main first-class targets:
 
 ```text
 iOS / iPadOS
@@ -254,56 +271,73 @@ Windows x64 / ARM64
 Linux x64 / ARM64
 ```
 
-CI also compiles supported ARMv7/BSD/illumos targets.
+CI also compiles supported ARMv7/BSD/illumos controller targets where documented. CI/source success does not replace physical full-device validation.
 
-- **macOS/Linux:** most complete current multi-engine client path.
-- **Windows:** normal ZIP + Portable x64/ARM64 build and execute in CI. WSL transport execution is not proof of full-device Windows VPN; native TUN/Wintun + DNS routing remains required for that claim.
-- **Android:** APK is a controller/importer shell until real `VpnService` adapters are linked.
-- **iOS/iPadOS:** SwiftUI + Packet Tunnel target build, but Packet Tunnel intentionally fails closed until native tunnel engines are linked.
-- **Multihop / strict kill switch:** remain unavailable until real networking implementations are validated.
+### Windows
 
-## 9. Multiple nodes and latency
+The daily-use app is native WPF. Raw/native WireGuard, native full-device layered TUN paths, Router VPN DNS policy, Windows firewall kill-switch handling and real multihop source paths are implemented. WSL is not counted as the native Windows VPN implementation. Validated custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2, plus a fail-closed OpenVPN 2.7 desktop path where the required runtime/helper and requested graph are supported. Expected public exit must be proven before Connected.
 
-The client supports multiple saved Router VPN nodes, selected-node persistence, local map coordinates where actually known, and latency testing with at least about 50 TCP handshake samples where practical.
+**Release gate:** physical Windows full-device routing, DNS/IPv4/IPv6, leak-negative behavior, reconnect/network change, custom exits and installed/Portable package variants.
 
-Useful metrics include:
+### macOS
 
-```text
-best
-median
-trimmed mean
-average
-p90
-max
-```
+The daily-use app is native AppKit/MapKit. Native routing, PF kill switch, real multihop and validated custom exits are source-implemented. WireGuard/SOCKS5/Shadowsocks/Hysteria2 are supported custom exits; OpenVPN 2.7 is supported for direct and the safe TCP-over-entry case, with unsupported DNS/hop combinations failing closed.
 
-Do not fabricate map coordinates.
+**Release gate:** physical macOS networking/custom-exit/visual validation plus signing/notarization.
+
+### Linux
+
+The daily-use app is native GTK. Linux has broad native runtime coverage, nftables kill switch, real multihop, validated external-node import/direct/hopped paths, measured node sorting and native OpenVPN 2.7 direct/safe TCP-over-entry support with expected-public-exit proof.
+
+**Release gate:** live distro/runtime/desktop integration and leak-negative/custom-exit validation.
+
+### Android
+
+Android is a native `VpnService` application. It has real WireGuard and AmneziaWG paths plus the pinned combined libbox/Xray path for supported layered modes, AUTO/SMART/CUSTOM orchestration, strict-policy handling, exact selected-node proof and a deliberately narrow real multihop subset. External WireGuard, SOCKS5, Shadowsocks and Hysteria2 exits use one full-device path and exact expected-public-exit proof. OpenVPN and unsupported mixed-engine/AWG-entry multihop stay unavailable rather than simulated.
+
+**Release gate:** physical Android VPN permission, lockdown, reconnect/network-change, DNS/IPv4/IPv6, custom-exit traffic and leak-negative tests.
+
+### iOS / iPadOS
+
+The SwiftUI app uses a real pinned WireGuardKit PacketTunnel for raw WireGuard and a pinned Libbox Apple bridge for supported Router VPN layered profiles. Strict mode uses NetworkExtension route-lockdown controls and fails closed if those controls are not active. External WireGuard, SOCKS5, Shadowsocks and Hysteria2 use the Libbox PacketTunnel path and exact expected-public-IP proof. External OpenVPN, AmneziaWG-only paths and full desktop-equivalent multihop remain unavailable unless a real pinned Apple dataplane exists; MAX/ALL names do not grant readiness.
+
+**Release gate:** physical iPhone/iPad permission, route lockdown, reconnect/network change, DNS/IPv4/IPv6, Libbox/external-exit traffic, leak-negative behavior and signing validation.
+
+## 9. Nodes, maps, latency and custom exits
+
+The app supports multiple linked/saved Router VPN nodes without reinstalling. Native node managers support current/recent, last-used, measured-latency and name ordering. Automatic lowest-latency selection is withheld until at least two usable nodes have real measurements. Node latency testing uses at least about 50 TCP handshake samples where practical, with real statistics rather than one-shot guesses.
+
+Coordinates are displayed only when actually known. Coordinate-less nodes remain usable in lists and are never assigned invented locations.
+
+Custom standard-protocol exits are separate from Router VPN `CUSTOM` transport selection and from Setup Center Methods. Current source support:
+
+- WireGuard — Windows/macOS/Linux/Android/iOS
+- SOCKS5 — Windows/macOS/Linux/Android/iOS
+- Shadowsocks — Windows/macOS/Linux/Android/iOS
+- Hysteria2 — Windows/macOS/Linux/Android/iOS
+- OpenVPN — Windows/macOS/Linux only where the native OpenVPN 2.7 runtime/helper and requested direct/hop policy are supported
+
+Private external-profile credentials stay private; public list/status APIs expose redacted summaries. Connected requires exact expected-public-exit proof.
 
 ## 10. LAN access / public IP / MTU
 
-LAN access should be explicit. Connected state should show the real public exit IP separately from a private proxy address.
+LAN access is explicit. Connected state shows the real public exit separately from private proxy addresses.
 
-DAITA-like traffic padding is bounded cover traffic. It is **not exact Mullvad DAITA/Maybenot**.
+DAITA-like traffic padding is bounded cover traffic; it is not exact Mullvad DAITA/Maybenot.
 
-Jumbo TUN/MTU 9000 is advanced LAN/TUN behavior only; public Internet paths normally cannot carry Ethernet MTU 9000 end-to-end.
+MTU support includes catalog/default, manual, PMTU-safe auto selection, effective-MTU proof metadata, per-path memory and an explicit Jumbo `9000` policy where requested. The throughput-aware optimizer tests safe candidate MTUs only after the selected private path is proven and restores the original MTU on failure. Jumbo 9000 is not claimed to work Internet-wide.
 
-## 11. Validation
+## 11. AI Help
 
-Browser-safe checks:
+Setup Center AI Help is server-side. Supported adapters are OpenAI, Gemini, Anthropic/Claude, DeepSeek, xAI/Grok, Moonshot/Kimi and a restricted private/local OpenAI-compatible endpoint. Provider credentials stay server-side in private files; repository/runtime/page context is bounded and redacted. Web capability is optional and never grants arbitrary SSRF access.
 
-- Setup Center loads
-- broker `/healthz`
-- config syntax
-- package generation
-- endpoint info
+Use `server/scripts/configure-ai-help.sh` locally on the Router VPN host to configure/disable it. Real-provider/local-endpoint operation remains a live release gate.
 
-Real VPN checks require actual handshake/TUN, route change, tunneled DNS, public IP change, IPv6 behavior, off-LAN reachability, and forwarding where applicable.
+## 12. Validation and update
 
-A green HTML page is not a green VPN mode.
+Browser/source-safe checks include Setup Center load, `/healthz`, syntax/contracts, package generation/checksums, exact-SHA builds and endpoint metadata. Real VPN checks require actual VPN permission/handshake/TUN, route change, tunneled DNS, public-IP proof, IPv6 behavior, fail-closed/leak-negative transitions, off-LAN reachability and forwarding where applicable. A green page or CI job is not a green live VPN path.
 
-## 12. Update
-
-For Portainer:
+For Portainer production update:
 
 ```text
 Stacks
@@ -311,7 +345,7 @@ Stacks
 → Pull and redeploy
 ```
 
-Keep the existing environment unless a release explicitly adds a required variable. The production Portainer compose remains **exact-SHA image-only**.
+Keep the existing environment unless a release explicitly adds a required variable. Production remains exact-SHA image-only. Do not deploy an old RC merely because it once passed.
 
 After update verify:
 
@@ -322,7 +356,7 @@ all long-running services Running
 http://192.168.50.133:8786/healthz = 200
 ```
 
-Do not reinstall the ASUS helper unless ports/helper logic changed or the router lost its hooks.
+Do not reinstall the ASUS helper unless its Router VPN port/helper logic changed or the router lost its hooks; inspect current state first.
 
 ## 13. Diagnostics
 
@@ -339,3 +373,5 @@ ASUS router:
 ```
 
 If a mode is unavailable, inspect the real checker/runtime reason. Never force it green in UI only.
+
+Use `docs/CURRENT-STATUS.md` for the current source-vs-live release boundary, `docs/NATIVE-APPS.md` for native application specifics and `docs/CLIENT.md` for linking/client notes.

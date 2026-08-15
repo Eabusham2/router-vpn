@@ -1,48 +1,59 @@
 # Install and use Router VPN clients
 
-The complete server/router walkthrough is in `docs/CURRENT-GUIDE.md`. This file focuses on linking devices after the home node exists.
+The complete server/router walkthrough is in `docs/CURRENT-GUIDE.md`. This file focuses on installing the generic app once and linking one or more private nodes afterward.
 
 ## Recommended link path
 
-You normally **do not need `router-vpn-client-bundle.zip`**.
+You normally **do not need a permanent `router-vpn-client-bundle.zip`**.
 
 1. Stay on the home LAN.
 2. Open `http://AI_BOARD_IP:8786/`.
-3. Install the small client package for the device, or use the platform-native/simple protocol instructions.
-4. Link Router VPN with the small private `router-vpn-bundle.json`:
-   - use **Import from home LAN** when the native app exposes it, or
-   - download/import `router-vpn-bundle.json` from Files.
-5. Start with **Raw tunnel** using **Base: Auto**. Auto prefers the saved/default base and can fall back to the other compatible base.
-6. Verify the public exit IP before moving to stronger methods.
+3. Install the generic client package for the device, or use one of the Setup Center Simple Methods in a compatible external app.
+4. Link Router VPN using the small private `router-vpn-bundle.json`, LAN import/pairing where exposed, or the validated external-profile import path for a custom standard exit.
+5. Start with **Raw tunnel** using **Base: Auto**. Auto prefers the saved/default base and can fall back to the other compatible base when the platform supports it.
+6. Verify the exact selected node/public exit before moving to stronger methods.
 
-The full private bundle remains available **on demand** for offline recovery/advanced installs; the AI Board does not retain the generated ZIP after delivery.
+The full private bundle remains available on demand for offline recovery/advanced use; generic public installer/Portable artifacts contain no linked home secrets. One installed application can link multiple nodes without reinstalling.
 
 ## Setup Center
 
-The Setup Center is the server/router onboarding and compatibility surface. It is LAN-only by design and provides:
+The Setup Center is the private server/router onboarding, recovery and compatibility surface. It provides:
 
-- persistent onboarding and full guide
+- persistent onboarding and Full Guide
 - ASUS SSH/JFFS/forwarding checks and helper download
 - current fixed WAN listener list and private ports that must never be exposed
-- direct private bundle/profile downloads
+- private node profile/bundle linking material
 - platform packages and checksums
-- WireGuard and AmneziaWG configs / QR codes
-- Shadowsocks 2022 URL/config/QR
-- Hysteria2 URL/config/QR
-- Shadowsocks + V2Ray-plugin material
-- VLESS/REALITY, XHTTP/FinalMask and Naive configs
-- SOCKS5 + TLS / OverTLS
+- Simple Methods for interoperable external/native clients
+- Connected Clients/admin controls
+- download progress/cancel/fallback handling
+- server-side multi-provider AI Help
+
+Large packages are requested through the download broker. It prefers the matching same-SHA GitHub artifact. If unavailable/unusable, the AI Board compiles only the requested generic client package with the bounded local toolchain, validates/packages it, streams it and removes temporary build/output. Private node data remains separate from the generic application package.
+
+QR images are generated only for a real supported import payload. Treat private JSON, QR codes and generated profiles as credentials.
+
+## Simple Methods
+
+Setup Center Methods is intentionally limited to simple, interoperable external/native-compatible configurations. Complex Router VPN logical stacks remain inside the Router VPN app.
+
+Current Simple Methods are:
+
+- WireGuard Raw
+- AmneziaWG 2
+- Shadowsocks 2022
+- Hysteria2 + QUIC
+- SOCKS5 + TLS / OverTLS compatibility
 - ShadowsocksR legacy compatibility
-- plain internal SOCKS5 instructions
-- custom/universal protocol files where a native OS import does not exist
+- private in-tunnel SOCKS5
 
-Large packages are requested through the download broker. It prefers the matching short-lived GitHub Actions artifact, overlays this node's private profiles in temporary storage, streams the requested package, then deletes that temporary copy. If the GitHub artifact is unavailable, the AI Board compiles **only the requested client package** locally with the bounded runtime Go toolchain, applies the private node data in temporary storage, streams it, then deletes the temporary build/output.
+A public import URL/QR is emitted only when the required public endpoint and protocol material are actually known. Private SOCKS5 does not get a WAN QR and must never be exposed just to make a third-party app work.
 
-QR images are generated on the home node. Treat the page, private JSON, QR codes and generated profiles as credentials.
+External-app interoperability is a live release gate: off-LAN import → connect → tunneled DNS → HTTP → exact expected public exit must be proven in a genuinely compatible client.
 
 ## Logical modes and base selection
 
-The app shows one row per **logical** method instead of duplicating WireGuard and AmneziaWG runtime variants. The server still retains the raw 20-mode catalog internally for AUTO and compatibility.
+The Router VPN app shows one row per logical method instead of duplicating WireGuard and AmneziaWG runtime variants. The server still retains the raw 20-mode catalog internally for AUTO and compatibility.
 
 For compatible logical methods, choose:
 
@@ -50,123 +61,114 @@ For compatible logical methods, choose:
 - **WireGuard**
 - **AmneziaWG**
 
-The current logical mapping lives in `configs/client/logical-modes.json`. Availability comes from the real generated-profile checkers; a logical row remains ready when at least one allowed base validates. If the preferred base is unavailable and fallback is valid, the UI should show that explicitly rather than greying the entire logical mode.
-
-## macOS — Apple Silicon and Intel
-
-The Setup Center provides architecture-specific packages on demand. The legacy/full bundle install path remains supported:
-
-```bash
-bash client/install-macos-final.sh "$PWD"
-```
-
-If macOS flags a locally-built component:
-
-1. verify the package/binary checksum against the Setup Center `SHA256SUMS`;
-2. use **System Settings → Privacy & Security → Open Anyway** for that verified Router VPN item;
-3. if necessary, remove quarantine only from the verified extracted Router VPN folder:
-
-```bash
-xattr -dr com.apple.quarantine /path/to/router-vpn
-```
-
-Do not remove quarantine broadly from Downloads or unrelated files.
-
-The desktop controller stores each imported node separately and can report the public VPN exit independently of the private SOCKS5 address.
+The current logical mapping lives in `configs/client/logical-modes.json`. Availability comes from actual generated-profile/runtime checks. If a preferred base fails and fallback succeeds, the UI must report that real fallback instead of claiming the original base stayed active.
 
 ## Windows — x64 and ARM64
 
-GitHub Actions produces normal Windows packages and Router VPN's own no-install **Portable ZIPs** for both architectures. The home Setup Center provides the matching package on demand and does not retain a server-side ZIP after delivery.
+GitHub Actions produces native WPF Windows packages and Router VPN's own no-install Portable ZIPs for both architectures. Installed and Portable packages use the loopback controller as private implementation plumbing and launch the WPF app rather than a browser/WebView shell.
 
-PortableApps.com/PAF packages are not produced or supported. Use `RouterVPN-Portable-Windows-amd64.zip` or `RouterVPN-Portable-Windows-arm64.zip` for the no-install portable layout.
+PortableApps.com/PAF packages are not produced or supported. Use `RouterVPN-Portable-Windows-amd64.zip` or `RouterVPN-Portable-Windows-arm64.zip` for the no-install layout.
 
-The existing complete multi-engine shell path can use the Linux transport runtime through WSL2. Native WireGuard/AmneziaWG profile import remains available in matching Windows clients. WSL execution alone is not claimed as a complete full-device Windows tunnel.
+Windows source includes native raw WireGuard, full-device layered TUN/DNS paths, a Windows firewall kill switch and real multihop where supported. WSL is **not** counted as the native Windows VPN implementation.
 
-## Linux / Unix
+Validated custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2 through the standard external runtime. A native OpenVPN 2.7 adapter/helper path is also implemented where the required pinned runtime/helper and requested direct/hop policy can be represented safely. Unsupported graphs fail closed and Connected is withheld until the expected public exit is proven.
 
-Common direct packages are produced for Linux x64 and ARM64. GitHub Actions also builds Linux ARMv7 and the supported BSD/illumos targets listed in the root README.
+Physical Windows full-device routing, DNS/IPv4/IPv6, reconnect/network-change, leak-negative, custom-exit and package-variant testing remain release gates.
 
-Legacy Linux install path:
+## macOS — Apple Silicon and Intel
 
-```bash
-sudo bash client/install-linux.sh "$PWD"
-```
+The macOS package contains the real AppKit/MapKit `RouterVPN.app` for arm64 and amd64. Native routing, PF kill-switch handling, real multihop and standard custom exits are source-implemented. WireGuard/SOCKS5/Shadowsocks/Hysteria2 custom exits are supported. OpenVPN 2.7 supports direct and the safe TCP-over-entry case; unsupported OpenVPN/DNS/hop combinations fail closed.
 
-## iPhone / iPad
+Unsigned/local builds should use the targeted System Settings → Privacy & Security → Open Anyway flow only after checksum verification. Do not globally disable Gatekeeper. Signing/notarization plus physical macOS networking/visual validation remain release gates.
 
-The SwiftUI Router VPN app supports the native app UX, private bundle import from Files or directly from the home LAN, logical-mode/base selection, home-LAN access settings, forwarding controls and the permanent setup guide.
+Legacy/full-bundle installer paths remain available for recovery, but the current daily-use package opens the native AppKit app.
 
-**Platform tunnel boundary:** the included Packet Tunnel target intentionally fails closed until the actual WireGuard/AmneziaWG and proxy engines are linked and validated. Its `completionHandler(error)` path is therefore an expected limitation, not an accidental build/runtime error. Until those adapters exist, use the generated Setup Center profiles in compatible native clients.
+## Linux
 
-The Router VPN UI follows the real NetworkExtension status and does not mark itself connected merely because `startVPNTunnel()` was called.
+Linux x64/ARM64 packages contain the native GTK application. Linux has broad native runtime coverage, nftables kill-switch handling, real multihop, validated external-node import/direct/hopped flows and native OpenVPN 2.7 direct/safe TCP-over-entry support.
+
+Live distro/runtime integration, DNS/IPv4/IPv6, leak-negative and custom-exit testing remain release gates.
 
 ## Android
 
-The APK is currently the native Router VPN controller/importer shell. It must not claim full-device VPN operation until its `VpnService` engine integration is linked and validated.
+Android is a real native `VpnService` application, not a controller/importer-only shell. It includes real WireGuard and AmneziaWG paths plus the pinned combined libbox/Xray runtime for supported layered modes. AUTO/SMART/CUSTOM require exact selected-node proof. Strict policy, reconnect/network-change handling and a deliberately narrow real multihop subset are source-implemented.
 
-Live protocol profiles remain importable into matching Android clients from the Setup Center. Android native engine work is tracked separately from server/runtime readiness so mobile UI status cannot make a server mode appear green by itself.
+Custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2 in one full-device path with expected-public-exit proof. OpenVPN and unsupported AWG-entry/mixed-engine multihop remain unavailable rather than simulated.
+
+Physical Android VPN-permission, lockdown, reconnect, DNS/IPv4/IPv6, custom-exit and leak-negative tests remain release gates.
+
+## iPhone / iPad
+
+The SwiftUI app uses a real pinned WireGuardKit PacketTunnel for raw WireGuard and the pinned Libbox Apple bridge for supported Router VPN layered profiles. It imports/links private nodes, preserves per-node bundle ownership, requires exact selected-node proof and follows real NetworkExtension state rather than marking Connected merely because startup was requested.
+
+Strict mode uses NetworkExtension route-lockdown controls and fails closed when those controls are not active. External WireGuard, SOCKS5, Shadowsocks and Hysteria2 use the Libbox PacketTunnel path and require the expected public exit before Connected.
+
+External OpenVPN, AmneziaWG-only paths and full desktop-equivalent multihop remain unavailable until a real pinned Apple dataplane exists for them. Unsupported MAX/ALL combinations stay unavailable rather than being inferred from labels.
+
+Physical iPhone/iPad VPN permission, route lockdown, reconnect, DNS/IPv4/IPv6, Libbox/custom-exit traffic, leak-negative behavior and signing remain release gates.
 
 ## Multiple routers / nodes
 
-Each imported node stores separate generated profile material. The desktop/controller surface supports:
+Each linked node keeps separate private generated/profile material. Native node managers support:
 
-- remembered selected node and use count
-- local coordinates/map
-- sorting by median latency, 10% trimmed mean, usage, distance or name
-- at least 50 TCP handshake samples per requested node test
+- current/recent and last-used ordering
+- name ordering
+- real measured-latency ordering
+- automatic lowest-latency selection only after at least two usable nodes have real measurements
+- at least about 50 TCP handshake samples per requested node test where practical
 - min / median / trimmed mean / average / p90 / max
 
-Import another node's private JSON while disconnected, then select it.
+Coordinate-less nodes remain usable in the list. Never invent map coordinates or infer a location merely from an IP.
+
+## Custom standard exits
+
+Custom standard exits are separate from Router VPN's `CUSTOM` transport selector and separate from Setup Center Methods. They can be direct exits or, where the platform/runtime safely supports it, be reached through a selected entry while preserving one fail-closed full-device path.
+
+Current source support:
+
+- WireGuard — Windows/macOS/Linux/Android/iOS
+- SOCKS5 — Windows/macOS/Linux/Android/iOS
+- Shadowsocks — Windows/macOS/Linux/Android/iOS
+- Hysteria2 — Windows/macOS/Linux/Android/iOS
+- OpenVPN 2.7 — Windows/macOS/Linux only where the required runtime/helper and requested direct/hop policy are supported
+
+Desktop secrets stay in private `0600` controller storage; Android uses app-private storage; iOS uses its private per-node bundle store. Public profile/node APIs expose redacted summaries only.
 
 ## DNS
 
-Default: **Home AdGuard**.
+Default policy is Home AdGuard. Other choices include fastest measured public DNS, common primary/secondary IPv4/IPv6 resolvers, custom UDP/TCP, DoT, DoH, DoH3 and DNS Rescue. Fastest uses real DNS-query timing, not ICMP ping. Live tunneled-DNS/leak-negative proof remains separate from configuration readiness.
 
-Other supported policy/configuration choices include:
+## SOCKS5 and compatibility
 
-- fastest measured public DNS from the home exit
-- common primary/secondary IPv4 and IPv6 resolvers
-- custom UDP or TCP DNS
-- DoT
-- DoH
-- DoH3
-- DNS Rescue fallback policy
+Private home SOCKS5:
 
-The server benchmark performs actual DNS queries and reports query timing rather than treating ICMP ping as DNS latency.
+```text
+192.168.50.133:1080
+```
 
-## SOCKS5
+Trusted LAN/tunnel only, no authentication. **Never WAN-forward TCP 1080.**
 
-The home SOCKS5 service is an internal LAN/tunnel service. It uses its IP + port and currently has no authentication. **Never WAN-forward TCP 1080.**
-
-The app must display that private proxy address separately from the public VPN exit address.
-
-## SOCKS5 + TLS / OverTLS
-
-Generated compatibility path:
+OverTLS:
 
 ```text
 Public TCP:       14443
 Private backend:  127.0.0.1:14444
 ```
 
-Never WAN-forward backend TCP 14444. OverTLS is a compatibility method outside the main AUTO runtime ladder.
+Never expose `14444`.
 
-## ShadowsocksR
-
-Generated legacy compatibility listener:
+ShadowsocksR legacy compatibility:
 
 ```text
 Public TCP+UDP: 15443
 ```
 
-Prefer modern Shadowsocks 2022 or other current methods for new setups. SSR remains outside AUTO.
+Prefer modern Shadowsocks 2022 for new setups.
 
 ## Port forwarding / Protected DMZ
 
-Inbound forwarding requires an authenticated tunnel peer path, normally WireGuard or AmneziaWG. Proxy-only methods are outbound.
+Inbound forwarding requires an authenticated peer-capable path, normally WireGuard or AmneziaWG. Proxy-only modes do not magically gain arbitrary inbound forwarding. Protected DMZ excludes reserved VPN, SSH, DNS, management, Portainer, Setup Center/API and internal SOCKS5 ports.
 
-The client supports TCP, UDP, both, a port/range, optional translated target port and Protected DMZ. Protected DMZ excludes reserved VPN, SSH, DNS, management, Portainer, Setup Center/API and internal SOCKS5 ports.
+## Availability / truth rule
 
-## Availability / grey-mode rule
-
-Do not hide a broken mode and do not force it green. Generated configuration checks decide readiness. CI regenerates and validates the combined/MAX branches that previously produced relative-certificate and shell-variable errors before the branch is eligible for deployment.
+Do not hide a broken mode and do not force it green. Generated configuration/runtime checks decide readiness. `Connected` requires exact selected-node or expected-exit proof, not generic Internet reachability. Unsupported platform features remain unavailable with an exact reason until their real dataplane is present and validated.
