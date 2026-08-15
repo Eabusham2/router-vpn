@@ -351,10 +351,14 @@ if "dist/packages/*" not in release_candidate or "(cd dist/packages && sha256sum
 client_apps_ci = text(".github/workflows/client-apps-ci.yml")
 if "dist/packages/*" not in client_apps_ci or "(cd dist/packages && sha256sum -c SHA256SUMS)" not in client_apps_ci:
     error("client-apps generic artifact is missing the self-contained package checksum contract")
-for workflow_path in workflow_root.glob("*.yml"):
-    workflow_body = workflow_path.read_text(encoding="utf-8", errors="replace")
-    if re.search(r"(?m)^\s*dist/SHA256SUMS\s*$", workflow_body):
-        error(f"{workflow_path.relative_to(ROOT)} uploads build-tree SHA256SUMS with non-artifact-relative paths")
+workflow_root = ROOT / ".github" / "workflows"
+if not workflow_root.is_dir():
+    error("GitHub workflow directory is missing")
+else:
+    for workflow_path in workflow_root.glob("*.yml"):
+        workflow_body = workflow_path.read_text(encoding="utf-8", errors="replace")
+        if re.search(r"(?m)^\s*dist/SHA256SUMS\s*$", workflow_body):
+            error(f"{workflow_path.relative_to(ROOT)} uploads build-tree SHA256SUMS with non-artifact-relative paths")
 
 for rel, markers in {
     "deploy/materialize-production-compose.py": ("GENERATED exact-SHA Router VPN production compose", "server/portainer-current.yaml"),
@@ -367,7 +371,6 @@ for rel, markers in {
         if marker not in body:
             error(f"{rel} missing exact-SHA production release marker: {marker}")
 
-workflow_root = ROOT / ".github" / "workflows"
 if workflow_root.is_dir():
     for workflow_path in workflow_root.glob("*.yml"):
         workflow_body = workflow_path.read_text(encoding="utf-8", errors="replace")
