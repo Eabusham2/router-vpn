@@ -18,11 +18,27 @@ done
 mkdir -p "$(dirname "$OUT")"
 
 # v5 extends the already-shipping v4 translation unit without duplicating it.
-# v4's final standalone main() is the only section omitted; all v4/v3/core
-# static functions remain in the same translation unit for v5 to reuse.
-grep -Fq 'int main(int argc, char **argv) {' "$V4"
-awk '/^int main\(int argc, char \*\*argv\) \{$/{found=1; exit} {print} END{if(!found) exit 7}' "$V4" > "$EMBEDDED_V4"
+# v4's final standalone main() is omitted. Its old top-level build_ui_v4()
+# remains inherited for source-contract continuity but is intentionally replaced
+# by build_ui_v5(), so mark only that generated copy as retained. All other
+# -Wunused-function findings remain fatal under -Werror.
+python3 - "$V4" "$EMBEDDED_V4" <<'PY'
+from pathlib import Path
+import sys
+src = Path(sys.argv[1]).read_text()
+main = 'int main(int argc, char **argv) {'
+if src.count(main) != 1:
+    raise SystemExit('expected exactly one v4 main')
+body = src.split(main, 1)[0]
+old = 'static void build_ui_v4(App *app) {'
+new = 'static void __attribute__((used)) build_ui_v4(App *app) {'
+if body.count(old) != 1:
+    raise SystemExit('expected exactly one v4 build_ui_v4')
+body = body.replace(old, new, 1)
+Path(sys.argv[2]).write_text(body)
+PY
 ! grep -Fq 'int main(int argc, char **argv) {' "$EMBEDDED_V4"
+grep -Fq 'static void __attribute__((used)) build_ui_v4(App *app) {' "$EMBEDDED_V4"
 
 gcc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong \
   -I"$BUILD_DIR" -I"$ROOT/client/linux" \
