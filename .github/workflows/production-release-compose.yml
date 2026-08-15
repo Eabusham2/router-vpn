@@ -1,0 +1,39 @@
+name: Exact-SHA production compose
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release-compose-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    name: Materialize exact-head production compose
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test production compose materializer
+        run: python3 deploy/test-production-release-compose.py
+      - name: Materialize exact-head compose
+        run: |
+          set -euo pipefail
+          mkdir -p dist/production-release
+          out="dist/production-release/RouterVPN-Portainer-${GITHUB_SHA}.yaml"
+          python3 deploy/materialize-production-compose.py --sha "$GITHUB_SHA" --output "$out"
+          grep -Fq "Router VPN exact release compose: ${GITHUB_SHA}" "$out"
+          test "$(grep -Eo 'ghcr\.io/eabusham2/router-vpn-(init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux):[0-9a-f]{40}' "$out" | sed 's/.*://' | sort -u)" = "$GITHUB_SHA"
+          test "$(sed -n 's/^[[:space:]]*ROUTER_VPN_GITHUB_SHA:[[:space:]]*\([0-9a-f]\{40\}\)[[:space:]]*$/\1/p' "$out")" = "$GITHUB_SHA"
+          (cd dist/production-release && sha256sum "$(basename "$out")" > "$(basename "$out").sha256")
+      - name: Upload exact-head Portainer compose
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-production-compose-${{ github.sha }}
+          path: dist/production-release/*
+          if-no-files-found: error
+          retention-days: 1
