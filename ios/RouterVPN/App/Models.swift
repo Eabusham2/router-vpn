@@ -157,6 +157,11 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var effectiveMTUPathKey: String?
     var effectiveUnderlayPMTU: Int?
     var effectiveMTUTestedAt: String?
+    var effectiveMTUNetworkFingerprint: String?
+    var effectiveMTUProfileFingerprint: String?
+    var effectiveMTUMbps: Double?
+    var effectiveMTUMedianRTTMs: Double?
+    var effectiveMTUSuccessRatio: Double?
     var diagnosticsEnabled: Bool?
     var diagnosticsRetentionDays: Int?
     var shareDiagnostics: Bool?
@@ -228,6 +233,11 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case effectiveMTUPathKey = "effective_mtu_path_key"
         case effectiveUnderlayPMTU = "effective_underlay_pmtu"
         case effectiveMTUTestedAt = "effective_mtu_tested_at"
+        case effectiveMTUNetworkFingerprint = "effective_mtu_network_fingerprint"
+        case effectiveMTUProfileFingerprint = "effective_mtu_profile_fingerprint"
+        case effectiveMTUMbps = "effective_mtu_mbps"
+        case effectiveMTUMedianRTTMs = "effective_mtu_median_rtt_ms"
+        case effectiveMTUSuccessRatio = "effective_mtu_success_ratio"
         case diagnosticsEnabled = "diagnostics_enabled"
         case diagnosticsRetentionDays = "diagnostics_retention_days"
         case shareDiagnostics = "share_diagnostics"
