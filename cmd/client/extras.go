@@ -17,23 +17,6 @@ import (
 
 const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#62d5ff"/><stop offset="1" stop-color="#7b68ff"/></linearGradient></defs><rect width="64" height="64" rx="16" fill="#0d1220"/><path d="M32 8 52 16v14c0 13-8.4 22.1-20 27C20.4 52.1 12 43 12 30V16l20-8Z" fill="url(#g)"/><path d="M24 32.5 29.5 38 41 25" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
 
-const manifestJSON = `{
-  "name":"Router VPN",
-  "short_name":"Router VPN",
-  "description":"Local controller for your self-hosted Router VPN nodes",
-  "start_url":"/",
-  "scope":"/",
-  "display":"standalone",
-  "background_color":"#0b1020",
-  "theme_color":"#10172a",
-  "icons":[{"src":"/favicon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
-}`
-
-const serviceWorkerJS = `const CACHE='router-vpn-ui-v1';
-self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['/','/favicon.svg','/manifest.webmanifest']))));
-self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
-self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))})`
-
 func extraRoutes(h *http.ServeMux, a *app) {
 	initSessionTracker(a)
 	h.HandleFunc("/favicon.svg", func(w http.ResponseWriter, _ *http.Request) {
@@ -41,15 +24,8 @@ func extraRoutes(h *http.ServeMux, a *app) {
 		w.Header().Set("cache-control", "public, max-age=86400")
 		_, _ = io.WriteString(w, faviconSVG)
 	})
-	h.HandleFunc("/manifest.webmanifest", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("content-type", "application/manifest+json")
-		_, _ = io.WriteString(w, manifestJSON)
-	})
-	h.HandleFunc("/sw.js", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("content-type", "application/javascript")
-		w.Header().Set("service-worker-allowed", "/")
-		_, _ = io.WriteString(w, serviceWorkerJS)
-	})
+	// The browser root is diagnostics plumbing only. The retired installable
+	// browser client intentionally has no web manifest or service-worker route.
 	h.HandleFunc("/api/logical-modes", a.listLogicalModes)
 	h.HandleFunc("/api/connect-logical", a.connectLogicalTracked)
 	h.HandleFunc("/api/session", a.sessionStatus)

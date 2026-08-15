@@ -13,9 +13,9 @@ PUBLIC_SOURCE_PATHS=(
  "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
  "ios/RouterVPN/App/RouterVPNModel.swift",
  "ios/RouterVPN/App/ContentView.swift",
- "cmd/client/ui.html","cmd/client/logical_ui.js","docs/CLIENT.md","modes/test_multihop.py",
+ "cmd/client/ui.html","cmd/client/logical_ui.js","cmd/client/extras.go","docs/CLIENT.md","modes/test_multihop.py",
 )
-PWA_MARKERS=(b"beforeinstallprompt",b"serviceWorker.register",b"manifest.webmanifest",b"installPWA(")
+PWA_MARKERS=(b"beforeinstallprompt",b"serviceWorker.register",b"manifest.webmanifest",b"router-vpn-ui-v1",b"installPWA(")
 
 def _check_name(name:str)->None:
  p=PurePosixPath(name.replace("\\","/"))
@@ -29,6 +29,11 @@ def _check_home_identity(name:str,data:bytes)->None:
   if any(v in data for v in _identity_variants(value)):
    raise ValueError(f"public client material contains deployment-specific home identity {value!r}: {name}")
 
+def _check_retired_pwa(name:str,data:bytes)->None:
+ for marker in PWA_MARKERS:
+  if marker in data:
+   raise ValueError(f"public client material contains retired browser/PWA marker {marker!r}: {name}")
+
 def _check_member(name:str,data:bytes)->None:
  _check_name(name); p=PurePosixPath(name.replace("\\","/"))
  if p.name=="router-vpn-bundle.json": raise ValueError(f"generic package contains private bundle: {name}")
@@ -37,6 +42,7 @@ def _check_member(name:str,data:bytes)->None:
   obj=json.loads(data.decode("utf-8"))
   if obj.get("selected_id") not in (None,"") or obj.get("profiles") not in (None,[]): raise ValueError(f"generic package contains linked router profiles: {name}")
  _check_home_identity(name,data)
+ _check_retired_pwa(name,data)
 
 def scan_source_tree()->None:
  repo=Path(__file__).resolve().parents[1]
@@ -44,9 +50,8 @@ def scan_source_tree()->None:
   path=repo/relative
   if not path.is_file(): raise ValueError(f"public-client source guard path is missing: {relative}")
   data=path.read_bytes(); _check_home_identity(relative,data)
-  if relative in ("cmd/client/ui.html","cmd/client/logical_ui.js"):
-   for marker in PWA_MARKERS:
-    if marker in data: raise ValueError(f"loopback controller UI must remain diagnostics-only; obsolete marker {marker!r} found in {relative}")
+  if relative in ("cmd/client/ui.html","cmd/client/logical_ui.js","cmd/client/extras.go"):
+   _check_retired_pwa(relative,data)
  print("public client source is node-agnostic and loopback UI is diagnostics-only")
 
 def scan_zip(path:Path)->None:

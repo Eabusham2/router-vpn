@@ -30,7 +30,9 @@ func TestLoopbackUIIsReadOnlyDiagnosticsNotDailyProduct(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	jsBytes, err := os.ReadFile("logical_ui.js")
 	if err != nil { t.Fatal(err) }
-	html, js := string(htmlBytes), string(jsBytes)
+	extrasBytes, err := os.ReadFile("extras.go")
+	if err != nil { t.Fatal(err) }
+	html, js, extras := string(htmlBytes), string(jsBytes), string(extrasBytes)
 
 	for _, required := range []string{
 		"Router VPN local controller", "Read-only loopback diagnostics", "native Router VPN app",
@@ -65,6 +67,12 @@ func TestLoopbackUIIsReadOnlyDiagnosticsNotDailyProduct(t *testing.T) {
 	}
 	if !strings.Contains(js, "forbiddenLoopbackMutations") || !strings.Contains(js, "/api/multihop/connect") {
 		t.Fatal("retired multihop mutation endpoint is not explicitly classified as forbidden loopback behavior")
+	}
+
+	for _, forbidden := range []string{
+		"manifest.webmanifest", "serviceWorkerJS", "router-vpn-ui-v1", "service-worker-allowed",
+	} {
+		if strings.Contains(extras, forbidden) { t.Fatalf("loopback controller regained retired PWA route/runtime marker %q", forbidden) }
 	}
 }
 
