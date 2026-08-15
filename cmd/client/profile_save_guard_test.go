@@ -12,16 +12,16 @@ import (
 )
 
 func TestGenericProfileSaveRejectsExternalCreation(t *testing.T) {
-	p := privateHTTPTestProfile()
 	a := &app{
 		cfg:      common.ClientConfig{ProfilesFile: filepath.Join(t.TempDir(), "routers.json")},
 		profiles: common.RouterProfileStore{SchemaVersion: common.RouterProfileStoreVersion},
 		state:    state{Mode: "off", Phase: "off"},
 	}
-	body, err := json.Marshal(p)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Exercise the generic endpoint guard directly. The payload deliberately
+	// does not need to be a fully valid external profile because this endpoint
+	// must reject the external profile class before any private-profile import
+	// or persistence path is reached.
+	body := []byte(`{"schema_version":3,"id":"external-create-test","name":"External WG","node_kind":"external","endpoint":"203.0.113.8","external":{"protocol":"wireguard"}}`)
 	rr := httptest.NewRecorder()
 	a.saveProfile(rr, httptest.NewRequest("POST", "/api/profile/save", bytes.NewReader(body)))
 	if rr.Code != 400 {
