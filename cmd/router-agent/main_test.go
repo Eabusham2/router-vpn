@@ -111,6 +111,21 @@ func TestPeerExplicitForwardIsInsertedAheadOfProtectedDMZ(t *testing.T) {
 	}
 }
 
+func TestSetupCenterExplicitForwardIsPrioritizedButDMZRemainsFallback(t *testing.T) {
+	input := "add rule inet router_vpn prerouting iifname \"eth0\" tcp dport 30000 dnat to 10.77.0.9 comment \"router-vpn admin rule minecraft\"\n" +
+		"add rule inet router_vpn prerouting iifname \"eth0\" tcp dport 1-65535 dnat to 10.77.0.25 comment \"router-vpn admin protected dmz\"\n"
+	got := prioritizeExplicitForwarding(input)
+	if !strings.Contains(got, "insert rule inet router_vpn prerouting iifname \"eth0\" tcp dport 30000") {
+		t.Fatalf("Setup Center explicit rule was not prioritized: %q", got)
+	}
+	if !strings.Contains(got, "add rule inet router_vpn prerouting iifname \"eth0\" tcp dport 1-65535") {
+		t.Fatalf("Protected DMZ should remain appended fallback: %q", got)
+	}
+	if strings.Contains(got, "insert rule inet router_vpn prerouting iifname \"eth0\" tcp dport 1-65535") {
+		t.Fatalf("Protected DMZ was incorrectly promoted ahead of explicit forwarding: %q", got)
+	}
+}
+
 func TestDNATFormattingIPv4AndIPv6(t *testing.T) {
 	if got := formatDNAT(net.ParseIP("10.77.0.2"), 1234); got != "10.77.0.2:1234" {
 		t.Fatalf("IPv4 DNAT=%q", got)
