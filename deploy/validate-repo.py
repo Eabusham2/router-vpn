@@ -345,6 +345,12 @@ for rel in ("server/install.sh", "server/upgrade.sh", "server/manage.sh"):
     if re.search(r"docker\s+compose\b[^\n]*\bbuild\b", body):
         error(f"{rel} explicitly builds server images")
 
+release_candidate = text(".github/workflows/release-candidate.yml")
+if re.search(r"(?m)^\s*dist/SHA256SUMS\s*$", release_candidate):
+    error("release-candidate generic artifact ships build-tree SHA256SUMS with non-artifact-relative paths")
+if "dist/packages/*" not in release_candidate or "(cd dist/packages && sha256sum -c SHA256SUMS)" not in release_candidate:
+    error("release-candidate generic artifact is missing the self-contained package checksum contract")
+
 for rel, markers in {
     "deploy/materialize-production-compose.py": ("GENERATED exact-SHA Router VPN production compose", "server/portainer-current.yaml"),
     "server/scripts/verify-production-compose.py": ("not a generated exact-SHA Router VPN production compose", "moving Router VPN image tag"),
