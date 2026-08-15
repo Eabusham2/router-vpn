@@ -97,6 +97,20 @@ func TestPeerForwardRulesAreOwnerTaggedAndSelectiveClearIsolated(t *testing.T) {
 	}
 }
 
+func TestPeerExplicitForwardIsInsertedAheadOfProtectedDMZ(t *testing.T) {
+	q := common.ForwardRequest{Protocol: "both", From: 25565, To: 25565}
+	script := peerForwardScript("router_vpn", "eth0", net.ParseIP("10.77.0.2"), q)
+	if got := strings.Count(script, "insert rule inet router_vpn prerouting"); got != 2 {
+		t.Fatalf("peer explicit both-protocol forward should insert two head rules, got %d: %q", got, script)
+	}
+	if strings.Contains(script, "add rule inet router_vpn prerouting") {
+		t.Fatalf("peer explicit forwarding was appended behind possible Protected DMZ rules: %q", script)
+	}
+	if !strings.Contains(script, peerForwardComment(net.ParseIP("10.77.0.2"))) {
+		t.Fatalf("peer ownership comment missing from inserted forward: %q", script)
+	}
+}
+
 func TestDNATFormattingIPv4AndIPv6(t *testing.T) {
 	if got := formatDNAT(net.ParseIP("10.77.0.2"), 1234); got != "10.77.0.2:1234" {
 		t.Fatalf("IPv4 DNAT=%q", got)
