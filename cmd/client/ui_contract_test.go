@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestUIHTMLHasUniqueIDsAndValidPageNavigation(t *testing.T) {
+func TestDiagnosticsUIHasUniqueIDs(t *testing.T) {
 	b, err := os.ReadFile("ui.html")
 	if err != nil { t.Fatal(err) }
 	html := string(b)
@@ -20,40 +20,39 @@ func TestUIHTMLHasUniqueIDsAndValidPageNavigation(t *testing.T) {
 	for id, count := range seen { if count > 1 { duplicates = append(duplicates, id) } }
 	sort.Strings(duplicates)
 	if len(duplicates) > 0 { t.Fatalf("duplicate HTML ids: %v", duplicates) }
-
-	pageRe := regexp.MustCompile(`data-page=["']([^"']+)["']`)
-	pages := map[string]bool{}
-	for _, m := range pageRe.FindAllStringSubmatch(html, -1) { pages[m[1]] = true }
-	navRe := regexp.MustCompile(`(?:showPage\(|data-target=["'])['"]?([a-zA-Z0-9_-]+)`)
-	for _, m := range navRe.FindAllStringSubmatch(html, -1) {
-		name := m[1]
-		if name == "" { continue }
-		if !pages[name] && strings.Contains(html, "showPage('"+name+"')") { t.Fatalf("navigation points at missing page %q", name) }
+	for _, required := range []string{"state", "node", "logical", "runtime", "proof", "exit", "dns", "rollback", "events", "refresh"} {
+		if seen[required] != 1 { t.Fatalf("diagnostics UI missing unique id %q", required) }
 	}
-	for _, required := range []string{"connect", "nodes", "modes"} { if !pages[required] { t.Fatalf("required UI page missing: %s", required) } }
 }
 
-func TestLogicalUIReferencesCoreDOMAndCurrentProductContracts(t *testing.T) {
+func TestLoopbackUIIsReadOnlyDiagnosticsNotDailyProduct(t *testing.T) {
 	htmlBytes, err := os.ReadFile("ui.html")
 	if err != nil { t.Fatal(err) }
 	jsBytes, err := os.ReadFile("logical_ui.js")
 	if err != nil { t.Fatal(err) }
 	html, js := string(htmlBytes), string(jsBytes)
-	for _, id := range []string{"mode", "modes", "connChip", "routeInfo"} {
-		if !strings.Contains(html, `id="`+id+`"`) && !strings.Contains(html, `id='`+id+`'`) { t.Fatalf("logical UI expects missing core DOM id %q", id) }
-	}
-	if strings.Contains(js, "PortableApps 3.9") { t.Fatal("stale PortableApps UI claim remains") }
-	legacy := "The Modes page always shows all 20 modes, layers, overhead estimates and exact availability reasons."
-	if strings.Contains(html, legacy) {
-		if !strings.Contains(js, legacy) || !strings.Contains(js, "The Modes page shows the 16 logical modes") { t.Fatal("legacy 20-raw-mode onboarding text is not migrated to the 16 logical-mode contract") }
-	}
+
 	for _, required := range []string{
-		"Connection validation", "Selected-node path proof", "Cross-platform policy intent",
-		"/api/session", "reloadModes", "connectLogicalMode", "16 logical modes",
-		"Multihop", "/api/multihop/status", "/api/multihop/connect", "mhEntry", "mhExit",
-		"Entry and exit nodes must be different", "platform_supported", "exit public endpoint is not opened as a direct firewall exception",
+		"Router VPN local controller", "Read-only loopback diagnostics", "native Router VPN app",
+		"/api/status", "/api/session", "/api/session/events?after=0",
+		"Selected-path proof", "Public exit", "DNS proof", "Rollback", "Recent typed events",
+		"no connect, profile-edit, admin, forwarding or privileged mutation controls",
 	} {
-		if !strings.Contains(js, required) { t.Fatalf("logical UI contract missing %q", required) }
+		if !strings.Contains(html, required) { t.Fatalf("diagnostics UI contract missing %q", required) }
+	}
+	for _, forbidden := range []string{
+		"beforeinstallprompt", "serviceWorker.register", "manifest.webmanifest", "installPWA(",
+		"/api/auto", "/api/connect-logical", "/api/profile/delete", "/api/forward", "/api/emergency-stop",
+	} {
+		if strings.Contains(html, forbidden) { t.Fatalf("loopback diagnostics UI regained retired/mutating contract %q", forbidden) }
+	}
+	for _, required := range []string{"Compatibility asset", "native apps own daily controls", "diagnostics only"} {
+		if !strings.Contains(js, required) { t.Fatalf("logical UI compatibility boundary missing %q", required) }
+	}
+	for _, forbidden := range []string{
+		"/api/logical-modes", "connectLogicalMode", "beforeinstallprompt", "serviceWorker.register", "installPWA(",
+	} {
+		if strings.Contains(js, forbidden) { t.Fatalf("logical UI compatibility asset regained retired product behavior %q", forbidden) }
 	}
 }
 

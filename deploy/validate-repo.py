@@ -76,19 +76,27 @@ for required in (
 ui = text("cmd/client/ui.html")
 logical_ui = text("cmd/client/logical_ui.js")
 for required in (
-    "Run full onboarding", "server/portainer-current.yaml",
-    "SMART AUTO", "CUSTOM", "Home AdGuard", "DNS Rescue",
-    "Protected DMZ", "at least 50 TCP handshake samples",
-    "Multi-hop is not mislabeled as ready yet",
+    "Router VPN local controller", "Read-only loopback diagnostics", "native Router VPN app",
+    "/api/status", "/api/session", "/api/session/events?after=0",
+    "Selected-path proof", "Public exit", "DNS proof", "Rollback", "Recent typed events",
+    "no connect, profile-edit, admin, forwarding or privileged mutation controls",
 ):
     if required not in ui:
-        error(f"Web UI missing current contract: {required}")
-for required in (
-    "/api/logical-modes", "Base: Auto (preferred + fallback)",
-    "16 logical modes", "selectable/fallback base",
+        error(f"Loopback diagnostics UI missing current boundary: {required}")
+for forbidden in (
+    "beforeinstallprompt", "serviceWorker.register", "manifest.webmanifest", "installPWA(",
+    "/api/auto", "/api/connect-logical", "/api/profile/delete", "/api/forward", "/api/emergency-stop",
 ):
+    if forbidden in ui:
+        error(f"Loopback diagnostics UI regained retired/mutating contract: {forbidden}")
+for required in ("Compatibility asset", "native apps own daily controls", "diagnostics only"):
     if required not in logical_ui:
-        error(f"logical UI extension missing current contract: {required}")
+        error(f"logical UI compatibility boundary missing: {required}")
+for forbidden in (
+    "/api/logical-modes", "connectLogicalMode", "beforeinstallprompt", "serviceWorker.register", "installPWA(",
+):
+    if forbidden in logical_ui:
+        error(f"logical UI compatibility asset regained retired product behavior: {forbidden}")
 
 android = text("android/app/src/main/java/com/eabusham/routervpn/MainActivity.java")
 for required in (
