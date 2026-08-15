@@ -44,6 +44,16 @@ for required in (
 ):
     assert required in main, f"controller missing protected transition state: {required}"
 
+try:
+    stop_body = main.split("func (a *app) stopModeWithIntent(holdKillSwitch bool) error {", 1)[1].split("func (a *app) auto", 1)[0]
+except IndexError as exc:
+    raise AssertionError("controller stop intent body could not be located") from exc
+assert "if !holdKillSwitch" in stop_body, "final/manual stop does not distinguish held transitions"
+assert "a.releaseTransitionKillSwitch()" in stop_body, "manual stop cannot clear stale on-connect state after controller restart"
+release_at = stop_body.index("a.releaseTransitionKillSwitch()")
+mode_guard_at = stop_body.index('if modeID != "off"')
+assert release_at > mode_guard_at, "persisted kill-switch release is incorrectly confined to remembered active-mode cleanup"
+
 assert "a.startModeAttempt(candidate.RuntimeID, true)" in logical
 assert "a.releaseTransitionKillSwitch()" in logical
 # Only the actual WG/AWG/native logical fallback loop must use the held-attempt
@@ -62,5 +72,6 @@ for required in (
     'envWithValue(os.Environ(), killSwitchHoldEnv, "0")',
 ):
     assert required in helper, f"controller release helper missing platform/manual release boundary: {required}"
+assert 'if profileID == ""' not in helper, "stale on-connect release incorrectly requires a selected profile"
 
 print("Kill-switch transition state-machine contract: OK")
