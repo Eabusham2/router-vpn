@@ -2,7 +2,20 @@
 
 The server keeps **20 raw runtime profiles** ordered from lightest/fastest to strongest/heaviest. The app normally presents **16 logical modes** from `configs/client/logical-modes.json`, combining WireGuard/AmneziaWG variants behind a base selector where they are compatible.
 
-Availability is dynamic. A profile is Ready only when its generated configuration/dependencies validate on the current node/client; this document does not override the real checker result.
+Availability is dynamic. A profile is Ready only when its generated configuration/dependencies validate on the current node/client; this document does not override the real checker result. The native app mode surface must show the same semantic contract on every platform where that mode exists:
+
+```text
+logical mode
+layers / stack
+engineering added-latency estimate
+engineering traffic-overhead estimate
+engineering speed-loss estimate
+runtime readiness
+exact readiness / unavailability reason
+actual runtime/base/fallback after connection
+```
+
+The estimate ranges are catalog guidance, not measured promises. **Readiness and exact reason are live runtime facts.** Setup Center separately labels server/source generation readiness so it never pretends a generated home-node profile proves that Windows, macOS, Linux, Android, or iOS has a compatible local dataplane. Unsupported platform graphs stay unavailable.
 
 ## Raw runtime catalog
 
@@ -72,7 +85,22 @@ The 16 logical choices are:
 
 ## MAX / ALL
 
-MAX modes use validated multi-engine chains. `ALL` keeps mutually exclusive outer transports as separate branches: strongest MAX TLS first, then MAX QUIC fallback. It does not pretend incompatible transports are simultaneously nested.
+MAX modes use validated multi-engine chains and fail closed when their requested branch is not valid. `ALL` keeps mutually exclusive outer transports as separate branches: strongest validated MAX TLS first, then MAX QUIC fallback. It reports any fallback instead of pretending incompatible transports are simultaneously nested.
+
+## DNS presentation paired with mode truth
+
+The native product surfaces also expose the selected Router VPN DNS policy rather than reducing DNS to a read-only label:
+
+- Home AdGuard
+- Fastest measured resolver
+- Custom UDP/TCP
+- DNS-over-TLS
+- DNS-over-HTTPS
+- DNS-over-HTTP/3
+- DNS Rescue
+- common IPv4 and IPv6 resolver presets
+
+Resolver benchmark values are real **A/AAAA DNS query RTTs measured from the selected home node**, not ICMP ping. Saving a DNS policy is not active-runtime proof; reconnect/session proof remains authoritative.
 
 ## DAITA-like / Jumbo / SOCKS5
 
