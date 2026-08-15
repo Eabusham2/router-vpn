@@ -254,9 +254,6 @@ func (a *app) saveProfile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "external profiles cannot be overwritten through /api/profile/save; use /api/external-profile/import", http.StatusConflict)
 			return
 		}
-		// A linked node's proof identity is immutable. Normal settings edits may
-		// omit it, but they may never erase or replace it. Legacy linked profiles
-		// are upgraded from their saved WireGuard server public key when possible.
 		identity := strings.TrimSpace(existing.NodeProofID)
 		if derived, deriveErr := expectedNodeProofID(existing); deriveErr == nil {
 			if identity != "" && identity != derived {
@@ -420,10 +417,6 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid router bundle", http.StatusBadRequest)
 		return
 	}
-
-	// Refuse expensive private staging if the client is currently changing or
-	// using its routing state. Re-check under the same lock immediately before
-	// commit so a connection cannot race the import.
 	a.mu.Lock()
 	busy := a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking"
 	a.mu.Unlock()
@@ -834,11 +827,14 @@ func (a *app) options(w http.ResponseWriter, r *http.Request) {
 }
 
 // startMode is the safety boundary for every normal mode launch. A process start
-// is not a VPN connection. The mode is marked starting, then health-checked
-// through the resulting network path. Any failed launch is rolled back before
-// returning to the caller, so manual Connect and logical-mode fallback cannot
-// leave a dead full-tunnel route installed while claiming success.
+// is not a VPN connection. The public/manual form releases an on-connect policy
+// after a terminal failure; AUTO/logical fallback uses startModeAttempt(...,true)
+// so protection stays held while another candidate is about to be tried.
 func (a *app) startMode(id string) error {
+	return a.startModeAttempt(id, false)
+}
+
+func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	p, err := a.activeProfile()
 	if err != nil {
 		return err
@@ -859,7 +855,11 @@ func (a *app) startMode(id string) error {
 	if jumbo && !m.JumboSupported {
 		return errors.New("Jumbo TUN is not available for this mode; leave it off for WireGuard/AWG")
 	}
-	if err = a.stopMode(); err != nil {
+	// Switching from an existing/failed runtime to a new candidate is a protected
+	// transition, not a manual disconnect. Keep on-connect/always firewall policy
+	// installed until the new candidate has either proven its path or the caller
+	// decides there are no more recovery candidates.
+	if err = a.stopModeWithIntent(true); err != nil {
 		return err
 	}
 
@@ -867,6 +867,9 @@ func (a *app) startMode(id string) error {
 	env := append(os.Environ(), fmt.Sprintf("HOMEVPN_DAITA=%t", a.state.DAITA), fmt.Sprintf("HOMEVPN_JUMBO=%t", a.state.Jumbo), fmt.Sprintf("HOMEVPN_SOCKS=%t", a.state.Socks), fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU), "HOMEVPN_PROFILE_ID="+p.ID, "HOMEVPN_ENDPOINT="+p.Endpoint, "HOMEVPN_ADGUARD4="+p.AdGuardIPv4, "HOMEVPN_ADGUARD6="+p.AdGuardIPv6, "HOMEVPN_SOCKS_HOST="+p.SocksHost, fmt.Sprintf("HOMEVPN_SOCKS_PORT=%d", p.SocksPort), "HOMEVPN_SOCKS_USER="+p.SocksUsername, "HOMEVPN_SOCKS_PASSWORD="+p.SocksPassword)
 	a.mu.Unlock()
 	if len(m.Command) == 0 {
+		if !holdOnFailure {
+			_ = a.releaseTransitionKillSwitch()
+		}
 		return errors.New("mode has no command")
 	}
 	cmd := exec.Command(m.Command[0], m.Command[1:]...)
@@ -875,6 +878,9 @@ func (a *app) startMode(id string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err = cmd.Start(); err != nil {
+		if !holdOnFailure {
+			_ = a.releaseTransitionKillSwitch()
+		}
 		return err
 	}
 
@@ -890,8 +896,6 @@ func (a *app) startMode(id string) error {
 	a.state.LastError = ""
 	a.mu.Unlock()
 
-	// Give the runtime a short window to create the interface/proxy before the
-	// connectivity check. The health check itself has the configured timeout.
 	time.Sleep(1200 * time.Millisecond)
 	a.mu.Lock()
 	a.state.Phase = "checking"
@@ -899,7 +903,7 @@ func (a *app) startMode(id string) error {
 	latency, healthErr := a.testHealth(p)
 	if healthErr != nil {
 		failure := fmt.Errorf("%s started but selected-router path proof failed: %w", m.Name, healthErr)
-		_ = a.stopMode()
+		_ = a.stopModeWithIntent(holdOnFailure)
 		a.mu.Lock()
 		a.state.LastError = failure.Error()
 		a.state.Phase = "failed"
@@ -928,6 +932,10 @@ func (a *app) startMode(id string) error {
 }
 
 func (a *app) stopMode() error {
+	return a.stopModeWithIntent(false)
+}
+
+func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 	a.mu.Lock()
 	cmd := a.cmd
 	modeID := a.state.Mode
@@ -959,6 +967,7 @@ func (a *app) stopMode() error {
 		if m, err := a.mode(modeID); err == nil && len(m.StopCommand) > 0 {
 			c := exec.Command(m.StopCommand[0], m.StopCommand[1:]...)
 			c.Dir = a.cfg.ScriptsDir
+			c.Env = a.stopCommandEnv(holdKillSwitch)
 			_ = c.Run()
 		}
 	}
@@ -981,7 +990,7 @@ func (a *app) auto(w http.ResponseWriter, _ *http.Request) {
 		a.mu.Lock()
 		a.state.Phase = "auto:trying:" + m.ID
 		a.mu.Unlock()
-		if err := a.startMode(m.ID); err != nil {
+		if err := a.startModeAttempt(m.ID, true); err != nil {
 			failures = append(failures, m.ID+": "+err.Error())
 			continue
 		}
@@ -992,6 +1001,9 @@ func (a *app) auto(w http.ResponseWriter, _ *http.Request) {
 		a.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": m.ID, "runtime_mode": m.ID, "logical_mode": "auto"})
 		return
+	}
+	if err := a.releaseTransitionKillSwitch(); err != nil {
+		failures = append(failures, err.Error())
 	}
 	a.mu.Lock()
 	a.state.LastError = strings.Join(failures, " • ")
