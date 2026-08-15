@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: arm64-portainer-${{ github.ref }}
@@ -19,11 +18,6 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-
-      - name: Report preflight start
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA run=$GITHUB_RUN_ID status=started workflow=ARM64-Portainer-preflight"
 
       - name: Static production preflight
         run: |
@@ -147,9 +141,3 @@ jobs:
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-preflight-aux:arm64 --version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-preflight-aux:arm64 -h >/dev/null 2>&1
 
-      - name: Report preflight result
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREFLIGHT_STATUS: ${{ job.status }}
-        run: gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA run=$GITHUB_RUN_ID status=$PREFLIGHT_STATUS workflow=ARM64-Portainer-preflight"

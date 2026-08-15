@@ -356,6 +356,15 @@ for rel, markers in {
         if marker not in body:
             error(f"{rel} missing exact-SHA production release marker: {marker}")
 
+workflow_root = ROOT / ".github" / "workflows"
+if workflow_root.is_dir():
+    for workflow_path in workflow_root.glob("*.yml"):
+        workflow_body = workflow_path.read_text(encoding="utf-8", errors="replace")
+        if "gh issue comment" in workflow_body:
+            error(f"{workflow_path.relative_to(ROOT)} uses GitHub issues as a CI status side channel")
+        if re.search(r"(?m)^\s*issues:\s*write\s*$", workflow_body):
+            error(f"{workflow_path.relative_to(ROOT)} grants forbidden issue-write permission")
+
 pins = {
     "server/init/Dockerfile": (
         "golang:1.24.13-alpine", "golang:1.24.13-bookworm",

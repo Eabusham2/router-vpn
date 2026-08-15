@@ -8,7 +8,6 @@ on:
 permissions:
   contents: read
   packages: write
-  issues: write
 
 concurrency:
   group: publish-arm64-portainer-${{ github.ref }}
@@ -67,14 +66,3 @@ jobs:
             org.opencontainers.image.source=https://github.com/Eabusham2/router-vpn
             org.opencontainers.image.revision=${{ github.sha }}
 
-  report:
-    name: Report publish result
-    if: always()
-    needs: publish
-    runs-on: ubuntu-latest
-    steps:
-      - name: Report
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ needs.publish.result }}
-        run: gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "commit=$GITHUB_SHA status=$RESULT workflow=Publish-ARM64-Portainer-images"
