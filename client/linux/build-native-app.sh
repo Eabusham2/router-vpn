@@ -17,11 +17,17 @@ gcc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong \
 chmod 755 "$OUT"
 
 file "$OUT"
-ldd "$OUT" | grep -q 'libgtk-3'
-ldd "$OUT" | grep -q 'libjson-glib'
+# Capture producer output before matching it. With pipefail, `producer | grep -q`
+# can report a false failure when grep exits after its first match and the
+# producer receives SIGPIPE. These are strict content checks, not pipeline tests.
+LINKAGE=$(ldd "$OUT")
+grep -q 'libgtk-3' <<<"$LINKAGE"
+grep -q 'libjson-glib' <<<"$LINKAGE"
 # Runner pkg-config may choose dynamic or static libcurl. Require the API symbol,
 # not one particular linkage form.
-if ! nm -a "$OUT" 2>/dev/null | grep -q 'curl_easy_init' && ! nm -D "$OUT" 2>/dev/null | grep -q 'curl_easy_init'; then
+SYMBOLS=$(nm -a "$OUT" 2>/dev/null || true)
+DYNAMIC_SYMBOLS=$(nm -D "$OUT" 2>/dev/null || true)
+if ! grep -q 'curl_easy_init' <<<"$SYMBOLS" && ! grep -q 'curl_easy_init' <<<"$DYNAMIC_SYMBOLS"; then
   echo 'Native Linux app does not contain/reference required libcurl API.' >&2
   exit 1
 fi
