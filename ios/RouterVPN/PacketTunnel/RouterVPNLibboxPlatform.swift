@@ -107,8 +107,9 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         guard let listener else { return }
         monitor?.cancel()
         let next = NWPathMonitor(); monitor = next
-        let first = DispatchSemaphore(value: 0); var firstDelivery = true
-        next.pathUpdateHandler = { path in self.update(listener, from: path); if firstDelivery { firstDelivery = false; first.signal() } }
+        let first = DispatchSemaphore(value: 0)
+        let delivery = InterfaceMonitorDelivery(listener: listener, first: first)
+        next.pathUpdateHandler = { path in delivery.deliver(path) }
         next.start(queue: DispatchQueue(label: "routervpn.libbox.path"))
         if first.wait(timeout: .now() + 5) == .timedOut { next.cancel(); monitor = nil; throw error("Timed out while discovering the default iOS network interface") }
     }
@@ -157,10 +158,35 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
     func systemCertificates() -> (any LibboxStringIteratorProtocol)? { nil }
     func reset() { networkSettings = nil; monitor?.cancel(); monitor = nil }
 
-    private func update(_ listener: LibboxInterfaceUpdateListenerProtocol, from path: NWPath) {
+    private static func update(_ listener: LibboxInterfaceUpdateListenerProtocol, from path: NWPath) {
         guard path.status != .unsatisfied, let iface = path.availableInterfaces.first else { listener.updateDefaultInterface("", interfaceIndex: -1, isExpensive: false, isConstrained: false); return }
         listener.updateDefaultInterface(iface.name, interfaceIndex: Int32(iface.index), isExpensive: path.isExpensive, isConstrained: path.isConstrained)
     }
+
+    /// NWPathMonitor requires a @Sendable callback under Swift 6. The Libbox mobile
+    /// listener protocol itself predates Sendable, so keep that foreign reference
+    /// behind a serial-queue delivery box and protect the one-shot semaphore state.
+    private final class InterfaceMonitorDelivery: @unchecked Sendable {
+        private let listener: LibboxInterfaceUpdateListenerProtocol
+        private let first: DispatchSemaphore
+        private let lock = NSLock()
+        private var deliveredFirst = false
+
+        init(listener: LibboxInterfaceUpdateListenerProtocol, first: DispatchSemaphore) {
+            self.listener = listener
+            self.first = first
+        }
+
+        func deliver(_ path: NWPath) {
+            RouterVPNLibboxPlatform.update(listener, from: path)
+            lock.lock()
+            let shouldSignal = !deliveredFirst
+            deliveredFirst = true
+            lock.unlock()
+            if shouldSignal { first.signal() }
+        }
+    }
+
     private func apply(_ settings: NEPacketTunnelNetworkSettings?, to tunnel: PacketTunnelProvider) throws {
         let semaphore = DispatchSemaphore(value: 0); var failure: Error?
         tunnel.setTunnelNetworkSettings(settings) { error in failure = error; semaphore.signal() }
