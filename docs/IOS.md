@@ -1,46 +1,50 @@
 # iPhone and iPad
 
-No home-router address is embedded in the app. Router profiles are imported and edited at runtime.
+No home-router address is embedded in the app. Router nodes/profiles are linked or imported at runtime and stored per node.
 
-## Immediate working profiles
+## Native Router VPN app
 
-After the router installs, open the private client bundle:
+The SwiftUI iOS/iPadOS app ships a real Packet Tunnel target. Current source includes:
 
-- `generated/wg/wg.conf` → import into WireGuard
-- `generated/awg2-fast/awg.conf` → import into an AmneziaWG-compatible iOS client
+- private home-LAN linking/import and per-node bundle storage
+- exact selected-node identity proof
+- native pinned WireGuardKit PacketTunnel for raw WireGuard
+- pinned Libbox Apple bridge for supported Router VPN layered profiles
+- external WireGuard, SOCKS5, Shadowsocks and Hysteria2 through the Libbox PacketTunnel path
+- expected-public-exit proof before external Connected state
+- strict NetworkExtension route-lockdown handling using `includeAllNetworks` + `enforceRoutes`
+- on-demand reconnect and LAN-policy alignment for strict mode
+- logical-mode/base selection with unsupported capabilities remaining unavailable
+- node list/current-recent/last-used/name/measured-latency ordering
+- no invented map coordinates for coordinate-less nodes
 
-These are the immediate iPhone/iPad choices while the custom Packet Tunnel adapter is unfinished.
+The app follows real NetworkExtension status. It does not mark itself Connected merely because tunnel startup was requested.
 
-## Custom Router VPN app
+## Honest current boundary
 
-The SwiftUI app includes:
+The native Apple dataplanes currently present are not equivalent to the complete desktop engine set.
 
-- router-bundle import
-- runtime endpoint editing
-- all generated modes and overhead display
-- AUTO/manual controls
-- DAITA-like and Jumbo controls
-- SOCKS5 IP:port display
-- WG/AWG port-forward controls
-- Packet Tunnel extension target
+- Raw WireGuard is a real pinned WireGuardKit path.
+- Supported imported Router VPN layered profiles use the pinned Libbox bridge.
+- External WireGuard/SOCKS5/Shadowsocks/Hysteria2 use the Libbox path with exact expected-exit proof.
+- AmneziaWG-only paths remain unavailable until a real pinned Apple AmneziaWG dataplane exists.
+- Full desktop-equivalent Router VPN multihop remains unavailable.
+- External OpenVPN remains unavailable because Router VPN does not ship a pinned native Apple OpenVPN dataplane.
+- MAX/ALL labels do not make an unsupported Apple graph Ready.
 
-The current `PacketTunnelProvider.swift` **intentionally fails closed** with an `NSError` and calls `completionHandler(error)` because the native WireGuard/AmneziaWG/Xray/sing-box adapter is not linked yet. That error path is expected preview behavior, not an accidental Go/Swift error or failed exception-handling path. It prevents a signed UI-only build from pretending the VPN connected.
+Unsupported paths fail closed rather than substituting another engine or faking Connected.
 
-CI compiles both the app and Packet Tunnel target and explicitly checks that this fail-closed behavior remains present until real adapters replace it.
+## Setup Center profiles
+
+The private Setup Center can still provide compatible protocol material for independent/native apps when that is useful, including WireGuard and supported compatible-method profiles. These are alternative interoperability paths, not evidence that a Router VPN app capability passed its physical-device release gate.
 
 ## GitHub Actions IPA builds
 
-The client CI builds:
+Client/release CI builds the SwiftUI app and PacketTunnel target and packages an **unsigned re-signable IPA** from the exact source SHA. CI verifies the pinned WireGuardKit/Libbox build/runtime contract.
 
-```text
-RouterVPN-preview-unsigned-resignable.ipa
-```
+A successful unsigned build proves source/package readiness, not Apple distribution or live full-device behavior. Installation on a normal device requires legitimate signing/provisioning, and final release still requires physical-device validation.
 
-This preview IPA must be re-signed before installation and is **not** advertised as a working full-device VPN while the native tunnel adapters are absent.
-
-Signing by itself does not add the missing tunnel engine. The custom app becomes a working full-device VPN only after native adapters are linked and validated in `PacketTunnelProvider.swift`.
-
-## Build manually on a Mac
+## Build/sign on a Mac
 
 ```bash
 brew install xcodegen
@@ -51,11 +55,10 @@ open RouterVPN.xcodeproj
 
 Then:
 
-1. Select your Apple Developer Team for both targets.
-2. Enable the Packet Tunnel Network Extension entitlement for both App IDs.
-3. Add the required WireGuard/AmneziaWG and proxy-engine libraries to the Packet Tunnel target.
-4. Replace the current explicit fail-closed error with the real adapter implementation.
-5. Build to a device or archive and export.
+1. Select the intended Apple Developer Team for the app and PacketTunnel targets.
+2. Enable/verify the required Network Extension Packet Tunnel entitlement and matching provisioning.
+3. Build/archive the existing pinned WireGuardKit + Libbox implementation; do not replace it with the retired fail-closed preview stub.
+4. Install to a real device and perform the physical validation matrix before treating the build as release-ready.
 
 Bundle identifiers:
 
@@ -63,3 +66,20 @@ Bundle identifiers:
 com.eabusham.routervpn
 com.eabusham.routervpn.PacketTunnel
 ```
+
+## Required physical validation
+
+Before final release on iPhone/iPad, prove on real hardware:
+
+- VPN permission and PacketTunnel startup
+- exact selected home-node proof
+- real public-exit change
+- tunneled DNS and IPv4/IPv6 behavior as applicable
+- strict route-lockdown / leak-negative behavior
+- disconnect/reconnect and network-change/on-demand behavior
+- supported Libbox layered traffic
+- supported external-exit traffic and exact expected-public-exit proof
+- fail-closed behavior for unsupported/invalid paths
+- legitimate signing/provisioning behavior
+
+CI, simulator/source checks or a green UI alone do not satisfy this gate.

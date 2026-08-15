@@ -3,7 +3,10 @@
 Current entrypoints:
 
 - Full setup/product guide: `docs/CURRENT-GUIDE.md`
-- Current implementation boundaries: `docs/CURRENT-STATUS.md`
+- Current implementation/release boundaries: `docs/CURRENT-STATUS.md`
+- Client linking/platform notes: `docs/CLIENT.md`
+- Native app boundaries: `docs/NATIVE-APPS.md`
+- Build/release details: `docs/BUILDS.md`
 - Portainer stack: `server/portainer-current.yaml`
 - ASUS forwarding helper: `router/asus-merlin-router-vpn-forwards.sh`
 - Terminal manager: `server/manage.sh`
@@ -11,18 +14,20 @@ Current entrypoints:
 - Raw mode catalog: `configs/client/modes.json`
 - Logical app catalog: `configs/client/logical-modes.json`
 
-## Normal deployment
+## Release/deployment order
 
 ```text
-GitHub CI green
-→ Portainer server/portainer-current.yaml
-→ exact-SHA image-only server stack
-→ verify init/finalizer + running services
-→ private Setup Center :8786
-→ ASUS helper
-→ install/pair client
-→ off-LAN real tunnel test
+requirements/source reconciliation
+→ GitHub source/security/native/runtime gates
+→ exact-SHA ARM64 images + one-SHA client release candidate
+→ physical-device / off-LAN / visual / AI-provider / signing gates
+→ deliberate exact-SHA Portainer production deploy
+→ live smoke tests
+→ inspect/revalidate ASUS forwarding
+→ final regression matrix
 ```
+
+Production is never promoted from an old release candidate merely because it once passed.
 
 Normal Portainer environment:
 
@@ -32,7 +37,7 @@ LAN_CIDR=192.168.50.0/24
 ADGUARD4=192.168.50.133
 ```
 
-`ENDPOINT` is optional.
+`ENDPOINT` is optional and normally left unset for auto-detection.
 
 ## Client downloads
 
@@ -42,8 +47,12 @@ Open the private Setup Center on the LAN:
 http://192.168.50.133:8786/
 ```
 
-Client packages are GitHub-artifact-first. If the matching client artifact is unavailable, the AI Board compiles only the requested package locally. Private customization and build output are temporary and deleted after delivery.
+Generic client packages are GitHub-artifact-first. If the matching artifact is unavailable/unusable, the AI Board can compile only the requested generic package locally with the bounded fallback. The generic installer/Portable ZIP remains secret-free; link/import/pair private nodes separately after installation.
 
 PortableApps/PAF is not supported; normal Router VPN Portable ZIP x64/ARM64 is supported.
 
-Never WAN-expose `1080`, `8786`, `8787`, `14444`, `9443`, SSH, Portainer, or AdGuard admin.
+## Private/public boundary
+
+Never WAN-expose `1080`, `8786`, `8787`, `14444`, `9443`, SSH, Portainer or AdGuard admin. Setup Center Simple Methods may use only their documented public listeners; complex Router VPN stacks remain in the Router VPN app.
+
+Real release claims require the documented physical/off-LAN/leak-negative/signing/production evidence. CI/source readiness alone is not final product completion.

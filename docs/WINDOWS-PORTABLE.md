@@ -1,10 +1,8 @@
 # Router VPN on Windows — Portable ZIP
 
-Router VPN ships a normal Windows package plus one tested no-system-install Portable ZIP layout. PortableApps.com/PAF packaging was retired because the official packager was not reliable enough in unattended CI; Router VPN does not publish or advertise a PortableApps package.
+Router VPN ships normal Windows packages plus tested no-system-install Portable ZIP layouts. PortableApps.com/PAF packaging is retired; Router VPN does not publish or advertise a PortableApps package.
 
-## Portable ZIP
-
-Artifacts:
+## Portable ZIP artifacts
 
 - `RouterVPN-Portable-Windows-amd64.zip`
 - `RouterVPN-Portable-Windows-arm64.zip`
@@ -15,9 +13,9 @@ Extract the whole folder anywhere, including a removable drive, then run:
 RouterVPNPortable.exe
 ```
 
-Do not separate the executable from its `App` and `Data` folders.
+Do not separate the launcher from its `App` and `Data` folders.
 
-The package layout is intentionally portable:
+Current layout is approximately:
 
 ```text
 RouterVPNPortable-ARCH/
@@ -31,58 +29,65 @@ RouterVPNPortable-ARCH/
       router-vpn-dns.exe
       modes.json
       logical-modes.json
-      modes/
       client/
+      modes/
       LICENSE
   Data/
-    ...created/updated at runtime...
+    ...writable/private state created at runtime...
 ```
 
-`App/RouterVPN` is immutable application/runtime material. `Data` contains mutable/private state: imported routers, generated private profiles, controller state, Windows runtime metadata and the portable browser profile.
+`App/RouterVPN` is immutable application/runtime material. `Data` is writable and holds settings, private linked-node state, generated profiles and native Windows engine/runtime material.
 
-The launcher regenerates absolute/WSL paths each time it starts, so moving the **whole** folder to a different drive/path does not bake in the old location.
+The ZIP is **generic and secret-free**. It contains no pre-linked home node. On first run the launcher creates a blank writable node store under `Data`; add nodes separately using import/pairing. Router VPN state is kept with the Portable folder rather than being intentionally written to AppData or the registry by the portable launcher/app.
 
-## Home Setup Center portable downloads
+## Native daily-use app
 
-The home node provides private, already-linked packages on demand:
+`RouterVPNPortable.exe` starts the local Router VPN controller, opens the native Windows WPF app from `App/RouterVPN/client/RouterVPN-Windows-App.ps1`, then cleanly stops the controller it owns when the native window exits.
 
-- `router-vpn-windows-portable-amd64.zip`
-- `router-vpn-windows-portable-arm64.zip`
+The current Portable product does **not** use Edge/Chrome app mode, an embedded browser/WebView, a portable browser profile or WSL as the native VPN dataplane.
 
-The Setup Center first tries the matching short-lived GitHub Actions artifact, overlays the current node's private data in a temporary directory, streams the ZIP, then deletes the temporary copy. If no usable GitHub artifact is available, the ARM64 AI Board compiles only the requested Windows Portable architecture locally, builds that one private ZIP in temporary storage, streams it, then deletes the temporary build/output.
+`RouterVPNPortable.exe --self-test` is used by CI to verify the real launcher/controller/native-app contract, clean shutdown and relocation to a different filesystem path.
 
-These home-linked ZIPs contain private profile material. Treat them as credentials and do not publish or share them.
+## Native Windows runtime
 
-## Windows full-mode runtime
-
-The controller and app UI are native Windows executables. Router VPN's existing full multi-engine shell paths are Unix-oriented, so Windows Portable routes those scripts through WSL when a usable default distro exists.
-
-Run once:
+Run once when native layered TUN modes require their external engines:
 
 ```powershell
 .\Setup-Windows-Runtime.ps1
 ```
 
-or use `RouterVPNSetupRuntime.exe`.
+or use:
 
-The helper verifies/installs the required WSL-side engines, including WireGuard tools, AmneziaWG, Rosenpass, sing-box with Naive support, Xray, Shadowsocks-rust and V2Ray-plugin. It fails visibly if a required engine is still missing.
+```text
+RouterVPNSetupRuntime.exe
+```
 
-After setup, close and reopen `RouterVPNPortable.exe`. The launcher regenerates `Data/modes.windows.json`, translating Windows paths into WSL paths and passing the Router VPN runtime environment through `WSLENV`.
+The runtime helper prepares/verifies the pinned native Windows engines required by supported layered modes. Those runtime files live under `Data` so they move with the Portable folder. If a required engine is absent or unsupported, the capability remains unavailable with an exact reason rather than being replaced by a compatibility-layer engine.
 
-If WSL is not ready, the app reports that dependency as the reason a shell-engine mode is unavailable instead of trying to execute `.sh` files directly on Windows.
+Windows source includes native raw WireGuard, full-device layered TUN/DNS paths, Windows firewall kill-switch handling and real multihop where supported. WSL is not counted as the native Windows VPN implementation.
+
+## Custom standard exits
+
+Validated custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. A native OpenVPN 2.7 adapter/helper path is also implemented where the required pinned runtime/helper and requested direct/hop graph can be represented safely. Unsupported graphs fail closed. Connected is withheld until the exact expected public exit is proven.
 
 ## Logical modes
 
-Portable uses the same controller binary and logical-mode API as the normal desktop client:
+Portable uses the same controller and logical-mode API as the normal Windows package:
 
-- 16 logical user-facing methods
-- raw 20 runtime variants remain internal
+- 16 logical user-facing modes
+- 20 raw runtime profiles remain internal
 - compatible methods expose `Base: Auto / WireGuard / AmneziaWG`
-- the alternate base can be tried as a fallback
-- raw duplicate `max-quic-wg`, `max-quic-awg`, `max-tls-wg`, and `max-tls-awg` IDs are not separate user-facing rows
+- the alternate compatible base can be tried as a real fallback
+- raw duplicate WG/AWG MAX variants are not separate user-facing rows
+
+## Home Setup Center downloads
+
+The Setup Center serves the matching generic Portable package for the requested architecture. It prefers the matching same-SHA GitHub artifact and, if unavailable/unusable, can build only the requested generic package locally with the bounded router-local client build path.
+
+The downloaded generic ZIP still contains **no linked home secrets**. Link/import one or more private Router VPN nodes after installation. Private bundles, pairing material and external-profile credentials are separate from the generic package and must not be published.
 
 ## Closing / removable-drive behavior
 
-When Router VPN opens Edge/Chrome/Brave in app-window mode, the portable launcher owns that app window. Closing it causes the launcher to stop Router VPN transports and the controller process it started, allowing the portable folder/removable drive to be moved or ejected cleanly.
+When the native WPF window exits, the portable launcher stops only the Router VPN controller/processes it owns and performs Router VPN emergency cleanup so the folder/removable drive can be moved or ejected cleanly.
 
-`RouterVPNPortable.exe --self-test` is used by CI to verify the real Windows launcher, local controller, 16-mode logical API, mutable `Data` generation, clean shutdown and relocation to another filesystem path.
+Physical Windows validation remains a release gate for real VPN permission/elevation, full-device routing, DNS/IPv4/IPv6, reconnect/network-change behavior, leak-negative kill-switch behavior, custom exits and both amd64/arm64 package variants on real hardware.
