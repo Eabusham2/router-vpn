@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """Post-connect, fail-closed Router VPN MTU optimizer.
 
-The pre-connect mtu-policy.py finds a safe PMTU ceiling.  This helper is an
-*explicit* post-connect optimization pass: it tests several safe live tunnel
-MTUs against the private Router VPN node, measures bidirectional packet success,
-RTT and aggregate transfer rate through the existing bounded DAITA test sink,
-then remembers the best candidate for the same path context.
+The pre-connect mtu-policy.py finds a safe PMTU ceiling. This helper is an
+explicit post-connect optimization pass: it tests several safe live tunnel MTUs
+against the private Router VPN node, measures bidirectional packet success, RTT
+and aggregate transfer rate through the existing bounded DAITA test sink, then
+remembers the best candidate for the same network/path context.
 
 It never opens a benchmark listener, never uses a public speed-test service,
-and refuses non-private proof/benchmark destinations.  On failure it restores
+and refuses non-private proof/benchmark destinations. On failure it restores
 the interface MTU that was active when optimization began.
 """
 from __future__ import annotations
 
 import datetime
 import hashlib
-import importlib.util
 import ipaddress
 import json
 import os
@@ -30,6 +29,8 @@ import tempfile
 import time
 import urllib.request
 from typing import Any
+
+from network_context import generated_profile_fingerprint, network_fingerprint
 
 MIN_OPT_MTU = 1200
 MAX_OPT_MTU = 1500
@@ -272,22 +273,47 @@ def pick_winner(results: list[dict[str, Any]]) -> dict[str, Any]:
     return max(near_rtt, key=lambda r: int(r["mtu"]))
 
 
-def path_context_key(profile: dict[str, Any]) -> str:
+def path_context(profile: dict[str, Any], root: Path | None = None) -> tuple[str, str, str]:
+    root = root or root_dir()
+    endpoint = str(profile.get("endpoint") or os.environ.get("HOMEVPN_ENDPOINT", "")).strip()
+    mode = os.environ.get("HOMEVPN_MODE", "").strip()
+    profile_id = str(profile.get("id") or os.environ.get("HOMEVPN_PROFILE_ID", "")).strip()
+    family = os.environ.get("HOMEVPN_IP_FAMILY", "").strip().lower()
+    if not family:
+        try:
+            family = str(ipaddress.ip_address(endpoint.strip("[]")).version)
+        except ValueError:
+            family = "unknown"
+    network = network_fingerprint(endpoint)
+    try:
+        generated = generated_profile_fingerprint(root, profile_id, mode)
+    except RuntimeError:
+        generated = hashlib.sha256(f"unavailable|{profile_id}|{mode}".encode("utf-8")).hexdigest()[:24]
     raw = "|".join([
-        str(profile.get("endpoint") or os.environ.get("HOMEVPN_ENDPOINT", "")).strip().lower(),
-        os.environ.get("HOMEVPN_MODE", "").strip().lower(),
+        endpoint.lower(),
+        mode.lower(),
         os.environ.get("HOMEVPN_LOGICAL_MODE", "").strip().lower(),
         os.environ.get("HOMEVPN_BASE", "").strip().lower(),
-        os.environ.get("HOMEVPN_IP_FAMILY", "").strip().lower(),
+        family,
+        profile_id.lower(),
+        network,
+        generated,
     ])
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24], network, generated
+
+
+def path_context_key(profile: dict[str, Any]) -> str:
+    return path_context(profile)[0]
 
 
 def persist(root: Path, store: dict[str, Any], profile: dict[str, Any], winner: dict[str, Any], results: list[dict[str, Any]]) -> None:
     now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    key, network, generated = path_context(profile, root)
     profile["effective_mtu"] = int(winner["mtu"])
     profile["effective_mtu_source"] = "auto-throughput"
-    profile["effective_mtu_path_key"] = path_context_key(profile)
+    profile["effective_mtu_path_key"] = key
+    profile["effective_mtu_network_fingerprint"] = network
+    profile["effective_mtu_profile_fingerprint"] = generated
     profile["effective_mtu_tested_at"] = now
     profile["effective_mtu_mbps"] = float(winner["mbps"])
     profile["effective_mtu_median_rtt_ms"] = float(winner["median_rtt_ms"])
@@ -366,6 +392,19 @@ def main() -> int:
         ]
         assert pick_winner(sample)["mtu"] == 1380
         assert candidate_mtus(1380)[0] == 1380
+        old = os.environ.get("HOMEVPN_NETWORK_CONTEXT")
+        try:
+            os.environ["HOMEVPN_NETWORK_CONTEXT"] = "wifi-a"
+            p = {"id": "node", "endpoint": "203.0.113.10"}
+            first = path_context_key(p)
+            os.environ["HOMEVPN_NETWORK_CONTEXT"] = "cellular-b"
+            second = path_context_key(p)
+            assert first != second
+        finally:
+            if old is None:
+                os.environ.pop("HOMEVPN_NETWORK_CONTEXT", None)
+            else:
+                os.environ["HOMEVPN_NETWORK_CONTEXT"] = old
         print("MTU throughput optimizer self-test OK")
         return 0
     if len(sys.argv) != 2 or sys.argv[1] != "optimize":
