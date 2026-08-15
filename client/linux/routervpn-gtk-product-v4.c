@@ -8,6 +8,121 @@
 
 /* Product v4: unified Router VPN + validated external-node desktop UX. */
 
+static void refresh_nodes_order_v4(App *app, const char *order) {
+    char *path = g_strdup_printf("/api/nodes?sort=%s", order != NULL ? order : "current");
+    Buffer out = {0};
+    char *err = NULL;
+    if (!api_request(path, "GET", NULL, 3000, &out, &err)) {
+        g_free(path); g_free(err); free(out.data); return;
+    }
+    g_free(path);
+    JsonNode *root = parse_json(out.data);
+    if (root == NULL || !JSON_NODE_HOLDS_OBJECT(root)) {
+        if (root != NULL) json_node_free(root);
+        free(out.data); g_free(err); return;
+    }
+    JsonObject *store = json_node_get_object(root);
+    const char *selected = obj_string(store, "selected_id");
+    JsonArray *profiles = json_object_get_array_member(store, "profiles");
+    app->suppress_router_change = TRUE;
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(app->router_combo));
+    g_ptr_array_set_size(app->router_ids, 0);
+    g_ptr_array_set_size(app->nodes, 0);
+    GString *text = g_string_new("");
+    guint selected_index = 0;
+    if (profiles != NULL) {
+        for (guint i = 0; i < json_array_get_length(profiles); i++) {
+            JsonObject *profile = json_array_get_object_element(profiles, i);
+            if (profile == NULL) continue;
+            MapNode *node = g_new0(MapNode, 1);
+            node->id = g_strdup(obj_string(profile, "id"));
+            node->name = g_strdup(obj_string(profile, "name"));
+            node->location = g_strdup(obj_string(profile, "location"));
+            node->endpoint = g_strdup(obj_string(profile, "endpoint"));
+            gboolean has_lat = FALSE, has_lon = FALSE, has_latency = FALSE;
+            node->latitude = obj_double(profile, "latitude", &has_lat);
+            node->longitude = obj_double(profile, "longitude", &has_lon);
+            node->latency = obj_double(profile, "latency_median_ms", &has_latency);
+            node->has_coordinates = has_lat && has_lon && isfinite(node->latitude) && isfinite(node->longitude)
+                && node->latitude >= -90 && node->latitude <= 90
+                && node->longitude >= -180 && node->longitude <= 180
+                && !(node->latitude == 0 && node->longitude == 0);
+            node->selected = selected[0] != '\0' && strcmp(selected, node->id) == 0;
+            if (node->selected) selected_index = i;
+            gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(app->router_combo),
+                                           node->name[0] != '\0' ? node->name : node->id);
+            g_ptr_array_add(app->router_ids, g_strdup(node->id));
+            g_ptr_array_add(app->nodes, node);
+            g_string_append_printf(text, "%s%s\n  %s\n  endpoint: %s\n  coordinates: %s",
+                node->selected ? "● " : "", node->name[0] ? node->name : node->id,
+                node->location[0] ? node->location : "Location not labeled",
+                node->endpoint[0] ? node->endpoint : "—",
+                node->has_coordinates ? "real stored latitude/longitude" : "not stored — not plotted");
+            if (has_latency && node->latency > 0) g_string_append_printf(text, "\n  median latency: %.1f ms", node->latency);
+            const char *last_used = obj_string(profile, "last_used_at");
+            if (last_used[0] != '\0') g_string_append_printf(text, "\n  last used: %s", last_used);
+            g_string_append(text, "\n\n");
+        }
+    }
+    if (app->router_ids->len > 0) gtk_combo_box_set_active(GTK_COMBO_BOX(app->router_combo), (gint)selected_index);
+    app->suppress_router_change = FALSE;
+    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->nodes_view));
+    gtk_text_buffer_set_text(buffer, text->str, -1);
+    g_string_free(text, TRUE);
+    gtk_widget_queue_draw(app->map);
+    json_node_free(root); free(out.data); g_free(err);
+}
+
+static void on_sort_nodes_current(GtkButton *button, gpointer data) {(void)button;refresh_nodes_order_v4((App *)data,"current");}
+static void on_sort_nodes_recent(GtkButton *button, gpointer data) {(void)button;refresh_nodes_order_v4((App *)data,"last-used");}
+static void on_sort_nodes_latency(GtkButton *button, gpointer data) {(void)button;refresh_nodes_order_v4((App *)data,"latency");}
+static void on_sort_nodes_name(GtkButton *button, gpointer data) {(void)button;refresh_nodes_order_v4((App *)data,"name");}
+
+static void on_select_lowest_latency(GtkButton *button, gpointer data) {
+    (void)button;
+    App *app = data;
+    Buffer out = {0};
+    char *err = NULL;
+    if (!api_request("/api/nodes?sort=latency", "GET", NULL, 3000, &out, &err)) {
+        append_diag(app, err != NULL ? err : "Lowest-latency selection failed.");
+        g_free(err); free(out.data); return;
+    }
+    JsonNode *root = parse_json(out.data);
+    const char *best_id = NULL;
+    guint measured = 0;
+    if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
+        JsonArray *profiles = json_object_get_array_member(json_node_get_object(root), "profiles");
+        if (profiles != NULL) {
+            for (guint i = 0; i < json_array_get_length(profiles); i++) {
+                JsonObject *profile = json_array_get_object_element(profiles, i);
+                if (profile == NULL) continue;
+                gboolean has_latency = FALSE;
+                double median = obj_double(profile, "latency_median_ms", &has_latency);
+                gint64 samples = json_object_has_member(profile, "latency_samples") ? json_object_get_int_member(profile, "latency_samples") : 0;
+                if (!has_latency || median <= 0 || samples <= 0) continue;
+                if (best_id == NULL) best_id = obj_string(profile, "id");
+                measured++;
+            }
+        }
+    }
+    if (measured < 2 || best_id == NULL || best_id[0] == '\0') {
+        append_diag(app, "Lowest-latency selection requires real 50-sample measurements on at least two usable nodes; current selection was kept.");
+    } else {
+        char *body = json_string_body("id", best_id);
+        Buffer selected_out = {0};
+        char *select_err = NULL;
+        if (api_request("/api/profile/select", "POST", body, 10000, &selected_out, &select_err)) {
+            append_diag(app, "Selected the lowest measured median-latency node.");
+            refresh_nodes_order_v4(app, "latency");
+        } else {
+            append_diag(app, select_err != NULL ? select_err : "Lowest-latency node selection failed.");
+        }
+        g_free(body); g_free(select_err); free(selected_out.data);
+    }
+    if (root != NULL) json_node_free(root);
+    g_free(err); free(out.data);
+}
+
 static void on_import_any_node(GtkButton *button, gpointer data) {
     (void)button;
     App *app = data;
@@ -157,6 +272,15 @@ static GtkWidget *build_nodes_page_v4(App *app) {
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
     gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 0);
 
+    GtkWidget *sort_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_pack_start(GTK_BOX(sort_row), gtk_label_new("Order:"), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(sort_row), make_button("Current / recent", G_CALLBACK(on_sort_nodes_current), app), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(sort_row), make_button("Last used", G_CALLBACK(on_sort_nodes_recent), app), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(sort_row), make_button("Lowest latency", G_CALLBACK(on_sort_nodes_latency), app), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(sort_row), make_button("Name", G_CALLBACK(on_sort_nodes_name), app), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(sort_row), make_button("Select lowest latency", G_CALLBACK(on_select_lowest_latency), app), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), sort_row, FALSE, FALSE, 0);
+
     GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_VERTICAL);
     app->map = gtk_drawing_area_new();
     gtk_widget_set_size_request(app->map, -1, 300);
@@ -197,9 +321,9 @@ static void build_ui_v4(App *app) {
 static int self_test_v4(void) {
     if (routervpn_product_v3_self_test() != 0) return 2;
     static const char *const external_paths[] = {
-        "/api/external-profile/import", "/api/external-profile/connect", "/api/nodes", "entry_id"
+        "/api/external-profile/import", "/api/external-profile/connect", "/api/nodes", "entry_id", "/api/nodes?sort=latency", "Select lowest latency"
     };
-    if (G_N_ELEMENTS(external_paths) != 4 || external_paths[0][0] != '/') return 3;
+    if (G_N_ELEMENTS(external_paths) != 6 || external_paths[0][0] != '/') return 3;
     puts("Router VPN native Linux unified external-node product self-test: OK");
     return 0;
 }
