@@ -33,6 +33,7 @@ func extraRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/profile/latency", a.profileLatency)
 	h.HandleFunc("/api/public-ip", a.publicIP)
 	h.HandleFunc("/api/dns/retest", a.retestDNS)
+	registerMTURetestRoute(h, a)
 	h.HandleFunc("/api/emergency-stop", a.emergencyStopTracked)
 	// Linux keeps its native WG/AWG split-entry chain. Windows and macOS route
 	// to their real native desktop multihop launchers instead of accidentally
