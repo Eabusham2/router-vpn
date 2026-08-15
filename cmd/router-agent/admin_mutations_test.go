@@ -65,28 +65,45 @@ func TestValidateAdminForward(t *testing.T) {
 	}
 }
 
-func TestLANAccessOffBlocksHostAndForwardedLANButPreservesTunnelControlDestination(t *testing.T) {
+func TestLANAccessOffBlocksHomeLANButPreservesOverlappingTunnelOverlay(t *testing.T) {
 	rules := renderLANAccessOffRules(
 		"router_vpn_admin",
-		[]string{"10.77.0.0/24", "fd77:77::/64"},
+		[]string{"10.77.0.0/24", "10.78.0.0/24", "fd77:77::/64", "fd78:78::/64"},
 		"192.168.50.0/24",
 		"fd00::/8",
 	)
-	required := []string{
+	for _, want := range []string{
 		"input ip saddr 10.77.0.0/24 ip daddr 192.168.50.0/24 drop",
 		"forward ip saddr 10.77.0.0/24 ip daddr 192.168.50.0/24 drop",
 		"input ip6 saddr fd77:77::/64 ip6 daddr fd00::/8 drop",
 		"forward ip6 saddr fd77:77::/64 ip6 daddr fd00::/8 drop",
-	}
-	for _, want := range required {
+	} {
 		if !strings.Contains(rules, want) {
 			t.Fatalf("LAN-off rules missing %q:\n%s", want, rules)
 		}
 	}
-	for _, tunnelControl := range []string{"10.77.0.1", "10.78.0.1", "fd77:77::1", "fd78:78::1"} {
-		if strings.Contains(rules, "daddr "+tunnelControl) {
-			t.Fatalf("LAN-off rules unexpectedly block private tunnel control destination %s:\n%s", tunnelControl, rules)
+
+	ipv6Drop := "input ip6 saddr fd77:77::/64 ip6 daddr fd00::/8 drop"
+	dropAt := strings.Index(rules, ipv6Drop)
+	if dropAt < 0 {
+		t.Fatalf("IPv6 LAN drop missing:\n%s", rules)
+	}
+	for _, allow := range []string{
+		"input ip6 saddr fd77:77::/64 ip6 daddr fd77:77::/64 accept",
+		"input ip6 saddr fd77:77::/64 ip6 daddr fd78:78::/64 accept",
+		"forward ip6 saddr fd77:77::/64 ip6 daddr fd77:77::/64 accept",
+		"forward ip6 saddr fd77:77::/64 ip6 daddr fd78:78::/64 accept",
+	} {
+		allowAt := strings.Index(rules, allow)
+		if allowAt < 0 {
+			t.Fatalf("overlapping Router VPN overlay exemption missing %q:\n%s", allow, rules)
 		}
+		if allowAt > dropAt {
+			t.Fatalf("overlay exemption appears after broad LAN drop %q:\n%s", allow, rules)
+		}
+	}
+	if strings.Contains(rules, "input ip saddr 10.77.0.0/24 ip daddr 10.77.0.0/24 accept") {
+		t.Fatalf("non-overlapping IPv4 tunnel CIDR was unnecessarily exempted:\n%s", rules)
 	}
 }
 
