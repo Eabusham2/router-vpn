@@ -20,6 +20,47 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$OUT"
 BUILD_WORK=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-macos-build.XXXXXX")
 trap 'rm -rf "$BUILD_WORK"' EXIT
 MENU_OBJ="$BUILD_WORK/RouterVPNMenuBar.o"
+ADAPTIVE_SRC="$BUILD_WORK/RouterVPNMacProduct.swift"
+
+# Keep one authoritative AppKit product source while compiling a deterministic
+# adaptive-layout view of it. Exact substitutions only: if the source layout
+# drifts, fail closed rather than silently shipping an unreviewed rewrite.
+python3 - "$SRC" "$ADAPTIVE_SRC" <<'PY'
+from pathlib import Path
+import sys
+src, out = map(Path, sys.argv[1:3])
+text = src.read_text(encoding="utf-8")
+changes = (
+    (
+        'NSRect(x: 0, y: 0, width: 1180, height: 780)',
+        'NSRect(x: 0, y: 0, width: 1050, height: 720)',
+    ),
+    (
+        'window.minSize = NSSize(width: 980, height: 650)',
+        'window.minSize = NSSize(width: 720, height: 520)',
+    ),
+    (
+        'tabs.view.heightAnchor.constraint(greaterThanOrEqualToConstant: 540)',
+        'tabs.view.heightAnchor.constraint(greaterThanOrEqualToConstant: 360)',
+    ),
+    (
+        'split.setPosition(650, ofDividerAt: 0)',
+        'split.setPosition(430, ofDividerAt: 0)',
+    ),
+)
+for old, new in changes:
+    if old not in text:
+        raise SystemExit(f"macOS adaptive layout contract drifted before: {old}")
+    text = text.replace(old, new, 1)
+for marker in (
+    'window.minSize = NSSize(width: 720, height: 520)',
+    'greaterThanOrEqualToConstant: 360',
+    'split.setPosition(430, ofDividerAt: 0)',
+):
+    if marker not in text:
+        raise SystemExit(f"macOS adaptive layout marker missing: {marker}")
+out.write_text(text, encoding="utf-8")
+PY
 
 # Native menu-bar integration is compiled into the same AppKit executable. It
 # exposes Open, Emergency Stop and Quit without a browser or separate daemon.
@@ -40,7 +81,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework Foundation \
   -framework MapKit \
-  "$SRC" \
+  "$ADAPTIVE_SRC" \
   "$MENU_OBJ" \
   -o "$BIN"
 chmod 755 "$BIN"
@@ -107,6 +148,9 @@ grep -Fq '/api/mtu/retest' "$SRC"
 grep -Fq 'Retest MTU' "$SRC"
 grep -Fq 'effective_mtu_mbps' "$SRC"
 grep -Fq '/api/emergency-stop' "$SRC"
+grep -Fq 'window.minSize = NSSize(width: 720, height: 520)' "$ADAPTIVE_SRC"
+grep -Fq 'greaterThanOrEqualToConstant: 360' "$ADAPTIVE_SRC"
+grep -Fq 'split.setPosition(430, ofDividerAt: 0)' "$ADAPTIVE_SRC"
 grep -Fq 'NSStatusBar' "$MENU_SRC"
 grep -Fq 'Open Router VPN' "$MENU_SRC"
 grep -Fq 'Emergency Stop' "$MENU_SRC"
@@ -118,4 +162,4 @@ if [[ "$(uname -m)" == arm64 && "$ARCH" == arm64 ]] || [[ "$(uname -m)" == x86_6
   "$BIN" --self-test
 fi
 
-echo "Built native RouterVPN.app with menu-bar integration for $ARCH at $APP"
+echo "Built native RouterVPN.app with menu-bar integration and adaptive layout for $ARCH at $APP"
