@@ -1,6 +1,6 @@
 # Router VPN builds
 
-GitHub Actions is the normal compile/test environment. The AI Board is not the routine cross-platform build farm; its bounded local toolchain exists only as a fallback for one requested generic client package when the matching artifact is unavailable.
+GitHub Actions is the normal compile/test environment. The AI Board is not the routine cross-platform build farm; its bounded local toolchain exists only as a fallback for one requested generic client package when the matching artifact is unavailable, and only where the finished product can be assembled truthfully from same-image components.
 
 ## Release workflows
 
@@ -35,7 +35,9 @@ Generic checked packages are produced for supported targets including:
 
 ## Windows
 
-Windows package CI builds the native WPF product and executes Portable amd64/arm64 self-test/relocation gates. Windows source includes native full-device runtime paths; WSL is not counted as the native Windows VPN implementation.
+Windows package CI builds the native WPF product and executes normal installed-package plus Portable amd64/arm64 self-test/relocation gates. The normal package includes `RouterVPN.exe`, Start Menu/icon integration and the WPF daily-use app. Windows source includes native full-device runtime paths; WSL is not counted as the native Windows VPN implementation.
+
+The AI Board can assemble the complete requested Windows/Portable package from same-image prebuilt Go components plus the shipped WPF/runtime sources and deterministic Router VPN icons. If one supported Windows Go component is unexpectedly absent, only that requested component may be rebuilt with the bounded Go toolchain.
 
 CI execution still does not replace physical Windows full-device routing, DNS/IPv4/IPv6, leak-negative, reconnect/network-change and custom-exit testing.
 
@@ -55,6 +57,8 @@ A green unsigned build does not provide Apple signing/provisioning or physical-d
 
 Release CI builds the native AppKit/MapKit macOS application for amd64/arm64 and native GTK Linux packages for amd64/arm64. Their source includes native routing/kill-switch/multihop/custom-exit paths as documented in `docs/CURRENT-STATUS.md`.
 
+The AI Board runtime image intentionally does **not** contain AppKit or GTK native build SDK environments. Therefore if the matching same-SHA macOS/Linux native artifact is unavailable, the download broker fails closed with an exact reason instead of returning a controller-only archive pretending to be the finished native app. This is the deliberate “requested package only / where possible” boundary, not a loss of platform support.
+
 Physical macOS/Linux networking, custom-exit and leak-negative validation remain separate; macOS also requires release signing/notarization.
 
 ## Home Setup Center download policy
@@ -62,9 +66,11 @@ Physical macOS/Linux networking, custom-exit and leak-negative validation remain
 Generic platform packages are on demand:
 
 ```text
-matching same-SHA GitHub artifact
+matching same-SHA GitHub native/package artifact
 ↓ if unavailable/unusable
-bounded router-local compile of requested generic client package only
+assemble only the requested complete package from same-image components where feasible
+↓ supported Windows/Portable only: bounded Go build for a missing required Go component
+↓ if a true native platform component cannot be produced on the AI Board: fail closed with exact reason
 ↓
 validate/package the generic secret-free application
 ↓
@@ -73,7 +79,7 @@ stream
 cleanup temporary build/output
 ```
 
-Private node data is **not injected into the public generic package**. Link/import/pair private nodes separately after installation. The GitHub artifact retention window may be short; the AI Board does not keep every platform archive permanently.
+Private node data is **not injected into the public generic package**. Link/import/pair private nodes separately after installation. The GitHub artifact retention window may be short; the AI Board does not keep every platform archive permanently and does not fabricate missing native AppKit/GTK products.
 
 ## Server images
 
@@ -81,6 +87,6 @@ Production custom server services are built/published by GitHub Actions for ARM6
 
 ## What CI proves
 
-Current workflows can prove source/security contracts, package integrity, logical/raw mode contracts, native compilation, Windows Portable execution/relocation, ARM64 server preflight, userspace WireGuard fallback, auxiliary proxy/runtime startup, generated mode validation, exact-SHA image publication and production-compose invariants.
+Current workflows can prove source/security contracts, package integrity, logical/raw mode contracts, native compilation, Windows normal/Portable execution and relocation, ARM64 server preflight, userspace WireGuard fallback, auxiliary proxy/runtime startup, generated mode validation, exact-SHA image publication and production-compose invariants.
 
 CI cannot prove a specific physical device, ISP/firewall/WAN path, OS permission flow, DNS/IPv4/IPv6 leak-negative behavior, third-party client interoperability, Apple distribution credentials, rendered visual quality or the live production deployment. Those remain separate manual/live release gates.
