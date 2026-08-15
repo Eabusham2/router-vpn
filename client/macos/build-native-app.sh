@@ -69,6 +69,9 @@ grep -Fq '/api/external-profile/import' "$SRC"
 grep -Fq '/api/external-profile/connect' "$SRC"
 grep -Fq 'entry_id' "$SRC"
 grep -Fq 'externalEntryPopup' "$SRC"
+grep -Fq '/api/mtu/retest' "$SRC"
+grep -Fq 'Retest MTU' "$SRC"
+grep -Fq 'effective_mtu_mbps' "$SRC"
 grep -Fq '/api/emergency-stop' "$SRC"
 ! otool -L "$BIN" | grep -q '/WebKit.framework/'
 
