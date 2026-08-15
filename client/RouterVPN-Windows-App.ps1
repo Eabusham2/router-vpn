@@ -26,10 +26,44 @@ $ApiContract = @(
 )
 
 if ($SelfTest) {
+    $Source = Get-Content -Raw -LiteralPath $MyInvocation.MyCommand.Path
+    foreach ($Marker in @('System.Windows.Forms.NotifyIcon','RouterVPN.ico','Router VPN native client')) {
+        if (-not $Source.Contains($Marker)) { throw "Windows app tray contract missing $Marker" }
+    }
     & $Product -BaseUrl $BaseUrl -SelfTest
-} else {
-    & $Product -BaseUrl $BaseUrl
+    if (-not $?) { throw 'Router VPN native Windows product shell failed.' }
+    exit 0
 }
-if (-not $?) { throw 'Router VPN native Windows product shell failed.' }
 
-# Native product contract markers: SelfTest / ShowDialog().
+# Tray integration exists only for the lifetime of the native WPF window. It
+# does not keep Router VPN running after the window closes and therefore does
+# not change the controller/emergency-cleanup lifecycle owned by the launcher.
+$Tray = $null
+try {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $Tray = New-Object System.Windows.Forms.NotifyIcon
+    $IconPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'RouterVPN.ico'
+    if (Test-Path -LiteralPath $IconPath -PathType Leaf) {
+        $Tray.Icon = New-Object System.Drawing.Icon($IconPath)
+    } else {
+        $Tray.Icon = [System.Drawing.SystemIcons]::Shield
+    }
+    $Tray.Text = 'Router VPN native client'
+    $Tray.Visible = $true
+    $Tray.add_DoubleClick({
+        try {
+            $shell = New-Object -ComObject WScript.Shell
+            [void]$shell.AppActivate($PID)
+        } catch {}
+    })
+    & $Product -BaseUrl $BaseUrl
+    if (-not $?) { throw 'Router VPN native Windows product shell failed.' }
+} finally {
+    if ($null -ne $Tray) {
+        $Tray.Visible = $false
+        $Tray.Dispose()
+    }
+}
+
+# Native product contract markers: SelfTest / ShowDialog() / bounded NotifyIcon tray.
