@@ -125,7 +125,6 @@ def render_rules(endpoint_ips: list[ipaddress._BaseAddress], lan_access: bool, r
     lines += [
         f"add table inet {TABLE}",
         f"add chain inet {TABLE} output {{ type filter hook output priority -310; policy drop; }}",
-        f"add rule inet {TABLE} output ct state established,related accept",
         f"add rule inet {TABLE} output oifname \"lo\" accept",
         f"add rule inet {TABLE} output oifname {{ \"wg\", \"awg\", \"router-vpn\" }} accept",
         f"add rule inet {TABLE} output ip protocol udp udp sport 68 udp dport 67 accept",
