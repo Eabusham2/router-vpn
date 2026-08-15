@@ -21,11 +21,11 @@ jobs:
         with:
           go-version: '1.24.x'
           cache: false
-      - name: Check logical UI JavaScript syntax
+      - name: Check logical compatibility JavaScript syntax
         run: node --check cmd/client/logical_ui.js
       - name: Build controller
         run: go build -o "$RUNNER_TEMP/router-vpn-client" ./cmd/client
-      - name: Smoke-test embedded logical UI and API
+      - name: Smoke-test read-only browser boundary and logical API
         run: |
           cat >"$RUNNER_TEMP/client.json" <<EOF
           {
@@ -49,12 +49,18 @@ jobs:
           curl -fsS http://127.0.0.1:18788/ >"$RUNNER_TEMP/index.html"
           curl -fsS http://127.0.0.1:18788/logical-ui.js >"$RUNNER_TEMP/logical-ui.js"
           curl -fsS http://127.0.0.1:18788/api/logical-modes >"$RUNNER_TEMP/logical.json"
+          curl -fsS http://127.0.0.1:18788/api/session >"$RUNNER_TEMP/session.json"
           grep -q '<script src="/logical-ui.js"></script>' "$RUNNER_TEMP/index.html"
-          grep -q '/api/logical-modes' "$RUNNER_TEMP/logical-ui.js"
-          grep -q '/api/connect-logical' "$RUNNER_TEMP/logical-ui.js"
-          python3 - "$RUNNER_TEMP/logical.json" <<'PY'
+          grep -q 'readOnlyDiagnostics' "$RUNNER_TEMP/logical-ui.js"
+          grep -q '/api/session' "$RUNNER_TEMP/logical-ui.js"
+          grep -q '/api/multihop/status' "$RUNNER_TEMP/logical-ui.js"
+          grep -q 'forbiddenLoopbackMutations' "$RUNNER_TEMP/logical-ui.js"
+          ! grep -q '/api/connect-logical' "$RUNNER_TEMP/logical-ui.js"
+          ! grep -Eq 'fetch\(|XMLHttpRequest|\.open\(' "$RUNNER_TEMP/logical-ui.js"
+          python3 - "$RUNNER_TEMP/logical.json" "$RUNNER_TEMP/session.json" <<'PY'
           import json,sys
           data=json.load(open(sys.argv[1]))
+          session=json.load(open(sys.argv[2]))
           assert len(data)==16, len(data)
           ids={x['id'] for x in data}
           assert {'base-raw','base-pq','max-quic','max-tls','all'} <= ids
@@ -66,4 +72,5 @@ jobs:
             item=next(x for x in data if x['id']==key)
             assert item['base_selector'] is True
             assert item['fallback'] is True
+          assert isinstance(session, dict)
           PY
