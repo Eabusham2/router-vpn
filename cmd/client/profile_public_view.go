@@ -118,6 +118,7 @@ func publicProfileStoreFor(store common.RouterProfileStore) publicProfileStore {
 func (a *app) listPublicNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method!=http.MethodGet{http.Error(w,"GET only",http.StatusMethodNotAllowed);return}
 	a.mu.Lock();store:=a.profiles;a.mu.Unlock()
+	store=sortPublicProfileStore(store,r.URL.Query().Get("sort"))
 	w.Header().Set("content-type","application/json")
 	w.Header().Set("cache-control","no-store")
 	_ = json.NewEncoder(w).Encode(publicProfileStoreFor(store))
