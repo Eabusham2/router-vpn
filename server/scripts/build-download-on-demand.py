@@ -3,8 +3,15 @@
 
 Desktop and Portable application packages are GENERIC and secret-free. Installing
 Router VPN and linking a home/server node are separate operations. A matching
-same-SHA GitHub Actions package can be supplied with --source-archive; when it is
-unavailable the home node may compile only the requested generic Go package.
+same-SHA GitHub Actions package can be supplied with --source-archive.
+
+When that artifact is unavailable, the home node may assemble only the requested
+package from same-image prebuilt components, with a bounded Go build only for a
+missing supported Windows/Portable Go component. It must never return a
+controller-only archive while claiming to be a finished native desktop app.
+Native AppKit/GTK packages therefore require their same-SHA native artifact unless
+a complete native component is actually present; this image intentionally does
+not become a giant cross-platform SDK environment.
 
 router-vpn-client-bundle.zip is the explicit private node-link bundle and is kept
 separate from application packages. The caller owns the temporary output and is
@@ -253,10 +260,30 @@ def build_private_bundle(work: Path, base: Path) -> Path:
     return root
 
 
+def materialize_icons(src_root: Path, root: Path) -> None:
+    generator = src_root / "deploy" / "materialize-desktop-icons.py"
+    if not generator.is_file():
+        raise FileNotFoundError("Router VPN desktop icon generator is missing")
+    subprocess.run(
+        ["python3", str(generator), "--png", str(root / "RouterVPN.png"), "--ico", str(root / "RouterVPN.ico")],
+        cwd=src_root,
+        check=True,
+        timeout=30,
+        stdout=subprocess.DEVNULL,
+    )
+
+
 def build_local(work: Path, name: str, src_root: Path, compiled_root: Path, base: Path) -> Path:
     _, family, arch = PACKAGE_MAP[name]
     if family == "bundle":
         return build_private_bundle(work, base)
+
+    if family in {"darwin", "linux"}:
+        platform = "AppKit" if family == "darwin" else "GTK"
+        raise RuntimeError(
+            f"{family}/{arch} requires its same-SHA native {platform} package artifact; "
+            "router-local fallback intentionally does not ship a cross-platform native SDK or return a controller-only substitute"
+        )
 
     if family == "portable":
         root = work / f"RouterVPNPortable-{arch}"
@@ -269,11 +296,13 @@ def build_local(work: Path, name: str, src_root: Path, compiled_root: Path, base
         copy_file(require_dist(compiled_root, f"RouterVPNPortable-{arch}.exe"), root / "RouterVPNPortable.exe")
         copy_file(require_dist(compiled_root, f"RouterVPNSetupRuntime-{arch}.exe"), root / "RouterVPNSetupRuntime.exe")
         copy_file(src_root / "client" / "Setup-Windows-Runtime.ps1", root / "Setup-Windows-Runtime.ps1")
+        materialize_icons(src_root, app)
         write_blank_routers(data / "routers.json")
         (data / "generated").mkdir(parents=True, exist_ok=True)
         (root / "README.txt").write_text(
-            f"Router VPN Portable {arch} — generic application package\n"
+            f"Router VPN Portable {arch} — generic native Windows application package\n"
             "Double-click RouterVPNPortable.exe, then link/import one or more Router VPN nodes separately.\n"
+            "The native WPF product and Router VPN icon are included under App/RouterVPN.\n"
             "No home/server node, token, or generated private profile is baked into this ZIP.\n"
             "Move the whole folder together; writable Router VPN state stays under Data.\n"
             "Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.\n",
@@ -282,20 +311,28 @@ def build_local(work: Path, name: str, src_root: Path, compiled_root: Path, base
         assert_generic_tree(root)
         return root
 
-    root = work / "router-vpn"
-    copy_generic_runtime(src_root, root)
     if family == "windows":
+        root = work / f"RouterVPN-Windows-{arch}"
+        copy_generic_runtime(src_root, root)
         copy_file(require_dist(compiled_root, f"router-vpn-client-windows-{arch}.exe"), root / "router-vpn-client.exe")
         copy_file(require_dist(compiled_root, f"router-vpn-dns-windows-{arch}.exe"), root / "router-vpn-dns.exe")
-    elif family in ("darwin", "linux"):
-        copy_file(require_dist(compiled_root, f"router-vpn-client-{family}-{arch}"), root / "router-vpn-client")
-        copy_file(require_dist(compiled_root, f"router-vpn-dns-{family}-{arch}"), root / "router-vpn-dns")
-        (root / "router-vpn-client").chmod(0o755)
-        (root / "router-vpn-dns").chmod(0o755)
-    else:
-        raise ValueError(f"unsupported package family: {family}")
-    assert_generic_tree(root)
-    return root
+        copy_file(require_dist(compiled_root, f"RouterVPN-{arch}.exe"), root / "RouterVPN.exe")
+        copy_file(src_root / "client" / "install-windows.ps1", root / "install-windows.ps1")
+        copy_file(src_root / "client" / "Setup-Windows-Runtime.ps1", root / "Setup-Windows-Runtime.ps1")
+        materialize_icons(src_root, root)
+        (root / "README-WINDOWS.txt").write_text(
+            f"Router VPN Windows {arch} — generic native application package\n"
+            "Double-click RouterVPN.exe or run install-windows.ps1 for the normal Start Menu application.\n"
+            "The package includes the native WPF daily-use app and Router VPN icon, not a browser/PWA substitute.\n"
+            "No home/server node, token, or generated private profile is baked into this ZIP.\n"
+            "Link/import Router VPN nodes separately after installation.\n"
+            "Router VPN is MIT-licensed open-source software; see LICENSE.\n",
+            encoding="utf-8",
+        )
+        assert_generic_tree(root)
+        return root
+
+    raise ValueError(f"unsupported package family: {family}")
 
 
 def _go_build(go: str, src_root: Path, dist: Path, work: Path, goos: str, goarch: str,
@@ -324,26 +361,54 @@ def _go_build(go: str, src_root: Path, dist: Path, work: Path, goos: str, goarch
         raise RuntimeError(f"router-local go build failed for {package} ({goos}/{goarch}):\n{tail}")
 
 
+def _supported_components(family: str, arch: str) -> list[tuple[str, str, bool]]:
+    if family == "windows":
+        return [
+            (f"router-vpn-client-windows-{arch}.exe", "./cmd/client", False),
+            (f"router-vpn-dns-windows-{arch}.exe", "./cmd/dnsproxy", False),
+            (f"RouterVPN-{arch}.exe", "./cmd/windows-app-launcher", True),
+        ]
+    if family == "portable":
+        return [
+            (f"router-vpn-client-windows-{arch}.exe", "./cmd/client", False),
+            (f"router-vpn-dns-windows-{arch}.exe", "./cmd/dnsproxy", False),
+            (f"RouterVPNPortable-{arch}.exe", "./cmd/portable-launcher", True),
+            (f"RouterVPNSetupRuntime-{arch}.exe", "./cmd/portable-runtime-setup", True),
+        ]
+    return []
+
+
 def compile_requested(work: Path, name: str, src_root: Path) -> Path:
     _, family, arch = PACKAGE_MAP[name]
     if family == "bundle":
         return src_root
+    if family in {"darwin", "linux"}:
+        platform = "AppKit" if family == "darwin" else "GTK"
+        raise RuntimeError(
+            f"router-local fallback cannot build the finished native {platform} app for {family}/{arch}; "
+            "a same-SHA native GitHub artifact is required"
+        )
+    if family not in {"windows", "portable"}:
+        raise ValueError(f"unsupported router-local fallback family: {family}")
+
+    components = _supported_components(family, arch)
+    prebuilt_dist = src_root / "dist"
+    if components and all((prebuilt_dist / filename).is_file() for filename, _, _ in components):
+        return src_root
+
     go = shutil.which("go")
     if not go:
-        raise FileNotFoundError("router-local fallback requires the bundled Go toolchain")
-
-    goos = "windows" if family in ("windows", "portable") else family
+        raise FileNotFoundError("router-local fallback requires the bundled Go toolchain for a missing supported Windows component")
     compiled = work / "router-local-build"
     dist = compiled / "dist"
     dist.mkdir(parents=True, exist_ok=True)
-    ext = ".exe" if goos == "windows" else ""
-    _go_build(go, src_root, dist, work, goos, arch, "./cmd/client", f"router-vpn-client-{goos}-{arch}{ext}")
-    _go_build(go, src_root, dist, work, goos, arch, "./cmd/dnsproxy", f"router-vpn-dns-{goos}-{arch}{ext}")
-    if family == "portable":
-        _go_build(go, src_root, dist, work, "windows", arch, "./cmd/portable-launcher",
-                  f"RouterVPNPortable-{arch}.exe", windows_gui=True)
-        _go_build(go, src_root, dist, work, "windows", arch, "./cmd/portable-runtime-setup",
-                  f"RouterVPNSetupRuntime-{arch}.exe", windows_gui=True)
+    for filename, package, windows_gui in components:
+        source = prebuilt_dist / filename
+        target = dist / filename
+        if source.is_file():
+            copy_file(source, target)
+            continue
+        _go_build(go, src_root, dist, work, "windows", arch, package, filename, windows_gui=windows_gui)
     return compiled
 
 
