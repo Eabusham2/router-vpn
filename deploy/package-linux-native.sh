@@ -36,6 +36,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o
 chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/modes/"*.sh
 
 "$ROOT/client/linux/build-native-app.sh" "$dir/router-vpn-app"
+python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$dir/router-vpn.png" --ico "$dir/RouterVPN.ico"
 
 cat > "$dir/start-router-vpn.sh" <<'SH'
 #!/usr/bin/env bash
@@ -45,21 +46,69 @@ exec "$ROOT/router-vpn-app"
 SH
 chmod 755 "$dir/start-router-vpn.sh"
 
-cat > "$dir/routervpn.desktop" <<'DESKTOP'
+cat > "$dir/router-vpn.desktop" <<'DESKTOP'
 [Desktop Entry]
 Type=Application
 Name=Router VPN
 Comment=Native Router VPN client
-Exec=router-vpn-app
+TryExec=/opt/router-vpn-client/router-vpn-app
+Exec=/opt/router-vpn-client/router-vpn-app
+Icon=router-vpn
 Terminal=false
 Categories=Network;Security;
+StartupNotify=true
+StartupWMClass=router-vpn-app
 DESKTOP
+
+cat > "$dir/install-router-vpn.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Run with sudo.' >&2; exit 1; }
+SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT=/opt/router-vpn-client
+mkdir -p "$ROOT" /usr/local/bin /usr/share/applications /usr/share/icons/hicolor/256x256/apps
+
+# Refresh immutable application/runtime material without replacing private
+# install-once node state on an upgrade.
+for path in modes client; do
+  rm -rf "$ROOT/$path"
+  cp -a "$SRC/$path" "$ROOT/$path"
+done
+for file in client.json modes.json logical-modes.json router-vpn-client router-vpn-dns router-vpn-app RouterVPN.ico router-vpn.png MODES.md CLIENT.md SECURITY.md LICENSE; do
+  [[ -e "$SRC/$file" ]] && cp -a "$SRC/$file" "$ROOT/$file"
+done
+chmod 755 "$ROOT/router-vpn-client" "$ROOT/router-vpn-dns" "$ROOT/router-vpn-app" "$ROOT/modes/"*.sh
+if [[ ! -f "$ROOT/routers.json" ]]; then
+  install -m 600 "$SRC/routers.json" "$ROOT/routers.json"
+fi
+if [[ ! -d "$ROOT/generated" ]]; then
+  cp -a "$SRC/generated" "$ROOT/generated"
+fi
+
+install -m 644 "$SRC/router-vpn.png" /usr/share/icons/hicolor/256x256/apps/router-vpn.png
+install -m 644 "$SRC/router-vpn.desktop" /usr/share/applications/router-vpn.desktop
+cat >/usr/local/bin/router-vpn <<'LAUNCH'
+#!/usr/bin/env sh
+exec /opt/router-vpn-client/router-vpn-app "$@"
+LAUNCH
+chmod 755 /usr/local/bin/router-vpn
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications || true
+command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true
+printf '%s\n' 'Router VPN installed. Open Router VPN from the desktop application menu or run: router-vpn'
+printf '%s\n' 'Existing linked Router VPN nodes were preserved if already present.'
+SH
+chmod 755 "$dir/install-router-vpn.sh"
 
 cat > "$dir/README-LINUX.txt" <<'TXT'
 Router VPN for Linux
 ====================
-Run ./router-vpn-app or ./start-router-vpn.sh. This is a native GTK3 application that talks only
-to the loopback Router VPN controller API. It does not open or embed a website/WebView.
+Run sudo ./install-router-vpn.sh for normal desktop application integration, then open Router VPN
+from your application menu. The installer adds the Router VPN icon/desktop entry and preserves any
+existing /opt/router-vpn-client/routers.json + generated node state on upgrades.
+
+You can also run ./router-vpn-app or ./start-router-vpn.sh directly from the extracted folder. This
+is a native GTK3 application that talks only to the loopback Router VPN controller API. It does not
+open or embed a website/WebView.
 
 The app starts the sibling router-vpn-client only when no controller is already listening on
 127.0.0.1:8788. If it starts that controller, closing the app issues an emergency stop and stops
@@ -72,20 +121,22 @@ than being substituted with a fake compatibility path.
 TXT
 
 tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
-# Materialize the archive listing once. With pipefail, `tar -t | grep -q` can
-# make tar receive SIGPIPE after grep finds an early match, falsely failing a
-# valid package with "tar: stdout: write error".
 archive_list="$work/archive-members.txt"
 tar -tzf "$OUT/$name.tar.gz" > "$archive_list"
 grep -Fxq "$name/router-vpn-app" "$archive_list"
+grep -Fxq "$name/router-vpn.png" "$archive_list"
+grep -Fxq "$name/router-vpn.desktop" "$archive_list"
+grep -Fxq "$name/install-router-vpn.sh" "$archive_list"
 grep -Fxq "$name/LICENSE" "$archive_list"
 if grep -Fq 'router-vpn-bundle.json' "$archive_list"; then
   echo 'Native Linux package unexpectedly contains a private router bundle.' >&2
   exit 1
 fi
+grep -Fq 'Exec=/opt/router-vpn-client/router-vpn-app' "$dir/router-vpn.desktop"
+grep -Fq 'Icon=router-vpn' "$dir/router-vpn.desktop"
+grep -Fq 'StartupWMClass=router-vpn-app' "$dir/router-vpn.desktop"
+grep -Fq '[[ ! -f "$ROOT/routers.json" ]]' "$dir/install-router-vpn.sh"
 
-# Scan the finished public archive. The scanner intentionally requires an archive;
-# scanning the work directory before tar creation would always fail with "no packages found".
 python3 "$ROOT/deploy/check-generic-package-secrets.py" "$OUT"
 (
   cd "$OUT"
