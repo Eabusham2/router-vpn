@@ -214,6 +214,10 @@ func (a *app) saveProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(p.NodeKind), "external") || p.External != nil {
+		http.Error(w, "external profiles must be created or updated through /api/external-profile/import", http.StatusBadRequest)
+		return
+	}
 	p.Name = strings.TrimSpace(p.Name)
 	if p.Name == "" {
 		p.Name = "Home Router"
@@ -245,6 +249,11 @@ func (a *app) saveProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		found = true
 		existing := a.profiles.Profiles[i]
+		if strings.EqualFold(strings.TrimSpace(existing.NodeKind), "external") || existing.External != nil {
+			a.mu.Unlock()
+			http.Error(w, "external profiles cannot be overwritten through /api/profile/save; use /api/external-profile/import", http.StatusConflict)
+			return
+		}
 		// A linked node's proof identity is immutable. Normal settings edits may
 		// omit it, but they may never erase or replace it. Legacy linked profiles
 		// are upgraded from their saved WireGuard server public key when possible.
