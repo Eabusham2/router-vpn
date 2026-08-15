@@ -300,7 +300,7 @@ func (s *adminForwardingExtensionServer) status(w http.ResponseWriter, r *http.R
 	writeAdminJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "forwarding_master": adminState.ForwardingMaster, "rules": rules,
 		"protected_dmz": dmz, "reserved_ports": s.cfg.ReservedPorts,
-		"semantics": "owners persist per normal rule; Protected DMZ covers only unreserved WAN ports and remains gated by the forwarding master",
+		"semantics": "owners persist per normal rule; Protected DMZ covers only otherwise-unused unreserved WAN ports, excludes enabled explicit forwarding ranges, and remains gated by the forwarding master",
 	})
 }
 
@@ -460,10 +460,55 @@ func (s *adminForwardingExtensionServer) applyProtectedDMZ() error {
 	if err := s.validateTunnelTarget(dmz.TargetIP); err != nil {
 		return err
 	}
-	return nftScript(s.protectedDMZScript(*dmz))
+	return nftScript(s.protectedDMZScript(*dmz, adminState))
 }
 
-func (s *adminForwardingExtensionServer) protectedDMZScript(dmz adminProtectedDMZ) string {
+func protectedDMZAllowedRanges(reserved []int, explicit []adminForwardRule) []string {
+	blocked := make([]bool, 65536)
+	for _, port := range reserved {
+		if port >= 1 && port <= 65535 {
+			blocked[port] = true
+		}
+	}
+	for _, rule := range explicit {
+		if !rule.Enabled {
+			continue
+		}
+		from, to := rule.From, rule.To
+		if from < 1 {
+			from = 1
+		}
+		if to > 65535 {
+			to = 65535
+		}
+		if to < from {
+			continue
+		}
+		for port := from; port <= to; port++ {
+			blocked[port] = true
+		}
+	}
+	out := []string{}
+	start := 0
+	for port := 1; port <= 65535; port++ {
+		if blocked[port] {
+			if start > 0 {
+				out = append(out, portRange(start, port-1))
+				start = 0
+			}
+			continue
+		}
+		if start == 0 {
+			start = port
+		}
+	}
+	if start > 0 {
+		out = append(out, portRange(start, 65535))
+	}
+	return out
+}
+
+func (s *adminForwardingExtensionServer) protectedDMZScript(dmz adminProtectedDMZ, adminState adminPersistentState) string {
 	protos := []string{dmz.Protocol}
 	if dmz.Protocol == "both" {
 		protos = []string{"tcp", "udp"}
@@ -474,7 +519,7 @@ func (s *adminForwardingExtensionServer) protectedDMZScript(dmz adminProtectedDM
 	}
 	var b strings.Builder
 	for _, proto := range protos {
-		for _, ports := range allowedRanges(s.cfg.ReservedPorts) {
+		for _, ports := range protectedDMZAllowedRanges(s.cfg.ReservedPorts, adminState.ForwardRules) {
 			fmt.Fprintf(&b, "add rule inet %s prerouting iifname %q %s dport %s dnat to %s comment %q\n", s.cfg.NftTable, s.cfg.WANInterface, proto, ports, formatDNAT(target, 0), adminProtectedDMZComment)
 		}
 	}
