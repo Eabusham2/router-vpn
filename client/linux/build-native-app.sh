@@ -3,10 +3,11 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 OUT=${1:?usage: build-native-app.sh OUT_BINARY}
-SRC="$ROOT/client/linux/routervpn-gtk-product-v4.c"
-LEGACY="$ROOT/client/linux/routervpn-gtk-product-v3.c"
+SRC="$ROOT/client/linux/routervpn-gtk-product-v5.c"
+V4="$ROOT/client/linux/routervpn-gtk-product-v4.c"
+V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
-SHIPPED=("$SRC" "$LEGACY" "$CORE")
+SHIPPED=("$SRC" "$V4" "$V3" "$CORE")
 
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
@@ -33,10 +34,10 @@ if ! grep -q 'curl_easy_init' <<<"$SYMBOLS" && ! grep -q 'curl_easy_init' <<<"$D
   echo 'Native Linux app does not contain/reference required libcurl API.' >&2
   exit 1
 fi
-# v4 is the shipping translation unit and intentionally composes v3 -> core via
-# source includes. Contract checks must therefore inspect the whole composed
-# source graph instead of only v4 + core, or inherited native features are
-# falsely reported missing.
+# v5 is the shipping translation unit and intentionally composes v4 -> v3 ->
+# core via source includes. Inspect the complete graph so inherited native
+# contracts remain release-gated while v5-specific onboarding/diagnostics are
+# required explicitly.
 ! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' "${SHIPPED[@]}"
 grep -Fq 'gtk_window_new' "${SHIPPED[@]}"
 grep -Fq 'gtk_notebook_new' "${SHIPPED[@]}"
@@ -48,9 +49,9 @@ grep -Fq '/api/profile/pair' "${SHIPPED[@]}"
 grep -Fq '/api/profile/import' "${SHIPPED[@]}"
 grep -Fq '/api/profile/delete' "${SHIPPED[@]}"
 grep -Fq '/api/profile/latency' "${SHIPPED[@]}"
-grep -Fq '/api/external-profile/import' "$SRC"
-grep -Fq '/api/external-profile/connect' "$SRC"
-grep -Fq '/api/nodes' "$SRC"
+grep -Fq '/api/external-profile/import' "${SHIPPED[@]}"
+grep -Fq '/api/external-profile/connect' "${SHIPPED[@]}"
+grep -Fq '/api/nodes' "${SHIPPED[@]}"
 grep -Fq 'latitude' "${SHIPPED[@]}"
 grep -Fq 'longitude' "${SHIPPED[@]}"
 grep -Fq 'Nodes & Map' "${SHIPPED[@]}"
@@ -59,6 +60,13 @@ grep -Fq 'Settings' "${SHIPPED[@]}"
 grep -Fq 'Help' "${SHIPPED[@]}"
 grep -Fq 'ensure_controller' "${SHIPPED[@]}"
 grep -Fq 'shutdown_controller' "${SHIPPED[@]}"
+# Visual QA contract discovered post-GitHub: the shipping app must own a
+# persistent native first-run tutorial and a dedicated Diagnostics surface.
+grep -Fq '#include "routervpn-gtk-product-v4.c"' "$SRC"
+grep -Fq 'linux-onboarding-v5.done' "$SRC"
+grep -Fq 'Run Tutorial' "$SRC"
+grep -Fq 'Diagnostics' "$SRC"
+grep -Fq '/api/session/events?after=0' "$SRC"
 "$OUT" --self-test
 
 echo "Built native Linux GTK Router VPN product shell at $OUT"
