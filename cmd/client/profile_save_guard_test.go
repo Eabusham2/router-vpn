@@ -22,7 +22,7 @@ func TestGenericProfileSaveRejectsExternalCreation(t *testing.T) {
 	// must reject the external profile class before any private-profile import
 	// or persistence path is reached.
 	body := []byte(`{"schema_version":3,"id":"external-create-test","name":"External WG","node_kind":"external","endpoint":"203.0.113.8","external":{"protocol":"wireguard"}}`)
-	body = bytes.ReplaceAll(body, []byte(`\"`), []byte(`"`))
+	body = bytes.ReplaceAll(body, []byte{'\\', '"'}, []byte{'"'})
 	rr := httptest.NewRecorder()
 	a.saveProfile(rr, httptest.NewRequest("POST", "/api/profile/save", bytes.NewReader(body)))
 	if rr.Code != 400 {
