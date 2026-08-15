@@ -6,6 +6,7 @@ on:
     paths:
       - 'client/linux/**'
       - 'deploy/package-linux-native.sh'
+      - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
       - 'internal/common/**'
@@ -19,6 +20,7 @@ on:
     paths:
       - 'client/linux/**'
       - 'deploy/package-linux-native.sh'
+      - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
       - 'internal/common/**'
@@ -58,6 +60,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file
+      - name: Desktop icon generator self-test
+        run: python3 deploy/materialize-desktop-icons.py --self-test
       - name: Test controller and shared contracts
         run: go test ./cmd/client ./internal/common
       - name: Build and package native Linux app
@@ -84,14 +88,31 @@ jobs:
           test -s "$archive"
           members="$RUNNER_TEMP/linux-native-$arch-members.txt"
           tar -tzf "$archive" > "$members"
-          grep -Fxq "RouterVPN-linux-$arch/router-vpn-app" "$members"
-          grep -Fxq "RouterVPN-linux-$arch/LICENSE" "$members"
+          for member in router-vpn-app router-vpn.png router-vpn.desktop install-router-vpn.sh LICENSE; do
+            grep -Fxq "RouterVPN-linux-$arch/$member" "$members"
+          done
           ! grep -Fq 'router-vpn-bundle.json' "$members"
           test ! -d "dist/linux-native/work-$arch"
           grep -Fq 'gtk_window_new' client/linux/routervpn-gtk.c
           grep -Fq 'gtk_notebook_new' client/linux/routervpn-gtk.c
           grep -Fq 'http://127.0.0.1:8788' client/linux/routervpn-gtk.c
           ! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' client/linux/routervpn-gtk.c
+          work="$RUNNER_TEMP/linux-native-inspect-$arch"
+          mkdir -p "$work"
+          tar -xzf "$archive" -C "$work"
+          root="$work/RouterVPN-linux-$arch"
+          grep -Fxq 'Exec=/opt/router-vpn-client/router-vpn-app' "$root/router-vpn.desktop"
+          grep -Fxq 'Icon=router-vpn' "$root/router-vpn.desktop"
+          grep -Fxq 'StartupWMClass=router-vpn-app' "$root/router-vpn.desktop"
+          grep -Fq '[[ ! -f "$ROOT/routers.json" ]]' "$root/install-router-vpn.sh"
+          test -s "$root/router-vpn.png"
+          python3 - "$root/router-vpn.png" <<'PY'
+          from pathlib import Path
+          import sys
+          data=Path(sys.argv[1]).read_bytes()
+          assert data.startswith(b'\x89PNG\r\n\x1a\n') and len(data)>4096
+          print('Linux Router VPN icon contract OK')
+          PY
           (cd dist/linux-native && sha256sum -c "RouterVPN-linux-$arch.sha256")
       - uses: actions/upload-artifact@v4
         with:
