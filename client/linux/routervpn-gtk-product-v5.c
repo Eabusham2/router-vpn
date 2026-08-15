@@ -1,10 +1,4 @@
-#define main routervpn_product_v4_main
-#define build_ui_v4 routervpn_product_v4_build_ui
-#define self_test_v4 routervpn_product_v4_self_test
-#include "routervpn-gtk-product-v4.c"
-#undef self_test_v4
-#undef build_ui_v4
-#undef main
+#include "routervpn-gtk-product-v4-embedded.c"
 
 /* Product v5: persistent native onboarding + dedicated diagnostics. */
 
@@ -157,7 +151,7 @@ static void build_ui_v5(App *app) {
 }
 
 static int self_test_v5(void) {
-    if (routervpn_product_v4_self_test() != 0) return 2;
+    if (self_test_v4() != 0) return 2;
     static const char *const visual_contract[] = {
         "Diagnostics", "Run Tutorial", "linux-onboarding-v5.done", "/api/session/events?after=0"
     };

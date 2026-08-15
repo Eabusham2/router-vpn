@@ -8,13 +8,24 @@ V4="$ROOT/client/linux/routervpn-gtk-product-v4.c"
 V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SHIPPED=("$SRC" "$V4" "$V3" "$CORE")
+BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v5.XXXXXX")
+EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
+trap 'rm -rf "$BUILD_DIR"' EXIT
 
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
 done
 mkdir -p "$(dirname "$OUT")"
 
+# v5 extends the already-shipping v4 translation unit without duplicating it.
+# v4's final standalone main() is the only section omitted; all v4/v3/core
+# static functions remain in the same translation unit for v5 to reuse.
+grep -Fq 'int main(int argc, char **argv) {' "$V4"
+awk '/^int main\(int argc, char \*\*argv\) \{$/{found=1; exit} {print} END{if(!found) exit 7}' "$V4" > "$EMBEDDED_V4"
+! grep -Fq 'int main(int argc, char **argv) {' "$EMBEDDED_V4"
+
 gcc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong \
+  -I"$BUILD_DIR" -I"$ROOT/client/linux" \
   "$SRC" -o "$OUT" \
   $(pkg-config --cflags --libs gtk+-3.0 libcurl json-glib-1.0) -lm
 chmod 755 "$OUT"
@@ -35,7 +46,7 @@ if ! grep -q 'curl_easy_init' <<<"$SYMBOLS" && ! grep -q 'curl_easy_init' <<<"$D
   exit 1
 fi
 # v5 is the shipping translation unit and intentionally composes v4 -> v3 ->
-# core via source includes. Inspect the complete graph so inherited native
+# core. Inspect the complete checked-in source graph so inherited native
 # contracts remain release-gated while v5-specific onboarding/diagnostics are
 # required explicitly.
 ! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' "${SHIPPED[@]}"
@@ -62,7 +73,7 @@ grep -Fq 'ensure_controller' "${SHIPPED[@]}"
 grep -Fq 'shutdown_controller' "${SHIPPED[@]}"
 # Visual QA contract discovered post-GitHub: the shipping app must own a
 # persistent native first-run tutorial and a dedicated Diagnostics surface.
-grep -Fq '#include "routervpn-gtk-product-v4.c"' "$SRC"
+grep -Fq '#include "routervpn-gtk-product-v4-embedded.c"' "$SRC"
 grep -Fq 'linux-onboarding-v5.done' "$SRC"
 grep -Fq 'Run Tutorial' "$SRC"
 grep -Fq 'Diagnostics' "$SRC"
