@@ -48,10 +48,18 @@ require(
     "speed_loss_min_pct", "speed_loss_max_pct", "ready_bases", "reason",
 )
 
+# Windows ships through the stable wrapper. It must decode Unicode explicitly
+# for Windows PowerShell 5.1 and apply exact small-effective-resolution layout
+# substitutions before parsing the native WPF product.
 require(
     "client/RouterVPN-Windows-App.ps1",
     "Get-Content -LiteralPath $Product -Raw -Encoding UTF8",
     "/api/dns/policy",
+    'MinHeight=\"480\" MinWidth=\"640\"',
+    'Height=\"2*\" MinHeight=\"140\"',
+    'MaxWidth=\"760\"',
+    'MinHeight=\"180\"',
+    "adaptive small-effective-resolution layout",
 )
 require(
     "client/RouterVPN-Windows-Product-v2.ps1",
@@ -61,9 +69,12 @@ require(
     "DNS-over-HTTP/3", "DNS Rescue", "/api/dns/policy", "/api/dns/retest",
     "Cloudflare IPv6", "Google IPv6", "Quad9 IPv6",
     "latitude", "longitude", "No real node coordinates",
-    'MinHeight="680"', 'MinWidth="980"', "HorizontalScrollBarVisibility=\"Auto\"",
+    "HorizontalScrollBarVisibility=\"Auto\"",
 )
 
+# macOS keeps one AppKit/MapKit product source. The build creates an exact
+# deterministic adaptive-layout view of that same source before swiftc so the
+# shipped app remains usable on compact/high-scaling logical desktops.
 require(
     "client/macos/RouterVPNMacProduct.swift",
     "import MapKit", "MKMapView", "latitude", "longitude",
@@ -72,6 +83,14 @@ require(
     "DNS-over-HTTPS", "DNS-over-HTTP/3", "DNS Rescue", "/api/dns/policy", "/api/dns/retest",
     "Cloudflare IPv6", "Google IPv6", "Quad9 IPv6",
     ".resizable", "window.minSize",
+)
+require(
+    "client/macos/build-native-app.sh",
+    "ADAPTIVE_SRC",
+    "window.minSize = NSSize(width: 720, height: 520)",
+    "greaterThanOrEqualToConstant: 360",
+    "split.setPosition(430, ofDividerAt: 0)",
+    "adaptive layout",
 )
 
 require(
