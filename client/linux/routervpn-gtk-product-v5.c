@@ -84,6 +84,11 @@ static void on_run_tutorial_v5(GtkButton *button, gpointer data) {
     show_onboarding_v5((App *)data, TRUE);
 }
 
+static void on_mtu_retest_v5(GtkButton *button, gpointer data) {
+    (void)button;
+    post_and_log((App *)data, "/api/mtu/retest", "{}", 130000, "MTU Retest");
+}
+
 static GtkWidget *find_button_v5(GtkWidget *root, const char *label) {
     if (root == NULL) return NULL;
     if (GTK_IS_BUTTON(root)) {
@@ -124,8 +129,10 @@ static void apply_action_sensitivity_v5(App *app, gboolean connected) {
     set_remembered_sensitive_v5(app, "router-vpn-home-public-v5", connected);
     set_remembered_sensitive_v5(app, "router-vpn-home-dns-v5", connected);
     set_remembered_sensitive_v5(app, "router-vpn-modes-connect-v5", has_mode);
+    set_remembered_sensitive_v5(app, "router-vpn-advanced-mtu-v5", connected);
     set_remembered_sensitive_v5(app, "router-vpn-diag-public-v5", connected);
     set_remembered_sensitive_v5(app, "router-vpn-diag-dns-v5", connected);
+    set_remembered_sensitive_v5(app, "router-vpn-diag-mtu-v5", connected);
     /* Emergency stop deliberately remains available even while disconnected so
        a stale helper/runtime can always be torn down. */
 }
@@ -162,13 +169,21 @@ static gboolean refresh_diagnostics_page_v5(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+static GtkWidget *build_advanced_page_v5(App *app) {
+    GtkWidget *box = make_info_page(
+        "Advanced",
+        "MTU/Jumbo, LAN access, kill switch, Router VPN multihop and external entry/exit compatibility remain controller-owned so native UI cannot claim settings the dataplane did not apply. MTU Retest is accepted only while one Router VPN node is connected with Auto MTU; it compares bounded private-node loss/RTT/throughput candidates, caches by network/path context, and does not claim MTU caused an earlier cellular regression.");
+    gtk_box_pack_start(GTK_BOX(box), make_button("Retest MTU", G_CALLBACK(on_mtu_retest_v5), app), FALSE, FALSE, 0);
+    return box;
+}
+
 static GtkWidget *build_diagnostics_page_v5(App *app) {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_container_set_border_width(GTK_CONTAINER(box), 16);
     GtkWidget *heading = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(heading), "<span size='x-large' weight='bold'>Diagnostics</span>");
     gtk_label_set_xalign(GTK_LABEL(heading), 0.0f);
-    GtkWidget *note = gtk_label_new("Read-only current status, exact selected-path proof, DNS proof, rollback state and typed session events. Generic Internet reachability alone is never accepted as connection proof.");
+    GtkWidget *note = gtk_label_new("Read-only current status, exact selected-path proof, DNS proof, rollback state and typed session events. Generic Internet reachability alone is never accepted as connection proof. MTU Retest logs the effective MTU/source and measured private-node throughput/RTT/success returned by the local controller.");
     gtk_label_set_xalign(GTK_LABEL(note), 0.0f);
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
     gtk_box_pack_start(GTK_BOX(box), heading, FALSE, FALSE, 0);
@@ -180,6 +195,7 @@ static GtkWidget *build_diagnostics_page_v5(App *app) {
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_box_pack_start(GTK_BOX(row), make_button("Prove public VPN exit", G_CALLBACK(on_public_ip), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(row), make_button("Retest DNS", G_CALLBACK(on_dns), app), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(row), make_button("Retest MTU", G_CALLBACK(on_mtu_retest_v5), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(row), make_button("Emergency stop", G_CALLBACK(on_emergency), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), row, FALSE, FALSE, 0);
     return box;
@@ -211,7 +227,9 @@ static void build_ui_v5(App *app) {
     remember_button_v5(app, modes, "router-vpn-modes-connect-v5", "Connect Selected");
 
     add_tab(tabs, make_info_page("DNS", "Selected DNS is controller-owned and session-proven. Home shows typed dns-proof events; a saved DNS choice alone is never proof."), "DNS");
-    add_tab(tabs, make_info_page("Advanced", "MTU/Jumbo, LAN access, kill switch, Router VPN multihop and external entry/exit compatibility remain controller-owned so native UI cannot claim settings the dataplane did not apply."), "Advanced");
+    GtkWidget *advanced = build_advanced_page_v5(app);
+    add_tab(tabs, advanced, "Advanced");
+    remember_button_v5(app, advanced, "router-vpn-advanced-mtu-v5", "Retest MTU");
     add_tab(tabs, make_info_page("Forwarding", "Incoming forwarding is available only when the active routable Router VPN dataplane can implement it. Proxy-only/external modes never pretend arbitrary DNAT is available."), "Forwarding");
     add_tab(tabs, make_info_page("Settings", "Router VPN Linux talks only to the fixed local controller at 127.0.0.1:8788. External protocol credentials remain in the private 0600 profile store and are redacted from public node/profile APIs."), "Settings");
     add_tab(tabs, build_help_page_v5(app), "Help");
@@ -220,6 +238,7 @@ static void build_ui_v5(App *app) {
     add_tab(tabs, diagnostics, "Diagnostics");
     remember_button_v5(app, diagnostics, "router-vpn-diag-public-v5", "Prove public VPN exit");
     remember_button_v5(app, diagnostics, "router-vpn-diag-dns-v5", "Retest DNS");
+    remember_button_v5(app, diagnostics, "router-vpn-diag-mtu-v5", "Retest MTU");
 
     gtk_container_add(GTK_CONTAINER(app->window), GTK_WIDGET(tabs));
 }
@@ -228,10 +247,10 @@ static int self_test_v5(void) {
     if (self_test_v4() != 0) return 2;
     static const char *const visual_contract[] = {
         "Diagnostics", "Run Tutorial", "linux-onboarding-v5.done",
-        "/api/session/events?after=0", "truthful-empty-state-actions"
+        "/api/session/events?after=0", "truthful-empty-state-actions", "/api/mtu/retest"
     };
-    if (G_N_ELEMENTS(visual_contract) != 5 || visual_contract[0][0] != 'D') return 3;
-    puts("Router VPN native Linux v5 onboarding/diagnostics product self-test: OK");
+    if (G_N_ELEMENTS(visual_contract) != 6 || visual_contract[0][0] != 'D') return 3;
+    puts("Router VPN native Linux v5 onboarding/diagnostics/MTU-Retest product self-test: OK");
     return 0;
 }
 
