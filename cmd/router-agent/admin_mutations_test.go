@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -13,11 +14,11 @@ func testMutationServer(t *testing.T) *adminMutationServer {
 	_, n4, _ := net.ParseCIDR("10.77.0.0/24")
 	_, n6, _ := net.ParseCIDR("fd77:77::/64")
 	return &adminMutationServer{
-		token:     "t0123456789012345678901234567890123456789",
-		cfg:       cfg{WANInterface: "eth0", ReservedPorts: []int{22, 53, 1080, 8786, 8787, 8789, 8790, 9443}, NftTable: "router_vpn", TunnelCIDRs: []string{"10.77.0.0/24", "fd77:77::/64"}},
-		statePath: filepath.Join(t.TempDir(), "admin-state.json"),
-		lanCIDR4:  "192.168.50.0/24",
-		lanCIDR6:  "fd00::/8",
+		token:      "t0123456789012345678901234567890123456789",
+		cfg:        cfg{WANInterface: "eth0", ReservedPorts: []int{22, 53, 1080, 8786, 8787, 8789, 8790, 9443}, NftTable: "router_vpn", TunnelCIDRs: []string{"10.77.0.0/24", "fd77:77::/64"}},
+		statePath:  filepath.Join(t.TempDir(), "admin-state.json"),
+		lanCIDR4:   "192.168.50.0/24",
+		lanCIDR6:   "fd00::/8",
 		tunnelNets: []*net.IPNet{n4, n6},
 	}
 }
@@ -60,6 +61,31 @@ func TestValidateAdminForward(t *testing.T) {
 	} {
 		if err := a.validateAdminForward(&bad); err == nil {
 			t.Fatalf("expected validation error for %+v", bad)
+		}
+	}
+}
+
+func TestLANAccessOffBlocksHostAndForwardedLANButPreservesTunnelControlDestination(t *testing.T) {
+	rules := renderLANAccessOffRules(
+		"router_vpn_admin",
+		[]string{"10.77.0.0/24", "fd77:77::/64"},
+		"192.168.50.0/24",
+		"fd00::/8",
+	)
+	required := []string{
+		"input ip saddr 10.77.0.0/24 ip daddr 192.168.50.0/24 drop",
+		"forward ip saddr 10.77.0.0/24 ip daddr 192.168.50.0/24 drop",
+		"input ip6 saddr fd77:77::/64 ip6 daddr fd00::/8 drop",
+		"forward ip6 saddr fd77:77::/64 ip6 daddr fd00::/8 drop",
+	}
+	for _, want := range required {
+		if !strings.Contains(rules, want) {
+			t.Fatalf("LAN-off rules missing %q:\n%s", want, rules)
+		}
+	}
+	for _, tunnelControl := range []string{"10.77.0.1", "10.78.0.1", "fd77:77::1", "fd78:78::1"} {
+		if strings.Contains(rules, "daddr "+tunnelControl) {
+			t.Fatalf("LAN-off rules unexpectedly block private tunnel control destination %s:\n%s", tunnelControl, rules)
 		}
 	}
 }
