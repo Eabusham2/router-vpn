@@ -360,17 +360,21 @@ final class RouterVPNModel: ObservableObject {
 
     func applyForward(dmz: Bool) async {
         saveRouter()
+        if dmz {
+            message = "Protected DMZ is a broad server/admin action. Manage it in the authenticated home Setup Center; this app creates only explicit forwarding owned by this tunnel peer."
+            return
+        }
         guard let b = bundle, let url = URL(string: b.routerAPI + "/api/forward") else { message = "Configure your home router first"; return }
         guard let from = Int(forwardFrom), let to = Int(forwardTo), let target = Int(forwardTarget) else { message = "Enter valid ports"; return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(b.apiToken)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["protocol": forwardProtocol, "from": from, "to": to, "target_port": target, "dmz": dmz])
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["protocol": forwardProtocol, "from": from, "to": to, "target_port": target, "dmz": false])
         do {
             let (_, response) = try await URLSession.shared.data(for: req)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-            message = dmz ? "Protected DMZ applied" : "Port forwarding applied"
+            message = "Port forwarding applied for this tunnel peer"
         } catch { message = "Port forwarding requires a connected Router VPN peer path: \(error.localizedDescription)" }
     }
 
@@ -380,7 +384,11 @@ final class RouterVPNModel: ObservableObject {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(b.apiToken)", forHTTPHeaderField: "Authorization")
-        do { _ = try await URLSession.shared.data(for: req); message = "Port forwarding cleared" }
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+            message = "This tunnel peer's forwarding cleared"
+        }
         catch { message = error.localizedDescription }
     }
 }
