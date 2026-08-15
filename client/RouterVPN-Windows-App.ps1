@@ -38,6 +38,19 @@ foreach ($Pair in $AdaptiveLayout) {
     }
     $ProductSource = $ProductSource.Replace($Pair[0], $Pair[1])
 }
+
+# The product is intentionally parsed from an in-memory UTF-8 ScriptBlock. In
+# that context $MyInvocation.MyCommand.Path is null, so the product self-test
+# cannot rediscover its own source file. Replace only that exact self-test read
+# with the stable wrapper-provided path. This preserves normal product behavior
+# and lets the self-test inspect the authoritative on-disk source rather than an
+# unrelated temp script or transformed copy.
+$SelfTestSourceRead = '$Source=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw'
+$SelfTestSourceReadFixed = '$Source=Get-Content -LiteralPath $env:ROUTER_VPN_PRODUCT_SOURCE -Raw -Encoding UTF8'
+if (-not $ProductSource.Contains($SelfTestSourceRead)) {
+    throw 'Router VPN Windows product self-test source-path contract drifted.'
+}
+$ProductSource = $ProductSource.Replace($SelfTestSourceRead, $SelfTestSourceReadFixed)
 $ProductScript = [ScriptBlock]::Create($ProductSource)
 
 # Static local-controller contract retained here for repository/package audits.
@@ -48,15 +61,25 @@ $ApiContract = @(
     '/api/mtu/retest', '/api/emergency-stop', '/api/session', '/api/session/events'
 )
 
-if ($SelfTest) {
-    foreach ($Marker in @('MinHeight="480" MinWidth="640"','Height="2*" MinHeight="140"','MaxWidth="760"','MinHeight="180"')) {
-        if (-not $ProductSource.Contains($Marker)) { throw "Adaptive Windows layout self-test missing $Marker" }
+$PreviousProductSource = $env:ROUTER_VPN_PRODUCT_SOURCE
+$env:ROUTER_VPN_PRODUCT_SOURCE = $Product
+try {
+    if ($SelfTest) {
+        foreach ($Marker in @('MinHeight="480" MinWidth="640"','Height="2*" MinHeight="140"','MaxWidth="760"','MinHeight="180"','$env:ROUTER_VPN_PRODUCT_SOURCE')) {
+            if (-not $ProductSource.Contains($Marker)) { throw "Adaptive Windows layout/self-test missing $Marker" }
+        }
+        & $ProductScript -BaseUrl $BaseUrl -SelfTest
+    } else {
+        & $ProductScript -BaseUrl $BaseUrl
     }
-    & $ProductScript -BaseUrl $BaseUrl -SelfTest
-} else {
-    & $ProductScript -BaseUrl $BaseUrl
+    if (-not $?) { throw 'Router VPN native Windows product shell failed.' }
+} finally {
+    if ($null -eq $PreviousProductSource) {
+        Remove-Item Env:ROUTER_VPN_PRODUCT_SOURCE -ErrorAction SilentlyContinue
+    } else {
+        $env:ROUTER_VPN_PRODUCT_SOURCE = $PreviousProductSource
+    }
 }
-if (-not $?) { throw 'Router VPN native Windows product shell failed.' }
 
 # Native product contract markers: SelfTest / ShowDialog() / explicit UTF-8 /
-# adaptive small-effective-resolution layout.
+# adaptive small-effective-resolution layout / stable in-memory source path.
