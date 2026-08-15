@@ -3,11 +3,12 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"
+MENU_SRC="$ROOT/client/macos/RouterVPNMenuBar.m"
 OUT=${1:?usage: build-native-app.sh OUT_DIR [amd64|arm64]}
 ARCH=${2:-arm64}
 case "$ARCH" in
-  amd64) TARGET=x86_64-apple-macosx13.0 ;;
-  arm64) TARGET=arm64-apple-macosx13.0 ;;
+  amd64) TARGET=x86_64-apple-macosx13.0; CLANG_ARCH=x86_64 ;;
+  arm64) TARGET=arm64-apple-macosx13.0; CLANG_ARCH=arm64 ;;
   *) echo "Unsupported macOS app architecture: $ARCH" >&2; exit 2 ;;
 esac
 
@@ -15,7 +16,22 @@ SDK=$(xcrun --sdk macosx --show-sdk-path)
 APP="$OUT/RouterVPN.app"
 BIN="$APP/Contents/MacOS/RouterVPN"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$OUT"
+BUILD_WORK=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-macos-build.XXXXXX")
+trap 'rm -rf "$BUILD_WORK"' EXIT
+MENU_OBJ="$BUILD_WORK/RouterVPNMenuBar.o"
+
+# Native menu-bar integration is compiled into the same AppKit executable. It
+# exposes Open, Emergency Stop and Quit without a browser or separate daemon.
+xcrun clang \
+  -fobjc-arc \
+  -fblocks \
+  -fmodules \
+  -isysroot "$SDK" \
+  -mmacosx-version-min=13.0 \
+  -arch "$CLANG_ARCH" \
+  -c "$MENU_SRC" \
+  -o "$MENU_OBJ"
 
 xcrun swiftc \
   -O \
@@ -25,13 +41,14 @@ xcrun swiftc \
   -framework Foundation \
   -framework MapKit \
   "$SRC" \
+  "$MENU_OBJ" \
   -o "$BIN"
 chmod 755 "$BIN"
 
 # Build the normal macOS application icon from the same deterministic Router VPN
 # icon source used by Windows/Linux. No opaque binary source asset is committed.
-ICON_WORK=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-icon.XXXXXX")
-trap 'rm -rf "$ICON_WORK"' EXIT
+ICON_WORK="$BUILD_WORK/icon"
+mkdir -p "$ICON_WORK"
 python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$ICON_WORK/router-vpn-1024.png" --ico "$ICON_WORK/router-vpn.ico"
 ICONSET="$ICON_WORK/RouterVPN.iconset"
 mkdir -p "$ICONSET"
@@ -90,10 +107,15 @@ grep -Fq '/api/mtu/retest' "$SRC"
 grep -Fq 'Retest MTU' "$SRC"
 grep -Fq 'effective_mtu_mbps' "$SRC"
 grep -Fq '/api/emergency-stop' "$SRC"
+grep -Fq 'NSStatusBar' "$MENU_SRC"
+grep -Fq 'Open Router VPN' "$MENU_SRC"
+grep -Fq 'Emergency Stop' "$MENU_SRC"
+grep -Fq 'Quit Router VPN' "$MENU_SRC"
+strings "$BIN" | grep -Fq 'RouterVPNMenuBarBootstrap'
 ! otool -L "$BIN" | grep -q '/WebKit.framework/'
 
 if [[ "$(uname -m)" == arm64 && "$ARCH" == arm64 ]] || [[ "$(uname -m)" == x86_64 && "$ARCH" == amd64 ]]; then
   "$BIN" --self-test
 fi
 
-echo "Built native RouterVPN.app for $ARCH at $APP"
+echo "Built native RouterVPN.app with menu-bar integration for $ARCH at $APP"

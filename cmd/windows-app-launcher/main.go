@@ -74,32 +74,49 @@ func hiddenCommand(name string, args ...string) *exec.Cmd {
 	return cmd
 }
 
-func requiredFiles(root string) (controller, app, icon string, err error) {
+func requiredFiles(root string) (controller, app, tray, icon string, err error) {
 	controller = filepath.Join(root, "router-vpn-client.exe")
 	app = filepath.Join(root, "client", "RouterVPN-Windows-App.ps1")
+	tray = filepath.Join(root, "client", "RouterVPN-Windows-Tray.ps1")
 	icon = filepath.Join(root, "RouterVPN.ico")
-	for _, path := range []string{controller, app, icon, filepath.Join(root, "client.json"), filepath.Join(root, "modes.json"), filepath.Join(root, "logical-modes.json")} {
+	for _, path := range []string{controller, app, tray, icon, filepath.Join(root, "client.json"), filepath.Join(root, "modes.json"), filepath.Join(root, "logical-modes.json")} {
 		info, statErr := os.Stat(path)
 		if statErr != nil || info.IsDir() {
-			return "", "", "", fmt.Errorf("required Router VPN package file is missing: %s", path)
+			return "", "", "", "", fmt.Errorf("required Router VPN package file is missing: %s", path)
 		}
 	}
-	return controller, app, icon, nil
+	return controller, app, tray, icon, nil
 }
 
 func runSelfTest(root string) error {
-	_, app, _, err := requiredFiles(root)
+	_, app, tray, _, err := requiredFiles(root)
 	if err != nil {
 		return err
 	}
-	cmd := hiddenCommand("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", app, "-BaseUrl", localBaseURL, "-SelfTest")
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_CLIENT_CONFIG="+filepath.Join(root, "client.json"), "HOMEVPN_NATIVE_APP=windows-wpf-product")
-	out, err := cmd.CombinedOutput()
+	env := append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_CLIENT_CONFIG="+filepath.Join(root, "client.json"), "HOMEVPN_NATIVE_APP=windows-wpf-product")
+	uiTest := hiddenCommand("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", app, "-BaseUrl", localBaseURL, "-SelfTest")
+	uiTest.Dir = root
+	uiTest.Env = env
+	out, err := uiTest.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("native WPF self-test failed: %w: %s", err, string(out))
 	}
+	trayTest := hiddenCommand("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", tray, "-BaseUrl", localBaseURL, "-SelfTest")
+	trayTest.Dir = root
+	trayTest.Env = env
+	out, err = trayTest.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("native system-tray self-test failed: %w: %s", err, string(out))
+	}
 	return nil
+}
+
+func stopChild(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+	_, _ = cmd.Process.Wait()
 }
 
 func run() error {
@@ -107,7 +124,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	controller, app, _, err := requiredFiles(root)
+	controller, app, tray, _, err := requiredFiles(root)
 	if err != nil {
 		return err
 	}
@@ -127,10 +144,7 @@ func run() error {
 		owned = true
 		defer func() {
 			emergencyStop()
-			if child != nil && child.Process != nil {
-				_ = child.Process.Kill()
-				_, _ = child.Process.Wait()
-			}
+			stopChild(child)
 		}()
 	}
 	if !waitReady(time.Now().Add(12 * time.Second)) {
@@ -142,8 +156,22 @@ func run() error {
 	ui.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_CLIENT_CONFIG="+filepath.Join(root, "client.json"), "HOMEVPN_NATIVE_APP=windows-wpf-product")
 	ui.Stdout = os.Stdout
 	ui.Stderr = os.Stderr
-	if err := ui.Run(); err != nil {
-		return fmt.Errorf("native Router VPN app exited with an error: %w", err)
+	if err := ui.Start(); err != nil {
+		return fmt.Errorf("start native Router VPN app: %w", err)
+	}
+
+	trayCmd := hiddenCommand("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", tray, "-BaseUrl", localBaseURL, "-UiPid", fmt.Sprintf("%d", ui.Process.Pid))
+	trayCmd.Dir = root
+	trayCmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_CLIENT_CONFIG="+filepath.Join(root, "client.json"), "HOMEVPN_NATIVE_APP=windows-system-tray")
+	if err := trayCmd.Start(); err != nil {
+		stopChild(ui)
+		return fmt.Errorf("start Router VPN system tray: %w", err)
+	}
+
+	uiErr := ui.Wait()
+	stopChild(trayCmd)
+	if uiErr != nil {
+		return fmt.Errorf("native Router VPN app exited with an error: %w", uiErr)
 	}
 	if !owned {
 		return nil

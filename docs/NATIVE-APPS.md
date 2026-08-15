@@ -6,7 +6,7 @@ A source/build claim is not a physical-device release claim. Real VPN permission
 
 ## Windows
 
-The Windows daily-use application is native WPF (`PresentationFramework`) and talks to the private loopback Router VPN controller at `127.0.0.1:8788`. Installed and Portable packages launch the WPF application, not Edge/Chrome app mode or a WebView wrapper. Portable self-tests must exit the native UI/controller cleanly and still pass after the folder is relocated.
+The Windows daily-use application is native WPF (`PresentationFramework`) and talks to the private loopback Router VPN controller at `127.0.0.1:8788`. Installed and Portable packages launch the WPF application, not Edge/Chrome app mode or a WebView wrapper. The normal installed package has a Router VPN Start Menu/icon entry. While the app is running, a native Windows system-tray companion provides **Open Router VPN**, **Emergency Stop** and **Exit Router VPN**; minimizing the WPF window moves it to that tray without changing VPN state. Portable self-tests must exit the native UI/controller cleanly and still pass after the folder is relocated.
 
 Windows source includes native raw WireGuard, full-device layered TUN/DNS paths, a Windows firewall kill-switch helper and real multihop where supported. WSL is not counted as the native Windows VPN implementation.
 
@@ -14,7 +14,7 @@ Validated Windows custom exits support WireGuard, SOCKS5, Shadowsocks and Hyster
 
 ## macOS
 
-The macOS package contains a native AppKit/MapKit `RouterVPN.app` for amd64 and arm64. It owns a sibling Router VPN controller only when it starts that controller itself. Closing the app performs Router VPN emergency cleanup and stops only the owned process. The app contains no WebKit view.
+The macOS package contains a native AppKit/MapKit `RouterVPN.app` for amd64 and arm64 with its Router VPN application icon and native menu-bar status item. The menu-bar item provides **Open Router VPN**, **Emergency Stop** and **Quit Router VPN** while the app is running. The app owns a sibling Router VPN controller only when it starts that controller itself. Closing the app performs Router VPN emergency cleanup and stops only the owned process. The app contains no WebKit view.
 
 Native routing, PF kill-switch handling and real multihop are source-implemented. Standard custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. Native OpenVPN 2.7 supports direct and the safe TCP-over-entry case; unsupported OpenVPN/DNS/hop combinations fail closed.
 
