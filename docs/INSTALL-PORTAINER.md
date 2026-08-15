@@ -1,16 +1,25 @@
 # Install Router VPN through Portainer
 
-## 1. Stack source
+## 1. Exact release source
+
+The tracked repository file:
 
 ```text
-Repository: https://github.com/Eabusham2/router-vpn.git
-Reference:  refs/heads/main
-Compose:    server/portainer-current.yaml
+server/portainer-current.yaml
 ```
 
-The repository is public, so Git repository authentication is normally off.
+is the reproducible image-only production **template/baseline**. It is not the deploy target for a newer `main` commit merely because its filename says `current`.
 
-For production, use the release-approved `server/portainer-current.yaml` state whose custom Router VPN services are pinned to one exact GitHub commit-SHA image set. Do not substitute moving tags or a source-build fallback.
+For production, choose one verified exact `main` SHA and require both its normal release gates and these same-SHA workflows to succeed:
+
+```text
+Publish ARM64 Portainer images
+Exact-SHA production compose
+```
+
+Then download the `RouterVPN-production-compose-<sha>` artifact, verify the included `.sha256`, and verify all Router VPN custom image tags plus `ROUTER_VPN_GITHUB_SHA` equal that exact SHA. Use the generated `RouterVPN-Portainer-<sha>.yaml` as the Portainer stack definition. Full contract: `docs/PRODUCTION-RELEASE.md`.
+
+The repository is public, so Git repository authentication is normally off for source browsing; the generated release YAML itself is the deliberate production input.
 
 ## 2. Environment
 
@@ -26,7 +35,7 @@ ADGUARD4=192.168.50.133
 
 ## 3. Deploy
 
-Use **Deploy the stack** / **Pull and redeploy** only after the exact release SHA has passed its source/build gates and the deployment change is deliberate.
+Update the `router-vpn` stack with the verified generated exact-SHA YAML only after the exact release SHA has passed its source/build/image/materialization gates and the deployment change is deliberate.
 
 The production Portainer compose is **image-only**. Router-local compilation is reserved for requested generic client packages inside the Setup Center broker, not for Portainer server images.
 
@@ -39,7 +48,7 @@ router-vpn-finalize   Exited (0)
 
 Expected long-running services include agent, WireGuard, AWG, Rosenpass, transports, Xray, Naive, SS-V2Ray, aux, Setup Center broker and SOCKS5.
 
-After deploy verify container state first, then verify:
+After deploy verify container state first, exact running image/provenance SHAs second, then verify:
 
 ```text
 http://192.168.50.133:8786/healthz = 200
@@ -71,7 +80,7 @@ stream
 cleanup temporary output
 ```
 
-Private node data is linked/imported/paird **separately after installation**. It is not baked into the public generic installer or Portable ZIP.
+Private node data is linked/imported/paired **separately after installation**. It is not baked into the public generic installer or Portable ZIP.
 
 ## 5. ASUS forwarding
 

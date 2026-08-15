@@ -6,7 +6,7 @@ Router VPN is MIT-licensed open-source software. See `LICENSE`.
 
 ## Normal setup — no giant ZIP required
 
-1. Deploy `server/portainer-current.yaml` from this repository in Portainer using the release-approved exact-SHA image pins.
+1. Choose one verified exact `main` SHA and use the generated `RouterVPN-production-compose-<sha>` artifact from the **Exact-SHA production compose** workflow after the same-SHA ARM64 image and release gates are green. The tracked `server/portainer-current.yaml` is only the reproducible image-only **template/baseline**; see `docs/PRODUCTION-RELEASE.md`.
 2. On the home LAN open the Setup Center at `http://AI_BOARD_IP:8786/`.
 3. Use its ASUS section to inspect current SSH/JFFS forwarding state before changing anything; preserve unrelated hooks.
 4. Install the generic Router VPN app for the device once, then link/import one or more private router/node bundles independently.
@@ -148,7 +148,7 @@ Native node managers support current/recent, last-used, measured-latency and nam
 
 ## Production/security boundaries
 
-- Production Portainer is exact-SHA image-only.
+- Production Portainer is exact-SHA image-only and must use the generated same-SHA release compose, not the tracked template/baseline.
 - `8786` Setup Center stays private.
 - `1080`, `8787`, `14444`, `9443`, SSH and AdGuard admin stay off WAN.
 - A mode becomes Ready only from real generated configuration/runtime validation.
@@ -159,7 +159,7 @@ Native node managers support current/recent, last-used, measured-latency and nam
 
 ## Validation policy
 
-GitHub Actions is the normal compile/test environment. Source/security/runtime/package audits, native builds and exact-SHA ARM64 image publication are required before manual release gates.
+GitHub Actions is the normal compile/test environment. Source/security/runtime/package audits, native builds, exact-SHA ARM64 image publication and the **Exact-SHA production compose** artifact are required before manual production gates.
 
 Physical release validation still requires the relevant real-device VPN permission/TUN, route/DNS/IPv4/IPv6 behavior, exact selected node/public exit, reconnect/network-change handling, fail-closed/leak-negative transitions and custom-exit behavior. Simple external Methods require real off-LAN compatible-client interoperability. Apple distribution requires real signing/notarization. Production requires a deliberate exact-SHA Portainer deploy and live smoke test, followed by ASUS forwarding revalidation where needed.
 
@@ -172,5 +172,6 @@ Physical release validation still requires the relevant real-device VPN permissi
 - `docs/WINDOWS-PORTABLE.md` — Windows Portable ZIP behavior
 - `docs/MODES.md` — raw runtime mode details
 - `docs/AI-HELP.md` — AI Help provider/configuration boundary
+- `docs/PRODUCTION-RELEASE.md` — generated exact-SHA production compose/deploy contract
 - `SECURITY.md` — security boundaries
 - `router/asus-merlin-router-vpn-forwards.sh` — persistent ASUS WAN forwarding helper

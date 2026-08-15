@@ -2,26 +2,31 @@
 
 Portainer is the normal ASUS AI Board deployment path. This terminal path is for Docker hosts where SSH access is actually available.
 
+The tracked `server/portainer-current.yaml` is only a reproducible image-only **template/baseline**. Terminal install/upgrade deliberately rejects it as a current release. First obtain and verify the generated `RouterVPN-Portainer-<release-sha>.yaml` from the **Exact-SHA production compose** workflow for the exact release SHA, following `docs/PRODUCTION-RELEASE.md`.
+
+Then:
+
 ```bash
 git clone https://github.com/Eabusham2/router-vpn.git
 cd router-vpn
-sudo ./server/install.sh
+export ROUTER_VPN_PRODUCTION_COMPOSE=/absolute/path/RouterVPN-Portainer-<release-sha>.yaml
+sudo -E ./server/install.sh
 ```
 
-The repository is public; a Git token is not normally required.
+The repository is public; a Git token is not normally required. `server/install.sh` verifies the generated release header, exact custom-image pins, matching broker provenance and image-only contract before Docker runs.
 
-`server/install.sh` uses the same **image-only** `server/portainer-current.yaml` as Portainer. It does not turn the server host into the normal image build environment.
-
-Update later with:
+Update later with the newly verified generated compose for the target release:
 
 ```bash
-sudo ./server/upgrade.sh
+export ROUTER_VPN_PRODUCTION_COMPOSE=/absolute/path/RouterVPN-Portainer-<release-sha>.yaml
+sudo -E ./server/upgrade.sh
 ```
 
 or:
 
 ```bash
-sudo ./server/manage.sh
+export ROUTER_VPN_PRODUCTION_COMPOSE=/absolute/path/RouterVPN-Portainer-<release-sha>.yaml
+sudo -E ./server/manage.sh
 ```
 
 Diagnostics:

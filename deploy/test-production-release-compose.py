@@ -11,7 +11,15 @@ SCRIPT = ROOT / "deploy/materialize-production-compose.py"
 VERIFY = ROOT / "server/scripts/verify-production-compose.py"
 SOURCE = ROOT / "server/portainer-current.yaml"
 TARGET = "a" * 40
-DOCS = [ROOT / "docs/CURRENT-GUIDE.md", ROOT / "USE-CURRENT.md"]
+DOCS = [
+    ROOT / "README.md",
+    ROOT / "START-HERE.md",
+    ROOT / "START-CURRENT.md",
+    ROOT / "USE-CURRENT.md",
+    ROOT / "docs/CURRENT-GUIDE.md",
+    ROOT / "docs/INSTALL-PORTAINER.md",
+    ROOT / "docs/INSTALL-SSH.md",
+]
 
 
 def main() -> int:

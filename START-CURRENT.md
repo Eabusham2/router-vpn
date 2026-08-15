@@ -7,9 +7,11 @@ Current entrypoints:
 - Client linking/platform notes: `docs/CLIENT.md`
 - Native app boundaries: `docs/NATIVE-APPS.md`
 - Build/release details: `docs/BUILDS.md`
-- Portainer stack: `server/portainer-current.yaml`
+- Production release contract: `docs/PRODUCTION-RELEASE.md`
+- Tracked Portainer template/baseline: `server/portainer-current.yaml`
+- Exact release generator: `Exact-SHA production compose`
 - ASUS forwarding helper: `router/asus-merlin-router-vpn-forwards.sh`
-- Terminal manager: `server/manage.sh`
+- Terminal manager: `server/manage.sh` (requires `ROUTER_VPN_PRODUCTION_COMPOSE`)
 - Diagnostics: `server/scripts/doctor-current.sh`
 - Raw mode catalog: `configs/client/modes.json`
 - Logical app catalog: `configs/client/logical-modes.json`
@@ -20,6 +22,7 @@ Current entrypoints:
 requirements/source reconciliation
 → GitHub source/security/native/runtime gates
 → exact-SHA ARM64 images + one-SHA client release candidate
+→ exact-SHA production compose artifact
 → physical-device / off-LAN / visual / AI-provider / signing gates
 → deliberate exact-SHA Portainer production deploy
 → live smoke tests
@@ -27,7 +30,7 @@ requirements/source reconciliation
 → final regression matrix
 ```
 
-Production is never promoted from an old release candidate merely because it once passed.
+The tracked `server/portainer-current.yaml` is only a reproducible image-only **template/baseline**. Production is never promoted from that baseline or an old release candidate merely because it once passed. Use the generated `RouterVPN-production-compose-<sha>` artifact for the exact verified release SHA and follow `docs/PRODUCTION-RELEASE.md`.
 
 Normal Portainer environment:
 
