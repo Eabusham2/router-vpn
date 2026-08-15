@@ -19,8 +19,9 @@ RUN mkdir -p dist \
 
 # Runtime Go exists only for the bounded requested-package fallback. The normal
 # path assembles from the exact-image prebuilt components above. Go is used only
-# if a supported Windows/Portable component is unexpectedly absent; native
-# AppKit/GTK SDK environments are intentionally not installed here.
+# if a supported Windows/Portable component is unexpectedly absent. The
+# native AppKit/GTK SDK environments are intentionally not installed here;
+# macOS/Linux desktop fallback requires the exact-SHA native GitHub artifact.
 FROM golang:1.24-bookworm AS go-toolchain
 
 FROM ghcr.io/sagernet/sing-box:v1.13.12 AS singbox
