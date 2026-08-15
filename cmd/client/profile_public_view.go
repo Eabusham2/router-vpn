@@ -110,6 +110,7 @@ func publicProfileFor(p common.RouterProfile) publicProfile {
 }
 
 func publicProfileStoreFor(store common.RouterProfileStore) publicProfileStore {
+	store=sortPublicProfileStore(store,"current")
 	out:=publicProfileStore{SchemaVersion:store.SchemaVersion,SelectedID:store.SelectedID,Profiles:make([]publicProfile,0,len(store.Profiles))}
 	for _,p:=range store.Profiles{out.Profiles=append(out.Profiles,publicProfileFor(p))}
 	return out
