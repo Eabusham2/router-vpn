@@ -25,13 +25,19 @@ def _load(name: str, filename: str):
 
 _ai = _load("routervpn_setup_center_ai_composition", "setup-center-ai-server.py")
 _release = _load("routervpn_setup_center_release_status", "setup_center_release_status.py")
+_verified = _load("routervpn_setup_center_verified_onboarding", "setup_center_verified_onboarding.py")
 
 
 class Handler(_ai.Handler):
     def _inject_product_ui(self, text: str) -> str:
-        enriched = super()._inject_product_ui(text)
+        # Repair only known stale generated-page copy before layering the mature
+        # admin/guide/device/AI product surfaces on top of it.
+        enriched = _verified.reconcile_setup_text(text)
+        enriched = super()._inject_product_ui(enriched)
         if 'data-tab="release-status"' not in enriched:
             enriched = self._before_body(enriched, _release.RELEASE_PANEL)
+        if 'id="rvpn-verified-onboarding"' not in enriched:
+            enriched = self._before_body(enriched, _verified.VERIFIED_ONBOARDING_PANEL)
         return enriched
 
     def _proxy_forwarding_extension(self, method: str) -> bool:
@@ -85,7 +91,7 @@ def main() -> int:
     _ai._core._broker.cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
     print(
-        f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + Full Guide + device UX + forwarding ownership/Protected DMZ + release/recovery status + server-side AI Help",
+        f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + Full Guide + verified onboarding + device UX + forwarding ownership/Protected DMZ + release/recovery status + server-side AI Help",
         flush=True,
     )
     try:
