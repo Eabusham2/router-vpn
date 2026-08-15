@@ -90,6 +90,12 @@ grep -Fq 'apply_action_sensitivity_v5' "$SRC"
 grep -Fq 'gtk_widget_set_sensitive' "$SRC"
 grep -Fq 'truthful-empty-state-actions' "$SRC"
 grep -Fq 'gtk_window_set_default_size(GTK_WINDOW(app->window), 960, 680);' "$SRC"
+# MTU Retest must be a real native action against the fixed local controller,
+# not an inert label or external helper launcher.
+grep -Fq '/api/mtu/retest' "$SRC"
+grep -Fq 'Retest MTU' "$SRC"
+grep -Fq '130000' "$SRC"
+grep -Fq 'router-vpn-advanced-mtu-v5' "$SRC"
 "$OUT" --self-test
 
 echo "Built native Linux GTK Router VPN product shell at $OUT"
