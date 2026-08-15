@@ -64,7 +64,7 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd, err := mtuRetestCommand(root, a.cfg.ScriptsDir)
+	cmd, err := mtuRetestCommand(a.cfg.ScriptsDir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotImplemented)
 		return
@@ -109,14 +109,19 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func mtuRetestCommand(root, scriptsDir string) (*exec.Cmd, error) {
+func mtuRetestCommand(scriptsDir string) (*exec.Cmd, error) {
+	scriptsDir = filepath.Clean(scriptsDir)
+	if scriptsDir == "." || scriptsDir == string(filepath.Separator) {
+		return nil, errors.New("invalid MTU scripts directory")
+	}
+	immutableRoot := filepath.Dir(scriptsDir)
 	if runtime.GOOS == "windows" {
-		script := filepath.Join(root, "client", "Optimize-RouterVPN-MTU.ps1")
-		if !safeMTUScriptPath(root, script) {
+		script := filepath.Join(immutableRoot, "client", "Optimize-RouterVPN-MTU.ps1")
+		if !safeMTUScriptPath(immutableRoot, script) {
 			return nil, errors.New("unsafe Windows MTU optimizer path")
 		}
 		if info, err := os.Stat(script); err != nil || !info.Mode().IsRegular() {
-			return nil, errors.New("Windows MTU optimizer is not installed")
+			return nil, errors.New("Windows MTU optimizer is not installed in the packaged runtime")
 		}
 		return exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Action", "optimize"), nil
 	}
@@ -124,8 +129,8 @@ func mtuRetestCommand(root, scriptsDir string) (*exec.Cmd, error) {
 	if runtime.GOOS == "darwin" {
 		name = "mtu-throughput-tuner-platform.py"
 	}
-	script := filepath.Join(filepath.Clean(scriptsDir), name)
-	if !safeMTUScriptPath(root, script) {
+	script := filepath.Join(scriptsDir, name)
+	if !safeMTUScriptPath(immutableRoot, script) {
 		return nil, errors.New("unsafe MTU optimizer path")
 	}
 	if info, err := os.Stat(script); err != nil || !info.Mode().IsRegular() {
