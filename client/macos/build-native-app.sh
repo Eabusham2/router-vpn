@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"
+MENU_SRC="$ROOT/client/macos/RouterVPNMacMenu.swift"
 OUT=${1:?usage: build-native-app.sh OUT_DIR [amd64|arm64]}
 ARCH=${2:-arm64}
 case "$ARCH" in
@@ -17,6 +18,25 @@ BIN="$APP/Contents/MacOS/RouterVPN"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+BUILD_WORK=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-macos.XXXXXX")
+trap 'rm -rf "$BUILD_WORK"' EXIT
+MAIN_SRC="$BUILD_WORK/main.swift"
+python3 - "$SRC" "$MAIN_SRC" <<'PY'
+from pathlib import Path
+import sys
+src=Path(sys.argv[1]).read_text(encoding='utf-8')
+needle='let productApp = NSApplication.shared'
+if src.count(needle) != 1:
+    raise SystemExit('expected exactly one native macOS application bootstrap marker')
+src=src.replace(needle, needle+'\ninstallRouterVPNMainMenu(productApp)', 1)
+Path(sys.argv[2]).write_text(src, encoding='utf-8')
+PY
+
+grep -Fq 'installRouterVPNMainMenu(productApp)' "$MAIN_SRC"
+grep -Fq 'app.mainMenu = main' "$MENU_SRC"
+grep -Fq 'About Router VPN' "$MENU_SRC"
+grep -Fq 'Quit Router VPN' "$MENU_SRC"
+
 xcrun swiftc \
   -O \
   -sdk "$SDK" \
@@ -24,21 +44,19 @@ xcrun swiftc \
   -framework AppKit \
   -framework Foundation \
   -framework MapKit \
-  "$SRC" \
+  "$MAIN_SRC" "$MENU_SRC" \
   -o "$BIN"
 chmod 755 "$BIN"
 
 # Build the normal macOS application icon from the same deterministic Router VPN
 # icon source used by Windows/Linux. No opaque binary source asset is committed.
-ICON_WORK=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-icon.XXXXXX")
-trap 'rm -rf "$ICON_WORK"' EXIT
-python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$ICON_WORK/router-vpn-1024.png" --ico "$ICON_WORK/router-vpn.ico"
-ICONSET="$ICON_WORK/RouterVPN.iconset"
+python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$BUILD_WORK/router-vpn-1024.png" --ico "$BUILD_WORK/router-vpn.ico"
+ICONSET="$BUILD_WORK/RouterVPN.iconset"
 mkdir -p "$ICONSET"
 for size in 16 32 128 256 512; do
-  sips -z "$size" "$size" "$ICON_WORK/router-vpn-1024.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+  sips -z "$size" "$size" "$BUILD_WORK/router-vpn-1024.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
   retina=$((size * 2))
-  sips -z "$retina" "$retina" "$ICON_WORK/router-vpn-1024.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+  sips -z "$retina" "$retina" "$BUILD_WORK/router-vpn-1024.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/RouterVPN.icns"
 [[ -s "$APP/Contents/Resources/RouterVPN.icns" ]]
@@ -72,7 +90,7 @@ case "$ARCH" in
 esac
 
 # A Router VPN desktop app must be native UI, not a hidden website/WebView wrapper.
-! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC"
+! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC" "$MENU_SRC"
 grep -Fq 'NSWindow(' "$SRC"
 grep -Fq 'NSTabViewController' "$SRC"
 grep -Fq 'import MapKit' "$SRC"
