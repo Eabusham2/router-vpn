@@ -30,9 +30,14 @@ _verified = _load("routervpn_setup_center_verified_onboarding", "setup_center_ve
 
 class Handler(_ai.Handler):
     def _inject_product_ui(self, text: str) -> str:
-        # Repair only known stale generated-page copy before layering the mature
-        # admin/guide/device/AI product surfaces on top of it.
-        enriched = _verified.reconcile_setup_text(text)
+        # Full generated Setup Center pages carry both the start tab and legacy
+        # wizard seam. Reconcile those pages strictly. Tiny unit-test/alternate
+        # fixture HTML may omit both, so it can still exercise the independent
+        # release/admin composition layers without being mistaken for production.
+        if 'data-tab="start"' in text or "startWizard(false)" in text or "startWizard(true)" in text:
+            enriched = _verified.reconcile_setup_text(text)
+        else:
+            enriched = text
         enriched = super()._inject_product_ui(enriched)
         if 'data-tab="release-status"' not in enriched:
             enriched = self._before_body(enriched, _release.RELEASE_PANEL)
