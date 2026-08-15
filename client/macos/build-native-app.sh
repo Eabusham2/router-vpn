@@ -28,6 +28,21 @@ xcrun swiftc \
   -o "$BIN"
 chmod 755 "$BIN"
 
+# Build the normal macOS application icon from the same deterministic Router VPN
+# icon source used by Windows/Linux. No opaque binary source asset is committed.
+ICON_WORK=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-icon.XXXXXX")
+trap 'rm -rf "$ICON_WORK"' EXIT
+python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$ICON_WORK/router-vpn-1024.png" --ico "$ICON_WORK/router-vpn.ico"
+ICONSET="$ICON_WORK/RouterVPN.iconset"
+mkdir -p "$ICONSET"
+for size in 16 32 128 256 512; do
+  sips -z "$size" "$size" "$ICON_WORK/router-vpn-1024.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+  retina=$((size * 2))
+  sips -z "$retina" "$retina" "$ICON_WORK/router-vpn-1024.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/RouterVPN.icns"
+[[ -s "$APP/Contents/Resources/RouterVPN.icns" ]]
+
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -39,6 +54,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>Router VPN</string>
   <key>CFBundleDisplayName</key><string>Router VPN</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>RouterVPN</string>
   <key>CFBundleShortVersionString</key><string>0.9.0</string>
   <key>CFBundleVersion</key><string>9</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
@@ -48,6 +64,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
+[[ "$(plutil -extract CFBundleIconFile raw -o - "$APP/Contents/Info.plist")" == "RouterVPN" ]]
 file "$BIN"
 case "$ARCH" in
   amd64) file "$BIN" | grep -Eq 'x86_64|Mach-O 64-bit executable x86_64' ;;
