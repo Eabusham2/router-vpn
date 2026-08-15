@@ -131,7 +131,6 @@ jobs:
           name: RouterVPN-client-desktop-unix-ci
           path: |
             dist/packages/*
-            dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 1
 

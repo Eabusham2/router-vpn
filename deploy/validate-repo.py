@@ -346,10 +346,15 @@ for rel in ("server/install.sh", "server/upgrade.sh", "server/manage.sh"):
         error(f"{rel} explicitly builds server images")
 
 release_candidate = text(".github/workflows/release-candidate.yml")
-if re.search(r"(?m)^\s*dist/SHA256SUMS\s*$", release_candidate):
-    error("release-candidate generic artifact ships build-tree SHA256SUMS with non-artifact-relative paths")
 if "dist/packages/*" not in release_candidate or "(cd dist/packages && sha256sum -c SHA256SUMS)" not in release_candidate:
     error("release-candidate generic artifact is missing the self-contained package checksum contract")
+client_apps_ci = text(".github/workflows/client-apps-ci.yml")
+if "dist/packages/*" not in client_apps_ci or "(cd dist/packages && sha256sum -c SHA256SUMS)" not in client_apps_ci:
+    error("client-apps generic artifact is missing the self-contained package checksum contract")
+for workflow_path in workflow_root.glob("*.yml"):
+    workflow_body = workflow_path.read_text(encoding="utf-8", errors="replace")
+    if re.search(r"(?m)^\s*dist/SHA256SUMS\s*$", workflow_body):
+        error(f"{workflow_path.relative_to(ROOT)} uploads build-tree SHA256SUMS with non-artifact-relative paths")
 
 for rel, markers in {
     "deploy/materialize-production-compose.py": ("GENERATED exact-SHA Router VPN production compose", "server/portainer-current.yaml"),
