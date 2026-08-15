@@ -6,6 +6,7 @@ write_blank_routers(){ cat >"$1" <<'JSON'
 JSON
 }
 copy_runtime(){ local dir=$1;mkdir -p "$dir/modes" "$dir/generated";cp "$ROOT/configs/client/client.json.example" "$dir/client.json";cp "$ROOT/configs/client/modes.json" "$dir/modes.json";cp "$ROOT/configs/client/logical-modes.json" "$dir/logical-modes.json";cp -a "$ROOT/modes/." "$dir/modes/";write_blank_routers "$dir/routers.json";cp "$ROOT/docs/MODES.md" "$dir/MODES.md";cp "$ROOT/docs/CLIENT.md" "$dir/CLIENT.md";cp "$ROOT/SECURITY.md" "$dir/SECURITY.md";cp "$ROOT/LICENSE" "$dir/LICENSE";}
+materialize_icons(){ python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$1/RouterVPN.png" --ico "$1/RouterVPN.ico"; }
 package_zip(){ local name=$1 dir=$2;(cd "$(dirname "$dir")"&&zip -qr "$OUT/$name.zip" "$(basename "$dir")");}
 package_tgz(){ local name=$1 dir=$2;tar -C "$(dirname "$dir")" -czf "$OUT/$name.tar.gz" "$(basename "$dir")";}
 write_windows_app_launcher(){ local file=$1;cat >"$file" <<'PS1'
@@ -33,9 +34,11 @@ try{
 }
 PS1
 }
-for arch in amd64 arm64;do dir="$OUT/work/RouterVPN-Windows-$arch";mkdir -p "$dir";copy_runtime "$dir";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$dir/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$dir/router-vpn-dns.exe";cp -a "$ROOT/client" "$dir/client";cp "$ROOT/client/install-windows.ps1" "$dir/install-windows.ps1";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$dir/Setup-Windows-Runtime.ps1";write_windows_app_launcher "$dir/Start-RouterVPN.ps1";cat >"$dir/README-WINDOWS.txt" <<'TXT'
-Run Start-RouterVPN.ps1 for the native Windows Router VPN WPF app. It talks only to the local
-127.0.0.1 controller API; it does not launch Edge/Chrome and does not embed a website/WebView.
+for arch in amd64 arm64;do dir="$OUT/work/RouterVPN-Windows-$arch";mkdir -p "$dir";copy_runtime "$dir";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$dir/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$dir/router-vpn-dns.exe";cp "$DIST/client/RouterVPN-$arch.exe" "$dir/RouterVPN.exe";cp -a "$ROOT/client" "$dir/client";cp "$ROOT/client/install-windows.ps1" "$dir/install-windows.ps1";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$dir/Setup-Windows-Runtime.ps1";materialize_icons "$dir";write_windows_app_launcher "$dir/Start-RouterVPN.ps1";cat >"$dir/README-WINDOWS.txt" <<'TXT'
+Double-click RouterVPN.exe for the normal native Windows Router VPN app. install-windows.ps1 can
+install the package and create a Start Menu entry with the Router VPN icon. Start-RouterVPN.ps1
+remains a recovery launcher for the same WPF product. The app talks only to the local 127.0.0.1
+controller API; it does not launch Edge/Chrome and does not embed a website/WebView.
 Run Setup-Windows-Runtime.ps1 once for native full-device layered TUN modes. It installs pinned,
 hash-verified native Windows sing-box/Xray engines. Raw WireGuard uses the official WireGuard for
 Windows tunnel service. Modes whose Windows engine is not implemented stay unavailable with an
@@ -45,17 +48,17 @@ This generic application package contains no linked home/server node; link nodes
 Router VPN is MIT-licensed open-source software; see LICENSE.
 TXT
 package_zip "RouterVPN-Windows-$arch" "$dir";done
-for arch in amd64 arm64;do root="$OUT/work/RouterVPNPortable-$arch";app="$root/App/RouterVPN";data="$root/Data";mkdir -p "$app" "$data/generated";copy_runtime "$app";cp -a "$ROOT/client" "$app/client";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe";cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe";cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1";cat >"$root/README.txt" <<'TXT'
+for arch in amd64 arm64;do root="$OUT/work/RouterVPNPortable-$arch";app="$root/App/RouterVPN";data="$root/Data";mkdir -p "$app" "$data/generated";copy_runtime "$app";cp -a "$ROOT/client" "$app/client";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe";cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe";cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1";materialize_icons "$app";cat >"$root/README.txt" <<'TXT'
 Double-click RouterVPNPortable.exe. It starts the local controller, opens the native Windows WPF
 app from App/RouterVPN/client/RouterVPN-Windows-App.ps1, then cleanly stops the controller it owns
 when the native window exits. It does not need Edge/Chrome or an embedded browser/WebView.
-App/RouterVPN contains immutable binaries/catalogs/scripts. Data contains writable settings,
-private linked node data, generated profiles and native Windows engines. No Router VPN state is
-written to AppData or the registry by the portable launcher/app; move the whole folder.
-The ZIP is generic and contains no linked node. Add nodes separately by import/pairing. On first
-run the launcher creates a blank writable node store under Data; it is not pre-populated in the
-archive. Run Setup-Windows-Runtime.ps1 once for native layered TUN modes; the pinned sing-box/Xray
-runtime is stored under Data and moves with the Portable folder. Unsupported engines stay grey
+App/RouterVPN contains immutable binaries/catalogs/scripts and the Router VPN window icon. Data
+contains writable settings, private linked node data, generated profiles and native Windows engines.
+No Router VPN state is written to AppData or the registry by the portable launcher/app; move the
+whole folder. The ZIP is generic and contains no linked node. Add nodes separately by import/pairing.
+On first run the launcher creates a blank writable node store under Data; it is not pre-populated in
+the archive. Run Setup-Windows-Runtime.ps1 once for native layered TUN modes; the pinned sing-box/
+Xray runtime is stored under Data and moves with the Portable folder. Unsupported engines stay grey
 with an exact reason rather than being substituted with a compatibility-layer engine.
 Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.
 TXT
