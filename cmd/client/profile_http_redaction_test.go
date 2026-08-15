@@ -8,6 +8,12 @@ import (
 	"router-vpn/internal/common"
 )
 
+const (
+	testWGPrivateKey    = "ERERERERERERERERERERERERERERERERERERERERERE="
+	testWGPresharedKey  = "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI="
+	testWGPeerPublicKey = "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM="
+)
+
 func privateHTTPTestProfile() common.RouterProfile {
 	return common.RouterProfile{
 		SchemaVersion: common.RouterProfileSchemaVersion,
@@ -28,9 +34,9 @@ func privateHTTPTestProfile() common.RouterProfile {
 			Protocol:         "wireguard",
 			ExpectedPublicIP: "203.0.113.9",
 			WireGuard: &common.ExternalWireGuardConfig{
-				PrivateKey:    "WG_PRIVATE_KEY_SECRET",
-				PresharedKey:  "WG_PRESHARED_KEY_SECRET",
-				PeerPublicKey: "PUBLIC_PEER_KEY",
+				PrivateKey:    testWGPrivateKey,
+				PresharedKey:  testWGPresharedKey,
+				PeerPublicKey: testWGPeerPublicKey,
 				Endpoint:      "203.0.113.8:51820",
 				Addresses:     []string{"10.20.0.2/32"},
 				AllowedIPs:    []string{"0.0.0.0/0"},
@@ -45,8 +51,8 @@ func assertNoPrivateProfileSecrets(t *testing.T, body string) {
 		"ROUTER_ADMIN_SECRET_DO_NOT_LEAK",
 		"SOCKS_USER_SECRET",
 		"SOCKS_PASSWORD_SECRET",
-		"WG_PRIVATE_KEY_SECRET",
-		"WG_PRESHARED_KEY_SECRET",
+		testWGPrivateKey,
+		testWGPresharedKey,
 		strings.Repeat("a", 64),
 	} {
 		if strings.Contains(body, secret) {
