@@ -63,6 +63,7 @@ targets:
         INFOPLIST_KEY_NSExtension_NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
         LIBRARY_SEARCH_PATHS: "$(inherited) $(CONFIGURATION_BUILD_DIR)"
+        OTHER_LDFLAGS: "$(inherited) -lresolv -framework UIKit"
         SKIP_INSTALL: YES
     dependencies:
       - package: WireGuardKit
