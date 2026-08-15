@@ -4,9 +4,13 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo 'Run with sudo: sudo ./server/install.sh'; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo 'Docker is required.'; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo 'Docker Compose v2 is required.'; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo 'Python 3 is required to verify the exact-SHA production compose.'; exit 1; }
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-COMPOSE="$ROOT_DIR/server/portainer-current.yaml"
+COMPOSE=${ROUTER_VPN_PRODUCTION_COMPOSE:-}
+[[ -n "$COMPOSE" ]] || { echo 'ROUTER_VPN_PRODUCTION_COMPOSE must point to a generated exact-SHA production compose; the tracked baseline is not a release.' >&2; exit 2; }
+[[ -f "$COMPOSE" ]] || { echo "Production release compose not found: $COMPOSE" >&2; exit 2; }
+RELEASE_SHA=$(python3 "$ROOT_DIR/server/scripts/verify-production-compose.py" "$COMPOSE") || exit $?
 INSTALL=/opt/router-vpn
 ENV_FILE="$INSTALL/.env"
 DEFAULT_WAN=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')
@@ -85,7 +89,7 @@ REALITY_TARGET=$REALITY_TARGET
 ENV
 chmod 600 "$ENV_FILE"
 
-echo 'Starting Router VPN from exact published images...'
+echo "Starting Router VPN release $RELEASE_SHA from exact published images..."
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --remove-orphans
 
 for container in router-vpn-init router-vpn-finalize; do
@@ -110,9 +114,9 @@ if command -v curl >/dev/null 2>&1; then
 fi
 
 echo
-echo 'Router VPN installed.'
+echo "Router VPN $RELEASE_SHA installed."
 echo "Setup Center: http://$ADGUARD4:8786/"
-echo 'Server services use exact published images for reliable Portainer-compatible deployment.'
+echo 'Server services use the verified generated exact-SHA production compose.'
 echo 'Client downloads use GitHub artifacts first and compile only the requested package on this host if that artifact is unavailable.'
 echo 'Use the Setup Center ASUS helper for persistent forwarding; do not expose 8786 to WAN.'
 echo 'Public listeners include OverTLS 14443/TCP and legacy SSR 15443/TCP+UDP when enabled.'

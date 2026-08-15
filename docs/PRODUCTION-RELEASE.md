@@ -21,6 +21,7 @@ Use a generated production compose only when all of these are true for the **sam
 4. `Exact-SHA production compose` succeeded for that SHA.
 5. The generated compose artifact checksum passes.
 6. The generated file's Router VPN image tags and `ROUTER_VPN_GITHUB_SHA` all equal that SHA.
+7. `server/scripts/verify-production-compose.py` accepts the generated YAML.
 
 Do not deploy the tracked baseline file merely because it is named `portainer-current.yaml`, and do not deploy an older generated RC after `main` has moved.
 
@@ -35,5 +36,16 @@ ADGUARD4=192.168.50.133
 ```
 
 `ENDPOINT` remains optional and should normally be unset so endpoint detection can operate. Do not add a moving image tag or `build:` fallback. Do not WAN-forward private/admin ports (`1080`, `8786`, `8787`, `9443`, `14444`, SSH, Portainer, or AdGuard admin).
+
+## Terminal manager
+
+The terminal install/upgrade path uses the same generated release contract and rejects the tracked baseline. Example:
+
+```bash
+export ROUTER_VPN_PRODUCTION_COMPOSE=/absolute/path/RouterVPN-Portainer-<release-sha>.yaml
+sudo -E bash server/manage.sh
+```
+
+`server/install.sh` and `server/upgrade.sh` call `server/scripts/verify-production-compose.py` before Docker. The verifier requires the generated exact-SHA header, exact Router VPN custom-image counts/pins, matching broker provenance, no moving Router VPN tag, and no production `build:`/remote Git context.
 
 After the update, prove the one-shot init/finalizer exit cleanly, all expected long-running services stay running, Setup Center `/healthz` returns 200, the running image IDs/tags match the selected SHA, and the selected VPN path itself passes the separate live release matrix before calling the whole release complete.

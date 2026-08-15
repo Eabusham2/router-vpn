@@ -3,13 +3,17 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo 'Run with sudo: sudo ./server/upgrade.sh'; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo 'Docker is required.'; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo 'Docker Compose v2 is required.'; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo 'Python 3 is required to verify the exact-SHA production compose.'; exit 1; }
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-COMPOSE="$ROOT_DIR/server/portainer-current.yaml"
+COMPOSE=${ROUTER_VPN_PRODUCTION_COMPOSE:-}
+[[ -n "$COMPOSE" ]] || { echo 'ROUTER_VPN_PRODUCTION_COMPOSE must point to a generated exact-SHA production compose; the tracked baseline is not a release.' >&2; exit 2; }
+[[ -f "$COMPOSE" ]] || { echo "Production release compose not found: $COMPOSE" >&2; exit 2; }
+RELEASE_SHA=$(python3 "$ROOT_DIR/server/scripts/verify-production-compose.py" "$COMPOSE") || exit $?
 ENV_FILE=/opt/router-vpn/.env
 [[ -s "$ENV_FILE" ]] || { echo 'No existing Router VPN install found at /opt/router-vpn/.env'; exit 1; }
 
-echo 'Refreshing Router VPN from exact published images...'
+echo "Refreshing Router VPN release $RELEASE_SHA from exact published images..."
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --force-recreate init finalize-current
 for container in router-vpn-init router-vpn-finalize; do
   docker wait "$container" >/dev/null 2>&1 || true
@@ -37,7 +41,7 @@ fi
 
 bash "$ROOT_DIR/server/scripts/cleanup-router-vpn-docker.sh"
 echo
-echo 'Upgrade complete.'
-echo 'Server services remain exact-image-only for reliable Portainer-compatible deployment.'
+echo "Upgrade to Router VPN $RELEASE_SHA complete."
+echo 'Server services remain exact-image-only and were launched from the verified generated release compose.'
 echo 'Current-version profile credentials were preserved by the finalizer migration path.'
 echo 'Large client packages remain on-demand/ephemeral: GitHub artifact first, requested-package local build second.'
