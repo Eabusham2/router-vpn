@@ -24,9 +24,6 @@ def require(path: str, *markers: str) -> str:
     return body
 
 
-# Shared controller contract: DNS is a narrow profile mutation, not a redacted
-# full-profile overwrite, and logical-mode metrics come from the canonical
-# controller response with live availability/reason.
 dns_api = require(
     "cmd/client/dns_policy_api.go",
     "/api/dns/policy",
@@ -51,8 +48,6 @@ require(
     "speed_loss_min_pct", "speed_loss_max_pct", "ready_bases", "reason",
 )
 
-# Windows: native WPF, explicit UTF-8 for Windows PowerShell 5.1, complete mode
-# chart, real DNS controls, real-coordinate map and resizable/scrollable product.
 require(
     "client/RouterVPN-Windows-App.ps1",
     "Get-Content -LiteralPath $Product -Raw -Encoding UTF8",
@@ -69,7 +64,6 @@ require(
     'MinHeight="680"', 'MinWidth="980"', "HorizontalScrollBarVisibility=\"Auto\"",
 )
 
-# macOS: native AppKit/MapKit existing dataplane plus complete mode and DNS views.
 require(
     "client/macos/RouterVPNMacProduct.swift",
     "import MapKit", "MKMapView", "latitude", "longitude",
@@ -80,8 +74,6 @@ require(
     ".resizable", "window.minSize",
 )
 
-# Linux: native GTK product keeps the existing dataplane and now exposes the
-# complete mode/DNS contract. Scrollable tabs and scrollers protect narrow UI.
 require(
     "client/linux/routervpn-gtk-product-v5.c",
     "build_modes_page_v5", "Added latency", "traffic", "speed loss", "Readiness:", "Reason:",
@@ -89,11 +81,8 @@ require(
     "DNS-over-HTTPS", "DNS-over-HTTP/3", "DNS Rescue", "/api/dns/policy", "/api/dns/retest",
     "Cloudflare IPv6", "Google IPv6", "Quad9 IPv6", "gtk_notebook_set_scrollable",
 )
-require("client/linux/routervpn-gtk-product-v4-embedded.c", "No real node coordinates", "latitude", "longitude")
+require("client/linux/routervpn-gtk-product-v4.c", "No real node coordinates", "latitude", "longitude")
 
-# Android: one real VpnService product; mode readiness comes from the existing
-# WG/AWG/libbox/Xray engine controllers. DNS benchmark is bounded private HTTP
-# and understands all standard Go HTTP response framing.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProductParity.java",
     "listDirectLibboxModes", "listDirectXrayModes", "AndroidKillSwitchPolicy.strictRequested",
@@ -109,8 +98,6 @@ require(
 )
 require("android/app/src/main/AndroidManifest.xml", "android.permission.BIND_VPN_SERVICE", 'android:usesCleartextTraffic="false"')
 
-# iOS/iPadOS: adaptive SwiftUI sheets, real platform selector/readiness, real
-# WireGuardKit/Libbox PacketTunnel, and truthful unsupported graphs.
 require(
     "ios/RouterVPN/App/ProductParitySheets.swift",
     "RouterVPNModeMetricsSheet", "RouterVPNDNSSettingsSheet",
@@ -129,11 +116,6 @@ require(
 )
 require("ios/RouterVPN/project.yml", "NSAllowsLocalNetworking", 'TARGETED_DEVICE_FAMILY: "1,2"')
 
-# Setup Center: server/source readiness is deliberately not confused with
-# installed-platform runtime readiness. Complex Router VPN stacks stay out of
-# the simple Methods lane; stale pre-implementation multihop/kill-switch claims
-# must not return. Responsive/mobile behavior remains source-enforced while
-# rendered DPI/orientation proof stays a physical release gate.
 setup = require(
     "server/scripts/generate-setup-assets.py",
     "Server/source readiness", "Reason / next gate", "20 raw runtimes", "16 logical modes",
