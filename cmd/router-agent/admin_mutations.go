@@ -301,9 +301,9 @@ func (a *adminMutationServer) settings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeAdminJSON(w, http.StatusOK, map[string]any{
-		"ok": true,
-		"settings": map[string]any{"forwarding_master": a.state.ForwardingMaster, "lan_access": a.state.LANAccess, "updated_at": a.state.UpdatedAt},
-		"banned_peers": a.state.BannedPeers,
+		"ok":            true,
+		"settings":      map[string]any{"forwarding_master": a.state.ForwardingMaster, "lan_access": a.state.LANAccess, "updated_at": a.state.UpdatedAt},
+		"banned_peers":  a.state.BannedPeers,
 		"revoked_peers": a.state.RevokedPeers,
 		"capabilities": map[string]any{
 			"ban_unban": true, "peer_revoke": true, "forwarding_master": true,
@@ -527,7 +527,9 @@ func (a *adminMutationServer) unban(w http.ResponseWriter, r *http.Request) {
 	if !a.require(w, r, http.MethodPost) {
 		return
 	}
-	var q struct{ PublicKey string `json:"public_key"` }
+	var q struct {
+		PublicKey string `json:"public_key"`
+	}
 	if err := decodeAdminJSON(w, r, &q); err != nil {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
@@ -648,22 +650,29 @@ func (a *adminMutationServer) applyPolicyLocked() error {
 		}
 	}
 	if !a.state.LANAccess {
-		for _, raw := range a.cfg.TunnelCIDRs {
-			_, src, err := net.ParseCIDR(raw)
-			if err != nil {
-				continue
-			}
-			family, dst := "ip", a.lanCIDR4
-			if src.IP.To4() == nil {
-				family, dst = "ip6", a.lanCIDR6
-			}
-			if _, _, err := net.ParseCIDR(dst); err != nil {
-				continue
-			}
-			fmt.Fprintf(&b, "add rule inet %s forward %s saddr %s %s daddr %s drop comment %q\n", table, family, src.String(), family, dst, "router-vpn LAN access off")
-		}
+		b.WriteString(renderLANAccessOffRules(table, a.cfg.TunnelCIDRs, a.lanCIDR4, a.lanCIDR6))
 	}
 	return nftScript(b.String())
+}
+
+func renderLANAccessOffRules(table string, tunnelCIDRs []string, lanCIDR4, lanCIDR6 string) string {
+	var b strings.Builder
+	for _, raw := range tunnelCIDRs {
+		_, src, err := net.ParseCIDR(raw)
+		if err != nil {
+			continue
+		}
+		family, dst := "ip", lanCIDR4
+		if src.IP.To4() == nil {
+			family, dst = "ip6", lanCIDR6
+		}
+		if _, _, err := net.ParseCIDR(dst); err != nil {
+			continue
+		}
+		fmt.Fprintf(&b, "add rule inet %s input %s saddr %s %s daddr %s drop comment %q\n", table, family, src.String(), family, dst, "router-vpn LAN access off")
+		fmt.Fprintf(&b, "add rule inet %s forward %s saddr %s %s daddr %s drop comment %q\n", table, family, src.String(), family, dst, "router-vpn LAN access off")
+	}
+	return b.String()
 }
 
 func (a *adminMutationServer) applyForwardRules() error {
