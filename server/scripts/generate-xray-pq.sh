@@ -8,33 +8,49 @@ TARGET=${5:-www.microsoft.com:443}
 REALITY_PORT=${6:-443}
 xr(){ if command -v xray >/dev/null 2>&1; then xray "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/xtls/xray-core:26.7.11 "$@"; fi; }
 sb(){ if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/sagernet/sing-box:v1.13.12 "$@"; fi; }
+umask 077
 mkdir -p "$BASE/config/xray" \
   "$BASE/client-bundle/generated/reality-vision" \
   "$BASE/client-bundle/generated/reality-pq-vision"
 
-STD_UUID=$(xr uuid | awk 'NF{print $1; exit}')
-PQ_UUID=$(xr uuid | awk 'NF{print $1; exit}')
-PAIR=$(xr x25519)
-REALITY_PRIVATE=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /privatekey/ {print $2; exit}')
-REALITY_PASSWORD=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /password|publickey/ {print $2; exit}')
-MLDSA=$(xr mldsa65 2>/dev/null || true)
-MLDSA_SEED=$(printf '%s\n' "$MLDSA" | awk -F': *' 'tolower($1) ~ /^seed/ {print $2; exit}')
-MLDSA_VERIFY=$(printf '%s\n' "$MLDSA" | awk -F': *' 'tolower($1) ~ /verify/ {print $2; exit}')
-VLESS=$(xr vlessenc)
-SERVER_DEC=$(printf '%s\n' "$VLESS" | awk '/Authentication: ML-KEM-768/{f=1;next} f && /"decryption"/{sub(/^[^:]*:[[:space:]]*"/,""); sub(/"[,]?$/,""); print; exit}')
-CLIENT_ENC=$(printf '%s\n' "$VLESS" | awk '/Authentication: ML-KEM-768/{f=1;next} f && /"encryption"/{sub(/^[^:]*:[[:space:]]*"/,""); sub(/"[,]?$/,""); print; exit}')
-STD_SHORT_ID=$(openssl rand -hex 8)
-PQ_SHORT_ID=$(openssl rand -hex 8)
+PRESERVED=$(python3 /src/server/scripts/preserve-generated-state.py xray "$BASE" 2>/dev/null || true)
+if [[ -n "$PRESERVED" ]]; then
+  eval "$PRESERVED"
+  MLDSA_SEED=''
+  echo 'Preserving existing standard/PQ REALITY identity for same-deployment upgrade.' >&2
+else
+  STD_UUID=$(xr uuid | awk 'NF{print $1; exit}')
+  PQ_UUID=$(xr uuid | awk 'NF{print $1; exit}')
+  PAIR=$(xr x25519)
+  REALITY_PRIVATE=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /privatekey/ {print $2; exit}')
+  REALITY_PASSWORD=$(printf '%s\n' "$PAIR" | awk -F': *' 'tolower($1) ~ /password|publickey/ {print $2; exit}')
+  MLDSA=$(xr mldsa65 2>/dev/null || true)
+  MLDSA_SEED=$(printf '%s\n' "$MLDSA" | awk -F': *' 'tolower($1) ~ /^seed/ {print $2; exit}')
+  MLDSA_VERIFY=$(printf '%s\n' "$MLDSA" | awk -F': *' 'tolower($1) ~ /verify/ {print $2; exit}')
+  VLESS=$(xr vlessenc)
+  SERVER_DEC=$(printf '%s\n' "$VLESS" | awk '/Authentication: ML-KEM-768/{f=1;next} f && /"decryption"/{sub(/^[^:]*:[[:space:]]*"/,""); sub(/"[,]?$/,""); print; exit}')
+  CLIENT_ENC=$(printf '%s\n' "$VLESS" | awk '/Authentication: ML-KEM-768/{f=1;next} f && /"encryption"/{sub(/^[^:]*:[[:space:]]*"/,""); sub(/"[,]?$/,""); print; exit}')
+  STD_SHORT_ID=$(openssl rand -hex 8)
+  PQ_SHORT_ID=$(openssl rand -hex 8)
+fi
+
 TARGET_HOST=${TARGET%:*}; TARGET_PORT=${TARGET##*:}
 [[ $TARGET_PORT =~ ^[0-9]+$ ]] || { TARGET_HOST=$TARGET; TARGET_PORT=443; }
 for v in STD_UUID PQ_UUID REALITY_PRIVATE REALITY_PASSWORD SERVER_DEC CLIENT_ENC STD_SHORT_ID PQ_SHORT_ID; do
-  [[ -n ${!v} ]] || { echo "Failed generating $v" >&2; exit 1; }
+  [[ -n ${!v} ]] || { echo "Failed generating/preserving $v" >&2; exit 1; }
 done
 
 python3 - "$BASE" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$PQ_PORT" "$TARGET_HOST" "$TARGET_PORT" "$STD_UUID" "$PQ_UUID" "$REALITY_PRIVATE" "$REALITY_PASSWORD" "$STD_SHORT_ID" "$PQ_SHORT_ID" "$SERVER_DEC" "$CLIENT_ENC" "$MLDSA_SEED" "$MLDSA_VERIFY" <<'PY'
 import json,sys,os
 (base,endpoint,dns,std_port,pq_port,target,tport,std_uuid,pq_uuid,rpriv,rpass,std_short,pq_short,sdec,cenc,mseed,mverify)=sys.argv[1:]
 std_port,pq_port,tport=map(int,(std_port,pq_port,tport))
+server_path=f"{base}/config/xray/server.json"
+kept=[]
+try:
+    old=json.load(open(server_path))
+    kept=[x for x in old.get('inbounds',[]) if isinstance(x,dict) and x.get('tag')=='max-xhttp-in']
+except Exception:
+    kept=[]
 
 def reality(short_id):
     return {"show":False,"target":f"{target}:{tport}","xver":0,"serverNames":[target],"privateKey":rpriv,"minClientVer":"26.3.27","maxTimeDiff":120000,"shortIds":[short_id]}
@@ -52,7 +68,7 @@ server={
  "inbounds":[
    inbound("reality-in",std_port,std_uuid,"none",std_short,"router-vpn-reality"),
    inbound("pq-reality-in",pq_port,pq_uuid,sdec,pq_short,"router-vpn-pq")
- ],
+ ] + kept,
  "outbounds":[{"protocol":"freedom","tag":"direct"}]
 }
 
@@ -74,7 +90,7 @@ def wrapper(name,mtu,socks_port,v4,v6):
     }
 
 os.makedirs(f"{base}/config/xray",exist_ok=True)
-json.dump(server,open(f"{base}/config/xray/server.json","w"),indent=2); open(f"{base}/config/xray/server.json","a").write("\n")
+json.dump(server,open(server_path,"w"),indent=2); open(server_path,"a").write("\n")
 
 std_dir=f"{base}/client-bundle/generated/reality-vision"
 pq_dir=f"{base}/client-bundle/generated/reality-pq-vision"
