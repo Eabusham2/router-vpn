@@ -38,7 +38,10 @@ done
 for target in windows/amd64 windows/arm64; do
   GOOS=${target%/*}
   GOARCH=${target#*/}
-  echo "building portable launchers $GOOS/$GOARCH"
+  echo "building normal and portable Windows launchers $GOOS/$GOARCH"
+  env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
+    go build -trimpath -ldflags='-s -w -H=windowsgui' \
+    -o "dist/client/RouterVPN-${GOARCH}.exe" ./cmd/windows-app-launcher
   env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
     go build -trimpath -ldflags='-s -w -H=windowsgui' \
     -o "dist/client/RouterVPNPortable-${GOARCH}.exe" ./cmd/portable-launcher
