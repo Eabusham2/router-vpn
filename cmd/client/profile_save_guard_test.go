@@ -17,12 +17,32 @@ func TestGenericProfileSaveRejectsExternalCreation(t *testing.T) {
 		profiles: common.RouterProfileStore{SchemaVersion: common.RouterProfileStoreVersion},
 		state:    state{Mode: "off", Phase: "off"},
 	}
-	// Exercise the generic endpoint guard directly. The payload deliberately
-	// does not need to be a fully valid external profile because this endpoint
-	// must reject the external profile class before any private-profile import
-	// or persistence path is reached.
-	body := []byte(`{"schema_version":3,"id":"external-create-test","name":"External WG","node_kind":"external","endpoint":"203.0.113.8","external":{"protocol":"wireguard"}}`)
-	body = bytes.ReplaceAll(body, []byte{'\\', '"'}, []byte{'"'})
+	// Use a fully valid private external profile so RouterProfile's strict
+	// UnmarshalJSON reaches the endpoint-class guard instead of rejecting the
+	// fixture during schema normalization.
+	incoming := common.RouterProfile{
+		SchemaVersion: common.RouterProfileSchemaVersion,
+		ID:            "external-create-test",
+		Name:          "External WG",
+		NodeKind:      "external",
+		Endpoint:      "203.0.113.8",
+		External: &common.ExternalNodeConfig{
+			Protocol:         "wireguard",
+			ExpectedPublicIP: "203.0.113.9",
+			WireGuard: &common.ExternalWireGuardConfig{
+				PrivateKey:    testWGPrivateKey,
+				PresharedKey:  testWGPresharedKey,
+				PeerPublicKey: testWGPeerPublicKey,
+				Endpoint:      "203.0.113.8:51820",
+				Addresses:     []string{"10.20.0.2/32"},
+				AllowedIPs:    []string{"0.0.0.0/0", "::/0"},
+			},
+		},
+	}
+	body, err := json.Marshal(incoming)
+	if err != nil {
+		t.Fatalf("marshal valid external profile: %v", err)
+	}
 	rr := httptest.NewRecorder()
 	a.saveProfile(rr, httptest.NewRequest("POST", "/api/profile/save", bytes.NewReader(body)))
 	if rr.Code != 400 {
