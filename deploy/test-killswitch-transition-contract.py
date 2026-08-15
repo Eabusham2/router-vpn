@@ -46,7 +46,15 @@ for required in (
 
 assert "a.startModeAttempt(candidate.RuntimeID, true)" in logical
 assert "a.releaseTransitionKillSwitch()" in logical
-assert "a.startMode(candidate.RuntimeID)" not in logical, "logical fallback still uses terminal/manual start path"
+# Only the actual WG/AWG/native logical fallback loop must use the held-attempt
+# API. Other terminal wrappers (for example ALL, which implements its own held
+# internal branch transitions) may legitimately call startMode().
+try:
+    candidate_loop = logical.split("for _, candidate := range candidates {", 1)[1].split("if err := a.releaseTransitionKillSwitch()", 1)[0]
+except IndexError as exc:
+    raise AssertionError("logical candidate fallback loop could not be located") from exc
+assert "a.startModeAttempt(candidate.RuntimeID, true)" in candidate_loop
+assert "a.startMode(candidate.RuntimeID)" not in candidate_loop, "ordinary logical fallback still uses terminal/manual start path"
 
 for required in (
     'runtime.GOOS != "linux" && runtime.GOOS != "darwin"',
