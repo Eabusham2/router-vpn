@@ -72,10 +72,10 @@ func TestGenericProfileSaveCannotOverwriteStoredExternalSecrets(t *testing.T) {
 	if stored.NodeKind != "external" || stored.External == nil || stored.External.WireGuard == nil {
 		t.Fatalf("stored external profile shape was damaged: %#v", stored)
 	}
-	if got := stored.External.WireGuard.PrivateKey; got != "WG_PRIVATE_KEY_SECRET" {
+	if got := stored.External.WireGuard.PrivateKey; got != testWGPrivateKey {
 		t.Fatalf("stored WireGuard private key changed after rejected generic save: %q", got)
 	}
-	if got := stored.External.WireGuard.PresharedKey; got != "WG_PRESHARED_KEY_SECRET" {
+	if got := stored.External.WireGuard.PresharedKey; got != testWGPresharedKey {
 		t.Fatalf("stored WireGuard preshared key changed after rejected generic save: %q", got)
 	}
 	if got := stored.APIToken; got != "ROUTER_ADMIN_SECRET_DO_NOT_LEAK" {
