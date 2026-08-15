@@ -170,10 +170,10 @@ jobs:
           if (-not (Test-Path $exe)) { throw "Missing launcher in $archive" }
           $proc = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
           if ($proc.ExitCode -ne 0) { throw "Portable $arch self-test failed with $($proc.ExitCode)" }
-          foreach ($relative in @('Data\client.json','Data\routers.json','Data\modes.windows.json','Data\logical-modes.json','Data\windows-runtime.json')) {
+          foreach ($relative in @('Data\\client.json','Data\\routers.json','Data\\modes.windows.json','Data\\logical-modes.json','Data\\windows-runtime.json')) {
             if (-not (Test-Path (Join-Path $root.FullName $relative))) { throw "Self-test did not create $relative" }
           }
-          $logical = Get-Content (Join-Path $root.FullName 'Data\logical-modes.json') -Raw | ConvertFrom-Json
+          $logical = Get-Content (Join-Path $root.FullName 'Data\\logical-modes.json') -Raw | ConvertFrom-Json
           if ($logical.Count -ne 16) { throw "Expected 16 portable logical modes; got $($logical.Count)" }
           Start-Sleep -Milliseconds 400
           try {
@@ -243,7 +243,11 @@ jobs:
         run: xcodegen generate
       - name: Build unsigned native WireGuard + Libbox app and PacketTunnel
         working-directory: ios/RouterVPN
+        shell: bash
         run: |
+          set -o pipefail
+          LOG="$RUNNER_TEMP/routervpn-xcodebuild.log"
+          set +e
           xcodebuild \
             -project RouterVPN.xcodeproj \
             -scheme RouterVPN \
@@ -254,7 +258,17 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM='' \
-            build
+            build 2>&1 | tee "$LOG"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- Xcode compiler diagnostics ---'
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:' "$LOG" | tail -n 120 || true
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:' "$LOG" | tail -n 120 | while IFS= read -r line; do
+              printf '::error::%s\n' "${line//'%'/'%25'}"
+            done || true
+            exit "$status"
+          fi
       - name: Verify pinned engines and strict runtime contract
         working-directory: ios/RouterVPN
         run: |
