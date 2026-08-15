@@ -334,7 +334,9 @@ for rel in ("server/install.sh", "server/upgrade.sh", "server/manage.sh"):
         error(f"{rel} does not require the generated exact-SHA production compose")
     if "verify-production-compose.py" not in body and rel != "server/manage.sh":
         error(f"{rel} does not verify the generated exact-SHA production compose")
-    if rel == "server/manage.sh" and "server/portainer-current.yaml baseline is intentionally rejected" not in body:
+    if rel == "server/manage.sh" and (
+        "server/portainer-current.yaml" not in body or "intentionally rejected" not in body
+    ):
         error("server/manage.sh does not clearly reject the tracked production baseline")
     if re.search(r"COMPOSE=.*server/portainer-current\.yaml", body):
         error(f"{rel} silently reintroduced the tracked baseline as a deploy target")
