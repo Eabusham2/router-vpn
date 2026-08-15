@@ -80,6 +80,23 @@ func TestProfilesHTTPUsesSecretFreeProjection(t *testing.T) {
 	assertNoPrivateProfileSecrets(t, rr.Body.String())
 }
 
+func TestNodesHTTPUsesSecretFreeProjectionForEverySort(t *testing.T) {
+	p := privateHTTPTestProfile()
+	p.LatencySamples = 50
+	p.LatencyMedianMs = 11.5
+	p.LatencyP90Ms = 16.0
+	p.LastUsedAt = "2026-08-15T06:00:00Z"
+	a := &app{profiles: common.RouterProfileStore{SchemaVersion: common.RouterProfileStoreVersion, SelectedID: p.ID, Profiles: []common.RouterProfile{p}}}
+	for _, order := range []string{"current", "last-used", "latency", "name"} {
+		rr := httptest.NewRecorder()
+		a.listPublicNodes(rr, httptest.NewRequest("GET", "/api/nodes?sort="+order, nil))
+		if rr.Code != 200 {
+			t.Fatalf("/api/nodes sort=%s status = %d: %s", order, rr.Code, rr.Body.String())
+		}
+		assertNoPrivateProfileSecrets(t, rr.Body.String())
+	}
+}
+
 func TestInfoHTTPUsesSecretFreeProjection(t *testing.T) {
 	p := privateHTTPTestProfile()
 	a := &app{
