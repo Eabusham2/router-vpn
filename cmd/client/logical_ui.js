@@ -20,6 +20,11 @@
       'Entry and exit nodes must be different',
       'exit public endpoint is not opened as a direct firewall exception'
     ]),
+    retiredBrowserBaseMarkup: Object.freeze([
+      'value="auto">Base: Auto',
+      'value="wg">Base: WireGuard',
+      'value="awg">Base: AmneziaWG'
+    ]),
     forbiddenLoopbackMutations: Object.freeze([
       '/api/multihop/connect'
     ])
