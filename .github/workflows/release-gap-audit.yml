@@ -36,5 +36,7 @@ jobs:
         run: python3 deploy/release-gap-audit.py
       - name: Guard shipping native app onboarding lifecycle
         run: python3 client/test_native_onboarding_contract.py
+      - name: Guard safe cross-platform profile settings
+        run: python3 deploy/profile-settings-audit.py
       - name: Guard cross-platform mode DNS and responsive product parity
         run: python3 deploy/product-parity-audit.py
