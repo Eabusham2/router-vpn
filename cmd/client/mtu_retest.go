@@ -22,6 +22,7 @@ const mtuRetestTimeout = 2 * time.Minute
 func registerMTURetestRoute(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/mtu/retest", a.retestMTU)
 	registerDNSPolicyRoute(h, a)
+	registerHomeSummaryRoute(h, a)
 }
 
 func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
