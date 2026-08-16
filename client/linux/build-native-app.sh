@@ -6,10 +6,11 @@ OUT=${1:?usage: build-native-app.sh OUT_BINARY}
 SRC="$ROOT/client/linux/routervpn-gtk-product-v5.c"
 ONBOARDING_INC="$ROOT/client/linux/routervpn-product-onboarding-v6.inc"
 HOME_INC="$ROOT/client/linux/routervpn-home-summary-v1.inc"
+SETTINGS_INC="$ROOT/client/linux/routervpn-profile-settings-v1.inc"
 V4="$ROOT/client/linux/routervpn-gtk-product-v4.c"
 V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$V4" "$V3" "$CORE")
+SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$V4" "$V3" "$CORE")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v5.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
 BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v5-shipping.c"
@@ -17,6 +18,9 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
+done
+for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC"; do
+  [[ -s "$source" ]] || { echo "Missing Linux shipping include: $source" >&2; exit 2; }
 done
 mkdir -p "$(dirname "$OUT")"
 
@@ -39,9 +43,9 @@ PY
 grep -Fq 'static void __attribute__((used)) build_ui_v4(App *app) {' "$EMBEDDED_V4"
 
 # Shipping v5 keeps the tracked product source authoritative and uses guarded
-# compile-time seams only for complete resumable onboarding plus the truthful
-# Home surface. The old inherited public-IP button is rewired to current-session
-# /api/home-summary/prove-exit rather than the cached-profile legacy endpoint.
+# compile-time seams for complete resumable onboarding, truthful Home state and
+# safe narrow profile settings. The inherited public-IP button is rewired to
+# current-session /api/home-summary/prove-exit rather than cached profile data.
 python3 - "$SRC" "$BUILD_SRC" <<'PY'
 from pathlib import Path
 import sys
@@ -49,7 +53,7 @@ src_path, out_path = map(Path, sys.argv[1:3])
 text = src_path.read_text(encoding='utf-8')
 
 include_old = '#include "routervpn-gtk-product-v4-embedded.c"\n'
-include_new = '#include "routervpn-gtk-product-v4-embedded.c"\n#include "routervpn-home-summary-v1.inc"\n'
+include_new = '#include "routervpn-gtk-product-v4-embedded.c"\n#include "routervpn-home-summary-v1.inc"\n#include "routervpn-profile-settings-v1.inc"\n'
 if text.count(include_old) != 1:
     raise SystemExit('Linux v5 include seam drifted')
 text = text.replace(include_old, include_new, 1)
@@ -126,11 +130,30 @@ if text.count(signal_old) != 1:
     raise SystemExit('Linux onboarding signal contract drifted')
 text = text.replace(signal_old, signal_new, 1)
 
-sensitivity_old = '    apply_action_sensitivity_v5(app, connected);'
-sensitivity_new = '    apply_action_sensitivity_v5(app, connected);\n    refresh_home_summary_v6(app);'
+sensitivity_old = '    set_remembered_sensitive_v5(app, "router-vpn-advanced-mtu-v5", connected);'
+sensitivity_new = '    set_remembered_sensitive_v5(app, "router-vpn-advanced-settings-v7", has_node && !connected);\n    set_remembered_sensitive_v5(app, "router-vpn-advanced-mtu-v5", connected);'
 if text.count(sensitivity_old) != 1:
-    raise SystemExit('Linux Home refresh seam drifted')
+    raise SystemExit('Linux profile settings sensitivity seam drifted')
 text = text.replace(sensitivity_old, sensitivity_new, 1)
+
+home_refresh_old = '    apply_action_sensitivity_v5(app, connected);'
+home_refresh_new = '    apply_action_sensitivity_v5(app, connected);\n    refresh_home_summary_v6(app);'
+if text.count(home_refresh_old) != 1:
+    raise SystemExit('Linux Home refresh seam drifted')
+text = text.replace(home_refresh_old, home_refresh_new, 1)
+
+advanced_old = '''    GtkWidget *advanced = build_advanced_page_v5(app);
+    add_tab(tabs, advanced, "Advanced");
+    remember_button_v5(app, advanced, "router-vpn-advanced-mtu-v5", "Retest MTU");'''
+advanced_new = '''    GtkWidget *advanced = build_advanced_page_v5(app);
+    GtkWidget *settings_v7 = make_button("Edit profile settings", G_CALLBACK(on_profile_settings_v7), app);
+    gtk_box_pack_start(GTK_BOX(advanced), settings_v7, FALSE, FALSE, 0);
+    add_tab(tabs, advanced, "Advanced");
+    remember_button_v5(app, advanced, "router-vpn-advanced-settings-v7", "Edit profile settings");
+    remember_button_v5(app, advanced, "router-vpn-advanced-mtu-v5", "Retest MTU");'''
+if text.count(advanced_old) != 1:
+    raise SystemExit('Linux Advanced profile settings seam drifted')
+text = text.replace(advanced_old, advanced_new, 1)
 
 home_old = '    GtkWidget *home = build_home_page(app);\n    add_tab(tabs, home, "Home / Connect");'
 home_new = '''    GtkWidget *home = build_home_page(app);
@@ -154,9 +177,10 @@ text = text.replace(initial_old, initial_new, 1)
 
 for marker in (
     '#include "routervpn-product-onboarding-v6.inc"', '#include "routervpn-home-summary-v1.inc"',
-    'onboarding_read_step_v6(path)', 'gtk_assistant_set_current_page',
-    'refresh_home_summary_v6(app)', 'gtk_button_set_label(GTK_BUTTON(home_exit_v6), "Prove actual exit")',
-    'G_CALLBACK(on_home_exit_v6)',
+    '#include "routervpn-profile-settings-v1.inc"', 'onboarding_read_step_v6(path)',
+    'gtk_assistant_set_current_page', 'refresh_home_summary_v6(app)',
+    'gtk_button_set_label(GTK_BUTTON(home_exit_v6), "Prove actual exit")', 'G_CALLBACK(on_home_exit_v6)',
+    'Edit profile settings', 'G_CALLBACK(on_profile_settings_v7)', 'router-vpn-advanced-settings-v7',
 ):
     if marker not in text: raise SystemExit(f'missing Linux shipping marker: {marker}')
 out_path.write_text(text, encoding='utf-8')
@@ -183,10 +207,11 @@ for marker in 'gtk_window_new' 'gtk_notebook_new' 'http://127.0.0.1:8788' '/api/
 
 for marker in 'pairing' 'router-vpn-bundle.json' 'AUTO' 'WireGuard' 'AmneziaWG' 'DNS' 'LAN Off' 'MTU/Jumbo' 'kill-switch' 'Multihop' 'forwarding' 'permissions' 'Disconnect' 'private identity/path proof' 'Public exit' 'Diagnostics' 'Emergency stop' 'Setup Center Full Guide' 'Run Tutorial'; do grep -Fq "$marker" "$ONBOARDING_INC"; done
 for marker in '/api/home-summary' '/api/home-summary/prove-exit' 'Actual public VPN exit' 'Node measured latency' 'LAN access' 'Kill switch' 'Effective MTU' 'Warnings'; do grep -Fq "$marker" "$HOME_INC"; done
-for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)'; do grep -Fq "$marker" "$BUILD_SRC"; done
+for marker in '/api/profile/settings' 'Allow home LAN access' 'Always / strict' 'AmneziaWG' 'Auto measured' 'DAITA-like' 'Jumbo TUN' 'SOCKS5' 'startup' 'autoconnect'; do grep -Fiq "$marker" "$SETTINGS_INC"; done
+for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' '#include "routervpn-profile-settings-v1.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)' 'Edit profile settings' 'G_CALLBACK(on_profile_settings_v7)' 'router-vpn-advanced-settings-v7'; do grep -Fq "$marker" "$BUILD_SRC"; done
 
 grep -Fq 'Diagnostics' "$SRC"; grep -Fq '/api/session/events?after=0' "$SRC"; grep -Fq 'apply_action_sensitivity_v5' "$SRC"; grep -Fq 'gtk_widget_set_sensitive' "$SRC"; grep -Fq 'truthful-empty-state-actions' "$SRC"; grep -Fq 'gtk_window_set_default_size(GTK_WINDOW(app->window), 960, 680);' "$SRC"
 grep -Fq '/api/mtu/retest' "$SRC"; grep -Fq 'Retest MTU' "$SRC"; grep -Fq '130000' "$SRC"; grep -Fq 'router-vpn-advanced-mtu-v5' "$SRC"
 "$OUT" --self-test
 
-echo "Built native Linux GTK Router VPN product with truthful Home state and resumable complete onboarding at $OUT"
+echo "Built native Linux GTK Router VPN product with truthful Home state, editable profile settings and resumable complete onboarding at $OUT"
