@@ -29,7 +29,7 @@ ios_product = read("ios/RouterVPN/App/ProductRootView.swift")
 
 shared_topics = (
     "pairing", "router-vpn-bundle.json", "AUTO", "WireGuard", "DNS",
-    "LAN Off", "MTU/Jumbo", "kill-switch", "Multihop", "forwarding",
+    "LAN Off", "MTU", "Jumbo", "kill-switch", "Multihop", "forwarding",
     "permissions", "Disconnect", "private identity/path proof", "Public",
     "Diagnostics", "Setup Center Full Guide",
 )
