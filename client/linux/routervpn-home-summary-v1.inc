@@ -24,7 +24,7 @@ static void refresh_home_summary_v6(App *app) {
     const char *exit_status = obj_string(s, "actual_exit_status");
     const char *actual_exit = obj_string(s, "actual_exit_ip");
     const char *exit_text = "Not connected";
-    if (connected) exit_text = strcmp(exit_status, "proved") == 0 && actual_exit[0] != '\0' ? actual_exit : "Unproven — click Prove public VPN exit";
+    if (connected) exit_text = strcmp(exit_status, "proved") == 0 && actual_exit[0] != '\0' ? actual_exit : "Unproven — click Prove actual exit";
 
     double dns_latency = json_object_has_member(s, "dns_latency_ms") ? json_object_get_double_member(s, "dns_latency_ms") : 0.0;
     double node_latency = json_object_has_member(s, "node_latency_ms") ? json_object_get_double_member(s, "node_latency_ms") : 0.0;
@@ -69,8 +69,16 @@ static void refresh_home_summary_v6(App *app) {
     free(out.data);
 }
 
+static void on_home_exit_v6(GtkButton *button, gpointer data) {
+    (void)button;
+    App *app = data;
+    post_and_log(app, "/api/home-summary/prove-exit", "{}", 12000, "Actual public VPN exit proof");
+    refresh_home_summary_v6(app);
+}
+
 /* Shipping Home contract:
  * node location public endpoint actual public VPN exit connection phase logical mode
  * actual runtime actual base fallback DNS latency node latency LAN access kill switch
  * effective MTU warnings Connect Emergency Disconnect /api/home-summary
+ * /api/home-summary/prove-exit current-session proof only
  */
