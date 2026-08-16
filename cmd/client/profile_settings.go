@@ -138,6 +138,7 @@ func applyProfileSettings(profile common.RouterProfile, q profileSettingsRequest
 	if q.BaseFallback != nil { updated.BaseFallback = *q.BaseFallback }
 	if q.MTUPolicy != nil { updated.MTUPolicy = strings.ToLower(strings.TrimSpace(*q.MTUPolicy)) }
 	if q.ManualMTU != nil { updated.ManualMTU = *q.ManualMTU }
+	if updated.MTUPolicy != "manual" { updated.ManualMTU = 0 }
 	if q.DAITAEnabled != nil { updated.DAITAEnabled = *q.DAITAEnabled }
 	if q.JumboTUN != nil { updated.JumboTUN = *q.JumboTUN }
 	if q.SocksEnabled != nil { updated.SocksEnabled = *q.SocksEnabled }
