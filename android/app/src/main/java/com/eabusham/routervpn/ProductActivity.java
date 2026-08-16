@@ -36,6 +36,7 @@ public final class ProductActivity extends Activity {
         catalog = new AndroidUnifiedNodeCatalog(nodeStore, exitStore);
         setContentView(buildUi());
         refreshNodes();
+        AndroidProductOnboarding.showIfNeeded(this);
     }
 
     @Override protected void onResume() { super.onResume(); refreshNodes(); }
@@ -237,13 +238,8 @@ public final class ProductActivity extends Activity {
         startActivity(intent);
     }
 
-    private void showModes() {
-        AndroidProductParity.showModes(this, nodeStore);
-    }
-
-    private void showDns() {
-        AndroidProductParity.showDNS(this, nodeStore);
-    }
+    private void showModes() { AndroidProductParity.showModes(this, nodeStore); }
+    private void showDns() { AndroidProductParity.showDNS(this, nodeStore); }
 
     private void showAdvanced() {
         JSONObject p = activeRouterProfile();
@@ -266,9 +262,9 @@ public final class ProductActivity extends Activity {
 
     private void showHelp() {
         new AlertDialog.Builder(this).setTitle("Help")
-                .setMessage("Install Router VPN once and link private node data separately. The preferred LAN flow redeems a one-time code created in the authenticated Setup Center; file import remains available in Connect. Router VPN nodes provide normal modes/AUTO/SMART/CUSTOM; external nodes can connect directly or as Router VPN WireGuard entry → external exit. Every external connection requires the exact expected public exit IP before success. Direct Android external exits also require Always-on VPN plus ‘Block connections without VPN’. Generic Internet access is never treated as selected-path proof.")
-                .setPositiveButton("Pair home node", (d, w) -> showPairDialog())
-                .setNeutralButton("Open Connect", (d, w) -> openConnect())
+                .setMessage("App onboarding is separate from Setup Center onboarding and can be rerun here. Install Router VPN once and link private node data separately. Every connection still requires the actual selected-path/public-exit/DNS proof appropriate to that mode; unsupported graphs stay unavailable.")
+                .setPositiveButton("Run onboarding again", (d, w) -> AndroidProductOnboarding.show(this, true))
+                .setNeutralButton("Pair home node", (d, w) -> showPairDialog())
                 .setNegativeButton("Close", null).show();
     }
 
