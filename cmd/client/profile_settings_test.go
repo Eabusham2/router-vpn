@@ -6,7 +6,7 @@ import (
 	"router-vpn/internal/common"
 )
 
-func settingsTestProfile() common.RouterProfile {
+func settingsTestProfileV2() common.RouterProfile {
 	return common.RouterProfile{
 		ID: "home", Name: "Home", NodeKind: "router-vpn", Endpoint: "vpn.example.test",
 		RouterAPI: "http://10.77.0.1:8787", APIToken: "secret-token",
@@ -18,16 +18,16 @@ func settingsTestProfile() common.RouterProfile {
 	}
 }
 
-func strptr(v string) *string { return &v }
-func boolptr(v bool) *bool { return &v }
-func intptr(v int) *int { return &v }
+func settingsStringPtrV2(v string) *string { return &v }
+func settingsBoolPtrV2(v bool) *bool { return &v }
+func settingsIntPtrV2(v int) *int { return &v }
 
-func TestProfileSettingsMutateOnlyAllowedPolicyFields(t *testing.T) {
-	before := settingsTestProfile()
+func TestProfileSettingsV2MutateOnlyAllowedPolicyFields(t *testing.T) {
+	before := settingsTestProfileV2()
 	updated, err := applyProfileSettings(before, profileSettingsRequest{
-		HomeLANAccess: boolptr(false), KillSwitchPolicy: strptr("always"), IPv6Mode: strptr("off"),
-		StartupMode: strptr("smart-auto"), AutoConnect: boolptr(true), BaseTunnel: strptr("awg"), BaseFallback: boolptr(true),
-		MTUPolicy: strptr("manual"), ManualMTU: intptr(1320), DAITAEnabled: boolptr(true), JumboTUN: boolptr(true), SocksEnabled: boolptr(true),
+		HomeLANAccess: settingsBoolPtrV2(false), KillSwitchPolicy: settingsStringPtrV2("always"), IPv6Mode: settingsStringPtrV2("off"),
+		StartupMode: settingsStringPtrV2("smart-auto"), AutoConnect: settingsBoolPtrV2(true), BaseTunnel: settingsStringPtrV2("awg"), BaseFallback: settingsBoolPtrV2(true),
+		MTUPolicy: settingsStringPtrV2("manual"), ManualMTU: settingsIntPtrV2(1320), DAITAEnabled: settingsBoolPtrV2(true), JumboTUN: settingsBoolPtrV2(true), SocksEnabled: settingsBoolPtrV2(true),
 	})
 	if err != nil { t.Fatal(err) }
 	if updated.HomeLANAccess || updated.KillSwitchPolicy != "always" || !updated.KillSwitch || updated.IPv6Mode != "off" || updated.StartupMode != "smart-auto" || !updated.AutoConnect || updated.BaseTunnel != "awg" || !updated.BaseFallback || updated.MTUPolicy != "manual" || updated.ManualMTU != 1320 || !updated.DAITAEnabled || !updated.JumboTUN || !updated.SocksEnabled {
@@ -38,25 +38,25 @@ func TestProfileSettingsMutateOnlyAllowedPolicyFields(t *testing.T) {
 	}
 }
 
-func TestProfileSettingsValidation(t *testing.T) {
-	base := settingsTestProfile()
+func TestProfileSettingsV2Validation(t *testing.T) {
+	base := settingsTestProfileV2()
 	bad := []profileSettingsRequest{
-		{KillSwitchPolicy: strptr("strict")},
-		{IPv6Mode: strptr("maybe")},
-		{StartupMode: strptr("boot-random")},
-		{BaseTunnel: strptr("openvpn")},
-		{MTUPolicy: strptr("manual"), ManualMTU: intptr(500)},
-		{MTUPolicy: strptr("nonsense")},
+		{KillSwitchPolicy: settingsStringPtrV2("strict")},
+		{IPv6Mode: settingsStringPtrV2("maybe")},
+		{StartupMode: settingsStringPtrV2("boot-random")},
+		{BaseTunnel: settingsStringPtrV2("openvpn")},
+		{MTUPolicy: settingsStringPtrV2("manual"), ManualMTU: settingsIntPtrV2(500)},
+		{MTUPolicy: settingsStringPtrV2("nonsense")},
 	}
 	for _, q := range bad {
 		if _, err := applyProfileSettings(base, q); err == nil { t.Fatalf("expected rejection for %+v", q) }
 	}
 }
 
-func TestProfileSettingsDefaultAndAutoMTUClearManualValue(t *testing.T) {
-	base := settingsTestProfile(); base.MTUPolicy = "manual"; base.ManualMTU = 1320
+func TestProfileSettingsV2DefaultAndAutoMTUClearManualValue(t *testing.T) {
+	base := settingsTestProfileV2(); base.MTUPolicy = "manual"; base.ManualMTU = 1320
 	for _, policy := range []string{"default", "auto"} {
-		updated, err := applyProfileSettings(base, profileSettingsRequest{MTUPolicy: strptr(policy)})
+		updated, err := applyProfileSettings(base, profileSettingsRequest{MTUPolicy: settingsStringPtrV2(policy)})
 		if err != nil { t.Fatal(err) }
 		if updated.MTUPolicy != policy || updated.ManualMTU != 0 { t.Fatalf("%s did not clear manual MTU: %+v", policy, updated) }
 	}
