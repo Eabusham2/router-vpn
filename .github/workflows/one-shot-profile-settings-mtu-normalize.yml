@@ -1,0 +1,38 @@
+name: One-shot profile settings MTU normalize
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-profile-settings-mtu-normalize.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Normalize manual MTU only under manual policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('cmd/client/profile_settings.go')
+          t=p.read_text()
+          old='''\tif q.MTUPolicy != nil { updated.MTUPolicy = strings.ToLower(strings.TrimSpace(*q.MTUPolicy)) }\n\tif q.ManualMTU != nil { updated.ManualMTU = *q.ManualMTU }\n\tif q.DAITAEnabled != nil { updated.DAITAEnabled = *q.DAITAEnabled }'''
+          new='''\tif q.MTUPolicy != nil { updated.MTUPolicy = strings.ToLower(strings.TrimSpace(*q.MTUPolicy)) }\n\tif q.ManualMTU != nil { updated.ManualMTU = *q.ManualMTU }\n\tif updated.MTUPolicy != "manual" { updated.ManualMTU = 0 }\n\tif q.DAITAEnabled != nil { updated.DAITAEnabled = *q.DAITAEnabled }'''
+          if t.count(old)!=1:
+              raise SystemExit('profile settings MTU seam drifted')
+          p.write_text(t.replace(old,new,1))
+          PY
+          rm -f .github/workflows/one-shot-profile-settings-mtu-normalize.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Clear stale manual MTU outside manual policy"
+          git push origin HEAD:main
