@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,7 +50,7 @@ require("Windows", win, shared_topics + (
 ))
 require_any("Windows", win, "kill switch", ("kill switch", "kill-switch"))
 assert "if ($SelfTest)" in win
-assert "Show-RouterVPNProductOnboarding\n        & $ProductScript" in win
+assert re.search(r"else\s*\{\s*Show-RouterVPNProductOnboarding\s*;\s*&\s*\$ProductScript\b", win), "Windows first-run onboarding is not wired before the shipping product"
 assert "TutorialPattern" in win and "Run onboarding" in win
 
 # macOS shipping build compiles the onboarding source into RouterVPN.app and
