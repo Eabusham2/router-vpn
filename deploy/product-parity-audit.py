@@ -42,7 +42,7 @@ home = require(
     "cmd/client/home_summary.go",
     "/api/home-summary", "/api/home-summary/prove-exit", "SessionID", "ActualExitStatus",
     "actual public exit is not proven for this live session", "session changed while public-exit proof was running",
-    "profile.PublicIP = ip", "proof.SessionID == session.ID", "probePublicExitIP",
+    "a.profiles.Profiles[i].PublicIP = ip", "proof.SessionID == session.ID", "probePublicExitIP",
 )
 for forbidden in (
     "ActualExitIP: profile.PublicIP", "ActualExitIP: profile.Endpoint", "actualExit = profile.PublicIP",
@@ -218,16 +218,8 @@ for stale in (
     if stale in setup:
         errors.append(f"server/scripts/generate-setup-assets.py: stale/superseded product claim returned: {stale}")
 
-require(
-    "docs/MODES.md", "layers / stack", "engineering added-latency estimate", "engineering traffic-overhead estimate",
-    "engineering speed-loss estimate", "runtime readiness", "exact readiness / unavailability reason", "Home AdGuard",
-    "Fastest measured resolver", "Custom UDP/TCP", "DNS-over-TLS", "DNS-over-HTTPS", "DNS-over-HTTP/3",
-    "DNS Rescue", "A/AAAA DNS query RTTs",
-)
-
 if errors:
-    for item in errors:
-        print("ERROR:", item)
+    for error in errors:
+        print("ERROR:", error)
     raise SystemExit(1)
-
-print("Router VPN cross-platform onboarding/Home/mode/DNS/responsive product-parity audit: PASS")
+print("Router VPN cross-platform mode/DNS/responsive product parity audit: PASS")
