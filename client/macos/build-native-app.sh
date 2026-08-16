@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"
+ONBOARDING_SRC="$ROOT/client/macos/RouterVPNProductOnboarding.swift"
 MENU_SRC="$ROOT/client/macos/RouterVPNMenuBar.m"
 OUT=${1:?usage: build-native-app.sh OUT_DIR [amd64|arm64]}
 ARCH=${2:-arm64}
@@ -23,42 +24,41 @@ MENU_OBJ="$BUILD_WORK/RouterVPNMenuBar.o"
 ADAPTIVE_SRC="$BUILD_WORK/RouterVPNMacProduct.swift"
 
 # Keep one authoritative AppKit product source while compiling a deterministic
-# adaptive-layout view of it. Exact substitutions only: if the source layout
-# drifts, fail closed rather than silently shipping an unreviewed rewrite.
+# adaptive/onboarding-wired view of it. Exact substitutions only: if the source
+# layout or Help/launch seam drifts, fail closed instead of silently shipping an
+# unreviewed rewrite.
 python3 - "$SRC" "$ADAPTIVE_SRC" <<'PY'
 from pathlib import Path
 import sys
 src, out = map(Path, sys.argv[1:3])
 text = src.read_text(encoding="utf-8")
 changes = (
+    ('NSRect(x: 0, y: 0, width: 1180, height: 780)', 'NSRect(x: 0, y: 0, width: 1050, height: 720)'),
+    ('window.minSize = NSSize(width: 980, height: 650)', 'window.minSize = NSSize(width: 720, height: 520)'),
+    ('tabs.view.heightAnchor.constraint(greaterThanOrEqualToConstant: 540)', 'tabs.view.heightAnchor.constraint(greaterThanOrEqualToConstant: 360)'),
+    ('split.setPosition(650, ofDividerAt: 0)', 'split.setPosition(430, ofDividerAt: 0)'),
     (
-        'NSRect(x: 0, y: 0, width: 1180, height: 780)',
-        'NSRect(x: 0, y: 0, width: 1050, height: 720)',
+        'let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Pair/add node", #selector(pairNode)));',
+        'let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Run onboarding", #selector(runProductOnboarding))); row.addArrangedSubview(button("Pair/add node", #selector(pairNode)));',
     ),
     (
-        'window.minSize = NSSize(width: 980, height: 650)',
-        'window.minSize = NSSize(width: 720, height: 520)',
-    ),
-    (
-        'tabs.view.heightAnchor.constraint(greaterThanOrEqualToConstant: 540)',
-        'tabs.view.heightAnchor.constraint(greaterThanOrEqualToConstant: 360)',
-    ),
-    (
-        'split.setPosition(650, ofDividerAt: 0)',
-        'split.setPosition(430, ofDividerAt: 0)',
+        'let w = ProductWindowController(api: api); wc = w; w.showWindow(nil); w.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)',
+        'let w = ProductWindowController(api: api); wc = w; w.showWindow(nil); w.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)',
     ),
 )
 for old, new in changes:
-    if old not in text:
-        raise SystemExit(f"macOS adaptive layout contract drifted before: {old}")
+    if text.count(old) != 1:
+        raise SystemExit(f"macOS adaptive/onboarding contract drifted before: {old}")
     text = text.replace(old, new, 1)
 for marker in (
     'window.minSize = NSSize(width: 720, height: 520)',
     'greaterThanOrEqualToConstant: 360',
     'split.setPosition(430, ofDividerAt: 0)',
+    'button("Run onboarding", #selector(runProductOnboarding))',
+    'RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)',
 ):
     if marker not in text:
-        raise SystemExit(f"macOS adaptive layout marker missing: {marker}")
+        raise SystemExit(f"macOS adaptive/onboarding marker missing: {marker}")
 out.write_text(text, encoding="utf-8")
 PY
 
@@ -82,12 +82,11 @@ xcrun swiftc \
   -framework Foundation \
   -framework MapKit \
   "$ADAPTIVE_SRC" \
+  "$ONBOARDING_SRC" \
   "$MENU_OBJ" \
   -o "$BIN"
 chmod 755 "$BIN"
 
-# Build the normal macOS application icon from the same deterministic Router VPN
-# icon source used by Windows/Linux. No opaque binary source asset is committed.
 ICON_WORK="$BUILD_WORK/icon"
 mkdir -p "$ICON_WORK"
 python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$ICON_WORK/router-vpn-1024.png" --ico "$ICON_WORK/router-vpn.ico"
@@ -114,7 +113,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>RouterVPN</string>
   <key>CFBundleShortVersionString</key><string>0.9.0</string>
-  <key>CFBundleVersion</key><string>9</string>
+  <key>CFBundleVersion</key><string>10</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -130,7 +129,7 @@ case "$ARCH" in
 esac
 
 # A Router VPN desktop app must be native UI, not a hidden website/WebView wrapper.
-! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC"
+! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC" "$ONBOARDING_SRC"
 grep -Fq 'NSWindow(' "$SRC"
 grep -Fq 'NSTabViewController' "$SRC"
 grep -Fq 'import MapKit' "$SRC"
@@ -151,6 +150,11 @@ grep -Fq '/api/emergency-stop' "$SRC"
 grep -Fq 'window.minSize = NSSize(width: 720, height: 520)' "$ADAPTIVE_SRC"
 grep -Fq 'greaterThanOrEqualToConstant: 360' "$ADAPTIVE_SRC"
 grep -Fq 'split.setPosition(430, ofDividerAt: 0)' "$ADAPTIVE_SRC"
+grep -Fq 'button("Run onboarding", #selector(runProductOnboarding))' "$ADAPTIVE_SRC"
+grep -Fq 'RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)' "$ADAPTIVE_SRC"
+for marker in 'RouterVPNProductOnboardingDoneV2' 'Add or link a node' 'router-vpn-bundle.json' 'AUTO' 'WireGuard' 'AmneziaWG' 'DNS' 'LAN Off' 'MTU/Jumbo' 'kill-switch' 'Multihop' 'forwarding' 'permissions' 'Disconnect' 'private identity/path proof' 'Public exit' 'Diagnostics' 'Emergency stop' 'Setup Center Full Guide' 'Run onboarding'; do
+  grep -Fq "$marker" "$ONBOARDING_SRC"
+done
 grep -Fq 'NSStatusBar' "$MENU_SRC"
 grep -Fq 'Open Router VPN' "$MENU_SRC"
 grep -Fq 'Emergency Stop' "$MENU_SRC"
@@ -162,4 +166,4 @@ if [[ "$(uname -m)" == arm64 && "$ARCH" == arm64 ]] || [[ "$(uname -m)" == x86_6
   "$BIN" --self-test
 fi
 
-echo "Built native RouterVPN.app with menu-bar integration and adaptive layout for $ARCH at $APP"
+echo "Built native RouterVPN.app with menu-bar integration, adaptive layout and persistent app onboarding for $ARCH at $APP"
