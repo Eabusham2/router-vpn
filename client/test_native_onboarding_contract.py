@@ -51,7 +51,7 @@ require("Windows", win, shared_topics + (
 require_any("Windows", win, "kill switch", ("kill switch", "kill-switch"))
 assert "if ($SelfTest)" in win
 assert re.search(r"else\s*\{\s*Show-RouterVPNProductOnboarding\s*;\s*&\s*\$ProductScript\b", win), "Windows first-run onboarding is not wired before the shipping product"
-assert "TutorialPattern" in win and "Run onboarding" in win
+assert "TutorialPattern" in win and "Show-RouterVPNProductOnboarding -Force" in win
 
 # macOS shipping build compiles the onboarding source into RouterVPN.app and
 # exact-wires both first launch and Help rerun into the AppKit product.
