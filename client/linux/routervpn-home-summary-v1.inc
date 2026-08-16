@@ -38,16 +38,20 @@ static void refresh_home_summary_v6(App *app) {
     g_string_append_printf(text, "Connection: %s • path proof %s\nLogical/runtime/base: %s • %s • %s\nFallback: %s\n",
         obj_string(s, "connection_phase"), obj_string(s, "path_proof"), obj_string(s, "logical_mode"),
         obj_string(s, "actual_runtime"), obj_string(s, "actual_base"), obj_string(s, "fallback")[0] ? obj_string(s, "fallback") : "None");
-    g_string_append_printf(text, "DNS: %s • %s%s • proof %s\nNode latency: %s\n",
-        obj_string(s, "dns_mode"), obj_string(s, "dns_host"), dns_latency > 0 ? " • measured RTT available" : "", obj_string(s, "dns_status"),
-        node_samples > 0 ? "measured" : "Not measured");
+    g_string_append_printf(text, "DNS: %s • %s • proof %s\n", obj_string(s, "dns_mode"), obj_string(s, "dns_host"), obj_string(s, "dns_status"));
     if (dns_latency > 0) g_string_append_printf(text, "DNS measured RTT: %.2f ms\n", dns_latency);
+    else g_string_append(text, "DNS measured RTT: not measured / not proven\n");
     if (node_samples > 0) g_string_append_printf(text, "Node measured latency: %.2f ms / %d samples\n", node_latency, node_samples);
-    g_string_append_printf(text, "LAN access: %s • Kill switch: %s\nEffective MTU: %s%s%s • IPv6: %s • Auto-connect: %s\n",
-        lan ? "On" : "Off", obj_string(s, "kill_switch"), effective_mtu > 0 ? "" : "Default / not measured",
-        effective_mtu > 0 ? g_strdup_printf("%d", effective_mtu) : "",
-        effective_mtu > 0 && obj_string(s, "effective_mtu_source")[0] ? obj_string(s, "effective_mtu_source") : "",
-        obj_string(s, "ipv6_mode"), json_object_has_member(s, "auto_connect") && json_object_get_boolean_member(s, "auto_connect") ? "On" : "Off");
+    else g_string_append(text, "Node measured latency: Not measured\n");
+    g_string_append_printf(text, "LAN access: %s • Kill switch: %s\n", lan ? "On" : "Off", obj_string(s, "kill_switch"));
+    if (effective_mtu > 0) {
+        g_string_append_printf(text, "Effective MTU: %d", effective_mtu);
+        if (obj_string(s, "effective_mtu_source")[0]) g_string_append_printf(text, " • %s", obj_string(s, "effective_mtu_source"));
+    } else {
+        g_string_append(text, "Effective MTU: Default / not measured");
+    }
+    g_string_append_printf(text, " • IPv6: %s • Auto-connect: %s\n", obj_string(s, "ipv6_mode"),
+        json_object_has_member(s, "auto_connect") && json_object_get_boolean_member(s, "auto_connect") ? "On" : "Off");
 
     JsonArray *warnings = json_object_has_member(s, "warnings") ? json_object_get_array_member(s, "warnings") : NULL;
     g_string_append(text, "Warnings: ");
