@@ -7,11 +7,21 @@ struct ProductRootView: View {
     @State private var showingNodes = false
     @State private var showingModeDetails = false
     @State private var showingDNS = false
+    @State private var showingOnboarding = false
 
     var body: some View {
         ContentView()
             .overlay(alignment: .bottomTrailing) {
                 VStack(alignment: .trailing, spacing: 8) {
+                    Button {
+                        UserDefaults.standard.set(0, forKey: "RouterVPNProductOnboardingStepV2")
+                        showingOnboarding = true
+                    } label: {
+                        Label("Setup Guide", systemImage: "questionmark.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityHint("Runs the persistent Router VPN app onboarding again, separate from Setup Center onboarding")
+
                     Button {
                         showingNodes = true
                     } label: {
@@ -63,6 +73,14 @@ struct ProductRootView: View {
                 RouterVPNDNSSettingsSheet()
                     .environmentObject(model)
             }
+            .sheet(isPresented: $showingOnboarding) {
+                RouterVPNProductOnboardingView()
+            }
+            .onAppear {
+                if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") {
+                    showingOnboarding = true
+                }
+            }
     }
 }
 
@@ -73,8 +91,8 @@ struct ProductRootView: View {
 // absence from the map never makes a real imported node unreachable.
 private let routerVPNMapContract = "Map( latitude longitude No real node coordinates Linked Nodes"
 
-// Product-parity contract: the native product also exposes the full mode metric
-// view and real selectable DNS policy/benchmark UI. These are SwiftUI sheets so
-// they remain scrollable/adaptive on iPhone and iPad instead of relying on a
+// Product-parity contract: the native product exposes full mode metrics, real
+// selectable DNS policy/benchmark UI and persistent app onboarding. SwiftUI
+// sheets remain scrollable/adaptive on iPhone and iPad instead of relying on a
 // fixed desktop-sized panel.
-private let routerVPNProductParityContract = "Mode Details DNS Settings Added latency traffic speed loss readiness exact reason Home Fastest Custom DoT DoH DoH3 Rescue"
+private let routerVPNProductParityContract = "Setup Guide RouterVPNProductOnboardingDoneV2 Mode Details DNS Settings Added latency traffic speed loss readiness exact reason Home Fastest Custom DoT DoH DoH3 Rescue"
