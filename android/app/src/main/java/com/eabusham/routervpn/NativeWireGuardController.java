@@ -20,6 +20,7 @@ import java.util.concurrent.Executors;
 /** Native Android WireGuard runtime using WireGuard's official userspace GoBackend. */
 final class NativeWireGuardController implements Tunnel {
     interface Callback { void done(State state, String message, Throwable error); }
+    private final Context appContext;
     private final GoBackend backend;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AndroidUnderlyingNetworkMonitor networkMonitor;
@@ -29,9 +30,9 @@ final class NativeWireGuardController implements Tunnel {
     private volatile String lastError = "";
 
     NativeWireGuardController(Context context) {
-        Context app = context.getApplicationContext();
-        backend = new GoBackend(app);
-        networkMonitor = new AndroidUnderlyingNetworkMonitor(app);
+        appContext = context.getApplicationContext();
+        backend = new GoBackend(appContext);
+        networkMonitor = new AndroidUnderlyingNetworkMonitor(appContext);
     }
     @Override public String getName() { return "routervpn"; }
     @Override public void onStateChange(State newState) { state = newState; }
@@ -39,6 +40,7 @@ final class NativeWireGuardController implements Tunnel {
     String getError() { return lastError; }
 
     void connect(File privateBundle, Callback callback) {
+        AndroidHomeStateStore.begin(appContext, "raw-tunnel", "wg", "wg");
         executor.execute(() -> {
             try {
                 networkMonitor.stop();
@@ -56,6 +58,7 @@ final class NativeWireGuardController implements Tunnel {
                 activeConfig = config;
                 activeBundle = privateBundle;
                 lastError = "";
+                AndroidHomeStateStore.connected(appContext, "raw-tunnel", "wg", "wg", "");
                 networkMonitor.start(() -> executor.execute(this::recoverAfterNetworkChange));
                 callback.done(State.UP, "Native Android WireGuard is active with selected DNS/MTU and selected-node private path proof.", null);
             } catch (Throwable error) {
@@ -71,6 +74,7 @@ final class NativeWireGuardController implements Tunnel {
         if (state != State.UP || config == null || bundle == null) return;
         try {
             lastError = "Underlying network changed; WireGuard is re-establishing and revalidating the selected node.";
+            AndroidHomeStateStore.warning(appContext, lastError);
             backend.setState(this, State.DOWN, null);
             State result = backend.setState(this, State.UP, config);
             state = result;
@@ -78,6 +82,7 @@ final class NativeWireGuardController implements Tunnel {
                 throw new IllegalStateException("WireGuard did not recover a proven selected-node path after the underlying network changed.");
             }
             lastError = "";
+            AndroidHomeStateStore.connected(appContext, "raw-tunnel", "wg", "wg", "");
         } catch (Throwable error) {
             failClosed(new IllegalStateException("WireGuard network-transition recovery failed closed: " + safeMessage(error), error));
         }
@@ -91,9 +96,11 @@ final class NativeWireGuardController implements Tunnel {
                 State result = backend.setState(this, State.DOWN, null);
                 state = result;
                 lastError = "";
+                AndroidHomeStateStore.disconnected(appContext);
                 callback.done(result, "Native Android WireGuard disconnected.", null);
             } catch (Throwable error) {
                 lastError = safeMessage(error);
+                AndroidHomeStateStore.failed(appContext, "WireGuard disconnect failed: " + lastError);
                 callback.done(state, "WireGuard disconnect failed: " + lastError, error);
             }
         });
@@ -110,13 +117,11 @@ final class NativeWireGuardController implements Tunnel {
         try { backend.setState(this, State.DOWN, null); } catch (Throwable ignored) { }
         state = State.DOWN;
         lastError = safeMessage(error);
+        AndroidHomeStateStore.failed(appContext, lastError);
         clearActive();
     }
 
-    private void clearActive() {
-        activeConfig = null;
-        activeBundle = null;
-    }
+    private void clearActive() { activeConfig = null; activeBundle = null; }
 
     private static Config loadWireGuardConfig(File privateBundle) throws Exception {
         if (!privateBundle.isFile()) throw new IllegalStateException("Import/link a Router VPN node first.");
