@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-private struct RouterVPNProfileSettingsPayload: Codable {
+private struct RouterVPNProfileSettingsPayloadV2: Codable {
     var homeLANAccess: Bool
     var killSwitchPolicy: String
     var ipv6Mode: String
@@ -10,7 +10,7 @@ private struct RouterVPNProfileSettingsPayload: Codable {
     var baseTunnel: String
     var baseFallback: Bool
     var mtuPolicy: String
-    var manualMTU: Int
+    var manualMTU: Int?
     var effectiveMTU: Int?
     var effectiveMTUSource: String?
     var daitaEnabled: Bool
@@ -39,7 +39,7 @@ extension ProductWindowController {
     @objc func editProfileSettings() {
         asyncAction {
             let data = try self.api.request("/api/profile/settings", timeout: 5)
-            var settings = try JSONDecoder().decode(RouterVPNProfileSettingsPayload.self, from: data)
+            var settings = try JSONDecoder().decode(RouterVPNProfileSettingsPayloadV2.self, from: data)
             let semaphore = DispatchSemaphore(value: 0)
             var save = false
             var validationError = ""
@@ -59,7 +59,8 @@ extension ProductWindowController {
                 func popup(_ title: String, values: [(String,String)], selected: String) -> NSPopUpButton {
                     let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8
                     let label = NSTextField(labelWithString: title); label.frame.size.width = 180
-                    let p = NSPopUpButton(); values.forEach { p.addItem(withTitle: $0.0); p.lastItem?.representedObject = $0.1 }
+                    let p = NSPopUpButton()
+                    for item in values { p.addItem(withTitle: item.0); p.lastItem?.representedObject = item.1 }
                     if let idx = values.firstIndex(where: { $0.1 == selected }) { p.selectItem(at: idx) }
                     row.addArrangedSubview(label); row.addArrangedSubview(p); form.addArrangedSubview(row); return p
                 }
@@ -74,7 +75,9 @@ extension ProductWindowController {
                 let fallback = check("Allow WG/AWG base fallback", value: settings.baseFallback)
                 let mtu = popup("MTU policy", values: [("Default","default"),("Auto measured","auto"),("Manual","manual")], selected: settings.mtuPolicy)
                 let mtuRow = NSStackView(); mtuRow.orientation = .horizontal; mtuRow.spacing = 8
-                mtuRow.addArrangedSubview(NSTextField(labelWithString: "Manual MTU 576–9000")); let manual = NSTextField(string: settings.manualMTU > 0 ? String(settings.manualMTU) : ""); mtuRow.addArrangedSubview(manual); form.addArrangedSubview(mtuRow)
+                mtuRow.addArrangedSubview(NSTextField(labelWithString: "Manual MTU 576–9000"))
+                let manual = NSTextField(string: (settings.manualMTU ?? 0) > 0 ? String(settings.manualMTU!) : "")
+                mtuRow.addArrangedSubview(manual); form.addArrangedSubview(mtuRow)
                 let daita = check("DAITA-like bounded cover traffic (supported modes only)", value: settings.daitaEnabled)
                 let jumbo = check("Jumbo TUN (compatible TUN/proxy paths only)", value: settings.jumboTUN)
                 let socks = check("Private in-tunnel SOCKS5 utility", value: settings.socksEnabled)
@@ -83,17 +86,19 @@ extension ProductWindowController {
                 let effective = NSTextField(wrappingLabelWithString: "Current effective MTU: \((settings.effectiveMTU ?? 0) > 0 ? String(settings.effectiveMTU!) : "default / not measured") • \(settings.effectiveMTUSource ?? "")")
                 effective.textColor = .secondaryLabelColor; form.addArrangedSubview(effective)
                 alert.accessoryView = form
-                let response = alert.runModal()
-                if response == .alertFirstButtonReturn {
+
+                if alert.runModal() == .alertFirstButtonReturn {
                     settings.homeLANAccess = lan.state == .on
                     settings.killSwitchPolicy = (kill.selectedItem?.representedObject as? String) ?? "off"
                     settings.ipv6Mode = (ipv6.selectedItem?.representedObject as? String) ?? "auto"
                     settings.baseTunnel = (base.selectedItem?.representedObject as? String) ?? "auto"
                     settings.baseFallback = fallback.state == .on
                     settings.mtuPolicy = (mtu.selectedItem?.representedObject as? String) ?? "default"
-                    settings.manualMTU = Int(manual.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-                    if settings.mtuPolicy == "manual" && !(576...9000).contains(settings.manualMTU) { validationError = "Manual MTU must be 576–9000." }
-                    if settings.mtuPolicy != "manual" { settings.manualMTU = 0 }
+                    let manualValue = Int(manual.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                    if settings.mtuPolicy == "manual" && !(576...9000).contains(manualValue) {
+                        validationError = "Manual MTU must be 576–9000."
+                    }
+                    settings.manualMTU = settings.mtuPolicy == "manual" ? manualValue : nil
                     settings.daitaEnabled = daita.state == .on
                     settings.jumboTUN = jumbo.state == .on
                     settings.socksEnabled = socks.state == .on
@@ -103,7 +108,8 @@ extension ProductWindowController {
                 }
                 semaphore.signal()
             }
-            _ = semaphore.wait(timeout: .now() + 120)
+
+            semaphore.wait()
             if !validationError.isEmpty { throw NSError(domain: "RouterVPN.Settings", code: 1, userInfo: [NSLocalizedDescriptionKey: validationError]) }
             if !save { return "Profile settings unchanged." }
             let payload = try JSONEncoder().encode(settings)
@@ -113,6 +119,5 @@ extension ProductWindowController {
     }
 }
 
-// Safe native settings contract: /api/profile/settings only; no redacted full-profile POST.
-// LAN Off • on-connect/always kill switch • IPv6 • WG/AWG base+fallback •
-// Default/Auto/Manual MTU • DAITA-like • Jumbo TUN • private SOCKS5 • startup/autoconnect.
+// Safe native settings contract: omitted manual_mtu decodes cleanly for Default/Auto.
+// /api/profile/settings only; no redacted full-profile POST.
