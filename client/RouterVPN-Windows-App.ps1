@@ -13,6 +13,10 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
+$HomeSummaryHelpers = Join-Path $PSScriptRoot 'RouterVPN-Windows-HomeSummary.ps1'
+if (-not (Test-Path -LiteralPath $HomeSummaryHelpers)) { throw "Router VPN Home summary helpers are missing: $HomeSummaryHelpers" }
+. $HomeSummaryHelpers
+
 # App onboarding is deliberately separate from Setup Center onboarding. It is
 # persistent, resumes from the last unfinished step, and is always rerunnable
 # from the shipping product Help tab.
@@ -34,16 +38,12 @@ $OnboardingSteps = @(
 )
 
 function Get-RouterVPNOnboardingState {
-    if (-not (Test-Path -LiteralPath $OnboardingStateFile)) {
-        return [pscustomobject]@{ done=$false; step=0 }
-    }
+    if (-not (Test-Path -LiteralPath $OnboardingStateFile)) { return [pscustomobject]@{ done=$false; step=0 } }
     try {
         $state = Get-Content -LiteralPath $OnboardingStateFile -Raw -Encoding UTF8 | ConvertFrom-Json
         $step = [Math]::Max(0, [Math]::Min([int]$state.step, $OnboardingSteps.Count - 1))
         return [pscustomobject]@{ done=[bool]$state.done; step=$step }
-    } catch {
-        return [pscustomobject]@{ done=$false; step=0 }
-    }
+    } catch { return [pscustomobject]@{ done=$false; step=0 } }
 }
 
 function Save-RouterVPNOnboardingState([int]$Step, [bool]$Done) {
@@ -59,19 +59,13 @@ function global:Show-RouterVPNProductOnboarding {
     if (-not $Force -and $state.done) { return }
     $step = if ($Force) { 0 } else { [int]$state.step }
     $keepDone = [bool]$state.done
-
     while ($true) {
         [xml]$TutorialXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN setup" Width="720" Height="510" MinWidth="560" MinHeight="430" WindowStartupLocation="CenterScreen" ResizeMode="CanResize" Background="#0B1020" Foreground="#F5F7FF">
 <Grid Margin="24"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-<TextBlock Name="Progress" Grid.Row="0" Foreground="#93A4C7" Margin="0,0,0,8"/>
-<TextBlock Name="StepTitle" Grid.Row="1" FontSize="26" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,16"/>
+<TextBlock Name="Progress" Grid.Row="0" Foreground="#93A4C7" Margin="0,0,0,8"/><TextBlock Name="StepTitle" Grid.Row="1" FontSize="26" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,16"/>
 <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><TextBlock Name="StepBody" FontSize="15" LineHeight="24" TextWrapping="Wrap" Foreground="#E8ECF8"/></ScrollViewer>
-<Grid Grid.Row="3" Margin="0,20,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-<Button Name="Back" Grid.Column="0" Content="Back" Padding="14,8" Margin="0,0,8,0"/>
-<Button Name="Close" Grid.Column="1" Content="Close and resume later" Padding="14,8"/>
-<Button Name="Next" Grid.Column="3" Content="Next" Padding="18,8" FontWeight="SemiBold" IsDefault="True"/>
-</Grid></Grid></Window>
+<Grid Grid.Row="3" Margin="0,20,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Name="Back" Grid.Column="0" Content="Back" Padding="14,8" Margin="0,0,8,0"/><Button Name="Close" Grid.Column="1" Content="Close and resume later" Padding="14,8"/><Button Name="Next" Grid.Column="3" Content="Next" Padding="18,8" FontWeight="SemiBold" IsDefault="True"/></Grid></Grid></Window>
 '@
         $reader = New-Object System.Xml.XmlNodeReader $TutorialXaml
         $dialog = [Windows.Markup.XamlReader]::Load($reader)
@@ -80,101 +74,72 @@ function global:Show-RouterVPNProductOnboarding {
         $dialog.FindName('StepBody').Text = [string]$OnboardingSteps[$step].Body
         $dialog.FindName('Back').IsEnabled = $step -gt 0
         $dialog.FindName('Next').Content = if ($step -eq $OnboardingSteps.Count - 1) { 'Finish' } else { 'Next' }
-        $dialog.FindName('Back').Add_Click({ $dialog.Tag='back'; $dialog.Close() })
-        $dialog.FindName('Close').Add_Click({ $dialog.Tag='close'; $dialog.Close() })
-        $dialog.FindName('Next').Add_Click({ $dialog.Tag='next'; $dialog.Close() })
-        [void]$dialog.ShowDialog()
-        $choice = [string]$dialog.Tag
+        $dialog.FindName('Back').Add_Click({ $dialog.Tag='back'; $dialog.Close() }); $dialog.FindName('Close').Add_Click({ $dialog.Tag='close'; $dialog.Close() }); $dialog.FindName('Next').Add_Click({ $dialog.Tag='next'; $dialog.Close() })
+        [void]$dialog.ShowDialog(); $choice = [string]$dialog.Tag
         if ($choice -eq 'back') { $step = [Math]::Max(0, $step - 1); Save-RouterVPNOnboardingState $step $keepDone; continue }
-        if ($choice -eq 'next') {
-            if ($step -ge $OnboardingSteps.Count - 1) { Save-RouterVPNOnboardingState 0 $true; return }
-            $step++; Save-RouterVPNOnboardingState $step $keepDone; continue
-        }
-        Save-RouterVPNOnboardingState $step $keepDone
-        return
+        if ($choice -eq 'next') { if ($step -ge $OnboardingSteps.Count - 1) { Save-RouterVPNOnboardingState 0 $true; return }; $step++; Save-RouterVPNOnboardingState $step $keepDone; continue }
+        Save-RouterVPNOnboardingState $step $keepDone; return
     }
 }
 
-# Stable package/Portable entrypoint. Windows PowerShell 5.1 treats UTF-8 text
-# without a BOM as the active ANSI code page when it parses a child .ps1 with
-# the call operator. The native product intentionally contains Unicode UI text,
-# so load it explicitly as UTF-8 before ScriptBlock parsing.
 $Product = Join-Path $PSScriptRoot 'RouterVPN-Windows-Product-v2.ps1'
-if (-not (Test-Path -LiteralPath $Product)) {
-    throw "Router VPN native Windows product shell is missing: $Product"
-}
+if (-not (Test-Path -LiteralPath $Product)) { throw "Router VPN native Windows product shell is missing: $Product" }
 $ProductSource = Get-Content -LiteralPath $Product -Raw -Encoding UTF8
 
-# The product source keeps a roomy desktop default, but the shipped entrypoint
-# must remain usable on small logical desktops created by high Windows scaling.
+# Exact fail-closed shipping transformations: small-screen layout, Home truth
+# surface, onboarding Help hook, and stable ScriptBlock self-test source path.
 $AdaptiveLayout = @(
     @('Height="800" Width="1180" MinHeight="680" MinWidth="980"', 'Height="720" Width="1040" MinHeight="480" MinWidth="640"'),
     @('<RowDefinition Height="240"/>', '<RowDefinition Height="2*" MinHeight="140"/>'),
     @('TextWrapping="Wrap" Width="760" Margin="8,4,0,0"', 'TextWrapping="Wrap" MaxWidth="760" Margin="8,4,0,0"'),
     @('<TextBox Name="DiagnosticsBox" Height="380"', '<TextBox Name="DiagnosticsBox" MinHeight="180"')
 )
-foreach ($Pair in $AdaptiveLayout) {
-    if (-not $ProductSource.Contains($Pair[0])) {
-        throw "Router VPN adaptive Windows layout contract drifted before: $($Pair[0])"
-    }
-    $ProductSource = $ProductSource.Replace($Pair[0], $Pair[1])
-}
+foreach ($Pair in $AdaptiveLayout) { if (-not $ProductSource.Contains($Pair[0])) { throw "Router VPN adaptive Windows layout contract drifted before: $($Pair[0])" }; $ProductSource = $ProductSource.Replace($Pair[0], $Pair[1]) }
 
-# The product is parsed from an in-memory UTF-8 ScriptBlock, so give its
-# self-test the authoritative on-disk product source path explicitly.
+$HomeButtonsOld = '<WrapPanel Margin="0,12,0,0"><Button Name="AutoButton" Content="AUTO Connect" Margin="4" Padding="13,8"/><Button Name="ConnectButton" Content="Connect Selected" Margin="4" Padding="13,8"/><Button Name="DisconnectButton" Content="Disconnect" Margin="4" Padding="13,8"/><Button Name="RefreshButton" Content="Refresh" Margin="4" Padding="13,8"/></WrapPanel>'
+$HomeButtonsNew = '<WrapPanel Margin="0,12,0,0"><Button Name="AutoButton" Content="AUTO Connect" Margin="4" Padding="13,8"/><Button Name="ConnectButton" Content="Connect Selected" Margin="4" Padding="13,8"/><Button Name="DisconnectButton" Content="Disconnect" Margin="4" Padding="13,8"/><Button Name="HomeExitButton" Content="Prove actual exit" Margin="4" Padding="13,8"/><Button Name="HomeEmergencyButton" Content="Emergency Disconnect" Margin="4" Padding="13,8"/><Button Name="RefreshButton" Content="Refresh" Margin="4" Padding="13,8"/></WrapPanel>'
+$HomeProofOld = '<TextBlock Name="ProofText" Text="Connected requires exact selected-router private path proof." TextWrapping="Wrap"/><TextBlock Name="LastErrorText" Foreground="#FF9CA8" TextWrapping="Wrap"/>'
+$HomeProofNew = '<TextBlock Name="ProofText" Text="Connected requires exact selected-router private path proof." TextWrapping="Wrap"/><TextBlock Name="HomeSummary" Text="Loading truthful Home state…" TextWrapping="Wrap" Margin="0,8,0,8" Foreground="#DDE7FF"/><TextBlock Name="LastErrorText" Foreground="#FF9CA8" TextWrapping="Wrap"/>'
+foreach ($Pair in @(@($HomeButtonsOld,$HomeButtonsNew),@($HomeProofOld,$HomeProofNew))) { if ($ProductSource.Contains($Pair[0]) -ne $true) { throw 'Router VPN Windows Home XAML contract drifted.' }; $ProductSource = $ProductSource.Replace($Pair[0],$Pair[1]) }
+
+$ControlOld = "$ConnectionDetail=Control 'ConnectionDetail';$ProofText=Control 'ProofText';$LastErrorText=Control 'LastErrorText'"
+$ControlNew = "$ConnectionDetail=Control 'ConnectionDetail';$ProofText=Control 'ProofText';$HomeSummary=Control 'HomeSummary';$HomeExitButton=Control 'HomeExitButton';$HomeEmergencyButton=Control 'HomeEmergencyButton';$LastErrorText=Control 'LastErrorText'"
+if (-not $ProductSource.Contains($ControlOld)) { throw 'Router VPN Windows Home control-binding contract drifted.' }
+$ProductSource = $ProductSource.Replace($ControlOld,$ControlNew)
+
+$RefreshFunctionMarker = 'function RefreshProduct{'
+$HomeRefreshFunction = 'function RefreshHomeSummary{try{$Home=Get-RouterVPNHomeSummary -BaseUrl $BaseUrl;$HomeSummary.Text=Format-RouterVPNHomeSummary $Home}catch{$HomeSummary.Text="Home state unavailable: $($_.Exception.Message)"}}' + "`n" + $RefreshFunctionMarker
+if ($ProductSource.Contains($RefreshFunctionMarker) -ne $true) { throw 'Router VPN Windows RefreshProduct contract drifted.' }
+$ProductSource = $ProductSource.Replace($RefreshFunctionMarker,$HomeRefreshFunction)
+if (-not $ProductSource.Contains(';RefreshMultihop;SessionEvents}catch')) { throw 'Router VPN Windows refresh tail contract drifted.' }
+$ProductSource = $ProductSource.Replace(';RefreshMultihop;SessionEvents}catch',';RefreshMultihop;RefreshHomeSummary;SessionEvents}catch')
+
+$HandlersMarker = "(Control 'RefreshButton').Add_Click({RefreshDnsPolicy;RefreshProduct})"
+$HomeHandlers = '$HomeExitButton.Add_Click({try{$Home=Prove-RouterVPNHomeExit -BaseUrl $BaseUrl;Log ("Actual public VPN exit proved for this session: "+$Home.actual_exit_ip)}catch{Log ("Actual exit proof failed: "+$_.Exception.Message)};RefreshHomeSummary});$HomeEmergencyButton.Add_Click({try{[void](Api "/api/emergency-stop" "POST" @{} 15);Log "Emergency Disconnect completed"}catch{Log $_.Exception.Message};RefreshProduct});' + $HandlersMarker
+if (-not $ProductSource.Contains($HandlersMarker)) { throw 'Router VPN Windows Home handler contract drifted.' }
+$ProductSource = $ProductSource.Replace($HandlersMarker,$HomeHandlers)
+
 $SelfTestSourceRead = '$Source=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw'
 $SelfTestSourceReadFixed = '$Source=Get-Content -LiteralPath $env:ROUTER_VPN_PRODUCT_SOURCE -Raw -Encoding UTF8'
-if (-not $ProductSource.Contains($SelfTestSourceRead)) {
-    throw 'Router VPN Windows product self-test source-path contract drifted.'
-}
+if (-not $ProductSource.Contains($SelfTestSourceRead)) { throw 'Router VPN Windows product self-test source-path contract drifted.' }
 $ProductSource = $ProductSource.Replace($SelfTestSourceRead, $SelfTestSourceReadFixed)
 
-# Replace the shipping Help button's old single-message tutorial with the same
-# persistent first-run onboarding flow. Require exactly one replacement so a
-# future product refactor cannot silently disconnect Help from onboarding.
 $TutorialPattern = "(?s)\(Control 'TutorialButton'\)\.Add_Click\(\{\[System\.Windows\.MessageBox\]::Show\(.*?\)\|Out-Null\}\)"
 $tutorialMatches = [regex]::Matches($ProductSource, $TutorialPattern)
-if ($tutorialMatches.Count -ne 1) {
-    throw "Router VPN Windows Help/onboarding contract drifted: expected one tutorial handler, found $($tutorialMatches.Count)."
-}
+if ($tutorialMatches.Count -ne 1) { throw "Router VPN Windows Help/onboarding contract drifted: expected one tutorial handler, found $($tutorialMatches.Count)." }
 $ProductSource = [regex]::Replace($ProductSource, $TutorialPattern, "(Control 'TutorialButton').Add_Click({Show-RouterVPNProductOnboarding -Force})", 1)
 $ProductScript = [ScriptBlock]::Create($ProductSource)
 
-$ApiContract = @(
-    '/api/status', '/api/profiles', '/api/logical-modes', '/api/auto',
-    '/api/connect-logical', '/api/disconnect', '/api/profile/select',
-    '/api/profile/latency', '/api/public-ip', '/api/dns/retest', '/api/dns/policy',
-    '/api/mtu/retest', '/api/emergency-stop', '/api/session', '/api/session/events'
-)
-
-$PreviousProductSource = $env:ROUTER_VPN_PRODUCT_SOURCE
-$env:ROUTER_VPN_PRODUCT_SOURCE = $Product
+$ApiContract = @('/api/status','/api/profiles','/api/logical-modes','/api/auto','/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/public-ip','/api/dns/retest','/api/dns/policy','/api/mtu/retest','/api/emergency-stop','/api/session','/api/session/events','/api/home-summary','/api/home-summary/prove-exit')
+$PreviousProductSource = $env:ROUTER_VPN_PRODUCT_SOURCE; $env:ROUTER_VPN_PRODUCT_SOURCE = $Product
 try {
     if ($SelfTest) {
-        foreach ($Marker in @(
-            'windows-onboarding-v2.json','Close and resume later','Show-RouterVPNProductOnboarding',
-            'Add or link a node','MTU, Auto MTU and Jumbo TUN','LAN access and strict kill switch',
-            'Multihop and external exits','Forwarding where it is actually routable','Windows permissions and privacy',
-            'Full guide and rerun','MinHeight="480" MinWidth="640"','Height="2*" MinHeight="140"',
-            'MaxWidth="760"','MinHeight="180"','$env:ROUTER_VPN_PRODUCT_SOURCE'
-        )) {
-            if (-not ((Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8).Contains($Marker) -or $ProductSource.Contains($Marker))) {
-                throw "Windows shipping onboarding/layout self-test missing $Marker"
-            }
-        }
+        foreach ($Marker in @('windows-onboarding-v2.json','Close and resume later','Show-RouterVPNProductOnboarding','Add or link a node','MTU, Auto MTU and Jumbo TUN','LAN access and strict kill switch','Multihop and external exits','Forwarding where it is actually routable','Windows permissions and privacy','Full guide and rerun','MinHeight="480" MinWidth="640"','Height="2*" MinHeight="140"','MaxWidth="760"','MinHeight="180"','$env:ROUTER_VPN_PRODUCT_SOURCE','HomeSummary','HomeExitButton','HomeEmergencyButton','RefreshHomeSummary','Get-RouterVPNHomeSummary','Prove-RouterVPNHomeExit')) { if (-not ((Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8).Contains($Marker) -or $ProductSource.Contains($Marker))) { throw "Windows shipping onboarding/layout/Home self-test missing $Marker" } }
         & $ProductScript -BaseUrl $BaseUrl -SelfTest
-    } else {
-        Show-RouterVPNProductOnboarding
-        & $ProductScript -BaseUrl $BaseUrl
-    }
+    } else { Show-RouterVPNProductOnboarding; & $ProductScript -BaseUrl $BaseUrl }
     if (-not $?) { throw 'Router VPN native Windows product shell failed.' }
-} finally {
-    if ($null -eq $PreviousProductSource) {
-        Remove-Item Env:ROUTER_VPN_PRODUCT_SOURCE -ErrorAction SilentlyContinue
-    } else {
-        $env:ROUTER_VPN_PRODUCT_SOURCE = $PreviousProductSource
-    }
-}
+} finally { if ($null -eq $PreviousProductSource) { Remove-Item Env:ROUTER_VPN_PRODUCT_SOURCE -ErrorAction SilentlyContinue } else { $env:ROUTER_VPN_PRODUCT_SOURCE = $PreviousProductSource } }
 
-# Native product contract markers: SelfTest / ShowDialog() / explicit UTF-8 /
-# adaptive layout / stable source path / persistent app onboarding lifecycle.
+# Native shipping contract: persistent onboarding + adaptive WPF + truthful Home
+# state. Actual exit is never taken from cached profile.public_ip; it comes only
+# from the current-session /api/home-summary/prove-exit path.
