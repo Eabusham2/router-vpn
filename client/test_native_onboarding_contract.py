@@ -2,41 +2,107 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-win = (ROOT / "client/RouterVPN-Windows-App.ps1").read_text(encoding="utf-8")
-mac = (ROOT / "client/macos/RouterVPNMacApp.swift").read_text(encoding="utf-8")
-linux = (ROOT / "client/linux/routervpn-gtk.c").read_text(encoding="utf-8")
 
-concepts = [
-    "Add Router", "pairing", "router-vpn-bundle.json", "AUTO", "WireGuard",
-    "AmneziaWG", "DNS", "LAN Off", "MTU/Jumbo", "kill-switch", "Multihop",
-    "forwarding", "permissions", "Disconnect", "private identity/path proof",
-    "Public", "Diagnostics", "Emergency stop", "Setup Center Full Guide", "Rerun",
-]
-for name, source in (("Windows", win), ("macOS", mac), ("Linux", linux)):
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def require(name: str, source: str, markers: tuple[str, ...]) -> None:
     lower = source.lower()
-    for concept in concepts:
-        assert concept.lower() in lower, f"{name} tutorial missing {concept}"
-    assert "separate from Setup Center onboarding" in source
-    assert "Run Tutorial" in source
+    for marker in markers:
+        assert marker.lower() in lower, f"{name} shipping onboarding missing {marker!r}"
 
-for marker in (
-    "Show-RouterVPNTutorial", "windows-onboarding-v1.json", ".routervpn-state",
-    "Close and resume later", "Save-RouterVPNOnboardingState 0 $true",
-    "Join-Path $PSScriptRoot '.routervpn-state'",
-):
-    assert marker in win, f"Windows onboarding missing {marker}"
 
-for marker in (
-    "RouterVPNNativeOnboardingDoneV1", "RouterVPNNativeOnboardingStepV1",
-    "showTutorial(force:", "Close & resume later", "UserDefaults.standard.set(true",
-):
-    assert marker in mac, f"macOS onboarding missing {marker}"
+# This audit intentionally watches the sources/package seams that the current
+# product actually ships. Legacy desktop prototype files are not evidence that
+# the packaged native product still owns the required onboarding lifecycle.
+win = read("client/RouterVPN-Windows-App.ps1")
+mac_onboarding = read("client/macos/RouterVPNProductOnboarding.swift")
+mac_build = read("client/macos/build-native-app.sh")
+linux_onboarding = read("client/linux/routervpn-product-onboarding-v6.inc")
+linux_build = read("client/linux/build-native-app.sh")
+android_onboarding = read("android/app/src/main/java/com/eabusham/routervpn/AndroidProductOnboarding.java")
+android_product = read("android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java")
+ios_onboarding = read("ios/RouterVPN/App/ProductOnboardingView.swift")
+ios_product = read("ios/RouterVPN/App/ProductRootView.swift")
 
-for marker in (
-    "show_tutorial(App *app, gboolean force)", "linux-onboarding-v1.ini",
-    "gtk_assistant_new", "tutorial_save(state->state_path, TRUE, 0)",
-    "show_tutorial(&app, FALSE)",
-):
-    assert marker in linux, f"Linux onboarding missing {marker}"
+shared_topics = (
+    "pairing", "router-vpn-bundle.json", "AUTO", "WireGuard", "DNS",
+    "LAN Off", "MTU/Jumbo", "kill-switch", "Multihop", "forwarding",
+    "permissions", "Disconnect", "private identity/path proof", "Public",
+    "Diagnostics", "Setup Center Full Guide",
+)
 
-print("Native desktop onboarding contract: PASS")
+# Windows shipping wrapper owns the lifecycle and rewires the actual Product-v2
+# Help button into the same persisted first-run tutorial.
+require("Windows", win, shared_topics + (
+    "AmneziaWG", "Emergency stop", "windows-onboarding-v2.json",
+    ".routervpn-state", "Close and resume later", "Show-RouterVPNProductOnboarding",
+    "Save-RouterVPNOnboardingState", "Show-RouterVPNProductOnboarding -Force",
+    "app onboarding is separate from Setup Center onboarding",
+))
+assert "if ($SelfTest)" in win
+assert "Show-RouterVPNProductOnboarding\n        & $ProductScript" in win
+assert "TutorialPattern" in win and "Run onboarding" in win
+
+# macOS shipping build compiles the onboarding source into RouterVPN.app and
+# exact-wires both first launch and Help rerun into the AppKit product.
+require("macOS", mac_onboarding, shared_topics + (
+    "AmneziaWG", "Emergency stop", "RouterVPNProductOnboardingDoneV2",
+    "RouterVPNProductOnboardingStepV2", "Close & resume later",
+    "presentIfNeeded", "runProductOnboarding",
+    "app onboarding is separate from Setup Center onboarding",
+))
+require("macOS build", mac_build, (
+    "RouterVPNProductOnboarding.swift", "Run onboarding",
+    "RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)",
+    "RouterVPNProductOnboardingDoneV2",
+))
+assert '"$ONBOARDING_SRC"' in mac_build
+
+# Linux retains the native GTK assistant but ships the complete v6 content and
+# a guarded build seam that persists/resumes its current page.
+require("Linux", linux_onboarding, shared_topics + (
+    "AmneziaWG", "Emergency stop", "Run Tutorial",
+    "app onboarding is separate from Setup Center onboarding",
+))
+require("Linux build", linux_build, (
+    "routervpn-product-onboarding-v6.inc", "onboarding_read_step_v6",
+    "onboarding_write_step_v6", "gtk_assistant_set_current_page",
+    "gtk_assistant_get_current_page", "Run Tutorial",
+))
+assert 'gcc -O2 -Wall -Wextra -Werror' in linux_build
+
+# Android ProductActivity is the actual dashboard. First launch and Help both
+# route to the persisted SharedPreferences onboarding flow.
+require("Android", android_onboarding, shared_topics + (
+    "AmneziaWG", "Emergency stop", "VpnService", "Always-on VPN",
+    "Block connections without VPN", "routervpn_product_onboarding_v2",
+    "Close & resume later", "showIfNeeded",
+    "app onboarding is separate from Setup Center onboarding",
+))
+require("Android product", android_product, (
+    "AndroidProductOnboarding.showIfNeeded(this)",
+    "Run onboarding again", "AndroidProductOnboarding.show(this, true)",
+))
+
+# iOS/iPadOS needs the shared app contract plus explicit Apple distribution and
+# Network Extension truth. Unsupported AWG/desktop parity must remain stated,
+# not faked green just to satisfy a shared-wording test.
+require("iOS/iPadOS", ios_onboarding, (
+    "pairing", "router-vpn-bundle.json", "AUTO", "WireGuard", "DNS",
+    "LAN Off", "MTU/Jumbo", "kill-switch", "Multihop", "forwarding",
+    "VPN permission", "Network Extension", "Local Network permission",
+    "Disconnect", "private identity/path proof", "public VPN exit",
+    "Diagnostics", "Setup Center Full Guide", "unsigned IPA", "TestFlight",
+    "App Store", "sideload", "provisioning", "PacketTunnel",
+    "RouterVPNProductOnboardingDoneV2", "RouterVPNProductOnboardingStepV2",
+    "Close & resume later", "app onboarding is separate from Setup Center onboarding",
+))
+require("iOS/iPadOS product", ios_product, (
+    "Setup Guide", "RouterVPNProductOnboardingView",
+    "RouterVPNProductOnboardingDoneV2", ".onAppear",
+))
+
+print("Shipping native app onboarding contract: PASS")
