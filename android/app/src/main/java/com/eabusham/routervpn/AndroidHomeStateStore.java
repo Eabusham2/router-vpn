@@ -1,0 +1,109 @@
+package com.eabusham.routervpn;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+import java.util.UUID;
+
+/** App-private runtime state used by the product Home dashboard. Never stores tunnel secrets. */
+final class AndroidHomeStateStore {
+    private static final String PREFS = "routervpn_home_state_v1";
+
+    static final class Snapshot {
+        final String sessionId, phase, logicalMode, runtimeMode, actualBase, fallback, warning;
+        final boolean connected;
+        Snapshot(SharedPreferences p) {
+            sessionId = p.getString("session_id", "");
+            phase = p.getString("phase", "off");
+            logicalMode = p.getString("logical_mode", "");
+            runtimeMode = p.getString("runtime_mode", "");
+            actualBase = p.getString("actual_base", "");
+            fallback = p.getString("fallback", "");
+            warning = p.getString("warning", "");
+            connected = p.getBoolean("connected", false);
+        }
+    }
+
+    private static SharedPreferences prefs(Context context) {
+        return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    static Snapshot snapshot(Context context) { return new Snapshot(prefs(context)); }
+
+    static String begin(Context context, String logicalMode, String runtimeMode, String base) {
+        String session = UUID.randomUUID().toString();
+        prefs(context).edit()
+                .putString("session_id", session)
+                .putString("phase", "connecting")
+                .putString("logical_mode", clean(logicalMode))
+                .putString("runtime_mode", clean(runtimeMode))
+                .putString("actual_base", clean(base))
+                .putString("fallback", "")
+                .putString("warning", "")
+                .putBoolean("connected", false)
+                .remove("actual_exit_ip")
+                .remove("actual_exit_session")
+                .apply();
+        return session;
+    }
+
+    static void connected(Context context, String logicalMode, String runtimeMode, String base, String fallback) {
+        SharedPreferences p = prefs(context);
+        String session = p.getString("session_id", "");
+        if (session == null || session.isEmpty()) session = UUID.randomUUID().toString();
+        p.edit()
+                .putString("session_id", session)
+                .putString("phase", "connected")
+                .putString("logical_mode", clean(logicalMode))
+                .putString("runtime_mode", clean(runtimeMode))
+                .putString("actual_base", clean(base))
+                .putString("fallback", clean(fallback))
+                .putString("warning", "")
+                .putBoolean("connected", true)
+                .apply();
+    }
+
+    static void warning(Context context, String warning) {
+        prefs(context).edit().putString("warning", clean(warning)).apply();
+    }
+
+    static void failed(Context context, String warning) {
+        prefs(context).edit()
+                .putString("phase", "failed")
+                .putString("warning", clean(warning))
+                .putBoolean("connected", false)
+                .remove("actual_exit_ip")
+                .remove("actual_exit_session")
+                .apply();
+    }
+
+    static void disconnected(Context context) {
+        prefs(context).edit()
+                .putString("session_id", "")
+                .putString("phase", "off")
+                .putString("logical_mode", "")
+                .putString("runtime_mode", "")
+                .putString("actual_base", "")
+                .putString("fallback", "")
+                .putString("warning", "")
+                .putBoolean("connected", false)
+                .remove("actual_exit_ip")
+                .remove("actual_exit_session")
+                .apply();
+    }
+
+    static void saveActualExit(Context context, String sessionId, String ip) {
+        prefs(context).edit().putString("actual_exit_session", clean(sessionId)).putString("actual_exit_ip", clean(ip)).apply();
+    }
+
+    static String actualExitForCurrentSession(Context context) {
+        SharedPreferences p = prefs(context);
+        String session = p.getString("session_id", "");
+        String proofSession = p.getString("actual_exit_session", "");
+        if (session == null || session.isEmpty() || !session.equals(proofSession)) return "";
+        return p.getString("actual_exit_ip", "");
+    }
+
+    private static String clean(String value) { return value == null ? "" : value.replace('\n', ' ').replace('\r', ' ').trim(); }
+    private AndroidHomeStateStore() {}
+}
