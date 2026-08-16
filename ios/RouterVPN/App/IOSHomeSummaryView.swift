@@ -17,7 +17,11 @@ struct IOSHomeSummaryView: View {
     private var dnsMeasuredRTT: Double? {
         guard let p = profile else { return nil }
         let host = (p.dnsHost ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !host.isEmpty, let result = p.dnsResults?.first(where: { $0.working && $0.address == host }), let value = result.latencyMs { return value }
+        if !host.isEmpty,
+           let result = p.dnsResults?.first(where: { $0.working && $0.address == host }),
+           let value = result.latencyMs {
+            return value
+        }
         if let value = p.fastestDNSLatencyMs, value > 0 { return value }
         return nil
     }
@@ -49,88 +53,202 @@ struct IOSHomeSummaryView: View {
 
     private var warnings: [String] {
         var values: [String] = []
-        if model.connected && actualExitStatus != "proved" { values.append("Actual public exit is not proven for this live PacketTunnel session") }
-        if let p = profile, (p.dnsMode ?? "").isEmpty == false { values.append("DNS RTT shown here is a home-node query measurement; active PacketTunnel DNS still needs runtime/device proof") }
-        if profile?.baseFallback == true { values.append("Base fallback is enabled; actual engine/base is authoritative") }
-        if !model.message.isEmpty && !model.message.lowercased().contains("connected") { values.append(model.message) }
+        if model.connected && actualExitStatus != "proved" {
+            values.append("Actual public exit is not proven for this live PacketTunnel session")
+        }
+        if let p = profile, (p.dnsMode ?? "").isEmpty == false {
+            values.append("DNS RTT shown here is a home-node query measurement; active PacketTunnel DNS still needs runtime/device proof")
+        }
+        if profile?.baseFallback == true {
+            values.append("Base fallback is enabled; actual engine/base is authoritative")
+        }
+        if !model.message.isEmpty && !model.message.lowercased().contains("connected") {
+            values.append(model.message)
+        }
         return values
+    }
+
+    private var locationText: String {
+        guard let value = profile?.location, !value.isEmpty else { return "Location not labeled" }
+        return value
+    }
+
+    private var actualExitText: String {
+        if actualExitStatus == "proved" { return actualExitIP }
+        return model.connected ? "Unproven — tap Prove actual exit" : "Not connected"
+    }
+
+    private var rawProfileText: String {
+        model.activeRawProfile.isEmpty ? "—" : model.activeRawProfile
+    }
+
+    private var dnsText: String {
+        let mode = profile?.dnsMode ?? "home"
+        let host = profile?.dnsHost ?? profile?.adGuardIPv4 ?? "—"
+        let rtt = dnsMeasuredRTT.map { String(format: " • home query RTT %.2f ms", $0) } ?? " • query RTT not measured"
+        return "DNS: \(mode) • \(host)\(rtt)"
+    }
+
+    private var nodeLatencyText: String {
+        guard let p = profile, (p.latencySamples ?? 0) > 0 else { return "Node latency: Not measured" }
+        return String(format: "Node latency: %.2f ms / %d samples", p.latencyMedianMs ?? 0, p.latencySamples ?? 0)
+    }
+
+    private var warningsText: String {
+        warnings.isEmpty ? "None" : warnings.joined(separator: " | ")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Home / Connect state").font(.headline)
-                Spacer()
-                Text(model.connected ? "Connected" : "Off").font(.caption.bold()).foregroundStyle(model.connected ? .green : .secondary)
-            }
-            Text("Node: \(profile?.name ?? model.routerName) • \((profile?.location?.isEmpty == false) ? profile!.location! : "Location not labeled")")
-            Text("Public endpoint: \(profile?.endpoint ?? model.endpoint)")
-            Text("Actual public VPN exit: \(actualExitStatus == "proved" ? actualExitIP : (model.connected ? "Unproven — tap Prove actual exit" : "Not connected"))")
-            Text("Phase/path proof: \(model.connected ? "connected • selected-node proof passed" : "off / not proven")")
-            Text("Logical/runtime/base: \(model.selectedLogicalMode) • \(model.activeRawProfile.isEmpty ? "—" : model.activeRawProfile) • \(actualBase)")
-            Text("Fallback: \(fallbackText)")
-            Text("DNS: \(profile?.dnsMode ?? "home") • \(profile?.dnsHost ?? profile?.adGuardIPv4 ?? "—")" + (dnsMeasuredRTT.map { String(format: " • home query RTT %.2f ms", $0) } ?? " • query RTT not measured"))
-            Text("Node latency: \((profile?.latencySamples ?? 0) > 0 ? String(format: "%.2f ms / %d samples", profile?.latencyMedianMs ?? 0, profile?.latencySamples ?? 0) : "Not measured")")
-            Text("LAN access: \((profile?.homeLANAccess ?? model.homeLANAccess) ? "On" : "Off") • Kill switch: \(killSwitchText)")
-            Text("Effective MTU: \(mtuText) • IPv6: \(profile?.ipv6Mode ?? "default")")
-            Text("Warnings: \(warnings.isEmpty ? "None" : warnings.joined(separator: " | "))").foregroundStyle(warnings.isEmpty ? .secondary : .orange)
-            if !exitError.isEmpty { Text(exitError).foregroundStyle(.red) }
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    Button(provingExit ? "Proving…" : "Prove actual exit") { Task { await proveActualExit() } }.disabled(!model.connected || provingExit)
-                    Button("Advanced Settings") { showingSettings = true }.disabled(model.connected)
-                    Button("Emergency Disconnect") { disconnectEmergency() }.disabled(!model.connected)
-                }
-                VStack(alignment: .leading) {
-                    Button(provingExit ? "Proving…" : "Prove actual exit") { Task { await proveActualExit() } }.disabled(!model.connected || provingExit)
-                    Button("Advanced Settings") { showingSettings = true }.disabled(model.connected)
-                    Button("Emergency Disconnect") { disconnectEmergency() }.disabled(!model.connected)
-                }
-            }
-            .buttonStyle(.bordered)
+            statusHeader
+            summaryLines
+            warningLines
+            actionControls
         }
         .font(.caption)
         .padding(12)
         .frame(maxWidth: 760, alignment: .leading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .sheet(isPresented: $showingSettings) { IOSProfileSettingsView().environmentObject(model) }
-        .onChange(of: model.connected) { _, connected in if !connected { actualExitIP = ""; actualExitStatus = "not-connected"; exitError = "" } }
+        .sheet(isPresented: $showingSettings) {
+            IOSProfileSettingsView().environmentObject(model)
+        }
+        .onChange(of: model.connected) { _, connected in
+            if !connected {
+                actualExitIP = ""
+                actualExitStatus = "not-connected"
+                exitError = ""
+            }
+        }
         .onChange(of: model.activeRawProfile) { _, _ in clearExitProofForRuntimeChange() }
         .onChange(of: model.activeEngine) { _, _ in clearExitProofForRuntimeChange() }
     }
 
+    private var statusHeader: some View {
+        HStack {
+            Text("Home / Connect state").font(.headline)
+            Spacer()
+            if model.connected {
+                Text("Connected").font(.caption.bold()).foregroundStyle(.green)
+            } else {
+                Text("Off").font(.caption.bold()).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder private var summaryLines: some View {
+        Text("Node: \(profile?.name ?? model.routerName) • \(locationText)")
+        Text("Public endpoint: \(profile?.endpoint ?? model.endpoint)")
+        Text("Actual public VPN exit: \(actualExitText)")
+        Text("Phase/path proof: \(model.connected ? "connected • selected-node proof passed" : "off / not proven")")
+        Text("Logical/runtime/base: \(model.selectedLogicalMode) • \(rawProfileText) • \(actualBase)")
+        Text("Fallback: \(fallbackText)")
+        Text(dnsText)
+        Text(nodeLatencyText)
+        Text("LAN access: \((profile?.homeLANAccess ?? model.homeLANAccess) ? "On" : "Off") • Kill switch: \(killSwitchText)")
+        Text("Effective MTU: \(mtuText) • IPv6: \(profile?.ipv6Mode ?? "default")")
+    }
+
+    @ViewBuilder private var warningLines: some View {
+        if warnings.isEmpty {
+            Text("Warnings: None").foregroundStyle(.secondary)
+        } else {
+            Text("Warnings: \(warningsText)").foregroundStyle(.orange)
+        }
+        if !exitError.isEmpty {
+            Text(exitError).foregroundStyle(.red)
+        }
+    }
+
+    private var actionControls: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack { actionButtons }
+            VStack(alignment: .leading) { actionButtons }
+        }
+        .buttonStyle(.bordered)
+    }
+
+    @ViewBuilder private var actionButtons: some View {
+        Button(provingExit ? "Proving…" : "Prove actual exit") {
+            Task { await proveActualExit() }
+        }
+        .disabled(!model.connected || provingExit)
+
+        Button("Advanced Settings") { showingSettings = true }
+            .disabled(model.connected)
+
+        Button("Emergency Disconnect") { disconnectEmergency() }
+            .disabled(!model.connected)
+    }
+
     private func disconnectEmergency() {
-        actualExitIP = ""; actualExitStatus = "not-connected"; exitError = ""; model.disconnect()
+        actualExitIP = ""
+        actualExitStatus = "not-connected"
+        exitError = ""
+        model.disconnect()
     }
 
     @MainActor private func proveActualExit() async {
         guard model.connected, let bundle = model.bundle else { return }
-        let selectedNode = bundle.selectedRouterID, engine = model.activeEngine, rawProfile = model.activeRawProfile
-        provingExit = true; exitError = ""; actualExitStatus = "checking"; defer { provingExit = false }
+        let selectedNode = bundle.selectedRouterID
+        let engine = model.activeEngine
+        let rawProfile = model.activeRawProfile
+        provingExit = true
+        exitError = ""
+        actualExitStatus = "checking"
+        defer { provingExit = false }
         do {
             let value = try await fetchPublicIP()
-            guard model.connected, model.bundle?.selectedRouterID == selectedNode, model.activeEngine == engine, model.activeRawProfile == rawProfile else {
-                throw NSError(domain: "RouterVPN.Home", code: 2, userInfo: [NSLocalizedDescriptionKey: "VPN node/runtime changed while proving the public exit; result discarded."])
+            guard model.connected,
+                  model.bundle?.selectedRouterID == selectedNode,
+                  model.activeEngine == engine,
+                  model.activeRawProfile == rawProfile else {
+                throw NSError(
+                    domain: "RouterVPN.Home",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "VPN node/runtime changed while proving the public exit; result discarded."]
+                )
             }
-            actualExitIP = value; actualExitStatus = "proved"
-        } catch { actualExitIP = ""; actualExitStatus = model.connected ? "unproven" : "not-connected"; exitError = "Actual exit proof failed: \(error.localizedDescription)" }
+            actualExitIP = value
+            actualExitStatus = "proved"
+        } catch {
+            actualExitIP = ""
+            actualExitStatus = model.connected ? "unproven" : "not-connected"
+            exitError = "Actual exit proof failed: \(error.localizedDescription)"
+        }
     }
 
     private func fetchPublicIP() async throws -> String {
         for raw in ["https://api64.ipify.org", "https://api.ipify.org"] {
             guard let url = URL(string: raw) else { continue }
             do {
-                var request = URLRequest(url: url); request.timeoutInterval = 6; request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 6
+                request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
                 let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), data.count <= 128 else { continue }
+                guard let http = response as? HTTPURLResponse,
+                      (200..<300).contains(http.statusCode),
+                      data.count <= 128 else {
+                    continue
+                }
                 let value = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
                 if IPv4Address(value) != nil || IPv6Address(value) != nil { return value }
-            } catch { continue }
+            } catch {
+                continue
+            }
         }
-        throw NSError(domain: "RouterVPN.Home", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not determine the public VPN exit through the current PacketTunnel."])
+        throw NSError(
+            domain: "RouterVPN.Home",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Could not determine the public VPN exit through the current PacketTunnel."]
+        )
     }
 
-    private func clearExitProofForRuntimeChange() { if actualExitStatus == "proved" { actualExitIP = ""; actualExitStatus = model.connected ? "unproven" : "not-connected" } }
+    private func clearExitProofForRuntimeChange() {
+        if actualExitStatus == "proved" {
+            actualExitIP = ""
+            actualExitStatus = model.connected ? "unproven" : "not-connected"
+        }
+    }
 }
 
 // Apple Home contract: node/location/public endpoint/current-session actual exit,
