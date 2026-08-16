@@ -304,15 +304,27 @@ static void refresh_dns_page_v5(App *app) {
             g_string_append_printf(detail, "Fastest measured: %s • %.2f ms • %s\n", obj_string(obj, "fastest_dns_name"), json_number_v5(obj, "fastest_dns_latency_ms"), obj_string(obj, "fastest_dns_host"));
         }
         JsonArray *results = json_object_has_member(obj, "results") ? json_object_get_array_member(obj, "results") : NULL;
-        if (results != NULL) for (guint i = 0; i < json_array_get_length(results); i++) {
-            JsonObject *r = json_array_get_object_element(results, i); if (r == NULL) continue;
-            gboolean working = json_object_has_member(r, "working") && json_object_get_boolean_member(r, "working");
-            g_string_append_printf(detail, "%s • %s • %s\n", obj_string(r, "name"), obj_string(r, "address"), working ? g_strdup_printf("%.2f ms", json_number_v5(r, "latency_ms")) : "failed");
+        if (results != NULL) {
+            for (guint i = 0; i < json_array_get_length(results); i++) {
+                JsonObject *r = json_array_get_object_element(results, i);
+                if (r == NULL) continue;
+                gboolean working = json_object_has_member(r, "working") && json_object_get_boolean_member(r, "working");
+                if (working) {
+                    g_string_append_printf(detail, "%s • %s • %.2f ms\n", obj_string(r, "name"), obj_string(r, "address"), json_number_v5(r, "latency_ms"));
+                } else {
+                    g_string_append_printf(detail, "%s • %s • failed\n", obj_string(r, "name"), obj_string(r, "address"));
+                }
+            }
         }
         g_string_append(detail, "\nBenchmark RTT = real A/AAAA DNS query time measured from the selected home node, not ICMP. Saving policy is not active-runtime proof; reconnect and session proof still decide that.");
-        gtk_label_set_text(GTK_LABEL(summary), detail->str); g_string_free(detail, TRUE);
+        gtk_label_set_text(GTK_LABEL(summary), detail->str);
+        g_string_free(detail, TRUE);
     }
-    if (root != NULL) json_node_free(root); free(out.data); g_free(err);
+    if (root != NULL) {
+        json_node_free(root);
+    }
+    free(out.data);
+    g_free(err);
 }
 
 static void on_dns_preset_v5(GtkComboBox *combo, gpointer data) {
@@ -382,7 +394,7 @@ static GtkWidget *build_dns_page_v5(App *app) {
 static GtkWidget *build_advanced_page_v5(App *app) {
     GtkWidget *box = make_info_page(
         "Advanced",
-        "MTU/Jumbo, LAN access, kill switch, Router VPN multihop and external entry/exit compatibility remain controller-owned so native UI cannot claim settings the dataplane did not apply. MTU Retest is accepted only while one Router VPN node is connected with Auto MTU; it compares bounded private-node loss/RTT/throughput candidates, caches by network/path context, and does not claim MTU caused an earlier cellular regression.");
+        "MTU/Jumbo, LAN access, kill switch, Router VPN multihop and external entry/exit compatibility remain controller-owned so native UI cannot claim settings the dataplane did not apply. MTU Retest is accepted only while one Router VPN node is connected with Auto MTU; it compares bounded private-node loss/RTT/throughput candidates, caches by network/path context, and does not claim MTU caused any earlier cellular regression.");
     gtk_box_pack_start(GTK_BOX(box), make_button("Retest MTU", G_CALLBACK(on_mtu_retest_v5), app), FALSE, FALSE, 0);
     return box;
 }
