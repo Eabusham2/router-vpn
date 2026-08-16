@@ -10,40 +10,51 @@ import (
 )
 
 type profileSettingsRequest struct {
-	HomeLANAccess   *bool   `json:"home_lan_access,omitempty"`
+	HomeLANAccess    *bool   `json:"home_lan_access,omitempty"`
 	KillSwitchPolicy *string `json:"kill_switch_policy,omitempty"`
-	IPv6Mode        *string `json:"ipv6_mode,omitempty"`
-	StartupMode     *string `json:"startup_mode,omitempty"`
-	AutoConnect     *bool   `json:"auto_connect,omitempty"`
-	BaseTunnel      *string `json:"base_tunnel,omitempty"`
-	BaseFallback    *bool   `json:"base_fallback,omitempty"`
-	MTUPolicy       *string `json:"mtu_policy,omitempty"`
-	ManualMTU       *int    `json:"manual_mtu,omitempty"`
-	DAITAEnabled    *bool   `json:"daita_enabled,omitempty"`
-	JumboTUN        *bool   `json:"jumbo_tun,omitempty"`
-	SocksEnabled    *bool   `json:"socks_enabled,omitempty"`
+	IPv6Mode         *string `json:"ipv6_mode,omitempty"`
+	StartupMode      *string `json:"startup_mode,omitempty"`
+	AutoConnect      *bool   `json:"auto_connect,omitempty"`
+	BaseTunnel       *string `json:"base_tunnel,omitempty"`
+	BaseFallback     *bool   `json:"base_fallback,omitempty"`
+	MTUPolicy        *string `json:"mtu_policy,omitempty"`
+	ManualMTU        *int    `json:"manual_mtu,omitempty"`
+	DAITAEnabled     *bool   `json:"daita_enabled,omitempty"`
+	JumboTUN         *bool   `json:"jumbo_tun,omitempty"`
+	SocksEnabled     *bool   `json:"socks_enabled,omitempty"`
 }
 
 type profileSettingsResponse struct {
-	HomeLANAccess   bool   `json:"home_lan_access"`
-	KillSwitchPolicy string `json:"kill_switch_policy"`
-	IPv6Mode        string `json:"ipv6_mode"`
-	StartupMode     string `json:"startup_mode"`
-	AutoConnect     bool   `json:"auto_connect"`
-	BaseTunnel      string `json:"base_tunnel"`
-	BaseFallback    bool   `json:"base_fallback"`
-	MTUPolicy       string `json:"mtu_policy"`
-	ManualMTU       int    `json:"manual_mtu,omitempty"`
-	EffectiveMTU    int    `json:"effective_mtu,omitempty"`
+	HomeLANAccess     bool   `json:"home_lan_access"`
+	KillSwitchPolicy  string `json:"kill_switch_policy"`
+	IPv6Mode          string `json:"ipv6_mode"`
+	StartupMode       string `json:"startup_mode"`
+	AutoConnect       bool   `json:"auto_connect"`
+	BaseTunnel        string `json:"base_tunnel"`
+	BaseFallback      bool   `json:"base_fallback"`
+	MTUPolicy         string `json:"mtu_policy"`
+	ManualMTU         int    `json:"manual_mtu,omitempty"`
+	EffectiveMTU      int    `json:"effective_mtu,omitempty"`
 	EffectiveMTUSource string `json:"effective_mtu_source,omitempty"`
-	DAITAEnabled    bool   `json:"daita_enabled"`
-	JumboTUN        bool   `json:"jumbo_tun"`
-	SocksEnabled    bool   `json:"socks_enabled"`
-	Note            string `json:"note"`
+	DAITAEnabled      bool   `json:"daita_enabled"`
+	JumboTUN          bool   `json:"jumbo_tun"`
+	SocksEnabled      bool   `json:"socks_enabled"`
+	Note              string `json:"note"`
 }
 
 func registerProfileSettingsRoute(h *http.ServeMux, a *app) {
+	a.mu.Lock()
+	if p, ok := a.profileByIDLocked(a.profiles.SelectedID); ok && !a.state.Connected {
+		a.syncProfileOptionStateLocked(p)
+	}
+	a.mu.Unlock()
 	h.HandleFunc("/api/profile/settings", a.profileSettings)
+}
+
+func (a *app) syncProfileOptionStateLocked(p common.RouterProfile) {
+	a.state.DAITA = p.DAITAEnabled
+	a.state.Jumbo = p.JumboTUN
+	a.state.Socks = p.SocksEnabled
 }
 
 func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +66,7 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 	selected := a.profiles.SelectedID
 	profile, ok := a.profileByIDLocked(selected)
 	busy := a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" || strings.HasPrefix(a.state.Phase, "auto:")
+	if ok && !busy { a.syncProfileOptionStateLocked(profile) }
 	a.mu.Unlock()
 	if !ok {
 		http.Error(w, "add and select your home router first", http.StatusBadRequest)
@@ -102,11 +114,7 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "selected router disappeared", http.StatusConflict)
 		return
 	}
-	// Legacy /api/options state mirrors the selected profile so every next start
-	// observes the persistent node policy rather than stale process memory.
-	a.state.DAITA = updated.DAITAEnabled
-	a.state.Jumbo = updated.JumboTUN
-	a.state.Socks = updated.SocksEnabled
+	a.syncProfileOptionStateLocked(updated)
 	err = a.persistProfilesLocked()
 	a.mu.Unlock()
 	if err != nil {
