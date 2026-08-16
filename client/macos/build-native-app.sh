@@ -23,7 +23,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$OUT"
 BUILD_WORK=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-macos-build.XXXXXX")
 trap 'rm -rf "$BUILD_WORK"' EXIT
 MENU_OBJ="$BUILD_WORK/RouterVPNMenuBar.o"
-ADAPTIVE_SRC="$BUILD_WORK/RouterVPNMacProduct.swift"
+# Swift permits top-level executable statements across a multi-file target only
+# when the executable translation unit is named main.swift.
+ADAPTIVE_SRC="$BUILD_WORK/main.swift"
 
 python3 - "$SRC" "$ADAPTIVE_SRC" <<'PY'
 from pathlib import Path
