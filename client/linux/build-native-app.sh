@@ -10,6 +10,7 @@ CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SHIPPED=("$SRC" "$V4" "$V3" "$CORE")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v5.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
+BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v5-build.c"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
@@ -40,9 +41,50 @@ PY
 ! grep -Fq 'int main(int argc, char **argv) {' "$EMBEDDED_V4"
 grep -Fq 'static void __attribute__((used)) build_ui_v4(App *app) {' "$EMBEDDED_V4"
 
+# The tracked v5 source is authoritative. Build an exact, fail-closed temporary
+# translation unit that fixes two compiler/audit issues discovered by the native
+# Linux -Werror gate: (1) a misleadingly-indented multi-statement cleanup line,
+# and (2) a g_strdup_printf temporary used only as a printf argument. No warning
+# is disabled; if either expected source sequence changes, fail instead of doing
+# a broad or unsafe rewrite.
+python3 - "$SRC" "$BUILD_SRC" <<'PY'
+from pathlib import Path
+import sys
+src_path, out_path = map(Path, sys.argv[1:3])
+text = src_path.read_text(encoding='utf-8')
+old_format = '''            g_string_append_printf(detail, "%s • %s • %s\\n", obj_string(r, "name"), obj_string(r, "address"), working ? g_strdup_printf("%.2f ms", json_number_v5(r, "latency_ms")) : "failed");'''
+new_format = '''            if (working) {
+                g_string_append_printf(detail, "%s • %s • %.2f ms\\n", obj_string(r, "name"), obj_string(r, "address"), json_number_v5(r, "latency_ms"));
+            } else {
+                g_string_append_printf(detail, "%s • %s • failed\\n", obj_string(r, "name"), obj_string(r, "address"));
+            }'''
+old_cleanup = '''    if (root != NULL) json_node_free(root); free(out.data); g_free(err);'''
+new_cleanup = '''    if (root != NULL) json_node_free(root);
+    free(out.data);
+    g_free(err);'''
+for label, old, new in (
+    ('DNS result formatting', old_format, new_format),
+    ('DNS cleanup indentation', old_cleanup, new_cleanup),
+):
+    if text.count(old) != 1:
+        raise SystemExit(f'expected exactly one v5 {label} source sequence')
+    text = text.replace(old, new, 1)
+for marker in (
+    'g_string_append_printf(detail, "%s • %s • %.2f ms\\n"',
+    'if (root != NULL) json_node_free(root);\n    free(out.data);\n    g_free(err);',
+):
+    if marker not in text:
+        raise SystemExit(f'missing sanitized v5 marker: {marker}')
+out_path.write_text(text, encoding='utf-8')
+PY
+! grep -Fq 'working ? g_strdup_printf' "$BUILD_SRC"
+! grep -Fq 'if (root != NULL) json_node_free(root); free(out.data); g_free(err);' "$BUILD_SRC"
+grep -Fq 'g_string_append_printf(detail, "%s • %s • %.2f ms\n"' "$BUILD_SRC"
+grep -Fq 'free(out.data);' "$BUILD_SRC"
+
 gcc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong \
   -I"$BUILD_DIR" -I"$ROOT/client/linux" \
-  "$SRC" -o "$OUT" \
+  "$BUILD_SRC" -o "$OUT" \
   $(pkg-config --cflags --libs gtk+-3.0 libcurl json-glib-1.0) -lm
 chmod 755 "$OUT"
 
