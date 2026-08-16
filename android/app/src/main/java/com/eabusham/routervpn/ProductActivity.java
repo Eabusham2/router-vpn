@@ -74,7 +74,7 @@ public final class ProductActivity extends Activity {
         homeStateView.setTextIsSelectable(true);
         root.addView(homeStateView, margins(0, dp(4), 0, dp(4)));
         LinearLayout homeActions = new LinearLayout(this);
-        homeActions.setOrientation(LinearLayout.HORIZONTAL);
+        homeActions.setOrientation(LinearLayout.VERTICAL);
         Button proveExit = button("Prove actual exit");
         proveExit.setOnClickListener(v -> {
             homeStateView.setText("Proving actual public VPN exit through the current Router VPN-owned Android VPN network…");
@@ -150,7 +150,12 @@ public final class ProductActivity extends Activity {
 
     private void chooseCatalogItem(AndroidUnifiedNodeCatalog.Item item){if(item.isRouterVpn()){try{nodeStore.select(item.id);refreshNodes();toast("Selected "+item.name);}catch(Exception error){toast(safe(error));}return;}Intent intent=new Intent(this,StandardExitActivity.class);intent.putExtra(StandardExitActivity.EXTRA_EXIT_ID,item.id);startActivity(intent);}
     private void showModes(){AndroidProductParity.showModes(this,nodeStore);} private void showDns(){AndroidProductParity.showDNS(this,nodeStore);}
-    private void showAdvanced(){JSONObject p=activeRouterProfile();if(p==null){dialog("Advanced","No active Router VPN profile. External custom exits enforce their own full-device runtime and exact public-exit proof; direct Android external exits additionally require system lockdown.");return;}String mtu=p.optString("mtu_policy","default");int customMtu=p.optInt("manual_mtu",0),effectiveMtu=p.optInt("effective_mtu",0);String kill=p.optString("kill_switch_policy","off");boolean lan=p.optBoolean("home_lan_access",true),multihop=p.optBoolean("multihop_enabled",false);dialog("Advanced","LAN access: "+(lan?"On":"Off")+"\nKill switch: "+kill+"\nMTU policy: "+mtu+(customMtu>0?" / manual "+customMtu:"")+(effectiveMtu>0?" / effective "+effectiveMtu:"")+"\nRouter VPN multihop profile: "+(multihop?"Enabled":"Off")+"\nExternal exits: direct or via Router VPN WireGuard entry\n\nRuntime support remains fail-closed when Android cannot enforce a requested policy.");}
+    private void showAdvanced(){
+        JSONObject p=activeRouterProfile();
+        if(p==null){dialog("Advanced","No active Router VPN profile. External custom exits enforce their own full-device runtime and exact public-exit proof; direct Android external exits additionally require system lockdown.");return;}
+        if("external".equalsIgnoreCase(p.optString("node_kind","router-vpn"))){dialog("Advanced","External exits own their protocol settings. Select a Router VPN home node to edit LAN, kill-switch, IPv6, WG/AWG base, MTU, DAITA-like, Jumbo TUN or SOCKS preferences.");return;}
+        AndroidProfileSettingsDialog.show(this,nodeStore,this::refreshHomeState);
+    }
     private void showForwarding(){dialog("Forwarding","Incoming forwarding is owned by the authenticated private home-node Setup Center/router-agent surface. This client does not expose an admin token or Docker/Portainer authority and does not fake DNAT in proxy-only/external modes. Use Setup Center Forwarding, then validate rules off-LAN.");}
     private void openSettings(){startActivity(new Intent(Settings.ACTION_VPN_SETTINGS));} private void openStandardExits(){startActivity(new Intent(this,StandardExitActivity.class));}
     private void showHelp(){new AlertDialog.Builder(this).setTitle("Help").setMessage("App onboarding is separate from Setup Center onboarding and can be rerun here. Install Router VPN once and link private node data separately. Every connection still requires the actual selected-path/public-exit/DNS proof appropriate to that mode; unsupported graphs stay unavailable.").setPositiveButton("Run onboarding again",(d,w)->AndroidProductOnboarding.show(this,true)).setNeutralButton("Pair home node",(d,w)->showPairDialog()).setNegativeButton("Close",null).show();}
