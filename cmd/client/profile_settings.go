@@ -25,26 +25,36 @@ type profileSettingsRequest struct {
 }
 
 type profileSettingsResponse struct {
-	HomeLANAccess     bool   `json:"home_lan_access"`
-	KillSwitchPolicy  string `json:"kill_switch_policy"`
-	IPv6Mode          string `json:"ipv6_mode"`
-	StartupMode       string `json:"startup_mode"`
-	AutoConnect       bool   `json:"auto_connect"`
-	BaseTunnel        string `json:"base_tunnel"`
-	BaseFallback      bool   `json:"base_fallback"`
-	MTUPolicy         string `json:"mtu_policy"`
-	ManualMTU         int    `json:"manual_mtu,omitempty"`
-	EffectiveMTU      int    `json:"effective_mtu,omitempty"`
+	HomeLANAccess      bool   `json:"home_lan_access"`
+	KillSwitchPolicy   string `json:"kill_switch_policy"`
+	IPv6Mode           string `json:"ipv6_mode"`
+	StartupMode        string `json:"startup_mode"`
+	AutoConnect        bool   `json:"auto_connect"`
+	BaseTunnel         string `json:"base_tunnel"`
+	BaseFallback       bool   `json:"base_fallback"`
+	MTUPolicy          string `json:"mtu_policy"`
+	ManualMTU          int    `json:"manual_mtu,omitempty"`
+	EffectiveMTU       int    `json:"effective_mtu,omitempty"`
 	EffectiveMTUSource string `json:"effective_mtu_source,omitempty"`
-	DAITAEnabled      bool   `json:"daita_enabled"`
-	JumboTUN          bool   `json:"jumbo_tun"`
-	SocksEnabled      bool   `json:"socks_enabled"`
-	Note              string `json:"note"`
+	DAITAEnabled       bool   `json:"daita_enabled"`
+	JumboTUN           bool   `json:"jumbo_tun"`
+	SocksEnabled       bool   `json:"socks_enabled"`
+	Note               string `json:"note"`
+}
+
+func profileSettingsBusy(connected bool, phase string) bool {
+	phase = strings.ToLower(strings.TrimSpace(phase))
+	if connected { return true }
+	if phase == "starting" || phase == "checking" { return true }
+	for _, prefix := range []string{"auto:", "smart-auto:", "smart:", "custom:"} {
+		if strings.HasPrefix(phase, prefix) { return true }
+	}
+	return false
 }
 
 func registerProfileSettingsRoute(h *http.ServeMux, a *app) {
 	a.mu.Lock()
-	if p, ok := a.profileByIDLocked(a.profiles.SelectedID); ok && !a.state.Connected {
+	if p, ok := a.profileByIDLocked(a.profiles.SelectedID); ok && !profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.syncProfileOptionStateLocked(p)
 	}
 	a.mu.Unlock()
@@ -65,7 +75,7 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	selected := a.profiles.SelectedID
 	profile, ok := a.profileByIDLocked(selected)
-	busy := a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" || strings.HasPrefix(a.state.Phase, "auto:")
+	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
 	if ok && !busy { a.syncProfileOptionStateLocked(profile) }
 	a.mu.Unlock()
 	if !ok {
@@ -81,7 +91,7 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if busy {
-		http.Error(w, "disconnect before changing Router VPN profile settings so the next tunnel starts from one coherent policy", http.StatusConflict)
+		http.Error(w, "disconnect or let the active AUTO/SMART/CUSTOM transition finish before changing Router VPN profile settings", http.StatusConflict)
 		return
 	}
 	var request profileSettingsRequest
@@ -96,9 +106,9 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.mu.Lock()
-	if a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" || strings.HasPrefix(a.state.Phase, "auto:") {
+	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
-		http.Error(w, "disconnect before changing Router VPN profile settings", http.StatusConflict)
+		http.Error(w, "disconnect or let the active AUTO/SMART/CUSTOM transition finish before changing Router VPN profile settings", http.StatusConflict)
 		return
 	}
 	found := false
@@ -143,6 +153,9 @@ func applyProfileSettings(profile common.RouterProfile, q profileSettingsRequest
 	if q.JumboTUN != nil { updated.JumboTUN = *q.JumboTUN }
 	if q.SocksEnabled != nil { updated.SocksEnabled = *q.SocksEnabled }
 	if err := common.NormalizeRouterProfile(&updated); err != nil { return profile, err }
+	if updated.AutoConnect && updated.StartupMode == "manual" {
+		return profile, errors.New("auto_connect requires startup_mode auto, smart-auto, or last; Manual intentionally leaves Router VPN disconnected")
+	}
 	return updated, nil
 }
 
@@ -154,7 +167,7 @@ func writeProfileSettings(w http.ResponseWriter, p common.RouterProfile) {
 		MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
 		EffectiveMTU: p.EffectiveMTU, EffectiveMTUSource: p.EffectiveMTUSource,
 		DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled,
-		Note: "Settings are stored only on the selected Router VPN profile. Disconnect before editing; saved settings apply on the next tunnel start and are not runtime proof by themselves.",
+		Note: "Settings are stored only on the selected Router VPN profile. Disconnect and wait for any AUTO/SMART/CUSTOM transition to finish before editing. Auto-connect requires AUTO, SMART AUTO, or Last mode. Saved settings apply on the next tunnel start and are not runtime proof by themselves.",
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
