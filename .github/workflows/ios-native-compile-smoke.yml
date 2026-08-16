@@ -1,0 +1,57 @@
+name: iOS native compile smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-native-compile-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-native-compile:
+    name: iOS native compile
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Prepare pinned native engines
+        working-directory: ios/RouterVPN
+        run: |
+          sh prepare-wireguard-kit.sh
+          ./prepare-libbox.sh
+      - name: Compile and surface exact Xcode errors
+        working-directory: ios/RouterVPN
+        shell: bash
+        run: |
+          set -uo pipefail
+          xcodegen generate
+          LOG="$RUNNER_TEMP/routervpn-ios-xcodebuild.log"
+          set +e
+          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' build >"$LOG" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '=== exact Xcode compiler/linker diagnostics ==='
+            grep -nE '(^|[[:space:]])(fatal )?error:|:[0-9]+:[0-9]+: (fatal )?error:|Undefined symbols|ld: ' "$LOG" | tail -n 160 || true
+            echo '=== final Xcode context ==='
+            tail -n 120 "$LOG"
+            exit "$status"
+          fi
+          grep -Fq '** BUILD SUCCEEDED **' "$LOG"
+          echo 'iOS native compile passed'
+      - name: Upload Xcode log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-xcodebuild-failure-${{ github.sha }}
+          path: ${{ runner.temp }}/routervpn-ios-xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 1
