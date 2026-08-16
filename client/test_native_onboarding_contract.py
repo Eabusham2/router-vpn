@@ -93,9 +93,9 @@ require("Android", android_onboarding, shared_topics + (
 ))
 require_any("Android", android_onboarding, "kill switch", ("kill switch", "kill-switch"))
 require("Android product", android_product, (
-    "AndroidProductOnboarding.showIfNeeded(this)",
-    "Run onboarding again", "AndroidProductOnboarding.show(this, true)",
+    "AndroidProductOnboarding.showIfNeeded(this)", "Run onboarding again",
 ))
+assert re.search(r"AndroidProductOnboarding\.show\(this\s*,\s*true\)", android_product), "Android Help is not wired to force-rerun product onboarding"
 
 # iOS/iPadOS needs the shared app contract plus explicit Apple distribution and
 # Network Extension truth. Unsupported AWG/desktop parity must remain stated,
