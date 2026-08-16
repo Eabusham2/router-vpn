@@ -14,6 +14,11 @@ def require(name: str, source: str, markers: tuple[str, ...]) -> None:
         assert marker.lower() in lower, f"{name} shipping onboarding missing {marker!r}"
 
 
+def require_any(name: str, source: str, label: str, variants: tuple[str, ...]) -> None:
+    lower = source.lower()
+    assert any(value.lower() in lower for value in variants), f"{name} shipping onboarding missing semantic {label!r}: {variants!r}"
+
+
 # This audit intentionally watches the sources/package seams that the current
 # product actually ships. Legacy desktop prototype files are not evidence that
 # the packaged native product still owns the required onboarding lifecycle.
@@ -29,7 +34,7 @@ ios_product = read("ios/RouterVPN/App/ProductRootView.swift")
 
 shared_topics = (
     "pairing", "router-vpn-bundle.json", "AUTO", "WireGuard", "DNS",
-    "LAN Off", "MTU", "Jumbo", "kill-switch", "Multihop", "forwarding",
+    "LAN Off", "MTU", "Jumbo", "Multihop", "forwarding",
     "permissions", "Disconnect", "private identity/path proof", "Public",
     "Diagnostics", "Setup Center Full Guide",
 )
@@ -42,6 +47,7 @@ require("Windows", win, shared_topics + (
     "Save-RouterVPNOnboardingState", "Show-RouterVPNProductOnboarding -Force",
     "app onboarding is separate from Setup Center onboarding",
 ))
+require_any("Windows", win, "kill switch", ("kill switch", "kill-switch"))
 assert "if ($SelfTest)" in win
 assert "Show-RouterVPNProductOnboarding\n        & $ProductScript" in win
 assert "TutorialPattern" in win and "Run onboarding" in win
@@ -54,6 +60,7 @@ require("macOS", mac_onboarding, shared_topics + (
     "presentIfNeeded", "runProductOnboarding",
     "app onboarding is separate from Setup Center onboarding",
 ))
+require_any("macOS", mac_onboarding, "kill switch", ("kill switch", "kill-switch"))
 require("macOS build", mac_build, (
     "RouterVPNProductOnboarding.swift", "Run onboarding",
     "RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)",
@@ -67,6 +74,7 @@ require("Linux", linux_onboarding, shared_topics + (
     "AmneziaWG", "Emergency stop", "Run Tutorial",
     "app onboarding is separate from Setup Center onboarding",
 ))
+require_any("Linux", linux_onboarding, "kill switch", ("kill switch", "kill-switch"))
 require("Linux build", linux_build, (
     "routervpn-product-onboarding-v6.inc", "onboarding_read_step_v6",
     "onboarding_write_step_v6", "gtk_assistant_set_current_page",
@@ -82,6 +90,7 @@ require("Android", android_onboarding, shared_topics + (
     "Close & resume later", "showIfNeeded",
     "app onboarding is separate from Setup Center onboarding",
 ))
+require_any("Android", android_onboarding, "kill switch", ("kill switch", "kill-switch"))
 require("Android product", android_product, (
     "AndroidProductOnboarding.showIfNeeded(this)",
     "Run onboarding again", "AndroidProductOnboarding.show(this, true)",
@@ -92,7 +101,7 @@ require("Android product", android_product, (
 # not faked green just to satisfy a shared-wording test.
 require("iOS/iPadOS", ios_onboarding, (
     "pairing", "router-vpn-bundle.json", "AUTO", "WireGuard", "DNS",
-    "LAN Off", "MTU/Jumbo", "kill-switch", "Multihop", "forwarding",
+    "LAN Off", "MTU/Jumbo", "Multihop", "forwarding",
     "VPN permission", "Network Extension", "Local Network permission",
     "Disconnect", "private identity/path proof", "public VPN exit",
     "Diagnostics", "Setup Center Full Guide", "unsigned IPA", "TestFlight",
@@ -100,6 +109,7 @@ require("iOS/iPadOS", ios_onboarding, (
     "RouterVPNProductOnboardingDoneV2", "RouterVPNProductOnboardingStepV2",
     "Close & resume later", "app onboarding is separate from Setup Center onboarding",
 ))
+require_any("iOS/iPadOS", ios_onboarding, "kill switch", ("kill switch", "kill-switch"))
 require("iOS/iPadOS product", ios_product, (
     "Setup Guide", "RouterVPNProductOnboardingView",
     "RouterVPNProductOnboardingDoneV2", ".onAppear",
