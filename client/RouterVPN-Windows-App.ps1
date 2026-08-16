@@ -17,9 +17,6 @@ $HomeSummaryHelpers = Join-Path $PSScriptRoot 'RouterVPN-Windows-HomeSummary.ps1
 if (-not (Test-Path -LiteralPath $HomeSummaryHelpers)) { throw "Router VPN Home summary helpers are missing: $HomeSummaryHelpers" }
 . $HomeSummaryHelpers
 
-# App onboarding is deliberately separate from Setup Center onboarding. It is
-# persistent, resumes from the last unfinished step, and is always rerunnable
-# from the shipping product Help tab.
 $OnboardingStateDir = Join-Path $PSScriptRoot '.routervpn-state'
 $OnboardingStateFile = Join-Path $OnboardingStateDir 'windows-onboarding-v2.json'
 $OnboardingSteps = @(
@@ -86,8 +83,6 @@ $Product = Join-Path $PSScriptRoot 'RouterVPN-Windows-Product-v2.ps1'
 if (-not (Test-Path -LiteralPath $Product)) { throw "Router VPN native Windows product shell is missing: $Product" }
 $ProductSource = Get-Content -LiteralPath $Product -Raw -Encoding UTF8
 
-# Exact fail-closed shipping transformations: small-screen layout, Home truth
-# surface, onboarding Help hook, and stable ScriptBlock self-test source path.
 $AdaptiveLayout = @(
     @('Height="800" Width="1180" MinHeight="680" MinWidth="980"', 'Height="720" Width="1040" MinHeight="480" MinWidth="640"'),
     @('<RowDefinition Height="240"/>', '<RowDefinition Height="2*" MinHeight="140"/>'),
@@ -100,16 +95,16 @@ $HomeButtonsOld = '<WrapPanel Margin="0,12,0,0"><Button Name="AutoButton" Conten
 $HomeButtonsNew = '<WrapPanel Margin="0,12,0,0"><Button Name="AutoButton" Content="AUTO Connect" Margin="4" Padding="13,8"/><Button Name="ConnectButton" Content="Connect Selected" Margin="4" Padding="13,8"/><Button Name="DisconnectButton" Content="Disconnect" Margin="4" Padding="13,8"/><Button Name="HomeExitButton" Content="Prove actual exit" Margin="4" Padding="13,8"/><Button Name="HomeEmergencyButton" Content="Emergency Disconnect" Margin="4" Padding="13,8"/><Button Name="RefreshButton" Content="Refresh" Margin="4" Padding="13,8"/></WrapPanel>'
 $HomeProofOld = '<TextBlock Name="ProofText" Text="Connected requires exact selected-router private path proof." TextWrapping="Wrap"/><TextBlock Name="LastErrorText" Foreground="#FF9CA8" TextWrapping="Wrap"/>'
 $HomeProofNew = '<TextBlock Name="ProofText" Text="Connected requires exact selected-router private path proof." TextWrapping="Wrap"/><TextBlock Name="HomeSummary" Text="Loading truthful Home state…" TextWrapping="Wrap" Margin="0,8,0,8" Foreground="#DDE7FF"/><TextBlock Name="LastErrorText" Foreground="#FF9CA8" TextWrapping="Wrap"/>'
-foreach ($Pair in @(@($HomeButtonsOld,$HomeButtonsNew),@($HomeProofOld,$HomeProofNew))) { if ($ProductSource.Contains($Pair[0]) -ne $true) { throw 'Router VPN Windows Home XAML contract drifted.' }; $ProductSource = $ProductSource.Replace($Pair[0],$Pair[1]) }
+foreach ($Pair in @(@($HomeButtonsOld,$HomeButtonsNew),@($HomeProofOld,$HomeProofNew))) { if (-not $ProductSource.Contains($Pair[0])) { throw 'Router VPN Windows Home XAML contract drifted.' }; $ProductSource = $ProductSource.Replace($Pair[0],$Pair[1]) }
 
-$ControlOld = "$ConnectionDetail=Control 'ConnectionDetail';$ProofText=Control 'ProofText';$LastErrorText=Control 'LastErrorText'"
-$ControlNew = "$ConnectionDetail=Control 'ConnectionDetail';$ProofText=Control 'ProofText';$HomeSummary=Control 'HomeSummary';$HomeExitButton=Control 'HomeExitButton';$HomeEmergencyButton=Control 'HomeEmergencyButton';$LastErrorText=Control 'LastErrorText'"
+$ControlOld = '$ConnectionDetail=Control ''ConnectionDetail'';$ProofText=Control ''ProofText'';$LastErrorText=Control ''LastErrorText'''
+$ControlNew = '$ConnectionDetail=Control ''ConnectionDetail'';$ProofText=Control ''ProofText'';$HomeSummary=Control ''HomeSummary'';$HomeExitButton=Control ''HomeExitButton'';$HomeEmergencyButton=Control ''HomeEmergencyButton'';$LastErrorText=Control ''LastErrorText'''
 if (-not $ProductSource.Contains($ControlOld)) { throw 'Router VPN Windows Home control-binding contract drifted.' }
 $ProductSource = $ProductSource.Replace($ControlOld,$ControlNew)
 
 $RefreshFunctionMarker = 'function RefreshProduct{'
 $HomeRefreshFunction = 'function RefreshHomeSummary{try{$Home=Get-RouterVPNHomeSummary -BaseUrl $BaseUrl;$HomeSummary.Text=Format-RouterVPNHomeSummary $Home}catch{$HomeSummary.Text="Home state unavailable: $($_.Exception.Message)"}}' + "`n" + $RefreshFunctionMarker
-if ($ProductSource.Contains($RefreshFunctionMarker) -ne $true) { throw 'Router VPN Windows RefreshProduct contract drifted.' }
+if (-not $ProductSource.Contains($RefreshFunctionMarker)) { throw 'Router VPN Windows RefreshProduct contract drifted.' }
 $ProductSource = $ProductSource.Replace($RefreshFunctionMarker,$HomeRefreshFunction)
 if (-not $ProductSource.Contains(';RefreshMultihop;SessionEvents}catch')) { throw 'Router VPN Windows refresh tail contract drifted.' }
 $ProductSource = $ProductSource.Replace(';RefreshMultihop;SessionEvents}catch',';RefreshMultihop;RefreshHomeSummary;SessionEvents}catch')
