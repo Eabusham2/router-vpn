@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 /** Native Android AmneziaWG 2 runtime using Amnezia's Apache-2.0 GoBackend. */
 final class NativeAmneziaWGController implements Tunnel {
     interface Callback { void done(State state, String message, Throwable error); }
+    private final Context appContext;
     private final GoBackend backend;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AndroidUnderlyingNetworkMonitor networkMonitor;
@@ -28,9 +29,9 @@ final class NativeAmneziaWGController implements Tunnel {
     private volatile String lastError = "";
 
     NativeAmneziaWGController(Context context) {
-        Context app = context.getApplicationContext();
-        backend = new GoBackend(app);
-        networkMonitor = new AndroidUnderlyingNetworkMonitor(app);
+        appContext = context.getApplicationContext();
+        backend = new GoBackend(appContext);
+        networkMonitor = new AndroidUnderlyingNetworkMonitor(appContext);
     }
     @Override public String getName() { return "routervpn-awg"; }
     @Override public void onStateChange(State newState) { state = newState; }
@@ -38,99 +39,69 @@ final class NativeAmneziaWGController implements Tunnel {
     String getError() { return lastError; }
 
     void connect(File privateBundle, Callback callback) {
+        AndroidHomeStateStore.begin(appContext, "raw-tunnel", "awg2-fast", "awg");
         executor.execute(() -> {
             try {
-                networkMonitor.stop();
-                clearActive();
+                networkMonitor.stop(); clearActive();
                 if (AndroidKillSwitchPolicy.strictRequested(privateBundle)) throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
                 Config config = loadConfig(privateBundle);
-                State result = backend.setState(this, State.UP, config);
-                state = result;
+                State result = backend.setState(this, State.UP, config); state = result;
                 if (result != State.UP) throw new IllegalStateException("AmneziaWG backend did not enter UP state.");
-                if (!AndroidPathProbe.prove(privateBundle, 8000)) {
-                    backend.setState(this, State.DOWN, null);
-                    state = State.DOWN;
-                    throw new IllegalStateException("Native AmneziaWG failed selected-node private path proof.");
-                }
-                activeConfig = config;
-                activeBundle = privateBundle;
-                lastError = "";
+                if (!AndroidPathProbe.prove(privateBundle, 8000)) { backend.setState(this, State.DOWN, null); state = State.DOWN; throw new IllegalStateException("Native AmneziaWG failed selected-node private path proof."); }
+                activeConfig = config; activeBundle = privateBundle; lastError = "";
+                AndroidHomeStateStore.connected(appContext, "raw-tunnel", "awg2-fast", "awg", "");
                 networkMonitor.start(() -> executor.execute(this::recoverAfterNetworkChange));
                 callback.done(State.UP, "Native Android AmneziaWG 2 is active with selected DNS/MTU and selected-node private path proof.", null);
-            } catch (Throwable error) {
-                failClosed(error);
-                callback.done(State.DOWN, "Native AmneziaWG failed: " + safeMessage(error), error);
-            }
+            } catch (Throwable error) { failClosed(error); callback.done(State.DOWN, "Native AmneziaWG failed: " + safeMessage(error), error); }
         });
     }
 
     private void recoverAfterNetworkChange() {
-        Config config = activeConfig;
-        File bundle = activeBundle;
+        Config config = activeConfig; File bundle = activeBundle;
         if (state != State.UP || config == null || bundle == null) return;
         try {
             lastError = "Underlying network changed; AmneziaWG is re-establishing and revalidating the selected node.";
+            AndroidHomeStateStore.warning(appContext, lastError);
             backend.setState(this, State.DOWN, null);
-            State result = backend.setState(this, State.UP, config);
-            state = result;
-            if (result != State.UP || !AndroidPathProbe.prove(bundle, 10000)) {
-                throw new IllegalStateException("AmneziaWG did not recover a proven selected-node path after the underlying network changed.");
-            }
+            State result = backend.setState(this, State.UP, config); state = result;
+            if (result != State.UP || !AndroidPathProbe.prove(bundle, 10000)) throw new IllegalStateException("AmneziaWG did not recover a proven selected-node path after the underlying network changed.");
             lastError = "";
-        } catch (Throwable error) {
-            failClosed(new IllegalStateException("AmneziaWG network-transition recovery failed closed: " + safeMessage(error), error));
-        }
+            AndroidHomeStateStore.connected(appContext, "raw-tunnel", "awg2-fast", "awg", "");
+        } catch (Throwable error) { failClosed(new IllegalStateException("AmneziaWG network-transition recovery failed closed: " + safeMessage(error), error)); }
     }
 
     void disconnect(Callback callback) {
         executor.execute(() -> {
-            networkMonitor.stop();
-            clearActive();
+            networkMonitor.stop(); clearActive();
             try {
-                State result = backend.setState(this, State.DOWN, null);
-                state = result;
-                lastError = "";
+                State result = backend.setState(this, State.DOWN, null); state = result; lastError = "";
+                AndroidHomeStateStore.disconnected(appContext);
                 callback.done(result, "Native Android AmneziaWG disconnected.", null);
             } catch (Throwable error) {
-                lastError = safeMessage(error);
+                lastError = safeMessage(error); AndroidHomeStateStore.failed(appContext, "AmneziaWG disconnect failed: " + lastError);
                 callback.done(state, "AmneziaWG disconnect failed: " + lastError, error);
             }
         });
     }
 
-    void close() {
-        networkMonitor.stop();
-        clearActive();
-        executor.shutdown();
-    }
+    void close() { networkMonitor.stop(); clearActive(); executor.shutdown(); }
 
     private void failClosed(Throwable error) {
-        networkMonitor.stop();
-        try { backend.setState(this, State.DOWN, null); } catch (Throwable ignored) { }
-        state = State.DOWN;
-        lastError = safeMessage(error);
-        clearActive();
+        networkMonitor.stop(); try { backend.setState(this, State.DOWN, null); } catch (Throwable ignored) { }
+        state = State.DOWN; lastError = safeMessage(error); AndroidHomeStateStore.failed(appContext, lastError); clearActive();
     }
-
-    private void clearActive() {
-        activeConfig = null;
-        activeBundle = null;
-    }
+    private void clearActive() { activeConfig = null; activeBundle = null; }
 
     private static Config loadConfig(File privateBundle) throws Exception {
         if (!privateBundle.isFile()) throw new IllegalStateException("Import/link a Router VPN node first.");
         if (privateBundle.length() <= 0 || privateBundle.length() > 64L * 1024L * 1024L) throw new IllegalStateException("Private node bundle size is invalid.");
         JSONObject root = new JSONObject(new String(readLimited(privateBundle, 64 * 1024 * 1024), StandardCharsets.UTF_8));
-        JSONObject profiles = root.optJSONObject("profiles");
-        if (profiles == null) throw new IllegalStateException("Node bundle has no generated profiles.");
-        JSONObject awg = profiles.optJSONObject("awg2-fast");
-        int fallbackMtu = 1400;
+        JSONObject profiles = root.optJSONObject("profiles"); if (profiles == null) throw new IllegalStateException("Node bundle has no generated profiles.");
+        JSONObject awg = profiles.optJSONObject("awg2-fast"); int fallbackMtu = 1400;
         if (awg == null) { awg = profiles.optJSONObject("awg2-strong"); fallbackMtu = 1360; }
         if (awg == null) throw new IllegalStateException("Node bundle has no AmneziaWG 2 profile.");
-        String encoded = awg.optString("awg.conf", "").trim();
-        if (encoded.isEmpty()) throw new IllegalStateException("Node bundle has no AmneziaWG awg.conf.");
-        byte[] decoded = Base64.decode(encoded, Base64.DEFAULT);
-        if (decoded.length <= 0 || decoded.length > 512 * 1024) throw new IllegalStateException("AmneziaWG profile size is invalid.");
+        String encoded = awg.optString("awg.conf", "").trim(); if (encoded.isEmpty()) throw new IllegalStateException("Node bundle has no AmneziaWG awg.conf.");
+        byte[] decoded = Base64.decode(encoded, Base64.DEFAULT); if (decoded.length <= 0 || decoded.length > 512 * 1024) throw new IllegalStateException("AmneziaWG profile size is invalid.");
         String patched = AndroidNativeProfilePolicy.patchWireGuardLikeConfig(root, new String(decoded, StandardCharsets.UTF_8), fallbackMtu);
         return Config.parse(new ByteArrayInputStream(patched.getBytes(StandardCharsets.UTF_8)));
     }
@@ -142,10 +113,5 @@ final class NativeAmneziaWGController implements Tunnel {
             return output.toByteArray();
         }
     }
-
-    private static String safeMessage(Throwable error) {
-        String value = error == null ? "unknown error" : error.getMessage();
-        if (value == null || value.trim().isEmpty()) value = error == null ? "unknown error" : error.getClass().getSimpleName();
-        return value.replace('\n', ' ').replace('\r', ' ').trim();
-    }
+    private static String safeMessage(Throwable error) { String value = error == null ? "unknown error" : error.getMessage(); if (value == null || value.trim().isEmpty()) value = error == null ? "unknown error" : error.getClass().getSimpleName(); return value.replace('\n',' ').replace('\r',' ').trim(); }
 }
