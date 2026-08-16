@@ -23,6 +23,7 @@ func registerMTURetestRoute(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/mtu/retest", a.retestMTU)
 	registerDNSPolicyRoute(h, a)
 	registerHomeSummaryRoute(h, a)
+	registerProfileSettingsRoute(h, a)
 }
 
 func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
