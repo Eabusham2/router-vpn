@@ -16,6 +16,9 @@ Add-Type -AssemblyName WindowsBase
 $HomeSummaryHelpers = Join-Path $PSScriptRoot 'RouterVPN-Windows-HomeSummary.ps1'
 if (-not (Test-Path -LiteralPath $HomeSummaryHelpers)) { throw "Router VPN Home summary helpers are missing: $HomeSummaryHelpers" }
 . $HomeSummaryHelpers
+$ProfileSettingsHelpers = Join-Path $PSScriptRoot 'RouterVPN-Windows-ProfileSettings.ps1'
+if (-not (Test-Path -LiteralPath $ProfileSettingsHelpers)) { throw "Router VPN profile settings helpers are missing: $ProfileSettingsHelpers" }
+. $ProfileSettingsHelpers
 
 $OnboardingStateDir = Join-Path $PSScriptRoot '.routervpn-state'
 $OnboardingStateFile = Join-Path $OnboardingStateDir 'windows-onboarding-v2.json'
@@ -91,6 +94,11 @@ $AdaptiveLayout = @(
 )
 foreach ($Pair in $AdaptiveLayout) { if (-not $ProductSource.Contains($Pair[0])) { throw "Router VPN adaptive Windows layout contract drifted before: $($Pair[0])" }; $ProductSource = $ProductSource.Replace($Pair[0], $Pair[1]) }
 
+$AdvancedSummaryOld = '<TextBlock Name="AdvancedSummary" TextWrapping="Wrap" Margin="0,8,0,12"/>'
+$AdvancedSummaryNew = '<TextBlock Name="AdvancedSummary" TextWrapping="Wrap" Margin="0,8,0,12"/><Button Name="ProfileSettingsButton" Content="Edit profile settings" HorizontalAlignment="Left" Margin="4,0,4,10" Padding="13,8"/>'
+if (-not $ProductSource.Contains($AdvancedSummaryOld)) { throw 'Router VPN Windows Advanced settings XAML contract drifted.' }
+$ProductSource = $ProductSource.Replace($AdvancedSummaryOld,$AdvancedSummaryNew)
+
 $HomeButtonsOld = '<WrapPanel Margin="0,12,0,0"><Button Name="AutoButton" Content="AUTO Connect" Margin="4" Padding="13,8"/><Button Name="ConnectButton" Content="Connect Selected" Margin="4" Padding="13,8"/><Button Name="DisconnectButton" Content="Disconnect" Margin="4" Padding="13,8"/><Button Name="RefreshButton" Content="Refresh" Margin="4" Padding="13,8"/></WrapPanel>'
 $HomeButtonsNew = '<WrapPanel Margin="0,12,0,0"><Button Name="AutoButton" Content="AUTO Connect" Margin="4" Padding="13,8"/><Button Name="ConnectButton" Content="Connect Selected" Margin="4" Padding="13,8"/><Button Name="DisconnectButton" Content="Disconnect" Margin="4" Padding="13,8"/><Button Name="HomeExitButton" Content="Prove actual exit" Margin="4" Padding="13,8"/><Button Name="HomeEmergencyButton" Content="Emergency Disconnect" Margin="4" Padding="13,8"/><Button Name="RefreshButton" Content="Refresh" Margin="4" Padding="13,8"/></WrapPanel>'
 $HomeProofOld = '<TextBlock Name="ProofText" Text="Connected requires exact selected-router private path proof." TextWrapping="Wrap"/><TextBlock Name="LastErrorText" Foreground="#FF9CA8" TextWrapping="Wrap"/>'
@@ -101,6 +109,10 @@ $ControlOld = '$ConnectionDetail=Control ''ConnectionDetail'';$ProofText=Control
 $ControlNew = '$ConnectionDetail=Control ''ConnectionDetail'';$ProofText=Control ''ProofText'';$HomeSummary=Control ''HomeSummary'';$HomeExitButton=Control ''HomeExitButton'';$HomeEmergencyButton=Control ''HomeEmergencyButton'';$LastErrorText=Control ''LastErrorText'''
 if (-not $ProductSource.Contains($ControlOld)) { throw 'Router VPN Windows Home control-binding contract drifted.' }
 $ProductSource = $ProductSource.Replace($ControlOld,$ControlNew)
+$AdvancedControlOld = '$AdvancedSummary=Control ''AdvancedSummary'';$SettingsSummary=Control ''SettingsSummary'''
+$AdvancedControlNew = '$AdvancedSummary=Control ''AdvancedSummary'';$ProfileSettingsButton=Control ''ProfileSettingsButton'';$SettingsSummary=Control ''SettingsSummary'''
+if (-not $ProductSource.Contains($AdvancedControlOld)) { throw 'Router VPN Windows Advanced settings control-binding contract drifted.' }
+$ProductSource = $ProductSource.Replace($AdvancedControlOld,$AdvancedControlNew)
 
 $RefreshFunctionMarker = 'function RefreshProduct{'
 $HomeRefreshFunction = 'function RefreshHomeSummary{try{$Home=Get-RouterVPNHomeSummary -BaseUrl $BaseUrl;$HomeSummary.Text=Format-RouterVPNHomeSummary $Home}catch{$HomeSummary.Text="Home state unavailable: $($_.Exception.Message)"}}' + "`n" + $RefreshFunctionMarker
@@ -108,10 +120,14 @@ if (-not $ProductSource.Contains($RefreshFunctionMarker)) { throw 'Router VPN Wi
 $ProductSource = $ProductSource.Replace($RefreshFunctionMarker,$HomeRefreshFunction)
 if (-not $ProductSource.Contains(';RefreshMultihop;SessionEvents}catch')) { throw 'Router VPN Windows refresh tail contract drifted.' }
 $ProductSource = $ProductSource.Replace(';RefreshMultihop;SessionEvents}catch',';RefreshMultihop;RefreshHomeSummary;SessionEvents}catch')
+$SettingsSensitivityOld = '$DnsSaveButton.IsEnabled=-not$Connected;$DnsButton.IsEnabled=$Connected;'
+$SettingsSensitivityNew = '$DnsSaveButton.IsEnabled=-not$Connected;$DnsButton.IsEnabled=$Connected;$ProfileSettingsButton.IsEnabled=-not$Connected;'
+if (-not $ProductSource.Contains($SettingsSensitivityOld)) { throw 'Router VPN Windows Advanced settings connected-state contract drifted.' }
+$ProductSource = $ProductSource.Replace($SettingsSensitivityOld,$SettingsSensitivityNew)
 
 $HandlersMarker = "(Control 'RefreshButton').Add_Click({RefreshDnsPolicy;RefreshProduct})"
-$HomeHandlers = '$HomeExitButton.Add_Click({try{$Home=Prove-RouterVPNHomeExit -BaseUrl $BaseUrl;Log ("Actual public VPN exit proved for this session: "+$Home.actual_exit_ip)}catch{Log ("Actual exit proof failed: "+$_.Exception.Message)};RefreshHomeSummary});$HomeEmergencyButton.Add_Click({try{[void](Api "/api/emergency-stop" "POST" @{} 15);Log "Emergency Disconnect completed"}catch{Log $_.Exception.Message};RefreshProduct});' + $HandlersMarker
-if (-not $ProductSource.Contains($HandlersMarker)) { throw 'Router VPN Windows Home handler contract drifted.' }
+$HomeHandlers = '$ProfileSettingsButton.Add_Click({try{$Saved=Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window;if($null-ne$Saved){Log "Profile settings saved for next connection"}}catch{Log ("Profile settings failed: "+$_.Exception.Message)};RefreshProduct});$HomeExitButton.Add_Click({try{$Home=Prove-RouterVPNHomeExit -BaseUrl $BaseUrl;Log ("Actual public VPN exit proved for this session: "+$Home.actual_exit_ip)}catch{Log ("Actual exit proof failed: "+$_.Exception.Message)};RefreshHomeSummary});$HomeEmergencyButton.Add_Click({try{[void](Api "/api/emergency-stop" "POST" @{} 15);Log "Emergency Disconnect completed"}catch{Log $_.Exception.Message};RefreshProduct});' + $HandlersMarker
+if (-not $ProductSource.Contains($HandlersMarker)) { throw 'Router VPN Windows Home/settings handler contract drifted.' }
 $ProductSource = $ProductSource.Replace($HandlersMarker,$HomeHandlers)
 
 $SelfTestSourceRead = '$Source=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw'
@@ -125,16 +141,16 @@ if ($tutorialMatches.Count -ne 1) { throw "Router VPN Windows Help/onboarding co
 $ProductSource = [regex]::Replace($ProductSource, $TutorialPattern, "(Control 'TutorialButton').Add_Click({Show-RouterVPNProductOnboarding -Force})", 1)
 $ProductScript = [ScriptBlock]::Create($ProductSource)
 
-$ApiContract = @('/api/status','/api/profiles','/api/logical-modes','/api/auto','/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/public-ip','/api/dns/retest','/api/dns/policy','/api/mtu/retest','/api/emergency-stop','/api/session','/api/session/events','/api/home-summary','/api/home-summary/prove-exit')
+$ApiContract = @('/api/status','/api/profiles','/api/logical-modes','/api/auto','/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/public-ip','/api/dns/retest','/api/dns/policy','/api/profile/settings','/api/mtu/retest','/api/emergency-stop','/api/session','/api/session/events','/api/home-summary','/api/home-summary/prove-exit')
 $PreviousProductSource = $env:ROUTER_VPN_PRODUCT_SOURCE; $env:ROUTER_VPN_PRODUCT_SOURCE = $Product
 try {
     if ($SelfTest) {
-        foreach ($Marker in @('windows-onboarding-v2.json','Close and resume later','Show-RouterVPNProductOnboarding','Add or link a node','MTU, Auto MTU and Jumbo TUN','LAN access and strict kill switch','Multihop and external exits','Forwarding where it is actually routable','Windows permissions and privacy','Full guide and rerun','MinHeight="480" MinWidth="640"','Height="2*" MinHeight="140"','MaxWidth="760"','MinHeight="180"','$env:ROUTER_VPN_PRODUCT_SOURCE','HomeSummary','HomeExitButton','HomeEmergencyButton','RefreshHomeSummary','Get-RouterVPNHomeSummary','Prove-RouterVPNHomeExit')) { if (-not ((Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8).Contains($Marker) -or $ProductSource.Contains($Marker))) { throw "Windows shipping onboarding/layout/Home self-test missing $Marker" } }
+        foreach ($Marker in @('windows-onboarding-v2.json','Close and resume later','Show-RouterVPNProductOnboarding','Add or link a node','MTU, Auto MTU and Jumbo TUN','LAN access and strict kill switch','Multihop and external exits','Forwarding where it is actually routable','Windows permissions and privacy','Full guide and rerun','MinHeight="480" MinWidth="640"','Height="2*" MinHeight="140"','MaxWidth="760"','MinHeight="180"','$env:ROUTER_VPN_PRODUCT_SOURCE','HomeSummary','HomeExitButton','HomeEmergencyButton','RefreshHomeSummary','Get-RouterVPNHomeSummary','Prove-RouterVPNHomeExit','RouterVPN-Windows-ProfileSettings.ps1','ProfileSettingsButton','Edit profile settings','Show-RouterVPNProfileSettingsDialog','/api/profile/settings')) { if (-not ((Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8).Contains($Marker) -or $ProductSource.Contains($Marker))) { throw "Windows shipping onboarding/layout/Home/settings self-test missing $Marker" } }
         & $ProductScript -BaseUrl $BaseUrl -SelfTest
     } else { Show-RouterVPNProductOnboarding; & $ProductScript -BaseUrl $BaseUrl }
     if (-not $?) { throw 'Router VPN native Windows product shell failed.' }
 } finally { if ($null -eq $PreviousProductSource) { Remove-Item Env:ROUTER_VPN_PRODUCT_SOURCE -ErrorAction SilentlyContinue } else { $env:ROUTER_VPN_PRODUCT_SOURCE = $PreviousProductSource } }
 
 # Native shipping contract: persistent onboarding + adaptive WPF + truthful Home
-# state. Actual exit is never taken from cached profile.public_ip; it comes only
-# from the current-session /api/home-summary/prove-exit path.
+# state + safe narrow profile settings. Actual exit is never taken from cached
+# profile.public_ip; it comes only from current-session /api/home-summary/prove-exit.
