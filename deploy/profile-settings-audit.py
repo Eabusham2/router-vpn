@@ -34,8 +34,8 @@ for forbidden in ("APIToken =", "NodeProofID =", "RouterAPI =", "Endpoint =", "D
         errors.append(f"cmd/client/profile_settings.go mutates protected/non-policy field: {forbidden}")
 require(
     "cmd/client/profile_settings_test.go",
-    "TestProfileSettingsMutateOnlyAllowedPolicyFields", "TestProfileSettingsValidation",
-    "TestProfileSettingsDefaultAndAutoMTUClearManualValue", "APIToken", "NodeProofID", "EffectiveMTUPathKey",
+    "TestProfileSettingsV2MutateOnlyAllowedPolicyFields", "TestProfileSettingsV2Validation",
+    "TestProfileSettingsV2DefaultAndAutoMTUClearManualValue", "APIToken", "NodeProofID", "EffectiveMTUPathKey",
 )
 require("internal/common/types.go", 'json:"daita_enabled,omitempty"', 'json:"jumbo_tun,omitempty"', 'json:"socks_enabled,omitempty"')
 require("cmd/client/mtu_retest.go", "registerProfileSettingsRoute(h, a)")
