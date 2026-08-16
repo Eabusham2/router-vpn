@@ -1,0 +1,34 @@
+name: One-shot macOS settings reconcile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-macos-settings-reconcile.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Replace macOS settings module with omitted-MTU-safe version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s client/macos/RouterVPNProfileSettingsV2.swift
+          cp client/macos/RouterVPNProfileSettingsV2.swift client/macos/RouterVPNProfileSettings.swift
+          rm -f .github/workflows/one-shot-macos-settings-reconcile.yml
+          cat > deploy/macos-settings-reconcile-v2.complete <<'EOF'
+          RouterVPNProfileSettings.swift is reconciled from V2 and accepts omitted manual_mtu for Default/Auto policy.
+          EOF
+          cmp client/macos/RouterVPNProfileSettings.swift client/macos/RouterVPNProfileSettingsV2.swift
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add client/macos/RouterVPNProfileSettings.swift deploy/macos-settings-reconcile-v2.complete .github/workflows/one-shot-macos-settings-reconcile.yml
+          git commit -m "Handle omitted default MTU in macOS settings"
+          git push origin HEAD:main
