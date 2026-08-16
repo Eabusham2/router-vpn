@@ -79,11 +79,11 @@ struct IOSProfileSettingsView: View {
     private func load() {
         guard let p = selectedProfile() else { status = "Pair/import and select a Router VPN node first."; return }
         guard p.normalizedNodeKind == "router-vpn" else { status = "External exits own their protocol settings."; return }
-        homeLANAccess = p.homeLANAccess
-        killSwitchPolicy = (p.killSwitchPolicy ?? (p.killSwitch ? "always" : "off")).lowercased()
+        homeLANAccess = p.homeLANAccess ?? true
+        killSwitchPolicy = (p.killSwitchPolicy ?? (p.killSwitch == true ? "always" : "off")).lowercased()
         ipv6Mode = (p.ipv6Mode ?? "auto").lowercased()
-        baseTunnel = p.baseTunnel.lowercased()
-        baseFallback = p.baseFallback
+        baseTunnel = (p.baseTunnel ?? "auto").lowercased()
+        baseFallback = p.baseFallback ?? false
         mtuPolicy = (p.mtuPolicy ?? "default").lowercased()
         manualMTU = (p.manualMTU ?? 0) > 0 ? String(p.manualMTU!) : ""
         startupMode = (p.startupMode ?? "manual").lowercased()
