@@ -112,15 +112,15 @@ struct IOSHomeSummaryView: View {
         .sheet(isPresented: $showingSettings) {
             IOSProfileSettingsView().environmentObject(model)
         }
-        .onChange(of: model.connected) { _, connected in
+        .onChange(of: model.connected) { connected in
             if !connected {
                 actualExitIP = ""
                 actualExitStatus = "not-connected"
                 exitError = ""
             }
         }
-        .onChange(of: model.activeRawProfile) { _, _ in clearExitProofForRuntimeChange() }
-        .onChange(of: model.activeEngine) { _, _ in clearExitProofForRuntimeChange() }
+        .onChange(of: model.activeRawProfile) { _ in clearExitProofForRuntimeChange() }
+        .onChange(of: model.activeEngine) { _ in clearExitProofForRuntimeChange() }
     }
 
     private var statusHeader: some View {
