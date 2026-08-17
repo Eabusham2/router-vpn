@@ -10,36 +10,40 @@ import (
 )
 
 type profileSettingsRequest struct {
-	HomeLANAccess    *bool   `json:"home_lan_access,omitempty"`
-	KillSwitchPolicy *string `json:"kill_switch_policy,omitempty"`
-	IPv6Mode         *string `json:"ipv6_mode,omitempty"`
-	StartupMode      *string `json:"startup_mode,omitempty"`
-	AutoConnect      *bool   `json:"auto_connect,omitempty"`
-	BaseTunnel       *string `json:"base_tunnel,omitempty"`
-	BaseFallback     *bool   `json:"base_fallback,omitempty"`
-	MTUPolicy        *string `json:"mtu_policy,omitempty"`
-	ManualMTU        *int    `json:"manual_mtu,omitempty"`
-	DAITAEnabled     *bool   `json:"daita_enabled,omitempty"`
-	JumboTUN         *bool   `json:"jumbo_tun,omitempty"`
-	SocksEnabled     *bool   `json:"socks_enabled,omitempty"`
+	HomeLANAccess          *bool   `json:"home_lan_access,omitempty"`
+	KillSwitchPolicy       *string `json:"kill_switch_policy,omitempty"`
+	IPv6Mode               *string `json:"ipv6_mode,omitempty"`
+	StartupMode            *string `json:"startup_mode,omitempty"`
+	AutoConnect            *bool   `json:"auto_connect,omitempty"`
+	AutoRequireEncrypted   *bool   `json:"auto_require_encrypted,omitempty"`
+	AutoRequireObfuscation *bool   `json:"auto_require_obfuscation,omitempty"`
+	BaseTunnel             *string `json:"base_tunnel,omitempty"`
+	BaseFallback           *bool   `json:"base_fallback,omitempty"`
+	MTUPolicy              *string `json:"mtu_policy,omitempty"`
+	ManualMTU              *int    `json:"manual_mtu,omitempty"`
+	DAITAEnabled           *bool   `json:"daita_enabled,omitempty"`
+	JumboTUN               *bool   `json:"jumbo_tun,omitempty"`
+	SocksEnabled           *bool   `json:"socks_enabled,omitempty"`
 }
 
 type profileSettingsResponse struct {
-	HomeLANAccess      bool   `json:"home_lan_access"`
-	KillSwitchPolicy   string `json:"kill_switch_policy"`
-	IPv6Mode           string `json:"ipv6_mode"`
-	StartupMode        string `json:"startup_mode"`
-	AutoConnect        bool   `json:"auto_connect"`
-	BaseTunnel         string `json:"base_tunnel"`
-	BaseFallback       bool   `json:"base_fallback"`
-	MTUPolicy          string `json:"mtu_policy"`
-	ManualMTU          int    `json:"manual_mtu,omitempty"`
-	EffectiveMTU       int    `json:"effective_mtu,omitempty"`
-	EffectiveMTUSource string `json:"effective_mtu_source,omitempty"`
-	DAITAEnabled       bool   `json:"daita_enabled"`
-	JumboTUN           bool   `json:"jumbo_tun"`
-	SocksEnabled       bool   `json:"socks_enabled"`
-	Note               string `json:"note"`
+	HomeLANAccess          bool   `json:"home_lan_access"`
+	KillSwitchPolicy       string `json:"kill_switch_policy"`
+	IPv6Mode               string `json:"ipv6_mode"`
+	StartupMode            string `json:"startup_mode"`
+	AutoConnect            bool   `json:"auto_connect"`
+	AutoRequireEncrypted   bool   `json:"auto_require_encrypted"`
+	AutoRequireObfuscation bool   `json:"auto_require_obfuscation"`
+	BaseTunnel             string `json:"base_tunnel"`
+	BaseFallback           bool   `json:"base_fallback"`
+	MTUPolicy              string `json:"mtu_policy"`
+	ManualMTU              int    `json:"manual_mtu,omitempty"`
+	EffectiveMTU           int    `json:"effective_mtu,omitempty"`
+	EffectiveMTUSource     string `json:"effective_mtu_source,omitempty"`
+	DAITAEnabled           bool   `json:"daita_enabled"`
+	JumboTUN               bool   `json:"jumbo_tun"`
+	SocksEnabled           bool   `json:"socks_enabled"`
+	Note                   string `json:"note"`
 }
 
 func profileSettingsBusy(connected bool, phase string) bool {
@@ -141,6 +145,8 @@ func applyProfileSettings(profile common.RouterProfile, q profileSettingsRequest
 	if q.IPv6Mode != nil { updated.IPv6Mode = strings.ToLower(strings.TrimSpace(*q.IPv6Mode)) }
 	if q.StartupMode != nil { updated.StartupMode = strings.ToLower(strings.TrimSpace(*q.StartupMode)) }
 	if q.AutoConnect != nil { updated.AutoConnect = *q.AutoConnect }
+	if q.AutoRequireEncrypted != nil { updated.AutoRequireEncrypted = *q.AutoRequireEncrypted }
+	if q.AutoRequireObfuscation != nil { updated.AutoRequireObfuscation = *q.AutoRequireObfuscation }
 	if q.BaseTunnel != nil {
 		value := strings.ToLower(strings.TrimSpace(*q.BaseTunnel))
 		switch value { case "auto", "wg", "awg": updated.BaseTunnel = value; default: return profile, errors.New("base_tunnel must be auto, wg, or awg") }
@@ -163,11 +169,12 @@ func writeProfileSettings(w http.ResponseWriter, p common.RouterProfile) {
 	response := profileSettingsResponse{
 		HomeLANAccess: p.HomeLANAccess, KillSwitchPolicy: p.KillSwitchPolicy,
 		IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect,
+		AutoRequireEncrypted: p.AutoRequireEncrypted, AutoRequireObfuscation: p.AutoRequireObfuscation,
 		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback,
 		MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
 		EffectiveMTU: p.EffectiveMTU, EffectiveMTUSource: p.EffectiveMTUSource,
 		DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled,
-		Note: "Settings are stored only on the selected Router VPN profile. Disconnect and wait for any AUTO/SMART/CUSTOM transition to finish before editing. Auto-connect requires AUTO, SMART AUTO, or Last mode. Saved settings apply on the next tunnel start and are not runtime proof by themselves.",
+		Note: "Settings are stored only on the selected Router VPN profile. Disconnect and wait for any AUTO/SMART/CUSTOM transition to finish before editing. SMART AUTO, IPv6 On and Auto MTU are the normalized defaults for new profiles. AUTO encryption/obfuscation requirements filter candidates before attempts. Auto-connect requires AUTO, SMART AUTO, or Last mode. Saved settings apply on the next tunnel start and are not runtime proof by themselves.",
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
