@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 OUT=${1:-"$ROOT/dist/macos-native"}
 WORK="$OUT/work"
+MACOS_SIGN_IDENTITY=${ROUTER_VPN_MACOS_SIGN_IDENTITY:--}
 rm -rf "$OUT"
 mkdir -p "$WORK"
 
@@ -29,6 +30,16 @@ copy_runtime() {
   cp "$ROOT/LICENSE" "$dir/LICENSE"
 }
 
+sign_macho() {
+  local target=$1
+  if [[ "$MACOS_SIGN_IDENTITY" == "-" ]]; then
+    codesign --force --sign - --timestamp=none "$target"
+  else
+    codesign --force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" "$target"
+  fi
+  codesign --verify --strict --verbose=2 "$target"
+}
+
 for arch in amd64 arm64; do
   case "$arch" in
     amd64) goarch=amd64 ;;
@@ -44,6 +55,15 @@ for arch in amd64 arm64; do
   chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/modes/"*.sh
 
   "$ROOT/client/macos/build-native-app.sh" "$dir" "$arch"
+
+  # Seal every distributed Mach-O before packaging. CI/release candidates use
+  # an ad-hoc identity so quarantine cannot mistake an unsealed bundle for a
+  # modified/corrupt app. Production can supply a Developer ID Application
+  # identity via ROUTER_VPN_MACOS_SIGN_IDENTITY; that path also enables the
+  # hardened runtime and secure timestamp required by Apple's notarization flow.
+  sign_macho "$dir/router-vpn-client"
+  sign_macho "$dir/router-vpn-dns"
+  sign_macho "$dir/RouterVPN.app"
 
   cat >"$dir/start-router-vpn.sh" <<'SH'
 #!/usr/bin/env bash
@@ -67,12 +87,16 @@ Add/import your router separately.
 start-router-vpn.sh is a convenience launcher for the same native app. Keep RouterVPN.app beside
 router-vpn-client, client.json, routers.json, modes/, generated/, and the rest of this folder.
 
-If Gatekeeper blocks a locally-built unsigned artifact, verify its SHA-256 and use System Settings
-→ Privacy & Security → Open Anyway for that specific trusted build. Do not disable Gatekeeper or
-other macOS platform security globally. Long-term distribution is expected to be signed/notarized.
+Release-candidate packages are cryptographically sealed with an ad-hoc code signature so macOS can
+verify bundle integrity after download. A public production build must additionally be signed with a
+Developer ID Application certificate and notarized by Apple before distribution. Do not disable
+Gatekeeper or other macOS platform security globally.
 
 Router VPN is MIT-licensed; see LICENSE.
 TXT
+
+  codesign --verify --deep --strict --verbose=2 "$dir/RouterVPN.app"
+  codesign -dv --verbose=2 "$dir/RouterVPN.app" 2>&1 | grep -Eq 'Signature=adhoc|Authority=Developer ID Application'
 
   tar -C "$WORK" -czf "$OUT/$name.tar.gz" "$name"
   archive_list="$WORK/$name-members.txt"
@@ -89,4 +113,4 @@ python3 "$ROOT/deploy/check-generic-package-secrets.py" "$OUT"
   shasum -a 256 -c SHA256SUMS
 )
 rm -rf "$WORK"
-echo "Packaged native macOS Router VPN applications in $OUT"
+echo "Packaged code-signed native macOS Router VPN applications in $OUT"
