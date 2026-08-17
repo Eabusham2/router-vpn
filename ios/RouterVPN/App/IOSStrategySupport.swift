@@ -2,7 +2,7 @@ import Foundation
 @preconcurrency import NetworkExtension
 import SwiftUI
 
-private enum IOSStrategyCatalog {
+enum IOSStrategyCatalog {
     static let layers: [String: Set<String>] = [
         "wg": ["wireguard"],
         "awg2-fast": ["amneziawg2", "light-obfuscation"],
@@ -46,6 +46,28 @@ private enum IOSStrategyCatalog {
         "max-tls-wg": ["reality-xhttp", "reality-pq-vision", "wg-pq", "max-quic-wg"],
         "max-tls-awg": ["max-tls-wg", "reality-xhttp", "awg2-pq", "max-quic-awg"]
     ]
+
+    private static let encryptedLayers: Set<String> = [
+        "wireguard", "amneziawg", "amneziawg2", "shadowsocks2022",
+        "reality", "hysteria2", "tls", "https", "xtls-vision",
+        "naive", "vless-pq", "rosenpass-pq"
+    ]
+    private static let obfuscationLayers: Set<String> = [
+        "light-obfuscation", "strong-obfuscation", "reality", "salamander",
+        "v2ray-plugin", "websocket", "utls-chrome", "finalmask", "xhttp",
+        "naive", "https", "protocol-split"
+    ]
+
+    static func autoRequirementFailure(rawID: String, profile: RouterProfile) -> String? {
+        let modeLayers = layers[rawID] ?? []
+        if profile.autoRequireEncrypted == true && modeLayers.isDisjoint(with: encryptedLayers) {
+            return "\(rawID) filtered: Require encrypted is enabled and this runtime has no recognized encrypted tunnel/transport layer"
+        }
+        if profile.autoRequireObfuscation == true && modeLayers.isDisjoint(with: obfuscationLayers) {
+            return "\(rawID) filtered: Require obfuscation is enabled and this runtime has no recognized camouflage/obfuscation layer"
+        }
+        return nil
+    }
 }
 
 private struct IOSLastRuntime: Codable {
@@ -134,6 +156,10 @@ extension RouterVPNModel {
             for candidate in IOSStrategyCatalog.simplify[best] ?? [] {
                 if visited.contains(candidate) { continue }
                 visited.insert(candidate)
+                if let requirement = IOSStrategyCatalog.autoRequirementFailure(rawID: candidate, profile: profile) {
+                    message = "SMART AUTO • \(requirement); skipping simplification."
+                    continue
+                }
                 guard let bundle,
                       (try? IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: candidate)) != nil else { continue }
                 let lastGood = best
@@ -155,7 +181,7 @@ extension RouterVPNModel {
         }
         auto = false
         recordIOSLastRuntime()
-        message = "SMART AUTO connected • \(best) • selected-node proof passed • no further iOS-runnable simplification preserved proof."
+        message = "SMART AUTO connected • \(best) • selected-node proof passed • no further iOS-runnable simplification preserved proof and AUTO requirements."
     }
 
     func runIOSCustom(layers requestedRaw: [String]) async {
@@ -254,56 +280,6 @@ extension RouterVPNModel {
             message = "Auto-connected last proven iOS runtime • \(last.rawProfileID) • selected-node proof passed."
         default:
             message = "Auto-connect is enabled but startup behavior is Manual/unsupported; iOS stayed disconnected."
-        }
-    }
-}
-
-struct IOSStrategySheet: View {
-    @EnvironmentObject var model: RouterVPNModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var selected = Set<String>()
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Connection strategy") {
-                    Button("AUTO — first proven iOS path") {
-                        Task { model.auto = true; await model.connect(); if model.connected { model.recordIOSLastRuntime() } }
-                    }
-                    Button("SMART AUTO — connect, simplify, restore") { Task { await model.runIOSSmartAuto() } }
-                        .disabled(model.iosStrategyStrictLockdown)
-                    if model.iosStrategyStrictLockdown {
-                        Text("SMART AUTO is disabled under iOS Always/strict lockdown because switching PacketTunnel engines after connection is not yet proven leak-free. Strict AUTO/manual still fail closed.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Text("AUTO/SMART/CUSTOM only use raw profiles this iOS build can really execute with WireGuardKit or pinned Libbox. AWG-only, Xray-only, unsupported MAX/ALL branches, OpenVPN and full desktop multihop stay unavailable.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("CUSTOM — exact required layers") {
-                    let layers = model.iosAvailableCustomLayers()
-                    if layers.isEmpty {
-                        Text("No iOS-runnable raw profile exposes a CUSTOM layer set in this linked node.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(layers, id: \.self) { layer in
-                            Toggle(layer, isOn: Binding(
-                                get: { selected.contains(layer) },
-                                set: { enabled in if enabled { selected.insert(layer) } else { selected.remove(layer) } }
-                            ))
-                        }
-                        Button("Connect CUSTOM") { Task { await model.runIOSCustom(layers: Array(selected)) } }
-                            .disabled(selected.isEmpty)
-                    }
-                    Text("CUSTOM minimizes extra layers, then base mismatch, traffic overhead and latency; every requested layer must be present. Under strict lockdown only the top candidate is attempted to avoid an unproven engine-transition gap.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Live result") {
-                    Text(model.message).font(.caption).textSelection(.enabled)
-                }
-            }
-            .navigationTitle("AUTO / SMART / CUSTOM")
-            .onAppear { selected = model.iosSavedCustomLayers() }
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
 }
