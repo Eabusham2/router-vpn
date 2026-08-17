@@ -80,7 +80,7 @@ enum IOSRuntimeSelector {
         }
 
         throw IOSRuntimeSelectionError.unsupportedMode(
-            "This iOS build cannot run \(logical.name) from the imported node: \(lastReason). Xray-, sslocal-, AmneziaWG-, helper-chain, ALL/MAX and full desktop multihop combinations remain unavailable instead of faking Connected. OpenVPN remains outside the iOS dataplane until a pinned native implementation exists."
+            "This iOS build cannot run \(logical.name) from the imported node: \(lastReason). Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable instead of faking Connected. Helper-dependent sslocal/Xray chains are also rejected unless a real Apple dataplane exists. OpenVPN remains outside the iOS dataplane until a pinned native implementation exists."
         )
     }
 
