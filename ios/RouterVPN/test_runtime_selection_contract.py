@@ -48,7 +48,16 @@ for marker in [
     'router-vpn.ios.last-runtime-v1', 'IOSStrategySheet',
 ]:
     assert marker in strategy, marker
+
 product=app.joinpath('ProductRootView.swift').read_text()
-for marker in ['AUTO / SMART / CUSTOM', 'IOSStrategySheet()', 'applyIOSStartupPolicyIfNeeded()', 'recordIOSLastRuntime()']:
+unified=app.joinpath('IOSUnifiedProductView.swift').read_text()
+for marker in ['IOSUnifiedProductView()', 'map-first', 'SMART AUTO default', 'CUSTOM preset builder']:
     assert marker in product, marker
-print('iOS runtime + helper-chain fail-closed + AUTO/SMART/CUSTOM strategy contract OK')
+for marker in [
+    'AUTO / SMART', 'runUnifiedIOSAuto()', 'runUnifiedIOSSmartAuto()',
+    'runIOSCustom(layers:', 'applyIOSStartupPolicyIfNeeded()', 'recordIOSLastRuntime()',
+    'IOSUnifiedMap', 'Connect', 'Disconnect', 'Kill switch', 'Multihop', 'Settings', 'Mode', 'DNS',
+    'New CUSTOM preset', 'systemBlue', 'systemOrange', 'systemPink', 'real coordinates',
+]:
+    assert marker in unified, marker
+print('iOS runtime + helper-chain fail-closed + unified AUTO/SMART/CUSTOM strategy contract OK')
