@@ -45,6 +45,46 @@ class Handler(_ai.Handler):
             enriched = self._before_body(enriched, _verified.VERIFIED_ONBOARDING_PANEL)
         return enriched
 
+    def _job_file(self, job_id: str) -> None:
+        """Stream a ready package while honoring authenticated DELETE cancellation."""
+        try:
+            package, meta = self.server.jobs.begin_delivery(job_id)
+        except KeyError:
+            self._json(404, {"ok": False, "error_code": "not_found", "error": "download job not found"})
+            return
+        except RuntimeError as exc:
+            self._json(409, {"ok": False, "error_code": "not_ready", "error": str(exc)})
+            return
+
+        success = False
+        try:
+            size = package.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", str(meta["content_type"]))
+            self.send_header("Content-Disposition", f'attachment; filename="{meta["name"]}"')
+            self.send_header("Content-Length", str(size))
+            self.send_header("X-Router-VPN-Source", str(meta.get("source") or ""))
+            self.send_header("X-Router-VPN-Job", job_id)
+            self.end_headers()
+            sent = 0
+            with package.open("rb") as f:
+                while True:
+                    if self.server.jobs.cancel_requested(job_id):
+                        break
+                    chunk = f.read(_ai._core._broker.CHUNK)
+                    if not chunk:
+                        success = not self.server.jobs.cancel_requested(job_id)
+                        break
+                    self.wfile.write(chunk)
+                    sent += len(chunk)
+                    self.server.jobs.update_delivery(job_id, sent, size)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as exc:
+            print(f"setup center: delivery failed {job_id}: {type(exc).__name__}: {exc}", flush=True)
+        finally:
+            self.server.jobs.finish_delivery(job_id, success)
+
     def _proxy_forwarding_extension(self, method: str) -> bool:
         path = urlparse(self.path).path
         if not (path == FORWARDING_EXTENSION_PREFIX or path.startswith(FORWARDING_EXTENSION_PREFIX + "/")):
