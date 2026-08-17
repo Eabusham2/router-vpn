@@ -18,6 +18,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Validate iOS runtime and DNS truth contracts
+        run: |
+          python3 ios/RouterVPN/test_runtime_selection_contract.py
+          python3 ios/RouterVPN/test_dns_policy_contract.py
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
       - name: Install XcodeGen
