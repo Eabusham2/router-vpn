@@ -12,10 +12,6 @@ struct ProductRootView: View {
     @State private var startupApplied = false
 
     init() {
-        // ContentView still contains an older deployment-oriented tutorial for
-        // explicit legacy/manual use. Suppress only its automatic first-run
-        // presentation so the complete Apple-specific product onboarding below
-        // is the one authoritative first-run/resume flow.
         UserDefaults.standard.set(true, forKey: "routerVPNOnboardingDoneV4")
         UserDefaults.standard.set(0, forKey: "routerVPNOnboardingStepV4")
     }
@@ -71,7 +67,7 @@ struct ProductRootView: View {
                         Label("DNS Settings", systemImage: "network")
                     }
                     .buttonStyle(.borderedProminent)
-                    .accessibilityHint("Selects Home, Fastest, Custom, DoT, DoH, DoH3 or Rescue DNS and shows real home-node DNS query RTT results")
+                    .accessibilityHint("Selects Home, Fastest, Custom, DoT, DoH, DoH3 or Rescue DNS and can Retest real DNS-query RTT over the active VPN path")
                 }
                 .padding(.trailing, 14)
                 .padding(.bottom, 58)
@@ -79,13 +75,13 @@ struct ProductRootView: View {
             .sheet(isPresented: $showingMap) { RouterVPNNodeMapSheet().environmentObject(model) }
             .sheet(isPresented: $showingNodes) { RouterVPNNodeManagerSheet().environmentObject(model) }
             .sheet(isPresented: $showingModeDetails) { RouterVPNModeMetricsSheet().environmentObject(model) }
-            .sheet(isPresented: $showingDNS) { RouterVPNDNSSettingsSheet().environmentObject(model) }
+            .sheet(isPresented: $showingDNS) { IOSDNSPolicyView().environmentObject(model) }
             .sheet(isPresented: $showingOnboarding) { RouterVPNProductOnboardingView() }
             .sheet(isPresented: $showingStrategies) { IOSStrategySheet().environmentObject(model) }
             .onAppear {
                 if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { showingOnboarding = true }
             }
-            .onChange(of: model.activeRawProfile) { _, value in
+            .onChange(of: model.activeRawProfile) { value in
                 if model.connected && !value.isEmpty { model.recordIOSLastRuntime() }
             }
             .task {
