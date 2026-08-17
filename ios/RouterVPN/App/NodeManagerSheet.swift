@@ -81,11 +81,18 @@ struct RouterVPNNodeManagerSheet: View {
 
                 if model.allNodeProfiles.isEmpty {
                     Section {
-                        ContentUnavailableView(
-                            "No linked nodes",
-                            systemImage: "point.3.connected.trianglepath.dotted",
-                            description: Text("Pair a Router VPN home node or import a validated node bundle above.")
-                        )
+                        VStack(spacing: 10) {
+                            Image(systemName: "point.3.connected.trianglepath.dotted")
+                                .font(.system(size: 36))
+                                .foregroundStyle(.secondary)
+                            Text("No linked nodes").font(.headline)
+                            Text("Pair a Router VPN home node or import a validated node bundle above.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.vertical, 18)
+                        .frame(maxWidth: .infinity)
                     }
                 } else {
                     Section("Node order") {
@@ -128,7 +135,7 @@ struct RouterVPNNodeManagerSheet: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Linked Nodes")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
                 }
             }
