@@ -44,8 +44,6 @@ for forbidden in ("APIToken =", "NodeProofID =", "PrivateKey ="):
 require("cmd/client/dns_policy_api_test.go", "TestDNSPolicyOnlyMutatesDNSFields", "TestApplyDNSPolicyEncryptedInference", "TestApplyDNSPolicyRejectsUnsafeOrUnsupported")
 require("cmd/client/logical_modes.go", "ping_min_ms", "ping_max_ms", "traffic_min_pct", "traffic_max_pct", "speed_loss_min_pct", "speed_loss_max_pct", "ready_bases", "reason")
 
-# Home is a trust boundary: a stored/profile endpoint or cached public_ip must
-# never become "actual exit" without a proof bound to the current live session.
 home = require(
     "cmd/client/home_summary.go",
     "/api/home-summary", "/api/home-summary/prove-exit", "SessionID", "ActualExitStatus",
@@ -66,9 +64,6 @@ require(
 )
 require("cmd/client/mtu_retest.go", "registerHomeSummaryRoute(h, a)")
 
-# Windows is composed at launch: Product-v2 supplies the mature detail pages,
-# the unified shell owns daily map/connect controls, and proof is current-session
-# /api/home-summary/prove-exit rather than a generic public-IP lookup.
 require(
     "client/RouterVPN-Windows-App.ps1",
     "Get-Content -LiteralPath $Product -Raw -Encoding UTF8",
@@ -95,8 +90,6 @@ require(
     "No real node coordinates",
 )
 
-# macOS actual build compiles the mature AppKit product plus the unified map-first
-# shell/Home/settings/onboarding modules. Current-session exit proof stays explicit.
 require(
     "client/macos/RouterVPNMacProduct.swift",
     "import MapKit", "MKMapView", "latitude", "longitude", "layers: ", "added latency",
@@ -118,8 +111,6 @@ require_combined(
     "Prove actual exit", "Emergency Disconnect", "SMART AUTO", "CUSTOM", "map-first",
 )
 
-# Linux ships GTK v5 plus unified v8. The Home include rewires actual exit proof,
-# while unified v8 owns the map-first dock and keeps mature pages as drill-ins.
 require(
     "client/linux/routervpn-gtk-product-v5.c",
     "build_modes_page_v5", "Added latency", "traffic", "speed loss", "Readiness:", "Reason:",
@@ -142,9 +133,6 @@ require_combined(
     "gcc -O2 -Wall -Wextra -Werror",
 )
 
-# Android unified ProductActivity owns the map-first daily surface. The compact
-# Details/proof action calls AndroidHomeSummary's app-owned-VPN/current-session
-# proof and exposes emergency disconnect without restoring the old top nav.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProductParity.java",
     "listDirectLibboxModes", "listDirectXrayModes", "AndroidKillSwitchPolicy.strictRequested",
@@ -191,9 +179,6 @@ require(
     'android:name=".ProductActivity"', 'android.intent.category.LAUNCHER', 'android:name=".MainActivity"',
 )
 
-# iOS/iPadOS ProductRoot delegates the daily surface to IOSUnifiedProductView.
-# Expanded sheet embeds IOSHomeSummaryView, whose proof is bound to selected node
-# plus current engine/raw-profile identity after PacketTunnel path proof.
 require(
     "ios/RouterVPN/App/ProductParitySheets.swift",
     "RouterVPNModeMetricsSheet", "RouterVPNDNSSettingsSheet", "Added latency", "traffic", "speed loss",
@@ -208,8 +193,9 @@ require(
     "Emergency Disconnect", "api64.ipify.org", "api.ipify.org", "model.bundle?.selectedRouterID == selectedNode",
     "model.activeEngine == engine", "model.activeRawProfile == rawProfile", "Cached profile.publicIP is never used as live proof",
 )
-require(
-    "ios/RouterVPN/App/ProductRootView.swift",
+require_combined(
+    "iOS/iPadOS unified root lifecycle",
+    ("ios/RouterVPN/App/ProductRootView.swift", "ios/RouterVPN/App/IOSUnifiedProductView.swift"),
     "IOSUnifiedProductView()", "map-first", "SMART AUTO default", "CUSTOM preset builder",
     "RouterVPNProductOnboardingDoneV2",
 )
