@@ -50,7 +50,7 @@ enum IOSDNSRuntimePolicy {
         guard !host.isEmpty else { throw error("DNS policy \(mode) has no resolver host.") }
         guard (1...65535).contains(port) else { throw error("DNS policy \(mode) has an invalid port.") }
         if ["tls", "https", "h3"].contains(type) {
-            if serverName.isEmpty, IPv4Address(host) == nil, IPv6Address(host) == nil { serverName = host }
+            if serverName.isEmpty, !isLiteralIP(host) { serverName = host }
             guard !serverName.isEmpty else { throw error("Encrypted DNS to an IP requires its TLS server name.") }
         }
         return IOSResolvedDNSPolicy(mode: mode, type: type, host: host, port: port, serverName: serverName, path: path)
@@ -76,7 +76,7 @@ enum IOSDNSRuntimePolicy {
             guard let encodedFiles = profiles[rawID], isSelfContainedLibbox(encodedFiles), let encoded = encodedFiles["sing-box.json"],
                   let data = Data(base64Encoded: encoded, options: []), data.count <= 4 * 1024 * 1024 else { continue }
             var next = encodedFiles
-            next["sing-box.json"] = try patchLibbox(data, policy: policy).base64EncodedString()
+            next["sing-box.json"] = try patchLibbox(data, policy: policy, profile: profile).base64EncodedString()
             profiles[rawID] = next
         }
         bundle.profiles = profiles
@@ -94,13 +94,33 @@ enum IOSDNSRuntimePolicy {
         return lines.joined(separator: "\n")
     }
 
-    private static func patchLibbox(_ data: Data, policy: IOSResolvedDNSPolicy) throws -> Data {
+    private static func patchLibbox(_ data: Data, policy: IOSResolvedDNSPolicy, profile: RouterProfile) throws -> Data {
         guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw error("Libbox DNS patch requires a JSON object.") }
         let detour = try selectedDetour(root)
         var server: [String: Any] = ["type": policy.type, "tag": "routervpn-selected-dns", "server": policy.host, "server_port": policy.port, "detour": detour]
         if ["tls", "https", "h3"].contains(policy.type) { server["tls"] = ["enabled": true, "server_name": policy.serverName] }
         if ["https", "h3"].contains(policy.type) { server["path"] = policy.path }
-        root["dns"] = ["servers": [server], "final": "routervpn-selected-dns"]
+
+        var servers: [[String: Any]] = []
+        if !isLiteralIP(policy.host) {
+            let bootstrap = bootstrapHost(profile)
+            servers.append([
+                "type": "udp",
+                "tag": "routervpn-bootstrap-dns",
+                "server": bootstrap,
+                "server_port": 53,
+                "detour": detour,
+            ])
+            // sing-box 1.12+ new DNS transports require a domain_resolver for
+            // hostname server addresses. The bootstrap DNS itself is a literal
+            // IP and is detoured through the exact same non-direct VPN outbound,
+            // so resolving an encrypted/custom resolver hostname cannot leak to
+            // the underlay or recurse through itself.
+            server["domain_resolver"] = "routervpn-bootstrap-dns"
+        }
+        servers.append(server)
+        root["dns"] = ["servers": servers, "final": "routervpn-selected-dns"]
+
         var route = root["route"] as? [String: Any] ?? [:]
         var rules = route["rules"] as? [[String: Any]] ?? []
         rules.removeAll { ($0["action"] as? String) == "hijack-dns" || ($0["protocol"] as? String) == "dns" }
@@ -118,6 +138,18 @@ enum IOSDNSRuntimePolicy {
         }
         for outbound in root["outbounds"] as? [[String: Any]] ?? [] { let tag = outbound["tag"] as? String ?? "", type = outbound["type"] as? String ?? ""; if !tag.isEmpty && type != "direct" { return tag } }
         throw error("Libbox profile has no non-direct outbound for selected DNS.")
+    }
+
+    private static func bootstrapHost(_ profile: RouterProfile) -> String {
+        for candidate in [profile.fastestDNSHost, profile.adGuardIPv4, profile.adGuardIPv6, "1.1.1.1"] {
+            let value = clean(candidate)
+            if isLiteralIP(value) { return value }
+        }
+        return "1.1.1.1"
+    }
+
+    private static func isLiteralIP(_ value: String) -> Bool {
+        IPv4Address(value) != nil || IPv6Address(value) != nil
     }
 
     private static func isSelfContainedLibbox(_ encoded: [String: String]) -> Bool {
