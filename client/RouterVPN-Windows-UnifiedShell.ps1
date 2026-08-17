@@ -27,9 +27,10 @@ function Add-RouterVPNUnifiedWindowsShell {
     </Grid>
   </Border>
   <Border Grid.Row="1" Background="#F0162238" BorderBrush="#354968" BorderThickness="1" CornerRadius="22" Padding="16,8,16,14">
-    <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto"><StackPanel>
+    <ScrollViewer MaxHeight="390" VerticalScrollBarVisibility="Auto"><StackPanel>
       <TextBlock Text="━━━━" HorizontalAlignment="Center" Foreground="#657794" FontSize="15"/>
       <TextBlock Name="UnifiedProofText" Text="Connected requires exact selected-node path proof." Foreground="#DDE7FF" TextWrapping="Wrap" Margin="0,0,0,7"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,6"><Button Name="UnifiedProofButton" Content="Prove actual exit" Padding="10,5"/><Button Name="UnifiedEmergencyButton" Content="Emergency disconnect" Margin="6,0,0,0" Padding="10,5"/></StackPanel>
       <TextBlock Name="UnifiedLastError" Foreground="#FF9CA8" TextWrapping="Wrap" Margin="0,0,0,6"/>
       <Grid Margin="0,2,0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Name="UnifiedConnectButton" Content="Connect" FontSize="17" FontWeight="Bold" Padding="18,10" Background="#6857E5" Foreground="White"/><CheckBox Name="UnifiedKillSwitch" Grid.Column="1" Content="Kill switch" VerticalAlignment="Center" Margin="14,0,0,0"/></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Multihop" FontWeight="SemiBold" VerticalAlignment="Center"/><CheckBox Name="UnifiedMultihop" Grid.Column="1" VerticalAlignment="Center" Margin="6,0"/><ComboBox Name="UnifiedEntryCombo" Grid.Column="2" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="150"/><TextBlock Grid.Column="3" Text=" → " VerticalAlignment="Center"/><ComboBox Name="UnifiedExitCombo" Grid.Column="4" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="150"/><ComboBox Name="UnifiedExitMode" Grid.Column="5" Margin="6,0,0,0"><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/></ComboBox></Grid>
@@ -96,6 +97,8 @@ function ShowUnifiedCustomBuilder{
     if (-not $ProductSource.Contains($beforeShow)) { throw 'Windows unified shell: startup marker drifted.' }
     $handlers = @'
 (Control 'UnifiedConnectButton').Add_Click({UnifiedConnect})
+(Control 'UnifiedProofButton').Add_Click({try{$R=Api '/api/home-summary/prove-exit' 'POST' @{} 15;if([string]$R.actual_exit_status -ne 'proved' -or -not [string]$R.actual_exit_ip){throw 'Current-session public-exit proof did not return proved.'};$ProofText.Text="Actual public VPN exit: $($R.actual_exit_ip) • current session proved";Log ("Actual public VPN exit proved: "+[string]$R.actual_exit_ip)}catch{Log ('Exit proof failed: '+$_.Exception.Message)};RefreshProduct})
+(Control 'UnifiedEmergencyButton').Add_Click({try{[void](Api '/api/emergency-stop' 'POST' @{} 20);Log 'Emergency disconnect completed'}catch{Log ('Emergency disconnect failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedNodesButton').Add_Click({OpenUnifiedDetail 1})
 (Control 'UnifiedPresetsButton').Add_Click({OpenUnifiedDetail 2})
 (Control 'UnifiedDnsDetailsButton').Add_Click({OpenUnifiedDetail 3})
@@ -108,6 +111,6 @@ function ShowUnifiedCustomBuilder{
 '@
     $ProductSource = $ProductSource.Replace($beforeShow, $handlers + "`n" + $beforeShow)
 
-    $ProductSource += "`n# Unified Windows UX contract: map-first bottom control sheet Connect Disconnect quick kill switch Multihop Settings Mode DNS SMART AUTO default AUTO all presets CUSTOM visual preset builder saved delete Router node Custom external real coordinates color-coded hop roles IPv6 On Auto MTU Require encrypted Require obfuscation.`n"
+    $ProductSource += "`n# Unified Windows UX contract: map-first bottom control sheet Connect Disconnect quick kill switch Prove actual exit current-session proof Emergency disconnect Multihop Settings Mode DNS SMART AUTO default AUTO all presets CUSTOM visual preset builder saved delete Router node Custom external real coordinates color-coded hop roles IPv6 On Auto MTU Require encrypted Require obfuscation.`n"
     return $ProductSource
 }
