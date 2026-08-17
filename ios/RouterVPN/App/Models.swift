@@ -147,6 +147,8 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var ipv6Mode: String?
     var startupMode: String?
     var autoConnect: Bool?
+    var autoRequireEncrypted: Bool?
+    var autoRequireObfuscation: Bool?
     var multihopEnabled: Bool?
     var multihopEntryID: String?
     var multihopExitID: String?
@@ -223,6 +225,8 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case ipv6Mode = "ipv6_mode"
         case startupMode = "startup_mode"
         case autoConnect = "auto_connect"
+        case autoRequireEncrypted = "auto_require_encrypted"
+        case autoRequireObfuscation = "auto_require_obfuscation"
         case multihopEnabled = "multihop_enabled"
         case multihopEntryID = "multihop_entry_id"
         case multihopExitID = "multihop_exit_id"
@@ -288,7 +292,7 @@ struct ClientBundle: Codable {
 
     static let empty = ClientBundle(
         bundleVersion: 4,
-        profileSchemaVersion: 3,
+        profileSchemaVersion: 4,
         nodeProofID: "",
         endpoint: "",
         apiToken: "",
@@ -355,7 +359,7 @@ struct ClientBundle: Codable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         bundleVersion = try values.decodeIfPresent(Int.self, forKey: .bundleVersion) ?? 1
         profileSchemaVersion = try values.decodeIfPresent(Int.self, forKey: .profileSchemaVersion) ?? 1
-        guard profileSchemaVersion <= 3 else {
+        guard profileSchemaVersion <= 4 else {
             throw DecodingError.dataCorruptedError(forKey: .profileSchemaVersion, in: values, debugDescription: "Router profile schema is newer than this app supports")
         }
         nodeProofID = try values.decodeIfPresent(String.self, forKey: .nodeProofID) ?? ""
