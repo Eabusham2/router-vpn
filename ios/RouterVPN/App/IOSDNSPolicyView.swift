@@ -48,7 +48,7 @@ struct IOSDNSPolicyView: View {
                     Picker("DNS", selection: $mode) {
                         ForEach(modeValues, id: \.1) { Text($0.0).tag($0.1) }
                     }
-                    .onChange(of: mode) { _, value in applyModeDefaults(value) }
+                    .onChange(of: mode) { value in applyModeDefaults(value) }
                     if mode == "custom" {
                         Picker("Transport", selection: $protocolName) { Text("UDP").tag("udp"); Text("TCP").tag("tcp") }
                     }
