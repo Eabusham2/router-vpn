@@ -190,13 +190,13 @@ class DownloadJobManager:
             if acquired:
                 self.build_slots.release()
             if work:
-                self._update(job_id, phase="cleanup", progress=100)
-                self._cleanup_dir(work)
                 with self.lock:
                     job = self.jobs.get(job_id)
-                    terminal = bool(job and job.get("status") in ("cancelled", "failed"))
-                if terminal:
-                    self._update(job_id, work_dir="", path="")
+                    terminal_status = str(job.get("status") or "") if job else ""
+                self._update(job_id, phase="cleanup", progress=100)
+                self._cleanup_dir(work)
+                if terminal_status in ("cancelled", "failed"):
+                    self._update(job_id, work_dir="", path="", phase=terminal_status, progress=0)
                 else:
                     self._update(job_id, work_dir="", path="", status="failed", phase="failed", progress=0, error_code="cleanup_without_result", error="download job ended without a deliverable package")
 
