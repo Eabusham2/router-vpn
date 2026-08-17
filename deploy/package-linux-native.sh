@@ -35,7 +35,26 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-dns" ./cmd/dnsproxy
 chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/modes/"*.sh
 
+# The GTK builder intentionally uses strict -Werror and many fail-closed contract
+# checks. If one of those post-link checks fails, print enough native evidence to
+# identify the exact missing dependency/symbol instead of leaving CI with only the
+# preceding `file` line. Never turn a failed native build into a package success.
+set +e
 "$ROOT/client/linux/build-native-app.sh" "$dir/router-vpn-app"
+native_rc=$?
+set -e
+if (( native_rc != 0 )); then
+  echo "Linux native app builder failed rc=$native_rc" >&2
+  if [[ -f "$dir/router-vpn-app" ]]; then
+    echo '=== router-vpn-app file ===' >&2
+    file "$dir/router-vpn-app" >&2 || true
+    echo '=== router-vpn-app ldd ===' >&2
+    ldd "$dir/router-vpn-app" >&2 || true
+    echo '=== required direct symbols ===' >&2
+    nm -D "$dir/router-vpn-app" 2>/dev/null | grep -E 'gtk_|json_|curl_easy_' | head -n 80 >&2 || true
+  fi
+  exit "$native_rc"
+fi
 python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$dir/router-vpn.png" --ico "$dir/RouterVPN.ico"
 
 cat > "$dir/start-router-vpn.sh" <<'SH'
