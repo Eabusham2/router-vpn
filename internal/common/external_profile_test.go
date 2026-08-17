@@ -11,7 +11,7 @@ const testWGKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 func TestLegacyProfileDefaultsToRouterVPNKind(t *testing.T) {
 	var p RouterProfile
 	if err := json.Unmarshal([]byte(`{"schema_version":2,"id":"home","home_lan_access":false}`), &p); err != nil { t.Fatal(err) }
-	if p.SchemaVersion != 3 { t.Fatalf("schema=%d", p.SchemaVersion) }
+	if p.SchemaVersion != RouterProfileSchemaVersion { t.Fatalf("schema=%d", p.SchemaVersion) }
 	if p.NodeKind != "router-vpn" { t.Fatalf("node_kind=%q", p.NodeKind) }
 	if p.External != nil { t.Fatal("legacy Router VPN profile gained external config") }
 }
