@@ -75,7 +75,7 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 		allowed := map[string]bool{"2022-blake3-aes-128-gcm":true,"2022-blake3-aes-256-gcm":true,"2022-blake3-chacha20-poly1305":true,"aes-128-gcm":true,"aes-256-gcm":true,"chacha20-ietf-poly1305":true}
 		if s.Server == "" || s.Port < 1 || s.Port > 65535 || !allowed[s.Method] || s.Password == "" { return fmt.Errorf("external shadowsocks requires server, valid port, supported method and password") }
 	case "socks5":
-		if ext.SOCKS5 == nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || ext.Hysteria2 != nil { return fmt.Errorf("external socks5 node requires only the socks5 block") }
+		if ext.SOCKS5 == nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || ext.Hysteria2 != nil { return fmt.Errorf("external socks5 requires host and valid port") }
 		s := ext.SOCKS5; s.Host = strings.TrimSpace(s.Host); s.Username = strings.TrimSpace(s.Username)
 		if s.Host == "" || s.Port < 1 || s.Port > 65535 { return fmt.Errorf("external socks5 requires host and valid port") }
 		if (s.Username == "") != (s.Password == "") { return fmt.Errorf("external socks5 username/password must be supplied together") }
@@ -129,9 +129,9 @@ func NormalizeRouterProfile(p *RouterProfile) error {
 	}
 	p.NodeProofID = strings.TrimSpace(p.NodeProofID); if p.NodeProofID != "" && !ValidNodeProofID(p.NodeProofID) { return fmt.Errorf("invalid node proof id") }
 	p.KillSwitchPolicy = strings.ToLower(strings.TrimSpace(p.KillSwitchPolicy)); if p.KillSwitchPolicy == "" { if p.KillSwitch { p.KillSwitchPolicy = "on-connect" } else { p.KillSwitchPolicy = "off" } }; switch p.KillSwitchPolicy { case "off", "on-connect", "always": default: return fmt.Errorf("invalid kill switch policy %q", p.KillSwitchPolicy) }; p.KillSwitch = p.KillSwitchPolicy != "off"
-	p.StartupMode = strings.ToLower(strings.TrimSpace(p.StartupMode)); if p.StartupMode == "" { p.StartupMode = "manual" }; switch p.StartupMode { case "manual", "auto", "smart-auto", "last": default: return fmt.Errorf("invalid startup mode %q", p.StartupMode) }
-	p.IPv6Mode = strings.ToLower(strings.TrimSpace(p.IPv6Mode)); if p.IPv6Mode == "" { p.IPv6Mode = "auto" }; switch p.IPv6Mode { case "auto", "on", "off": default: return fmt.Errorf("invalid IPv6 mode %q", p.IPv6Mode) }
-	p.MTUPolicy = strings.ToLower(strings.TrimSpace(p.MTUPolicy)); if p.MTUPolicy == "" { p.MTUPolicy = "default" }; switch p.MTUPolicy { case "default", "auto": p.ManualMTU = 0; case "manual": if p.ManualMTU < 576 || p.ManualMTU > 9000 { return fmt.Errorf("manual MTU %d is outside 576..9000", p.ManualMTU) }; default: return fmt.Errorf("invalid MTU policy %q", p.MTUPolicy) }
+	p.StartupMode = strings.ToLower(strings.TrimSpace(p.StartupMode)); if p.StartupMode == "" { p.StartupMode = "smart-auto" }; switch p.StartupMode { case "manual", "auto", "smart-auto", "last": default: return fmt.Errorf("invalid startup mode %q", p.StartupMode) }
+	p.IPv6Mode = strings.ToLower(strings.TrimSpace(p.IPv6Mode)); if p.IPv6Mode == "" { p.IPv6Mode = "on" }; switch p.IPv6Mode { case "auto", "on", "off": default: return fmt.Errorf("invalid IPv6 mode %q", p.IPv6Mode) }
+	p.MTUPolicy = strings.ToLower(strings.TrimSpace(p.MTUPolicy)); if p.MTUPolicy == "" { p.MTUPolicy = "auto" }; switch p.MTUPolicy { case "default", "auto": p.ManualMTU = 0; case "manual": if p.ManualMTU < 576 || p.ManualMTU > 9000 { return fmt.Errorf("manual MTU %d is outside 576..9000", p.ManualMTU) }; default: return fmt.Errorf("invalid MTU policy %q", p.MTUPolicy) }
 	if p.DiagnosticsRetentionDays == 0 { p.DiagnosticsRetentionDays = 7 }; if p.DiagnosticsRetentionDays < 1 || p.DiagnosticsRetentionDays > 365 { return fmt.Errorf("diagnostics retention must be between 1 and 365 days") }
 	p.MultihopEntryID = strings.TrimSpace(p.MultihopEntryID); p.MultihopExitID = strings.TrimSpace(p.MultihopExitID); if p.MultihopEnabled { if p.MultihopEntryID == "" || p.MultihopExitID == "" { return fmt.Errorf("multihop requires both an entry node and an exit node") }; if p.MultihopEntryID == p.MultihopExitID { return fmt.Errorf("multihop entry and exit nodes must be different") } }
 	return nil
