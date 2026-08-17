@@ -194,3 +194,20 @@ static GtkWidget *build_home_page_strategy_v7(App *app) {
  * AUTO /api/strategy/auto SMART AUTO /api/strategy/smart-auto CUSTOM /api/strategy/custom
  * responsive GtkFlowBox strategy controls; CUSTOM requires explicit exact layers.
  */
+
+/*
+ * The profile-settings include is compiled immediately after this shared Home
+ * include. Its multihop callbacks carry LinuxMultihopDialogV7 state instead of
+ * App state, so keep this button connector pointer-generic and declare the grid
+ * helper before the settings body uses it. This preserves -Werror and keeps the
+ * callbacks type-correct without casting LinuxMultihopDialogV7 to App.
+ */
+static void profile_settings_grid_row_v7(GtkWidget *grid, int row, const char *label, GtkWidget *widget);
+
+static GtkWidget *make_button_data_v7(const char *label, GCallback callback, gpointer data) {
+    GtkWidget *button = gtk_button_new_with_label(label);
+    g_signal_connect(button, "clicked", callback, data);
+    return button;
+}
+
+#define make_button(label, callback, data) make_button_data_v7((label), (callback), (gpointer)(data))
