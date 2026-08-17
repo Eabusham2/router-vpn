@@ -73,7 +73,7 @@ enum IOSRuntimeSelector {
         }
 
         throw IOSRuntimeSelectionError.unsupportedMode(
-            "This iOS build cannot run \(logical.name) from the imported node: no validated WireGuardKit/sing-box variant is present. Xray-only, AmneziaWG-only, ALL/MAX and full multihop combinations remain unavailable instead of faking Connected."
+            "This iOS build cannot run \(logical.name) from the imported node: no validated WireGuardKit/sing-box variant is present. Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable instead of faking Connected. Full desktop-equivalent Router VPN multihop and OpenVPN remain outside the iOS dataplane until a pinned native implementation exists."
         )
     }
 
