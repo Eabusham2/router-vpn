@@ -67,21 +67,40 @@ enum IOSRuntimeSelector {
         // actually ships a complete sing-box profile. This prevents UI parity
         // from turning into fake runtime parity for Xray/AWG-only modes.
         for rawID in orderedVariantIDs(logical) {
-            guard isSafe(rawID, pattern: rawProfilePattern) else {
-                throw IOSRuntimeSelectionError.invalidProfileName(rawID)
+            if let selection = try? selectRaw(bundle: bundle, rawProfileID: rawID, logicalModeID: logical.id) {
+                return selection
             }
-            guard let encoded = bundle.profiles[rawID], encoded["sing-box.json"] != nil else { continue }
-            let files = try decodeProfile(encoded)
-            guard let config = files["sing-box.json"],
-                  let object = try? JSONSerialization.jsonObject(with: config),
-                  object is [String: Any]
-            else { throw IOSRuntimeSelectionError.invalidSingBoxConfig }
-            return IOSRuntimeSelection(engine: .libbox, logicalModeID: logical.id, rawProfileID: rawID, files: files)
         }
 
         throw IOSRuntimeSelectionError.unsupportedMode(
-            "This iOS build cannot run \(logical.name) from the imported node: no validated sing-box.json variant is present. Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable instead of faking Connected."
+            "This iOS build cannot run \(logical.name) from the imported node: no validated WireGuardKit/sing-box variant is present. Xray-only, AmneziaWG-only, ALL/MAX and full multihop combinations remain unavailable instead of faking Connected."
         )
+    }
+
+    static func selectRaw(bundle: ClientBundle, rawProfileID: String) throws -> IOSRuntimeSelection {
+        try selectRaw(bundle: bundle, rawProfileID: rawProfileID, logicalModeID: logicalModeID(for: rawProfileID, in: bundle))
+    }
+
+    static func logicalModeID(for rawProfileID: String, in bundle: ClientBundle) -> String {
+        bundle.logicalModes.first(where: { $0.variants.values.contains(rawProfileID) })?.id ?? rawProfileID
+    }
+
+    private static func selectRaw(bundle: ClientBundle, rawProfileID: String, logicalModeID: String) throws -> IOSRuntimeSelection {
+        guard isSafe(rawProfileID, pattern: rawProfilePattern) else {
+            throw IOSRuntimeSelectionError.invalidProfileName(rawProfileID)
+        }
+        if rawProfileID == "wg" {
+            return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [:])
+        }
+        guard let encoded = bundle.profiles[rawProfileID], encoded["sing-box.json"] != nil else {
+            throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no iOS-runnable sing-box profile.")
+        }
+        let files = try decodeProfile(encoded)
+        guard let config = files["sing-box.json"],
+              let object = try? JSONSerialization.jsonObject(with: config),
+              object is [String: Any]
+        else { throw IOSRuntimeSelectionError.invalidSingBoxConfig }
+        return IOSRuntimeSelection(engine: .libbox, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: files)
     }
 
     private static func orderedVariantIDs(_ logical: LogicalMode) -> [String] {
