@@ -3,8 +3,6 @@ import SwiftUI
 
 private let iosUnifiedModeKey = "routervpn.unified.mode.v1"
 private let iosUnifiedPresetsKey = "routervpn.unified.custom-presets.v1"
-private let iosRequireEncryptedPrefix = "routervpn.unified.require-encrypted."
-private let iosRequireObfuscationPrefix = "routervpn.unified.require-obfuscation."
 
 private struct IOSUnifiedCustomPreset: Codable, Identifiable, Hashable {
     var id: String { name.lowercased() }
@@ -47,15 +45,25 @@ extension RouterVPNModel {
     }
 
     func unifiedRequirement(_ kind: String) -> Bool {
-        guard let id = unifiedSelectedProfile?.id else { return false }
-        let prefix = kind == "obfuscation" ? iosRequireObfuscationPrefix : iosRequireEncryptedPrefix
-        return UserDefaults.standard.bool(forKey: prefix + id)
+        guard let profile = unifiedSelectedProfile else { return false }
+        return kind == "obfuscation" ? (profile.autoRequireObfuscation ?? false) : (profile.autoRequireEncrypted ?? false)
     }
 
     func setUnifiedRequirement(_ kind: String, enabled: Bool) {
-        guard let id = unifiedSelectedProfile?.id else { return }
-        let prefix = kind == "obfuscation" ? iosRequireObfuscationPrefix : iosRequireEncryptedPrefix
-        UserDefaults.standard.set(enabled, forKey: prefix + id)
+        guard !connected else { message = "Disconnect before changing AUTO / SMART requirements."; return }
+        guard var current = bundle,
+              let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) ?? current.routerProfiles.indices.first,
+              current.routerProfiles[index].normalizedNodeKind == "router-vpn" else {
+            message = "Select a Router VPN node before changing AUTO / SMART requirements."; return
+        }
+        if kind == "obfuscation" { current.routerProfiles[index].autoRequireObfuscation = enabled }
+        else { current.routerProfiles[index].autoRequireEncrypted = enabled }
+        current.profileSchemaVersion = max(current.profileSchemaVersion, 4)
+        do {
+            try importBundle(JSONEncoder().encode(current))
+            let label = kind == "obfuscation" ? "Require obfuscation" : "Require encrypted"
+            message = "\(label) \(enabled ? "enabled" : "disabled") for AUTO / SMART on the selected Router VPN node."
+        } catch { message = "AUTO requirement update failed: \(error.localizedDescription)" }
     }
 
     func unifiedSetDNSMode(_ mode: String) {
@@ -73,75 +81,20 @@ extension RouterVPNModel {
     }
 
     private func unifiedRawModeMeetsAutoRequirements(_ rawID: String) -> Bool {
-        let encrypted = unifiedRequirement("encrypted")
-        let obfuscated = unifiedRequirement("obfuscation")
-        if !encrypted && !obfuscated { return true }
-        let raw = rawID.lowercased()
-        let encryptedIDs: Set<String> = [
-            "wg", "awg2-fast", "wg-pq", "shadowsocks", "awg2-strong", "awg2-pq",
-            "reality-vision", "hysteria2", "reality-pq-vision", "ss-v2ray", "naive-h2",
-            "naive-h3", "split", "reality-xhttp", "max", "max-quic-wg", "max-quic-awg",
-            "max-tls-wg", "max-tls-awg", "all"
-        ]
-        let obfuscatedIDs: Set<String> = [
-            "awg2-fast", "awg2-strong", "awg2-pq", "reality-vision", "hysteria2",
-            "reality-pq-vision", "ss-v2ray", "naive-h2", "naive-h3", "split",
-            "reality-xhttp", "max", "max-quic-wg", "max-quic-awg", "max-tls-wg",
-            "max-tls-awg", "all"
-        ]
-        if encrypted && !encryptedIDs.contains(raw) { return false }
-        if obfuscated && !obfuscatedIDs.contains(raw) { return false }
-        return true
-    }
-
-    private func unifiedFilteredBundleForAuto() -> ClientBundle? {
-        guard var current = bundle else { return nil }
-        let encrypted = unifiedRequirement("encrypted"), obfuscated = unifiedRequirement("obfuscation")
-        guard encrypted || obfuscated else { return current }
-        current.modes = current.modes.filter { unifiedRawModeMeetsAutoRequirements($0.id) }
-        current.logicalModes = current.logicalModes.filter { logical in
-            guard let selection = try? IOSRuntimeSelector.select(bundle: current, logicalModeID: logical.id) else { return false }
-            return unifiedRawModeMeetsAutoRequirements(selection.rawProfileID)
-        }
-        return current
-    }
-
-    private func unifiedRunWithFilteredBundle(_ operation: @escaping @MainActor () async -> Void) async {
-        guard let original = bundle, let filtered = unifiedFilteredBundleForAuto() else { message = "Pair/import a Router VPN node first."; return }
-        if filtered.modes.isEmpty || IOSRuntimeSelector.runnableModes(in: filtered).isEmpty {
-            var requirements: [String] = []
-            if unifiedRequirement("encrypted") { requirements.append("encrypted") }
-            if unifiedRequirement("obfuscation") { requirements.append("obfuscated") }
-            message = "AUTO found no iOS-runnable candidate satisfying Require \(requirements.joined(separator: " + "))."
-            return
-        }
-        let filtering = filtered.modes.count != original.modes.count
-        do { try importBundle(JSONEncoder().encode(filtered)) }
-        catch { message = "AUTO requirement filtering failed closed: \(error.localizedDescription)"; return }
-        await operation()
-        let resultMessage = message
-        let resultLogical = selectedLogicalMode
-        let resultRaw = activeRawProfile
-        do {
-            try importBundle(JSONEncoder().encode(original))
-            selectedLogicalMode = resultLogical
-            selectedMode = resultRaw.isEmpty ? resultLogical : resultRaw
-            message = filtering ? resultMessage + " • AUTO requirements enforced" : resultMessage
-        } catch {
-            message = resultMessage + " • warning: could not restore the complete local mode catalog after filtered attempt: \(error.localizedDescription)"
-        }
+        guard let profile = unifiedSelectedProfile else { return false }
+        return IOSStrategyCatalog.autoRequirementFailure(rawID: rawID, profile: profile) == nil
     }
 
     func runUnifiedIOSAuto() async {
-        await unifiedRunWithFilteredBundle {
-            self.auto = true
-            await self.connect()
-            if self.connected { self.recordIOSLastRuntime() }
-        }
+        guard unifiedSelectedProfile != nil else { message = "Pair/import a Router VPN node first."; return }
+        auto = true
+        await connect()
+        if connected { recordIOSLastRuntime() }
     }
 
     func runUnifiedIOSSmartAuto() async {
-        await unifiedRunWithFilteredBundle { await self.runIOSSmartAuto() }
+        guard unifiedSelectedProfile != nil else { message = "Pair/import a Router VPN node first."; return }
+        await runIOSSmartAuto()
     }
 }
 
@@ -489,8 +442,10 @@ private struct IOSUnifiedSettingsView: View {
                 Section("Quick settings") {
                     Toggle("Kill switch", isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) }))
                     Toggle("AUTO / SMART: Require encrypted", isOn: $requireEncrypted)
+                        .disabled(model.connected)
                     Toggle("AUTO / SMART: Require obfuscation", isOn: $requireObfuscation)
-                    Text("Both AUTO requirements are Off by default. They filter candidates before the proof attempt; SMART cannot simplify into a candidate that violates them.").font(.caption).foregroundStyle(.secondary)
+                        .disabled(model.connected)
+                    Text("Both AUTO requirements are Off by default. They are stored in the selected schema-v4 Router VPN profile, shared with Advanced Settings, and filter candidates before the proof attempt; SMART cannot simplify into a candidate that violates them.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Defaults") {
                     LabeledContent("IPv6", value: (model.unifiedSelectedProfile?.ipv6Mode ?? "on").capitalized)
@@ -506,12 +461,15 @@ private struct IOSUnifiedSettingsView: View {
             }
             .navigationTitle("Settings")
             .onAppear { requireEncrypted = model.unifiedRequirement("encrypted"); requireObfuscation = model.unifiedRequirement("obfuscation") }
-            .onChange(of: requireEncrypted) { _ in saveRequirements() }
-            .onChange(of: requireObfuscation) { _ in saveRequirements() }
+            .onChange(of: requireEncrypted) { value in model.setUnifiedRequirement("encrypted", enabled: value) }
+            .onChange(of: requireObfuscation) { value in model.setUnifiedRequirement("obfuscation", enabled: value) }
             .sheet(isPresented: $showingAdvanced) { IOSProfileSettingsView().environmentObject(model) }
         }
     }
-    private func saveRequirements() { model.setUnifiedRequirement("encrypted", enabled: requireEncrypted); model.setUnifiedRequirement("obfuscation", enabled: requireObfuscation) }
+    private func saveRequirements() {
+        model.setUnifiedRequirement("encrypted", enabled: requireEncrypted)
+        model.setUnifiedRequirement("obfuscation", enabled: requireObfuscation)
+    }
 }
 
-private let iosUnifiedUXContract = "map-first swipe-up Connect Disconnect quick kill switch Multihop Settings Mode DNS SMART AUTO default AUTO all presets CUSTOM builder saved delete Router node Custom external color-coded hops real coordinates IPv6 On Auto MTU Require encrypted Require obfuscation"
+private let iosUnifiedUXContract = "map-first swipe-up Connect Disconnect quick kill switch Multihop Settings Mode DNS SMART AUTO default AUTO all presets CUSTOM builder saved delete Router node Custom external color-coded hops real coordinates IPv6 On Auto MTU Require encrypted Require obfuscation schema-v4 profile-shared requirements"
