@@ -7,19 +7,20 @@ SRC="$ROOT/client/linux/routervpn-gtk-product-v5.c"
 ONBOARDING_INC="$ROOT/client/linux/routervpn-product-onboarding-v6.inc"
 HOME_INC="$ROOT/client/linux/routervpn-home-summary-v1.inc"
 SETTINGS_INC="$ROOT/client/linux/routervpn-profile-settings-v1.inc"
+UNIFIED_INC="$ROOT/client/linux/routervpn-unified-shell-v8.inc"
 V4="$ROOT/client/linux/routervpn-gtk-product-v4.c"
 V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$V4" "$V3" "$CORE")
-BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v5.XXXXXX")
+SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$UNIFIED_INC" "$V4" "$V3" "$CORE")
+BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v8.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
-BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v5-shipping.c"
+BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v8-shipping.c"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
 done
-for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC"; do
+for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$UNIFIED_INC"; do
   [[ -s "$source" ]] || { echo "Missing Linux shipping include: $source" >&2; exit 2; }
 done
 mkdir -p "$(dirname "$OUT")"
@@ -42,10 +43,9 @@ PY
 ! grep -Fq 'int main(int argc, char **argv) {' "$EMBEDDED_V4"
 grep -Fq 'static void __attribute__((used)) build_ui_v4(App *app) {' "$EMBEDDED_V4"
 
-# Shipping v5 keeps the tracked product source authoritative and uses guarded
-# compile-time seams for complete resumable onboarding, truthful Home state and
-# safe narrow profile settings. The inherited public-IP button is rewired to
-# current-session /api/home-summary/prove-exit rather than cached profile data.
+# Shipping v8 keeps the mature controller/product code, complete onboarding,
+# truthful Home state and profile settings, then renames the old tab-first
+# builder and installs the unified map-first shell as the only daily-use root.
 python3 - "$SRC" "$BUILD_SRC" <<'PY'
 from pathlib import Path
 import sys
@@ -175,12 +175,22 @@ if text.count(initial_old) != 1:
     raise SystemExit('Linux initial Home refresh seam drifted')
 text = text.replace(initial_old, initial_new, 1)
 
+legacy_builder = 'static void build_ui_v5(App *app) {'
+if text.count(legacy_builder) != 1:
+    raise SystemExit('Linux unified shell could not find exactly one legacy v5 builder')
+text = text.replace(legacy_builder, 'static void build_ui_legacy_v5(App *app) {', 1)
+self_test_marker = 'static int self_test_v5(void) {'
+if text.count(self_test_marker) != 1:
+    raise SystemExit('Linux unified shell could not find v5 self-test seam')
+text = text.replace(self_test_marker, '#include "routervpn-unified-shell-v8.inc"\n\n' + self_test_marker, 1)
+
 for marker in (
     '#include "routervpn-product-onboarding-v6.inc"', '#include "routervpn-home-summary-v1.inc"',
-    '#include "routervpn-profile-settings-v1.inc"', 'onboarding_read_step_v6(path)',
-    'gtk_assistant_set_current_page', 'refresh_home_summary_v6(app)',
+    '#include "routervpn-profile-settings-v1.inc"', '#include "routervpn-unified-shell-v8.inc"',
+    'onboarding_read_step_v6(path)', 'gtk_assistant_set_current_page', 'refresh_home_summary_v6(app)',
     'gtk_button_set_label(GTK_BUTTON(home_exit_v6), "Prove actual exit")', 'G_CALLBACK(on_home_exit_v6)',
     'Edit profile settings', 'G_CALLBACK(on_profile_settings_v7)', 'router-vpn-advanced-settings-v7',
+    'static void build_ui_legacy_v5(App *app) {',
 ):
     if marker not in text: raise SystemExit(f'missing Linux shipping marker: {marker}')
 out_path.write_text(text, encoding='utf-8')
@@ -204,14 +214,14 @@ SYMBOLS=$(nm -a "$OUT" 2>/dev/null || true); DYNAMIC_SYMBOLS=$(nm -D "$OUT" 2>/d
 if ! grep -q 'curl_easy_init' <<<"$SYMBOLS" && ! grep -q 'curl_easy_init' <<<"$DYNAMIC_SYMBOLS"; then echo 'Native Linux app does not contain/reference required libcurl API.' >&2; exit 1; fi
 ! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' "${SHIPPED[@]}"
 for marker in 'gtk_window_new' 'gtk_notebook_new' 'http://127.0.0.1:8788' '/api/connect-logical' '/api/emergency-stop' '/api/session/events' '/api/profile/pair' '/api/profile/import' '/api/profile/delete' '/api/profile/latency' '/api/external-profile/import' '/api/external-profile/connect' '/api/nodes' 'latitude' 'longitude' 'Nodes & Map' 'Forwarding' 'Settings' 'Help' 'ensure_controller' 'shutdown_controller'; do grep -Fq "$marker" "${SHIPPED[@]}"; done
-
 for marker in 'pairing' 'router-vpn-bundle.json' 'AUTO' 'WireGuard' 'AmneziaWG' 'DNS' 'LAN Off' 'MTU/Jumbo' 'kill-switch' 'Multihop' 'forwarding' 'permissions' 'Disconnect' 'private identity/path proof' 'Public exit' 'Diagnostics' 'Emergency stop' 'Setup Center Full Guide' 'Run Tutorial'; do grep -Fq "$marker" "$ONBOARDING_INC"; done
 for marker in '/api/home-summary' '/api/home-summary/prove-exit' 'Actual public VPN exit' 'Node measured latency' 'LAN access' 'Kill switch' 'Effective MTU' 'Warnings'; do grep -Fq "$marker" "$HOME_INC"; done
 for marker in '/api/profile/settings' 'Allow home LAN access' 'Always / strict' 'AmneziaWG' 'Auto measured' 'DAITA-like' 'Jumbo TUN' 'SOCKS5' 'startup' 'autoconnect'; do grep -Fiq "$marker" "$SETTINGS_INC"; done
-for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' '#include "routervpn-profile-settings-v1.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)' 'Edit profile settings' 'G_CALLBACK(on_profile_settings_v7)' 'router-vpn-advanced-settings-v7'; do grep -Fq "$marker" "$BUILD_SRC"; done
+for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' '#include "routervpn-profile-settings-v1.inc"' '#include "routervpn-unified-shell-v8.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)' 'Edit profile settings' 'G_CALLBACK(on_profile_settings_v7)' 'router-vpn-advanced-settings-v7' 'static void build_ui_legacy_v5(App *app) {'; do grep -Fq "$marker" "$BUILD_SRC"; done
+for marker in 'build_ui_v5(App *app)' 'map-first' 'Connect' 'Disconnect' 'Kill switch' 'Multihop' 'Settings' 'Mode' 'DNS' 'SMART AUTO — recommended' 'AUTO — first proven path' 'New CUSTOM preset…' 'CUSTOM preset builder' '/api/strategy/auto' '/api/strategy/smart-auto' '/api/strategy/custom' '/api/connect-logical' '/api/multihop/connect' '/api/mtu/retest' 'real stored coordinates'; do grep -Fq "$marker" "$UNIFIED_INC"; done
 
 grep -Fq 'Diagnostics' "$SRC"; grep -Fq '/api/session/events?after=0' "$SRC"; grep -Fq 'apply_action_sensitivity_v5' "$SRC"; grep -Fq 'gtk_widget_set_sensitive' "$SRC"; grep -Fq 'truthful-empty-state-actions' "$SRC"; grep -Fq 'gtk_window_set_default_size(GTK_WINDOW(app->window), 960, 680);' "$SRC"
 grep -Fq '/api/mtu/retest' "$SRC"; grep -Fq 'Retest MTU' "$SRC"; grep -Fq '130000' "$SRC"; grep -Fq 'router-vpn-advanced-mtu-v5' "$SRC"
 "$OUT" --self-test
 
-echo "Built native Linux GTK Router VPN product with truthful Home state, editable profile settings and resumable complete onboarding at $OUT"
+echo "Built native Linux GTK Router VPN product with map-first unified shell, truthful Home state, editable profile settings and resumable complete onboarding at $OUT"
