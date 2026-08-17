@@ -6,20 +6,20 @@ struct IOSProfileSettingsView: View {
 
     @State private var homeLANAccess = true
     @State private var killSwitchPolicy = "off"
-    @State private var ipv6Mode = "auto"
+    @State private var ipv6Mode = "on"
     @State private var baseTunnel = "auto"
     @State private var baseFallback = false
-    @State private var mtuPolicy = "default"
+    @State private var mtuPolicy = "auto"
     @State private var manualMTU = ""
-    @State private var startupMode = "manual"
+    @State private var startupMode = "smart-auto"
     @State private var autoConnect = false
     @State private var status = ""
 
     private let killValues = [("Off","off"),("On connect","on-connect"),("Always / strict","always")]
-    private let ipv6Values = [("Auto","auto"),("On","on"),("Off","off")]
+    private let ipv6Values = [("On — default","on"),("Auto","auto"),("Off","off")]
     private let baseValues = [("Auto","auto"),("WireGuard","wg"),("AmneziaWG","awg")]
-    private let mtuValues = [("Default","default"),("Auto measured","auto"),("Manual","manual")]
-    private let startupValues = [("Manual","manual"),("AUTO","auto"),("SMART AUTO","smart-auto"),("Last mode","last")]
+    private let mtuValues = [("Auto measured — default","auto"),("Fixed / manual","manual"),("Runtime default","default")]
+    private let startupValues = [("SMART AUTO — recommended","smart-auto"),("AUTO","auto"),("Last proven mode","last"),("Manual / stay disconnected","manual")]
 
     var body: some View {
         NavigationStack {
@@ -43,19 +43,19 @@ struct IOSProfileSettingsView: View {
                 Section("MTU") {
                     Picker("MTU policy", selection: $mtuPolicy) { ForEach(mtuValues, id: \.1) { Text($0.0).tag($0.1) } }
                     if mtuPolicy == "manual" {
-                        TextField("Manual MTU 576–9000", text: $manualMTU).keyboardType(.numberPad)
+                        TextField("Fixed MTU 576–9000", text: $manualMTU).keyboardType(.numberPad)
                     }
                     if let p = selectedProfile(), let value = p.effectiveMTU, value > 0 {
                         Text("Current effective MTU: \(value) • \(p.effectiveMTUSource ?? "measured")")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("Jumbo TUN is intentionally not exposed here because current iOS support is path-specific/incomplete; unsupported settings are not faked green.")
+                    Text("Auto measured MTU is the default and is path/config specific. Jumbo TUN is intentionally not exposed here because current iOS support is path-specific/incomplete; unsupported settings are not faked green.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Startup") {
                     Picker("Startup behavior", selection: $startupMode) { ForEach(startupValues, id: \.1) { Text($0.0).tag($0.1) } }
                     Toggle("Auto-connect when Router VPN starts", isOn: $autoConnect)
-                    Text("Startup/autoconnect is stored as node policy; iOS may still require system VPN/Network Extension permission and background restrictions can limit automatic execution.")
+                    Text("SMART AUTO is the unified default. Startup/autoconnect is stored as node policy; iOS may still require system VPN/Network Extension permission and background restrictions can limit automatic execution.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {
@@ -81,12 +81,12 @@ struct IOSProfileSettingsView: View {
         guard p.normalizedNodeKind == "router-vpn" else { status = "External exits own their protocol settings."; return }
         homeLANAccess = p.homeLANAccess ?? true
         killSwitchPolicy = (p.killSwitchPolicy ?? (p.killSwitch == true ? "always" : "off")).lowercased()
-        ipv6Mode = (p.ipv6Mode ?? "auto").lowercased()
+        ipv6Mode = (p.ipv6Mode ?? "on").lowercased()
         baseTunnel = (p.baseTunnel ?? "auto").lowercased()
         baseFallback = p.baseFallback ?? false
-        mtuPolicy = (p.mtuPolicy ?? "default").lowercased()
+        mtuPolicy = (p.mtuPolicy ?? "auto").lowercased()
         manualMTU = (p.manualMTU ?? 0) > 0 ? String(p.manualMTU!) : ""
-        startupMode = (p.startupMode ?? "manual").lowercased()
+        startupMode = (p.startupMode ?? "smart-auto").lowercased()
         autoConnect = p.autoConnect ?? false
     }
 
@@ -98,7 +98,7 @@ struct IOSProfileSettingsView: View {
         }
         guard bundle.routerProfiles[index].normalizedNodeKind == "router-vpn" else { status = "External exits own their protocol settings."; return }
         let manual = Int(manualMTU.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-        if mtuPolicy == "manual" && !(576...9000).contains(manual) { status = "Manual MTU must be 576–9000."; return }
+        if mtuPolicy == "manual" && !(576...9000).contains(manual) { status = "Fixed MTU must be 576–9000."; return }
 
         var p = bundle.routerProfiles[index]
         p.homeLANAccess = homeLANAccess
@@ -121,6 +121,6 @@ struct IOSProfileSettingsView: View {
     }
 }
 
-// iOS settings contract: LAN Off / kill switch / IPv6 / WG-AWG base+fallback /
-// default-auto-manual MTU / startup-autoconnect. Jumbo/DAITA/SOCKS are omitted
+// iOS settings contract: LAN Off / kill switch / IPv6 On default / WG-AWG base+fallback /
+// Auto measured-fixed-runtime MTU / SMART AUTO startup default. Jumbo/DAITA/SOCKS are omitted
 // when the current Apple runtime cannot truthfully claim their support.
