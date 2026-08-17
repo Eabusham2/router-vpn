@@ -23,14 +23,18 @@ jobs:
         run: |
           python3 -m py_compile \
             server/scripts/download-broker.py \
+            server/scripts/download_jobs.py \
+            server/scripts/setup_center_ux_patch.py \
             server/scripts/setup-center-server.py \
             server/scripts/setup-center-ai-server.py \
             server/scripts/setup-center-product-server.py \
             server/scripts/setup_center_verified_onboarding.py \
+            server/scripts/test_download_jobs.py \
             server/scripts/test_setup_center_server.py \
             server/scripts/test_setup_center_verified_onboarding.py
-      - name: Setup Center admin proxy tests
+      - name: Setup Center admin, onboarding, and download job tests
         run: |
+          python3 server/scripts/test_download_jobs.py
           python3 server/scripts/test_setup_center_server.py
           python3 server/scripts/test_setup_center_verified_onboarding.py
       - name: Router-agent admin and forwarding tests
