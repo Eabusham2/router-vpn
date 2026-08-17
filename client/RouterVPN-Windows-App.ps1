@@ -3,159 +3,87 @@ param(
     [switch]$SelfTest
 )
 
-$ErrorActionPreference = 'Stop'
-$BaseUrl = $BaseUrl.TrimEnd('/')
-if ($BaseUrl -ne 'http://127.0.0.1:8788') {
-    throw 'Router VPN native Windows app only talks to the fixed local controller at http://127.0.0.1:8788.'
-}
+$ErrorActionPreference='Stop'
+$BaseUrl=$BaseUrl.TrimEnd('/')
+if($BaseUrl-ne'http://127.0.0.1:8788'){throw 'Router VPN native Windows app only talks to the fixed local controller at http://127.0.0.1:8788.'}
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
-$HomeSummaryHelpers = Join-Path $PSScriptRoot 'RouterVPN-Windows-HomeSummary.ps1'
-if (-not (Test-Path -LiteralPath $HomeSummaryHelpers)) { throw "Router VPN Home summary helpers are missing: $HomeSummaryHelpers" }
-. $HomeSummaryHelpers
-$ProfileSettingsHelpers = Join-Path $PSScriptRoot 'RouterVPN-Windows-ProfileSettings.ps1'
-if (-not (Test-Path -LiteralPath $ProfileSettingsHelpers)) { throw "Router VPN profile settings helpers are missing: $ProfileSettingsHelpers" }
+$ProfileSettingsHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-ProfileSettings.ps1'
+if(-not(Test-Path -LiteralPath $ProfileSettingsHelpers)){throw "Router VPN profile settings helpers are missing: $ProfileSettingsHelpers"}
 . $ProfileSettingsHelpers
+$UnifiedShellHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-UnifiedShell.ps1'
+if(-not(Test-Path -LiteralPath $UnifiedShellHelpers)){throw "Router VPN unified shell helpers are missing: $UnifiedShellHelpers"}
+. $UnifiedShellHelpers
 
-$OnboardingStateDir = Join-Path $PSScriptRoot '.routervpn-state'
-$OnboardingStateFile = Join-Path $OnboardingStateDir 'windows-onboarding-v2.json'
-$OnboardingSteps = @(
-    @{ Title='Welcome to Router VPN'; Body='This is the daily native Windows VPN app. Setup Center deploys and administers the home node; this app connects to it. Install Router VPN once, then link one or many Router VPN or validated external nodes without reinstalling.' },
-    @{ Title='Add or link a node'; Body='Use Pair home node with a short-lived one-time code from the authenticated private Setup Center, or Import node JSON / router-vpn-bundle.json. Select, remember, remove and relink nodes in Nodes / Map. Pairing is LAN-only; a node bundle is private data and must not be baked into the generic installer.' },
-    @{ Title='Windows permissions and privacy'; Body='Full-device VPN, Wintun/TUN, route, DNS and strict-firewall work can require Windows administrator/network-driver permission. Router VPN is native Windows; WSL is not counted as the VPN dataplane. Never paste or upload WG/AWG private keys, PSKs, node secrets, admin tokens, SSH passwords or provider API secrets.' },
-    @{ Title='Choose a node, logical mode and base'; Body='Choose the selected node, then a logical mode. Where compatible, Base can be Auto, WireGuard or AmneziaWG. AUTO tries the lightest eligible path and stops at the first proven healthy one. SMART AUTO simplifies only after connecting and restores the last-good path if a reduction fails. CUSTOM keeps only requested compatible layers. Unavailable modes stay unavailable and show the exact reason.' },
-    @{ Title='DNS selection and measured RTT'; Body='DNS choices are Home AdGuard, Fastest measured, Custom UDP/TCP, DoT, DoH, DoH3 and Rescue, including common IPv4/IPv6 resolvers. Retest measures real A/AAAA DNS query RTT from the selected home node, not ICMP ping. Saving a resolver is not proof; the active session must prove the selected DNS path after reconnect.' },
-    @{ Title='LAN access and strict kill switch'; Body='LAN access is an explicit shared policy. LAN Off must block ordinary private-LAN reachability while preserving the minimum safe control/recovery path. Strict kill switch is different from Emergency stop or an intentional Disconnect: it must prevent IPv4/IPv6 and DNS leaks during protected reconnect/failure, then release correctly after a deliberate disconnect.' },
-    @{ Title='MTU, Auto MTU and Jumbo TUN'; Body='Advanced MTU state is shared with the node profile: default/manual/auto/effective MTU. Retest Auto MTU only on one connected Router VPN path and keep the result path/network specific. Jumbo TUN is an advanced option only for compatible TUN/proxy paths and never overrides the real Internet path MTU.' },
-    @{ Title='Multihop and external exits'; Body='A real multihop is entry -> exit -> Internet; entry and exit must differ and the app must prove the actual exit. External WireGuard/OpenVPN/SOCKS5/Shadowsocks/Hysteria2 paths are used only where the Windows dataplane really supports them. Unsupported hop/protocol graphs fail closed instead of being labeled connected.' },
-    @{ Title='Forwarding where it is actually routable'; Body='Incoming forwarding is administered by the authenticated private Setup Center/router-agent and is only advertised for routable tunnel modes. Proxy-only paths cannot fake arbitrary DNAT. Protected DMZ forwards only allowed unused ports and preserves Router VPN listeners plus SSH, DNS/admin, Portainer, Setup Center, SOCKS5 and other protected services.' },
-    @{ Title='First connection and proof'; Body='Start with WireGuard Raw as the baseline when available, then try AUTO or another ready logical mode. Watch truthful connecting/attempt/fallback progress. Connected means selected-node private identity/path proof passed; then verify the real public VPN exit IP, selected DNS proof and IPv4/IPv6 behavior. Generic Internet access by itself is not success.' },
-    @{ Title='Diagnostics, recovery and clean disconnect'; Body='Diagnostics shows session phase, actual runtime/base/fallback, path proof, DNS proof and typed events. Use Emergency stop for a stuck runtime; use normal Disconnect for an intentional clean exit. Portable Router VPN must stop transports/controller, release files and leave no hidden process holding the portable folder.' },
-    @{ Title='Full guide and rerun'; Body='Setup Center Full Guide remains the server/router administration source of truth. The app Help tab can run this onboarding again at any time. Physical leak, sleep/wake, network-change, off-LAN and visual/DPI tests are release proof gates; the app never turns a saved setting or a green-looking control into fake runtime proof.' }
+$OnboardingStateDir=Join-Path $PSScriptRoot '.routervpn-state'
+$OnboardingStateFile=Join-Path $OnboardingStateDir 'windows-onboarding-v3.json'
+$OnboardingSteps=@(
+    @{Title='Welcome to Router VPN';Body='The map is the daily app. Setup Center remains the separate authenticated deployment/admin surface. Install this native app once, then securely add/select Router nodes or compatible Custom/external exits.'},
+    @{Title='Map and nodes';Body='One normal node is selected by default. Router and Custom/external nodes share one catalog. Only real stored coordinates are plotted; Router VPN never fabricates a map pin from an IP address. Measured latency selection remains based on the robust 50-sample node test.'},
+    @{Title='Connect and proof';Body='The main button changes Connect ↔ Disconnect. Connected is asserted only after the selected-node private path proof. Runtime/base/fallback, DNS proof and real public exit remain separate truth signals; generic Internet access is not success.'},
+    @{Title='Modes';Body='SMART AUTO is the default mode. AUTO is a first-class mode. All logical presets remain discoverable and unavailable ones keep their exact readiness reason. CUSTOM uses saved visual presets containing exact required layers and fails closed if no validated compatible stack works.'},
+    @{Title='DNS and Settings';Body='DNS is changed from the control dock and detailed resolver setup/retest drills in. Settings contains kill switch, IPv6 On default, LAN policy, WG/AWG preference, Auto measured/fixed MTU, DAITA-like traffic padding, Jumbo TUN, AUTO encryption/obfuscation filters, and forwarding ownership where supported.'},
+    @{Title='Multihop';Body='Multihop is entry → exit → Internet. Entry and exit must be different and the graph must be supported by the real Windows dataplane. Unsupported graphs fail closed and the actual public exit must be proved.'},
+    @{Title='Windows permissions and recovery';Body='Full-device Wintun/TUN, routes, DNS and strict firewall enforcement can require Windows administrator/network-driver permission. WSL is not counted as the native dataplane. Use normal Disconnect for intentional exit and Emergency stop only for a stuck runtime.'},
+    @{Title='Final checks';Body='After the first real connection, verify selected-node proof, selected DNS, actual public exit, IPv4/IPv6 leak behavior, kill switch, reconnect, network change, sleep/wake and the current display scaling. Setup Center Full Guide remains the server/router administration source of truth.'}
 )
 
-function Get-RouterVPNOnboardingState {
-    if (-not (Test-Path -LiteralPath $OnboardingStateFile)) { return [pscustomobject]@{ done=$false; step=0 } }
-    try {
-        $state = Get-Content -LiteralPath $OnboardingStateFile -Raw -Encoding UTF8 | ConvertFrom-Json
-        $step = [Math]::Max(0, [Math]::Min([int]$state.step, $OnboardingSteps.Count - 1))
-        return [pscustomobject]@{ done=[bool]$state.done; step=$step }
-    } catch { return [pscustomobject]@{ done=$false; step=0 } }
+function Get-OnboardingState{
+    if(-not(Test-Path -LiteralPath $OnboardingStateFile)){return [pscustomobject]@{done=$false;step=0}}
+    try{$s=Get-Content -LiteralPath $OnboardingStateFile -Raw -Encoding UTF8|ConvertFrom-Json;return [pscustomobject]@{done=[bool]$s.done;step=[Math]::Max(0,[Math]::Min([int]$s.step,$OnboardingSteps.Count-1))}}catch{return [pscustomobject]@{done=$false;step=0}}
 }
-
-function Save-RouterVPNOnboardingState([int]$Step, [bool]$Done) {
-    [void](New-Item -ItemType Directory -Force -Path $OnboardingStateDir)
-    $tmp = "$OnboardingStateFile.tmp"
-    @{ version=2; done=$Done; step=$Step } | ConvertTo-Json -Compress | Set-Content -LiteralPath $tmp -Encoding UTF8
-    Move-Item -Force -LiteralPath $tmp -Destination $OnboardingStateFile
-}
-
-function global:Show-RouterVPNProductOnboarding {
+function Save-OnboardingState([int]$Step,[bool]$Done){[void](New-Item -ItemType Directory -Force -Path $OnboardingStateDir);@{version=3;done=$Done;step=$Step}|ConvertTo-Json -Compress|Set-Content -LiteralPath $OnboardingStateFile -Encoding UTF8}
+function global:Show-RouterVPNProductOnboarding{
     param([switch]$Force)
-    $state = Get-RouterVPNOnboardingState
-    if (-not $Force -and $state.done) { return }
-    $step = if ($Force) { 0 } else { [int]$state.step }
-    $keepDone = [bool]$state.done
-    while ($true) {
-        [xml]$TutorialXaml = @'
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN setup" Width="720" Height="510" MinWidth="560" MinHeight="430" WindowStartupLocation="CenterScreen" ResizeMode="CanResize" Background="#0B1020" Foreground="#F5F7FF">
-<Grid Margin="24"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-<TextBlock Name="Progress" Grid.Row="0" Foreground="#93A4C7" Margin="0,0,0,8"/><TextBlock Name="StepTitle" Grid.Row="1" FontSize="26" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,16"/>
-<ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><TextBlock Name="StepBody" FontSize="15" LineHeight="24" TextWrapping="Wrap" Foreground="#E8ECF8"/></ScrollViewer>
-<Grid Grid.Row="3" Margin="0,20,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Name="Back" Grid.Column="0" Content="Back" Padding="14,8" Margin="0,0,8,0"/><Button Name="Close" Grid.Column="1" Content="Close and resume later" Padding="14,8"/><Button Name="Next" Grid.Column="3" Content="Next" Padding="18,8" FontWeight="SemiBold" IsDefault="True"/></Grid></Grid></Window>
+    $state=Get-OnboardingState;if(-not$Force-and$state.done){return};$step=if($Force){0}else{[int]$state.step};$keepDone=[bool]$state.done
+    while($true){
+        [xml]$X=@'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN setup" Width="700" Height="470" MinWidth="540" MinHeight="400" WindowStartupLocation="CenterScreen" ResizeMode="CanResize" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="24"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Name="Progress" Foreground="#93A4C7"/><TextBlock Name="Title" Grid.Row="1" FontSize="26" FontWeight="Bold" Margin="0,8,0,14" TextWrapping="Wrap"/><ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><TextBlock Name="Body" FontSize="15" LineHeight="24" TextWrapping="Wrap" Foreground="#E8ECF8"/></ScrollViewer><Grid Grid.Row="3" Margin="0,18,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Name="Back" Content="Back" Padding="14,8" Margin="0,0,8,0"/><Button Name="Close" Grid.Column="1" Content="Close and resume later" Padding="14,8"/><Button Name="Next" Grid.Column="3" Content="Next" Padding="18,8" IsDefault="True"/></Grid></Grid></Window>
 '@
-        $reader = New-Object System.Xml.XmlNodeReader $TutorialXaml
-        $dialog = [Windows.Markup.XamlReader]::Load($reader)
-        $dialog.FindName('Progress').Text = "Step $($step + 1) of $($OnboardingSteps.Count) • app onboarding is separate from Setup Center onboarding"
-        $dialog.FindName('StepTitle').Text = [string]$OnboardingSteps[$step].Title
-        $dialog.FindName('StepBody').Text = [string]$OnboardingSteps[$step].Body
-        $dialog.FindName('Back').IsEnabled = $step -gt 0
-        $dialog.FindName('Next').Content = if ($step -eq $OnboardingSteps.Count - 1) { 'Finish' } else { 'Next' }
-        $dialog.FindName('Back').Add_Click({ $dialog.Tag='back'; $dialog.Close() }); $dialog.FindName('Close').Add_Click({ $dialog.Tag='close'; $dialog.Close() }); $dialog.FindName('Next').Add_Click({ $dialog.Tag='next'; $dialog.Close() })
-        [void]$dialog.ShowDialog(); $choice = [string]$dialog.Tag
-        if ($choice -eq 'back') { $step = [Math]::Max(0, $step - 1); Save-RouterVPNOnboardingState $step $keepDone; continue }
-        if ($choice -eq 'next') { if ($step -ge $OnboardingSteps.Count - 1) { Save-RouterVPNOnboardingState 0 $true; return }; $step++; Save-RouterVPNOnboardingState $step $keepDone; continue }
-        Save-RouterVPNOnboardingState $step $keepDone; return
+        $reader=New-Object System.Xml.XmlNodeReader $X;$d=[Windows.Markup.XamlReader]::Load($reader);$d.FindName('Progress').Text="Step $($step+1) of $($OnboardingSteps.Count) • app onboarding is separate from Setup Center";$d.FindName('Title').Text=[string]$OnboardingSteps[$step].Title;$d.FindName('Body').Text=[string]$OnboardingSteps[$step].Body;$d.FindName('Back').IsEnabled=$step-gt0;$d.FindName('Next').Content=if($step-eq$OnboardingSteps.Count-1){'Finish'}else{'Next'};$d.FindName('Back').Add_Click({$d.Tag='back';$d.Close()});$d.FindName('Close').Add_Click({$d.Tag='close';$d.Close()});$d.FindName('Next').Add_Click({$d.Tag='next';$d.Close()});[void]$d.ShowDialog();$choice=[string]$d.Tag
+        if($choice-eq'back'){$step=[Math]::Max(0,$step-1);Save-OnboardingState $step $keepDone;continue};if($choice-eq'next'){if($step-ge$OnboardingSteps.Count-1){Save-OnboardingState 0 $true;return};$step++;Save-OnboardingState $step $keepDone;continue};Save-OnboardingState $step $keepDone;return
     }
 }
 
-$Product = Join-Path $PSScriptRoot 'RouterVPN-Windows-Product-v2.ps1'
-if (-not (Test-Path -LiteralPath $Product)) { throw "Router VPN native Windows product shell is missing: $Product" }
-$ProductSource = Get-Content -LiteralPath $Product -Raw -Encoding UTF8
+$Product=Join-Path $PSScriptRoot 'RouterVPN-Windows-Product-v2.ps1'
+if(-not(Test-Path -LiteralPath $Product)){throw "Router VPN native Windows product shell is missing: $Product"}
+$ProductSource=Get-Content -LiteralPath $Product -Raw -Encoding UTF8
 
-$AdaptiveLayout = @(
-    @('Height="800" Width="1180" MinHeight="680" MinWidth="980"', 'Height="720" Width="1040" MinHeight="480" MinWidth="640"'),
-    @('<RowDefinition Height="240"/>', '<RowDefinition Height="2*" MinHeight="140"/>'),
-    @('TextWrapping="Wrap" Width="760" Margin="8,4,0,0"', 'TextWrapping="Wrap" MaxWidth="760" Margin="8,4,0,0"'),
-    @('<TextBox Name="DiagnosticsBox" Height="380"', '<TextBox Name="DiagnosticsBox" MinHeight="180"')
+# Keep mature WPF detail pages responsive, but the unified transform hides them
+# behind drill-in actions so the map/control dock is the daily-use surface.
+$AdaptiveLayout=@(
+    @('Height="800" Width="1180" MinHeight="680" MinWidth="980"','Height="720" Width="1040" MinHeight="480" MinWidth="640"'),
+    @('<RowDefinition Height="240"/>','<RowDefinition Height="2*" MinHeight="140"/>'),
+    @('TextWrapping="Wrap" Width="760" Margin="8,4,0,0"','TextWrapping="Wrap" MaxWidth="760" Margin="8,4,0,0"'),
+    @('<TextBox Name="DiagnosticsBox" Height="380"','<TextBox Name="DiagnosticsBox" MinHeight="180"')
 )
-foreach ($Pair in $AdaptiveLayout) { if (-not $ProductSource.Contains($Pair[0])) { throw "Router VPN adaptive Windows layout contract drifted before: $($Pair[0])" }; $ProductSource = $ProductSource.Replace($Pair[0], $Pair[1]) }
+foreach($pair in $AdaptiveLayout){if(-not$ProductSource.Contains($pair[0])){throw "Router VPN adaptive Windows layout contract drifted before: $($pair[0])"};$ProductSource=$ProductSource.Replace($pair[0],$pair[1])}
 
-$AdvancedSummaryOld = '<TextBlock Name="AdvancedSummary" TextWrapping="Wrap" Margin="0,8,0,12"/>'
-$AdvancedSummaryNew = '<TextBlock Name="AdvancedSummary" TextWrapping="Wrap" Margin="0,8,0,12"/><Button Name="ProfileSettingsButton" Content="Edit profile settings" HorizontalAlignment="Left" Margin="4,0,4,10" Padding="13,8"/>'
-if (-not $ProductSource.Contains($AdvancedSummaryOld)) { throw 'Router VPN Windows Advanced settings XAML contract drifted.' }
-$ProductSource = $ProductSource.Replace($AdvancedSummaryOld,$AdvancedSummaryNew)
+# ScriptBlock self-test must inspect the original product source path even after
+# this launcher transforms it in memory.
+$SelfTestSourceRead='$Source=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw'
+$SelfTestSourceReadFixed='$Source=Get-Content -LiteralPath $env:ROUTER_VPN_PRODUCT_SOURCE -Raw -Encoding UTF8'
+if(-not$ProductSource.Contains($SelfTestSourceRead)){throw 'Router VPN Windows product self-test source-path contract drifted.'}
+$ProductSource=$ProductSource.Replace($SelfTestSourceRead,$SelfTestSourceReadFixed)
 
-$HomeButtonsOld = '<WrapPanel Margin="0,12,0,0"><Button Name="AutoButton" Content="AUTO Connect" Margin="4" Padding="13,8"/><Button Name="ConnectButton" Content="Connect Selected" Margin="4" Padding="13,8"/><Button Name="DisconnectButton" Content="Disconnect" Margin="4" Padding="13,8"/><Button Name="RefreshButton" Content="Refresh" Margin="4" Padding="13,8"/></WrapPanel>'
-$HomeButtonsNew = '<WrapPanel Margin="0,12,0,0"><Button Name="AutoButton" Content="AUTO" Margin="4" Padding="13,8"/><Button Name="SmartButton" Content="SMART AUTO" Margin="4" Padding="13,8"/><TextBox Name="CustomLayersText" Width="330" Margin="4" Padding="8,6" ToolTip="CUSTOM exact layers, comma-separated (example: wireguard, rosenpass)"/><Button Name="CustomButton" Content="CUSTOM" Margin="4" Padding="13,8"/><Button Name="ConnectButton" Content="Connect Selected" Margin="4" Padding="13,8"/><Button Name="DisconnectButton" Content="Disconnect" Margin="4" Padding="13,8"/><Button Name="HomeExitButton" Content="Prove actual exit" Margin="4" Padding="13,8"/><Button Name="HomeEmergencyButton" Content="Emergency Disconnect" Margin="4" Padding="13,8"/><Button Name="RefreshButton" Content="Refresh" Margin="4" Padding="13,8"/></WrapPanel>'
-$HomeProofOld = '<TextBlock Name="ProofText" Text="Connected requires exact selected-router private path proof." TextWrapping="Wrap"/><TextBlock Name="LastErrorText" Foreground="#FF9CA8" TextWrapping="Wrap"/>'
-$HomeProofNew = '<TextBlock Name="ProofText" Text="Connected requires exact selected-router private path proof. AUTO stops at the first proven candidate; SMART then simplifies and restores last-good on failure; CUSTOM tries only validated stacks containing every requested layer." TextWrapping="Wrap"/><TextBlock Name="HomeSummary" Text="Loading truthful Home state…" TextWrapping="Wrap" Margin="0,8,0,8" Foreground="#DDE7FF"/><TextBlock Name="LastErrorText" Foreground="#FF9CA8" TextWrapping="Wrap"/>'
-foreach ($Pair in @(@($HomeButtonsOld,$HomeButtonsNew),@($HomeProofOld,$HomeProofNew))) { if (-not $ProductSource.Contains($Pair[0])) { throw 'Router VPN Windows Home XAML contract drifted.' }; $ProductSource = $ProductSource.Replace($Pair[0],$Pair[1]) }
+$ProductSource=Add-RouterVPNUnifiedWindowsShell -ProductSource $ProductSource
+$ProductScript=[ScriptBlock]::Create($ProductSource)
 
-$ControlOld = '$ConnectionDetail=Control ''ConnectionDetail'';$ProofText=Control ''ProofText'';$LastErrorText=Control ''LastErrorText'''
-$ControlNew = '$ConnectionDetail=Control ''ConnectionDetail'';$ProofText=Control ''ProofText'';$SmartButton=Control ''SmartButton'';$CustomButton=Control ''CustomButton'';$CustomLayersText=Control ''CustomLayersText'';$HomeSummary=Control ''HomeSummary'';$HomeExitButton=Control ''HomeExitButton'';$HomeEmergencyButton=Control ''HomeEmergencyButton'';$LastErrorText=Control ''LastErrorText'''
-if (-not $ProductSource.Contains($ControlOld)) { throw 'Router VPN Windows Home control-binding contract drifted.' }
-$ProductSource = $ProductSource.Replace($ControlOld,$ControlNew)
-$AdvancedControlOld = '$AdvancedSummary=Control ''AdvancedSummary'';$SettingsSummary=Control ''SettingsSummary'''
-$AdvancedControlNew = '$AdvancedSummary=Control ''AdvancedSummary'';$ProfileSettingsButton=Control ''ProfileSettingsButton'';$SettingsSummary=Control ''SettingsSummary'''
-if (-not $ProductSource.Contains($AdvancedControlOld)) { throw 'Router VPN Windows Advanced settings control-binding contract drifted.' }
-$ProductSource = $ProductSource.Replace($AdvancedControlOld,$AdvancedControlNew)
-
-$AutoEndpointOld = "Api '/api/auto' 'POST' @{} 120"
-$AutoEndpointNew = "Api '/api/strategy/auto' 'POST' @{} 180"
-if (-not $ProductSource.Contains($AutoEndpointOld)) { throw 'Router VPN Windows AUTO handler contract drifted.' }
-$ProductSource = $ProductSource.Replace($AutoEndpointOld,$AutoEndpointNew)
-
-$RefreshFunctionMarker = 'function RefreshProduct{'
-$HomeRefreshFunction = 'function RefreshHomeSummary{try{$Home=Get-RouterVPNHomeSummary -BaseUrl $BaseUrl;$HomeSummary.Text=Format-RouterVPNHomeSummary $Home}catch{$HomeSummary.Text="Home state unavailable: $($_.Exception.Message)"}}' + "`n" + $RefreshFunctionMarker
-if (-not $ProductSource.Contains($RefreshFunctionMarker)) { throw 'Router VPN Windows RefreshProduct contract drifted.' }
-$ProductSource = $ProductSource.Replace($RefreshFunctionMarker,$HomeRefreshFunction)
-if (-not $ProductSource.Contains(';RefreshMultihop;SessionEvents}catch')) { throw 'Router VPN Windows refresh tail contract drifted.' }
-$ProductSource = $ProductSource.Replace(';RefreshMultihop;SessionEvents}catch',';RefreshMultihop;RefreshHomeSummary;SessionEvents}catch')
-$SettingsSensitivityOld = '$DnsSaveButton.IsEnabled=-not$Connected;$DnsButton.IsEnabled=$Connected;'
-$SettingsSensitivityNew = '$DnsSaveButton.IsEnabled=-not$Connected;$DnsButton.IsEnabled=$Connected;$ProfileSettingsButton.IsEnabled=-not$Connected;$SmartButton.IsEnabled=-not$Connected;$CustomButton.IsEnabled=-not$Connected;$CustomLayersText.IsEnabled=-not$Connected;'
-if (-not $ProductSource.Contains($SettingsSensitivityOld)) { throw 'Router VPN Windows Advanced settings connected-state contract drifted.' }
-$ProductSource = $ProductSource.Replace($SettingsSensitivityOld,$SettingsSensitivityNew)
-
-$HandlersMarker = "(Control 'RefreshButton').Add_Click({RefreshDnsPolicy;RefreshProduct})"
-$HomeHandlers = '$ProfileSettingsButton.Add_Click({try{$Saved=Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window;if($null-ne$Saved){Log "Profile settings saved for next connection"}}catch{Log ("Profile settings failed: "+$_.Exception.Message)};RefreshProduct});$SmartButton.Add_Click({try{$R=Api "/api/strategy/smart-auto" "POST" @{} 240;Log ("SMART AUTO winner: "+$R.runtime_mode)}catch{Log ("SMART AUTO failed: "+$_.Exception.Message)};RefreshProduct});$CustomButton.Add_Click({$Layers=@($CustomLayersText.Text -split "," | ForEach-Object {$_.Trim().ToLowerInvariant()} | Where-Object {$_});if($Layers.Count -eq 0){Log "CUSTOM requires at least one exact layer."}else{try{$R=Api "/api/strategy/custom" "POST" @{layers=$Layers} 240;Log ("CUSTOM winner: "+$R.runtime_mode+" • requested="+($Layers -join ", "))}catch{Log ("CUSTOM failed: "+$_.Exception.Message)}};RefreshProduct});$HomeExitButton.Add_Click({try{$Home=Prove-RouterVPNHomeExit -BaseUrl $BaseUrl;Log ("Actual public VPN exit proved for this session: "+$Home.actual_exit_ip)}catch{Log ("Actual exit proof failed: "+$_.Exception.Message)};RefreshHomeSummary});$HomeEmergencyButton.Add_Click({try{[void](Api "/api/emergency-stop" "POST" @{} 15);Log "Emergency Disconnect completed"}catch{Log $_.Exception.Message};RefreshProduct});' + $HandlersMarker
-if (-not $ProductSource.Contains($HandlersMarker)) { throw 'Router VPN Windows Home/settings handler contract drifted.' }
-$ProductSource = $ProductSource.Replace($HandlersMarker,$HomeHandlers)
-
-$SelfTestSourceRead = '$Source=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw'
-$SelfTestSourceReadFixed = '$Source=Get-Content -LiteralPath $env:ROUTER_VPN_PRODUCT_SOURCE -Raw -Encoding UTF8'
-if (-not $ProductSource.Contains($SelfTestSourceRead)) { throw 'Router VPN Windows product self-test source-path contract drifted.' }
-$ProductSource = $ProductSource.Replace($SelfTestSourceRead, $SelfTestSourceReadFixed)
-
-$TutorialPattern = "(?s)\(Control 'TutorialButton'\)\.Add_Click\(\{\[System\.Windows\.MessageBox\]::Show\(.*?\)\|Out-Null\}\)"
-$tutorialMatches = [regex]::Matches($ProductSource, $TutorialPattern)
-if ($tutorialMatches.Count -ne 1) { throw "Router VPN Windows Help/onboarding contract drifted: expected one tutorial handler, found $($tutorialMatches.Count)." }
-$ProductSource = [regex]::Replace($ProductSource, $TutorialPattern, "(Control 'TutorialButton').Add_Click({Show-RouterVPNProductOnboarding -Force})", 1)
-$ProductScript = [ScriptBlock]::Create($ProductSource)
-
-$ApiContract = @('/api/status','/api/profiles','/api/logical-modes','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom','/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/public-ip','/api/dns/retest','/api/dns/policy','/api/profile/settings','/api/mtu/retest','/api/emergency-stop','/api/session','/api/session/events','/api/home-summary','/api/home-summary/prove-exit')
-$PreviousProductSource = $env:ROUTER_VPN_PRODUCT_SOURCE; $env:ROUTER_VPN_PRODUCT_SOURCE = $Product
-try {
-    if ($SelfTest) {
-        foreach ($Marker in @('windows-onboarding-v2.json','Close and resume later','Show-RouterVPNProductOnboarding','Add or link a node','MTU, Auto MTU and Jumbo TUN','LAN access and strict kill switch','Multihop and external exits','Forwarding where it is actually routable','Windows permissions and privacy','Full guide and rerun','MinHeight="480" MinWidth="640"','Height="2*" MinHeight="140"','MaxWidth="760"','MinHeight="180"','$env:ROUTER_VPN_PRODUCT_SOURCE','SmartButton','SMART AUTO','CustomButton','CustomLayersText','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom','HomeSummary','HomeExitButton','HomeEmergencyButton','RefreshHomeSummary','Get-RouterVPNHomeSummary','Prove-RouterVPNHomeExit','RouterVPN-Windows-ProfileSettings.ps1','ProfileSettingsButton','Edit profile settings','Show-RouterVPNProfileSettingsDialog','/api/profile/settings')) { if (-not ((Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8).Contains($Marker) -or $ProductSource.Contains($Marker))) { throw "Windows shipping onboarding/layout/Home/settings/strategy self-test missing $Marker" } }
+$PreviousProductSource=$env:ROUTER_VPN_PRODUCT_SOURCE;$env:ROUTER_VPN_PRODUCT_SOURCE=$Product
+try{
+    if($SelfTest){
+        $self=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8
+        foreach($marker in @('RouterVPN-Windows-UnifiedShell.ps1','Add-RouterVPNUnifiedWindowsShell','windows-onboarding-v3.json','SMART AUTO is the default mode','IPv6 On default','Auto measured/fixed MTU','DAITA-like traffic padding','AUTO encryption/obfuscation filters')){if(-not$self.Contains($marker)){throw "Windows unified launcher self-test missing $marker"}}
+        foreach($marker in @('UnifiedShell','UnifiedMapCanvas','UnifiedConnectButton','UnifiedKillSwitch','UnifiedMultihop','UnifiedModeCombo','UnifiedDnsCombo','SMART AUTO — recommended','New CUSTOM preset…','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom','/api/connect-logical','/api/multihop/connect','/api/mtu/retest','system','real coordinates')){if(-not$ProductSource.Contains($marker)){throw "Windows unified product self-test missing $marker"}}
         & $ProductScript -BaseUrl $BaseUrl -SelfTest
-    } else { Show-RouterVPNProductOnboarding; & $ProductScript -BaseUrl $BaseUrl }
-    if (-not $?) { throw 'Router VPN native Windows product shell failed.' }
-} finally { if ($null -eq $PreviousProductSource) { Remove-Item Env:ROUTER_VPN_PRODUCT_SOURCE -ErrorAction SilentlyContinue } else { $env:ROUTER_VPN_PRODUCT_SOURCE = $PreviousProductSource } }
+    }else{Show-RouterVPNProductOnboarding;& $ProductScript -BaseUrl $BaseUrl}
+    if(-not$?){throw 'Router VPN native Windows product shell failed.'}
+}finally{if($null-eq$PreviousProductSource){Remove-Item Env:ROUTER_VPN_PRODUCT_SOURCE -ErrorAction SilentlyContinue}else{$env:ROUTER_VPN_PRODUCT_SOURCE=$PreviousProductSource}}
 
-# Native shipping contract: persistent onboarding + adaptive WPF + truthful
-# AUTO/SMART/CUSTOM + Home state + safe narrow profile settings. Actual exit is
-# never taken from cached profile.public_ip; it comes only from the current session.
+# Native shipping contract: map-first WPF daily app; bottom control dock; one
+# Connect/Disconnect action; quick kill switch; real multihop; Settings→Mode→DNS;
+# SMART AUTO default; AUTO first-class; visible readiness; GUI CUSTOM presets;
+# real-coordinate map; fixed local controller only; no browser/PWA final shell.
