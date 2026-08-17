@@ -8,6 +8,8 @@ struct ProductRootView: View {
     @State private var showingModeDetails = false
     @State private var showingDNS = false
     @State private var showingOnboarding = false
+    @State private var showingStrategies = false
+    @State private var startupApplied = false
 
     init() {
         // ContentView still contains an older deployment-oriented tutorial for
@@ -32,6 +34,12 @@ struct ProductRootView: View {
             }
             .overlay(alignment: .bottomTrailing) {
                 VStack(alignment: .trailing, spacing: 8) {
+                    Button { showingStrategies = true } label: {
+                        Label("AUTO / SMART / CUSTOM", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityHint("Runs only iOS-runnable WireGuardKit or Libbox strategies; unsupported engine graphs stay unavailable")
+
                     Button {
                         UserDefaults.standard.set(0, forKey: "RouterVPNProductOnboardingStepV2")
                         showingOnboarding = true
@@ -73,11 +81,20 @@ struct ProductRootView: View {
             .sheet(isPresented: $showingModeDetails) { RouterVPNModeMetricsSheet().environmentObject(model) }
             .sheet(isPresented: $showingDNS) { RouterVPNDNSSettingsSheet().environmentObject(model) }
             .sheet(isPresented: $showingOnboarding) { RouterVPNProductOnboardingView() }
+            .sheet(isPresented: $showingStrategies) { IOSStrategySheet().environmentObject(model) }
             .onAppear {
                 if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { showingOnboarding = true }
+            }
+            .onChange(of: model.activeRawProfile) { _, value in
+                if model.connected && !value.isEmpty { model.recordIOSLastRuntime() }
+            }
+            .task {
+                guard !startupApplied else { return }
+                startupApplied = true
+                await model.applyIOSStartupPolicyIfNeeded()
             }
     }
 }
 
 private let routerVPNMapContract = "Map( latitude longitude No real node coordinates Linked Nodes"
-private let routerVPNProductParityContract = "Home / Connect state actual public VPN exit Emergency Disconnect Setup Guide RouterVPNProductOnboardingDoneV2 Mode Details DNS Settings Added latency traffic speed loss readiness exact reason Home Fastest Custom DoT DoH DoH3 Rescue"
+private let routerVPNProductParityContract = "Home / Connect state actual public VPN exit Emergency Disconnect Setup Guide RouterVPNProductOnboardingDoneV2 AUTO SMART CUSTOM Mode Details DNS Settings Added latency traffic speed loss readiness exact reason Home Fastest Custom DoT DoH DoH3 Rescue"
