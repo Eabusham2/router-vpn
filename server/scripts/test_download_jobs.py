@@ -45,7 +45,7 @@ def main() -> int:
             out.write_bytes(b"router-vpn-test-package")
             return out, "test-source"
 
-        manager = m.DownloadJobManager(base, fake_build, lambda _n: "application/zip", threading.BoundedSemaphore(1), {"router-vpn-test.zip"}, max_active=2)
+        manager = m.DownloadJobManager(base, fake_build, lambda _n: "application/zip", threading.BoundedSemaphore(1), {"router-vpn-test.zip"}, max_active=3)
         try:
             created = manager.create("router-vpn-test.zip")
             assert created["status"] in ("queued", "building", "ready")
@@ -74,6 +74,22 @@ def main() -> int:
             manager.finish_delivery(second_id, False)
             assert manager.status(second_id)["status"] == "delivery-interrupted"
             assert not parent2.exists(), "interrupted delivery temp directory was not removed"
+
+            third = manager.create("router-vpn-test.zip")
+            third_id = third["id"]
+            wait_state(manager, third_id, {"ready"})
+            path3, _ = manager.begin_delivery(third_id)
+            parent3 = path3.parent
+            cancel_reply = manager.cancel(third_id)
+            assert cancel_reply["status"] == "delivering", cancel_reply
+            assert manager.cancel_requested(third_id) is True
+            manager.finish_delivery(third_id, False)
+            cancelled_stream = manager.status(third_id)
+            assert cancelled_stream["status"] == "cancelled"
+            assert cancelled_stream["phase"] == "cancelled"
+            assert cancelled_stream["error_code"] == "cancelled"
+            assert "streaming" in cancelled_stream["phase_history"] and "cleanup" in cancelled_stream["phase_history"]
+            assert not parent3.exists(), "cancelled stream temp directory was not removed"
 
             try:
                 manager.create("../escape.zip")
@@ -112,7 +128,7 @@ def main() -> int:
     ):
         assert required in patch, required
     assert "location.href=directHref" in patch
-    print("download job lifecycle/progress/cancel/browser wiring tests: OK")
+    print("download job lifecycle/progress/build-cancel/stream-cancel/browser wiring tests: OK")
     return 0
 
 
