@@ -159,10 +159,15 @@ func (a *app) failStrategy(strategy string, failures []string) error {
 	return errors.New(message)
 }
 
-func (a *app) firstWorkingAuto(strategy string, result *strategyResult) (common.Mode, error) {
+func (a *app) firstWorkingAuto(strategy string, p common.RouterProfile, result *strategyResult) (common.Mode, error) {
 	var failures []string
 	for _, mode := range a.modes {
 		if !mode.AutoEligible {
+			continue
+		}
+		if allowed, reason := modeMeetsAutoRequirements(mode, p); !allowed {
+			result.Attempts = append(result.Attempts, strategyAttempt{Mode: mode.ID, Action: "filtered", Success: false, Error: reason})
+			sessionTrackerFor(a).strategyEvent("strategy-filtered", reason)
 			continue
 		}
 		sessionTrackerFor(a).strategyEvent("strategy-attempt", fmt.Sprintf("%s trying %s", strings.ToUpper(strategy), mode.ID))
@@ -180,6 +185,9 @@ func (a *app) firstWorkingAuto(strategy string, result *strategyResult) (common.
 		result.Attempts = append(result.Attempts, attempt)
 		return mode, nil
 	}
+	if len(result.Attempts) > 0 && len(failures) == 0 {
+		failures = append(failures, strategy+" found no candidate that satisfied the selected AUTO requirements")
+	}
 	return common.Mode{}, a.failStrategy(strategy, failures)
 }
 
@@ -193,7 +201,7 @@ func (a *app) runAutoStrategy(strategy string) (strategyResult, error) {
 		return result, err
 	}
 	a.declareStrategy(strategy, p)
-	winner, err := a.firstWorkingAuto(strategy, &result)
+	winner, err := a.firstWorkingAuto(strategy, p, &result)
 	if err != nil {
 		return result, err
 	}
@@ -214,7 +222,7 @@ func (a *app) runSmartStrategy() (strategyResult, error) {
 		return result, err
 	}
 	a.declareStrategy(strategy, p)
-	best, err := a.firstWorkingAuto(strategy, &result)
+	best, err := a.firstWorkingAuto(strategy, p, &result)
 	if err != nil {
 		return result, err
 	}
@@ -230,6 +238,11 @@ func (a *app) runSmartStrategy() (strategyResult, error) {
 			candidate, modeErr := a.mode(candidateID)
 			if modeErr != nil {
 				result.Attempts = append(result.Attempts, strategyAttempt{Mode: candidateID, Action: "simplify", Success: false, Error: "unknown simplification runtime"})
+				continue
+			}
+			if allowed, reason := modeMeetsAutoRequirements(candidate, p); !allowed {
+				result.Attempts = append(result.Attempts, strategyAttempt{Mode: candidateID, Action: "simplify-filtered", Success: false, Error: reason})
+				sessionTrackerFor(a).strategyEvent("strategy-filtered", reason)
 				continue
 			}
 			if ok, reason := a.checkMode(candidate); !ok {
