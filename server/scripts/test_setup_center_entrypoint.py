@@ -18,6 +18,13 @@ for forbidden in ("OPENAI_API_KEY=", "--api-key", "sk-", "eval ", "sh -c"):
     assert forbidden not in entry, forbidden
 
 for marker in (
+    "def _cancellable_run_builder(",
+    "subprocess.Popen(args, stdout=subprocess.DEVNULL)",
+    "progress(\"building\", 58)",
+    "proc.terminate()",
+    "proc.kill()",
+    "broker.PACKAGE_TIMEOUT",
+    "_ai._core._broker._run_builder = _cancellable_run_builder",
     "def _job_file(self, job_id: str)",
     "self.server.jobs.cancel_requested(job_id)",
     "self.server.jobs.update_delivery(job_id, sent, size)",
@@ -26,5 +33,6 @@ for marker in (
 ):
     assert marker in product, marker
 assert product.index("cancel_requested(job_id)") < product.index("f.read(_ai._core._broker.CHUNK)")
+assert product.index("subprocess.Popen(args, stdout=subprocess.DEVNULL)") < product.index("time.sleep(0.20)")
 
-print("Setup Center product entrypoint + cancellable streaming contract: PASS")
+print("Setup Center product entrypoint + cancellable build/streaming contract: PASS")
