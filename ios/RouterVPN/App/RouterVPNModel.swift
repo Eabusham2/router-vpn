@@ -207,6 +207,16 @@ final class RouterVPNModel: ObservableObject {
             if auto {
                 let runnable = IOSRuntimeSelector.runnableModes(in: bundle)
                 var values = try runnable.map { try IOSRuntimeSelector.select(bundle: bundle, logicalModeID: $0.id) }
+                if let profile = selectedRouterProfile {
+                    let filtered = values.compactMap { selection -> (IOSRuntimeSelection, String?) in
+                        (selection, IOSStrategyCatalog.autoRequirementFailure(rawID: selection.rawProfileID, profile: profile))
+                    }
+                    let rejected = filtered.compactMap { pair in pair.1 }
+                    values = filtered.compactMap { pair in pair.1 == nil ? pair.0 : nil }
+                    if values.isEmpty && !rejected.isEmpty {
+                        throw IOSRuntimeSelectionError.unsupportedMode("AUTO failed closed: no iOS-runnable candidate satisfies the saved requirements. " + rejected.joined(separator: " • "))
+                    }
+                }
                 values.sort { lhs, rhs in
                     if lhs.engine != rhs.engine { return lhs.engine == .wireGuard }
                     return lhs.logicalModeID < rhs.logicalModeID
