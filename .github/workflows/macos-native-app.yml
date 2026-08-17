@@ -56,7 +56,7 @@ jobs:
         run: |
           chmod +x client/macos/build-native-app.sh deploy/package-macos-native.sh
           ./deploy/package-macos-native.sh
-      - name: Verify native AppKit package contract
+      - name: Verify native AppKit package contract and signatures
         run: |
           for arch in amd64 arm64; do
             archive="dist/macos-native/RouterVPN-darwin-$arch.tar.gz"
@@ -69,12 +69,19 @@ jobs:
             grep -Fxq "RouterVPN-darwin-$arch/LICENSE" "$members"
             ! grep -Fq 'router-vpn-bundle.json' "$members"
             inspect="$RUNNER_TEMP/macos-$arch-inspect"
+            rm -rf "$inspect"
             mkdir -p "$inspect"
             tar -xzf "$archive" -C "$inspect"
-            plist="$inspect/RouterVPN-darwin-$arch/RouterVPN.app/Contents/Info.plist"
-            icon="$inspect/RouterVPN-darwin-$arch/RouterVPN.app/Contents/Resources/RouterVPN.icns"
+            root="$inspect/RouterVPN-darwin-$arch"
+            app="$root/RouterVPN.app"
+            plist="$app/Contents/Info.plist"
+            icon="$app/Contents/Resources/RouterVPN.icns"
             test -s "$icon"
             test "$(plutil -extract CFBundleIconFile raw -o - "$plist")" = 'RouterVPN'
+            codesign --verify --deep --strict --verbose=2 "$app"
+            codesign --verify --strict --verbose=2 "$root/router-vpn-client"
+            codesign --verify --strict --verbose=2 "$root/router-vpn-dns"
+            codesign -dv --verbose=2 "$app" 2>&1 | grep -Eq 'Signature=adhoc|Authority=Developer ID Application'
           done
           (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
           test ! -d dist/macos-native/work
