@@ -53,9 +53,7 @@ enum IOSRuntimeSelector {
     private static let loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]
 
     static func runnableModes(in bundle: ClientBundle) -> [LogicalMode] {
-        bundle.logicalModes.filter { mode in
-            (try? select(bundle: bundle, logicalModeID: mode.id)) != nil
-        }
+        bundle.logicalModes.filter { mode in (try? select(bundle: bundle, logicalModeID: mode.id)) != nil }
     }
 
     static func select(bundle: ClientBundle, logicalModeID: String) throws -> IOSRuntimeSelection {
@@ -63,57 +61,55 @@ enum IOSRuntimeSelector {
             throw IOSRuntimeSelectionError.missingLogicalMode
         }
 
-        // Preserve the known-good WireGuardKit path for raw WireGuard.
         if logical.id == "base-raw", logical.variants["wg"] == "wg" {
-            return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logical.id, rawProfileID: "wg", files: [:])
+            let selection = IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logical.id, rawProfileID: "wg", files: [:])
+            do { try IOSDNSRuntimePolicy.validate(selection: selection, in: bundle) }
+            catch { throw IOSRuntimeSelectionError.unsupportedMode(error.localizedDescription) }
+            return selection
         }
 
-        // For layered iOS support, only advertise an imported raw variant that
-        // is completely executable by the pinned Apple Libbox. A sing-box JSON
-        // file alone is not enough: desktop wrappers may point at localhost
-        // Xray/sslocal/WG/AWG helpers that the iOS PacketTunnel never starts.
+        var lastReason = "no validated WireGuardKit/self-contained Libbox variant is present"
         for rawID in orderedVariantIDs(logical) {
-            if let selection = try? selectRaw(bundle: bundle, rawProfileID: rawID, logicalModeID: logical.id) {
+            do {
+                let selection = try selectRawCore(bundle: bundle, rawProfileID: rawID, logicalModeID: logical.id)
+                try IOSDNSRuntimePolicy.validate(selection: selection, in: bundle)
                 return selection
+            } catch {
+                lastReason = error.localizedDescription
             }
         }
 
         throw IOSRuntimeSelectionError.unsupportedMode(
-            "This iOS build cannot run \(logical.name) from the imported node: no validated WireGuardKit/self-contained Libbox variant is present. Xray-, sslocal-, AmneziaWG-, helper-chain, ALL/MAX and full desktop multihop combinations remain unavailable instead of faking Connected. OpenVPN remains outside the iOS dataplane until a pinned native implementation exists."
+            "This iOS build cannot run \(logical.name) from the imported node: \(lastReason). Xray-, sslocal-, AmneziaWG-, helper-chain, ALL/MAX and full desktop multihop combinations remain unavailable instead of faking Connected. OpenVPN remains outside the iOS dataplane until a pinned native implementation exists."
         )
     }
 
     static func selectRaw(bundle: ClientBundle, rawProfileID: String) throws -> IOSRuntimeSelection {
-        try selectRaw(bundle: bundle, rawProfileID: rawProfileID, logicalModeID: logicalModeID(for: rawProfileID, in: bundle))
+        let selection = try selectRawCore(bundle: bundle, rawProfileID: rawProfileID, logicalModeID: logicalModeID(for: rawProfileID, in: bundle))
+        do { try IOSDNSRuntimePolicy.validate(selection: selection, in: bundle) }
+        catch { throw IOSRuntimeSelectionError.unsupportedMode(error.localizedDescription) }
+        return selection
     }
 
     static func logicalModeID(for rawProfileID: String, in bundle: ClientBundle) -> String {
         bundle.logicalModes.first(where: { $0.variants.values.contains(rawProfileID) })?.id ?? rawProfileID
     }
 
-    private static func selectRaw(bundle: ClientBundle, rawProfileID: String, logicalModeID: String) throws -> IOSRuntimeSelection {
-        guard isSafe(rawProfileID, pattern: rawProfilePattern) else {
-            throw IOSRuntimeSelectionError.invalidProfileName(rawProfileID)
-        }
-        if rawProfileID == "wg" {
-            return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [:])
-        }
+    private static func selectRawCore(bundle: ClientBundle, rawProfileID: String, logicalModeID: String) throws -> IOSRuntimeSelection {
+        guard isSafe(rawProfileID, pattern: rawProfilePattern) else { throw IOSRuntimeSelectionError.invalidProfileName(rawProfileID) }
+        if rawProfileID == "wg" { return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [:]) }
         guard let encoded = bundle.profiles[rawProfileID], encoded["sing-box.json"] != nil else {
             throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no iOS-runnable sing-box profile.")
         }
         let files = try decodeProfile(encoded)
         if let helper = unsupportedHelperAssets.first(where: { files[$0] != nil }) {
-            throw IOSRuntimeSelectionError.unsupportedMode(
-                "Raw runtime \(rawProfileID) requires desktop helper asset \(helper), which the iOS PacketTunnel does not start."
-            )
+            throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) requires desktop helper asset \(helper), which the iOS PacketTunnel does not start.")
         }
-        guard let config = files["sing-box.json"],
-              let object = try? JSONSerialization.jsonObject(with: config) as? [String: Any]
-        else { throw IOSRuntimeSelectionError.invalidSingBoxConfig }
+        guard let config = files["sing-box.json"], let object = try? JSONSerialization.jsonObject(with: config) as? [String: Any] else {
+            throw IOSRuntimeSelectionError.invalidSingBoxConfig
+        }
         guard !usesUnsupportedLoopbackHelper(object) else {
-            throw IOSRuntimeSelectionError.unsupportedMode(
-                "Raw runtime \(rawProfileID) depends on a localhost helper that is not part of the iOS PacketTunnel dataplane."
-            )
+            throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) depends on a localhost helper that is not part of the iOS PacketTunnel dataplane.")
         }
         return IOSRuntimeSelection(engine: .libbox, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: files)
     }
@@ -133,12 +129,8 @@ enum IOSRuntimeSelector {
         var result: [String: Data] = [:]
         var total = 0
         for (name, value) in encoded {
-            guard isSafe(name, pattern: assetPattern), name != ".", name != ".." else {
-                throw IOSRuntimeSelectionError.invalidAssetName(name)
-            }
-            guard let data = Data(base64Encoded: value, options: []) else {
-                throw IOSRuntimeSelectionError.invalidAssetEncoding(name)
-            }
+            guard isSafe(name, pattern: assetPattern), name != ".", name != ".." else { throw IOSRuntimeSelectionError.invalidAssetName(name) }
+            guard let data = Data(base64Encoded: value, options: []) else { throw IOSRuntimeSelectionError.invalidAssetEncoding(name) }
             guard data.count <= maxAssetBytes else { throw IOSRuntimeSelectionError.assetTooLarge(name) }
             total += data.count
             guard total <= maxProfileBytes else { throw IOSRuntimeSelectionError.profileTooLarge }
