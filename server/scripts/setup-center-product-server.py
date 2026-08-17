@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -26,6 +29,67 @@ def _load(name: str, filename: str):
 _ai = _load("routervpn_setup_center_ai_composition", "setup-center-ai-server.py")
 _release = _load("routervpn_setup_center_release_status", "setup_center_release_status.py")
 _verified = _load("routervpn_setup_center_verified_onboarding", "setup_center_verified_onboarding.py")
+
+
+def _terminate_builder(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=3)
+
+
+def _cancellable_run_builder(base: Path, name: str, temp: Path, source: Path | None, progress=None) -> Path:
+    """Production fallback builder that remains bounded and responds to job cancel."""
+    broker = _ai._core._broker
+    output = temp / name
+    args = [
+        "python3", str(broker.BUILDER_PATH), "--base", str(base),
+        "--source-root", os.environ.get("ROUTER_VPN_FALLBACK_ROOT", "/src"),
+        "--name", name, "--output", str(output),
+    ]
+    if source is not None:
+        args += ["--source-archive", str(source)]
+    if progress:
+        progress("building", 58)
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL)
+    deadline = time.monotonic() + broker.PACKAGE_TIMEOUT
+    try:
+        while True:
+            code = proc.poll()
+            if code is not None:
+                if code != 0:
+                    raise subprocess.CalledProcessError(code, args)
+                break
+            if time.monotonic() >= deadline:
+                _terminate_builder(proc)
+                raise subprocess.TimeoutExpired(args, broker.PACKAGE_TIMEOUT)
+            if progress:
+                try:
+                    # DownloadJobManager's progress callback is also the
+                    # cooperative cancellation checkpoint. Rechecking while the
+                    # subprocess is alive makes Cancel terminate a local build
+                    # instead of waiting for the full package timeout.
+                    progress("building", 58)
+                except Exception:
+                    _terminate_builder(proc)
+                    raise
+            time.sleep(0.20)
+    except BaseException:
+        _terminate_builder(proc)
+        raise
+    if progress:
+        progress("packaging", 84)
+    return output
+
+
+# build_package resolves _run_builder through the broker module globals, so this
+# replaces only the final authenticated product's local fallback runner. GitHub
+# same-SHA artifact selection/validation remains unchanged.
+_ai._core._broker._run_builder = _cancellable_run_builder
 
 
 class Handler(_ai.Handler):
