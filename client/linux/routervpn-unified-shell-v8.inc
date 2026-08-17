@@ -1,3 +1,5 @@
+#include <sys/stat.h>
+
 typedef struct {
     App *app;
     GtkWidget *stack;
@@ -114,7 +116,12 @@ static void linux_unified_refresh_mode_combo_v8(LinuxUnifiedV8 *state) {
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->mode), "custom:new", "New CUSTOM preset…");
     if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->mode), wanted)) gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->mode), "smart-auto");
     state->syncing = FALSE;
-    if (root != NULL) json_node_free(root); g_free(err); free(out.data); g_free(wanted);
+    if (root != NULL) {
+        json_node_free(root);
+    }
+    g_free(err);
+    free(out.data);
+    g_free(wanted);
 }
 
 static void linux_unified_custom_builder_v8(LinuxUnifiedV8 *state) {
