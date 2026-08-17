@@ -12,8 +12,11 @@ for marker in [
     'routervpn-selected-dns', '"action": "hijack-dns"',
     'guard final != "direct"', 'fastestDNSHost', 'dnsResults',
     'Array(profiles.keys)', 'isSelfContainedLibbox',
+    'routervpn-bootstrap-dns', 'server["domain_resolver"] = "routervpn-bootstrap-dns"',
+    '"detour": detour', 'bootstrapHost(profile)', 'isLiteralIP(policy.host)',
 ]:
     assert marker in runtime, marker
+assert runtime.index('"tag": "routervpn-bootstrap-dns"') < runtime.index('server["domain_resolver"] = "routervpn-bootstrap-dns"')
 
 view = app.joinpath("IOSDNSPolicyView.swift").read_text()
 for marker in [
@@ -43,4 +46,4 @@ gen = (root / "server/scripts/generate-transports.sh").read_text()
 for marker in ['"type":"udp"', '"detour":"proxy"', '"protocol":"dns","action":"hijack-dns"']:
     assert marker in gen, marker
 
-print("iOS DNS policy/runtime/RTT UI contract OK")
+print("iOS DNS policy/runtime/RTT/hostname-bootstrap contract OK")
