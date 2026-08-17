@@ -27,11 +27,19 @@ struct RouterVPNNodeMapSheet: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if nodes.isEmpty {
-                    ContentUnavailableView(
-                        "No real node coordinates",
-                        systemImage: "map",
-                        description: Text("Router VPN never invents map locations. Only stored latitude/longitude values are plotted.")
-                    )
+                    VStack(spacing: 12) {
+                        Image(systemName: "map")
+                            .font(.system(size: 42))
+                            .foregroundStyle(.secondary)
+                        Text("No real node coordinates")
+                            .font(.headline)
+                        Text("Router VPN never invents map locations. Only stored latitude/longitude values are plotted.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     RouterVPNMapPanel(nodes: nodes)
                     RouterVPNMapNodeList(nodes: nodes)
@@ -39,7 +47,7 @@ struct RouterVPNNodeMapSheet: View {
             }
             .navigationTitle("Nodes & Map")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
                 }
             }
@@ -61,15 +69,39 @@ struct RouterVPNMapPoint: Identifiable {
 
 private struct RouterVPNMapPanel: View {
     let nodes: [RouterVPNMapPoint]
+    @State private var region = MKCoordinateRegion()
+
     var body: some View {
-        Map {
-            ForEach(nodes) { node in
-                Marker(node.name, coordinate: node.coordinate)
-                    .tint(node.active ? .blue : .teal)
+        Map(coordinateRegion: $region, annotationItems: nodes) { node in
+            MapAnnotation(coordinate: node.coordinate) {
+                VStack(spacing: 2) {
+                    Image(systemName: node.active ? "location.circle.fill" : "mappin.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(node.active ? .blue : .teal)
+                    Text(node.name)
+                        .font(.caption2)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(.regularMaterial, in: Capsule())
+                }
+                .accessibilityLabel("\(node.name), \(node.location)")
             }
         }
-        .mapStyle(.standard)
         .frame(minHeight: 360)
+        .onAppear { region = fittedRegion(nodes) }
+    }
+
+    private func fittedRegion(_ values: [RouterVPNMapPoint]) -> MKCoordinateRegion {
+        guard let first = values.first else { return MKCoordinateRegion() }
+        var minLat = first.latitude, maxLat = first.latitude, minLon = first.longitude, maxLon = first.longitude
+        for item in values.dropFirst() {
+            minLat = min(minLat, item.latitude); maxLat = max(maxLat, item.latitude)
+            minLon = min(minLon, item.longitude); maxLon = max(maxLon, item.longitude)
+        }
+        let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2)
+        let latDelta = max(0.05, (maxLat - minLat) * 1.5)
+        let lonDelta = max(0.05, (maxLon - minLon) * 1.5)
+        return MKCoordinateRegion(center: center, span: MKCoordinateSpan(latitudeDelta: min(180, latDelta), longitudeDelta: min(360, lonDelta)))
     }
 }
 
