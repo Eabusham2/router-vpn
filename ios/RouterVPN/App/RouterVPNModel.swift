@@ -107,8 +107,9 @@ final class RouterVPNModel: ObservableObject {
     func importBundle(_ data: Data) throws {
         guard data.count <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
         let decoded = try JSONDecoder().decode(ClientBundle.self, from: data)
-        apply(decoded)
-        saveRouter()
+        let prepared = try IOSDNSRuntimePolicy.patch(decoded)
+        apply(prepared)
+        guard saveRouter() else { throw NSError(domain: "RouterVPN.ProfileSave", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
         message = "Router bundle imported • \(iosRunnableLogicalModes.count) iOS runtime mode(s) available"
     }
 
@@ -142,8 +143,9 @@ final class RouterVPNModel: ObservableObject {
         } catch { message = "LAN pairing failed: \(error.localizedDescription)" }
     }
 
-    func saveRouter() {
-        guard !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { message = "Enter the home router public IP or hostname"; return }
+    @discardableResult
+    func saveRouter() -> Bool {
+        guard !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { message = "Enter the home router public IP or hostname"; return false }
         var current = bundle ?? ClientBundle.empty
         current.endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         current.apiToken = apiToken
@@ -154,10 +156,14 @@ final class RouterVPNModel: ObservableObject {
         current.socks5Password = ""
         current.modes = modes
         current.logicalModes = logicalModes
+        do { current = try IOSDNSRuntimePolicy.patch(current) }
+        catch { message = "DNS policy is not runnable on this iOS node: \(error.localizedDescription)"; return false }
         bundle = current
-        if let data = try? JSONEncoder().encode(current) { UserDefaults.standard.set(data, forKey: bundleKey) }
+        guard let data = try? JSONEncoder().encode(current) else { message = "Router profile could not be encoded"; return false }
+        UserDefaults.standard.set(data, forKey: bundleKey)
         UserDefaults.standard.set(lanImportHost, forKey: lanImportKey)
         message = "Router profile saved on this device"
+        return true
     }
 
     private func apply(_ decoded: ClientBundle) {
@@ -194,7 +200,7 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func connect() async {
-        saveRouter()
+        guard saveRouter() else { connected = false; return }
         guard let bundle else { message = "Configure your home router first"; return }
         let selections: [IOSRuntimeSelection]
         do {
@@ -205,7 +211,7 @@ final class RouterVPNModel: ObservableObject {
                     if lhs.engine != rhs.engine { return lhs.engine == .wireGuard }
                     return lhs.logicalModeID < rhs.logicalModeID
                 }
-                guard !values.isEmpty else { throw IOSRuntimeSelectionError.unsupportedMode("This imported node has no iOS-runnable WireGuardKit or Libbox mode.") }
+                guard !values.isEmpty else { throw IOSRuntimeSelectionError.unsupportedMode("This imported node has no iOS-runnable WireGuardKit or Libbox mode for the selected DNS policy.") }
                 selections = strictKillSwitchEnabled ? [values[0]] : values
             } else {
                 selections = [try IOSRuntimeSelector.select(bundle: bundle, logicalModeID: selectedLogicalMode)]
@@ -221,9 +227,7 @@ final class RouterVPNModel: ObservableObject {
             let manager = managers.first ?? NETunnelProviderManager()
             var failures: [String] = []
             for (index, selection) in selections.enumerated() {
-                if auto {
-                    message = "AUTO \(index + 1)/\(selections.count) • trying \(modeName(selection.logicalModeID)) • \(engineName(selection.engine))…"
-                }
+                if auto { message = "AUTO \(index + 1)/\(selections.count) • trying \(modeName(selection.logicalModeID)) • \(engineName(selection.engine))…" }
                 let success = try await start(manager: manager, bundle: bundle, selection: selection)
                 if success {
                     connected = true
@@ -359,7 +363,7 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func applyForward(dmz: Bool) async {
-        saveRouter()
+        guard saveRouter() else { return }
         if dmz {
             message = "Protected DMZ is a broad server/admin action. Manage it in the authenticated home Setup Center; this app creates only explicit forwarding owned by this tunnel peer."
             return
@@ -379,7 +383,7 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func clearForward() async {
-        saveRouter()
+        guard saveRouter() else { return }
         guard let b = bundle, let url = URL(string: b.routerAPI + "/api/forward/clear") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
