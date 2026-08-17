@@ -39,15 +39,31 @@ for marker in ['"server": "127.0.0.1"', '"server_port": 1090']:
 for marker in ['"server":"127.0.0.1"', '"server_port":1092']:
     assert marker in tls, marker
 
+models=app.joinpath('Models.swift').read_text()
+for marker in [
+    'profileSchemaVersion: 4', 'profileSchemaVersion <= 4',
+    'autoRequireEncrypted', 'auto_require_encrypted',
+    'autoRequireObfuscation', 'auto_require_obfuscation',
+]:
+    assert marker in models, marker
+
 strategy=app.joinpath('IOSStrategySupport.swift').read_text()
 for marker in [
     'runIOSSmartAuto()', 'runIOSCustom(layers requestedRaw: [String])',
     'SMART AUTO is unavailable while iOS Always/strict route lockdown is enabled',
     'selected-node proof passed', 'IOSRuntimeSelector.selectRaw',
     'customLayers = requested', 'applyIOSStartupPolicyIfNeeded()',
-    'router-vpn.ios.last-runtime-v1', 'IOSStrategySheet',
+    'router-vpn.ios.last-runtime-v1', 'autoRequirementFailure',
+    'encryptedLayers', 'obfuscationLayers', 'skipping simplification',
 ]:
     assert marker in strategy, marker
+
+model=app.joinpath('RouterVPNModel.swift').read_text()
+for marker in [
+    'IOSStrategyCatalog.autoRequirementFailure',
+    'AUTO failed closed: no iOS-runnable candidate satisfies the saved requirements',
+]:
+    assert marker in model, marker
 
 product=app.joinpath('ProductRootView.swift').read_text()
 unified=app.joinpath('IOSUnifiedProductView.swift').read_text()
@@ -58,6 +74,7 @@ for marker in [
     'runIOSCustom(layers:', 'applyIOSStartupPolicyIfNeeded()', 'recordIOSLastRuntime()',
     'IOSUnifiedMap', 'Connect', 'Disconnect', 'Kill switch', 'Multihop', 'Settings', 'Mode', 'DNS',
     'New CUSTOM preset', 'systemBlue', 'systemOrange', 'systemPink', 'real coordinates',
+    'IOSHomeSummaryView', 'Require encrypted', 'Require obfuscation',
 ]:
     assert marker in unified, marker
 print('iOS runtime + helper-chain fail-closed + unified AUTO/SMART/CUSTOM strategy contract OK')
