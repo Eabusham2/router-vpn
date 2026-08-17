@@ -202,7 +202,7 @@ struct RouterVPNDNSSettingsSheet: View {
                     Picker("Common resolver", selection: $preset) {
                         Text("Manual / current").tag("")
                         ForEach(RouterVPNDNSPreset.common) { Text($0.name).tag($0.id) }
-                    }.onChange(of: preset) { _, value in if let item = RouterVPNDNSPreset.common.first(where: { $0.id == value }) { host = item.host; serverName = item.serverName } }
+                    }.onChange(of: preset) { value in if let item = RouterVPNDNSPreset.common.first(where: { $0.id == value }) { host = item.host; serverName = item.serverName } }
                     if mode == "custom" { Picker("Protocol", selection: $protocolName) { Text("UDP").tag("udp"); Text("TCP").tag("tcp") } }
                     if !["home","fastest"].contains(mode) {
                         TextField("Resolver host / IPv4 / IPv6", text: $host).textInputAutocapitalization(.never).autocorrectionDisabled()
