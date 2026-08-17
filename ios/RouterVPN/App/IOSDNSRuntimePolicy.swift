@@ -28,37 +28,23 @@ enum IOSDNSRuntimePolicy {
 
     static func resolve(_ profile: RouterProfile) throws -> IOSResolvedDNSPolicy? {
         let mode = clean(profile.dnsMode).lowercased()
-        guard !mode.isEmpty else { return nil } // Backward-compatible old bundle: keep embedded DNS.
+        guard !mode.isEmpty else { return nil }
         guard modeIDs.contains(mode) else { throw error("Unsupported iOS DNS policy \(mode).") }
-
-        var type = "udp"
-        var host = ""
-        var port = 53
-        var serverName = clean(profile.dnsServerName)
-        var path = clean(profile.dnsPath)
+        var type = "udp", host = "", port = 53, serverName = clean(profile.dnsServerName), path = clean(profile.dnsPath)
         switch mode {
-        case "home":
-            host = firstNonEmpty(profile.adGuardIPv4, profile.adGuardIPv6)
+        case "home": host = firstNonEmpty(profile.adGuardIPv4, profile.adGuardIPv6)
         case "fastest":
             host = fastestHost(profile)
             guard !host.isEmpty else { throw error("Fastest DNS is selected but this node has no measured working resolver.") }
         case "custom":
-            host = clean(profile.dnsHost)
-            type = clean(profile.dnsProtocol).lowercased()
+            host = clean(profile.dnsHost); type = clean(profile.dnsProtocol).lowercased()
             if type.isEmpty { type = "udp" }
             guard ["udp", "tcp"].contains(type) else { throw error("Custom DNS accepts explicit UDP or TCP only.") }
             port = profile.dnsPort ?? 53
-        case "dot":
-            type = "tls"; host = clean(profile.dnsHost); port = profile.dnsPort ?? 853
-        case "doh":
-            type = "https"; host = clean(profile.dnsHost); port = profile.dnsPort ?? 443
-            if path.isEmpty { path = "/dns-query" }
-        case "doh3":
-            type = "h3"; host = clean(profile.dnsHost); port = profile.dnsPort ?? 443
-            if path.isEmpty { path = "/dns-query" }
-        case "rescue":
-            host = fastestHost(profile)
-            if host.isEmpty { host = "1.1.1.1" }
+        case "dot": type = "tls"; host = clean(profile.dnsHost); port = profile.dnsPort ?? 853
+        case "doh": type = "https"; host = clean(profile.dnsHost); port = profile.dnsPort ?? 443; if path.isEmpty { path = "/dns-query" }
+        case "doh3": type = "h3"; host = clean(profile.dnsHost); port = profile.dnsPort ?? 443; if path.isEmpty { path = "/dns-query" }
+        case "rescue": host = fastestHost(profile); if host.isEmpty { host = "1.1.1.1" }
         default: break
         }
         guard !host.isEmpty else { throw error("DNS policy \(mode) has no resolver host.") }
@@ -71,26 +57,23 @@ enum IOSDNSRuntimePolicy {
     }
 
     static func validate(selection: IOSRuntimeSelection, in bundle: ClientBundle) throws {
-        guard let profile = selectedProfile(in: bundle), profile.normalizedNodeKind == "router-vpn" else { return }
-        guard let policy = try resolve(profile) else { return }
+        guard let profile = selectedProfile(in: bundle), profile.normalizedNodeKind == "router-vpn", let policy = try resolve(profile) else { return }
         if selection.engine == .wireGuard && !policy.wireGuardCompatible {
             throw error("\(policy.mode.uppercased()) DNS requires Libbox on iOS. WireGuardKit can only enforce plain IP DNS without pretending to provide TCP/DoT/DoH/DoH3 transport.")
         }
     }
 
     static func patch(_ source: ClientBundle) throws -> ClientBundle {
-        guard let profile = selectedProfile(in: source), profile.normalizedNodeKind == "router-vpn",
-              let policy = try resolve(profile) else { return source }
+        guard let profile = selectedProfile(in: source), profile.normalizedNodeKind == "router-vpn", let policy = try resolve(profile) else { return source }
         var bundle = source
         var profiles = bundle.profiles
         if policy.wireGuardCompatible, var wg = profiles["wg"], let encoded = wg["wg.conf"],
            let data = Data(base64Encoded: encoded, options: []), let text = String(data: data, encoding: .utf8) {
-            let patched = try patchWireGuard(text, policy: policy)
-            wg["wg.conf"] = Data(patched.utf8).base64EncodedString()
+            wg["wg.conf"] = Data(try patchWireGuard(text, policy: policy).utf8).base64EncodedString()
             profiles["wg"] = wg
         }
-        for (rawID, encodedFiles) in profiles where rawID != "wg" {
-            guard isSelfContainedLibbox(encodedFiles), let encoded = encodedFiles["sing-box.json"],
+        for rawID in Array(profiles.keys).filter({ $0 != "wg" }) {
+            guard let encodedFiles = profiles[rawID], isSelfContainedLibbox(encodedFiles), let encoded = encodedFiles["sing-box.json"],
                   let data = Data(base64Encoded: encoded, options: []), data.count <= 4 * 1024 * 1024 else { continue }
             var next = encodedFiles
             next["sing-box.json"] = try patchLibbox(data, policy: policy).base64EncodedString()
@@ -102,26 +85,12 @@ enum IOSDNSRuntimePolicy {
 
     private static func patchWireGuard(_ text: String, policy: IOSResolvedDNSPolicy) throws -> String {
         var lines = text.components(separatedBy: .newlines)
-        guard let start = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("[Interface]") == .orderedSame }) else {
-            throw error("WireGuard profile has no [Interface] section for DNS policy application.")
-        }
-        let end = ((start + 1)..<lines.count).first(where: {
-            let value = lines[$0].trimmingCharacters(in: .whitespacesAndNewlines)
-            return value.hasPrefix("[") && value.hasSuffix("]")
-        }) ?? lines.count
+        guard let start = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("[Interface]") == .orderedSame }) else { throw error("WireGuard profile has no [Interface] section for DNS policy application.") }
+        let end = ((start + 1)..<lines.count).first(where: { let value = lines[$0].trimmingCharacters(in: .whitespacesAndNewlines); return value.hasPrefix("[") && value.hasSuffix("]") }) ?? lines.count
         var dnsIndexes: [Int] = []
-        if end > start + 1 {
-            for index in (start + 1)..<end {
-                let value = lines[index].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if value.hasPrefix("dns") && value.contains("=") { dnsIndexes.append(index) }
-            }
-        }
-        if let first = dnsIndexes.first {
-            lines[first] = "DNS = \(policy.host)"
-            for index in dnsIndexes.dropFirst().reversed() { lines.remove(at: index) }
-        } else {
-            lines.insert("DNS = \(policy.host)", at: end)
-        }
+        if end > start + 1 { for index in (start + 1)..<end { let value = lines[index].trimmingCharacters(in: .whitespacesAndNewlines).lowercased(); if value.hasPrefix("dns") && value.contains("=") { dnsIndexes.append(index) } } }
+        if let first = dnsIndexes.first { lines[first] = "DNS = \(policy.host)"; for index in dnsIndexes.dropFirst().reversed() { lines.remove(at: index) } }
+        else { lines.insert("DNS = \(policy.host)", at: end) }
         return lines.joined(separator: "\n")
     }
 
@@ -147,21 +116,14 @@ enum IOSDNSRuntimePolicy {
             guard final != "direct" else { throw error("Libbox final route is direct; refusing DNS that could bypass the selected VPN exit.") }
             return final
         }
-        for outbound in root["outbounds"] as? [[String: Any]] ?? [] {
-            let tag = outbound["tag"] as? String ?? "", type = outbound["type"] as? String ?? ""
-            if !tag.isEmpty && type != "direct" { return tag }
-        }
+        for outbound in root["outbounds"] as? [[String: Any]] ?? [] { let tag = outbound["tag"] as? String ?? "", type = outbound["type"] as? String ?? ""; if !tag.isEmpty && type != "direct" { return tag } }
         throw error("Libbox profile has no non-direct outbound for selected DNS.")
     }
 
     private static func isSelfContainedLibbox(_ encoded: [String: String]) -> Bool {
         if helperAssets.contains(where: { encoded[$0] != nil }) { return false }
-        guard let value = encoded["sing-box.json"], let data = Data(base64Encoded: value, options: []),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        for outbound in root["outbounds"] as? [[String: Any]] ?? [] {
-            guard let server = outbound["server"] as? String else { continue }
-            if loopbackHosts.contains(server.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()) { return false }
-        }
+        guard let value = encoded["sing-box.json"], let data = Data(base64Encoded: value, options: []), let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        for outbound in root["outbounds"] as? [[String: Any]] ?? [] { guard let server = outbound["server"] as? String else { continue }; if loopbackHosts.contains(server.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()) { return false } }
         return true
     }
 
@@ -172,6 +134,6 @@ enum IOSDNSRuntimePolicy {
             .min(by: { ($0.latencyMs ?? .greatestFiniteMagnitude) < ($1.latencyMs ?? .greatestFiniteMagnitude) })?.address ?? ""
     }
     private static func clean(_ value: String?) -> String { (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
-    private static func firstNonEmpty(_ values: String...) -> String { values.map(clean).first(where: { !$0.isEmpty }) ?? "" }
+    private static func firstNonEmpty(_ values: String...) -> String { values.map { clean($0) }.first(where: { !$0.isEmpty }) ?? "" }
     private static func error(_ message: String) -> NSError { NSError(domain: "RouterVPN.IOSDNS", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
 }
