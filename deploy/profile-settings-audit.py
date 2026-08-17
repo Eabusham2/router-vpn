@@ -24,7 +24,9 @@ def require(path: str, *markers: str) -> str:
 
 api = require(
     "cmd/client/profile_settings.go",
-    "/api/profile/settings", "disconnect before changing Router VPN profile settings",
+    "/api/profile/settings",
+    "disconnect or let the active AUTO/SMART/CUSTOM transition finish before changing Router VPN profile settings",
+    "profileSettingsBusy", '"auto:"', '"smart-auto:"', '"smart:"', '"custom:"',
     "external exits own their protocol settings", "NormalizeRouterProfile", "syncProfileOptionStateLocked",
     "HomeLANAccess", "KillSwitchPolicy", "IPv6Mode", "BaseTunnel", "BaseFallback",
     "MTUPolicy", "ManualMTU", "DAITAEnabled", "JumboTUN", "SocksEnabled",
@@ -38,7 +40,7 @@ require(
     "TestProfileSettingsV2DefaultAndAutoMTUClearManualValue", "APIToken", "NodeProofID", "EffectiveMTUPathKey",
 )
 require("internal/common/types.go", 'json:"daita_enabled,omitempty"', 'json:"jumbo_tun,omitempty"', 'json:"socks_enabled,omitempty"')
-require("cmd/client/mtu_retest.go", "registerProfileSettingsRoute(h, a)")
+require("cmd/client/mtu_retest.go", "registerProfileSettingsRoute(h, a)", "registerStrategyRoutes(h, a)")
 
 # Windows shipping wrapper owns the button and only invokes the narrow helper.
 require(
@@ -49,6 +51,7 @@ require(
 require(
     "client/RouterVPN-Windows-App.ps1", "RouterVPN-Windows-ProfileSettings.ps1", "ProfileSettingsButton",
     "Edit profile settings", "Show-RouterVPNProfileSettingsDialog", "/api/profile/settings",
+    "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
 )
 
 # macOS build must compile the settings module and expose it from Advanced.
@@ -59,7 +62,7 @@ require(
 )
 require(
     "client/macos/build-native-app.sh", "SETTINGS_SRC", 'button(\"Edit profile settings\", #selector(editProfileSettings))',
-    '"$SETTINGS_SRC"', "/api/profile/settings",
+    '"$SETTINGS_SRC"', "/api/profile/settings", "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
 )
 
 # Linux shipping build compiles the GTK editor into v5 Advanced.
@@ -71,6 +74,10 @@ require(
 require(
     "client/linux/build-native-app.sh", "SETTINGS_INC", '#include \"routervpn-profile-settings-v1.inc\"',
     "Edit profile settings", "G_CALLBACK(on_profile_settings_v7)", "gcc -O2 -Wall -Wextra -Werror",
+)
+require(
+    "client/linux/routervpn-home-summary-v1.inc",
+    "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom", "GtkFlowBox",
 )
 
 # Android edits only the selected private bundle and Advanced must open it.
