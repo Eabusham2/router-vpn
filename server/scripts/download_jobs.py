@@ -16,6 +16,10 @@ JOB_TTL_SECONDS = 15 * 60
 MAX_HISTORY = 64
 
 
+class DownloadCancelled(RuntimeError):
+    """Raised cooperatively when an authenticated Setup Center job is cancelled."""
+
+
 class DownloadJobManager:
     def __init__(self, base: Path, build_func: Callable, content_type_func: Callable, build_slots: threading.BoundedSemaphore, allowed_names: set[str], max_active: int = 8):
         self.base = Path(base)
@@ -113,7 +117,7 @@ class DownloadJobManager:
         }
         def report(phase: str, progress: int | None = None) -> None:
             if self._cancelled(job_id):
-                return
+                raise DownloadCancelled("download job cancelled")
             phase = str(phase or "building").strip().lower()
             floor = allowed.get(phase, 25)
             value = floor if progress is None else max(floor, min(94, int(progress)))
@@ -124,6 +128,10 @@ class DownloadJobManager:
         with self.lock:
             job = self.jobs.get(job_id)
             return not job or bool(job.get("cancel_requested")) or self.closed.is_set()
+
+    def cancel_requested(self, job_id: str) -> bool:
+        """Safe delivery-loop cancellation probe for the threaded HTTP server."""
+        return self._cancelled(job_id)
 
     def _cleanup_dir(self, path: str) -> None:
         if not path:
@@ -165,13 +173,14 @@ class DownloadJobManager:
                 package, source = self.build_func(self.base, name, Path(work))
                 report("packaging", 85)
             if self._cancelled(job_id):
-                self._update(job_id, status="cancelled", phase="cancelled", progress=0, error_code="cancelled", error="download job cancelled")
-                return
+                raise DownloadCancelled("download job cancelled")
             if not package.is_file() or package.stat().st_size <= 0:
                 raise RuntimeError("package creation returned an empty file")
             size = package.stat().st_size
             self._update(job_id, status="ready", phase="ready", progress=100, source=source, size=size, bytes_total=size, path=str(package), expires_in_seconds=JOB_TTL_SECONDS)
             work = ""
+        except DownloadCancelled:
+            self._update(job_id, status="cancelled", phase="cancelled", progress=0, error_code="cancelled", error="download job cancelled")
         except TimeoutError:
             self._update(job_id, status="failed", phase="failed", progress=0, error_code="timeout", error="package generation timed out")
         except Exception as exc:
@@ -183,7 +192,13 @@ class DownloadJobManager:
             if work:
                 self._update(job_id, phase="cleanup", progress=100)
                 self._cleanup_dir(work)
-                self._update(job_id, work_dir="", path="")
+                with self.lock:
+                    job = self.jobs.get(job_id)
+                    terminal = bool(job and job.get("status") in ("cancelled", "failed"))
+                if terminal:
+                    self._update(job_id, work_dir="", path="")
+                else:
+                    self._update(job_id, work_dir="", path="", status="failed", phase="failed", progress=0, error_code="cleanup_without_result", error="download job ended without a deliverable package")
 
     def status(self, job_id: str) -> dict:
         with self.lock:
@@ -226,6 +241,7 @@ class DownloadJobManager:
             if not job:
                 return
             work = str(job.get("work_dir") or "")
+            cancelled = bool(job.get("cancel_requested"))
         self._update(job_id, status="delivering", phase="cleanup", progress=100)
         self._cleanup_dir(work)
         with self.lock:
@@ -234,14 +250,27 @@ class DownloadJobManager:
                 return
             job["work_dir"] = ""
             job["path"] = ""
-            job["status"] = "delivered" if success else "delivery-interrupted"
-            final_phase = "delivered" if success else "delivery-interrupted"
+            if success:
+                final_status = "delivered"
+                final_phase = "delivered"
+            elif cancelled:
+                final_status = "cancelled"
+                final_phase = "cancelled"
+            else:
+                final_status = "delivery-interrupted"
+                final_phase = "delivery-interrupted"
+            job["status"] = final_status
             if not job.get("phase_history") or job["phase_history"][-1] != final_phase:
                 job.setdefault("phase_history", []).append(final_phase)
             job["phase"] = final_phase
             job["progress"] = 100 if success else 0
             if success:
                 job["bytes_sent"] = job.get("bytes_total", 0)
+                job["error_code"] = ""
+                job["error"] = ""
+            elif cancelled:
+                job["error_code"] = "cancelled"
+                job["error"] = "download delivery cancelled; temporary output was deleted"
             else:
                 job["error_code"] = "client_disconnected"
                 job["error"] = "download delivery was interrupted; temporary output was deleted"
@@ -260,7 +289,8 @@ class DownloadJobManager:
                 job["path"] = ""
                 job["status"] = "cancelled"
                 job["phase"] = "cancelled"
-                job.setdefault("phase_history", []).append("cancelled")
+                if not job.get("phase_history") or job["phase_history"][-1] != "cancelled":
+                    job.setdefault("phase_history", []).append("cancelled")
                 job["progress"] = 0
                 job["error_code"] = "cancelled"
                 job["error"] = "download job cancelled"
