@@ -46,6 +46,11 @@ enum IOSRuntimeSelector {
     static let maxProfileBytes = 12 * 1024 * 1024
     static let rawProfilePattern = try! NSRegularExpression(pattern: "^[A-Za-z0-9._-]{1,96}$")
     static let assetPattern = try! NSRegularExpression(pattern: "^[A-Za-z0-9._-]{1,128}$")
+    private static let unsupportedHelperAssets: Set<String> = [
+        "xray.json", "outer-xray.json", "sslocal.json", "middle-sing-box.json", "chain.env",
+        "wg.conf", "wg-socks.conf", "awg.conf", "awg-socks.conf"
+    ]
+    private static let loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]
 
     static func runnableModes(in bundle: ClientBundle) -> [LogicalMode] {
         bundle.logicalModes.filter { mode in
@@ -64,8 +69,9 @@ enum IOSRuntimeSelector {
         }
 
         // For layered iOS support, only advertise an imported raw variant that
-        // actually ships a complete sing-box profile. This prevents UI parity
-        // from turning into fake runtime parity for Xray/AWG-only modes.
+        // is completely executable by the pinned Apple Libbox. A sing-box JSON
+        // file alone is not enough: desktop wrappers may point at localhost
+        // Xray/sslocal/WG/AWG helpers that the iOS PacketTunnel never starts.
         for rawID in orderedVariantIDs(logical) {
             if let selection = try? selectRaw(bundle: bundle, rawProfileID: rawID, logicalModeID: logical.id) {
                 return selection
@@ -73,7 +79,7 @@ enum IOSRuntimeSelector {
         }
 
         throw IOSRuntimeSelectionError.unsupportedMode(
-            "This iOS build cannot run \(logical.name) from the imported node: no validated WireGuardKit/sing-box variant is present. Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable instead of faking Connected. Full desktop-equivalent Router VPN multihop and OpenVPN remain outside the iOS dataplane until a pinned native implementation exists."
+            "This iOS build cannot run \(logical.name) from the imported node: no validated WireGuardKit/self-contained Libbox variant is present. Xray-, sslocal-, AmneziaWG-, helper-chain, ALL/MAX and full desktop multihop combinations remain unavailable instead of faking Connected. OpenVPN remains outside the iOS dataplane until a pinned native implementation exists."
         )
     }
 
@@ -96,10 +102,19 @@ enum IOSRuntimeSelector {
             throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no iOS-runnable sing-box profile.")
         }
         let files = try decodeProfile(encoded)
+        if let helper = unsupportedHelperAssets.first(where: { files[$0] != nil }) {
+            throw IOSRuntimeSelectionError.unsupportedMode(
+                "Raw runtime \(rawProfileID) requires desktop helper asset \(helper), which the iOS PacketTunnel does not start."
+            )
+        }
         guard let config = files["sing-box.json"],
-              let object = try? JSONSerialization.jsonObject(with: config),
-              object is [String: Any]
+              let object = try? JSONSerialization.jsonObject(with: config) as? [String: Any]
         else { throw IOSRuntimeSelectionError.invalidSingBoxConfig }
+        guard !usesUnsupportedLoopbackHelper(object) else {
+            throw IOSRuntimeSelectionError.unsupportedMode(
+                "Raw runtime \(rawProfileID) depends on a localhost helper that is not part of the iOS PacketTunnel dataplane."
+            )
+        }
         return IOSRuntimeSelection(engine: .libbox, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: files)
     }
 
@@ -130,6 +145,16 @@ enum IOSRuntimeSelector {
             result[name] = data
         }
         return result
+    }
+
+    private static func usesUnsupportedLoopbackHelper(_ object: [String: Any]) -> Bool {
+        guard let outbounds = object["outbounds"] as? [[String: Any]] else { return false }
+        for outbound in outbounds {
+            guard let server = outbound["server"] as? String else { continue }
+            let normalized = server.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+            if loopbackHosts.contains(normalized) { return true }
+        }
+        return false
     }
 
     private static func isSafe(_ value: String, pattern: NSRegularExpression) -> Bool {
