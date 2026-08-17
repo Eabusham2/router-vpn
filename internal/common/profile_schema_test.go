@@ -14,10 +14,20 @@ func TestLegacyProfileMigration(t *testing.T) {
 	if p.SchemaVersion != RouterProfileSchemaVersion { t.Fatalf("schema=%d", p.SchemaVersion) }
 	if !p.HomeLANAccess { t.Fatal("legacy profile should preserve historical LAN access") }
 	if p.KillSwitchPolicy != "on-connect" { t.Fatalf("kill policy=%q", p.KillSwitchPolicy) }
-	if p.StartupMode != "manual" || p.IPv6Mode != "auto" || p.MTUPolicy != "default" {
-		t.Fatalf("defaults not migrated: %+v", p)
+	if p.StartupMode != "smart-auto" || p.IPv6Mode != "on" || p.MTUPolicy != "auto" {
+		t.Fatalf("unified defaults not migrated: %+v", p)
 	}
+	if p.AutoRequireEncrypted || p.AutoRequireObfuscation { t.Fatalf("AUTO requirements must default off: %+v", p) }
 	if p.DiagnosticsRetentionDays != 7 { t.Fatalf("retention=%d", p.DiagnosticsRetentionDays) }
+}
+
+func TestExplicitUnifiedDefaultsRoundTrip(t *testing.T) {
+	in := RouterProfile{ID: "home", StartupMode: "smart-auto", IPv6Mode: "on", MTUPolicy: "auto", AutoRequireEncrypted: true, AutoRequireObfuscation: true}
+	b, err := json.Marshal(in)
+	if err != nil { t.Fatal(err) }
+	var out RouterProfile
+	if err := json.Unmarshal(b, &out); err != nil { t.Fatal(err) }
+	if out.StartupMode != "smart-auto" || out.IPv6Mode != "on" || out.MTUPolicy != "auto" || !out.AutoRequireEncrypted || !out.AutoRequireObfuscation { t.Fatalf("unified settings lost: %s", b) }
 }
 
 func TestExplicitLANOffRoundTrips(t *testing.T) {
@@ -46,6 +56,7 @@ func TestStoreMigrationAndSelection(t *testing.T) {
 	if s.SchemaVersion != RouterProfileStoreVersion { t.Fatalf("store schema=%d", s.SchemaVersion) }
 	if s.SelectedID != "one" { t.Fatalf("selected=%q", s.SelectedID) }
 	if s.Profiles[0].HomeLANAccess { t.Fatal("explicit false changed during migration") }
+	if s.Profiles[0].StartupMode != "smart-auto" || s.Profiles[0].IPv6Mode != "on" || s.Profiles[0].MTUPolicy != "auto" { t.Fatalf("store did not receive unified defaults: %+v", s.Profiles[0]) }
 }
 
 func TestManualMTUValidation(t *testing.T) {
