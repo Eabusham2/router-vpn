@@ -24,6 +24,14 @@ def require(path: str, *markers: str) -> str:
     return body
 
 
+def require_combined(label: str, paths: tuple[str, ...], *markers: str) -> str:
+    body = "\n".join(text(path) for path in paths)
+    for marker in markers:
+        if marker not in body:
+            errors.append(f"{label}: missing composed product-parity marker: {marker}")
+    return body
+
+
 dns_api = require(
     "cmd/client/dns_policy_api.go",
     "/api/dns/policy", 'case "home"', 'case "fastest"', 'case "custom"', 'case "dot"',
@@ -58,21 +66,24 @@ require(
 )
 require("cmd/client/mtu_retest.go", "registerHomeSummaryRoute(h, a)")
 
-# Windows shipping wrapper: UTF-8-safe WPF, adaptive layout, persistent app
-# onboarding and full truthful Home state with current-session exit proof.
+# Windows is composed at launch: Product-v2 supplies the mature detail pages,
+# the unified shell owns daily map/connect controls, and proof is current-session
+# /api/home-summary/prove-exit rather than a generic public-IP lookup.
 require(
     "client/RouterVPN-Windows-App.ps1",
-    "Get-Content -LiteralPath $Product -Raw -Encoding UTF8", "/api/dns/policy",
+    "Get-Content -LiteralPath $Product -Raw -Encoding UTF8",
     'MinHeight=\"480\" MinWidth=\"640\"', 'Height=\"2*\" MinHeight=\"140\"',
     'MaxWidth=\"760\"', 'MinHeight=\"180\"',
-    "HomeSummary", "HomeExitButton", "HomeEmergencyButton", "RefreshHomeSummary",
-    "Get-RouterVPNHomeSummary", "Prove-RouterVPNHomeExit", "Emergency Disconnect",
+    "SMART AUTO is the default mode", "WireGuard / AmneziaWG",
 )
 require(
-    "client/RouterVPN-Windows-HomeSummary.ps1",
-    "/api/home-summary", "/api/home-summary/prove-exit", "Actual public VPN exit", "Connection:",
-    "Logical/runtime/base", "Fallback:", "DNS:", "Node latency", "LAN access", "Kill switch",
-    "Effective MTU", "Warnings:", "Unproven — click Prove actual exit",
+    "client/RouterVPN-Windows-UnifiedShell.ps1",
+    "UnifiedShell", "UnifiedMapCanvas", "UnifiedConnectButton", "UnifiedKillSwitch",
+    "UnifiedProofButton", "UnifiedEmergencyButton", "Prove actual exit", "Emergency disconnect",
+    "/api/home-summary/prove-exit", "actual_exit_status", "actual_exit_ip",
+    "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
+    "/api/multihop/connect", "/api/profile/settings", "/api/mtu/retest", "/api/dns/policy",
+    "SMART AUTO", "New CUSTOM preset", "real coordinates", "color-coded hop roles",
 )
 require(
     "client/RouterVPN-Windows-Product-v2.ps1",
@@ -81,10 +92,11 @@ require(
     "Home AdGuard", "Fastest measured", "Custom UDP/TCP", "DNS-over-TLS", "DNS-over-HTTPS",
     "DNS-over-HTTP/3", "DNS Rescue", "/api/dns/policy", "/api/dns/retest",
     "Cloudflare IPv6", "Google IPv6", "Quad9 IPv6", "latitude", "longitude",
-    "No real node coordinates", "HorizontalScrollBarVisibility=\"Auto\"",
+    "No real node coordinates",
 )
 
-# macOS actual build compiles one AppKit product plus onboarding/Home modules.
+# macOS actual build compiles the mature AppKit product plus the unified map-first
+# shell/Home/settings/onboarding modules. Current-session exit proof stays explicit.
 require(
     "client/macos/RouterVPNMacProduct.swift",
     "import MapKit", "MKMapView", "latitude", "longitude", "layers: ", "added latency",
@@ -99,16 +111,15 @@ require(
     "Actual public VPN exit", "Connection:", "Logical/runtime/base", "Fallback:", "DNS:",
     "Node latency", "LAN access", "Kill switch", "Effective MTU", "Warnings:",
 )
-require(
-    "client/macos/build-native-app.sh",
-    "HOME_SRC", "ONBOARDING_SRC", "window.minSize = NSSize(width: 720, height: 520)",
-    "greaterThanOrEqualToConstant: 360", "split.setPosition(430, ofDividerAt: 0)",
-    'button(\"Prove actual exit\", #selector(proveActualHomeExit))',
-    'button(\"Emergency Disconnect\", #selector(emergencyDisconnectHome))', "refreshHomeSummary()",
+require_combined(
+    "macOS unified shipping product",
+    ("client/macos/build-native-app.sh", "client/macos/RouterVPNMacUnifiedShell.swift", "client/macos/RouterVPNHomeSummary.swift"),
+    "UNIFIED_SRC", "HOME_SRC", '"$UNIFIED_SRC"', '"$HOME_SRC"',
+    "Prove actual exit", "Emergency Disconnect", "SMART AUTO", "CUSTOM", "map-first",
 )
 
-# Linux actual GTK v5 build rewires the inherited old public-IP button to the
-# current-session Home proof and refreshes the full Home state continuously.
+# Linux ships GTK v5 plus unified v8. The Home include rewires actual exit proof,
+# while unified v8 owns the map-first dock and keeps mature pages as drill-ins.
 require(
     "client/linux/routervpn-gtk-product-v5.c",
     "build_modes_page_v5", "Added latency", "traffic", "speed loss", "Readiness:", "Reason:",
@@ -123,15 +134,17 @@ require(
     "Logical/runtime/base", "Fallback:", "DNS:", "Node measured latency", "LAN access", "Kill switch",
     "Effective MTU", "Warnings:", "on_home_exit_v6",
 )
-require(
-    "client/linux/build-native-app.sh",
-    "HOME_INC", '#include \"routervpn-home-summary-v1.inc\"', "refresh_home_summary_v6(app)",
-    'gtk_button_set_label(GTK_BUTTON(home_exit_v6), \"Prove actual exit\")', "G_CALLBACK(on_home_exit_v6)",
+require_combined(
+    "Linux unified shipping product",
+    ("client/linux/build-native-app.sh", "client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-home-summary-v1.inc"),
+    "routervpn-unified-shell-v8.inc", "routervpn-home-summary-v1.inc", "SMART AUTO", "CUSTOM",
+    "Connect", "Disconnect", "Kill switch", "Multihop", "Settings", "Mode", "DNS",
     "gcc -O2 -Wall -Wextra -Werror",
 )
 
-# Android LAUNCHER product owns Home; proof requires an app-owned VPN network,
-# current runtime identity and selected-node private proof before/after ipify.
+# Android unified ProductActivity owns the map-first daily surface. The compact
+# Details/proof action calls AndroidHomeSummary's app-owned-VPN/current-session
+# proof and exposes emergency disconnect without restoring the old top nav.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProductParity.java",
     "listDirectLibboxModes", "listDirectXrayModes", "AndroidKillSwitchPolicy.strictRequested",
@@ -153,9 +166,11 @@ require(
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
-    "AndroidProductParity.showModes", "AndroidProductParity.showDNS", "AndroidHomeSummary.format",
-    "AndroidHomeSummary.proveActualExit", "AndroidHomeSummary.emergencyDisconnect", "Prove actual exit",
-    "Emergency Disconnect", "HorizontalScrollView", "ScrollView", "Nodes & Map", "onboarding_done_v6",
+    "RouterVpnNodeMapView", "SMART AUTO — recommended", "New CUSTOM preset", "Details / proof",
+    "showConnectionDetails", "AndroidHomeSummary.format", "AndroidHomeSummary.proveActualExit",
+    "AndroidHomeSummary.emergencyDisconnect", "Prove actual exit", "Emergency disconnect",
+    "AndroidProductParity.showModes", "AndroidProductParity.showDNS", "showSettings",
+    "Multihop", "Add Router node", "Add custom / external",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java",
@@ -176,8 +191,9 @@ require(
     'android:name=".ProductActivity"', 'android.intent.category.LAUNCHER', 'android:name=".MainActivity"',
 )
 
-# Apple Home is native SwiftUI and binds live exit proof to the current selected
-# node + active engine/raw-profile identity after selected-node PacketTunnel proof.
+# iOS/iPadOS ProductRoot delegates the daily surface to IOSUnifiedProductView.
+# Expanded sheet embeds IOSHomeSummaryView, whose proof is bound to selected node
+# plus current engine/raw-profile identity after PacketTunnel path proof.
 require(
     "ios/RouterVPN/App/ProductParitySheets.swift",
     "RouterVPNModeMetricsSheet", "RouterVPNDNSSettingsSheet", "Added latency", "traffic", "speed loss",
@@ -194,8 +210,14 @@ require(
 )
 require(
     "ios/RouterVPN/App/ProductRootView.swift",
-    "IOSHomeSummaryView", "Setup Guide", "RouterVPNProductOnboardingView", "RouterVPNProductOnboardingDoneV2",
-    "routerVPNOnboardingDoneV4", "Nodes & Map", "Mode Details", "DNS Settings",
+    "IOSUnifiedProductView()", "map-first", "SMART AUTO default", "CUSTOM preset builder",
+    "RouterVPNProductOnboardingDoneV2",
+)
+require(
+    "ios/RouterVPN/App/IOSUnifiedProductView.swift",
+    "IOSUnifiedMap", "IOSHomeSummaryView", "Connect", "Disconnect", "Kill switch", "Multihop",
+    "Settings", "Mode", "DNS", "SMART AUTO", "New CUSTOM preset", "real coordinates",
+    "systemBlue", "systemOrange", "systemPink", "Require encrypted", "Require obfuscation",
 )
 require(
     "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
@@ -222,4 +244,4 @@ if errors:
     for error in errors:
         print("ERROR:", error)
     raise SystemExit(1)
-print("Router VPN cross-platform mode/DNS/responsive product parity audit: PASS")
+print("Router VPN cross-platform unified mode/DNS/proof/responsive product parity audit: PASS")
