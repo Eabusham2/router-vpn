@@ -9,6 +9,8 @@ struct IOSProfileSettingsView: View {
     @State private var ipv6Mode = "on"
     @State private var baseTunnel = "auto"
     @State private var baseFallback = false
+    @State private var autoRequireEncrypted = false
+    @State private var autoRequireObfuscation = false
     @State private var mtuPolicy = "auto"
     @State private var manualMTU = ""
     @State private var startupMode = "smart-auto"
@@ -39,6 +41,12 @@ struct IOSProfileSettingsView: View {
                         Text("AmneziaWG stays unavailable on iOS until the native PacketTunnel engine exists; saving this preference does not make it runnable.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                }
+                Section("AUTO / SMART AUTO requirements") {
+                    Toggle("Require encrypted AUTO candidates", isOn: $autoRequireEncrypted)
+                    Toggle("Require obfuscation for AUTO candidates", isOn: $autoRequireObfuscation)
+                    Text("Both are off by default. When enabled they filter AUTO and SMART AUTO before a candidate is attempted; manual modes and CUSTOM stay explicit user choices. If no iOS-runnable candidate satisfies the requested requirements, AUTO fails closed instead of silently relaxing them.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("MTU") {
                     Picker("MTU policy", selection: $mtuPolicy) { ForEach(mtuValues, id: \.1) { Text($0.0).tag($0.1) } }
@@ -84,6 +92,8 @@ struct IOSProfileSettingsView: View {
         ipv6Mode = (p.ipv6Mode ?? "on").lowercased()
         baseTunnel = (p.baseTunnel ?? "auto").lowercased()
         baseFallback = p.baseFallback ?? false
+        autoRequireEncrypted = p.autoRequireEncrypted ?? false
+        autoRequireObfuscation = p.autoRequireObfuscation ?? false
         mtuPolicy = (p.mtuPolicy ?? "auto").lowercased()
         manualMTU = (p.manualMTU ?? 0) > 0 ? String(p.manualMTU!) : ""
         startupMode = (p.startupMode ?? "smart-auto").lowercased()
@@ -107,10 +117,13 @@ struct IOSProfileSettingsView: View {
         p.ipv6Mode = ipv6Mode
         p.baseTunnel = baseTunnel
         p.baseFallback = baseFallback
+        p.autoRequireEncrypted = autoRequireEncrypted
+        p.autoRequireObfuscation = autoRequireObfuscation
         p.mtuPolicy = mtuPolicy
         p.manualMTU = mtuPolicy == "manual" ? manual : 0
         p.startupMode = startupMode
         p.autoConnect = autoConnect
+        bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
         bundle.routerProfiles[index] = p
         do {
             try model.importBundle(JSONEncoder().encode(bundle))
@@ -122,5 +135,6 @@ struct IOSProfileSettingsView: View {
 }
 
 // iOS settings contract: LAN Off / kill switch / IPv6 On default / WG-AWG base+fallback /
-// Auto measured-fixed-runtime MTU / SMART AUTO startup default. Jumbo/DAITA/SOCKS are omitted
-// when the current Apple runtime cannot truthfully claim their support.
+// Require encrypted + Require obfuscation AUTO filters / Auto measured-fixed-runtime MTU /
+// SMART AUTO startup default. Jumbo/DAITA/SOCKS are omitted when the current Apple runtime
+// cannot truthfully claim their support.
