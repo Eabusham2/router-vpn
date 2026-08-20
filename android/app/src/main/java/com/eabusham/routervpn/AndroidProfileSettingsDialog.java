@@ -58,6 +58,8 @@ final class AndroidProfileSettingsDialog {
 
             Button forwarding=new Button(activity); forwarding.setAllCaps(false); forwarding.setText("Port forwarding / Protected DMZ"); forwarding.setOnClickListener(v->new AlertDialog.Builder(activity).setTitle("Port forwarding / Protected DMZ").setMessage("Incoming forwarding is owned by the authenticated private home-node Setup Center/router-agent. It is available only to routable tunnel modes; proxy-only paths never claim arbitrary DNAT. Configure it there, then validate it off-LAN.").setPositiveButton("OK",null).show()); body.addView(forwarding);
             Button mtuRetest=new Button(activity); mtuRetest.setAllCaps(false); mtuRetest.setText("MTU / Retest current path…"); mtuRetest.setOnClickListener(v->new AlertDialog.Builder(activity).setTitle("MTU Retest").setMessage("A real MTU Retest is meaningful only on the current selected node/config/path. Keep Auto measured for normal use. If no live path-specific tester is available on this Android runtime, Router VPN must not invent a result; the next proven connection keeps the last valid measurement or runtime default truthfully.").setPositiveButton("OK",null).show()); body.addView(mtuRetest);
+            Button connectionProfiles=new Button(activity);connectionProfiles.setAllCaps(false);connectionProfiles.setText("Connection profiles — Add / Load / Update / Delete");connectionProfiles.setOnClickListener(v->AndroidConnectionProfilesDialog.show(activity,store,new AndroidStandardExitStore(activity),onSaved));body.addView(connectionProfiles);
+            TextView profileNote=label(activity,"Connection profiles reference the selected Router/Custom node and copy only non-secret mode, DNS, kill-switch, IPv6, MTU and multihop choices. Node keys, API tokens and external credentials stay in their private node stores.");body.addView(profileNote);
 
             ScrollView scroll=new ScrollView(activity);scroll.addView(body);
             AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("Settings").setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
@@ -80,7 +82,10 @@ final class AndroidProfileSettingsDialog {
                 } catch(Throwable error){Toast.makeText(activity,"Settings save failed: "+safe(error),Toast.LENGTH_LONG).show();}
             }));
             dialog.show();
-        } catch(Throwable error){Toast.makeText(activity,"Settings unavailable: "+safe(error),Toast.LENGTH_LONG).show();}
+        } catch(Throwable error){
+            new AlertDialog.Builder(activity).setTitle("Settings").setMessage("Router-node settings unavailable: "+safe(error)+"\n\nConnection profiles remain available for linked Router or Custom/external nodes while disconnected.")
+                    .setPositiveButton("Connection profiles",(d,w)->AndroidConnectionProfilesDialog.show(activity,store,new AndroidStandardExitStore(activity),onSaved)).setNegativeButton("Close",null).show();
+        }
     }
 
     private static boolean hasLiveVpn(Context context) {
