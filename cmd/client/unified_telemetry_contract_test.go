@@ -29,19 +29,23 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 	requireRepoMarkers(t, "cmd/client/telemetry.go",
 		"/api/profile/fastest", "/api/connection/live-latency", "/api/multihop/live-latency",
 		"/api/connection/speed-test", "/api/benchmark/download", "/api/benchmark/upload", "DownloadMbps", "UploadMbps")
+	requireRepoMarkers(t, "cmd/client/telemetry_hops.go",
+		"/api/profile/speed-test", "/api/multihop/speed-test", "measureRoutedProfileSpeed",
+		"entry_error", "exit_error", "not derived from RTT", "active routing graph")
+	requireRepoMarkers(t, "cmd/client/mtu_retest.go", "registerHopTelemetryRoutes(h, a)")
 
 	requireRepoMarkers(t, "client/RouterVPN-Windows-Telemetry.ps1",
 		"UnifiedFastestNode", "UnifiedLiveLatency", "UnifiedMultihopLatency", "UnifiedForwardButton",
-		"Real path speed", "/api/connection/speed-test", "50-sample selected node", "Throughput + Auto MTU")
+		"Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test", "50-sample selected node", "Throughput + Auto MTU")
 	requireRepoMarkers(t, "client/macos/RouterVPNMacTelemetry.swift",
 		"unified-fastest-node", "unified-live-latency", "unified-multihop-latency", "Forward",
-		"Real path speed", "/api/connection/speed-test", "50-sample selected node", "Throughput + Auto MTU")
+		"Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test", "50-sample selected node", "Throughput + Auto MTU")
 	requireRepoMarkers(t, "client/linux/routervpn-telemetry-v9.inc",
 		"⚡ Fastest", "/api/profile/fastest", "/api/connection/live-latency", "/api/multihop/live-latency",
-		"Real path speed", "/api/connection/speed-test", "Throughput + Auto MTU", "Forward")
+		"Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test", "Throughput + Auto MTU", "Forward")
 
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetry.java",
-		"class SpeedResult", "speedTest", "/api/benchmark/download", "/api/benchmark/upload",
+		"class SpeedResult", "speedTest", "speedTest(AndroidNodeStore.Node", "/api/benchmark/download", "/api/benchmark/upload",
 		"Authorization", "Accept-Encoding", "downloadMbps", "uploadMbps")
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
 		"⚡ Fastest", "liveLatency", "Performance", "Forward", "Profiles", "showProfileManager",
