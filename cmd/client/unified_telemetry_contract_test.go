@@ -45,7 +45,7 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		"Authorization", "Accept-Encoding", "downloadMbps", "uploadMbps")
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
 		"⚡ Fastest", "liveLatency", "Performance", "Forward", "Profiles", "showProfileManager",
-		"currentPathMs", "refreshMultihopSummary", "RouterVpnNodeMapView.Marker")
+		"Real current VPN path speed", "telemetry.speedTest", "currentPathMs", "refreshMultihopSummary", "RouterVpnNodeMapView.Marker")
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
 		"latencyMs", "System.currentTimeMillis", "postInvalidateDelayed", "ROLE_ENTRY", "ROLE_EXIT", "canvas.drawLine")
 
@@ -54,12 +54,16 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		"Authorization", "downloadMbps", "uploadMbps", "IOSProbeOnce")
 	requireRepoMarkers(t, "ios/RouterVPN/App/IOSUnifiedProductView.swift",
 		"bolt.fill", "livePathMs", "Performance", "Master port forwarding", "IOSUnifiedMap",
-		"packet", "multihop", "New CUSTOM preset")
+		"Run real current VPN path speed", "telemetry.speedTest", "packet", "multihop", "New CUSTOM preset")
+	requireRepoMarkers(t, "ios/RouterVPN/App/NodeManagerSheet.swift",
+		"Pair from home LAN", "Import node bundle", "Select lowest-latency node", "model.removeNode", "Edit", "updateNodeMetadata")
 }
 
 func TestUnifiedDefaultsAndSettingsContract(t *testing.T) {
 	requireRepoMarkers(t, "internal/common/profile_schema.go",
-		"smart-auto", "ipv6", "auto", "auto_require_encrypted", "auto_require_obfuscation")
+		"p.StartupMode", `p.StartupMode = "smart-auto"`, "p.IPv6Mode", `p.IPv6Mode = "on"`, "p.MTUPolicy", `p.MTUPolicy = "auto"`)
+	requireRepoMarkers(t, "internal/common/types.go",
+		`json:"auto_require_encrypted,omitempty"`, `json:"auto_require_obfuscation,omitempty"`, `json:"daita_enabled,omitempty"`, `json:"jumbo_tun,omitempty"`)
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSettingsDialog.java",
 		"Require encrypted", "Require obfuscation", "Auto measured", "Jumbo", "DAITA")
 	requireRepoMarkers(t, "ios/RouterVPN/App/IOSUnifiedProductView.swift",
