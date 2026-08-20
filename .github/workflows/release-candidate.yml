@@ -33,6 +33,7 @@ jobs:
           python3 client/test_native_onboarding_contract.py
           python3 android/test_android_runtime_contract.py
           python3 android/test_android_multihop_contract.py
+          python3 android/test_android_session_identity_contract.py
           python3 android/test_android_native_policy_contract.py
           python3 android/test_android_standard_exit_contract.py
           python3 modes/test_profile_id_safety.py
@@ -129,6 +130,7 @@ jobs:
         run: |
           python3 android/test_android_runtime_contract.py
           python3 android/test_android_multihop_contract.py
+          python3 android/test_android_session_identity_contract.py
           python3 android/test_android_native_policy_contract.py
           python3 android/test_android_standard_exit_contract.py
           gradle -p android --no-daemon :app:assembleDebug
