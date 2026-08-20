@@ -11,7 +11,7 @@ final class AndroidHomeStateStore {
 
     static final class Snapshot {
         final String sessionId, phase, logicalMode, runtimeMode, actualBase, fallback, warning;
-        final String activeEntryId, activeExitId;
+        final String activeNodeId, activeEntryId, activeExitId;
         final boolean connected;
         Snapshot(SharedPreferences p) {
             sessionId = p.getString("session_id", "");
@@ -21,6 +21,7 @@ final class AndroidHomeStateStore {
             actualBase = p.getString("actual_base", "");
             fallback = p.getString("fallback", "");
             warning = p.getString("warning", "");
+            activeNodeId = p.getString("active_node_id", "");
             activeEntryId = p.getString("active_entry_id", "");
             activeExitId = p.getString("active_exit_id", "");
             connected = p.getBoolean("connected", false);
@@ -34,6 +35,10 @@ final class AndroidHomeStateStore {
     static Snapshot snapshot(Context context) { return new Snapshot(prefs(context)); }
 
     static String begin(Context context, String logicalMode, String runtimeMode, String base) {
+        return begin(context, logicalMode, runtimeMode, base, "");
+    }
+
+    static String begin(Context context, String logicalMode, String runtimeMode, String base, String activeNodeId) {
         String session = UUID.randomUUID().toString();
         prefs(context).edit()
                 .putString("session_id", session)
@@ -41,6 +46,7 @@ final class AndroidHomeStateStore {
                 .putString("logical_mode", clean(logicalMode))
                 .putString("runtime_mode", clean(runtimeMode))
                 .putString("actual_base", clean(base))
+                .putString("active_node_id", clean(activeNodeId))
                 .putString("fallback", "")
                 .putString("warning", "")
                 .putBoolean("connected", false)
@@ -60,6 +66,7 @@ final class AndroidHomeStateStore {
                 .putString("logical_mode", "multihop")
                 .putString("runtime_mode", clean(runtimeMode))
                 .putString("actual_base", "wg")
+                .putString("active_node_id", clean(exitId))
                 .putString("fallback", "")
                 .putString("warning", "")
                 .putString("active_entry_id", clean(entryId))
@@ -72,6 +79,10 @@ final class AndroidHomeStateStore {
     }
 
     static void connected(Context context, String logicalMode, String runtimeMode, String base, String fallback) {
+        connected(context, logicalMode, runtimeMode, base, fallback, "");
+    }
+
+    static void connected(Context context, String logicalMode, String runtimeMode, String base, String fallback, String activeNodeId) {
         SharedPreferences p = prefs(context);
         String session = p.getString("session_id", "");
         if (session == null || session.isEmpty()) session = UUID.randomUUID().toString();
@@ -81,6 +92,7 @@ final class AndroidHomeStateStore {
                 .putString("logical_mode", clean(logicalMode))
                 .putString("runtime_mode", clean(runtimeMode))
                 .putString("actual_base", clean(base))
+                .putString("active_node_id", clean(activeNodeId))
                 .putString("fallback", clean(fallback))
                 .putString("warning", "")
                 .putBoolean("connected", true)
@@ -99,6 +111,7 @@ final class AndroidHomeStateStore {
                 .putString("logical_mode", "multihop")
                 .putString("runtime_mode", clean(runtimeMode))
                 .putString("actual_base", "wg")
+                .putString("active_node_id", clean(exitId))
                 .putString("fallback", "")
                 .putString("warning", "")
                 .putString("active_entry_id", clean(entryId))
@@ -116,6 +129,7 @@ final class AndroidHomeStateStore {
                 .putString("phase", "failed")
                 .putString("warning", clean(warning))
                 .putBoolean("connected", false)
+                .remove("active_node_id")
                 .remove("active_entry_id")
                 .remove("active_exit_id")
                 .remove("actual_exit_ip")
@@ -133,6 +147,7 @@ final class AndroidHomeStateStore {
                 .putString("fallback", "")
                 .putString("warning", "")
                 .putBoolean("connected", false)
+                .remove("active_node_id")
                 .remove("active_entry_id")
                 .remove("active_exit_id")
                 .remove("actual_exit_ip")
@@ -151,6 +166,9 @@ final class AndroidHomeStateStore {
         if (session == null || session.isEmpty() || !session.equals(proofSession)) return "";
         return p.getString("actual_exit_ip", "");
     }
+
+    static String localNodeId(FileNameSource source) { return source == null ? "" : clean(source.localNodeId()); }
+    interface FileNameSource { String localNodeId(); }
 
     private static String clean(String value) { return value == null ? "" : value.replace('\n', ' ').replace('\r', ' ').trim(); }
     private AndroidHomeStateStore() {}
