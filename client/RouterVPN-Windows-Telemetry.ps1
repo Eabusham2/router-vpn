@@ -40,9 +40,9 @@ function RefreshUnifiedTelemetry{
  }catch{(Control 'UnifiedMultihopLatency').Text=''}
 }
 function ShowUnifiedPerformance{
- [xml]$PX=@'
+ [xml]$PX=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN Performance" Width="650" Height="430" MinWidth="520" MinHeight="350" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Latency &amp; path performance" FontSize="23" FontWeight="Bold"/><TextBlock Grid.Row="1" Margin="0,8,0,12" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Live RTT uses the current private tunnel. The 50-sample test is the durable node benchmark. Throughput + Auto MTU uses the bounded private-node loss/RTT/throughput comparison and may update Auto MTU; it is not mislabeled as a passive speed test."/><TextBox Name="Result" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Background="#101A2B" Foreground="#E8ECF8" Padding="10"/><WrapPanel Grid.Row="3" Margin="0,12,0,0"><Button Name="Live" Content="Live path RTT" Margin="4" Padding="11,6"/><Button Name="Durable" Content="50-sample selected node" Margin="4" Padding="11,6"/><Button Name="Throughput" Content="Throughput + Auto MTU" Margin="4" Padding="11,6"/><Button Name="Close" Content="Close" Margin="4" Padding="11,6"/></WrapPanel></Grid></Window>
-'@
+"@
   $Reader=New-Object System.Xml.XmlNodeReader $PX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window;$Result=$D.FindName('Result')
   $D.FindName('Live').Add_Click({try{$R=Api '/api/connection/live-latency' 'POST' @{samples=5} 12;$Result.Text=($R|ConvertTo-Json -Depth 6)}catch{$Result.Text=$_.Exception.Message}})
   $D.FindName('Durable').Add_Click({try{$P=SelectedNode;$R=Api '/api/profile/latency' 'POST' @{id=[string]$P.id;samples=50} 180;$Result.Text=($R|ConvertTo-Json -Depth 6);RefreshProduct}catch{$Result.Text=$_.Exception.Message}})
