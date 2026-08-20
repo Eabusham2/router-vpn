@@ -52,12 +52,12 @@ private final class RouterVPNMacRouteChromeView: NSView {
         border.lineWidth = 1.2
         border.stroke()
 
-        let title = "ROUTER VPN • LIVE ROUTE"
+        let title = "ROUTER VPN • LIVE ROUTE" as NSString
         title.draw(at: NSPoint(x: 22, y: bounds.height - 34), withAttributes: [
             .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold),
             .foregroundColor: NSColor(calibratedRed: 0.73, green: 0.82, blue: 0.94, alpha: 0.88)
         ])
-        let truth = "Only linked real coordinates • no IP geolocation or fabricated device pin"
+        let truth = "Only linked real coordinates • no IP geolocation or fabricated device pin" as NSString
         truth.draw(at: NSPoint(x: 22, y: 18), withAttributes: [
             .font: NSFont.systemFont(ofSize: 9, weight: .regular),
             .foregroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.78)
@@ -68,14 +68,15 @@ private final class RouterVPNMacRouteChromeView: NSView {
         let b = mapView.convert(exit, toPointTo: self)
         guard a.x.isFinite, a.y.isFinite, b.x.isFinite, b.y.isFinite else { return }
 
+        let c1 = NSPoint(x: a.x + (b.x - a.x) * 0.34, y: min(bounds.height - 30, max(a.y, b.y) + 44))
+        let c2 = NSPoint(x: a.x + (b.x - a.x) * 0.66, y: min(bounds.height - 30, max(a.y, b.y) + 44))
         let route = NSBezierPath()
         route.move(to: a)
-        route.curve(to: b,
-                    controlPoint1: NSPoint(x: a.x + (b.x - a.x) * 0.34, y: min(bounds.height - 30, max(a.y, b.y) + 44)),
-                    controlPoint2: NSPoint(x: a.x + (b.x - a.x) * 0.66, y: min(bounds.height - 30, max(a.y, b.y) + 44)))
+        route.curve(to: b, controlPoint1: c1, controlPoint2: c2)
+        route.lineCapStyle = .round
+        route.lineJoinStyle = .round
         NSColor.systemBlue.withAlphaComponent(0.30).setStroke()
         route.lineWidth = 9
-        route.lineCapStyle = .round
         route.stroke()
         NSColor.systemCyan.withAlphaComponent(0.92).setStroke()
         route.lineWidth = 3.2
@@ -83,8 +84,6 @@ private final class RouterVPNMacRouteChromeView: NSView {
 
         // Cubic Bézier interpolation for a packet moving over the same visible
         // path. This is visual motion only; RTT remains separately measured.
-        let c1 = NSPoint(x: a.x + (b.x - a.x) * 0.34, y: min(bounds.height - 30, max(a.y, b.y) + 44))
-        let c2 = NSPoint(x: a.x + (b.x - a.x) * 0.66, y: min(bounds.height - 30, max(a.y, b.y) + 44))
         let t = phase, u = 1 - t
         let packet = NSPoint(
             x: u*u*u*a.x + 3*u*u*t*c1.x + 3*u*t*t*c2.x + t*t*t*b.x,
@@ -96,7 +95,7 @@ private final class RouterVPNMacRouteChromeView: NSView {
         NSColor.white.setFill(); dot.fill()
 
         let mid = NSPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 + 28)
-        let label = pathMs > 0 ? String(format: "PATH %.1f ms", pathMs) : "LIVE MULTIHOP"
+        let label = (pathMs > 0 ? String(format: "PATH %.1f ms", pathMs) : "LIVE MULTIHOP") as NSString
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold),
             .foregroundColor: NSColor.white,
