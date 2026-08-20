@@ -12,52 +12,62 @@ import android.view.View;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
-/** Offline native coordinate view. Callers provide only coordinates explicitly present in linked node data. */
+/** Offline native VPN globe. Callers provide only coordinates explicitly present in linked node data. */
 final class RouterVpnNodeMapView extends View {
     interface OnMarkerClickListener { void onMarkerClick(Marker marker); }
     static final String ROLE_NORMAL="normal", ROLE_SELECTED="selected", ROLE_ENTRY="entry", ROLE_EXIT="exit", ROLE_EXTERNAL="external";
 
     static final class Marker {
         final String id, name, role;
-        final double latitude, longitude;
+        final double latitude, longitude, latencyMs;
         final boolean selected;
-        Marker(String id,String name,double latitude,double longitude,boolean selected){this(id,name,latitude,longitude,selected?ROLE_SELECTED:ROLE_NORMAL);}
-        Marker(String id,String name,double latitude,double longitude,String role){this.id=id;this.name=name;this.latitude=latitude;this.longitude=longitude;this.role=role==null?ROLE_NORMAL:role;this.selected=ROLE_SELECTED.equals(this.role);}
+        Marker(String id,String name,double latitude,double longitude,boolean selected){this(id,name,latitude,longitude,selected?ROLE_SELECTED:ROLE_NORMAL,0);}
+        Marker(String id,String name,double latitude,double longitude,String role){this(id,name,latitude,longitude,role,0);}
+        Marker(String id,String name,double latitude,double longitude,String role,double latencyMs){this.id=id;this.name=name;this.latitude=latitude;this.longitude=longitude;this.role=role==null?ROLE_NORMAL:role;this.selected=ROLE_SELECTED.equals(this.role);this.latencyMs=Double.isFinite(latencyMs)&&latencyMs>0?latencyMs:0;}
     }
 
-    private final Paint background=paint(Color.rgb(14,24,43),1f);
-    private final Paint grid=paint(Color.rgb(45,61,87),1f);
-    private final Paint axis=paint(Color.rgb(88,116,164),1.5f);
+    private final Paint background=paint(Color.rgb(9,17,31),1f);
+    private final Paint oceanGlow=paint(Color.rgb(17,34,58),1f);
+    private final Paint grid=paint(Color.rgb(39,58,83),1f);
+    private final Paint axis=paint(Color.rgb(75,107,153),1.5f);
     private final Paint normalPin=paint(Color.rgb(72,199,214),1f);
     private final Paint selectedPin=paint(Color.rgb(145,108,255),1f);
     private final Paint entryPin=paint(Color.rgb(55,145,255),1f);
     private final Paint exitPin=paint(Color.rgb(255,154,50),1f);
     private final Paint externalPin=paint(Color.rgb(242,91,172),1f);
-    private final Paint path=paint(Color.rgb(55,145,255),4f);
+    private final Paint path=paint(Color.rgb(83,166,255),4f);
+    private final Paint packet=paint(Color.WHITE,1f);
     private final Paint text=paint(Color.WHITE,1f);
+    private final Paint secondary=paint(Color.rgb(160,180,208),1f);
     private List<Marker> markers=Collections.emptyList();
     private OnMarkerClickListener markerClickListener;
 
     RouterVpnNodeMapView(Context context){this(context,null);}
-    RouterVpnNodeMapView(Context context,AttributeSet attrs){super(context,attrs);text.setTextSize(sp(12));setMinimumHeight((int)dp(260));setContentDescription("Interactive Router VPN node map using stored coordinates only");setClickable(true);}
+    RouterVpnNodeMapView(Context context,AttributeSet attrs){super(context,attrs);text.setTextSize(sp(12));secondary.setTextSize(sp(10));setMinimumHeight((int)dp(260));setContentDescription("Interactive Router VPN globe using stored coordinates and measured node latency only");setClickable(true);}
 
     void setMarkers(List<Marker>value){markers=value==null?Collections.emptyList():new ArrayList<>(value);invalidate();}
     void setOnMarkerClickListener(OnMarkerClickListener listener){markerClickListener=listener;}
 
     @Override protected void onDraw(Canvas canvas){
-        super.onDraw(canvas);RectF world=worldRect();canvas.drawRoundRect(world,dp(14),dp(14),background);
+        super.onDraw(canvas);RectF world=worldRect();canvas.drawRoundRect(world,dp(18),dp(18),background);
+        RectF glow=new RectF(world.left+dp(4),world.top+dp(4),world.right-dp(4),world.bottom-dp(4));canvas.drawOval(glow,oceanGlow);
         for(int lon=-120;lon<=120;lon+=60){float x=xFor(lon,world);canvas.drawLine(x,world.top,x,world.bottom,lon==0?axis:grid);}
         for(int lat=-60;lat<=60;lat+=30){float y=yFor(lat,world);canvas.drawLine(world.left,y,world.right,y,lat==0?axis:grid);}
-        if(markers.isEmpty()){text.setTextAlign(Paint.Align.CENTER);canvas.drawText("No real node coordinates in linked bundles",world.centerX(),world.centerY(),text);text.setTextAlign(Paint.Align.LEFT);return;}
+        text.setTextAlign(Paint.Align.LEFT);canvas.drawText("ROUTER VPN GLOBE",world.left+dp(12),world.top+dp(20),secondary);
+        if(markers.isEmpty()){text.setTextAlign(Paint.Align.CENTER);canvas.drawText("No real node coordinates in linked profiles",world.centerX(),world.centerY(),text);text.setTextAlign(Paint.Align.LEFT);return;}
 
         Marker entry=null,exit=null;
         for(Marker marker:markers){if(ROLE_ENTRY.equals(marker.role))entry=marker;else if(ROLE_EXIT.equals(marker.role))exit=marker;}
-        if(entry!=null&&exit!=null&&valid(entry)&&valid(exit)){canvas.drawLine(xFor(entry.longitude,world),yFor(entry.latitude,world),xFor(exit.longitude,world),yFor(exit.latitude,world),path);}
+        if(entry!=null&&exit!=null&&valid(entry)&&valid(exit)){
+            float ax=xFor(entry.longitude,world),ay=yFor(entry.latitude,world),bx=xFor(exit.longitude,world),by=yFor(exit.latitude,world);canvas.drawLine(ax,ay,bx,by,path);
+            float phase=(System.currentTimeMillis()%1800L)/1800f;float px=ax+(bx-ax)*phase,py=ay+(by-ay)*phase;canvas.drawCircle(px,py,dp(4),packet);postInvalidateDelayed(48);
+        }
 
         for(Marker marker:markers){
             if(!valid(marker))continue;float x=xFor(marker.longitude,world),y=yFor(marker.latitude,world);float r=dp(ROLE_SELECTED.equals(marker.role)||ROLE_ENTRY.equals(marker.role)||ROLE_EXIT.equals(marker.role)?8:6);canvas.drawCircle(x,y,r,paintFor(marker.role));
-            String label=marker.name==null||marker.name.trim().isEmpty()?"Router VPN node":marker.name.trim();if(label.length()>22)label=label.substring(0,21)+"…";canvas.drawText(label,x+r+dp(4),y-dp(4),text);
+            String label=marker.name==null||marker.name.trim().isEmpty()?"Router VPN node":marker.name.trim();if(label.length()>18)label=label.substring(0,17)+"…";if(marker.latencyMs>0)label+="  "+String.format(Locale.US,"%.1f ms",marker.latencyMs);canvas.drawText(label,x+r+dp(4),y-dp(4),text);
         }
     }
 
@@ -66,7 +76,7 @@ final class RouterVpnNodeMapView extends View {
         if(markerClickListener==null||markers.isEmpty())return performClick();
         RectF world=worldRect();Marker best=null;float bestDistance=Float.MAX_VALUE;
         for(Marker marker:markers){if(!valid(marker))continue;float dx=xFor(marker.longitude,world)-event.getX(),dy=yFor(marker.latitude,world)-event.getY(),distance=(float)Math.hypot(dx,dy);if(distance<bestDistance){bestDistance=distance;best=marker;}}
-        if(best!=null&&bestDistance<=dp(32)){markerClickListener.onMarkerClick(best);performClick();return true;}
+        if(best!=null&&bestDistance<=dp(34)){markerClickListener.onMarkerClick(best);performClick();return true;}
         return performClick();
     }
 
