@@ -3,6 +3,7 @@ package com.eabusham.routervpn;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import java.io.File;
 import java.util.UUID;
 
 /** App-private runtime state used by the product Home dashboard. Never stores tunnel secrets. */
@@ -167,8 +168,11 @@ final class AndroidHomeStateStore {
         return p.getString("actual_exit_ip", "");
     }
 
-    static String localNodeId(FileNameSource source) { return source == null ? "" : clean(source.localNodeId()); }
-    interface FileNameSource { String localNodeId(); }
+    static String nodeIdFromBundleFile(File file) {
+        if (file == null) return "";
+        String name = file.getName();
+        return name != null && name.matches("[0-9a-f]{32}\\.json") ? name.substring(0, 32) : "";
+    }
 
     private static String clean(String value) { return value == null ? "" : value.replace('\n', ' ').replace('\r', ' ').trim(); }
     private AndroidHomeStateStore() {}
