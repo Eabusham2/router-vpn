@@ -551,9 +551,12 @@ private struct IOSUnifiedSettingsView: View {
                 }
                 Section("Performance") {
                     LabeledContent("Live path", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "Not connected")
-                    Button("Latency / node benchmarks…") { showingPerformance = true }
+                    if let speed = telemetry.lastSpeedResult {
+                        LabeledContent("Last real path speed", value: String(format: "↓ %.1f • ↑ %.1f Mbps", speed.downloadMbps, speed.uploadMbps))
+                    }
+                    Button("Latency / speed / node benchmarks…") { showingPerformance = true }
                     if let p = model.unifiedSelectedProfile, let mbps = p.effectiveMTUMbps, mbps > 0 {
-                        LabeledContent("Last proven MTU-path throughput", value: String(format: "%.1f Mbps", mbps))
+                        LabeledContent("Last Auto-MTU path throughput", value: String(format: "%.1f Mbps", mbps))
                     }
                 }
                 Section("Platform truth") {
@@ -586,16 +589,22 @@ private struct IOSUnifiedPerformanceView: View {
                 Section("Current path") {
                     LabeledContent("Live RTT", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "Not connected")
                     Button("Measure current tunnel RTT") { runLive() }.disabled(!model.connected || busy)
+                    Button(telemetry.isSpeedTesting ? "Testing real VPN path speed…" : "Run real current VPN path speed") { runSpeed() }
+                        .disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || busy || telemetry.isSpeedTesting)
+                    if let speed = telemetry.lastSpeedResult {
+                        Text(speed.detail).font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                    Text("Real speed transfers 8 MiB down and 8 MiB up against the selected Router VPN node's authenticated private router-agent through the active PacketTunnel route. It is not inferred from RTT.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Nodes") {
                     Button("50-sample selected node") { runSelected() }.disabled(model.unifiedSelectedProfile == nil || busy)
                     Button("Benchmark all linked nodes") { runAll() }.disabled(busy)
                 }
-                Section("Throughput / MTU") {
+                Section("Auto MTU") {
                     if let p = model.unifiedSelectedProfile, let mbps = p.effectiveMTUMbps, mbps > 0 {
-                        Text(String(format: "Last proven path/config throughput: %.1f Mbps • MTU %d • RTT %.1f ms", mbps, p.effectiveMTU ?? 0, p.effectiveMTUMedianRTTMs ?? 0))
-                    } else { Text("No proven iOS path-throughput result is stored yet.").foregroundStyle(.secondary) }
-                    Text("iOS does not label socket RTT as Mbps. A dedicated private upload/download benchmark must be present in the home-node runtime before per-hop/end speed is reported.").font(.caption).foregroundStyle(.secondary)
+                        Text(String(format: "Last Auto-MTU optimizer result: %.1f Mbps • MTU %d • RTT %.1f ms", mbps, p.effectiveMTU ?? 0, p.effectiveMTUMedianRTTMs ?? 0))
+                    } else { Text("No proven Auto-MTU optimizer result is stored for this path yet.").foregroundStyle(.secondary) }
+                    Text("Auto-MTU throughput and the real 8 MiB down/up speed test are separate measurements. Hop-specific Mbps is shown only when that hop's private benchmark is actually reachable; Router VPN never derives it from latency arithmetic.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Result") { Text(output).font(.caption.monospaced()).textSelection(.enabled) }
             }
@@ -604,8 +613,9 @@ private struct IOSUnifiedPerformanceView: View {
         }
     }
     private func runLive() { busy = true; Task { await telemetry.refreshLivePath(profile: model.unifiedSelectedProfile, connected: model.connected); output = telemetry.livePathMs.map { String(format: "Current private tunnel median RTT: %.1f ms", $0) } ?? "Current tunnel RTT failed."; busy = false } }
+    private func runSpeed() { busy = true; Task { do { output = try await telemetry.speedTest(profile: model.unifiedSelectedProfile, connected: model.connected, bytes: 8 << 20).detail } catch { output = error.localizedDescription }; busy = false } }
     private func runSelected() { guard let p = model.unifiedSelectedProfile else { return }; busy = true; Task { do { output = try await telemetry.measureOne(p, samples: 50).detail } catch { output = error.localizedDescription }; busy = false } }
     private func runAll() { busy = true; Task { let values = await telemetry.measureAll(model.allNodeProfiles, samples: 5); output = values.isEmpty ? telemetry.lastError : values.map(\.detail).joined(separator: "\n"); busy = false } }
 }
 
-private let iosUnifiedUXContract = "map-first swipe-up Connect Disconnect fastest-node live RTT quick kill switch forwarding shortcut Multihop Settings Performance Mode DNS SMART AUTO default AUTO all presets CUSTOM builder saved delete Router node Custom external color-coded hops real coordinates node ms animated packet path IPv6 On Auto MTU Require encrypted Require obfuscation schema-v4 profile-shared requirements"
+private let iosUnifiedUXContract = "map-first swipe-up Connect Disconnect fastest-node live RTT real path Mbps quick kill switch forwarding shortcut Multihop Settings Performance Mode DNS SMART AUTO default AUTO all presets CUSTOM builder saved delete Router node Custom external color-coded hops real coordinates node ms animated packet path IPv6 On Auto MTU Require encrypted Require obfuscation schema-v4 profile-shared requirements"
