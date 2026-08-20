@@ -148,7 +148,5 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         try { orchestrator.close(); } catch (Throwable ignored) {}
         try { wireGuard.close(); } catch (Throwable ignored) {}
         try { amneziaWG.close(); } catch (Throwable ignored) {}
-        try { singBox.close(); } catch (Throwable ignored) {}
-        try { xray.close(); } catch (Throwable ignored) {}
     }
 }

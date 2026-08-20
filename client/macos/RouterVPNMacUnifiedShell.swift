@@ -22,7 +22,7 @@ private enum UnifiedHopRole {
 }
 
 private final class RouterVPNCustomPresetBuilder: NSWindowController {
-    private weak var owner: ProductWindowController?
+    private weak var productOwner: ProductWindowController?
     private let api: ProductAPI
     private let nameField = NSTextField(string: "")
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -32,7 +32,7 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
     private var presets: [MacCustomPreset] = []
 
     init(owner: ProductWindowController, api: ProductAPI) {
-        self.owner = owner
+        self.productOwner = owner
         self.api = api
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 620), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         panel.title = "CUSTOM preset builder"
@@ -177,7 +177,7 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         presets.removeAll { $0.name == target.name }
         ProductWindowController.saveUnifiedCustomPresets(presets)
-        owner?.refreshUnifiedModeMenu(preferred: "custom:new")
+        productOwner?.refreshUnifiedModeMenu(preferred: "custom:new")
         reloadPresets()
     }
 
@@ -192,7 +192,7 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
         presets.append(preset)
         presets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         ProductWindowController.saveUnifiedCustomPresets(presets)
-        owner?.refreshUnifiedModeMenu(preferred: "custom:\(name)")
+        productOwner?.refreshUnifiedModeMenu(preferred: "custom:\(name)")
         reloadPresets(select: name)
         status.stringValue = "Saved \(name) • \(layers.joined(separator: " • "))"
         return preset
@@ -201,7 +201,7 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
     @objc private func savePreset() { _ = persist() }
     @objc private func saveAndConnect() {
         guard let preset = persist() else { return }
-        owner?.connectUnifiedCustomPreset(preset.name, layers: preset.layers)
+        productOwner?.connectUnifiedCustomPreset(preset.name, layers: preset.layers)
         close()
     }
     @objc private func closeBuilder() { close() }

@@ -140,7 +140,7 @@ for marker in (
     "Composite desktop MAX chains remain separate and are never faked on Android",
 ):
     assert marker in orch, f"AndroidModeOrchestrator missing truth marker: {marker}"
-assert "collect(bundle,false)" in orch, "ALL must inspect all actually native candidates, not just AUTO ordering"
+assert "collect(bundle,false,false)" in orch, "ALL must inspect all actually native candidates, not just AUTO ordering"
 assert "comparingInt(AndroidModeOrchestrator::protectionRank).reversed()" in orch, "ALL must try strongest native policy first"
 
 # Embedded libbox candidates must be full-device and self-contained, and staged

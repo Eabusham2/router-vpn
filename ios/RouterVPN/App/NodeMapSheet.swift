@@ -56,6 +56,7 @@ struct RouterVPNNodeMapSheet: View {
     }
 }
 
+@MainActor
 func routerVPNMapPoints(model: RouterVPNModel) -> [RouterVPNMapPoint] {
     let profiles = model.bundle?.routerProfiles ?? []
     let selectedID = model.bundle?.selectedRouterID ?? ""
