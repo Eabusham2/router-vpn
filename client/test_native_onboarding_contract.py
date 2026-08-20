@@ -29,8 +29,10 @@ win_telemetry = read("client/RouterVPN-Windows-Telemetry.ps1")
 win_product = read("client/RouterVPN-Windows-Product-v2.ps1")
 mac_onboarding = read("client/macos/RouterVPNProductOnboarding.swift")
 mac_build = read("client/macos/build-native-app.sh")
+mac_telemetry = read("client/macos/RouterVPNMacTelemetry.swift")
 linux_onboarding = read("client/linux/routervpn-product-onboarding-v6.inc")
 linux_build = read("client/linux/build-native-app.sh")
+linux_telemetry = read("client/linux/routervpn-telemetry-v9.inc")
 android_onboarding = read("android/app/src/main/java/com/eabusham/routervpn/AndroidProductOnboarding.java")
 android_product = read("android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java")
 ios_onboarding = read("ios/RouterVPN/App/ProductOnboardingView.swift")
@@ -90,6 +92,12 @@ require("macOS build", mac_build, (
     "RouterVPNProductOnboardingDoneV2",
 ))
 assert '"$ONBOARDING_SRC"' in mac_build
+require("macOS forwarding master", mac_telemetry, (
+    "unified-forward-master", "/api/forwarding/master", "Forward ON", "Forward OFF",
+    "toggleUnifiedForwardingMaster", "refreshUnifiedForwardingMaster",
+    "Forwarding master did not reach the requested state", "Real server forwarding master",
+))
+assert 'action: #selector(openUnifiedForwarding)' not in mac_telemetry, "macOS Forward side control regressed to forwarding-page navigation"
 
 # Linux retains the native GTK assistant but ships the complete v6 content and
 # a guarded build seam that persists/resumes its current page.
@@ -104,6 +112,13 @@ require("Linux build", linux_build, (
     "gtk_assistant_get_current_page", "Run Tutorial",
 ))
 assert 'gcc -O2 -Wall -Wextra -Werror' in linux_build
+require("Linux forwarding master", linux_telemetry, (
+    "/api/forwarding/master", "Forward ON", "Forward OFF", "linux_telemetry_forward_v9",
+    "linux_telemetry_read_forward_v9", "linux_telemetry_set_forward_label_v9",
+    "Forwarding master response did not verify the requested state",
+))
+assert "linux_unified_show_detail_v8(t->base,5)" not in linux_telemetry, "Linux Forward side control regressed to a detail-page shortcut"
+assert "Forward shortcut" not in linux_telemetry, "Linux telemetry still describes forwarding as a shortcut"
 
 # Android ProductActivity is the actual map-first dashboard. First launch and
 # Help both route to the persisted SharedPreferences onboarding flow.
