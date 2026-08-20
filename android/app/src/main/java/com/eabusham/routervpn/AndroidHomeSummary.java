@@ -32,7 +32,7 @@ final class AndroidHomeSummary {
     private static volatile String provedExit = "";
 
     private static final class RuntimeState {
-        String phase="off", logical="", runtime="", base="", fallback="", warning="", activeNodeId="", activeEntryId="", activeExitId="";
+        String sessionId="",phase="off", logical="", runtime="", base="", fallback="", warning="", activeNodeId="", activeEntryId="", activeExitId="";
         String activeExternalId="",activeExternalName="",activeExternalProtocol="",expectedExternalIp="";
         long pathGeneration;
         boolean connected;
@@ -116,7 +116,7 @@ final class AndroidHomeSummary {
                 if (!AndroidPathProbe.prove(proof.bundle, 8000)) throw new IllegalStateException(proof.multihop ? "Active multihop exit-node private path proof failed before public-exit test." : "Active session node private path proof failed before public-exit test.");
                 String ip = fetchIP(proof.network);
                 FileProof after = proofInputs(activity, nodeStore);
-                if (!proof.signature.equals(after.signature)) throw new IllegalStateException("Android VPN network/runtime or underlying path generation changed while proving public exit; result discarded.");
+                if (!proof.signature.equals(after.signature)) throw new IllegalStateException("Android VPN network/session/runtime or underlying path generation changed while proving public exit; result discarded.");
                 if (!AndroidPathProbe.prove(after.bundle, 8000)) throw new IllegalStateException(after.multihop ? "Active multihop exit-node private path proof failed after public-exit test." : "Active session node private path proof failed after public-exit test.");
                 provedSignature = after.signature; provedExit = ip;
                 AndroidHomeStateStore.saveActualExit(activity, AndroidHomeStateStore.snapshot(activity).sessionId, ip);
@@ -139,6 +139,7 @@ final class AndroidHomeSummary {
         AndroidHomeStateStore.warning(activity, "Emergency Disconnect requested; verifying every Router VPN transport stops.");
         AndroidRuntimeRegistry runtime=AndroidRuntimeRegistry.get(activity);
         try{runtime.multihop.disconnect();}catch(Throwable ignored){}
+        try{runtime.standardExit.disconnect();}catch(Throwable ignored){}
         try{runtime.singBox.stop();}catch(Throwable ignored){}
         try{runtime.xray.stop();}catch(Throwable ignored){}
         try { activity.startService(new Intent(activity, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_STOP)); } catch (Throwable ignored) {}
@@ -175,14 +176,14 @@ final class AndroidHomeSummary {
 
     private static RuntimeState runtimeState(Context context){
         RuntimeState out=new RuntimeState();AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
-        out.activeNodeId=home.activeNodeId;out.activeEntryId=home.activeEntryId;out.activeExitId=home.activeExitId;out.activeExternalId=home.activeExternalId;out.activeExternalName=home.activeExternalName;out.activeExternalProtocol=home.activeExternalProtocol;out.expectedExternalIp=home.expectedExternalIp;out.pathGeneration=home.pathGeneration;
+        out.sessionId=home.sessionId;out.activeNodeId=home.activeNodeId;out.activeEntryId=home.activeEntryId;out.activeExitId=home.activeExitId;out.activeExternalId=home.activeExternalId;out.activeExternalName=home.activeExternalName;out.activeExternalProtocol=home.activeExternalProtocol;out.expectedExternalIp=home.expectedExternalIp;out.pathGeneration=home.pathGeneration;
         if(home.connected){out.connected=true;out.phase=home.phase;out.logical=home.logicalMode;out.runtime=home.runtimeMode;out.base=home.actualBase;out.fallback=home.fallback;out.warning=home.warning;return out;}
         SharedPreferences p=context.getSharedPreferences("router-vpn",Context.MODE_PRIVATE);String layered=p.getString(NativeSingBoxController.STATE_KEY,"DOWN");
         if("UP".equals(layered)){out.connected=true;out.phase="connected";out.runtime=p.getString(NativeSingBoxController.MODE_KEY,"");out.logical=out.runtime.startsWith("standard-")?"external-untracked":out.runtime;out.base="libbox";out.warning=p.getString(NativeSingBoxController.ERROR_KEY,"");return out;}
         String xray=p.getString(NativeXrayController.STATE_KEY,"DOWN");if("UP".equals(xray)){out.connected=true;out.phase="connected";out.runtime=p.getString(NativeXrayController.MODE_KEY,"");out.logical=out.runtime;out.base="xray";out.warning=p.getString(NativeXrayController.ERROR_KEY,"");return out;}out.phase=home.phase;out.warning=home.warning;return out;
     }
 
-    private static String signature(Network network,RuntimeState runtime){return network==null?"":network.getNetworkHandle()+"|"+runtime.logical+"|"+runtime.runtime+"|"+runtime.base+"|"+runtime.activeNodeId+"|"+runtime.activeEntryId+"|"+runtime.activeExitId+"|"+runtime.activeExternalId+"|"+runtime.expectedExternalIp+"|path="+runtime.pathGeneration;}
+    private static String signature(Network network,RuntimeState runtime){return network==null?"":network.getNetworkHandle()+"|session="+runtime.sessionId+"|"+runtime.logical+"|"+runtime.runtime+"|"+runtime.base+"|"+runtime.activeNodeId+"|"+runtime.activeEntryId+"|"+runtime.activeExitId+"|"+runtime.activeExternalId+"|"+runtime.expectedExternalIp+"|path="+runtime.pathGeneration;}
     private static String fetchIP(Network network)throws Exception{for(String raw:new String[]{"https://api64.ipify.org","https://api.ipify.org"}){HttpURLConnection c=null;try{c=(HttpURLConnection)network.openConnection(new URL(raw));c.setConnectTimeout(6000);c.setReadTimeout(6000);c.setUseCaches(false);if(c.getResponseCode()/100!=2)continue;byte[]data=readLimited(c.getInputStream(),128);String value=new String(data,StandardCharsets.UTF_8).trim();if(value.matches("[0-9A-Fa-f:.]+")){InetAddress.getByName(value);return value;}}catch(Throwable ignored){}finally{if(c!=null)c.disconnect();}}throw new IllegalStateException("Could not determine public VPN exit through the active Router VPN network.");}
     private static JSONObject proofProfile(AndroidNodeStore store,RuntimeState runtime)throws Exception{String id;if(runtime.connected){id="multihop".equals(runtime.logical)?runtime.activeExitId:runtime.activeNodeId;}else{id=store.activeId();}if(id==null||id.isEmpty())throw new IllegalStateException(runtime.connected?"Active session node identity is unavailable.":"Pair/import and select a Router VPN node first.");return AndroidUnifiedNodeCatalog.selectedProfile(store.file(id));}
     private static String nodeName(AndroidNodeStore store,String id){try{JSONObject p=AndroidUnifiedNodeCatalog.selectedProfile(store.file(id));String name=p.optString("name",id).trim();return name.isEmpty()?id:name;}catch(Throwable ignored){return id==null||id.isEmpty()?"unknown":id;}}
@@ -190,7 +191,7 @@ final class AndroidHomeSummary {
     private static String killSwitch(JSONObject p){String value=p.optString("kill_switch_policy","").trim();if(!value.isEmpty())return value;return p.optBoolean("kill_switch",false)?"strict":"off";}
     private static String inferredBase(String runtime){if(runtime==null)return"";if(runtime.startsWith("awg"))return"awg";if("wg".equals(runtime)||runtime.contains("-wg"))return"wg";if(!runtime.isEmpty())return"embedded";return"";}
     private static String empty(String value){return value==null||value.isEmpty()?"—":value;}
-    private static byte[] readLimited(InputStream input,int max)throws Exception{try(InputStream in=input;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[128];int n,total=0;while((n=in.read(b))!=-1){total+=n;if(total>max)throw new IllegalStateException("Public-exit response exceeded safety limit.");out.write(b,0,n);}return out.toByteArray();}}
+    private static byte[] readLimited(InputStream input,int max)throws Exception{try(InputStream in=input;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[128];int n,total=0;while((n=input.read(b))!=-1){total+=n;if(total>max)throw new IllegalStateException("Public-exit response exceeded safety limit.");out.write(b,0,n);}return out.toByteArray();}}
     private static String safe(Throwable e){String v=e==null?"":e.getMessage();return v==null||v.trim().isEmpty()?"Router VPN error":v.replace('\n',' ').replace('\r',' ').trim();}
     private AndroidHomeSummary(){}
 }
