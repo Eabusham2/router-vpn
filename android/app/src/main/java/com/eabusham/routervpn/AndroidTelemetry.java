@@ -60,6 +60,34 @@ final class AndroidTelemetry {
 
     void measureAll(int samples,Callback<List<Result>> callback){new Thread(()->{try{List<Result>out=new ArrayList<>();for(AndroidNodeStore.Node n:store.list()){try{Result r=probeNode(n,clamp(samples,3,10));cache(r);out.add(r);}catch(Throwable ignored){}}if(out.isEmpty())throw new IllegalStateException("No Router VPN node returned a live latency result.");Collections.sort(out,Comparator.comparingDouble(r->r.medianMs));callback.finished(out,null);}catch(Throwable e){callback.finished(null,e);}},"routervpn-fastest-rtt").start();}
 
+    /**
+     * Measures candidate public endpoints through the device's current routing
+     * graph without touching the normal direct-node RTT cache. Callers use this
+     * only while a temporary/proven entry VPN is actually UP, so X→Y labels are
+     * observations through X rather than arithmetic based on direct RTTs.
+     */
+    void measureNodesViaCurrentPath(String expectedEntryId,List<AndroidNodeStore.Node> nodes,int samples,Callback<List<Result>> callback){
+        new Thread(()->{
+            try{
+                AndroidHomeStateStore.Snapshot before=AndroidHomeStateStore.snapshot(context);
+                if(!before.connected||!"raw-tunnel".equals(before.logicalMode)||!"wg".equals(before.actualBase)||expectedEntryId==null||!expectedEntryId.equals(before.activeNodeId))throw new IllegalStateException("A proven temporary WireGuard entry tunnel is not the active routing path; refusing to label via-entry latency.");
+                String session=before.sessionId;long generation=before.pathGeneration;
+                List<Result>out=new ArrayList<>();
+                for(AndroidNodeStore.Node node:nodes){
+                    if(node==null||node.id.equals(expectedEntryId))continue;
+                    AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(context);
+                    if(!now.connected||!session.equals(now.sessionId)||now.pathGeneration!=generation||!expectedEntryId.equals(now.activeNodeId))throw new IllegalStateException("Temporary entry VPN changed while measuring candidate latency; all results discarded.");
+                    try{out.add(probeNode(node,clamp(samples,3,10)));}catch(Throwable ignored){}
+                }
+                AndroidHomeStateStore.Snapshot after=AndroidHomeStateStore.snapshot(context);
+                if(!after.connected||!session.equals(after.sessionId)||after.pathGeneration!=generation||!expectedEntryId.equals(after.activeNodeId))throw new IllegalStateException("Temporary entry VPN changed before candidate latency completed; all results discarded.");
+                if(out.isEmpty())throw new IllegalStateException("No candidate node returned a live RTT through the selected entry tunnel.");
+                Collections.sort(out,Comparator.comparingDouble(r->r.medianMs));
+                callback.finished(out,null);
+            }catch(Throwable e){callback.finished(null,e);}
+        },"routervpn-via-entry-rtt").start();
+    }
+
     void currentPath(int samples,Callback<PathResult> callback){new Thread(()->{try{callback.finished(probePrivatePath(clamp(samples,2,10)),null);}catch(Throwable e){callback.finished(null,e);}},"routervpn-private-rtt").start();}
 
     void speedTest(int bytes,Callback<SpeedResult> callback){new Thread(()->{try{callback.finished(probeSpeed(activeBundle(),bytes<=0?SPEED_DEFAULT_BYTES:bytes),null);}catch(Throwable e){callback.finished(null,e);}},"routervpn-private-speed").start();}
