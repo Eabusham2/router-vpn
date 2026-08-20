@@ -11,6 +11,7 @@ final class AndroidHomeStateStore {
 
     static final class Snapshot {
         final String sessionId, phase, logicalMode, runtimeMode, actualBase, fallback, warning;
+        final String activeEntryId, activeExitId;
         final boolean connected;
         Snapshot(SharedPreferences p) {
             sessionId = p.getString("session_id", "");
@@ -20,6 +21,8 @@ final class AndroidHomeStateStore {
             actualBase = p.getString("actual_base", "");
             fallback = p.getString("fallback", "");
             warning = p.getString("warning", "");
+            activeEntryId = p.getString("active_entry_id", "");
+            activeExitId = p.getString("active_exit_id", "");
             connected = p.getBoolean("connected", false);
         }
     }
@@ -41,6 +44,27 @@ final class AndroidHomeStateStore {
                 .putString("fallback", "")
                 .putString("warning", "")
                 .putBoolean("connected", false)
+                .remove("active_entry_id")
+                .remove("active_exit_id")
+                .remove("actual_exit_ip")
+                .remove("actual_exit_session")
+                .apply();
+        return session;
+    }
+
+    static String beginMultihop(Context context, String entryId, String exitId, String runtimeMode) {
+        String session = UUID.randomUUID().toString();
+        prefs(context).edit()
+                .putString("session_id", session)
+                .putString("phase", "connecting")
+                .putString("logical_mode", "multihop")
+                .putString("runtime_mode", clean(runtimeMode))
+                .putString("actual_base", "wg")
+                .putString("fallback", "")
+                .putString("warning", "")
+                .putString("active_entry_id", clean(entryId))
+                .putString("active_exit_id", clean(exitId))
+                .putBoolean("connected", false)
                 .remove("actual_exit_ip")
                 .remove("actual_exit_session")
                 .apply();
@@ -60,6 +84,26 @@ final class AndroidHomeStateStore {
                 .putString("fallback", clean(fallback))
                 .putString("warning", "")
                 .putBoolean("connected", true)
+                .remove("active_entry_id")
+                .remove("active_exit_id")
+                .apply();
+    }
+
+    static void connectedMultihop(Context context, String entryId, String exitId, String runtimeMode) {
+        SharedPreferences p = prefs(context);
+        String session = p.getString("session_id", "");
+        if (session == null || session.isEmpty()) session = UUID.randomUUID().toString();
+        p.edit()
+                .putString("session_id", session)
+                .putString("phase", "connected")
+                .putString("logical_mode", "multihop")
+                .putString("runtime_mode", clean(runtimeMode))
+                .putString("actual_base", "wg")
+                .putString("fallback", "")
+                .putString("warning", "")
+                .putString("active_entry_id", clean(entryId))
+                .putString("active_exit_id", clean(exitId))
+                .putBoolean("connected", true)
                 .apply();
     }
 
@@ -72,6 +116,8 @@ final class AndroidHomeStateStore {
                 .putString("phase", "failed")
                 .putString("warning", clean(warning))
                 .putBoolean("connected", false)
+                .remove("active_entry_id")
+                .remove("active_exit_id")
                 .remove("actual_exit_ip")
                 .remove("actual_exit_session")
                 .apply();
@@ -87,6 +133,8 @@ final class AndroidHomeStateStore {
                 .putString("fallback", "")
                 .putString("warning", "")
                 .putBoolean("connected", false)
+                .remove("active_entry_id")
+                .remove("active_exit_id")
                 .remove("actual_exit_ip")
                 .remove("actual_exit_session")
                 .apply();
