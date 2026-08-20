@@ -11,15 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Locale;
 
-/**
- * Builds a direct non-Router-VPN external exit on Android.
- *
- * The server address is already validated as a literal IP by
- * AndroidStandardExitStore, so setup performs no pre-tunnel DNS. Direct custom
- * exits always request strict Android lockdown: LayeredVpnService must prove
- * Always-on VPN + "Block connections without VPN" before it starts this graph.
- * DNS is encrypted Rescue DNS and is forced through the custom exit.
- */
+/** Builds a direct non-Router-VPN external exit on Android. */
 final class AndroidDirectStandardExitController {
     private static final int MAX_CONFIG = 4 * 1024 * 1024;
     private static final int MAX_SESSION_DIRS = 32;
@@ -67,8 +59,6 @@ final class AndroidDirectStandardExitController {
         File session = new File(root, id);
         if (!session.mkdir()) throw new IllegalStateException("Cannot create direct custom-exit session.");
         try {
-            // Direct third-party exits have no Router VPN profile carrying a
-            // policy bit, so require the strongest Android system policy.
             writeFile(new File(session, AndroidKillSwitchPolicy.SESSION_MARKER), new byte[]{'1','\n'});
             writeFile(new File(session, "sing-box.json"), raw);
             return new NativeSingBoxController.SessionInfo(id, "standard-direct-" + exit.protocol);
@@ -93,6 +83,10 @@ final class AndroidDirectStandardExitController {
         if ("socks5".equals(e.protocol)) {
             out.put("type", "socks").put("version", "5");
             if (!e.username.isEmpty()) out.put("username", e.username).put("password", e.password);
+        } else if ("http".equals(e.protocol) || "https".equals(e.protocol)) {
+            out.put("type", "http");
+            if (!e.username.isEmpty()) out.put("username", e.username).put("password", e.password);
+            if ("https".equals(e.protocol)) out.put("tls", new JSONObject().put("enabled", true).put("server_name", e.tlsServerName));
         } else if ("shadowsocks".equals(e.protocol)) {
             out.put("type", "shadowsocks").put("method", e.method).put("password", e.secret);
         } else if ("hysteria2".equals(e.protocol)) {
