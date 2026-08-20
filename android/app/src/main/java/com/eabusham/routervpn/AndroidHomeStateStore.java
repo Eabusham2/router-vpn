@@ -13,6 +13,7 @@ final class AndroidHomeStateStore {
     static final class Snapshot {
         final String sessionId, phase, logicalMode, runtimeMode, actualBase, fallback, warning;
         final String activeNodeId, activeEntryId, activeExitId;
+        final String activeExternalId, activeExternalName, activeExternalProtocol, expectedExternalIp;
         final boolean connected;
         Snapshot(SharedPreferences p) {
             sessionId = p.getString("session_id", "");
@@ -25,6 +26,10 @@ final class AndroidHomeStateStore {
             activeNodeId = p.getString("active_node_id", "");
             activeEntryId = p.getString("active_entry_id", "");
             activeExitId = p.getString("active_exit_id", "");
+            activeExternalId = p.getString("active_external_id", "");
+            activeExternalName = p.getString("active_external_name", "");
+            activeExternalProtocol = p.getString("active_external_protocol", "");
+            expectedExternalIp = p.getString("expected_external_ip", "");
             connected = p.getBoolean("connected", false);
         }
     }
@@ -41,41 +46,30 @@ final class AndroidHomeStateStore {
 
     static String begin(Context context, String logicalMode, String runtimeMode, String base, String activeNodeId) {
         String session = UUID.randomUUID().toString();
-        prefs(context).edit()
-                .putString("session_id", session)
-                .putString("phase", "connecting")
-                .putString("logical_mode", clean(logicalMode))
-                .putString("runtime_mode", clean(runtimeMode))
-                .putString("actual_base", clean(base))
-                .putString("active_node_id", clean(activeNodeId))
-                .putString("fallback", "")
-                .putString("warning", "")
-                .putBoolean("connected", false)
-                .remove("active_entry_id")
-                .remove("active_exit_id")
-                .remove("actual_exit_ip")
-                .remove("actual_exit_session")
-                .apply();
+        SharedPreferences.Editor e = baseSession(context, session, logicalMode, runtimeMode, base)
+                .putString("active_node_id", clean(activeNodeId));
+        clearGraphAndExternal(e).apply();
         return session;
     }
 
     static String beginMultihop(Context context, String entryId, String exitId, String runtimeMode) {
         String session = UUID.randomUUID().toString();
-        prefs(context).edit()
-                .putString("session_id", session)
-                .putString("phase", "connecting")
-                .putString("logical_mode", "multihop")
-                .putString("runtime_mode", clean(runtimeMode))
-                .putString("actual_base", "wg")
+        SharedPreferences.Editor e = baseSession(context, session, "multihop", runtimeMode, "wg")
                 .putString("active_node_id", clean(exitId))
-                .putString("fallback", "")
-                .putString("warning", "")
                 .putString("active_entry_id", clean(entryId))
-                .putString("active_exit_id", clean(exitId))
-                .putBoolean("connected", false)
-                .remove("actual_exit_ip")
-                .remove("actual_exit_session")
-                .apply();
+                .putString("active_exit_id", clean(exitId));
+        clearExternal(e).apply();
+        return session;
+    }
+
+    static String beginExternal(Context context, String externalId, String name, String protocol, String expectedIp, String base) {
+        String session = UUID.randomUUID().toString();
+        SharedPreferences.Editor e = baseSession(context, session, "external", protocol, base)
+                .putString("active_external_id", clean(externalId))
+                .putString("active_external_name", clean(name))
+                .putString("active_external_protocol", clean(protocol))
+                .putString("expected_external_ip", clean(expectedIp));
+        clearRouterGraph(e).apply();
         return session;
     }
 
@@ -85,9 +79,8 @@ final class AndroidHomeStateStore {
 
     static void connected(Context context, String logicalMode, String runtimeMode, String base, String fallback, String activeNodeId) {
         SharedPreferences p = prefs(context);
-        String session = p.getString("session_id", "");
-        if (session == null || session.isEmpty()) session = UUID.randomUUID().toString();
-        p.edit()
+        String session = existingOrNewSession(p);
+        SharedPreferences.Editor e = p.edit()
                 .putString("session_id", session)
                 .putString("phase", "connected")
                 .putString("logical_mode", clean(logicalMode))
@@ -96,17 +89,14 @@ final class AndroidHomeStateStore {
                 .putString("active_node_id", clean(activeNodeId))
                 .putString("fallback", clean(fallback))
                 .putString("warning", "")
-                .putBoolean("connected", true)
-                .remove("active_entry_id")
-                .remove("active_exit_id")
-                .apply();
+                .putBoolean("connected", true);
+        clearGraphAndExternal(e).putString("active_node_id", clean(activeNodeId)).apply();
     }
 
     static void connectedMultihop(Context context, String entryId, String exitId, String runtimeMode) {
         SharedPreferences p = prefs(context);
-        String session = p.getString("session_id", "");
-        if (session == null || session.isEmpty()) session = UUID.randomUUID().toString();
-        p.edit()
+        String session = existingOrNewSession(p);
+        SharedPreferences.Editor e = p.edit()
                 .putString("session_id", session)
                 .putString("phase", "connected")
                 .putString("logical_mode", "multihop")
@@ -117,7 +107,29 @@ final class AndroidHomeStateStore {
                 .putString("warning", "")
                 .putString("active_entry_id", clean(entryId))
                 .putString("active_exit_id", clean(exitId))
-                .putBoolean("connected", true)
+                .putBoolean("connected", true);
+        clearExternal(e).apply();
+    }
+
+    static void connectedExternal(Context context, String externalId, String name, String protocol, String expectedIp, String base, String observedIp) {
+        SharedPreferences p = prefs(context);
+        String session = existingOrNewSession(p);
+        SharedPreferences.Editor e = p.edit()
+                .putString("session_id", session)
+                .putString("phase", "connected")
+                .putString("logical_mode", "external")
+                .putString("runtime_mode", clean(protocol))
+                .putString("actual_base", clean(base))
+                .putString("fallback", "")
+                .putString("warning", "")
+                .putString("active_external_id", clean(externalId))
+                .putString("active_external_name", clean(name))
+                .putString("active_external_protocol", clean(protocol))
+                .putString("expected_external_ip", clean(expectedIp))
+                .putBoolean("connected", true);
+        clearRouterGraph(e)
+                .putString("actual_exit_session", session)
+                .putString("actual_exit_ip", clean(observedIp))
                 .apply();
     }
 
@@ -126,20 +138,15 @@ final class AndroidHomeStateStore {
     }
 
     static void failed(Context context, String warning) {
-        prefs(context).edit()
+        SharedPreferences.Editor e = prefs(context).edit()
                 .putString("phase", "failed")
                 .putString("warning", clean(warning))
-                .putBoolean("connected", false)
-                .remove("active_node_id")
-                .remove("active_entry_id")
-                .remove("active_exit_id")
-                .remove("actual_exit_ip")
-                .remove("actual_exit_session")
-                .apply();
+                .putBoolean("connected", false);
+        clearAllIdentity(e).apply();
     }
 
     static void disconnected(Context context) {
-        prefs(context).edit()
+        SharedPreferences.Editor e = prefs(context).edit()
                 .putString("session_id", "")
                 .putString("phase", "off")
                 .putString("logical_mode", "")
@@ -147,13 +154,8 @@ final class AndroidHomeStateStore {
                 .putString("actual_base", "")
                 .putString("fallback", "")
                 .putString("warning", "")
-                .putBoolean("connected", false)
-                .remove("active_node_id")
-                .remove("active_entry_id")
-                .remove("active_exit_id")
-                .remove("actual_exit_ip")
-                .remove("actual_exit_session")
-                .apply();
+                .putBoolean("connected", false);
+        clearAllIdentity(e).apply();
     }
 
     static void saveActualExit(Context context, String sessionId, String ip) {
@@ -172,6 +174,36 @@ final class AndroidHomeStateStore {
         if (file == null) return "";
         String name = file.getName();
         return name != null && name.matches("[0-9a-f]{32}\\.json") ? name.substring(0, 32) : "";
+    }
+
+    private static SharedPreferences.Editor baseSession(Context context, String session, String logical, String runtime, String base) {
+        return prefs(context).edit()
+                .putString("session_id", session)
+                .putString("phase", "connecting")
+                .putString("logical_mode", clean(logical))
+                .putString("runtime_mode", clean(runtime))
+                .putString("actual_base", clean(base))
+                .putString("fallback", "")
+                .putString("warning", "")
+                .putBoolean("connected", false)
+                .remove("actual_exit_ip")
+                .remove("actual_exit_session");
+    }
+
+    private static String existingOrNewSession(SharedPreferences p) {
+        String session = p.getString("session_id", "");
+        return session == null || session.isEmpty() ? UUID.randomUUID().toString() : session;
+    }
+
+    private static SharedPreferences.Editor clearRouterGraph(SharedPreferences.Editor e) {
+        return e.remove("active_node_id").remove("active_entry_id").remove("active_exit_id");
+    }
+    private static SharedPreferences.Editor clearExternal(SharedPreferences.Editor e) {
+        return e.remove("active_external_id").remove("active_external_name").remove("active_external_protocol").remove("expected_external_ip");
+    }
+    private static SharedPreferences.Editor clearGraphAndExternal(SharedPreferences.Editor e) { return clearExternal(clearRouterGraph(e)); }
+    private static SharedPreferences.Editor clearAllIdentity(SharedPreferences.Editor e) {
+        return clearGraphAndExternal(e).remove("actual_exit_ip").remove("actual_exit_session");
     }
 
     private static String clean(String value) { return value == null ? "" : value.replace('\n', ' ').replace('\r', ' ').trim(); }
