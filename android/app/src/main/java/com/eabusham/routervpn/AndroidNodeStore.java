@@ -47,6 +47,7 @@ final class AndroidNodeStore {
     }
 
     synchronized Node importBundle(byte[] bytes) throws Exception {
+        requireMutable("importing or replacing a Router VPN node");
         if (bytes == null || bytes.length == 0 || bytes.length > MAX_BUNDLE) throw new IllegalArgumentException("Router bundle size is invalid.");
         JSONObject bundle = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
         validateBundle(bundle);
@@ -80,6 +81,11 @@ final class AndroidNodeStore {
 
     synchronized void select(String id) throws Exception {
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
+        AndroidHomeStateStore.Snapshot runtime = AndroidHomeStateStore.snapshot(context);
+        if (runtime.connected) {
+            String live = "multihop".equals(runtime.logicalMode) ? runtime.activeExitId : runtime.activeNodeId;
+            if (live == null || live.isEmpty() || !id.equals(live)) throw new IllegalStateException("Disconnect Router VPN before selecting a different node; the live session identity is frozen until disconnect.");
+        }
         File source = nodeFile(id);
         if (!source.isFile()) throw new IllegalStateException("Selected node is not stored.");
         byte[] bytes = readLimited(source, MAX_BUNDLE);
@@ -91,6 +97,7 @@ final class AndroidNodeStore {
     }
 
     synchronized void remove(String id) throws Exception {
+        requireMutable("deleting a Router VPN node");
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
         File file = nodeFile(id);
         if (file.exists() && !file.delete()) throw new IllegalStateException("Could not remove stored node.");
@@ -105,6 +112,13 @@ final class AndroidNodeStore {
         File file = nodeFile(id);
         if (!file.isFile()) throw new IllegalStateException("Stored node is missing.");
         return file;
+    }
+
+    private void requireMutable(String action) {
+        AndroidHomeStateStore.Snapshot runtime = AndroidHomeStateStore.snapshot(context);
+        if (runtime.connected) throw new IllegalStateException("Disconnect Router VPN before " + action + "; live node identity and proof must remain immutable for the session.");
+        AndroidRuntimeRegistry engines = AndroidRuntimeRegistry.get(context);
+        if (engines.orchestrator.isRunning() || engines.multihop.isActiveOrTransitioning()) throw new IllegalStateException("Wait for the current Router VPN transition to finish or disconnect before " + action + ".");
     }
 
     private void ensureRoot() throws Exception {
@@ -124,12 +138,7 @@ final class AndroidNodeStore {
         return new Node(id, name, endpoint, file);
     }
 
-    /**
-     * Stable public identity shared with router-agent. New bundles carry it
-     * explicitly; legacy bundles derive the same value from the WireGuard server
-     * public key, so endpoint/DDNS changes update one stored node instead of
-     * creating duplicates. If both forms exist they must agree.
-     */
+    /** Stable public identity shared with router-agent. */
     static String stableNodeIdentity(JSONObject bundle) throws Exception {
         JSONObject profile = selectedProfile(bundle);
         String top = bundle.optString("nodeProofId", "").trim();
