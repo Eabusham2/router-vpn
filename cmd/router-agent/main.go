@@ -80,6 +80,7 @@ func main() {
 	h.HandleFunc("/api/forward", s.forward)
 	h.HandleFunc("/api/forward/clear", s.clear)
 	h.HandleFunc("/api/dns/benchmark", s.dnsBenchmark)
+	registerBenchmarkRoutes(h, s)
 	log.Printf("router agent listening on %s", c.Listen)
 	log.Fatal(http.ListenAndServe(c.Listen, h))
 }
