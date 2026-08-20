@@ -43,7 +43,7 @@ extension ProductWindowController {
         fast.controlSize = .small
         fast.target = self
         fast.action = #selector(unifiedFastConnectChanged(_:))
-        fast.toolTip = "Connect the fastest measured Router VPN node, or choose a node directly."
+        fast.toolTip = "Test and connect the fastest Router VPN node, or choose a node directly."
         telemetryFastPopup = fast
         connectRow.insertArrangedSubview(fast, at: min(1, connectRow.arrangedSubviews.count))
 
@@ -76,7 +76,7 @@ extension ProductWindowController {
             let performance = NSButton(title: "Performance", target: self, action: #selector(openUnifiedPerformance))
             performance.bezelStyle = .rounded
             performance.controlSize = .small
-            performance.toolTip = "Live latency, durable node benchmark and path throughput/MTU test."
+            performance.toolTip = "Live latency, durable node benchmark, real path Mbps and Auto-MTU retest."
             performance.translatesAutoresizingMaskIntoConstraints = false
             sheet.addSubview(performance)
             NSLayoutConstraint.activate([
@@ -175,38 +175,63 @@ extension ProductWindowController {
     }
 
     @objc private func openUnifiedPerformance() {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 430), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         panel.title = "Router VPN Performance"
-        panel.minSize = NSSize(width: 520, height: 360)
+        panel.minSize = NSSize(width: 560, height: 360)
         let controller = NSWindowController(window: panel)
         objc_setAssociatedObject(self, &telemetryPerformanceControllerKey, controller, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         let stack = NSStackView(); stack.orientation = .vertical; stack.spacing = 10; stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
         let title = NSTextField(labelWithString: "Latency & path performance")
         title.font = .systemFont(ofSize: 22, weight: .bold); stack.addArrangedSubview(title)
-        let note = NSTextField(wrappingLabelWithString: "Live RTT uses a lightweight private-path probe. The durable node benchmark remains 50 samples. Path throughput is measured by MTU Retest's bounded private-node loss/RTT/throughput comparison; it can update Auto MTU, so it is labeled explicitly rather than pretending to be a passive speed test.")
+        let note = NSTextField(wrappingLabelWithString: "Live RTT measures the active private tunnel. The 50-sample test is the durable node benchmark. Real path speed transfers authenticated bounded data to/from the active node private router-agent and reports actual download/upload Mbps. Auto MTU retest is separate because it may change the path MTU.")
         note.textColor = .secondaryLabelColor; stack.addArrangedSubview(note)
-        let result = NSTextField(wrappingLabelWithString: "Select a test."); result.font = .monospacedSystemFont(ofSize: 12, weight: .regular); result.isSelectable = true; stack.addArrangedSubview(result)
+        let result = NSTextField(wrappingLabelWithString: "Choose a real measurement."); result.font = .monospacedSystemFont(ofSize: 12, weight: .regular); result.isSelectable = true; result.identifier = NSUserInterfaceItemIdentifier("telemetry-performance-result"); stack.addArrangedSubview(result)
         let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8
-        let live = NSButton(title: "Live path RTT", target: nil, action: nil); live.bezelStyle = .rounded
-        live.action = #selector(telemetryLivePerformance(_:)); live.target = self; live.identifier = NSUserInterfaceItemIdentifier("telemetry-live-performance")
-        let durable = NSButton(title: "50-sample selected node", target: self, action: #selector(latencySelected)); durable.bezelStyle = .rounded
-        let throughput = NSButton(title: "Throughput + Auto MTU", target: self, action: #selector(retestMTU)); throughput.bezelStyle = .rounded
-        row.addArrangedSubview(live); row.addArrangedSubview(durable); row.addArrangedSubview(throughput); stack.addArrangedSubview(row)
-        result.identifier = NSUserInterfaceItemIdentifier("telemetry-performance-result")
+        let live = NSButton(title: "Live path RTT", target: self, action: #selector(telemetryLivePerformance(_:))); live.bezelStyle = .rounded
+        let durable = NSButton(title: "50-sample selected node", target: self, action: #selector(telemetryDurablePerformance(_:))); durable.bezelStyle = .rounded
+        let speed = NSButton(title: "Real path speed", target: self, action: #selector(telemetrySpeedPerformance(_:))); speed.bezelStyle = .rounded
+        let mtu = NSButton(title: "Throughput + Auto MTU", target: self, action: #selector(telemetryMtuPerformance(_:))); mtu.bezelStyle = .rounded
+        row.addArrangedSubview(live); row.addArrangedSubview(durable); row.addArrangedSubview(speed); row.addArrangedSubview(mtu); stack.addArrangedSubview(row)
         panel.contentView = stack; panel.center(); controller.showWindow(nil); panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
 
-    @objc private func telemetryLivePerformance(_ sender: NSButton) {
-        guard let panel = sender.window, let result = telemetryWalk(panel.contentView, id: "telemetry-performance-result") as? NSTextField else { return }
-        result.stringValue = "Measuring current tunnel RTT…"
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self else { return }
+    private func telemetryResult(_ sender: NSButton) -> NSTextField? {
+        telemetryWalk(sender.window?.contentView, id: "telemetry-performance-result") as? NSTextField
+    }
+
+    private func telemetryAsync(_ sender: NSButton, label: String, work: @escaping () throws -> Data) {
+        guard let result = telemetryResult(sender) else { return }
+        result.stringValue = label
+        sender.isEnabled = false
+        DispatchQueue.global(qos: .userInitiated).async { [weak sender] in
             do {
-                let data = try self.api.request("/api/connection/live-latency", method: "POST", body: ["samples": 5], timeout: 10)
+                let data = try work()
                 let text = String(data: data, encoding: .utf8) ?? "No result"
-                DispatchQueue.main.async { result.stringValue = text }
-            } catch { DispatchQueue.main.async { result.stringValue = error.localizedDescription } }
+                DispatchQueue.main.async { result.stringValue = text; sender?.isEnabled = true }
+            } catch {
+                DispatchQueue.main.async { result.stringValue = error.localizedDescription; sender?.isEnabled = true }
+            }
         }
+    }
+
+    @objc private func telemetryLivePerformance(_ sender: NSButton) {
+        telemetryAsync(sender, label: "Measuring current tunnel RTT…") { try self.api.request("/api/connection/live-latency", method: "POST", body: ["samples": 5], timeout: 12) }
+    }
+
+    @objc private func telemetryDurablePerformance(_ sender: NSButton) {
+        telemetryAsync(sender, label: "Running 50-sample selected-node benchmark…") {
+            let root = try self.api.json("/api/profiles", timeout: 5) as? [String: Any] ?? [:]
+            guard let id = root["selected_id"] as? String, !id.isEmpty else { throw NSError(domain: "RouterVPNMac", code: 41, userInfo: [NSLocalizedDescriptionKey: "Select a Router VPN node first."]) }
+            return try self.api.request("/api/profile/latency", method: "POST", body: ["id": id, "samples": 50], timeout: 180)
+        }
+    }
+
+    @objc private func telemetrySpeedPerformance(_ sender: NSButton) {
+        telemetryAsync(sender, label: "Transferring 8 MiB down and 8 MiB up through the current VPN path…") { try self.api.request("/api/connection/speed-test", method: "POST", body: ["bytes": 8 * 1024 * 1024], timeout: 45) }
+    }
+
+    @objc private func telemetryMtuPerformance(_ sender: NSButton) {
+        telemetryAsync(sender, label: "Retesting current path MTU and bounded MTU throughput…") { try self.api.request("/api/mtu/retest", method: "POST", body: [:], timeout: 130) }
     }
 
     private func telemetryWalk(_ view: NSView?, id: String) -> NSView? {
