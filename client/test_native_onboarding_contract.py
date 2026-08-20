@@ -30,9 +30,11 @@ win_product = read("client/RouterVPN-Windows-Product-v2.ps1")
 mac_onboarding = read("client/macos/RouterVPNProductOnboarding.swift")
 mac_build = read("client/macos/build-native-app.sh")
 mac_telemetry = read("client/macos/RouterVPNMacTelemetry.swift")
+mac_globe = read("client/macos/RouterVPNMacGlobeChrome.swift")
 linux_onboarding = read("client/linux/routervpn-product-onboarding-v6.inc")
 linux_build = read("client/linux/build-native-app.sh")
 linux_telemetry = read("client/linux/routervpn-telemetry-v9.inc")
+linux_globe = read("client/linux/routervpn-globe-v10.inc")
 android_onboarding = read("android/app/src/main/java/com/eabusham/routervpn/AndroidProductOnboarding.java")
 android_product = read("android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java")
 ios_onboarding = read("ios/RouterVPN/App/ProductOnboardingView.swift")
@@ -98,6 +100,15 @@ require("macOS forwarding master", mac_telemetry, (
     "Forwarding master did not reach the requested state", "Real server forwarding master",
 ))
 assert 'action: #selector(openUnifiedForwarding)' not in mac_telemetry, "macOS Forward side control regressed to forwarding-page navigation"
+require("macOS VPN route chrome", mac_globe, (
+    "installUnifiedMapChrome", "ROUTER VPN • LIVE ROUTE", "Only linked real coordinates",
+    "no IP geolocation or fabricated device pin", "map.mapType = .mutedStandard",
+    "/api/multihop/status", "/api/multihop/live-latency", "PATH %.1f ms",
+    "Timer.scheduledTimer(withTimeInterval: 0.05", "chrome.advance()",
+))
+assert "RouterVPNMacGlobeChrome.swift" in mac_build
+assert '"$GLOBE_SRC"' in mac_build
+assert "installUnifiedMapChrome()" in mac_build
 
 # Linux retains the native GTK assistant but ships the complete v6 content and
 # a guarded build seam that persists/resumes its current page.
@@ -119,6 +130,15 @@ require("Linux forwarding master", linux_telemetry, (
 ))
 assert "linux_unified_show_detail_v8(t->base,5)" not in linux_telemetry, "Linux Forward side control regressed to a detail-page shortcut"
 assert "Forward shortcut" not in linux_telemetry, "Linux telemetry still describes forwarding as a shortcut"
+require("Linux VPN globe", linux_globe, (
+    "LinuxGlobeV10", "ROUTER VPN GLOBE", "linux_globe_draw_v10", "linux_globe_click_v10",
+    "routervpn_flat_map_v9", "entry blue", "exit orange", "external pink",
+    "animated packet", "PATH %.1f ms", "device location is not fabricated",
+    "/api/multihop/live-latency",
+))
+assert "routervpn-globe-v10.inc" in linux_build
+assert "linux_install_globe_v10(&app);" in linux_build
+assert "#define draw_map routervpn_flat_map_v9" in linux_build
 
 # Android ProductActivity is the actual map-first dashboard. First launch and
 # Help both route to the persisted SharedPreferences onboarding flow.
