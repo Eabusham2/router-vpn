@@ -1,6 +1,9 @@
 import AppKit
 import Foundation
 
+private let macConnectionModeKey = "routervpn.unified.selected-mode.v1"
+private let macConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
+
 private struct RouterVPNProfileSettingsPayloadV2: Codable {
     var homeLANAccess: Bool
     var killSwitchPolicy: String
@@ -18,6 +21,13 @@ private struct RouterVPNProfileSettingsPayloadV2: Codable {
     var daitaEnabled: Bool
     var jumboTUN: Bool
     var socksEnabled: Bool
+
+    static let unavailableDefaults = RouterVPNProfileSettingsPayloadV2(
+        homeLANAccess: false, killSwitchPolicy: "off", ipv6Mode: "on", startupMode: "smart-auto",
+        autoConnect: false, autoRequireEncrypted: false, autoRequireObfuscation: false,
+        baseTunnel: "auto", baseFallback: true, mtuPolicy: "auto", manualMTU: nil,
+        effectiveMTU: nil, effectiveMTUSource: nil, daitaEnabled: false, jumboTUN: false, socksEnabled: false
+    )
 
     enum CodingKeys: String, CodingKey {
         case homeLANAccess = "home_lan_access"
@@ -39,11 +49,145 @@ private struct RouterVPNProfileSettingsPayloadV2: Codable {
     }
 }
 
+private struct MacConnectionPresetMirror: Codable {
+    var name: String
+    var layers: [String]
+}
+
+private func macCurrentConnectionModeSnapshot() -> (mode: String, layers: [String]) {
+    let mode = UserDefaults.standard.string(forKey: macConnectionModeKey) ?? "smart-auto"
+    guard mode.hasPrefix("custom:"),
+          let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey),
+          let values = try? JSONDecoder().decode([MacConnectionPresetMirror].self, from: data) else {
+        return (mode, [])
+    }
+    let name = String(mode.dropFirst("custom:".count))
+    let layers = values.first(where: { $0.name == name })?.layers ?? []
+    return (mode, layers)
+}
+
+private func macApplyLoadedConnectionMode(_ root: [String: Any]) {
+    let mode = (root["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "smart-auto"
+    UserDefaults.standard.set(mode.isEmpty ? "smart-auto" : mode, forKey: macConnectionModeKey)
+    guard mode.hasPrefix("custom:"), let layers = root["custom_layers"] as? [String], !layers.isEmpty else { return }
+    let name = String(mode.dropFirst("custom:".count))
+    guard !name.isEmpty else { return }
+    var values: [MacConnectionPresetMirror] = []
+    if let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey),
+       let current = try? JSONDecoder().decode([MacConnectionPresetMirror].self, from: data) { values = current }
+    values.removeAll { $0.name == name }
+    values.append(MacConnectionPresetMirror(name: name, layers: layers.sorted()))
+    values.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    if let data = try? JSONEncoder().encode(values) { UserDefaults.standard.set(data, forKey: macConnectionCustomPresetsKey) }
+}
+
+private final class MacConnectionProfileControls: NSObject {
+    private let api: ProductAPI
+    private weak var owner: ProductWindowController?
+    let root = NSStackView()
+    private let name = NSTextField(string: "")
+    private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let status = NSTextField(wrappingLabelWithString: "")
+
+    init(api: ProductAPI, owner: ProductWindowController) {
+        self.api = api
+        self.owner = owner
+        super.init()
+        build()
+        refresh()
+    }
+
+    private func build() {
+        root.orientation = .vertical; root.spacing = 6
+        let separator = NSBox(); separator.boxType = .separator; root.addArrangedSubview(separator)
+        let title = NSTextField(labelWithString: "Connection profiles"); title.font = .systemFont(ofSize: 15, weight: .semibold); root.addArrangedSubview(title)
+        let note = NSTextField(wrappingLabelWithString: "Save/load the selected node plus current Mode/CUSTOM layers, DNS, kill switch, IPv6, MTU and multihop choices. Node keys, API tokens and external credentials stay only in the linked node store and are never duplicated here.")
+        note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; root.addArrangedSubview(note)
+        name.placeholderString = "Profile name"; root.addArrangedSubview(name); root.addArrangedSubview(popup)
+        let row = NSStackView(); row.orientation = .horizontal; row.spacing = 6
+        for (label, action) in [("Add", #selector(addProfile)), ("Load", #selector(loadProfile)), ("Update", #selector(updateProfile)), ("Delete", #selector(deleteProfile)), ("Refresh", #selector(refreshAction))] {
+            let button = NSButton(title: label, target: self, action: action); button.bezelStyle = .rounded; row.addArrangedSubview(button)
+        }
+        root.addArrangedSubview(row)
+        status.font = .systemFont(ofSize: 11); status.textColor = .secondaryLabelColor; root.addArrangedSubview(status)
+        popup.target = self; popup.action = #selector(selectionChanged)
+    }
+
+    @objc private func selectionChanged() {
+        if let value = popup.selectedItem?.representedObject as? [String: String] { name.stringValue = value["name"] ?? "" }
+    }
+
+    @objc private func refreshAction() { refresh() }
+
+    private func refresh() {
+        do {
+            let rootJSON = try api.json("/api/connection-profiles", timeout: 5) as? [String: Any] ?? [:]
+            let profiles = rootJSON["profiles"] as? [[String: Any]] ?? []
+            popup.removeAllItems()
+            for profile in profiles {
+                let id = profile["id"] as? String ?? ""; guard !id.isEmpty else { continue }
+                let profileName = profile["name"] as? String ?? id
+                let mode = profile["mode"] as? String ?? "smart-auto"
+                let node = profile["node_id"] as? String ?? ""
+                popup.addItem(withTitle: "\(profileName) • \(mode) • \(node)")
+                popup.lastItem?.representedObject = ["id": id, "name": profileName]
+            }
+            if popup.numberOfItems > 0 { popup.selectItem(at: 0); selectionChanged() }
+            status.stringValue = "\(popup.numberOfItems) saved connection profile(s)."
+        } catch { status.stringValue = "Profile refresh failed: \(error.localizedDescription)" }
+    }
+
+    private func selectedID() throws -> String {
+        guard let value = popup.selectedItem?.representedObject as? [String: String], let id = value["id"], !id.isEmpty else {
+            throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select a saved connection profile first."])
+        }
+        return id
+    }
+
+    private func write(path: String, updating: Bool) throws -> [String: Any] {
+        let clean = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 2, userInfo: [NSLocalizedDescriptionKey: "Enter a profile name."]) }
+        let snapshot = macCurrentConnectionModeSnapshot()
+        var body: [String: Any] = ["name": clean, "mode": snapshot.mode, "custom_layers": snapshot.layers]
+        if updating { body["id"] = try selectedID() }
+        let data = try api.request(path, method: "POST", body: body, timeout: 10)
+        return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+    }
+
+    @objc private func addProfile() {
+        do { let root = try write(path: "/api/connection-profile/save", updating: false); let p = root["profile"] as? [String: Any]; status.stringValue = "Added \(p?["name"] as? String ?? "profile")."; refresh() }
+        catch { status.stringValue = "Add failed: \(error.localizedDescription)" }
+    }
+
+    @objc private func updateProfile() {
+        do { let root = try write(path: "/api/connection-profile/update", updating: true); let p = root["profile"] as? [String: Any]; status.stringValue = "Updated \(p?["name"] as? String ?? "profile")."; refresh() }
+        catch { status.stringValue = "Update failed: \(error.localizedDescription)" }
+    }
+
+    @objc private func loadProfile() {
+        do {
+            let data = try api.request("/api/connection-profile/load", method: "POST", body: ["id": try selectedID()], timeout: 12)
+            let rootJSON = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            macApplyLoadedConnectionMode(rootJSON)
+            let loaded = rootJSON["profile"] as? [String: Any]
+            status.stringValue = "Loaded \(loaded?["name"] as? String ?? "profile") • node \(rootJSON["selected_node_id"] as? String ?? "") • mode \(rootJSON["mode"] as? String ?? "smart-auto")."
+            owner?.refreshAll(); owner?.refreshUnifiedModeMenu(preferred: rootJSON["mode"] as? String); owner?.refreshUnifiedChrome(); owner?.refreshUnifiedTelemetry()
+        } catch { status.stringValue = "Load failed: \(error.localizedDescription)" }
+    }
+
+    @objc private func deleteProfile() {
+        do { _ = try api.request("/api/connection-profile/delete", method: "POST", body: ["id": try selectedID()], timeout: 10); status.stringValue = "Deleted saved connection profile."; refresh() }
+        catch { status.stringValue = "Delete failed: \(error.localizedDescription)" }
+    }
+}
+
 extension ProductWindowController {
     @objc func editProfileSettings() {
         asyncAction {
-            let data = try self.api.request("/api/profile/settings", timeout: 5)
-            var settings = try JSONDecoder().decode(RouterVPNProfileSettingsPayloadV2.self, from: data)
+            let data = try? self.api.request("/api/profile/settings", timeout: 5)
+            let decoded = data.flatMap { try? JSONDecoder().decode(RouterVPNProfileSettingsPayloadV2.self, from: $0) }
+            let supportsNodeSettings = decoded != nil
+            var settings = decoded ?? .unavailableDefaults
             let semaphore = DispatchSemaphore(value: 0)
             var save = false
             var validationError = ""
@@ -51,14 +195,16 @@ extension ProductWindowController {
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.messageText = "Settings"
-                alert.informativeText = "Selected Router node • persistent defaults for the next connection. Unsupported runtime features stay unavailable; saved values are not runtime proof."
-                alert.addButton(withTitle: "Save")
+                alert.informativeText = supportsNodeSettings
+                    ? "Selected Router node • persistent defaults for the next connection. Unsupported runtime features stay unavailable; saved values are not runtime proof."
+                    : "Selected Custom/external node does not expose Router VPN node settings here. Connection-profile Add / Load / Update / Delete remains available."
+                alert.addButton(withTitle: supportsNodeSettings ? "Save" : "Close")
                 alert.addButton(withTitle: "Cancel")
 
                 let form = NSStackView()
                 form.orientation = .vertical
                 form.spacing = 8
-                form.frame = NSRect(x: 0, y: 0, width: 540, height: 570)
+                form.frame = NSRect(x: 0, y: 0, width: 570, height: 760)
 
                 func popup(_ title: String, values: [(String,String)], selected: String) -> NSPopUpButton {
                     let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8
@@ -77,33 +223,31 @@ extension ProductWindowController {
                 let ipv6 = popup("IPv6", values: [("On — default","on"),("Auto","auto"),("Off","off")], selected: settings.ipv6Mode)
                 let base = popup("WG / AWG base", values: [("Auto","auto"),("WireGuard","wg"),("AmneziaWG","awg")], selected: settings.baseTunnel)
                 let fallback = check("Allow compatible WG / AWG base fallback", value: settings.baseFallback)
-
                 let autoEncrypted = check("AUTO / SMART: Require encrypted", value: settings.autoRequireEncrypted)
                 let autoObfuscated = check("AUTO / SMART: Require obfuscation", value: settings.autoRequireObfuscation)
                 let autoNote = NSTextField(wrappingLabelWithString: "Both AUTO requirements are Off by default. When enabled, candidates are filtered before connection attempts; SMART simplification cannot drop below the requirement.")
                 autoNote.textColor = .secondaryLabelColor; autoNote.font = .systemFont(ofSize: 11); form.addArrangedSubview(autoNote)
-
                 let mtu = popup("MTU", values: [("Auto measured — default","auto"),("Fixed / manual","manual"),("Runtime default","default")], selected: settings.mtuPolicy)
-                let mtuRow = NSStackView(); mtuRow.orientation = .horizontal; mtuRow.spacing = 8
-                mtuRow.addArrangedSubview(NSTextField(labelWithString: "Fixed MTU 576–9000"))
-                let manual = NSTextField(string: (settings.manualMTU ?? 0) > 0 ? String(settings.manualMTU!) : "")
-                mtuRow.addArrangedSubview(manual); form.addArrangedSubview(mtuRow)
+                let mtuRow = NSStackView(); mtuRow.orientation = .horizontal; mtuRow.spacing = 8; mtuRow.addArrangedSubview(NSTextField(labelWithString: "Fixed MTU 576–9000"))
+                let manual = NSTextField(string: (settings.manualMTU ?? 0) > 0 ? String(settings.manualMTU!) : ""); mtuRow.addArrangedSubview(manual); form.addArrangedSubview(mtuRow)
                 let effective = NSTextField(wrappingLabelWithString: "Effective MTU: \((settings.effectiveMTU ?? 0) > 0 ? String(settings.effectiveMTU!) : "not measured yet") • \(settings.effectiveMTUSource ?? "Auto will test/use a valid path-specific value")")
                 effective.textColor = .secondaryLabelColor; effective.font = .systemFont(ofSize: 11); form.addArrangedSubview(effective)
-
                 let daita = check("DAITA-like traffic padding (bounded; supported modes only)", value: settings.daitaEnabled)
                 let jumbo = check("Jumbo TUN / jumbo packet mode (compatible paths only)", value: settings.jumboTUN)
                 let socks = check("Private in-tunnel SOCKS5 utility", value: settings.socksEnabled)
                 let startup = popup("Default mode on startup", values: [("SMART AUTO — recommended","smart-auto"),("AUTO","auto"),("Last proven mode","last"),("Manual / stay disconnected","manual")], selected: settings.startupMode)
                 let auto = check("Auto-connect when Router VPN starts", value: settings.autoConnect)
+                let forwarding = NSButton(title: "Port forwarding / Protected DMZ…", target: self, action: #selector(self.openUnifiedForwarding)); forwarding.bezelStyle = .rounded; form.addArrangedSubview(forwarding)
+                let retest = NSButton(title: "Retest MTU for current config/path", target: self, action: #selector(self.retestMTU)); retest.bezelStyle = .rounded; form.addArrangedSubview(retest)
 
-                let forwarding = NSButton(title: "Port forwarding / Protected DMZ…", target: self, action: #selector(self.openUnifiedForwarding))
-                forwarding.bezelStyle = .rounded; form.addArrangedSubview(forwarding)
-                let retest = NSButton(title: "Retest MTU for current config/path", target: self, action: #selector(self.retestMTU))
-                retest.bezelStyle = .rounded; form.addArrangedSubview(retest)
+                let connectionProfiles = MacConnectionProfileControls(api: self.api, owner: self)
+                form.addArrangedSubview(connectionProfiles.root)
+                if !supportsNodeSettings {
+                    for view in [lan, kill, ipv6, base, fallback, autoEncrypted, autoObfuscated, mtu, manual, daita, jumbo, socks, startup, auto, forwarding, retest] { view.isEnabled = false }
+                }
 
                 alert.accessoryView = form
-                if alert.runModal() == .alertFirstButtonReturn {
+                if alert.runModal() == .alertFirstButtonReturn && supportsNodeSettings {
                     settings.homeLANAccess = lan.state == .on
                     settings.killSwitchPolicy = (kill.selectedItem?.representedObject as? String) ?? "off"
                     settings.ipv6Mode = (ipv6.selectedItem?.representedObject as? String) ?? "on"
@@ -122,11 +266,13 @@ extension ProductWindowController {
                     settings.autoConnect = auto.state == .on
                     save = validationError.isEmpty
                 }
+                _ = connectionProfiles
                 semaphore.signal()
             }
 
             semaphore.wait()
             if !validationError.isEmpty { throw NSError(domain: "RouterVPN.Settings", code: 1, userInfo: [NSLocalizedDescriptionKey: validationError]) }
+            if !supportsNodeSettings { return "Connection profile manager closed; external node settings remain owned by that node's protocol configuration." }
             if !save { return "Settings unchanged." }
             let payload = try JSONEncoder().encode(settings)
             _ = try self.api.requestRaw("/api/profile/settings", body: payload, timeout: 8)
@@ -138,4 +284,5 @@ extension ProductWindowController {
 // Unified settings contract: SMART AUTO default, IPv6 On default, Auto measured MTU,
 // fixed MTU override + Retest, DAITA-like traffic padding, Jumbo TUN, kill switch,
 // AUTO Require encrypted / Require obfuscation, LAN access and forwarding entry point.
-// /api/profile/settings only; no redacted full-profile POST.
+// /api/profile/settings only for Router-node preferences; connection-profile CRUD uses
+// /api/connection-profiles + save/update/load/delete and never duplicates node secrets.
