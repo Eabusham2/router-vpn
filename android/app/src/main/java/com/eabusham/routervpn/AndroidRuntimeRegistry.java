@@ -2,13 +2,7 @@ package com.eabusham.routervpn;
 
 import android.content.Context;
 
-/**
- * App-process owner for Android VPN engines.
- *
- * WireGuard/Amnezia GoBackend keep the running tunnel on the backend instance,
- * so Activities must not recreate those backends on rotation or window changes.
- * UI controllers are disposable; these engine objects live for the app process.
- */
+/** App-process owner for Android VPN engines and session revalidation. */
 final class AndroidRuntimeRegistry {
     private static AndroidRuntimeRegistry instance;
 
@@ -18,6 +12,7 @@ final class AndroidRuntimeRegistry {
     final NativeXrayController xray;
     final AndroidModeOrchestrator orchestrator;
     final AndroidMultihopRuntime multihop;
+    final AndroidSessionRevalidator revalidator;
 
     private AndroidRuntimeRegistry(Context context) {
         Context app = context.getApplicationContext();
@@ -27,6 +22,8 @@ final class AndroidRuntimeRegistry {
         xray = new NativeXrayController(app);
         orchestrator = new AndroidModeOrchestrator(app, wireGuard, amneziaWG, singBox, xray);
         multihop = new AndroidMultihopRuntime(app, singBox);
+        revalidator = new AndroidSessionRevalidator(app, this);
+        revalidator.start();
     }
 
     static synchronized AndroidRuntimeRegistry get(Context context) {
