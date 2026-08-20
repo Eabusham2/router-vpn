@@ -37,19 +37,27 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 	requireRepoMarkers(t, "client/RouterVPN-Windows-Telemetry.ps1",
 		"UnifiedFastestNode", "UnifiedLiveLatency", "UnifiedMultihopLatency", "UnifiedForwardButton",
 		"Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test", "50-sample selected node", "Throughput + Auto MTU")
+	requireRepoMarkers(t, "client/RouterVPN-Windows-App.ps1",
+		"RouterVPN-Windows-Telemetry.ps1", "Add-RouterVPNTelemetryWindowsShell", "/api/connection/speed-test",
+		"/api/multihop/speed-test", "Routed hop speeds")
 	requireRepoMarkers(t, "client/macos/RouterVPNMacTelemetry.swift",
 		"unified-fastest-node", "unified-live-latency", "unified-multihop-latency", "Forward",
 		"Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test", "50-sample selected node", "Throughput + Auto MTU")
+	requireRepoMarkers(t, "client/macos/build-native-app.sh",
+		"TELEMETRY_SRC", `"$TELEMETRY_SRC"`, "installUnifiedTelemetryUI")
 	requireRepoMarkers(t, "client/linux/routervpn-telemetry-v9.inc",
 		"⚡ Fastest", "/api/profile/fastest", "/api/connection/live-latency", "/api/multihop/live-latency",
 		"Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test", "Throughput + Auto MTU", "Forward")
+	requireRepoMarkers(t, "client/linux/build-native-app.sh",
+		"routervpn-telemetry-v9.inc", "linux_install_telemetry_v9(&app);")
 
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetry.java",
 		"class SpeedResult", "speedTest", "speedTest(AndroidNodeStore.Node", "/api/benchmark/download", "/api/benchmark/upload",
 		"Authorization", "Accept-Encoding", "downloadMbps", "uploadMbps")
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
 		"⚡ Fastest", "liveLatency", "Performance", "Forward", "Profiles", "showProfileManager",
-		"Real current VPN path speed", "telemetry.speedTest", "currentPathMs", "refreshMultihopSummary", "RouterVpnNodeMapView.Marker")
+		"Real current VPN path speed", "Routed multihop speeds", "runRoutedHopSpeeds", "telemetry.speedTest(entry", "telemetry.speedTest(exit",
+		"currentPathMs", "refreshMultihopSummary", "RouterVpnNodeMapView.Marker")
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
 		"latencyMs", "System.currentTimeMillis", "postInvalidateDelayed", "ROLE_ENTRY", "ROLE_EXIT", "canvas.drawLine")
 
@@ -61,6 +69,9 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		"Run real current VPN path speed", "telemetry.speedTest", "packet", "multihop", "New CUSTOM preset")
 	requireRepoMarkers(t, "ios/RouterVPN/App/NodeManagerSheet.swift",
 		"Pair from home LAN", "Import node bundle", "Select lowest-latency node", "model.removeNode", "Edit", "updateNodeMetadata")
+
+	requireRepoMarkers(t, ".github/workflows/release-candidate-status.yml",
+		"workflow_run", "Router VPN release candidate", "statuses: write", "Router VPN release candidate", "head_sha")
 }
 
 func TestUnifiedDefaultsAndSettingsContract(t *testing.T) {
