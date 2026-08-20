@@ -23,10 +23,11 @@ final class AndroidSessionRevalidator {
         AndroidHomeStateStore.Snapshot before=AndroidHomeStateStore.snapshot(context);
         if(!before.connected)return;
         if("wg".equals(before.actualBase)||"awg".equals(before.actualBase)){
-            if(!"multihop".equals(before.logicalMode)&&!"external".equals(before.logicalMode))return; // native WG/AWG controllers own their recovery.
+            if(!"multihop".equals(before.logicalMode)&&!"external".equals(before.logicalMode))return; // native WG/AWG controllers own recovery/reproof.
         }
         String session=before.sessionId;
         if(session==null||session.isEmpty())return;
+        AndroidHomeStateStore.advancePathGeneration(context); // immediately invalidate any public-exit proof from the old underlying path.
         try{
             AndroidHomeStateStore.warning(context,"Underlying network changed; re-proving the frozen Router VPN session before keeping Connected.");
             try{Thread.sleep(650L);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();return;}
