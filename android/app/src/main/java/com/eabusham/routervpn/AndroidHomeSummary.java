@@ -30,14 +30,14 @@ final class AndroidHomeSummary {
     private static volatile String provedExit = "";
 
     private static final class RuntimeState {
-        String phase="off", logical="", runtime="", base="", fallback="", warning="";
+        String phase="off", logical="", runtime="", base="", fallback="", warning="", activeEntryId="", activeExitId="";
         boolean connected;
     }
 
     static String format(Activity activity, AndroidNodeStore nodeStore) {
         try {
-            JSONObject profile = activeProfile(nodeStore);
             RuntimeState runtime = runtimeState(activity);
+            JSONObject profile = proofProfile(nodeStore, runtime);
             Network vpn = ownedVpnNetwork(activity);
             String signature = signature(vpn, runtime);
             boolean osConnected = vpn != null;
@@ -47,6 +47,7 @@ final class AndroidHomeSummary {
             List<String> warnings = new ArrayList<>();
             if (runtime.connected && !osConnected) warnings.add("Stored runtime says connected but Android has no Router VPN-owned VPN network");
             if (connected && provedExit.isEmpty()) warnings.add("Actual public exit is not proven for this live Android VPN network");
+            if ("multihop".equals(runtime.logical) && (runtime.activeEntryId.isEmpty() || runtime.activeExitId.isEmpty())) warnings.add("Multihop runtime identity is incomplete; exit proof is unavailable until the exact active graph is known");
             if (!runtime.warning.isEmpty()) warnings.add(runtime.warning);
             warnings.add("DNS RTT is a home-node A/AAAA query measurement; active Android tunnel DNS still needs runtime/device proof");
 
@@ -62,11 +63,16 @@ final class AndroidHomeSummary {
             String logical = runtime.logical.isEmpty() ? runtime.runtime : runtime.logical;
             String base = runtime.base.isEmpty() ? inferredBase(runtime.runtime) : runtime.base;
             String fallback = runtime.fallback.isEmpty() ? "None" : runtime.fallback;
+            String nodeLabel = profile.optString("name", profile.optString("id", "Router VPN"));
+            String graphLabel = "multihop".equals(runtime.logical) && !runtime.activeEntryId.isEmpty() && !runtime.activeExitId.isEmpty()
+                    ? nodeName(nodeStore, runtime.activeEntryId) + " → " + nodeName(nodeStore, runtime.activeExitId)
+                    : nodeLabel;
+            String proofLabel = "multihop".equals(runtime.logical) ? "active exit-node path proof" : "selected-node path proof";
 
-            return "Node: " + profile.optString("name", profile.optString("id", "Router VPN")) + " • " + location +
+            return "Node/path: " + graphLabel + " • " + location +
                     "\nPublic endpoint: " + profile.optString("endpoint", "—") +
                     "\nActual public VPN exit: " + exit +
-                    "\nConnection: " + (connected ? "connected • selected-node proof required/passed by the active engine" : runtime.phase) +
+                    "\nConnection: " + (connected ? "connected • " + proofLabel + " passed by the active engine" : runtime.phase) +
                     "\nLogical/runtime/base: " + empty(logical) + " • " + empty(runtime.runtime) + " • " + empty(base) +
                     "\nFallback: " + fallback +
                     "\nDNS: " + dnsMode + " • " + empty(dnsHost) + (dnsRtt > 0 ? String.format(Locale.US," • home query RTT %.2f ms",dnsRtt) : " • query RTT not measured") +
@@ -83,11 +89,11 @@ final class AndroidHomeSummary {
         new Thread(() -> {
             try {
                 FileProof proof = proofInputs(activity, nodeStore);
-                if (!AndroidPathProbe.prove(proof.bundle, 8000)) throw new IllegalStateException("Selected-node private path proof failed before public-exit test.");
+                if (!AndroidPathProbe.prove(proof.bundle, 8000)) throw new IllegalStateException(proof.multihop ? "Active multihop exit-node private path proof failed before public-exit test." : "Selected-node private path proof failed before public-exit test.");
                 String ip = fetchIP(proof.network);
                 FileProof after = proofInputs(activity, nodeStore);
-                if (!proof.signature.equals(after.signature)) throw new IllegalStateException("Android VPN network/runtime changed while proving public exit; result discarded.");
-                if (!AndroidPathProbe.prove(after.bundle, 8000)) throw new IllegalStateException("Selected-node private path proof failed after public-exit test.");
+                if (!proof.signature.equals(after.signature)) throw new IllegalStateException("Android VPN network/runtime or active node graph changed while proving public exit; result discarded.");
+                if (!AndroidPathProbe.prove(after.bundle, 8000)) throw new IllegalStateException(after.multihop ? "Active multihop exit-node private path proof failed after public-exit test." : "Selected-node private path proof failed after public-exit test.");
                 provedSignature = after.signature;
                 provedExit = ip;
                 AndroidHomeStateStore.saveActualExit(activity, AndroidHomeStateStore.snapshot(activity).sessionId, ip);
@@ -116,15 +122,17 @@ final class AndroidHomeSummary {
     }
 
     private static final class FileProof {
-        final java.io.File bundle; final Network network; final String signature;
-        FileProof(java.io.File bundle,Network network,String signature){this.bundle=bundle;this.network=network;this.signature=signature;}
+        final java.io.File bundle; final Network network; final String signature; final boolean multihop;
+        FileProof(java.io.File bundle,Network network,String signature,boolean multihop){this.bundle=bundle;this.network=network;this.signature=signature;this.multihop=multihop;}
     }
     private static FileProof proofInputs(Activity activity,AndroidNodeStore store)throws Exception{
-        String id=store.activeId(); if(id==null||id.isEmpty())throw new IllegalStateException("Select a Router VPN node first.");
-        java.io.File bundle=store.file(id); if(!bundle.isFile())throw new IllegalStateException("Selected private node bundle is missing.");
-        Network network=ownedVpnNetwork(activity); if(network==null)throw new IllegalStateException("No active Android VPN network owned by Router VPN.");
         RuntimeState runtime=runtimeState(activity); if(!runtime.connected)throw new IllegalStateException("Router VPN runtime is not in a proven connected state.");
-        return new FileProof(bundle,network,signature(network,runtime));
+        boolean multihop="multihop".equals(runtime.logical);
+        String id=multihop?runtime.activeExitId:store.activeId();
+        if(id==null||id.isEmpty())throw new IllegalStateException(multihop?"Active multihop exit identity is unavailable.":"Select a Router VPN node first.");
+        java.io.File bundle=store.file(id); if(!bundle.isFile())throw new IllegalStateException(multihop?"Active multihop exit bundle is missing.":"Selected private node bundle is missing.");
+        Network network=ownedVpnNetwork(activity); if(network==null)throw new IllegalStateException("No active Android VPN network owned by Router VPN.");
+        return new FileProof(bundle,network,signature(network,runtime),multihop);
     }
 
     private static Network ownedVpnNetwork(Context context) {
@@ -137,6 +145,7 @@ final class AndroidHomeSummary {
 
     private static RuntimeState runtimeState(Context context){
         RuntimeState out=new RuntimeState(); AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+        out.activeEntryId=home.activeEntryId;out.activeExitId=home.activeExitId;
         if(home.connected){out.connected=true;out.phase=home.phase;out.logical=home.logicalMode;out.runtime=home.runtimeMode;out.base=home.actualBase;out.fallback=home.fallback;out.warning=home.warning;return out;}
         SharedPreferences p=context.getSharedPreferences("router-vpn",Context.MODE_PRIVATE);
         String layered=p.getString(NativeSingBoxController.STATE_KEY,"DOWN");
@@ -146,13 +155,14 @@ final class AndroidHomeSummary {
         out.phase=home.phase;out.warning=home.warning;return out;
     }
 
-    private static String signature(Network network,RuntimeState runtime){return network==null?"":network.getNetworkHandle()+"|"+runtime.logical+"|"+runtime.runtime+"|"+runtime.base;}
+    private static String signature(Network network,RuntimeState runtime){return network==null?"":network.getNetworkHandle()+"|"+runtime.logical+"|"+runtime.runtime+"|"+runtime.base+"|"+runtime.activeEntryId+"|"+runtime.activeExitId;}
     private static String fetchIP(Network network)throws Exception{
         for(String raw:new String[]{"https://api64.ipify.org","https://api.ipify.org"}){
             HttpURLConnection c=null;try{c=(HttpURLConnection)network.openConnection(new URL(raw));c.setConnectTimeout(6000);c.setReadTimeout(6000);c.setUseCaches(false);if(c.getResponseCode()/100!=2)continue;byte[]data=readLimited(c.getInputStream(),128);String value=new String(data,StandardCharsets.UTF_8).trim();if(value.matches("[0-9A-Fa-f:.]+")){InetAddress.getByName(value);return value;}}catch(Throwable ignored){}finally{if(c!=null)c.disconnect();}
         }throw new IllegalStateException("Could not determine public VPN exit through the active Router VPN network.");
     }
-    private static JSONObject activeProfile(AndroidNodeStore store)throws Exception{String id=store.activeId();if(id==null||id.isEmpty())throw new IllegalStateException("Pair/import and select a Router VPN node first.");return AndroidUnifiedNodeCatalog.selectedProfile(store.file(id));}
+    private static JSONObject proofProfile(AndroidNodeStore store,RuntimeState runtime)throws Exception{String id="multihop".equals(runtime.logical)&&!runtime.activeExitId.isEmpty()?runtime.activeExitId:store.activeId();if(id==null||id.isEmpty())throw new IllegalStateException("Pair/import and select a Router VPN node first.");return AndroidUnifiedNodeCatalog.selectedProfile(store.file(id));}
+    private static String nodeName(AndroidNodeStore store,String id){try{JSONObject p=AndroidUnifiedNodeCatalog.selectedProfile(store.file(id));String name=p.optString("name",id).trim();return name.isEmpty()?id:name;}catch(Throwable ignored){return id==null||id.isEmpty()?"unknown":id;}}
     private static double measuredDnsRtt(JSONObject p,String host){JSONArray a=p.optJSONArray("dns_results");if(a!=null)for(int i=0;i<a.length();i++){JSONObject r=a.optJSONObject(i);if(r!=null&&r.optBoolean("working")&&host.equals(r.optString("address")))return r.optDouble("latency_ms",0);}return p.optDouble("fastest_dns_latency_ms",0);}
     private static String killSwitch(JSONObject p){String value=p.optString("kill_switch_policy","").trim();if(!value.isEmpty())return value;return p.optBoolean("kill_switch",false)?"strict":"off";}
     private static String inferredBase(String runtime){if(runtime==null)return"";if(runtime.startsWith("awg"))return"awg";if("wg".equals(runtime)||runtime.contains("-wg"))return"wg";if(!runtime.isEmpty())return"embedded";return"";}
