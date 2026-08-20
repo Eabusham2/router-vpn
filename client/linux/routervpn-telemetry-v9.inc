@@ -4,6 +4,7 @@ typedef struct {
     GtkWidget *fastest;
     GtkWidget *live;
     GtkWidget *hop;
+    GtkWidget *forward;
     gboolean syncing;
 } LinuxTelemetryV9;
 
@@ -52,7 +53,22 @@ static void linux_telemetry_fastest_changed_v9(GtkComboBox *combo, gpointer data
     refresh_all(t->app); linux_unified_refresh_v8(t->base); linux_telemetry_refresh_fastest_v9(t); linux_unified_connect_v8(NULL,t->base);
 }
 
-static void linux_telemetry_forward_v9(GtkButton *button, gpointer data){(void)button;LinuxTelemetryV9*t=data;if(t!=NULL)linux_unified_show_detail_v8(t->base,5);}
+static void linux_telemetry_set_forward_label_v9(LinuxTelemetryV9 *t,gboolean known,gboolean enabled){
+    if(t==NULL||t->forward==NULL)return;
+    gtk_button_set_label(GTK_BUTTON(t->forward),known?(enabled?"Forward ON":"Forward OFF"):"Forward ?");
+    gtk_widget_set_tooltip_text(t->forward,known?"Real server forwarding master on the active Router VPN home node.":"Connect a Router VPN home-node path to verify the real forwarding master.");
+}
+
+static gboolean linux_telemetry_read_forward_v9(LinuxTelemetryV9*t,gboolean*enabled){
+    if(t==NULL||enabled==NULL)return FALSE;Buffer out={0};char*err=NULL;gboolean ok=api_request("/api/forwarding/master","GET",NULL,5000,&out,&err);if(!ok){g_free(err);free(out.data);return FALSE;}
+    JsonNode*root=parse_json(out.data);free(out.data);g_free(err);if(root==NULL||!JSON_NODE_HOLDS_OBJECT(root)){if(root!=NULL)json_node_free(root);return FALSE;}JsonObject*obj=json_node_get_object(root);if(!json_object_has_member(obj,"enabled")){json_node_free(root);return FALSE;}*enabled=json_object_get_boolean_member(obj,"enabled");json_node_free(root);return TRUE;
+}
+
+static void linux_telemetry_forward_v9(GtkButton *button, gpointer data){
+    LinuxTelemetryV9*t=data;if(t==NULL)return;gtk_widget_set_sensitive(GTK_WIDGET(button),FALSE);gtk_button_set_label(button,"Forward …");gboolean current=FALSE;if(!linux_telemetry_read_forward_v9(t,&current)){append_diag(t->app,"Forwarding master unavailable: connect a Router VPN home-node path first.");linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);return;}
+    gboolean wanted=!current;char*body=g_strdup_printf("{\"enabled\":%s}",wanted?"true":"false");Buffer out={0};char*err=NULL;gboolean ok=api_request("/api/forwarding/master","PUT",body,10000,&out,&err);g_free(body);if(!ok){if(err!=NULL)append_diag(t->app,err);g_free(err);free(out.data);linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);return;}
+    JsonNode*root=parse_json(out.data);free(out.data);g_free(err);gboolean verified=FALSE,actual=FALSE;if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject*obj=json_node_get_object(root);if(json_object_has_member(obj,"enabled")){actual=json_object_get_boolean_member(obj,"enabled");verified=(actual==wanted);}}if(root!=NULL)json_node_free(root);if(!verified){append_diag(t->app,"Forwarding master response did not verify the requested state.");linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);}else{char*msg=g_strdup_printf("Forwarding master %s on the active Router VPN home node.",actual?"ON":"OFF");append_diag(t->app,msg);g_free(msg);linux_telemetry_set_forward_label_v9(t,TRUE,actual);}gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);
+}
 
 static char *linux_telemetry_json_text_v9(const char *path,const char *method,const char *body,int timeout){Buffer out={0};char*err=NULL;if(api_request(path,method,body,timeout,&out,&err)){char*value=g_strdup(out.data?out.data:"{}");free(out.data);g_free(err);return value;}char*value=g_strdup(err?err:"request failed");g_free(err);free(out.data);return value;}
 
@@ -77,12 +93,13 @@ static void linux_telemetry_performance_v9(GtkButton *button,gpointer data){
 static gboolean linux_telemetry_refresh_v9(gpointer data){
     LinuxTelemetryV9*t=data;if(t==NULL)return G_SOURCE_REMOVE;linux_telemetry_refresh_fastest_v9(t);
     Buffer out={0};char*err=NULL;if(api_request("/api/connection/live-latency","GET",NULL,3500,&out,&err)){JsonNode*root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject*obj=json_node_get_object(root);double ms=json_object_has_member(obj,"median_ms")?json_object_get_double_member(obj,"median_ms"):0.0;char*label=ms>0?g_strdup_printf("%.1f ms",ms):g_strdup("-- ms");gtk_label_set_text(GTK_LABEL(t->live),label);g_free(label);json_node_free(root);}}else gtk_label_set_text(GTK_LABEL(t->live),"-- ms");g_free(err);free(out.data);
+    gboolean forward_enabled=FALSE;if(linux_telemetry_read_forward_v9(t,&forward_enabled))linux_telemetry_set_forward_label_v9(t,TRUE,forward_enabled);else linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);
     out=(Buffer){0};err=NULL;if(api_request("/api/multihop/status","GET",NULL,3500,&out,&err)){JsonNode*root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject*obj=json_node_get_object(root);const char*entry=obj_string(obj,"entry_id");const char*exit=obj_string(obj,"exit_id");if(entry[0]&&exit[0]&&strcmp(entry,exit)!=0){char*body=g_strdup_printf("{\"entry_id\":\"%s\",\"exit_id\":\"%s\",\"samples\":2}",entry,exit);Buffer hop={0};char*hop_err=NULL;if(api_request("/api/multihop/live-latency","POST",body,8000,&hop,&hop_err)){JsonNode*h=parse_json(hop.data);if(h!=NULL&&JSON_NODE_HOLDS_OBJECT(h)){JsonObject*ho=json_node_get_object(h);GString*s=g_string_new("");if(json_object_has_member(ho,"entry")){JsonObject*e=json_object_get_object_member(ho,"entry");g_string_append_printf(s,"IN %.1f",json_object_get_double_member(e,"median_ms"));}if(json_object_has_member(ho,"exit")){JsonObject*x=json_object_get_object_member(ho,"exit");if(s->len)g_string_append(s," • ");g_string_append_printf(s,"OUT %.1f",json_object_get_double_member(x,"median_ms"));}if(json_object_has_member(ho,"current_path")){JsonObject*p=json_object_get_object_member(ho,"current_path");if(s->len)g_string_append(s," • ");g_string_append_printf(s,"PATH %.1f ms",json_object_get_double_member(p,"median_ms"));}gtk_label_set_text(GTK_LABEL(t->hop),s->str);g_string_free(s,TRUE);json_node_free(h);}}g_free(hop_err);free(hop.data);g_free(body);}else gtk_label_set_text(GTK_LABEL(t->hop),"");json_node_free(root);}}g_free(err);free(out.data);return G_SOURCE_CONTINUE;
 }
 
 static void linux_install_telemetry_v9(App *app){
     if(app==NULL||app->window==NULL)return;LinuxUnifiedV8*base=g_object_get_data(G_OBJECT(app->window),"linux-unified-v8");if(base==NULL)return;LinuxTelemetryV9*t=g_new0(LinuxTelemetryV9,1);t->app=app;t->base=base;
-    GtkWidget*connect_row=gtk_widget_get_parent(base->connect);if(GTK_IS_BOX(connect_row)){t->fastest=gtk_combo_box_text_new();gtk_widget_set_size_request(t->fastest,155,-1);gtk_box_pack_start(GTK_BOX(connect_row),t->fastest,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->fastest,1);t->live=gtk_label_new("-- ms");gtk_box_pack_start(GTK_BOX(connect_row),t->live,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->live,2);GtkWidget*forward=make_button("Forward",G_CALLBACK(linux_telemetry_forward_v9),t);gtk_box_pack_end(GTK_BOX(connect_row),forward,FALSE,FALSE,0);g_signal_connect(t->fastest,"changed",G_CALLBACK(linux_telemetry_fastest_changed_v9),t);}
+    GtkWidget*connect_row=gtk_widget_get_parent(base->connect);if(GTK_IS_BOX(connect_row)){t->fastest=gtk_combo_box_text_new();gtk_widget_set_size_request(t->fastest,155,-1);gtk_box_pack_start(GTK_BOX(connect_row),t->fastest,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->fastest,1);t->live=gtk_label_new("-- ms");gtk_box_pack_start(GTK_BOX(connect_row),t->live,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->live,2);t->forward=make_button("Forward ?",G_CALLBACK(linux_telemetry_forward_v9),t);gtk_widget_set_tooltip_text(t->forward,"Real server forwarding master on the active Router VPN home node.");gtk_box_pack_end(GTK_BOX(connect_row),t->forward,FALSE,FALSE,0);g_signal_connect(t->fastest,"changed",G_CALLBACK(linux_telemetry_fastest_changed_v9),t);}
     GtkWidget*multi_row=gtk_widget_get_parent(base->multihop);t->hop=gtk_label_new("");if(GTK_IS_BOX(multi_row)){gtk_box_pack_start(GTK_BOX(multi_row),t->hop,FALSE,FALSE,0);}
     GtkWidget*settings=linux_telemetry_find_button_v9(base->stack,"Open settings");if(settings!=NULL&&GTK_IS_BOX(gtk_widget_get_parent(settings))){GtkWidget*performance=make_button("Performance",G_CALLBACK(linux_telemetry_performance_v9),t);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),performance,FALSE,FALSE,0);}
     g_object_set_data_full(G_OBJECT(app->window),"linux-telemetry-v9",t,g_free);linux_telemetry_refresh_fastest_v9(t);linux_telemetry_refresh_v9(t);g_timeout_add(3000,linux_telemetry_refresh_v9,t);gtk_widget_show_all(app->window);
@@ -90,4 +107,4 @@ static void linux_install_telemetry_v9(App *app){
 
 /* Linux telemetry v9: fastest-node side dropdown, live current-path RTT, live multihop
  * IN/OUT/PATH RTT, real authenticated path Mbps, real routed entry/exit Mbps when reachable,
- * separate MTU optimizer, Performance panel, Forward shortcut and map latency refresh. */
+ * separate MTU optimizer, Performance panel, real /api/forwarding/master ON/OFF control and map latency refresh. */
