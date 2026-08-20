@@ -3,6 +3,7 @@ package com.eabusham.routervpn;
 import android.app.Activity;
 import android.content.Intent;
 import android.net.VpnService;
+import android.os.Bundle;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -16,6 +17,7 @@ import java.util.List;
 final class AndroidUnifiedConnectionController implements AutoCloseable {
     interface Callback { void progress(String message); void finished(boolean ok, String message); }
     static final int PREPARE_UNIFIED = 7605;
+    private static final String STATE_PENDING="routervpn.pending",STATE_MODE="routervpn.pending.mode",STATE_LAYERS="routervpn.pending.layers",STATE_ENTRY="routervpn.pending.entry",STATE_EXIT="routervpn.pending.exit",STATE_EXIT_MODE="routervpn.pending.exit_mode";
 
     private final Activity activity;
     private final AndroidNodeStore nodeStore;
@@ -45,7 +47,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         multihop = runtime.multihop;
     }
 
-    boolean isActiveOrTransitioning() { return multihop.isActiveOrTransitioning() || orchestrator.isRunning() || orchestrator.isActive(); }
+    boolean isActiveOrTransitioning() { return multihop.isActiveOrTransitioning() || orchestrator.isRunning() || orchestrator.isActive() || "connecting".equals(AndroidHomeStateStore.snapshot(activity).phase); }
     boolean isConnected() { return AndroidHomeStateStore.snapshot(activity).connected; }
     boolean isMultihopConnected() { return multihop.isConnected(); }
     String activeMultihopEntryId() { return multihop.activeEntryId(); }
@@ -75,10 +77,35 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         return multihop.listSupportedExitModes(exit.file);
     }
 
+    void savePending(Bundle out) {
+        if (out == null || pendingCallback == null || pendingMode.isEmpty()) return;
+        out.putBoolean(STATE_PENDING,true);
+        out.putString(STATE_MODE,pendingMode);
+        out.putStringArrayList(STATE_LAYERS,new ArrayList<>(pendingLayers));
+        if(pendingEntry!=null)out.putString(STATE_ENTRY,pendingEntry.id);
+        if(pendingExit!=null)out.putString(STATE_EXIT,pendingExit.id);
+        out.putString(STATE_EXIT_MODE,pendingExitMode);
+    }
+
+    void restorePending(Bundle in, Callback callback) {
+        if(in==null||!in.getBoolean(STATE_PENDING,false))return;
+        String mode=in.getString(STATE_MODE,"");
+        if(mode==null||mode.trim().isEmpty())return;
+        pendingMode=mode.trim();
+        ArrayList<String> layers=in.getStringArrayList(STATE_LAYERS);pendingLayers=layers==null?Collections.emptyList():new ArrayList<>(layers);
+        pendingEntry=findNode(in.getString(STATE_ENTRY,""));
+        pendingExit=findNode(in.getString(STATE_EXIT,""));
+        pendingExitMode=in.getString(STATE_EXIT_MODE,"");if(pendingExitMode==null)pendingExitMode="";
+        if("multihop".equals(pendingMode)&&(pendingEntry==null||pendingExit==null||pendingEntry.id.equals(pendingExit.id)||pendingExitMode.isEmpty())){clearPending();callback.finished(false,"Pending multihop permission state could not be restored safely; choose the hops again.");return;}
+        pendingCallback=callback;
+        callback.progress("Waiting for Android VPN permission for restored "+displayMode(pendingMode)+" request…");
+    }
+
     void disconnect(Callback callback) {
         clearPending();
         boolean wasMultihop = multihop.isActiveOrTransitioning();
         try { multihop.disconnect(); } catch (Throwable ignored) {}
+        try { runtime.standardExit.disconnect(); } catch (Throwable ignored) {}
         orchestrator.disconnect(new AndroidModeOrchestrator.Callback() {
             @Override public void progress(String message) { activity.runOnUiThread(() -> callback.progress(message)); }
             @Override public void finished(boolean success, String modeId, String message) {
@@ -138,6 +165,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         } else orchestrator.logical(bundle, mode, bridge);
     }
 
+    private AndroidNodeStore.Node findNode(String id){if(id==null||id.isEmpty())return null;try{for(AndroidNodeStore.Node node:nodeStore.list())if(id.equals(node.id))return node;}catch(Exception ignored){}return null;}
     private File activeBundle() throws Exception {
         String id = nodeStore.activeId();
         if (id == null || id.trim().isEmpty()) throw new IllegalStateException("Pair/import and select a Router VPN node first.");
@@ -147,12 +175,11 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     }
 
     private void clearPending() { pendingMode=""; pendingLayers=Collections.emptyList(); pendingEntry=null; pendingExit=null; pendingExitMode=""; pendingCallback=null; }
-    private static String displayMode(String mode) { if ("smart-auto".equals(mode)) return "SMART AUTO"; if ("auto".equals(mode)) return "AUTO"; if (mode.startsWith("custom:")) return "CUSTOM"; return mode.toUpperCase(); }
+    private static String displayMode(String mode) { if ("smart-auto".equals(mode)) return "SMART AUTO"; if ("auto".equals(mode)) return "AUTO"; if("multihop".equals(mode))return"multihop"; if (mode.startsWith("custom:")) return "CUSTOM"; return mode.toUpperCase(); }
     private static String safe(Throwable error) { String value=error==null?"":error.getMessage(); return value==null||value.trim().isEmpty()?"Router VPN connection error":value.trim(); }
 
     @Override public void close() {
-        // Activity destruction must not destroy the app-process VPN engines.
-        // They own active GoBackend/libbox/Xray state across rotation/recreation.
+        // Activity destruction must not destroy app-process VPN engines.
         clearPending();
     }
 }
