@@ -19,6 +19,7 @@ const (
 func registerBenchmarkRoutes(h *http.ServeMux, s *server) {
 	h.HandleFunc("/api/benchmark/download", s.benchmarkDownload)
 	h.HandleFunc("/api/benchmark/upload", s.benchmarkUpload)
+	registerClientForwardingMasterRoute(h, s)
 }
 
 func benchmarkRequestedBytes(r *http.Request) (int64, error) {
