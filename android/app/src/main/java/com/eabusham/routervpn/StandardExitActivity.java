@@ -21,6 +21,7 @@ import java.util.List;
 public final class StandardExitActivity extends Activity {
     static final String EXTRA_EXIT_ID = "routervpn.standard_exit_id";
     private static final int PREPARE_STANDARD_EXIT = 2101;
+    private static final String STATE_PENDING_ENTRY="pending_entry",STATE_PENDING_EXIT="pending_exit",STATE_PENDING_DIRECT="pending_direct",STATE_REQUESTED_HANDLED="requested_handled";
     private AndroidNodeStore nodeStore;
     private AndroidStandardExitStore exitStore;
     private NativeSingBoxController singBox;
@@ -36,14 +37,32 @@ public final class StandardExitActivity extends Activity {
         super.onCreate(state);
         nodeStore = new AndroidNodeStore(this);
         exitStore = new AndroidStandardExitStore(this);
-        singBox = new NativeSingBoxController(this);
-        runtime = new AndroidStandardExitRuntime(this, singBox);
+        AndroidRuntimeRegistry engines=AndroidRuntimeRegistry.get(this);
+        singBox = engines.singBox;
+        runtime = engines.standardExit;
+        restorePending(state);
         setContentView(buildUi());
         refresh();
     }
 
     @Override protected void onResume() { super.onResume(); refresh(); openRequestedExitOnce(); }
-    @Override protected void onDestroy() { if (runtime != null) runtime.close(); super.onDestroy(); }
+    @Override protected void onDestroy() { super.onDestroy(); }
+    @Override protected void onSaveInstanceState(Bundle out){
+        super.onSaveInstanceState(out);
+        if(pendingEntry!=null)out.putString(STATE_PENDING_ENTRY,pendingEntry.id);
+        if(pendingExit!=null)out.putString(STATE_PENDING_EXIT,pendingExit.id);
+        out.putBoolean(STATE_PENDING_DIRECT,pendingDirect);
+        out.putBoolean(STATE_REQUESTED_HANDLED,requestedExitHandled);
+    }
+
+    private void restorePending(Bundle state){
+        if(state==null)return;
+        pendingDirect=state.getBoolean(STATE_PENDING_DIRECT,false);
+        requestedExitHandled=state.getBoolean(STATE_REQUESTED_HANDLED,false);
+        String entryId=state.getString(STATE_PENDING_ENTRY,""),exitId=state.getString(STATE_PENDING_EXIT,"");
+        try{if(!entryId.isEmpty())for(AndroidNodeStore.Node n:nodeStore.list())if(entryId.equals(n.id)){pendingEntry=n;break;}}catch(Exception ignored){}
+        try{if(!exitId.isEmpty())pendingExit=exitStore.get(exitId);}catch(Exception ignored){}
+    }
 
     private void openRequestedExitOnce() {
         if (requestedExitHandled) return;
@@ -74,11 +93,15 @@ public final class StandardExitActivity extends Activity {
     private void refresh() {
         if (listView == null) return;
         try {
+            AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);
+            busy="external".equals(home.logicalMode)&&"connecting".equals(home.phase);
             List<AndroidStandardExitStore.Entry> exits=exitStore.list();
             StringBuilder out=new StringBuilder("Saved standard exits: ").append(exits.size()).append('/').append(AndroidStandardExitStore.MAX_EXITS);
             for(AndroidStandardExitStore.Entry e:exits) out.append("\n• ").append(e.name).append(" — ").append(e.protocol).append(" — ").append(e.server).append(':').append(e.serverPort).append(" → expected ").append(e.expectedPublicIp);
             listView.setText(out.toString());
-            if(!busy){String state=singBox.getState();if("UP".equals(state)&&singBox.getMode().startsWith("standard-"))statusView.setText("Custom-exit VPN engine UP — exact exit proof was required before the connection attempt reported success.");}
+            if("external".equals(home.logicalMode)&&home.connected){String actual=AndroidHomeStateStore.actualExitForCurrentSession(this);statusView.setText("Connected • "+home.activeExternalName+" • "+home.activeExternalProtocol+" • exit "+(actual.isEmpty()?"unproven":actual));}
+            else if(busy)statusView.setText("Custom-exit connection is in progress…");
+            else {String state=singBox.getState();if("UP".equals(state)&&singBox.getMode().startsWith("standard-"))statusView.setText("Custom-exit VPN engine UP — unified session proof is being reconciled.");else statusView.setText("Disconnected");}
         } catch(Exception e){listView.setText("Custom exit store unavailable: "+safe(e));}
     }
 
@@ -136,28 +159,32 @@ public final class StandardExitActivity extends Activity {
     }
 
     private void requestDirect(AndroidStandardExitStore.Entry exit) {
-        if(busy){toast("A custom-exit connection attempt is already running.");return;}
+        if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
         pendingEntry=null;pendingExit=exit;pendingDirect=true;
         Intent permission=VpnService.prepare(this);
         if(permission!=null){statusView.setText("Waiting for Android VPN permission…");startActivityForResult(permission,PREPARE_STANDARD_EXIT);}else startPending();
     }
 
     private void chooseEntry(AndroidStandardExitStore.Entry exit) {
-        if(busy){toast("A custom-exit connection attempt is already running.");return;}
+        if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
         try{List<AndroidNodeStore.Node> nodes=nodeStore.list();if(nodes.isEmpty()){dialog("Router VPN entry required","Link at least one Router VPN node first; the entry must contain standard WireGuard.");return;}String[]labels=new String[nodes.size()];for(int i=0;i<nodes.size();i++)labels[i]=nodes.get(i).name+(nodes.get(i).endpoint.isEmpty()?"":" — "+nodes.get(i).endpoint);new AlertDialog.Builder(this).setTitle("Choose Router VPN WireGuard entry").setMessage("Path: this device → Router VPN WireGuard entry → "+exit.name+" → Internet").setItems(labels,(d,w)->requestConnect(nodes.get(w),exit)).setNegativeButton("Cancel",null).show();}catch(Exception e){toast(safe(e));}
     }
 
     private void requestConnect(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit) {
+        if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
         pendingEntry=entry;pendingExit=exit;pendingDirect=false;Intent permission=VpnService.prepare(this);if(permission!=null){statusView.setText("Waiting for Android VPN permission…");startActivityForResult(permission,PREPARE_STANDARD_EXIT);}else startPending();
     }
 
     private void startPending() {
         AndroidNodeStore.Node entry=pendingEntry;AndroidStandardExitStore.Entry exit=pendingExit;boolean direct=pendingDirect;
         pendingEntry=null;pendingExit=null;pendingDirect=false;if(exit==null)return;if(!direct&&entry==null)return;
+        if(activeOrTransitioning()){toast("VPN state changed while permission was open; disconnect before starting the custom exit.");refresh();return;}
         busy=true;statusView.setText(direct?"Preparing direct external exit…":"Preparing Router VPN entry → external exit…");
-        AndroidStandardExitRuntime.Callback cb=new AndroidStandardExitRuntime.Callback(){public void progress(String m){runOnUiThread(()->statusView.setText(m));}public void finished(boolean ok,String m){runOnUiThread(()->{busy=false;statusView.setText(m);if(!ok)toast(m);refresh();});}};
+        AndroidStandardExitRuntime.Callback cb=new AndroidStandardExitRuntime.Callback(){public void progress(String m){runOnUiThread(()->{if(!isFinishing())statusView.setText(m);});}public void finished(boolean ok,String m){runOnUiThread(()->{busy=false;if(!isFinishing()){statusView.setText(m);if(!ok)toast(m);refresh();}});}};
         if(direct)runtime.connectDirect(exit,cb);else runtime.connect(entry.file,exit,cb);
     }
+
+    private boolean activeOrTransitioning(){AndroidHomeStateStore.Snapshot s=AndroidHomeStateStore.snapshot(this);return s.connected||"connecting".equals(s.phase)||"STARTING".equals(singBox.getState())||"STOPPING".equals(singBox.getState());}
 
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request!=PREPARE_STANDARD_EXIT)return;if(result==RESULT_OK)startPending();else{pendingEntry=null;pendingExit=null;pendingDirect=false;busy=false;statusView.setText("VPN permission denied; custom exit stayed disconnected.");}}
 
