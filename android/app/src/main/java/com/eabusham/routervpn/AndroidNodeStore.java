@@ -58,7 +58,7 @@ final class AndroidNodeStore {
         int count = existing == null ? 0 : existing.length;
         if (!target.isFile() && count >= MAX_NODES) throw new IllegalStateException("Android node store is full (max " + MAX_NODES + "). Remove a node before importing another.");
         atomicWrite(target, bytes);
-        select(id);
+        selectInternal(id);
         return describe(id, bundle, target);
     }
 
@@ -80,20 +80,8 @@ final class AndroidNodeStore {
     }
 
     synchronized void select(String id) throws Exception {
-        if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
-        AndroidHomeStateStore.Snapshot runtime = AndroidHomeStateStore.snapshot(context);
-        if (runtime.connected) {
-            String live = "multihop".equals(runtime.logicalMode) ? runtime.activeExitId : runtime.activeNodeId;
-            if (live == null || live.isEmpty() || !id.equals(live)) throw new IllegalStateException("Disconnect Router VPN before selecting a different node; the live session identity is frozen until disconnect.");
-        }
-        File source = nodeFile(id);
-        if (!source.isFile()) throw new IllegalStateException("Selected node is not stored.");
-        byte[] bytes = readLimited(source, MAX_BUNDLE);
-        JSONObject bundle = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
-        validateBundle(bundle);
-        if (!id.equals(deriveId(bundle, bytes))) throw new IllegalStateException("Stored node identity check failed.");
-        atomicWrite(new File(context.getFilesDir(), ACTIVE_BUNDLE), bytes);
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(ACTIVE_ID, id).apply();
+        requireSelectable(id);
+        selectInternal(id);
     }
 
     synchronized void remove(String id) throws Exception {
@@ -114,11 +102,40 @@ final class AndroidNodeStore {
         return file;
     }
 
+    private void requireSelectable(String id) {
+        if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
+        AndroidHomeStateStore.Snapshot runtime = AndroidHomeStateStore.snapshot(context);
+        AndroidRuntimeRegistry engines = AndroidRuntimeRegistry.get(context);
+        boolean transitioning = "connecting".equals(runtime.phase) || engines.orchestrator.isRunning() || engines.multihop.isActiveOrTransitioning()
+                || "STARTING".equals(engines.singBox.getState()) || "STOPPING".equals(engines.singBox.getState())
+                || "STARTING".equals(engines.xray.getState()) || "STOPPING".equals(engines.xray.getState());
+        if (transitioning) throw new IllegalStateException("Wait for the current Router VPN transition to finish or disconnect before selecting a node.");
+        if (runtime.connected) {
+            String live = "multihop".equals(runtime.logicalMode) ? runtime.activeExitId : runtime.activeNodeId;
+            if (live == null || live.isEmpty() || !id.equals(live)) throw new IllegalStateException("Disconnect Router VPN before selecting a different node; the live session identity is frozen until disconnect.");
+        }
+    }
+
     private void requireMutable(String action) {
         AndroidHomeStateStore.Snapshot runtime = AndroidHomeStateStore.snapshot(context);
-        if (runtime.connected) throw new IllegalStateException("Disconnect Router VPN before " + action + "; live node identity and proof must remain immutable for the session.");
         AndroidRuntimeRegistry engines = AndroidRuntimeRegistry.get(context);
-        if (engines.orchestrator.isRunning() || engines.multihop.isActiveOrTransitioning()) throw new IllegalStateException("Wait for the current Router VPN transition to finish or disconnect before " + action + ".");
+        boolean activeOrTransitioning = runtime.connected || "connecting".equals(runtime.phase)
+                || engines.orchestrator.isRunning() || engines.multihop.isActiveOrTransitioning()
+                || "UP".equals(engines.singBox.getState()) || "STARTING".equals(engines.singBox.getState()) || "STOPPING".equals(engines.singBox.getState())
+                || "UP".equals(engines.xray.getState()) || "STARTING".equals(engines.xray.getState()) || "STOPPING".equals(engines.xray.getState());
+        if (activeOrTransitioning) throw new IllegalStateException("Disconnect Router VPN before " + action + "; live node identity and proof must remain immutable for the session.");
+    }
+
+    private void selectInternal(String id) throws Exception {
+        if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
+        File source = nodeFile(id);
+        if (!source.isFile()) throw new IllegalStateException("Selected node is not stored.");
+        byte[] bytes = readLimited(source, MAX_BUNDLE);
+        JSONObject bundle = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
+        validateBundle(bundle);
+        if (!id.equals(deriveId(bundle, bytes))) throw new IllegalStateException("Stored node identity check failed.");
+        atomicWrite(new File(context.getFilesDir(), ACTIVE_BUNDLE), bytes);
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(ACTIVE_ID, id).apply();
     }
 
     private void ensureRoot() throws Exception {
