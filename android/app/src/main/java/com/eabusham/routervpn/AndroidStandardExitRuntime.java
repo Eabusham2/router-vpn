@@ -1,5 +1,7 @@
 package com.eabusham.routervpn;
 
+import android.content.Context;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
@@ -18,6 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class AndroidStandardExitRuntime implements AutoCloseable {
     interface Callback{void progress(String message);void finished(boolean ok,String message);}
     private static final long START_TIMEOUT_MS=20000L;
+    private final Context context;
     private final NativeSingBoxController singBox;
     private final AndroidStandardExitController builder;
     private final AndroidDirectStandardExitController directBuilder;
@@ -25,10 +28,11 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     private final AtomicBoolean closed=new AtomicBoolean(false);
     private Future<?> active;
 
-    AndroidStandardExitRuntime(android.content.Context context,NativeSingBoxController singBox){
+    AndroidStandardExitRuntime(Context context,NativeSingBoxController singBox){
+        this.context=context.getApplicationContext();
         this.singBox=singBox;
-        this.builder=new AndroidStandardExitController(context);
-        this.directBuilder=new AndroidDirectStandardExitController(context);
+        this.builder=new AndroidStandardExitController(this.context);
+        this.directBuilder=new AndroidDirectStandardExitController(this.context);
     }
 
     synchronized void connect(File entryBundle,AndroidStandardExitStore.Entry exit,Callback cb){ submit(entryBundle,exit,false,cb); }
@@ -37,14 +41,17 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     private void submit(File entryBundle,AndroidStandardExitStore.Entry exit,boolean direct,Callback cb){
         if(closed.get()){cb.finished(false,"Android custom-exit runtime is closed.");return;}
         if(active!=null&&!active.isDone()){cb.finished(false,"Another Android custom-exit attempt is running.");return;}
+        String blocked=startBlockedReason();if(!blocked.isEmpty()){cb.finished(false,blocked);return;}
         active=executor.submit(()->run(entryBundle,exit,direct,cb));
     }
 
     private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,Callback cb){
-        boolean started=false;
+        boolean started=false,sessionStarted=false;
         try{
+            String blocked=startBlockedReason();if(!blocked.isEmpty())throw new IllegalStateException(blocked);
             String before=singBox.getState();
             if("UP".equals(before)||"STARTING".equals(before)||"STOPPING".equals(before))throw new IllegalStateException("Disconnect the current embedded VPN before custom exit.");
+            AndroidHomeStateStore.beginExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg");sessionStarted=true;
             cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing WireGuard entry → "+exit.protocol+" custom exit…");
             NativeSingBoxController.SessionInfo session=direct?directBuilder.prepare(exit):builder.prepare(entry,exit);
             if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
@@ -61,12 +68,21 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             if(!"UP".equals(singBox.getState()))throw new IllegalStateException("Embedded custom-exit engine did not reach UP before timeout.");
             cb.progress("Tunnel is UP; proving the exact public custom exit before Connected…");
             String observed=proveExpectedPublicIp(exit.expectedPublicIp);
+            AndroidHomeStateStore.connectedExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg",observed);
             cb.finished(true,direct?"Connected: direct "+exit.protocol+" custom exit. Public exit proof passed: "+observed:"Connected: WireGuard entry → "+exit.protocol+" custom exit. Public exit proof passed: "+observed);
         } catch(InterruptedException e){
-            Thread.currentThread().interrupt();if(started)singBox.stop();cb.finished(false,"Android custom exit cancelled and disconnected.");
+            Thread.currentThread().interrupt();if(started)singBox.stop();if(sessionStarted)AndroidHomeStateStore.disconnected(context);cb.finished(false,"Android custom exit cancelled and disconnected.");
         } catch(Exception e){
-            if(started)singBox.stop();cb.finished(false,nonEmpty(e.getMessage(),"Android custom exit failed closed."));
+            if(started)singBox.stop();if(sessionStarted)AndroidHomeStateStore.failed(context,nonEmpty(e.getMessage(),"Android custom exit failed closed."));cb.finished(false,nonEmpty(e.getMessage(),"Android custom exit failed closed."));
         }
+    }
+
+    private String startBlockedReason(){
+        AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+        if(home.connected)return "Disconnect the current Router VPN or custom-exit session before starting another custom exit.";
+        AndroidRuntimeRegistry engines=AndroidRuntimeRegistry.get(context);
+        if(engines.orchestrator.isRunning()||engines.orchestrator.isActive()||engines.multihop.isActiveOrTransitioning())return "Wait for the current Router VPN transition to finish or disconnect before starting a custom exit.";
+        return "";
     }
 
     static String proveExpectedPublicIp(String expected)throws Exception{
@@ -90,7 +106,12 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         throw last==null?new IllegalStateException("Custom exit public-IP proof timed out."):last;
     }
 
-    synchronized void disconnect(){if(active!=null&&!active.isDone())active.cancel(true);singBox.stop();}
+    synchronized void disconnect(){
+        AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+        boolean owns="external".equals(home.logicalMode)||singBox.getMode().startsWith("standard-");
+        if(!owns)return;
+        if(active!=null&&!active.isDone())active.cancel(true);singBox.stop();AndroidHomeStateStore.disconnected(context);
+    }
     @Override public synchronized void close(){if(!closed.compareAndSet(false,true))return;if(active!=null&&!active.isDone())active.cancel(true);executor.shutdownNow();}
     private static byte[] readLimited(InputStream in,int max)throws Exception{try(InputStream input=in;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[256];int total=0,n;while((n=input.read(b))!=-1){total+=n;if(total>max)throw new IllegalStateException("Custom exit proof response too large.");out.write(b,0,n);}return out.toByteArray();}}
     private static String nonEmpty(String v,String fallback){return v==null||v.trim().isEmpty()?fallback:v.trim();}
