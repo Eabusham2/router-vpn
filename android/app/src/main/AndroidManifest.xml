@@ -21,7 +21,6 @@
             </intent-filter>
         </activity>
         <activity android:name=".StandardExitActivity" android:exported="false" />
-        <activity android:name=".MainActivity" android:exported="false" />
         <service
             android:name=".LayeredVpnService"
             android:exported="false"
