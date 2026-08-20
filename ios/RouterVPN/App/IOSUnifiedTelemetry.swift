@@ -18,31 +18,51 @@ struct IOSLatencyResult: Identifiable, Hashable {
     }
 }
 
+struct IOSSpeedResult: Hashable {
+    let downloadMbps: Double
+    let uploadMbps: Double
+    let bytes: Int
+    let downloadMs: Double
+    let uploadMs: Double
+    let serverReceiveMs: Double?
+    let measuredAt: Date
+
+    var detail: String {
+        var value = String(format: "Download %.1f Mbps • Upload %.1f Mbps\n%d MiB each way • %.0f ms down • %.0f ms up", downloadMbps, uploadMbps, bytes / (1 << 20), downloadMs, uploadMs)
+        if let serverReceiveMs { value += String(format: " • server received upload in %.0f ms", serverReceiveMs) }
+        return value
+    }
+}
+
+private final class IOSProbeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished else { return false }
+        finished = true
+        return true
+    }
+}
+
 @MainActor
 final class IOSUnifiedTelemetry: ObservableObject {
     @Published private(set) var latencyByID: [String: Double] = [:]
     @Published private(set) var livePathMs: Double?
     @Published private(set) var isTestingFastest = false
+    @Published private(set) var isSpeedTesting = false
+    @Published private(set) var lastSpeedResult: IOSSpeedResult?
     @Published private(set) var lastError = ""
-    @Published private(set) var animationPhase: Double = 0
 
     private static let cacheKey = "routervpn.ios.live-latency.v1"
-    private static let probePorts: [UInt16] = [443, 8388, 10443, 11443, 12443, 13443, 14443, 15443, 51820, 51822]
-    private var ticker: Timer?
+    nonisolated private static let probePorts: [UInt16] = [443, 8388, 10443, 11443, 12443, 13443, 14443, 15443, 51820, 51822]
     private var liveProbeBusy = false
 
     init() {
         if let stored = UserDefaults.standard.dictionary(forKey: Self.cacheKey) as? [String: Double] { latencyByID = stored }
-        ticker = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.animationPhase += 0.08
-                if self.animationPhase >= 1 { self.animationPhase -= 1 }
-            }
-        }
     }
-
-    deinit { ticker?.invalidate() }
 
     func cached(_ id: String) -> Double? { latencyByID[id] }
 
@@ -76,25 +96,73 @@ final class IOSUnifiedTelemetry: ObservableObject {
         liveProbeBusy = true
         defer { liveProbeBusy = false }
         do {
-            let url = base.appending(path: "health")
+            let url = base.appendingPathComponent("health")
             var values: [Double] = []
             for _ in 0..<2 {
                 var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 1.8)
                 if !profile.apiToken.isEmpty { request.setValue("Bearer \(profile.apiToken)", forHTTPHeaderField: "Authorization") }
-                let started = ContinuousClock.now
+                let started = Date()
                 let (_, response) = try await URLSession.shared.data(for: request)
                 guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
-                let elapsed = started.duration(to: .now)
-                values.append(Self.durationMs(elapsed))
+                values.append(Date().timeIntervalSince(started) * 1000)
             }
             values.sort()
             livePathMs = Self.percentile(values, 0.5)
         } catch { livePathMs = nil }
     }
 
+    func speedTest(profile: RouterProfile?, connected: Bool, bytes requestedBytes: Int = 8 << 20) async throws -> IOSSpeedResult {
+        guard connected else { throw NSError(domain: "RouterVPN", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connect Router VPN before testing path speed."]) }
+        guard let profile, profile.normalizedNodeKind == "router-vpn" else { throw NSError(domain: "RouterVPN", code: 2, userInfo: [NSLocalizedDescriptionKey: "Private path speed test requires a Router VPN node, not an external-only exit."]) }
+        guard !profile.apiToken.isEmpty, let base = URL(string: profile.routerAPI), !profile.routerAPI.isEmpty else { throw NSError(domain: "RouterVPN", code: 3, userInfo: [NSLocalizedDescriptionKey: "Selected node has no private benchmark API/token."]) }
+        let byteCount = min(max(requestedBytes, 1 << 20), 16 << 20)
+        isSpeedTesting = true
+        lastError = ""
+        defer { isSpeedTesting = false }
+
+        var downloadComponents = URLComponents(url: base.appendingPathComponent("api/benchmark/download"), resolvingAgainstBaseURL: false)
+        downloadComponents?.queryItems = [URLQueryItem(name: "bytes", value: String(byteCount))]
+        guard let downloadURL = downloadComponents?.url else { throw URLError(.badURL) }
+        var downloadRequest = URLRequest(url: downloadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+        downloadRequest.setValue("Bearer \(profile.apiToken)", forHTTPHeaderField: "Authorization")
+        downloadRequest.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        let downloadStarted = Date()
+        let (downloadData, downloadResponse) = try await URLSession.shared.data(for: downloadRequest)
+        let downloadSeconds = Date().timeIntervalSince(downloadStarted)
+        guard let downloadHTTP = downloadResponse as? HTTPURLResponse, (200..<300).contains(downloadHTTP.statusCode), downloadData.count == byteCount else { throw URLError(.badServerResponse) }
+
+        let uploadURL = base.appendingPathComponent("api/benchmark/upload")
+        var uploadRequest = URLRequest(url: uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
+        uploadRequest.httpMethod = "POST"
+        uploadRequest.setValue("Bearer \(profile.apiToken)", forHTTPHeaderField: "Authorization")
+        uploadRequest.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        uploadRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let uploadPayload = Data(count: byteCount)
+        let uploadStarted = Date()
+        let (uploadData, uploadResponse) = try await URLSession.shared.upload(for: uploadRequest, from: uploadPayload)
+        let uploadSeconds = Date().timeIntervalSince(uploadStarted)
+        guard let uploadHTTP = uploadResponse as? HTTPURLResponse, (200..<300).contains(uploadHTTP.statusCode) else { throw URLError(.badServerResponse) }
+        struct UploadReply: Decodable { let bytes: Int; let server_receive_ms: Double? }
+        let reply = try JSONDecoder().decode(UploadReply.self, from: uploadData)
+        guard reply.bytes == byteCount else { throw URLError(.cannotParseResponse) }
+
+        let mbits = Double(byteCount * 8) / 1_000_000
+        let result = IOSSpeedResult(
+            downloadMbps: Self.round3(mbits / max(downloadSeconds, 0.000001)),
+            uploadMbps: Self.round3(mbits / max(uploadSeconds, 0.000001)),
+            bytes: byteCount,
+            downloadMs: Self.round3(downloadSeconds * 1000),
+            uploadMs: Self.round3(uploadSeconds * 1000),
+            serverReceiveMs: reply.server_receive_ms,
+            measuredAt: Date()
+        )
+        lastSpeedResult = result
+        return result
+    }
+
     private func persist() { UserDefaults.standard.set(latencyByID, forKey: Self.cacheKey) }
 
-    nonisolated private static func measure(profile: RouterProfile, samples: Int) async throws -> IOSLatencyResult {
+    private static func measure(profile: RouterProfile, samples: Int) async throws -> IOSLatencyResult {
         let host = endpointHost(profile.endpoint)
         guard !host.isEmpty else { throw URLError(.badURL) }
         var port: UInt16?
@@ -121,14 +189,12 @@ final class IOSUnifiedTelemetry: ObservableObject {
     nonisolated private static func probeTCP(host: String, port: UInt16, timeoutMs: Int) async throws -> Double {
         try await withCheckedThrowingContinuation { continuation in
             let queue = DispatchQueue(label: "routervpn.ios.telemetry.\(UUID().uuidString)")
-            let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
-            let lock = NSLock()
-            var finished = false
+            guard let endpointPort = NWEndpoint.Port(rawValue: port) else { continuation.resume(throwing: URLError(.badURL)); return }
+            let connection = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: .tcp)
+            let once = IOSProbeOnce()
             let started = DispatchTime.now().uptimeNanoseconds
             let finish: @Sendable (Result<Double, Error>) -> Void = { result in
-                lock.lock(); defer { lock.unlock() }
-                guard !finished else { return }
-                finished = true
+                guard once.claim() else { return }
                 connection.stateUpdateHandler = nil
                 connection.cancel()
                 continuation.resume(with: result)
@@ -148,14 +214,13 @@ final class IOSUnifiedTelemetry: ObservableObject {
         }
     }
 
-    nonisolated private static func endpointHost(_ value: String) -> String {
+    private static func endpointHost(_ value: String) -> String {
         let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if let url = URL(string: raw.contains("://") ? raw : "tcp://\(raw)"), let host = url.host { return host }
         if raw.hasPrefix("["), let end = raw.firstIndex(of: "]") { return String(raw[raw.index(after: raw.startIndex)..<end]) }
         if raw.filter({ $0 == ":" }).count == 1, let colon = raw.lastIndex(of: ":") { return String(raw[..<colon]) }
         return raw
     }
-    nonisolated private static func percentile(_ values: [Double], _ p: Double) -> Double { guard values.count > 1 else { return values.first ?? 0 }; let index = p * Double(values.count - 1); let lo = Int(floor(index)), hi = Int(ceil(index)); if lo == hi { return values[lo] }; return values[lo] * (Double(hi)-index) + values[hi] * (index-Double(lo)) }
-    nonisolated private static func round3(_ value: Double) -> Double { (value * 1000).rounded() / 1000 }
-    nonisolated private static func durationMs(_ duration: Duration) -> Double { let c = duration.components; return Double(c.seconds) * 1000 + Double(c.attoseconds) / 1_000_000_000_000_000 }
+    private static func percentile(_ values: [Double], _ p: Double) -> Double { guard values.count > 1 else { return values.first ?? 0 }; let index = p * Double(values.count - 1); let lo = Int(floor(index)), hi = Int(ceil(index)); if lo == hi { return values[lo] }; return values[lo] * (Double(hi)-index) + values[hi] * (index-Double(lo)) }
+    private static func round3(_ value: Double) -> Double { (value * 1000).rounded() / 1000 }
 }
