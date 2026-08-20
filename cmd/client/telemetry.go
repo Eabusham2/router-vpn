@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +24,10 @@ type liveLatencyRequest struct {
 	Samples         int    `json:"samples"`
 	Select          *bool  `json:"select,omitempty"`
 	IncludeExternal bool   `json:"include_external,omitempty"`
+}
+
+type connectionSpeedRequest struct {
+	Bytes int64 `json:"bytes,omitempty"`
 }
 
 type liveLatencyResult struct {
@@ -56,10 +63,27 @@ type connectionLatencyResult struct {
 	Proof      string    `json:"proof"`
 }
 
+type connectionSpeedResult struct {
+	Connected       bool      `json:"connected"`
+	Mode            string    `json:"mode"`
+	LogicalMode     string    `json:"logical_mode"`
+	RouterID        string    `json:"router_id"`
+	Name            string    `json:"name"`
+	Bytes           int64     `json:"bytes"`
+	DownloadMbps    float64   `json:"download_mbps"`
+	UploadMbps      float64   `json:"upload_mbps"`
+	DownloadMs      float64   `json:"download_ms"`
+	UploadMs        float64   `json:"upload_ms"`
+	ServerReceiveMs float64   `json:"server_receive_ms,omitempty"`
+	MeasuredAt      time.Time `json:"measured_at"`
+	Proof           string    `json:"proof"`
+}
+
 func registerTelemetryRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/profile/live-latency", a.liveProfileLatency)
 	h.HandleFunc("/api/profile/fastest", a.fastestProfile)
 	h.HandleFunc("/api/connection/live-latency", a.connectionLiveLatency)
+	h.HandleFunc("/api/connection/speed-test", a.connectionSpeedTest)
 	h.HandleFunc("/api/multihop/live-latency", a.multihopLiveLatency)
 }
 
@@ -200,6 +224,69 @@ func (a *app) connectionLiveLatency(w http.ResponseWriter, r *http.Request) {
 	p, st, err := activeLatencyTarget(a); if err != nil { http.Error(w, err.Error(), http.StatusConflict); return }
 	value, err := privatePathLatency(p, st, samples); if err != nil { http.Error(w, err.Error(), http.StatusBadGateway); return }
 	w.Header().Set("content-type", "application/json"); w.Header().Set("cache-control", "no-store"); _ = json.NewEncoder(w).Encode(value)
+}
+
+func clampSpeedBytes(value int64) int64 {
+	if value == 0 { return 8 << 20 }
+	if value < 1<<20 { return 1 << 20 }
+	if value > 16<<20 { return 16 << 20 }
+	return value
+}
+
+func privateBenchmarkRequest(method, url, token string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil { return nil, err }
+	if strings.TrimSpace(token) != "" { req.Header.Set("Authorization", "Bearer "+token) }
+	req.Header.Set("Cache-Control", "no-store")
+	if body != nil { req.Header.Set("Content-Type", "application/octet-stream") }
+	return req, nil
+}
+
+func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost { http.Error(w, "POST only", http.StatusMethodNotAllowed); return }
+	var q connectionSpeedRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil && !errors.Is(err, io.EOF) { http.Error(w, "bad json", http.StatusBadRequest); return }
+	q.Bytes = clampSpeedBytes(q.Bytes)
+	p, st, err := activeLatencyTarget(a); if err != nil { http.Error(w, err.Error(), http.StatusConflict); return }
+	if strings.EqualFold(strings.TrimSpace(p.NodeKind), "external") || p.External != nil { http.Error(w, "private Router VPN throughput benchmark is unavailable for an external-only exit", http.StatusConflict); return }
+	if strings.TrimSpace(p.APIToken) == "" { http.Error(w, "active node has no private benchmark token", http.StatusConflict); return }
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	base := strings.TrimRight(p.RouterAPI, "/")
+	downloadURL := base + "/api/benchmark/download?bytes=" + strconv.FormatInt(q.Bytes, 10)
+	downloadReq, err := privateBenchmarkRequest(http.MethodGet, downloadURL, p.APIToken, nil); if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	downloadStarted := time.Now()
+	downloadResp, err := client.Do(downloadReq); if err != nil { http.Error(w, "download benchmark failed: "+err.Error(), http.StatusBadGateway); return }
+	downloaded, copyErr := io.Copy(io.Discard, io.LimitReader(downloadResp.Body, q.Bytes+1)); _ = downloadResp.Body.Close()
+	if copyErr != nil { http.Error(w, "download benchmark read failed: "+copyErr.Error(), http.StatusBadGateway); return }
+	if downloadResp.StatusCode/100 != 2 { http.Error(w, "download benchmark returned "+downloadResp.Status, http.StatusBadGateway); return }
+	if downloaded != q.Bytes { http.Error(w, fmt.Sprintf("download benchmark returned %d bytes, expected %d", downloaded, q.Bytes), http.StatusBadGateway); return }
+	downloadElapsed := time.Since(downloadStarted)
+
+	uploadPayload := make([]byte, q.Bytes)
+	if _, err := rand.Read(uploadPayload); err != nil { http.Error(w, "could not prepare incompressible upload payload", http.StatusInternalServerError); return }
+	uploadURL := base + "/api/benchmark/upload"
+	uploadReq, err := privateBenchmarkRequest(http.MethodPost, uploadURL, p.APIToken, bytes.NewReader(uploadPayload)); if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	uploadReq.ContentLength = q.Bytes
+	uploadStarted := time.Now()
+	uploadResp, err := client.Do(uploadReq); if err != nil { http.Error(w, "upload benchmark failed: "+err.Error(), http.StatusBadGateway); return }
+	uploadBody, readErr := io.ReadAll(io.LimitReader(uploadResp.Body, 64<<10)); _ = uploadResp.Body.Close()
+	if readErr != nil { http.Error(w, "upload benchmark response failed: "+readErr.Error(), http.StatusBadGateway); return }
+	if uploadResp.StatusCode/100 != 2 { http.Error(w, "upload benchmark returned "+uploadResp.Status+": "+strings.TrimSpace(string(uploadBody)), http.StatusBadGateway); return }
+	uploadElapsed := time.Since(uploadStarted)
+	var uploadServer struct { ServerReceiveMs float64 `json:"server_receive_ms"`; Bytes int64 `json:"bytes"` }
+	if err := json.Unmarshal(uploadBody, &uploadServer); err != nil { http.Error(w, "upload benchmark returned invalid JSON", http.StatusBadGateway); return }
+	if uploadServer.Bytes != q.Bytes { http.Error(w, fmt.Sprintf("upload benchmark accepted %d bytes, expected %d", uploadServer.Bytes, q.Bytes), http.StatusBadGateway); return }
+
+	mbits := float64(q.Bytes*8) / 1_000_000.0
+	result := connectionSpeedResult{
+		Connected: true, Mode: st.Mode, LogicalMode: st.LogicalMode, RouterID: p.ID, Name: p.Name, Bytes: q.Bytes,
+		DownloadMbps: round3(mbits / downloadElapsed.Seconds()), UploadMbps: round3(mbits / uploadElapsed.Seconds()),
+		DownloadMs: round3(float64(downloadElapsed.Microseconds()) / 1000.0), UploadMs: round3(float64(uploadElapsed.Microseconds()) / 1000.0),
+		ServerReceiveMs: round3(uploadServer.ServerReceiveMs), MeasuredAt: time.Now().UTC(),
+		Proof: "authenticated bounded upload/download against the active node private router-agent through the current VPN path",
+	}
+	w.Header().Set("content-type", "application/json"); w.Header().Set("cache-control", "no-store"); _ = json.NewEncoder(w).Encode(result)
 }
 
 func (a *app) multihopLiveLatency(w http.ResponseWriter, r *http.Request) {
