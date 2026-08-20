@@ -75,3 +75,47 @@ func TestMeasureRoutedProfileSpeedRejectsUnsupportedProfiles(t *testing.T) {
 		t.Fatal("missing private benchmark API/token unexpectedly accepted")
 	}
 }
+
+func TestValidateActiveMultihopSpeedGraphRequiresExactLivePair(t *testing.T) {
+	st := state{Connected: true, Mode: "multihop", RouterID: "exit-a"}
+	graph := activeMultihopGraph{EntryID: "entry-a", ExitID: "exit-a", Base: "wg", ExitMode: "shadowsocks"}
+	if err := validateActiveMultihopSpeedGraph(st, graph, true, "entry-a", "exit-a"); err != nil {
+		t.Fatalf("exact active graph rejected: %v", err)
+	}
+	if err := validateActiveMultihopSpeedGraph(st, graph, true, "entry-other", "exit-a"); err == nil || !strings.Contains(err.Error(), "does not match active multihop entry") {
+		t.Fatalf("wrong entry was not rejected precisely: %v", err)
+	}
+	if err := validateActiveMultihopSpeedGraph(st, graph, true, "entry-a", "exit-other"); err == nil || !strings.Contains(err.Error(), "does not match active multihop exit") {
+		t.Fatalf("wrong exit was not rejected precisely: %v", err)
+	}
+}
+
+func TestValidateActiveMultihopSpeedGraphFailsClosedWithoutIdentity(t *testing.T) {
+	st := state{Connected: true, Mode: "multihop", RouterID: "exit-a"}
+	if err := validateActiveMultihopSpeedGraph(st, activeMultihopGraph{}, false, "entry-a", "exit-a"); err == nil || !strings.Contains(err.Error(), "refusing to guess") {
+		t.Fatalf("missing graph identity did not fail closed: %v", err)
+	}
+	graph := activeMultihopGraph{EntryID: "entry-a", ExitID: "exit-a"}
+	st.RouterID = "different-exit"
+	if err := validateActiveMultihopSpeedGraph(st, graph, true, "entry-a", "exit-a"); err == nil || !strings.Contains(err.Error(), "state and tracked exit identity disagree") {
+		t.Fatalf("state/tracker disagreement did not fail closed: %v", err)
+	}
+}
+
+func TestActiveMultihopGraphTrackerStoresExactSelection(t *testing.T) {
+	a := &app{}
+	defer clearActiveMultihopGraph(a)
+	sel := multihopSelection{
+		Entry: common.RouterProfile{ID: "entry-a"},
+		Exit: common.RouterProfile{ID: "exit-a"},
+		Base: "awg", ExitMode: "hysteria2",
+	}
+	setActiveMultihopGraph(a, sel)
+	graph, ok := getActiveMultihopGraph(a)
+	if !ok { t.Fatal("active graph was not stored") }
+	if graph.EntryID != "entry-a" || graph.ExitID != "exit-a" || graph.Base != "awg" || graph.ExitMode != "hysteria2" {
+		t.Fatalf("active graph changed identity: %+v", graph)
+	}
+	clearActiveMultihopGraph(a)
+	if _, ok := getActiveMultihopGraph(a); ok { t.Fatal("active graph survived explicit invalidation") }
+}
