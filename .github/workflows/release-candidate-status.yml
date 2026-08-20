@@ -1,0 +1,47 @@
+name: Router VPN release candidate status
+
+on:
+  workflow_run:
+    workflows: ["Router VPN release candidate"]
+    types: [completed]
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  publish:
+    name: Publish exact-head RC status
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish commit status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          case "$CONCLUSION" in
+            success) STATE=success; DESCRIPTION='All Router VPN release-candidate gates passed' ;;
+            *) STATE=failure; DESCRIPTION="Router VPN release candidate: ${CONCLUSION:-unknown}" ;;
+          esac
+          python3 - "$STATE" "$DESCRIPTION" "$RUN_URL" > "$RUNNER_TEMP/status.json" <<'PY'
+          import json, sys
+          state, description, url = sys.argv[1:4]
+          print(json.dumps({
+              "state": state,
+              "description": description[:140],
+              "context": "Router VPN release candidate",
+              "target_url": url,
+          }))
+          PY
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPO/statuses/$SHA" \
+            --data-binary @"$RUNNER_TEMP/status.json"
+          if [[ "$STATE" != success ]]; then exit 1; fi
