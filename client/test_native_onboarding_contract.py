@@ -25,6 +25,7 @@ def require_any(name: str, source: str, label: str, variants: tuple[str, ...]) -
 # separate persisted lifecycle. Legacy prototype files are never used as proof.
 win = read("client/RouterVPN-Windows-App.ps1")
 win_unified = read("client/RouterVPN-Windows-UnifiedShell.ps1")
+win_telemetry = read("client/RouterVPN-Windows-Telemetry.ps1")
 win_product = read("client/RouterVPN-Windows-Product-v2.ps1")
 mac_onboarding = read("client/macos/RouterVPNProductOnboarding.swift")
 mac_build = read("client/macos/build-native-app.sh")
@@ -49,13 +50,22 @@ require("Windows onboarding v3", win, (
     "Setup Center Full Guide", "Emergency stop",
 ))
 require_any("Windows onboarding v3", win, "kill switch", ("kill switch", "kill-switch"))
-require("Windows unified shipping shell", win_unified + win_product, (
+require("Windows unified shipping shell", win_unified + win_product + win_telemetry, (
     "UnifiedShell", "UnifiedMapCanvas", "UnifiedConnectButton", "UnifiedKillSwitch",
     "SMART AUTO", "CUSTOM", "/api/strategy/auto", "/api/strategy/smart-auto",
     "/api/strategy/custom", "/api/connect-logical", "/api/multihop/connect",
     "/api/profile/select", "/api/profile/latency", "/api/dns/retest",
     "/api/emergency-stop",
 ))
+require("Windows globe + forwarding", win_telemetry, (
+    "ROUTER VPN GLOBE", "GlobeXY", "SelectUnifiedMapNode", "TickUnifiedMapAnimation",
+    "UnifiedMapAnimationTimer", "entry", "exit", "external", "selected",
+    "PATH {0:N1} ms", "latency_trimmed_mean_ms", "latency_median_ms",
+    "Only real stored coordinates", "/api/forwarding/master", "Forward ON", "Forward OFF",
+    "ToggleUnifiedForwardingMaster", "Real path speed", "Routed hop speeds",
+))
+assert "OpenUnifiedDetail 5" not in win_telemetry, "Windows Forward side control regressed to a detail-page shortcut"
+assert "device location is never fabricated" in win_telemetry
 assert "if($SelfTest)" in win
 assert re.search(r"else\s*\{\s*Show-RouterVPNProductOnboarding\s*;\s*&\s*\$ProductScript\b", win), "Windows first-run onboarding is not wired before the shipping product"
 
