@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"
 UNIFIED_SRC="$ROOT/client/macos/RouterVPNMacUnifiedShell.swift"
+TELEMETRY_SRC="$ROOT/client/macos/RouterVPNMacTelemetry.swift"
 ONBOARDING_SRC="$ROOT/client/macos/RouterVPNProductOnboarding.swift"
 HOME_SRC="$ROOT/client/macos/RouterVPNHomeSummary.swift"
 SETTINGS_SRC="$ROOT/client/macos/RouterVPNProfileSettings.swift"
@@ -40,7 +41,7 @@ changes = (
     ('split.setPosition(650, ofDividerAt: 0)', 'split.setPosition(430, ofDividerAt: 0)'),
     (
         'super.init(window: window); buildUI(); refreshAll(); timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshLive() }',
-        'super.init(window: window); buildUnifiedUI(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshLive(); self?.refreshUnifiedChrome() }',
+        'super.init(window: window); buildUnifiedUI(); installUnifiedTelemetryUI(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry(); timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshLive(); self?.refreshUnifiedChrome(); self?.refreshUnifiedTelemetry() }',
     ),
     (
         'let r = NSStackView(); r.orientation = .horizontal; r.spacing = 8; r.addArrangedSubview(button("AUTO Connect", #selector(autoConnect))); r.addArrangedSubview(button("Connect Selected", #selector(connectSelected))); r.addArrangedSubview(button("Disconnect", #selector(disconnect))); r.addArrangedSubview(button("Refresh", #selector(refreshAction))); s.addArrangedSubview(r)',
@@ -54,7 +55,7 @@ changes = (
     ),
     (
         'func refreshLive() { refreshStatus(); refreshSessionEvents() }',
-        'func refreshLive() { refreshStatus(); refreshHomeSummary(); refreshSessionEvents(); refreshUnifiedChrome() }',
+        'func refreshLive() { refreshStatus(); refreshHomeSummary(); refreshSessionEvents(); refreshUnifiedChrome(); refreshUnifiedTelemetry() }',
     ),
     (
         'let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Connect real multihop", #selector(connectMultihop))); row.addArrangedSubview(button("Refresh multihop readiness", #selector(refreshAdvancedAction))); row.addArrangedSubview(button("Retest MTU", #selector(retestMTU))); row.addArrangedSubview(button("Emergency stop", #selector(emergencyStop))); s.addArrangedSubview(row);',
@@ -75,7 +76,7 @@ for old, new in changes:
     text = text.replace(old, new, 1)
 for marker in (
     'window.minSize = NSSize(width: 720, height: 520)',
-    'buildUnifiedUI(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome()',
+    'buildUnifiedUI(); installUnifiedTelemetryUI(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry()',
     '/api/strategy/auto', '/api/strategy/smart-auto',
     'customConnect() { openUnifiedCustomBuilder() }',
     'refreshHomeSummary()',
@@ -91,7 +92,7 @@ PY
 xcrun clang -fobjc-arc -fblocks -fmodules -isysroot "$SDK" -mmacosx-version-min=13.0 -arch "$CLANG_ARCH" -c "$MENU_SRC" -o "$MENU_OBJ"
 
 xcrun swiftc -O -sdk "$SDK" -target "$TARGET" -framework AppKit -framework Foundation -framework MapKit \
-  "$ADAPTIVE_SRC" "$UNIFIED_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$MENU_OBJ" -o "$BIN"
+  "$ADAPTIVE_SRC" "$UNIFIED_SRC" "$TELEMETRY_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$MENU_OBJ" -o "$BIN"
 chmod 755 "$BIN"
 
 ICON_WORK="$BUILD_WORK/icon"; mkdir -p "$ICON_WORK"
@@ -112,7 +113,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>com.eabusham.routervpn.macos</string><key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Router VPN</string><key>CFBundleDisplayName</key><string>Router VPN</string>
   <key>CFBundlePackageType</key><string>APPL</string><key>CFBundleIconFile</key><string>RouterVPN</string>
-  <key>CFBundleShortVersionString</key><string>0.9.0</string><key>CFBundleVersion</key><string>13</string>
+  <key>CFBundleShortVersionString</key><string>0.9.0</string><key>CFBundleVersion</key><string>14</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string><key>NSHighResolutionCapable</key><true/><key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 PLIST
@@ -121,10 +122,11 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 file "$BIN"
 case "$ARCH" in amd64) file "$BIN" | grep -Eq 'x86_64|Mach-O 64-bit executable x86_64';; arm64) file "$BIN" | grep -Eq 'arm64|Mach-O 64-bit executable arm64';; esac
 
-! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC" "$UNIFIED_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC"
+! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC" "$UNIFIED_SRC" "$TELEMETRY_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC"
 for marker in 'NSWindow(' 'import MapKit' 'MKMapView' 'http://127.0.0.1:8788' '/api/connect-logical' '/api/session/events' '/api/multihop/status' '/api/multihop/connect' '/api/external-profile/import' '/api/external-profile/connect' 'entry_id' 'externalEntryPopup' '/api/mtu/retest' 'Retest MTU' 'effective_mtu_mbps' '/api/emergency-stop'; do grep -Fq "$marker" "$SRC"; done
 for marker in 'buildUnifiedUI' 'unified-sheet' 'unified-connect' 'SMART AUTO — recommended' 'AUTO — first proven path' 'New CUSTOM preset…' 'CUSTOM preset builder' 'Kill switch' 'Multihop' 'Open settings' 'Mode' 'DNS' 'systemBlue' 'systemOrange' 'systemPink' 'real coordinates'; do grep -Fq "$marker" "$UNIFIED_SRC"; done
-for marker in 'buildUnifiedUI(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome()' '/api/strategy/auto' '/api/strategy/smart-auto' 'openUnifiedCustomBuilder()' 'refreshHomeSummary()' 'button("Edit profile settings", #selector(editProfileSettings))' 'button("Run onboarding", #selector(runProductOnboarding))' 'RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)'; do grep -Fq "$marker" "$ADAPTIVE_SRC"; done
+for marker in 'installUnifiedTelemetryUI' 'unified-fastest-node' 'unified-live-latency' 'unified-multihop-latency' '/api/profile/fastest' '/api/connection/live-latency' '/api/multihop/live-latency' 'Performance' 'Throughput + Auto MTU' 'Forward'; do grep -Fq "$marker" "$TELEMETRY_SRC"; done
+for marker in 'buildUnifiedUI(); installUnifiedTelemetryUI(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry()' '/api/strategy/auto' '/api/strategy/smart-auto' 'openUnifiedCustomBuilder()' 'refreshHomeSummary()' 'button("Edit profile settings", #selector(editProfileSettings))' 'button("Run onboarding", #selector(runProductOnboarding))' 'RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)'; do grep -Fq "$marker" "$ADAPTIVE_SRC"; done
 for marker in 'RouterVPNProductOnboardingDoneV2' 'Add or link a node' 'router-vpn-bundle.json' 'AUTO' 'WireGuard' 'AmneziaWG' 'DNS' 'LAN Off' 'MTU/Jumbo' 'kill-switch' 'Multihop' 'forwarding' 'permissions' 'Disconnect' 'private identity/path proof' 'Public exit' 'Diagnostics' 'Emergency stop' 'Setup Center Full Guide' 'Run onboarding'; do grep -Fq "$marker" "$ONBOARDING_SRC"; done
 for marker in '/api/home-summary' '/api/home-summary/prove-exit' 'actualExitStatus == "proved"' 'Node latency' 'LAN access' 'Kill switch' 'Effective MTU' 'Warnings'; do grep -Fq "$marker" "$HOME_SRC"; done
 for marker in '/api/profile/settings' 'Allow home LAN access' 'Always / strict' 'AmneziaWG' 'Auto measured' 'DAITA-like' 'Jumbo TUN' 'SOCKS5' 'startup' 'auto-connect'; do grep -Fiq "$marker" "$SETTINGS_SRC"; done
@@ -133,4 +135,4 @@ strings "$BIN" | grep -Fq 'RouterVPNMenuBarBootstrap'; ! otool -L "$BIN" | grep 
 
 if [[ "$(uname -m)" == arm64 && "$ARCH" == arm64 ]] || [[ "$(uname -m)" == x86_64 && "$ARCH" == amd64 ]]; then "$BIN" --self-test; fi
 
-echo "Built native RouterVPN.app with map-first unified shell, truthful SMART/AUTO/CUSTOM, Home state, editable profile settings, menu bar and persistent onboarding for $ARCH at $APP"
+echo "Built native RouterVPN.app with map-first unified shell, fastest-node connect, live path/multihop telemetry, truthful SMART/AUTO/CUSTOM, editable profile settings, menu bar and persistent onboarding for $ARCH at $APP"
