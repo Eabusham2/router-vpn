@@ -29,9 +29,16 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 	requireRepoMarkers(t, "cmd/client/telemetry.go",
 		"/api/profile/fastest", "/api/connection/live-latency", "/api/multihop/live-latency",
 		"/api/connection/speed-test", "/api/benchmark/download", "/api/benchmark/upload", "DownloadMbps", "UploadMbps")
+	requireRepoMarkers(t, "cmd/client/multihop.go",
+		"activeMultihopGraph", "setActiveMultihopGraph", "clearActiveMultihopGraph", "getActiveMultihopGraph",
+		"configured_entry_id", "configured_exit_id", "actual_entry_id", "actual_exit_id")
 	requireRepoMarkers(t, "cmd/client/telemetry_hops.go",
 		"/api/profile/speed-test", "/api/multihop/speed-test", "measureRoutedProfileSpeed",
-		"entry_error", "exit_error", "not derived from RTT", "active routing graph")
+		"validateActiveMultihopSpeedGraph", "does not match active multihop entry", "does not match active multihop exit",
+		"refusing to guess hop ownership", "entry_error", "exit_error", "not derived from RTT", "active routing graph")
+	requireRepoMarkers(t, "cmd/client/telemetry_hops_test.go",
+		"TestValidateActiveMultihopSpeedGraphRequiresExactLivePair", "TestValidateActiveMultihopSpeedGraphFailsClosedWithoutIdentity",
+		"TestActiveMultihopGraphTrackerStoresExactSelection")
 	requireRepoMarkers(t, "cmd/client/mtu_retest.go", "registerHopTelemetryRoutes(h, a)")
 
 	requireRepoMarkers(t, "client/RouterVPN-Windows-Telemetry.ps1",
@@ -43,13 +50,11 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 	requireRepoMarkers(t, "client/macos/RouterVPNMacTelemetry.swift",
 		"unified-fastest-node", "unified-live-latency", "unified-multihop-latency", "Forward",
 		"Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test", "50-sample selected node", "Throughput + Auto MTU")
-	requireRepoMarkers(t, "client/macos/build-native-app.sh",
-		"TELEMETRY_SRC", `"$TELEMETRY_SRC"`, "installUnifiedTelemetryUI")
+	requireRepoMarkers(t, "client/macos/build-native-app.sh", "TELEMETRY_SRC", `"$TELEMETRY_SRC"`, "installUnifiedTelemetryUI")
 	requireRepoMarkers(t, "client/linux/routervpn-telemetry-v9.inc",
 		"⚡ Fastest", "/api/profile/fastest", "/api/connection/live-latency", "/api/multihop/live-latency",
 		"Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test", "Throughput + Auto MTU", "Forward")
-	requireRepoMarkers(t, "client/linux/build-native-app.sh",
-		"routervpn-telemetry-v9.inc", "linux_install_telemetry_v9(&app);")
+	requireRepoMarkers(t, "client/linux/build-native-app.sh", "routervpn-telemetry-v9.inc", "linux_install_telemetry_v9(&app);")
 
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetry.java",
 		"class SpeedResult", "speedTest", "speedTest(AndroidNodeStore.Node", "/api/benchmark/download", "/api/benchmark/upload",
@@ -72,6 +77,8 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 
 	requireRepoMarkers(t, ".github/workflows/release-candidate-status.yml",
 		"workflow_run", "Router VPN release candidate", "statuses: write", "Router VPN release candidate", "head_sha")
+	requireRepoMarkers(t, ".github/workflows/server-release-status.yml",
+		"Router VPN ARM64 images", "Router VPN ARM64 Portainer preflight", "head_sha")
 }
 
 func TestUnifiedDefaultsAndSettingsContract(t *testing.T) {
