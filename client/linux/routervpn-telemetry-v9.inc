@@ -8,6 +8,8 @@ typedef struct {
     gboolean syncing;
 } LinuxTelemetryV9;
 
+#include "routervpn-connection-profiles-v10.inc"
+
 static GtkWidget *linux_telemetry_find_button_v9(GtkWidget *root, const char *label) {
     if (root == NULL) return NULL;
     if (GTK_IS_BUTTON(root)) {
@@ -101,10 +103,10 @@ static void linux_install_telemetry_v9(App *app){
     if(app==NULL||app->window==NULL)return;LinuxUnifiedV8*base=g_object_get_data(G_OBJECT(app->window),"linux-unified-v8");if(base==NULL)return;LinuxTelemetryV9*t=g_new0(LinuxTelemetryV9,1);t->app=app;t->base=base;
     GtkWidget*connect_row=gtk_widget_get_parent(base->connect);if(GTK_IS_BOX(connect_row)){t->fastest=gtk_combo_box_text_new();gtk_widget_set_size_request(t->fastest,155,-1);gtk_box_pack_start(GTK_BOX(connect_row),t->fastest,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->fastest,1);t->live=gtk_label_new("-- ms");gtk_box_pack_start(GTK_BOX(connect_row),t->live,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->live,2);t->forward=make_button("Forward ?",G_CALLBACK(linux_telemetry_forward_v9),t);gtk_widget_set_tooltip_text(t->forward,"Real server forwarding master on the active Router VPN home node.");gtk_box_pack_end(GTK_BOX(connect_row),t->forward,FALSE,FALSE,0);g_signal_connect(t->fastest,"changed",G_CALLBACK(linux_telemetry_fastest_changed_v9),t);}
     GtkWidget*multi_row=gtk_widget_get_parent(base->multihop);t->hop=gtk_label_new("");if(GTK_IS_BOX(multi_row)){gtk_box_pack_start(GTK_BOX(multi_row),t->hop,FALSE,FALSE,0);}
-    GtkWidget*settings=linux_telemetry_find_button_v9(base->stack,"Open settings");if(settings!=NULL&&GTK_IS_BOX(gtk_widget_get_parent(settings))){GtkWidget*performance=make_button("Performance",G_CALLBACK(linux_telemetry_performance_v9),t);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),performance,FALSE,FALSE,0);}
+    GtkWidget*settings=linux_telemetry_find_button_v9(base->stack,"Open settings");if(settings!=NULL&&GTK_IS_BOX(gtk_widget_get_parent(settings))){GtkWidget*profiles=make_button("Profiles",G_CALLBACK(linux_connection_profiles_v10),t);GtkWidget*performance=make_button("Performance",G_CALLBACK(linux_telemetry_performance_v9),t);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),profiles,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),performance,FALSE,FALSE,0);}
     g_object_set_data_full(G_OBJECT(app->window),"linux-telemetry-v9",t,g_free);linux_telemetry_refresh_fastest_v9(t);linux_telemetry_refresh_v9(t);g_timeout_add(3000,linux_telemetry_refresh_v9,t);gtk_widget_show_all(app->window);
 }
 
 /* Linux telemetry v9: fastest-node side dropdown, live current-path RTT, live multihop
  * IN/OUT/PATH RTT, real authenticated path Mbps, real routed entry/exit Mbps when reachable,
- * separate MTU optimizer, Performance panel, real /api/forwarding/master ON/OFF control and map latency refresh. */
+ * separate MTU optimizer, Settings-row Profiles manager, Performance panel, real /api/forwarding/master ON/OFF control and map latency refresh. */
