@@ -51,8 +51,9 @@ final class AndroidStandardExitStore {
         }
     }
 
+    private final Context context;
     private final File storeFile;
-    AndroidStandardExitStore(Context context) { storeFile = new File(context.getFilesDir(), "standard-exits.json"); }
+    AndroidStandardExitStore(Context context) { this.context=context.getApplicationContext(); storeFile = new File(this.context.getFilesDir(), "standard-exits.json"); }
 
     static List<Capability> capabilities() {
         List<Capability> r=new ArrayList<>();
@@ -68,6 +69,7 @@ final class AndroidStandardExitStore {
         throw new IllegalArgumentException("Custom standard exit was not found.");
     }
     synchronized Entry save(Entry entry) throws Exception {
+        requireMutable("saving or replacing a custom exit");
         validate(entry);
         List<Entry> all=readStore(); boolean found=false;
         for(int i=0;i<all.size();i++) if(all.get(i).id.equals(entry.id)){all.set(i,entry);found=true;break;}
@@ -75,10 +77,21 @@ final class AndroidStandardExitStore {
         writeStore(all); return entry;
     }
     synchronized void remove(String id) throws Exception {
+        requireMutable("deleting a custom exit");
         if(!safeId(id)) throw new IllegalArgumentException("Invalid custom exit id.");
         List<Entry> all=readStore(), next=new ArrayList<>(); boolean found=false;
         for(Entry e:all){if(e.id.equals(id))found=true;else next.add(e);} if(!found)throw new IllegalArgumentException("Custom standard exit was not found.");
         writeStore(next);
+    }
+
+    private void requireMutable(String action){
+        AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+        AndroidRuntimeRegistry engines=AndroidRuntimeRegistry.get(context);
+        boolean activeOrTransitioning=home.connected||"connecting".equals(home.phase)
+                ||engines.orchestrator.isRunning()||engines.multihop.isActiveOrTransitioning()
+                ||"UP".equals(engines.singBox.getState())||"STARTING".equals(engines.singBox.getState())||"STOPPING".equals(engines.singBox.getState())
+                ||"UP".equals(engines.xray.getState())||"STARTING".equals(engines.xray.getState())||"STOPPING".equals(engines.xray.getState());
+        if(activeOrTransitioning)throw new IllegalStateException("Disconnect Router VPN before "+action+"; live external-exit identity and proof must remain immutable for the session.");
     }
 
     private List<Entry> readStore() throws Exception {
