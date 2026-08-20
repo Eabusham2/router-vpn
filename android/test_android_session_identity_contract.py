@@ -23,6 +23,7 @@ forwarding = read("AndroidForwardingMaster.java")
 revalidator = read("AndroidSessionRevalidator.java")
 standard_activity = read("StandardExitActivity.java")
 via_entry = read("AndroidViaEntryLatencyProbe.java")
+map_view = read("RouterVpnNodeMapView.java")
 manifest = (ROOT / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
 
 # One app-process engine owner. Activity recreation must not replace GoBackend,
@@ -41,6 +42,30 @@ for marker in (
 ):
     assert marker in registry, f"runtime registry lost ownership marker: {marker}"
 assert 'android:name=".MainActivity" android:exported="false" android:enabled="false"' in manifest
+
+# Location is an explicit map action only. Permission declarations may exist,
+# but no first-launch/runtime owner may silently request them. The globe accepts
+# only Android Location-provider fixes and renders a separately colored user pin.
+for marker in (
+    "android.permission.ACCESS_COARSE_LOCATION",
+    "android.permission.ACCESS_FINE_LOCATION",
+):
+    assert marker in manifest, f"Android manifest missing opt-in location permission: {marker}"
+for marker in (
+    "LOCATE ME",
+    "enableRealUserLocation()",
+    "activity.requestPermissions",
+    "requestSingleUpdate",
+    "MAX_LAST_LOCATION_AGE_MS",
+    "acceptRealLocation",
+    "userPin",
+    'canvas.drawText("YOU"',
+    "Only real coordinates • device location appears only after LOCATE ME",
+):
+    assert marker in map_view, f"Android truthful-location globe marker missing: {marker}"
+assert "requestPermissions" not in product, "Android ProductActivity must not silently request location on startup"
+assert "getLastKnownLocation" in map_view and "getProviders(true)" in map_view
+assert "Geocoder" not in map_view and "ip-api" not in map_view.lower() and "ipinfo" not in map_view.lower(), "Android map must not infer device location from network/IP"
 
 # Node and external-profile identity cannot mutate underneath a live/transitioning
 # tunnel. Public list/read operations remain available for rendering telemetry.
