@@ -16,6 +16,7 @@ struct IOSProfileSettingsView: View {
     @State private var startupMode = "smart-auto"
     @State private var autoConnect = false
     @State private var status = ""
+    @State private var showingConnectionProfiles = false
 
     private let killValues = [("Off","off"),("On connect","on-connect"),("Always / strict","always")]
     private let ipv6Values = [("On — default","on"),("Auto","auto"),("Off","off")]
@@ -66,6 +67,13 @@ struct IOSProfileSettingsView: View {
                     Text("SMART AUTO is the unified default. Startup/autoconnect is stored as node policy; iOS may still require system VPN/Network Extension permission and background restrictions can limit automatic execution.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Section("Connection profiles") {
+                    Button("Add / Load / Update / Delete connection profiles") { showingConnectionProfiles = true }
+                        .disabled(model.connected)
+                    Text("Profiles reference linked Router/Custom nodes and save only non-secret Mode/CUSTOM, DNS, kill-switch, IPv6 and MTU choices. Node keys, API tokens and external credentials stay in the private node store.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if model.connected { Text("Disconnect before changing saved connection-profile choices.").font(.caption).foregroundStyle(.orange) }
+                }
                 Section {
                     Button("Save for next supported connection") { save() }
                         .disabled(model.connected)
@@ -75,6 +83,7 @@ struct IOSProfileSettingsView: View {
             }
             .navigationTitle("Advanced Settings")
             .onAppear { load() }
+            .sheet(isPresented: $showingConnectionProfiles) { IOSConnectionProfilesView().environmentObject(model) }
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
@@ -85,8 +94,8 @@ struct IOSProfileSettingsView: View {
     }
 
     private func load() {
-        guard let p = selectedProfile() else { status = "Pair/import and select a Router VPN node first."; return }
-        guard p.normalizedNodeKind == "router-vpn" else { status = "External exits own their protocol settings."; return }
+        guard let p = selectedProfile() else { status = "Pair/import and select a Router VPN node first. Connection profiles remain available above."; return }
+        guard p.normalizedNodeKind == "router-vpn" else { status = "External exits own their protocol settings. Connection profiles remain available above."; return }
         homeLANAccess = p.homeLANAccess ?? true
         killSwitchPolicy = (p.killSwitchPolicy ?? (p.killSwitch == true ? "always" : "off")).lowercased()
         ipv6Mode = (p.ipv6Mode ?? "on").lowercased()
@@ -136,5 +145,5 @@ struct IOSProfileSettingsView: View {
 
 // iOS settings contract: LAN Off / kill switch / IPv6 On default / WG-AWG base+fallback /
 // Require encrypted + Require obfuscation AUTO filters / Auto measured-fixed-runtime MTU /
-// SMART AUTO startup default. Jumbo/DAITA/SOCKS are omitted when the current Apple runtime
-// cannot truthfully claim their support.
+// SMART AUTO startup default / secret-free connection-profile Add-Load-Update-Delete.
+// Jumbo/DAITA/SOCKS are omitted when the current Apple runtime cannot truthfully claim their support.
