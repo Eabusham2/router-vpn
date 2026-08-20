@@ -1,5 +1,7 @@
 package com.eabusham.routervpn;
 
+import android.content.Context;
+
 import com.wireguard.android.backend.Tunnel;
 
 import java.util.ArrayList;
@@ -21,12 +23,14 @@ final class AndroidViaEntryLatencyProbe {
         void finished(AndroidNodeStore.Node entry, List<AndroidTelemetry.Result> values, Throwable error);
     }
 
+    private final Context context;
     private final NativeWireGuardController wireGuard;
     private final AndroidTelemetry telemetry;
     private final AndroidRuntimeRegistry runtime;
     private final AtomicBoolean busy = new AtomicBoolean(false);
 
-    AndroidViaEntryLatencyProbe(AndroidRuntimeRegistry runtime, AndroidTelemetry telemetry) {
+    AndroidViaEntryLatencyProbe(Context context, AndroidRuntimeRegistry runtime, AndroidTelemetry telemetry) {
+        this.context = context.getApplicationContext();
         this.runtime = runtime;
         this.wireGuard = runtime.wireGuard;
         this.telemetry = telemetry;
@@ -38,7 +42,7 @@ final class AndroidViaEntryLatencyProbe {
         if (entry == null) { callback.finished(null, null, new IllegalArgumentException("Choose a multihop entry first.")); return; }
         if (candidates == null || candidates.isEmpty()) { callback.finished(entry, null, new IllegalArgumentException("No candidate exits are available.")); return; }
         if (!busy.compareAndSet(false, true)) { callback.finished(entry, null, new IllegalStateException("A via-entry latency measurement is already running.")); return; }
-        AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(entry.file.getParentFile() == null ? null : runtimeContext());
+        AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(context);
         if (home.connected || "connecting".equals(home.phase) || runtime.orchestrator.isRunning() || runtime.multihop.isActiveOrTransitioning()
                 || "UP".equals(runtime.singBox.getState()) || "STARTING".equals(runtime.singBox.getState())
                 || "UP".equals(runtime.xray.getState()) || "STARTING".equals(runtime.xray.getState())
@@ -78,18 +82,5 @@ final class AndroidViaEntryLatencyProbe {
                 });
             });
         });
-    }
-
-    /* Registry-owned controllers use application context; HomeState only needs that context. */
-    private android.content.Context runtimeContext() {
-        return AndroidViaEntryLatencyContextHolder.context;
-    }
-
-    static void installContext(android.content.Context context) {
-        AndroidViaEntryLatencyContextHolder.context = context == null ? null : context.getApplicationContext();
-    }
-
-    private static final class AndroidViaEntryLatencyContextHolder {
-        private static volatile android.content.Context context;
     }
 }
