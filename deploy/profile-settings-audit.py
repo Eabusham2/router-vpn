@@ -59,43 +59,101 @@ require(
     'json:"auto_require_encrypted,omitempty"', 'json:"auto_require_obfuscation,omitempty"',
     'json:"daita_enabled,omitempty"', 'json:"jumbo_tun,omitempty"', 'json:"socks_enabled,omitempty"',
 )
-require("cmd/client/mtu_retest.go", "registerProfileSettingsRoute(h, a)", "registerStrategyRoutes(h, a)")
+require(
+    "cmd/client/mtu_retest.go", "registerProfileSettingsRoute(h, a)", "registerStrategyRoutes(h, a)",
+    "registerConnectionProfileRoutes(h, a)",
+)
+
+# Shared desktop connection profiles save complete connection choices without
+# cloning node identity/private credentials. Load is an idle-only configuration
+# restore; the next connect still has to establish and prove its real dataplane.
+connection_profiles = require(
+    "cmd/client/connection_profiles.go",
+    "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
+    "/api/connection-profile/load", "/api/connection-profile/delete",
+    "connection-profiles.json", "0o600", "profileSettingsBusy", "saved multihop profile references",
+    "connect separately so the selected platform can establish and prove the requested dataplane",
+    "snapshotConnectionPreferences", "CustomLayers", "DNSMode", "MultihopEntryID", "MultihopExitID",
+)
+for forbidden_field in (
+    "APIToken string", "PrivateKey string", "PresharedKey string", "SocksUsername string",
+    "SocksPassword string", "External *common.ExternalNodeConfig",
+):
+    if forbidden_field in connection_profiles:
+        errors.append(f"connection profile persistence unexpectedly declares secret-bearing field: {forbidden_field}")
+require(
+    "cmd/client/connection_profiles_test.go",
+    "TestConnectionProfileStoreRoundTripIsPrivateAndSecretFree",
+    "TestSnapshotConnectionPreferencesNeverCopiesNodeCredentials",
+    "TestConnectionProfileInputNormalization", "TOP-SECRET-API-TOKEN", "private-password", "0o600",
+)
 
 # Windows is a composed native WPF product: launcher + unified daily shell +
-# narrow settings helper. The migration audit follows that real shipping seam
-# instead of requiring the old tab/button names to remain duplicated.
-require(
+# narrow settings helper. Connection profile CRUD lives inside Settings so the
+# requested daily Connect -> Multihop -> Settings -> Mode -> DNS order is intact.
+win_settings = require(
     "client/RouterVPN-Windows-ProfileSettings.ps1", "/api/profile/settings", "Allow home LAN access",
     "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
-    "never POST redacted /api/profile",
+    "Connection profiles", "Add profile", "Load", "Update", "Delete",
+    "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
+    "/api/connection-profile/load", "/api/connection-profile/delete",
+    "windows-selected-mode-v1.txt", "windows-custom-presets-v1.json",
+    "never duplicate node secrets",
 )
+for forbidden in ("APIToken", "PrivateKey", "PresharedKey", "socks_password"):
+    if forbidden in win_settings:
+        errors.append(f"Windows connection profile UI should not serialize private node field marker: {forbidden}")
 require_combined(
     "Windows unified product",
     ("client/RouterVPN-Windows-App.ps1", "client/RouterVPN-Windows-UnifiedShell.ps1", "client/RouterVPN-Windows-ProfileSettings.ps1"),
     "RouterVPN-Windows-ProfileSettings.ps1", "Show-RouterVPNProfileSettingsDialog", "/api/profile/settings",
     "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
-    "UnifiedSettingsButton", "UnifiedKillSwitch", "UnifiedMtuButton",
+    "UnifiedSettingsButton", "UnifiedKillSwitch", "UnifiedMtuButton", "/api/connection-profile/load",
 )
 
-# macOS build compiles both settings and unified shell. Strategy endpoints live
-# in the unified shell while the build owns the compile/package seam.
-require(
+# macOS build compiles both settings and unified shell. The Settings accessory
+# owns profile CRUD and mirrors only unified mode/CUSTOM layer choices locally.
+mac_settings = require(
     "client/macos/RouterVPNProfileSettings.swift", "/api/profile/settings", "Allow home LAN access",
     "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
-    "no redacted full-profile POST",
+    "Connection profiles", "MacConnectionProfileControls", "Add", "Load", "Update", "Delete",
+    "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
+    "/api/connection-profile/load", "/api/connection-profile/delete",
+    "routervpn.unified.selected-mode.v1", "routervpn.unified.custom-presets.v1",
+    "never duplicates node secrets",
 )
+for forbidden in ("apiToken", "privateKey", "presharedKey", "socksPassword"):
+    if forbidden in mac_settings:
+        errors.append(f"macOS connection profile UI should not serialize private node field marker: {forbidden}")
 require_combined(
     "macOS unified product",
     ("client/macos/build-native-app.sh", "client/macos/RouterVPNMacUnifiedShell.swift", "client/macos/RouterVPNProfileSettings.swift"),
     "SETTINGS_SRC", "UNIFIED_SRC", '"$SETTINGS_SRC"', '"$UNIFIED_SRC"',
     "editProfileSettings", "/api/profile/settings", "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
+    "/api/connection-profile/load",
 )
 
-# Linux shipping build compiles the settings editor plus the unified v8 shell.
+# Linux keeps Router-node settings stable and attaches a separate native profile
+# manager beside Settings/Performance. The whole shipping binary remains -Werror.
 require(
     "client/linux/routervpn-profile-settings-v1.inc", "/api/profile/settings", "Allow home LAN access",
     "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
     "never redacted full-profile POST",
+)
+linux_profiles = require(
+    "client/linux/routervpn-connection-profiles-v10.inc",
+    "LinuxConnectionProfilesV10", "Add profile", "Load", "Update", "Delete", "Refresh",
+    "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
+    "/api/connection-profile/load", "/api/connection-profile/delete",
+    "linux_unified_selected_mode_v8", "linux_unified_custom_layers_for_mode_v8",
+    "linux_unified_store_mode_v8", "never duplicate node secrets or credentials",
+)
+for forbidden in ("api_token", "private_key", "preshared_key", "socks_password"):
+    if forbidden in linux_profiles:
+        errors.append(f"Linux connection profile UI should not serialize private node field marker: {forbidden}")
+require(
+    "client/linux/routervpn-telemetry-v9.inc", '#include "routervpn-connection-profiles-v10.inc"',
+    'make_button("Profiles",G_CALLBACK(linux_connection_profiles_v10),t)',
 )
 require(
     "client/linux/build-native-app.sh", "SETTINGS_INC", '#include \"routervpn-profile-settings-v1.inc\"',
@@ -103,9 +161,9 @@ require(
 )
 require_combined(
     "Linux unified product",
-    ("client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-home-summary-v1.inc"),
+    ("client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-home-summary-v1.inc", "client/linux/routervpn-telemetry-v9.inc", "client/linux/routervpn-connection-profiles-v10.inc"),
     "/api/profile/settings", "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
-    "linux_unified_settings_v8", "Kill switch", "MTU Retest",
+    "linux_unified_settings_v8", "Kill switch", "MTU Retest", "/api/connection-profile/load",
 )
 
 # Android edits only the selected private bundle. Current map-first ProductActivity
