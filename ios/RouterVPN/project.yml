@@ -26,6 +26,7 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Router VPN connects to your home VPN node on the local network to import its private profile and manage tunnel-only services.
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Router VPN can show your real device location on the VPN map when you explicitly tap the location button. Location is not required for the VPN and is never inferred from your IP address.
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
         TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
