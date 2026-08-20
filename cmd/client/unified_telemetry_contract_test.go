@@ -47,7 +47,7 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		"⚡ Fastest", "liveLatency", "Performance", "Forward", "Profiles", "showProfileManager",
 		"currentPathMs", "refreshMultihopSummary", "RouterVpnNodeMapView.Marker")
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
-		"latencyMs", "packetPhase", "ROLE_ENTRY", "ROLE_EXIT", "canvas.drawLine", "invalidate")
+		"latencyMs", "System.currentTimeMillis", "postInvalidateDelayed", "ROLE_ENTRY", "ROLE_EXIT", "canvas.drawLine")
 
 	requireRepoMarkers(t, "ios/RouterVPN/App/IOSUnifiedTelemetry.swift",
 		"IOSSpeedResult", "speedTest", "/api/benchmark/download", "/api/benchmark/upload",
