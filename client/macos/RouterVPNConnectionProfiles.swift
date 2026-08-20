@@ -50,7 +50,6 @@ extension ProductWindowController {
                 if list.profiles.isEmpty { popup.addItem(withTitle: "No saved profiles"); popup.lastItem?.isEnabled = false }
                 let name = NSTextField(string: list.profiles.first?.name ?? "")
                 name.placeholderString = "Profile name"
-                popup.target = nil
                 stack.addArrangedSubview(popup); stack.addArrangedSubview(name)
                 alert.accessoryView = stack
 
@@ -61,20 +60,27 @@ extension ProductWindowController {
                     guard let id = popup.selectedItem?.representedObject as? String, !id.isEmpty else { showConnectionProfileMessage("Select a saved profile first.", error: true); continue }
                     let payload = try connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": id])
                     applyLoadedConnectionProfile(payload)
-                    showConnectionProfileMessage("Loaded \(payload["profile"].flatMap { ($0 as? [String: Any])?["name"] as? String } ?? "profile"). Connect separately so the selected dataplane is established and proved.", error: false)
+                    let loadedName = (payload["profile"] as? [String: Any])?["name"] as? String ?? "profile"
+                    showConnectionProfileMessage("Loaded \(loadedName). Connect separately so the selected dataplane is established and proved.", error: false)
                 case 1:
                     let profileName = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !profileName.isEmpty else { showConnectionProfileMessage("Enter a profile name.", error: true); continue }
-                    _ = try connectionProfilePOST("/api/connection-profile/setup/save", body: connectionProfileSnapshot(name: profileName, id: nil))
+                    let result = try connectionProfilePOST("/api/connection-profile/setup/save", body: connectionProfileSnapshot(name: profileName, id: nil))
+                    let savedName = (result["profile"] as? [String: Any])?["name"] as? String ?? profileName
+                    showConnectionProfileMessage("Saved \(savedName).", error: false)
                 case 2:
                     guard let id = popup.selectedItem?.representedObject as? String, !id.isEmpty else { showConnectionProfileMessage("Select a saved profile first.", error: true); continue }
                     let profileName = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !profileName.isEmpty else { showConnectionProfileMessage("Enter a profile name.", error: true); continue }
                     _ = try connectionProfilePOST("/api/connection-profile/setup/update", body: connectionProfileSnapshot(name: profileName, id: id))
+                    showConnectionProfileMessage("Updated \(profileName).", error: false)
                 case 3:
                     guard let id = popup.selectedItem?.representedObject as? String, !id.isEmpty else { showConnectionProfileMessage("Select a saved profile first.", error: true); continue }
                     let confirm = NSAlert(); confirm.alertStyle = .warning; confirm.messageText = "Delete saved connection profile?"; confirm.informativeText = "This removes only the reusable setup. Linked Router/custom node credentials are not deleted."; confirm.addButton(withTitle: "Delete"); confirm.addButton(withTitle: "Cancel")
-                    if confirm.runModal() == .alertFirstButtonReturn { _ = try connectionProfilePOST("/api/connection-profile/setup/delete", body: ["id": id]) }
+                    if confirm.runModal() == .alertFirstButtonReturn {
+                        _ = try connectionProfilePOST("/api/connection-profile/setup/delete", body: ["id": id])
+                        showConnectionProfileMessage("Deleted the reusable connection profile. Linked nodes were not changed.", error: false)
+                    }
                 default:
                     return
                 }
@@ -115,13 +121,15 @@ extension ProductWindowController {
     }
 
     private func applyLoadedConnectionProfile(_ payload: [String: Any]) {
-        let mode = (payload["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? payload["mode"] as! String : "smart-auto"
+        let rawMode = (payload["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let mode = rawMode.isEmpty ? "smart-auto" : rawMode
         if mode.hasPrefix("custom:"), let layers = payload["custom_layers"] as? [String], !layers.isEmpty {
             let name = String(mode.dropFirst("custom:".count))
             var presets: [MacConnectionCustomPreset] = []
             if let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey) { presets = (try? JSONDecoder().decode([MacConnectionCustomPreset].self, from: data)) ?? [] }
             presets.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
             presets.append(MacConnectionCustomPreset(name: name, layers: layers))
+            presets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             if let data = try? JSONEncoder().encode(presets) { UserDefaults.standard.set(data, forKey: macConnectionCustomPresetsKey) }
         }
         UserDefaults.standard.set(mode, forKey: macConnectionModeKey)
@@ -132,14 +140,14 @@ extension ProductWindowController {
         refreshUnifiedModeMenu(preferred: mode)
         if let entry = payload["multihop_entry_id"] as? String, let index = multihopNodeIDs.firstIndex(of: entry) { multihopEntryPopup.selectItem(at: index) }
         if let exit = payload["multihop_exit_id"] as? String, let index = multihopNodeIDs.firstIndex(of: exit) { multihopExitPopup.selectItem(at: index) }
-        if (payload["multihop_exit_mode"] as? String) == "hysteria2" { multihopExitModePopup.selectItem(at: min(1, multihopExitModePopup.numberOfItems - 1)) }
+        if (payload["multihop_exit_mode"] as? String) == "hysteria2", multihopExitModePopup.numberOfItems > 1 { multihopExitModePopup.selectItem(at: 1) }
         else if multihopExitModePopup.numberOfItems > 0 { multihopExitModePopup.selectItem(at: 0) }
         refreshUnifiedHopOverlay()
         refreshUnifiedChrome()
     }
 
     private func showConnectionProfileMessage(_ text: String, error: Bool) {
-        let alert = NSAlert(); alert.alertStyle = error ? .warning : .informational; alert.messageText = error ? "Connection profile" : "Connection profile loaded"; alert.informativeText = text; alert.addButton(withTitle: "OK"); alert.runModal()
+        let alert = NSAlert(); alert.alertStyle = error ? .warning : .informational; alert.messageText = error ? "Connection profile" : "Connection profile"; alert.informativeText = text; alert.addButton(withTitle: "OK"); _ = alert.runModal()
     }
 }
 
