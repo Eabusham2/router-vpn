@@ -87,7 +87,6 @@ extension ProductWindowController {
 
         refreshUnifiedFastNodeMenu()
         refreshUnifiedTelemetry()
-        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in self?.refreshUnifiedTelemetry() }
     }
 
     func refreshUnifiedFastNodeMenu() {
@@ -134,7 +133,7 @@ extension ProductWindowController {
                 }
                 DispatchQueue.main.async {
                     self.refreshAll(); self.refreshUnifiedChrome(); self.refreshUnifiedFastNodeMenu()
-                    self.startUnifiedSelectedMode()
+                    self.connectUnified()
                 }
             } catch { DispatchQueue.main.async { self.errorLabel.stringValue = "Fast connect failed: \(error.localizedDescription)" } }
         }
@@ -151,7 +150,8 @@ extension ProductWindowController {
                 DispatchQueue.main.async { self.telemetryLiveLabel?.stringValue = "-- ms"; self.telemetryLiveLabel?.textColor = .secondaryLabelColor }
             }
 
-            guard UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey),
+            let multihopOn = (self.telemetryFind("unified-multihop-toggle") as? NSButton)?.state == .on
+            guard multihopOn,
                   self.multihopEntryPopup.indexOfSelectedItem >= 0, self.multihopExitPopup.indexOfSelectedItem >= 0,
                   self.multihopEntryPopup.indexOfSelectedItem < self.multihopNodeIDs.count,
                   self.multihopExitPopup.indexOfSelectedItem < self.multihopNodeIDs.count else {
