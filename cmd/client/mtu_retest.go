@@ -25,6 +25,7 @@ func registerMTURetestRoute(h *http.ServeMux, a *app) {
 	registerHomeSummaryRoute(h, a)
 	registerProfileSettingsRoute(h, a)
 	registerStrategyRoutes(h, a)
+	registerTelemetryRoutes(h, a)
 }
 
 func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
