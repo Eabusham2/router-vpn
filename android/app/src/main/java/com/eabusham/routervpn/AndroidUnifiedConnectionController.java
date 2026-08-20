@@ -45,7 +45,11 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         multihop = new AndroidMultihopRuntime(activity, singBox);
     }
 
-    boolean isActiveOrTransitioning() { return orchestrator.isRunning() || orchestrator.isActive(); }
+    boolean isActiveOrTransitioning() { return multihop.isActiveOrTransitioning() || orchestrator.isRunning() || orchestrator.isActive(); }
+    boolean isMultihopConnected() { return multihop.isConnected(); }
+    String activeMultihopEntryId() { return multihop.activeEntryId(); }
+    String activeMultihopExitId() { return multihop.activeExitId(); }
+    String activeMultihopExitMode() { return multihop.activeExitMode(); }
 
     void connect(String mode, List<String> layers, Callback callback) {
         if (isActiveOrTransitioning()) { callback.finished(false, "Disconnect the current Router VPN session or let its transition finish first."); return; }
@@ -72,10 +76,13 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
 
     void disconnect(Callback callback) {
         pendingMode = ""; pendingLayers = Collections.emptyList(); pendingEntry = null; pendingExit = null; pendingExitMode = ""; pendingCallback = null;
+        boolean wasMultihop = multihop.isActiveOrTransitioning();
         try { multihop.disconnect(); } catch (Throwable ignored) {}
         orchestrator.disconnect(new AndroidModeOrchestrator.Callback() {
             @Override public void progress(String message) { activity.runOnUiThread(() -> callback.progress(message)); }
-            @Override public void finished(boolean success, String modeId, String message) { activity.runOnUiThread(() -> callback.finished(success, message)); }
+            @Override public void finished(boolean success, String modeId, String message) {
+                activity.runOnUiThread(() -> callback.finished(success, wasMultihop && success ? "Disconnected Android multihop and native Router VPN transports." : message));
+            }
         });
     }
 
@@ -108,7 +115,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if (callback == null) return;
         if ("multihop".equals(mode)) {
             if (entry == null || exit == null || entry.id.equals(exit.id) || exitMode.isEmpty()) { callback.finished(false, "Multihop selection expired; choose entry and exit again."); return; }
-            multihop.connect(entry.file, exit.file, exitMode, new AndroidMultihopRuntime.Callback() {
+            multihop.connect(entry, exit, exitMode, new AndroidMultihopRuntime.Callback() {
                 @Override public void progress(String message) { activity.runOnUiThread(() -> callback.progress(message)); }
                 @Override public void finished(boolean ok, String message) { activity.runOnUiThread(() -> callback.finished(ok, message)); }
             });
