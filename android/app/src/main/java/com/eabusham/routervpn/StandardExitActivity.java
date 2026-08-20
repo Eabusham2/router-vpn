@@ -108,15 +108,16 @@ public final class StandardExitActivity extends Activity {
     private String capabilityText() {
         StringBuilder s=new StringBuilder("Supported now:");
         for(AndroidStandardExitStore.Capability c:AndroidStandardExitStore.capabilities()) s.append("\n").append(c.supported?"✓ ":"— ").append(c.protocol).append(c.supported?"":" — "+c.reason);
-        s.append("\n\nDirect custom exits require Android Always-on VPN plus ‘Block connections without VPN’; Router VPN refuses to start a direct external graph without that strict system lockdown. Hopped exits use the linked Router VPN WireGuard entry policy. Secrets stay in Android app-private storage and are never shown in this list. Custom exit servers and DNS endpoints currently require literal IPs so setup cannot leak pre-tunnel DNS.");
+        s.append("\n\nHTTP is HTTP CONNECT. HTTPS is HTTP CONNECT protected by certificate-verified TLS/SNI. Direct custom exits require Android Always-on VPN plus ‘Block connections without VPN’; Router VPN refuses to start a direct external graph without that strict system lockdown. Hopped exits use the linked Router VPN WireGuard entry policy. Secrets stay in Android app-private storage and are never shown in this list. Custom exit servers and DNS endpoints require literal IPs so setup cannot leak pre-tunnel DNS.");
         return s.toString();
     }
 
     private void chooseProtocol() {
-        String[] protocols={"WireGuard","SOCKS5","Shadowsocks","Hysteria2","OpenVPN — unavailable"};
+        String[] protocols={"WireGuard","SOCKS5","HTTP CONNECT","HTTPS CONNECT + TLS","Shadowsocks","Hysteria2","OpenVPN — unavailable"};
+        String[] ids={"wireguard","socks5","http","https","shadowsocks","hysteria2"};
         new AlertDialog.Builder(this).setTitle("Add custom exit protocol").setItems(protocols,(d,w)->{
-            if(w==4){dialog("OpenVPN unavailable",AndroidStandardExitStore.capabilities().get(4).reason);return;}
-            showAddForm(new String[]{"wireguard","socks5","shadowsocks","hysteria2"}[w]);
+            if(w==6){dialog("OpenVPN unavailable",AndroidStandardExitStore.capabilities().get(6).reason);return;}
+            showAddForm(ids[w]);
         }).setNegativeButton("Cancel",null).show();
     }
 
@@ -125,7 +126,7 @@ public final class StandardExitActivity extends Activity {
         EditText name=field("Name",false),server=field("Server literal IP",false),port=field("Server port",false),expected=field("Expected public exit IP",false);
         port.setInputType(InputType.TYPE_CLASS_NUMBER);form.addView(name);form.addView(server);form.addView(port);form.addView(expected);
         List<EditText> extra=new ArrayList<>();
-        if("socks5".equals(protocol)){extra.add(field("Username (optional)",false));extra.add(field("Password (optional)",true));}
+        if("socks5".equals(protocol)||"http".equals(protocol)||"https".equals(protocol)){extra.add(field("Username (optional)",false));extra.add(field("Password (optional)",true));if("https".equals(protocol))extra.add(field("TLS server name / SNI for certificate verification",false));}
         else if("shadowsocks".equals(protocol)){extra.add(field("Method, e.g. 2022-blake3-aes-256-gcm",false));extra.add(field("Password / PSK",true));}
         else if("hysteria2".equals(protocol)){extra.add(field("Password",true));extra.add(field("TLS server name / SNI",false));}
         else if("wireguard".equals(protocol)){extra.add(field("Interface addresses, comma-separated CIDRs",false));extra.add(field("Private key",true));extra.add(field("Peer public key",false));extra.add(field("Preshared key (optional)",true));extra.add(field("Allowed IPs, comma-separated CIDRs",false));EditText mtu=field("MTU (optional)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);extra.add(mtu);}
@@ -133,7 +134,7 @@ public final class StandardExitActivity extends Activity {
         ScrollView scroll=new ScrollView(this);scroll.addView(form);
         new AlertDialog.Builder(this).setTitle("Add "+protocol+" exit").setView(scroll).setPositiveButton("Save",(d,w)->{
             try{AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.name=name.getText().toString();e.protocol=protocol;e.server=server.getText().toString();e.serverPort=parseInt(port,"Server port");e.expectedPublicIp=expected.getText().toString();int i=0;
-                if("socks5".equals(protocol)){e.username=extra.get(i++).getText().toString();e.password=extra.get(i).getText().toString();}
+                if("socks5".equals(protocol)||"http".equals(protocol)||"https".equals(protocol)){e.username=extra.get(i++).getText().toString();e.password=extra.get(i++).getText().toString();if("https".equals(protocol))e.tlsServerName=extra.get(i).getText().toString();}
                 else if("shadowsocks".equals(protocol)){e.method=extra.get(i++).getText().toString();e.secret=extra.get(i).getText().toString();}
                 else if("hysteria2".equals(protocol)){e.secret=extra.get(i++).getText().toString();e.tlsServerName=extra.get(i).getText().toString();}
                 else{e.wgAddresses.addAll(csv(extra.get(i++).getText().toString()));e.wgPrivateKey=extra.get(i++).getText().toString();e.wgPeerPublicKey=extra.get(i++).getText().toString();e.wgPreSharedKey=extra.get(i++).getText().toString();e.wgAllowedIps.addAll(csv(extra.get(i++).getText().toString()));String m=extra.get(i).getText().toString().trim();e.wgMtu=m.isEmpty()?0:Integer.parseInt(m);}
@@ -145,7 +146,7 @@ public final class StandardExitActivity extends Activity {
     private void showSavedExits(boolean connect, boolean direct) {
         try {
             List<AndroidStandardExitStore.Entry> exits=exitStore.list();
-            if(exits.isEmpty()){new AlertDialog.Builder(this).setTitle("No custom exits").setMessage("Add a WireGuard, SOCKS5, Shadowsocks or Hysteria2 exit first.").setPositiveButton("Add",(d,w)->chooseProtocol()).setNegativeButton("Cancel",null).show();return;}
+            if(exits.isEmpty()){new AlertDialog.Builder(this).setTitle("No custom exits").setMessage("Add WireGuard, SOCKS5, HTTP/HTTPS CONNECT, Shadowsocks or Hysteria2 first.").setPositiveButton("Add",(d,w)->chooseProtocol()).setNegativeButton("Cancel",null).show();return;}
             String[] labels=new String[exits.size()];for(int i=0;i<exits.size();i++){AndroidStandardExitStore.Entry e=exits.get(i);labels[i]=e.name+" — "+e.protocol+"\n"+e.server+":"+e.serverPort+" → "+e.expectedPublicIp;}
             String title=!connect?"Manage custom exits":direct?"Choose direct external exit":"Choose external exit after Router VPN entry";
             new AlertDialog.Builder(this).setTitle(title).setItems(labels,(d,w)->{if(connect){if(direct)requestDirect(exits.get(w));else chooseEntry(exits.get(w));}else showExitActions(exits.get(w));}).setPositiveButton(connect?"Cancel":"Add new",(d,w)->{if(!connect)chooseProtocol();}).setNegativeButton("Close",null).show();
