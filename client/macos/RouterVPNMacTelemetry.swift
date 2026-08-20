@@ -7,6 +7,7 @@ private var telemetryInstalledKey: UInt8 = 0
 private var telemetryFastPopupKey: UInt8 = 0
 private var telemetryLiveLabelKey: UInt8 = 0
 private var telemetryHopLabelKey: UInt8 = 0
+private var telemetryForwardButtonKey: UInt8 = 0
 private var telemetryPerformanceControllerKey: UInt8 = 0
 
 extension ProductWindowController {
@@ -32,6 +33,10 @@ extension ProductWindowController {
         get { objc_getAssociatedObject(self, &telemetryHopLabelKey) as? NSTextField }
         set { objc_setAssociatedObject(self, &telemetryHopLabelKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
     }
+    private var telemetryForwardButton: NSButton? {
+        get { objc_getAssociatedObject(self, &telemetryForwardButtonKey) as? NSButton }
+        set { objc_setAssociatedObject(self, &telemetryForwardButtonKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
 
     func installUnifiedTelemetryUI() {
         if (objc_getAssociatedObject(self, &telemetryInstalledKey) as? Bool) == true { return }
@@ -56,10 +61,14 @@ extension ProductWindowController {
         telemetryLiveLabel = live
         connectRow.addArrangedSubview(live)
 
-        let forwarding = NSButton(title: "Forward", target: self, action: #selector(openUnifiedForwarding))
+        let forwarding = NSButton(title: "Forward ?", target: self, action: #selector(toggleUnifiedForwardingMaster(_:)))
+        forwarding.identifier = NSUserInterfaceItemIdentifier("unified-forward-master")
         forwarding.controlSize = .small
         forwarding.bezelStyle = .rounded
-        forwarding.toolTip = "Master port-forward controls for supported tunnel modes."
+        forwarding.state = .mixed
+        forwarding.allowsMixedState = true
+        forwarding.toolTip = "Real server forwarding master on the active Router VPN home node."
+        telemetryForwardButton = forwarding
         connectRow.addArrangedSubview(forwarding)
 
         if let multi = telemetryFind("unified-multihop-toggle") as? NSButton, let row = multi.superview as? NSStackView {
@@ -139,8 +148,66 @@ extension ProductWindowController {
         }
     }
 
+    private func setUnifiedForwardState(_ enabled: Bool?, name: String? = nil) {
+        guard let button = telemetryForwardButton else { return }
+        button.isEnabled = true
+        if let enabled {
+            button.state = enabled ? .on : .off
+            button.title = enabled ? "Forward ON" : "Forward OFF"
+            let suffix = (name?.isEmpty == false) ? " on \(name!)" : ""
+            button.toolTip = "Real server forwarding master\(suffix)."
+        } else {
+            button.state = .mixed
+            button.title = "Forward ?"
+            button.toolTip = "Connect a Router VPN home-node path to verify the real forwarding master."
+        }
+    }
+
+    private func refreshUnifiedForwardingMaster() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            do {
+                let root = try self.api.json("/api/forwarding/master", timeout: 4) as? [String: Any] ?? [:]
+                guard let enabled = root["enabled"] as? Bool else { throw NSError(domain: "RouterVPNMac", code: 71, userInfo: [NSLocalizedDescriptionKey: "Forwarding-master response did not contain a verified state."]) }
+                let name = root["name"] as? String
+                DispatchQueue.main.async { self.setUnifiedForwardState(enabled, name: name) }
+            } catch {
+                DispatchQueue.main.async { self.setUnifiedForwardState(nil) }
+            }
+        }
+    }
+
+    @objc private func toggleUnifiedForwardingMaster(_ sender: NSButton) {
+        sender.isEnabled = false
+        sender.title = "Forward …"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak sender] in
+            guard let self, let sender else { return }
+            do {
+                let current = try self.api.json("/api/forwarding/master", timeout: 5) as? [String: Any] ?? [:]
+                guard let currentEnabled = current["enabled"] as? Bool else { throw NSError(domain: "RouterVPNMac", code: 72, userInfo: [NSLocalizedDescriptionKey: "Could not verify the current forwarding-master state."]) }
+                let wanted = !currentEnabled
+                let data = try self.api.request("/api/forwarding/master", method: "PUT", body: ["enabled": wanted], timeout: 10)
+                guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], let actual = root["enabled"] as? Bool, actual == wanted else {
+                    throw NSError(domain: "RouterVPNMac", code: 73, userInfo: [NSLocalizedDescriptionKey: "Forwarding master did not reach the requested state."])
+                }
+                let name = root["name"] as? String
+                DispatchQueue.main.async {
+                    self.setUnifiedForwardState(actual, name: name)
+                    self.errorLabel.stringValue = "Forwarding master \(actual ? "ON" : "OFF")\(name?.isEmpty == false ? " on \(name!)" : "")."
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    sender.isEnabled = true
+                    self.setUnifiedForwardState(nil)
+                    self.errorLabel.stringValue = "Forwarding master failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     func refreshUnifiedTelemetry() {
         refreshUnifiedFastNodeMenu()
+        refreshUnifiedForwardingMaster()
         let multihopOn = (telemetryFind("unified-multihop-toggle") as? NSButton)?.state == .on
         let entryIndex = multihopEntryPopup.indexOfSelectedItem
         let exitIndex = multihopExitPopup.indexOfSelectedItem
