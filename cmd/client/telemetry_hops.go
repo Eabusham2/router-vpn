@@ -43,12 +43,8 @@ func registerHopTelemetryRoutes(h *http.ServeMux, a *app) {
 func measureRoutedProfileSpeed(p common.RouterProfile, bytesCount int64) (routedSpeedResult, error) {
 	bytesCount = clampSpeedBytes(bytesCount)
 	kind := strings.ToLower(strings.TrimSpace(p.NodeKind))
-	if kind == "external" || p.External != nil {
-		return routedSpeedResult{}, errors.New("private Router VPN throughput benchmark is unavailable for an external-only node")
-	}
-	if strings.TrimSpace(p.RouterAPI) == "" || strings.TrimSpace(p.APIToken) == "" {
-		return routedSpeedResult{}, errors.New("node has no private benchmark API/token")
-	}
+	if kind == "external" || p.External != nil { return routedSpeedResult{}, errors.New("private Router VPN throughput benchmark is unavailable for an external-only node") }
+	if strings.TrimSpace(p.RouterAPI) == "" || strings.TrimSpace(p.APIToken) == "" { return routedSpeedResult{}, errors.New("node has no private benchmark API/token") }
 	client := &http.Client{Timeout: 30 * time.Second}
 	base := strings.TrimRight(p.RouterAPI, "/")
 
@@ -115,6 +111,15 @@ func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"connected": true, "mode": st.Mode, "logical_mode": st.LogicalMode, "result": value})
 }
 
+func validateActiveMultihopSpeedGraph(st state, graph activeMultihopGraph, graphOK bool, entryID, exitID string) error {
+	if !st.Connected || st.Mode != "multihop" { return errors.New("connect the actual multihop graph before testing routed hop speed") }
+	if !graphOK { return errors.New("active multihop graph identity is unavailable; refusing to guess hop ownership") }
+	if graph.EntryID != entryID { return fmt.Errorf("requested entry %q does not match active multihop entry %q", entryID, graph.EntryID) }
+	if graph.ExitID != exitID { return fmt.Errorf("requested exit %q does not match active multihop exit %q", exitID, graph.ExitID) }
+	if st.RouterID != "" && st.RouterID != graph.ExitID { return errors.New("active multihop state and tracked exit identity disagree") }
+	return nil
+}
+
 func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost { http.Error(w, "POST only", http.StatusMethodNotAllowed); return }
 	var q routedSpeedRequest
@@ -122,12 +127,12 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 	entryID, exitID := strings.TrimSpace(q.EntryID), strings.TrimSpace(q.ExitID)
 	if entryID == "" || exitID == "" || entryID == exitID { http.Error(w, "choose different multihop entry and exit nodes", http.StatusBadRequest); return }
 	a.mu.Lock(); st := a.state; entry, entryOK := a.profileByIDLocked(entryID); exit, exitOK := a.profileByIDLocked(exitID); a.mu.Unlock()
-	if !st.Connected || st.Mode != "multihop" { http.Error(w, "connect the actual multihop graph before testing routed hop speed", http.StatusConflict); return }
+	graph, graphOK := getActiveMultihopGraph(a)
+	if err := validateActiveMultihopSpeedGraph(st, graph, graphOK, entryID, exitID); err != nil { http.Error(w, err.Error(), http.StatusConflict); return }
 	if !entryOK || !exitOK { http.Error(w, "unknown multihop entry or exit node", http.StatusNotFound); return }
-	if st.RouterID != "" && st.RouterID != exitID { http.Error(w, "requested exit does not match the active multihop exit", http.StatusConflict); return }
 
 	payload := map[string]any{
-		"connected": true, "mode": st.Mode, "entry_id": entryID, "exit_id": exitID, "bytes": clampSpeedBytes(q.Bytes),
+		"connected": true, "mode": st.Mode, "entry_id": graph.EntryID, "exit_id": graph.ExitID, "bytes": clampSpeedBytes(q.Bytes),
 		"measured_at": time.Now().UTC(),
 		"note": "each hop result is an independent authenticated transfer to that hop's private router-agent through the active routing graph; Router VPN never subtracts or divides another measurement to invent per-hop speed",
 	}
