@@ -41,6 +41,40 @@ function global:Set-RouterVPNLoadedModeSnapshot {
     }
 }
 
+function global:Get-RouterVPNVisibleConnectionSnapshot {
+    param([System.Windows.Window]$Owner,[hashtable]$Provided)
+    if($null -ne $Provided){return $Provided}
+    $result=@{multihop_enabled=$false;multihop_entry_id='';multihop_exit_id='';multihop_exit_mode=''}
+    if($null -eq $Owner){return $result}
+    try{
+        $toggle=$Owner.FindName('UnifiedMultihop');$entry=$Owner.FindName('UnifiedEntryCombo');$exit=$Owner.FindName('UnifiedExitCombo');$exitMode=$Owner.FindName('UnifiedExitMode')
+        if($null -ne $toggle){$result.multihop_enabled=[bool]$toggle.IsChecked}
+        if($result.multihop_enabled){
+            if($null -ne $entry){$result.multihop_entry_id=[string]$entry.SelectedValue}
+            if($null -ne $exit){$result.multihop_exit_id=[string]$exit.SelectedValue}
+            if($null -ne $exitMode -and $null -ne $exitMode.SelectedItem){$result.multihop_exit_mode=[string]$exitMode.SelectedItem.Tag}
+            if([string]::IsNullOrWhiteSpace([string]$result.multihop_exit_mode)){$result.multihop_exit_mode='shadowsocks'}
+        }
+    }catch{}
+    return $result
+}
+
+function global:Apply-RouterVPNLoadedConnectionSnapshot {
+    param([System.Windows.Window]$Owner,$Loaded)
+    if($null -eq $Owner){return}
+    try{
+        $toggle=$Owner.FindName('UnifiedMultihop');$entry=$Owner.FindName('UnifiedEntryCombo');$exit=$Owner.FindName('UnifiedExitCombo');$exitMode=$Owner.FindName('UnifiedExitMode')
+        $enabled=[bool]$Loaded.multihop_enabled
+        if($null -ne $toggle){$toggle.IsChecked=$enabled}
+        if($null -ne $entry -and -not [string]::IsNullOrWhiteSpace([string]$Loaded.multihop_entry_id)){$entry.SelectedValue=[string]$Loaded.multihop_entry_id}
+        if($null -ne $exit -and -not [string]::IsNullOrWhiteSpace([string]$Loaded.multihop_exit_id)){$exit.SelectedValue=[string]$Loaded.multihop_exit_id}
+        if($null -ne $exitMode -and $exitMode.Items.Count -gt 0){
+            $want=[string]$Loaded.multihop_exit_mode;if([string]::IsNullOrWhiteSpace($want)){$want='shadowsocks'}
+            for($i=0;$i-lt$exitMode.Items.Count;$i++){if([string]$exitMode.Items[$i].Tag -eq $want){$exitMode.SelectedIndex=$i;break}}
+        }
+    }catch{}
+}
+
 function global:Show-RouterVPNProfileSettingsDialog {
     param([string]$BaseUrl,[System.Windows.Window]$Owner,[hashtable]$ConnectionSnapshot,[scriptblock]$OnConnectionProfileLoaded)
     $current=$null;$settingsError=''
@@ -83,14 +117,8 @@ function global:Show-RouterVPNProfileSettingsDialog {
     $makeSetupBody={
         param([string]$Name,[string]$ID)
         $snap=Get-RouterVPNCurrentModeSnapshot
-        $multi=$false;$entry='';$exit='';$exitMode=''
-        if($null -ne $ConnectionSnapshot){
-            $multi=[bool]$ConnectionSnapshot.multihop_enabled
-            $entry=[string]$ConnectionSnapshot.multihop_entry_id
-            $exit=[string]$ConnectionSnapshot.multihop_exit_id
-            $exitMode=[string]$ConnectionSnapshot.multihop_exit_mode
-        }
-        $body=@{name=$Name;mode=[string]$snap.mode;custom_layers=@($snap.custom_layers);multihop_enabled=$multi;multihop_entry_id=$entry;multihop_exit_id=$exit;multihop_exit_mode=$exitMode}
+        $visible=Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner -Provided $ConnectionSnapshot
+        $body=@{name=$Name;mode=[string]$snap.mode;custom_layers=@($snap.custom_layers);multihop_enabled=[bool]$visible.multihop_enabled;multihop_entry_id=[string]$visible.multihop_entry_id;multihop_exit_id=[string]$visible.multihop_exit_id;multihop_exit_mode=[string]$visible.multihop_exit_mode}
         if($ID){$body.id=$ID}
         return $body
     }
@@ -98,7 +126,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
     $dialog.FindName('ProfileRefresh').Add_Click({& $refreshProfiles})
     $dialog.FindName('ProfileAdd').Add_Click({try{$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$body=& $makeSetupBody $name '';$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/save') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 8 -Compress) -TimeoutSec 10;$profileStatus.Text="Added $($r.profile.name) • $($r.profile.mode) • exact hop setup saved";& $refreshProfiles}catch{$profileStatus.Text='Add failed: '+$_.Exception.Message}})
     $dialog.FindName('ProfileUpdate').Add_Click({try{if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$body=& $makeSetupBody $name ([string]$profileCombo.SelectedValue);$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/update') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 8 -Compress) -TimeoutSec 10;$profileStatus.Text="Updated $($r.profile.name) • exact hop setup refreshed";& $refreshProfiles}catch{$profileStatus.Text='Update failed: '+$_.Exception.Message}})
-    $dialog.FindName('ProfileLoad').Add_Click({try{if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/load') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Compress) -TimeoutSec 12;Set-RouterVPNLoadedModeSnapshot -Loaded $r;if($null -ne $OnConnectionProfileLoaded){& $OnConnectionProfileLoaded $r};$profileStatus.Text="Loaded $($r.profile.name) • node $($r.selected_node_id) • mode $($r.mode) • hop setup restored. Connect separately to prove it."}catch{$profileStatus.Text='Load failed: '+$_.Exception.Message}})
+    $dialog.FindName('ProfileLoad').Add_Click({try{if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/load') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Compress) -TimeoutSec 12;Set-RouterVPNLoadedModeSnapshot -Loaded $r;Apply-RouterVPNLoadedConnectionSnapshot -Owner $Owner -Loaded $r;if($null -ne $OnConnectionProfileLoaded){& $OnConnectionProfileLoaded $r};$profileStatus.Text="Loaded $($r.profile.name) • node $($r.selected_node_id) • mode $($r.mode) • exact hop setup restored. Connect separately to prove it."}catch{$profileStatus.Text='Load failed: '+$_.Exception.Message}})
     $dialog.FindName('ProfileDelete').Add_Click({try{if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};[void](Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/delete') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Compress) -TimeoutSec 10);$profileStatus.Text='Deleted saved connection profile and setup metadata.';& $refreshProfiles}catch{$profileStatus.Text='Delete failed: '+$_.Exception.Message}})
     & $refreshProfiles
     $dialog.FindName('MtuRetest').Add_Click({try{$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/mtu/retest') -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 130;$effective.Text="Current effective MTU: $($r.effective_mtu) • $($r.effective_mtu_source)"}catch{[System.Windows.MessageBox]::Show("MTU Retest failed: $($_.Exception.Message)",'Router VPN')|Out-Null}})
@@ -115,4 +143,4 @@ function global:Show-RouterVPNProfileSettingsDialog {
 # SMART AUTO default / IPv6 On default / Auto measured MTU / fixed override + Retest /
 # Require encrypted + Require obfuscation default Off / DAITA-like traffic padding / Jumbo TUN /
 # LAN / kill switch / WG-AWG base+fallback / private SOCKS5 / forwarding ownership / startup /
-# connection profile Add + Load + Update + Delete with current mode/CUSTOM layers and exact multihop entry/exit/exit transport.
+# connection profile Add + Load + Update + Delete with current mode/CUSTOM layers and exact visible multihop entry/exit/exit transport.
