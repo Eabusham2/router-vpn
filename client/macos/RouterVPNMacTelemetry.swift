@@ -76,7 +76,7 @@ extension ProductWindowController {
             let performance = NSButton(title: "Performance", target: self, action: #selector(openUnifiedPerformance))
             performance.bezelStyle = .rounded
             performance.controlSize = .small
-            performance.toolTip = "Live latency, durable node benchmark, real path Mbps and Auto-MTU retest."
+            performance.toolTip = "Live latency, durable node benchmark, real path/routed-hop Mbps and Auto-MTU retest."
             performance.translatesAutoresizingMaskIntoConstraints = false
             sheet.addSubview(performance)
             NSLayoutConstraint.activate([
@@ -175,23 +175,24 @@ extension ProductWindowController {
     }
 
     @objc private func openUnifiedPerformance() {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 760, height: 470), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         panel.title = "Router VPN Performance"
-        panel.minSize = NSSize(width: 560, height: 360)
+        panel.minSize = NSSize(width: 600, height: 380)
         let controller = NSWindowController(window: panel)
         objc_setAssociatedObject(self, &telemetryPerformanceControllerKey, controller, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         let stack = NSStackView(); stack.orientation = .vertical; stack.spacing = 10; stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
         let title = NSTextField(labelWithString: "Latency & path performance")
         title.font = .systemFont(ofSize: 22, weight: .bold); stack.addArrangedSubview(title)
-        let note = NSTextField(wrappingLabelWithString: "Live RTT measures the active private tunnel. The 50-sample test is the durable node benchmark. Real path speed transfers authenticated bounded data to/from the active node private router-agent and reports actual download/upload Mbps. Auto MTU retest is separate because it may change the path MTU.")
+        let note = NSTextField(wrappingLabelWithString: "Live RTT measures the active private tunnel. Real path speed transfers to the active exit. Routed hop speed independently transfers to the selected entry and exit private router-agents through the actual multihop routing graph; unreachable hops keep their error instead of receiving a calculated value. Auto MTU remains separate.")
         note.textColor = .secondaryLabelColor; stack.addArrangedSubview(note)
         let result = NSTextField(wrappingLabelWithString: "Choose a real measurement."); result.font = .monospacedSystemFont(ofSize: 12, weight: .regular); result.isSelectable = true; result.identifier = NSUserInterfaceItemIdentifier("telemetry-performance-result"); stack.addArrangedSubview(result)
         let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8
         let live = NSButton(title: "Live path RTT", target: self, action: #selector(telemetryLivePerformance(_:))); live.bezelStyle = .rounded
         let durable = NSButton(title: "50-sample selected node", target: self, action: #selector(telemetryDurablePerformance(_:))); durable.bezelStyle = .rounded
         let speed = NSButton(title: "Real path speed", target: self, action: #selector(telemetrySpeedPerformance(_:))); speed.bezelStyle = .rounded
+        let hops = NSButton(title: "Routed hop speeds", target: self, action: #selector(telemetryHopSpeedPerformance(_:))); hops.bezelStyle = .rounded
         let mtu = NSButton(title: "Throughput + Auto MTU", target: self, action: #selector(telemetryMtuPerformance(_:))); mtu.bezelStyle = .rounded
-        row.addArrangedSubview(live); row.addArrangedSubview(durable); row.addArrangedSubview(speed); row.addArrangedSubview(mtu); stack.addArrangedSubview(row)
+        row.addArrangedSubview(live); row.addArrangedSubview(durable); row.addArrangedSubview(speed); row.addArrangedSubview(hops); row.addArrangedSubview(mtu); stack.addArrangedSubview(row)
         panel.contentView = stack; panel.center(); controller.showWindow(nil); panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -228,6 +229,19 @@ extension ProductWindowController {
 
     @objc private func telemetrySpeedPerformance(_ sender: NSButton) {
         telemetryAsync(sender, label: "Transferring 8 MiB down and 8 MiB up through the current VPN path…") { try self.api.request("/api/connection/speed-test", method: "POST", body: ["bytes": 8 * 1024 * 1024], timeout: 45) }
+    }
+
+    @objc private func telemetryHopSpeedPerformance(_ sender: NSButton) {
+        telemetryAsync(sender, label: "Testing routed entry and exit throughput through the active multihop graph…") {
+            guard self.multihopEntryPopup.indexOfSelectedItem >= 0, self.multihopExitPopup.indexOfSelectedItem >= 0,
+                  self.multihopEntryPopup.indexOfSelectedItem < self.multihopNodeIDs.count, self.multihopExitPopup.indexOfSelectedItem < self.multihopNodeIDs.count else {
+                throw NSError(domain: "RouterVPNMac", code: 42, userInfo: [NSLocalizedDescriptionKey: "Choose multihop entry and exit nodes first."])
+            }
+            let entry = self.multihopNodeIDs[self.multihopEntryPopup.indexOfSelectedItem]
+            let exit = self.multihopNodeIDs[self.multihopExitPopup.indexOfSelectedItem]
+            guard entry != exit else { throw NSError(domain: "RouterVPNMac", code: 43, userInfo: [NSLocalizedDescriptionKey: "Multihop entry and exit must be different."]) }
+            return try self.api.request("/api/multihop/speed-test", method: "POST", body: ["entry_id": entry, "exit_id": exit, "bytes": 4 * 1024 * 1024], timeout: 70)
+        }
     }
 
     @objc private func telemetryMtuPerformance(_ sender: NSButton) {
