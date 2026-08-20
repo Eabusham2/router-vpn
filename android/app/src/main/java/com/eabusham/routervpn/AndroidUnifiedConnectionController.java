@@ -10,10 +10,8 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Thin activity-owned bridge used by the map-first product shell. It reuses the
- * exact native WG/AWG/libbox/Xray orchestrator instead of opening the legacy
- * engine console. Android VPN consent remains system-owned and every successful
- * mode still requires the orchestrator's selected-node path proof.
+ * Activity-owned UI bridge over app-process-owned VPN engines. Android VPN
+ * consent remains system-owned and every success still requires path proof.
  */
 final class AndroidUnifiedConnectionController implements AutoCloseable {
     interface Callback { void progress(String message); void finished(boolean ok, String message); }
@@ -21,6 +19,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
 
     private final Activity activity;
     private final AndroidNodeStore nodeStore;
+    private final AndroidRuntimeRegistry runtime;
     private final NativeWireGuardController wireGuard;
     private final NativeAmneziaWGController amneziaWG;
     private final NativeSingBoxController singBox;
@@ -37,15 +36,17 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     AndroidUnifiedConnectionController(Activity activity, AndroidNodeStore nodeStore) {
         this.activity = activity;
         this.nodeStore = nodeStore;
-        wireGuard = new NativeWireGuardController(activity);
-        amneziaWG = new NativeAmneziaWGController(activity);
-        singBox = new NativeSingBoxController(activity);
-        xray = new NativeXrayController(activity);
-        orchestrator = new AndroidModeOrchestrator(activity, wireGuard, amneziaWG, singBox, xray);
-        multihop = new AndroidMultihopRuntime(activity, singBox);
+        runtime = AndroidRuntimeRegistry.get(activity);
+        wireGuard = runtime.wireGuard;
+        amneziaWG = runtime.amneziaWG;
+        singBox = runtime.singBox;
+        xray = runtime.xray;
+        orchestrator = runtime.orchestrator;
+        multihop = runtime.multihop;
     }
 
     boolean isActiveOrTransitioning() { return multihop.isActiveOrTransitioning() || orchestrator.isRunning() || orchestrator.isActive(); }
+    boolean isConnected() { return AndroidHomeStateStore.snapshot(activity).connected; }
     boolean isMultihopConnected() { return multihop.isConnected(); }
     String activeMultihopEntryId() { return multihop.activeEntryId(); }
     String activeMultihopExitId() { return multihop.activeExitId(); }
@@ -75,7 +76,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     }
 
     void disconnect(Callback callback) {
-        pendingMode = ""; pendingLayers = Collections.emptyList(); pendingEntry = null; pendingExit = null; pendingExitMode = ""; pendingCallback = null;
+        clearPending();
         boolean wasMultihop = multihop.isActiveOrTransitioning();
         try { multihop.disconnect(); } catch (Throwable ignored) {}
         orchestrator.disconnect(new AndroidModeOrchestrator.Callback() {
@@ -111,7 +112,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         final AndroidNodeStore.Node entry = pendingEntry, exit = pendingExit;
         final String exitMode = pendingExitMode;
         final Callback callback = pendingCallback;
-        clearPendingExceptCallback();
+        clearPending();
         if (callback == null) return;
         if ("multihop".equals(mode)) {
             if (entry == null || exit == null || entry.id.equals(exit.id) || exitMode.isEmpty()) { callback.finished(false, "Multihop selection expired; choose entry and exit again."); return; }
@@ -145,15 +146,13 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         return file;
     }
 
-    private void clearPendingExceptCallback() { pendingMode=""; pendingLayers=Collections.emptyList(); pendingEntry=null; pendingExit=null; pendingExitMode=""; pendingCallback=null; }
-    private void clearPending() { clearPendingExceptCallback(); }
+    private void clearPending() { pendingMode=""; pendingLayers=Collections.emptyList(); pendingEntry=null; pendingExit=null; pendingExitMode=""; pendingCallback=null; }
     private static String displayMode(String mode) { if ("smart-auto".equals(mode)) return "SMART AUTO"; if ("auto".equals(mode)) return "AUTO"; if (mode.startsWith("custom:")) return "CUSTOM"; return mode.toUpperCase(); }
     private static String safe(Throwable error) { String value=error==null?"":error.getMessage(); return value==null||value.trim().isEmpty()?"Router VPN connection error":value.trim(); }
 
     @Override public void close() {
-        try { multihop.close(); } catch (Throwable ignored) {}
-        try { orchestrator.close(); } catch (Throwable ignored) {}
-        try { wireGuard.close(); } catch (Throwable ignored) {}
-        try { amneziaWG.close(); } catch (Throwable ignored) {}
+        // Activity destruction must not destroy the app-process VPN engines.
+        // They own active GoBackend/libbox/Xray state across rotation/recreation.
+        clearPending();
     }
 }
