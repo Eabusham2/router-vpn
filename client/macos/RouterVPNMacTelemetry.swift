@@ -141,6 +141,18 @@ extension ProductWindowController {
 
     func refreshUnifiedTelemetry() {
         refreshUnifiedFastNodeMenu()
+        let multihopOn = (telemetryFind("unified-multihop-toggle") as? NSButton)?.state == .on
+        let entryIndex = multihopEntryPopup.indexOfSelectedItem
+        let exitIndex = multihopExitPopup.indexOfSelectedItem
+        let ids = multihopNodeIDs
+        let hopIDs: (String, String)?
+        if multihopOn, entryIndex >= 0, exitIndex >= 0, entryIndex < ids.count, exitIndex < ids.count, ids[entryIndex] != ids[exitIndex] {
+            hopIDs = (ids[entryIndex], ids[exitIndex])
+        } else {
+            hopIDs = nil
+            telemetryHopLabel?.stringValue = ""
+        }
+
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             if let value = try? self.api.json("/api/connection/live-latency", timeout: 4) as? [String: Any],
@@ -150,16 +162,7 @@ extension ProductWindowController {
                 DispatchQueue.main.async { self.telemetryLiveLabel?.stringValue = "-- ms"; self.telemetryLiveLabel?.textColor = .secondaryLabelColor }
             }
 
-            let multihopOn = (self.telemetryFind("unified-multihop-toggle") as? NSButton)?.state == .on
-            guard multihopOn,
-                  self.multihopEntryPopup.indexOfSelectedItem >= 0, self.multihopExitPopup.indexOfSelectedItem >= 0,
-                  self.multihopEntryPopup.indexOfSelectedItem < self.multihopNodeIDs.count,
-                  self.multihopExitPopup.indexOfSelectedItem < self.multihopNodeIDs.count else {
-                DispatchQueue.main.async { self.telemetryHopLabel?.stringValue = "" }; return
-            }
-            let entry = self.multihopNodeIDs[self.multihopEntryPopup.indexOfSelectedItem]
-            let exit = self.multihopNodeIDs[self.multihopExitPopup.indexOfSelectedItem]
-            guard entry != exit else { return }
+            guard let (entry, exit) = hopIDs else { return }
             if let value = try? self.api.request("/api/multihop/live-latency", method: "POST", body: ["entry_id": entry, "exit_id": exit, "samples": 2], timeout: 8),
                let root = try? JSONSerialization.jsonObject(with: value) as? [String: Any] {
                 let e = ((root["entry"] as? [String: Any])?["median_ms"] as? NSNumber)?.doubleValue
@@ -232,15 +235,20 @@ extension ProductWindowController {
     }
 
     @objc private func telemetryHopSpeedPerformance(_ sender: NSButton) {
+        let entryIndex = multihopEntryPopup.indexOfSelectedItem
+        let exitIndex = multihopExitPopup.indexOfSelectedItem
+        guard entryIndex >= 0, exitIndex >= 0, entryIndex < multihopNodeIDs.count, exitIndex < multihopNodeIDs.count else {
+            telemetryResult(sender)?.stringValue = "Choose multihop entry and exit nodes first."
+            return
+        }
+        let entry = multihopNodeIDs[entryIndex]
+        let exit = multihopNodeIDs[exitIndex]
+        guard entry != exit else {
+            telemetryResult(sender)?.stringValue = "Multihop entry and exit must be different."
+            return
+        }
         telemetryAsync(sender, label: "Testing routed entry and exit throughput through the active multihop graph…") {
-            guard self.multihopEntryPopup.indexOfSelectedItem >= 0, self.multihopExitPopup.indexOfSelectedItem >= 0,
-                  self.multihopEntryPopup.indexOfSelectedItem < self.multihopNodeIDs.count, self.multihopExitPopup.indexOfSelectedItem < self.multihopNodeIDs.count else {
-                throw NSError(domain: "RouterVPNMac", code: 42, userInfo: [NSLocalizedDescriptionKey: "Choose multihop entry and exit nodes first."])
-            }
-            let entry = self.multihopNodeIDs[self.multihopEntryPopup.indexOfSelectedItem]
-            let exit = self.multihopNodeIDs[self.multihopExitPopup.indexOfSelectedItem]
-            guard entry != exit else { throw NSError(domain: "RouterVPNMac", code: 43, userInfo: [NSLocalizedDescriptionKey: "Multihop entry and exit must be different."]) }
-            return try self.api.request("/api/multihop/speed-test", method: "POST", body: ["entry_id": entry, "exit_id": exit, "bytes": 4 * 1024 * 1024], timeout: 70)
+            try self.api.request("/api/multihop/speed-test", method: "POST", body: ["entry_id": entry, "exit_id": exit, "bytes": 4 * 1024 * 1024], timeout: 70)
         }
     }
 
