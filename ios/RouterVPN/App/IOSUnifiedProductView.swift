@@ -106,6 +106,7 @@ private final class IOSUnifiedMapAnnotation: MKPointAnnotation {
 
 private struct IOSUnifiedMap: UIViewRepresentable {
     @EnvironmentObject var model: RouterVPNModel
+    var latencyByID: [String: Double]
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> MKMapView {
@@ -114,12 +115,14 @@ private struct IOSUnifiedMap: UIViewRepresentable {
         map.showsCompass = true
         map.showsScale = true
         map.pointOfInterestFilter = .excludingAll
+        context.coordinator.startPacketAnimation(map)
         return map
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.parent = self
-        map.removeAnnotations(map.annotations)
+        let packet = context.coordinator.packet
+        map.removeAnnotations(map.annotations.filter { $0 !== packet })
         map.removeOverlays(map.overlays)
         let profiles = model.allNodeProfiles
         let selectedID = model.bundle?.selectedRouterID ?? ""
@@ -139,24 +142,54 @@ private struct IOSUnifiedMap: UIViewRepresentable {
             let annotation = IOSUnifiedMapAnnotation(profileID: profile.id, role: role)
             annotation.coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
             annotation.title = profile.name.isEmpty ? profile.id : profile.name
-            annotation.subtitle = profile.normalizedNodeKind == "external" ? "Custom / external" : "Router node"
+            let kind = profile.normalizedNodeKind == "external" ? "Custom / external" : "Router node"
+            let ms = latencyByID[profile.id] ?? profile.latencyMedianMs ?? 0
+            annotation.subtitle = ms > 0 ? String(format: "%@ • %.1f ms", kind, ms) : kind
             map.addAnnotation(annotation)
             coordinatesByID[profile.id] = annotation.coordinate
         }
         if let entryID, let exitID, let a = coordinatesByID[entryID], let b = coordinatesByID[exitID] {
             var values = [a, b]
             map.addOverlay(MKPolyline(coordinates: &values, count: values.count))
+            context.coordinator.entry = a; context.coordinator.exit = b; context.coordinator.ensurePacket(on: map)
+        } else {
+            context.coordinator.entry = nil; context.coordinator.exit = nil
+            if let packet { map.removeAnnotation(packet); context.coordinator.packet = nil }
         }
-        if !map.annotations.isEmpty {
-            map.showAnnotations(map.annotations, animated: context.transaction.animation != nil)
-        }
+        let regular = map.annotations.filter { $0 !== context.coordinator.packet }
+        if !regular.isEmpty { map.showAnnotations(regular, animated: false) }
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
         var parent: IOSUnifiedMap
+        weak var map: MKMapView?
+        var entry: CLLocationCoordinate2D?
+        var exit: CLLocationCoordinate2D?
+        var packet: IOSUnifiedMapAnnotation?
+        private var timer: Timer?
+        private var phase: Double = 0
         init(_ parent: IOSUnifiedMap) { self.parent = parent }
+        deinit { timer?.invalidate() }
+
+        func startPacketAnimation(_ map: MKMapView) {
+            self.map = map
+            timer?.invalidate()
+            timer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
+                guard let self, let a = self.entry, let b = self.exit, let packet = self.packet else { return }
+                self.phase += 0.035; if self.phase >= 1 { self.phase -= 1 }
+                packet.coordinate = CLLocationCoordinate2D(latitude: a.latitude + (b.latitude-a.latitude)*self.phase, longitude: a.longitude + (b.longitude-a.longitude)*self.phase)
+            }
+        }
+        func ensurePacket(on map: MKMapView) {
+            guard packet == nil, let a = entry else { return }
+            let p = IOSUnifiedMapAnnotation(profileID: "__packet__", role: "packet"); p.coordinate = a; packet = p; map.addAnnotation(p)
+        }
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             guard let node = annotation as? IOSUnifiedMapAnnotation else { return nil }
+            if node.role == "packet" {
+                let view = (mapView.dequeueReusableAnnotationView(withIdentifier: "packet") as? MKMarkerAnnotationView) ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: "packet")
+                view.annotation = annotation; view.markerTintColor = .white; view.glyphText = "•"; view.canShowCallout = false; view.displayPriority = .required; return view
+            }
             let view = (mapView.dequeueReusableAnnotationView(withIdentifier: "node") as? MKMarkerAnnotationView) ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: "node")
             view.annotation = annotation; view.canShowCallout = true
             switch node.role {
@@ -169,7 +202,7 @@ private struct IOSUnifiedMap: UIViewRepresentable {
             return view
         }
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-            guard let node = view.annotation as? IOSUnifiedMapAnnotation else { return }
+            guard let node = view.annotation as? IOSUnifiedMapAnnotation, node.role != "packet" else { return }
             Task { @MainActor in parent.model.selectNode(node.profileID) }
         }
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -181,6 +214,7 @@ private struct IOSUnifiedMap: UIViewRepresentable {
 
 struct IOSUnifiedProductView: View {
     @EnvironmentObject var model: RouterVPNModel
+    @StateObject private var telemetry = IOSUnifiedTelemetry()
     @AppStorage(iosUnifiedModeKey) private var selectedMode = IOSUnifiedModeSelection.smart
     @State private var expanded = false
     @State private var showingNodes = false
@@ -188,12 +222,13 @@ struct IOSUnifiedProductView: View {
     @State private var showingDNS = false
     @State private var showingSettings = false
     @State private var showingOnboarding = false
+    @State private var showingForwardingInfo = false
     @State private var startupApplied = false
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
-                IOSUnifiedMap().environmentObject(model).ignoresSafeArea()
+                IOSUnifiedMap(latencyByID: telemetry.latencyByID).environmentObject(model).ignoresSafeArea()
 
                 VStack {
                     HStack(spacing: 8) {
@@ -202,7 +237,7 @@ struct IOSUnifiedProductView: View {
                                 Image(systemName: selectedProfile?.normalizedNodeKind == "external" ? "arrow.up.right.circle.fill" : "network")
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(selectedProfile.map { $0.name.isEmpty ? $0.id : $0.name } ?? "Add a node").font(.subheadline.bold()).lineLimit(1)
-                                    Text(selectedProfile?.normalizedNodeKind == "external" ? "Custom / external" : "Router node").font(.caption2).foregroundStyle(.secondary)
+                                    Text(nodeSubtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                                 }
                             }
                         }
@@ -210,7 +245,10 @@ struct IOSUnifiedProductView: View {
                         Spacer()
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(model.connected ? "Connected" : "Disconnected").font(.subheadline.bold())
-                            Text(model.activeRawProfile.isEmpty ? selectedModeTitle : model.activeRawProfile).font(.caption2).foregroundStyle(.secondary)
+                            HStack(spacing: 5) {
+                                Text(model.activeRawProfile.isEmpty ? selectedModeTitle : model.activeRawProfile)
+                                if let ms = telemetry.livePathMs, model.connected { Text(String(format: "• %.1f ms", ms)).monospacedDigit() }
+                            }.font(.caption2).foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 10).padding(.vertical, 7).background(.regularMaterial, in: Capsule())
                     }
@@ -224,14 +262,32 @@ struct IOSUnifiedProductView: View {
         .sheet(isPresented: $showingNodes) { RouterVPNNodeManagerSheet().environmentObject(model) }
         .sheet(isPresented: $showingModes) { IOSUnifiedModePicker(selectedMode: $selectedMode).environmentObject(model) }
         .sheet(isPresented: $showingDNS) { IOSDNSPolicyView().environmentObject(model) }
-        .sheet(isPresented: $showingSettings) { IOSUnifiedSettingsView().environmentObject(model) }
+        .sheet(isPresented: $showingSettings) { IOSUnifiedSettingsView(telemetry: telemetry).environmentObject(model) }
         .sheet(isPresented: $showingOnboarding) { RouterVPNProductOnboardingView() }
+        .alert("Master port forwarding", isPresented: $showingForwardingInfo) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Incoming forwarding is owned by the authenticated private Router VPN home node and only exists for routable tunnel modes. iOS PacketTunnel paths that cannot enforce arbitrary DNAT keep this unavailable rather than showing a fake switch. Configure the home-node rule in Setup Center/router-agent and validate it off-LAN.")
+        }
         .onAppear { if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { showingOnboarding = true } }
         .onChange(of: model.activeRawProfile) { value in if model.connected && !value.isEmpty { model.recordIOSLastRuntime() } }
-        .task { guard !startupApplied else { return }; startupApplied = true; await model.applyIOSStartupPolicyIfNeeded() }
+        .task { guard !startupApplied else { return }; startupApplied = true; await model.applyIOSStartupPolicyIfNeeded(); _ = await telemetry.measureAll(model.allNodeProfiles, samples: 2) }
+        .task(id: model.connected) {
+            while !Task.isCancelled {
+                await telemetry.refreshLivePath(profile: model.unifiedSelectedProfile, connected: model.connected)
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
     }
 
     private var selectedProfile: RouterProfile? { model.unifiedSelectedProfile }
+    private var routerProfiles: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" } }
+    private var nodeSubtitle: String {
+        guard let p = selectedProfile else { return "Router / Custom node" }
+        let kind = p.normalizedNodeKind == "external" ? "Custom / external" : "Router node"
+        let ms = telemetry.cached(p.id) ?? p.latencyMedianMs ?? 0
+        return ms > 0 ? String(format: "%@ • %.1f ms", kind, ms) : kind
+    }
     private var selectedModeTitle: String {
         if selectedMode == IOSUnifiedModeSelection.smart { return "SMART AUTO" }
         if selectedMode == IOSUnifiedModeSelection.auto { return "AUTO" }
@@ -257,14 +313,31 @@ struct IOSUnifiedProductView: View {
                 .gesture(DragGesture(minimumDistance: 8).onEnded { value in withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { expanded = value.translation.height < 0 } })
             ScrollView {
                 VStack(spacing: 10) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 7) {
+                        Menu {
+                            Button { Task { await connectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing…" : "Test & connect fastest", systemImage: "bolt.fill") }
+                                .disabled(telemetry.isTestingFastest || model.connected)
+                            Divider()
+                            ForEach(routerProfiles) { profile in
+                                Button { connectSpecific(profile) } label: {
+                                    let ms = telemetry.cached(profile.id) ?? profile.latencyMedianMs ?? 0
+                                    Text(ms > 0 ? String(format: "%@ • %.1f ms", profile.name, ms) : profile.name)
+                                }.disabled(model.connected)
+                            }
+                        } label: { Image(systemName: "bolt.fill").frame(width: 24, height: 32) }
+                        .buttonStyle(.bordered).accessibilityLabel("Fastest node or choose node")
+
                         Button { connectOrDisconnect() } label: { Text(model.connected ? "Disconnect" : "Connect").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 7) }
                             .buttonStyle(.borderedProminent).tint(model.connected ? .red : .accentColor)
+
+                        if let ms = telemetry.livePathMs, model.connected { Text(String(format: "%.1f\nms", ms)).font(.caption2.bold()).monospacedDigit().multilineTextAlignment(.center) }
                         Toggle(isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) })) { Image(systemName: "lock.shield.fill") }
                             .toggleStyle(.button).buttonStyle(.bordered).accessibilityLabel("Kill switch")
+                        Button { showingForwardingInfo = true } label: { Image(systemName: "arrow.triangle.branch") }
+                            .buttonStyle(.bordered).accessibilityLabel("Master port forwarding")
                     }
 
-                    unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: "Unavailable on current iOS dataplane") { showingNodes = true }
+                    unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: iosMultihopSummary) { showingNodes = true }
                     unifiedRow(icon: "slider.horizontal.3", title: "Settings", value: settingsSummary) { showingSettings = true }
                     unifiedRow(icon: "wand.and.stars", title: "Mode", value: selectedModeTitle) { showingModes = true }
 
@@ -304,6 +377,16 @@ struct IOSUnifiedProductView: View {
         })
     }
 
+    private var iosMultihopSummary: String {
+        if let p = selectedProfile, p.multihopEnabled == true, let entry = p.multihopEntryID, let exit = p.multihopExitID {
+            let a = telemetry.cached(entry), b = telemetry.cached(exit)
+            var text = "\(entry) → \(exit)"
+            if let a, let b { text += String(format: " • %.1f / %.1f ms", a, b) }
+            if let path = telemetry.livePathMs, model.connected { text += String(format: " • PATH %.1f", path) }
+            return text
+        }
+        return "Unavailable on current iOS dataplane"
+    }
     private var settingsSummary: String {
         let p = selectedProfile
         let mtu = (p?.mtuPolicy ?? "auto").lowercased() == "manual" ? "MTU \(p?.manualMTU ?? 0)" : "Auto MTU"
@@ -318,6 +401,19 @@ struct IOSUnifiedProductView: View {
         }.buttonStyle(.plain)
     }
 
+    private func connectSpecific(_ profile: RouterProfile) {
+        guard !model.connected else { return }
+        model.selectNode(profile.id)
+        connectOrDisconnect()
+    }
+    private func connectFastest() async {
+        guard !model.connected else { return }
+        let results = await telemetry.measureAll(routerProfiles, samples: 4)
+        guard let winner = results.first else { model.message = telemetry.lastError; return }
+        model.selectNode(winner.id)
+        model.message = "Fastest live node: \(winner.name) • \(winner.shortLabel) • connecting with \(selectedModeTitle)…"
+        connectOrDisconnect()
+    }
     private func connectOrDisconnect() {
         if model.connected { model.disconnect(); return }
         guard let profile = selectedProfile else { showingNodes = true; return }
@@ -432,7 +528,9 @@ private struct IOSUnifiedCustomBuilder: View {
 private struct IOSUnifiedSettingsView: View {
     @EnvironmentObject var model: RouterVPNModel
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject var telemetry: IOSUnifiedTelemetry
     @State private var showingAdvanced = false
+    @State private var showingPerformance = false
     @State private var requireEncrypted = false
     @State private var requireObfuscation = false
 
@@ -441,10 +539,8 @@ private struct IOSUnifiedSettingsView: View {
             Form {
                 Section("Quick settings") {
                     Toggle("Kill switch", isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) }))
-                    Toggle("AUTO / SMART: Require encrypted", isOn: $requireEncrypted)
-                        .disabled(model.connected)
-                    Toggle("AUTO / SMART: Require obfuscation", isOn: $requireObfuscation)
-                        .disabled(model.connected)
+                    Toggle("AUTO / SMART: Require encrypted", isOn: $requireEncrypted).disabled(model.connected)
+                    Toggle("AUTO / SMART: Require obfuscation", isOn: $requireObfuscation).disabled(model.connected)
                     Text("Both AUTO requirements are Off by default. They are stored in the selected schema-v4 Router VPN profile, shared with Advanced Settings, and filter candidates before the proof attempt; SMART cannot simplify into a candidate that violates them.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Defaults") {
@@ -452,6 +548,13 @@ private struct IOSUnifiedSettingsView: View {
                     LabeledContent("MTU", value: (model.unifiedSelectedProfile?.mtuPolicy ?? "auto") == "manual" ? "Fixed \(model.unifiedSelectedProfile?.manualMTU ?? 0)" : "Auto measured")
                     Text("IPv6 On, SMART AUTO and Auto measured MTU are the unified defaults for newly normalized Router VPN profiles.").font(.caption).foregroundStyle(.secondary)
                     Button("Advanced node settings / MTU…") { showingAdvanced = true }
+                }
+                Section("Performance") {
+                    LabeledContent("Live path", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "Not connected")
+                    Button("Latency / node benchmarks…") { showingPerformance = true }
+                    if let p = model.unifiedSelectedProfile, let mbps = p.effectiveMTUMbps, mbps > 0 {
+                        LabeledContent("Last proven MTU-path throughput", value: String(format: "%.1f Mbps", mbps))
+                    }
                 }
                 Section("Platform truth") {
                     Text("DAITA-like traffic padding, Jumbo TUN, arbitrary tunnel port forwarding and full multihop are shown only when this Apple PacketTunnel/runtime can actually enforce them. Current unsupported paths stay unavailable instead of becoming cosmetic toggles.").font(.caption).foregroundStyle(.secondary)
@@ -464,12 +567,45 @@ private struct IOSUnifiedSettingsView: View {
             .onChange(of: requireEncrypted) { value in model.setUnifiedRequirement("encrypted", enabled: value) }
             .onChange(of: requireObfuscation) { value in model.setUnifiedRequirement("obfuscation", enabled: value) }
             .sheet(isPresented: $showingAdvanced) { IOSProfileSettingsView().environmentObject(model) }
+            .sheet(isPresented: $showingPerformance) { IOSUnifiedPerformanceView(telemetry: telemetry).environmentObject(model) }
         }
     }
-    private func saveRequirements() {
-        model.setUnifiedRequirement("encrypted", enabled: requireEncrypted)
-        model.setUnifiedRequirement("obfuscation", enabled: requireObfuscation)
-    }
+    private func saveRequirements() { model.setUnifiedRequirement("encrypted", enabled: requireEncrypted); model.setUnifiedRequirement("obfuscation", enabled: requireObfuscation) }
 }
 
-private let iosUnifiedUXContract = "map-first swipe-up Connect Disconnect quick kill switch Multihop Settings Mode DNS SMART AUTO default AUTO all presets CUSTOM builder saved delete Router node Custom external color-coded hops real coordinates IPv6 On Auto MTU Require encrypted Require obfuscation schema-v4 profile-shared requirements"
+private struct IOSUnifiedPerformanceView: View {
+    @EnvironmentObject var model: RouterVPNModel
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var telemetry: IOSUnifiedTelemetry
+    @State private var output = "Choose a real measurement."
+    @State private var busy = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Current path") {
+                    LabeledContent("Live RTT", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "Not connected")
+                    Button("Measure current tunnel RTT") { runLive() }.disabled(!model.connected || busy)
+                }
+                Section("Nodes") {
+                    Button("50-sample selected node") { runSelected() }.disabled(model.unifiedSelectedProfile == nil || busy)
+                    Button("Benchmark all linked nodes") { runAll() }.disabled(busy)
+                }
+                Section("Throughput / MTU") {
+                    if let p = model.unifiedSelectedProfile, let mbps = p.effectiveMTUMbps, mbps > 0 {
+                        Text(String(format: "Last proven path/config throughput: %.1f Mbps • MTU %d • RTT %.1f ms", mbps, p.effectiveMTU ?? 0, p.effectiveMTUMedianRTTMs ?? 0))
+                    } else { Text("No proven iOS path-throughput result is stored yet.").foregroundStyle(.secondary) }
+                    Text("iOS does not label socket RTT as Mbps. A dedicated private upload/download benchmark must be present in the home-node runtime before per-hop/end speed is reported.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Result") { Text(output).font(.caption.monospaced()).textSelection(.enabled) }
+            }
+            .navigationTitle("Performance")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+    private func runLive() { busy = true; Task { await telemetry.refreshLivePath(profile: model.unifiedSelectedProfile, connected: model.connected); output = telemetry.livePathMs.map { String(format: "Current private tunnel median RTT: %.1f ms", $0) } ?? "Current tunnel RTT failed."; busy = false } }
+    private func runSelected() { guard let p = model.unifiedSelectedProfile else { return }; busy = true; Task { do { output = try await telemetry.measureOne(p, samples: 50).detail } catch { output = error.localizedDescription }; busy = false } }
+    private func runAll() { busy = true; Task { let values = await telemetry.measureAll(model.allNodeProfiles, samples: 5); output = values.isEmpty ? telemetry.lastError : values.map(\.detail).joined(separator: "\n"); busy = false } }
+}
+
+private let iosUnifiedUXContract = "map-first swipe-up Connect Disconnect fastest-node live RTT quick kill switch forwarding shortcut Multihop Settings Performance Mode DNS SMART AUTO default AUTO all presets CUSTOM builder saved delete Router node Custom external color-coded hops real coordinates node ms animated packet path IPv6 On Auto MTU Require encrypted Require obfuscation schema-v4 profile-shared requirements"
