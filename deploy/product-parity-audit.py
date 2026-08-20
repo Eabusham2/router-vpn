@@ -62,14 +62,32 @@ require(
     "TestHomeSummaryUsesOnlyProofForCurrentSession",
     "TestHomeSummaryReportsFallbackDNSAndSharedState",
 )
-require("cmd/client/mtu_retest.go", "registerHomeSummaryRoute(h, a)")
+require("cmd/client/mtu_retest.go", "registerHomeSummaryRoute(h, a)", "registerHopTelemetryRoutes(h, a)")
+require(
+    "cmd/client/telemetry.go",
+    "/api/profile/fastest", "/api/connection/live-latency", "/api/multihop/live-latency",
+    "/api/connection/speed-test", "/api/benchmark/download", "/api/benchmark/upload",
+)
+require(
+    "cmd/client/telemetry_hops.go",
+    "/api/profile/speed-test", "/api/multihop/speed-test", "measureRoutedProfileSpeed",
+    "entry_error", "exit_error", "not derived from RTT", "active routing graph",
+)
+require(
+    "cmd/router-agent/benchmark.go",
+    "/api/benchmark/download", "/api/benchmark/upload", "s.authorized(r)", "benchmarkMaxBytes",
+    "no-store, no-transform", "content-encoding",
+)
 
+# Windows: launcher -> unified transform -> telemetry transform -> shipping WPF product.
 require(
     "client/RouterVPN-Windows-App.ps1",
     "Get-Content -LiteralPath $Product -Raw -Encoding UTF8",
     'MinHeight=\"480\" MinWidth=\"640\"', 'Height=\"2*\" MinHeight=\"140\"',
     'MaxWidth=\"760\"', 'MinHeight=\"180\"',
+    "Add-RouterVPNUnifiedWindowsShell", "Add-RouterVPNTelemetryWindowsShell",
     "SMART AUTO is the default mode", "WireGuard / AmneziaWG",
+    "/api/connection/speed-test", "/api/multihop/speed-test", "Routed hop speeds",
 )
 require(
     "client/RouterVPN-Windows-UnifiedShell.ps1",
@@ -81,6 +99,12 @@ require(
     "SMART AUTO", "New CUSTOM preset", "real coordinates", "color-coded hop roles",
 )
 require(
+    "client/RouterVPN-Windows-Telemetry.ps1",
+    "UnifiedFastestNode", "UnifiedLiveLatency", "UnifiedMultihopLatency", "UnifiedForwardButton",
+    "Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test",
+    "50-sample selected node", "Throughput + Auto MTU",
+)
+require(
     "client/RouterVPN-Windows-Product-v2.ps1",
     'Header="Layers"', 'Header="Added ms"', 'Header="Traffic"', 'Header="Speed loss"',
     'Header="Exact reason"', "layers_text", "ping_text", "traffic_text", "speed_text", "reason_text",
@@ -90,6 +114,7 @@ require(
     "No real node coordinates",
 )
 
+# macOS: build script must compile Product + UnifiedShell + Telemetry into RouterVPN.app.
 require(
     "client/macos/RouterVPNMacProduct.swift",
     "import MapKit", "MKMapView", "latitude", "longitude", "layers: ", "added latency",
@@ -104,13 +129,26 @@ require(
     "Actual public VPN exit", "Connection:", "Logical/runtime/base", "Fallback:", "DNS:",
     "Node latency", "LAN access", "Kill switch", "Effective MTU", "Warnings:",
 )
+require(
+    "client/macos/RouterVPNMacUnifiedShell.swift",
+    "buildUnifiedUI", "CUSTOM preset builder", "Save & Connect", "Delete", "SMART AUTO — recommended",
+    "AUTO — first proven path", "unified-connect", "unified-multihop-toggle", "Open settings",
+    "Mode", "DNS", "systemBlue", "systemOrange", "systemPink", "real coordinates",
+)
+require(
+    "client/macos/RouterVPNMacTelemetry.swift",
+    "unified-fastest-node", "unified-live-latency", "unified-multihop-latency", "Forward",
+    "Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test",
+)
 require_combined(
     "macOS unified shipping product",
-    ("client/macos/build-native-app.sh", "client/macos/RouterVPNMacUnifiedShell.swift", "client/macos/RouterVPNHomeSummary.swift"),
-    "UNIFIED_SRC", "HOME_SRC", '"$UNIFIED_SRC"', '"$HOME_SRC"',
+    ("client/macos/build-native-app.sh", "client/macos/RouterVPNMacUnifiedShell.swift", "client/macos/RouterVPNMacTelemetry.swift", "client/macos/RouterVPNHomeSummary.swift"),
+    "UNIFIED_SRC", "TELEMETRY_SRC", "HOME_SRC", '"$UNIFIED_SRC"', '"$TELEMETRY_SRC"', '"$HOME_SRC"',
     "Prove actual exit", "Emergency Disconnect", "SMART AUTO", "CUSTOM", "map-first",
+    "Real path speed", "Routed hop speeds",
 )
 
+# Linux: generated build source must include unified root + telemetry and compile with -Werror.
 require(
     "client/linux/routervpn-gtk-product-v5.c",
     "build_modes_page_v5", "Added latency", "traffic", "speed loss", "Readiness:", "Reason:",
@@ -125,14 +163,22 @@ require(
     "Logical/runtime/base", "Fallback:", "DNS:", "Node measured latency", "LAN access", "Kill switch",
     "Effective MTU", "Warnings:", "on_home_exit_v6",
 )
+require(
+    "client/linux/routervpn-telemetry-v9.inc",
+    "LinuxTelemetryV9", "⚡ Fastest", "/api/profile/fastest", "/api/connection/live-latency",
+    "/api/multihop/live-latency", "Real path speed", "/api/connection/speed-test",
+    "Routed hop speeds", "/api/multihop/speed-test", "Throughput + Auto MTU", "Forward",
+)
 require_combined(
     "Linux unified shipping product",
-    ("client/linux/build-native-app.sh", "client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-home-summary-v1.inc"),
-    "routervpn-unified-shell-v8.inc", "routervpn-home-summary-v1.inc", "SMART AUTO", "CUSTOM",
-    "Connect", "Disconnect", "Kill switch", "Multihop", "Settings", "Mode", "DNS",
+    ("client/linux/build-native-app.sh", "client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-telemetry-v9.inc", "client/linux/routervpn-home-summary-v1.inc"),
+    "routervpn-unified-shell-v8.inc", "routervpn-telemetry-v9.inc", "routervpn-home-summary-v1.inc",
+    "linux_install_telemetry_v9(&app);", "SMART AUTO", "CUSTOM", "Connect", "Disconnect", "Kill switch",
+    "Multihop", "Settings", "Mode", "DNS", "Real path speed", "Routed hop speeds",
     "gcc -O2 -Wall -Wextra -Werror",
 )
 
+# Android: ProductActivity is the launcher. It must expose the unified map-first UX and real telemetry.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProductParity.java",
     "listDirectLibboxModes", "listDirectXrayModes", "AndroidKillSwitchPolicy.strictRequested",
@@ -153,12 +199,23 @@ require(
     "session_id", "actual_exit_session", "actualExitForCurrentSession", "begin(", "connected(", "disconnected(",
 )
 require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetry.java",
+    "class SpeedResult", "speedTest(AndroidNodeStore.Node", "/api/benchmark/download", "/api/benchmark/upload",
+    "Authorization", "Accept-Encoding", "downloadMbps", "uploadMbps",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
+    "ROLE_ENTRY", "ROLE_EXIT", "ROLE_EXTERNAL", "latencyMs", "System.currentTimeMillis", "postInvalidateDelayed",
+)
+require(
     "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
-    "RouterVpnNodeMapView", "SMART AUTO — recommended", "New CUSTOM preset", "Details / proof",
+    "RouterVpnNodeMapView", "⚡ Fastest", "SMART AUTO — recommended", "New CUSTOM preset", "Details / proof",
     "showConnectionDetails", "AndroidHomeSummary.format", "AndroidHomeSummary.proveActualExit",
     "AndroidHomeSummary.emergencyDisconnect", "Prove actual exit", "Emergency disconnect",
     "AndroidProductParity.showModes", "AndroidProductParity.showDNS", "showSettings",
-    "Multihop", "Add Router node", "Add custom / external",
+    "Multihop", "Add Router node", "Add custom", "Profiles", "showProfileManager",
+    "Real current VPN path speed", "Routed multihop speeds", "runRoutedHopSpeeds",
+    "telemetry.speedTest(entry", "telemetry.speedTest(exit",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java",
@@ -179,6 +236,8 @@ require(
     'android:name=".ProductActivity"', 'android.intent.category.LAUNCHER', 'android:name=".MainActivity"',
 )
 
+# iOS/iPadOS: @main -> ProductRootView -> IOSUnifiedProductView, all App sources compiled by XcodeGen.
+require("ios/RouterVPN/App/RouterVPNApp.swift", "@main", "ProductRootView()")
 require(
     "ios/RouterVPN/App/ProductParitySheets.swift",
     "RouterVPNModeMetricsSheet", "RouterVPNDNSSettingsSheet", "Added latency", "traffic", "speed loss",
@@ -195,8 +254,8 @@ require(
 )
 require_combined(
     "iOS/iPadOS unified root lifecycle",
-    ("ios/RouterVPN/App/ProductRootView.swift", "ios/RouterVPN/App/IOSUnifiedProductView.swift"),
-    "IOSUnifiedProductView()", "map-first", "SMART AUTO default", "CUSTOM preset builder",
+    ("ios/RouterVPN/App/RouterVPNApp.swift", "ios/RouterVPN/App/ProductRootView.swift", "ios/RouterVPN/App/IOSUnifiedProductView.swift"),
+    "ProductRootView()", "IOSUnifiedProductView()", "map-first", "SMART AUTO default", "CUSTOM preset builder",
     "RouterVPNProductOnboardingDoneV2",
 )
 require(
@@ -204,12 +263,22 @@ require(
     "IOSUnifiedMap", "IOSHomeSummaryView", "Connect", "Disconnect", "Kill switch", "Multihop",
     "Settings", "Mode", "DNS", "SMART AUTO", "New CUSTOM preset", "real coordinates",
     "systemBlue", "systemOrange", "systemPink", "Require encrypted", "Require obfuscation",
+    "Run real current VPN path speed", "telemetry.speedTest",
+)
+require(
+    "ios/RouterVPN/App/IOSUnifiedTelemetry.swift",
+    "IOSSpeedResult", "IOSProbeOnce", "/api/benchmark/download", "/api/benchmark/upload",
+    "Authorization", "downloadMbps", "uploadMbps",
+)
+require(
+    "ios/RouterVPN/App/NodeManagerSheet.swift",
+    "Pair from home LAN", "Import node bundle", "Select lowest-latency node", "model.removeNode", "Edit", "updateNodeMetadata",
 )
 require(
     "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
     "WireGuardAdapter(with: self)", "RouterVPNLibboxEngine", "includeAllNetworks", "enforceRoutes",
 )
-require("ios/RouterVPN/project.yml", "NSAllowsLocalNetworking", 'TARGETED_DEVICE_FAMILY: "1,2"')
+require("ios/RouterVPN/project.yml", "sources: [App, Resources]", "NSAllowsLocalNetworking", 'TARGETED_DEVICE_FAMILY: "1,2"', "SWIFT_VERSION: \"6.0\"")
 
 setup = require(
     "server/scripts/generate-setup-assets.py",
@@ -226,8 +295,13 @@ for stale in (
     if stale in setup:
         errors.append(f"server/scripts/generate-setup-assets.py: stale/superseded product claim returned: {stale}")
 
+require(
+    ".github/workflows/release-candidate-status.yml",
+    "workflow_run", "Router VPN release candidate", "statuses: write", "head_sha",
+)
+
 if errors:
     for error in errors:
         print("ERROR:", error)
     raise SystemExit(1)
-print("Router VPN cross-platform unified mode/DNS/proof/responsive product parity audit: PASS")
+print("Router VPN current shipping cross-platform product parity audit: PASS")
