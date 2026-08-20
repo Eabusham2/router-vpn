@@ -29,9 +29,6 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var dnsPort: Int
     var dnsServerName: String
     var dnsPath: String
-    var multihopEnabled: Bool
-    var multihopEntryID: String
-    var multihopExitID: String
 }
 
 private struct IOSConnectionProfileRecord: Identifiable, Codable, Hashable {
@@ -61,6 +58,9 @@ private enum IOSConnectionProfileStore {
         let layers = try customLayers(for: mode)
         let prefs: IOSConnectionSafePreferences?
         if selected.normalizedNodeKind == "router-vpn" {
+            if selected.multihopEnabled == true {
+                throw issue("The selected Router node currently contains desktop-style multihop choices. Current iOS cannot execute full desktop multihop, so this setup is not saved as a misleading iOS connection profile. Disable multihop or save it from a supported desktop/Android path.")
+            }
             prefs = IOSConnectionSafePreferences(
                 homeLANAccess: selected.homeLANAccess ?? true,
                 killSwitch: selected.killSwitch ?? false,
@@ -79,10 +79,7 @@ private enum IOSConnectionProfileStore {
                 dnsHost: selected.dnsHost ?? "",
                 dnsPort: selected.dnsPort ?? 0,
                 dnsServerName: selected.dnsServerName ?? "",
-                dnsPath: selected.dnsPath ?? "",
-                multihopEnabled: selected.multihopEnabled ?? false,
-                multihopEntryID: selected.multihopEntryID ?? "",
-                multihopExitID: selected.multihopExitID ?? ""
+                dnsPath: selected.dnsPath ?? ""
             )
         } else {
             prefs = nil
@@ -112,16 +109,20 @@ private enum IOSConnectionProfileStore {
         guard let linked = model.allNodeProfiles.first(where: { $0.id == saved.nodeID }), linked.normalizedNodeKind == saved.nodeKind else {
             throw issue("The linked node referenced by this connection profile is missing or changed type.")
         }
-        if let prefs = saved.preferences, prefs.multihopEnabled {
-            throw issue("This saved profile contains multihop, but the current iOS PacketTunnel does not support full desktop multihop. Nothing was changed.")
-        }
-        model.selectNode(saved.nodeID)
-        guard saved.nodeKind == "router-vpn", let prefs = saved.preferences else {
+        guard var bundle = model.bundle,
+              let index = bundle.routerProfiles.firstIndex(where: { $0.id == saved.nodeID }) else { throw issue("Linked node bundle could not be loaded.") }
+
+        if saved.nodeKind == "external" {
+            bundle.selectedRouterID = saved.nodeID
+            do { try model.importBundle(JSONEncoder().encode(bundle)) }
+            catch { throw issue("Could not select the saved Custom/external node: \(error.localizedDescription)") }
             UserDefaults.standard.set("smart-auto", forKey: iosConnectionModeKey)
             return saved
         }
-        guard var bundle = model.bundle,
-              let index = bundle.routerProfiles.firstIndex(where: { $0.id == saved.nodeID }) else { throw issue("Selected Router node bundle could not be loaded.") }
+
+        guard let prefs = saved.preferences else { throw issue("Router connection profile is missing its non-secret preference snapshot.") }
+        let effectiveMode = normalizeMode(saved.mode)
+        let preparedPreset = try preparedCustomPresetData(mode: effectiveMode, layers: saved.customLayers)
         var profile = bundle.routerProfiles[index]
         profile.homeLANAccess = prefs.homeLANAccess
         profile.killSwitch = prefs.killSwitch
@@ -145,11 +146,13 @@ private enum IOSConnectionProfileStore {
         profile.multihopEntryID = nil
         profile.multihopExitID = nil
         bundle.routerProfiles[index] = profile
+        bundle.selectedRouterID = saved.nodeID
         bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
+
         do { try model.importBundle(JSONEncoder().encode(bundle)) }
         catch { throw issue("Could not apply saved connection preferences: \(error.localizedDescription)") }
-        UserDefaults.standard.set(saved.mode, forKey: iosConnectionModeKey)
-        try restoreCustomPreset(mode: saved.mode, layers: saved.customLayers)
+        UserDefaults.standard.set(effectiveMode, forKey: iosConnectionModeKey)
+        if let preparedPreset { UserDefaults.standard.set(preparedPreset, forKey: iosConnectionCustomPresetsKey) }
         return saved
     }
 
@@ -193,14 +196,18 @@ private enum IOSConnectionProfileStore {
         return unique.sorted()
     }
 
-    private static func restoreCustomPreset(mode: String, layers: [String]) throws {
-        guard mode.hasPrefix("custom:"), !layers.isEmpty else { return }
-        let name = String(mode.dropFirst("custom:".count)); let normalized = try normalizeLayers(layers)
+    private static func preparedCustomPresetData(mode: String, layers: [String]) throws -> Data? {
+        guard mode.hasPrefix("custom:"), !layers.isEmpty else { return nil }
+        let name = String(mode.dropFirst("custom:".count))
+        guard !name.isEmpty else { throw issue("CUSTOM connection profile name is invalid.") }
+        let normalized = try normalizeLayers(layers)
         var values: [IOSConnectionCustomPresetMirror] = []
         if let data = UserDefaults.standard.data(forKey: iosConnectionCustomPresetsKey),
            let existing = try? JSONDecoder().decode([IOSConnectionCustomPresetMirror].self, from: data) { values = existing }
-        values.removeAll { $0.name == name }; values.append(IOSConnectionCustomPresetMirror(name: name, layers: normalized))
-        UserDefaults.standard.set(try JSONEncoder().encode(values), forKey: iosConnectionCustomPresetsKey)
+        values.removeAll { $0.name == name }
+        values.append(IOSConnectionCustomPresetMirror(name: name, layers: normalized))
+        values.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return try JSONEncoder().encode(values)
     }
 
     private static func issue(_ message: String) -> NSError { NSError(domain: "RouterVPN.ConnectionProfiles", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
@@ -234,7 +241,7 @@ struct IOSConnectionProfilesView: View {
                     if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary) }
                 }
                 Section("Capability truth") {
-                    Text("Current iOS does not execute full desktop multihop. A saved multihop connection profile is rejected before changing state rather than silently connecting single-hop. Connect remains a separate action so PacketTunnel still has to establish and prove the real path.")
+                    Text("Current iOS does not execute full desktop multihop, so an imported Router node carrying desktop-style multihop choices is rejected at Add/Update time rather than creating an iOS profile that cannot be loaded. Connect remains a separate action so PacketTunnel still has to establish and prove the real path.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -252,5 +259,6 @@ struct IOSConnectionProfilesView: View {
     private func delete() { guard let selectedID else { return }; do { try IOSConnectionProfileStore.delete(id: selectedID); status = "Deleted saved connection profile."; self.selectedID = nil; refresh() } catch { status = error.localizedDescription } }
 }
 
-// iOS connection-profile contract: Add / Load / Update / Delete complete non-secret choices.
+// iOS connection-profile contract: Add / Load / Update / Delete complete non-secret choices supported by the current iOS dataplane.
+// Unsupported desktop multihop is rejected before save; load validates everything and applies one bundle update before selection changes.
 // No RouterProfile/API token/private key/external secret payload is encoded into this store.
