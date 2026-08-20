@@ -22,6 +22,7 @@ product = read("ProductActivity.java")
 forwarding = read("AndroidForwardingMaster.java")
 revalidator = read("AndroidSessionRevalidator.java")
 standard_activity = read("StandardExitActivity.java")
+via_entry = read("AndroidViaEntryLatencyProbe.java")
 manifest = (ROOT / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
 
 # One app-process engine owner. Activity recreation must not replace GoBackend,
@@ -95,6 +96,33 @@ for marker in (
 ):
     assert marker in telemetry, f"telemetry session identity missing: {marker}"
 
+# Pre-connect X→Y/X→Z latency is a real temporary-entry routed measurement.
+# The temporary WG entry must be proven, session/path identity must remain
+# stable, results must never pollute direct RTT cache, and the entry must be
+# fully DOWN before the picker sees any result.
+for marker in (
+    "wireGuard.connect(entry.file",
+    "state != Tunnel.State.UP",
+    "telemetry.measureNodesViaCurrentPath(entry.id",
+    "wireGuard.disconnect",
+    "Temporary entry did not fully disconnect; candidate results discarded.",
+    "AtomicBoolean",
+):
+    assert marker in via_entry, f"via-entry probe missing: {marker}"
+for marker in (
+    "measureNodesViaCurrentPath",
+    '"raw-tunnel".equals(before.logicalMode)',
+    '"wg".equals(before.actualBase)',
+    "String session=before.sessionId",
+    "long generation=before.pathGeneration",
+    "session.equals(now.sessionId)",
+    "now.pathGeneration!=generation",
+    "all results discarded",
+):
+    assert marker in telemetry, f"via-entry telemetry proof missing: {marker}"
+via_method = telemetry.split("void measureNodesViaCurrentPath", 1)[1].split("void currentPath", 1)[0]
+assert "cache(" not in via_method, "via-entry RTT must never overwrite direct-node RTT cache"
+
 # Android VPN consent can outlive an Activity instance. Persist only non-secret
 # requested mode/layers/node IDs and rebind a new UI callback.
 for marker in (
@@ -114,12 +142,21 @@ for marker in (
     "connection.activeMultihopExitId()",
     "connection.activeMultihopExitMode()",
     "Connect the actual Android multihop graph before testing routed hop speeds",
+    "PREPARE_VIA_ENTRY_RTT",
+    "VpnService.prepare(this)",
+    "prepareViaEntryExitMeasurement",
+    "runPendingViaEntryProbe",
+    "showViaEntryExitPicker",
+    "Values are not saved as direct-node RTTs.",
 ):
-    assert marker in product, f"ProductActivity lost live-graph marker: {marker}"
+    assert marker in product, f"ProductActivity lost live-graph/via-entry marker: {marker}"
 assert 'prefs().getString(MULTI_ENTRY,"")' in product, "saved pre-connect multihop config should remain supported"
 run_speed = product.split("private void runRoutedHopSpeeds()", 1)[1].split("private void refreshModeChoices", 1)[0]
 assert "prefs().getString(MULTI_ENTRY" not in run_speed
 assert "prefs().getString(MULTI_EXIT" not in run_speed
+picker = product.split("private void showViaEntryExitPicker", 1)[1].split("private void clearPendingProbe", 1)[0]
+assert "cachedMedian" not in picker, "via-entry picker must not substitute direct cached RTT"
+assert "medianMs" in picker and "unavailable" in picker
 
 # Custom-exit UI/runtime ownership and permission metadata survive recreation.
 for marker in (
@@ -152,5 +189,9 @@ for marker in (
     "Setup Center admin token never leaves the server",
 ):
     assert marker in product, f"Product forwarding control missing: {marker}"
+
+# Keep the standalone focused contract executable for local/CI use too.
+standalone = ROOT / "test_android_via_entry_latency_contract.py"
+assert standalone.is_file() and standalone.read_text(encoding="utf-8").strip()
 
 print("Android session identity contract: PASS")
