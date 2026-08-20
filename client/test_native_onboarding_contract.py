@@ -40,6 +40,8 @@ android_product = read("android/app/src/main/java/com/eabusham/routervpn/Product
 ios_onboarding = read("ios/RouterVPN/App/ProductOnboardingView.swift")
 ios_root = read("ios/RouterVPN/App/ProductRootView.swift")
 ios_unified = read("ios/RouterVPN/App/IOSUnifiedProductView.swift")
+ios_location = read("ios/RouterVPN/App/IOSUserLocationOverlay.swift")
+ios_project = read("ios/RouterVPN/project.yml")
 
 # Windows v3 owns first-launch/resume in the launcher and the map-first daily
 # controls in the unified shell. Require the real current lifecycle rather than
@@ -173,5 +175,16 @@ require("iOS/iPadOS unified product", ios_root + ios_unified, (
     "RouterVPNProductOnboardingDoneV2", "Setup Guide", "SMART AUTO",
     "CUSTOM", "Connect", "Disconnect", "DNS", "Kill switch", "Multihop",
 ))
+require("iOS opt-in real user location", ios_root + ios_location + ios_project, (
+    "IOSUserLocationControl", "requestFromUserTap", "requestedByUser",
+    "requestWhenInUseAuthorization", "requestLocation()", "horizontalAccuracy",
+    "abs(location.timestamp.timeIntervalSinceNow) <= 30", "CLLocationCoordinate2DIsValid",
+    "map.showsUserLocation = true", ".systemGreen", "no automatic request",
+    "no IP geolocation", "INFOPLIST_KEY_NSLocationWhenInUseUsageDescription",
+    "when you explicitly tap the location button", "never inferred from your IP address",
+))
+assert "IOSUserLocationControl()" in ios_root, "iOS real-location control exists but is not wired into ProductRootView"
+assert "startUpdatingLocation" not in ios_location, "iOS location must remain a user-triggered one-shot rather than automatic background tracking"
+assert "CLGeocoder" not in ios_location and "ipify" not in ios_location.lower(), "iOS user location must not use geocoding/IP-derived placement"
 
 print("Shipping native app onboarding contract: PASS")
