@@ -64,9 +64,6 @@ require(
     "registerConnectionProfileRoutes(h, a)",
 )
 
-# Shared desktop connection profiles save complete connection choices without
-# cloning node identity/private credentials. Load is an idle-only configuration
-# restore; the next connect still has to establish and prove its real dataplane.
 connection_profiles = require(
     "cmd/client/connection_profiles.go",
     "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
@@ -88,17 +85,13 @@ require(
     "TestConnectionProfileInputNormalization", "TOP-SECRET-API-TOKEN", "private-password", "0o600",
 )
 
-# Windows is a composed native WPF product: launcher + unified daily shell +
-# narrow settings helper. Connection profile CRUD lives inside Settings so the
-# requested daily Connect -> Multihop -> Settings -> Mode -> DNS order is intact.
 win_settings = require(
     "client/RouterVPN-Windows-ProfileSettings.ps1", "/api/profile/settings", "Allow home LAN access",
     "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
     "Connection profiles", "Add profile", "Load", "Update", "Delete",
     "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
     "/api/connection-profile/load", "/api/connection-profile/delete",
-    "windows-selected-mode-v1.txt", "windows-custom-presets-v1.json",
-    "never duplicate node secrets",
+    "windows-selected-mode-v1.txt", "windows-custom-presets-v1.json", "never duplicate node secrets",
 )
 for forbidden in ("APIToken", "PrivateKey", "PresharedKey", "socks_password"):
     if forbidden in win_settings:
@@ -111,16 +104,13 @@ require_combined(
     "UnifiedSettingsButton", "UnifiedKillSwitch", "UnifiedMtuButton", "/api/connection-profile/load",
 )
 
-# macOS build compiles both settings and unified shell. The Settings accessory
-# owns profile CRUD and mirrors only unified mode/CUSTOM layer choices locally.
 mac_settings = require(
     "client/macos/RouterVPNProfileSettings.swift", "/api/profile/settings", "Allow home LAN access",
     "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
     "Connection profiles", "MacConnectionProfileControls", "Add", "Load", "Update", "Delete",
     "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
     "/api/connection-profile/load", "/api/connection-profile/delete",
-    "routervpn.unified.selected-mode.v1", "routervpn.unified.custom-presets.v1",
-    "never duplicates node secrets",
+    "routervpn.unified.selected-mode.v1", "routervpn.unified.custom-presets.v1", "never duplicates node secrets",
 )
 for forbidden in ("apiToken", "privateKey", "presharedKey", "socksPassword"):
     if forbidden in mac_settings:
@@ -133,8 +123,6 @@ require_combined(
     "/api/connection-profile/load",
 )
 
-# Linux keeps Router-node settings stable and attaches a separate native profile
-# manager beside Settings/Performance. The whole shipping binary remains -Werror.
 require(
     "client/linux/routervpn-profile-settings-v1.inc", "/api/profile/settings", "Allow home LAN access",
     "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
@@ -166,14 +154,28 @@ require_combined(
     "linux_unified_settings_v8", "Kill switch", "MTU Retest", "/api/connection-profile/load",
 )
 
-# Android edits only the selected private bundle. Current map-first ProductActivity
-# opens showSettings() and refreshes the complete unified surface after a save.
-require(
+android_settings = require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSettingsDialog.java",
     "home_lan_access", "kill_switch_policy", "ipv6_mode", "base_tunnel", "base_fallback",
     "auto_require_encrypted", "auto_require_obfuscation", "Require encrypted", "Require obfuscation",
     "mtu_policy", "manual_mtu", "daita_enabled", "jumbo_tun", "socks_enabled",
     "External exits own their protocol settings", "store.importBundle",
+    "Connection profiles — Add / Load / Update / Delete", "AndroidConnectionProfilesDialog.show",
+)
+android_store = require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "connection-profiles-v1.json", "MAX_PROFILES=64", "POLICY_KEYS", "requireIdle",
+    "home_lan_access", "kill_switch_policy", "ipv6_mode", "auto_require_encrypted", "auto_require_obfuscation",
+    "mtu_policy", "dns_mode", "dns_protocol", "multihop_enabled", "multihop_entry_id", "multihop_exit_id",
+    "node_kind", "node_id", "custom_layers", "store contains non-whitelisted node data",
+)
+for forbidden in ('"api_token"', '"private_key"', '"preshared_key"', '"socks_password"', '"password"', '"secret"'):
+    if forbidden in android_store:
+        errors.append(f"Android connection profile store contains forbidden secret field literal: {forbidden}")
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfilesDialog.java",
+    "Add", "Load", "Update", "Delete", "Refresh", "AndroidConnectionProfileStore",
+    "never copied into these profiles", "Connect still has to establish and prove the real VPN path",
 )
 android_product = require(
     "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
@@ -184,32 +186,37 @@ if "AndroidProfileSettingsDialog.show(this,nodeStore,this::refreshAll)" not in c
     errors.append("Android ProductActivity Settings is not wired to refresh the unified surface after save")
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java",
-    "auto_require_encrypted", "auto_require_obfuscation", "applyAutoRequirements",
-    "AUTO/SMART filters only",
+    "auto_require_encrypted", "auto_require_obfuscation", "applyAutoRequirements", "AUTO/SMART filters only",
 )
 
-# Apple exposes only settings carried by the current PacketTunnel profile and
-# explicitly omits unsupported Jumbo/DAITA/SOCKS rather than fake-enabling them.
-# iOS must also accept current profile schema v4 and enforce the shared AUTO
-# encryption/obfuscation classifications before initial and SMART attempts.
 require(
     "ios/RouterVPN/App/Models.swift",
     "profileSchemaVersion: 4", "profileSchemaVersion <= 4",
     "autoRequireEncrypted", 'autoRequireEncrypted = "auto_require_encrypted"',
     "autoRequireObfuscation", 'autoRequireObfuscation = "auto_require_obfuscation"',
 )
-require(
+ios_settings = require(
     "ios/RouterVPN/App/IOSProfileSettingsView.swift", "Allow home LAN access", "Always / strict",
     "AmneziaWG stays unavailable on iOS", "MTU policy", "Fixed / manual", "Jumbo TUN is intentionally not exposed",
     "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "autoRequireEncrypted", "autoRequireObfuscation", "model.importBundle",
-    "Disconnect before changing profile settings",
+    "Disconnect before changing profile settings", "Connection profiles", "IOSConnectionProfilesView",
 )
+ios_profiles = require(
+    "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
+    "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "Add", "Load", "Update", "Delete",
+    "routervpn.connection-profiles.v1", "routervpn.unified.mode.v1", "routervpn.unified.custom-presets.v1",
+    "dnsMode", "dnsProtocol", "multihopEnabled", "multihopEntryID", "multihopExitID",
+    "current iOS PacketTunnel does not support full desktop multihop. Nothing was changed",
+    "Connect remains a separate action", "No RouterProfile/API token/private key/external secret payload",
+)
+for forbidden in ("apiToken", "privateKey", "presharedKey", "socksPassword", "ExternalNodeConfig"):
+    if forbidden in ios_profiles:
+        errors.append(f"iOS connection profile store unexpectedly references secret-bearing model field/type: {forbidden}")
 require(
     "ios/RouterVPN/App/IOSStrategySupport.swift",
     "autoRequirementFailure", "encryptedLayers", "obfuscationLayers",
-    "profile.autoRequireEncrypted", "profile.autoRequireObfuscation",
-    "SMART AUTO •", "skipping simplification",
+    "profile.autoRequireEncrypted", "profile.autoRequireObfuscation", "SMART AUTO •", "skipping simplification",
 )
 require(
     "ios/RouterVPN/App/RouterVPNModel.swift",
