@@ -21,6 +21,9 @@
             </intent-filter>
         </activity>
         <activity android:name=".StandardExitActivity" android:exported="false" />
+        <!-- Legacy engine console remains compiled only for source/diagnostic regression coverage.
+             It is deliberately not runnable, so it cannot create duplicate GoBackend owners. -->
+        <activity android:name=".MainActivity" android:exported="false" android:enabled="false" />
         <service
             android:name=".LayeredVpnService"
             android:exported="false"
