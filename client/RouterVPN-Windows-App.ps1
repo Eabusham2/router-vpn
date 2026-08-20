@@ -23,13 +23,18 @@ $UnifiedShellHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-UnifiedShell.ps1
 if(-not(Test-Path -LiteralPath $UnifiedShellHelpers)){throw "Router VPN unified shell helpers are missing: $UnifiedShellHelpers"}
 $UnifiedShellSource=Get-Content -LiteralPath $UnifiedShellHelpers -Raw -Encoding UTF8
 . ([ScriptBlock]::Create($UnifiedShellSource))
+$TelemetryHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-Telemetry.ps1'
+if(-not(Test-Path -LiteralPath $TelemetryHelpers)){throw "Router VPN telemetry helpers are missing: $TelemetryHelpers"}
+$TelemetrySource=Get-Content -LiteralPath $TelemetryHelpers -Raw -Encoding UTF8
+. ([ScriptBlock]::Create($TelemetrySource))
 
 # The shipping Windows product is composed from this launcher + the unified shell
-# + Product-v2. Keep the controller contract declared here and verify the actual
-# implementation is present in the UTF-8 unified-shell source during -SelfTest.
+# + telemetry transform + Product-v2. Keep the controller contract declared here
+# and verify the actual implementation is present during -SelfTest.
 $UnifiedControllerContract=@(
     '/api/status','/api/profiles','/api/logical-modes','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom',
-    '/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/public-ip','/api/dns/retest','/api/emergency-stop'
+    '/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/profile/fastest','/api/profile/live-latency',
+    '/api/connection/live-latency','/api/multihop/live-latency','/api/public-ip','/api/dns/retest','/api/emergency-stop'
 )
 # Compatibility marker for older repository audits only. The retired /api/auto
 # route is not invoked by this launcher; AUTO now uses /api/strategy/auto.
@@ -39,13 +44,13 @@ $OnboardingStateDir=Join-Path $PSScriptRoot '.routervpn-state'
 $OnboardingStateFile=Join-Path $OnboardingStateDir 'windows-onboarding-v3.json'
 $OnboardingSteps=@(
     @{Title='Welcome to Router VPN';Body='The map is the daily app. Setup Center remains the separate authenticated deployment/admin surface. Install this native app once, then securely add/select Router nodes or compatible Custom/external exits.'},
-    @{Title='Map and nodes';Body='One normal node is selected by default. Router and Custom/external nodes share one catalog. Only real stored coordinates are plotted; Router VPN never fabricates a map pin from an IP address. Measured latency selection remains based on the robust 50-sample node test.'},
-    @{Title='Connect and proof';Body='The main button changes Connect <-> Disconnect. Connected is asserted only after the selected-node private path proof. Runtime/base/fallback, DNS proof and real public exit remain separate truth signals; generic Internet access is not success.'},
+    @{Title='Map and nodes';Body='One normal node is selected by default. Router and Custom/external nodes share one catalog. Only real stored coordinates are plotted; Router VPN never fabricates a map pin from an IP address. The connect-side dropdown can live-test Router nodes and choose the fastest measured median RTT.'},
+    @{Title='Connect and proof';Body='The main button changes Connect <-> Disconnect. Connected is asserted only after the selected-node private path proof. Live RTT beside the button measures the current private tunnel path; runtime/base/fallback, DNS proof and real public exit remain separate truth signals.'},
     @{Title='Modes';Body='SMART AUTO is the default mode. AUTO is a first-class mode. All logical presets remain discoverable and unavailable ones keep their exact readiness reason. CUSTOM uses saved visual presets containing exact required layers and fails closed if no validated compatible stack works.'},
-    @{Title='DNS and Settings';Body='DNS is changed from the control dock and detailed resolver setup/retest drills in. Settings contains kill switch, IPv6 On default, LAN policy, WireGuard / AmneziaWG base preference, Auto measured/fixed MTU, DAITA-like traffic padding, Jumbo TUN, AUTO encryption/obfuscation filters, and forwarding ownership where supported.'},
-    @{Title='Multihop';Body='Multihop is entry -> exit -> Internet. Entry and exit must be different and the graph must be supported by the real Windows dataplane. Unsupported graphs fail closed and the actual public exit must be proved.'},
+    @{Title='DNS and Settings';Body='DNS is changed from the control dock and detailed resolver setup/retest drills in. Settings contains kill switch, IPv6 On default, LAN policy, WireGuard / AmneziaWG base preference, Auto measured/fixed MTU, DAITA-like traffic padding, Jumbo TUN, AUTO encryption/obfuscation filters, forwarding ownership and Performance tests.'},
+    @{Title='Multihop';Body='Multihop is entry -> exit -> Internet. Entry and exit must be different and the graph must be supported by the real Windows dataplane. The main sheet shows live entry/exit direct RTT and, when actually connected, current multihop private-path RTT; unsupported graphs fail closed.'},
     @{Title='Windows permissions and recovery';Body='Full-device Wintun/TUN, routes, DNS and strict firewall enforcement can require Windows administrator/network-driver permission. WSL is not counted as the native dataplane. Use normal Disconnect for intentional exit and Emergency stop only for a stuck runtime.'},
-    @{Title='Final checks';Body='After the first real connection, verify selected-node proof, selected DNS, actual public exit, IPv4/IPv6 leak behavior, kill switch, reconnect, network change, sleep/wake and the current display scaling. Setup Center Full Guide remains the server/router administration source of truth.'}
+    @{Title='Final checks';Body='After the first real connection, verify selected-node proof, selected DNS, actual public exit, IPv4/IPv6 leak behavior, kill switch, reconnect, network change, sleep/wake, live RTT and the current display scaling. Setup Center Full Guide remains the server/router administration source of truth.'}
 )
 
 function Get-OnboardingState{
@@ -87,21 +92,23 @@ if(-not$ProductSource.Contains($SelfTestSourceRead)){throw 'Router VPN Windows p
 $ProductSource=$ProductSource.Replace($SelfTestSourceRead,$SelfTestSourceReadFixed)
 
 $ProductSource=Add-RouterVPNUnifiedWindowsShell -ProductSource $ProductSource
+$ProductSource=Add-RouterVPNTelemetryWindowsShell -ProductSource $ProductSource
 $ProductScript=[ScriptBlock]::Create($ProductSource)
 
 $PreviousProductSource=$env:ROUTER_VPN_PRODUCT_SOURCE;$env:ROUTER_VPN_PRODUCT_SOURCE=$Product
 try{
     if($SelfTest){
         $self=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8
-        foreach($marker in @('RouterVPN-Windows-UnifiedShell.ps1','Add-RouterVPNUnifiedWindowsShell','windows-onboarding-v3.json','SMART AUTO is the default mode','IPv6 On default','Auto measured/fixed MTU','DAITA-like traffic padding','AUTO encryption/obfuscation filters')){if(-not$self.Contains($marker)){throw "Windows unified launcher self-test missing $marker"}}
-        foreach($marker in $UnifiedControllerContract){if(-not$UnifiedShellSource.Contains($marker)-and-not$ProductSource.Contains($marker)){throw "Windows composed controller contract missing $marker"}}
-        foreach($marker in @('UnifiedShell','UnifiedMapCanvas','UnifiedConnectButton','UnifiedKillSwitch','UnifiedMultihop','UnifiedModeCombo','UnifiedDnsCombo','SMART AUTO','New CUSTOM preset','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom','/api/connect-logical','/api/multihop/connect','/api/mtu/retest','System.Collections.Generic.HashSet','real coordinates')){if(-not$ProductSource.Contains($marker)){throw "Windows unified product self-test missing $marker"}}
+        foreach($marker in @('RouterVPN-Windows-UnifiedShell.ps1','RouterVPN-Windows-Telemetry.ps1','Add-RouterVPNUnifiedWindowsShell','Add-RouterVPNTelemetryWindowsShell','windows-onboarding-v3.json','SMART AUTO is the default mode','IPv6 On default','Auto measured/fixed MTU','DAITA-like traffic padding','AUTO encryption/obfuscation filters')){if(-not$self.Contains($marker)){throw "Windows unified launcher self-test missing $marker"}}
+        foreach($marker in $UnifiedControllerContract){if(-not$UnifiedShellSource.Contains($marker)-and-not$TelemetrySource.Contains($marker)-and-not$ProductSource.Contains($marker)){throw "Windows composed controller contract missing $marker"}}
+        foreach($marker in @('UnifiedShell','UnifiedMapCanvas','UnifiedConnectButton','UnifiedFastestNode','UnifiedLiveLatency','UnifiedForwardButton','UnifiedKillSwitch','UnifiedMultihop','UnifiedMultihopLatency','UnifiedPerformanceButton','UnifiedModeCombo','UnifiedDnsCombo','SMART AUTO','New CUSTOM preset','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom','/api/connect-logical','/api/profile/fastest','/api/connection/live-latency','/api/multihop/live-latency','/api/mtu/retest','System.Collections.Generic.HashSet','real coordinates')){if(-not$ProductSource.Contains($marker)){throw "Windows unified product self-test missing $marker"}}
         & $ProductScript -BaseUrl $BaseUrl -SelfTest
     }else{Show-RouterVPNProductOnboarding;& $ProductScript -BaseUrl $BaseUrl}
     if(-not$?){throw 'Router VPN native Windows product shell failed.'}
 }finally{if($null-eq$PreviousProductSource){Remove-Item Env:ROUTER_VPN_PRODUCT_SOURCE -ErrorAction SilentlyContinue}else{$env:ROUTER_VPN_PRODUCT_SOURCE=$PreviousProductSource}}
 
-# Native shipping contract: map-first WPF daily app; bottom control dock; one
-# Connect/Disconnect action; quick kill switch; real multihop; Settings->Mode->DNS;
+# Native shipping contract: map-first WPF daily app; one Connect/Disconnect action;
+# fastest-node side dropdown; live path RTT; quick kill switch; Forward shortcut;
+# real multihop with live IN/OUT/PATH RTT; Settings->Mode->DNS; Performance panel;
 # SMART AUTO default; AUTO first-class; visible readiness; GUI CUSTOM presets;
-# real-coordinate map; fixed local controller only; no browser/PWA final shell.
+# real-coordinate map with measured node ms; fixed local controller only; no browser/PWA final shell.
