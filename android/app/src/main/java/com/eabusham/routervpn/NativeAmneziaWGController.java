@@ -39,7 +39,8 @@ final class NativeAmneziaWGController implements Tunnel {
     String getError() { return lastError; }
 
     void connect(File privateBundle, Callback callback) {
-        AndroidHomeStateStore.begin(appContext, "raw-tunnel", "awg2-fast", "awg");
+        String activeNodeId = AndroidHomeStateStore.nodeIdFromBundleFile(privateBundle);
+        AndroidHomeStateStore.begin(appContext, "raw-tunnel", "awg2-fast", "awg", activeNodeId);
         executor.execute(() -> {
             try {
                 networkMonitor.stop(); clearActive();
@@ -49,7 +50,7 @@ final class NativeAmneziaWGController implements Tunnel {
                 if (result != State.UP) throw new IllegalStateException("AmneziaWG backend did not enter UP state.");
                 if (!AndroidPathProbe.prove(privateBundle, 8000)) { backend.setState(this, State.DOWN, null); state = State.DOWN; throw new IllegalStateException("Native AmneziaWG failed selected-node private path proof."); }
                 activeConfig = config; activeBundle = privateBundle; lastError = "";
-                AndroidHomeStateStore.connected(appContext, "raw-tunnel", "awg2-fast", "awg", "");
+                AndroidHomeStateStore.connected(appContext, "raw-tunnel", "awg2-fast", "awg", "", activeNodeId);
                 networkMonitor.start(() -> executor.execute(this::recoverAfterNetworkChange));
                 callback.done(State.UP, "Native Android AmneziaWG 2 is active with selected DNS/MTU and selected-node private path proof.", null);
             } catch (Throwable error) { failClosed(error); callback.done(State.DOWN, "Native AmneziaWG failed: " + safeMessage(error), error); }
@@ -66,7 +67,7 @@ final class NativeAmneziaWGController implements Tunnel {
             State result = backend.setState(this, State.UP, config); state = result;
             if (result != State.UP || !AndroidPathProbe.prove(bundle, 10000)) throw new IllegalStateException("AmneziaWG did not recover a proven selected-node path after the underlying network changed.");
             lastError = "";
-            AndroidHomeStateStore.connected(appContext, "raw-tunnel", "awg2-fast", "awg", "");
+            AndroidHomeStateStore.connected(appContext, "raw-tunnel", "awg2-fast", "awg", "", AndroidHomeStateStore.nodeIdFromBundleFile(bundle));
         } catch (Throwable error) { failClosed(new IllegalStateException("AmneziaWG network-transition recovery failed closed: " + safeMessage(error), error)); }
     }
 
