@@ -40,7 +40,8 @@ final class NativeWireGuardController implements Tunnel {
     String getError() { return lastError; }
 
     void connect(File privateBundle, Callback callback) {
-        AndroidHomeStateStore.begin(appContext, "raw-tunnel", "wg", "wg");
+        String activeNodeId = AndroidHomeStateStore.nodeIdFromBundleFile(privateBundle);
+        AndroidHomeStateStore.begin(appContext, "raw-tunnel", "wg", "wg", activeNodeId);
         executor.execute(() -> {
             try {
                 networkMonitor.stop();
@@ -58,7 +59,7 @@ final class NativeWireGuardController implements Tunnel {
                 activeConfig = config;
                 activeBundle = privateBundle;
                 lastError = "";
-                AndroidHomeStateStore.connected(appContext, "raw-tunnel", "wg", "wg", "");
+                AndroidHomeStateStore.connected(appContext, "raw-tunnel", "wg", "wg", "", activeNodeId);
                 networkMonitor.start(() -> executor.execute(this::recoverAfterNetworkChange));
                 callback.done(State.UP, "Native Android WireGuard is active with selected DNS/MTU and selected-node private path proof.", null);
             } catch (Throwable error) {
@@ -82,7 +83,7 @@ final class NativeWireGuardController implements Tunnel {
                 throw new IllegalStateException("WireGuard did not recover a proven selected-node path after the underlying network changed.");
             }
             lastError = "";
-            AndroidHomeStateStore.connected(appContext, "raw-tunnel", "wg", "wg", "");
+            AndroidHomeStateStore.connected(appContext, "raw-tunnel", "wg", "wg", "", AndroidHomeStateStore.nodeIdFromBundleFile(bundle));
         } catch (Throwable error) {
             failClosed(new IllegalStateException("WireGuard network-transition recovery failed closed: " + safeMessage(error), error));
         }
