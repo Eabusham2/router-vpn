@@ -42,7 +42,7 @@ function global:Set-RouterVPNLoadedModeSnapshot {
 }
 
 function global:Show-RouterVPNProfileSettingsDialog {
-    param([string]$BaseUrl,[System.Windows.Window]$Owner)
+    param([string]$BaseUrl,[System.Windows.Window]$Owner,[hashtable]$ConnectionSnapshot,[scriptblock]$OnConnectionProfileLoaded)
     $current=$null;$settingsError=''
     try{$current=Get-RouterVPNProfileSettings -BaseUrl $BaseUrl}catch{$settingsError=$_.Exception.Message}
     [xml]$xaml = @'
@@ -62,7 +62,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
 <TextBlock Text="Retest is path/config specific. A fixed MTU stays fixed until changed. Incoming forwarding is owned by the authenticated private home node and is available only to routable tunnel modes; proxy-only paths never claim arbitrary DNAT." TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,12"/>
 </StackPanel>
 <Separator Margin="0,6,0,12"/>
-<TextBlock Text="Connection profiles" FontSize="17" FontWeight="SemiBold"/><TextBlock Text="Save or restore the selected node plus current Mode/CUSTOM layers, DNS, kill switch, IPv6, MTU, and multihop choices. Node keys, API tokens and external credentials are referenced by node ID and are never copied into a connection profile." TextWrapping="Wrap" Foreground="#A8B6D5" FontSize="11" Margin="0,3,0,8"/>
+<TextBlock Text="Connection profiles" FontSize="17" FontWeight="SemiBold"/><TextBlock Text="Save or restore the selected node plus current Mode/CUSTOM layers, DNS, kill switch, IPv6, MTU, and exact multihop entry → exit → exit-transport choice. Node keys, API tokens and external credentials are referenced by node ID and are never copied into a connection profile." TextWrapping="Wrap" Foreground="#A8B6D5" FontSize="11" Margin="0,3,0,8"/>
 <TextBox Name="ConnectionProfileName" Margin="0,0,0,6" ToolTip="Name for Add or Update"/><ComboBox Name="ConnectionProfiles" DisplayMemberPath="display" SelectedValuePath="id" Margin="0,0,0,6"/>
 <WrapPanel Margin="0,0,0,5"><Button Name="ProfileAdd" Content="Add profile" Padding="9,5" Margin="0,0,6,6"/><Button Name="ProfileLoad" Content="Load" Padding="9,5" Margin="0,0,6,6"/><Button Name="ProfileUpdate" Content="Update" Padding="9,5" Margin="0,0,6,6"/><Button Name="ProfileDelete" Content="Delete" Padding="9,5" Margin="0,0,6,6"/><Button Name="ProfileRefresh" Content="Refresh" Padding="9,5" Margin="0,0,6,6"/></WrapPanel>
 <TextBlock Name="ProfileStatus" TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,12"/>
@@ -80,12 +80,26 @@ function global:Show-RouterVPNProfileSettingsDialog {
     $refreshProfiles={
         try{$items=New-Object System.Collections.ArrayList;foreach($p in @(Get-RouterVPNConnectionProfiles -BaseUrl $BaseUrl)){$label="$($p.name) • $($p.mode) • $($p.node_id)";[void]$items.Add([pscustomobject]@{id=[string]$p.id;display=$label;name=[string]$p.name;mode=[string]$p.mode;node_id=[string]$p.node_id})};$profileCombo.ItemsSource=@($items);if($items.Count -gt 0){$profileCombo.SelectedIndex=0};$profileStatus.Text="$($items.Count) saved connection profile(s)."}catch{$profileStatus.Text='Profile refresh failed: '+$_.Exception.Message}
     }
+    $makeSetupBody={
+        param([string]$Name,[string]$ID)
+        $snap=Get-RouterVPNCurrentModeSnapshot
+        $multi=$false;$entry='';$exit='';$exitMode=''
+        if($null -ne $ConnectionSnapshot){
+            $multi=[bool]$ConnectionSnapshot.multihop_enabled
+            $entry=[string]$ConnectionSnapshot.multihop_entry_id
+            $exit=[string]$ConnectionSnapshot.multihop_exit_id
+            $exitMode=[string]$ConnectionSnapshot.multihop_exit_mode
+        }
+        $body=@{name=$Name;mode=[string]$snap.mode;custom_layers=@($snap.custom_layers);multihop_enabled=$multi;multihop_entry_id=$entry;multihop_exit_id=$exit;multihop_exit_mode=$exitMode}
+        if($ID){$body.id=$ID}
+        return $body
+    }
     $profileCombo.Add_SelectionChanged({if($profileCombo.SelectedItem){$profileName.Text=[string]$profileCombo.SelectedItem.name}})
     $dialog.FindName('ProfileRefresh').Add_Click({& $refreshProfiles})
-    $dialog.FindName('ProfileAdd').Add_Click({try{$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$snap=Get-RouterVPNCurrentModeSnapshot;$body=@{name=$name;mode=[string]$snap.mode;custom_layers=@($snap.custom_layers)};$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/save') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 8 -Compress) -TimeoutSec 10;$profileStatus.Text="Added $($r.profile.name) • $($r.profile.mode)";& $refreshProfiles}catch{$profileStatus.Text='Add failed: '+$_.Exception.Message}})
-    $dialog.FindName('ProfileUpdate').Add_Click({try{if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$snap=Get-RouterVPNCurrentModeSnapshot;$body=@{id=[string]$profileCombo.SelectedValue;name=$name;mode=[string]$snap.mode;custom_layers=@($snap.custom_layers)};$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/update') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 8 -Compress) -TimeoutSec 10;$profileStatus.Text="Updated $($r.profile.name) • $($r.profile.mode)";& $refreshProfiles}catch{$profileStatus.Text='Update failed: '+$_.Exception.Message}})
-    $dialog.FindName('ProfileLoad').Add_Click({try{if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/load') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Compress) -TimeoutSec 12;Set-RouterVPNLoadedModeSnapshot -Loaded $r;$profileStatus.Text="Loaded $($r.profile.name) • node $($r.selected_node_id) • mode $($r.mode). Close Settings to refresh the map/control sheet."}catch{$profileStatus.Text='Load failed: '+$_.Exception.Message}})
-    $dialog.FindName('ProfileDelete').Add_Click({try{if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};[void](Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/delete') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Compress) -TimeoutSec 10);$profileStatus.Text='Deleted saved connection profile.';& $refreshProfiles}catch{$profileStatus.Text='Delete failed: '+$_.Exception.Message}})
+    $dialog.FindName('ProfileAdd').Add_Click({try{$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$body=& $makeSetupBody $name '';$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/save') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 8 -Compress) -TimeoutSec 10;$profileStatus.Text="Added $($r.profile.name) • $($r.profile.mode) • exact hop setup saved";& $refreshProfiles}catch{$profileStatus.Text='Add failed: '+$_.Exception.Message}})
+    $dialog.FindName('ProfileUpdate').Add_Click({try{if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$body=& $makeSetupBody $name ([string]$profileCombo.SelectedValue);$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/update') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 8 -Compress) -TimeoutSec 10;$profileStatus.Text="Updated $($r.profile.name) • exact hop setup refreshed";& $refreshProfiles}catch{$profileStatus.Text='Update failed: '+$_.Exception.Message}})
+    $dialog.FindName('ProfileLoad').Add_Click({try{if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/load') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Compress) -TimeoutSec 12;Set-RouterVPNLoadedModeSnapshot -Loaded $r;if($null -ne $OnConnectionProfileLoaded){& $OnConnectionProfileLoaded $r};$profileStatus.Text="Loaded $($r.profile.name) • node $($r.selected_node_id) • mode $($r.mode) • hop setup restored. Connect separately to prove it."}catch{$profileStatus.Text='Load failed: '+$_.Exception.Message}})
+    $dialog.FindName('ProfileDelete').Add_Click({try{if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};[void](Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/delete') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Compress) -TimeoutSec 10);$profileStatus.Text='Deleted saved connection profile and setup metadata.';& $refreshProfiles}catch{$profileStatus.Text='Delete failed: '+$_.Exception.Message}})
     & $refreshProfiles
     $dialog.FindName('MtuRetest').Add_Click({try{$r=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/mtu/retest') -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 130;$effective.Text="Current effective MTU: $($r.effective_mtu) • $($r.effective_mtu_source)"}catch{[System.Windows.MessageBox]::Show("MTU Retest failed: $($_.Exception.Message)",'Router VPN')|Out-Null}})
     $dialog.FindName('Forwarding').Add_Click({[System.Windows.MessageBox]::Show('Port forwarding / Protected DMZ is configured through the authenticated private home-node forwarding surface and must be validated off-LAN. Router VPN will not advertise arbitrary DNAT for proxy-only paths.','Router VPN forwarding')|Out-Null})
@@ -97,8 +111,8 @@ function global:Show-RouterVPNProfileSettingsDialog {
 }
 
 # Safe unified settings contract: /api/profile/settings only for node preferences; connection profiles use
-# /api/connection-profiles + explicit save/update/load/delete endpoints and never duplicate node secrets.
+# /api/connection-profile/setup/* plus /api/connection-profiles and never duplicate node secrets.
 # SMART AUTO default / IPv6 On default / Auto measured MTU / fixed override + Retest /
 # Require encrypted + Require obfuscation default Off / DAITA-like traffic padding / Jumbo TUN /
 # LAN / kill switch / WG-AWG base+fallback / private SOCKS5 / forwarding ownership / startup /
-# connection profile Add + Load + Update + Delete with current mode/CUSTOM layers.
+# connection profile Add + Load + Update + Delete with current mode/CUSTOM layers and exact multihop entry/exit/exit transport.
