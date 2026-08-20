@@ -76,7 +76,18 @@ require(
 require(
     "cmd/router-agent/benchmark.go",
     "/api/benchmark/download", "/api/benchmark/upload", "s.authorized(r)", "benchmarkMaxBytes",
-    "no-store, no-transform", "content-encoding",
+    "no-store, no-transform", "content-encoding", "registerClientForwardingMasterRoute",
+)
+require(
+    "cmd/router-agent/client_forwarding_master.go",
+    "/api/forwarding/master", "s.authorized(r)", "admin mutation address must remain loopback-only",
+    "/api/admin/settings", 'map[string]bool{"forwarding_master": *requested}',
+    "Setup Center admin token never", "authenticated tunnel-peer request proxied server-side",
+)
+require(
+    "cmd/router-agent/client_forwarding_master_test.go",
+    "TestValidatedAdminMutationBaseRequiresLoopback", "TestClientForwardingMasterGetAndPut",
+    "TestClientForwardingMasterRejectsNonTunnelPeer", "admin token leaked to tunnel client response",
 )
 
 # Windows: launcher -> unified transform -> telemetry transform -> shipping WPF product.
@@ -188,20 +199,32 @@ require(
     "transfer-encoding: chunked", "parseContentLength", "decodeChunked", "MAX_HTTP",
 )
 require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidRuntimeRegistry.java",
+    "static AndroidRuntimeRegistry instance", "final NativeWireGuardController wireGuard",
+    "final NativeAmneziaWGController amneziaWG", "final AndroidMultihopRuntime multihop",
+    "final AndroidStandardExitRuntime standardExit", "final AndroidSessionRevalidator revalidator", "revalidator.start()",
+)
+require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidHomeSummary.java",
     "TRANSPORT_VPN", "getOwnerUid()", "Process.myUid()", "getNetworkHandle()",
     "AndroidPathProbe.prove", "network.openConnection", "api64.ipify.org", "api.ipify.org",
     "Actual public VPN exit", "Logical/runtime/base", "Node latency", "LAN access", "Kill switch",
-    "Effective MTU", "Warnings:", "Emergency Disconnect",
+    "Effective MTU", "Warnings:", "Emergency Disconnect", '"|session="+runtime.sessionId', '"|path="+runtime.pathGeneration',
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidHomeStateStore.java",
-    "session_id", "actual_exit_session", "actualExitForCurrentSession", "begin(", "connected(", "disconnected(",
+    "session_id", "actual_exit_session", "actualExitForCurrentSession", "path_generation", "advancePathGeneration",
+    "begin(", "connected(", "disconnected(",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetry.java",
     "class SpeedResult", "speedTest(AndroidNodeStore.Node", "/api/benchmark/download", "/api/benchmark/upload",
-    "Authorization", "Accept-Encoding", "downloadMbps", "uploadMbps",
+    "Authorization", "Accept-Encoding", "downloadMbps", "uploadMbps", "state.activeNodeId", "state.activeExitId",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidForwardingMaster.java",
+    "/api/forwarding/master", "vpn.openConnection", "getOwnerUid()==Process.myUid()", "isPrivate(address)",
+    "state.sessionId.equals(after.sessionId)", "after.pathGeneration!=state.pathGeneration",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
@@ -215,7 +238,9 @@ require(
     "AndroidProductParity.showModes", "AndroidProductParity.showDNS", "showSettings",
     "Multihop", "Add Router node", "Add custom", "Profiles", "showProfileManager",
     "Real current VPN path speed", "Routed multihop speeds", "runRoutedHopSpeeds",
-    "telemetry.speedTest(entry", "telemetry.speedTest(exit",
+    "telemetry.speedTest(entry", "telemetry.speedTest(exit", "connection.restorePending(state,callback())",
+    "connection.savePending(out)", "connection.activeMultihopEntryId()", "connection.activeMultihopExitId()",
+    "AndroidForwardingMaster forwardingMaster", "Forward ON", "Forward OFF", "setForwardingMaster",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java",
@@ -233,8 +258,10 @@ require(
 require(
     "android/app/src/main/AndroidManifest.xml",
     "android.permission.BIND_VPN_SERVICE", 'android:usesCleartextTraffic="false"',
-    'android:name=".ProductActivity"', 'android.intent.category.LAUNCHER', 'android:name=".MainActivity"',
+    'android:name=".ProductActivity"', 'android.intent.category.LAUNCHER',
+    'android:name=".MainActivity" android:exported="false" android:enabled="false"',
 )
+require("android/test_android_session_identity_contract.py", "Android session identity contract: PASS")
 
 # iOS/iPadOS: @main -> ProductRootView -> IOSUnifiedProductView, all App sources compiled by XcodeGen.
 require("ios/RouterVPN/App/RouterVPNApp.swift", "@main", "ProductRootView()")
