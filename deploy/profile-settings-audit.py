@@ -135,13 +135,15 @@ linux_profiles = require(
     "/api/connection-profile/load", "/api/connection-profile/delete",
     "linux_unified_selected_mode_v8", "linux_unified_custom_layers_for_mode_v8",
     "linux_unified_store_mode_v8", "never duplicate node secrets or credentials",
+    "linux_connection_profiles_button_v10",
 )
 for forbidden in ("api_token", "private_key", "preshared_key", "socks_password"):
     if forbidden in linux_profiles:
         errors.append(f"Linux connection profile UI should not serialize private node field marker: {forbidden}")
 require(
     "client/linux/routervpn-telemetry-v9.inc", '#include "routervpn-connection-profiles-v10.inc"',
-    'make_button("Profiles",G_CALLBACK(linux_connection_profiles_v10),t)',
+    'linux_telemetry_button_v9("Profiles",G_CALLBACK(linux_connection_profiles_v10),t)',
+    "linux_telemetry_button_v9",
 )
 require(
     "client/linux/build-native-app.sh", "SETTINGS_INC", '#include \"routervpn-profile-settings-v1.inc\"',
