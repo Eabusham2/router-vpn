@@ -61,10 +61,10 @@ final class AndroidModeOrchestrator {
         if(running){cb.finished(false,"","Another Android mode selection is already running.");return;}
         running=true;
         final String requested=custom!=null?"CUSTOM":smart?"SMART AUTO":"AUTO";
-        AndroidHomeStateStore.begin(context,requested,"","auto");
+        final String activeNodeId=nodeId(bundle);
+        AndroidHomeStateStore.begin(context,requested,"","auto",activeNodeId);
         executor.execute(()->{
             try{
-                // Require-encrypted / require-obfuscation are AUTO/SMART filters only.
                 List<Candidate> candidates=collect(bundle,true,custom==null);
                 if(custom!=null){
                     Set<String>wanted=new HashSet<>();for(String layer:custom){String v=layer==null?"":layer.trim().toLowerCase();if(!v.isEmpty())wanted.add(v);}
@@ -84,7 +84,7 @@ final class AndroidModeOrchestrator {
                 if(smart)best=smartReduce(bundle,best,candidates,cb);
                 current=best;
                 String transition=smart&&!initial.id.equals(best.id)?initial.id+" -> "+best.id:"";
-                AndroidHomeStateStore.connected(context,requested,best.id,baseFor(best),transition);
+                AndroidHomeStateStore.connected(context,requested,best.id,baseFor(best),transition,activeNodeId);
                 cb.finished(true,best.id,requested+" selected "+best.name+" after real selected-node path proof.");
             }catch(Throwable error){try{stopCurrent();}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
         });
@@ -92,7 +92,8 @@ final class AndroidModeOrchestrator {
 
     private void runLogical(File bundle,String logicalId,Callback cb){
         if(running){cb.finished(false,"","Another Android mode selection is already running.");return;}
-        running=true;AndroidHomeStateStore.begin(context,logicalId,"","auto");
+        final String activeNodeId=nodeId(bundle);
+        running=true;AndroidHomeStateStore.begin(context,logicalId,"","auto",activeNodeId);
         executor.execute(()->{
             try{
                 JSONObject root=load(bundle);
@@ -116,7 +117,7 @@ final class AndroidModeOrchestrator {
                 Candidate winner=null;List<String> failures=new ArrayList<>();
                 for(String rawId:candidateIds){Candidate c=byId.get(rawId);if(c==null){failures.add(rawId+": unavailable on Android");continue;}cb.progress(logical.optString("name",logicalId)+" trying "+c.name+"…");if(startAndProve(bundle,c,cb)){winner=c;break;}failures.add(rawId+": selected-node proof failed");}
                 if(winner==null)throw new IllegalStateException("Logical mode "+logical.optString("name",logicalId)+" failed closed: "+String.join(" • ",failures));
-                current=winner;AndroidHomeStateStore.connected(context,logicalId,winner.id,baseFor(winner),"");
+                current=winner;AndroidHomeStateStore.connected(context,logicalId,winner.id,baseFor(winner),"",activeNodeId);
                 cb.finished(true,winner.id,logical.optString("name",logicalId)+" connected with runtime "+winner.id+" after selected-node proof.");
             }catch(Throwable error){try{stopCurrent();}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
         });
@@ -124,14 +125,15 @@ final class AndroidModeOrchestrator {
 
     private void runAll(File bundle,Callback cb){
         if(running){cb.finished(false,"","Another Android mode selection is already running.");return;}
-        running=true;AndroidHomeStateStore.begin(context,"ALL","","auto");
+        final String activeNodeId=nodeId(bundle);
+        running=true;AndroidHomeStateStore.begin(context,"ALL","","auto",activeNodeId);
         executor.execute(()->{
             try{
                 List<Candidate> candidates=collect(bundle,false,false);candidates.sort(Comparator.<Candidate>comparingInt(AndroidModeOrchestrator::protectionRank).reversed().thenComparingInt(c->c.order));
                 if(candidates.isEmpty())throw new IllegalStateException("ALL found no truthful Android-native branch. Composite desktop MAX sidecar chains are not silently downgraded.");
                 Candidate best=null;for(Candidate c:candidates){cb.progress("ALL testing protected Android-native branch "+c.name+"…");if(startAndProve(bundle,c,cb)){best=c;break;}}
                 if(best==null)throw new IllegalStateException("ALL failed closed because no Android-native branch passed selected-node path proof.");
-                current=best;AndroidHomeStateStore.connected(context,"ALL",best.id,baseFor(best),"");
+                current=best;AndroidHomeStateStore.connected(context,"ALL",best.id,baseFor(best),"",activeNodeId);
                 cb.finished(true,best.id,"ALL selected the strongest available Android-native branch that passed selected-node path proof: "+best.name+". Composite desktop MAX chains remain separate and are never faked on Android.");
             }catch(Throwable error){try{stopCurrent();}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
         });
@@ -190,5 +192,6 @@ final class AndroidModeOrchestrator {
     private static boolean has(JSONObject profiles,String id,String name){JSONObject p=profiles==null?null:profiles.optJSONObject(id);return p!=null&&!p.optString(name,"").trim().isEmpty();}
     private static List<String>strings(JSONArray values){if(values==null)return Collections.emptyList();List<String>out=new ArrayList<>();for(int i=0;i<values.length();i++){String v=values.optString(i,"").trim().toLowerCase();if(!v.isEmpty())out.add(v);}return out;}
     private static JSONObject load(File file)throws Exception{if(file==null||!file.isFile()||file.length()<=0||file.length()>64L*1024L*1024L)throw new IllegalStateException("Private node bundle is missing or invalid.");try(FileInputStream in=new FileInputStream(file)){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[]b=new byte[8192];int n,total=0;while((n=in.read(b))!=-1){total+=n;if(total>64*1024*1024)throw new IllegalStateException("Bundle exceeds safety limit.");out.write(b,0,n);}return new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));}}
+    private static String nodeId(File bundle){return AndroidHomeStateStore.nodeIdFromBundleFile(bundle);}
     private static String safe(Throwable error){String m=error==null?"unknown error":error.getMessage();if(m==null||m.trim().isEmpty())m=error==null?"unknown error":error.getClass().getSimpleName();return m.replace('\n',' ').replace('\r',' ').trim();}
 }
