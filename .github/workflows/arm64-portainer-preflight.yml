@@ -22,6 +22,7 @@ jobs:
       - name: Static production preflight
         run: |
           python3 deploy/validate-repo.py
+          python3 deploy/product-parity-audit.py
           python3 -m json.tool configs/client/modes.json >/dev/null
           python3 -m json.tool configs/client/logical-modes.json >/dev/null
           find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
@@ -93,6 +94,17 @@ jobs:
       - name: Build router agent image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f deploy/router-agent.Dockerfile -t router-vpn-preflight-agent:arm64 .
 
+      - name: Prove benchmark routes are compiled into ARM64 agent
+        run: |
+          set -euo pipefail
+          cid="$(docker create --platform linux/arm64 router-vpn-preflight-agent:arm64)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid:/usr/local/bin/router-vpn-agent" "$RUNNER_TEMP/router-vpn-agent-arm64"
+          test -s "$RUNNER_TEMP/router-vpn-agent-arm64"
+          grep -aF '/api/benchmark/download' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
+          grep -aF '/api/benchmark/upload' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
+          grep -aF 'authenticated tunnel-peer private throughput sink' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
+
       - name: Build WireGuard image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/wireguard/Dockerfile -t router-vpn-preflight-wireguard:arm64 .
 
@@ -140,4 +152,3 @@ jobs:
           docker run --rm --platform linux/arm64 --entrypoint /usr/bin/v2ray-plugin router-vpn-preflight-ss-v2ray:arm64 -version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-preflight-aux:arm64 --version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-preflight-aux:arm64 -h >/dev/null 2>&1
-
