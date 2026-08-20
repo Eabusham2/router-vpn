@@ -31,6 +31,7 @@ final class AndroidProfileSettingsDialog {
     static void show(Activity activity, AndroidNodeStore store, Runnable onSaved) {
         try {
             if (hasLiveVpn(activity)) throw new IllegalStateException("Disconnect the active VPN before changing persistent Router VPN profile settings.");
+            final String originalNodeId=store.activeId();
             JSONObject bundle = loadBundle(store);
             JSONObject profile = selectedProfile(bundle);
             if (profile == null) throw new IllegalStateException("Pair/import and select a Router VPN node first.");
@@ -77,7 +78,10 @@ final class AndroidProfileSettingsDialog {
                     profile.put("mtu_policy",mtuPolicy); profile.put("manual_mtu",manualValue);
                     profile.put("daita_enabled",daita.isChecked()); profile.put("jumbo_tun",jumbo.isChecked()); profile.put("socks_enabled",socks.isChecked());
                     if(!profile.has("startup_mode")||profile.optString("startup_mode","").trim().isEmpty())profile.put("startup_mode","smart-auto");
-                    store.importBundle(bundle.toString().getBytes(StandardCharsets.UTF_8));
+                    byte[] updated=bundle.toString().getBytes(StandardCharsets.UTF_8);
+                    String updatedId=AndroidNodeStore.deriveId(bundle,updated);
+                    if(originalNodeId==null||originalNodeId.isEmpty()||!originalNodeId.equals(updatedId))throw new IllegalStateException("This legacy Router node has no stable proof-bound identity, so rewriting settings would change its local node ID. Re-import a current Router VPN bundle before editing persistent settings.");
+                    AndroidNodeStore.Node applied=store.importBundle(updated);if(!originalNodeId.equals(applied.id))throw new IllegalStateException("Router node identity changed while saving settings; refusing to continue.");
                     Toast.makeText(activity,"Settings saved for the next supported connection.",Toast.LENGTH_LONG).show(); dialog.dismiss(); if(onSaved!=null)onSaved.run();
                 } catch(Throwable error){Toast.makeText(activity,"Settings save failed: "+safe(error),Toast.LENGTH_LONG).show();}
             }));
@@ -96,7 +100,7 @@ final class AndroidProfileSettingsDialog {
         return true;
     }
     private static JSONObject loadBundle(AndroidNodeStore store)throws Exception{String id=store.activeId();if(id==null||id.isEmpty())throw new IllegalStateException("Select a Router VPN node first.");try(FileInputStream in=new FileInputStream(store.file(id));ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[8192];int n,total=0;while((n=in.read(b))!=-1){total+=n;if(total>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Private node bundle exceeds safety limit.");out.write(b,0,n);}return new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));}}
-    private static JSONObject selectedProfile(JSONObject bundle){JSONArray a=bundle.optJSONArray("routerProfiles");String id=bundle.optString("selectedRouterID","");if(a==null)return null;for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p!=null&&id.equals(p.optString("id")))return p;}return a.length()>0?a.optJSONObject(0):null;}
+    private static JSONObject selectedProfile(JSONObject bundle){JSONArray a=bundle.optJSONArray("routerProfiles");String id=bundle.optString("selectedRouterID","");if(a==null)return null;for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p!=null&&id.equals(p.optString("id","")))return p;}return a.length()>0?a.optJSONObject(0):null;}
     private static Spinner spinner(Activity a,String[]items,int selected){Spinner s=new Spinner(a);s.setAdapter(new ArrayAdapter<>(a,android.R.layout.simple_spinner_dropdown_item,items));s.setSelection(Math.max(0,Math.min(selected,items.length-1)));return s;}
     private static CheckBox check(Activity a,String text,boolean value){CheckBox c=new CheckBox(a);c.setText(text);c.setChecked(value);return c;}
     private static TextView label(Activity a,String text){TextView v=new TextView(a);v.setText(text);v.setPadding(0,dp(a,8),0,0);return v;}
