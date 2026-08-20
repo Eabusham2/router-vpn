@@ -57,6 +57,8 @@ final class IOSUnifiedTelemetry: ObservableObject {
     @Published private(set) var lastError = ""
 
     private static let cacheKey = "routervpn.ios.live-latency.v1"
+    private static let benchmarkDownloadRoute = "/api/benchmark/download"
+    private static let benchmarkUploadRoute = "/api/benchmark/upload"
     nonisolated private static let probePorts: [UInt16] = [443, 8388, 10443, 11443, 12443, 13443, 14443, 15443, 51820, 51822]
     private var liveProbeBusy = false
 
@@ -120,18 +122,21 @@ final class IOSUnifiedTelemetry: ObservableObject {
         lastError = ""
         defer { isSpeedTesting = false }
 
-        var downloadComponents = URLComponents(url: base.appendingPathComponent("api/benchmark/download"), resolvingAgainstBaseURL: false)
+        let downloadPath = String(Self.benchmarkDownloadRoute.dropFirst())
+        var downloadComponents = URLComponents(url: base.appendingPathComponent(downloadPath), resolvingAgainstBaseURL: false)
         downloadComponents?.queryItems = [URLQueryItem(name: "bytes", value: String(byteCount))]
         guard let downloadURL = downloadComponents?.url else { throw URLError(.badURL) }
         var downloadRequest = URLRequest(url: downloadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
         downloadRequest.setValue("Bearer \(profile.apiToken)", forHTTPHeaderField: "Authorization")
         downloadRequest.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        downloadRequest.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         let downloadStarted = Date()
         let (downloadData, downloadResponse) = try await URLSession.shared.data(for: downloadRequest)
         let downloadSeconds = Date().timeIntervalSince(downloadStarted)
         guard let downloadHTTP = downloadResponse as? HTTPURLResponse, (200..<300).contains(downloadHTTP.statusCode), downloadData.count == byteCount else { throw URLError(.badServerResponse) }
 
-        let uploadURL = base.appendingPathComponent("api/benchmark/upload")
+        let uploadPath = String(Self.benchmarkUploadRoute.dropFirst())
+        let uploadURL = base.appendingPathComponent(uploadPath)
         var uploadRequest = URLRequest(url: uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30)
         uploadRequest.httpMethod = "POST"
         uploadRequest.setValue("Bearer \(profile.apiToken)", forHTTPHeaderField: "Authorization")
