@@ -1,0 +1,88 @@
+name: One-shot RC source repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-rc-source-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply deterministic source repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          repo = Path('.')
+
+          # These helpers are dot-sourced by RouterVPN-Windows-App.ps1. A top-level
+          # Set-StrictMode leaks into the caller and then into the dynamically composed
+          # Product-v2 ScriptBlock. Keep strictness inside each transform function only.
+          for rel, func in (
+              ('client/RouterVPN-Windows-UnifiedShell.ps1', 'Add-RouterVPNUnifiedWindowsShell'),
+              ('client/RouterVPN-Windows-Telemetry.ps1', 'Add-RouterVPNTelemetryWindowsShell'),
+          ):
+              path = repo / rel
+              text = path.read_text(encoding='utf-8')
+              marker = 'Set-StrictMode -Version Latest\n\n'
+              if not text.startswith(marker):
+                  raise SystemExit(f'{rel}: expected top-level StrictMode marker missing')
+              text = text[len(marker):]
+              seam = f'function {func} {{\n'
+              if seam not in text:
+                  raise SystemExit(f'{rel}: transform function seam missing')
+              text = text.replace(seam, seam + '    Set-StrictMode -Version Latest\n', 1)
+              path.write_text(text, encoding='utf-8')
+
+          # Android's shipping Gradle build executes the pinned libbox native build,
+          # which requires Go 1.26.3. Do not depend on the hosted runner's ambient Go.
+          rc = repo / '.github/workflows/release-candidate.yml'
+          text = rc.read_text(encoding='utf-8')
+          android_anchor = "      - uses: actions/setup-java@v4\n        with: {distribution: temurin, java-version: '17'}\n      - uses: gradle/actions/setup-gradle@v4\n"
+          android_fixed = "      - uses: actions/setup-java@v4\n        with: {distribution: temurin, java-version: '17'}\n      - uses: actions/setup-go@v5\n        with: {go-version: '1.26.3', cache: false}\n      - uses: gradle/actions/setup-gradle@v4\n"
+          if android_fixed not in text:
+              if android_anchor not in text:
+                  raise SystemExit('release-candidate Android toolchain seam missing')
+              text = text.replace(android_anchor, android_fixed, 1)
+          rc.write_text(text, encoding='utf-8')
+
+          # The temporary observability workflow served its purpose; do not leave it
+          # as permanent project surface.
+          diag = repo / '.github/workflows/rc-failure-diagnostic.yml'
+          if diag.exists():
+              diag.unlink()
+
+          # Remove this one-shot workflow from the resulting source commit.
+          self_path = repo / '.github/workflows/one-shot-rc-source-repair.yml'
+          if self_path.exists():
+              self_path.unlink()
+          PY
+
+          python3 deploy/validate-repo.py
+          python3 android/test_android_runtime_contract.py
+          python3 android/test_android_multihop_contract.py
+          python3 android/test_android_session_identity_contract.py
+          python3 android/test_android_native_policy_contract.py
+          python3 android/test_android_standard_exit_contract.py
+          go test ./cmd/portable-launcher ./cmd/windows-app-launcher
+
+      - name: Commit repaired source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Router VPN CI Repair'
+          git config user.email 'actions@github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Fix RC Windows strict scope and Android Go pin'
+          git push origin HEAD:main
