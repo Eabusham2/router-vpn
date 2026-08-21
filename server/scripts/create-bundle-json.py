@@ -53,7 +53,7 @@ if setup_path.is_file():
         setup_assets={}
 
 router_profile={
-    'schema_version':3,
+    'schema_version':4,
     'id':'home',
     'name':'Home Router',
     'node_kind':'router-vpn',
@@ -77,13 +77,15 @@ router_profile={
     'home_lan_cidrs':['192.168.50.0/24'],
     'kill_switch':False,
     'kill_switch_policy':'off',
-    'ipv6_mode':'auto',
-    'startup_mode':'manual',
+    'ipv6_mode':'on',
+    'startup_mode':'smart-auto',
     'auto_connect':False,
+    'auto_require_encrypted':False,
+    'auto_require_obfuscation':False,
     'multihop_enabled':False,
     'multihop_entry_id':'',
     'multihop_exit_id':'',
-    'mtu_policy':'default',
+    'mtu_policy':'auto',
     'manual_mtu':0,
     'effective_mtu':0,
     'effective_mtu_source':'',
@@ -119,11 +121,11 @@ client_config={
 }
 json.dump(client_config,open(base/'client-bundle/client.json','w'),indent=2)
 open(base/'client-bundle/client.json','a').write('\n')
-json.dump({'schema_version':3,'selected_id':'home','profiles':[router_profile]},open(base/'client-bundle/routers.json','w'),indent=2)
+json.dump({'schema_version':4,'selected_id':'home','profiles':[router_profile]},open(base/'client-bundle/routers.json','w'),indent=2)
 open(base/'client-bundle/routers.json','a').write('\n')
 bundle={
     'bundleVersion':4,
-    'profileSchemaVersion':3,
+    'profileSchemaVersion':4,
     'nodeProofId':node_proof_id,
     'endpoint':endpoint,
     'apiToken':token,
