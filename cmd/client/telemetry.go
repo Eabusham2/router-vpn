@@ -146,17 +146,6 @@ func (a *app) liveProfileLatency(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(result)
 }
 
-func updateStoredLiveLatency(p *common.RouterProfile, value liveLatencyResult) {
-	p.LatencySamples = value.Samples
-	p.LatencyMinMs = value.MinMs
-	p.LatencyMedianMs = value.MedianMs
-	p.LatencyTrimmedMeanMs = value.MedianMs
-	p.LatencyAverageMs = value.AverageMs
-	p.LatencyP90Ms = value.P90Ms
-	p.LatencyMaxMs = value.MaxMs
-	p.LatencyLastTest = value.MeasuredAt.Format(time.RFC3339)
-}
-
 func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost { http.Error(w, "POST only", http.StatusMethodNotAllowed); return }
 	var q liveLatencyRequest
@@ -178,16 +167,24 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 	if len(results) == 0 { http.Error(w, "no node returned a live latency result", http.StatusBadGateway); return }
 	sort.SliceStable(results, func(i, j int) bool { return results[i].MedianMs < results[j].MedianMs })
 	winner := results[0]
+
+	// Fastest is an intentionally lightweight live RTT probe. Its 1-10 samples
+	// must never overwrite Latency* fields, which are reserved for the durable
+	// >=50-sample /api/profile/latency benchmark (including its real trimmed mean).
+	// Only an explicit winner selection is durable here.
 	a.mu.Lock()
-	for i := range a.profiles.Profiles {
-		for _, value := range results { if a.profiles.Profiles[i].ID == value.ID { updateStoredLiveLatency(&a.profiles.Profiles[i], value); break } }
+	selectedID := a.profiles.SelectedID
+	var persistErr error
+	if selectWinner {
+		a.profiles.SelectedID = winner.ID
+		a.state.RouterID = winner.ID
+		selectedID = winner.ID
+		persistErr = a.persistProfilesLocked()
 	}
-	if selectWinner { a.profiles.SelectedID = winner.ID; a.state.RouterID = winner.ID }
-	persistErr := a.persistProfilesLocked(); selectedID := a.profiles.SelectedID
 	a.mu.Unlock()
 	if persistErr != nil { http.Error(w, persistErr.Error(), http.StatusInternalServerError); return }
 	w.Header().Set("content-type", "application/json"); w.Header().Set("cache-control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{"winner": winner, "results": results, "selected_id": selectedID, "selected": selectWinner, "note": "fastest-node chooses the lowest live median RTT; durable 50-sample node tests remain available separately"})
+	_ = json.NewEncoder(w).Encode(map[string]any{"winner": winner, "results": results, "selected_id": selectedID, "selected": selectWinner, "note": "fastest-node chooses the lowest lightweight live median RTT and does not overwrite the durable 50-sample node benchmark"})
 }
 
 func activeLatencyTarget(a *app) (common.RouterProfile, state, error) {
