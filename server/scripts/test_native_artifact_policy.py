@@ -55,8 +55,8 @@ class NativeArtifactPolicyTests(unittest.TestCase):
         android = policy.DIRECT_ARTIFACTS["router-vpn-android.apk"]["sources"]
         self.assertEqual(android[0], ("RouterVPN-Android-release-candidate", "app-debug.apk"))
         ios = policy.DIRECT_ARTIFACTS["router-vpn-ios.ipa"]["sources"]
-        self.assertEqual(ios[0], ("RouterVPN-iOS-release-candidate", "RouterVPN-native-wg-unsigned-resignable.ipa"))
-        self.assertEqual(ios[1], ("RouterVPN-iOS-Native-WireGuard-CI", "RouterVPN-native-wg-unsigned-resignable.ipa"))
+        self.assertEqual(ios[0], ("RouterVPN-iOS-release-candidate", "RouterVPN-native-unsigned-resignable.ipa"))
+        self.assertEqual(ios[1], ("RouterVPN-iOS-Native-CI", "RouterVPN-native-unsigned-resignable.ipa"))
         self.assertEqual(policy.DIRECT_ARTIFACTS["router-vpn-ios-preview.ipa"]["sources"], ios)
 
 
