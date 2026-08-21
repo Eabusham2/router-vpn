@@ -22,7 +22,7 @@ func setupProfileTestApp(t *testing.T) *app {
 		{ID: "home", Name: "Home", NodeKind: "router-vpn", Endpoint: "203.0.113.10", RouterAPI: "http://10.77.0.1:8787", APIToken: "HOME-SECRET", IPv6Mode: "on", MTUPolicy: "auto", DNSMode: "home", KillSwitchPolicy: "on-connect"},
 		{ID: "entry", Name: "Entry", NodeKind: "router-vpn", Endpoint: "203.0.113.11", RouterAPI: "http://10.77.0.1:8787", APIToken: "ENTRY-SECRET", IPv6Mode: "on", MTUPolicy: "auto", DNSMode: "home"},
 		{ID: "exit", Name: "Exit", NodeKind: "router-vpn", Endpoint: "203.0.113.12", RouterAPI: "http://10.77.0.1:8787", APIToken: "EXIT-SECRET", IPv6Mode: "on", MTUPolicy: "auto", DNSMode: "home"},
-		{ID: "external", Name: "External", NodeKind: "external", Endpoint: "198.51.100.9"},
+		{ID: "external", Name: "External", NodeKind: "external", Endpoint: "198.51.100.9", External: &common.ExternalNodeConfig{Protocol: "socks5", ExpectedPublicIP: "203.0.113.50", SOCKS5: &common.ExternalSOCKS5Config{Host: "198.51.100.9", Port: 1080}}},
 	}}
 	return a
 }
