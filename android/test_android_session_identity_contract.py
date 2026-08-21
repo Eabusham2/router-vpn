@@ -21,6 +21,8 @@ unified = read("AndroidUnifiedConnectionController.java")
 product = read("ProductActivity.java")
 forwarding = read("AndroidForwardingMaster.java")
 revalidator = read("AndroidSessionRevalidator.java")
+wireguard = read("NativeWireGuardController.java")
+amnezia = read("NativeAmneziaWGController.java")
 standard_activity = read("StandardExitActivity.java")
 via_entry = read("AndroidViaEntryLatencyProbe.java")
 map_view = read("RouterVpnNodeMapView.java")
@@ -110,6 +112,19 @@ for marker in (
     "AndroidStandardExitRuntime.proveExpectedPublicIp",
 ):
     assert marker in revalidator, f"network-change revalidation lost marker: {marker}"
+
+# Native WG/AWG own their own handoff recovery, so they must independently
+# invalidate public-exit proof/path generation before rebuilding the tunnel.
+for name, source in (("WireGuard", wireguard), ("AmneziaWG", amnezia)):
+    recovery = source.split("private void recoverAfterNetworkChange()", 1)
+    assert len(recovery) == 2, f"{name} lost network-change recovery"
+    recovery = recovery[1].split("void disconnect", 1)[0]
+    invalidate = recovery.find("AndroidHomeStateStore.advancePathGeneration(appContext)")
+    teardown = recovery.find("backend.setState(this, State.DOWN, null)")
+    proof = recovery.find("AndroidPathProbe.prove(bundle, 10000)")
+    assert invalidate >= 0, f"{name} must invalidate the old path/public-exit proof on underlay change"
+    assert teardown >= 0 and invalidate < teardown, f"{name} must invalidate proof before tunnel rebuild"
+    assert proof > teardown, f"{name} must re-prove selected node after tunnel rebuild"
 
 # Telemetry binds to frozen session IDs, never mutable selection or saved
 # multihop preferences while a graph is actually running.
