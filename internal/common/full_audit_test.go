@@ -6,15 +6,24 @@ import (
 	"testing"
 )
 
-func TestFullRepositoryAudit(t *testing.T) {
+func runRepositoryPythonAudit(t *testing.T, scriptName string) {
+	t.Helper()
 	python, err := exec.LookPath("python3")
 	if err != nil {
-		t.Fatal("python3 is required for the full repository audit")
+		t.Fatal("python3 is required for the repository audits")
 	}
-	script := filepath.Join("..", "..", "deploy", "full-audit-v4.py")
+	script := filepath.Join("..", "..", "deploy", scriptName)
 	cmd := exec.Command(python, script)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("full Router VPN audit failed: %v\n%s", err, out)
+		t.Fatalf("repository audit %s failed: %v\n%s", scriptName, err, out)
 	}
+}
+
+func TestFullRepositoryAudit(t *testing.T) {
+	runRepositoryPythonAudit(t, "full-audit-v4.py")
+}
+
+func TestLinuxFullConnectionProfileShippingAudit(t *testing.T) {
+	runRepositoryPythonAudit(t, "linux-full-profile-shipping-audit.py")
 }
