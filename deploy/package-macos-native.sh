@@ -10,7 +10,7 @@ mkdir -p "$WORK"
 
 write_blank_routers() {
   cat >"$1" <<'JSON'
-{"schema_version":2,"selected_id":"","profiles":[]}
+{"schema_version":4,"selected_id":"","profiles":[]}
 JSON
   chmod 600 "$1"
 }
