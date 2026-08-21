@@ -36,7 +36,7 @@ MAX_MEMBERS = 10_000
 MAX_MEMBER = 512 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
 LOCAL_BUILD_TIMEOUT = 300
-PROFILE_SCHEMA_VERSION = 2
+PROFILE_SCHEMA_VERSION = 4
 
 PACKAGE_MAP = {
     "router-vpn-windows-amd64.zip": ("RouterVPN-Windows-amd64.zip", "windows", "amd64"),
