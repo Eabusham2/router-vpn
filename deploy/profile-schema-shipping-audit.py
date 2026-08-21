@@ -47,4 +47,13 @@ for marker in (
 ):
     assert marker in bundle, f"generated home profile lost current default: {marker}"
 
+android = read("android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java")
+assert f"MAX_PROFILE_SCHEMA = {profile_version}" in android, "Android bundle importer schema ceiling is stale"
+assert 'profileSchema > MAX_PROFILE_SCHEMA' in android, "Android must fail closed on future top-level profile schemas"
+assert 'nestedSchema > MAX_PROFILE_SCHEMA' in android, "Android must fail closed on future nested profile schemas"
+
+ios = read("ios/RouterVPN/App/Models.swift")
+assert f"profileSchemaVersion: {profile_version}" in ios, "iOS empty/current bundle schema is stale"
+assert f"guard profileSchemaVersion <= {profile_version} else" in ios, "iOS bundle importer schema ceiling is stale"
+
 print(f"profile schema shipping audit: OK (profile v{profile_version}, store v{store_version})")
