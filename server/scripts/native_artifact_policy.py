@@ -50,8 +50,8 @@ _ANDROID_SOURCES = (
     ("RouterVPN-Android-CI", "app-debug.apk"),
 )
 _IOS_SOURCES = (
-    ("RouterVPN-iOS-release-candidate", "RouterVPN-native-wg-unsigned-resignable.ipa"),
-    ("RouterVPN-iOS-Native-WireGuard-CI", "RouterVPN-native-wg-unsigned-resignable.ipa"),
+    ("RouterVPN-iOS-release-candidate", "RouterVPN-native-unsigned-resignable.ipa"),
+    ("RouterVPN-iOS-Native-CI", "RouterVPN-native-unsigned-resignable.ipa"),
 )
 
 DIRECT_ARTIFACTS: dict[str, dict[str, object]] = {
