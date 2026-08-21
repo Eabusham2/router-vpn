@@ -24,17 +24,34 @@ static char *linux_connection_profile_body_v10(const char *id,const char *name,c
 static void linux_connection_profiles_set_status_v10(LinuxConnectionProfilesV10 *state,const char *text){if(state!=NULL&&state->status!=NULL)gtk_label_set_text(GTK_LABEL(state->status),text!=NULL?text:"");}
 
 static void linux_connection_profiles_refresh_v10(LinuxConnectionProfilesV10 *state){
-    if(state==NULL||state->profiles==NULL)return;Buffer out={0};char *err=NULL;
+    if(state==NULL||state->profiles==NULL){
+        return;
+    }
+    Buffer out={0};
+    char *err=NULL;
     if(!api_request("/api/connection-profiles","GET",NULL,5000,&out,&err)){linux_connection_profiles_set_status_v10(state,err!=NULL?err:"Connection profiles unavailable.");g_free(err);free(out.data);return;}
     JsonNode *root=parse_json(out.data);gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(state->profiles));guint count=0;
     if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);JsonArray *profiles=json_object_has_member(obj,"profiles")?json_object_get_array_member(obj,"profiles"):NULL;for(guint i=0;profiles!=NULL&&i<json_array_get_length(profiles);i++){JsonObject *p=json_array_get_object_element(profiles,i);if(p==NULL)continue;const char *id=obj_string(p,"id");const char *name=obj_string(p,"name");const char *mode=obj_string(p,"mode");const char *node=obj_string(p,"node_id");if(id[0]=='\0')continue;char *label=g_strdup_printf("%s • %s • %s",name[0]?name:id,mode[0]?mode:"smart-auto",node);gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->profiles),id,label);g_free(label);count++;}}
-    if(count>0)gtk_combo_box_set_active(GTK_COMBO_BOX(state->profiles),0);char *msg=g_strdup_printf("%u saved connection profile(s). Node keys/API tokens/external credentials are never duplicated.",count);linux_connection_profiles_set_status_v10(state,msg);g_free(msg);if(root!=NULL)json_node_free(root);g_free(err);free(out.data);
+    if(count>0){
+        gtk_combo_box_set_active(GTK_COMBO_BOX(state->profiles),0);
+    }
+    char *msg=g_strdup_printf("%u saved connection profile(s). Node keys/API tokens/external credentials are never duplicated.",count);
+    linux_connection_profiles_set_status_v10(state,msg);
+    g_free(msg);
+    if(root!=NULL){
+        json_node_free(root);
+    }
+    g_free(err);
+    free(out.data);
 }
 
 static void linux_connection_profiles_refresh_clicked_v10(GtkButton *button,gpointer data){(void)button;linux_connection_profiles_refresh_v10((LinuxConnectionProfilesV10*)data);}
 
 static gboolean linux_connection_profiles_write_v10(LinuxConnectionProfilesV10 *state,gboolean updating){
-    if(state==NULL)return FALSE;const char *raw_name=gtk_entry_get_text(GTK_ENTRY(state->name));char *name=g_strdup(raw_name!=NULL?raw_name:"");g_strstrip(name);if(name[0]=='\0'){linux_connection_profiles_set_status_v10(state,"Enter a profile name.");g_free(name);return FALSE;}
+    if(state==NULL){
+        return FALSE;
+    }
+    const char *raw_name=gtk_entry_get_text(GTK_ENTRY(state->name));char *name=g_strdup(raw_name!=NULL?raw_name:"");g_strstrip(name);if(name[0]=='\0'){linux_connection_profiles_set_status_v10(state,"Enter a profile name.");g_free(name);return FALSE;}
     char *mode=linux_unified_selected_mode_v8();if(mode==NULL||mode[0]=='\0'){g_free(mode);mode=g_strdup("smart-auto");}char *layers=linux_unified_custom_layers_for_mode_v8(mode);const char *id=updating?gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->profiles)):NULL;if(updating&&(id==NULL||id[0]=='\0')){linux_connection_profiles_set_status_v10(state,"Select a saved profile to update.");g_free(name);g_free(mode);g_free(layers);return FALSE;}
     char *body=linux_connection_profile_body_v10(id,name,mode,layers);Buffer out={0};char *err=NULL;const char *path=updating?"/api/connection-profile/update":"/api/connection-profile/save";gboolean ok=api_request(path,"POST",body,12000,&out,&err);if(ok){linux_connection_profiles_set_status_v10(state,updating?"Connection profile updated from the current node/mode/settings.":"Connection profile added from the current node/mode/settings.");linux_connection_profiles_refresh_v10(state);}else linux_connection_profiles_set_status_v10(state,err!=NULL?err:"Connection profile write failed.");g_free(body);g_free(name);g_free(mode);g_free(layers);g_free(err);free(out.data);return ok;
 }
@@ -43,7 +60,10 @@ static void linux_connection_profiles_add_v10(GtkButton *button,gpointer data){(
 static void linux_connection_profiles_update_v10(GtkButton *button,gpointer data){(void)button;(void)linux_connection_profiles_write_v10((LinuxConnectionProfilesV10*)data,TRUE);}
 
 static void linux_connection_profiles_apply_loaded_mode_v10(LinuxConnectionProfilesV10 *state,JsonObject *root){
-    if(state==NULL||root==NULL)return;const char *mode=obj_string(root,"mode");if(mode[0]=='\0')mode="smart-auto";
+    if(state==NULL||root==NULL){
+        return;
+    }
+    const char *mode=obj_string(root,"mode");if(mode[0]=='\0')mode="smart-auto";
     if(g_str_has_prefix(mode,"custom:")&&json_object_has_member(root,"custom_layers")){
         JsonArray *layers=json_object_get_array_member(root,"custom_layers");const char *name=mode+strlen("custom:");if(name[0]&&layers!=NULL&&json_array_get_length(layers)>0){GString *joined=g_string_new("");for(guint i=0;i<json_array_get_length(layers);i++){const char *layer=json_array_get_string_element(layers,i);if(layer==NULL||layer[0]=='\0')continue;if(joined->len)g_string_append_c(joined,',');g_string_append(joined,layer);}if(joined->len){GKeyFile *key=linux_unified_load_keyfile_v8();char *group=g_strdup_printf("preset:%s",name);g_key_file_set_string(key,group,"layers",joined->str);linux_unified_save_keyfile_v8(key);g_free(group);g_key_file_unref(key);}g_string_free(joined,TRUE);}
     }
