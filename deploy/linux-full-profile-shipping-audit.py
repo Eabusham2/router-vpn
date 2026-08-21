@@ -27,7 +27,7 @@ profiles = read("cmd/client/connection_profiles.go")
 setup = read("cmd/client/connection_profile_setup.go")
 
 # The current shipping composition is build -> telemetry-v9 -> v10 compatibility
-# seam -> v11.  Prove every link so an orphaned v11 source file cannot be called
+# seam -> v11. Prove every link so an orphaned v11 source file cannot be called
 # shipped merely because it exists in the repository.
 require(telemetry, "Linux telemetry shipping seam",
         '#include "routervpn-connection-profiles-v10.inc"',
@@ -40,11 +40,11 @@ if "api_request(" in compat:
     errors.append("Linux v10 compatibility seam must not implement a second/stale profile API client")
 require(build, "Linux native shipping build",
         'TELEMETRY_INC="$ROOT/client/linux/routervpn-telemetry-v9.inc"',
-        '#include \\"routervpn-telemetry-v9.inc\\"',
+        '#include "routervpn-telemetry-v9.inc"',
         "linux_install_telemetry_v9(&app);",
         "gcc -O2 -Wall -Wextra -Werror")
 
-# v11 is the whole-connection manager.  It must use the setup routes that stage
+# v11 is the whole-connection manager. It must use the setup routes that stage
 # exact multihop graph identity while Connect remains a separate action.
 require(full, "Linux full connection profile manager v11",
         "Full non-secret connection profile CRUD",
