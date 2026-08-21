@@ -21,6 +21,7 @@ import java.util.List;
 final class AndroidNodeStore {
     static final int MAX_NODES = 24;
     static final int MAX_BUNDLE = 32 * 1024 * 1024;
+    static final int MAX_PROFILE_SCHEMA = 4;
     static final String ACTIVE_BUNDLE = "router-vpn-bundle.json";
     private static final String PREFS = "router-vpn";
     private static final String ACTIVE_ID = "active_node_id_v1";
@@ -204,6 +205,16 @@ final class AndroidNodeStore {
 
     static void validateBundle(JSONObject bundle) {
         if (bundle == null || !bundle.has("profiles") || !bundle.has("modes") || !bundle.has("routerProfiles")) throw new IllegalArgumentException("This is not a complete Router VPN node bundle.");
+        int profileSchema = bundle.optInt("profileSchemaVersion", 1);
+        if (profileSchema < 1 || profileSchema > MAX_PROFILE_SCHEMA) throw new IllegalArgumentException("Router profile schema is newer than this Android app supports.");
+        JSONArray routerProfiles = bundle.optJSONArray("routerProfiles");
+        if (routerProfiles == null || routerProfiles.length() == 0) throw new IllegalArgumentException("Router VPN node bundle has no router profiles.");
+        for (int i = 0; i < routerProfiles.length(); i++) {
+            JSONObject profile = routerProfiles.optJSONObject(i);
+            if (profile == null) throw new IllegalArgumentException("Router VPN node bundle contains an invalid router profile.");
+            int nestedSchema = profile.optInt("schema_version", profileSchema);
+            if (nestedSchema < 1 || nestedSchema > MAX_PROFILE_SCHEMA) throw new IllegalArgumentException("Router profile schema is newer than this Android app supports.");
+        }
         JSONObject profiles = bundle.optJSONObject("profiles");
         if (profiles == null || profiles.length() == 0) throw new IllegalArgumentException("Router VPN node bundle has no generated profiles.");
         try { stableNodeIdentity(bundle); }
