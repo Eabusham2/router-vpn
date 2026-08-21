@@ -24,6 +24,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.0'
@@ -46,10 +50,10 @@ jobs:
         run: |
           {
             echo '=== go ==='
-            go version || true
-            go env GOPATH GOTOOLCHAIN || true
+            go version
+            go env GOPATH GOTOOLCHAIN
             echo '=== java ==='
-            java -version || true
+            java -version
             echo '=== sdk ==='
             echo "ANDROID_HOME=$ANDROID_HOME"
           } | tee android-diagnostic.log
