@@ -74,6 +74,10 @@ final class NativeWireGuardController implements Tunnel {
         File bundle = activeBundle;
         if (state != State.UP || config == null || bundle == null) return;
         try {
+            // The underlay changed while the logical session stayed the same.
+            // Invalidate any public-exit proof immediately; it belongs to the
+            // previous path generation and must be re-proved on the new route.
+            AndroidHomeStateStore.advancePathGeneration(appContext);
             lastError = "Underlying network changed; WireGuard is re-establishing and revalidating the selected node.";
             AndroidHomeStateStore.warning(appContext, lastError);
             backend.setState(this, State.DOWN, null);
