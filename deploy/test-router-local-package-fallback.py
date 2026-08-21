@@ -58,6 +58,12 @@ def require(root: Path, *names: str) -> None:
         assert path.is_file(), f"missing complete fallback component: {path}"
 
 
+def assert_blank_store(path: Path) -> None:
+    store = json.loads(path.read_text(encoding="utf-8"))
+    assert store.get("schema_version") == 4, store
+    assert store.get("selected_id") == "" and store.get("profiles") == [], store
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="router-vpn-local-fallback-") as td:
         td = Path(td)
@@ -84,8 +90,7 @@ def main() -> int:
             "client/RouterVPN-Windows-App.ps1",
             "routers.json",
         )
-        store = json.loads((win / "routers.json").read_text(encoding="utf-8"))
-        assert store.get("selected_id") == "" and store.get("profiles") == []
+        assert_blank_store(win / "routers.json")
         builder.assert_generic_tree(win)
 
         portable = builder.build_local(td / "work-portable", "router-vpn-windows-portable-arm64.zip", src, src, base)
@@ -100,6 +105,8 @@ def main() -> int:
             "App/RouterVPN/router-vpn-client.exe",
             "Data/routers.json",
         )
+        assert_blank_store(portable / "App/RouterVPN/routers.json")
+        assert_blank_store(portable / "Data/routers.json")
         builder.assert_generic_tree(portable)
 
         for request, platform in (
