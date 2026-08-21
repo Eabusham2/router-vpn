@@ -61,6 +61,10 @@ final class NativeAmneziaWGController implements Tunnel {
         Config config = activeConfig; File bundle = activeBundle;
         if (state != State.UP || config == null || bundle == null) return;
         try {
+            // The logical session survives an underlay handoff, but any actual
+            // public-exit proof belongs to the old route. Invalidate it before
+            // rebuilding/re-proving AmneziaWG on the new network generation.
+            AndroidHomeStateStore.advancePathGeneration(appContext);
             lastError = "Underlying network changed; AmneziaWG is re-establishing and revalidating the selected node.";
             AndroidHomeStateStore.warning(appContext, lastError);
             backend.setState(this, State.DOWN, null);
