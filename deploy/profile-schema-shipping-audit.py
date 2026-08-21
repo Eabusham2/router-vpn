@@ -26,6 +26,11 @@ for path in (
     for stale in range(store_version):
         assert f'{{"schema_version":{stale},"selected_id":"","profiles":[]}}' not in source, f"{path} still seeds stale store schema v{stale}"
 
+fallback = read("server/scripts/build-download-on-demand.py")
+assert f"PROFILE_SCHEMA_VERSION = {store_version}" in fallback, "router-local package fallback seeds a stale router store schema"
+for stale in range(store_version):
+    assert f"PROFILE_SCHEMA_VERSION = {stale}" not in fallback, f"router-local package fallback still declares stale schema v{stale}"
+
 bundle = read("server/scripts/create-bundle-json.py")
 assert f"'schema_version':{profile_version}" in bundle, "generated home profile schema is stale"
 assert f"json.dump({{'schema_version':{store_version},'selected_id':'home','profiles':[router_profile]}}" in bundle, "generated routers.json store schema is stale"
