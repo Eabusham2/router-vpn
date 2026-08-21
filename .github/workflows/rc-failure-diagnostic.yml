@@ -1,0 +1,152 @@
+name: RC failure diagnostic
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rc-failure-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-diagnostic:
+    name: Android exact build diagnostic
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - uses: gradle/actions/setup-gradle@v4
+        with: {gradle-version: '9.5.0'}
+      - name: Install Android SDK
+        run: |
+          set -euxo pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Source contracts
+        run: |
+          set -euxo pipefail
+          python3 android/test_android_runtime_contract.py
+          python3 android/test_android_multihop_contract.py
+          python3 android/test_android_session_identity_contract.py
+          python3 android/test_android_native_policy_contract.py
+          python3 android/test_android_standard_exit_contract.py
+      - name: Gradle assemble with full diagnostics
+        run: |
+          set -o pipefail
+          gradle -p android --no-daemon --stacktrace --info --warning-mode all :app:assembleDebug 2>&1 | tee "$RUNNER_TEMP/android-gradle.log"
+      - name: APK integrity
+        run: |
+          set -euxo pipefail
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -tq "$APK"
+          ls -lh "$APK"
+      - name: Upload Android diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-gradle-diagnostic
+          path: ${{ runner.temp }}/android-gradle.log
+          if-no-files-found: warn
+          retention-days: 1
+
+  windows-diagnostic:
+    name: Windows exact self-test diagnostic
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24.x', cache: false}
+      - name: Raw composed WPF self-test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Continue'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/RouterVPN-Windows-App.ps1 -SelfTest 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\windows-source-selftest.log"
+          $code=$LASTEXITCODE
+          Write-Host "SOURCE_SELFTEST_EXIT=$code"
+          if($code -ne 0){ exit $code }
+      - name: Build packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TOOL_DIR="$(cygpath -u "$RUNNER_TEMP")/routervpn-tools"
+          mkdir -p "$TOOL_DIR"
+          cat >"$TOOL_DIR/zip" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          while (($#)) && [[ "$1" == -* ]]; do shift; done
+          test "$#" -eq 2
+          /c/Windows/System32/tar.exe -a -c -f "$1" "$2"
+          SH
+          chmod +x "$TOOL_DIR/zip"
+          export PATH="$TOOL_DIR:$PATH"
+          ./deploy/build-client.sh
+          ./deploy/package-builds.sh
+      - name: Portable controller and WPF self-test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $archive=(Resolve-Path 'dist/packages/RouterVPN-Portable-Windows-amd64.zip').Path
+          $extract=Join-Path $env:RUNNER_TEMP 'portable-debug'
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive $archive $extract -Force
+          $root=Get-ChildItem $extract -Directory|Select-Object -First 1
+          $exe=Join-Path $root.FullName 'RouterVPNPortable.exe'
+          & $exe --self-test 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\windows-portable-selftest.log"
+          $code=$LASTEXITCODE
+          Write-Host "PORTABLE_SELFTEST_EXIT=$code"
+          if($code -ne 0){ exit $code }
+      - name: Upload Windows diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-selftest-diagnostic
+          path: |
+            ${{ runner.temp }}/windows-source-selftest.log
+            ${{ runner.temp }}/windows-portable-selftest.log
+          if-no-files-found: warn
+          retention-days: 1
+
+  ios-diagnostic:
+    name: iOS exact native build diagnostic
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Source contracts
+        working-directory: ios/RouterVPN
+        run: |
+          set -euxo pipefail
+          python3 test_dns_policy_contract.py
+          python3 test_libbox_bridge_contract.py
+          python3 test_libbox_build_contract.py
+          python3 test_libbox_link_contract.py
+          python3 test_packet_tunnel_libbox_contract.py
+          python3 test_runtime_selection_contract.py
+      - name: Prepare pinned native engines
+        working-directory: ios/RouterVPN
+        run: |
+          set -euxo pipefail
+          brew install xcodegen
+          sh prepare-wireguard-kit.sh
+          ./prepare-libbox.sh
+          xcodegen generate
+      - name: Xcode build with retained full log
+        working-directory: ios/RouterVPN
+        run: |
+          set -o pipefail
+          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' build 2>&1 | tee "$RUNNER_TEMP/ios-xcodebuild.log"
+      - name: Upload iOS diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-xcodebuild-diagnostic
+          path: ${{ runner.temp }}/ios-xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 1
