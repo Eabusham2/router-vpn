@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd);DIST="$ROOT/dist";OUT="$DIST/packages";rm -rf "$OUT";mkdir -p "$OUT"
 write_blank_routers(){ cat >"$1" <<'JSON'
-{"schema_version":2,"selected_id":"","profiles":[]}
+{"schema_version":4,"selected_id":"","profiles":[]}
 JSON
 }
 copy_runtime(){ local dir=$1;mkdir -p "$dir/modes" "$dir/generated";cp "$ROOT/configs/client/client.json.example" "$dir/client.json";cp "$ROOT/configs/client/modes.json" "$dir/modes.json";cp "$ROOT/configs/client/logical-modes.json" "$dir/logical-modes.json";cp -a "$ROOT/modes/." "$dir/modes/";write_blank_routers "$dir/routers.json";cp "$ROOT/docs/MODES.md" "$dir/MODES.md";cp "$ROOT/docs/CLIENT.md" "$dir/CLIENT.md";cp "$ROOT/SECURITY.md" "$dir/SECURITY.md";cp "$ROOT/LICENSE" "$dir/LICENSE";}
