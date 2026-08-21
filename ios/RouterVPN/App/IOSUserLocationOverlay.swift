@@ -1,4 +1,4 @@
-import CoreLocation
+@preconcurrency import CoreLocation
 import MapKit
 import SwiftUI
 import UIKit
@@ -117,4 +117,6 @@ struct IOSUserLocationControl: View {
 }
 
 // Location contract: no automatic request, no IP geolocation, no synthetic coordinate.
+// CoreLocation is imported with @preconcurrency because its Objective-C delegate callbacks
+// cross the Swift 6 isolation boundary; all mutable controller/UI state stays @MainActor.
 // A user tap -> When-In-Use permission -> fresh Core Location fix -> MapKit user annotation only.
