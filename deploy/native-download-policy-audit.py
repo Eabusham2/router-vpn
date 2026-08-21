@@ -75,10 +75,10 @@ if builder is not None and policy is not None:
 
     ios = policy.DIRECT_ARTIFACTS.get("router-vpn-ios.ipa", {}).get("sources", ())
     if ios[:2] != (
-        ("RouterVPN-iOS-release-candidate", "RouterVPN-native-wg-unsigned-resignable.ipa"),
-        ("RouterVPN-iOS-Native-WireGuard-CI", "RouterVPN-native-wg-unsigned-resignable.ipa"),
+        ("RouterVPN-iOS-release-candidate", "RouterVPN-native-unsigned-resignable.ipa"),
+        ("RouterVPN-iOS-Native-CI", "RouterVPN-native-unsigned-resignable.ipa"),
     ):
-        errors.append("iOS direct download does not prefer the real native WireGuard PacketTunnel artifacts")
+        errors.append("iOS direct download does not prefer the real native WireGuard + Libbox PacketTunnel artifacts")
     if policy.DIRECT_ARTIFACTS.get("router-vpn-ios-preview.ipa", {}).get("sources") != ios:
         errors.append("legacy iOS preview URL must be a compatibility alias to the native IPA")
     android = policy.DIRECT_ARTIFACTS.get("router-vpn-android.apk", {}).get("sources", ())
