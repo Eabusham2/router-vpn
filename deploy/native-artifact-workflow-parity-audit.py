@@ -35,12 +35,14 @@ mac_rel = ".github/workflows/macos-native-app.yml"
 linux_rel = ".github/workflows/linux-native-app.yml"
 diag_rel = ".github/workflows/android-diagnostic.yml"
 combined_rel = ".github/workflows/android-combined-runtime.yml"
+package_rel = "deploy/package-builds.sh"
 rc = read(rc_rel)
 client = read(client_rel)
 mac = read(mac_rel)
 linux = read(linux_rel)
 diag = read(diag_rel)
 combined = read(combined_rel)
+package_builds = read(package_rel)
 
 # Every workflow that assembles the full Android APK also executes native AAR
 # build tasks; all of them must pin the exact Go toolchain required by libbox.
@@ -56,6 +58,7 @@ for rel, body in (
 # that the authenticated download broker actually asks GitHub for.
 require(rc, rc_rel,
         "name: RouterVPN-generic-release-candidate",
+        "path: |\n            dist/packages/*",
         "name: RouterVPN-Android-release-candidate",
         "path: android/app/build/outputs/apk/debug/app-debug.apk",
         "name: RouterVPN-iOS-release-candidate",
@@ -68,6 +71,7 @@ require(rc, rc_rel,
         "name: RouterVPN-release-candidate-${{ github.sha }}")
 require(client, client_rel,
         "name: RouterVPN-client-desktop-unix-ci",
+        "dist/packages/*",
         "name: RouterVPN-Android-CI",
         "path: android/app/build/outputs/apk/debug/app-debug.apk",
         "name: RouterVPN-iOS-Native-CI",
@@ -80,16 +84,21 @@ require(linux, linux_rel,
         "name: RouterVPN-Linux-Native-${{ matrix.arch }}-CI",
         "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz")
 
-# Validate every concrete desktop policy source against the corresponding
-# workflow source, including both release-candidate and dedicated-CI fallbacks.
+# Validate every concrete desktop policy source against its real producer. The
+# generic Windows artifact uploads a directory glob, so concrete ZIP membership
+# is proven by package-builds.sh rather than by pretending the YAML lists files.
 for request, sources in policy.NATIVE_PACKAGE_ARTIFACTS.items():
     assert len(sources) >= 2, f"{request}: missing two-source native artifact policy"
     for artifact, member in sources[:2]:
-        if artifact == "RouterVPN-generic-release-candidate":
-            producer = rc
-        elif artifact == "RouterVPN-client-desktop-unix-ci":
-            producer = client
-        elif artifact == "RouterVPN-macOS-release-candidate":
+        if artifact in ("RouterVPN-generic-release-candidate", "RouterVPN-client-desktop-unix-ci"):
+            workflow = rc if artifact == "RouterVPN-generic-release-candidate" else client
+            assert artifact in workflow, f"{request}: producer workflow does not upload artifact {artifact}"
+            arch = "arm64" if "arm64" in member else "amd64"
+            rendered = package_builds.replace("$arch", arch)
+            base = member[:-4] if member.endswith(".zip") else member
+            assert base in rendered, f"{request}: package builder does not produce {member}"
+            continue
+        if artifact == "RouterVPN-macOS-release-candidate":
             producer = rc
         elif artifact == "RouterVPN-macOS-Native-CI":
             producer = mac
