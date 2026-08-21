@@ -1,10 +1,9 @@
-Set-StrictMode -Version Latest
-
 $script:RouterVPNUnifiedModeKey = 'windows-selected-mode-v1.txt'
 $script:RouterVPNUnifiedPresets = 'windows-custom-presets-v1.json'
 
 function Add-RouterVPNUnifiedWindowsShell {
     param([Parameter(Mandatory=$true)][string]$ProductSource)
+    Set-StrictMode -Version Latest
 
     $oldHeader = '<Grid Grid.Row="0" Margin="4,0,4,14">'
     if (-not $ProductSource.Contains($oldHeader)) { throw 'Windows unified shell: header contract drifted.' }
