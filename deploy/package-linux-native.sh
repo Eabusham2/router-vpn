@@ -23,7 +23,7 @@ cp "$ROOT/configs/client/logical-modes.json" "$dir/logical-modes.json"
 cp -a "$ROOT/modes/." "$dir/modes/"
 cp -a "$ROOT/client/." "$dir/client/"
 cat > "$dir/routers.json" <<'JSON'
-{"schema_version":2,"selected_id":"","profiles":[]}
+{"schema_version":4,"selected_id":"","profiles":[]}
 JSON
 chmod 600 "$dir/routers.json"
 cp "$ROOT/docs/MODES.md" "$dir/MODES.md"
