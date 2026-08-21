@@ -149,7 +149,7 @@ func applyProfileSettings(profile common.RouterProfile, q profileSettingsRequest
 	if q.AutoRequireObfuscation != nil { updated.AutoRequireObfuscation = *q.AutoRequireObfuscation }
 	if q.BaseTunnel != nil {
 		value := strings.ToLower(strings.TrimSpace(*q.BaseTunnel))
-		switch value { case "auto", "wg", "awg": updated.BaseTunnel = value; default: return profile, errors.New("base_tunnel must be auto, wg, or awg") }
+		switch value { case "", "auto": updated.BaseTunnel = "auto"; case "wg", "awg": updated.BaseTunnel = value; default: return profile, errors.New("base_tunnel must be auto, wg, or awg") }
 	}
 	if q.BaseFallback != nil { updated.BaseFallback = *q.BaseFallback }
 	if q.MTUPolicy != nil { updated.MTUPolicy = strings.ToLower(strings.TrimSpace(*q.MTUPolicy)) }
