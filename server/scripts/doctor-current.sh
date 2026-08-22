@@ -21,12 +21,20 @@ for f in \
   "$BASE/client-bundle/modes.json" \
   "$BASE/client-bundle/setup-assets.json" \
   "$BASE/client-bundle/router-vpn-device-setup.html" \
+  "$BASE/client-bundle/router-vpn-bundle.json" \
   "$BASE/downloads/index.html" \
   "$BASE/downloads/router-vpn-device-setup.html" \
-  "$BASE/downloads/router-vpn-bundle.json" \
   "$BASE/downloads/setup-assets.json" \
   "$BASE/downloads/download-policy.json"; do
   [[ -s "$f" ]] && ok "$(basename "$f") present" || bad "missing $f"
+done
+
+for leaked in \
+  "$BASE/downloads/router-vpn-bundle.json" \
+  "$BASE/downloads/router-vpn-client-bundle.zip" \
+  "$BASE/downloads/CREDENTIALS.txt" \
+  "$BASE/router-vpn-client-bundle.zip"; do
+  [[ ! -e "$leaked" ]] && ok "private material not publicly cached: $(basename "$leaked")" || bad "private Router VPN material leaked/cached at $leaked"
 done
 
 for marker in "$BASE/config/.core-transports-xray-v2" "$BASE/config/.advanced-profiles-v2" "$BASE/config/.tls-alternates-v1"; do
@@ -64,9 +72,9 @@ if command -v curl >/dev/null 2>&1; then
 import json,os
 try: d=json.loads(os.environ.get('POLICY',''))
 except Exception: raise SystemExit(1)
-raise SystemExit(0 if d.get('mode')=='on-demand' and d.get('server_cache') is False else 1)
+raise SystemExit(0 if d.get('mode')=='on-demand' and d.get('server_cache') is False and d.get('github_exact_sha_required') is True else 1)
 PY
-  then ok 'download broker reports on-demand/no-cache policy'; else bad 'download broker policy is missing or stale'; fi
+  then ok 'download broker reports on-demand/no-cache/exact-SHA policy'; else bad 'download broker policy is missing or stale'; fi
 else
   warn 'curl unavailable; broker HTTP checks skipped'
 fi
@@ -133,8 +141,13 @@ fi
 if command -v nft >/dev/null 2>&1; then
   rules=$(nft list table inet router_vpn_guard 2>/dev/null || true)
   [[ -n $rules ]] && ok 'WAN guard nftables table present' || bad 'WAN guard nftables table missing'
-  grep -q 'dport 1080.*accept' <<<"$rules" && bad 'SOCKS5 1080 appears allowed from WAN' || ok 'SOCKS5 1080 is not explicitly allowed from WAN'
-  grep -q 'dport 14444.*accept' <<<"$rules" && bad 'OverTLS loopback backend 14444 appears allowed from WAN' || ok 'OverTLS loopback 14444 is not explicitly allowed from WAN'
+  for port in 22 53 1080 3000 8786 8787 8789 8790 9443 14444 45999; do
+    if grep -Eq "dport[[:space:]]+${port}([^0-9]|$).*accept" <<<"$rules"; then
+      bad "private/control port $port appears allowed from WAN"
+    else
+      ok "private/control port $port is not explicitly allowed from WAN"
+    fi
+  done
 else
   warn 'nft command unavailable for firewall check'
 fi
