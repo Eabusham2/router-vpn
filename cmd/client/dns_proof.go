@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -307,7 +306,6 @@ func dnsProtocolCompatible(actual, selected string) bool {
 	if actual == selected {
 		return true
 	}
-	// Raw h3 falls back to HTTPS in router-vpn-dns; sing-box retains h3.
 	return (selected == "doh" && actual == "https") || (selected == "dot" && actual == "tls") || (selected == "doh3" && actual == "h3")
 }
 
@@ -324,7 +322,7 @@ func proveSelectedDNS(a *app, s observedConnection, runtimeID string) dnsProofSt
 	}
 	root := clientRoot(a)
 	var err error
-	if kernelDNSMode(runtimeID) && runtime.GOOS != "windows" {
+	if kernelDNSMode(runtimeID) {
 		err = verifyKernelDNSRuntime(root, s.RouterID, runtimeID, selected)
 	} else {
 		err = verifySingBoxDNSRuntime(root, s.RouterID, runtimeID, selected)
