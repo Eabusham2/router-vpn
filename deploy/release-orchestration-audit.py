@@ -38,8 +38,6 @@ for marker in (
 ):
     assert marker in build, f"Build all lost release-order marker: {marker}"
 
-# Exact image publication must always include immutable commit tags. The moving
-# arm64-main convenience tag may coexist, but production compose never uses it.
 for marker in (
     "platforms: linux/arm64",
     "push: true",
@@ -56,14 +54,15 @@ for marker in (
 ):
     assert marker in compose, f"production compose workflow lost verification marker: {marker}"
 
-# The tracked file stays a baseline template. Only a generated file with the
-# verifier header is deployable; never make Build all upload the tracked YAML.
 assert "server/portainer-current.yaml" not in build, "Build all must not expose tracked baseline as deployable production compose"
 assert "RouterVPN-Portainer-${GITHUB_SHA}.yaml" in compose, "production compose artifact is not exact-SHA named"
 
-# This script is already a required RC + production-compose source gate, so run
-# the related destructive-cleanup isolation audit here instead of creating yet
-# another standalone workflow that could silently drift out of the release path.
-subprocess.run([sys.executable, str(ROOT / "deploy/docker-cleanup-safety-audit.py")], cwd=ROOT, check=True)
+# These are source-level destructive/security boundaries that must travel with
+# the exact release orchestration instead of living as orphan audit scripts.
+for audit in (
+    "deploy/docker-cleanup-safety-audit.py",
+    "deploy/private-bundle-boundary-audit.py",
+):
+    subprocess.run([sys.executable, str(ROOT / audit)], cwd=ROOT, check=True)
 
-print("authoritative one-SHA release orchestration + cleanup isolation audit: OK")
+print("authoritative one-SHA release orchestration + cleanup/private-bundle isolation audit: OK")
