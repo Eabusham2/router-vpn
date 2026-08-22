@@ -43,6 +43,8 @@ for marker in (
     "push: true",
     "ghcr.io/eabusham2/${{ matrix.image }}:${{ github.sha }}",
     "org.opencontainers.image.revision=${{ github.sha }}",
+    "image: router-vpn-updater",
+    "dockerfile: deploy/update-controller.Dockerfile",
 ):
     assert marker in publish, f"image publication lost exact-SHA marker: {marker}"
 
@@ -57,12 +59,14 @@ for marker in (
 assert "server/portainer-current.yaml" not in build, "Build all must not expose tracked baseline as deployable production compose"
 assert "RouterVPN-Portainer-${GITHUB_SHA}.yaml" in compose, "production compose artifact is not exact-SHA named"
 
-# These source-level destructive/security and historical runtime boundaries must
-# travel with exact release orchestration instead of living as orphan scripts.
+# These source-level destructive/security, credential-preservation, and
+# historical runtime boundaries must travel with exact release orchestration
+# instead of living as orphan scripts.
 for audit in (
     "deploy/docker-cleanup-safety-audit.py",
     "deploy/private-bundle-boundary-audit.py",
     "deploy/historical-regression-audit.py",
+    "server/scripts/test_preserve_generated_state.py",
 ):
     subprocess.run([sys.executable, str(ROOT / audit)], cwd=ROOT, check=True)
 
@@ -92,4 +96,4 @@ assert not [
     if g.get("kind") == "source" and not g.get("pass")
 ], "legacy source gate failed inside recovered release audit"
 
-print("authoritative one-SHA release orchestration + complete recovered source/security audit: OK")
+print("authoritative one-SHA release orchestration + upgrade preservation + complete recovered source/security audit: OK")
