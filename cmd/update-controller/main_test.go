@@ -74,24 +74,21 @@ func TestPreserveUpdaterKeepsOnlyOldUpdaterDuringPhaseOne(t *testing.T) {
 	if !strings.Contains(phaseOne, "router-vpn-agent:"+testNewSHA) { t.Fatal("phase one did not update core services") }
 }
 
-func TestEnvPayloadNeverReturnsNilForPortainer(t *testing.T) {
-	for _, raw := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage("   ")} {
-		v := envPayload(raw)
-		items, ok := v.([]any)
-		if !ok || len(items) != 0 { t.Fatalf("null environment did not become empty array: %#v", v) }
+func TestStackEnvironmentFailsClosedWhenMissingOrInvalid(t *testing.T) {
+	for _, raw := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage("   "), json.RawMessage(`{}`), json.RawMessage(`"bad"`)} {
+		if _, err := stackEnvironment(raw); err == nil { t.Fatalf("invalid/missing Portainer environment was accepted: %q", string(raw)) }
 	}
-	input := json.RawMessage(`[ {"name":"WAN_INTERFACE","value":"eth0"} ]`)
-	if got := envPayload(input); got == nil { t.Fatal("non-null Portainer env was dropped") }
+	for _, raw := range []json.RawMessage{json.RawMessage(`[]`), json.RawMessage(`[ {"name":"WAN_INTERFACE","value":"eth0"} ]`)} {
+		items, err := stackEnvironment(raw)
+		if err != nil { t.Fatalf("valid Portainer environment rejected: %v", err) }
+		if items == nil { t.Fatal("valid Portainer environment became nil") }
+	}
 }
 
-func TestComposeSHAIsUnknownForMixedPhaseOneImages(t *testing.T) {
+func TestComposeSHARejectsMixedPhaseOneEvenWithGeneratedHeader(t *testing.T) {
 	target, err := validateAndMaterializeTemplate(testTemplate(), testNewSHA)
 	if err != nil { t.Fatal(err) }
 	phaseOne, err := preserveUpdater(target, testTemplate())
 	if err != nil { t.Fatal(err) }
-	// The generated header describes the target even while the updater is
-	// deliberately old during rollback-protected phase one. Remove it to test
-	// image-based inference does not lie about a mixed deployment.
-	phaseOne = strings.Join(strings.Split(phaseOne, "\n")[2:], "\n")
-	if got := composeSHA(phaseOne); got != "unknown" { t.Fatalf("mixed image set reported exact SHA %q", got) }
+	if got := composeSHA(phaseOne); got != "unknown" { t.Fatalf("mixed image set reported exact SHA %q despite generated target header", got) }
 }
