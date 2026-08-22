@@ -89,7 +89,7 @@ for marker in (
     'ghcr.io/eabusham2/router-vpn-updater:',
     'ROUTER_VPN_UPDATE_LISTEN: 127.0.0.1:8793',
     '/opt/router-vpn/config:/etc/router-vpn:ro',
-    '/opt/router-vpn/update-state:/var/lib/router-vpn',
+    '/opt/router-vpn/admin-state:/var/lib/router-vpn',
 ):
     assert marker in compose, f"production compose updater missing {marker!r}"
 assert '/var/run/docker.sock' not in compose, "production updater gained Docker socket access"
