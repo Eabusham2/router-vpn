@@ -25,7 +25,6 @@ rm -f \
   "$OUT"/router-vpn-android.apk \
   "$OUT"/router-vpn-ios-preview.ipa \
   "$OUT"/router-vpn-ios.ipa \
-  "$OUT"/router-vpn-ios.ipa \
   "$OUT"/router-vpn-bundle.json \
   "$OUT"/CREDENTIALS.txt \
   "$OUT"/SHA256SUMS
@@ -109,7 +108,7 @@ data['download_policy']={
   'local_build_scope':'requested-generic-package-only','local_build_platforms':'go-desktop-portable',
   'generic_packages_secret_free':True,'node_linking':'separate-bundle-or-pairing',
   'setup_center_auth':'required-for-private-ui-and-build-actions',
-  'mobile_artifacts':'same-sha-github-only','server_cache':False,
+  'mobile_artifacts':'same-sha-github-only','github_exact_sha_required':True,'server_cache':False,
   'max_parallel_package_requests':8,'local_build_slots':1,
   'download_jobs':{'create':'POST /api/download-jobs {name}','status':'GET /api/download-jobs/{job_id}','cancel':'DELETE /api/download-jobs/{job_id}','file':'GET /api/download-jobs/{job_id}/file','ready_ttl_seconds':900},
   'pairing':{'create':'POST /api/pairing (Setup Center auth required)','redeem':'POST /api/pairing/redeem','lan_only':True,'one_time':True,'default_ttl_seconds':300,'apple_local_network_permission_required':True},
@@ -133,6 +132,7 @@ cat >"$OUT/download-policy.json" <<'JSON'
   "node_linking": "separate-bundle-or-pairing",
   "setup_center_auth": "required-for-private-ui-and-build-actions",
   "mobile_artifacts": "same-sha-github-only",
+  "github_exact_sha_required": true,
   "server_cache": false,
   "max_parallel_package_requests": 8,
   "local_build_slots": 1,
