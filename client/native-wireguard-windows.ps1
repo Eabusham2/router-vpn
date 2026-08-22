@@ -138,7 +138,8 @@ function Get-DnsSelection {
   if ([string]::IsNullOrWhiteSpace($dnsHost)) { throw 'Selected DNS policy has no upstream host.' }
   if ($protocol -eq 'h3') { throw 'DoH3 is unavailable on raw Windows WireGuard because the bounded kernel-mode DNS proxy has no QUIC engine. Choose DoH/DoT or a native sing-box mode; Router VPN will not silently downgrade DoH3.' }
   if ($protocol -notin @('udp','tcp','tls','https','rescue')) { throw "Unsupported DNS protocol for raw Windows WireGuard: $protocol" }
-  if ([Net.IPAddress]::TryParse($dnsHost,[ref]([Net.IPAddress]$null)) -eq $false) {
+  $parsedIp = $null
+  if (-not [Net.IPAddress]::TryParse($dnsHost,[ref]$parsedIp)) {
     throw 'Raw Windows WireGuard requires a literal DNS upstream IP so bootstrap resolution cannot leak or loop. Use a resolver IP or a native sing-box mode for hostname-based DNS.'
   }
   $serverName = Infer-DnsServerName $dnsHost $serverName
