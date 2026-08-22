@@ -1,6 +1,7 @@
 name: ARM64 Portainer preflight
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches: [main]
@@ -23,6 +24,7 @@ jobs:
         run: |
           python3 deploy/validate-repo.py
           python3 deploy/product-parity-audit.py
+          python3 deploy/router-forwarding-audit.py
           python3 -m json.tool configs/client/modes.json >/dev/null
           python3 -m json.tool configs/client/logical-modes.json >/dev/null
           find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
