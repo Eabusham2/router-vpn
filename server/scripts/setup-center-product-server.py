@@ -16,6 +16,8 @@ FORWARDING_EXTENSION_BASE = "http://127.0.0.1:8791"
 FORWARDING_EXTENSION_PREFIX = "/api/admin/forwarding-extension"
 SERVER_CONTROL_BASE = "http://127.0.0.1:8792"
 SERVER_CONTROL_PREFIX = "/api/admin/server-control"
+UPDATE_BASE = "http://127.0.0.1:8793"
+UPDATE_PREFIX = "/api/admin/update"
 
 
 def _load(name: str, filename: str):
@@ -32,6 +34,7 @@ _ai = _load("routervpn_setup_center_ai_composition", "setup-center-ai-server.py"
 _release = _load("routervpn_setup_center_release_status", "setup_center_release_status.py")
 _verified = _load("routervpn_setup_center_verified_onboarding", "setup_center_verified_onboarding.py")
 _server_control = _load("routervpn_setup_center_server_control", "setup_center_server_control.py")
+_update = _load("routervpn_setup_center_update", "setup_center_update.py")
 
 
 def _terminate_builder(proc: subprocess.Popen) -> None:
@@ -112,6 +115,8 @@ class Handler(_ai.Handler):
             enriched = self._before_body(enriched, _verified.VERIFIED_ONBOARDING_PANEL)
         if 'id="rvpn-server-control-script"' not in enriched:
             enriched = self._before_body(enriched, _server_control.SERVER_CONTROL_PANEL)
+        if 'id="rvpn-update-script"' not in enriched:
+            enriched = self._before_body(enriched, _update.UPDATE_PANEL)
         return enriched
 
     def _job_file(self, job_id: str) -> None:
@@ -172,7 +177,18 @@ class Handler(_ai.Handler):
         self._proxy_admin(SERVER_CONTROL_BASE, path, method)
         return True
 
+    def _proxy_update(self, method: str) -> bool:
+        path = urlparse(self.path).path
+        if not (path == UPDATE_PREFIX or path.startswith(UPDATE_PREFIX + "/")):
+            return False
+        if not self._require_auth():
+            return True
+        self._proxy_admin(UPDATE_BASE, path, method)
+        return True
+
     def do_GET(self) -> None:
+        if self._proxy_update("GET"):
+            return
         if self._proxy_server_control("GET"):
             return
         if self._proxy_forwarding_extension("GET"):
@@ -185,6 +201,8 @@ class Handler(_ai.Handler):
         super().do_GET()
 
     def do_POST(self) -> None:
+        if self._proxy_update("POST"):
+            return
         if self._proxy_server_control("POST"):
             return
         if self._proxy_forwarding_extension("POST"):
@@ -222,7 +240,7 @@ def main() -> int:
     _ai._core._broker.cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
     print(
-        f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + Full Guide + verified onboarding + device UX + Stop/Emergency/Resume server control + forwarding ownership/Protected DMZ + release/recovery status + server-side AI Help",
+        f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + Full Guide + verified onboarding + device UX + Stop/Emergency/Resume server control + exact-SHA Portainer update + forwarding ownership/Protected DMZ + release/recovery status + server-side AI Help",
         flush=True,
     )
     try:
