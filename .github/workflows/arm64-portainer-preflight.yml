@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: arm64-portainer-${{ github.ref }}
+  group: arm64-portainer-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
