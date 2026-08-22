@@ -213,6 +213,7 @@ private enum IOSConnectionProfileStore {
     private static func issue(_ message: String) -> NSError { NSError(domain: "RouterVPN.ConnectionProfiles", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
 }
 
+@MainActor
 struct IOSConnectionProfilesView: View {
     @EnvironmentObject var model: RouterVPNModel
     @Environment(\.dismiss) private var dismiss
