@@ -49,6 +49,9 @@ def main() -> int:
         assert "GENERATED exact-SHA Router VPN production compose: " + TARGET in rendered
         assert "ghcr.io/sagernet/sing-box:v1.13.12" in rendered
         assert "ghcr.io/xtls/xray-core:26.7.11" in rendered
+        assert "ghcr.io/eabusham2/router-vpn-updater:" + TARGET in rendered
+        assert "ROUTER_VPN_UPDATE_LISTEN: 127.0.0.1:8793" in rendered
+        assert "/var/run/docker.sock" not in rendered
         assert "ROUTER_VPN_GITHUB_SHA: " + TARGET in rendered
         assert SOURCE.read_bytes() == original, "materializer mutated tracked template"
 
