@@ -55,8 +55,8 @@ for marker in (
     'TestMaterializeRejectsDockerSocketBuildAndLatest',
     'TestMaterializeRequiresUpdaterService',
     'TestPreserveUpdaterKeepsOnlyOldUpdaterDuringPhaseOne',
-    'TestEnvPayloadNeverReturnsNilForPortainer',
-    'TestComposeSHAIsUnknownForMixedPhaseOneImages',
+    'TestStackEnvironmentFailsClosedWhenMissingOrInvalid',
+    'TestComposeSHARejectsMixedPhaseOneEvenWithGeneratedHeader',
 ):
     assert marker in controller_test, f"update-controller Go tests missing {marker!r}"
 
