@@ -6,7 +6,6 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-
 def read(rel: str) -> str:
     path = ROOT / rel
     assert path.is_file(), f"missing release workflow: {rel}"
@@ -58,11 +57,12 @@ for marker in (
 assert "server/portainer-current.yaml" not in build, "Build all must not expose tracked baseline as deployable production compose"
 assert "RouterVPN-Portainer-${GITHUB_SHA}.yaml" in compose, "production compose artifact is not exact-SHA named"
 
-# These are source-level destructive/security boundaries that must travel with
-# the exact release orchestration instead of living as orphan audit scripts.
+# These source-level destructive/security and historical runtime boundaries must
+# travel with exact release orchestration instead of living as orphan scripts.
 for audit in (
     "deploy/docker-cleanup-safety-audit.py",
     "deploy/private-bundle-boundary-audit.py",
+    "deploy/historical-regression-audit.py",
 ):
     subprocess.run([sys.executable, str(ROOT / audit)], cwd=ROOT, check=True)
 
