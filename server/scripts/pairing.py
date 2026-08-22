@@ -12,6 +12,12 @@ DEFAULT_TTL = 300
 MAX_TTL = 600
 MAX_CODES = 16
 MAX_FAILURES_PER_MINUTE = 10
+LAN_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "fc00::/7",
+))
 
 
 def lan_source(value: str) -> bool:
@@ -19,7 +25,9 @@ def lan_source(value: str) -> bool:
         ip = ipaddress.ip_address(value.split("%", 1)[0])
     except ValueError:
         return False
-    return ip.is_private or ip.is_loopback or ip.is_link_local
+    if ip.is_loopback or ip.is_link_local:
+        return True
+    return any(ip.version == network.version and ip in network for network in LAN_NETWORKS)
 
 
 class PairingManager:
