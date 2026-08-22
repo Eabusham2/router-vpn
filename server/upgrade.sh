@@ -29,7 +29,9 @@ echo 'Refreshing long-running services...'
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --remove-orphans
 
 test -s /opt/router-vpn/downloads/index.html || { echo 'Upgrade completed but Setup Center index is missing.' >&2; exit 1; }
-test -s /opt/router-vpn/downloads/router-vpn-bundle.json || { echo 'Upgrade completed but the private router bundle is missing.' >&2; exit 1; }
+test -s /opt/router-vpn/client-bundle/router-vpn-bundle.json || { echo 'Upgrade completed but the canonical private router bundle is missing.' >&2; exit 1; }
+test ! -e /opt/router-vpn/downloads/router-vpn-bundle.json || { echo 'Upgrade leaked private router-vpn-bundle.json into public Setup Center downloads.' >&2; exit 1; }
+test ! -e /opt/router-vpn/downloads/router-vpn-client-bundle.zip || { echo 'Upgrade leaked a cached private node-link ZIP into public Setup Center downloads.' >&2; exit 1; }
 
 if command -v curl >/dev/null 2>&1; then
   for _ in $(seq 1 30); do
@@ -44,4 +46,5 @@ echo
 echo "Upgrade to Router VPN $RELEASE_SHA complete."
 echo 'Server services remain exact-image-only and were launched from the verified generated release compose.'
 echo 'Current-version profile credentials were preserved by the finalizer migration path.'
-echo 'Large client packages remain on-demand/ephemeral: GitHub artifact first, requested-package local build second.'
+echo 'Private node material remains under client-bundle and is linked/downloaded only through authenticated on-demand paths.'
+echo 'Large client packages remain on-demand/ephemeral: exact-SHA GitHub artifact first, requested-package local build second.'
