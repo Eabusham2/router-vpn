@@ -54,11 +54,14 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as fh:
               fh.write('\n'.join(summary)+'\n')
 
-          if recovered['score_percent'] < 84.5:
+          # Manual/live evidence intentionally remains a separate 12-point gate,
+          # but every source requirement must be complete before this workflow is
+          # allowed to go green. A partial 84.5/88 source score is not a release.
+          if recovered['source_earned'] != 88.0 or legacy_failed or recovered_failed:
               raise SystemExit(
-                  f"recovered score {recovered['score_percent']:.2f}% < 84.50%; "
+                  f"source audit incomplete: {recovered['source_earned']:.2f}/88.00; "
                   f"legacy_failed={[g['name'] for g in legacy_failed]}; "
                   f"recovered_failed={[g['name'] for g in recovered_failed]}"
               )
-          print(f"Weighted release threshold passed at {recovered['score_percent']:.2f}%")
+          print(f"Recovered source audit complete at {recovered['source_earned']:.2f}/88.00; manual/live evidence remains separate")
           PY
