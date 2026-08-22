@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -312,15 +311,12 @@ func validateAndMaterializeTemplate(text, target string) (string, error) {
 		if strings.Contains(text, forbidden) { return "", fmt.Errorf("production compose contains forbidden marker %q", forbidden) }
 	}
 	matches := customImageRE.FindAllStringSubmatch(text, -1)
-	if len(matches) < 9 { return "", errors.New("production compose does not contain the complete Router VPN exact-image set") }
-	services := map[string]bool{}
-	for _, match := range matches { services[match[1]] = true }
+	if len(matches) < 11 { return "", errors.New("production compose does not contain the complete Router VPN exact-image set") }
 	if !strings.Contains(text, "router-vpn-updater:") { return "", errors.New("target release does not contain the rollback-safe update controller service") }
 	out := customImageRE.ReplaceAllString(text, `${1}`+target)
 	if brokerSHARe.MatchString(out) { out = brokerSHARe.ReplaceAllString(out, `${1}`+target+`${3}`) } else { return "", errors.New("production compose broker provenance SHA is missing") }
 	for _, match := range customImageRE.FindAllStringSubmatch(out, -1) { if match[2] != target { return "", errors.New("materialized compose contains non-target Router VPN image") } }
 	if !strings.Contains(out, "ROUTER_VPN_GITHUB_SHA: "+target) { return "", errors.New("materialized compose broker SHA mismatch") }
-	_ = services
 	header := "# GENERATED exact-SHA Router VPN production compose: " + target + "\n# Update controller verified RC + ARM64 image publication before materialization.\n"
 	return header + out, nil
 }
