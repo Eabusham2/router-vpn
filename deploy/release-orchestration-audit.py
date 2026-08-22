@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Protect the authoritative Router VPN release chain from workflow drift."""
 from pathlib import Path
+import json
 import subprocess
 import sys
 
@@ -65,4 +66,30 @@ for audit in (
 ):
     subprocess.run([sys.executable, str(ROOT / audit)], cwd=ROOT, check=True)
 
-print("authoritative one-SHA release orchestration + cleanup/private-bundle isolation audit: OK")
+# The recovered scorer owns requirements that landed after the original weighted
+# 88/12 model (macOS PF, desktop multihop parity, selected-DNS proof, current
+# native information architecture). Build-all/RC must not be able to bypass
+# those gates merely because weighted-release-audit.yml is a separate workflow.
+recovered_proc = subprocess.run(
+    [sys.executable, str(ROOT / "deploy" / "recovered-release-audit-v4.py")],
+    cwd=ROOT,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    check=True,
+)
+recovered = json.loads(recovered_proc.stdout)
+assert recovered.get("source_weight") == 88.0, recovered
+assert recovered.get("manual_live_weight") == 12.0, recovered
+assert recovered.get("source_earned") == 88.0, (
+    "recovered source requirements are incomplete: "
+    + ", ".join(
+        g["name"] for g in recovered.get("recovered_gates", []) if not g.get("pass")
+    )
+)
+assert not [
+    g for g in recovered.get("legacy_gates", [])
+    if g.get("kind") == "source" and not g.get("pass")
+], "legacy source gate failed inside recovered release audit"
+
+print("authoritative one-SHA release orchestration + complete recovered source/security audit: OK")
