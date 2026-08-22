@@ -24,17 +24,27 @@ jobs:
           python3 -m py_compile \
             server/scripts/download-broker.py \
             server/scripts/download_jobs.py \
+            server/scripts/pairing.py \
+            server/scripts/native_artifact_policy.py \
             server/scripts/setup_center_ux_patch.py \
             server/scripts/setup-center-server.py \
             server/scripts/setup-center-ai-server.py \
             server/scripts/setup-center-product-server.py \
             server/scripts/setup_center_verified_onboarding.py \
             server/scripts/test_download_jobs.py \
+            server/scripts/test_setup_auth.py \
+            server/scripts/test_broker_security.py \
+            server/scripts/test_download_broker_exact_sha.py \
+            server/scripts/test_native_artifact_policy.py \
             server/scripts/test_setup_center_server.py \
             server/scripts/test_setup_center_verified_onboarding.py
-      - name: Setup Center admin, onboarding, and download job tests
+      - name: Setup Center admin, auth, artifact, onboarding, and download tests
         run: |
           python3 server/scripts/test_download_jobs.py
+          python3 server/scripts/test_setup_auth.py
+          python3 server/scripts/test_broker_security.py
+          python3 server/scripts/test_download_broker_exact_sha.py
+          python3 server/scripts/test_native_artifact_policy.py
           python3 server/scripts/test_setup_center_server.py
           python3 server/scripts/test_setup_center_verified_onboarding.py
       - name: Router-agent admin and forwarding tests
