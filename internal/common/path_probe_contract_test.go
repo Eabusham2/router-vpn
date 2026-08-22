@@ -27,7 +27,7 @@ func TestBundleGeneratorCarriesVersionedPrivateProbe(t *testing.T) {
 	b, err := os.ReadFile(path)
 	if err != nil { t.Fatal(err) }
 	text := string(b)
-	for _, want := range []string{"'profileSchemaVersion':3", "'schema_version':3", "'node_kind':'router-vpn'", "'path_probe_url':'http://10.77.0.1:8787/health'", "'health_url':'http://10.77.0.1:8787/health'"} {
+	for _, want := range []string{"'profileSchemaVersion':4", "'schema_version':4", "'node_kind':'router-vpn'", "'path_probe_url':'http://10.77.0.1:8787/health'", "'health_url':'http://10.77.0.1:8787/health'"} {
 		if !strings.Contains(text, want) { t.Fatalf("bundle generator missing %s", want) }
 	}
 }
