@@ -21,6 +21,12 @@ targets:
       - Resources
       - path: ../../LICENSE
         buildPhase: resources
+    postBuildScripts:
+      - name: Verify MIT license resource
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          test -s "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/LICENSE"
     settings:
       base:
         PRODUCT_NAME: RouterVPN
