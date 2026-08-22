@@ -658,6 +658,15 @@ func (a *app) activeProfile() (common.RouterProfile, error) {
 }
 
 func applyProfileDefaults(p *common.RouterProfile) {
+	if strings.EqualFold(strings.TrimSpace(p.NodeKind), "external") || p.External != nil {
+		// External exits own their own transport/DNS/proof semantics. Never inject
+		// this home Router VPN node's private API, AdGuard, SOCKS, DAITA, base
+		// tunnel, or path-probe defaults when an external profile is reloaded.
+		if p.Location == "" {
+			p.Location = p.Name
+		}
+		return
+	}
 	if p.RouterAPI == "" {
 		p.RouterAPI = "http://10.77.0.1:8787"
 	}
