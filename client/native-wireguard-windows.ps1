@@ -148,7 +148,30 @@ function Get-DnsSelection {
   return [pscustomobject]@{mode=$mode;protocol=$protocol;dns_host=$dnsHost;port=$port;server_name=$serverName;path=$path}
 }
 
+function Test-RuntimeOwner {
+  if (-not (Test-Path -LiteralPath $dnsOwnerFile -PathType Leaf)) { return $true }
+  if ([string]::IsNullOrWhiteSpace($script:dnsOwnerToken)) { return $false }
+  try { $current=(Get-Content -Raw -LiteralPath $dnsOwnerFile -ErrorAction Stop).Trim() } catch { return $false }
+  return $current -eq $script:dnsOwnerToken
+}
+
+function New-DnsOwner {
+  $script:dnsOwnerToken=[Guid]::NewGuid().ToString('N')
+  Write-Utf8NoBom $dnsOwnerFile ($script:dnsOwnerToken+"`n")
+}
+
+function Remove-OwnedDnsHint {
+  if ([string]::IsNullOrWhiteSpace($script:dnsOwnerToken)) { return }
+  if (-not (Test-Path -LiteralPath $dnsHint -PathType Leaf)) { return }
+  try { $hintText=Get-Content -Raw -LiteralPath $dnsHint -ErrorAction Stop } catch { return }
+  $ownerLine='owner='+$script:dnsOwnerToken
+  if (@($hintText -split "`r?`n") -contains $ownerLine) {
+    Remove-Item -LiteralPath $dnsHint -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Stop-DnsProxy {
+  if (-not (Test-RuntimeOwner)) { return }
   if (Test-Path -LiteralPath $dnsPidFile -PathType Leaf) {
     $pidValue=0
     if ([int]::TryParse(((Get-Content -Raw -LiteralPath $dnsPidFile -ErrorAction SilentlyContinue).Trim()),[ref]$pidValue) -and $pidValue -gt 1) {
@@ -159,8 +182,9 @@ function Stop-DnsProxy {
 }
 
 function Remove-PrivateRuntime {
+  if (-not (Test-RuntimeOwner)) { return }
+  Remove-OwnedDnsHint
   if (Test-Path -LiteralPath $runDir -PathType Container) { Remove-Item -LiteralPath $runDir -Recurse -Force -ErrorAction SilentlyContinue }
-  if (Test-Path -LiteralPath $dnsHint -PathType Leaf) { Remove-Item -LiteralPath $dnsHint -Force -ErrorAction SilentlyContinue }
 }
 
 function Prepare-RuntimeConfig {
@@ -177,6 +201,7 @@ function Prepare-RuntimeConfig {
 function Start-DnsProxy($Dns) {
   $dnsProxy = Find-DnsProxy
   if (-not $dnsProxy) { throw 'router-vpn-dns.exe is missing from the Windows package.' }
+  New-DnsOwner
   $args = @('-listen','127.0.0.1:53','-protocol',[string]$Dns.protocol,'-server',[string]$Dns.dns_host,'-port',[string]$Dns.port)
   if (-not [string]::IsNullOrWhiteSpace([string]$Dns.server_name)) { $args += @('-server-name',[string]$Dns.server_name) }
   if (-not [string]::IsNullOrWhiteSpace([string]$Dns.path)) { $args += @('-path',[string]$Dns.path) }
@@ -185,7 +210,7 @@ function Start-DnsProxy($Dns) {
   Start-Sleep -Milliseconds 250
   if ($process.HasExited) { throw "Router VPN selected-DNS proxy exited during startup with code $($process.ExitCode)." }
   $server = if ([string]$Dns.dns_host -match ':') { "[$($Dns.dns_host)]:$($Dns.port)" } else { "$($Dns.dns_host):$($Dns.port)" }
-  $hint = "mode=$($Dns.mode)`nprotocol=$($Dns.protocol)`nserver=$server`n"
+  $hint = "owner=$($script:dnsOwnerToken)`nmode=$($Dns.mode)`nprotocol=$($Dns.protocol)`nserver=$server`n"
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dnsHint) | Out-Null
   Write-Utf8NoBom $dnsHint $hint
 }
@@ -205,7 +230,12 @@ $runBase = Safe-Under $root (Join-Path $root 'run\windows')
 $runDir = Safe-Under $runBase (Join-Path $runBase (Join-Path $profileId 'wg'))
 $runtimeConfig = Join-Path $runDir 'wg.conf'
 $dnsPidFile = Join-Path $runDir 'router-vpn-dns.pid'
+$dnsOwnerFile = Join-Path $runDir 'dns.owner'
 $dnsHint = Safe-Under $root (Join-Path $root 'run\dns.txt')
+$script:dnsOwnerToken=''
+if (Test-Path -LiteralPath $dnsOwnerFile -PathType Leaf) {
+  try { $script:dnsOwnerToken=(Get-Content -Raw -LiteralPath $dnsOwnerFile -ErrorAction Stop).Trim() } catch { $script:dnsOwnerToken='' }
+}
 $tunnelName = 'wg'
 $serviceName = "WireGuardTunnel`$$tunnelName"
 
