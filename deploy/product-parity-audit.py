@@ -305,7 +305,12 @@ require(
     "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
     "WireGuardAdapter(with: self)", "RouterVPNLibboxEngine", "includeAllNetworks", "enforceRoutes",
 )
-require("ios/RouterVPN/project.yml", "sources: [App, Resources]", "NSAllowsLocalNetworking", 'TARGETED_DEVICE_FAMILY: "1,2"', "SWIFT_VERSION: \"6.0\"")
+require(
+    "ios/RouterVPN/project.yml",
+    "sources:", "- App", "- Resources", "- path: ../../LICENSE", "buildPhase: resources",
+    "Verify MIT license resource", 'test -s "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/LICENSE"',
+    "NSAllowsLocalNetworking", 'TARGETED_DEVICE_FAMILY: "1,2"', "SWIFT_VERSION: \"6.0\"",
+)
 
 setup = require(
     "server/scripts/generate-setup-assets.py",
