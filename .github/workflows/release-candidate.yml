@@ -29,18 +29,30 @@ jobs:
           python3 deploy/full-audit-v4.py
           python3 deploy/release-gap-audit.py
           python3 deploy/product-parity-audit.py
+          python3 deploy/profile-settings-audit.py
+          python3 deploy/profile-schema-shipping-audit.py
+          python3 deploy/linux-full-profile-shipping-audit.py
           python3 deploy/native-download-policy-audit.py
           python3 deploy/native-artifact-workflow-parity-audit.py
-          python3 deploy/profile-schema-shipping-audit.py
+          python3 deploy/private-bundle-boundary-audit.py
+          python3 deploy/docker-cleanup-safety-audit.py
           python3 deploy/router-forwarding-audit.py
           python3 deploy/release-orchestration-audit.py
+          python3 deploy/recovered-release-audit-v4.py
+          python3 deploy/test-killswitch-transition-contract.py
+          python3 deploy/test_macos_killswitch_contract.py
+          python3 deploy/test-router-local-package-fallback.py
           python3 deploy/test-production-release-compose.py
+          python3 server/finalize/test_sync_endpoint.py
           python3 server/scripts/test_native_artifact_policy.py
           python3 server/scripts/test_download_broker_exact_sha.py
           python3 server/scripts/test_setup_auth.py
           python3 server/scripts/test_broker_security.py
           python3 server/scripts/test_download_jobs.py
           python3 server/scripts/test_setup_imports.py
+          python3 server/scripts/test_setup_center_server.py
+          python3 server/scripts/test_setup_center_server_control.py
+          python3 server/scripts/test_setup_center_verified_onboarding.py
           python3 client/test_native_onboarding_contract.py
           python3 android/test_android_runtime_contract.py
           python3 android/test_android_multihop_contract.py
@@ -65,6 +77,7 @@ jobs:
           python3 server/scripts/test_setup_center_guide.py
           python3 server/scripts/test_setup_center_ux_patch.py
           python3 server/scripts/test_setup_center_entrypoint.py
+          python3 server/scripts/test_setup_center_server_control.py
           sh -n server/scripts/run-setup-center.sh
           sh -n server/scripts/configure-ai-help.sh
 
