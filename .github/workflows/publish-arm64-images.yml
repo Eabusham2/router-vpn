@@ -28,6 +28,9 @@ jobs:
           - name: agent
             dockerfile: deploy/router-agent.Dockerfile
             image: router-vpn-agent
+          - name: updater
+            dockerfile: deploy/update-controller.Dockerfile
+            image: router-vpn-updater
           - name: wireguard
             dockerfile: server/wireguard/Dockerfile
             image: router-vpn-wireguard
