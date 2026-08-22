@@ -329,14 +329,36 @@ func (c *controller) targetCompose(sha string) (string, error) {
 	return validateAndMaterializeTemplate(baseline, sha)
 }
 
+func stackEnvironment(raw json.RawMessage) ([]any, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, errors.New("Portainer did not return stack environment; refusing to replace it with an empty environment")
+	}
+	if len(trimmed) > maxJSON { return nil, errors.New("Portainer stack environment exceeds safety limit") }
+	var values []any
+	if err := json.Unmarshal(trimmed, &values); err != nil { return nil, fmt.Errorf("decode Portainer stack environment: %w", err) }
+	if values == nil { return nil, errors.New("Portainer stack environment is null") }
+	return values, nil
+}
+
 func (c *controller) findStack() (stackInfo, error) {
 	var stacks []stackInfo
 	if err := c.portainer(http.MethodGet, "/api/stacks", nil, &stacks); err != nil { return stackInfo{}, err }
 	var matches []stackInfo
 	for _, stack := range stacks { if stack.Name == c.stackName { matches = append(matches, stack) } }
 	if len(matches) != 1 { return stackInfo{}, fmt.Errorf("expected one Portainer stack named %q, found %d", c.stackName, len(matches)) }
-	if matches[0].ID <= 0 || matches[0].EndpointID <= 0 { return stackInfo{}, errors.New("Portainer stack has invalid ID/environment") }
-	return matches[0], nil
+	selected := matches[0]
+	if selected.ID <= 0 || selected.EndpointID <= 0 { return stackInfo{}, errors.New("Portainer stack has invalid ID/environment") }
+	// The list endpoint may omit Env in some Portainer versions. Fetch the
+	// authoritative stack object and refuse an update if its environment cannot
+	// be read; silently sending Env:[] could erase WAN/LAN/AdGuard overrides.
+	var detail stackInfo
+	if err := c.portainer(http.MethodGet, fmt.Sprintf("/api/stacks/%d", selected.ID), nil, &detail); err != nil { return stackInfo{}, fmt.Errorf("read Portainer stack details: %w", err) }
+	if detail.ID != 0 && detail.ID != selected.ID { return stackInfo{}, errors.New("Portainer stack detail ID changed during lookup") }
+	if detail.Name != "" && detail.Name != c.stackName { return stackInfo{}, errors.New("Portainer stack detail name changed during lookup") }
+	if len(bytes.TrimSpace(detail.Env)) > 0 { selected.Env = detail.Env }
+	if _, err := stackEnvironment(selected.Env); err != nil { return stackInfo{}, err }
+	return selected, nil
 }
 
 func (c *controller) stackFile(stack stackInfo) (string, error) {
@@ -346,17 +368,11 @@ func (c *controller) stackFile(stack stackInfo) (string, error) {
 	return payload.StackFileContent, nil
 }
 
-func envPayload(raw json.RawMessage) any {
-	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) { return []any{} }
-	var v any
-	if json.Unmarshal(raw, &v) != nil { return []any{} }
-	if v == nil { return []any{} }
-	return v
-}
-
 func (c *controller) putStack(stack stackInfo, content string) error {
 	if len(content) == 0 || len(content) > maxCompose { return errors.New("refusing invalid stack content") }
-	payload := map[string]any{"StackFileContent": content, "Env": envPayload(stack.Env), "PullImage": true, "Prune": false}
+	environment, err := stackEnvironment(stack.Env)
+	if err != nil { return err }
+	payload := map[string]any{"StackFileContent": content, "Env": environment, "PullImage": true, "Prune": false}
 	path := fmt.Sprintf("/api/stacks/%d?endpointId=%d", stack.ID, stack.EndpointID)
 	return c.portainer(http.MethodPut, path, payload, nil)
 }
@@ -376,12 +392,16 @@ func preserveUpdater(target, current string) (string, error) {
 }
 
 func composeSHA(content string) string {
-	match := regexp.MustCompile(`(?m)^# GENERATED exact-SHA Router VPN production compose: ([0-9a-f]{40})$`).FindStringSubmatch(content)
-	if len(match) == 2 { return match[1] }
 	values := map[string]bool{}
 	for _, item := range customImageRE.FindAllStringSubmatch(content, -1) { values[item[2]] = true }
-	if len(values) == 1 { for sha := range values { return sha } }
-	return "unknown"
+	if len(values) != 1 { return "unknown" }
+	var imageSHA string
+	for sha := range values { imageSHA = sha }
+	header := regexp.MustCompile(`(?m)^# GENERATED exact-SHA Router VPN production compose: ([0-9a-f]{40})$`).FindStringSubmatch(content)
+	if len(header) == 2 && header[1] != imageSHA { return "unknown" }
+	broker := brokerSHARe.FindStringSubmatch(content)
+	if len(broker) == 4 && broker[2] != imageSHA { return "unknown" }
+	return imageSHA
 }
 
 func (c *controller) containerState(stack stackInfo, name string) (bool, int, error) {
@@ -430,7 +450,7 @@ func (c *controller) status(w http.ResponseWriter, r *http.Request) {
 	if configured {
 		if stack, err := c.findStack(); err == nil { if file, err := c.stackFile(stack); err == nil { current = composeSHA(file) } }
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "configured": configured, "configuration_reason": reason, "current_sha": current, "busy": busy, "state": state, "semantics": "Exact-SHA update requires green release-candidate, ARM64 image publication and production-compose workflows; Portainer owns deployment; prune is always false; rollback restores the prior stack if core health fails."})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "configured": configured, "configuration_reason": reason, "current_sha": current, "busy": busy, "state": state, "semantics": "Exact-SHA update requires green release-candidate, ARM64 image publication and production-compose workflows; Portainer owns deployment; prune is always false; stack environment must be read and preserved; rollback restores the prior stack if core health fails."})
 }
 
 func decodeSHARequest(w http.ResponseWriter, r *http.Request) (string, bool) {
