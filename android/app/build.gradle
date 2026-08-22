@@ -2,6 +2,9 @@ plugins {
     id 'com.android.application'
 }
 
+def projectLicense = rootProject.file('../LICENSE')
+def generatedLicenseAssets = file("$buildDir/generated/routervpn-license-assets")
+
 android {
     namespace 'com.eabusham.routervpn'
     compileSdk 36
@@ -19,10 +22,26 @@ android {
         targetCompatibility JavaVersion.VERSION_17
         coreLibraryDesugaringEnabled true
     }
+
+    sourceSets {
+        main {
+            assets.srcDir generatedLicenseAssets
+        }
+    }
 }
 
 def awgAar = file('libs/amneziawg-tunnel.aar')
 def libboxAar = file('libs/libbox.aar')
+
+tasks.register('stageProjectLicense', Copy) {
+    doFirst {
+        if (!projectLicense.isFile()) {
+            throw new GradleException('Root MIT LICENSE is missing')
+        }
+    }
+    from projectLicense
+    into generatedLicenseAssets
+}
 
 tasks.register('prepareAmneziaWgTunnel', Exec) {
     workingDir rootProject.projectDir
@@ -50,8 +69,32 @@ bash "$patched"
 }
 
 tasks.named('preBuild').configure {
+    dependsOn tasks.named('stageProjectLicense')
     dependsOn tasks.named('prepareAmneziaWgTunnel')
     dependsOn tasks.named('prepareSingBoxLibbox')
+}
+
+tasks.register('verifyDebugProjectLicense') {
+    dependsOn 'packageDebug'
+    doLast {
+        def apk = file("$buildDir/outputs/apk/debug/app-debug.apk")
+        if (!apk.isFile()) {
+            throw new GradleException('Debug APK is missing while verifying MIT license')
+        }
+        def zip = new java.util.zip.ZipFile(apk)
+        try {
+            def entry = zip.getEntry('assets/LICENSE')
+            if (entry == null || entry.size <= 0) {
+                throw new GradleException('Android APK is missing assets/LICENSE')
+            }
+        } finally {
+            zip.close()
+        }
+    }
+}
+
+tasks.named('assembleDebug').configure {
+    finalizedBy tasks.named('verifyDebugProjectLicense')
 }
 
 dependencies {
