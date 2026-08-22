@@ -118,3 +118,16 @@ func TestMultihopRequiresCompleteDistinctNodes(t *testing.T) {
 	if err := NormalizeRouterProfile(&p); err != nil { t.Fatal(err) }
 	if p.MultihopEntryID != "entry" || p.MultihopExitID != "exit" { t.Fatalf("multihop IDs were not normalized: %+v", p) }
 }
+
+func TestDAITALikeRateIsExplicitlyBounded(t *testing.T) {
+	for _, rate := range []int{DAITALikeMinRateKbps, 96, DAITALikeMaxRateKbps} {
+		p := RouterProfile{ID: "home", DAITARateKbps: rate}
+		if err := NormalizeRouterProfile(&p); err != nil { t.Fatalf("valid DAITA-like rate %d rejected: %v", rate, err) }
+	}
+	for _, rate := range []int{1, DAITALikeMinRateKbps - 1, DAITALikeMaxRateKbps + 1, 1000000} {
+		p := RouterProfile{ID: "home", DAITARateKbps: rate}
+		if err := NormalizeRouterProfile(&p); err == nil || !strings.Contains(err.Error(), "DAITA-like rate") {
+			t.Fatalf("out-of-bound DAITA-like rate %d was accepted: %v", rate, err)
+		}
+	}
+}
