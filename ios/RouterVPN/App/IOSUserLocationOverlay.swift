@@ -76,7 +76,8 @@ final class IOSUserLocationController: NSObject, ObservableObject, CLLocationMan
         map.userTrackingMode = .none
         // MapKit owns the actual user annotation. Entry/exit/custom nodes remain
         // the app's explicit markers; the real device marker gets its own green tint.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
             map.view(for: map.userLocation)?.tintColor = .systemGreen
         }
     }
@@ -97,6 +98,7 @@ final class IOSUserLocationController: NSObject, ObservableObject, CLLocationMan
     }
 }
 
+@MainActor
 struct IOSUserLocationControl: View {
     @StateObject private var controller = IOSUserLocationController()
 
