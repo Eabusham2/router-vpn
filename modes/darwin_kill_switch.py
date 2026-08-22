@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Scoped macOS PF backend for Router VPN strict kill-switch policy.
 
-This module never rewrites /etc/pf.conf and never flushes the global PF ruleset.
-It installs filter rules only in the existing com.apple/* anchor namespace and
-uses pfctl's reference-counted -E/-X lifecycle. A protected connect is two phase:
-pre-connect rules permit only the selected literal node endpoint and required
-link maintenance; after the tunnel starts, the controller refreshes the anchor
-and permits only a newly-created Router VPN utun that also owns a public route.
+This module never rewrites /etc/pf.conf, never flushes the global PF ruleset,
+and never flushes the global PF state table. It installs filter rules only in
+the existing com.apple/* anchor namespace and uses pfctl's reference-counted
+-E/-X lifecycle. A protected connect is two phase: pre-connect rules permit only
+the selected literal node endpoint and required link maintenance; after the
+tunnel starts, the controller refreshes the anchor and permits only a newly-
+created Router VPN utun that also owns a public route. Existing states are
+invalidated only on the proven pre-tunnel public interface(s), so strict mode
+does not destroy unrelated PF state on other interfaces.
 """
 from __future__ import annotations
 
@@ -69,6 +72,34 @@ def current_utuns() -> list[str]:
     ifconfig = shutil.which("ifconfig") or "/sbin/ifconfig"
     text = _command_output([ifconfig, "-l"])
     return sorted({x for x in text.split() if re.fullmatch(r"utun[0-9]+", x)})
+
+
+def _safe_physical_interface(value: str) -> bool:
+    value = value.strip()
+    return bool(
+        re.fullmatch(r"[A-Za-z0-9_.:-]{1,32}", value)
+        and value != "lo0"
+        and not re.fullmatch(r"utun[0-9]+", value)
+    )
+
+
+def public_route_interfaces() -> list[str]:
+    override = os.environ.get("HOMEVPN_KILLSWITCH_DARWIN_PHYSICAL_INTERFACES")
+    if override is not None:
+        return sorted({x.strip() for x in override.split(",") if _safe_physical_interface(x)})
+    route = shutil.which("route") or "/sbin/route"
+    found: set[str] = set()
+    commands = (
+        [route, "-n", "get", "1.1.1.1"],
+        [route, "-n", "get", "9.9.9.9"],
+        [route, "-n", "get", "-inet6", "2606:4700:4700::1111"],
+    )
+    for command in commands:
+        text = _command_output(command)
+        match = re.search(r"(?m)^\s*interface:\s*(\S+)\s*$", text)
+        if match and _safe_physical_interface(match.group(1)):
+            found.add(match.group(1))
+    return sorted(found)
 
 
 def route_utuns() -> list[str]:
@@ -147,6 +178,10 @@ def apply_darwin(
             x for x in previous_state.get("darwin_baseline_utun", [])
             if isinstance(x, str) and re.fullmatch(r"utun[0-9]+", x)
         }
+        physical_interfaces = sorted({
+            x for x in previous_state.get("darwin_physical_interfaces", [])
+            if isinstance(x, str) and _safe_physical_interface(x)
+        })
         new_interfaces = set(current) - baseline
         routed = set(route_utuns())
         tunnel_interfaces = sorted(new_interfaces & routed)
@@ -156,7 +191,12 @@ def apply_darwin(
             )
     else:
         baseline = set(current)
+        physical_interfaces = public_route_interfaces()
         tunnel_interfaces = []
+        if not dry_run and not physical_interfaces:
+            raise RuntimeError(
+                "strict macOS kill switch could not prove the pre-tunnel public interface; refusing unscoped PF state invalidation"
+            )
 
     rules = render_pf_rules(endpoint_ips, lan_access, tunnel_interfaces)
     if dry_run:
@@ -165,6 +205,7 @@ def apply_darwin(
             "pf_token": token,
             "darwin_baseline_utun": sorted(baseline),
             "darwin_tunnel_interfaces": tunnel_interfaces,
+            "darwin_physical_interfaces": physical_interfaces,
             "darwin_pf_anchor": PF_ANCHOR,
         }
 
@@ -176,10 +217,12 @@ def apply_darwin(
         token, token_created = _enable_reference(previous_state)
         run_pf(["-a", PF_ANCHOR, "-f", "-"], input_text=rules)
         if token_created:
-            # Existing PF states are global. Clear them once when strict
-            # protection first becomes active so pre-existing cleartext flows
-            # cannot bypass the new fail-closed filter state.
-            run_pf(["-F", "states"])
+            # PF state is global by default, so strict protection must invalidate
+            # pre-existing cleartext flows. Restrict that operation to the
+            # proven pre-tunnel public interface(s); never flush the global state
+            # table or states on unrelated interfaces.
+            for interface in physical_interfaces:
+                run_pf(["-i", interface, "-F", "states"])
     except Exception:
         if token_created and token:
             _clear_anchor(check=False)
@@ -189,6 +232,7 @@ def apply_darwin(
         "pf_token": token,
         "darwin_baseline_utun": sorted(baseline),
         "darwin_tunnel_interfaces": tunnel_interfaces,
+        "darwin_physical_interfaces": physical_interfaces,
         "darwin_pf_anchor": PF_ANCHOR,
     }
 
