@@ -1,7 +1,7 @@
 import CFNetwork
 import CryptoKit
 import Foundation
-import Network
+@preconcurrency import Network
 import NetworkExtension
 import WireGuardKit
 
@@ -13,10 +13,39 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private static let proofKind = "router-vpn-private-agent-v1"
     private static let nodeProofDomain = "router-vpn-node-proof-v1\n"
 
+    private final class NetworkProofGuard: @unchecked Sendable {
+        private let lock = NSLock()
+        private var sawInitialPath = false
+        private var invalidated = false
+        weak var owner: PacketTunnelProvider?
+
+        init(owner: PacketTunnelProvider) { self.owner = owner }
+
+        func handle(_ path: NWPath) {
+            _ = path.status
+            lock.lock()
+            if !sawInitialPath {
+                sawInitialPath = true
+                lock.unlock()
+                return
+            }
+            if invalidated {
+                lock.unlock()
+                return
+            }
+            invalidated = true
+            lock.unlock()
+            owner?.invalidateSelectedPathProof()
+        }
+    }
+
     private var wireGuardAdapter: WireGuardAdapter?
     private var libboxEngine: RouterVPNLibboxEngine?
     private var proofTask: URLSessionDataTask?
     private var proofSession: URLSession?
+    private var pathMonitor: NWPathMonitor?
+    private var pathProofGuard: NetworkProofGuard?
+    private let pathMonitorQueue = DispatchQueue(label: "com.eabusham.routervpn.path-proof", qos: .utility)
 
     override func startTunnel(options: [String: NSObject]? = nil, completionHandler: @escaping (Error?) -> Void) {
         do {
@@ -58,6 +87,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             if let adapterError { self.wireGuardAdapter = nil; completionHandler(self.tunnelError(12, "WireGuard engine failed to start: \(adapterError.localizedDescription)")); return }
             self.proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID, proxyPort: nil) { proofError in
                 if let proofError { adapter.stop { _ in self.wireGuardAdapter = nil; completionHandler(proofError) }; return }
+                self.armNetworkProofGuard()
                 completionHandler(nil)
             }
         }
@@ -75,6 +105,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 16, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during Libbox proof."])); return }
             if let proofError { engine.stop(); self.libboxEngine = nil; completionHandler(proofError); return }
+            self.armNetworkProofGuard()
             completionHandler(nil)
         }
     }
@@ -86,11 +117,30 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         proveExternalExit(expectedPublicIP: runtime.expectedPublicIP, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 18, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during external-exit proof."])); return }
             if let proofError { engine.stop(); self.libboxEngine = nil; completionHandler(proofError); return }
+            self.armNetworkProofGuard()
             completionHandler(nil)
         }
     }
 
+    private func armNetworkProofGuard() {
+        pathMonitor?.cancel()
+        let monitor = NWPathMonitor()
+        let guardState = NetworkProofGuard(owner: self)
+        pathProofGuard = guardState
+        pathMonitor = monitor
+        monitor.pathUpdateHandler = { path in guardState.handle(path) }
+        monitor.start(queue: pathMonitorQueue)
+    }
+
+    private func invalidateSelectedPathProof() {
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        pathProofGuard = nil
+        cancelTunnelWithError(tunnelError(19, "Underlying network changed; selected-node/public-exit proof was invalidated. Reconnect must establish and prove the selected path again."))
+    }
+
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        pathMonitor?.cancel(); pathMonitor = nil; pathProofGuard = nil
         proofTask?.cancel(); proofTask = nil; proofSession?.invalidateAndCancel(); proofSession = nil
         if let engine = libboxEngine { engine.stop(); libboxEngine = nil }
         guard let adapter = wireGuardAdapter else { completionHandler(); return }
