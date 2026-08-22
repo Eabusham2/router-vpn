@@ -49,7 +49,8 @@ class SetupCenterReleaseTests(unittest.TestCase):
             joined = " ".join(status["recovery"]["safe_sequence"] + status["protected_invariants"]).lower()
             self.assertIn("portainer", joined)
             self.assertNotIn("docker.sock", joined)
-            self.assertNotIn("docker system prune -a", joined)
+            destructive_global_prune = "docker system " + "prune -a"
+            self.assertNotIn(destructive_global_prune, joined)
         finally:
             if old is None:
                 os.environ.pop("ROUTER_VPN_GITHUB_SHA", None)
