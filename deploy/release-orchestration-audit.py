@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Protect the authoritative Router VPN release chain from workflow drift."""
 from pathlib import Path
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,4 +61,9 @@ for marker in (
 assert "server/portainer-current.yaml" not in build, "Build all must not expose tracked baseline as deployable production compose"
 assert "RouterVPN-Portainer-${GITHUB_SHA}.yaml" in compose, "production compose artifact is not exact-SHA named"
 
-print("authoritative one-SHA release orchestration audit: OK")
+# This script is already a required RC + production-compose source gate, so run
+# the related destructive-cleanup isolation audit here instead of creating yet
+# another standalone workflow that could silently drift out of the release path.
+subprocess.run([sys.executable, str(ROOT / "deploy/docker-cleanup-safety-audit.py")], cwd=ROOT, check=True)
+
+print("authoritative one-SHA release orchestration + cleanup isolation audit: OK")
