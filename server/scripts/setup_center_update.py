@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+"""Authenticated Setup Center UI for rollback-safe exact-SHA Portainer updates."""
+
+UPDATE_PANEL = r'''
+<style id="rvpn-update-style">
+#rvpn-update-card .rvpn-update-grid{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:10px;margin-top:12px}
+#rvpn-update-card .rvpn-update-state{font-size:20px;font-weight:800;margin:4px 0}
+#rvpn-update-card input{width:100%;box-sizing:border-box}
+@media(max-width:760px){#rvpn-update-card .rvpn-update-grid{grid-template-columns:1fr}}
+</style>
+<script id="rvpn-update-script">
+(()=>{
+ let installed=false,checkedSha='';
+ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ async function api(path,opt={}){const r=await fetch(path,{credentials:'same-origin',cache:'no-store',...opt});let d={};try{d=await r.json()}catch{try{d={error:await r.text()}}catch{}}if(!r.ok||d.ok===false)throw new Error(d.error||`HTTP ${r.status}`);return d}
+ function setNote(text,kind=''){const el=document.getElementById('rvpn-update-note');if(!el)return;el.textContent=text||'';el.className='small '+kind}
+ function install(){
+   if(installed)return true;
+   const panel=document.querySelector('section[data-tab="release-status"]');if(!panel)return false;
+   const card=document.createElement('div');card.className='card';card.id='rvpn-update-card';card.innerHTML=`<div class="row"><div class="grow"><h2 style="margin-bottom:4px">Update Router VPN</h2><div class="small">Portainer-owned exact-SHA update. The server accepts only releases whose source/native release candidate, ARM64 images, and production compose all passed for the same commit. Docker prune is disabled and failed core health automatically restores the previous stack.</div></div><button class="btn" type="button" onclick="refreshRouterVpnUpdate()">Refresh</button></div><div class="rvpn-update-grid"><div><div class="small">Update controller</div><div id="rvpn-update-state" class="rvpn-update-state">Loading…</div><div id="rvpn-update-current" class="small">Current SHA: —</div></div><div><div class="small">Exact target SHA (optional)</div><input id="rvpn-update-sha" autocomplete="off" spellcheck="false" maxlength="40" placeholder="Leave blank for latest verified release"><div class="admin-actions" style="margin-top:8px"><button class="btn" type="button" onclick="routerVpnCheckUpdate()">Check release</button></div></div><div><div class="small">Verified target</div><div id="rvpn-update-target" style="overflow-wrap:anywhere">Not checked</div><div class="admin-actions" style="margin-top:8px"><button id="rvpn-update-apply" class="btn primary" type="button" onclick="routerVpnApplyUpdate()" disabled>Apply verified SHA</button></div></div></div><div id="rvpn-update-note" class="small" style="margin-top:10px"></div>`;
+   const hero=panel.querySelector('.card.hero');if(hero&&hero.nextSibling)panel.insertBefore(card,hero.nextSibling);else panel.appendChild(card);
+   for(const tab of document.querySelectorAll('#tabs [data-tab="release-status"]'))tab.addEventListener('click',()=>setTimeout(window.refreshRouterVpnUpdate,0));
+   installed=true;return true;
+ }
+ function render(d){const state=document.getElementById('rvpn-update-state'),cur=document.getElementById('rvpn-update-current'),apply=document.getElementById('rvpn-update-apply');if(!state)return;const s=d.state||{};state.textContent=d.busy?String(s.status||'UPDATING').toUpperCase():d.configured?'READY':'SETUP REQUIRED';state.className='rvpn-update-state '+(d.busy?'warn':d.configured?'ok':'bad');cur.textContent='Current SHA: '+(d.current_sha||'unknown');if(!d.configured)setNote(d.configuration_reason||'Configure the server-side Portainer API key first.','bad');else if(s.message)setNote(s.message,s.status==='failed'?'bad':'');if(apply)apply.disabled=!d.configured||!!d.busy||!checkedSha}
+ window.refreshRouterVpnUpdate=async()=>{if(!install())return;try{render(await api('/api/admin/update/status'))}catch(e){const st=document.getElementById('rvpn-update-state');if(st){st.textContent='UNAVAILABLE';st.className='rvpn-update-state bad'}setNote(e.message,'bad')}};
+ window.routerVpnCheckUpdate=async()=>{if(!install())return;const raw=(document.getElementById('rvpn-update-sha')?.value||'').trim().toLowerCase();checkedSha='';document.getElementById('rvpn-update-apply').disabled=true;document.getElementById('rvpn-update-target').textContent='Checking…';setNote('Verifying exact-SHA release gates…');try{const d=await api('/api/admin/update/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sha:raw})});checkedSha=d.sha;document.getElementById('rvpn-update-target').textContent=d.sha;document.getElementById('rvpn-update-apply').disabled=false;setNote('Verified: release candidate, ARM64 image publication, and production compose are green for this exact SHA.','ok')}catch(e){document.getElementById('rvpn-update-target').textContent='Not verified';setNote(e.message,'bad')}};
+ async function pollAfterApply(){for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,3000));try{const d=await api('/api/admin/update/status');render(d);const s=d.state||{};if(s.status==='complete'){setNote('Exact-SHA update completed and core health passed.','ok');checkedSha='';document.getElementById('rvpn-update-apply').disabled=true;return}if(s.status==='failed'){setNote(s.message||'Update failed. Check recovery status.','bad');return}}catch{setNote('Setup Center is restarting during the update; reconnecting…','warn')}}setNote('Update state is still unavailable. Refresh after Setup Center reconnects.','warn')}
+ window.routerVpnApplyUpdate=async()=>{if(!checkedSha)return;if(!confirm(`Apply verified Router VPN release ${checkedSha}? Portainer will preserve stack environment values, pull exact-SHA images, verify core health, and automatically restore the prior stack if core validation fails.`))return;const target=checkedSha;document.getElementById('rvpn-update-apply').disabled=true;setNote('Applying through Portainer. Setup Center may briefly reconnect while its container is recreated…','warn');try{const d=await api('/api/admin/update/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sha:target})});if(d.ok){setNote('Exact-SHA update completed and core health passed.','ok');checkedSha='';await window.refreshRouterVpnUpdate();return}}catch(e){setNote('Update request disconnected while services were being recreated; checking persisted update state…','warn')}await pollAfterApply()};
+ let tries=0;const timer=setInterval(()=>{tries++;if(install()||tries>40){clearInterval(timer);if(installed)window.refreshRouterVpnUpdate()}},50);
+})();
+</script>
+'''
