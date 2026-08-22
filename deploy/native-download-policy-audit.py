@@ -194,8 +194,9 @@ need(
     "0527dfa47639714dd8f5c9ffbd9d40d19083f0ba",
     "05434cab7d91bbbc607d18ec5fade91f4b83774c",
     "e9af1cdd2549d528deb20a4ab8d61c5fbe51f306",
+    '"$BUNDLE/modes/native-multihop-darwin.sh"',
 )
-forbid("client/install-macos.sh", "git checkout 00569eb ", "--branch v3.0.2")
+forbid("client/install-macos.sh", "git checkout 00569eb ", "--branch v3.0.2", '"$BUNDLE/client/native-multihop-darwin.sh"')
 
 need(
     "client/install-linux.sh",
@@ -233,7 +234,7 @@ need(
 )
 need("modes/run-multihop.sh", "cleanup-private-runtime.py")
 forbid("modes/run-multihop.sh", 'rm -rf "$RUN"')
-need("client/native-multihop-darwin.sh", "cleanup-private-runtime.py")
+need("modes/native-multihop-darwin.sh", "cleanup-private-runtime.py", "release_guard")
 need("client/native-multihop-windows.ps1", "Remove-PrivateRuntime", "[IO.Directory]::Delete($RuntimeDir,$true)")
 
 if errors:
