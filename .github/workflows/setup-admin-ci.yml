@@ -30,6 +30,7 @@ jobs:
             server/scripts/setup-center-server.py \
             server/scripts/setup-center-ai-server.py \
             server/scripts/setup-center-product-server.py \
+            server/scripts/setup_center_server_control.py \
             server/scripts/setup_center_verified_onboarding.py \
             server/scripts/test_download_jobs.py \
             server/scripts/test_setup_auth.py \
@@ -37,8 +38,9 @@ jobs:
             server/scripts/test_download_broker_exact_sha.py \
             server/scripts/test_native_artifact_policy.py \
             server/scripts/test_setup_center_server.py \
+            server/scripts/test_setup_center_server_control.py \
             server/scripts/test_setup_center_verified_onboarding.py
-      - name: Setup Center admin, auth, artifact, onboarding, and download tests
+      - name: Setup Center admin, auth, artifact, onboarding, download, and server-control tests
         run: |
           python3 server/scripts/test_download_jobs.py
           python3 server/scripts/test_setup_auth.py
@@ -46,11 +48,12 @@ jobs:
           python3 server/scripts/test_download_broker_exact_sha.py
           python3 server/scripts/test_native_artifact_policy.py
           python3 server/scripts/test_setup_center_server.py
+          python3 server/scripts/test_setup_center_server_control.py
           python3 server/scripts/test_setup_center_verified_onboarding.py
-      - name: Router-agent admin and forwarding tests
-        run: go test ./cmd/router-agent -run 'Admin|Peer|Listener|Forwarding|ProtectedDMZ' -count=1
+      - name: Router-agent admin, server-control, and forwarding tests
+        run: go test ./cmd/router-agent -run 'Admin|Peer|Listener|Forwarding|ProtectedDMZ|ServerControl' -count=1
       - name: Production compose uses final authenticated product wrapper only
         run: |
           grep -F 'entrypoint: ["python3", "/src/server/scripts/setup-center-product-server.py"]' server/portainer-current.yaml
-          ! grep -E '8789:|:8789|8790:|:8790|8791:|:8791|0\.0\.0\.0:8789|0\.0\.0\.0:8790|0\.0\.0\.0:8791' server/portainer-current.yaml
+          ! grep -E '8789:|:8789|8790:|:8790|8791:|:8791|8792:|:8792|0\.0\.0\.0:8789|0\.0\.0\.0:8790|0\.0\.0\.0:8791|0\.0\.0\.0:8792' server/portainer-current.yaml
           grep -F '/opt/router-vpn:/opt/router-vpn:ro' server/portainer-current.yaml
