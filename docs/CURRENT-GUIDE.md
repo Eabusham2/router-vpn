@@ -23,7 +23,7 @@ source change
 → production
 ```
 
-The **production Portainer stack stays exact-SHA image-only**. The router-local build fallback applies only to requested generic client downloads when the matching GitHub artifact is unavailable; it never turns production into a moving source build.
+The **production Portainer stack stays exact-SHA image-only**. Router-local client fallback is **Windows/Portable only**: it can build only a requested Windows x64/ARM64 installed or Portable generic package when the matching same-SHA GitHub artifact is unavailable. macOS/Linux require matching same-SHA artifacts or source built in their proper native build environments, and Android/iOS/iPadOS never use router-local builds. This fallback never turns production into a moving source build.
 
 ## 2. Portainer deployment
 
@@ -102,17 +102,17 @@ The Setup Center provides onboarding, Full Guide, private node linking/pairing d
 
 ```text
 matching same-SHA GitHub artifact
-↓ if unavailable/unusable
-bounded router-local build of requested generic package only
+↓ only for Windows x64/ARM64 installed/Portable when unavailable
+bounded router-local build of that requested generic Windows package only
 ↓
-validate/package the generic secret-free application
+validate/package the generic secret-free Windows application
 ↓
 stream
 ↓
 cleanup temporary build/output
 ```
 
-Private node data is linked/imported separately after installation and is never baked into a public generic installer or Portable package. One installed app can link multiple nodes without reinstalling. PortableApps/PAF is retired; normal Router VPN Portable ZIP x64/ARM64 remains supported.
+macOS and Linux never use the AI Board as a substitute native build environment; they require matching same-SHA artifacts or source built in the correct native environment. Android and iOS/iPadOS never use router-local builds. Private node data is linked/imported separately after installation and is never baked into a public generic installer or Portable package. One installed app can link multiple nodes without reinstalling. PortableApps/PAF is retired; normal Router VPN Portable ZIP x64/ARM64 remains supported.
 
 ## 4. ASUS Merlin forwarding
 
