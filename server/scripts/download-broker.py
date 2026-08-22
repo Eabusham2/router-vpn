@@ -151,8 +151,8 @@ def _github_scope() -> tuple[str, str, str]:
     head_sha = os.environ.get("ROUTER_VPN_GITHUB_SHA", "").strip().lower()
     if "/" not in repo:
         raise RuntimeError("invalid GitHub repository")
-    if head_sha and (len(head_sha) != 40 or any(ch not in "0123456789abcdef" for ch in head_sha)):
-        raise RuntimeError("ROUTER_VPN_GITHUB_SHA must be a full 40-character commit SHA")
+    if len(head_sha) != 40 or any(ch not in "0123456789abcdef" for ch in head_sha):
+        raise RuntimeError("ROUTER_VPN_GITHUB_SHA is required and must be a full 40-character commit SHA for GitHub artifact retrieval")
     return repo, branch, head_sha
 
 
@@ -164,7 +164,7 @@ def _artifact_candidates(meta: dict, artifact_name: str, branch: str, head_sha: 
         run = item.get("workflow_run") or {}
         if branch and run.get("head_branch") != branch:
             continue
-        if head_sha and run.get("head_sha") != head_sha:
+        if run.get("head_sha") != head_sha:
             continue
         candidates.append(item)
     candidates.sort(key=lambda x: (x.get("created_at", ""), int(x.get("id", 0))), reverse=True)
@@ -184,8 +184,7 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     candidates = _artifact_candidates(meta, artifact_name, branch, head_sha)
     if not candidates:
         scope = branch or "any branch"
-        if head_sha:
-            scope += f" at {head_sha}"
+        scope += f" at {head_sha}"
         raise RuntimeError(f"no unexpired {artifact_name} artifact for {scope}")
     outer = temp / (artifact_name + "-artifact.zip")
     _download_limited(candidates[0]["archive_download_url"], outer, progress=progress)
@@ -506,6 +505,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "setup_center_auth": "required-for-private-ui-and-build-actions",
                 "local_build_scope": "requested-generic-package-only",
                 "local_build_platforms": "go-desktop-portable", "mobile_artifacts": "same-sha-github-only",
+                "github_exact_sha_required": True,
                 "max_parallel_package_requests": 8, "local_build_slots": 1,
                 "download_jobs": {"create": "POST /api/download-jobs {name}", "status": "GET /api/download-jobs/{job_id}", "cancel": "DELETE /api/download-jobs/{job_id}", "file": "GET /api/download-jobs/{job_id}/file", "ready_ttl_seconds": _jobs.JOB_TTL_SECONDS},
                 "github_artifact_retention_days": 1,
