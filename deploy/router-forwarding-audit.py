@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Fail closed if ASUS Merlin WAN forwarding drifts outside the Router VPN public allowlist."""
+"""Fail closed if ASUS WAN forwarding or server reserved-port protection drifts."""
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,8 +37,6 @@ def calls(name: str, argc: int) -> list[tuple[str, ...]]:
         line = raw.strip()
         if not line.startswith(name + " "):
             continue
-        # Only the concrete calls in apply_nat/apply_filter match this simple
-        # quoted-token shape; function definitions/iptables internals do not.
         parts = re.findall(r'"([^"\n]+)"|(\S+)', line[len(name):].strip())
         tokens = tuple(a or b for a, b in parts)
         if len(tokens) == argc:
@@ -49,9 +48,10 @@ actual_fwd = calls("add_fwd", 2)
 assert actual_dnat == expected_dnat, f"WAN DNAT allowlist drifted: {actual_dnat!r}"
 assert actual_fwd == expected_fwd, f"WAN FORWARD allowlist drifted: {actual_fwd!r}"
 
-# Private/control-plane ports must never become concrete forwarding calls.
-for forbidden in ("1080", "8786", "8787", "9443", "14444", "3000", "22"):
-    assert all(forbidden not in token for call in actual_dnat + actual_fwd for token in call), f"private port {forbidden} became WAN-forwarded"
+private_ports = {22, 53, 1080, 3000, 8786, 8787, 8789, 8790, 9443, 14444, 45999}
+for forbidden in private_ports:
+    value = str(forbidden)
+    assert all(value not in token for call in actual_dnat + actual_fwd for token in call), f"private port {forbidden} became WAN-forwarded"
 
 # WAN scoping and destination scoping are mandatory. No broad chain jump.
 for marker in (
@@ -84,4 +84,29 @@ for forbidden in (
 ):
     assert forbidden not in text, f"Router VPN would overwrite/remove unrelated Merlin hook content: {forbidden}"
 
-print("ASUS Router VPN forwarding allowlist audit: OK")
+# Fresh installs and upgrades both need the same private management protection.
+# New installs inherit router-agent.json.example; upgrades keep older persisted
+# JSON, so reserved_dynamic.go must independently add every fixed private port.
+example = json.loads((ROOT / "configs/router/router-agent.json.example").read_text(encoding="utf-8"))
+example_reserved = {int(port) for port in example.get("reserved_ports", [])}
+assert private_ports <= example_reserved, f"fresh-install router-agent example omits private ports: {sorted(private_ports-example_reserved)}"
+
+dynamic = (ROOT / "cmd/router-agent/reserved_dynamic.go").read_text(encoding="utf-8")
+match = re.search(r'for _, p := range \[\]int\{(.*?)\}\s*\{\s*reserved\[p\] = true', dynamic, re.S)
+assert match, "upgrade-time fixed reserved-port augmentation is missing"
+dynamic_fixed = {int(value) for value in re.findall(r'\b(\d{2,5})\b', re.sub(r'//.*', '', match.group(1)))}
+assert private_ports <= dynamic_fixed, f"upgrade-time reserved ports omit: {sorted(private_ports-dynamic_fixed)}"
+for marker in (
+    '"overtls_internal_port"',
+    '"overtls_port"',
+    '"ssr_port"',
+    '"ss_v2ray_port"',
+    '"naive_port"',
+    'ListenPort',
+    'transports", "server.json"',
+    'xray", "server.json"',
+    'rosenpass", "server.toml"',
+):
+    assert marker in dynamic, f"dynamic custom listener reservation lost marker: {marker}"
+
+print("ASUS WAN forwarding + upgrade-safe reserved-port audit: OK")
