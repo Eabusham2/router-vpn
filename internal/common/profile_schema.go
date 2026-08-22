@@ -36,9 +36,30 @@ func validExternalCIDRs(values []string, label string, required bool) error {
 	return nil
 }
 
+func normalizeExternalHTTPConnect(c *ExternalHTTPConnectConfig, tls bool) error {
+	if c == nil { return fmt.Errorf("external CONNECT proxy configuration is missing") }
+	c.Host = strings.Trim(strings.TrimSpace(c.Host), "[]")
+	c.Username = strings.TrimSpace(c.Username)
+	c.TLSServerName = strings.TrimSpace(c.TLSServerName)
+	if c.Host == "" || strings.ContainsAny(c.Host, " /\\?#@") { return fmt.Errorf("external CONNECT proxy requires a safe host") }
+	if c.Port < 1 || c.Port > 65535 { return fmt.Errorf("external CONNECT proxy requires a valid port") }
+	if (c.Username == "") != (c.Password == "") { return fmt.Errorf("external CONNECT proxy username/password must be supplied together") }
+	if len(c.Username) > 4096 || len(c.Password) > 4096 || len(c.TLSServerName) > 4096 { return fmt.Errorf("external CONNECT proxy credential/TLS field is too long") }
+	if tls {
+		if c.TLSServerName == "" || strings.ContainsAny(c.TLSServerName, " /\\?#@") { return fmt.Errorf("external HTTPS CONNECT requires a safe TLS server name") }
+	} else if c.TLSServerName != "" {
+		return fmt.Errorf("external HTTP CONNECT cannot specify a TLS server name; choose https-connect instead")
+	}
+	return nil
+}
+
 func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	if ext == nil { return fmt.Errorf("external node requires protocol configuration") }
 	ext.Protocol = strings.ToLower(strings.TrimSpace(ext.Protocol))
+	switch ext.Protocol {
+	case "http", "http_connect", "http-connect": ext.Protocol = "http-connect"
+	case "https", "https_connect", "https-connect": ext.Protocol = "https-connect"
+	}
 	ext.ExpectedPublicIP = strings.TrimSpace(ext.ExpectedPublicIP)
 	ip := net.ParseIP(ext.ExpectedPublicIP)
 	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
@@ -47,11 +68,18 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	ext.ExpectedPublicIP = ip.String()
 
 	blocks := 0
-	if ext.WireGuard != nil { blocks++ }; if ext.OpenVPN != nil { blocks++ }; if ext.Shadowsocks != nil { blocks++ }; if ext.SOCKS5 != nil { blocks++ }; if ext.Hysteria2 != nil { blocks++ }
+	if ext.WireGuard != nil { blocks++ }
+	if ext.OpenVPN != nil { blocks++ }
+	if ext.Shadowsocks != nil { blocks++ }
+	if ext.SOCKS5 != nil { blocks++ }
+	if ext.HTTPConnect != nil { blocks++ }
+	if ext.HTTPSConnect != nil { blocks++ }
+	if ext.Hysteria2 != nil { blocks++ }
 	if blocks != 1 { return fmt.Errorf("external node requires exactly one protocol block") }
+	noHTTP := ext.HTTPConnect == nil && ext.HTTPSConnect == nil
 	switch ext.Protocol {
 	case "wireguard":
-		if ext.WireGuard == nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil || ext.Hysteria2 != nil { return fmt.Errorf("external wireguard node requires only the wireguard block") }
+		if ext.WireGuard == nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil || !noHTTP || ext.Hysteria2 != nil { return fmt.Errorf("external wireguard node requires only the wireguard block") }
 		w := ext.WireGuard
 		w.PrivateKey = strings.TrimSpace(w.PrivateKey); w.PeerPublicKey = strings.TrimSpace(w.PeerPublicKey); w.PresharedKey = strings.TrimSpace(w.PresharedKey); w.Endpoint = strings.TrimSpace(w.Endpoint)
 		if w.Endpoint == "" { return fmt.Errorf("external wireguard endpoint is empty") }
@@ -63,24 +91,30 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 		for i := range w.DNS { w.DNS[i] = strings.TrimSpace(w.DNS[i]); if net.ParseIP(strings.Trim(w.DNS[i], "[]")) == nil { return fmt.Errorf("external WireGuard DNS entry %q is not a literal IP address", w.DNS[i]) } }
 		if w.MTU != 0 && (w.MTU < 1280 || w.MTU > 9000) { return fmt.Errorf("external WireGuard MTU %d is outside 1280..9000", w.MTU) }
 	case "openvpn":
-		if ext.OpenVPN == nil || ext.WireGuard != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil || ext.Hysteria2 != nil { return fmt.Errorf("external openvpn node requires only the openvpn block") }
+		if ext.OpenVPN == nil || ext.WireGuard != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil || !noHTTP || ext.Hysteria2 != nil { return fmt.Errorf("external openvpn node requires only the openvpn block") }
 		o := ext.OpenVPN; o.Config = strings.TrimSpace(o.Config); o.Username = strings.TrimSpace(o.Username)
 		if o.Config == "" { return fmt.Errorf("external openvpn config is empty") }
 		if len(o.Config) > 256*1024 { return fmt.Errorf("external openvpn config exceeds 256 KiB") }
 		if strings.IndexByte(o.Config, 0) >= 0 { return fmt.Errorf("external openvpn config contains NUL") }
 		if (o.Username == "") != (o.Password == "") { return fmt.Errorf("external openvpn username/password must be supplied together") }
 	case "shadowsocks":
-		if ext.Shadowsocks == nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.SOCKS5 != nil || ext.Hysteria2 != nil { return fmt.Errorf("external shadowsocks node requires only the shadowsocks block") }
+		if ext.Shadowsocks == nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.SOCKS5 != nil || !noHTTP || ext.Hysteria2 != nil { return fmt.Errorf("external shadowsocks node requires only the shadowsocks block") }
 		s := ext.Shadowsocks; s.Server = strings.TrimSpace(s.Server); s.Method = strings.ToLower(strings.TrimSpace(s.Method))
 		allowed := map[string]bool{"2022-blake3-aes-128-gcm":true,"2022-blake3-aes-256-gcm":true,"2022-blake3-chacha20-poly1305":true,"aes-128-gcm":true,"aes-256-gcm":true,"chacha20-ietf-poly1305":true}
 		if s.Server == "" || s.Port < 1 || s.Port > 65535 || !allowed[s.Method] || s.Password == "" { return fmt.Errorf("external shadowsocks requires server, valid port, supported method and password") }
 	case "socks5":
-		if ext.SOCKS5 == nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || ext.Hysteria2 != nil { return fmt.Errorf("external socks5 requires host and valid port") }
+		if ext.SOCKS5 == nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || !noHTTP || ext.Hysteria2 != nil { return fmt.Errorf("external socks5 requires host and valid port") }
 		s := ext.SOCKS5; s.Host = strings.TrimSpace(s.Host); s.Username = strings.TrimSpace(s.Username)
 		if s.Host == "" || s.Port < 1 || s.Port > 65535 { return fmt.Errorf("external socks5 requires host and valid port") }
 		if (s.Username == "") != (s.Password == "") { return fmt.Errorf("external socks5 username/password must be supplied together") }
+	case "http-connect":
+		if ext.HTTPConnect == nil || ext.HTTPSConnect != nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil || ext.Hysteria2 != nil { return fmt.Errorf("external HTTP CONNECT node requires only the http_connect block") }
+		if err := normalizeExternalHTTPConnect(ext.HTTPConnect, false); err != nil { return err }
+	case "https-connect":
+		if ext.HTTPSConnect == nil || ext.HTTPConnect != nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil || ext.Hysteria2 != nil { return fmt.Errorf("external HTTPS CONNECT node requires only the https_connect block") }
+		if err := normalizeExternalHTTPConnect(ext.HTTPSConnect, true); err != nil { return err }
 	case "hysteria2":
-		if ext.Hysteria2 == nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil { return fmt.Errorf("external hysteria2 node requires only the hysteria2 block") }
+		if ext.Hysteria2 == nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil || !noHTTP { return fmt.Errorf("external hysteria2 node requires only the hysteria2 block") }
 		h := ext.Hysteria2; h.Server = strings.TrimSpace(h.Server); h.TLSServerName = strings.TrimSpace(h.TLSServerName)
 		if h.Server == "" || h.Port < 1 || h.Port > 65535 || h.Password == "" || h.TLSServerName == "" || strings.ContainsAny(h.TLSServerName, " /\\?#@") { return fmt.Errorf("external hysteria2 requires server, valid port, password and safe TLS server name") }
 	default:
@@ -98,6 +132,10 @@ func externalNodeEndpoint(ext *ExternalNodeConfig) string {
 		if ext.Shadowsocks != nil { return strings.TrimSpace(ext.Shadowsocks.Server) }
 	case "socks5":
 		if ext.SOCKS5 != nil { return strings.TrimSpace(ext.SOCKS5.Host) }
+	case "http-connect":
+		if ext.HTTPConnect != nil { return strings.TrimSpace(ext.HTTPConnect.Host) }
+	case "https-connect":
+		if ext.HTTPSConnect != nil { return strings.TrimSpace(ext.HTTPSConnect.Host) }
 	case "hysteria2":
 		if ext.Hysteria2 != nil { return strings.TrimSpace(ext.Hysteria2.Server) }
 	case "openvpn":
