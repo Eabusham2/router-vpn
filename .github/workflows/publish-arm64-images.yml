@@ -1,6 +1,7 @@
 name: Publish ARM64 Portainer images
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches: [main]
@@ -65,4 +66,3 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/Eabusham2/router-vpn
             org.opencontainers.image.revision=${{ github.sha }}
-
