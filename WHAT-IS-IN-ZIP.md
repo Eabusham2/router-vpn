@@ -31,21 +31,21 @@ PortableApps/PAF is retired and is not a supported deliverable. Normal Router VP
 
 ## Client package model
 
-The home node does not keep one giant platform archive forever. Generic client downloads are generated/selected on demand:
+The home node does not keep one giant platform archive forever. Generic client downloads are selected/generated on demand, but router-local compilation is deliberately narrow:
 
 ```text
 matching same-SHA GitHub artifact
-↓ if unavailable/unusable on supported desktop fallback targets
-bounded router-local build of the requested generic client package only
+↓ only for Windows x64/ARM64 installed/Portable when unavailable
+bounded router-local build of that requested generic Windows package only
 ↓
-validate/package secret-free generic application
+validate/package secret-free generic Windows application
 ↓
 stream
 ↓
 cleanup
 ```
 
-Private node data is **not baked into the public generic package**. Install the generic app once, then link/import/pair one or more private Router VPN nodes separately. Android/iOS do not use fake Linux-host mobile build fallbacks; they require matching real mobile artifacts.
+macOS and Linux require matching same-SHA native artifacts or source built in the correct native build environment; the AI Board never substitutes for those native build environments. Android and iOS/iPadOS never use router-local builds. Private node data is **not baked into the public generic package**. Install the generic app once, then link/import/pair one or more private Router VPN nodes separately.
 
 ## Mobile boundary
 

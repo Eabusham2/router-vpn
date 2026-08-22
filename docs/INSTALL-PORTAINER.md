@@ -37,7 +37,7 @@ ADGUARD4=192.168.50.133
 
 Update the `router-vpn` stack with the verified generated exact-SHA YAML only after the exact release SHA has passed its source/build/image/materialization gates and the deployment change is deliberate.
 
-The production Portainer compose is **image-only**. Router-local compilation is reserved for requested generic client packages inside the Setup Center broker, not for Portainer server images.
+The production Portainer compose is **image-only**. Router-local compilation is not a Portainer server-image fallback; the only approved production-host client build fallback is the bounded requested **Windows x64/ARM64 installed/Portable** generic package path.
 
 Expected one-shots:
 
@@ -70,17 +70,17 @@ Generic client-package download policy is:
 
 ```text
 matching same-SHA GitHub artifact
-↓ if unavailable/unusable
-bounded local build of requested generic client package only
+↓ only for Windows x64/ARM64 installed/Portable when unavailable
+bounded local build of that requested generic Windows package only
 ↓
-validate/package secret-free generic app
+validate/package secret-free generic Windows app
 ↓
 stream
 ↓
 cleanup temporary output
 ```
 
-Private node data is linked/imported/paired **separately after installation**. It is not baked into the public generic installer or Portable ZIP.
+macOS and Linux require matching same-SHA artifacts or source built in their proper native build environments; the AI Board never substitutes for those native environments. Android and iOS/iPadOS never use router-local builds. Private node data is linked/imported/paired **separately after installation**. It is not baked into the public generic installer or Portable ZIP.
 
 ## 5. ASUS forwarding
 
