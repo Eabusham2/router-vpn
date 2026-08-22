@@ -103,7 +103,9 @@ for container in router-vpn-init router-vpn-finalize; do
 done
 
 test -s "$INSTALL/downloads/index.html" || { echo 'Setup Center index was not generated.' >&2; exit 1; }
-test -s "$INSTALL/downloads/router-vpn-bundle.json" || { echo 'Private router bundle was not generated.' >&2; exit 1; }
+test -s "$INSTALL/client-bundle/router-vpn-bundle.json" || { echo 'Canonical private router bundle was not generated.' >&2; exit 1; }
+test ! -e "$INSTALL/downloads/router-vpn-bundle.json" || { echo 'Install leaked private router-vpn-bundle.json into public Setup Center downloads.' >&2; exit 1; }
+test ! -e "$INSTALL/downloads/router-vpn-client-bundle.zip" || { echo 'Install leaked a cached private node-link ZIP into public Setup Center downloads.' >&2; exit 1; }
 
 if command -v curl >/dev/null 2>&1; then
   for _ in $(seq 1 30); do
@@ -117,7 +119,8 @@ echo
 echo "Router VPN $RELEASE_SHA installed."
 echo "Setup Center: http://$ADGUARD4:8786/"
 echo 'Server services use the verified generated exact-SHA production compose.'
-echo 'Client downloads use GitHub artifacts first and compile only the requested package on this host if that artifact is unavailable.'
+echo 'Client downloads use exact-SHA GitHub artifacts first and compile only the requested supported desktop/Portable package on this host if that artifact is unavailable.'
+echo 'Private node material remains outside public downloads and is linked only through authenticated on-demand bundle/pairing flows.'
 echo 'Use the Setup Center ASUS helper for persistent forwarding; do not expose 8786 to WAN.'
 echo 'Public listeners include OverTLS 14443/TCP and legacy SSR 15443/TCP+UDP when enabled.'
 echo 'Never WAN-forward 1080, 8786, 8787, 14444, 9443, SSH, Portainer, or AdGuard admin.'
