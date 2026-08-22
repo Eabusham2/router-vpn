@@ -109,4 +109,19 @@ for marker in (
 ):
     assert marker in dynamic, f"dynamic custom listener reservation lost marker: {marker}"
 
-print("ASUS WAN forwarding + upgrade-safe reserved-port audit: OK")
+# Emergency Stop promises to remove both WireGuard and AmneziaWG peers. The
+# router-agent image therefore must carry both exact control tools rather than
+# merely blocking new ingress and pretending AWG peer removal is available.
+agent_dockerfile = (ROOT / "deploy/router-agent.Dockerfile").read_text(encoding="utf-8")
+for marker in (
+    "wireguard-tools",
+    "AWGTOOLS_COMMIT=5e882890fbca2316f8ca40e992789d24f67f0118",
+    "/usr/local/bin/awg",
+    "command -v wg",
+    "command -v awg",
+):
+    assert marker in agent_dockerfile, f"router-agent Emergency Stop tooling lost marker: {marker}"
+server_control = (ROOT / "cmd/router-agent/admin_server_control.go").read_text(encoding="utf-8")
+assert "collectWireGuardPeers()" in server_control and "removeLivePeer(peer.Interface, peer.PublicKey)" in server_control, "Emergency Stop no longer removes live WireGuard-family peers"
+
+print("ASUS WAN forwarding + upgrade-safe reserved-port + Emergency Stop audit: OK")
