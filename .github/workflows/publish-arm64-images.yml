@@ -11,7 +11,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: publish-arm64-portainer-${{ github.ref }}
+  group: publish-arm64-portainer-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
