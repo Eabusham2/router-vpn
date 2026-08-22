@@ -55,6 +55,7 @@ func init() {
 		8790,  // loopback mutation admin plane
 		8791,  // loopback forwarding/Protected-DMZ admin extension
 		8792,  // loopback Stop/Emergency/Resume server control plane
+		8793,  // loopback exact-SHA Portainer update controller
 		9443,  // Portainer
 		14444, // default OverTLS loopback backend
 		18080, // default ACME internal target; external 80 may map here
