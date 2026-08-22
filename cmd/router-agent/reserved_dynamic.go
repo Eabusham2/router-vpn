@@ -13,7 +13,8 @@ import (
 // init runs before main reads ROUTER_VPN_CONFIG. The config volume is mounted
 // read-only, so create a private augmented copy in /tmp instead of mutating the
 // user's persistent JSON. This keeps Protected DMZ/forwarding safe when custom
-// listener ports were chosen during installation.
+// listener ports were chosen during installation or an older persisted config
+// predates a newly protected management listener.
 func init() {
 	path := os.Getenv("ROUTER_VPN_CONFIG")
 	if path == "" {
@@ -38,10 +39,24 @@ func init() {
 			}
 		}
 	}
-	// ACME plus all private Router VPN control/admin listeners are always
-	// protected from generic WAN forwarding even though the admin listeners
-	// themselves bind only to loopback.
-	for _, p := range []int{80, 1080, 8786, 8787, 8789, 8790, 9443} {
+	// These fixed/default management and private-control ports are protected on
+	// every startup even when the persisted router-agent.json came from an older
+	// release that did not list them yet. Custom listener ports are added below
+	// from their live generated configuration files.
+	for _, p := range []int{
+		22,    // SSH
+		53,    // DNS / AdGuard service
+		80,    // ACME external control
+		1080,  // private SOCKS5
+		3000,  // AdGuard admin UI
+		8786,  // authenticated Setup Center
+		8787,  // private router-agent API
+		8789,  // loopback read-only admin plane
+		8790,  // loopback mutation admin plane
+		9443,  // Portainer
+		14444, // default OverTLS loopback backend
+		45999, // DAITA-like private cover sink
+	} {
 		reserved[p] = true
 	}
 
