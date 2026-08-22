@@ -59,6 +59,23 @@ compose = read("server/portainer-current.yaml")
 assert "/opt/router-vpn/caddy-data:/caddy-data:ro" in compose, "SS+V2Ray lost read-only Caddy certificate volume"
 assert "/opt/router-vpn/config/transports/cert.pem:/etc/sing-box/cert.pem:ro" in compose, "sing-box transport certificate path drifted"
 
+# Raw Windows WireGuard must keep its selected-DNS process/runtime/proof hint
+# owned by one session. A delayed teardown from an older session may not kill or
+# erase the newer session merely because the deterministic paths are reused.
+require(
+    "client/native-wireguard-windows.ps1",
+    "function Test-RuntimeOwner",
+    "function New-DnsOwner",
+    "function Remove-OwnedDnsHint",
+    "$dnsOwnerFile = Join-Path $runDir 'dns.owner'",
+    "owner=$($script:dnsOwnerToken)",
+    "if (-not (Test-RuntimeOwner)) { return }",
+    "DoH3 is unavailable on raw Windows WireGuard",
+    "requires a literal DNS upstream IP",
+)
+windows_raw = read("client/native-wireguard-windows.ps1")
+assert "$Host" not in windows_raw, "Windows raw-WG helper revived the read-only $Host variable collision"
+
 # MAX must fail closed on missing/unexpected chain state and on any component
 # death; default-expansion on optional variables avoids the old set -u crash.
 require(
@@ -88,4 +105,4 @@ require(
     '"fallback_used": fallbackUsed',
 )
 
-print("historical production regression audit: PASS")
+print("historical production + Windows DNS ownership regression audit: PASS")
