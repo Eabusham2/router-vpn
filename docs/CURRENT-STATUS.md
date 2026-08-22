@@ -51,15 +51,15 @@ Client package downloads use:
 
 ```text
 matching same-SHA GitHub artifact
-→ bounded router-local build of the requested generic desktop/Portable package when needed
-→ validate/package the generic secret-free application
+→ Windows x64/ARM64 installed/Portable only: bounded requested-package router-local fallback when needed
+→ validate/package the generic secret-free Windows application
 → stream
 → cleanup
 ```
 
-Private node data is linked/imported separately after installation and is never baked into the generic installer or Portable package. One installed application can link multiple Router VPN nodes without reinstalling.
+macOS and Linux never use the AI Board as a substitute native build environment; they require matching same-SHA artifacts or source built in the correct native environment. Android and iOS/iPadOS never use router-local builds. Private node data is linked/imported separately after installation and is never baked into the generic installer or Portable package. One installed application can link multiple Router VPN nodes without reinstalling.
 
-The router-local fallback is bounded to the requested generic client package and is tested on native ARM64. PortableApps/PAF is retired; normal Router VPN Portable ZIP x64/ARM64 remains supported.
+The router-local fallback is bounded to the requested generic **Windows/Portable** package and uses the approved same-image prebuilt components. PortableApps/PAF is retired; normal Router VPN Portable ZIP x64/ARM64 remains supported.
 
 ## Native platform status
 
