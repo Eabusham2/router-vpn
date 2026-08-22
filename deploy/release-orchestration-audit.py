@@ -15,13 +15,15 @@ preflight = read(".github/workflows/arm64-portainer-preflight.yml")
 publish = read(".github/workflows/publish-arm64-images.yml")
 compose = read(".github/workflows/production-release-compose.yml")
 
-for rel, body in (
-    ("release-candidate.yml", rc),
-    ("arm64-portainer-preflight.yml", preflight),
-    ("publish-arm64-images.yml", publish),
-    ("production-release-compose.yml", compose),
+for rel, body, concurrency in (
+    ("release-candidate.yml", rc, "group: release-candidate-${{ github.ref }}-${{ github.sha }}"),
+    ("arm64-portainer-preflight.yml", preflight, "group: arm64-portainer-${{ github.ref }}-${{ github.sha }}"),
+    ("publish-arm64-images.yml", publish, "group: publish-arm64-portainer-${{ github.ref }}-${{ github.sha }}"),
+    ("production-release-compose.yml", compose, "group: production-release-compose-${{ github.ref }}-${{ github.sha }}"),
 ):
     assert "workflow_call:" in body, f"{rel} cannot participate in authoritative Build all chain"
+    assert concurrency in body, f"{rel} can be canceled by a different release SHA"
+    assert "cancel-in-progress: true" in body, f"{rel} does not collapse duplicate same-SHA runs"
 
 for marker in (
     "packages: write",
