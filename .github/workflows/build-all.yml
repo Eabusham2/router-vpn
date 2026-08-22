@@ -5,9 +5,27 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   release-candidate:
     name: Authoritative one-SHA native release matrix
     uses: ./.github/workflows/release-candidate.yml
+    secrets: inherit
+
+  portainer-preflight:
+    name: Authoritative ARM64 Portainer preflight
+    uses: ./.github/workflows/arm64-portainer-preflight.yml
+    secrets: inherit
+
+  publish-arm64-images:
+    name: Publish exact-SHA ARM64 server images
+    needs: [release-candidate, portainer-preflight]
+    uses: ./.github/workflows/publish-arm64-images.yml
+    secrets: inherit
+
+  production-compose:
+    name: Materialize verified exact-SHA production compose
+    needs: [publish-arm64-images]
+    uses: ./.github/workflows/production-release-compose.yml
     secrets: inherit
