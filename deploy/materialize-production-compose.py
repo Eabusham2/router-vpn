@@ -16,9 +16,10 @@ CUSTOM_IMAGES = {
     "naive": 1,
     "ss-v2ray": 1,
     "aux": 1,
+    "updater": 1,
 }
 IMAGE_RE = re.compile(
-    r"(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux):)"
+    r"(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):)"
     r"([0-9a-f]{40})"
 )
 BROKER_RE = re.compile(
@@ -37,6 +38,8 @@ def validate_template(text: str) -> str:
         fail("production template may not use a remote Git build context")
     if re.search(r"(?m)^\s*image:\s*\S+:latest\s*$", text):
         fail("production template may not use floating latest images")
+    if "/var/run/docker.sock" in text:
+        fail("production template may not grant Docker socket access")
 
     found: list[str] = []
     for image, expected in CUSTOM_IMAGES.items():
