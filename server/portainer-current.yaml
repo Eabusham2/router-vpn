@@ -192,6 +192,24 @@ services:
     environment:
       ROUTER_VPN_AUX_DIR: /router-vpn
 
+  update-controller:
+    image: ghcr.io/eabusham2/router-vpn-updater:e2a616278142ff4579a11728f05b081bd7e4d665
+    container_name: router-vpn-updater
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      finalize-current: {condition: service_completed_successfully}
+    volumes:
+      - /opt/router-vpn/config:/etc/router-vpn:ro
+      - /opt/router-vpn/admin-state:/var/lib/router-vpn
+    environment:
+      ROUTER_VPN_UPDATE_LISTEN: 127.0.0.1:8793
+      ROUTER_VPN_PORTAINER_URL: https://127.0.0.1:9443
+      ROUTER_VPN_PORTAINER_STACK: router-vpn
+      ROUTER_VPN_GITHUB_REPO: Eabusham2/router-vpn
+      ROUTER_VPN_GITHUB_BRANCH: main
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+
   bundle-web:
     image: ghcr.io/eabusham2/router-vpn-init:e2a616278142ff4579a11728f05b081bd7e4d665
     container_name: router-vpn-bundle-web
@@ -199,6 +217,7 @@ services:
     restart: unless-stopped
     depends_on:
       finalize-current: {condition: service_completed_successfully}
+      update-controller: {condition: service_started}
     # setup-center-product-server.py composes the existing authenticated AI wrapper,
     # which in turn loads the original Setup Center core/download broker.
     # Broker provenance marker for repository validation (not a direct entrypoint):
