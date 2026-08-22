@@ -16,7 +16,11 @@ targets:
   RouterVPN:
     type: application
     platform: iOS
-    sources: [App, Resources]
+    sources:
+      - App
+      - Resources
+      - path: ../../LICENSE
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: RouterVPN
