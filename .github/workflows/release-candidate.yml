@@ -32,6 +32,11 @@ jobs:
           python3 deploy/native-download-policy-audit.py
           python3 deploy/native-artifact-workflow-parity-audit.py
           python3 deploy/profile-schema-shipping-audit.py
+          python3 server/scripts/test_native_artifact_policy.py
+          python3 server/scripts/test_download_broker_exact_sha.py
+          python3 server/scripts/test_broker_security.py
+          python3 server/scripts/test_download_jobs.py
+          python3 server/scripts/test_setup_imports.py
           python3 client/test_native_onboarding_contract.py
           python3 android/test_android_runtime_contract.py
           python3 android/test_android_multihop_contract.py
