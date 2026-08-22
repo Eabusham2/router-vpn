@@ -8,7 +8,7 @@ from pathlib import Path
 SHA = r"[0-9a-f]{40}"
 HEADER_RE = re.compile(rf"^# GENERATED exact-SHA Router VPN production compose: ({SHA})$", re.M)
 BROKER_RE = re.compile(rf"(?m)^\s*ROUTER_VPN_GITHUB_SHA:\s*({SHA})\s*$")
-IMAGE_RE = re.compile(rf"ghcr\.io/eabusham2/router-vpn-(init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux):({SHA})")
+IMAGE_RE = re.compile(rf"ghcr\.io/eabusham2/router-vpn-(init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):({SHA})")
 EXPECTED = {
     "init": 3,
     "agent": 1,
@@ -18,6 +18,7 @@ EXPECTED = {
     "naive": 1,
     "ss-v2ray": 1,
     "aux": 1,
+    "updater": 1,
 }
 
 
@@ -33,6 +34,8 @@ def verify(path: Path) -> str:
         fail("production release compose contains a remote Git build context")
     if re.search(r"ghcr\.io/eabusham2/router-vpn-[^\s:]+:(?:latest|main|arm64-main)\b", text):
         fail("production release compose contains a moving Router VPN image tag")
+    if "/var/run/docker.sock" in text:
+        fail("production release compose must not grant Docker socket access")
 
     header = HEADER_RE.search(text)
     if not header:
@@ -52,6 +55,8 @@ def verify(path: Path) -> str:
     brokers = BROKER_RE.findall(text)
     if brokers != [target]:
         fail(f"ROUTER_VPN_GITHUB_SHA does not equal generated release SHA {target}")
+    if "ROUTER_VPN_UPDATE_LISTEN: 127.0.0.1:8793" not in text:
+        fail("update controller is not pinned to loopback")
     return target
 
 
