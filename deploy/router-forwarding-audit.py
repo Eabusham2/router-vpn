@@ -48,7 +48,7 @@ actual_fwd = calls("add_fwd", 2)
 assert actual_dnat == expected_dnat, f"WAN DNAT allowlist drifted: {actual_dnat!r}"
 assert actual_fwd == expected_fwd, f"WAN FORWARD allowlist drifted: {actual_fwd!r}"
 
-private_ports = {22, 53, 1080, 3000, 8786, 8787, 8789, 8790, 9443, 14444, 45999}
+private_ports = {22, 53, 1080, 3000, 8786, 8787, 8789, 8790, 8791, 8792, 9443, 14444, 18080, 45999}
 for forbidden in private_ports:
     value = str(forbidden)
     assert all(value not in token for call in actual_dnat + actual_fwd for token in call), f"private port {forbidden} became WAN-forwarded"
