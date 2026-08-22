@@ -1,0 +1,37 @@
+name: Exact-SHA source snapshot
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-snapshot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Archive exact checked-out source
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.tar.gz"
+          git archive --format=tar.gz --prefix="router-vpn-${GITHUB_SHA}/" -o "$archive" HEAD
+          sha256sum "$archive" > "$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.tar.gz.sha256"
+          tar -tzf "$archive" | head -n 5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: router-vpn-source-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/router-vpn-source-${{ github.sha }}.tar.gz
+            ${{ runner.temp }}/router-vpn-source-${{ github.sha }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 1

@@ -30,6 +30,7 @@ func TestAuthoritativeRepositoryPythonSafetyContracts(t *testing.T) {
 	paths := []string{
 		"deploy/full-audit-v4.py",
 		"deploy/linux-full-profile-shipping-audit.py",
+		"deploy/linux-auto-requirements-audit.py",
 		"deploy/docs-native-fallback-policy-audit.py",
 		"server/scripts/test_preserve_generated_state.py",
 		"server/scripts/test_setup_center_update.py",

@@ -35,12 +35,11 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-dns" ./cmd/dnsproxy
 chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/modes/"*.sh
 
-# The GTK builder intentionally uses strict -Werror and many fail-closed contract
-# checks. If one of those post-link checks fails, print enough native evidence to
-# identify the exact missing dependency/symbol instead of leaving CI with only the
-# preceding `file` line. Never turn a failed native build into a package success.
+# The current wrapper surgically composes the mature native builder with the
+# schema-v4 AUTO/SMART requirement controls. It executes a temporary copy in
+# client/linux so the base builder keeps its normal ROOT semantics.
 set +e
-"$ROOT/client/linux/build-native-app.sh" "$dir/router-vpn-app"
+"$ROOT/client/linux/build-native-app-current.sh" "$dir/router-vpn-app"
 native_rc=$?
 set -e
 if (( native_rc != 0 )); then

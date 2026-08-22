@@ -10,7 +10,7 @@ It covers:
 
 - image-only exact-SHA Portainer server deployment
 - dynamic private Setup Center/download broker
-- GitHub-first client downloads with router-local requested-package compile fallback
+- GitHub-first client downloads with **Windows x64/ARM64 installed/Portable-only** bounded router-local fallback; macOS/Linux require matching native artifacts or proper native build environments and Android/iOS never router-build
 - ASUS SSH/JFFS forwarding helper
 - full current WAN port map including OverTLS `14443` and SSR `15443`
 - protected/private ports including `14444`

@@ -50,7 +50,7 @@ Open the private Setup Center on the LAN:
 http://192.168.50.133:8786/
 ```
 
-Generic client packages are GitHub-artifact-first. If the matching artifact is unavailable/unusable, the AI Board can compile only the requested generic package locally with the bounded fallback. The generic installer/Portable ZIP remains secret-free; link/import/pair private nodes separately after installation.
+Generic client packages are GitHub-artifact-first. Only **Windows x64/ARM64 installed/Portable** requests may use the bounded AI Board fallback when matching same-SHA packages are unavailable. macOS/Linux require matching same-SHA native artifacts or source built in the proper native build environment; Android and iOS/iPadOS never use router-local builds. All generic packages remain secret-free; link/import/pair private nodes separately after installation.
 
 PortableApps/PAF is not supported; normal Router VPN Portable ZIP x64/ARM64 is supported.
 
