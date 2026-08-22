@@ -19,8 +19,10 @@ darwin = text("modes/darwin_kill_switch.py")
 assert 'PF_ANCHOR = "com.apple/router-vpn"' in darwin
 assert "pfctl" in darwin and "utun" in darwin
 assert "darwin_baseline_utun" in darwin and "darwin_tunnel_interfaces" in darwin
+assert "darwin_physical_interfaces" in darwin and "public_route_interfaces" in darwin
 assert "newly-created Router VPN utun" in darwin
 assert "-X" in darwin and "-E" in darwin
+assert 'run_pf(["-i", interface, "-F", "states"])' in darwin, "macOS strict mode must invalidate old states only on proven public interfaces"
 for forbidden in (
     'Path("/etc/pf.conf").write_text',
     "Path('/etc/pf.conf').write_text",
@@ -30,6 +32,7 @@ for forbidden in (
     "open('/etc/pf.conf','w')",
     'pfctl(), "-f", "/etc/pf.conf"',
     "pfctl(), '-f', '/etc/pf.conf'",
+    'run_pf(["-F", "states"])',
 ):
     assert forbidden not in darwin, forbidden
 
@@ -78,4 +81,4 @@ assert '"./stop-mode.sh"' in compat and '"./stop-mode-platform.sh"' in compat
 orchestrate = text("modes/orchestrate-platform.py")
 assert 'stop-mode.sh' in orchestrate and 'stop-mode-platform.sh' in orchestrate
 
-print("macOS strict kill-switch source contract: OK")
+print("macOS strict kill-switch scoped PF/state source contract: OK")
