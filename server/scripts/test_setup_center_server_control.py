@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -50,7 +52,16 @@ for marker in (
 ):
     assert marker in product, f"Setup Center product proxy missing {marker!r}"
 
-for port in (8791, 8792, 18080):
+for port in (8791, 8792, 8793, 18080):
     assert f"{port}," in reserved, f"protected control/internal port {port} is not permanently reserved"
 
-print("Setup Center server control contract: PASS")
+# Update is part of the same authenticated server-management surface. Keep its
+# deeper Portainer/exact-SHA/rollback contract authoritative without duplicating
+# those assertions here.
+subprocess.run(
+    [sys.executable, str(ROOT / "server/scripts/test_setup_center_update.py")],
+    cwd=ROOT,
+    check=True,
+)
+
+print("Setup Center server control + exact-SHA Update contract: PASS")
