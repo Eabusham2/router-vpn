@@ -57,6 +57,7 @@ cleanup() {
   trap - EXIT INT TERM HUP
   stop_owned
   release_guard
+  HOMEVPN_ROOT="$ROOT" python3 "$ROOT/modes/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -76,6 +77,7 @@ HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_POLICY_PROFILE_ID=
 if [[ "$ACTION" == "check" ]]; then
   release_guard
   trap - EXIT INT TERM HUP
+  HOMEVPN_ROOT="$ROOT" python3 "$ROOT/modes/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
   echo 'native macOS multihop graph ready'
   exit 0
 fi
