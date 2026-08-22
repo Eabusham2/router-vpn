@@ -18,6 +18,7 @@ type ExternalWireGuardConfig struct { PrivateKey string `json:"private_key"`; Ad
 type ExternalOpenVPNConfig struct { Config string `json:"config"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"` }
 type ExternalShadowsocksConfig struct { Server string `json:"server"`; Port int `json:"port"`; Method string `json:"method"`; Password string `json:"password"` }
 type ExternalSOCKS5Config struct { Host string `json:"host"`; Port int `json:"port"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"` }
+type ExternalHTTPConnectConfig struct { Host string `json:"host"`; Port int `json:"port"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"`; TLSServerName string `json:"tls_server_name,omitempty"` }
 type ExternalHysteria2Config struct { Server string `json:"server"`; Port int `json:"port"`; Password string `json:"password"`; TLSServerName string `json:"tls_server_name"` }
 
 type ExternalNodeConfig struct {
@@ -27,6 +28,8 @@ type ExternalNodeConfig struct {
 	OpenVPN *ExternalOpenVPNConfig `json:"openvpn,omitempty"`
 	Shadowsocks *ExternalShadowsocksConfig `json:"shadowsocks,omitempty"`
 	SOCKS5 *ExternalSOCKS5Config `json:"socks5,omitempty"`
+	HTTPConnect *ExternalHTTPConnectConfig `json:"http_connect,omitempty"`
+	HTTPSConnect *ExternalHTTPConnectConfig `json:"https_connect,omitempty"`
 	Hysteria2 *ExternalHysteria2Config `json:"hysteria2,omitempty"`
 }
 
