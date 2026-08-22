@@ -93,7 +93,7 @@ tasks.register('verifyDebugProjectLicense') {
     }
 }
 
-tasks.named('assembleDebug').configure {
+tasks.matching { it.name == 'assembleDebug' }.configureEach {
     finalizedBy tasks.named('verifyDebugProjectLicense')
 }
 
