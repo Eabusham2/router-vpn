@@ -25,34 +25,34 @@ verify_aar() {
   unzip -tq "$AAR" >/dev/null
   unzip -l "$AAR" | grep -q 'classes.jar' || { echo 'combined libbox AAR is missing classes.jar' >&2; return 1; }
   for abi in armeabi-v7a arm64-v8a x86 x86_64; do
-    unzip -l "$AAR" | grep -q "jni/$abi/libbox\\.so" || { echo "combined libbox AAR is missing jni/$abi/libbox.so" >&2; return 1; }
+    unzip -l "$AAR" | grep -q "jni/$abi/libbox\.so" || { echo "combined libbox AAR is missing jni/$abi/libbox.so" >&2; return 1; }
   done
   local tmp classes
   tmp=$(mktemp -d)
   classes="$tmp/classes.jar"
   trap 'rm -rf "$tmp"' RETURN
   unzip -p "$AAR" classes.jar >"$classes"
-  jar tf "$classes" | grep -qx 'libbox/RouterXrayDialerController.class' || {
+  jar tf "$classes" | grep -qx 'io/nekohasekai/libbox/RouterXrayDialerController.class' || {
     echo 'combined libbox AAR is missing RouterXrayDialerController' >&2
     return 1
   }
-  javap -classpath "$classes" libbox.Libbox | grep -q 'routerXrayInvoke' || {
+  javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep -q 'routerXrayInvoke' || {
     echo 'combined libbox AAR is missing routerXrayInvoke bridge' >&2
     return 1
   }
-  javap -classpath "$classes" libbox.Libbox | grep -q 'routerXrayRegisterDialerController' || {
+  javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep -q 'routerXrayRegisterDialerController' || {
     echo 'combined libbox AAR is missing Xray dialer-controller bridge' >&2
     return 1
   }
-  javap -classpath "$classes" libbox.Libbox | grep -q 'routerXraySetDNS' || {
+  javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep -q 'routerXraySetDNS' || {
     echo 'combined libbox AAR is missing protected Xray DNS bridge' >&2
     return 1
   }
-  javap -classpath "$classes" libbox.Libbox | grep -q 'routerXrayResetDNS' || {
+  javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep -q 'routerXrayResetDNS' || {
     echo 'combined libbox AAR is missing Xray DNS reset bridge' >&2
     return 1
   }
-  javap -classpath "$classes" libbox.Libbox | grep -q 'routerXrayBridgeRevision' || {
+  javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep -q 'routerXrayBridgeRevision' || {
     echo 'combined libbox AAR is missing Xray revision trust marker' >&2
     return 1
   }
