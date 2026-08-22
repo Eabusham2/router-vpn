@@ -19,8 +19,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Test production compose materializer
-        run: python3 deploy/test-production-release-compose.py
+      - name: Test production release orchestration and compose materializer
+        run: |
+          python3 deploy/release-orchestration-audit.py
+          python3 deploy/test-production-release-compose.py
       - name: Materialize and verify exact-head compose
         run: |
           set -euo pipefail
