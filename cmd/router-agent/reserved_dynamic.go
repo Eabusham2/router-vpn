@@ -53,8 +53,11 @@ func init() {
 		8787,  // private router-agent API
 		8789,  // loopback read-only admin plane
 		8790,  // loopback mutation admin plane
+		8791,  // loopback forwarding/Protected-DMZ admin extension
+		8792,  // loopback Stop/Emergency/Resume server control plane
 		9443,  // Portainer
 		14444, // default OverTLS loopback backend
+		18080, // default ACME internal target; external 80 may map here
 		45999, // DAITA-like private cover sink
 	} {
 		reserved[p] = true
