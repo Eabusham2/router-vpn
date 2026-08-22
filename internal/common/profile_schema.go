@@ -11,6 +11,11 @@ import (
 type routerProfileWire RouterProfile
 type routerProfileStoreWire RouterProfileStore
 
+const (
+	DAITALikeMinRateKbps = 32
+	DAITALikeMaxRateKbps = 192
+)
+
 func ValidNodeProofID(value string) bool {
 	value = strings.TrimSpace(value)
 	if len(value) != 64 { return false }
@@ -170,6 +175,7 @@ func NormalizeRouterProfile(p *RouterProfile) error {
 	p.StartupMode = strings.ToLower(strings.TrimSpace(p.StartupMode)); if p.StartupMode == "" { p.StartupMode = "smart-auto" }; switch p.StartupMode { case "manual", "auto", "smart-auto", "last": default: return fmt.Errorf("invalid startup mode %q", p.StartupMode) }
 	p.IPv6Mode = strings.ToLower(strings.TrimSpace(p.IPv6Mode)); if p.IPv6Mode == "" { p.IPv6Mode = "on" }; switch p.IPv6Mode { case "auto", "on", "off": default: return fmt.Errorf("invalid IPv6 mode %q", p.IPv6Mode) }
 	p.MTUPolicy = strings.ToLower(strings.TrimSpace(p.MTUPolicy)); if p.MTUPolicy == "" { p.MTUPolicy = "auto" }; switch p.MTUPolicy { case "default", "auto": p.ManualMTU = 0; case "manual": if p.ManualMTU < 576 || p.ManualMTU > 9000 { return fmt.Errorf("manual MTU %d is outside 576..9000", p.ManualMTU) }; default: return fmt.Errorf("invalid MTU policy %q", p.MTUPolicy) }
+	if p.DAITARateKbps != 0 && (p.DAITARateKbps < DAITALikeMinRateKbps || p.DAITARateKbps > DAITALikeMaxRateKbps) { return fmt.Errorf("DAITA-like rate %d kbps is outside bounded %d..%d", p.DAITARateKbps, DAITALikeMinRateKbps, DAITALikeMaxRateKbps) }
 	if p.DiagnosticsRetentionDays == 0 { p.DiagnosticsRetentionDays = 7 }; if p.DiagnosticsRetentionDays < 1 || p.DiagnosticsRetentionDays > 365 { return fmt.Errorf("diagnostics retention must be between 1 and 365 days") }
 	p.MultihopEntryID = strings.TrimSpace(p.MultihopEntryID); p.MultihopExitID = strings.TrimSpace(p.MultihopExitID); if p.MultihopEnabled { if p.MultihopEntryID == "" || p.MultihopExitID == "" { return fmt.Errorf("multihop requires both an entry node and an exit node") }; if p.MultihopEntryID == p.MultihopExitID { return fmt.Errorf("multihop entry and exit nodes must be different") } }
 	return nil
