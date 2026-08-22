@@ -169,13 +169,14 @@ func (s *adminServerControl) require(w http.ResponseWriter, r *http.Request, met
 	return true
 }
 
-// Ports that are infrastructure/control-plane only and must remain reachable
-// while Router VPN ingress is paused. All other reserved ports are Router VPN
-// transport/service listeners and are fail-closed by Stop/Emergency Stop.
+// Infrastructure/control-plane listeners remain reachable while Router VPN is
+// paused. Router VPN transport/service listeners, including private SOCKS5,
+// internal transport backends and cover-traffic sinks, are deliberately not in
+// this set and are fail-closed by Stop/Emergency Stop on the ingress interface.
 var serverControlInfrastructurePorts = map[int]bool{
-	22: true, 53: true, 80: true, 1080: true, 3000: true,
-	8786: true, 8787: true, 8789: true, 8790: true, 8791: true, 8792: true,
-	9443: true, 14444: true, 18080: true, 45999: true,
+	22: true, 53: true, 80: true, 3000: true,
+	8786: true, 8787: true, 8789: true, 8790: true, 8791: true, 8792: true, 8793: true,
+	9443: true, 18080: true,
 }
 
 func serverControlServicePorts(reserved []int) []int {
@@ -234,7 +235,7 @@ func (s *adminServerControl) status(w http.ResponseWriter, r *http.Request) {
 		"emergency": state.Emergency,
 		"updated_at": state.UpdatedAt,
 		"blocked_service_ports": ports,
-		"semantics": "Stop pauses Router VPN transport ingress while preserving Setup Center/admin/recovery infrastructure. Emergency Stop also removes live WireGuard-family peers. Resume restores ingress without rotating keys or deleting configuration.",
+		"semantics": "Stop pauses Router VPN transport/service ingress while preserving Setup Center/admin/recovery infrastructure. Emergency Stop is marked complete only after both wg and awg control sources re-enumerate with zero remaining peers. Resume restores ingress without rotating keys or deleting configuration.",
 	})
 }
 
@@ -281,6 +282,29 @@ func (s *adminServerControl) resume(w http.ResponseWriter, r *http.Request) {
 	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "paused": false, "emergency": false})
 }
 
+func validateEmergencyPeerTeardown(sources, errs []string, remaining int) error {
+	if len(errs) > 0 {
+		return fmt.Errorf("peer teardown verification errors: %s", strings.Join(errs, "; "))
+	}
+	seen := map[string]bool{}
+	for _, source := range sources {
+		seen[source] = true
+	}
+	var missing []string
+	for _, required := range []string{"wg", "awg"} {
+		if !seen[required] {
+			missing = append(missing, required)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("peer teardown verification missing control source(s): %s", strings.Join(missing, ", "))
+	}
+	if remaining != 0 {
+		return fmt.Errorf("%d WireGuard-family peer(s) remain after teardown", remaining)
+	}
+	return nil
+}
+
 func (s *adminServerControl) emergencyStop(w http.ResponseWriter, r *http.Request) {
 	if !s.require(w, r, http.MethodPost) {
 		return
@@ -291,7 +315,7 @@ func (s *adminServerControl) emergencyStop(w http.ResponseWriter, r *http.Reques
 	}
 	peers, _, collectErrs := collectWireGuardPeers()
 	removed := 0
-	details := make([]string, 0, len(peers)+len(collectErrs))
+	details := make([]string, 0, len(peers)+len(collectErrs)+4)
 	for _, peer := range peers {
 		ok, detail := removeLivePeer(peer.Interface, peer.PublicKey)
 		if ok {
@@ -302,8 +326,27 @@ func (s *adminServerControl) emergencyStop(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	details = append(details, collectErrs...)
+
+	remaining, sources, verifyErrs := collectWireGuardPeers()
+	if err := validateEmergencyPeerTeardown(sources, verifyErrs, len(remaining)); err != nil {
+		details = append(details, "verification: "+err.Error())
+		emergencyState := false
+		if resetErr := s.setState(true, false); resetErr != nil {
+			emergencyState = true
+			details = append(details, "state downgrade failed: "+resetErr.Error())
+		}
+		message := "Emergency Stop incomplete; transport/service ingress remains paused: " + err.Error()
+		writeAdminJSON(w, http.StatusInternalServerError, map[string]any{
+			"ok": false, "error": message, "paused": true, "emergency": emergencyState,
+			"live_peers_removed": removed, "peer_rows_seen": len(peers),
+			"remaining_peer_rows": len(remaining), "coverage_sources": sources, "details": details,
+		})
+		return
+	}
+
 	writeAdminJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "paused": true, "emergency": true,
-		"live_peers_removed": removed, "peer_rows_seen": len(peers), "details": details,
+		"live_peers_removed": removed, "peer_rows_seen": len(peers),
+		"remaining_peer_rows": 0, "coverage_sources": sources, "details": details,
 	})
 }

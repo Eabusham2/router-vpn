@@ -14,6 +14,7 @@ control = text("cmd/router-agent/admin_server_control.go")
 ui = text("server/scripts/setup_center_server_control.py")
 product = text("server/scripts/setup-center-product-server.py")
 reserved = text("cmd/router-agent/reserved_dynamic.go")
+agent_dockerfile = text("deploy/router-agent.Dockerfile")
 
 for marker in (
     'defaultAdminServerControlListen = "127.0.0.1:8792"',
@@ -22,11 +23,19 @@ for marker in (
     '/api/admin/server-control/emergency-stop',
     '/api/admin/server-control/resume',
     'serverControlInfrastructurePorts',
+    '8793: true',
+    'validateEmergencyPeerTeardown',
+    'remaining_peer_rows',
+    'coverage_sources',
+    's.setState(true, false)',
     'router-vpn server paused',
     'removeLivePeer(peer.Interface, peer.PublicKey)',
     'Resume restores ingress without rotating keys or deleting configuration',
 ):
     assert marker in control, f"server control missing {marker!r}"
+
+for private_service in ('1080: true', '14444: true', '45999: true'):
+    assert private_service not in control, f"Stop incorrectly preserves Router VPN service marker {private_service!r}"
 
 for forbidden in (
     'docker system prune', 'docker stop', 'docker rm', '/var/run/docker.sock',
@@ -40,6 +49,7 @@ for marker in (
     '/api/admin/server-control/emergency-stop',
     '/api/admin/server-control/resume',
     "credentials:'same-origin'",
+    'await window.refreshRouterVpnServerControl();alert(\'Emergency Stop incomplete',
 ):
     assert marker in ui, f"Setup Center server-control UI missing {marker!r}"
 
@@ -54,6 +64,9 @@ for marker in (
 
 for port in (8791, 8792, 8793, 18080):
     assert f"{port}," in reserved, f"protected control/internal port {port} is not permanently reserved"
+
+for marker in ('command -v wg >/dev/null', 'command -v awg >/dev/null', '/usr/local/bin/awg'):
+    assert marker in agent_dockerfile, f"agent image cannot prove Emergency Stop control coverage: missing {marker!r}"
 
 # Update is part of the same authenticated server-management surface. Keep its
 # deeper Portainer/exact-SHA/rollback contract authoritative without duplicating
