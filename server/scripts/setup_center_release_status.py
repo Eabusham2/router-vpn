@@ -43,7 +43,7 @@ def release_status(base: Path) -> dict:
             "downloads_present": downloads.is_dir(),
             "safe_sequence": [
                 "Record the currently deployed exact SHA and current server status.",
-                "Do not prune Docker globally or delete overlay2 manually.",
+                "Do not prune Docker globally or manually delete Docker storage-driver directories.",
                 "If a new release is being applied, use only validated exact-SHA images in server/portainer-current.yaml.",
                 "Perform one deliberate Portainer stack update after source/native/release gates pass.",
                 "Verify init/finalize, long-running services, Setup Center, DNS/exit, clients, and protected ports.",
