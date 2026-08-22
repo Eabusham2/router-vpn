@@ -30,6 +30,7 @@ jobs:
           find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
           sh -n router/asus-merlin-router-vpn-forwards.sh
+          go test ./cmd/update-controller -count=1
           python3 - <<'PY'
           import pathlib,re
           text=pathlib.Path('server/portainer-current.yaml').read_text()
@@ -37,11 +38,15 @@ jobs:
               raise SystemExit('ERROR: Portainer production compose must stay image-only')
           if re.search(r'(?m)^\s*context:\s*https?://', text):
               raise SystemExit('ERROR: remote Git Docker build contexts are forbidden')
+          if '/var/run/docker.sock' in text:
+              raise SystemExit('ERROR: production compose must not grant Docker socket access')
           if '/src/server/scripts/download-broker.py' not in text or 'ROUTER_VPN_GITHUB_SHA:' not in text:
               raise SystemExit('ERROR: production :8786 dynamic broker contract is missing')
-          tags=re.findall(r'ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux):([0-9a-f]{40})', text)
+          tags=re.findall(r'ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):([0-9a-f]{40})', text)
           if not tags or len(set(tags)) != 1:
               raise SystemExit('ERROR: custom production images must share one exact source SHA')
+          if 'ROUTER_VPN_UPDATE_LISTEN: 127.0.0.1:8793' not in text:
+              raise SystemExit('ERROR: update controller must remain loopback-only')
           PY
           docker compose -f server/portainer-current.yaml config >/dev/null
 
@@ -96,7 +101,7 @@ jobs:
       - name: Build router agent image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f deploy/router-agent.Dockerfile -t router-vpn-preflight-agent:arm64 .
 
-      - name: Prove benchmark routes are compiled into ARM64 agent
+      - name: Prove benchmark and Emergency Stop tooling in ARM64 agent
         run: |
           set -euo pipefail
           cid="$(docker create --platform linux/arm64 router-vpn-preflight-agent:arm64)"
@@ -106,6 +111,10 @@ jobs:
           grep -aF '/api/benchmark/download' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
           grep -aF '/api/benchmark/upload' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
           grep -aF 'authenticated tunnel-peer private throughput sink' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-agent:arm64 -c 'command -v wg >/dev/null && command -v awg >/dev/null'
+
+      - name: Build update controller image
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f deploy/update-controller.Dockerfile -t router-vpn-preflight-updater:arm64 .
 
       - name: Build WireGuard image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/wireguard/Dockerfile -t router-vpn-preflight-wireguard:arm64 .
@@ -146,7 +155,8 @@ jobs:
       - name: Smoke-test built ARM64 binaries
         run: |
           docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-init:arm64 -c 'test -x /usr/local/bin/router-vpn-init && test -x /src/server/scripts/generate-setup-assets.py && test -x /src/server/scripts/generate-aux-proxies.py && test -x /src/server/scripts/create-bundle-json.py && test -x /src/server/scripts/build-download-on-demand.py && test -x /src/server/scripts/download-broker.py && test -x /src/server/scripts/apply-runtime.sh && command -v go >/dev/null'
-          docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-agent:arm64 -c 'test -x /usr/local/bin/router-vpn-agent'
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-agent:arm64 -c 'test -x /usr/local/bin/router-vpn-agent && command -v wg >/dev/null && command -v awg >/dev/null'
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-updater:arm64 -c 'test -x /usr/local/bin/router-vpn-update-controller'
           docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-wireguard:arm64 -c 'command -v wg >/dev/null && command -v wg-quick >/dev/null && command -v wireguard-go >/dev/null && wireguard-go --version 2>&1 | grep -qi wireguard'
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/amneziawg-go router-vpn-preflight-awg2:arm64 --version >/dev/null
           docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/rosenpass router-vpn-preflight-rosenpass:arm64 --version >/dev/null
