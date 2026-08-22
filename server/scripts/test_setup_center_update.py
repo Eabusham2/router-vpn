@@ -51,10 +51,12 @@ for forbidden in (
     assert forbidden not in controller, f"update controller contains unsafe/fake marker {forbidden!r}"
 
 for marker in (
-    'TestMaterializeRequiresCompleteImageSet',
-    'TestPreserveUpdaterKeepsOldImage',
-    'TestEnvPayloadNullIsEmptyList',
-    'TestComposeSHA',
+    'TestMaterializeExactSHAAndNoFloatingOldImages',
+    'TestMaterializeRejectsDockerSocketBuildAndLatest',
+    'TestMaterializeRequiresUpdaterService',
+    'TestPreserveUpdaterKeepsOnlyOldUpdaterDuringPhaseOne',
+    'TestEnvPayloadNeverReturnsNilForPortainer',
+    'TestComposeSHAIsUnknownForMixedPhaseOneImages',
 ):
     assert marker in controller_test, f"update-controller Go tests missing {marker!r}"
 
