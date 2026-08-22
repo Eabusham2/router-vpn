@@ -12,7 +12,7 @@ Router VPN is MIT-licensed open-source software. See `LICENSE`.
 4. Install the generic Router VPN app for the device once, then link/import one or more private router/node bundles independently.
 5. Start with Raw tunnel / Base Auto, verify the exact selected home node/public exit, then use AUTO, SMART AUTO, CUSTOM or another validated logical mode.
 
-The Setup Center prefers matching same-SHA GitHub client artifacts. If the requested generic artifact is unavailable/unusable, the AI Board can compile only that requested generic client package with a bounded local toolchain, validate/package it, stream it and remove temporary build/output. The production Portainer server stack itself remains exact-SHA image-only and never silently falls back to a moving source build.
+The Setup Center prefers matching same-SHA GitHub client artifacts. Router-local client fallback is **Windows/Portable only**: if a matching Windows x64/ARM64 installed or Portable package is unavailable, the AI Board may build only that requested generic Windows package from the approved same-image inputs, validate/package it, stream it and remove temporary output. macOS and Linux require matching same-SHA artifacts or source built in their proper native build environments; the AI Board is never used as a substitute native macOS/Linux build host. Android and iOS/iPadOS never use router-local builds. The production Portainer server stack itself remains exact-SHA image-only and never silently falls back to a moving source build.
 
 Private node data is not baked into public generic installers/Portable ZIPs. One installed application can link multiple nodes without reinstalling.
 
