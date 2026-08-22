@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
+AUDIT_SOURCE = Path(__file__).resolve()
 cleanup = (ROOT / "server/scripts/cleanup-router-vpn-docker.sh").read_text(encoding="utf-8")
 
 for marker in (
@@ -33,9 +34,13 @@ for pattern in forbidden_regexes:
 
 # Search repository shell/Python deployment helpers as well; docs may mention
 # forbidden commands historically, but executable deployment/recovery source may not.
+# The audit source itself necessarily contains the forbidden-pattern definitions,
+# so exclude only this exact file from the repository-wide executable scan.
 for root_name in ("server", "deploy", "router"):
     for path in (ROOT / root_name).rglob("*"):
         if not path.is_file() or path.suffix not in {".sh", ".py", ".yml", ".yaml"}:
+            continue
+        if path.resolve() == AUDIT_SOURCE:
             continue
         body = path.read_text(encoding="utf-8", errors="replace")
         executable = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
