@@ -41,10 +41,35 @@ def main() -> int:
         path2 = auth.ensure_token(base)
         assert path2.read_text().strip() == first, "safe upgrade rotated Setup Center token"
 
-    assert pair.lan_source("192.168.50.10")
-    assert pair.lan_source("10.77.0.2")
-    assert pair.lan_source("fd77:77::2")
-    assert not pair.lan_source("8.8.8.8")
+    # Pairing accepts only explicit RFC1918/ULA plus loopback/link-local. Do not
+    # use ipaddress.is_private here: Python intentionally treats additional
+    # non-globally-routable/documentation ranges as private, which is too broad
+    # for a LAN-only authentication boundary.
+    for source in (
+        "192.168.50.10",
+        "10.77.0.2",
+        "172.16.4.3",
+        "172.31.255.254",
+        "fd77:77::2",
+        "fc00::1234",
+        "127.0.0.1",
+        "::1",
+        "169.254.10.2",
+        "fe80::1%en0",
+    ):
+        assert pair.lan_source(source), source
+    for source in (
+        "8.8.8.8",
+        "1.1.1.1",
+        "192.0.2.10",
+        "198.51.100.10",
+        "203.0.113.10",
+        "100.64.0.1",
+        "0.0.0.0",
+        "::",
+        "2001:4860:4860::8888",
+    ):
+        assert not pair.lan_source(source), source
 
     manager = pair.PairingManager()
     item = manager.create(90)
@@ -67,7 +92,7 @@ def main() -> int:
     else:
         raise AssertionError("public/non-LAN source redeemed a pairing code")
 
-    print("Setup Center auth + LAN pairing tests: OK")
+    print("Setup Center auth + strict LAN pairing tests: OK")
     return 0
 
 
