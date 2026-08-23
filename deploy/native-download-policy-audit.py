@@ -98,8 +98,18 @@ need(
     "server/scripts/publish-downloads.sh",
     "iOS/iPadOS native WireGuard IPA",
     "router-vpn-ios.ipa",
-    "same-SHA native GitHub artifact only",
+    "same-SHA native GitHub artifacts only",
+    "Windows x64/ARM64 installed/Portable",
+    "windows-portable-amd64",
+    "macOS/Linux require a real same-SHA native artifact",
 )
+for stale in (
+    "Desktop/Portable: matching same-SHA",
+    "\"local_build_platforms\": \"go-desktop-portable\"",
+    "'local_build_platforms':'go-desktop-portable'",
+):
+    if stale in text("server/scripts/publish-downloads.sh"):
+        errors.append(f"publish-downloads contains stale broad router-local fallback claim {stale!r}")
 need(
     ".github/workflows/release-candidate.yml",
     "RouterVPN-release-candidate-${{ github.sha }}",
@@ -161,8 +171,6 @@ for marker in ("generic package contains private bundle", "generic package conta
     if marker not in scanner:
         errors.append(f"generic package leak scanner missing {marker!r}")
 
-# Native runtime installers must be pinned to immutable bytes/objects. Version
-# labels alone are not enough when the upstream release/tag can be retargeted.
 need(
     "client/install-xray.sh",
     "VERSION=v26.7.11",
@@ -224,7 +232,6 @@ forbid("server/rosenpass/Dockerfile", "AWGTOOLS_TAG=", "refs/tags/${AWG")
 need("server/aux-proxies/Dockerfile", "SSR_COMMIT=227127c4bc5a6555e0556693d084c96860e75b5e")
 forbid("server/aux-proxies/Dockerfile", "SSR_TAG=", '--branch "${SSR_TAG}"')
 
-# Private multihop staging must be removed on disconnect/failure on every desktop.
 need(
     "modes/cleanup-private-runtime.py",
     'relative_to(run_root)',

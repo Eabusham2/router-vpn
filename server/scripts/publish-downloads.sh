@@ -80,7 +80,7 @@ if 'Generic application packages are generated on demand' not in text:
     note=(
       '<div style="max-width:980px;margin:8px auto 24px;padding:0 16px;opacity:.72;font-size:12px">'
       'This Setup Center is authenticated because it can contain private node setup material. Generic application packages are generated on demand and never contain linked-node secrets. '
-      'Desktop/Portable: matching same-SHA release/native GitHub artifact first, then router-side build of only the requested generic Go client package if unavailable. Android/iOS: matching same-SHA native GitHub artifact only; the Linux home node does not fake platform-specific mobile builds. '
+      'Windows x64/ARM64 installed/Portable: matching same-SHA release/native GitHub artifact first, then the bounded router-local Windows fallback if unavailable. macOS/Linux require a real same-SHA native artifact; Android/iOS require same-SHA native GitHub artifacts only. '
       'Add nodes separately by authenticated private-bundle import or one-time LAN pairing. Pairing codes are short-lived and one-use; Apple-family clients must grant local-network permission before LAN pairing. '
       'Private bundle builds and all temporary package files are deleted after delivery. Typed asynchronous download jobs expose queued/building/ready progress and cancellation.'
       '</div>'
@@ -105,7 +105,7 @@ for item in wanted:
 data['downloads']=arr
 data['download_policy']={
   'mode':'on-demand','preferred_source':'github-actions','fallback':'router-local-generic-build',
-  'local_build_scope':'requested-generic-package-only','local_build_platforms':'go-desktop-portable',
+  'local_build_scope':'requested-generic-package-only','local_build_platforms':['windows-amd64','windows-arm64','windows-portable-amd64','windows-portable-arm64'],
   'generic_packages_secret_free':True,'node_linking':'separate-bundle-or-pairing',
   'setup_center_auth':'required-for-private-ui-and-build-actions',
   'mobile_artifacts':'same-sha-github-only','github_exact_sha_required':True,'server_cache':False,
@@ -127,7 +127,7 @@ cat >"$OUT/download-policy.json" <<'JSON'
   "preferred_source": "github-actions",
   "fallback": "router-local-generic-build",
   "local_build_scope": "requested-generic-package-only",
-  "local_build_platforms": "go-desktop-portable",
+  "local_build_platforms": ["windows-amd64", "windows-arm64", "windows-portable-amd64", "windows-portable-arm64"],
   "generic_packages_secret_free": true,
   "node_linking": "separate-bundle-or-pairing",
   "setup_center_auth": "required-for-private-ui-and-build-actions",
