@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   statuses: write
 
 concurrency:
@@ -14,32 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  finalize:
-    if: github.event_name == 'push' && github.event.head_commit.message == 'Stage final Router-VPN consolidation'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Apply exact validated Router-VPN batch
-        shell: bash
-        run: |
-          set -euo pipefail
-          BASE=9a7330d6a8ce05fc53a8082b6f57a7e45af7fe6c
-          git merge-base --is-ancestor "$BASE" HEAD
-          cat .routervpn-final-patch/part01a .routervpn-final-patch/part01b .routervpn-final-patch/part01c .routervpn-final-patch/part01d .routervpn-final-patch/part02 .routervpn-final-patch/part03 .routervpn-final-patch/part04a .routervpn-final-patch/part04b .routervpn-final-patch/part04c .routervpn-final-patch/part04d | base64 -d | gunzip > /tmp/routervpn-final.patch
-          git apply --check /tmp/routervpn-final.patch
-          git rm -rf --ignore-unmatch .routervpn-final-patch
-          git rm -f --ignore-unmatch .github/workflows/router-vpn-one-shot-sync.yml .github/workflows/router-vpn-finish-sync.yml .github/workflows/apply-routervpn-final-batch.yml
-          git checkout "$BASE" -- .github/workflows/source-snapshot.yml
-          git apply --index /tmp/routervpn-final.patch
-          git add -A
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git diff --cached --quiet && { echo 'No final changes staged'; exit 1; }
-          git commit -m 'Sync validated Router-VPN safety and release contracts'
-          git push origin HEAD:main
-
   snapshot:
     runs-on: ubuntu-24.04
     steps:
