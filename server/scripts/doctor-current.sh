@@ -141,7 +141,7 @@ fi
 if command -v nft >/dev/null 2>&1; then
   rules=$(nft list table inet router_vpn_guard 2>/dev/null || true)
   [[ -n $rules ]] && ok 'WAN guard nftables table present' || bad 'WAN guard nftables table missing'
-  for port in 22 53 1080 3000 8786 8787 8789 8790 9443 14444 45999; do
+  for port in 22 53 1080 3000 8786 8787 8788 8789 8790 8791 8792 8793 9443 14444 45999; do
     if grep -Eq "dport[[:space:]]+${port}([^0-9]|$).*accept" <<<"$rules"; then
       bad "private/control port $port appears allowed from WAN"
     else

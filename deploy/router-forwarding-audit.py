@@ -67,13 +67,14 @@ for marker in (
     '"$IPTABLES" -t nat -C PREROUTING -i "$WAN" -p "$PROTO" --dport "$EXT"',
     '"$IPTABLES" -C FORWARD -i "$WAN" -d "$DST" -p "$PROTO" --dport "$PORT"',
     'TAG=ROUTER_VPN',
-    'if ! require_health; then',
+    'if ! require_health || ! preflight_port_conflicts "$WAN"; then',
     'remove_owned_from_chain nat PREROUTING',
     'remove_owned_from_chain filter FORWARD',
     'apply) apply_all',
     'status) status',
     'verify) verify',
-    'remove|uninstall) remove',
+    'remove) remove',
+    'uninstall) uninstall',
 ):
     assert marker in text, f"narrow/fail-open forwarding marker missing: {marker}"
 
@@ -112,8 +113,10 @@ assert '-s "$LAN"' not in mutations and '-o "$WAN"' not in mutations, "Router VP
 for marker in (
     '[ -f "$FILE" ] || printf \'#!/bin/sh\\n\' > "$FILE"',
     'grep -Fqx "$LINE" "$FILE" 2>/dev/null || printf \'%s\\n\' "$LINE" >> "$FILE"',
-    'write_hook "$NAT_START" "$RUNTIME apply-nat"',
-    'write_hook "$FIREWALL_START" "$RUNTIME apply-filter"',
+    'write_hook "$NAT_START" "$RUNTIME apply"',
+    'write_hook "$FIREWALL_START" "$RUNTIME apply"',
+    'preflight_port_conflicts(){',
+    'Existing non-Router-VPN DNAT owns',
     'grep -Fvx -- "$LINE" "$FILE" > "$TMP" || true',
 ):
     assert marker in text, f"Merlin hook preservation marker missing: {marker}"

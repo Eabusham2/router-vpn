@@ -28,6 +28,10 @@ class SetupCenterUXPatchTests(unittest.TestCase):
             "family='macos'",
             "family='linux'",
             "arm64|aarch64",
+            "getHighEntropyValues",
+            "architecture",
+            "CPU architecture is not safely exposed",
+            "will not guess the wrong architecture",
             "native|router vpn app|installer",
         ):
             self.assertIn(marker, self.patch)

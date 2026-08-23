@@ -94,7 +94,7 @@ Health:
 http://192.168.50.133:8786/healthz
 ```
 
-Never WAN-forward `8786`.
+Never WAN-forward Setup Center/control/private services `8786-8793`, SOCKS5 `1080`, internal OverTLS `14444`, DAITA-like UDP `45999`, Portainer, SSH, or AdGuard management.
 
 The Setup Center provides onboarding, Full Guide, private node linking/pairing data, platform downloads, Simple Methods, ASUS helper/status guidance, Connected Clients, forwarding controls, recovery/diagnostics and server-side AI Help.
 
@@ -157,15 +157,15 @@ Never WAN-expose:
 8788-8793 internal client/control/update/health surfaces
 9443    Portainer
 14444   internal OverTLS backend
+45999   private DAITA-like cover-traffic service
 ```
 
 Every owned IPv4 rule carries `-m comment --comment ROUTER_VPN`. FORWARD rules are destination-scoped to `192.168.50.133`, exact-port scoped, and `NEW` only; normal ASUS ESTABLISHED/RELATED handling remains in charge.
 
-Current persistent Merlin hook calls remain component-specific and idempotent:
+Current persistent Merlin hooks are deliberately identical and idempotent. Both `nat-start` and `firewall-start` call the full guarded helper so either Merlin event can restore the complete narrow rule set without depending on event ordering:
 
 ```text
-router-vpn-forward.sh apply-nat
-router-vpn-forward.sh apply-filter
+router-vpn-forward.sh apply || true
 ```
 
 The helper also provides:
@@ -236,6 +236,8 @@ Choices include:
 
 - Fastest measured public DNS
 - Home AdGuard
+
+AdGuard **Allowed Clients** semantics: an empty/blank Allowed Clients list already means unrestricted and should remain blank unless you intentionally want a restrictive allowlist. If you do use a restrictive allowlist, include the Router VPN client networks `10.77.0.0/24`, `10.78.0.0/24`, `fd77:77::/64`, and `fd78:78::/64`. Do not create a restrictive list merely to add those networks.
 - Custom UDP/TCP
 - DoT
 - DoH

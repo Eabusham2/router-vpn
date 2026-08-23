@@ -197,7 +197,7 @@ func (a *app) listProfiles(w http.ResponseWriter, _ *http.Request) {
 }
 
 func validProfileID(id string) bool {
-	if len(id) < 1 || len(id) > 80 || id == "." || id == ".." {
+	if len(id) < 1 || len(id) > 64 || id == "." || id == ".." {
 		return false
 	}
 	for _, r := range id {

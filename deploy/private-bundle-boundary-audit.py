@@ -15,6 +15,7 @@ install = read("server/install.sh")
 upgrade = read("server/upgrade.sh")
 doctor = read("server/scripts/doctor-current.sh")
 broker = read("server/scripts/download-broker.py")
+bundle_gen = read("server/scripts/create-bundle-json.py")
 
 # Public/static publishing must delete every historical credential-bearing form
 # and never copy the canonical private bundle/CREDENTIALS into downloads.
@@ -57,4 +58,11 @@ for marker in (
 ):
     assert marker in broker, f"broker private-node boundary lost marker: {marker}"
 
-print("private node bundle publication/authentication boundary audit: OK")
+# Pairing/private bundles may contain the node API credential needed by the client,
+# but never the Setup Center/admin bearer secret used for management mutations.
+for forbidden in ("setup_token", "setup-center.token", "ROUTER_VPN_ADMIN_TOKEN_FILE", "admin_token"):
+    assert forbidden not in bundle_gen, f"private client bundle generator leaked management credential concept: {forbidden}"
+assert 'self.server.setup_token' not in broker[broker.index('def _redeem_pairing'):broker.index('def _dynamic')], "pairing redemption serialized Setup Center token"
+assert 'router-vpn-bundle.json' in broker[broker.index('def _redeem_pairing'):broker.index('def _dynamic')], "pairing does not return the canonical minimal node bundle"
+
+print("private node bundle publication/authentication/token-separation boundary audit: OK")

@@ -87,7 +87,8 @@ class SetupCenterGuideTests(unittest.TestCase):
 
     def test_safety_and_distribution_guidance_are_explicit(self):
         for marker in (
-            "Never WAN-expose Setup Center 8786",
+            "Never WAN-expose Setup Center/control 8786–8793",
+            "private DAITA-like UDP 45999",
             "SOCKS5 1080",
             "loopback OverTLS 14444",
             "Direct public IP works",

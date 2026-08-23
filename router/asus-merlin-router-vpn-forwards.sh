@@ -119,11 +119,11 @@ wan_if(){
 health_ok(){
   URL="http://$DST:$ROUTER_VPN_HEALTH_PORT$ROUTER_VPN_HEALTH_PATH"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsS --connect-timeout 2 --max-time 3 "$URL" >/dev/null 2>&1
+    curl -fsS --connect-timeout 1 --max-time 1 "$URL" >/dev/null 2>&1
     return $?
   fi
   if command -v wget >/dev/null 2>&1; then
-    wget -q -T 3 -O /dev/null "$URL" >/dev/null 2>&1
+    wget -q -T 1 -O /dev/null "$URL" >/dev/null 2>&1
     return $?
   fi
   return 1
@@ -133,6 +133,25 @@ require_health(){
   if health_ok; then return 0; fi
   warn "Router VPN health check failed at http://$DST:$ROUTER_VPN_HEALTH_PORT$ROUTER_VPN_HEALTH_PATH; no new WAN exposure was installed."
   return 1
+}
+
+preflight_port_conflicts(){
+  WAN=$1
+  RULES=$("$IPTABLES" -t nat -S PREROUTING 2>/dev/null || true)
+  for SPEC in \
+    "tcp:$ACME_EXTERNAL_PORT" "tcp:$REALITY_PORT" "udp:$AWG_PORT" \
+    "tcp:$SS_PORT" "udp:$SS_PORT" "udp:$HY2_PORT" \
+    "tcp:$XRAY_PQ_PORT" "tcp:$XHTTP_PORT" "tcp:$SS_V2RAY_PORT" \
+    "tcp:$NAIVE_PORT" "udp:$NAIVE_PORT" "tcp:$OVERTLS_PORT" \
+    "tcp:$SSR_PORT" "udp:$SSR_PORT" "udp:$WG_PORT" "udp:$ROSENPASS_PORT"
+  do
+    PROTO=${SPEC%%:*}; PORT=${SPEC#*:}
+    if printf '%s\n' "$RULES" | grep -F -- "-i $WAN" | grep -F -- "-p $PROTO" | grep -F -- "--dport $PORT" | grep -F -- '-j DNAT' | grep -v -F -- "--comment $TAG" >/dev/null 2>&1; then
+      warn "Existing non-Router-VPN DNAT owns $PROTO/$PORT; refusing to compete with or reorder that ASUS/add-on forward."
+      return 1
+    fi
+  done
+  return 0
 }
 
 ensure_nat(){
@@ -191,9 +210,11 @@ apply_nat(){
     return 1
   fi
   WAN=$(wan_if)
-  if ! require_health; then
-    remove_owned_from_chain nat PREROUTING
-    return 1
+  if [ "${ROUTER_VPN_PREFLIGHT_DONE:-0}" != 1; then
+    if ! require_health || ! preflight_port_conflicts "$WAN"; then
+      remove_owned_from_chain nat PREROUTING
+      return 1
+    fi
   fi
   if ! {
     ensure_nat "$WAN" tcp "$ACME_EXTERNAL_PORT" "$ACME_INTERNAL_PORT" &&
@@ -228,9 +249,11 @@ apply_filter(){
     return 1
   fi
   WAN=$(wan_if)
-  if ! require_health; then
-    remove_owned_from_chain filter FORWARD
-    return 1
+  if [ "${ROUTER_VPN_PREFLIGHT_DONE:-0}" != 1; then
+    if ! require_health || ! preflight_port_conflicts "$WAN"; then
+      remove_owned_from_chain filter FORWARD
+      return 1
+    fi
   fi
   if ! {
     ensure_fwd "$WAN" tcp "$ACME_INTERNAL_PORT" &&
@@ -265,12 +288,15 @@ apply_all(){
     warn 'Invalid Router VPN forwarding configuration; all Router VPN WAN exposure was removed. Ordinary Internet rules were untouched.'
     return 1
   fi
-  if ! require_health; then
+  WAN=$(wan_if)
+  if ! require_health || ! preflight_port_conflicts "$WAN"; then
     remove_owned_from_chain nat PREROUTING
     remove_owned_from_chain filter FORWARD
     return 1
   fi
   remove_legacy_chains
+  ROUTER_VPN_PREFLIGHT_DONE=1
+  export ROUTER_VPN_PREFLIGHT_DONE
   if ! apply_nat || ! apply_filter; then
     remove_owned_from_chain nat PREROUTING
     remove_owned_from_chain filter FORWARD
@@ -354,8 +380,8 @@ install(){
   write_config
   remove_hook_lines "$NAT_START"
   remove_hook_lines "$FIREWALL_START"
-  write_hook "$NAT_START" "$RUNTIME apply-nat"
-  write_hook "$FIREWALL_START" "$RUNTIME apply-filter"
+  write_hook "$NAT_START" "$RUNTIME apply"
+  write_hook "$FIREWALL_START" "$RUNTIME apply"
   if [ "${ROUTER_VPN_SKIP_NVRAM:-0}" != 1 ]; then
     nvram set jffs2_scripts=1
     nvram commit
@@ -373,8 +399,13 @@ remove(){
   remove_rules
   remove_hook_lines "$NAT_START"
   remove_hook_lines "$FIREWALL_START"
+  say 'Router VPN-owned forwarding rules/hooks removed. Helper/config were preserved for manual apply/reinstall; every unrelated JFFS line and ASUS firewall rule was preserved.'
+}
+
+uninstall(){
+  remove
   rm -f "$RUNTIME" "$CONFIG"
-  say 'Router VPN-owned forwarding rules/hooks/config removed. Every unrelated JFFS line and ASUS firewall rule was preserved.'
+  say 'Router VPN forwarding helper/config uninstalled.'
 }
 
 status(){
@@ -399,7 +430,7 @@ status(){
   printf 'UDP      %-7s -> %s\n' "$WG_PORT" "$WG_PORT"
   printf 'UDP      %-7s -> %s\n' "$ROSENPASS_PORT" "$ROSENPASS_PORT"
   say 'OverTLS loopback backend 14444 is never WAN-forwarded.'
-  say 'Never exposed by this script: 22/53, 1080, 3000, 8786-8793, 9443, 14444, SSH, Portainer, AdGuard admin.'
+  say 'Never exposed by this script: 22/53, 1080, 3000, 8786-8793, 9443, 14444, 45999, SSH, Portainer, AdGuard admin.'
   [ ! -f "$CONFIG" ] || say "Persistent settings: $CONFIG"
   say '--- Router-VPN-owned NAT rules ---'
   "$IPTABLES" -t nat -S PREROUTING 2>/dev/null | grep -F -- "--comment $TAG" || say 'No Router VPN NAT rules installed.'
@@ -422,7 +453,7 @@ verify(){
   if printf '%s\n' "$NAT_OWNED" | grep -v '^$' | grep -v -F -- "-i $WAN" >/dev/null 2>&1; then warn 'Router VPN NAT rule lost WAN-interface scope'; ERR=1; fi
   if printf '%s\n' "$FWD_OWNED" | grep -v '^$' | grep -v -F -- "-i $WAN -d $DST" >/dev/null 2>&1; then warn 'Router VPN FORWARD rule lost WAN/destination scope'; ERR=1; fi
   if printf '%s\n' "$FWD_OWNED" | grep -v '^$' | grep -v -F -- '--state NEW' >/dev/null 2>&1; then warn 'Router VPN FORWARD rule is not NEW-only'; ERR=1; fi
-  for PORT in 22 53 1080 3000 8786 8787 8788 8789 8790 8791 8792 8793 9443 14444 18080; do
+  for PORT in 22 53 1080 3000 8786 8787 8788 8789 8790 8791 8792 8793 9443 14444 18080 45999; do
     if printf '%s\n' "$NAT_OWNED" | grep -E -- "--dport $PORT( |$)" >/dev/null 2>&1; then warn "forbidden/private WAN destination port $PORT is exposed"; ERR=1; fi
   done
   APPROVED=" $ACME_EXTERNAL_PORT $REALITY_PORT $AWG_PORT $SS_PORT $HY2_PORT $XRAY_PQ_PORT $XHTTP_PORT $SS_V2RAY_PORT $NAIVE_PORT $OVERTLS_PORT $SSR_PORT $WG_PORT $ROSENPASS_PORT "
@@ -445,6 +476,7 @@ case "${1:-install}" in
   apply-filter) apply_filter ;;
   status) status ;;
   verify) verify ;;
-  remove|uninstall) remove ;;
-  *) fail "usage: $0 [install|apply|apply-nat|apply-filter|status|verify|remove]" ;;
+  remove) remove ;;
+  uninstall) uninstall ;;
+  *) fail "usage: $0 [install|apply|apply-nat|apply-filter|status|verify|remove|uninstall]" ;;
 esac

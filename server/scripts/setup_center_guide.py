@@ -48,7 +48,7 @@ GUIDE_PANEL = r'''
         <li>Use the real WAN interface and home-LAN CIDR. The endpoint can stay blank when automatic public-address detection is appropriate.</li>
         <li>Let initialization/finalization finish, then open Setup Center and use its health/admin surfaces before linking clients.</li>
       </ol>
-      <div class="rg-warn">Never WAN-expose Setup Center 8786, Router API/private proof 8787, SOCKS5 1080, loopback OverTLS 14444, Portainer, AdGuard admin, or SSH.</div>
+      <div class="rg-warn">Never WAN-expose Setup Center/control 8786–8793, SOCKS5 1080, loopback OverTLS 14444, private DAITA-like UDP 45999, Portainer, AdGuard admin, or SSH.</div>
     </section>
     <section class="rg-step" data-step="2">
       <h3>3. ASUS router forwarding</h3>
@@ -85,7 +85,7 @@ GUIDE_PANEL = r'''
         <li>Select the router/node.</li>
         <li>Choose AUTO for the simplest validated route, or choose a supported manual mode.</li>
         <li>Where the logical mode supports it, choose WireGuard/AmneziaWG base preference and fallback.</li>
-        <li>Choose DNS: Home AdGuard, fastest measured home-exit public DNS, Rescue, or an explicitly configured encrypted/custom resolver.</li>
+        <li>Choose DNS: Home AdGuard, fastest measured home-exit public DNS, Rescue, or an explicitly configured encrypted/custom resolver. AdGuard Allowed Clients may stay blank (blank means unrestricted); only if you intentionally use a restrictive allowlist add 10.77.0.0/24, 10.78.0.0/24, fd77:77::/64, and fd78:78::/64.</li>
         <li>Choose home-LAN access, MTU/Jumbo, supported kill-switch policy, and supported multihop options.</li>
         <li>Connect and watch connection progress. Connected is not accepted until selected-node private identity/path proof succeeds.</li>
       </ol>

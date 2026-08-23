@@ -106,9 +106,9 @@ UDP      51820   -> 51820
 UDP      51822   -> 51822
 ```
 
-External TCP `80` maps to internal `18080` for ACME. Current source still uses public OverTLS `14443/TCP` and legacy SSR `15443/TCP+UDP`. Never expose `22/53`, `1080`, `3000`, `8786-8793`, `9443`, `14444`, SSH, Portainer or AdGuard management.
+External TCP `80` maps to internal `18080` for ACME. Current source still uses public OverTLS `14443/TCP` and legacy SSR `15443/TCP+UDP`. Never expose `22/53`, `1080`, `3000`, `8786-8793`, `9443`, `14444`, `45999`, SSH, Portainer or AdGuard management.
 
-The helper supports `status`, `apply`, `verify`, and `remove` in addition to the component `apply-nat` / `apply-filter` hook actions. `remove` preserves every unrelated line in `nat-start` and `firewall-start`.
+The helper supports `status`, `apply`, `verify`, `remove`, and `uninstall`. Both persistent Merlin hooks call the same guarded `apply || true`; `remove` withdraws only Router-VPN rules/hooks while preserving the helper/config for recovery, and `uninstall` additionally removes the helper/config. Every unrelated line in `nat-start` and `firewall-start` is preserved.
 
 No-reboot migration/update:
 

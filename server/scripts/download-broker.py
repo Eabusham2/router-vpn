@@ -504,7 +504,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "generic_packages_secret_free": True, "node_linking": "separate-bundle-or-pairing",
                 "setup_center_auth": "required-for-private-ui-and-build-actions",
                 "local_build_scope": "requested-generic-package-only",
-                "local_build_platforms": "go-desktop-portable", "mobile_artifacts": "same-sha-github-only",
+                "local_build_platforms": ["windows-amd64", "windows-arm64", "windows-portable-amd64", "windows-portable-arm64"], "mobile_artifacts": "same-sha-github-only",
                 "github_exact_sha_required": True,
                 "max_parallel_package_requests": 8, "local_build_slots": 1,
                 "download_jobs": {"create": "POST /api/download-jobs {name}", "status": "GET /api/download-jobs/{job_id}", "cancel": "DELETE /api/download-jobs/{job_id}", "file": "GET /api/download-jobs/{job_id}/file", "ready_ttl_seconds": _jobs.JOB_TTL_SECONDS},

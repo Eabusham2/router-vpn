@@ -59,6 +59,33 @@ for marker in (
 assert "server/portainer-current.yaml" not in build, "Build all must not expose tracked baseline as deployable production compose"
 assert "RouterVPN-Portainer-${GITHUB_SHA}.yaml" in compose, "production compose artifact is not exact-SHA named"
 
+# Exact-SHA release candidate must directly block on core behavioral/shipping contracts.
+for marker in (
+    "python3 deploy/historical-regression-audit.py",
+    "python3 modes/test_kill_switch.py",
+    "python3 server/scripts/test_preserve_generated_state.py",
+    "python3 modes/test_mtu_policy.py",
+    "python3 modes/test_multihop.py",
+    "python3 server/scripts/test_download_safety.py",
+    "python3 server/scripts/test_setup_center_release.py",
+    "python3 server/scripts/test_setup_center_update.py",
+    "python3 server/scripts/test_setup_center_requirement_349.py",
+    "python3 modes/test_smart_auto_rollback.py",
+    "python3 deploy/daita-safety-audit.py",
+    "python3 deploy/recovered-corrections-audit.py",
+    "python3 deploy/recovered-requirements-1-264-audit.py",
+    "python3 deploy/recovered-requirements-265-311-audit.py",
+    "python3 deploy/recovered-addendum-312-356-audit.py",
+    "python3 deploy/latest-a20-product-contract-audit.py",
+    "python3 deploy/binding-edge-requirements-audit.py",
+    "client\\test-windows-kill-switch.ps1",
+    "python3 server/scripts/test_setup_center_ux_patch.py",
+    "python3 server/scripts/test_setup_center_router_onboarding.py",
+    "python3 android/test_android_connection_profiles_contract.py",
+    "python3 android/test_android_via_entry_latency_contract.py",
+):
+    assert marker in rc, f"release candidate lost authoritative gate: {marker}"
+
 # These source-level destructive/security, credential-preservation, and
 # historical runtime boundaries must travel with exact release orchestration
 # instead of living as orphan scripts.
@@ -66,6 +93,7 @@ for audit in (
     "deploy/docker-cleanup-safety-audit.py",
     "deploy/private-bundle-boundary-audit.py",
     "deploy/historical-regression-audit.py",
+    "deploy/binding-edge-requirements-audit.py",
     "server/scripts/test_preserve_generated_state.py",
 ):
     subprocess.run([sys.executable, str(ROOT / audit)], cwd=ROOT, check=True)

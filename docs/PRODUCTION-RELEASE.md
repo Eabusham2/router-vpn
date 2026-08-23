@@ -35,7 +35,7 @@ LAN_CIDR=192.168.50.0/24
 ADGUARD4=192.168.50.133
 ```
 
-`ENDPOINT` remains optional and should normally be unset so endpoint detection can operate. Do not add a moving image tag or `build:` fallback. Do not WAN-forward private/admin ports (`1080`, `8786`, `8787`, `9443`, `14444`, SSH, Portainer, or AdGuard admin).
+`ENDPOINT` remains optional and should normally be unset so endpoint detection can operate. Do not add a moving image tag or `build:` fallback. Do not WAN-forward private/admin ports (`1080`, `8786-8793`, `9443`, `14444`, `45999`, SSH, Portainer, or AdGuard admin).
 
 ## Terminal manager
 

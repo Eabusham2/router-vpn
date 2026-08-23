@@ -17,6 +17,7 @@ PUBLIC_SOURCE_PATHS=(
  "cmd/client/ui.html","cmd/client/logical_ui.js","cmd/client/extras.go","docs/CLIENT.md","modes/test_multihop.py",
 )
 PWA_MARKERS=(b"beforeinstallprompt",b"serviceWorker.register",b"manifest.webmanifest",b"router-vpn-ui-v1",b"installPWA(")
+RETIRED_WINDOWS_PAYLOADS=("client/Prepare-Windows-Mode-Catalog.ps1","client/RouterVPN-Windows-Product.ps1")
 WINDOWS_NATIVE_HELPERS=(
  "client/RouterVPN-Windows-App.ps1",
  "client/RouterVPN-Windows-UnifiedShell.ps1",
@@ -69,6 +70,9 @@ def _require_suffix(names:set[str],suffix:str,archive:str)->None:
 
 def _check_windows_zip_contract(path:Path,names:set[str])->None:
  filename=path.name
+ for retired in RETIRED_WINDOWS_PAYLOADS:
+  if any(name==retired or name.endswith("/"+retired) for name in names):
+   raise ValueError(f"{filename} contains retired Windows payload: {retired}")
  if filename.startswith("RouterVPN-Windows-"):
   for member in ("RouterVPN.exe","RouterVPN.ico","logical-modes.json","routers.json",*WINDOWS_NATIVE_HELPERS):
    _require_suffix(names,member,filename)

@@ -214,8 +214,8 @@ for required in (
     "OVERTLS_PORT=${OVERTLS_PORT:-14443}",
     "OverTLS loopback backend 14444 is never WAN-forwarded.",
     "SSR_PORT=${SSR_PORT:-15443}",
-    'write_hook "$NAT_START" "$RUNTIME apply-nat"',
-    'write_hook "$FIREWALL_START" "$RUNTIME apply-filter"',
+    'write_hook "$NAT_START" "$RUNTIME apply"',
+    'write_hook "$FIREWALL_START" "$RUNTIME apply"',
 ):
     if required not in helper:
         error(f"ASUS forwarding helper missing: {required}")

@@ -16,6 +16,10 @@ The Setup Center prefers matching same-SHA GitHub client artifacts. Router-local
 
 Private node data is not baked into public generic installers/Portable ZIPs. One installed application can link multiple nodes without reinstalling.
 
+## Production environment and images
+
+Normal Portainer deployment uses the generated exact-SHA production compose and the published `ghcr.io/eabusham2/router-vpn-*` images. The normal variables are `WAN_INTERFACE=eth0`, `LAN_CIDR=192.168.50.0/24`, and `ADGUARD4=192.168.50.133`; `ENDPOINT` may stay blank when automatic public-IP detection is appropriate. Do not add a Git build context or `build:` section to the production stack.
+
 ## Product split
 
 - **Setup Center** — private deployment/setup/admin/recovery/downloads/pairing/Simple Methods/Full Guide/AI Help.
@@ -150,7 +154,7 @@ Native node managers support current/recent, last-used, measured-latency and nam
 
 - Production Portainer is exact-SHA image-only and must use the generated same-SHA release compose, not the tracked template/baseline.
 - `8786` Setup Center stays private.
-- `1080`, `8787`, `14444`, `9443`, SSH and AdGuard admin stay off WAN.
+- `1080`, `8786-8793`, `14444`, `45999`, `9443`, SSH and AdGuard admin stay off WAN.
 - A mode becomes Ready only from real generated configuration/runtime validation.
 - Unsupported platform features stay unavailable with a real reason.
 - UI/CSS must never force readiness.
@@ -162,6 +166,16 @@ Native node managers support current/recent, last-used, measured-latency and nam
 GitHub Actions is the normal compile/test environment. Source/security/runtime/package audits, native builds, exact-SHA ARM64 image publication and the **Exact-SHA production compose** artifact are required before manual production gates.
 
 Physical release validation still requires the relevant real-device VPN permission/TUN, route/DNS/IPv4/IPv6 behavior, exact selected node/public exit, reconnect/network-change handling, fail-closed/leak-negative transitions and custom-exit behavior. Simple external Methods require real off-LAN compatible-client interoperability. Apple distribution requires real signing/notarization. Production requires a deliberate exact-SHA Portainer deploy and live smoke test, followed by ASUS forwarding revalidation where needed.
+
+## Update, recovery, and troubleshooting
+
+Use the authenticated Setup Center **Release & recovery** surface for exact-SHA update status/check/apply. An update preserves the existing Portainer environment and generated credentials, revalidates core health, and automatically restores the prior stack when the new exact-SHA deployment fails validation. **Emergency Stop/Resume** is a separate runtime recovery action; it is not the normal update path and is not the strict kill-switch policy.
+
+For a connection failure, use the app's exact mode/readiness reason, session timeline, selected-node path proof, DNS proof, public-exit proof and Emergency Stop before changing unrelated router/network settings. For ASUS forwarding, run the helper `status`/`verify`; never use DMZ/Exposed Host, never WAN-expose private/admin ports, and never remove unrelated JFFS rules. For download/setup problems, use the authenticated Setup Center job status/cancel flow and Full Guide rather than a giant or home-linked installer.
+
+## License
+
+Router VPN is MIT licensed. Every public generic client package must include the repository `LICENSE`; public packages remain secret-free and private node data is linked separately.
 
 ## More documentation
 

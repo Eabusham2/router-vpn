@@ -158,8 +158,8 @@ AI Help is server-side and provider-neutral. Current adapters cover OpenAI, Goog
 
 - DAITA-like is not exact Mullvad DAITA/Maybenot.
 - Proxy-only modes do not magically provide arbitrary inbound forwarding.
-- `8786` Setup Center stays private.
-- `1080`, `8787`, `14444`, `9443`, SSH and admin services stay off WAN.
+- Setup Center/control services `8786-8793` stay private.
+- `1080`, `14444`, `45999`, `9443`, SSH and admin services stay off WAN.
 - A mode becomes Ready only because its real generated configuration/runtime validates.
 - `Connected` requires exact selected-node/private-exit proof, not generic Internet reachability.
 - Unsupported platform features stay unavailable with a real reason; UI/CSS must never force them Ready.

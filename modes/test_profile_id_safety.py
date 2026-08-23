@@ -13,7 +13,7 @@ sys.path.insert(0, str(HERE))
 from profile_id import validate_profile_id  # noqa: E402
 
 VALID = ["router", "home-1", "node_2", "a.b-c_d"]
-INVALID = ["", ".", "..", "a..b", "../x", "x/..", "a/b", r"a\b", "bad space", "x$y", "a" * 65]
+INVALID = ["", ".", "..", "a..b", "../x", "x/..", "a/b", r"a\b", "bad space", "x$y", "%2e%2e", "%2fetc", "%5c..", "%252e%252e", "a" * 65]
 CRITICAL_SHELL = ["run-mode.sh", "run-all.sh", "run-max.sh", "run-combined.sh", "run-xhttp.sh", "check-mode.sh", "check-combined.sh"]
 PYTHON_CONSUMERS = ["dns-policy.py", "mtu-policy.py", "kill-switch.py", "multihop.py", "orchestrate.py"]
 

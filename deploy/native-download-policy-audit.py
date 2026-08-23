@@ -121,6 +121,16 @@ need(
 )
 
 broker = text("server/scripts/download-broker.py")
+if '"local_build_platforms": ["windows-amd64", "windows-arm64", "windows-portable-amd64", "windows-portable-arm64"]' not in broker:
+    errors.append("download broker API does not expose the bounded Windows-only local fallback contract")
+if '"local_build_platforms": "go-desktop-portable"' in broker:
+    errors.append("download broker API still advertises retired broad go-desktop-portable fallback")
+try:
+    example = __import__('json').loads(text("configs/client/routers.json.example"))
+    if example != {"schema_version": 4, "selected_id": "", "profiles": []}:
+        errors.append("routers.json.example is not the blank schema-v4 router store")
+except Exception as exc:
+    errors.append(f"routers.json.example is not valid JSON: {exc}")
 for floating in ("latest.zip", "/releases/latest", "refs/heads/main"):
     if floating in broker:
         errors.append(f"download broker contains floating artifact source {floating!r}")

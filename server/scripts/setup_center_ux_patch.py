@@ -21,11 +21,13 @@ UX_PATCH = r'''
 </div>
 <iframe id="rvpn-job-download-frame" title="Router VPN package download" hidden></iframe>
 <script>
-(()=>{
+(async()=>{
  const btn=document.getElementById('rvpn-device-download'),note=document.getElementById('rvpn-device-download-note');
  const panel=document.getElementById('rvpn-download-job'),title=document.getElementById('rvpn-job-title'),phase=document.getElementById('rvpn-job-phase'),fill=document.getElementById('rvpn-job-fill'),meta=document.getElementById('rvpn-job-meta'),history=document.getElementById('rvpn-job-history'),cancel=document.getElementById('rvpn-job-cancel'),retry=document.getElementById('rvpn-job-retry'),close=document.getElementById('rvpn-job-close'),frame=document.getElementById('rvpn-job-download-frame');
  const ua=(navigator.userAgent||'').toLowerCase(),plat=(navigator.platform||'').toLowerCase();
- const isArm=/arm|aarch64/.test(ua+' '+plat)||(navigator.userAgentData&&navigator.userAgentData.architecture==='arm');
+ let arch=/arm64|aarch64|\barm\b/.test(ua+' '+plat)?'arm64':(/x86_64|amd64|x64|win64/.test(ua+' '+plat)?'amd64':'unknown');
+ if(navigator.userAgentData&&navigator.userAgentData.getHighEntropyValues){try{const h=await navigator.userAgentData.getHighEntropyValues(['architecture','bitness']);const a=String(h.architecture||'').toLowerCase();if(/arm/.test(a))arch='arm64';else if(/x86/.test(a)&&String(h.bitness||'')==='64')arch='amd64'}catch(_){}}
+ const isArm=arch==='arm64';
  let family='unknown',active=null,pollTimer=0,lastRequest=null,downloadStarted=false;
  if(/android/.test(ua))family='android';
  else if(/iphone|ipad|ipod/.test(ua)||(/mac/.test(plat)&&navigator.maxTouchPoints>1))family='ios';
@@ -35,7 +37,7 @@ UX_PATCH = r'''
  const aliases={windows:['windows','win'],macos:['macos','darwin','mac'],linux:['linux'],android:['android','.apk'],ios:['ios','ipad','iphone','.ipa']};
  function candidates(){return [...document.querySelectorAll('a[href]')].filter(a=>{const s=(a.textContent+' '+a.getAttribute('href')).toLowerCase();return (aliases[family]||[]).some(x=>s.includes(x))&&/download|\.zip|\.tar\.gz|\.apk|\.ipa|package|installer/.test(s)})}
  function score(a){const s=(a.textContent+' '+a.getAttribute('href')).toLowerCase();let n=0;if(/native|router vpn app|installer/.test(s))n+=8;if(isArm&&/arm64|aarch64/.test(s))n+=6;if(!isArm&&/amd64|x86_64|x64/.test(s))n+=6;if(/portable/.test(s))n-=2;if(/all.platform|bundle/.test(s))n-=5;return n}
- function best(){return candidates().sort((a,b)=>score(b)-score(a))[0]||null}
+ function best(){if(['windows','macos','linux'].includes(family)&&arch==='unknown')return null;return candidates().sort((a,b)=>score(b)-score(a))[0]||null}
  function packageName(a){try{const u=new URL(a.href,location.href);if(u.origin!==location.origin)return'';const name=decodeURIComponent(u.pathname.split('/').pop()||'');return /\.(zip|apk|ipa|tar\.gz|tar\.xz|deb|rpm|pkg|dmg|exe|msi)$/i.test(name)?name:''}catch(_){return''}}
  function fmtBytes(n){n=Number(n||0);if(!n)return'0 B';const units=['B','KiB','MiB','GiB'];let i=0;while(n>=1024&&i<units.length-1){n/=1024;i++}return `${n.toFixed(i?1:0)} ${units[i]}`}
  function labelPhase(p){return String(p||'queued').split('-').map(x=>x?x[0].toUpperCase()+x.slice(1):x).join(' ')}
@@ -70,9 +72,10 @@ UX_PATCH = r'''
    }
  }
  const found=best();
- if(found){btn.dataset.href=found.href;btn.title=`Detected ${family}${isArm?' ARM64':''}; uses the best matching generic/native Setup Center package link with real job progress.`}
+ if(found){btn.dataset.href=found.href;btn.title=`Detected ${family}${arch==='arm64'?' ARM64':arch==='amd64'?' x64':''}; uses the best matching generic/native Setup Center package link with real job progress.`}
+ else if(['windows','macos','linux'].includes(family)&&arch==='unknown'){btn.title=`Detected ${family}, but CPU architecture is not safely exposed by this browser. Choose the x64/Intel or ARM64/Apple Silicon package explicitly.`}
  else{btn.title='No matching platform package link is currently published by this node.'}
- btn.addEventListener('click',()=>{const a=best();if(a){const name=packageName(a);if(name){startJob(name,a.href);return}a.click();return}note.textContent=`No ${family==='unknown'?'detected-platform':family} package is currently published. Keep this Setup Center open and use the platform package/download section or retry after the node finishes publishing artifacts.`;note.style.display='block';setTimeout(()=>note.style.display='none',7000)});
+ btn.addEventListener('click',()=>{const a=best();if(a){const name=packageName(a);if(name){startJob(name,a.href);return}a.click();return}note.textContent=(['windows','macos','linux'].includes(family)&&arch==='unknown')?`Detected ${family}, but this browser does not safely reveal whether the CPU is x64/Intel or ARM64/Apple Silicon. Choose the matching platform package below; Router VPN will not guess the wrong architecture.`:`No ${family==='unknown'?'detected-platform':family} package is currently published. Keep this Setup Center open and use the platform package/download section or retry after the node finishes publishing artifacts.`;note.style.display='block';setTimeout(()=>note.style.display='none',7000)});
  document.addEventListener('click',e=>{const a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a)return;const name=packageName(a);if(!name)return;e.preventDefault();startJob(name,a.href)},true);
  cancel.addEventListener('click',async()=>{if(!active||!active.status_url)return;cancel.disabled=true;phase.textContent='Cancellation requested…';try{const d=await json(active.status_url,{method:'DELETE'});render(d.job);if(!terminal(d.job))poll()}catch(e){phase.textContent=`Cancel failed: ${e.message}`;cancel.disabled=false}});
  retry.addEventListener('click',()=>{if(lastRequest)startJob(lastRequest.name,lastRequest.directHref)});

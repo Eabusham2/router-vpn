@@ -65,8 +65,9 @@ func TestASUSProtectedJFFSScriptsAreNeverTargeted(t *testing.T) {
 	for _, marker := range []string{
 		`grep -Fqx "$LINE" "$FILE" 2>/dev/null || printf '%s\n' "$LINE" >> "$FILE"`,
 		`grep -Fvx -- "$LINE" "$FILE" > "$TMP" || true`,
-		`write_hook "$NAT_START" "$RUNTIME apply-nat"`,
-		`write_hook "$FIREWALL_START" "$RUNTIME apply-filter"`,
+		`LINE="$LINE || true"`,
+		`write_hook "$NAT_START" "$RUNTIME apply"`,
+		`write_hook "$FIREWALL_START" "$RUNTIME apply"`,
 		`TAG=ROUTER_VPN`,
 		`-t nat -A PREROUTING -i "$WAN" -p "$PROTO" --dport "$EXT"`,
 		`-A FORWARD -i "$WAN" -d "$DST" -p "$PROTO" --dport "$PORT" -m state --state NEW`,

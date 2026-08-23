@@ -64,7 +64,7 @@ button:disabled,.btn:disabled{opacity:.55;cursor:not-allowed;background-color:#1
     </div><div id="adminForwardRules" class="scroll" style="margin-top:12px"></div>
   </div>
   <div class="card"><h2>Protected ports & listeners</h2><p class="small">Reserved Router VPN/management ports stay protected from generic forwarding. This view reports listeners the node can actually see.</p><div id="adminListeners" class="scroll"><div class="small">Loading…</div></div></div>
-  <div class="card"><h2>Administration capability boundary</h2><div id="adminCapabilities" class="small">Loading…</div><p class="small">Server update and one-click recovery remain unavailable until they have an authenticated rollback-safe implementation. They are not rendered as fake working controls.</p></div>
+  <div class="card"><h2>Administration capability boundary</h2><div id="adminCapabilities" class="small">Loading…</div><p class="small">Authenticated exact-SHA update is available from Release & recovery. Portainer preserves the existing stack environment, core health is revalidated after apply, and a failed update automatically restores the prior stack; Emergency Stop/Resume remains a separate runtime safety control.</p></div>
 </section>
 '''
 
@@ -100,7 +100,7 @@ ADMIN_SCRIPT = r'''
       summary.innerHTML=card('Recently active peers',recent,`${adminPeers.length} WireGuard-family peer(s) discovered`,recent?'ok':'')+card('Forwarding master',adminSettings.forwarding_master?'ON':'OFF',`${rules.filter(x=>x.enabled).length}/${rules.length} persistent rule(s) enabled`,adminSettings.forwarding_master?'ok':'warn')+card('Home LAN access',adminSettings.lan_access?'ON':'OFF',`${active.length}/${reserved.length} protected port(s) listening`,adminSettings.lan_access?'ok':'warn');
       renderPolicy();renderClients();renderForwardRules();
       listenersEl.innerHTML='<table><thead><tr><th>Protocol</th><th>Address</th><th>Port</th><th>Protected</th></tr></thead><tbody>'+listeners.map(x=>`<tr><td>${esc(x.protocol)}</td><td><code>${esc(x.address)}</code></td><td>${esc(x.port)}</td><td>${reserved.includes(Number(x.port))?'<span class="ok">Yes</span>':'No'}</td></tr>`).join('')+'</tbody></table>';
-      const caps={...(status.capabilities||{}),...(settings.capabilities||{})};capsEl.innerHTML=Object.entries(caps).map(([k,v])=>`<span class="pill ${v?'ok':'warn'}">${esc(k.replaceAll('_',' '))}: ${v?'ready':'not implemented'}</span>`).join('')+(status.errors?.length?`<p class="warn">Diagnostics: ${esc(status.errors.join(' • '))}</p>`:'');
+      const caps={...(status.capabilities||{}),...(settings.capabilities||{})};delete caps.server_update;delete caps.recovery_actions;caps.setup_center_exact_sha_update=true;caps.automatic_update_rollback=true;capsEl.innerHTML=Object.entries(caps).map(([k,v])=>`<span class="pill ${v?'ok':'warn'}">${esc(k.replaceAll('_',' '))}: ${v?'ready':'unavailable in this admin plane'}</span>`).join('')+(status.errors?.length?`<p class="warn">Diagnostics: ${esc(status.errors.join(' • '))}</p>`:'');
     }catch(e){summary.innerHTML=card('Server admin','Unavailable',e.message,'bad');clientsEl.innerHTML=`<p class="bad">${esc(e.message)}</p>`;listenersEl.innerHTML='<p class="small">No live listener data.</p>';capsEl.textContent='Server administration could not be loaded.'}
   };
   if(location.hash==='#server-admin'){gotoTab('server-admin');refreshServerAdmin()}

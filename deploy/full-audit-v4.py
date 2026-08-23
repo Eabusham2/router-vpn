@@ -129,6 +129,8 @@ need("client/Setup-Windows-Runtime.ps1","1.13.12","26.7.11","SHA-256 mismatch","
 need("client/Prepare-Windows-Mode-Catalog-v2.ps1","$mode.id -eq 'wg'","native-wireguard-windows.ps1","native-windows-mode.ps1","no native Windows adapter yet","Write-Utf8NoBom")
 need("cmd/client/windows_runtime.go","Prepare-Windows-Mode-Catalog-v2.ps1","sing-box/Xray TUN adapter")
 need("cmd/portable-launcher/main.go",'modeID=="wg"',"native-wireguard-windows.ps1","native-windows-mode.ps1","nativeLayeredWindowsModes","no native Windows adapter yet")
+for retired in ("client/Prepare-Windows-Mode-Catalog.ps1","client/RouterVPN-Windows-Product.ps1"):
+ if (ROOT/retired).exists():errors.append(f"retired Windows payload still ships in source tree: {retired}")
 for rel in("client/native-windows-mode.ps1","client/Setup-Windows-Runtime.ps1","client/Prepare-Windows-Mode-Catalog-v2.ps1","cmd/client/windows_runtime.go","cmd/portable-launcher/main.go","deploy/package-builds.sh"):
  text=read(rel).lower()
  if"wsl.exe"in text or"requires wsl2"in text:errors.append(f"current Windows runtime still depends on WSL: {rel}")

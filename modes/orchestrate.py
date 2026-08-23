@@ -185,6 +185,15 @@ def cleanup_signal(signum, _frame):
     stop_current(False); raise SystemExit(128 + signum)
 
 signal.signal(signal.SIGINT, cleanup_signal); signal.signal(signal.SIGTERM, cleanup_signal)
-if len(sys.argv) != 2 or sys.argv[1] not in {"smart", "custom"}: raise SystemExit("usage: orchestrate.py smart|custom")
-try: raise SystemExit(smart_auto() if sys.argv[1] == "smart" else custom())
-finally: stop_current(False)
+
+def main() -> int:
+    if len(sys.argv) != 2 or sys.argv[1] not in {"smart", "custom"}:
+        print("usage: orchestrate.py smart|custom", file=sys.stderr)
+        return 2
+    try:
+        return smart_auto() if sys.argv[1] == "smart" else custom()
+    finally:
+        stop_current(False)
+
+if __name__ == "__main__":
+    raise SystemExit(main())
