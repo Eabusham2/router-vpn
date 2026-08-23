@@ -84,7 +84,9 @@ macOS and Linux require matching same-SHA artifacts or source built in their pro
 
 ## 5. ASUS forwarding
 
-Use the Setup Center's `asus-merlin-router-vpn-forwards.sh`, but inspect current router/JFFS state before reinstalling or changing hooks. The helper must preserve unrelated JFFS hook contents.
+Use the Setup Center's `asus-merlin-router-vpn-forwards.sh`. The current helper is fail-open for ordinary household Internet: it installs only direct IPv4 WAN-interface + protocol + exact-port DNAT rules and matching destination-scoped NEW-only FORWARD rules, all tagged `ROUTER_VPN`. It does not use a broad WAN catch-all chain, change built-in policies, add DROP/REJECT, modify IPv6, touch unrelated ASUS/AT&T rules, or disable hardware acceleration.
+
+Before new exposure is added the helper requires the private Setup Center health endpoint on the AI Board. A failed health/config/rule install removes only Router VPN-owned exposure; LAN -> WAN Internet remains untouched. Repeated `nat-start` / `firewall-start` calls use `iptables -C` and do not duplicate or churn healthy rules.
 
 Default public listeners:
 
@@ -104,9 +106,15 @@ UDP      51820   -> 51820
 UDP      51822   -> 51822
 ```
 
-External TCP `80` maps to internal `18080` for ACME. Never convert that to `80 -> 80`.
+External TCP `80` maps to internal `18080` for ACME. Current source still uses public OverTLS `14443/TCP` and legacy SSR `15443/TCP+UDP`. Never expose `22/53`, `1080`, `3000`, `8786-8793`, `9443`, `14444`, SSH, Portainer or AdGuard management.
 
-Never expose `1080`, `8786`, `8787`, `14444`, `9443`, SSH, Portainer or AdGuard admin.
+The helper supports `status`, `apply`, `verify`, and `remove` in addition to the component `apply-nat` / `apply-filter` hook actions. `remove` preserves every unrelated line in `nat-start` and `firewall-start`.
+
+No-reboot migration/update:
+
+```bash
+curl -fsS http://192.168.50.133:8786/asus-merlin-router-vpn-forwards.sh | ssh ROUTER_USER@192.168.50.1 'cat >/tmp/router-vpn-forwards.sh && chmod 755 /tmp/router-vpn-forwards.sh && sh /tmp/router-vpn-forwards.sh install && /jffs/scripts/router-vpn-forward.sh verify'
+```
 
 ## 6. Release/live validation
 

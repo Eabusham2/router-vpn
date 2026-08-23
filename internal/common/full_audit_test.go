@@ -29,6 +29,8 @@ func runRepositoryPythonPath(t *testing.T, scriptPath string) {
 func TestAuthoritativeRepositoryPythonSafetyContracts(t *testing.T) {
 	paths := []string{
 		"deploy/full-audit-v4.py",
+		"deploy/router-forwarding-audit.py",
+		"deploy/test_router_forwarding_fail_open.py",
 		"deploy/linux-full-profile-shipping-audit.py",
 		"deploy/linux-auto-requirements-audit.py",
 		"deploy/docs-native-fallback-policy-audit.py",
@@ -62,10 +64,14 @@ func TestASUSProtectedJFFSScriptsAreNeverTargeted(t *testing.T) {
 	}
 	for _, marker := range []string{
 		`grep -Fqx "$LINE" "$FILE" 2>/dev/null || printf '%s\n' "$LINE" >> "$FILE"`,
+		`grep -Fvx -- "$LINE" "$FILE" > "$TMP" || true`,
 		`write_hook "$NAT_START" "$RUNTIME apply-nat"`,
 		`write_hook "$FIREWALL_START" "$RUNTIME apply-filter"`,
-		`/jffs/scripts/router-vpn-forward.sh apply-nat`,
-		`/jffs/scripts/router-vpn-forward.sh apply-filter`,
+		`TAG=ROUTER_VPN`,
+		`-t nat -A PREROUTING -i "$WAN" -p "$PROTO" --dport "$EXT"`,
+		`-A FORWARD -i "$WAN" -d "$DST" -p "$PROTO" --dport "$PORT" -m state --state NEW`,
+		`apply) apply_all`,
+		`verify) verify`,
 	} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("non-destructive ASUS JFFS hook marker missing: %s", marker)
@@ -75,6 +81,8 @@ func TestASUSProtectedJFFSScriptsAreNeverTargeted(t *testing.T) {
 		`cat > "$NAT_START"`, `cat > "$FIREWALL_START"`,
 		`: > "$NAT_START"`, `: > "$FIREWALL_START"`,
 		`rm -f "$NAT_START"`, `rm -f "$FIREWALL_START"`,
+		`ensure_jump nat PREROUTING -i "$WAN" -j`,
+		`ensure_jump filter FORWARD -i "$WAN" -d "$DST" -j`,
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("destructive Merlin hook behavior detected: %s", forbidden)

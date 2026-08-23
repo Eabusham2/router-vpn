@@ -122,6 +122,10 @@ Use:
 router/asus-merlin-router-vpn-forwards.sh
 ```
 
+The helper is deliberately **fail-open for normal household Internet**. Router VPN never changes INPUT/FORWARD/OUTPUT policies, never flushes built-in chains, never adds DROP/REJECT rules, never touches IPv6, and never disables Runner/FlowCache/hardware acceleration. It adds only direct IPv4 parent-chain rules that already match the WAN interface + protocol + one exact Router VPN destination port. Unrelated WAN packets never enter a Router VPN catch-all chain.
+
+A private `http://192.168.50.133:8786/healthz` check must succeed before new Router VPN exposure is installed. If the AI Board is down, malformed, or an iptables add fails, Router VPN removes only its own tagged exposure; ordinary LAN -> WAN, DNS/DHCP, ASUS-generated firewall state, AT&T/BGW rules and unrelated port forwards are left alone.
+
 Default WAN → AI Board mapping:
 
 ```text
@@ -140,41 +144,54 @@ UDP      51820   -> 51820
 UDP      51822   -> 51822
 ```
 
-External TCP `80` maps to internal `18080` for ACME. Never change that to `80 -> 80`.
+`14443/TCP` (OverTLS) and `15443/TCP+UDP` (legacy SSR) remain because current source still publishes those services. External TCP `80` maps to internal `18080` for ACME; never change it to `80 -> 80`.
 
 Never WAN-expose:
 
 ```text
-1080   plain trusted-LAN/tunnel SOCKS5
-8786   Setup Center/download broker
-8787   internal router API
-14444  internal OverTLS backend
-9443   Portainer
-SSH
-AdGuard admin
+22/53   SSH / DNS management
+1080    plain trusted-LAN/tunnel SOCKS5
+3000    AdGuard UI
+8786    Setup Center/download broker
+8787    internal router API
+8788-8793 internal client/control/update/health surfaces
+9443    Portainer
+14444   internal OverTLS backend
 ```
 
-The helper preserves unrelated JFFS hook contents. Current Router VPN hook calls are:
+Every owned IPv4 rule carries `-m comment --comment ROUTER_VPN`. FORWARD rules are destination-scoped to `192.168.50.133`, exact-port scoped, and `NEW` only; normal ASUS ESTABLISHED/RELATED handling remains in charge.
+
+Current persistent Merlin hook calls remain component-specific and idempotent:
 
 ```text
 router-vpn-forward.sh apply-nat
 router-vpn-forward.sh apply-filter
 ```
 
-If ASUS SCP/SFTP is unavailable, use SSH stdin:
+The helper also provides:
 
-```bash
-ssh ROUTER_USER@192.168.50.1 'cat > /tmp/router-vpn-forwards.sh && chmod 755 /tmp/router-vpn-forwards.sh' < router/asus-merlin-router-vpn-forwards.sh
-ssh ROUTER_USER@192.168.50.1 'sh /tmp/router-vpn-forwards.sh install'
+```text
+router-vpn-forward.sh apply
+router-vpn-forward.sh status
+router-vpn-forward.sh verify
+router-vpn-forward.sh remove
 ```
 
-Status:
+`verify` rejects the retired broad `PREROUTING -> ROUTER_VPN_DNAT` / `FORWARD -> ROUTER_VPN_FWD` layout, forbidden ports, duplicates, LAN->WAN mutations, and Router VPN IPv6 rules. `remove` deletes only Router-VPN-tagged/direct/legacy-owned rules and exact Router VPN hook lines; every unrelated line in `nat-start` / `firewall-start` is preserved.
+
+No-reboot migration/update from Mac/Linux (SSH stdin also works when ASUS SFTP/scp is unavailable):
 
 ```bash
-ssh ROUTER_USER@192.168.50.1 '/jffs/scripts/router-vpn-forward.sh status'
+curl -fsS http://192.168.50.133:8786/asus-merlin-router-vpn-forwards.sh | ssh ROUTER_USER@192.168.50.1 'cat >/tmp/router-vpn-forwards.sh && chmod 755 /tmp/router-vpn-forwards.sh && sh /tmp/router-vpn-forwards.sh install && /jffs/scripts/router-vpn-forward.sh verify'
 ```
 
-Inspect current router state before reinstalling/updating hooks; preserve unrelated JFFS scripts.
+Status/verification:
+
+```bash
+ssh ROUTER_USER@192.168.50.1 '/jffs/scripts/router-vpn-forward.sh status && /jffs/scripts/router-vpn-forward.sh verify'
+```
+
+Inspect current router state before reinstalling/updating hooks. Preserve unrelated JFFS scripts and ASUS/AT&T firewall behavior.
 
 ## 5. Logical modes
 

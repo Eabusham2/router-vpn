@@ -37,6 +37,7 @@ jobs:
           python3 deploy/private-bundle-boundary-audit.py
           python3 deploy/docker-cleanup-safety-audit.py
           python3 deploy/router-forwarding-audit.py
+          python3 deploy/test_router_forwarding_fail_open.py
           python3 deploy/release-orchestration-audit.py
           python3 deploy/recovered-release-audit-v4.py
           python3 deploy/test-killswitch-transition-contract.py
