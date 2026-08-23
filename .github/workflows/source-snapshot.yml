@@ -25,9 +25,12 @@ jobs:
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.tar.gz"
+          members="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.members.txt"
           git archive --format=tar.gz --prefix="router-vpn-${GITHUB_SHA}/" -o "$archive" HEAD
           sha256sum "$archive" > "$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.tar.gz.sha256"
-          tar -tzf "$archive" | head -n 5
+          tar -tzf "$archive" > "$members"
+          test -s "$members"
+          head -n 5 "$members"
       - name: Upload exact source snapshot
         id: upload
         uses: actions/upload-artifact@v4

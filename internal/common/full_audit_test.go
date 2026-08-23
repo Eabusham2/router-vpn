@@ -81,3 +81,46 @@ func TestASUSProtectedJFFSScriptsAreNeverTargeted(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildInputsAndSourceSnapshotAreRepositoryConsistent(t *testing.T) {
+	root := repositoryRoot()
+	dockerPath := filepath.Join(root, "deploy", "update-controller.Dockerfile")
+	dockerBody, err := os.ReadFile(dockerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerText := string(dockerBody)
+	if strings.Contains(dockerText, "go.sum") {
+		if _, err := os.Stat(filepath.Join(root, "go.sum")); err != nil {
+			t.Fatalf("update-controller Dockerfile references go.sum but the repository does not ship it: %v", err)
+		}
+	}
+	for _, marker := range []string{"COPY go.mod ./", "COPY cmd/update-controller ./cmd/update-controller", "go build -trimpath"} {
+		if !strings.Contains(dockerText, marker) {
+			t.Fatalf("update-controller image lost required deterministic build marker %q", marker)
+		}
+	}
+
+	workflowPath := filepath.Join(root, ".github", "workflows", "source-snapshot.yml")
+	workflowBody, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(workflowBody)
+	for _, forbidden := range []string{`tar -tzf "$archive" | head`, `tar -tf "$archive" | head`} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("source snapshot uses a pipefail/SIGPIPE-prone archive preview: %s", forbidden)
+		}
+	}
+	for _, marker := range []string{
+		`tar -tzf "$archive" > "$members"`,
+		`test -s "$members"`,
+		`head -n 5 "$members"`,
+		`id: upload`,
+		`description": "artifact:" + os.environ["ARTIFACT_ID"]`,
+	} {
+		if !strings.Contains(workflow, marker) {
+			t.Fatalf("source snapshot lost exact-SHA local-audit handoff marker %q", marker)
+		}
+	}
+}
