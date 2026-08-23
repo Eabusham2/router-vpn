@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           git merge-base --is-ancestor 9a7330d6a8ce05fc53a8082b6f57a7e45af7fe6c HEAD
-          cat .routervpn-final-patch/part01 .routervpn-final-patch/part02 .routervpn-final-patch/part03 .routervpn-final-patch/part04a .routervpn-final-patch/part04b .routervpn-final-patch/part04c .routervpn-final-patch/part04d | base64 -d | gunzip > /tmp/routervpn-final.patch
+          cat .routervpn-final-patch/part01a .routervpn-final-patch/part01b .routervpn-final-patch/part01c .routervpn-final-patch/part01d .routervpn-final-patch/part02 .routervpn-final-patch/part03 .routervpn-final-patch/part04a .routervpn-final-patch/part04b .routervpn-final-patch/part04c .routervpn-final-patch/part04d | base64 -d | gunzip > /tmp/routervpn-final.patch
           git apply --check /tmp/routervpn-final.patch
           git apply --index /tmp/routervpn-final.patch
           rm -rf .routervpn-final-patch
