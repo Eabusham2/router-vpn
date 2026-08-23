@@ -40,19 +40,37 @@ jobs:
           python3 deploy/test_router_forwarding_fail_open.py
           python3 deploy/release-orchestration-audit.py
           python3 deploy/recovered-release-audit-v4.py
+          python3 deploy/historical-regression-audit.py
+          python3 deploy/recovered-corrections-audit.py
+          python3 deploy/recovered-requirements-1-264-audit.py
+          python3 deploy/recovered-requirements-265-311-audit.py
+          python3 deploy/recovered-addendum-312-356-audit.py
+          python3 deploy/latest-a20-product-contract-audit.py
+          python3 deploy/binding-edge-requirements-audit.py
+          python3 deploy/daita-safety-audit.py
+          python3 modes/test_smart_auto_rollback.py
           python3 deploy/test-killswitch-transition-contract.py
           python3 deploy/test_macos_killswitch_contract.py
+          python3 modes/test_kill_switch.py
+          python3 modes/test_mtu_policy.py
+          python3 modes/test_multihop.py
           python3 deploy/test-router-local-package-fallback.py
           python3 deploy/test-production-release-compose.py
           python3 server/finalize/test_sync_endpoint.py
+          python3 server/scripts/test_preserve_generated_state.py
           python3 server/scripts/test_native_artifact_policy.py
           python3 server/scripts/test_download_broker_exact_sha.py
           python3 server/scripts/test_setup_auth.py
           python3 server/scripts/test_broker_security.py
           python3 server/scripts/test_download_jobs.py
+          python3 server/scripts/test_download_safety.py
+          python3 server/scripts/test_setup_center_release.py
+          python3 server/scripts/test_setup_center_update.py
           python3 server/scripts/test_setup_imports.py
           python3 server/scripts/test_setup_center_server.py
           python3 server/scripts/test_setup_center_server_control.py
+          python3 server/scripts/test_setup_center_requirement_349.py
+          python3 server/scripts/test_setup_center_router_onboarding.py
           python3 server/scripts/test_setup_center_verified_onboarding.py
           python3 client/test_native_onboarding_contract.py
           python3 android/test_android_runtime_contract.py
@@ -60,6 +78,8 @@ jobs:
           python3 android/test_android_session_identity_contract.py
           python3 android/test_android_native_policy_contract.py
           python3 android/test_android_standard_exit_contract.py
+          python3 android/test_android_connection_profiles_contract.py
+          python3 android/test_android_via_entry_latency_contract.py
           python3 modes/test_profile_id_safety.py
       - name: Weighted source/manual release accounting
         run: |
@@ -137,6 +157,7 @@ jobs:
           $arch=$env:ROUTER_VPN_ARCH; $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Windows-$arch.zip"|Select-Object -First 1).FullName
           $extract=Join-Path $env:RUNNER_TEMP "installed-$arch"; Expand-Archive $archive $extract -Force; $root=Get-ChildItem $extract -Directory|Select-Object -First 1; $start=Get-Content (Join-Path $root.FullName 'Start-RouterVPN.ps1') -Raw
           if($start-notmatch'RouterVPN-Windows-App\.ps1'){throw 'installed package not native WPF'}; if($start-match'msedge\.exe|chrome\.exe|--app='){throw 'browser shell regression'}
+          $killTest=Join-Path $root.FullName 'client\test-windows-kill-switch.ps1'; if(-not(Test-Path $killTest)){throw 'shipped Windows package missing kill-switch contract test'}; & $killTest
 
   android:
     name: Android native APK
@@ -160,6 +181,8 @@ jobs:
           python3 android/test_android_session_identity_contract.py
           python3 android/test_android_native_policy_contract.py
           python3 android/test_android_standard_exit_contract.py
+          python3 android/test_android_connection_profiles_contract.py
+          python3 android/test_android_via_entry_latency_contract.py
           gradle -p android --no-daemon :app:assembleDebug
           test -s android/app/build/outputs/apk/debug/app-debug.apk
           unzip -tq android/app/build/outputs/apk/debug/app-debug.apk >/dev/null
