@@ -64,7 +64,7 @@ if 'router-vpn-windows-amd64.zip' not in text:
     ]
 if 'router-vpn-android.apk' not in text:
     extra += [
-      "['Android APK','router-vpn-android.apk','Same-SHA GitHub-built generic Android controller/importer APK'],",
+      "['Android APK','router-vpn-android.apk','Same-SHA native Android VpnService app'],",
       "['iOS/iPadOS native WireGuard IPA','router-vpn-ios.ipa','Unsigned re-signable same-SHA native WireGuard PacketTunnel build'],",
     ]
 if extra:

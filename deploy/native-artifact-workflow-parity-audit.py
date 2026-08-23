@@ -134,4 +134,26 @@ require(rc, rc_rel,
         "RELEASE-CANDIDATE-SHA256SUMS",
         "sha256sum -c RELEASE-CANDIDATE-SHA256SUMS")
 
+# Product-facing mobile source docs must describe the runtimes the native jobs
+# actually build, without reviving the retired controller/importer-only shell.
+ios_readme = read("ios/README.md")
+require(ios_readme, "ios/README.md",
+        "native SwiftUI Router VPN application",
+        "pinned WireGuardKit adapter",
+        "pinned Libbox bridge",
+        "RouterVPN-native-unsigned-resignable.ipa",
+        "release-candidate.yml",
+        "client-apps-ci.yml",
+        "Unsupported paths fail closed")
+for stale in (
+    "SwiftUI controller/importer",
+    "native tunnel adapter is missing",
+    "custom VPN connections will not work until",
+):
+    assert stale not in ios_readme, f"ios/README.md: stale pre-native runtime claim returned: {stale!r}"
+
+publisher = read("server/scripts/publish-downloads.sh")
+assert "Same-SHA native Android VpnService app" in publisher, "Setup Center publisher reverted Android to a controller/importer label"
+assert "Android controller/importer APK" not in publisher, "Setup Center publisher contains retired Android shell wording"
+
 print("native artifact/workflow parity audit: OK")
