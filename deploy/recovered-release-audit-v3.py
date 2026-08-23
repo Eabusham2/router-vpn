@@ -62,7 +62,7 @@ def macos_killswitch_gate() -> bool:
         and mod.has("modes/stop-mode-platform.sh", "stop-mode.sh", "kill-switch-platform.py", "release")
         and mod.has("modes/orchestrate-platform.py", "stop-mode.sh", "stop-mode-platform.sh")
         and mod.has("internal/common/mode_platform.go", 'platform != "darwin"', "orchestrate-platform.py", "stop-mode-platform.sh")
-        and mod.has("deploy/test_macos_killswitch_contract.py", "macOS strict kill-switch source contract: OK")
+        and mod.has("deploy/test_macos_killswitch_contract.py", "macOS strict kill-switch scoped PF/state source contract: OK")
     )
     if not structural:
         return False
@@ -78,7 +78,7 @@ def macos_killswitch_gate() -> bool:
         )
     except Exception:
         return False
-    return proc.returncode == 0 and "macOS strict kill-switch source contract: OK" in proc.stdout
+    return proc.returncode == 0 and "macOS strict kill-switch scoped PF/state source contract: OK" in proc.stdout
 
 
 def controller_multihop_platform(platform: str) -> bool:
@@ -94,17 +94,18 @@ def android_map() -> bool:
         and mod.has(
             "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
             "RouterVpnNodeMapView",
-            "latitude",
-            "longitude",
-            "Home / Connect",
-            "Nodes / Map",
-            "Modes",
-            "DNS",
-            "Advanced",
-            "Forwarding",
-            "Settings",
-            "Help",
-            "if (!item.hasCoordinates()) continue;",
+            "Add / select node",
+            "Details / proof",
+            "⚡ Fastest",
+            "Connect",
+            "Multihop",
+            'controlRow("Settings")',
+            'controlRow("Mode")',
+            'controlRow("DNS")',
+            'smallButton("Forward")',
+            'smallButton("Nodes")',
+            'smallButton("Profiles")',
+            "showHelp",
         )
         and mod.has(
             "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
@@ -113,7 +114,10 @@ def android_map() -> bool:
             "latitude",
             "longitude",
             "Double.isFinite",
-            "No real node coordinates",
+            "No real node coordinates in linked profiles",
+            "Only real coordinates",
+            "LOCATE ME",
+            "no first-launch prompt",
         )
     )
 
@@ -121,19 +125,27 @@ def android_map() -> bool:
 def ios_map() -> bool:
     return (
         mod.has("ios/RouterVPN/App/RouterVPNApp.swift", "ProductRootView()")
-        and mod.has("ios/RouterVPN/project.yml", "sources: [App, Resources]")
-        and mod.has("ios/RouterVPN/App/ProductRootView.swift", "RouterVPNNodeMapSheet", "Nodes & Map")
+        and mod.has("ios/RouterVPN/project.yml", "sources:", "- App", "- Resources")
         and mod.has(
-            "ios/RouterVPN/App/NodeMapSheet.swift",
+            "ios/RouterVPN/App/ProductRootView.swift",
+            "IOSUnifiedProductView",
+            "IOSUserLocationControl",
+            "never derives a coordinate from the public IP",
+        )
+        and mod.has(
+            "ios/RouterVPN/App/IOSUnifiedProductView.swift",
             "import MapKit",
-            "Map {",
+            "IOSUnifiedMap",
+            "MKMapView",
             "latitude",
             "longitude",
-            "No real node coordinates",
-            "never invents map locations",
+            "(-90...90).contains(lat)",
+            "(-180...180).contains(lon)",
+            "!(lat == 0 && lon == 0)",
+            "RouterVPNNodeManagerSheet",
+            "real coordinates",
         )
     )
-
 
 def selected_dns_proof() -> bool:
     return (

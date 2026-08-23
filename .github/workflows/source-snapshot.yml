@@ -27,7 +27,7 @@ jobs:
           archive="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.tar.gz"
           members="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.members.txt"
           git archive --format=tar.gz --prefix="router-vpn-${GITHUB_SHA}/" -o "$archive" HEAD
-          sha256sum "$archive" > "$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.tar.gz.sha256"
+          (cd "$RUNNER_TEMP" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
           tar -tzf "$archive" > "$members"
           test -s "$members"
           head -n 5 "$members"

@@ -89,8 +89,8 @@ win_settings = require(
     "client/RouterVPN-Windows-ProfileSettings.ps1", "/api/profile/settings", "Allow home LAN access",
     "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
     "Connection profiles", "Add profile", "Load", "Update", "Delete",
-    "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
-    "/api/connection-profile/load", "/api/connection-profile/delete",
+    "/api/connection-profiles", "/api/connection-profile/setup/save", "/api/connection-profile/setup/update",
+    "/api/connection-profile/setup/load", "/api/connection-profile/setup/delete",
     "windows-selected-mode-v1.txt", "windows-custom-presets-v1.json", "never duplicate node secrets",
 )
 for forbidden in ("APIToken", "PrivateKey", "PresharedKey", "socks_password"):
@@ -101,7 +101,7 @@ require_combined(
     ("client/RouterVPN-Windows-App.ps1", "client/RouterVPN-Windows-UnifiedShell.ps1", "client/RouterVPN-Windows-ProfileSettings.ps1"),
     "RouterVPN-Windows-ProfileSettings.ps1", "Show-RouterVPNProfileSettingsDialog", "/api/profile/settings",
     "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
-    "UnifiedSettingsButton", "UnifiedKillSwitch", "UnifiedMtuButton", "/api/connection-profile/load",
+    "UnifiedSettingsButton", "UnifiedKillSwitch", "UnifiedMtuButton", "/api/connection-profile/setup/load",
 )
 
 mac_settings = require(
@@ -169,7 +169,7 @@ android_store = require(
     "connection-profiles-v1.json", "MAX_PROFILES=64", "POLICY_KEYS", "requireIdle",
     "home_lan_access", "kill_switch_policy", "ipv6_mode", "auto_require_encrypted", "auto_require_obfuscation",
     "mtu_policy", "dns_mode", "dns_protocol", "multihop_enabled", "multihop_entry_id", "multihop_exit_id",
-    "node_kind", "node_id", "custom_layers", "store contains non-whitelisted node data",
+    "node_kind", "node_id", "custom_layers", "Connection profile contains non-whitelisted node data",
 )
 for forbidden in ('"api_token"', '"private_key"', '"preshared_key"', '"socks_password"', '"password"', '"secret"'):
     if forbidden in android_store:
@@ -188,7 +188,8 @@ if "AndroidProfileSettingsDialog.show(this,nodeStore,this::refreshAll)" not in c
     errors.append("Android ProductActivity Settings is not wired to refresh the unified surface after save")
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java",
-    "auto_require_encrypted", "auto_require_obfuscation", "applyAutoRequirements", "AUTO/SMART filters only",
+    "auto_require_encrypted", "auto_require_obfuscation", "applyAutoRequirements",
+    "collect(bundle,true,custom==null)", "applyAutoRequirements&&profile!=null",
 )
 
 require(
@@ -209,7 +210,7 @@ ios_profiles = require(
     "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "Add", "Load", "Update", "Delete",
     "routervpn.connection-profiles.v1", "routervpn.unified.mode.v1", "routervpn.unified.custom-presets.v1",
     "dnsMode", "dnsProtocol", "multihopEnabled", "multihopEntryID", "multihopExitID",
-    "current iOS PacketTunnel does not support full desktop multihop. Nothing was changed",
+    "Current iOS does not execute full desktop multihop", "rejected at Add/Update time",
     "Connect remains a separate action", "No RouterProfile/API token/private key/external secret payload",
 )
 for forbidden in ("apiToken", "privateKey", "presharedKey", "socksPassword", "ExternalNodeConfig"):

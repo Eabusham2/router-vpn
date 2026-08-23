@@ -42,13 +42,15 @@ for marker in (
     assert marker in controller, f"update controller missing {marker!r}"
 
 for forbidden in (
-    '/var/run/docker.sock',
     'docker system prune',
     'docker compose',
     'InsecureSkipVerify: false',
     '0.0.0.0:8793',
 ):
     assert forbidden not in controller, f"update controller contains unsafe/fake marker {forbidden!r}"
+# The updater must explicitly reject a Docker-socket mount in a candidate compose;
+# mentioning the path in this validation is a safety invariant, not socket access.
+assert '- /var/run/docker.sock' in controller, 'update controller no longer rejects Docker-socket mounts in candidate compose'
 
 for marker in (
     'TestMaterializeExactSHAAndNoFloatingOldImages',

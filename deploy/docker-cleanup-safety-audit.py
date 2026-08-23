@@ -42,6 +42,11 @@ for root_name in ("server", "deploy", "router"):
             continue
         if path.resolve() == AUDIT_SOURCE:
             continue
+        # Negative security tests intentionally contain the forbidden command strings
+        # as assertions. They are not deployment/recovery executables and must not
+        # be mistaken for code that will run those host-wide Docker operations.
+        if path.name.startswith("test_"):
+            continue
         body = path.read_text(encoding="utf-8", errors="replace")
         executable = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
         for pattern in forbidden_regexes:

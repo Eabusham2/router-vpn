@@ -113,6 +113,7 @@ func TestBuildInputsAndSourceSnapshotAreRepositoryConsistent(t *testing.T) {
 		}
 	}
 	for _, marker := range []string{
+		`(cd "$RUNNER_TEMP" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")`,
 		`tar -tzf "$archive" > "$members"`,
 		`test -s "$members"`,
 		`head -n 5 "$members"`,

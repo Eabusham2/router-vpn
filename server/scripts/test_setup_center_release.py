@@ -29,10 +29,13 @@ class SetupCenterReleaseTests(unittest.TestCase):
         h = object.__new__(mod.Handler)
         base = '<html><body><div id="tabs"></div><div id="wizard" class="overlay"></div></body></html>'
         rendered = h._inject_product_ui(base)
-        self.assertIn('data-tab="release-status"', rendered)
-        self.assertEqual(rendered.count('data-tab="release-status"'), 1)
+        panel_marker = '<section class="panel" data-tab="release-status">'
+        script_marker = 'id="routerVpnReleaseStatusScript"'
+        self.assertEqual(rendered.count(panel_marker), 1)
+        self.assertEqual(rendered.count(script_marker), 1)
         again = h._inject_product_ui(rendered)
-        self.assertEqual(again.count('data-tab="release-status"'), 1)
+        self.assertEqual(again.count(panel_marker), 1)
+        self.assertEqual(again.count(script_marker), 1)
 
     def test_exact_sha_status_is_read_only(self):
         old = os.environ.get("ROUTER_VPN_GITHUB_SHA")
@@ -45,7 +48,9 @@ class SetupCenterReleaseTests(unittest.TestCase):
             self.assertTrue(status["exact_sha"])
             self.assertEqual(status["deployed_sha"], "a" * 40)
             self.assertEqual(status["production_model"], "exact-sha-image-only")
-            self.assertFalse(status["self_update_available"])
+            self.assertTrue(status["self_update_available"])
+            self.assertIn("loopback-only update controller", status["self_update_reason"])
+            self.assertIn("exact SHA", status["self_update_reason"])
             joined = " ".join(status["recovery"]["safe_sequence"] + status["protected_invariants"]).lower()
             self.assertIn("portainer", joined)
             self.assertNotIn("docker.sock", joined)
