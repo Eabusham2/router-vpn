@@ -141,6 +141,8 @@ esac
         run(["/bin/sh", str(HELPER), "install"], env)
         runtime = jffs / "router-vpn-forward.sh"
         assert runtime.exists()
+        assert f"{runtime} apply-nat || true" in nat_hook.read_text(encoding="utf-8")
+        assert f"{runtime} apply-filter || true" in fw_hook.read_text(encoding="utf-8")
         assert unrelated(state) == initial_unrelated
         assert not (state / "nat.ROUTER_VPN_DNAT").exists()
         assert not (state / "filter.ROUTER_VPN_FWD").exists()
@@ -167,6 +169,8 @@ esac
         # Router VPN/AI Board down -> only Router VPN exposure disappears.
         down = env | {"ROUTER_VPN_TEST_HEALTH": "down"}
         run(["/bin/sh", str(runtime), "apply"], down, ok=False)
+        run(["/bin/sh", str(nat_hook)], down)
+        run(["/bin/sh", str(fw_hook)], down)
         assert unrelated(state) == initial_unrelated
         assert owned(state) == ([], [])
 
@@ -206,8 +210,8 @@ esac
         nat2, fwd2 = owned(state)
         assert len(nat2) == len(set(nat2)) == 16
         assert len(fwd2) == len(set(fwd2)) == 16
-        assert nat_hook.read_text(encoding="utf-8").count("router-vpn-forward.sh apply-nat") == 1
-        assert fw_hook.read_text(encoding="utf-8").count("router-vpn-forward.sh apply-filter") == 1
+        assert nat_hook.read_text(encoding="utf-8").count("router-vpn-forward.sh apply-nat || true") == 1
+        assert fw_hook.read_text(encoding="utf-8").count("router-vpn-forward.sh apply-filter || true") == 1
         assert "unrelated-nat-hook" in nat_hook.read_text(encoding="utf-8")
         for protected in ("cod-na-block.sh", "rogue-dhcp-ra-guard.sh", "att-bgw-guard.sh"):
             assert protected in fw_hook.read_text(encoding="utf-8")

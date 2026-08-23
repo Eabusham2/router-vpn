@@ -282,6 +282,7 @@ apply_all(){
 
 write_hook(){
   FILE=$1 LINE=$2
+  LINE="$LINE || true"
   [ -f "$FILE" ] || printf '#!/bin/sh\n' > "$FILE"
   grep -Fqx "$LINE" "$FILE" 2>/dev/null || printf '%s\n' "$LINE" >> "$FILE"
   chmod 755 "$FILE"
@@ -302,6 +303,11 @@ remove_hook_lines(){
   do
     TMP="$FILE.router-vpn.$$"
     grep -Fvx -- "$LINE" "$FILE" > "$TMP" || true
+    cat "$TMP" > "$FILE"
+    rm -f "$TMP"
+    GUARDED_LINE="$LINE || true"
+    TMP="$FILE.router-vpn.$$"
+    grep -Fvx -- "$GUARDED_LINE" "$FILE" > "$TMP" || true
     cat "$TMP" > "$FILE"
     rm -f "$TMP"
   done
