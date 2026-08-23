@@ -16,7 +16,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "9a7330d6a8ce05fc53a8082b6f57a7e45af7fe6c"
+          git merge-base --is-ancestor 9a7330d6a8ce05fc53a8082b6f57a7e45af7fe6c HEAD
           cat .routervpn-final-patch/part01 .routervpn-final-patch/part02 .routervpn-final-patch/part03 .routervpn-final-patch/part04a .routervpn-final-patch/part04b .routervpn-final-patch/part04c .routervpn-final-patch/part04d | base64 -d | gunzip > /tmp/routervpn-final.patch
           git apply --check /tmp/routervpn-final.patch
           git apply --index /tmp/routervpn-final.patch
