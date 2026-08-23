@@ -135,8 +135,6 @@ require_health(){
   return 1
 }
 
-# Direct parent-chain ownership helpers.  -C makes healthy repeated Merlin hook
-# calls true no-ops rather than delete/reinsert cycles.
 ensure_nat(){
   WAN=$1 PROTO=$2 EXT=$3 INT=$4
   if ! "$IPTABLES" -t nat -C PREROUTING -i "$WAN" -p "$PROTO" --dport "$EXT" -m comment --comment "$TAG" -j DNAT --to-destination "$DST:$INT" >/dev/null 2>&1; then
@@ -151,9 +149,6 @@ ensure_fwd(){
   fi
 }
 
-# Remove only exact Router-VPN-owned direct rules.  Other ASUS/NVRAM rules are
-# never reordered or deleted.  Legacy chain cleanup targets only the retired
-# ROUTER_VPN_DNAT/ROUTER_VPN_FWD names created by older Router VPN versions.
 remove_owned_from_chain(){
   TABLE=$1 CHAIN=$2
   "$IPTABLES" -t "$TABLE" -S "$CHAIN" 2>/dev/null | grep -F -- "--comment $TAG" | while IFS= read -r RULE; do
@@ -162,22 +157,17 @@ remove_owned_from_chain(){
       "-A $CHAIN "*) SPEC=$(printf '%s\n' "$RULE" | sed "s/^-A $CHAIN //") ;;
       *) continue ;;
     esac
-    # shellcheck disable=SC2086 -- iptables -S emits already-tokenized rule syntax.
     "$IPTABLES" -t "$TABLE" -D "$CHAIN" $SPEC >/dev/null 2>&1 || true
   done
 }
 
 remove_legacy_chains(){
-  # Delete every jump to Router VPN's two retired private chains, regardless of
-  # an old saved WAN value.  Those chain names are Router-VPN-owned.
   "$IPTABLES" -t nat -S PREROUTING 2>/dev/null | grep -F -- '-j ROUTER_VPN_DNAT' | while IFS= read -r RULE; do
     SPEC=${RULE#-A PREROUTING }
-    # shellcheck disable=SC2086
     "$IPTABLES" -t nat -D PREROUTING $SPEC >/dev/null 2>&1 || true
   done
   "$IPTABLES" -S FORWARD 2>/dev/null | grep -F -- '-j ROUTER_VPN_FWD' | while IFS= read -r RULE; do
     SPEC=${RULE#-A FORWARD }
-    # shellcheck disable=SC2086
     "$IPTABLES" -D FORWARD $SPEC >/dev/null 2>&1 || true
   done
   "$IPTABLES" -t nat -F ROUTER_VPN_DNAT >/dev/null 2>&1 || true
@@ -205,7 +195,6 @@ apply_nat(){
     remove_owned_from_chain nat PREROUTING
     return 1
   fi
-
   if ! {
     ensure_nat "$WAN" tcp "$ACME_EXTERNAL_PORT" "$ACME_INTERNAL_PORT" &&
     ensure_nat "$WAN" tcp "$REALITY_PORT" "$REALITY_PORT" &&
@@ -243,7 +232,6 @@ apply_filter(){
     remove_owned_from_chain filter FORWARD
     return 1
   fi
-
   if ! {
     ensure_fwd "$WAN" tcp "$ACME_INTERNAL_PORT" &&
     ensure_fwd "$WAN" tcp "$REALITY_PORT" &&
@@ -354,11 +342,7 @@ install(){
   need_router
   validate_settings || { remove_owned_from_chain nat PREROUTING; remove_owned_from_chain filter FORWARD; return 1; }
   mkdir -p "$JFFS_DIR"
-
-  # Remove old Router-VPN-owned rules/chains only; preserve ASUS and unrelated
-  # user firewall state byte-for-byte.
   remove_rules
-
   if [ "$SELF" != "$RUNTIME" ]; then cp "$SELF" "$RUNTIME"; fi
   chmod 755 "$RUNTIME"
   write_config
@@ -366,12 +350,10 @@ install(){
   remove_hook_lines "$FIREWALL_START"
   write_hook "$NAT_START" "$RUNTIME apply-nat"
   write_hook "$FIREWALL_START" "$RUNTIME apply-filter"
-
   if [ "${ROUTER_VPN_SKIP_NVRAM:-0}" != 1 ]; then
     nvram set jffs2_scripts=1
     nvram commit
   fi
-
   if "$RUNTIME" apply; then
     say 'Persistent narrow Merlin hooks installed. Existing nat-start/firewall-start content was preserved.'
     say "Saved forwarding overrides: $CONFIG"
@@ -410,7 +392,7 @@ status(){
   printf 'TCP+UDP  %-7s -> %s\n' "$SSR_PORT" "$SSR_PORT"
   printf 'UDP      %-7s -> %s\n' "$WG_PORT" "$WG_PORT"
   printf 'UDP      %-7s -> %s\n' "$ROSENPASS_PORT" "$ROSENPASS_PORT"
-  say 'Internal OverTLS backend 14444 is never WAN-forwarded.'
+  say 'OverTLS loopback backend 14444 is never WAN-forwarded.'
   say 'Never exposed by this script: 22/53, 1080, 3000, 8786-8793, 9443, 14444, SSH, Portainer, AdGuard admin.'
   [ ! -f "$CONFIG" ] || say "Persistent settings: $CONFIG"
   say '--- Router-VPN-owned NAT rules ---'
@@ -426,58 +408,26 @@ verify(){
   ERR=0
   NAT_RULES=$($IPTABLES -t nat -S PREROUTING 2>/dev/null || true)
   FWD_RULES=$($IPTABLES -S FORWARD 2>/dev/null || true)
-
-  if printf '%s\n' "$NAT_RULES" | grep -F -- '-j ROUTER_VPN_DNAT' >/dev/null 2>&1; then
-    warn 'broad legacy PREROUTING -> ROUTER_VPN_DNAT catch-all still exists'; ERR=1
-  fi
-  if printf '%s\n' "$FWD_RULES" | grep -F -- '-j ROUTER_VPN_FWD' >/dev/null 2>&1; then
-    warn 'broad legacy FORWARD -> ROUTER_VPN_FWD catch-all still exists'; ERR=1
-  fi
-
+  if printf '%s\n' "$NAT_RULES" | grep -F -- '-j ROUTER_VPN_DNAT' >/dev/null 2>&1; then warn 'broad legacy PREROUTING -> ROUTER_VPN_DNAT catch-all still exists'; ERR=1; fi
+  if printf '%s\n' "$FWD_RULES" | grep -F -- '-j ROUTER_VPN_FWD' >/dev/null 2>&1; then warn 'broad legacy FORWARD -> ROUTER_VPN_FWD catch-all still exists'; ERR=1; fi
   NAT_OWNED=$(printf '%s\n' "$NAT_RULES" | grep -F -- "--comment $TAG" || true)
   FWD_OWNED=$(printf '%s\n' "$FWD_RULES" | grep -F -- "--comment $TAG" || true)
-
-  # Every owned rule must remain inbound-only and exact-port scoped.  No owned
-  # rule may touch LAN->WAN, policies, DROP/REJECT, DNS/DHCP, or broad traffic.
-  if printf '%s\n%s\n' "$NAT_OWNED" "$FWD_OWNED" | grep -E -- ' -j (DROP|REJECT)( |$)|(^| )-P( |$)| -s 192\.168\.50\.| -o ' >/dev/null 2>&1; then
-    warn 'Router VPN-owned rule escaped narrow inbound-only scope'; ERR=1
-  fi
-  if printf '%s\n' "$NAT_OWNED" | grep -v '^$' | grep -v -F -- "-i $WAN" >/dev/null 2>&1; then
-    warn 'Router VPN NAT rule lost WAN-interface scope'; ERR=1
-  fi
-  if printf '%s\n' "$FWD_OWNED" | grep -v '^$' | grep -v -F -- "-i $WAN -d $DST" >/dev/null 2>&1; then
-    warn 'Router VPN FORWARD rule lost WAN/destination scope'; ERR=1
-  fi
-  if printf '%s\n' "$FWD_OWNED" | grep -v '^$' | grep -v -F -- '--state NEW' >/dev/null 2>&1; then
-    warn 'Router VPN FORWARD rule is not NEW-only'; ERR=1
-  fi
-
+  if printf '%s\n%s\n' "$NAT_OWNED" "$FWD_OWNED" | grep -E -- ' -j (DROP|REJECT)( |$)|(^| )-P( |$)| -s 192\.168\.50\.| -o ' >/dev/null 2>&1; then warn 'Router VPN-owned rule escaped narrow inbound-only scope'; ERR=1; fi
+  if printf '%s\n' "$NAT_OWNED" | grep -v '^$' | grep -v -F -- "-i $WAN" >/dev/null 2>&1; then warn 'Router VPN NAT rule lost WAN-interface scope'; ERR=1; fi
+  if printf '%s\n' "$FWD_OWNED" | grep -v '^$' | grep -v -F -- "-i $WAN -d $DST" >/dev/null 2>&1; then warn 'Router VPN FORWARD rule lost WAN/destination scope'; ERR=1; fi
+  if printf '%s\n' "$FWD_OWNED" | grep -v '^$' | grep -v -F -- '--state NEW' >/dev/null 2>&1; then warn 'Router VPN FORWARD rule is not NEW-only'; ERR=1; fi
   for PORT in 22 53 1080 3000 8786 8787 8788 8789 8790 8791 8792 8793 9443 14444 18080; do
-    if printf '%s\n' "$NAT_OWNED" | grep -E -- "--dport $PORT( |$)" >/dev/null 2>&1; then
-      warn "forbidden/private WAN destination port $PORT is exposed"; ERR=1
-    fi
+    if printf '%s\n' "$NAT_OWNED" | grep -E -- "--dport $PORT( |$)" >/dev/null 2>&1; then warn "forbidden/private WAN destination port $PORT is exposed"; ERR=1; fi
   done
-
-  # Public destination allowlist: current source still requires OverTLS 14443
-  # and legacy SSR 15443; 14444 and management ports are intentionally absent.
   APPROVED=" $ACME_EXTERNAL_PORT $REALITY_PORT $AWG_PORT $SS_PORT $HY2_PORT $XRAY_PQ_PORT $XHTTP_PORT $SS_V2RAY_PORT $NAIVE_PORT $OVERTLS_PORT $SSR_PORT $WG_PORT $ROSENPASS_PORT "
   printf '%s\n' "$NAT_OWNED" | while IFS= read -r RULE; do
     [ -n "$RULE" ] || continue
     PORT=$(printf '%s\n' "$RULE" | sed -n 's/.*--dport \([0-9][0-9]*\).*/\1/p')
     case "$APPROVED" in *" $PORT "*) : ;; *) exit 23 ;; esac
   done || { warn 'Router VPN NAT contains a public port outside the approved allowlist'; ERR=1; }
-
-  if [ -n "$NAT_OWNED" ] && [ "$(printf '%s\n' "$NAT_OWNED" | sort | uniq -d | wc -l | tr -d ' ')" != 0 ]; then
-    warn 'duplicate Router VPN NAT rules detected'; ERR=1
-  fi
-  if [ -n "$FWD_OWNED" ] && [ "$(printf '%s\n' "$FWD_OWNED" | sort | uniq -d | wc -l | tr -d ' ')" != 0 ]; then
-    warn 'duplicate Router VPN FORWARD rules detected'; ERR=1
-  fi
-
-  if command -v ip6tables-save >/dev/null 2>&1 && ip6tables-save 2>/dev/null | grep -F "$TAG" >/dev/null 2>&1; then
-    warn 'Router VPN IPv6 iptables rules exist even though IPv6 WAN forwarding is not implemented/tested'; ERR=1
-  fi
-
+  if [ -n "$NAT_OWNED" ] && [ "$(printf '%s\n' "$NAT_OWNED" | sort | uniq -d | wc -l | tr -d ' ')" != 0 ]; then warn 'duplicate Router VPN NAT rules detected'; ERR=1; fi
+  if [ -n "$FWD_OWNED" ] && [ "$(printf '%s\n' "$FWD_OWNED" | sort | uniq -d | wc -l | tr -d ' ')" != 0 ]; then warn 'duplicate Router VPN FORWARD rules detected'; ERR=1; fi
+  if command -v ip6tables-save >/dev/null 2>&1 && ip6tables-save 2>/dev/null | grep -F "$TAG" >/dev/null 2>&1; then warn 'Router VPN IPv6 iptables rules exist even though IPv6 WAN forwarding is not implemented/tested'; ERR=1; fi
   [ "$ERR" -eq 0 ] || return 1
   say 'VERIFY OK: only narrow Router-VPN-owned IPv4 WAN rules are present; no legacy catch-all, forbidden port, duplicate, LAN->WAN mutation, or Router-VPN IPv6 rule was found.'
 }
