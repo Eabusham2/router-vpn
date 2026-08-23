@@ -31,7 +31,7 @@ jobs:
           git apply --index /tmp/routervpn-final.patch
           rm -rf .routervpn-final-patch
           rm -f .github/workflows/apply-routervpn-final-batch.yml
-          git checkout 9a7330d6a8ce05fc53a8082b6f57a7e45af7fe6c -- .github/workflows/source-snapshot.yml
+          git checkout 9a7330d6a8ce05fc53a8082b6f57a7e45af7fe6c -- .github/workflows/source-snapshot.yml .github/workflows/release-candidate.yml
           git add -A
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
