@@ -22,6 +22,8 @@ require(
     "AUTO Encrypted",
     "AUTO Off",
     "AUTO n/a",
+    "Test-RouterVPNConnectionProfileBusy",
+    "Disconnect Router VPN or let the active transition finish",
 )
 require(
     "client/RouterVPN-Windows-UnifiedShell.ps1",
@@ -41,6 +43,9 @@ require(
     "AUTO Encrypted",
     "AUTO Off",
     "AUTO n/a",
+    "mutationBusy()",
+    "syncMutationState()",
+    "Disconnect Router VPN or let the active transition finish",
 )
 require(
     "client/macos/RouterVPNMacUnifiedShell.swift",
@@ -76,6 +81,9 @@ require(
     "AUTO n/a",
     "auto_require_encrypted",
     "auto_require_obfuscation",
+    "linux_profile_mutation_busy_v11",
+    "gtk_dialog_get_widget_for_response",
+    "Disconnect Router VPN or let the active transition finish",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSettingsDialog.java",
@@ -95,6 +103,8 @@ require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfilesDialog.java",
     "AUTO encryption/obfuscation requirements",
     "Connect still has to establish and prove the real VPN path",
+    "hasLiveVpn",
+    "Disconnect Router VPN before Add / Load / Update / Delete",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
