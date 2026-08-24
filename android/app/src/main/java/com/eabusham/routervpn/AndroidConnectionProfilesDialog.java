@@ -23,7 +23,7 @@ final class AndroidConnectionProfilesDialog {
 
         void show(){
             LinearLayout body=new LinearLayout(activity);body.setOrientation(LinearLayout.VERTICAL);int p=dp(16);body.setPadding(p,p,p,p);
-            TextView note=new TextView(activity);note.setText("Save/load the selected Router or Custom node plus current Mode/CUSTOM layers, DNS, kill switch, IPv6, AUTO encryption/obfuscation requirements, MTU and multihop choices. Linked node keys, API tokens and external credentials are never copied into these profiles. Load restores choices only; Connect still has to establish and prove the real VPN path.");body.addView(note);
+            TextView note=new TextView(activity);note.setText("Save/load the selected Router or Custom node plus current Mode/CUSTOM layers, DNS, kill switch, IPv6, WG/AWG base/fallback, AUTO encryption/obfuscation requirements, MTU, DAITA/Jumbo/SOCKS policy where supported, and multihop choices. Linked node keys, API tokens and external credentials are never copied into these profiles. Load restores choices only; Connect still has to establish and prove the real VPN path.");body.addView(note);
             name.setHint("Profile name");body.addView(name);body.addView(profiles);
             LinearLayout row=new LinearLayout(activity);row.setOrientation(LinearLayout.HORIZONTAL);
             Button add=button("Add"),load=button("Load"),update=button("Update"),delete=button("Delete"),refresh=button("Refresh");row.addView(add);row.addView(load);row.addView(update);row.addView(delete);row.addView(refresh);body.addView(row);status.setPadding(0,dp(8),0,0);body.addView(status);
