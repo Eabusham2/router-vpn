@@ -87,6 +87,7 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "router profile has no endpoint", http.StatusBadRequest)
 		return
 	}
+	profileAtStart := fastestProfileSnapshotToken([]common.RouterProfile{p})
 
 	port, err := pickTCPProbePort(p.Endpoint)
 	if err != nil {
@@ -142,6 +143,12 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.mu.Lock()
+	current, currentOK := a.profileByIDLocked(p.ID)
+	if !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{current}) != profileAtStart {
+		a.mu.Unlock()
+		http.Error(w, "router profile identity changed while durable latency measurement was running", http.StatusConflict)
+		return
+	}
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == p.ID {
 			x := &a.profiles.Profiles[i]
@@ -225,11 +232,15 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 	if a.state.Mode == "multihop" && a.state.RouterID != "" {
 		target = a.state.RouterID
 	}
+	targetProfile, targetOK := a.profileByIDLocked(target)
 	a.mu.Unlock()
 	if !connected {
 		http.Error(w, "connect the VPN first so the reported address is the VPN exit", http.StatusConflict)
 		return
 	}
+	if !targetOK { http.Error(w, "active VPN node disappeared before public-exit lookup", http.StatusConflict); return }
+	targetAtStart := fastestProfileSnapshotToken([]common.RouterProfile{targetProfile})
+	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
 	client := &http.Client{Timeout: 5 * time.Second}
 	providers := []string{"https://api64.ipify.org", "https://api.ipify.org"}
 	var result string
@@ -250,15 +261,20 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not determine public VPN exit address", http.StatusBadGateway)
 		return
 	}
+	if sessionTrackerFor(a).snapshot(0).ID != sessionAtStart { http.Error(w, "VPN session changed while public-exit lookup was running", http.StatusConflict); return }
 	a.mu.Lock()
-	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID == target {
-			a.profiles.Profiles[i].PublicIP = result
-			break
-		}
+	currentTarget := a.profiles.SelectedID
+	if a.state.Mode == "multihop" && a.state.RouterID != "" { currentTarget = a.state.RouterID }
+	currentProfile, currentOK := a.profileByIDLocked(target)
+	if !a.state.Connected || currentTarget != target || !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{currentProfile}) != targetAtStart {
+		a.mu.Unlock(); http.Error(w, "active VPN path changed while public-exit lookup was running", http.StatusConflict); return
 	}
-	_ = a.persistProfilesLocked()
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == target { a.profiles.Profiles[i].PublicIP = result; break }
+	}
+	persistErr := a.persistProfilesLocked()
 	a.mu.Unlock()
+	if persistErr != nil { http.Error(w, persistErr.Error(), http.StatusInternalServerError); return }
 	_ = json.NewEncoder(w).Encode(map[string]any{"public_ip": result, "router_id": target, "multihop": target != selected})
 }
 
@@ -284,6 +300,8 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "connect this router first; DNS retest runs from the home node", http.StatusConflict)
 		return
 	}
+	profileAtStart := fastestProfileSnapshotToken([]common.RouterProfile{p})
+	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
 
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(p.RouterAPI, "/")+"/api/dns/benchmark", strings.NewReader(`{}`))
 	if err != nil {
@@ -310,7 +328,12 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if sessionTrackerFor(a).snapshot(0).ID != sessionAtStart { http.Error(w, "VPN session changed while DNS Retest was running", http.StatusConflict); return }
 	a.mu.Lock()
+	current, currentOK := a.profileByIDLocked(p.ID)
+	if !a.state.Connected || a.profiles.SelectedID != p.ID || !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{current}) != profileAtStart {
+		a.mu.Unlock(); http.Error(w, "selected node or DNS policy changed while DNS Retest was running", http.StatusConflict); return
+	}
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == p.ID {
 			x := &a.profiles.Profiles[i]
@@ -319,9 +342,6 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 				x.FastestDNSHost = payload.Winner.Address
 				x.FastestDNSName = payload.Winner.Name
 				x.FastestDNSLatencyMs = payload.Winner.LatencyMs
-				if x.DNSMode == "fastest" {
-					x.DNSHost = payload.Winner.Address
-				}
 			}
 			break
 		}
