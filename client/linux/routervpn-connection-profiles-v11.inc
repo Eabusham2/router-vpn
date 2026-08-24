@@ -174,6 +174,25 @@ static void linux_profile_populate_saved_v11(GtkWidget *combo) {
     if (gtk_tree_model_iter_n_children(gtk_combo_box_get_model(GTK_COMBO_BOX(combo)), NULL) > 0) gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
 }
 
+static gboolean linux_profile_mutation_busy_v11(void) {
+    Buffer out = {0};
+    char *err = NULL;
+    gboolean busy = TRUE;
+    if (api_request("/api/status", "GET", NULL, 3500, &out, &err)) {
+        JsonNode *root = parse_json(out.data);
+        if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
+            JsonObject *obj = json_node_get_object(root);
+            gboolean connected = json_object_has_member(obj, "connected") && json_object_get_boolean_member(obj, "connected");
+            const char *phase = obj_string(obj, "phase");
+            busy = connected || g_str_has_prefix(phase, "connecting") || g_str_has_prefix(phase, "starting") || g_str_has_prefix(phase, "checking") || g_str_has_prefix(phase, "disconnecting") || g_str_has_prefix(phase, "stopping") || strstr(phase, "trying") != NULL || strstr(phase, "proving") != NULL || strstr(phase, "switching") != NULL || strstr(phase, "reconnecting") != NULL;
+            json_node_free(root);
+        }
+    }
+    g_free(err);
+    free(out.data);
+    return busy;
+}
+
 static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
     (void)button;
     LinuxUnifiedV8 *state = data;
@@ -220,9 +239,36 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
     gtk_box_pack_start(GTK_BOX(content), box, TRUE, TRUE, 0);
     gtk_widget_show_all(dialog);
 
+    gboolean mutation_busy = linux_profile_mutation_busy_v11();
+    gtk_widget_set_sensitive(name, !mutation_busy);
+    gtk_widget_set_sensitive(saved, !mutation_busy);
+    gtk_widget_set_sensitive(multi, !mutation_busy);
+    gtk_widget_set_sensitive(entry, !mutation_busy);
+    gtk_widget_set_sensitive(exit, !mutation_busy);
+    gtk_widget_set_sensitive(mode, !mutation_busy);
+    for (int response_id = 1; response_id <= 4; response_id++) {
+        GtkWidget *response_button = gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), response_id);
+        if (response_button != NULL) gtk_widget_set_sensitive(response_button, !mutation_busy);
+    }
+    if (mutation_busy) gtk_label_set_text(GTK_LABEL(status), "Disconnect Router VPN or let the active transition finish before Add / Load / Update / Delete.");
+
     for (;;) {
         int response = gtk_dialog_run(GTK_DIALOG(dialog));
         if (response == GTK_RESPONSE_CLOSE || response == GTK_RESPONSE_DELETE_EVENT) break;
+        if (linux_profile_mutation_busy_v11()) {
+            gtk_widget_set_sensitive(name, FALSE);
+            gtk_widget_set_sensitive(saved, FALSE);
+            gtk_widget_set_sensitive(multi, FALSE);
+            gtk_widget_set_sensitive(entry, FALSE);
+            gtk_widget_set_sensitive(exit, FALSE);
+            gtk_widget_set_sensitive(mode, FALSE);
+            for (int response_id = 1; response_id <= 4; response_id++) {
+                GtkWidget *response_button = gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), response_id);
+                if (response_button != NULL) gtk_widget_set_sensitive(response_button, FALSE);
+            }
+            gtk_label_set_text(GTK_LABEL(status), "Disconnect Router VPN or let the active transition finish before changing connection profiles.");
+            continue;
+        }
         const char *id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(saved));
         const char *profile_name = gtk_entry_get_text(GTK_ENTRY(name));
         gboolean on = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(multi));
@@ -380,4 +426,5 @@ static void linux_install_connection_profiles_v11(App *app) {
 /* Linux v11 Profiles contract: Add/Load/Update/Delete exact non-secret setup; current Mode/CUSTOM layers;
  * staged exact entry/exit/exit-transport survives load and main Connect uses it directly; opening Choose hops clears staged profile ownership;
  * active/transitioning Connect always delegates to mature Disconnect handling; loading never auto-connects;
+ * profile mutation UI fails closed while controller status is connected/transitioning or unavailable;
  * node secrets remain in the linked private Router/custom stores. */
