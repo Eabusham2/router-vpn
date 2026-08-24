@@ -118,6 +118,13 @@ require(
     "auto_require_obfuscation",
 )
 require(
+    "ios/RouterVPN/App/RouterVPNModel.swift",
+    "tunnelTransitioning",
+    "profileMutationBlocked",
+    "Disconnecting…",
+    "status == .connecting || status == .disconnecting || status == .reasserting",
+)
+require(
     "ios/RouterVPN/App/IOSProfileSettingsView.swift",
     "Require encrypted AUTO candidates",
     "Require obfuscation for AUTO candidates",
@@ -139,6 +146,9 @@ require(
     "AUTO Encrypted+Obfuscation",
     "AUTO Off",
     "AUTO encryption/obfuscation requirements",
+    "model.profileMutationBlocked",
+    "delete(model: RouterVPNModel",
+    "active VPN transition finish",
 )
 
 print("Native AUTO/SMART requirements UI parity audit: PASS")
