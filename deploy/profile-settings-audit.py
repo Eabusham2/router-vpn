@@ -209,7 +209,9 @@ ios_settings = require(
     "AmneziaWG stays unavailable on iOS", "MTU policy", "Fixed / manual", "Jumbo TUN is intentionally not exposed",
     "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "autoRequireEncrypted", "autoRequireObfuscation", "model.importBundle",
-    "Disconnect before changing profile settings", "Connection profiles", "IOSConnectionProfilesView",
+    "profileMutationBlocked", ".disabled(model.profileMutationBlocked)",
+    "guard !model.profileMutationBlocked else", "Disconnect or let the active VPN transition finish before changing profile settings.",
+    "Connection profiles", "IOSConnectionProfilesView",
 )
 ios_profiles = require(
     "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
