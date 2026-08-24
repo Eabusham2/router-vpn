@@ -69,6 +69,13 @@ require(
     "client/linux/routervpn-connection-profiles-v11.inc",
     "AUTO encryption/obfuscation requirements",
     "Load never connects automatically",
+    "AUTO Encrypted+Obfuscation",
+    "AUTO Obfuscation",
+    "AUTO Encrypted",
+    "AUTO Off",
+    "AUTO n/a",
+    "auto_require_encrypted",
+    "auto_require_obfuscation",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSettingsDialog.java",
