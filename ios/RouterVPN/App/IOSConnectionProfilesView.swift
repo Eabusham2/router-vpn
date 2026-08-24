@@ -40,6 +40,14 @@ private struct IOSConnectionProfileRecord: Identifiable, Codable, Hashable {
     var customLayers: [String]
     var preferences: IOSConnectionSafePreferences?
     var updatedAt: Date
+
+    var autoRequirementsSummary: String {
+        guard let preferences else { return "AUTO n/a" }
+        if preferences.autoRequireEncrypted && preferences.autoRequireObfuscation { return "AUTO Encrypted+Obfuscation" }
+        if preferences.autoRequireEncrypted { return "AUTO Encrypted" }
+        if preferences.autoRequireObfuscation { return "AUTO Obfuscation" }
+        return "AUTO Off"
+    }
 }
 
 @MainActor
@@ -231,7 +239,7 @@ struct IOSConnectionProfilesView: View {
                     TextField("Profile name", text: $name)
                     Picker("Saved profile", selection: $selectedID) {
                         Text("Select…").tag(String?.none)
-                        ForEach(profiles) { profile in Text("\(profile.name) • \(profile.mode) • \(profile.nodeKind == "external" ? "Custom" : "Router")").tag(Optional(profile.id)) }
+                        ForEach(profiles) { profile in Text("\(profile.name) • \(profile.mode) • \(profile.nodeKind == "external" ? "Custom" : "Router") • \(profile.autoRequirementsSummary)").tag(Optional(profile.id)) }
                     }
                     HStack {
                         Button("Add") { add() }.disabled(model.connected)
@@ -254,12 +262,12 @@ struct IOSConnectionProfilesView: View {
     }
 
     private func refresh() { profiles = IOSConnectionProfileStore.all(); if let selectedID, !profiles.contains(where: { $0.id == selectedID }) { self.selectedID = nil } }
-    private func add() { do { let p = try IOSConnectionProfileStore.add(model: model, name: name); status = "Added \(p.name) • \(p.mode)."; refresh(); selectedID = p.id } catch { status = error.localizedDescription } }
-    private func update() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.update(model: model, id: selectedID, name: name); status = "Updated \(p.name) • \(p.mode)."; refresh() } catch { status = error.localizedDescription } }
-    private func load() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.load(model: model, id: selectedID); status = "Loaded \(p.name) • \(p.mode). Connect separately to prove the path." } catch { status = error.localizedDescription } }
+    private func add() { do { let p = try IOSConnectionProfileStore.add(model: model, name: name); status = "Added \(p.name) • \(p.mode) • \(p.autoRequirementsSummary)."; refresh(); selectedID = p.id } catch { status = error.localizedDescription } }
+    private func update() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.update(model: model, id: selectedID, name: name); status = "Updated \(p.name) • \(p.mode) • \(p.autoRequirementsSummary)."; refresh() } catch { status = error.localizedDescription } }
+    private func load() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.load(model: model, id: selectedID); status = "Loaded \(p.name) • \(p.mode) • \(p.autoRequirementsSummary). Connect separately to prove the path." } catch { status = error.localizedDescription } }
     private func delete() { guard let selectedID else { return }; do { try IOSConnectionProfileStore.delete(id: selectedID); status = "Deleted saved connection profile."; self.selectedID = nil; refresh() } catch { status = error.localizedDescription } }
 }
 
-// iOS connection-profile contract: Add / Load / Update / Delete complete non-secret choices supported by the current iOS dataplane, including AUTO encryption/obfuscation requirements.
+// iOS connection-profile contract: Add / Load / Update / Delete complete non-secret choices supported by the current iOS dataplane, including visible AUTO encryption/obfuscation requirements.
 // Unsupported desktop multihop is rejected before save; load validates everything and applies one bundle update before selection changes.
 // No RouterProfile/API token/private key/external secret payload is encoded into this store.
