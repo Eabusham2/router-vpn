@@ -38,6 +38,17 @@ require(
     "ios/RouterVPN/App/IOSDNSPolicyView.swift",
     ".disabled(model.profileMutationBlocked)",
     "guard !model.profileMutationBlocked",
+    "let benchmarkNodeID = profile.id",
+    "@State private var benchmarkSessionInvalidated = false",
+    ".onChange(of: model.connected)",
+    ".onChange(of: model.tunnelTransitioning)",
+    ".onChange(of: model.activeEngine)",
+    ".onChange(of: model.activeRawProfile)",
+    "!benchmarkSessionInvalidated",
+    "freshBundle.selectedRouterID == benchmarkNodeID",
+    "freshBundle.routerProfiles.firstIndex(where: { $0.id == benchmarkNodeID })",
+    "DNS Retest discarded: the VPN session changed during measurement.",
+    "DNS Retest discarded: selected node or VPN session changed before results could be saved.",
 )
 require(
     "ios/RouterVPN/App/IOSProfileSettingsView.swift",
