@@ -472,13 +472,19 @@ private struct IOSUnifiedModePicker: View {
                 }
                 Section("CUSTOM presets") {
                     ForEach(presets) { preset in
-                        Button { selectedMode = IOSUnifiedModeSelection.customPrefix + preset.name; dismiss() } label: {
+                        Button { guard !model.profileMutationBlocked else { return }; selectedMode = IOSUnifiedModeSelection.customPrefix + preset.name; dismiss() } label: {
                             VStack(alignment: .leading, spacing: 4) { HStack { Text(preset.name).font(.headline); if selectedMode == IOSUnifiedModeSelection.customPrefix + preset.name { Image(systemName: "checkmark.circle.fill") } }; Text(preset.layers.joined(separator: " • ")).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                         }
-                        .swipeActions { Button(role: .destructive) { IOSUnifiedPresetStore.delete(preset.name); presets = IOSUnifiedPresetStore.load(); if selectedMode == IOSUnifiedModeSelection.customPrefix + preset.name { selectedMode = IOSUnifiedModeSelection.smart } } label: { Label("Delete", systemImage: "trash") } }
-                        .contextMenu { Button("Edit") { editingPreset = preset }; Button("Delete", role: .destructive) { IOSUnifiedPresetStore.delete(preset.name); presets = IOSUnifiedPresetStore.load() } }
+                        .disabled(model.profileMutationBlocked)
+                        .swipeActions { Button(role: .destructive) { guard !model.profileMutationBlocked else { return }; IOSUnifiedPresetStore.delete(preset.name); presets = IOSUnifiedPresetStore.load(); if selectedMode == IOSUnifiedModeSelection.customPrefix + preset.name { selectedMode = IOSUnifiedModeSelection.smart } } label: { Label("Delete", systemImage: "trash") }.disabled(model.profileMutationBlocked) }
+                        .contextMenu { Button("Edit") { guard !model.profileMutationBlocked else { return }; editingPreset = preset }.disabled(model.profileMutationBlocked); Button("Delete", role: .destructive) { guard !model.profileMutationBlocked else { return }; IOSUnifiedPresetStore.delete(preset.name); presets = IOSUnifiedPresetStore.load() }.disabled(model.profileMutationBlocked) }
                     }
-                    Button { creatingPreset = true } label: { Label("New CUSTOM preset…", systemImage: "plus.circle.fill") }
+                    Button { guard !model.profileMutationBlocked else { return }; creatingPreset = true } label: { Label("New CUSTOM preset…", systemImage: "plus.circle.fill") }
+                        .disabled(model.profileMutationBlocked)
+                    if model.profileMutationBlocked {
+                        Text("Disconnect or let the active VPN transition finish before changing Mode or CUSTOM presets.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             .navigationTitle("Mode")
@@ -489,9 +495,9 @@ private struct IOSUnifiedModePicker: View {
     }
 
     private func choice(_ title: String, subtitle: String, id: String, available: Bool) -> some View {
-        Button { guard available else { return }; selectedMode = id; dismiss() } label: {
+        Button { guard available, !model.profileMutationBlocked else { return }; selectedMode = id; dismiss() } label: {
             HStack(alignment: .top) { VStack(alignment: .leading, spacing: 3) { Text(title).font(.headline); Text(subtitle).font(.caption).foregroundStyle(.secondary) }; Spacer(); if selectedMode == id { Image(systemName: "checkmark.circle.fill") } }
-        }.disabled(!available)
+        }.disabled(!available || model.profileMutationBlocked)
     }
 }
 
@@ -530,7 +536,9 @@ private struct IOSUnifiedCustomBuilder: View {
                     if layers.isEmpty { Text("No iOS-runnable raw profile exposes CUSTOM layers for this node.").foregroundStyle(.secondary) }
                     ForEach(layers, id: \.self) { layer in Toggle(layer, isOn: Binding(get: { selected.contains(layer) }, set: { on in if on { selected.insert(layer) } else { selected.remove(layer) } })) }
                 }
-                Section { Button("Save preset") { save(connect: false) }.disabled(!valid); Button("Save & Connect") { save(connect: true) }.disabled(!valid) }
+                Section { Button("Save preset") { save(connect: false) }.disabled(!valid || model.profileMutationBlocked); Button("Save & Connect") { save(connect: true) }.disabled(!valid || model.profileMutationBlocked)
+                    if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before saving a CUSTOM preset.").font(.caption).foregroundStyle(.secondary) }
+                }
             }
             .navigationTitle("CUSTOM builder")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
@@ -538,6 +546,7 @@ private struct IOSUnifiedCustomBuilder: View {
     }
     private var valid: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !selected.isEmpty && name.count <= 64 }
     private func save(connect: Bool) {
+        guard !model.profileMutationBlocked else { model.message = "Disconnect or let the active VPN transition finish before saving a CUSTOM preset."; return }
         let preset = IOSUnifiedCustomPreset(name: name.trimmingCharacters(in: .whitespacesAndNewlines), layers: Array(selected).sorted()); IOSUnifiedPresetStore.save(preset)
         UserDefaults.standard.set(IOSUnifiedModeSelection.customPrefix + preset.name, forKey: iosUnifiedModeKey)
         if connect { Task { await model.runIOSCustom(layers: preset.layers) } }
@@ -559,6 +568,7 @@ private struct IOSUnifiedSettingsView: View {
             Form {
                 Section("Quick settings") {
                     Toggle("Kill switch", isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) }))
+                        .disabled(model.profileMutationBlocked)
                     Toggle("Require encrypted AUTO candidates", isOn: $requireEncrypted).disabled(model.profileMutationBlocked)
                     Toggle("Require obfuscation for AUTO candidates", isOn: $requireObfuscation).disabled(model.profileMutationBlocked)
                     Text("Both AUTO requirements are Off by default. They are stored in the selected schema-v4 Router VPN profile, shared with Advanced Settings, and filter candidates before the proof attempt; SMART cannot simplify into a candidate that violates them.").font(.caption).foregroundStyle(.secondary)
@@ -593,7 +603,7 @@ private struct IOSUnifiedSettingsView: View {
             .sheet(isPresented: $showingPerformance) { IOSUnifiedPerformanceView(telemetry: telemetry).environmentObject(model) }
         }
     }
-    private func saveRequirements() { model.setUnifiedRequirement("encrypted", enabled: requireEncrypted); model.setUnifiedRequirement("obfuscation", enabled: requireObfuscation) }
+    private func saveRequirements() { guard !model.profileMutationBlocked else { return }; model.setUnifiedRequirement("encrypted", enabled: requireEncrypted); model.setUnifiedRequirement("obfuscation", enabled: requireObfuscation) }
 }
 
 private struct IOSUnifiedPerformanceView: View {
