@@ -88,6 +88,7 @@ private final class MacConnectionProfileControls: NSObject {
     private let name = NSTextField(string: "")
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let status = NSTextField(wrappingLabelWithString: "")
+    private var mutationButtons: [NSButton] = []
 
     init(api: ProductAPI, owner: ProductWindowController) {
         self.api = api
@@ -107,10 +108,37 @@ private final class MacConnectionProfileControls: NSObject {
         let row = NSStackView(); row.orientation = .horizontal; row.spacing = 6
         for (label, action) in [("Add", #selector(addProfile)), ("Load", #selector(loadProfile)), ("Update", #selector(updateProfile)), ("Delete", #selector(deleteProfile)), ("Refresh", #selector(refreshAction))] {
             let button = NSButton(title: label, target: self, action: action); button.bezelStyle = .rounded; row.addArrangedSubview(button)
+            if label != "Refresh" { mutationButtons.append(button) }
         }
         root.addArrangedSubview(row)
         status.font = .systemFont(ofSize: 11); status.textColor = .secondaryLabelColor; root.addArrangedSubview(status)
         popup.target = self; popup.action = #selector(selectionChanged)
+    }
+
+    private func mutationBusy() -> Bool {
+        do {
+            let state = try api.json("/api/status", timeout: 4) as? [String: Any] ?? [:]
+            if state["connected"] as? Bool == true { return true }
+            let phase = (state["phase"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return ["connecting", "starting", "checking", "trying", "proving", "disconnecting", "stopping", "switching", "reconnecting"].contains { phase.contains($0) }
+        } catch {
+            return true
+        }
+    }
+
+    @discardableResult private func syncMutationState() -> Bool {
+        let busy = mutationBusy()
+        name.isEnabled = !busy
+        popup.isEnabled = !busy
+        mutationButtons.forEach { $0.isEnabled = !busy }
+        if busy { status.stringValue = "Disconnect Router VPN or let the active transition finish before Add / Load / Update / Delete. Refresh remains available." }
+        return busy
+    }
+
+    private func requireIdle(_ action: String) throws {
+        if syncMutationState() {
+            throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 3, userInfo: [NSLocalizedDescriptionKey: "Disconnect Router VPN before \(action)."])
+        }
     }
 
     @objc private func selectionChanged() {
@@ -138,7 +166,11 @@ private final class MacConnectionProfileControls: NSObject {
             }
             if popup.numberOfItems > 0 { popup.selectItem(at: 0); selectionChanged() }
             status.stringValue = "\(popup.numberOfItems) saved connection profile(s)."
-        } catch { status.stringValue = "Profile refresh failed: \(error.localizedDescription)" }
+            _ = syncMutationState()
+        } catch {
+            status.stringValue = "Profile refresh failed: \(error.localizedDescription)"
+            _ = syncMutationState()
+        }
     }
 
     private func selectedID() throws -> String {
@@ -149,6 +181,7 @@ private final class MacConnectionProfileControls: NSObject {
     }
 
     private func write(path: String, updating: Bool) throws -> [String: Any] {
+        try requireIdle(updating ? "updating a connection profile" : "adding a connection profile")
         let clean = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 2, userInfo: [NSLocalizedDescriptionKey: "Enter a profile name."]) }
         let snapshot = macCurrentConnectionModeSnapshot()
@@ -170,6 +203,7 @@ private final class MacConnectionProfileControls: NSObject {
 
     @objc private func loadProfile() {
         do {
+            try requireIdle("loading a connection profile")
             let data = try api.request("/api/connection-profile/load", method: "POST", body: ["id": try selectedID()], timeout: 12)
             let rootJSON = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             macApplyLoadedConnectionMode(rootJSON)
@@ -180,7 +214,7 @@ private final class MacConnectionProfileControls: NSObject {
     }
 
     @objc private func deleteProfile() {
-        do { _ = try api.request("/api/connection-profile/delete", method: "POST", body: ["id": try selectedID()], timeout: 10); status.stringValue = "Deleted saved connection profile."; refresh() }
+        do { try requireIdle("deleting a connection profile"); _ = try api.request("/api/connection-profile/delete", method: "POST", body: ["id": try selectedID()], timeout: 10); status.stringValue = "Deleted saved connection profile."; refresh() }
         catch { status.stringValue = "Delete failed: \(error.localizedDescription)" }
     }
 }
@@ -290,3 +324,4 @@ extension ProductWindowController {
 // AUTO Require encrypted / Require obfuscation, LAN access and forwarding entry point.
 // /api/profile/settings only for Router-node preferences; connection-profile CRUD uses
 // /api/connection-profiles + save/update/load/delete and never duplicates node secrets.
+// Connection-profile mutation controls fail closed while controller status is connected/transitioning or unavailable.
