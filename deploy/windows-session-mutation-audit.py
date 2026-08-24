@@ -75,4 +75,12 @@ for marker in (
 ):
     assert marker in unified, f'transformed UnifiedShell missing {marker}'
 
+telemetry=(ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text(encoding='utf-8')
+for marker in (
+    "Assert-RouterVPNMutationIdle 'selecting a node from the VPN globe'",
+    "Assert-RouterVPNMutationIdle 'selecting/connecting a fastest Router VPN node'",
+    "UnifiedFastestNode').IsEnabled=-not(Test-RouterVPNMutationBusy)",
+):
+    assert marker in telemetry, f'Windows telemetry session guard missing {marker}'
+
 print('Windows session mutation shipping audit: PASS')
