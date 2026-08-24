@@ -176,7 +176,7 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
     GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_container_set_border_width(GTK_CONTAINER(box), 14);
-    GtkWidget *note = gtk_label_new("Profiles save the selected node plus current Mode/CUSTOM layers, DNS/settings and an exact staged multihop Entry -> Exit -> exit transport. Node keys/API tokens/credentials stay in the linked private node stores. Load never connects automatically.");
+    GtkWidget *note = gtk_label_new("Profiles save the selected node plus current Mode/CUSTOM layers, DNS, kill switch, IPv6, WG/AWG base/fallback, AUTO encryption/obfuscation requirements, MTU and an exact staged multihop Entry -> Exit -> exit transport. Node keys/API tokens/credentials stay in the linked private node stores. Load never connects automatically.");
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
     gtk_label_set_xalign(GTK_LABEL(note), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 0);

@@ -101,7 +101,7 @@ private final class MacConnectionProfileControls: NSObject {
         root.orientation = .vertical; root.spacing = 6
         let separator = NSBox(); separator.boxType = .separator; root.addArrangedSubview(separator)
         let title = NSTextField(labelWithString: "Connection profiles"); title.font = .systemFont(ofSize: 15, weight: .semibold); root.addArrangedSubview(title)
-        let note = NSTextField(wrappingLabelWithString: "Save/load the selected node plus current Mode/CUSTOM layers, DNS, kill switch, IPv6, MTU and multihop choices. Node keys, API tokens and external credentials stay only in the linked node store and are never duplicated here.")
+        let note = NSTextField(wrappingLabelWithString: "Save/load the selected node plus current Mode/CUSTOM layers, DNS, kill switch, IPv6, WG/AWG base/fallback, AUTO encryption/obfuscation requirements, MTU and multihop choices. Node keys, API tokens and external credentials stay only in the linked node store and are never duplicated here.")
         note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; root.addArrangedSubview(note)
         name.placeholderString = "Profile name"; root.addArrangedSubview(name); root.addArrangedSubview(popup)
         let row = NSStackView(); row.orientation = .horizontal; row.spacing = 6

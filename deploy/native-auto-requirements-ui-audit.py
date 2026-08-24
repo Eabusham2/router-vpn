@@ -16,6 +16,7 @@ require(
     "Require encrypted AUTO candidates",
     "Require obfuscation for AUTO candidates",
     "Both are Off by default",
+    "AUTO encryption/obfuscation requirements",
 )
 require(
     "client/RouterVPN-Windows-UnifiedShell.ps1",
@@ -29,6 +30,7 @@ require(
     "Require encrypted AUTO candidates",
     "Require obfuscation for AUTO candidates",
     "Both AUTO requirements are Off by default",
+    "AUTO encryption/obfuscation requirements",
 )
 require(
     "client/macos/RouterVPNMacUnifiedShell.swift",
@@ -52,6 +54,11 @@ require(
     "AUTO requirements: Off • Off by default • SMART never simplifies below enabled requirements",
     "auto_require_encrypted",
     "auto_require_obfuscation",
+)
+require(
+    "client/linux/routervpn-connection-profiles-v11.inc",
+    "AUTO encryption/obfuscation requirements",
+    "Load never connects automatically",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSettingsDialog.java",
