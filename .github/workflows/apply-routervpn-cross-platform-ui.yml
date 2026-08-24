@@ -1,8 +1,8 @@
 name: Apply RouterVPN cross-platform UI update
 
-# Trigger after the workflow is present on the default branch.
-# Merge-triggered so GitHub emits the default-branch push event.
 on:
+  pull_request:
+    branches: [main]
   push:
     paths:
       - '.github/routervpn-cross-platform-ui.patch.gz.b64'
@@ -26,7 +26,7 @@ jobs:
           base64 -d .github/routervpn-cross-platform-ui.patch.gz.b64 | gzip -d > /tmp/routervpn-cross-platform-ui.patch
           git apply --check /tmp/routervpn-cross-platform-ui.patch
           git apply /tmp/routervpn-cross-platform-ui.patch
-          rm -f .github/routervpn-cross-platform-ui.patch.gz.b64 .github/workflows/apply-routervpn-cross-platform-ui.yml
+          rm -f .github/routervpn-cross-platform-ui.patch.gz.b64 .github/workflows/apply-routervpn-cross-platform-ui.yml .github/apply-ui-trigger
           git diff --check
       - name: Re-run source-first product gates
         shell: bash
