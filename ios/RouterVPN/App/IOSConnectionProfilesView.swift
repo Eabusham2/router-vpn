@@ -59,7 +59,7 @@ private enum IOSConnectionProfileStore {
     }
 
     static func snapshot(model: RouterVPNModel, name rawName: String, id: String? = nil) throws -> IOSConnectionProfileRecord {
-        guard !model.connected else { throw issue("Disconnect before saving or updating a connection profile.") }
+        guard !model.profileMutationBlocked else { throw issue("Disconnect or let the active VPN transition finish before saving or updating a connection profile.") }
         let name = try cleanName(rawName)
         guard let selected = model.selectedNodeProfile else { throw issue("Select a linked Router or Custom node first.") }
         let mode = normalizeMode(UserDefaults.standard.string(forKey: iosConnectionModeKey) ?? "smart-auto")
@@ -107,12 +107,13 @@ private enum IOSConnectionProfileStore {
         let value = try snapshot(model: model, name: name, id: id); values[index] = value; try persist(values); return value
     }
 
-    static func delete(id: String) throws {
+    static func delete(model: RouterVPNModel, id: String) throws {
+        guard !model.profileMutationBlocked else { throw issue("Disconnect or let the active VPN transition finish before deleting a connection profile.") }
         var values = all(); let before = values.count; values.removeAll { $0.id == id }; guard values.count != before else { throw issue("Connection profile was not found.") }; try persist(values)
     }
 
     static func load(model: RouterVPNModel, id: String) throws -> IOSConnectionProfileRecord {
-        guard !model.connected else { throw issue("Disconnect before loading a connection profile.") }
+        guard !model.profileMutationBlocked else { throw issue("Disconnect or let the active VPN transition finish before loading a connection profile.") }
         guard let saved = all().first(where: { $0.id == id }) else { throw issue("Connection profile was not found.") }
         guard let linked = model.allNodeProfiles.first(where: { $0.id == saved.nodeID }), linked.normalizedNodeKind == saved.nodeKind else {
             throw issue("The linked node referenced by this connection profile is missing or changed type.")
@@ -242,10 +243,14 @@ struct IOSConnectionProfilesView: View {
                         ForEach(profiles) { profile in Text("\(profile.name) • \(profile.mode) • \(profile.nodeKind == "external" ? "Custom" : "Router") • \(profile.autoRequirementsSummary)").tag(Optional(profile.id)) }
                     }
                     HStack {
-                        Button("Add") { add() }.disabled(model.connected)
-                        Button("Load") { load() }.disabled(model.connected || selectedID == nil)
-                        Button("Update") { update() }.disabled(model.connected || selectedID == nil)
-                        Button("Delete", role: .destructive) { delete() }.disabled(model.connected || selectedID == nil)
+                        Button("Add") { add() }.disabled(model.profileMutationBlocked)
+                        Button("Load") { load() }.disabled(model.profileMutationBlocked || selectedID == nil)
+                        Button("Update") { update() }.disabled(model.profileMutationBlocked || selectedID == nil)
+                        Button("Delete", role: .destructive) { delete() }.disabled(model.profileMutationBlocked || selectedID == nil)
+                    }
+                    if model.profileMutationBlocked {
+                        Text("Disconnect or let the active VPN transition finish before Add / Load / Update / Delete.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary) }
                 }
@@ -265,9 +270,10 @@ struct IOSConnectionProfilesView: View {
     private func add() { do { let p = try IOSConnectionProfileStore.add(model: model, name: name); status = "Added \(p.name) • \(p.mode) • \(p.autoRequirementsSummary)."; refresh(); selectedID = p.id } catch { status = error.localizedDescription } }
     private func update() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.update(model: model, id: selectedID, name: name); status = "Updated \(p.name) • \(p.mode) • \(p.autoRequirementsSummary)."; refresh() } catch { status = error.localizedDescription } }
     private func load() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.load(model: model, id: selectedID); status = "Loaded \(p.name) • \(p.mode) • \(p.autoRequirementsSummary). Connect separately to prove the path." } catch { status = error.localizedDescription } }
-    private func delete() { guard let selectedID else { return }; do { try IOSConnectionProfileStore.delete(id: selectedID); status = "Deleted saved connection profile."; self.selectedID = nil; refresh() } catch { status = error.localizedDescription } }
+    private func delete() { guard let selectedID else { return }; do { try IOSConnectionProfileStore.delete(model: model, id: selectedID); status = "Deleted saved connection profile."; self.selectedID = nil; refresh() } catch { status = error.localizedDescription } }
 }
 
 // iOS connection-profile contract: Add / Load / Update / Delete complete non-secret choices supported by the current iOS dataplane, including visible AUTO encryption/obfuscation requirements.
 // Unsupported desktop multihop is rejected before save; load validates everything and applies one bundle update before selection changes.
+// Profile mutation is blocked while connected or while NetworkExtension is connecting/reasserting/disconnecting.
 // No RouterProfile/API token/private key/external secret payload is encoded into this store.
