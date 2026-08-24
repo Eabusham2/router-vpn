@@ -2,12 +2,6 @@ package com.eabusham.routervpn;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Context;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkCapabilities;
-import android.os.Build;
-import android.os.Process;
 import android.text.InputType;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -30,7 +24,7 @@ import java.nio.charset.StandardCharsets;
 final class AndroidProfileSettingsDialog {
     static void show(Activity activity, AndroidNodeStore store, Runnable onSaved) {
         try {
-            if (hasLiveVpn(activity)) throw new IllegalStateException("Disconnect the active VPN before changing persistent Router VPN profile settings.");
+            if (AndroidVpnMutationGuard.isBusy(activity)) throw new IllegalStateException("Disconnect Router VPN or let the active transition finish before changing persistent Router VPN profile settings.");
             final String originalNodeId=store.activeId();
             JSONObject bundle = loadBundle(store);
             JSONObject profile = selectedProfile(bundle);
@@ -38,7 +32,7 @@ final class AndroidProfileSettingsDialog {
             if ("external".equalsIgnoreCase(profile.optString("node_kind", "router-vpn"))) throw new IllegalStateException("External exits own their protocol settings.");
 
             LinearLayout body = new LinearLayout(activity); body.setOrientation(LinearLayout.VERTICAL); int p=dp(activity,16); body.setPadding(p,p,p,p);
-            TextView note = new TextView(activity); note.setText("Persistent settings for the selected Router VPN node. SMART AUTO, IPv6 On and Auto measured MTU are the unified defaults. A live VPN blocks mutation. Saved values are preferences for supported runtimes, not runtime proof."); body.addView(note);
+            TextView note = new TextView(activity); note.setText("Persistent settings for the selected Router VPN node. SMART AUTO, IPv6 On and Auto measured MTU are the unified defaults. An active or transitioning VPN blocks mutation. Saved values are preferences for supported runtimes, not runtime proof."); body.addView(note);
             CheckBox lan=check(activity,"Allow home LAN access",profile.optBoolean("home_lan_access",true)); body.addView(lan);
             Spinner kill=spinner(activity,new String[]{"Off","On connect","Always / strict"},index(new String[]{"off","on-connect","always"},profile.optString("kill_switch_policy","off"))); body.addView(label(activity,"Kill switch policy")); body.addView(kill);
             Spinner ipv6=spinner(activity,new String[]{"On — default","Auto","Off"},index(new String[]{"on","auto","off"},profile.optString("ipv6_mode","on"))); body.addView(label(activity,"IPv6 policy")); body.addView(ipv6);
@@ -66,7 +60,7 @@ final class AndroidProfileSettingsDialog {
             AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("Settings").setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
             dialog.setOnShowListener(x->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
                 try {
-                    if (hasLiveVpn(activity)) throw new IllegalStateException("VPN became active while settings were open; disconnect and try again.");
+                    if (AndroidVpnMutationGuard.isBusy(activity)) throw new IllegalStateException("VPN became active or began transitioning while settings were open; disconnect and try again.");
                     String[] killValues={"off","on-connect","always"}, ipv6Values={"on","auto","off"}, baseValues={"auto","wg","awg"}, mtuValues={"auto","manual","default"};
                     int manualValue=manual.getText().toString().trim().isEmpty()?0:Integer.parseInt(manual.getText().toString().trim()); String mtuPolicy=mtuValues[mtu.getSelectedItemPosition()];
                     if("manual".equals(mtuPolicy)&&(manualValue<576||manualValue>9000))throw new IllegalArgumentException("Fixed MTU must be 576–9000."); if(!"manual".equals(mtuPolicy))manualValue=0;
@@ -78,6 +72,7 @@ final class AndroidProfileSettingsDialog {
                     profile.put("mtu_policy",mtuPolicy); profile.put("manual_mtu",manualValue);
                     profile.put("daita_enabled",daita.isChecked()); profile.put("jumbo_tun",jumbo.isChecked()); profile.put("socks_enabled",socks.isChecked());
                     if(!profile.has("startup_mode")||profile.optString("startup_mode","").trim().isEmpty())profile.put("startup_mode","smart-auto");
+                    if (AndroidVpnMutationGuard.isBusy(activity)) throw new IllegalStateException("VPN became active or began transitioning before settings commit; refusing to rewrite node policy.");
                     byte[] updated=bundle.toString().getBytes(StandardCharsets.UTF_8);
                     String updatedId=AndroidNodeStore.deriveId(bundle,updated);
                     if(originalNodeId==null||originalNodeId.isEmpty()||!originalNodeId.equals(updatedId))throw new IllegalStateException("This legacy Router node has no stable proof-bound identity, so rewriting settings would change its local node ID. Re-import a current Router VPN bundle before editing persistent settings.");
@@ -92,13 +87,6 @@ final class AndroidProfileSettingsDialog {
         }
     }
 
-    private static boolean hasLiveVpn(Context context) {
-        ConnectivityManager cm=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE); if(cm==null)return false;
-        Network network=cm.getActiveNetwork(); if(network==null)return false;
-        NetworkCapabilities caps=cm.getNetworkCapabilities(network); if(caps==null||!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))return false;
-        if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.Q){int owner=caps.getOwnerUid();return owner==Process.myUid()||owner<0;}
-        return true;
-    }
     private static JSONObject loadBundle(AndroidNodeStore store)throws Exception{String id=store.activeId();if(id==null||id.isEmpty())throw new IllegalStateException("Select a Router VPN node first.");try(FileInputStream in=new FileInputStream(store.file(id));ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[8192];int n,total=0;while((n=in.read(b))!=-1){total+=n;if(total>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Private node bundle exceeds safety limit.");out.write(b,0,n);}return new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));}}
     private static JSONObject selectedProfile(JSONObject bundle){JSONArray a=bundle.optJSONArray("routerProfiles");String id=bundle.optString("selectedRouterID","");if(a==null)return null;for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p!=null&&id.equals(p.optString("id","")))return p;}return a.length()>0?a.optJSONObject(0):null;}
     private static Spinner spinner(Activity a,String[]items,int selected){Spinner s=new Spinner(a);s.setAdapter(new ArrayAdapter<>(a,android.R.layout.simple_spinner_dropdown_item,items));s.setSelection(Math.max(0,Math.min(selected,items.length-1)));return s;}
