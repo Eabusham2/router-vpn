@@ -21,6 +21,7 @@ struct IOSDNSPolicyView: View {
     @State private var results: [DNSBenchmarkResult] = []
     @State private var status = ""
     @State private var benchmarking = false
+    @State private var benchmarkSessionInvalidated = false
 
     private let modeValues = [
         ("Home AdGuard", "home"), ("Fastest measured", "fastest"), ("Custom UDP/TCP", "custom"),
@@ -122,6 +123,10 @@ struct IOSDNSPolicyView: View {
             }
             .navigationTitle("DNS")
             .onAppear { load() }
+            .onChange(of: model.connected) { _ in if benchmarking { benchmarkSessionInvalidated = true } }
+            .onChange(of: model.tunnelTransitioning) { _ in if benchmarking { benchmarkSessionInvalidated = true } }
+            .onChange(of: model.activeEngine) { _ in if benchmarking { benchmarkSessionInvalidated = true } }
+            .onChange(of: model.activeRawProfile) { _ in if benchmarking { benchmarkSessionInvalidated = true } }
         }
     }
 
@@ -166,12 +171,16 @@ struct IOSDNSPolicyView: View {
 
     private func retest() async {
         guard model.connected else { status = "Connect first so DNS RTT uses the selected VPN path."; return }
-        guard var bundle = model.bundle,
+        guard let bundle = model.bundle,
               let index = bundle.routerProfiles.firstIndex(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.indices.first else { return }
+        let profile = bundle.routerProfiles[index]
+        let benchmarkNodeID = profile.id
+        let benchmarkEngine = model.activeEngine
+        let benchmarkRawProfile = model.activeRawProfile
+        benchmarkSessionInvalidated = false
         benchmarking = true
         defer { benchmarking = false }
         var candidates = presets.map { ($0.name, $0.address, $0.family) }
-        let profile = bundle.routerProfiles[index]
         for (name, address, family) in [
             ("Home AdGuard IPv4", profile.adGuardIPv4, "IPv4"),
             ("Home AdGuard IPv6", profile.adGuardIPv6, "IPv6")
@@ -180,11 +189,29 @@ struct IOSDNSPolicyView: View {
         }
         var measured: [DNSBenchmarkResult] = []
         for candidate in candidates {
+            guard model.connected, !model.tunnelTransitioning, !benchmarkSessionInvalidated,
+                  model.activeEngine == benchmarkEngine, model.activeRawProfile == benchmarkRawProfile else {
+                status = "DNS Retest discarded: the VPN session changed during measurement."
+                return
+            }
             let value = await IOSDNSRTTProbe.query(address: candidate.1)
+            guard model.connected, !model.tunnelTransitioning, !benchmarkSessionInvalidated,
+                  model.activeEngine == benchmarkEngine, model.activeRawProfile == benchmarkRawProfile else {
+                status = "DNS Retest discarded: the VPN session changed during measurement."
+                return
+            }
             measured.append(DNSBenchmarkResult(name: candidate.0, address: candidate.1, family: candidate.2, latencyMs: value, working: value != nil))
         }
         results = sorted(measured)
-        var p = bundle.routerProfiles[index]
+        guard var freshBundle = model.bundle,
+              freshBundle.selectedRouterID == benchmarkNodeID,
+              let freshIndex = freshBundle.routerProfiles.firstIndex(where: { $0.id == benchmarkNodeID }),
+              model.connected, !model.tunnelTransitioning, !benchmarkSessionInvalidated,
+              model.activeEngine == benchmarkEngine, model.activeRawProfile == benchmarkRawProfile else {
+            status = "DNS Retest discarded: selected node or VPN session changed before results could be saved."
+            return
+        }
+        var p = freshBundle.routerProfiles[freshIndex]
         p.dnsResults = results
         if let best = results.first(where: { $0.working && $0.latencyMs != nil }) {
             p.fastestDNSHost = best.address
@@ -193,9 +220,13 @@ struct IOSDNSPolicyView: View {
         } else {
             p.fastestDNSHost = nil; p.fastestDNSName = nil; p.fastestDNSLatencyMs = nil
         }
-        bundle.routerProfiles[index] = p
+        freshBundle.routerProfiles[freshIndex] = p
         do {
-            try model.importBundle(JSONEncoder().encode(bundle))
+            guard model.connected, !model.tunnelTransitioning, !benchmarkSessionInvalidated else {
+                status = "DNS Retest discarded: VPN session changed before persistence."
+                return
+            }
+            try model.importBundle(JSONEncoder().encode(freshBundle))
             status = p.fastestDNSHost == nil ? "Retest completed: no resolver returned a valid DNS answer." : "Retest saved the fastest real DNS-query RTT for this node/path."
             load()
         } catch { status = "DNS benchmark save failed: \(error.localizedDescription)" }
