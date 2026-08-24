@@ -34,6 +34,8 @@ build=require('client/linux/build-native-app.sh',
     '-I"$BUILD_DIR" -I"$ROOT/client/linux"')
 assert 'routervpn-profile-settings-v2.inc' not in build, 'canonical Linux builder switched to un-audited settings include'
 
+# Execute the transformer against the canonical shipping baselines and verify
+# the hardened output contains the exact session guards used by the build.
 spec=importlib.util.spec_from_file_location('linux_session_transform',ROOT/'client/linux/apply-session-mutation.py')
 mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 with tempfile.TemporaryDirectory() as td:
@@ -51,4 +53,12 @@ with tempfile.TemporaryDirectory() as td:
         body=dst.read_text(encoding='utf-8')
         for marker in markers:
             if marker not in body: raise SystemExit(f'transformed {name}: missing {marker!r}')
+
+require('client/linux/routervpn-telemetry-v9.inc',
+    'selecting/connecting a fastest Router VPN node',
+    'gtk_widget_set_sensitive(t->fastest,!routervpn_mutation_busy(t->app))')
+require('client/linux/routervpn-globe-v10.inc',
+    'selecting a node from the VPN globe',
+    'routervpn_require_mutation_idle(app')
+
 print('Linux session mutation shipping audit: PASS')
