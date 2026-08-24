@@ -72,11 +72,17 @@ struct RouterVPNNodeManagerSheet: View {
                             Task { await model.linkFromLAN(host: host, code: code) }
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(model.profileMutationBlocked)
                         Button("Import node bundle") { importing = true }
                             .buttonStyle(.bordered)
+                            .disabled(model.profileMutationBlocked)
                     }
                     Text("Pairing/importing adds a node bundle to the per-node store; it does not reinstall Router VPN or overwrite another home's raw WG/Libbox assets.")
                         .font(.caption).foregroundStyle(.secondary)
+                    if model.profileMutationBlocked {
+                        Text("Disconnect or let the active VPN transition finish before pairing, importing, selecting, removing, or editing linked nodes.")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 }
 
                 if model.allNodeProfiles.isEmpty {
@@ -107,7 +113,7 @@ struct RouterVPNNodeManagerSheet: View {
                             model.selectNode(best.id)
                             nodeSort = .latency
                         }
-                        .disabled(measuredProfiles.count < 2)
+                        .disabled(measuredProfiles.count < 2 || model.profileMutationBlocked)
                         Text(measuredProfiles.count < 2 ? "Run the 50-sample latency test on at least two usable nodes before automatic lowest-latency selection." : "Lowest-latency selection uses measured median latency; untested nodes are never guessed as fastest.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -121,6 +127,7 @@ struct RouterVPNNodeManagerSheet: View {
                                     } label: {
                                         Label("Remove", systemImage: "trash")
                                     }
+                                    .disabled(model.profileMutationBlocked)
                                 }
                         }
                     }
@@ -144,6 +151,7 @@ struct RouterVPNNodeManagerSheet: View {
                     .environmentObject(model)
             }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+                guard !model.profileMutationBlocked else { model.message = "Disconnect or let the active VPN transition finish before importing node data."; return }
                 guard case .success(let url) = result, url.startAccessingSecurityScopedResource() else {
                     if case .failure(let error) = result { model.message = "Import failed: \(error.localizedDescription)" }
                     return
@@ -177,6 +185,7 @@ struct RouterVPNNodeManagerSheet: View {
                 Spacer()
                 Button("Edit") { editing = profile }
                     .buttonStyle(.borderless)
+                    .disabled(model.profileMutationBlocked)
             }
 
             Text(model.nodeRuntimeSummary(profile))
@@ -209,7 +218,7 @@ struct RouterVPNNodeManagerSheet: View {
                     model.selectNode(profile.id)
                 }
                 .buttonStyle(.bordered)
-                .disabled(profile.id == model.bundle?.selectedRouterID)
+                .disabled(profile.id == model.bundle?.selectedRouterID || model.profileMutationBlocked)
 
                 if profile.normalizedNodeKind == "external" {
                     Button("Connect external") {
@@ -217,7 +226,7 @@ struct RouterVPNNodeManagerSheet: View {
                         Task { await model.connectSelectedExternal() }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!["wireguard", "socks5", "shadowsocks", "hysteria2"].contains(profile.external?.protocolName.lowercased() ?? ""))
+                    .disabled(model.profileMutationBlocked || !["wireguard", "socks5", "shadowsocks", "hysteria2"].contains(profile.external?.protocolName.lowercased() ?? ""))
                 }
             }
         }
@@ -271,9 +280,11 @@ private struct RouterVPNNodeMetadataEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        guard !model.profileMutationBlocked else { model.message = "Disconnect or let the active VPN transition finish before editing node metadata."; return }
                         model.updateNodeMetadata(id: profile.id, name: name, location: location, latitudeText: latitude, longitudeText: longitude)
                         dismiss()
                     }
+                    .disabled(model.profileMutationBlocked)
                 }
             }
         }
