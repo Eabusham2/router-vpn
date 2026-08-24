@@ -146,6 +146,12 @@ func (a *app) liveProfileLatency(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(result)
 }
 
+func fastestProfileSnapshotToken(profiles []common.RouterProfile) string {
+	var b strings.Builder
+	for _, p := range profiles { b.WriteString(p.ID); b.WriteByte(0); b.WriteString(p.NodeKind); b.WriteByte(0); b.WriteString(p.Endpoint); b.WriteByte(0); b.WriteString(p.RouterAPI); b.WriteByte(0); b.WriteString(p.NodeProofID); b.WriteByte('\n') }
+	return b.String()
+}
+
 func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost { http.Error(w, "POST only", http.StatusMethodNotAllowed); return }
 	var q liveLatencyRequest
@@ -156,8 +162,11 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 	selectWinner := true; if q.Select != nil { selectWinner = *q.Select }
 	a.mu.Lock()
 	if selectWinner && (a.state.Connected || profileSettingsBusy(a.state.Connected, a.state.Phase)) { a.mu.Unlock(); http.Error(w, "disconnect before switching to the fastest node", http.StatusConflict); return }
+	selectionAtStart := a.profiles.SelectedID
 	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
+	profilesAtStart := fastestProfileSnapshotToken(profiles)
 	a.mu.Unlock()
+	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
 	results := make([]liveLatencyResult, 0, len(profiles))
 	for _, p := range profiles {
 		kind := strings.ToLower(strings.TrimSpace(p.NodeKind)); if kind == "" { kind = "router-vpn" }
@@ -176,6 +185,10 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 	selectedID := a.profiles.SelectedID
 	var persistErr error
 	if selectWinner {
+		if a.state.Connected || profileSettingsBusy(a.state.Connected, a.state.Phase) { a.mu.Unlock(); http.Error(w, "VPN state changed while fastest-node measurement was running", http.StatusConflict); return }
+		if sessionTrackerFor(a).snapshot(0).ID != sessionAtStart { a.mu.Unlock(); http.Error(w, "VPN session changed while fastest-node measurement was running", http.StatusConflict); return }
+		if a.profiles.SelectedID != selectionAtStart { a.mu.Unlock(); http.Error(w, "selected node changed while fastest-node measurement was running", http.StatusConflict); return }
+		if fastestProfileSnapshotToken(a.profiles.Profiles) != profilesAtStart { a.mu.Unlock(); http.Error(w, "linked node catalog changed while fastest-node measurement was running", http.StatusConflict); return }
 		a.profiles.SelectedID = winner.ID
 		a.state.RouterID = winner.ID
 		selectedID = winner.ID
