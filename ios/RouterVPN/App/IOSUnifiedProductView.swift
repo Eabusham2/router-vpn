@@ -539,8 +539,8 @@ private struct IOSUnifiedSettingsView: View {
             Form {
                 Section("Quick settings") {
                     Toggle("Kill switch", isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) }))
-                    Toggle("AUTO / SMART: Require encrypted", isOn: $requireEncrypted).disabled(model.connected)
-                    Toggle("AUTO / SMART: Require obfuscation", isOn: $requireObfuscation).disabled(model.connected)
+                    Toggle("Require encrypted AUTO candidates", isOn: $requireEncrypted).disabled(model.connected)
+                    Toggle("Require obfuscation for AUTO candidates", isOn: $requireObfuscation).disabled(model.connected)
                     Text("Both AUTO requirements are Off by default. They are stored in the selected schema-v4 Router VPN profile, shared with Advanced Settings, and filter candidates before the proof attempt; SMART cannot simplify into a candidate that violates them.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Defaults") {

@@ -88,6 +88,7 @@ require(
 win_settings = require(
     "client/RouterVPN-Windows-ProfileSettings.ps1", "/api/profile/settings", "Allow home LAN access",
     "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
+    "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "Connection profiles", "Add profile", "Load", "Update", "Delete",
     "/api/connection-profiles", "/api/connection-profile/setup/save", "/api/connection-profile/setup/update",
     "/api/connection-profile/setup/load", "/api/connection-profile/setup/delete",
@@ -101,12 +102,14 @@ require_combined(
     ("client/RouterVPN-Windows-App.ps1", "client/RouterVPN-Windows-UnifiedShell.ps1", "client/RouterVPN-Windows-ProfileSettings.ps1"),
     "RouterVPN-Windows-ProfileSettings.ps1", "Show-RouterVPNProfileSettingsDialog", "/api/profile/settings",
     "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
-    "UnifiedSettingsButton", "UnifiedKillSwitch", "UnifiedMtuButton", "/api/connection-profile/setup/load",
+    "UnifiedSettingsButton", "UnifiedSettingsSummary", "AUTO requirements=", "auto_require_encrypted", "auto_require_obfuscation",
+    "UnifiedKillSwitch", "UnifiedMtuButton", "/api/connection-profile/setup/load",
 )
 
 mac_settings = require(
     "client/macos/RouterVPNProfileSettings.swift", "/api/profile/settings", "Allow home LAN access",
     "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
+    "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "Connection profiles", "MacConnectionProfileControls", "Add", "Load", "Update", "Delete",
     "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
     "/api/connection-profile/load", "/api/connection-profile/delete",
@@ -120,6 +123,7 @@ require_combined(
     ("client/macos/build-native-app.sh", "client/macos/RouterVPNMacUnifiedShell.swift", "client/macos/RouterVPNProfileSettings.swift"),
     "SETTINGS_SRC", "UNIFIED_SRC", '"$SETTINGS_SRC"', '"$UNIFIED_SRC"',
     "editProfileSettings", "/api/profile/settings", "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
+    "unified-auto-requirements", "AUTO requirements: Off", "auto_require_encrypted", "auto_require_obfuscation",
     "/api/connection-profile/load",
 )
 
@@ -153,13 +157,14 @@ require_combined(
     "Linux unified product",
     ("client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-home-summary-v1.inc", "client/linux/routervpn-telemetry-v9.inc", "client/linux/routervpn-connection-profiles-v10.inc"),
     "/api/profile/settings", "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
-    "linux_unified_settings_v8", "Kill switch", "MTU Retest", "/api/connection-profile/load",
+    "linux_unified_settings_v8", "linux_unified_auto_requirements_v8", "AUTO requirements", "on_linux_auto_requirements_v11",
+    "Kill switch", "MTU Retest", "/api/connection-profile/load",
 )
 
 android_settings = require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSettingsDialog.java",
     "home_lan_access", "kill_switch_policy", "ipv6_mode", "base_tunnel", "base_fallback",
-    "auto_require_encrypted", "auto_require_obfuscation", "Require encrypted", "Require obfuscation",
+    "auto_require_encrypted", "auto_require_obfuscation", "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "mtu_policy", "manual_mtu", "daita_enabled", "jumbo_tun", "socks_enabled",
     "External exits own their protocol settings", "store.importBundle",
     "Connection profiles — Add / Load / Update / Delete", "AndroidConnectionProfilesDialog.show",
@@ -182,6 +187,7 @@ require(
 android_product = require(
     "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
     "AndroidProfileSettingsDialog.show", "showSettings", "LinearLayout.VERTICAL",
+    "AUTO requirements: Off", "auto_require_encrypted", "auto_require_obfuscation",
 )
 compact_android = android_product.replace(" ", "").replace("\n", "")
 if "AndroidProfileSettingsDialog.show(this,nodeStore,this::refreshAll)" not in compact_android:
@@ -216,6 +222,11 @@ ios_profiles = require(
 for forbidden in ("apiToken", "privateKey", "presharedKey", "socksPassword", "ExternalNodeConfig"):
     if forbidden in ios_profiles:
         errors.append(f"iOS connection profile store unexpectedly references secret-bearing model field/type: {forbidden}")
+require(
+    "ios/RouterVPN/App/IOSUnifiedProductView.swift",
+    "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
+    "Both AUTO requirements are Off by default", "profile-shared requirements",
+)
 require(
     "ios/RouterVPN/App/IOSStrategySupport.swift",
     "autoRequirementFailure", "encryptedLayers", "obfuscationLayers",

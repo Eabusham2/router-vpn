@@ -300,6 +300,7 @@ extension ProductWindowController {
 
         let settingsRow = unifiedLabeledRow(title: "Settings")
         let settingsButton = NSButton(title: "Open settings", target: self, action: #selector(openUnifiedSettings)); settingsButton.bezelStyle = .rounded; settingsRow.addArrangedSubview(settingsButton)
+        let requirementsSummary = NSTextField(labelWithString: "AUTO requirements: Off"); requirementsSummary.identifier = NSUserInterfaceItemIdentifier("unified-auto-requirements"); requirementsSummary.textColor = .secondaryLabelColor; requirementsSummary.lineBreakMode = .byTruncatingTail; settingsRow.addArrangedSubview(requirementsSummary)
         let mtu = NSButton(title: "Retest MTU", target: self, action: #selector(retestMTU)); mtu.bezelStyle = .rounded; settingsRow.addArrangedSubview(mtu); controls.addArrangedSubview(settingsRow)
 
         let compactMode = NSPopUpButton(frame: .zero, pullsDown: false); compactMode.identifier = NSUserInterfaceItemIdentifier("unified-mode-popup"); compactMode.target = self; compactMode.action = #selector(unifiedModeChanged(_:))
@@ -479,6 +480,9 @@ extension ProductWindowController {
                 let connected = status["connected"] as? Bool ?? false; let phase = status["phase"] as? String ?? "off"
                 if let button = self.findUnifiedView("unified-connect") as? NSButton { let transitioning = !connected && (phase.contains("trying") || phase == "starting" || phase == "checking" || phase.contains("proving")); button.title = connected || transitioning ? "Disconnect" : "Connect" }
                 if let kill = self.findUnifiedView("unified-kill-switch") as? NSButton { let policy = (settings["kill_switch_policy"] as? String ?? "off").lowercased(); kill.state = policy == "off" ? .off : .on }
+                if let requirements = self.findUnifiedView("unified-auto-requirements") as? NSTextField {
+                    var active: [String] = []; if settings["auto_require_encrypted"] as? Bool ?? false { active.append("Encrypted") }; if settings["auto_require_obfuscation"] as? Bool ?? false { active.append("Obfuscation") }; requirements.stringValue = active.isEmpty ? "AUTO requirements: Off" : "AUTO requirements: " + active.joined(separator: " + ")
+                }
                 let selectedIndex = self.routerPopup.indexOfSelectedItem
                 if selectedIndex >= 0 && selectedIndex < self.profiles.count {
                     let profile = self.profiles[selectedIndex]; let kind = (profile["node_kind"] as? String ?? "router-vpn").lowercased(); let name = profile["name"] as? String ?? profile["id"] as? String ?? "Node"; self.routerPopup.selectedItem?.title = (kind == "external" ? "Custom • " : "Router • ") + name
