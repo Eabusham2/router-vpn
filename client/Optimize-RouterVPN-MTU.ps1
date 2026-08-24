@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('optimize','self-test')][string]$Action = 'optimize'
+  [ValidateSet('optimize','measure','apply','restore','self-test')][string]$Action = 'optimize'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -133,11 +133,27 @@ function Ensure-KillSwitch($Profile,[string]$Alias){
   & $helper -Action prepare -Root (Root-Path) -TunnelAlias $Alias;if($LASTEXITCODE-ne0){throw'Windows kill switch could not be enforced before MTU optimization.'}
 }
 
+function Invoke-ApplyMeasured([bool]$Rollback){
+  Require-Admin
+  $alias=([string]$env:HOMEVPN_MTU_APPLY_INTERFACE).Trim();$familyRaw=([string]$env:HOMEVPN_MTU_APPLY_FAMILY).Trim();$valueRaw=([string]$env:HOMEVPN_MTU_APPLY_VALUE).Trim()
+  if([string]::IsNullOrWhiteSpace($alias)-or$familyRaw-notin@('4','6')-or$valueRaw-notmatch'^\d+$'){throw'MTU apply requires an explicit measured interface, IP family, and MTU.'}
+  $family=if($familyRaw-eq'6'){'IPv6'}else{'IPv4'};$value=[int]$valueRaw;$previous=Read-Mtu $alias $family
+  if($Rollback){Set-Mtu $alias $family $value;[pscustomobject]@{ok=$true;interface=$alias;family=[int]$familyRaw;previous_mtu=$previous;applied_mtu=$value;rollback=$true}|ConvertTo-Json -Depth 10;return}
+  $ctx=Read-Store;$profile=$ctx.Profile;$policy=if(Has-Property $profile 'mtu_policy'){([string]$profile.mtu_policy).ToLowerInvariant()}else{'default'};if($policy-ne'auto'){throw'MTU policy changed before measured result adoption.'}
+  Prove-Node $profile;$target=if((Has-Property $profile 'daita_host')-and$profile.daita_host){[string]$profile.daita_host}else{'10.77.0.1'};$ip=Private-IP $target;$activeFamily=Address-Family $ip
+  if($activeFamily-ne$family){throw'Active MTU path IP family changed before adoption.'};$activeAlias=Route-Alias $target;if($activeAlias-ne$alias){throw'Active MTU path interface changed before adoption.'}
+  Ensure-KillSwitch $profile $alias;$path=Path-Context $profile;$expected=([string]$env:HOMEVPN_MTU_EXPECTED_PATH_KEY).Trim();if([string]::IsNullOrWhiteSpace($expected)-or$path.Key-ne$expected){throw'Active MTU path fingerprint changed before adoption.'}
+  try{Set-Mtu $alias $family $value;Prove-Node $profile}catch{try{Set-Mtu $alias $family $previous}catch{};throw}
+  [pscustomobject]@{ok=$true;interface=$alias;family=[int]$familyRaw;previous_mtu=$previous;applied_mtu=$value;path_key=$path.Key;network_fingerprint=$path.Network;profile_fingerprint=$path.Generated;rollback=$false}|ConvertTo-Json -Depth 10
+}
+
 if($Action-eq'self-test'){
   $sample=@([pscustomobject]@{mtu=1380;working=$true;success_ratio=1.0;mbps=100.0;median_rtt_ms=10.0},[pscustomobject]@{mtu=1360;working=$true;success_ratio=1.0;mbps=102.0;median_rtt_ms=9.9},[pscustomobject]@{mtu=1340;working=$false;success_ratio=.5;mbps=130.0;median_rtt_ms=8.0});if((Pick-Winner $sample).mtu-ne1380){throw'Winner tie policy self-test failed'};if((Candidate-Mtus 1380)[0]-ne1380){throw'Candidate ceiling self-test failed'}
   $profile=[pscustomobject]@{id='node';endpoint='203.0.113.10'};$old=[string]$env:HOMEVPN_NETWORK_CONTEXT;try{$env:HOMEVPN_NETWORK_CONTEXT='wifi-a';$first=Path-Key $profile;$env:HOMEVPN_NETWORK_CONTEXT='cellular-b';$second=Path-Key $profile;if($first-eq$second){throw'Network-change path-key self-test failed'}}finally{$env:HOMEVPN_NETWORK_CONTEXT=$old};Write-Output 'MTU throughput optimizer Windows self-test OK';exit 0
 }
+if($Action-eq'apply'){Invoke-ApplyMeasured $false;exit 0}
+if($Action-eq'restore'){Invoke-ApplyMeasured $true;exit 0}
 
 Require-Admin;$ctx=Read-Store;$profile=$ctx.Profile;$policy=if(Has-Property $profile 'mtu_policy'){([string]$profile.mtu_policy).ToLowerInvariant()}else{'default'};if($policy-ne'auto'-and$env:HOMEVPN_MTU_OPTIMIZE_FORCE-notin@('1','true','yes')){throw'Set this node MTU policy to Auto before running Optimize MTU.'};if($env:HOMEVPN_JUMBO-eq'true'){throw'Jumbo is explicit; disable Jumbo before automatic MTU optimization.'}
-Prove-Node $profile;$target=if((Has-Property $profile 'daita_host')-and$profile.daita_host){[string]$profile.daita_host}else{'10.77.0.1'};$ip=Private-IP $target;$port=if((Has-Property $profile 'daita_port')-and[int]$profile.daita_port-gt0){[int]$profile.daita_port}else{45999};$alias=Route-Alias $target;$family=Address-Family $ip;$original=Read-Mtu $alias $family;Ensure-KillSwitch $profile $alias;$ceiling=if((Has-Property $profile 'effective_mtu')-and[int]$profile.effective_mtu-ge$MinMtu){[int]$profile.effective_mtu}else{[Math]::Min($MaxMtu,$original)};$results=New-Object System.Collections.ArrayList;$winner=$null
-try{foreach($mtu in @(Candidate-Mtus $ceiling)){Set-Mtu $alias $family $mtu;Start-Sleep -Milliseconds 120;Prove-Node $profile;[void]$results.Add((Bench-Candidate $ip $port $mtu))};$winner=Pick-Winner @($results);Set-Mtu $alias $family ([int]$winner.mtu);Prove-Node $profile;Persist-Winner $ctx $winner @($results);[pscustomobject]@{ok=$true;interface=$alias;original_mtu=$original;winner=$winner;results=@($results)}|ConvertTo-Json -Depth 20}catch{try{Set-Mtu $alias $family $original}catch{};throw}
+Prove-Node $profile;$target=if((Has-Property $profile 'daita_host')-and$profile.daita_host){[string]$profile.daita_host}else{'10.77.0.1'};$ip=Private-IP $target;$port=if((Has-Property $profile 'daita_port')-and[int]$profile.daita_port-gt0){[int]$profile.daita_port}else{45999};$alias=Route-Alias $target;$family=Address-Family $ip;$familyNumber=if($family-eq'IPv6'){6}else{4};$original=Read-Mtu $alias $family;Ensure-KillSwitch $profile $alias;$ceiling=if((Has-Property $profile 'effective_mtu')-and[int]$profile.effective_mtu-ge$MinMtu){[int]$profile.effective_mtu}else{[Math]::Min($MaxMtu,$original)};$results=New-Object System.Collections.ArrayList;$winner=$null
+try{foreach($mtu in @(Candidate-Mtus $ceiling)){Set-Mtu $alias $family $mtu;Start-Sleep -Milliseconds 120;Prove-Node $profile;[void]$results.Add((Bench-Candidate $ip $port $mtu))};$winner=Pick-Winner @($results);Set-Mtu $alias $family ([int]$winner.mtu);Prove-Node $profile;$path=Path-Context $profile;$adopted=$true;if($Action-eq'measure'){Set-Mtu $alias $family $original;$adopted=$false}else{Persist-Winner $ctx $winner @($results)};[pscustomobject]@{ok=$true;interface=$alias;family=$familyNumber;original_mtu=$original;winner=$winner;results=@($results);path_key=$path.Key;network_fingerprint=$path.Network;profile_fingerprint=$path.Generated;adopted=$adopted}|ConvertTo-Json -Depth 20}catch{try{Set-Mtu $alias $family $original}catch{};throw}
