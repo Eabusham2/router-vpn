@@ -18,6 +18,7 @@ final class RouterVPNModel: ObservableObject {
     @Published var daita = false
     @Published var jumbo = false
     @Published var connected = false
+    @Published var tunnelTransitioning = false
     @Published var message = "Import a router bundle from Files or pair from your home LAN"
     @Published var activeEngine = "none"
     @Published var activeRawProfile = ""
@@ -69,6 +70,7 @@ final class RouterVPNModel: ObservableObject {
     }
 
     var baseSelectorEnabled: Bool { false }
+    var profileMutationBlocked: Bool { connected || tunnelTransitioning }
 
     func runtimeLabel(for mode: LogicalMode) -> String {
         guard let bundle,
@@ -200,6 +202,9 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func connect() async {
+        if tunnelTransitioning { message = "VPN transition already in progress"; return }
+        tunnelTransitioning = true
+        defer { tunnelTransitioning = false }
         guard saveRouter() else { connected = false; return }
         guard let bundle else { message = "Configure your home router first"; return }
         let selections: [IOSRuntimeSelection]
@@ -347,8 +352,10 @@ final class RouterVPNModel: ObservableObject {
 
     func refreshTunnelStatus() async {
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
-        guard let manager = managers.first else { connected = false; return }
-        connected = manager.connection.status == .connected
+        guard let manager = managers.first else { connected = false; tunnelTransitioning = false; return }
+        let status = manager.connection.status
+        tunnelTransitioning = status == .connecting || status == .disconnecting || status == .reasserting
+        connected = status == .connected
         if connected, let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
             activeEngine = (proto.providerConfiguration?["engine"] as? String) ?? "wireguard"
             activeRawProfile = (proto.providerConfiguration?["rawProfileID"] as? String) ?? (proto.providerConfiguration?["mode"] as? String) ?? "wg"
@@ -356,7 +363,11 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func disconnect() {
+        if tunnelTransitioning { return }
+        tunnelTransitioning = true
+        message = "Disconnecting…"
         Task {
+            defer { tunnelTransitioning = false }
             let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
             guard let manager = managers.first else {
                 connected = false; activeEngine = "none"; activeRawProfile = ""; message = "Disconnected"; return
@@ -365,6 +376,10 @@ final class RouterVPNModel: ObservableObject {
             manager.onDemandRules = []
             try? await manager.saveToPreferences()
             manager.connection.stopVPNTunnel()
+            for _ in 0..<20 {
+                if manager.connection.status == .disconnected || manager.connection.status == .invalid { break }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
             connected = false
             activeEngine = "none"
             activeRawProfile = ""
