@@ -134,7 +134,7 @@ func TestDecodeMTUMeasurementRequiresDeferredSafeWinner(t *testing.T) {
 	for name, bad := range map[string]string{
 		"already-adopted":  `{"ok":true,"interface":"tun0","family":4,"original_mtu":1420,"winner":{"mtu":1380,"working":true,"success_ratio":1.0},"path_key":"0123456789abcdef01234567","adopted":true}`,
 		"failed-winner":    `{"ok":true,"interface":"tun0","family":4,"original_mtu":1420,"winner":{"mtu":1380,"working":false,"success_ratio":1.0},"path_key":"0123456789abcdef01234567","adopted":false}`,
-		"unsafe-interface": "{\"ok\":true,\"interface\":\"tun0\\nboom\",\"family\":4,\"original_mtu\":1420,\"winner\":{\"mtu\":1380,\"working\":true,\"success_ratio\":1.0},\"path_key\":\"0123456789abcdef01234567\",\"adopted\":false}",
+		"unsafe-interface": `{"ok":true,"interface":"tun0\nboom","family":4,"original_mtu":1420,"winner":{"mtu":1380,"working":true,"success_ratio":1.0},"path_key":"0123456789abcdef01234567","adopted":false}`,
 	} {
 		if _, _, err := decodeMTUMeasurement([]byte(bad)); err == nil {
 			t.Fatalf("%s invalid result accepted", name)
