@@ -3,6 +3,8 @@ name: Apply desktop saved-profile AUTO badges
 on:
   pull_request:
     branches: [main]
+    paths:
+      - '.github/desktop-auto-badge-trigger'
 
 permissions:
   contents: write
@@ -46,21 +48,17 @@ jobs:
 
           p=Path('deploy/native-auto-requirements-ui-audit.py')
           s=p.read_text(encoding='utf-8')
-          additions={
-            '"client/RouterVPN-Windows-ProfileSettings.ps1",': ['"AUTO Encrypted+Obfuscation",','"AUTO n/a",'],
-            '"client/macos/RouterVPNProfileSettings.swift",': ['"AUTO Encrypted+Obfuscation",','"AUTO n/a",'],
-            '"client/linux/routervpn-connection-profiles-v11.inc",': ['"AUTO Encrypted+Obfuscation",','"AUTO n/a",'],
-          }
-          for marker, lines in additions.items():
+          for path in ['client/RouterVPN-Windows-ProfileSettings.ps1','client/macos/RouterVPNProfileSettings.swift','client/linux/routervpn-connection-profiles-v11.inc']:
+              marker=f'    "{path}",\n'
               pos=s.find(marker)
-              if pos<0: raise SystemExit(f'audit block missing {marker}')
-              end=s.find(')',pos)
+              if pos<0: raise SystemExit(f'audit block missing {path}')
+              end=s.find('\n)',pos)
               block=s[pos:end]
-              for line in lines:
-                  if line not in block:
-                      insert=s.rfind('\n',pos,end)
-                      s=s[:insert+1]+'    '+line+'\n'+s[insert+1:]
-                      end=s.find(')',pos)
+              lines=[]
+              if '"AUTO Encrypted+Obfuscation"' not in block: lines.append('    "AUTO Encrypted+Obfuscation",')
+              if '"AUTO n/a"' not in block: lines.append('    "AUTO n/a",')
+              if lines:
+                  s=s[:end]+"\n"+"\n".join(lines)+s[end:]
           p.write_text(s,encoding='utf-8')
           PY
           git diff --check
