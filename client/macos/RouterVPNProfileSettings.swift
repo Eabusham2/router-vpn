@@ -81,6 +81,17 @@ private func macApplyLoadedConnectionMode(_ root: [String: Any]) {
     if let data = try? JSONEncoder().encode(values) { UserDefaults.standard.set(data, forKey: macConnectionCustomPresetsKey) }
 }
 
+private func macMutationBusy(_ api: ProductAPI) -> Bool {
+    do {
+        let state = try api.json("/api/status", timeout: 4) as? [String: Any] ?? [:]
+        if state["connected"] as? Bool == true { return true }
+        let phase = (state["phase"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["connecting", "starting", "checking", "trying", "proving", "disconnecting", "stopping", "switching", "reconnecting"].contains { phase.contains($0) }
+    } catch {
+        return true
+    }
+}
+
 private final class MacConnectionProfileControls: NSObject {
     private let api: ProductAPI
     private weak var owner: ProductWindowController?
@@ -115,16 +126,7 @@ private final class MacConnectionProfileControls: NSObject {
         popup.target = self; popup.action = #selector(selectionChanged)
     }
 
-    private func mutationBusy() -> Bool {
-        do {
-            let state = try api.json("/api/status", timeout: 4) as? [String: Any] ?? [:]
-            if state["connected"] as? Bool == true { return true }
-            let phase = (state["phase"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return ["connecting", "starting", "checking", "trying", "proving", "disconnecting", "stopping", "switching", "reconnecting"].contains { phase.contains($0) }
-        } catch {
-            return true
-        }
-    }
+    private func mutationBusy() -> Bool { macMutationBusy(api) }
 
     @discardableResult private func syncMutationState() -> Bool {
         let busy = mutationBusy()
@@ -225,6 +227,7 @@ extension ProductWindowController {
             let data = try? self.api.request("/api/profile/settings", timeout: 5)
             let decoded = data.flatMap { try? JSONDecoder().decode(RouterVPNProfileSettingsPayloadV2.self, from: $0) }
             let supportsNodeSettings = decoded != nil
+            let settingsMutationBusy = macMutationBusy(self.api)
             var settings = decoded ?? .unavailableDefaults
             let semaphore = DispatchSemaphore(value: 0)
             var save = false
@@ -233,9 +236,13 @@ extension ProductWindowController {
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.messageText = "Settings"
-                alert.informativeText = supportsNodeSettings
-                    ? "Selected Router node • persistent defaults for the next connection. Unsupported runtime features stay unavailable; saved values are not runtime proof."
-                    : "Selected Custom/external node does not expose Router VPN node settings here. Connection-profile Add / Load / Update / Delete remains available."
+                if supportsNodeSettings && settingsMutationBusy {
+                    alert.informativeText = "Disconnect Router VPN or let the active transition finish before editing persistent node settings. Saved values are preferences, not runtime proof."
+                } else {
+                    alert.informativeText = supportsNodeSettings
+                        ? "Selected Router node • persistent defaults for the next connection. Unsupported runtime features stay unavailable; saved values are not runtime proof."
+                        : "Selected Custom/external node does not expose Router VPN node settings here. Connection-profile Add / Load / Update / Delete remains available."
+                }
                 alert.addButton(withTitle: supportsNodeSettings ? "Save" : "Close")
                 alert.addButton(withTitle: "Cancel")
 
@@ -280,12 +287,14 @@ extension ProductWindowController {
 
                 let connectionProfiles = MacConnectionProfileControls(api: self.api, owner: self)
                 form.addArrangedSubview(connectionProfiles.root)
-                if !supportsNodeSettings {
-                    for view in [lan, kill, ipv6, base, fallback, autoEncrypted, autoObfuscated, mtu, manual, daita, jumbo, socks, startup, auto, forwarding, retest] { view.isEnabled = false }
+                let nodePreferenceViews: [NSView] = [lan, kill, ipv6, base, fallback, autoEncrypted, autoObfuscated, mtu, manual, daita, jumbo, socks, startup, auto, forwarding, retest]
+                if !supportsNodeSettings || settingsMutationBusy {
+                    nodePreferenceViews.forEach { $0.isEnabled = false }
                 }
+                if supportsNodeSettings && settingsMutationBusy { alert.buttons.first?.isEnabled = false }
 
                 alert.accessoryView = form
-                if alert.runModal() == .alertFirstButtonReturn && supportsNodeSettings {
+                if alert.runModal() == .alertFirstButtonReturn && supportsNodeSettings && !settingsMutationBusy {
                     settings.homeLANAccess = lan.state == .on
                     settings.killSwitchPolicy = (kill.selectedItem?.representedObject as? String) ?? "off"
                     settings.ipv6Mode = (ipv6.selectedItem?.representedObject as? String) ?? "on"
@@ -311,7 +320,8 @@ extension ProductWindowController {
             semaphore.wait()
             if !validationError.isEmpty { throw NSError(domain: "RouterVPN.Settings", code: 1, userInfo: [NSLocalizedDescriptionKey: validationError]) }
             if !supportsNodeSettings { return "Connection profile manager closed; external node settings remain owned by that node's protocol configuration." }
-            if !save { return "Settings unchanged." }
+            if !save { return settingsMutationBusy ? "Settings locked until Router VPN is fully disconnected." : "Settings unchanged." }
+            if macMutationBusy(self.api) { throw NSError(domain: "RouterVPN.Settings", code: 2, userInfo: [NSLocalizedDescriptionKey: "VPN became active or began transitioning before settings save; disconnect and try again."]) }
             let payload = try JSONEncoder().encode(settings)
             _ = try self.api.requestRaw("/api/profile/settings", body: payload, timeout: 8)
             return "Settings saved for the next supported connection. Saved preferences are not runtime proof."
@@ -324,4 +334,4 @@ extension ProductWindowController {
 // AUTO Require encrypted / Require obfuscation, LAN access and forwarding entry point.
 // /api/profile/settings only for Router-node preferences; connection-profile CRUD uses
 // /api/connection-profiles + save/update/load/delete and never duplicates node secrets.
-// Connection-profile mutation controls fail closed while controller status is connected/transitioning or unavailable.
+// Connection-profile mutation and persistent Settings Save both fail closed while controller status is connected/transitioning or unavailable.
