@@ -96,12 +96,23 @@ require(
     "Disconnect Router VPN or let the active transition finish",
 )
 require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidVpnMutationGuard.java",
+    "hasOwnedVpnTransport",
+    "AndroidHomeStateStore.snapshot",
+    "orchestrator.isRunning()",
+    "multihop.isActiveOrTransitioning()",
+    "STARTING",
+    "STOPPING",
+    "return true;",
+)
+require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSettingsDialog.java",
     "Require encrypted AUTO candidates",
     "Require obfuscation for AUTO candidates",
     "Both filters are Off by default",
-    "hasLiveVpn(activity)",
-    "VPN became active while settings were open",
+    "AndroidVpnMutationGuard.isBusy(activity)",
+    "VPN became active or began transitioning while settings were open",
+    "before settings commit",
     "Loading a profile never counts as runtime proof",
 )
 require(
@@ -116,8 +127,8 @@ require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfilesDialog.java",
     "AUTO encryption/obfuscation requirements",
     "Connect still has to establish and prove the real VPN path",
-    "hasLiveVpn",
-    "Disconnect Router VPN before Add / Load / Update / Delete",
+    "AndroidVpnMutationGuard.isBusy(activity)",
+    "active transition finish before Add / Load / Update / Delete",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
@@ -129,6 +140,7 @@ require(
     "AUTO n/a",
     "auto_require_encrypted",
     "auto_require_obfuscation",
+    "AndroidVpnMutationGuard.isBusy(context)",
 )
 require(
     "ios/RouterVPN/App/RouterVPNModel.swift",
