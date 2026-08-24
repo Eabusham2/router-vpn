@@ -70,7 +70,7 @@ struct IOSProfileSettingsView: View {
                 Section("Connection profiles") {
                     Button("Add / Load / Update / Delete connection profiles") { showingConnectionProfiles = true }
                         .disabled(model.connected)
-                    Text("Profiles reference linked Router/Custom nodes and save only non-secret Mode/CUSTOM, DNS, kill-switch, IPv6 and MTU choices. Node keys, API tokens and external credentials stay in the private node store.")
+                    Text("Profiles reference linked Router/Custom nodes and save only non-secret Mode/CUSTOM, DNS, kill-switch, IPv6, AUTO encryption/obfuscation requirements and MTU choices. Node keys, API tokens and external credentials stay in the private node store.")
                         .font(.caption).foregroundStyle(.secondary)
                     if model.connected { Text("Disconnect before changing saved connection-profile choices.").font(.caption).foregroundStyle(.orange) }
                 }
@@ -145,5 +145,5 @@ struct IOSProfileSettingsView: View {
 
 // iOS settings contract: LAN Off / kill switch / IPv6 On default / WG-AWG base+fallback /
 // Require encrypted + Require obfuscation AUTO filters / Auto measured-fixed-runtime MTU /
-// SMART AUTO startup default / secret-free connection-profile Add-Load-Update-Delete.
+// SMART AUTO startup default / secret-free connection-profile Add-Load-Update-Delete including AUTO requirements.
 // Jumbo/DAITA/SOCKS are omitted when the current Apple runtime cannot truthfully claim their support.
