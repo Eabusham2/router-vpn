@@ -1,0 +1,73 @@
+name: Apply AUTO summary UI parity
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch Linux and iOS map-first summaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          git switch -C publish origin/main
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('client/linux/routervpn-unified-shell-v8.inc')
+          s = p.read_text(encoding='utf-8')
+          changes = [
+              ('    GtkWidget *status;\n    gboolean syncing;', '    GtkWidget *status;\n    GtkWidget *settings_summary;\n    gboolean syncing;'),
+              ('out=(Buffer){0};err=NULL;if(api_request("/api/profile/settings","GET",NULL,3500,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);const char *kill=obj_string(obj,"kill_switch_policy");gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->kill_switch),kill[0]&&strcmp(kill,"off")!=0);json_node_free(root);}}g_free(err);free(out.data);',
+               'out=(Buffer){0};err=NULL;if(api_request("/api/profile/settings","GET",NULL,3500,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);const char *kill=obj_string(obj,"kill_switch_policy");gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->kill_switch),kill[0]&&strcmp(kill,"off")!=0);gboolean encrypted=json_object_has_member(obj,"auto_require_encrypted")&&json_object_get_boolean_member(obj,"auto_require_encrypted");gboolean obfuscated=json_object_has_member(obj,"auto_require_obfuscation")&&json_object_get_boolean_member(obj,"auto_require_obfuscation");const char *requirements=encrypted&&obfuscated?"Encrypted + Obfuscation":encrypted?"Encrypted":obfuscated?"Obfuscation":"Off";char *summary=g_strdup_printf("AUTO requirements: %s • Off by default • SMART never simplifies below enabled requirements",requirements);if(state->settings_summary!=NULL)gtk_label_set_text(GTK_LABEL(state->settings_summary),summary);g_free(summary);json_node_free(root);}}g_free(err);free(out.data);'),
+              ('GtkWidget *settings_buttons=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,6);gtk_box_pack_start(GTK_BOX(settings_buttons),make_button("Open settings",G_CALLBACK(linux_unified_settings_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(settings_buttons),make_button("AUTO requirements",G_CALLBACK(linux_unified_auto_requirements_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(settings_buttons),make_button("Retest MTU",G_CALLBACK(linux_unified_mtu_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(dock_box),linux_unified_row_v8("Settings",settings_buttons),FALSE,FALSE,0);',
+               'GtkWidget *settings_buttons=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,6);gtk_box_pack_start(GTK_BOX(settings_buttons),make_button("Open settings",G_CALLBACK(linux_unified_settings_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(settings_buttons),make_button("AUTO requirements",G_CALLBACK(linux_unified_auto_requirements_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(settings_buttons),make_button("Retest MTU",G_CALLBACK(linux_unified_mtu_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(dock_box),linux_unified_row_v8("Settings",settings_buttons),FALSE,FALSE,0);state->settings_summary=gtk_label_new("AUTO requirements: Off • Off by default • SMART never simplifies below enabled requirements");gtk_label_set_xalign(GTK_LABEL(state->settings_summary),0.0f);gtk_label_set_ellipsize(GTK_LABEL(state->settings_summary),PANGO_ELLIPSIZE_END);gtk_widget_set_tooltip_text(state->settings_summary,"Enabled AUTO requirements filter candidates before attempts and bound SMART simplification.");gtk_box_pack_start(GTK_BOX(dock_box),state->settings_summary,FALSE,FALSE,0);')
+          ]
+          for old, new in changes:
+              if s.count(old) != 1:
+                  raise SystemExit(f'Linux AUTO summary seam drifted: {old[:80]}')
+              s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('ios/RouterVPN/App/IOSUnifiedProductView.swift')
+          s = p.read_text(encoding='utf-8')
+          old = '''    private var settingsSummary: String {\n        let p = selectedProfile\n        let mtu = (p?.mtuPolicy ?? "auto").lowercased() == "manual" ? "MTU \\(p?.manualMTU ?? 0)" : "Auto MTU"\n        let ipv6 = (p?.ipv6Mode ?? "on").lowercased() == "off" ? "IPv6 Off" : "IPv6 On"\n        return "\\(ipv6) • \\(mtu)"\n    }'''
+          new = '''    private var settingsSummary: String {\n        let p = selectedProfile\n        let mtu = (p?.mtuPolicy ?? "auto").lowercased() == "manual" ? "MTU \\(p?.manualMTU ?? 0)" : "Auto MTU"\n        let ipv6 = (p?.ipv6Mode ?? "on").lowercased() == "off" ? "IPv6 Off" : "IPv6 On"\n        let encrypted = p?.autoRequireEncrypted ?? false\n        let obfuscated = p?.autoRequireObfuscation ?? false\n        let requirements = encrypted && obfuscated ? "AUTO Encrypted+Obfuscation" : encrypted ? "AUTO Encrypted" : obfuscated ? "AUTO Obfuscation" : "AUTO Off"\n        return "\\(ipv6) • \\(mtu) • \\(requirements)"\n    }'''
+          if s.count(old) != 1:
+              raise SystemExit('iOS map-first settingsSummary seam drifted')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+          git diff --check
+          grep -Fq 'settings_summary' client/linux/routervpn-unified-shell-v8.inc
+          grep -Fq 'SMART never simplifies below enabled requirements' client/linux/routervpn-unified-shell-v8.inc
+          grep -Fq 'AUTO Encrypted+Obfuscation' ios/RouterVPN/App/IOSUnifiedProductView.swift
+          grep -Fq 'AUTO Off' ios/RouterVPN/App/IOSUnifiedProductView.swift
+      - name: Source gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ios/RouterVPN/test_runtime_selection_contract.py
+          python3 deploy/product-parity-audit.py
+          python3 deploy/full-audit-v4.py
+          python3 deploy/latest-a20-product-contract-audit.py
+          python3 deploy/validate-repo.py
+      - name: Commit source and self-clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-auto-summary-ui.yml
+          git config user.name 'Eabusham2'
+          git config user.email 'eabusham2@gmail.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Surface AUTO requirements in native map-first settings'
+          git push origin HEAD:main
