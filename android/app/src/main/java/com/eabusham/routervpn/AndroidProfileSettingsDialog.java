@@ -46,8 +46,8 @@ final class AndroidProfileSettingsDialog {
             CheckBox fallback=check(activity,"Allow WG/AWG base fallback",profile.optBoolean("base_fallback",false)); body.addView(fallback);
 
             body.addView(label(activity,"AUTO / SMART AUTO filters"));
-            CheckBox requireEncrypted=check(activity,"Require encrypted",profile.optBoolean("auto_require_encrypted",false)); body.addView(requireEncrypted);
-            CheckBox requireObfuscation=check(activity,"Require obfuscation",profile.optBoolean("auto_require_obfuscation",false)); body.addView(requireObfuscation);
+            CheckBox requireEncrypted=check(activity,"Require encrypted AUTO candidates",profile.optBoolean("auto_require_encrypted",false)); body.addView(requireEncrypted);
+            CheckBox requireObfuscation=check(activity,"Require obfuscation for AUTO candidates",profile.optBoolean("auto_require_obfuscation",false)); body.addView(requireObfuscation);
             TextView filterNote=label(activity,"Both filters are Off by default. Enabled filters remove non-matching candidates before AUTO tries them; SMART cannot simplify below the selected requirements."); body.addView(filterNote);
 
             Spinner mtu=spinner(activity,new String[]{"Auto measured — default","Fixed / manual","Runtime default"},index(new String[]{"auto","manual","default"},profile.optString("mtu_policy","auto"))); body.addView(label(activity,"MTU policy")); body.addView(mtu);
