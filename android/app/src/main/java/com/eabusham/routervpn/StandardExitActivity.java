@@ -27,6 +27,7 @@ public final class StandardExitActivity extends Activity {
     private NativeSingBoxController singBox;
     private AndroidStandardExitRuntime runtime;
     private TextView statusView, listView;
+    private Button addButton, directButton, hoppedButton;
     private AndroidNodeStore.Node pendingEntry;
     private AndroidStandardExitStore.Entry pendingExit;
     private boolean pendingDirect;
@@ -79,10 +80,10 @@ public final class StandardExitActivity extends Activity {
         root.addView(text("Custom Standard Exits",28,true));
         root.addView(text("Save a private non-Router-VPN exit, then either connect to it directly or chain Router VPN WireGuard entry → external exit. Connected is withheld until the exact expected public exit IP is observed.",14,false), margins(0,dp(4),0,dp(12)));
         statusView=text("Disconnected",16,true); root.addView(statusView,margins(0,0,0,dp(10)));
-        Button add=button("Add custom exit"); add.setOnClickListener(v->chooseProtocol()); root.addView(add);
+        addButton=button("Add custom exit"); addButton.setOnClickListener(v->chooseProtocol()); root.addView(addButton);
         Button manage=button("Manage saved exits"); manage.setOnClickListener(v->showSavedExits(false,false)); root.addView(manage,margins(0,dp(8),0,0));
-        Button direct=button("Connect direct external exit"); direct.setOnClickListener(v->showSavedExits(true,true)); root.addView(direct,margins(0,dp(8),0,0));
-        Button hopped=button("Connect via Router VPN WireGuard entry → external exit"); hopped.setOnClickListener(v->showSavedExits(true,false)); root.addView(hopped,margins(0,dp(8),0,0));
+        directButton=button("Connect direct external exit"); directButton.setOnClickListener(v->showSavedExits(true,true)); root.addView(directButton,margins(0,dp(8),0,0));
+        hoppedButton=button("Connect via Router VPN WireGuard entry → external exit"); hoppedButton.setOnClickListener(v->showSavedExits(true,false)); root.addView(hoppedButton,margins(0,dp(8),0,0));
         Button disconnect=button("Disconnect custom exit"); disconnect.setOnClickListener(v->{runtime.disconnect();busy=false;pendingDirect=false;pendingEntry=null;pendingExit=null;statusView.setText("Disconnected");refresh();}); root.addView(disconnect,margins(0,dp(8),0,0));
         Button vpnSettings=button("Open Android VPN settings / lockdown"); vpnSettings.setOnClickListener(v->startActivity(new Intent(android.provider.Settings.ACTION_VPN_SETTINGS))); root.addView(vpnSettings,margins(0,dp(8),0,0));
         listView=text("",14,false); root.addView(listView,margins(0,dp(16),0,0));
@@ -95,6 +96,8 @@ public final class StandardExitActivity extends Activity {
         try {
             AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);
             busy="external".equals(home.logicalMode)&&"connecting".equals(home.phase);
+            boolean mutationBlocked=activeOrTransitioning();
+            if(addButton!=null)addButton.setEnabled(!mutationBlocked);if(directButton!=null)directButton.setEnabled(!mutationBlocked);if(hoppedButton!=null)hoppedButton.setEnabled(!mutationBlocked);
             List<AndroidStandardExitStore.Entry> exits=exitStore.list();
             StringBuilder out=new StringBuilder("Saved standard exits: ").append(exits.size()).append('/').append(AndroidStandardExitStore.MAX_EXITS);
             for(AndroidStandardExitStore.Entry e:exits) out.append("\n• ").append(e.name).append(" — ").append(e.protocol).append(" — ").append(e.server).append(':').append(e.serverPort).append(" → expected ").append(e.expectedPublicIp);
@@ -113,6 +116,7 @@ public final class StandardExitActivity extends Activity {
     }
 
     private void chooseProtocol() {
+        if(activeOrTransitioning()){toast("Disconnect/finish the current VPN session before adding or editing custom exits.");return;}
         String[] protocols={"WireGuard","SOCKS5","HTTP CONNECT","HTTPS CONNECT + TLS","Shadowsocks","Hysteria2","OpenVPN — unavailable"};
         String[] ids={"wireguard","socks5","http","https","shadowsocks","hysteria2"};
         new AlertDialog.Builder(this).setTitle("Add custom exit protocol").setItems(protocols,(d,w)->{
@@ -122,6 +126,7 @@ public final class StandardExitActivity extends Activity {
     }
 
     private void showAddForm(String protocol) {
+        if(activeOrTransitioning()){toast("Disconnect/finish the current VPN session before adding a custom exit.");return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int p=dp(10);form.setPadding(p,p,p,p);
         EditText name=field("Name",false),server=field("Server literal IP",false),port=field("Server port",false),expected=field("Expected public exit IP",false);
         port.setInputType(InputType.TYPE_CLASS_NUMBER);form.addView(name);form.addView(server);form.addView(port);form.addView(expected);
@@ -133,6 +138,7 @@ public final class StandardExitActivity extends Activity {
         for(EditText e:extra)form.addView(e);
         ScrollView scroll=new ScrollView(this);scroll.addView(form);
         new AlertDialog.Builder(this).setTitle("Add "+protocol+" exit").setView(scroll).setPositiveButton("Save",(d,w)->{
+            if(activeOrTransitioning()){toast("VPN state changed; disconnect/finish before saving a custom exit.");return;}
             try{AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.name=name.getText().toString();e.protocol=protocol;e.server=server.getText().toString();e.serverPort=parseInt(port,"Server port");e.expectedPublicIp=expected.getText().toString();int i=0;
                 if("socks5".equals(protocol)||"http".equals(protocol)||"https".equals(protocol)){e.username=extra.get(i++).getText().toString();e.password=extra.get(i++).getText().toString();if("https".equals(protocol))e.tlsServerName=extra.get(i).getText().toString();}
                 else if("shadowsocks".equals(protocol)){e.method=extra.get(i++).getText().toString();e.secret=extra.get(i).getText().toString();}
@@ -156,7 +162,7 @@ public final class StandardExitActivity extends Activity {
     private void showExitActions(AndroidStandardExitStore.Entry e) {
         String[] actions={"Connect direct","Connect through Router VPN entry","Delete"};
         new AlertDialog.Builder(this).setTitle(e.name+" — "+e.protocol).setMessage("Server: "+e.server+":"+e.serverPort+"\nExpected public IP: "+e.expectedPublicIp+"\nCredentials are stored privately and are not displayed.")
-                .setItems(actions,(d,w)->{if(w==0)requestDirect(e);else if(w==1)chooseEntry(e);else new AlertDialog.Builder(this).setTitle("Delete "+e.name+"?").setMessage("Only this app-private custom exit will be removed.").setPositiveButton("Delete",(x,y)->{try{exitStore.remove(e.id);refresh();toast("Deleted "+e.name);}catch(Exception err){toast(safe(err));}}).setNegativeButton("Cancel",null).show();}).setNegativeButton("Close",null).show();
+                .setItems(actions,(d,w)->{if(w==0)requestDirect(e);else if(w==1)chooseEntry(e);else new AlertDialog.Builder(this).setTitle("Delete "+e.name+"?").setMessage("Only this app-private custom exit will be removed.").setPositiveButton("Delete",(x,y)->{if(activeOrTransitioning()){toast("VPN state changed; disconnect/finish before deleting a custom exit.");return;}try{exitStore.remove(e.id);refresh();toast("Deleted "+e.name);}catch(Exception err){toast(safe(err));}}).setNegativeButton("Cancel",null).show();}).setNegativeButton("Close",null).show();
     }
 
     private void requestDirect(AndroidStandardExitStore.Entry exit) {
@@ -185,7 +191,7 @@ public final class StandardExitActivity extends Activity {
         if(direct)runtime.connectDirect(exit,cb);else runtime.connect(entry.file,exit,cb);
     }
 
-    private boolean activeOrTransitioning(){AndroidHomeStateStore.Snapshot s=AndroidHomeStateStore.snapshot(this);return s.connected||"connecting".equals(s.phase)||"STARTING".equals(singBox.getState())||"STOPPING".equals(singBox.getState());}
+    private boolean activeOrTransitioning(){return busy||AndroidVpnMutationGuard.isBusy(this);}
 
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request!=PREPARE_STANDARD_EXIT)return;if(result==RESULT_OK)startPending();else{pendingEntry=null;pendingExit=null;pendingDirect=false;busy=false;statusView.setText("VPN permission denied; custom exit stayed disconnected.");}}
 
