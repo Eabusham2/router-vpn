@@ -37,6 +37,12 @@ func TestFastestLiveLatencyCannotOverwriteDurableBenchmark(t *testing.T) {
 	}
 	for _, required := range []string{
 		"q.Samples = clampLiveSamples(q.Samples, 5)",
+		"selectionAtStart := a.profiles.SelectedID",
+		"profilesAtStart := fastestProfileSnapshotToken(profiles)",
+		"sessionAtStart := sessionTrackerFor(a).snapshot(0).ID",
+		"VPN session changed while fastest-node measurement was running",
+		"selected node changed while fastest-node measurement was running",
+		"linked node catalog changed while fastest-node measurement was running",
 		"a.profiles.SelectedID = winner.ID",
 		"persistErr = a.persistProfilesLocked()",
 		"does not overwrite the durable 50-sample node benchmark",
