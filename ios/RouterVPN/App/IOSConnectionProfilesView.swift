@@ -235,7 +235,7 @@ struct IOSConnectionProfilesView: View {
         NavigationStack {
             Form {
                 Section("Connection profile") {
-                    Text("A connection profile stores node ID + non-secret Mode/CUSTOM, DNS, kill-switch, IPv6, AUTO encryption/obfuscation requirements and MTU choices. Router keys, API tokens, SOCKS credentials and external protocol secrets stay only in the linked node bundle/store.")
+                    Text("A connection profile stores the selected node ID plus non-secret Mode/CUSTOM layers, home-LAN policy, DNS, kill switch, IPv6, WG/AWG base/fallback, AUTO encryption/obfuscation requirements, MTU, and startup/autoconnect choices. Router keys, API tokens, SOCKS credentials and external protocol secrets stay only in the linked node bundle/store.")
                         .font(.caption).foregroundStyle(.secondary)
                     TextField("Profile name", text: $name)
                     Picker("Saved profile", selection: $selectedID) {
