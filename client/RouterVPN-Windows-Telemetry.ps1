@@ -34,7 +34,7 @@ function GlobeXY([double]$Lat,[double]$Lon,[double]$Width,[double]$Height){
 function AddGlobeLine($x1,$y1,$x2,$y2,[string]$Color,[double]$Thickness=1){
  $Line=New-Object Windows.Shapes.Line;$Line.X1=$x1;$Line.Y1=$y1;$Line.X2=$x2;$Line.Y2=$y2;$Line.Stroke=$Color;$Line.StrokeThickness=$Thickness;$Line.StrokeStartLineCap='Round';$Line.StrokeEndLineCap='Round';[void]$MapCanvas.Children.Add($Line);return $Line
 }
-function SelectUnifiedMapNode([string]$ID){try{[void](Api '/api/profile/select' 'POST' @{id=$ID} 10);RefreshProduct;RefreshUnifiedTelemetry}catch{Log ('Map node select failed: '+$_.Exception.Message)}}
+function SelectUnifiedMapNode([string]$ID){try{Assert-RouterVPNMutationIdle 'selecting a node from the VPN globe';[void](Api '/api/profile/select' 'POST' @{id=$ID} 10);RefreshProduct;RefreshUnifiedTelemetry}catch{Log ('Map node select failed: '+$_.Exception.Message)}}
 function DrawMap($Profiles,[string]$Selected){
  $MapCanvas.Children.Clear();$script:UnifiedRoute=$null;$script:UnifiedRoutePacket=$null
  $Width=[Math]::Max(420.0,[double]$MapCanvas.ActualWidth);$Height=[Math]::Max(190.0,[double]$MapCanvas.ActualHeight);$cx=$Width/2;$cy=$Height/2;$rx=[Math]::Max(40.0,$Width/2-15);$ry=[Math]::Max(40.0,$Height/2-14)
@@ -80,6 +80,7 @@ function ToggleUnifiedForwardingMaster{
 }
 function RefreshUnifiedTelemetry{
  RefreshUnifiedFastestChoices
+ try{(Control 'UnifiedFastestNode').IsEnabled=-not(Test-RouterVPNMutationBusy)}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
  try{$Live=Api '/api/connection/live-latency' -Timeout 4;$script:UnifiedRoutePathMs=[double]$Live.median_ms;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f [double]$Live.median_ms);(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}catch{$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text='-- ms';(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
  try{if((Control 'UnifiedMultihop').IsChecked){$Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue;if($Entry -and $Exit -and $Entry -ne $Exit){$R=Api '/api/multihop/live-latency' 'POST' @{entry_id=$Entry;exit_id=$Exit;samples=2} 8;$Bits=@();if($R.entry){$Bits+=('IN {0:N1}'-f[double]$R.entry.median_ms)};if($R.exit){$Bits+=('OUT {0:N1}'-f[double]$R.exit.median_ms)};if($R.current_path){$script:UnifiedRoutePathMs=[double]$R.current_path.median_ms;$Bits+=('PATH {0:N1} ms'-f[double]$R.current_path.median_ms)};(Control 'UnifiedMultihopLatency').Text=($Bits -join ' • ')}}else{(Control 'UnifiedMultihopLatency').Text=''}}catch{(Control 'UnifiedMultihopLatency').Text=''}
  RefreshUnifiedForwardingMaster
@@ -96,7 +97,7 @@ function ShowUnifiedPerformance{
  $D.FindName('Mtu').Add_Click({try{$R=Api '/api/mtu/retest' 'POST' @{} 130;$Result.Text=($R|ConvertTo-Json -Depth 8);RefreshProduct}catch{$Result.Text=$_.Exception.Message}})
  $D.FindName('Close').Add_Click({$D.Close()});[void]$D.ShowDialog()
 }
-(Control 'UnifiedFastestNode').Add_SelectionChanged({if($script:UnifiedTelemetrySync){return};$ID=[string](Control 'UnifiedFastestNode').SelectedValue;if(-not $ID){return};try{if($ID -eq 'fastest'){[void](Api '/api/profile/fastest' 'POST' @{samples=5;select=$true} 40)}else{[void](Api '/api/profile/select' 'POST' @{id=$ID} 10)};RefreshProduct;RefreshUnifiedTelemetry;UnifiedConnect}catch{Log ('Fast connect failed: '+$_.Exception.Message)}finally{$script:UnifiedTelemetrySync=$true;(Control 'UnifiedFastestNode').SelectedValue='fastest';$script:UnifiedTelemetrySync=$false}})
+(Control 'UnifiedFastestNode').Add_SelectionChanged({if($script:UnifiedTelemetrySync){return};$ID=[string](Control 'UnifiedFastestNode').SelectedValue;if(-not $ID){return};try{Assert-RouterVPNMutationIdle 'selecting/connecting a fastest Router VPN node';if($ID -eq 'fastest'){[void](Api '/api/profile/fastest' 'POST' @{samples=5;select=$true} 40)}else{[void](Api '/api/profile/select' 'POST' @{id=$ID} 10)};RefreshProduct;RefreshUnifiedTelemetry;UnifiedConnect}catch{Log ('Fast connect failed: '+$_.Exception.Message)}finally{$script:UnifiedTelemetrySync=$true;(Control 'UnifiedFastestNode').SelectedValue='fastest';$script:UnifiedTelemetrySync=$false}})
 (Control 'UnifiedForwardButton').Add_Click({ToggleUnifiedForwardingMaster})
 (Control 'UnifiedPerformanceButton').Add_Click({ShowUnifiedPerformance})
 '@
