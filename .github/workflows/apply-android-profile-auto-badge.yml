@@ -1,0 +1,63 @@
+name: Apply Android saved-profile AUTO badge
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Preserve saved AUTO policy in Android profile rows
+        shell: bash
+        run: |
+          set -euo pipefail
+          git switch -C publish origin/main
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java')
+          s=p.read_text(encoding='utf-8')
+          old='''    static final class Record {\n        final String id,name,nodeKind,nodeId,mode; final List<String> customLayers;\n        Record(String id,String name,String nodeKind,String nodeId,String mode,List<String>layers){this.id=id;this.name=name;this.nodeKind=nodeKind;this.nodeId=nodeId;this.mode=mode;this.customLayers=layers;}\n        @Override public String toString(){return name+" • "+mode+" • "+("external".equals(nodeKind)?"Custom":"Router");}\n    }'''
+          new='''    static final class Record {\n        final String id,name,nodeKind,nodeId,mode; final List<String> customLayers; final boolean autoRequireEncrypted,autoRequireObfuscation;\n        Record(String id,String name,String nodeKind,String nodeId,String mode,List<String>layers,boolean autoRequireEncrypted,boolean autoRequireObfuscation){this.id=id;this.name=name;this.nodeKind=nodeKind;this.nodeId=nodeId;this.mode=mode;this.customLayers=layers;this.autoRequireEncrypted=autoRequireEncrypted;this.autoRequireObfuscation=autoRequireObfuscation;}\n        String autoRequirementsSummary(){if("external".equals(nodeKind))return "AUTO n/a";if(autoRequireEncrypted&&autoRequireObfuscation)return "AUTO Encrypted+Obfuscation";if(autoRequireEncrypted)return "AUTO Encrypted";if(autoRequireObfuscation)return "AUTO Obfuscation";return "AUTO Off";}\n        @Override public String toString(){return name+" • "+mode+" • "+("external".equals(nodeKind)?"Custom":"Router")+" • "+autoRequirementsSummary();}\n    }'''
+          if s.count(old)!=1: raise SystemExit('Android Record seam drifted')
+          s=s.replace(old,new,1)
+          old='''    private static Record toRecord(JSONObject row){return new Record(row.optString("id",""),row.optString("name",""),row.optString("node_kind",""),row.optString("node_id",""),row.optString("mode","smart-auto"),jsonStrings(row.optJSONArray("custom_layers"),32));}'''
+          new='''    private static Record toRecord(JSONObject row){JSONObject policy=row.optJSONObject("policy");boolean encrypted=policy!=null&&policy.optBoolean("auto_require_encrypted",false),obfuscated=policy!=null&&policy.optBoolean("auto_require_obfuscation",false);return new Record(row.optString("id",""),row.optString("name",""),row.optString("node_kind",""),row.optString("node_id",""),row.optString("mode","smart-auto"),jsonStrings(row.optJSONArray("custom_layers"),32),encrypted,obfuscated);}'''
+          if s.count(old)!=1: raise SystemExit('Android toRecord seam drifted')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+
+          p=Path('deploy/native-auto-requirements-ui-audit.py')
+          s=p.read_text(encoding='utf-8')
+          anchor='''require(\n    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfilesDialog.java",\n    "AUTO encryption/obfuscation requirements",\n    "Connect still has to establish and prove the real VPN path",\n)'''
+          replacement=anchor+'''\nrequire(\n    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",\n    "autoRequirementsSummary",\n    "AUTO Encrypted+Obfuscation",\n    "AUTO Obfuscation",\n    "AUTO Encrypted",\n    "AUTO Off",\n    "auto_require_encrypted",\n    "auto_require_obfuscation",\n)'''
+          if s.count(anchor)!=1: raise SystemExit('Android UI audit seam drifted')
+          p.write_text(s.replace(anchor,replacement,1),encoding='utf-8')
+          PY
+          git diff --check
+      - name: Source gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/native-auto-requirements-ui-audit.py
+          python3 deploy/profile-settings-audit.py
+          python3 deploy/product-parity-audit.py
+          python3 deploy/full-audit-v4.py
+          python3 deploy/validate-repo.py
+      - name: Commit source and self-clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-android-profile-auto-badge.yml
+          git config user.name 'Eabusham2'
+          git config user.email 'eabusham2@gmail.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Show AUTO requirements on Android saved profiles'
+          git push origin HEAD:main
