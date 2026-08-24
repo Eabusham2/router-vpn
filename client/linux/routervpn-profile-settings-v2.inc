@@ -16,6 +16,25 @@ static void profile_settings_grid_row_v7(GtkWidget *grid, int row, const char *l
     gtk_grid_attach(GTK_GRID(grid), widget, 1, row, 1, 1);
 }
 
+static gboolean profile_settings_mutation_busy_v7(void) {
+    Buffer out = {0};
+    char *err = NULL;
+    gboolean busy = TRUE;
+    if (api_request("/api/status", "GET", NULL, 3500, &out, &err)) {
+        JsonNode *root = parse_json(out.data);
+        if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
+            JsonObject *obj = json_node_get_object(root);
+            gboolean connected = json_object_has_member(obj, "connected") && json_object_get_boolean_member(obj, "connected");
+            const char *phase = obj_string(obj, "phase");
+            busy = connected || g_str_has_prefix(phase, "connecting") || g_str_has_prefix(phase, "starting") || g_str_has_prefix(phase, "checking") || g_str_has_prefix(phase, "disconnecting") || g_str_has_prefix(phase, "stopping") || strstr(phase, "trying") != NULL || strstr(phase, "proving") != NULL || strstr(phase, "switching") != NULL || strstr(phase, "reconnecting") != NULL;
+            json_node_free(root);
+        }
+    }
+    g_free(err);
+    free(out.data);
+    return busy;
+}
+
 static void on_profile_settings_v7(GtkButton *button, gpointer data) {
     (void)button;
     App *app = data;
@@ -52,7 +71,10 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
     gtk_widget_set_vexpand(scroll, TRUE);
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 9);
     gtk_container_set_border_width(GTK_CONTAINER(box), 16);
-    GtkWidget *note = gtk_label_new("Disconnect before saving. These are persistent selected-node preferences; unsupported runtime features remain unavailable and saved values are not runtime proof.");
+    gboolean settings_busy = profile_settings_mutation_busy_v7();
+    GtkWidget *note = gtk_label_new(settings_busy
+        ? "Disconnect Router VPN or let the active transition finish before editing persistent node settings. Saved values are preferences, not runtime proof."
+        : "Disconnect before saving. These are persistent selected-node preferences; unsupported runtime features remain unavailable and saved values are not runtime proof.");
     gtk_label_set_xalign(GTK_LABEL(note), 0.0f);
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
     gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 0);
@@ -127,57 +149,70 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
     gtk_label_set_xalign(GTK_LABEL(effective), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), effective, FALSE, FALSE, 0);
 
+    GtkWidget *editable[] = {lan, kill, ipv6, base, fallback, mtu, manual, daita, jumbo, socks, startup, autoconnect};
+    if (settings_busy) {
+        for (guint i = 0; i < G_N_ELEMENTS(editable); i++) gtk_widget_set_sensitive(editable[i], FALSE);
+        GtkWidget *save_button = gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), GTK_RESPONSE_OK);
+        if (save_button != NULL) gtk_widget_set_sensitive(save_button, FALSE);
+    }
+
     gtk_container_add(GTK_CONTAINER(scroll), box);
     gtk_box_pack_start(GTK_BOX(content), scroll, TRUE, TRUE, 0);
     gtk_widget_show_all(dialog);
 
     if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_OK) {
-        const char *mtu_policy = gtk_combo_box_get_active_id(GTK_COMBO_BOX(mtu));
-        int manual_mtu = (int)g_ascii_strtoll(gtk_entry_get_text(GTK_ENTRY(manual)), NULL, 10);
-        if (g_strcmp0(mtu_policy, "manual") == 0 && (manual_mtu < 576 || manual_mtu > 9000)) {
-            append_diag(app, "Profile settings not saved: manual MTU must be 576–9000.");
+        if (profile_settings_mutation_busy_v7()) {
+            append_diag(app, "Profile settings not saved: VPN is active, transitioning, or controller status is unavailable.");
         } else {
-            if (g_strcmp0(mtu_policy, "manual") != 0) {
-                manual_mtu = 0;
-            }
-            JsonBuilder *builder = json_builder_new();
-            json_builder_begin_object(builder);
+            const char *mtu_policy = gtk_combo_box_get_active_id(GTK_COMBO_BOX(mtu));
+            int manual_mtu = (int)g_ascii_strtoll(gtk_entry_get_text(GTK_ENTRY(manual)), NULL, 10);
+            if (g_strcmp0(mtu_policy, "manual") == 0 && (manual_mtu < 576 || manual_mtu > 9000)) {
+                append_diag(app, "Profile settings not saved: manual MTU must be 576–9000.");
+            } else {
+                if (g_strcmp0(mtu_policy, "manual") != 0) {
+                    manual_mtu = 0;
+                }
+                JsonBuilder *builder = json_builder_new();
+                json_builder_begin_object(builder);
 #define ADD_BOOL(name, value) do { json_builder_set_member_name(builder, name); json_builder_add_boolean_value(builder, value); } while (0)
 #define ADD_STR(name, value) do { json_builder_set_member_name(builder, name); json_builder_add_string_value(builder, (value) != NULL ? (value) : ""); } while (0)
-            ADD_BOOL("home_lan_access", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(lan)));
-            ADD_STR("kill_switch_policy", gtk_combo_box_get_active_id(GTK_COMBO_BOX(kill)));
-            ADD_STR("ipv6_mode", gtk_combo_box_get_active_id(GTK_COMBO_BOX(ipv6)));
-            ADD_STR("base_tunnel", gtk_combo_box_get_active_id(GTK_COMBO_BOX(base)));
-            ADD_BOOL("base_fallback", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(fallback)));
-            ADD_STR("mtu_policy", mtu_policy);
-            json_builder_set_member_name(builder, "manual_mtu");
-            json_builder_add_int_value(builder, manual_mtu);
-            ADD_BOOL("daita_enabled", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(daita)));
-            ADD_BOOL("jumbo_tun", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(jumbo)));
-            ADD_BOOL("socks_enabled", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(socks)));
-            ADD_STR("startup_mode", gtk_combo_box_get_active_id(GTK_COMBO_BOX(startup)));
-            ADD_BOOL("auto_connect", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(autoconnect)));
+                ADD_BOOL("home_lan_access", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(lan)));
+                ADD_STR("kill_switch_policy", gtk_combo_box_get_active_id(GTK_COMBO_BOX(kill)));
+                ADD_STR("ipv6_mode", gtk_combo_box_get_active_id(GTK_COMBO_BOX(ipv6)));
+                ADD_STR("base_tunnel", gtk_combo_box_get_active_id(GTK_COMBO_BOX(base)));
+                ADD_BOOL("base_fallback", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(fallback)));
+                ADD_STR("mtu_policy", mtu_policy);
+                json_builder_set_member_name(builder, "manual_mtu");
+                json_builder_add_int_value(builder, manual_mtu);
+                ADD_BOOL("daita_enabled", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(daita)));
+                ADD_BOOL("jumbo_tun", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(jumbo)));
+                ADD_BOOL("socks_enabled", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(socks)));
+                ADD_STR("startup_mode", gtk_combo_box_get_active_id(GTK_COMBO_BOX(startup)));
+                ADD_BOOL("auto_connect", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(autoconnect)));
 #undef ADD_BOOL
 #undef ADD_STR
-            json_builder_end_object(builder);
+                json_builder_end_object(builder);
 
-            JsonGenerator *gen = json_generator_new();
-            JsonNode *payload_root = json_builder_get_root(builder);
-            json_generator_set_root(gen, payload_root);
-            char *payload = json_generator_to_data(gen, NULL);
-            Buffer saved = {0};
-            char *save_err = NULL;
-            if (api_request("/api/profile/settings", "POST", payload, 8000, &saved, &save_err)) {
-                append_diag(app, "Profile settings saved for the next supported connection; saved preferences are not runtime proof.");
-            } else {
-                append_diag(app, save_err != NULL ? save_err : "Profile settings save failed.");
+                JsonGenerator *gen = json_generator_new();
+                JsonNode *payload_root = json_builder_get_root(builder);
+                json_generator_set_root(gen, payload_root);
+                char *payload = json_generator_to_data(gen, NULL);
+                Buffer saved = {0};
+                char *save_err = NULL;
+                if (profile_settings_mutation_busy_v7()) {
+                    append_diag(app, "Profile settings not saved: VPN became active or began transitioning before POST.");
+                } else if (api_request("/api/profile/settings", "POST", payload, 8000, &saved, &save_err)) {
+                    append_diag(app, "Profile settings saved for the next supported connection; saved preferences are not runtime proof.");
+                } else {
+                    append_diag(app, save_err != NULL ? save_err : "Profile settings save failed.");
+                }
+                free(saved.data);
+                g_free(save_err);
+                g_free(payload);
+                json_node_free(payload_root);
+                g_object_unref(gen);
+                g_object_unref(builder);
             }
-            free(saved.data);
-            g_free(save_err);
-            g_free(payload);
-            json_node_free(payload_root);
-            g_object_unref(gen);
-            g_object_unref(builder);
         }
     }
 
@@ -191,4 +226,5 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
 /* Safe settings contract: /api/profile/settings only; never redacted full-profile POST.
  * LAN Off / kill switch / IPv6 / WG-AWG base+fallback / default-auto-manual MTU /
  * DAITA-like / Jumbo TUN / SOCKS5 / startup/autoconnect.
+ * Persistent settings Save fails closed while connected/transitioning or controller status is unavailable.
  */
