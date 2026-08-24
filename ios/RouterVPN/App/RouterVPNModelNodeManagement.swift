@@ -2,6 +2,7 @@ import Foundation
 
 extension RouterVPNModel {
     func removeNode(_ id: String) {
+        guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before removing a linked node."; return }
         do {
             let replacement = try IOSNodeBundleStore.shared.remove(profileID: id, current: bundle)
             if let replacement {
@@ -23,6 +24,7 @@ extension RouterVPNModel {
         latitudeText: String,
         longitudeText: String
     ) {
+        guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before editing node metadata."; return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty, trimmedName.count <= 120 else {
             message = "Node name must be 1–120 characters"
