@@ -66,8 +66,8 @@ struct IOSDNSPolicyView: View {
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
                     Button("Save DNS for next connection") { savePolicy() }
-                        .disabled(model.connected)
-                    if model.connected { Text("Disconnect before changing the active DNS policy.").font(.caption).foregroundStyle(.orange) }
+                        .disabled(model.profileMutationBlocked)
+                    if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before changing the DNS policy.").font(.caption).foregroundStyle(.orange) }
                 }
 
                 Section("Runtime truth") {
@@ -142,7 +142,7 @@ struct IOSDNSPolicyView: View {
     }
 
     private func savePolicy() {
-        guard !model.connected else { status = "Disconnect before changing the DNS policy."; return }
+        guard !model.profileMutationBlocked else { status = "Disconnect or let the active VPN transition finish before changing the DNS policy."; return }
         guard var bundle = model.bundle,
               let index = bundle.routerProfiles.firstIndex(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.indices.first else {
             status = "Pair/import a Router VPN node first."; return
