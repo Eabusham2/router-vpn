@@ -1,6 +1,7 @@
 name: Apply RouterVPN cross-platform UI update
 
 # Trigger after the workflow is present on the default branch.
+# Merge-triggered so GitHub emits the default-branch push event.
 on:
   push:
     paths:
