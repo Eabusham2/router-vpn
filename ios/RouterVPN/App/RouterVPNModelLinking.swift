@@ -2,6 +2,7 @@ import Foundation
 
 extension RouterVPNModel {
     func linkFromLAN(host rawHost: String, code rawCode: String) async {
+        guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before pairing another node."; return }
         let raw = rawHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { message = "Enter the AI Board LAN IP or hostname"; return }
         let code = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
