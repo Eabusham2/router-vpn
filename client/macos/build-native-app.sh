@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"
 UNIFIED_SRC="$ROOT/client/macos/RouterVPNMacUnifiedShell.swift"
+SESSION_MUTATION_TRANSFORM="$ROOT/client/macos/macos-session-mutation-transform.py"
 TELEMETRY_SRC="$ROOT/client/macos/RouterVPNMacTelemetry.swift"
 GLOBE_SRC="$ROOT/client/macos/RouterVPNMacGlobeChrome.swift"
 PROFILE_SRC="$ROOT/client/macos/RouterVPNConnectionProfiles.swift"
@@ -30,9 +31,14 @@ trap 'rm -rf "$BUILD_WORK"' EXIT
 MENU_OBJ="$BUILD_WORK/RouterVPNMenuBar.o"
 # Swift permits top-level executable statements across a multi-file target only
 # when the executable translation unit is named main.swift.
+HARDENED_SRC="$BUILD_WORK/RouterVPNMacProduct.swift"
+HARDENED_UNIFIED_SRC="$BUILD_WORK/RouterVPNMacUnifiedShell.swift"
 ADAPTIVE_SRC="$BUILD_WORK/main.swift"
 
-python3 - "$SRC" "$ADAPTIVE_SRC" <<'PY'
+python3 "$SESSION_MUTATION_TRANSFORM" "$SRC" "$HARDENED_SRC" product
+python3 "$SESSION_MUTATION_TRANSFORM" "$UNIFIED_SRC" "$HARDENED_UNIFIED_SRC" unified
+
+python3 - "$HARDENED_SRC" "$ADAPTIVE_SRC" <<'PY'
 from pathlib import Path
 import sys
 src, out = map(Path, sys.argv[1:3])
@@ -95,7 +101,7 @@ PY
 xcrun clang -fobjc-arc -fblocks -fmodules -isysroot "$SDK" -mmacosx-version-min=13.0 -arch "$CLANG_ARCH" -c "$MENU_SRC" -o "$MENU_OBJ"
 
 xcrun swiftc -O -sdk "$SDK" -target "$TARGET" -framework AppKit -framework Foundation -framework MapKit \
-  "$ADAPTIVE_SRC" "$UNIFIED_SRC" "$TELEMETRY_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$MENU_OBJ" -o "$BIN"
+  "$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$MENU_OBJ" -o "$BIN"
 chmod 755 "$BIN"
 
 ICON_WORK="$BUILD_WORK/icon"; mkdir -p "$ICON_WORK"
@@ -127,7 +133,9 @@ case "$ARCH" in amd64) file "$BIN" | grep -Eq 'x86_64|Mach-O 64-bit executable x
 
 ! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC" "$UNIFIED_SRC" "$TELEMETRY_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC"
 for marker in 'NSWindow(' 'import MapKit' 'MKMapView' 'http://127.0.0.1:8788' '/api/connect-logical' '/api/session/events' '/api/multihop/status' '/api/multihop/connect' '/api/external-profile/import' '/api/external-profile/connect' 'entry_id' 'externalEntryPopup' '/api/mtu/retest' 'Retest MTU' 'effective_mtu_mbps' '/api/emergency-stop'; do grep -Fq "$marker" "$SRC"; done
-for marker in 'buildUnifiedUI' 'unified-sheet' 'unified-connect' 'SMART AUTO — recommended' 'AUTO — first proven path' 'New CUSTOM preset…' 'CUSTOM preset builder' 'Kill switch' 'Multihop' 'Open settings' 'Mode' 'DNS' 'systemBlue' 'systemOrange' 'systemPink' 'real coordinates'; do grep -Fq "$marker" "$UNIFIED_SRC"; done
+for marker in 'buildUnifiedUI' 'unified-sheet' 'unified-connect' 'SMART AUTO — recommended' 'AUTO — first proven path' 'New CUSTOM preset…' 'CUSTOM preset builder' 'Kill switch' 'Multihop' 'Open settings' 'Mode' 'DNS' 'systemBlue' 'systemOrange' 'systemPink' 'real coordinates'; do grep -Fq "$marker" "$HARDENED_UNIFIED_SRC"; done
+for marker in 'mutationBusy(from status:' 'Disconnect already in progress.' 'changing the selected mode' 'saving a CUSTOM preset' 'deleting a CUSTOM preset' 'changing persistent kill-switch policy' 'changing DNS policy' 'Disconnecting…' 'Checking…'; do grep -Fq "$marker" "$HARDENED_UNIFIED_SRC"; done
+for marker in 'func mutationBusy(from status:' 'redeeming the one-time pairing code' 'committing the lowest-latency node selection' 'committing linked-node removal' 'saving DNS policy'; do grep -Fq "$marker" "$HARDENED_SRC"; done
 for marker in 'installUnifiedTelemetryUI' 'unified-fastest-node' 'unified-live-latency' 'unified-multihop-latency' '/api/profile/fastest' '/api/connection/live-latency' '/api/multihop/live-latency' '/api/forwarding/master' 'Forward ON' 'Forward OFF' 'toggleUnifiedForwardingMaster' 'Performance' 'Throughput + Auto MTU'; do grep -Fq "$marker" "$TELEMETRY_SRC"; done
 for marker in 'installUnifiedMapChrome' 'ROUTER VPN • LIVE ROUTE' 'Only linked real coordinates' 'no IP geolocation or fabricated device pin' 'map.mapType = .mutedStandard' 'Timer.scheduledTimer(withTimeInterval: 0.05' '/api/multihop/status' '/api/multihop/live-latency' 'PATH %.1f ms'; do grep -Fq "$marker" "$GLOBE_SRC"; done
 for marker in 'manageConnectionProfiles' '/api/connection-profile/setup/save' '/api/connection-profile/setup/update' '/api/connection-profile/setup/load' '/api/connection-profile/setup/delete' 'multihop_entry_id' 'multihop_exit_id' 'multihop_exit_mode' 'Loading never connects automatically'; do grep -Fq "$marker" "$PROFILE_SRC"; done
