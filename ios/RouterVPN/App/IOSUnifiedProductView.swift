@@ -30,7 +30,7 @@ extension RouterVPNModel {
     }
 
     func setUnifiedQuickKillSwitch(_ enabled: Bool) {
-        guard !connected else { message = "Disconnect before changing persistent kill-switch policy."; return }
+        guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before changing persistent kill-switch policy."; return }
         guard var current = bundle,
               let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) ?? current.routerProfiles.indices.first,
               current.routerProfiles[index].normalizedNodeKind == "router-vpn" else {
@@ -50,7 +50,7 @@ extension RouterVPNModel {
     }
 
     func setUnifiedRequirement(_ kind: String, enabled: Bool) {
-        guard !connected else { message = "Disconnect before changing AUTO / SMART requirements."; return }
+        guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before changing AUTO / SMART requirements."; return }
         guard var current = bundle,
               let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) ?? current.routerProfiles.indices.first,
               current.routerProfiles[index].normalizedNodeKind == "router-vpn" else {
@@ -67,7 +67,7 @@ extension RouterVPNModel {
     }
 
     func unifiedSetDNSMode(_ mode: String) {
-        guard !connected else { message = "Disconnect before changing the selected DNS policy."; return }
+        guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before changing the selected DNS policy."; return }
         guard var current = bundle,
               let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) ?? current.routerProfiles.indices.first,
               current.routerProfiles[index].normalizedNodeKind == "router-vpn" else {
@@ -203,7 +203,10 @@ private struct IOSUnifiedMap: UIViewRepresentable {
         }
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
             guard let node = view.annotation as? IOSUnifiedMapAnnotation, node.role != "packet" else { return }
-            Task { @MainActor in parent.model.selectNode(node.profileID) }
+            Task { @MainActor in
+                guard !parent.model.profileMutationBlocked else { parent.model.message = "Disconnect or let the active VPN transition finish before selecting another node."; return }
+                parent.model.selectNode(node.profileID)
+            }
         }
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
@@ -242,9 +245,10 @@ struct IOSUnifiedProductView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(model.profileMutationBlocked)
                         Spacer()
                         VStack(alignment: .trailing, spacing: 1) {
-                            Text(model.connected ? "Connected" : "Disconnected").font(.subheadline.bold())
+                            Text(connectionStateTitle).font(.subheadline.bold())
                             HStack(spacing: 5) {
                                 Text(model.activeRawProfile.isEmpty ? selectedModeTitle : model.activeRawProfile)
                                 if let ms = telemetry.livePathMs, model.connected { Text(String(format: "• %.1f ms", ms)).monospacedDigit() }
@@ -288,6 +292,15 @@ struct IOSUnifiedProductView: View {
         let ms = telemetry.cached(p.id) ?? p.latencyMedianMs ?? 0
         return ms > 0 ? String(format: "%@ • %.1f ms", kind, ms) : kind
     }
+    private var connectionStateTitle: String {
+        if model.connected { return "Connected" }
+        if model.tunnelTransitioning { return model.message.lowercased().contains("disconnect") ? "Disconnecting…" : "Connecting…" }
+        return "Disconnected"
+    }
+    private var connectionButtonTitle: String {
+        if model.tunnelTransitioning { return model.message.lowercased().contains("disconnect") ? "Disconnecting…" : "Connecting…" }
+        return model.connected ? "Disconnect" : "Connect"
+    }
     private var selectedModeTitle: String {
         if selectedMode == IOSUnifiedModeSelection.smart { return "SMART AUTO" }
         if selectedMode == IOSUnifiedModeSelection.auto { return "AUTO" }
@@ -316,30 +329,32 @@ struct IOSUnifiedProductView: View {
                     HStack(spacing: 7) {
                         Menu {
                             Button { Task { await connectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing…" : "Test & connect fastest", systemImage: "bolt.fill") }
-                                .disabled(telemetry.isTestingFastest || model.connected)
+                                .disabled(telemetry.isTestingFastest || model.profileMutationBlocked)
                             Divider()
                             ForEach(routerProfiles) { profile in
                                 Button { connectSpecific(profile) } label: {
                                     let ms = telemetry.cached(profile.id) ?? profile.latencyMedianMs ?? 0
                                     Text(ms > 0 ? String(format: "%@ • %.1f ms", profile.name, ms) : profile.name)
-                                }.disabled(model.connected)
+                                }.disabled(model.profileMutationBlocked)
                             }
                         } label: { Image(systemName: "bolt.fill").frame(width: 24, height: 32) }
                         .buttonStyle(.bordered).accessibilityLabel("Fastest node or choose node")
 
-                        Button { connectOrDisconnect() } label: { Text(model.connected ? "Disconnect" : "Connect").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 7) }
+                        Button { connectOrDisconnect() } label: { Text(connectionButtonTitle).font(.headline).frame(maxWidth: .infinity).padding(.vertical, 7) }
                             .buttonStyle(.borderedProminent).tint(model.connected ? .red : .accentColor)
+                            .disabled(model.tunnelTransitioning)
 
                         if let ms = telemetry.livePathMs, model.connected { Text(String(format: "%.1f\nms", ms)).font(.caption2.bold()).monospacedDigit().multilineTextAlignment(.center) }
                         Toggle(isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) })) { Image(systemName: "lock.shield.fill") }
                             .toggleStyle(.button).buttonStyle(.bordered).accessibilityLabel("Kill switch")
+                            .disabled(model.profileMutationBlocked)
                         Button { showingForwardingInfo = true } label: { Image(systemName: "arrow.triangle.branch") }
                             .buttonStyle(.bordered).accessibilityLabel("Master port forwarding")
                     }
 
                     unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: iosMultihopSummary) { showingNodes = true }
                     unifiedRow(icon: "slider.horizontal.3", title: "Settings", value: settingsSummary) { showingSettings = true }
-                    unifiedRow(icon: "wand.and.stars", title: "Mode", value: selectedModeTitle) { showingModes = true }
+                    unifiedRow(icon: "wand.and.stars", title: "Mode", value: selectedModeTitle, disabled: model.profileMutationBlocked) { showingModes = true }
 
                     HStack {
                         Label("DNS", systemImage: "network").font(.subheadline.bold())
@@ -356,6 +371,7 @@ struct IOSUnifiedProductView: View {
                             Divider()
                             Button("DNS details / Retest…") { showingDNS = true }
                         }
+                        .disabled(model.profileMutationBlocked)
                     }
                     .padding(11).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
 
@@ -397,20 +413,20 @@ struct IOSUnifiedProductView: View {
         return "\(ipv6) • \(mtu) • \(requirements)"
     }
 
-    private func unifiedRow(icon: String, title: String, value: String, action: @escaping () -> Void) -> some View {
+    private func unifiedRow(icon: String, title: String, value: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack { Label(title, systemImage: icon).font(.subheadline.bold()); Spacer(); Text(value).font(.caption).foregroundStyle(.secondary).lineLimit(1); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary) }
                 .padding(11).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        }.buttonStyle(.plain)
+        }.buttonStyle(.plain).disabled(disabled)
     }
 
     private func connectSpecific(_ profile: RouterProfile) {
-        guard !model.connected else { return }
+        guard !model.profileMutationBlocked else { return }
         model.selectNode(profile.id)
         connectOrDisconnect()
     }
     private func connectFastest() async {
-        guard !model.connected else { return }
+        guard !model.profileMutationBlocked else { return }
         let results = await telemetry.measureAll(routerProfiles, samples: 4)
         guard let winner = results.first else { model.message = telemetry.lastError; return }
         model.selectNode(winner.id)
@@ -418,6 +434,7 @@ struct IOSUnifiedProductView: View {
         connectOrDisconnect()
     }
     private func connectOrDisconnect() {
+        guard !model.tunnelTransitioning else { return }
         if model.connected { model.disconnect(); return }
         guard let profile = selectedProfile else { showingNodes = true; return }
         if profile.normalizedNodeKind == "external" { Task { await model.connectSelectedExternal() }; return }
@@ -542,8 +559,8 @@ private struct IOSUnifiedSettingsView: View {
             Form {
                 Section("Quick settings") {
                     Toggle("Kill switch", isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) }))
-                    Toggle("Require encrypted AUTO candidates", isOn: $requireEncrypted).disabled(model.connected)
-                    Toggle("Require obfuscation for AUTO candidates", isOn: $requireObfuscation).disabled(model.connected)
+                    Toggle("Require encrypted AUTO candidates", isOn: $requireEncrypted).disabled(model.profileMutationBlocked)
+                    Toggle("Require obfuscation for AUTO candidates", isOn: $requireObfuscation).disabled(model.profileMutationBlocked)
                     Text("Both AUTO requirements are Off by default. They are stored in the selected schema-v4 Router VPN profile, shared with Advanced Settings, and filter candidates before the proof attempt; SMART cannot simplify into a candidate that violates them.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Defaults") {
