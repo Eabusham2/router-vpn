@@ -129,7 +129,11 @@ private final class MacConnectionProfileControls: NSObject {
                 let profileName = profile["name"] as? String ?? id
                 let mode = profile["mode"] as? String ?? "smart-auto"
                 let node = profile["node_id"] as? String ?? ""
-                popup.addItem(withTitle: "\(profileName) • \(mode) • \(node)")
+                let prefs = profile["preferences"] as? [String: Any]
+                let encrypted = prefs?["auto_require_encrypted"] as? Bool ?? false
+                let obfuscated = prefs?["auto_require_obfuscation"] as? Bool ?? false
+                let requirements = prefs == nil ? "AUTO n/a" : encrypted && obfuscated ? "AUTO Encrypted+Obfuscation" : encrypted ? "AUTO Encrypted" : obfuscated ? "AUTO Obfuscation" : "AUTO Off"
+                popup.addItem(withTitle: "\(profileName) • \(mode) • \(node) • \(requirements)")
                 popup.lastItem?.representedObject = ["id": id, "name": profileName]
             }
             if popup.numberOfItems > 0 { popup.selectItem(at: 0); selectionChanged() }
