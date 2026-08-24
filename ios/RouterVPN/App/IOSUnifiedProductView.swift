@@ -391,7 +391,10 @@ struct IOSUnifiedProductView: View {
         let p = selectedProfile
         let mtu = (p?.mtuPolicy ?? "auto").lowercased() == "manual" ? "MTU \(p?.manualMTU ?? 0)" : "Auto MTU"
         let ipv6 = (p?.ipv6Mode ?? "on").lowercased() == "off" ? "IPv6 Off" : "IPv6 On"
-        return "\(ipv6) • \(mtu)"
+        let encrypted = p?.autoRequireEncrypted ?? false
+        let obfuscated = p?.autoRequireObfuscation ?? false
+        let requirements = encrypted && obfuscated ? "AUTO Encrypted+Obfuscation" : encrypted ? "AUTO Encrypted" : obfuscated ? "AUTO Obfuscation" : "AUTO Off"
+        return "\(ipv6) • \(mtu) • \(requirements)"
     }
 
     private func unifiedRow(icon: String, title: String, value: String, action: @escaping () -> Void) -> some View {
