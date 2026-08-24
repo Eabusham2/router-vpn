@@ -19,9 +19,14 @@ $ProfileSettingsHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-ProfileSettin
 if(-not(Test-Path -LiteralPath $ProfileSettingsHelpers)){throw "Router VPN profile settings helpers are missing: $ProfileSettingsHelpers"}
 $ProfileSettingsSource=Get-Content -LiteralPath $ProfileSettingsHelpers -Raw -Encoding UTF8
 . ([ScriptBlock]::Create($ProfileSettingsSource))
+$SessionMutationHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-SessionMutation.ps1'
+if(-not(Test-Path -LiteralPath $SessionMutationHelpers)){throw "Router VPN Windows session-mutation helpers are missing: $SessionMutationHelpers"}
+$SessionMutationSource=Get-Content -LiteralPath $SessionMutationHelpers -Raw -Encoding UTF8
+. ([ScriptBlock]::Create($SessionMutationSource))
 $UnifiedShellHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-UnifiedShell.ps1'
 if(-not(Test-Path -LiteralPath $UnifiedShellHelpers)){throw "Router VPN unified shell helpers are missing: $UnifiedShellHelpers"}
 $UnifiedShellSource=Get-Content -LiteralPath $UnifiedShellHelpers -Raw -Encoding UTF8
+$UnifiedShellSource=Convert-RouterVPNWindowsUnifiedSessionMutation -Source $UnifiedShellSource
 . ([ScriptBlock]::Create($UnifiedShellSource))
 $TelemetryHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-Telemetry.ps1'
 if(-not(Test-Path -LiteralPath $TelemetryHelpers)){throw "Router VPN telemetry helpers are missing: $TelemetryHelpers"}
@@ -73,6 +78,7 @@ function global:Show-RouterVPNProductOnboarding{
 $Product=Join-Path $PSScriptRoot 'RouterVPN-Windows-Product-v2.ps1'
 if(-not(Test-Path -LiteralPath $Product)){throw "Router VPN native Windows product shell is missing: $Product"}
 $ProductSource=Get-Content -LiteralPath $Product -Raw -Encoding UTF8
+$ProductSource=Convert-RouterVPNWindowsProductSessionMutation -Source $ProductSource
 
 # Keep mature WPF detail pages responsive, but the unified transform hides them
 # behind drill-in actions so the map/control dock is the daily-use surface.
@@ -99,7 +105,7 @@ $PreviousProductSource=$env:ROUTER_VPN_PRODUCT_SOURCE;$env:ROUTER_VPN_PRODUCT_SO
 try{
     if($SelfTest){
         $self=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8
-        foreach($marker in @('RouterVPN-Windows-UnifiedShell.ps1','RouterVPN-Windows-Telemetry.ps1','Add-RouterVPNUnifiedWindowsShell','Add-RouterVPNTelemetryWindowsShell','windows-onboarding-v3.json','SMART AUTO is the default mode','IPv6 On default','Auto measured/fixed MTU','DAITA-like traffic padding','AUTO encryption/obfuscation filters')){if(-not$self.Contains($marker)){throw "Windows unified launcher self-test missing $marker"}}
+        foreach($marker in @('RouterVPN-Windows-SessionMutation.ps1','Convert-RouterVPNWindowsProductSessionMutation','Convert-RouterVPNWindowsUnifiedSessionMutation','RouterVPN-Windows-UnifiedShell.ps1','RouterVPN-Windows-Telemetry.ps1','Add-RouterVPNUnifiedWindowsShell','Add-RouterVPNTelemetryWindowsShell','windows-onboarding-v3.json','SMART AUTO is the default mode','IPv6 On default','Auto measured/fixed MTU','DAITA-like traffic padding','AUTO encryption/obfuscation filters')){if(-not$self.Contains($marker)){throw "Windows unified launcher self-test missing $marker"}}
         foreach($marker in $UnifiedControllerContract){if(-not$UnifiedShellSource.Contains($marker)-and-not$TelemetrySource.Contains($marker)-and-not$ProductSource.Contains($marker)){throw "Windows composed controller contract missing $marker"}}
         foreach($marker in @('UnifiedShell','UnifiedMapCanvas','UnifiedConnectButton','UnifiedFastestNode','UnifiedLiveLatency','UnifiedForwardButton','UnifiedKillSwitch','UnifiedMultihop','UnifiedMultihopLatency','UnifiedPerformanceButton','UnifiedModeCombo','UnifiedDnsCombo','SMART AUTO','New CUSTOM preset','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom','/api/connect-logical','/api/profile/fastest','/api/connection/live-latency','/api/connection/speed-test','/api/multihop/live-latency','/api/multihop/speed-test','Real path speed','Routed hop speeds','/api/mtu/retest','System.Collections.Generic.HashSet','real stored coordinates')){if(-not$ProductSource.Contains($marker)){throw "Windows unified product self-test missing $marker"}}
         & $ProductScript -BaseUrl $BaseUrl -SelfTest
