@@ -33,6 +33,7 @@ extension RouterVPNModel {
     /// on iOS instead of merely keeping several metadata rows beside one set of
     /// node-specific wg/sing-box files.
     func selectNode(_ id: String) {
+        guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before selecting another node."; return }
         guard let data = IOSNodeBundleStore.shared.bundleData(containing: id, current: bundle),
               var value = try? JSONDecoder().decode(ClientBundle.self, from: data),
               let selected = value.routerProfiles.first(where: { $0.id == id })
@@ -64,12 +65,16 @@ extension RouterVPNModel {
     /// their 64-hex selected-node proof so every home keeps its own raw profile
     /// assets. External-only bundles retain their validated profile ids.
     func linkNodeBundle(_ data: Data) throws {
+        guard !profileMutationBlocked else {
+            throw NSError(domain: "RouterVPN.NodeMutation", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before linking node data."])
+        }
         let normalized = try IOSNodeBundleStore.shared.link(data, preserving: bundle)
         try importBundle(normalized)
         message = "Linked node bundle • \(allNodeProfiles.count) node(s) available without reinstalling Router VPN"
     }
 
     func connectSelectedExternal() async {
+        guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before starting another external connection."; return }
         guard let bundle, let profile = selectedNodeProfile, profile.normalizedNodeKind == "external" else {
             message = "Choose an external custom node first"; return
         }
@@ -83,6 +88,8 @@ extension RouterVPNModel {
         guard let expected = profile.external?.expectedPublicIP, !expected.isEmpty else {
             connected = false; message = "External node is missing its expected public exit IP."; return
         }
+        tunnelTransitioning = true
+        defer { tunnelTransitioning = false }
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences()
             let manager = managers.first ?? NETunnelProviderManager()
