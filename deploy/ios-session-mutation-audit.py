@@ -28,6 +28,11 @@ require(
     "guard !parent.model.profileMutationBlocked",
     "setUnifiedQuickKillSwitch",
     "unifiedSetDNSMode",
+    "Disconnect or let the active VPN transition finish before changing Mode or CUSTOM presets",
+    "guard available, !model.profileMutationBlocked",
+    "Save & Connect",
+    "before saving a CUSTOM preset",
+    "Toggle(\"Kill switch\"",
 )
 require(
     "ios/RouterVPN/App/IOSDNSPolicyView.swift",
