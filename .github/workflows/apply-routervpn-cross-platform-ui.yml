@@ -1,0 +1,54 @@
+name: Apply RouterVPN cross-platform UI update
+
+on:
+  push:
+    paths:
+      - '.github/routervpn-cross-platform-ui.patch.gz.b64'
+      - '.github/workflows/apply-routervpn-cross-platform-ui.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply validated cross-platform source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .github/routervpn-cross-platform-ui.patch.gz.b64 | gzip -d > /tmp/routervpn-cross-platform-ui.patch
+          git apply --check /tmp/routervpn-cross-platform-ui.patch
+          git apply /tmp/routervpn-cross-platform-ui.patch
+          rm -f .github/routervpn-cross-platform-ui.patch.gz.b64 .github/workflows/apply-routervpn-cross-platform-ui.yml
+          git diff --check
+      - name: Re-run source-first product gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/linux-auto-requirements-audit.py
+          python3 deploy/profile-settings-audit.py
+          python3 deploy/product-parity-audit.py
+          python3 deploy/linux-full-profile-shipping-audit.py
+          python3 deploy/full-audit-v4.py
+          python3 deploy/latest-a20-product-contract-audit.py
+          python3 deploy/recovered-requirements-1-264-audit.py
+          python3 deploy/recovered-requirements-265-311-audit.py
+          python3 deploy/recovered-addendum-312-356-audit.py
+          python3 deploy/recovered-corrections-audit.py
+          python3 deploy/release-orchestration-audit.py
+          python3 deploy/validate-repo.py
+      - name: Commit real source and remove staging files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Eabusham2'
+          git config user.email 'eabusham2@gmail.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Unify AUTO requirements across native map-first UI'
+          git push origin HEAD:main
