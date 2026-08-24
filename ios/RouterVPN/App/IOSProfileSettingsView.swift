@@ -69,15 +69,15 @@ struct IOSProfileSettingsView: View {
                 }
                 Section("Connection profiles") {
                     Button("Add / Load / Update / Delete connection profiles") { showingConnectionProfiles = true }
-                        .disabled(model.connected)
+                        .disabled(model.profileMutationBlocked)
                     Text("Profiles reference linked Router/Custom nodes and save only non-secret Mode/CUSTOM, DNS, kill-switch, IPv6, AUTO encryption/obfuscation requirements and MTU choices. Node keys, API tokens and external credentials stay in the private node store.")
                         .font(.caption).foregroundStyle(.secondary)
-                    if model.connected { Text("Disconnect before changing saved connection-profile choices.").font(.caption).foregroundStyle(.orange) }
+                    if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before changing saved connection-profile choices.").font(.caption).foregroundStyle(.orange) }
                 }
                 Section {
                     Button("Save for next supported connection") { save() }
-                        .disabled(model.connected)
-                    if model.connected { Text("Disconnect before editing persistent tunnel policy.").font(.caption).foregroundStyle(.orange) }
+                        .disabled(model.profileMutationBlocked)
+                    if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before editing persistent tunnel policy.").font(.caption).foregroundStyle(.orange) }
                     if !status.isEmpty { Text(status).font(.caption) }
                 }
             }
@@ -110,7 +110,7 @@ struct IOSProfileSettingsView: View {
     }
 
     private func save() {
-        guard !model.connected else { status = "Disconnect before changing profile settings."; return }
+        guard !model.profileMutationBlocked else { status = "Disconnect or let the active VPN transition finish before changing profile settings."; return }
         guard var bundle = model.bundle,
               let index = bundle.routerProfiles.firstIndex(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.indices.first else {
             status = "Pair/import and select a Router VPN node first."; return
@@ -146,4 +146,5 @@ struct IOSProfileSettingsView: View {
 // iOS settings contract: LAN Off / kill switch / IPv6 On default / WG-AWG base+fallback /
 // Require encrypted + Require obfuscation AUTO filters / Auto measured-fixed-runtime MTU /
 // SMART AUTO startup default / secret-free connection-profile Add-Load-Update-Delete including AUTO requirements.
+// Persistent settings/profile mutation stays disabled through connected/connecting/reasserting/disconnecting state.
 // Jumbo/DAITA/SOCKS are omitted when the current Apple runtime cannot truthfully claim their support.
