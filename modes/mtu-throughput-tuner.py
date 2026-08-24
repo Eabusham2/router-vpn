@@ -339,7 +339,12 @@ def persist(root: Path, store: dict[str, Any], profile: dict[str, Any], winner: 
             pass
 
 
-def optimize() -> dict[str, Any]:
+def measurement_context(profile: dict[str, Any], root: Path) -> dict[str, str]:
+    key, network, generated = path_context(profile, root)
+    return {"path_key": key, "network_fingerprint": network, "profile_fingerprint": generated}
+
+
+def optimize(*, defer_adopt: bool = False) -> dict[str, Any]:
     root = root_dir()
     store, profile = load_profile(root)
     policy = str(profile.get("mtu_policy") or "default").strip().lower()
@@ -373,14 +378,71 @@ def optimize() -> dict[str, Any]:
         winner = pick_winner(results)
         set_interface_mtu(alias, family, int(winner["mtu"]))
         prove_node(profile)
-        persist(root, store, profile, winner, results)
-        return {"ok": True, "interface": alias, "original_mtu": original, "winner": winner, "results": results}
+        context = measurement_context(profile, root)
+        if defer_adopt:
+            # The controller owns the transaction. Never leave a measured winner
+            # live or durable until it has re-proved the same session/profile/path.
+            set_interface_mtu(alias, family, original)
+        else:
+            persist(root, store, profile, winner, results)
+        return {
+            "ok": True,
+            "interface": alias,
+            "family": family,
+            "original_mtu": original,
+            "winner": winner,
+            "results": results,
+            **context,
+            "adopted": not defer_adopt,
+        }
     except Exception:
         try:
             set_interface_mtu(alias, family, original)
         except Exception:
             pass
         raise
+
+
+def apply_measured_result(*, rollback: bool = False) -> dict[str, Any]:
+    root = root_dir()
+    _store, profile = load_profile(root)
+    raw_alias = os.environ.get("HOMEVPN_MTU_APPLY_INTERFACE", "").strip()
+    raw_family = os.environ.get("HOMEVPN_MTU_APPLY_FAMILY", "").strip()
+    raw_mtu = os.environ.get("HOMEVPN_MTU_APPLY_VALUE", "").strip()
+    if not raw_alias or raw_family not in {"4", "6"} or not raw_mtu.isdigit():
+        raise RuntimeError("MTU apply requires an explicit measured interface, IP family, and MTU")
+    value = int(raw_mtu)
+    family = int(raw_family)
+    previous = interface_mtu(raw_alias, family)
+    if rollback:
+        set_interface_mtu(raw_alias, family, value)
+        return {"ok": True, "interface": raw_alias, "family": family, "previous_mtu": previous, "applied_mtu": value, "rollback": True}
+
+    policy = str(profile.get("mtu_policy") or "default").strip().lower()
+    if policy != "auto":
+        raise RuntimeError("MTU policy changed before measured result adoption")
+    prove_node(profile)
+    enforce_kill_switch()
+    host = str(profile.get("daita_host") or "10.77.0.1").strip().strip("[]")
+    ip = private_ip(host)
+    if ip.version != family:
+        raise RuntimeError("active MTU path IP family changed before adoption")
+    if route_interface(host) != raw_alias:
+        raise RuntimeError("active MTU path interface changed before adoption")
+    expected = os.environ.get("HOMEVPN_MTU_EXPECTED_PATH_KEY", "").strip()
+    current = measurement_context(profile, root)
+    if not expected or current["path_key"] != expected:
+        raise RuntimeError("active MTU path fingerprint changed before adoption")
+    try:
+        set_interface_mtu(raw_alias, family, value)
+        prove_node(profile)
+    except Exception:
+        try:
+            set_interface_mtu(raw_alias, family, previous)
+        except Exception:
+            pass
+        raise
+    return {"ok": True, "interface": raw_alias, "family": family, "previous_mtu": previous, "applied_mtu": value, **current, "rollback": False}
 
 
 def main() -> int:
@@ -407,11 +469,18 @@ def main() -> int:
                 os.environ["HOMEVPN_NETWORK_CONTEXT"] = old
         print("MTU throughput optimizer self-test OK")
         return 0
-    if len(sys.argv) != 2 or sys.argv[1] != "optimize":
-        print("usage: mtu-throughput-tuner.py optimize | --self-test", file=sys.stderr)
+    if len(sys.argv) != 2 or sys.argv[1] not in {"optimize", "measure", "apply", "restore"}:
+        print("usage: mtu-throughput-tuner.py optimize | measure | apply | restore | --self-test", file=sys.stderr)
         return 2
     try:
-        result = optimize()
+        if sys.argv[1] == "measure":
+            result = optimize(defer_adopt=True)
+        elif sys.argv[1] == "apply":
+            result = apply_measured_result(rollback=False)
+        elif sys.argv[1] == "restore":
+            result = apply_measured_result(rollback=True)
+        else:
+            result = optimize(defer_adopt=False)
     except Exception as exc:
         print(f"MTU optimization failed: {exc}", file=sys.stderr)
         return 1
