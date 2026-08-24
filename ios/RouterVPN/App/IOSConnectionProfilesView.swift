@@ -226,7 +226,7 @@ struct IOSConnectionProfilesView: View {
         NavigationStack {
             Form {
                 Section("Connection profile") {
-                    Text("A connection profile stores node ID + non-secret Mode/CUSTOM, DNS, kill-switch, IPv6 and MTU choices. Router keys, API tokens, SOCKS credentials and external protocol secrets stay only in the linked node bundle/store.")
+                    Text("A connection profile stores node ID + non-secret Mode/CUSTOM, DNS, kill-switch, IPv6, AUTO encryption/obfuscation requirements and MTU choices. Router keys, API tokens, SOCKS credentials and external protocol secrets stay only in the linked node bundle/store.")
                         .font(.caption).foregroundStyle(.secondary)
                     TextField("Profile name", text: $name)
                     Picker("Saved profile", selection: $selectedID) {
@@ -260,6 +260,6 @@ struct IOSConnectionProfilesView: View {
     private func delete() { guard let selectedID else { return }; do { try IOSConnectionProfileStore.delete(id: selectedID); status = "Deleted saved connection profile."; self.selectedID = nil; refresh() } catch { status = error.localizedDescription } }
 }
 
-// iOS connection-profile contract: Add / Load / Update / Delete complete non-secret choices supported by the current iOS dataplane.
+// iOS connection-profile contract: Add / Load / Update / Delete complete non-secret choices supported by the current iOS dataplane, including AUTO encryption/obfuscation requirements.
 // Unsupported desktop multihop is rejected before save; load validates everything and applies one bundle update before selection changes.
 // No RouterProfile/API token/private key/external secret payload is encoded into this store.
