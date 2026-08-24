@@ -17,6 +17,11 @@ require(
     "Require obfuscation for AUTO candidates",
     "Both are Off by default",
     "AUTO encryption/obfuscation requirements",
+    "AUTO Encrypted+Obfuscation",
+    "AUTO Obfuscation",
+    "AUTO Encrypted",
+    "AUTO Off",
+    "AUTO n/a",
 )
 require(
     "client/RouterVPN-Windows-UnifiedShell.ps1",
@@ -31,6 +36,11 @@ require(
     "Require obfuscation for AUTO candidates",
     "Both AUTO requirements are Off by default",
     "AUTO encryption/obfuscation requirements",
+    "AUTO Encrypted+Obfuscation",
+    "AUTO Obfuscation",
+    "AUTO Encrypted",
+    "AUTO Off",
+    "AUTO n/a",
 )
 require(
     "client/macos/RouterVPNMacUnifiedShell.swift",
