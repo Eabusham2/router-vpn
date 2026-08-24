@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parent
 JAVA = ROOT / "app" / "src" / "main" / "java" / "com" / "eabusham" / "routervpn"
@@ -233,5 +235,8 @@ for marker in (
 # Keep the standalone focused contract executable for local/CI use too.
 standalone = ROOT / "test_android_via_entry_latency_contract.py"
 assert standalone.is_file() and standalone.read_text(encoding="utf-8").strip()
+
+mutation_audit = ROOT.parent / "deploy" / "android-session-mutation-audit.py"
+subprocess.run([sys.executable, str(mutation_audit)], cwd=ROOT.parent, check=True)
 
 print("Android session identity contract: PASS")
