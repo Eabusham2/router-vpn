@@ -24,6 +24,8 @@ require(
     "AUTO n/a",
     "Test-RouterVPNConnectionProfileBusy",
     "Disconnect Router VPN or let the active transition finish",
+    "$settingsSave.IsEnabled=$false",
+    "VPN became active or began transitioning before settings save",
 )
 require(
     "client/RouterVPN-Windows-UnifiedShell.ps1",
@@ -43,9 +45,10 @@ require(
     "AUTO Encrypted",
     "AUTO Off",
     "AUTO n/a",
-    "mutationBusy()",
+    "macMutationBusy",
     "syncMutationState()",
-    "Disconnect Router VPN or let the active transition finish",
+    "alert.buttons.first?.isEnabled = false",
+    "VPN became active or began transitioning before settings save",
 )
 require(
     "client/macos/RouterVPNMacUnifiedShell.swift",
@@ -60,6 +63,13 @@ require(
     "Require obfuscation for AUTO candidates",
     "auto_require_encrypted",
     "auto_require_obfuscation",
+)
+require(
+    "client/linux/routervpn-profile-settings-v2.inc",
+    "profile_settings_mutation_busy_v7",
+    "gtk_dialog_get_widget_for_response",
+    "Save for next connection",
+    "VPN became active or began transitioning before POST",
 )
 require(
     "client/linux/routervpn-unified-shell-v8.inc",
@@ -90,6 +100,9 @@ require(
     "Require encrypted AUTO candidates",
     "Require obfuscation for AUTO candidates",
     "Both filters are Off by default",
+    "hasLiveVpn(activity)",
+    "VPN became active while settings were open",
+    "Loading a profile never counts as runtime proof",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
@@ -129,6 +142,9 @@ require(
     "Require encrypted AUTO candidates",
     "Require obfuscation for AUTO candidates",
     "AUTO fails closed instead of silently relaxing them",
+    ".disabled(model.profileMutationBlocked)",
+    "active VPN transition finish before editing persistent tunnel policy",
+    "guard !model.profileMutationBlocked",
 )
 require(
     "ios/RouterVPN/App/IOSUnifiedProductView.swift",
