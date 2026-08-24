@@ -80,6 +80,17 @@ require(
     "Connect still has to establish and prove the real VPN path",
 )
 require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "autoRequirementsSummary",
+    "AUTO Encrypted+Obfuscation",
+    "AUTO Obfuscation",
+    "AUTO Encrypted",
+    "AUTO Off",
+    "AUTO n/a",
+    "auto_require_encrypted",
+    "auto_require_obfuscation",
+)
+require(
     "ios/RouterVPN/App/IOSProfileSettingsView.swift",
     "Require encrypted AUTO candidates",
     "Require obfuscation for AUTO candidates",
