@@ -3,6 +3,8 @@ name: Apply Android saved-profile AUTO badge
 on:
   pull_request:
     branches: [main]
+    paths:
+      - '.github/android-auto-badge-trigger'
 
 permissions:
   contents: write
