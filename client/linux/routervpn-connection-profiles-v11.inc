@@ -155,7 +155,14 @@ static void linux_profile_populate_saved_v11(GtkWidget *combo) {
                 if (p == NULL) continue;
                 const char *id = obj_string(p, "id");
                 if (!id[0]) continue;
-                char *label = g_strdup_printf("%s • %s • %s", obj_string(p, "name"), obj_string(p, "mode"), obj_string(p, "node_id"));
+                JsonObject *prefs = json_object_has_member(p, "preferences") ? json_object_get_object_member(p, "preferences") : NULL;
+                const char *auto_label = "AUTO n/a";
+                if (prefs != NULL) {
+                    gboolean enc = json_object_has_member(prefs, "auto_require_encrypted") && json_object_get_boolean_member(prefs, "auto_require_encrypted");
+                    gboolean obf = json_object_has_member(prefs, "auto_require_obfuscation") && json_object_get_boolean_member(prefs, "auto_require_obfuscation");
+                    auto_label = enc && obf ? "AUTO Encrypted+Obfuscation" : (enc ? "AUTO Encrypted" : (obf ? "AUTO Obfuscation" : "AUTO Off"));
+                }
+                char *label = g_strdup_printf("%s • %s • %s • %s", obj_string(p, "name"), obj_string(p, "mode"), obj_string(p, "node_id"), auto_label);
                 gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), id, label);
                 g_free(label);
             }
