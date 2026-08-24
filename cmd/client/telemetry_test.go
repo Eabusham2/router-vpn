@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"net/http"
 	"testing"
+
+	"router-vpn/internal/common"
 )
 
 func TestClampSpeedBytes(t *testing.T) {
@@ -65,5 +67,25 @@ func TestPrivateBenchmarkRequestHeaders(t *testing.T) {
 	}
 	if got := getReq.Header.Get("Content-Type"); got != "" {
 		t.Fatalf("unexpected content-type=%q", got)
+	}
+}
+
+func TestFastestProfileSnapshotTokenTracksSelectionInputs(t *testing.T) {
+	base := []common.RouterProfile{{ID: "a", NodeKind: "router-vpn", Endpoint: "home.example:51820", RouterAPI: "http://10.0.0.1", NodeProofID: "proof-a"}}
+	token := fastestProfileSnapshotToken(base)
+	if token == "" {
+		t.Fatal("empty fastest profile snapshot token")
+	}
+	mutations := []common.RouterProfile{
+		{ID: "b", NodeKind: "router-vpn", Endpoint: "home.example:51820", RouterAPI: "http://10.0.0.1", NodeProofID: "proof-a"},
+		{ID: "a", NodeKind: "external", Endpoint: "home.example:51820", RouterAPI: "http://10.0.0.1", NodeProofID: "proof-a"},
+		{ID: "a", NodeKind: "router-vpn", Endpoint: "other.example:51820", RouterAPI: "http://10.0.0.1", NodeProofID: "proof-a"},
+		{ID: "a", NodeKind: "router-vpn", Endpoint: "home.example:51820", RouterAPI: "http://10.0.0.2", NodeProofID: "proof-a"},
+		{ID: "a", NodeKind: "router-vpn", Endpoint: "home.example:51820", RouterAPI: "http://10.0.0.1", NodeProofID: "proof-b"},
+	}
+	for _, changed := range mutations {
+		if got := fastestProfileSnapshotToken([]common.RouterProfile{changed}); got == token {
+			t.Fatalf("snapshot token did not change for mutation: %+v", changed)
+		}
 	}
 }
