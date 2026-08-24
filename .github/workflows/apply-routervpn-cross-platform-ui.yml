@@ -3,10 +3,6 @@ name: Apply RouterVPN cross-platform UI update
 on:
   pull_request:
     branches: [main]
-  push:
-    paths:
-      - '.github/routervpn-cross-platform-ui.patch.gz.b64'
-      - '.github/workflows/apply-routervpn-cross-platform-ui.yml'
 
 permissions:
   contents: write
@@ -23,10 +19,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 -d .github/routervpn-cross-platform-ui.patch.gz.b64 | gzip -d > /tmp/routervpn-cross-platform-ui.patch
+          git switch -C publish origin/main
+          cat .github/ui-patch-part-00 .github/ui-patch-part-01 .github/ui-patch-part-02 .github/ui-patch-part-03 .github/ui-patch-part-04 .github/ui-patch-part-05 > /tmp/routervpn-ui.b64
+          echo '5e06a3d90bb5637d0afeb79d764dc03a427fdb2b3b907a3106ab181f67e9833f  /tmp/routervpn-ui.b64' | sha256sum -c -
+          base64 -d /tmp/routervpn-ui.b64 > /tmp/routervpn-ui.patch.gz
+          gzip -dc /tmp/routervpn-ui.patch.gz > /tmp/routervpn-cross-platform-ui.patch
+          echo '697bee9287c72cded97898e0dd34aac70d64e2475d5daf581ef79bea756727eb  /tmp/routervpn-cross-platform-ui.patch' | sha256sum -c -
           git apply --check /tmp/routervpn-cross-platform-ui.patch
           git apply /tmp/routervpn-cross-platform-ui.patch
-          rm -f .github/routervpn-cross-platform-ui.patch.gz.b64 .github/workflows/apply-routervpn-cross-platform-ui.yml .github/apply-ui-trigger
+          rm -f .github/routervpn-cross-platform-ui.patch.gz.b64 .github/workflows/apply-routervpn-cross-platform-ui.yml .github/ui-patch-part-00 .github/ui-patch-part-01 .github/ui-patch-part-02 .github/ui-patch-part-03 .github/ui-patch-part-04 .github/ui-patch-part-05
           git diff --check
       - name: Re-run source-first product gates
         shell: bash
