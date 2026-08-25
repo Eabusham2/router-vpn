@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
+import stat
 import statistics
 import struct
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 BASE = Path(sys.argv[1] if len(sys.argv) > 1 else "/opt/router-vpn")
 OUT = BASE / "config" / "dns-fastest.json"
+MAX_RESULT_BYTES = 1 << 20
 
 # Common public recursive resolvers, including primary/secondary addresses and
 # both address families where the provider publishes them. The benchmark runs
@@ -68,78 +72,94 @@ def probe(address: str, qtype: int) -> float | None:
         sock.close()
 
 
-results = []
-for name, address in CANDIDATES:
-    samples = []
-    # Five real DNS queries give a useful median while still keeping first-run
-    # time bounded. Alternate A/AAAA so both record paths are exercised.
-    for qtype in (1, 28, 1, 28, 1):
-        value = probe(address, qtype)
-        if value is not None:
-            samples.append(value)
-    if samples:
-        samples.sort()
-        latency = statistics.median(samples)
-        results.append({
-            "name": name,
-            "address": address,
-            "family": "ipv6" if ":" in address else "ipv4",
-            "latency_ms": round(latency, 3),
-            "samples": len(samples),
-            "working": True,
-        })
-    else:
-        results.append({
-            "name": name,
-            "address": address,
-            "family": "ipv6" if ":" in address else "ipv4",
-            "samples": 0,
-            "working": False,
-        })
-
-working = [r for r in results if r.get("working")]
-working.sort(key=lambda r: r["latency_ms"])
-if working:
-    winner = working[0]
-else:
-    # Home AdGuard is the default profile policy, so failure to benchmark public
-    # resolvers must never make first boot unusable.
-    winner = {"name": "Cloudflare IPv4 fallback", "address": "1.1.1.1", "family": "ipv4", "latency_ms": None, "working": False}
-
-payload = {
-    "policy": "fastest-public",
-    "winner": winner,
-    "results": results,
-    "tested_from": "home-vpn-node",
-    "test": "five real DNS A/AAAA UDP queries; median shown",
-}
-OUT.parent.mkdir(parents=True, exist_ok=True)
-OUT.write_text(json.dumps(payload, indent=2) + "\n")
-OUT.chmod(0o600)
-
-# Desktop installers may copy routers.json directly instead of importing the JSON
-# bundle. Keep the benchmark available there, but default actual DNS selection to
-# the user's Home AdGuard resolver as requested.
-routers_path = BASE / "client-bundle" / "routers.json"
-if routers_path.is_file():
+def write_private_atomic(path: Path, text: str) -> None:
+    body = text.encode("utf-8")
+    if not body or len(body) > MAX_RESULT_BYTES:
+        raise RuntimeError("DNS benchmark result is empty or oversized")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
-        routers = json.loads(routers_path.read_text())
-        latency = winner.get("latency_ms")
-        for profile in routers.get("profiles", []):
-            profile.setdefault("dns_mode", "home")
-            profile.setdefault("dns_protocol", "udp")
-            home = profile.get("adguard_ipv4") or "10.77.0.1"
-            profile["dns_host"] = home
-            profile.setdefault("dns_port", 53)
-            profile.setdefault("dns_server_name", "")
-            profile.setdefault("dns_path", "/dns-query")
-            profile["fastest_dns_host"] = winner["address"]
-            profile["fastest_dns_name"] = winner["name"]
-            profile["fastest_dns_latency_ms"] = float(latency) if latency is not None else 0.0
-            profile["dns_results"] = results
-        routers_path.write_text(json.dumps(routers, indent=2) + "\n")
-        routers_path.chmod(0o600)
-    except Exception as exc:
-        print(f"warning: could not update routers.json DNS fields: {exc}", file=sys.stderr)
+        info = path.lstat()
+    except FileNotFoundError:
+        info = None
+    if info is not None:
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f"refusing non-regular/symlink DNS benchmark output: {path}")
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.tmp-", dir=path.parent)
+    tmp = Path(name)
+    committed = False
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb", closefd=True) as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+        committed = True
+        try:
+            dir_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    finally:
+        if not committed:
+            tmp.unlink(missing_ok=True)
 
-print(winner["address"])
+
+def main() -> int:
+    results = []
+    for name, address in CANDIDATES:
+        samples = []
+        # Five real DNS queries give a useful median while still keeping first-run
+        # time bounded. Alternate A/AAAA so both record paths are exercised.
+        for qtype in (1, 28, 1, 28, 1):
+            value = probe(address, qtype)
+            if value is not None:
+                samples.append(value)
+        if samples:
+            samples.sort()
+            latency = statistics.median(samples)
+            results.append({
+                "name": name,
+                "address": address,
+                "family": "ipv6" if ":" in address else "ipv4",
+                "latency_ms": round(latency, 3),
+                "samples": len(samples),
+                "working": True,
+            })
+        else:
+            results.append({
+                "name": name,
+                "address": address,
+                "family": "ipv6" if ":" in address else "ipv4",
+                "samples": 0,
+                "working": False,
+            })
+
+    working = [r for r in results if r.get("working")]
+    working.sort(key=lambda r: r["latency_ms"])
+    if working:
+        winner = working[0]
+    else:
+        # Home AdGuard remains the actual default policy. This fallback is only a
+        # measured-default candidate for fresh bundle generation; benchmark runs
+        # never rewrite an existing user's routers.json or active DNS policy.
+        winner = {"name": "Cloudflare IPv4 fallback", "address": "1.1.1.1", "family": "ipv4", "latency_ms": None, "working": False}
+
+    payload = {
+        "policy": "fastest-public",
+        "winner": winner,
+        "results": results,
+        "tested_from": "home-vpn-node",
+        "test": "five real DNS A/AAAA UDP queries; median shown",
+        "measurement_only": True,
+    }
+    write_private_atomic(OUT, json.dumps(payload, indent=2) + "\n")
+    print(winner["address"])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
