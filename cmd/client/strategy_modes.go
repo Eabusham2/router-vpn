@@ -70,6 +70,13 @@ func (t *sessionTracker) strategyEvent(kind, message string) {
 }
 
 func (a *app) strategyAuto(w http.ResponseWriter, r *http.Request) {
+	_, finish, guardErr := a.beginConnectionOperation()
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer finish()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -79,6 +86,13 @@ func (a *app) strategyAuto(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) strategySmartAuto(w http.ResponseWriter, r *http.Request) {
+	_, finish, guardErr := a.beginConnectionOperation()
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer finish()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -88,6 +102,13 @@ func (a *app) strategySmartAuto(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) strategyCustom(w http.ResponseWriter, r *http.Request) {
+	_, finish, guardErr := a.beginConnectionOperation()
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer finish()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -333,12 +354,20 @@ func customBasePenalty(mode common.Mode, preferred string) int {
 	}
 	wantAWG := strings.HasPrefix(strings.ToLower(strings.TrimSpace(preferred)), "awg") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(preferred)), "amnezia")
 	if wantAWG {
-		if hasAWG { return 0 }
-		if hasWG { return 1 }
+		if hasAWG {
+			return 0
+		}
+		if hasWG {
+			return 1
+		}
 		return 0
 	}
-	if hasWG { return 0 }
-	if hasAWG { return 1 }
+	if hasWG {
+		return 0
+	}
+	if hasAWG {
+		return 1
+	}
 	return 0
 }
 
@@ -358,10 +387,18 @@ func (a *app) rankCustomModes(requested []string, preferred string) []rankedCust
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
-		if a.ExtraLayers != b.ExtraLayers { return a.ExtraLayers < b.ExtraLayers }
-		if a.BasePenalty != b.BasePenalty { return a.BasePenalty < b.BasePenalty }
-		if a.Mode.TrafficMinPct != b.Mode.TrafficMinPct { return a.Mode.TrafficMinPct < b.Mode.TrafficMinPct }
-		if a.Mode.PingMinMs != b.Mode.PingMinMs { return a.Mode.PingMinMs < b.Mode.PingMinMs }
+		if a.ExtraLayers != b.ExtraLayers {
+			return a.ExtraLayers < b.ExtraLayers
+		}
+		if a.BasePenalty != b.BasePenalty {
+			return a.BasePenalty < b.BasePenalty
+		}
+		if a.Mode.TrafficMinPct != b.Mode.TrafficMinPct {
+			return a.Mode.TrafficMinPct < b.Mode.TrafficMinPct
+		}
+		if a.Mode.PingMinMs != b.Mode.PingMinMs {
+			return a.Mode.PingMinMs < b.Mode.PingMinMs
+		}
 		return a.Mode.ID < b.Mode.ID
 	})
 	return candidates
@@ -466,7 +503,7 @@ func (a *app) recordLastSuccessfulRuntime() {
 		a.mu.Lock()
 		st := a.state
 		a.mu.Unlock()
-		if !st.Connected || strings.TrimSpace(st.RuntimeMode) == "" || strings.TrimSpace(st.RouterID) == "" {
+		if !st.Connected || st.Phase != "connected" || strings.TrimSpace(st.RuntimeMode) == "" || strings.TrimSpace(st.RouterID) == "" {
 			continue
 		}
 		if _, err := a.mode(st.RuntimeMode); err != nil {
@@ -476,8 +513,24 @@ func (a *app) recordLastSuccessfulRuntime() {
 		if key == lastKey {
 			continue
 		}
+
+		// Serialize the durable last-good write against connection/disconnect and
+		// settings transactions, then re-prove the exact state sampled above.
+		a.operationMu.Lock()
+		a.mu.Lock()
+		current := a.state
+		fresh := current.Connected && current.Phase == "connected" &&
+			current.RouterID == st.RouterID && current.RuntimeMode == st.RuntimeMode &&
+			current.LogicalMode == st.LogicalMode && current.Base == st.Base
+		a.mu.Unlock()
+		if !fresh {
+			a.operationMu.Unlock()
+			continue
+		}
 		selection := startupSelection{RouterID: st.RouterID, RuntimeMode: st.RuntimeMode, LogicalMode: st.LogicalMode, Base: st.Base, UpdatedAt: time.Now().UTC()}
-		if err := a.saveStartupSelection(selection); err != nil {
+		err := a.saveStartupSelection(selection)
+		a.operationMu.Unlock()
+		if err != nil {
 			log.Printf("Router VPN could not persist last successful runtime: %v", err)
 			continue
 		}
@@ -486,6 +539,12 @@ func (a *app) recordLastSuccessfulRuntime() {
 }
 
 func (a *app) applyStartupPolicy() {
+	_, finish, guardErr := a.beginConnectionOperation()
+	if guardErr != nil {
+		log.Printf("Router VPN startup auto-connect skipped while another transaction is active: %v", guardErr)
+		return
+	}
+	defer finish()
 	a.mu.Lock()
 	selectedID := a.profiles.SelectedID
 	profile, ok := a.profileByIDLocked(selectedID)
