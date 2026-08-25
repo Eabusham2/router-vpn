@@ -143,6 +143,7 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.mu.Lock()
+	previousStore := cloneRouterProfileStore(a.profiles)
 	current, currentOK := a.profileByIDLocked(p.ID)
 	if !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{current}) != profileAtStart {
 		a.mu.Unlock()
@@ -164,6 +165,9 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	persistErr := a.persistProfilesLocked()
+	if persistErr != nil {
+		a.rollbackProfilesLocked(previousStore)
+	}
 	a.mu.Unlock()
 	if persistErr != nil {
 		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
@@ -220,6 +224,19 @@ func percentile(sorted []float64, p float64) float64 {
 
 func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
 
+func captureAsyncMeasurementSession(a *app) (connectionSession, error) {
+	s := sessionTrackerFor(a).snapshot(0)
+	if strings.TrimSpace(s.ID) == "" || !s.Connected || strings.TrimSpace(s.Phase) != "connected" || s.PathProof != "passed" {
+		return connectionSession{}, errors.New("current Router VPN session has not proved a stable connected path")
+	}
+	return s, nil
+}
+
+func sameAsyncMeasurementSession(before, after connectionSession) bool {
+	return before.ID != "" && after.ID == before.ID && after.Connected && after.Phase == "connected" && after.PathProof == "passed" &&
+		after.RouterID == before.RouterID && after.ActualMode == before.ActualMode && after.ActualBase == before.ActualBase
+}
+
 func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
@@ -238,9 +255,19 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "connect the VPN first so the reported address is the VPN exit", http.StatusConflict)
 		return
 	}
-	if !targetOK { http.Error(w, "active VPN node disappeared before public-exit lookup", http.StatusConflict); return }
+	if !targetOK {
+		http.Error(w, "active VPN node disappeared before public-exit lookup", http.StatusConflict)
+		return
+	}
 	targetAtStart := fastestProfileSnapshotToken([]common.RouterProfile{targetProfile})
-	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
+	sessionAtStart, sessionErr := captureAsyncMeasurementSession(a)
+	if sessionErr != nil {
+		http.Error(w, sessionErr.Error(), http.StatusConflict)
+		return
+	}
+	a.mu.Lock()
+	stateAtStart := mtuStateSnapshotToken(a.state)
+	a.mu.Unlock()
 	client := &http.Client{Timeout: 5 * time.Second}
 	providers := []string{"https://api64.ipify.org", "https://api.ipify.org"}
 	var result string
@@ -261,20 +288,37 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not determine public VPN exit address", http.StatusBadGateway)
 		return
 	}
-	if sessionTrackerFor(a).snapshot(0).ID != sessionAtStart { http.Error(w, "VPN session changed while public-exit lookup was running", http.StatusConflict); return }
+	if !sameAsyncMeasurementSession(sessionAtStart, sessionTrackerFor(a).snapshot(0)) {
+		http.Error(w, "VPN session/path changed while public-exit lookup was running", http.StatusConflict)
+		return
+	}
 	a.mu.Lock()
+	previousStore := cloneRouterProfileStore(a.profiles)
 	currentTarget := a.profiles.SelectedID
-	if a.state.Mode == "multihop" && a.state.RouterID != "" { currentTarget = a.state.RouterID }
+	if a.state.Mode == "multihop" && a.state.RouterID != "" {
+		currentTarget = a.state.RouterID
+	}
 	currentProfile, currentOK := a.profileByIDLocked(target)
-	if !a.state.Connected || currentTarget != target || !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{currentProfile}) != targetAtStart {
-		a.mu.Unlock(); http.Error(w, "active VPN path changed while public-exit lookup was running", http.StatusConflict); return
+	if !a.state.Connected || mtuStateSnapshotToken(a.state) != stateAtStart || currentTarget != target || !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{currentProfile}) != targetAtStart {
+		a.mu.Unlock()
+		http.Error(w, "active VPN path changed while public-exit lookup was running", http.StatusConflict)
+		return
 	}
 	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID == target { a.profiles.Profiles[i].PublicIP = result; break }
+		if a.profiles.Profiles[i].ID == target {
+			a.profiles.Profiles[i].PublicIP = result
+			break
+		}
 	}
 	persistErr := a.persistProfilesLocked()
+	if persistErr != nil {
+		a.rollbackProfilesLocked(previousStore)
+	}
 	a.mu.Unlock()
-	if persistErr != nil { http.Error(w, persistErr.Error(), http.StatusInternalServerError); return }
+	if persistErr != nil {
+		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"public_ip": result, "router_id": target, "multihop": target != selected})
 }
 
@@ -301,7 +345,14 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profileAtStart := fastestProfileSnapshotToken([]common.RouterProfile{p})
-	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
+	sessionAtStart, sessionErr := captureAsyncMeasurementSession(a)
+	if sessionErr != nil {
+		http.Error(w, sessionErr.Error(), http.StatusConflict)
+		return
+	}
+	a.mu.Lock()
+	stateAtStart := mtuStateSnapshotToken(a.state)
+	a.mu.Unlock()
 
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(p.RouterAPI, "/")+"/api/dns/benchmark", strings.NewReader(`{}`))
 	if err != nil {
@@ -328,11 +379,17 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sessionTrackerFor(a).snapshot(0).ID != sessionAtStart { http.Error(w, "VPN session changed while DNS Retest was running", http.StatusConflict); return }
+	if !sameAsyncMeasurementSession(sessionAtStart, sessionTrackerFor(a).snapshot(0)) {
+		http.Error(w, "VPN session/path changed while DNS Retest was running", http.StatusConflict)
+		return
+	}
 	a.mu.Lock()
+	previousStore := cloneRouterProfileStore(a.profiles)
 	current, currentOK := a.profileByIDLocked(p.ID)
-	if !a.state.Connected || a.profiles.SelectedID != p.ID || !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{current}) != profileAtStart {
-		a.mu.Unlock(); http.Error(w, "selected node or DNS policy changed while DNS Retest was running", http.StatusConflict); return
+	if !a.state.Connected || mtuStateSnapshotToken(a.state) != stateAtStart || a.profiles.SelectedID != p.ID || !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{current}) != profileAtStart {
+		a.mu.Unlock()
+		http.Error(w, "selected node or DNS policy changed while DNS Retest was running", http.StatusConflict)
+		return
 	}
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == p.ID {
@@ -347,6 +404,9 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	persistErr := a.persistProfilesLocked()
+	if persistErr != nil {
+		a.rollbackProfilesLocked(previousStore)
+	}
 	a.mu.Unlock()
 	if persistErr != nil {
 		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
@@ -361,6 +421,9 @@ func (a *app) emergencyStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	a.cancelConnectionOperation()
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
 	if err := a.stopMode(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
