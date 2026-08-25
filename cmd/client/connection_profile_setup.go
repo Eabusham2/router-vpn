@@ -59,7 +59,7 @@ func connectionProfileSetupMetaPath(a *app) string {
 
 func loadConnectionProfileSetupMeta(a *app) (connectionProfileSetupMetaStore, error) {
 	path := connectionProfileSetupMetaPath(a)
-	raw, err := os.ReadFile(path)
+	raw, err := readPrivateRegular(path, 128<<10)
 	if errors.Is(err, os.ErrNotExist) {
 		return connectionProfileSetupMetaStore{Version: connectionProfileSetupMetaVersion, Entries: map[string]connectionProfileSetupMeta{}}, nil
 	}
@@ -99,9 +99,6 @@ func persistConnectionProfileSetupMeta(a *app, store connectionProfileSetupMetaS
 		store.Entries = map[string]connectionProfileSetupMeta{}
 	}
 	path := connectionProfileSetupMetaPath(a)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	raw, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
 		return err
@@ -109,19 +106,7 @@ func persistConnectionProfileSetupMeta(a *app, store connectionProfileSetupMetaS
 	if len(raw) > 128<<10 {
 		return errors.New("connection profile setup metadata is too large")
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return os.Chmod(path, 0o600)
+	return atomicWritePrivate(path, append(raw, '\n'))
 }
 
 func normalizeConnectionProfileExitMode(value string) (string, error) {

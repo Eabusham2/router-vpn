@@ -83,7 +83,7 @@ func connectionProfileStorePath(a *app) string {
 
 func loadConnectionProfileStore(a *app) (connectionProfileStore, error) {
 	path := connectionProfileStorePath(a)
-	raw, err := os.ReadFile(path)
+	raw, err := readPrivateRegular(path, connectionProfileStoreMaxBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return connectionProfileStore{Version: connectionProfileStoreVersion, Profiles: []connectionProfileRecord{}}, nil
 	}
@@ -141,9 +141,6 @@ func persistConnectionProfileStore(a *app, store connectionProfileStore) error {
 		return errors.New("too many saved connection profiles")
 	}
 	path := connectionProfileStorePath(a)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	raw, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
 		return err
@@ -151,19 +148,7 @@ func persistConnectionProfileStore(a *app, store connectionProfileStore) error {
 	if len(raw) > connectionProfileStoreMaxBytes {
 		return errors.New("connection profile store is too large")
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return os.Chmod(path, 0o600)
+	return atomicWritePrivate(path, append(raw, '\n'))
 }
 
 func validateConnectionProfileName(name string) error {
