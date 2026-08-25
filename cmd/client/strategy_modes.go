@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -465,18 +464,11 @@ func (a *app) saveStartupSelection(selection startupSelection) error {
 	if path == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil && filepath.Dir(path) != "." {
-		return err
-	}
 	body, err := json.MarshalIndent(selection, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err = os.WriteFile(tmp, append(body, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicWritePrivate(path, append(body, '\n'))
 }
 
 func (a *app) loadStartupSelection() (startupSelection, error) {
@@ -484,13 +476,19 @@ func (a *app) loadStartupSelection() (startupSelection, error) {
 	if path == "" {
 		return startupSelection{}, errors.New("startup state path is not configured")
 	}
-	body, err := os.ReadFile(path)
+	body, err := readPrivateRegular(path, 64<<10)
 	if err != nil {
 		return startupSelection{}, err
 	}
 	var selection startupSelection
 	if err = json.Unmarshal(body, &selection); err != nil {
 		return startupSelection{}, err
+	}
+	if !validProfileID(strings.TrimSpace(selection.RouterID)) {
+		return startupSelection{}, errors.New("startup state contains an invalid router id")
+	}
+	if strings.TrimSpace(selection.RuntimeMode) == "" {
+		return startupSelection{}, errors.New("startup state contains no runtime mode")
 	}
 	return selection, nil
 }
