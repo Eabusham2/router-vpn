@@ -1,11 +1,17 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"router-vpn/internal/common"
+)
 
 func TestAllRuntimeCandidate(t *testing.T) {
 	tests := []struct {
-		in      string
-		wantID  string
+		in       string
+		wantID   string
 		wantBase string
 	}{
 		{"max-tls-wg", "max-tls-wg", "wg"},
@@ -24,5 +30,24 @@ func TestAllRuntimeCandidate(t *testing.T) {
 	}
 	if _, err := allRuntimeCandidate("all"); err == nil {
 		t.Fatal("expected unknown ALL branch to fail")
+	}
+}
+
+func TestPersistBasePreferenceRollsBackOnDiskFailure(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{
+		cfg:      common.ClientConfig{ProfilesFile: filepath.Join(blocker, "routers.json")},
+		profiles: common.RouterProfileStore{SelectedID: "home", Profiles: []common.RouterProfile{{ID: "home", BaseTunnel: "wg"}}},
+		state:    state{Mode: "off", Phase: "off"},
+	}
+	if err := a.persistBasePreference("awg"); err == nil {
+		t.Fatal("expected profile persistence failure")
+	}
+	if got := a.profiles.Profiles[0].BaseTunnel; got != "wg" {
+		t.Fatalf("failed base persistence left in-memory base %q, want wg", got)
 	}
 }
