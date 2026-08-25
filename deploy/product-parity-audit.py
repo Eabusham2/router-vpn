@@ -47,8 +47,8 @@ require("cmd/client/logical_modes.go", "ping_min_ms", "ping_max_ms", "traffic_mi
 home = require(
     "cmd/client/home_summary.go",
     "/api/home-summary", "/api/home-summary/prove-exit", "SessionID", "ActualExitStatus",
-    "actual public exit is not proven for this live session", "session changed while public-exit proof was running",
-    "a.profiles.Profiles[i].PublicIP = ip", "proof.SessionID == session.ID", "probePublicExitIP",
+    "actual public exit is not proven for this live session", "after.ActualMode != before.ActualMode",
+    "mtuStateSnapshotToken(a.state)", "a.profiles.Profiles[i].PublicIP = ip", "proof.SessionID == session.ID", "probePublicExitIP",
 )
 for forbidden in (
     "ActualExitIP: profile.PublicIP", "ActualExitIP: profile.Endpoint", "actualExit = profile.PublicIP",
@@ -94,8 +94,8 @@ require(
 require(
     "client/RouterVPN-Windows-App.ps1",
     "Get-Content -LiteralPath $Product -Raw -Encoding UTF8",
-    'MinHeight=\"480\" MinWidth=\"640\"', 'Height=\"2*\" MinHeight=\"140\"',
-    'MaxWidth=\"760\"', 'MinHeight=\"180\"',
+    'MinHeight="480" MinWidth="640"', 'Height="2*" MinHeight="140"',
+    'MaxWidth="760"', 'MinHeight="180"',
     "Add-RouterVPNUnifiedWindowsShell", "Add-RouterVPNTelemetryWindowsShell",
     "SMART AUTO is the default mode", "WireGuard / AmneziaWG",
     "/api/connection/speed-test", "/api/multihop/speed-test", "Routed hop speeds",
