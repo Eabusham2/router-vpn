@@ -62,6 +62,7 @@ assert "RouterVPN-Portainer-${GITHUB_SHA}.yaml" in compose, "production compose 
 # Exact-SHA release candidate must directly block on core behavioral/shipping contracts.
 for marker in (
     "python3 deploy/historical-regression-audit.py",
+    "python3 deploy/backend-session-transaction-audit.py",
     "python3 modes/test_kill_switch.py",
     "python3 server/scripts/test_preserve_generated_state.py",
     "python3 modes/test_mtu_policy.py",
