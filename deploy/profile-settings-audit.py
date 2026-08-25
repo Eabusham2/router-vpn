@@ -35,7 +35,7 @@ api = require(
     "cmd/client/profile_settings.go",
     "/api/profile/settings",
     "disconnect or let the active AUTO/SMART/CUSTOM transition finish before changing Router VPN profile settings",
-    "profileSettingsBusy", '"auto:"', '"smart-auto:"', '"smart:"', '"custom:"',
+    "profileSettingsBusy", 'case "", "off", "failed":', "default:", "return true",
     "external exits own their protocol settings", "NormalizeRouterProfile", "syncProfileOptionStateLocked",
     "HomeLANAccess", "KillSwitchPolicy", "IPv6Mode", "BaseTunnel", "BaseFallback",
     "AutoRequireEncrypted", "AutoRequireObfuscation",
