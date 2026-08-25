@@ -42,13 +42,16 @@ type state struct {
 }
 
 type app struct {
-	cfg         common.ClientConfig
-	modes       []common.Mode
-	profiles    common.RouterProfileStore
-	mu          sync.Mutex
-	state       state
-	cmd         *exec.Cmd
-	daitaCancel context.CancelFunc
+	cfg               common.ClientConfig
+	modes             []common.Mode
+	profiles          common.RouterProfileStore
+	mu                sync.Mutex
+	operationMu       sync.Mutex
+	connectionContext context.Context
+	connectionCancel  context.CancelFunc
+	state             state
+	cmd               *exec.Cmd
+	daitaCancel       context.CancelFunc
 }
 
 func main() {
