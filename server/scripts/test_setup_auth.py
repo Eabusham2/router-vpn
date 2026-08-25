@@ -30,16 +30,47 @@ def main() -> int:
         assert len(first) >= 32
         # POSIX mode bits are the production Linux/Docker security contract.
         # Windows runners do not faithfully model chmod(0600), so validate the
-        # same helper there without pretending NTFS ACLs are POSIX mode bits.
+        # source contract there without pretending NTFS ACLs are POSIX mode bits.
         if os.name != "nt":
             assert path.stat().st_mode & 0o777 == 0o600
         else:
             assert path.is_file() and path.parent.name == "config"
             source = (SCRIPT_DIR / "ensure-setup-auth.py").read_text(encoding="utf-8")
-            assert "os.chmod(tmp, 0o600)" in source
-            assert "os.chmod(path, 0o600)" in source
+            assert "atomic-private-write.py" in source
+            assert "refusing silent rotation" in source
         path2 = auth.ensure_token(base)
         assert path2.read_text().strip() == first, "safe upgrade rotated Setup Center token"
+
+    with tempfile.TemporaryDirectory(prefix="router-vpn-auth-corrupt-") as td:
+        base = Path(td)
+        config = base / "config"
+        config.mkdir()
+        path = config / "setup-center.token"
+        path.write_text("short\n", encoding="utf-8")
+        os.chmod(path, 0o600)
+        try:
+            auth.ensure_token(base)
+        except RuntimeError as exc:
+            assert "refusing silent rotation" in str(exc)
+        else:
+            raise AssertionError("corrupt preserved Setup Center token was silently rotated")
+        assert path.read_text(encoding="utf-8") == "short\n"
+
+    if os.name != "nt":
+        with tempfile.TemporaryDirectory(prefix="router-vpn-auth-symlink-") as td:
+            base = Path(td)
+            config = base / "config"
+            config.mkdir()
+            real = config / "real-token"
+            real.write_text("x" * 48 + "\n", encoding="utf-8")
+            os.chmod(real, 0o600)
+            (config / "setup-center.token").symlink_to(real)
+            try:
+                auth.ensure_token(base)
+            except RuntimeError as exc:
+                assert "symlink" in str(exc)
+            else:
+                raise AssertionError("symlink Setup Center token was accepted")
 
     # Pairing accepts only explicit RFC1918/ULA plus loopback/link-local. Do not
     # use ipaddress.is_private here: Python intentionally treats additional
