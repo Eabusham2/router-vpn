@@ -246,14 +246,30 @@ func cloneAdminState(s adminPersistentState) adminPersistentState {
 	return out
 }
 
-func (a *adminMutationServer) rollbackLocked(old adminPersistentState, policy, forwards bool) {
+func (a *adminMutationServer) rollbackLocked(old adminPersistentState, policy, forwards bool) error {
 	a.state = old
+	errorsFound := make([]string, 0, 2)
 	if policy {
-		_ = a.applyPolicyLocked()
+		if err := a.applyPolicyLocked(); err != nil {
+			errorsFound = append(errorsFound, "policy restore: "+err.Error())
+		}
 	}
 	if forwards {
-		_ = a.applyForwardRulesLocked()
+		if err := a.applyForwardRulesLocked(); err != nil {
+			errorsFound = append(errorsFound, "forwarding restore: "+err.Error())
+		}
 	}
+	if len(errorsFound) > 0 {
+		return errors.New(strings.Join(errorsFound, "; "))
+	}
+	return nil
+}
+
+func adminMutationFailure(actionErr, rollbackErr error) string {
+	if rollbackErr == nil {
+		return actionErr.Error()
+	}
+	return actionErr.Error() + "; rollback incomplete: " + rollbackErr.Error()
 }
 
 func (a *adminMutationServer) settings(w http.ResponseWriter, r *http.Request) {
@@ -283,13 +299,13 @@ func (a *adminMutationServer) settings(w http.ResponseWriter, r *http.Request) {
 			a.state.LANAccess = *q.LANAccess
 		}
 		if err := a.applyPolicyLocked(); err != nil {
-			a.rollbackLocked(old, true, false)
-			http.Error(w, err.Error(), 500)
+			rollbackErr := a.rollbackLocked(old, true, false)
+			http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 			return
 		}
 		if err := a.persistLocked(); err != nil {
-			a.rollbackLocked(old, true, false)
-			http.Error(w, err.Error(), 500)
+			rollbackErr := a.rollbackLocked(old, true, false)
+			http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 			return
 		}
 	}
@@ -344,13 +360,13 @@ func (a *adminMutationServer) forwarding(w http.ResponseWriter, r *http.Request)
 			a.state.ForwardRules = append(a.state.ForwardRules, q)
 		}
 		if err := a.applyForwardRulesLocked(); err != nil {
-			a.rollbackLocked(old, false, true)
-			http.Error(w, err.Error(), 500)
+			rollbackErr := a.rollbackLocked(old, false, true)
+			http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 			return
 		}
 		if err := a.persistLocked(); err != nil {
-			a.rollbackLocked(old, false, true)
-			http.Error(w, err.Error(), 500)
+			rollbackErr := a.rollbackLocked(old, false, true)
+			http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 			return
 		}
 	}
@@ -384,13 +400,13 @@ func (a *adminMutationServer) forwardingByID(w http.ResponseWriter, r *http.Requ
 	}
 	a.state.ForwardRules = out
 	if err := a.applyForwardRulesLocked(); err != nil {
-		a.rollbackLocked(old, false, true)
-		http.Error(w, err.Error(), 500)
+		rollbackErr := a.rollbackLocked(old, false, true)
+		http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 		return
 	}
 	if err := a.persistLocked(); err != nil {
-		a.rollbackLocked(old, false, true)
-		http.Error(w, err.Error(), 500)
+		rollbackErr := a.rollbackLocked(old, false, true)
+		http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 		return
 	}
 	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "rules": a.state.ForwardRules})
@@ -504,13 +520,13 @@ func (a *adminMutationServer) ban(w http.ResponseWriter, r *http.Request) {
 		a.state.BannedPeers = append(a.state.BannedPeers, q)
 	}
 	if err := a.applyPolicyLocked(); err != nil {
-		a.rollbackLocked(old, true, false)
-		http.Error(w, err.Error(), 500)
+		rollbackErr := a.rollbackLocked(old, true, false)
+		http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 		return
 	}
 	if err := a.persistLocked(); err != nil {
-		a.rollbackLocked(old, true, false)
-		http.Error(w, err.Error(), 500)
+		rollbackErr := a.rollbackLocked(old, true, false)
+		http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 		return
 	}
 	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "banned": q})
@@ -547,13 +563,13 @@ func (a *adminMutationServer) unban(w http.ResponseWriter, r *http.Request) {
 	}
 	a.state.BannedPeers = out
 	if err := a.applyPolicyLocked(); err != nil {
-		a.rollbackLocked(old, true, false)
-		http.Error(w, err.Error(), 500)
+		rollbackErr := a.rollbackLocked(old, true, false)
+		http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 		return
 	}
 	if err := a.persistLocked(); err != nil {
-		a.rollbackLocked(old, true, false)
-		http.Error(w, err.Error(), 500)
+		rollbackErr := a.rollbackLocked(old, true, false)
+		http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 		return
 	}
 	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "public_key": q.PublicKey, "banned": false})
@@ -586,15 +602,15 @@ func (a *adminMutationServer) revoke(w http.ResponseWriter, r *http.Request) {
 		a.state.BannedPeers = append(a.state.BannedPeers, q)
 	}
 	if err := a.applyPolicyLocked(); err != nil {
-		a.rollbackLocked(old, true, false)
+		rollbackErr := a.rollbackLocked(old, true, false)
 		a.mu.Unlock()
-		http.Error(w, err.Error(), 500)
+		http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 		return
 	}
 	if err := a.persistLocked(); err != nil {
-		a.rollbackLocked(old, true, false)
+		rollbackErr := a.rollbackLocked(old, true, false)
 		a.mu.Unlock()
-		http.Error(w, err.Error(), 500)
+		http.Error(w, adminMutationFailure(err, rollbackErr), 500)
 		return
 	}
 	a.mu.Unlock()
