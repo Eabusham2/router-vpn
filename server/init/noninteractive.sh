@@ -13,6 +13,7 @@ HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
 XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
+PRIVATE_WRITE=/src/server/scripts/atomic-private-write.py
 umask 077
 mkdir -p "$BASE"/{config/{wireguard,awg2},client-bundle/generated,scripts,logs,downloads}
 
@@ -37,10 +38,11 @@ fi
 TOKEN=$(openssl rand -hex 32)
 SOCKS_USER="vpn$(openssl rand -hex 3)"
 SOCKS_PASSWORD=$(openssl rand -base64 24 | tr -d '\n=/+' | head -c 28)
-keypair(){ local prefix=$1; local priv pub; priv=$(wg genkey); pub=$(printf '%s' "$priv" | wg pubkey); printf -v "${prefix}_PRIV" '%s' "$priv"; printf -v "${prefix}_PUB" '%s' "$pub"; }
+keypair(){ local prefix=$1 priv pub; priv=$(wg genkey); pub=$(printf '%s' "$priv" | wg pubkey); printf -v "${prefix}_PRIV" '%s' "$priv"; printf -v "${prefix}_PUB" '%s' "$pub"; }
 keypair WG_SERVER; keypair WG_CLIENT; keypair AWG_SERVER; keypair AWG_CLIENT
 WG_PSK=$(wg genpsk); AWG_PSK=$(wg genpsk)
-cat >"$BASE/config/wireguard/wg0.conf" <<CFG
+
+python3 "$PRIVATE_WRITE" "$BASE/config/wireguard/wg0.conf" <<CFG
 [Interface]
 Address = 10.77.0.1/24, fd77:77::1/64
 ListenPort = $WG_PORT
@@ -53,7 +55,7 @@ AllowedIPs = 10.77.0.2/32, fd77:77::2/128
 CFG
 for mode in wg wg-pq; do
   mkdir -p "$BASE/client-bundle/generated/$mode"
-  cat >"$BASE/client-bundle/generated/$mode/wg.conf" <<CFG
+  python3 "$PRIVATE_WRITE" "$BASE/client-bundle/generated/$mode/wg.conf" <<CFG
 [Interface]
 Address = 10.77.0.2/24, fd77:77::2/64
 PrivateKey = $WG_CLIENT_PRIV
@@ -67,7 +69,7 @@ AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 CFG
 done
-cat >"$BASE/client-bundle/generated/wg/wg-socks.conf" <<CFG
+python3 "$PRIVATE_WRITE" "$BASE/client-bundle/generated/wg/wg-socks.conf" <<CFG
 [Interface]
 Address = 10.77.0.2/24, fd77:77::2/64
 PrivateKey = $WG_CLIENT_PRIV
@@ -79,8 +81,9 @@ Endpoint = $CONFIG_ENDPOINT:$WG_PORT
 AllowedIPs = 10.77.0.0/24, fd77:77::/64, $LAN_CIDR
 PersistentKeepalive = 25
 CFG
-cp "$BASE/client-bundle/generated/wg/wg-socks.conf" "$BASE/client-bundle/generated/wg-pq/wg-socks.conf"
-cat >"$BASE/config/awg2/awg0.conf" <<CFG
+python3 "$PRIVATE_WRITE" "$BASE/client-bundle/generated/wg-pq/wg-socks.conf" < "$BASE/client-bundle/generated/wg/wg-socks.conf"
+
+python3 "$PRIVATE_WRITE" "$BASE/config/awg2/awg0.conf" <<CFG
 [Interface]
 Address = 10.78.0.1/24, fd78:78::1/64
 ListenPort = $AWG_PORT
@@ -99,7 +102,10 @@ PublicKey = $AWG_CLIENT_PUB
 PresharedKey = $AWG_PSK
 AllowedIPs = 10.78.0.2/32, fd78:78::2/128
 CFG
-make_awg(){ local mode=$1 jc=$2 jmax=$3 mtu=$4; mkdir -p "$BASE/client-bundle/generated/$mode"; cat >"$BASE/client-bundle/generated/$mode/awg.conf" <<CFG
+make_awg(){
+  local mode=$1 jc=$2 jmax=$3 mtu=$4
+  mkdir -p "$BASE/client-bundle/generated/$mode"
+  python3 "$PRIVATE_WRITE" "$BASE/client-bundle/generated/$mode/awg.conf" <<CFG
 [Interface]
 Address = 10.78.0.2/24, fd78:78::2/64
 PrivateKey = $AWG_CLIENT_PRIV
@@ -126,26 +132,30 @@ CFG
 }
 make_awg awg2-fast 3 900 1400
 make_awg awg2-strong 8 1200 1360
-cp -a "$BASE/client-bundle/generated/awg2-fast" "$BASE/client-bundle/generated/awg2-pq"
+mkdir -p "$BASE/client-bundle/generated/awg2-pq"
+python3 "$PRIVATE_WRITE" "$BASE/client-bundle/generated/awg2-pq/awg.conf" < "$BASE/client-bundle/generated/awg2-fast/awg.conf"
 for mode in awg2-fast awg2-strong awg2-pq; do
-  cp "$BASE/client-bundle/generated/$mode/awg.conf" "$BASE/client-bundle/generated/$mode/awg-socks.conf"
-  sed -i "s#AllowedIPs = 0.0.0.0/0, ::/0#AllowedIPs = 10.78.0.0/24, fd78:78::/64, $LAN_CIDR#" "$BASE/client-bundle/generated/$mode/awg-socks.conf"
+  tmp=$(mktemp)
+  sed "s#AllowedIPs = 0.0.0.0/0, ::/0#AllowedIPs = 10.78.0.0/24, fd78:78::/64, $LAN_CIDR#" "$BASE/client-bundle/generated/$mode/awg.conf" > "$tmp"
+  python3 "$PRIVATE_WRITE" "$BASE/client-bundle/generated/$mode/awg-socks.conf" < "$tmp"
+  rm -f "$tmp"
 done
+
 /src/server/scripts/generate-transports.sh "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$HY2_PORT" "$SS_PORT" "$REALITY_TARGET"
 /src/server/scripts/generate-xray-pq.sh "$BASE" "$CONFIG_ENDPOINT" "$ADGUARD4" "$XRAY_PQ_PORT" "$REALITY_TARGET" "$REALITY_PORT"
-python3 - "$TOKEN" "$WAN_INTERFACE" <<'PY'
+python3 - "$TOKEN" "$WAN_INTERFACE" <<'PY' | python3 "$PRIVATE_WRITE" "$BASE/config/router-agent.json"
 import json,sys
 x=json.load(open('/src/configs/router/router-agent.json.example')); x['token']=sys.argv[1]; x['wan_interface']=sys.argv[2]
-json.dump(x,open('/opt/router-vpn/config/router-agent.json','w'),indent=2)
+print(json.dumps(x,indent=2))
 PY
-python3 - "$SOCKS_USER" "$SOCKS_PASSWORD" "$ADGUARD4" <<'PY'
+python3 - "$SOCKS_USER" "$SOCKS_PASSWORD" "$ADGUARD4" <<'PY' | python3 "$PRIVATE_WRITE" "$BASE/config/socks5.json"
 import json,sys
 x=json.load(open('/src/configs/router/socks5.json.example')); x['inbounds'][0]['users'][0]={'username':sys.argv[1],'password':sys.argv[2]}; x['dns']['servers'][0]['server']=sys.argv[3]
-json.dump(x,open('/opt/router-vpn/config/socks5.json','w'),indent=2)
+print(json.dumps(x,indent=2))
 PY
 cp /src/configs/client/modes.json "$BASE/client-bundle/modes.json"
 cp -a /src/modes /src/dist /src/client "$BASE/client-bundle/"
-cat >"$BASE/client-bundle/CREDENTIALS.txt" <<TXT
+python3 "$PRIVATE_WRITE" "$BASE/client-bundle/CREDENTIALS.txt" <<TXT
 Endpoint: ${ENDPOINT:-CHOOSE_IN_APP}
 WireGuard UDP: $WG_PORT
 AmneziaWG UDP: $AWG_PORT
@@ -160,6 +170,6 @@ Router API client-control token: $TOKEN
 Setup Center access credential is NOT in this bundle; it remains only on the router at /opt/router-vpn/config/setup-center.token.
 TXT
 /src/server/scripts/create-bundle-json.py "$BASE" "$ENDPOINT" "$TOKEN" "http://$ADGUARD4:8787" "$ADGUARD4" "$SOCKS_USER" "$SOCKS_PASSWORD"
-touch "$BASE/.initialized"
+printf 'initialized\n' | python3 "$PRIVATE_WRITE" "$BASE/.initialized"
 /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
 echo 'Initialization complete: private node material prepared; Setup Center authentication stays router-local and client bundles are built only on demand.'
