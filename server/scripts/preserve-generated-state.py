@@ -2,9 +2,9 @@
 """Read previously generated private runtime state for safe same-deployment upgrades.
 
 The generator scripts call this helper before creating new credentials. It emits
-only fixed-name shell assignments quoted with shlex.quote and exits non-zero when
-the existing state is incomplete/inconsistent, in which case the caller may
-regenerate that credential family deliberately.
+only fixed-name shell assignments quoted with shlex.quote. Missing state means a
+credential family has never been generated; existing but corrupt/inconsistent
+state is an error and must never be converted into silent credential rotation.
 """
 from __future__ import annotations
 
@@ -12,16 +12,32 @@ import json
 from pathlib import Path
 import re
 import shlex
+import stat
 import sys
 from typing import Any
 
+MAX_PRIVATE_STATE = 4 << 20
 
-def _load_json(path: Path) -> dict[str, Any]:
+
+def _read_regular_text(path: Path, label: str) -> str:
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"refusing non-regular/symlink {label}")
+    if info.st_size <= 0 or info.st_size > MAX_PRIVATE_STATE:
+        raise ValueError(f"{label} is empty or oversized")
+    return path.read_text(encoding="utf-8")
+
+
+def _load_json(path: Path, label: str) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+        value = json.loads(_read_regular_text(path, label))
+    except FileNotFoundError:
         return {}
-    return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} is corrupt JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
 
 
 def _nonempty(value: Any, minimum: int = 1) -> str:
@@ -39,7 +55,7 @@ def _emit(values: dict[str, str]) -> None:
 
 
 def transports(base: Path) -> dict[str, str]:
-    saved = _load_json(base / "config" / "transports" / "generated-secrets.json")
+    saved = _load_json(base / "config" / "transports" / "generated-secrets.json", "transport secret state")
     return {
         "SS_KEY": _nonempty(saved.get("shadowsocks_key"), 16),
         "HY2_PASSWORD": _nonempty(saved.get("hysteria2_password"), 12),
@@ -68,8 +84,8 @@ def _reality(inbound: dict[str, Any]) -> dict[str, Any]:
 
 
 def xray(base: Path) -> dict[str, str]:
-    server = _load_json(base / "config" / "xray" / "server.json")
-    saved = _load_json(base / "config" / "xray" / "generated-secrets.json")
+    server = _load_json(base / "config" / "xray" / "server.json", "Xray server identity")
+    saved = _load_json(base / "config" / "xray" / "generated-secrets.json", "Xray generated identity")
     std = _inbound(server, "reality-in")
     pq = _inbound(server, "pq-reality-in")
     std_reality = _reality(std)
@@ -87,7 +103,7 @@ def xray(base: Path) -> dict[str, str]:
     if _nonempty(saved.get("standard_short_id"), 8) != std_short or _nonempty(saved.get("pq_short_id"), 8) != pq_short:
         raise ValueError("saved REALITY short IDs disagree with server config")
     server_dec = _nonempty((pq.get("settings") or {}).get("decryption"), 1)
-    values = {
+    return {
         "STD_UUID": std_uuid,
         "PQ_UUID": pq_uuid,
         "REALITY_PRIVATE": std_private,
@@ -98,24 +114,22 @@ def xray(base: Path) -> dict[str, str]:
         "CLIENT_ENC": _nonempty(saved.get("vless_encryption"), 1),
         "MLDSA_VERIFY": str(saved.get("mldsa65_verify") or "").strip(),
     }
-    return values
 
 
 def tls(base: Path) -> dict[str, str]:
-    path = base / "config" / "tls" / "settings.env"
-    text = path.read_text(encoding="utf-8")
+    text = _read_regular_text(base / "config" / "tls" / "settings.env", "TLS credential state")
     values: dict[str, str] = {}
     for key in ("SS_V2RAY_PASSWORD", "NAIVE_USER", "NAIVE_PASSWORD"):
         matches = re.findall(rf"(?m)^{re.escape(key)}='([^'\r\n]+)'$", text)
-        if not matches:
-            raise ValueError(f"missing {key}")
-        values[key] = _nonempty(matches[-1], 4)
+        if len(matches) != 1:
+            raise ValueError(f"expected exactly one preserved {key}")
+        values[key] = _nonempty(matches[0], 4)
     return values
 
 
 def advanced(base: Path) -> dict[str, str]:
-    server = _load_json(base / "config" / "xray" / "server.json")
-    saved = _load_json(base / "config" / "xray" / "advanced-secrets.json")
+    server = _load_json(base / "config" / "xray" / "server.json", "Xray server identity")
+    saved = _load_json(base / "config" / "xray" / "advanced-secrets.json", "advanced XHTTP identity")
     inbound = _inbound(server, "max-xhttp-in")
     reality = _reality(inbound)
     uuid = _first_client_uuid(inbound)
