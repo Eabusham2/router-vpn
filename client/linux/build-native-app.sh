@@ -7,6 +7,7 @@ SRC="$ROOT/client/linux/routervpn-gtk-product-v5.c"
 ONBOARDING_INC="$ROOT/client/linux/routervpn-product-onboarding-v6.inc"
 HOME_INC="$ROOT/client/linux/routervpn-home-summary-v1.inc"
 SETTINGS_INC="$ROOT/client/linux/routervpn-profile-settings-v1.inc"
+AUTO_REQ_INC="$ROOT/client/linux/routervpn-auto-requirements-v11.inc"
 UNIFIED_INC="$ROOT/client/linux/routervpn-unified-shell-v8.inc"
 TELEMETRY_INC="$ROOT/client/linux/routervpn-telemetry-v9.inc"
 GLOBE_INC="$ROOT/client/linux/routervpn-globe-v10.inc"
@@ -14,7 +15,7 @@ V4="$ROOT/client/linux/routervpn-gtk-product-v4.c"
 V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$GLOBE_INC" "$V4" "$V3" "$CORE")
+SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$GLOBE_INC" "$V4" "$V3" "$CORE")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v10.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
 BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v10-shipping.c"
@@ -28,7 +29,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
 done
-for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$GLOBE_INC"; do
+for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$GLOBE_INC"; do
   [[ -s "$source" ]] || { echo "Missing Linux shipping include: $source" >&2; exit 2; }
 done
 mkdir -p "$(dirname "$OUT")"
@@ -67,7 +68,7 @@ import sys
 src_path, out_path = map(Path, sys.argv[1:3])
 text = src_path.read_text(encoding='utf-8')
 include_old = '#include "routervpn-gtk-product-v4-embedded.c"\n'
-include_new = '#include "routervpn-gtk-product-v4-embedded.c"\n#include "routervpn-home-summary-v1.inc"\n#include "routervpn-profile-settings-v1.inc"\n'
+include_new = '#include "routervpn-gtk-product-v4-embedded.c"\n#include "routervpn-home-summary-v1.inc"\n#include "routervpn-profile-settings-v1.inc"\n#include "routervpn-auto-requirements-v11.inc"\n'
 if text.count(include_old) != 1: raise SystemExit('Linux v5 include seam drifted')
 text = text.replace(include_old, include_new, 1)
 finish_old = '''static void onboarding_finish_v5(GtkAssistant *assistant, gpointer data) {
@@ -179,7 +180,7 @@ install_old = '    build_ui_v5(&app);\n    g_signal_connect(app.window, "destroy
 install_new = '    build_ui_v5(&app);\n    linux_install_telemetry_v9(&app);\n    linux_install_globe_v10(&app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
 if text.count(install_old) != 1: raise SystemExit('Linux telemetry/globe installer seam drifted')
 text = text.replace(install_old, install_new, 1)
-for marker in ('#include "routervpn-product-onboarding-v6.inc"','#include "routervpn-home-summary-v1.inc"','#include "routervpn-profile-settings-v1.inc"','#include "routervpn-unified-shell-v8.inc"','#include "routervpn-telemetry-v9.inc"','#include "routervpn-globe-v10.inc"','onboarding_read_step_v6(path)','gtk_assistant_set_current_page','refresh_home_summary_v6(app)','gtk_button_set_label(GTK_BUTTON(home_exit_v6), "Prove actual exit")','G_CALLBACK(on_home_exit_v6)','Edit profile settings','G_CALLBACK(on_profile_settings_v7)','router-vpn-advanced-settings-v7','static void build_ui_legacy_v5(App *app) {','linux_install_telemetry_v9(&app);','linux_install_globe_v10(&app);'):
+for marker in ('#include "routervpn-product-onboarding-v6.inc"','#include "routervpn-home-summary-v1.inc"','#include "routervpn-profile-settings-v1.inc"','#include "routervpn-auto-requirements-v11.inc"','#include "routervpn-unified-shell-v8.inc"','#include "routervpn-telemetry-v9.inc"','#include "routervpn-globe-v10.inc"','onboarding_read_step_v6(path)','gtk_assistant_set_current_page','refresh_home_summary_v6(app)','gtk_button_set_label(GTK_BUTTON(home_exit_v6), "Prove actual exit")','G_CALLBACK(on_home_exit_v6)','Edit profile settings','G_CALLBACK(on_profile_settings_v7)','router-vpn-advanced-settings-v7','static void build_ui_legacy_v5(App *app) {','linux_install_telemetry_v9(&app);','linux_install_globe_v10(&app);'):
     if marker not in text: raise SystemExit(f'missing Linux shipping marker: {marker}')
 out_path.write_text(text, encoding='utf-8')
 PY
@@ -203,8 +204,9 @@ for marker in 'gtk_window_new' 'gtk_notebook_new' 'http://127.0.0.1:8788' '/api/
 for marker in 'pairing' 'router-vpn-bundle.json' 'AUTO' 'WireGuard' 'AmneziaWG' 'DNS' 'LAN Off' 'MTU/Jumbo' 'kill-switch' 'Multihop' 'forwarding' 'permissions' 'Disconnect' 'private identity/path proof' 'Public exit' 'Diagnostics' 'Emergency stop' 'Setup Center Full Guide' 'Run Tutorial'; do grep -Fq "$marker" "$ONBOARDING_INC"; done
 for marker in '/api/home-summary' '/api/home-summary/prove-exit' 'Actual public VPN exit' 'Node measured latency' 'LAN access' 'Kill switch' 'Effective MTU' 'Warnings'; do grep -Fq "$marker" "$HOME_INC"; done
 for marker in '/api/profile/settings' 'Allow home LAN access' 'Always / strict' 'AmneziaWG' 'Auto measured' 'DAITA-like' 'Jumbo TUN' 'SOCKS5' 'startup' 'autoconnect'; do grep -Fiq "$marker" "$SETTINGS_INC"; done
+for marker in '/api/profile/settings' 'Require encrypted AUTO candidates' 'Require obfuscation for AUTO candidates' 'Save requirements' 'Disconnect before saving'; do grep -Fq "$marker" "$AUTO_REQ_INC"; done
 grep -Fq '/api/multihop/connect' "$SETTINGS_INC"
-for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' '#include "routervpn-profile-settings-v1.inc"' '#include "routervpn-unified-shell-v8.inc"' '#include "routervpn-telemetry-v9.inc"' '#include "routervpn-globe-v10.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)' 'Edit profile settings' 'G_CALLBACK(on_profile_settings_v7)' 'router-vpn-advanced-settings-v7' 'static void build_ui_legacy_v5(App *app) {' 'linux_install_telemetry_v9(&app);' 'linux_install_globe_v10(&app);'; do grep -Fq "$marker" "$BUILD_SRC"; done
+for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' '#include "routervpn-profile-settings-v1.inc"' '#include "routervpn-auto-requirements-v11.inc"' '#include "routervpn-unified-shell-v8.inc"' '#include "routervpn-telemetry-v9.inc"' '#include "routervpn-globe-v10.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)' 'Edit profile settings' 'G_CALLBACK(on_profile_settings_v7)' 'router-vpn-advanced-settings-v7' 'static void build_ui_legacy_v5(App *app) {' 'linux_install_telemetry_v9(&app);' 'linux_install_globe_v10(&app);'; do grep -Fq "$marker" "$BUILD_SRC"; done
 for marker in 'build_ui_v5(App *app)' 'map-first' 'Connect' 'Disconnect' 'Kill switch' 'Multihop' 'Settings' 'Mode' 'DNS' 'SMART AUTO — recommended' 'AUTO — first proven path' 'New CUSTOM preset…' 'CUSTOM preset builder' '/api/strategy/auto' '/api/strategy/smart-auto' '/api/strategy/custom' '/api/connect-logical' '/api/mtu/retest' 'real stored coordinates'; do grep -Fq "$marker" "$UNIFIED_INC"; done
 for marker in 'LinuxTelemetryV9' '⚡ Fastest' '/api/profile/fastest' '/api/connection/live-latency' '/api/multihop/live-latency' '/api/forwarding/master' 'Forward ON' 'Forward OFF' 'Performance' 'Throughput + Auto MTU'; do grep -Fq "$marker" "$TELEMETRY_INC"; done
 for marker in 'LinuxGlobeV10' 'ROUTER VPN GLOBE' 'linux_globe_draw_v10' 'linux_globe_click_v10' 'routervpn_flat_map_v9' 'entry blue' 'exit orange' 'external pink' 'animated packet' 'PATH %.1f ms' 'device location is not fabricated' '/api/multihop/live-latency'; do grep -Fq "$marker" "$GLOBE_INC"; done
