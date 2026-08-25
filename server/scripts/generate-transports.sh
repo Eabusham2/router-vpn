@@ -8,6 +8,8 @@ HY2_PORT=${5:-8443}
 SS_PORT=${6:-8388}
 REALITY_TARGET=${7:-www.microsoft.com:443}
 SING_BOX_IMAGE=${SING_BOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.12}
+PRIVATE_WRITE=/src/server/scripts/atomic-private-write.py
+PRIVATE_BATCH=/src/server/scripts/atomic-private-batch.py
 umask 077
 
 mkdir -p "$BASE/config/transports" \
@@ -34,7 +36,7 @@ CERT_NAME=${ROUTER_VPN_TLS_NAME:-router-vpn.home}
 CERT_PATH="$BASE/config/transports/cert.pem"
 KEY_PATH="$BASE/config/transports/key.pem"
 cert_ok=0
-if [[ -s "$CERT_PATH" && -s "$KEY_PATH" ]] \
+if [[ -f "$CERT_PATH" && ! -L "$CERT_PATH" && -f "$KEY_PATH" && ! -L "$KEY_PATH" ]] \
   && openssl x509 -in "$CERT_PATH" -noout >/dev/null 2>&1 \
   && openssl pkey -in "$KEY_PATH" -noout >/dev/null 2>&1 \
   && openssl x509 -in "$CERT_PATH" -noout -ext subjectAltName 2>/dev/null | grep -Fq "DNS:$CERT_NAME"; then
@@ -46,18 +48,32 @@ if [[ -s "$CERT_PATH" && -s "$KEY_PATH" ]] \
 fi
 if (( cert_ok == 0 )); then
   SAN="DNS:$CERT_NAME"
+  TLS_TMP=$(mktemp -d "$BASE/config/transports/.tls.XXXXXX")
+  trap 'rm -rf "${TLS_TMP:-}" "${GEN_TMP:-}" "${CHECK_CONFIG:-}"' EXIT
   openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 825 \
     -subj "/CN=$CERT_NAME" -addext "subjectAltName=$SAN" \
-    -keyout "$KEY_PATH" -out "$CERT_PATH" >/dev/null 2>&1
+    -keyout "$TLS_TMP/key.pem" -out "$TLS_TMP/cert.pem" >/dev/null 2>&1
+  openssl x509 -in "$TLS_TMP/cert.pem" -noout -ext subjectAltName | grep -Fq "DNS:$CERT_NAME"
+  cert_pub=$(openssl x509 -in "$TLS_TMP/cert.pem" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum | awk '{print $1}')
+  key_pub=$(openssl pkey -in "$TLS_TMP/key.pem" -pubout -outform DER | sha256sum | awk '{print $1}')
+  [[ -n "$cert_pub" && "$cert_pub" == "$key_pub" ]]
+  python3 "$PRIVATE_BATCH" "$KEY_PATH=$TLS_TMP/key.pem" "$CERT_PATH=$TLS_TMP/cert.pem"
+  rm -rf "$TLS_TMP"
+  TLS_TMP=
 else
+  # Republish the preserved pair through the private batch helper so upgrades
+  # also converge old broad permissions without a post-commit chmod edge.
+  python3 "$PRIVATE_BATCH" "$KEY_PATH=$KEY_PATH" "$CERT_PATH=$CERT_PATH"
   echo 'Preserving existing valid Hysteria2 TLS certificate/private key.' >&2
 fi
-cp "$CERT_PATH" "$BASE/client-bundle/generated/hysteria2/cert.pem"
+python3 "$PRIVATE_WRITE" "$BASE/client-bundle/generated/hysteria2/cert.pem" < "$CERT_PATH"
 
-python3 - "$BASE" "$ENDPOINT" "$ADGUARD4" "$HY2_PORT" "$SS_PORT" "$SS_KEY" "$HY2_PASSWORD" "$CERT_NAME" <<'PY'
-import json,sys,os
-(base,endpoint,dns,hp,sp,sskey,hy2pass,tls_name)=sys.argv[1:]
-hp,sp=map(int,(hp,sp))
+GEN_TMP=$(mktemp -d "$BASE/config/transports/.generate.XXXXXX")
+trap 'rm -rf "${TLS_TMP:-}" "${GEN_TMP:-}" "${CHECK_CONFIG:-}"' EXIT
+python3 - "$GEN_TMP" "$ENDPOINT" "$ADGUARD4" "$HY2_PORT" "$SS_PORT" "$SS_KEY" "$HY2_PASSWORD" "$CERT_NAME" <<'PY'
+import json,pathlib,sys
+(tmp,endpoint,dns,hp,sp,sskey,hy2pass,tls_name)=sys.argv[1:]
+tmp=pathlib.Path(tmp); hp,sp=map(int,(hp,sp))
 server={
  "log":{"level":"warn"},
  "inbounds":[
@@ -73,8 +89,6 @@ server={
  "outbounds":[{"type":"direct","tag":"direct"}],
  "route":{"final":"direct"}
 }
-os.makedirs(f"{base}/config/transports",exist_ok=True)
-json.dump(server,open(f"{base}/config/transports/server.json","w"),indent=2); open(f"{base}/config/transports/server.json","a").write("\n")
 
 def client(outbound,mtu):
  return {
@@ -88,19 +102,27 @@ def client(outbound,mtu):
 hy2={"type":"hysteria2","tag":"proxy","server":endpoint,"server_port":hp,"password":hy2pass,"obfs":{"type":"salamander","password":hy2pass},
  "tls":{"enabled":True,"server_name":tls_name,"certificate_path":"cert.pem"}}
 ss={"type":"shadowsocks","tag":"proxy","server":endpoint,"server_port":sp,"method":"2022-blake3-aes-256-gcm","password":sskey}
-for name,obj,mtu in (("hysteria2",hy2,1360),("shadowsocks",ss,1380)):
- path=f"{base}/client-bundle/generated/{name}/sing-box.json"
- json.dump(client(obj,mtu),open(path,"w"),indent=2); open(path,"a").write("\n")
-
-secrets={"hysteria2_password":hy2pass,"shadowsocks_key":sskey}
-json.dump(secrets,open(f"{base}/config/transports/generated-secrets.json","w"),indent=2); open(f"{base}/config/transports/generated-secrets.json","a").write("\n")
+values={
+ "server.json":server,
+ "hysteria2.json":client(hy2,1360),
+ "shadowsocks.json":client(ss,1380),
+ "generated-secrets.json":{"hysteria2_password":hy2pass,"shadowsocks_key":sskey},
+}
+for name,value in values.items():
+ (tmp/name).write_text(json.dumps(value,indent=2)+"\n",encoding="utf-8")
 PY
-chmod 600 "$BASE/config/transports/"* "$BASE/client-bundle/generated/hysteria2/cert.pem" "$BASE/client-bundle/generated/"*/sing-box.json
+python3 "$PRIVATE_BATCH" \
+  "$BASE/config/transports/server.json=$GEN_TMP/server.json" \
+  "$BASE/client-bundle/generated/hysteria2/sing-box.json=$GEN_TMP/hysteria2.json" \
+  "$BASE/client-bundle/generated/shadowsocks/sing-box.json=$GEN_TMP/shadowsocks.json" \
+  "$BASE/config/transports/generated-secrets.json=$GEN_TMP/generated-secrets.json"
+rm -rf "$GEN_TMP"
+GEN_TMP=
 
 # Production mounts the transport certificate/key at /etc/sing-box. During
-# initialization those mounts do not exist yet, so validate a temporary copy
-# whose TLS paths point at the generated files without changing production paths.
-CHECK_CONFIG="$BASE/config/transports/server.check.json"
+# initialization those mounts do not exist yet, so validate a disposable staging
+# copy whose TLS paths point at generated files. This file is not authoritative.
+CHECK_CONFIG=$(mktemp "$BASE/config/transports/.server.check.XXXXXX.json")
 python3 - "$BASE/config/transports/server.json" "$CHECK_CONFIG" "$CERT_PATH" "$KEY_PATH" <<'PY'
 import json,sys
 src,dst,cert,key=sys.argv[1:]
@@ -115,5 +137,7 @@ open(dst,"a").write("\n")
 PY
 sb check -D "$BASE/config/transports" -c "$CHECK_CONFIG" >/dev/null
 rm -f "$CHECK_CONFIG"
+CHECK_CONFIG=
 sb check -D "$BASE/client-bundle/generated/hysteria2" -c "$BASE/client-bundle/generated/hysteria2/sing-box.json" >/dev/null
 sb check -D "$BASE/client-bundle/generated/shadowsocks" -c "$BASE/client-bundle/generated/shadowsocks/sing-box.json" >/dev/null
+trap - EXIT
