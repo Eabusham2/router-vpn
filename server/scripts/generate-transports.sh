@@ -23,8 +23,13 @@ sb(){
   if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm "$SING_BOX_IMAGE" "$@"; fi
 }
 
-PRESERVED=$(python3 /src/server/scripts/preserve-generated-state.py transports "$BASE" 2>/dev/null || true)
-if [[ -n "$PRESERVED" ]]; then
+TRANSPORT_SECRETS="$BASE/config/transports/generated-secrets.json"
+TRANSPORT_SERVER="$BASE/config/transports/server.json"
+if [[ -e "$TRANSPORT_SECRETS" || -e "$TRANSPORT_SERVER" ]]; then
+  if ! PRESERVED=$(python3 /src/server/scripts/preserve-generated-state.py transports "$BASE"); then
+    echo 'Existing transport credential state is corrupt/incomplete; refusing silent Shadowsocks/Hysteria2 credential rotation.' >&2
+    exit 1
+  fi
   eval "$PRESERVED"
   echo 'Preserving existing Shadowsocks/Hysteria2 credentials for same-deployment upgrade.' >&2
 else
@@ -35,18 +40,26 @@ fi
 CERT_NAME=${ROUTER_VPN_TLS_NAME:-router-vpn.home}
 CERT_PATH="$BASE/config/transports/cert.pem"
 KEY_PATH="$BASE/config/transports/key.pem"
+cert_present=0
+[[ -e "$CERT_PATH" || -e "$KEY_PATH" ]] && cert_present=1
 cert_ok=0
-if [[ -f "$CERT_PATH" && ! -L "$CERT_PATH" && -f "$KEY_PATH" && ! -L "$KEY_PATH" ]] \
-  && openssl x509 -in "$CERT_PATH" -noout >/dev/null 2>&1 \
-  && openssl pkey -in "$KEY_PATH" -noout >/dev/null 2>&1 \
-  && openssl x509 -in "$CERT_PATH" -noout -ext subjectAltName 2>/dev/null | grep -Fq "DNS:$CERT_NAME"; then
-  cert_pub=$(openssl x509 -in "$CERT_PATH" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
-  key_pub=$(openssl pkey -in "$KEY_PATH" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
-  if [[ -n "$cert_pub" && "$cert_pub" == "$key_pub" ]]; then
-    cert_ok=1
+if (( cert_present )); then
+  if [[ -f "$CERT_PATH" && ! -L "$CERT_PATH" && -f "$KEY_PATH" && ! -L "$KEY_PATH" ]] \
+    && openssl x509 -in "$CERT_PATH" -noout >/dev/null 2>&1 \
+    && openssl pkey -in "$KEY_PATH" -noout >/dev/null 2>&1 \
+    && openssl x509 -in "$CERT_PATH" -noout -ext subjectAltName 2>/dev/null | grep -Fq "DNS:$CERT_NAME"; then
+    cert_pub=$(openssl x509 -in "$CERT_PATH" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+    key_pub=$(openssl pkey -in "$KEY_PATH" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+    if [[ -n "$cert_pub" && "$cert_pub" == "$key_pub" ]]; then
+      cert_ok=1
+    fi
+  fi
+  if (( cert_ok == 0 )); then
+    echo 'Existing Hysteria2 TLS identity is corrupt/incomplete; refusing silent certificate/private-key rotation.' >&2
+    exit 1
   fi
 fi
-if (( cert_ok == 0 )); then
+if (( cert_present == 0 )); then
   SAN="DNS:$CERT_NAME"
   TLS_TMP=$(mktemp -d "$BASE/config/transports/.tls.XXXXXX")
   trap 'rm -rf "${TLS_TMP:-}" "${GEN_TMP:-}" "${CHECK_CONFIG:-}"' EXIT
