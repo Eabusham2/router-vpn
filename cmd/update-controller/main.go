@@ -493,43 +493,80 @@ func (c *controller) applyUpdate(w http.ResponseWriter, r *http.Request) {
 	if configured, reason := c.configured(); !configured { http.Error(w, reason, http.StatusServiceUnavailable); return }
 	c.mu.Lock()
 	if c.state.Status == "applying" || c.state.Status == "finalizing" || c.state.Status == "rolling-back" { c.mu.Unlock(); http.Error(w, "an update is already in progress", http.StatusConflict); return }
-	c.persistStateLocked("applying", "", sha, "verifying exact release")
+	if err := c.persistStateLocked("applying", "", sha, "verifying exact release"); err != nil {
+		c.mu.Unlock()
+		http.Error(w, "cannot persist update recovery state: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	c.mu.Unlock()
 
 	stack, err := c.findStack()
-	if err != nil { c.failState(sha, err); http.Error(w, err.Error(), 500); return }
+	if err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), 500); return }
 	previous, err := c.stackFile(stack)
-	if err != nil { c.failState(sha, err); http.Error(w, err.Error(), 500); return }
+	if err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), 500); return }
 	from := composeSHA(previous)
 	target, err := c.targetCompose(sha)
-	if err != nil { c.failState(sha, err); http.Error(w, err.Error(), http.StatusServiceUnavailable); return }
+	if err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), http.StatusServiceUnavailable); return }
 	phaseOne, err := preserveUpdater(target, previous)
-	if err != nil { c.failState(sha, err); http.Error(w, err.Error(), http.StatusConflict); return }
+	if err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), http.StatusConflict); return }
 
-	c.mu.Lock(); c.persistStateLocked("applying", from, sha, "Portainer is applying target services while preserving the current update controller"); c.mu.Unlock()
-	if err := c.putStack(stack, phaseOne); err != nil { c.failState(sha, err); http.Error(w, err.Error(), 500); return }
+	c.mu.Lock()
+	if err := c.persistStateLocked("applying", from, sha, "Portainer is applying target services while preserving the current update controller"); err != nil {
+		c.mu.Unlock()
+		http.Error(w, "cannot persist pre-deployment recovery state: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	c.mu.Unlock()
+	if err := c.putStack(stack, phaseOne); err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), 500); return }
 	if err := c.waitCoreHealthy(stack, 120*time.Second); err != nil {
-		c.mu.Lock(); c.persistStateLocked("rolling-back", from, sha, err.Error()); c.mu.Unlock()
+		c.mu.Lock()
+		stateErr := c.persistStateLocked("rolling-back", from, sha, err.Error())
+		c.mu.Unlock()
 		rollbackErr := c.putStack(stack, previous)
 		if rollbackErr == nil { rollbackErr = c.waitCoreHealthy(stack, 120*time.Second) }
-		if rollbackErr != nil { err = fmt.Errorf("target failed (%v); automatic rollback also failed (%v)", err, rollbackErr) } else { err = fmt.Errorf("target failed health verification and prior stack was restored: %w", err) }
-		c.failState(sha, err); http.Error(w, err.Error(), http.StatusInternalServerError); return
+		if rollbackErr != nil {
+			message := fmt.Errorf("target failed (%v); automatic rollback also failed (%v)", err, rollbackErr)
+			if stateErr != nil { message = fmt.Errorf("%v; rolling-back state persistence also failed (%v)", message, stateErr) }
+			http.Error(w, message.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = fmt.Errorf("target failed health verification and prior stack was restored: %w", err)
+		if stateErr != nil { err = fmt.Errorf("%v; rolling-back state persistence failed (%v)", err, stateErr) }
+		err = c.failState(sha, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	// The core application is now proven healthy. Replace only the preserved old
 	// updater image by applying the full exact-SHA compose last. If this process is
 	// recreated during the request, the new controller reads the persisted
 	// finalizing state; core VPN services are already on the verified target.
-	c.mu.Lock(); c.persistStateLocked("finalizing", from, sha, "core services verified; updating the update controller last"); c.mu.Unlock()
-	if err := c.putStack(stack, target); err != nil { c.failState(sha, err); http.Error(w, err.Error(), 500); return }
-	c.mu.Lock(); c.persistStateLocked("complete", from, sha, "exact-SHA Portainer stack update completed"); c.mu.Unlock()
+	c.mu.Lock()
+	if err := c.persistStateLocked("finalizing", from, sha, "core services verified; updating the update controller last"); err != nil {
+		c.mu.Unlock()
+		http.Error(w, "cannot persist finalizing recovery state: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	c.mu.Unlock()
+	if err := c.putStack(stack, target); err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), 500); return }
+	c.mu.Lock()
+	if err := c.persistStateLocked("complete", from, sha, "exact-SHA Portainer stack update completed"); err != nil {
+		c.mu.Unlock()
+		http.Error(w, "stack updated but completion state could not be persisted: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	c.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "from_sha": from, "sha": sha, "rolled_back": false, "core_health_verified": true})
 }
 
-func (c *controller) failState(target string, err error) {
-	c.mu.Lock(); defer c.mu.Unlock()
+func (c *controller) failState(target string, cause error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	from := c.state.FromSHA
-	c.persistStateLocked("failed", from, target, err.Error())
+	if err := c.persistStateLocked("failed", from, target, cause.Error()); err != nil {
+		return fmt.Errorf("%v; failed to persist terminal update state: %w", cause, err)
+	}
+	return cause
 }
 
 func (c *controller) reconcileFinalizing() {
@@ -540,7 +577,11 @@ func (c *controller) reconcileFinalizing() {
 	file, err := c.stackFile(stack); if err != nil { return }
 	if composeSHA(file) != state.TargetSHA { return }
 	if err := c.waitCoreHealthy(stack, 60*time.Second); err != nil { return }
-	c.mu.Lock(); c.persistStateLocked("complete", state.FromSHA, state.TargetSHA, "exact-SHA update completed after update-controller restart"); c.mu.Unlock()
+	c.mu.Lock()
+	if err := c.persistStateLocked("complete", state.FromSHA, state.TargetSHA, "exact-SHA update completed after update-controller restart"); err != nil {
+		log.Printf("reconcile finalizing state persistence: %v", err)
+	}
+	c.mu.Unlock()
 }
 
 func main() {
