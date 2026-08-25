@@ -183,7 +183,6 @@ def apply_transaction(changes: list[Change]) -> None:
             tmp = staged.pop(change.path)
             os.replace(tmp, change.path)
             adopted.append(change)
-            os.chmod(change.path, PRIVATE_MODE)
             fsync_directory(change.path.parent)
     except Exception as exc:
         rollback_errors = restore_changes(reversed(adopted))
