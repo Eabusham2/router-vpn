@@ -283,3 +283,29 @@ func TestMTURetestPackagedOptimizersKeepMeasurementAndAdoptionSeparate(t *testin
 		}
 	}
 }
+
+func TestMTURetestPersistenceFailureRollsBackLiveAndInMemoryResult(t *testing.T) {
+	a, root := installFakeMTURetestRuntime(t)
+	t.Setenv("HOMEVPN_ROOT", root)
+	blocker := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.ProfilesFile = filepath.Join(blocker, "routers.json")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/mtu/retest", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	a.retestMTU(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("persistence failure status=%d body=%q", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "fake-restore")); err != nil {
+		t.Fatal("MTU persistence failure did not roll back the live interface")
+	}
+	a.mu.Lock()
+	got := a.profiles.Profiles[0]
+	a.mu.Unlock()
+	if got.EffectiveMTU != 1420 || got.EffectiveMTUSource != "" || got.EffectiveMTUPathKey != "" {
+		t.Fatalf("MTU persistence failure left measured state in RAM: %+v", got)
+	}
+}
