@@ -52,54 +52,62 @@ type updateState struct {
 }
 
 type controller struct {
-	setupToken string
-	listen string
-	portainerURL *url.URL
+	setupToken       string
+	listen           string
+	portainerURL     *url.URL
 	portainerKeyFile string
 	portainerPinFile string
-	stackName string
-	repo string
-	branch string
-	statePath string
-	mu sync.Mutex
-	state updateState
+	stackName        string
+	repo             string
+	branch           string
+	statePath        string
+	mu               sync.Mutex
+	state            updateState
 }
 
 type stackInfo struct {
-	ID int `json:"Id"`
-	EndpointID int `json:"EndpointId"`
-	Name string `json:"Name"`
-	Status int `json:"Status"`
-	Env json.RawMessage `json:"Env"`
+	ID         int             `json:"Id"`
+	EndpointID int             `json:"EndpointId"`
+	Name       string          `json:"Name"`
+	Status     int             `json:"Status"`
+	Env        json.RawMessage `json:"Env"`
 }
 
 type workflowRuns struct {
 	Runs []struct {
-		ID int64 `json:"id"`
-		HeadSHA string `json:"head_sha"`
+		ID         int64  `json:"id"`
+		HeadSHA    string `json:"head_sha"`
 		HeadBranch string `json:"head_branch"`
-		Status string `json:"status"`
+		Status     string `json:"status"`
 		Conclusion string `json:"conclusion"`
-		CreatedAt string `json:"created_at"`
+		CreatedAt  string `json:"created_at"`
 	} `json:"workflow_runs"`
 }
 
 func env(k, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(k)); v != "" { return v }
+	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+		return v
+	}
 	return fallback
 }
 
 func readSecret(path string, min int) (string, error) {
 	b, err := readUpdaterPrivate(path, 64<<10)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	v := strings.TrimSpace(string(b))
-	if len(v) < min { return "", fmt.Errorf("%s is empty or too short", path) }
+	if len(v) < min {
+		return "", fmt.Errorf("%s is empty or too short", path)
+	}
 	return v, nil
 }
 
 func loadController() (*controller, error) {
 	setupToken, err := readSecret(env("ROUTER_VPN_ADMIN_TOKEN_FILE", defaultSetupTokenFile), 32)
-	if err != nil { return nil, fmt.Errorf("setup token: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("setup token: %w", err)
+	}
 	listen := env("ROUTER_VPN_UPDATE_LISTEN", defaultListen)
 	host, _, err := net.SplitHostPort(listen)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
@@ -114,18 +122,20 @@ func loadController() (*controller, error) {
 		return nil, errors.New("Portainer Update is restricted to a loopback Portainer origin")
 	}
 	c := &controller{
-		setupToken: setupToken,
-		listen: listen,
-		portainerURL: purl,
+		setupToken:       setupToken,
+		listen:           listen,
+		portainerURL:     purl,
 		portainerKeyFile: env("ROUTER_VPN_PORTAINER_API_KEY_FILE", defaultPortainerKey),
 		portainerPinFile: env("ROUTER_VPN_PORTAINER_TLS_PIN_FILE", defaultPortainerPin),
-		stackName: env("ROUTER_VPN_PORTAINER_STACK", defaultStackName),
-		repo: env("ROUTER_VPN_GITHUB_REPO", defaultRepo),
-		branch: env("ROUTER_VPN_GITHUB_BRANCH", defaultBranch),
-		statePath: env("ROUTER_VPN_UPDATE_STATE", defaultStatePath),
-		state: updateState{Version: 1, Status: "idle"},
+		stackName:        env("ROUTER_VPN_PORTAINER_STACK", defaultStackName),
+		repo:             env("ROUTER_VPN_GITHUB_REPO", defaultRepo),
+		branch:           env("ROUTER_VPN_GITHUB_BRANCH", defaultBranch),
+		statePath:        env("ROUTER_VPN_UPDATE_STATE", defaultStatePath),
+		state:            updateState{Version: 1, Status: "idle"},
 	}
-	if strings.Count(c.repo, "/") != 1 || strings.ContainsAny(c.repo, " \\?#") { return nil, errors.New("invalid GitHub repository") }
+	if strings.Count(c.repo, "/") != 1 || strings.ContainsAny(c.repo, " \\?#") {
+		return nil, errors.New("invalid GitHub repository")
+	}
 	if err := c.loadState(); err != nil {
 		return nil, fmt.Errorf("load update recovery state: %w", err)
 	}
@@ -142,45 +152,78 @@ func validUpdateStatus(status string) bool {
 }
 
 func validateUpdateState(s updateState) error {
-	if s.Version != 1 { return fmt.Errorf("unsupported update state version %d", s.Version) }
-	if !validUpdateStatus(s.Status) { return fmt.Errorf("unsupported update state status %q", s.Status) }
-	if s.FromSHA != "" && !shaRE.MatchString(s.FromSHA) { return errors.New("update state contains invalid from_sha") }
-	if s.TargetSHA != "" && !shaRE.MatchString(s.TargetSHA) { return errors.New("update state contains invalid target_sha") }
+	if s.Version != 1 {
+		return fmt.Errorf("unsupported update state version %d", s.Version)
+	}
+	if !validUpdateStatus(s.Status) {
+		return fmt.Errorf("unsupported update state status %q", s.Status)
+	}
+	if s.FromSHA != "" && !shaRE.MatchString(s.FromSHA) {
+		return errors.New("update state contains invalid from_sha")
+	}
+	if s.TargetSHA != "" && !shaRE.MatchString(s.TargetSHA) {
+		return errors.New("update state contains invalid target_sha")
+	}
 	return nil
 }
 
 func (c *controller) loadState() error {
 	b, err := readUpdaterPrivate(c.statePath, 64<<10)
-	if errors.Is(err, os.ErrNotExist) { return nil }
-	if err != nil { return err }
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	var state updateState
-	if err := json.Unmarshal(b, &state); err != nil { return err }
-	if err := validateUpdateState(state); err != nil { return err }
+	if err := json.Unmarshal(b, &state); err != nil {
+		return err
+	}
+	if err := validateUpdateState(state); err != nil {
+		return err
+	}
 	c.state = state
 	return nil
 }
 
 func (c *controller) persistStateLocked(status, from, target, message string) error {
 	next := updateState{Version: 1, Status: status, FromSHA: from, TargetSHA: target, Message: message, UpdatedAt: time.Now().Unix()}
-	if err := validateUpdateState(next); err != nil { return err }
+	if err := validateUpdateState(next); err != nil {
+		return err
+	}
 	body, err := json.MarshalIndent(next, "", "  ")
-	if err != nil { return err }
-	if err := atomicWriteUpdaterPrivate(c.statePath, append(body, '\n')); err != nil { return err }
+	if err != nil {
+		return err
+	}
+	if err := atomicWriteUpdaterPrivate(c.statePath, append(body, '\n')); err != nil {
+		return err
+	}
 	c.state = next
 	return nil
 }
 
 func (c *controller) authorized(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil { return false }
+	if err != nil {
+		return false
+	}
 	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() { return false }
+	if ip == nil || !ip.IsLoopback() {
+		return false
+	}
 	return subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+c.setupToken)) == 1
 }
 
 func (c *controller) require(w http.ResponseWriter, r *http.Request, method string) bool {
-	if r.Method != method { w.Header().Set("Allow", method); http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return false }
-	if !c.authorized(r) { http.Error(w, "forbidden", http.StatusForbidden); return false }
+	if r.Method != method {
+		w.Header().Set("Allow", method)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	if !c.authorized(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
 	return true
 }
 
@@ -192,30 +235,42 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func (c *controller) configured() (bool, string) {
-	if _, err := readSecret(c.portainerKeyFile, 16); err != nil { return false, "Portainer API key is not configured server-side" }
+	if _, err := readSecret(c.portainerKeyFile, 16); err != nil {
+		return false, "Portainer API key is not configured server-side"
+	}
 	pin, err := readSecret(c.portainerPinFile, 64)
 	if err != nil || len(pin) != 64 {
 		return false, "Portainer TLS certificate fingerprint is not configured server-side"
 	}
-	if _, err := hex.DecodeString(strings.ToLower(pin)); err != nil { return false, "Portainer TLS certificate fingerprint is invalid" }
+	if _, err := hex.DecodeString(strings.ToLower(pin)); err != nil {
+		return false, "Portainer TLS certificate fingerprint is invalid"
+	}
 	return true, ""
 }
 
 func (c *controller) portainerClient() (*http.Client, string, error) {
 	key, err := readSecret(c.portainerKeyFile, 16)
-	if err != nil { return nil, "", err }
+	if err != nil {
+		return nil, "", err
+	}
 	pin, err := readSecret(c.portainerPinFile, 64)
-	if err != nil { return nil, "", err }
+	if err != nil {
+		return nil, "", err
+	}
 	pin = strings.ToLower(pin)
-	if len(pin) != 64 { return nil, "", errors.New("invalid Portainer TLS fingerprint length") }
-	if _, err := hex.DecodeString(pin); err != nil { return nil, "", errors.New("invalid Portainer TLS fingerprint") }
+	if len(pin) != 64 {
+		return nil, "", errors.New("invalid Portainer TLS fingerprint length")
+	}
+	if _, err := hex.DecodeString(pin); err != nil {
+		return nil, "", errors.New("invalid Portainer TLS fingerprint")
+	}
 	tlsConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		// Certificate trust is a local explicit SHA-256 pin. Standard chain
-		// verification cannot validate Portainer's default self-signed cert.
-		InsecureSkipVerify: true, // verified below by VerifyConnection
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 { return errors.New("Portainer returned no TLS certificate") }
+			if len(cs.PeerCertificates) == 0 {
+				return errors.New("Portainer returned no TLS certificate")
+			}
 			sum := sha256.Sum256(cs.PeerCertificates[0].Raw)
 			if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(pin)) != 1 {
 				return errors.New("Portainer TLS certificate fingerprint changed")
@@ -229,24 +284,50 @@ func (c *controller) portainerClient() (*http.Client, string, error) {
 
 func (c *controller) portainer(method, path string, body any, out any) error {
 	client, key, err := c.portainerClient()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	var reader io.Reader
 	if body != nil {
-		b, err := json.Marshal(body); if err != nil { return err }
-		if len(b) > maxCompose+maxJSON { return errors.New("Portainer request exceeds safety limit") }
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		if len(b) > maxCompose+maxJSON {
+			return errors.New("Portainer request exceeds safety limit")
+		}
 		reader = bytes.NewReader(b)
 	}
 	endpoint := strings.TrimRight(c.portainerURL.String(), "/") + path
-	req, err := http.NewRequest(method, endpoint, reader); if err != nil { return err }
+	req, err := http.NewRequest(method, endpoint, reader)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("X-API-Key", key)
 	req.Header.Set("Accept", "application/json")
-	if body != nil { req.Header.Set("Content-Type", "application/json") }
-	resp, err := client.Do(req); if err != nil { return err }
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCompose+maxJSON+1)); if err != nil { return err }
-	if len(raw) > maxCompose+maxJSON { return errors.New("Portainer response exceeds safety limit") }
-	if resp.StatusCode/100 != 2 { return fmt.Errorf("Portainer %s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw))) }
-	if out != nil && len(bytes.TrimSpace(raw)) > 0 { if err := json.Unmarshal(raw, out); err != nil { return fmt.Errorf("decode Portainer response: %w", err) } }
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCompose+maxJSON+1))
+	if err != nil {
+		return err
+	}
+	if len(raw) > maxCompose+maxJSON {
+		return errors.New("Portainer response exceeds safety limit")
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("Portainer %s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	if out != nil && len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return fmt.Errorf("decode Portainer response: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -254,52 +335,92 @@ func githubHeaders(req *http.Request) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "router-vpn-update-controller/1")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" { req.Header.Set("Authorization", "Bearer "+token) }
+	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 }
 
 func githubJSON(endpoint string, out any) error {
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil); if err != nil { return err }
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
 	githubHeaders(req)
 	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: nil}}
-	resp, err := client.Do(req); if err != nil { return err }
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxJSON+1)); if err != nil { return err }
-	if len(raw) > maxJSON { return errors.New("GitHub response exceeds safety limit") }
-	if resp.StatusCode/100 != 2 { return fmt.Errorf("GitHub HTTP %d", resp.StatusCode) }
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxJSON+1))
+	if err != nil {
+		return err
+	}
+	if len(raw) > maxJSON {
+		return errors.New("GitHub response exceeds safety limit")
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("GitHub HTTP %d", resp.StatusCode)
+	}
 	return json.Unmarshal(raw, out)
 }
 
 func githubText(endpoint string, limit int64) (string, error) {
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil); if err != nil { return "", err }
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
 	githubHeaders(req)
 	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: nil}}
-	resp, err := client.Do(req); if err != nil { return "", err }
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1)); if err != nil { return "", err }
-	if int64(len(raw)) > limit { return "", errors.New("GitHub file exceeds safety limit") }
-	if resp.StatusCode/100 != 2 { return "", fmt.Errorf("GitHub file HTTP %d", resp.StatusCode) }
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return "", err
+	}
+	if int64(len(raw)) > limit {
+		return "", errors.New("GitHub file exceeds safety limit")
+	}
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("GitHub file HTTP %d", resp.StatusCode)
+	}
 	return string(raw), nil
 }
 
 func (c *controller) workflowSuccess(file, sha string) (bool, error) {
-	if !shaRE.MatchString(sha) { return false, errors.New("invalid SHA") }
+	if !shaRE.MatchString(sha) {
+		return false, errors.New("invalid SHA")
+	}
 	q := url.Values{"branch": {c.branch}, "status": {"success"}, "head_sha": {sha}, "per_page": {"20"}}
 	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/actions/workflows/%s/runs?%s", c.repo, url.PathEscape(file), q.Encode())
 	var runs workflowRuns
-	if err := githubJSON(endpoint, &runs); err != nil { return false, err }
+	if err := githubJSON(endpoint, &runs); err != nil {
+		return false, err
+	}
 	for _, run := range runs.Runs {
-		if strings.ToLower(run.HeadSHA) == sha && run.HeadBranch == c.branch && run.Status == "completed" && run.Conclusion == "success" { return true, nil }
+		if strings.ToLower(run.HeadSHA) == sha && run.HeadBranch == c.branch && run.Status == "completed" && run.Conclusion == "success" {
+			return true, nil
+		}
 	}
 	return false, nil
 }
 
 func (c *controller) verifiedTarget(sha string) error {
 	sha = strings.ToLower(strings.TrimSpace(sha))
-	if !shaRE.MatchString(sha) { return errors.New("target must be a lowercase full 40-character commit SHA") }
+	if !shaRE.MatchString(sha) {
+		return errors.New("target must be a lowercase full 40-character commit SHA")
+	}
 	for _, workflow := range []string{"release-candidate.yml", "publish-arm64-images.yml", "production-release-compose.yml"} {
 		ok, err := c.workflowSuccess(workflow, sha)
-		if err != nil { return fmt.Errorf("verify %s: %w", workflow, err) }
-		if !ok { return fmt.Errorf("%s has no successful exact-SHA %s run", sha, workflow) }
+		if err != nil {
+			return fmt.Errorf("verify %s: %w", workflow, err)
+		}
+		if !ok {
+			return fmt.Errorf("%s has no successful exact-SHA %s run", sha, workflow)
+		}
 	}
 	return nil
 }
@@ -308,39 +429,69 @@ func (c *controller) latestVerified() (string, error) {
 	q := url.Values{"branch": {c.branch}, "status": {"success"}, "per_page": {"30"}}
 	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/actions/workflows/release-candidate.yml/runs?%s", c.repo, q.Encode())
 	var runs workflowRuns
-	if err := githubJSON(endpoint, &runs); err != nil { return "", err }
+	if err := githubJSON(endpoint, &runs); err != nil {
+		return "", err
+	}
 	seen := map[string]bool{}
 	for _, run := range runs.Runs {
 		sha := strings.ToLower(run.HeadSHA)
-		if seen[sha] || !shaRE.MatchString(sha) || run.HeadBranch != c.branch || run.Status != "completed" || run.Conclusion != "success" { continue }
+		if seen[sha] || !shaRE.MatchString(sha) || run.HeadBranch != c.branch || run.Status != "completed" || run.Conclusion != "success" {
+			continue
+		}
 		seen[sha] = true
-		if err := c.verifiedTarget(sha); err == nil { return sha, nil }
+		if err := c.verifiedTarget(sha); err == nil {
+			return sha, nil
+		}
 	}
 	return "", errors.New("no recent exact-SHA release has all required green workflows")
 }
 
 func validateAndMaterializeTemplate(text, target string) (string, error) {
-	if !shaRE.MatchString(target) { return "", errors.New("invalid target SHA") }
-	if len(text) == 0 || len(text) > maxCompose { return "", errors.New("production compose baseline size is invalid") }
+	if !shaRE.MatchString(target) {
+		return "", errors.New("invalid target SHA")
+	}
+	if len(text) == 0 || len(text) > maxCompose {
+		return "", errors.New("production compose baseline size is invalid")
+	}
 	for _, forbidden := range []string{"\nbuild:\n", "\n    build:", ":latest", "- /var/run/docker.sock"} {
-		if strings.Contains(text, forbidden) { return "", fmt.Errorf("production compose contains forbidden marker %q", forbidden) }
+		if strings.Contains(text, forbidden) {
+			return "", fmt.Errorf("production compose contains forbidden marker %q", forbidden)
+		}
 	}
 	matches := customImageRE.FindAllStringSubmatch(text, -1)
-	if len(matches) < 11 { return "", errors.New("production compose does not contain the complete Router VPN exact-image set") }
-	if !strings.Contains(text, "router-vpn-updater:") { return "", errors.New("target release does not contain the rollback-safe update controller service") }
+	if len(matches) < 11 {
+		return "", errors.New("production compose does not contain the complete Router VPN exact-image set")
+	}
+	if !strings.Contains(text, "router-vpn-updater:") {
+		return "", errors.New("target release does not contain the rollback-safe update controller service")
+	}
 	out := customImageRE.ReplaceAllString(text, `${1}`+target)
-	if brokerSHARe.MatchString(out) { out = brokerSHARe.ReplaceAllString(out, `${1}`+target+`${3}`) } else { return "", errors.New("production compose broker provenance SHA is missing") }
-	for _, match := range customImageRE.FindAllStringSubmatch(out, -1) { if match[2] != target { return "", errors.New("materialized compose contains non-target Router VPN image") } }
-	if !strings.Contains(out, "ROUTER_VPN_GITHUB_SHA: "+target) { return "", errors.New("materialized compose broker SHA mismatch") }
+	if brokerSHARe.MatchString(out) {
+		out = brokerSHARe.ReplaceAllString(out, `${1}`+target+`${3}`)
+	} else {
+		return "", errors.New("production compose broker provenance SHA is missing")
+	}
+	for _, match := range customImageRE.FindAllStringSubmatch(out, -1) {
+		if match[2] != target {
+			return "", errors.New("materialized compose contains non-target Router VPN image")
+		}
+	}
+	if !strings.Contains(out, "ROUTER_VPN_GITHUB_SHA: "+target) {
+		return "", errors.New("materialized compose broker SHA mismatch")
+	}
 	header := "# GENERATED exact-SHA Router VPN production compose: " + target + "\n# Update controller verified RC + ARM64 image publication before materialization.\n"
 	return header + out, nil
 }
 
 func (c *controller) targetCompose(sha string) (string, error) {
-	if err := c.verifiedTarget(sha); err != nil { return "", err }
+	if err := c.verifiedTarget(sha); err != nil {
+		return "", err
+	}
 	endpoint := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/server/portainer-current.yaml", c.repo, sha)
 	baseline, err := githubText(endpoint, maxCompose)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	return validateAndMaterializeTemplate(baseline, sha)
 }
 
@@ -349,44 +500,77 @@ func stackEnvironment(raw json.RawMessage) ([]any, error) {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil, errors.New("Portainer did not return stack environment; refusing to replace it with an empty environment")
 	}
-	if len(trimmed) > maxJSON { return nil, errors.New("Portainer stack environment exceeds safety limit") }
+	if len(trimmed) > maxJSON {
+		return nil, errors.New("Portainer stack environment exceeds safety limit")
+	}
 	var values []any
-	if err := json.Unmarshal(trimmed, &values); err != nil { return nil, fmt.Errorf("decode Portainer stack environment: %w", err) }
-	if values == nil { return nil, errors.New("Portainer stack environment is null") }
+	if err := json.Unmarshal(trimmed, &values); err != nil {
+		return nil, fmt.Errorf("decode Portainer stack environment: %w", err)
+	}
+	if values == nil {
+		return nil, errors.New("Portainer stack environment is null")
+	}
 	return values, nil
 }
 
 func (c *controller) findStack() (stackInfo, error) {
 	var stacks []stackInfo
-	if err := c.portainer(http.MethodGet, "/api/stacks", nil, &stacks); err != nil { return stackInfo{}, err }
+	if err := c.portainer(http.MethodGet, "/api/stacks", nil, &stacks); err != nil {
+		return stackInfo{}, err
+	}
 	var matches []stackInfo
-	for _, stack := range stacks { if stack.Name == c.stackName { matches = append(matches, stack) } }
-	if len(matches) != 1 { return stackInfo{}, fmt.Errorf("expected one Portainer stack named %q, found %d", c.stackName, len(matches)) }
+	for _, stack := range stacks {
+		if stack.Name == c.stackName {
+			matches = append(matches, stack)
+		}
+	}
+	if len(matches) != 1 {
+		return stackInfo{}, fmt.Errorf("expected one Portainer stack named %q, found %d", c.stackName, len(matches))
+	}
 	selected := matches[0]
-	if selected.ID <= 0 || selected.EndpointID <= 0 { return stackInfo{}, errors.New("Portainer stack has invalid ID/environment") }
-	// The list endpoint may omit Env in some Portainer versions. Fetch the
-	// authoritative stack object and refuse an update if its environment cannot
-	// be read; silently sending Env:[] could erase WAN/LAN/AdGuard overrides.
+	if selected.ID <= 0 || selected.EndpointID <= 0 {
+		return stackInfo{}, errors.New("Portainer stack has invalid ID/environment")
+	}
 	var detail stackInfo
-	if err := c.portainer(http.MethodGet, fmt.Sprintf("/api/stacks/%d", selected.ID), nil, &detail); err != nil { return stackInfo{}, fmt.Errorf("read Portainer stack details: %w", err) }
-	if detail.ID != 0 && detail.ID != selected.ID { return stackInfo{}, errors.New("Portainer stack detail ID changed during lookup") }
-	if detail.Name != "" && detail.Name != c.stackName { return stackInfo{}, errors.New("Portainer stack detail name changed during lookup") }
-	if len(bytes.TrimSpace(detail.Env)) > 0 { selected.Env = detail.Env }
-	if _, err := stackEnvironment(selected.Env); err != nil { return stackInfo{}, err }
+	if err := c.portainer(http.MethodGet, fmt.Sprintf("/api/stacks/%d", selected.ID), nil, &detail); err != nil {
+		return stackInfo{}, fmt.Errorf("read Portainer stack details: %w", err)
+	}
+	if detail.ID != 0 && detail.ID != selected.ID {
+		return stackInfo{}, errors.New("Portainer stack detail ID changed during lookup")
+	}
+	if detail.Name != "" && detail.Name != c.stackName {
+		return stackInfo{}, errors.New("Portainer stack detail name changed during lookup")
+	}
+	if len(bytes.TrimSpace(detail.Env)) > 0 {
+		selected.Env = detail.Env
+	}
+	if _, err := stackEnvironment(selected.Env); err != nil {
+		return stackInfo{}, err
+	}
 	return selected, nil
 }
 
 func (c *controller) stackFile(stack stackInfo) (string, error) {
-	var payload struct { StackFileContent string `json:"StackFileContent"` }
-	if err := c.portainer(http.MethodGet, fmt.Sprintf("/api/stacks/%d/file", stack.ID), nil, &payload); err != nil { return "", err }
-	if payload.StackFileContent == "" || len(payload.StackFileContent) > maxCompose { return "", errors.New("Portainer returned an empty/oversized stack file") }
+	var payload struct {
+		StackFileContent string `json:"StackFileContent"`
+	}
+	if err := c.portainer(http.MethodGet, fmt.Sprintf("/api/stacks/%d/file", stack.ID), nil, &payload); err != nil {
+		return "", err
+	}
+	if payload.StackFileContent == "" || len(payload.StackFileContent) > maxCompose {
+		return "", errors.New("Portainer returned an empty/oversized stack file")
+	}
 	return payload.StackFileContent, nil
 }
 
 func (c *controller) putStack(stack stackInfo, content string) error {
-	if len(content) == 0 || len(content) > maxCompose { return errors.New("refusing invalid stack content") }
+	if len(content) == 0 || len(content) > maxCompose {
+		return errors.New("refusing invalid stack content")
+	}
 	environment, err := stackEnvironment(stack.Env)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	payload := map[string]any{"StackFileContent": content, "Env": environment, "PullImage": true, "Prune": false}
 	path := fmt.Sprintf("/api/stacks/%d?endpointId=%d", stack.ID, stack.EndpointID)
 	return c.portainer(http.MethodPut, path, payload, nil)
@@ -395,41 +579,68 @@ func (c *controller) putStack(stack stackInfo, content string) error {
 func extractUpdaterImage(content string) (string, error) {
 	re := regexp.MustCompile(`ghcr\.io/eabusham2/router-vpn-updater:[0-9a-f]{40}`)
 	matches := re.FindAllString(content, -1)
-	if len(matches) != 1 { return "", fmt.Errorf("expected one updater image in current stack, found %d", len(matches)) }
+	if len(matches) != 1 {
+		return "", fmt.Errorf("expected one updater image in current stack, found %d", len(matches))
+	}
 	return matches[0], nil
 }
 
 func preserveUpdater(target, current string) (string, error) {
-	oldImage, err := extractUpdaterImage(current); if err != nil { return "", err }
+	oldImage, err := extractUpdaterImage(current)
+	if err != nil {
+		return "", err
+	}
 	re := regexp.MustCompile(`ghcr\.io/eabusham2/router-vpn-updater:[0-9a-f]{40}`)
-	if len(re.FindAllString(target, -1)) != 1 { return "", errors.New("target compose has invalid updater image count") }
+	if len(re.FindAllString(target, -1)) != 1 {
+		return "", errors.New("target compose has invalid updater image count")
+	}
 	return re.ReplaceAllString(target, oldImage), nil
 }
 
 func composeSHA(content string) string {
 	values := map[string]bool{}
-	for _, item := range customImageRE.FindAllStringSubmatch(content, -1) { values[item[2]] = true }
-	if len(values) != 1 { return "unknown" }
+	for _, item := range customImageRE.FindAllStringSubmatch(content, -1) {
+		values[item[2]] = true
+	}
+	if len(values) != 1 {
+		return "unknown"
+	}
 	var imageSHA string
-	for sha := range values { imageSHA = sha }
+	for sha := range values {
+		imageSHA = sha
+	}
 	header := regexp.MustCompile(`(?m)^# GENERATED exact-SHA Router VPN production compose: ([0-9a-f]{40})$`).FindStringSubmatch(content)
-	if len(header) == 2 && header[1] != imageSHA { return "unknown" }
+	if len(header) == 2 && header[1] != imageSHA {
+		return "unknown"
+	}
 	broker := brokerSHARe.FindStringSubmatch(content)
-	if len(broker) == 4 && broker[2] != imageSHA { return "unknown" }
+	if len(broker) == 4 && broker[2] != imageSHA {
+		return "unknown"
+	}
 	return imageSHA
 }
 
 func (c *controller) containerState(stack stackInfo, name string) (bool, int, error) {
-	var payload struct { State struct { Running bool `json:"Running"`; ExitCode int `json:"ExitCode"`; Status string `json:"Status"` } `json:"State"` }
+	var payload struct {
+		State struct {
+			Running  bool   `json:"Running"`
+			ExitCode int    `json:"ExitCode"`
+			Status   string `json:"Status"`
+		} `json:"State"`
+	}
 	path := fmt.Sprintf("/api/endpoints/%d/docker/containers/%s/json", stack.EndpointID, url.PathEscape(name))
-	if err := c.portainer(http.MethodGet, path, nil, &payload); err != nil { return false, -1, err }
+	if err := c.portainer(http.MethodGet, path, nil, &payload); err != nil {
+		return false, -1, err
+	}
 	return payload.State.Running, payload.State.ExitCode, nil
 }
 
 func localHealth(endpoint string) bool {
 	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	resp, err := client.Get(endpoint)
-	if err != nil { return false }
+	if err != nil {
+		return false
+	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return resp.StatusCode/100 == 2
@@ -444,13 +655,19 @@ func (c *controller) waitCoreHealthy(stack stackInfo, timeout time.Duration) err
 		problems = problems[:0]
 		for _, name := range longRunning {
 			running, exit, err := c.containerState(stack, name)
-			if err != nil || !running { problems = append(problems, fmt.Sprintf("%s not running (exit=%d)", name, exit)) }
+			if err != nil || !running {
+				problems = append(problems, fmt.Sprintf("%s not running (exit=%d)", name, exit))
+			}
 		}
 		for _, name := range oneShot {
 			running, exit, err := c.containerState(stack, name)
-			if err != nil || running || exit != 0 { problems = append(problems, fmt.Sprintf("%s not completed successfully (running=%t exit=%d)", name, running, exit)) }
+			if err != nil || running || exit != 0 {
+				problems = append(problems, fmt.Sprintf("%s not completed successfully (running=%t exit=%d)", name, running, exit))
+			}
 		}
-		if len(problems) == 0 && localHealth("http://127.0.0.1:8786/healthz") && localHealth("http://127.0.0.1:8787/health") { return nil }
+		if len(problems) == 0 && localHealth("http://127.0.0.1:8786/healthz") && localHealth("http://127.0.0.1:8787/health") {
+			return nil
+		}
 		time.Sleep(2 * time.Second)
 	}
 	sort.Strings(problems)
@@ -458,41 +675,86 @@ func (c *controller) waitCoreHealthy(stack stackInfo, timeout time.Duration) err
 }
 
 func (c *controller) status(w http.ResponseWriter, r *http.Request) {
-	if !c.require(w, r, http.MethodGet) { return }
+	if !c.require(w, r, http.MethodGet) {
+		return
+	}
 	configured, reason := c.configured()
-	c.mu.Lock(); state := c.state; busy := state.Status == "applying" || state.Status == "finalizing" || state.Status == "rolling-back"; c.mu.Unlock()
+	c.mu.Lock()
+	state := c.state
+	busy := state.Status == "applying" || state.Status == "finalizing" || state.Status == "rolling-back"
+	c.mu.Unlock()
 	current := "unknown"
 	if configured {
-		if stack, err := c.findStack(); err == nil { if file, err := c.stackFile(stack); err == nil { current = composeSHA(file) } }
+		if stack, err := c.findStack(); err == nil {
+			if file, err := c.stackFile(stack); err == nil {
+				current = composeSHA(file)
+			}
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "configured": configured, "configuration_reason": reason, "current_sha": current, "busy": busy, "state": state, "semantics": "Exact-SHA update requires green release-candidate, ARM64 image publication and production-compose workflows; Portainer owns deployment; prune is always false; stack environment must be read and preserved; rollback restores the prior stack if core health fails."})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "configured": configured, "configuration_reason": reason, "current_sha": current, "busy": busy, "state": state, "semantics": "Exact-SHA update requires green release-candidate, ARM64 image publication and production-compose workflows; Portainer owns deployment; prune is always false; stack environment and previous exact compose are preserved; terminal failed is written only after exact prior-stack rollback is health-verified."})
 }
 
 func decodeSHARequest(w http.ResponseWriter, r *http.Request) (string, bool) {
-	var q struct { SHA string `json:"sha"` }
+	var q struct {
+		SHA string `json:"sha"`
+	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
-	if err := dec.Decode(&q); err != nil { http.Error(w, "bad json", http.StatusBadRequest); return "", false }
+	if err := dec.Decode(&q); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return "", false
+	}
 	return strings.ToLower(strings.TrimSpace(q.SHA)), true
 }
 
 func (c *controller) check(w http.ResponseWriter, r *http.Request) {
-	if !c.require(w, r, http.MethodPost) { return }
-	sha, ok := decodeSHARequest(w, r); if !ok { return }
+	if !c.require(w, r, http.MethodPost) {
+		return
+	}
+	sha, ok := decodeSHARequest(w, r)
+	if !ok {
+		return
+	}
 	var err error
-	if sha == "" { sha, err = c.latestVerified() } else { err = c.verifiedTarget(sha) }
-	if err != nil { http.Error(w, err.Error(), http.StatusServiceUnavailable); return }
+	if sha == "" {
+		sha, err = c.latestVerified()
+	} else {
+		err = c.verifiedTarget(sha)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	compose, err := c.targetCompose(sha)
-	if err != nil { http.Error(w, err.Error(), http.StatusServiceUnavailable); return }
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sha": sha, "compose_bytes": len(compose), "verified": true})
 }
 
 func (c *controller) applyUpdate(w http.ResponseWriter, r *http.Request) {
-	if !c.require(w, r, http.MethodPost) { return }
-	sha, ok := decodeSHARequest(w, r); if !ok { return }
-	if sha == "" { http.Error(w, "exact target sha is required; use Check latest first", http.StatusBadRequest); return }
-	if configured, reason := c.configured(); !configured { http.Error(w, reason, http.StatusServiceUnavailable); return }
+	if !c.require(w, r, http.MethodPost) {
+		return
+	}
+	sha, ok := decodeSHARequest(w, r)
+	if !ok {
+		return
+	}
+	if sha == "" {
+		http.Error(w, "exact target sha is required; use Check latest first", http.StatusBadRequest)
+		return
+	}
+	if configured, reason := c.configured(); !configured {
+		http.Error(w, reason, http.StatusServiceUnavailable)
+		return
+	}
+
 	c.mu.Lock()
-	if c.state.Status == "applying" || c.state.Status == "finalizing" || c.state.Status == "rolling-back" { c.mu.Unlock(); http.Error(w, "an update is already in progress", http.StatusConflict); return }
+	if c.state.Status == "applying" || c.state.Status == "finalizing" || c.state.Status == "rolling-back" {
+		c.mu.Unlock()
+		http.Error(w, "an update is already in progress", http.StatusConflict)
+		return
+	}
 	if err := c.persistStateLocked("applying", "", sha, "verifying exact release"); err != nil {
 		c.mu.Unlock()
 		http.Error(w, "cannot persist update recovery state: "+err.Error(), http.StatusInternalServerError)
@@ -501,62 +763,98 @@ func (c *controller) applyUpdate(w http.ResponseWriter, r *http.Request) {
 	c.mu.Unlock()
 
 	stack, err := c.findStack()
-	if err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), 500); return }
-	previous, err := c.stackFile(stack)
-	if err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), 500); return }
-	from := composeSHA(previous)
-	target, err := c.targetCompose(sha)
-	if err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), http.StatusServiceUnavailable); return }
-	phaseOne, err := preserveUpdater(target, previous)
-	if err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), http.StatusConflict); return }
-
-	c.mu.Lock()
-	if err := c.persistStateLocked("applying", from, sha, "Portainer is applying target services while preserving the current update controller"); err != nil {
-		c.mu.Unlock()
-		http.Error(w, "cannot persist pre-deployment recovery state: "+err.Error(), http.StatusInternalServerError)
+	if err != nil {
+		err = c.failState(sha, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	c.mu.Unlock()
-	if err := c.putStack(stack, phaseOne); err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), 500); return }
-	if err := c.waitCoreHealthy(stack, 120*time.Second); err != nil {
-		c.mu.Lock()
-		stateErr := c.persistStateLocked("rolling-back", from, sha, err.Error())
-		c.mu.Unlock()
-		rollbackErr := c.putStack(stack, previous)
-		if rollbackErr == nil { rollbackErr = c.waitCoreHealthy(stack, 120*time.Second) }
-		if rollbackErr != nil {
-			message := fmt.Errorf("target failed (%v); automatic rollback also failed (%v)", err, rollbackErr)
-			if stateErr != nil { message = fmt.Errorf("%v; rolling-back state persistence also failed (%v)", message, stateErr) }
-			http.Error(w, message.Error(), http.StatusInternalServerError)
-			return
-		}
-		err = fmt.Errorf("target failed health verification and prior stack was restored: %w", err)
-		if stateErr != nil { err = fmt.Errorf("%v; rolling-back state persistence failed (%v)", err, stateErr) }
+	previous, err := c.stackFile(stack)
+	if err != nil {
+		err = c.failState(sha, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	from := composeSHA(previous)
+	if !shaRE.MatchString(from) {
+		err = c.failState(sha, fmt.Errorf("current Portainer stack is not one exact rollback-safe SHA: %s", from))
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	target, err := c.targetCompose(sha)
+	if err != nil {
+		err = c.failState(sha, err)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	phaseOne, err := preserveUpdater(target, previous)
+	if err != nil {
+		err = c.failState(sha, err)
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err := c.saveRollbackCompose(previous, from); err != nil {
 		err = c.failState(sha, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// The core application is now proven healthy. Replace only the preserved old
-	// updater image by applying the full exact-SHA compose last. If this process is
-	// recreated during the request, the new controller reads the persisted
-	// finalizing state; core VPN services are already on the verified target.
+	c.mu.Lock()
+	if err := c.persistStateLocked("applying", from, sha, "Portainer is applying target services while preserving the current update controller"); err != nil {
+		c.mu.Unlock()
+		_ = c.clearRollbackCompose()
+		err = c.failState(sha, fmt.Errorf("cannot persist pre-deployment recovery state: %w", err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	c.mu.Unlock()
+
+	if err := c.putStack(stack, phaseOne); err != nil {
+		err = c.rollbackAfterDeploymentFailure(stack, from, sha, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := c.waitCoreHealthy(stack, 120*time.Second); err != nil {
+		err = c.rollbackAfterDeploymentFailure(stack, from, sha, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	c.mu.Lock()
 	if err := c.persistStateLocked("finalizing", from, sha, "core services verified; updating the update controller last"); err != nil {
 		c.mu.Unlock()
-		http.Error(w, "cannot persist finalizing recovery state: "+err.Error(), http.StatusInternalServerError)
+		err = c.rollbackAfterDeploymentFailure(stack, from, sha, fmt.Errorf("cannot persist finalizing recovery state: %w", err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	c.mu.Unlock()
-	if err := c.putStack(stack, target); err != nil { err = c.failState(sha, err); http.Error(w, err.Error(), 500); return }
-	c.mu.Lock()
-	if err := c.persistStateLocked("complete", from, sha, "exact-SHA Portainer stack update completed"); err != nil {
-		c.mu.Unlock()
-		http.Error(w, "stack updated but completion state could not be persisted: "+err.Error(), http.StatusInternalServerError)
+
+	if err := c.putStack(stack, target); err != nil {
+		err = c.rollbackAfterDeploymentFailure(stack, from, sha, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	c.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "from_sha": from, "sha": sha, "rolled_back": false, "core_health_verified": true})
+	if err := c.waitCoreHealthy(stack, 120*time.Second); err != nil {
+		err = c.rollbackAfterDeploymentFailure(stack, from, sha, fmt.Errorf("full exact target failed final health verification: %w", err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	current, err := c.stackFile(stack)
+	if err != nil {
+		err = c.rollbackAfterDeploymentFailure(stack, from, sha, fmt.Errorf("cannot prove final Portainer compose identity: %w", err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if actual := composeSHA(current); actual != sha {
+		err = c.rollbackAfterDeploymentFailure(stack, from, sha, fmt.Errorf("final Portainer compose identity is %s, expected %s", actual, sha))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	state := updateState{FromSHA: from, TargetSHA: sha}
+	if err := c.completeRecoveredUpdate(state, "exact-SHA Portainer stack update completed and health-verified"); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "from_sha": from, "sha": sha, "rolled_back": false, "core_health_verified": true, "exact_compose_verified": true})
 }
 
 func (c *controller) failState(target string, cause error) error {
@@ -570,22 +868,16 @@ func (c *controller) failState(target string, cause error) error {
 }
 
 func (c *controller) reconcileFinalizing() {
-	c.mu.Lock(); state := c.state; c.mu.Unlock()
-	if state.Status != "finalizing" || !shaRE.MatchString(state.TargetSHA) { return }
-	configured, _ := c.configured(); if !configured { return }
-	stack, err := c.findStack(); if err != nil { return }
-	file, err := c.stackFile(stack); if err != nil { return }
-	if composeSHA(file) != state.TargetSHA { return }
-	if err := c.waitCoreHealthy(stack, 60*time.Second); err != nil { return }
-	c.mu.Lock()
-	if err := c.persistStateLocked("complete", state.FromSHA, state.TargetSHA, "exact-SHA update completed after update-controller restart"); err != nil {
-		log.Printf("reconcile finalizing state persistence: %v", err)
+	if err := c.reconcileRecovery(); err != nil {
+		log.Printf("update recovery reconciliation: %v", err)
 	}
-	c.mu.Unlock()
 }
 
 func main() {
-	c, err := loadController(); if err != nil { log.Fatal(err) }
+	c, err := loadController()
+	if err != nil {
+		log.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/admin/update/status", c.status)
 	mux.HandleFunc("/api/admin/update/check", c.check)
@@ -593,5 +885,7 @@ func main() {
 	go c.reconcileFinalizing()
 	server := &http.Server{Addr: c.listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
 	log.Printf("Router VPN exact-SHA update controller listening on %s", c.listen)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed { log.Fatal(err) }
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
