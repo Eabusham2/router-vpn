@@ -47,13 +47,18 @@ type profileSettingsResponse struct {
 }
 
 func profileSettingsBusy(connected bool, phase string) bool {
-	phase = strings.ToLower(strings.TrimSpace(phase))
-	if connected { return true }
-	if phase == "starting" || phase == "checking" { return true }
-	for _, prefix := range []string{"auto:", "smart-auto:", "smart:", "custom:"} {
-		if strings.HasPrefix(phase, prefix) { return true }
+	if connected {
+		return true
 	}
-	return false
+	phase = strings.ToLower(strings.TrimSpace(phase))
+	// Fail closed for every transition/proof phase and every unknown future
+	// phase. Only explicit, stable disconnected states permit mutation.
+	switch phase {
+	case "", "off", "failed":
+		return false
+	default:
+		return true
+	}
 }
 
 func registerProfileSettingsRoute(h *http.ServeMux, a *app) {
@@ -76,11 +81,21 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	if r.Method == http.MethodPost {
+		release, err := a.beginMutationOperation(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		defer release()
+	}
 	a.mu.Lock()
 	selected := a.profiles.SelectedID
 	profile, ok := a.profileByIDLocked(selected)
 	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
-	if ok && !busy { a.syncProfileOptionStateLocked(profile) }
+	if ok && !busy {
+		a.syncProfileOptionStateLocked(profile)
+	}
 	a.mu.Unlock()
 	if !ok {
 		http.Error(w, "add and select your home router first", http.StatusBadRequest)
@@ -116,8 +131,11 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	found := false
+	oldState := a.state
+	oldProfile := profile
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == selected {
+			oldProfile = a.profiles.Profiles[i]
 			a.profiles.Profiles[i] = updated
 			found = true
 			break
@@ -130,6 +148,15 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	a.syncProfileOptionStateLocked(updated)
 	err = a.persistProfilesLocked()
+	if err != nil {
+		for i := range a.profiles.Profiles {
+			if a.profiles.Profiles[i].ID == selected {
+				a.profiles.Profiles[i] = oldProfile
+				break
+			}
+		}
+		a.state = oldState
+	}
 	a.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -140,25 +167,63 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 
 func applyProfileSettings(profile common.RouterProfile, q profileSettingsRequest) (common.RouterProfile, error) {
 	updated := profile
-	if q.HomeLANAccess != nil { updated.HomeLANAccess = *q.HomeLANAccess }
-	if q.KillSwitchPolicy != nil { updated.KillSwitchPolicy = strings.ToLower(strings.TrimSpace(*q.KillSwitchPolicy)); updated.KillSwitch = updated.KillSwitchPolicy != "off" }
-	if q.IPv6Mode != nil { updated.IPv6Mode = strings.ToLower(strings.TrimSpace(*q.IPv6Mode)) }
-	if q.StartupMode != nil { updated.StartupMode = strings.ToLower(strings.TrimSpace(*q.StartupMode)) }
-	if q.AutoConnect != nil { updated.AutoConnect = *q.AutoConnect }
-	if q.AutoRequireEncrypted != nil { updated.AutoRequireEncrypted = *q.AutoRequireEncrypted }
-	if q.AutoRequireObfuscation != nil { updated.AutoRequireObfuscation = *q.AutoRequireObfuscation }
+	if q.HomeLANAccess != nil {
+		updated.HomeLANAccess = *q.HomeLANAccess
+	}
+	if q.KillSwitchPolicy != nil {
+		updated.KillSwitchPolicy = strings.ToLower(strings.TrimSpace(*q.KillSwitchPolicy))
+		updated.KillSwitch = updated.KillSwitchPolicy != "off"
+	}
+	if q.IPv6Mode != nil {
+		updated.IPv6Mode = strings.ToLower(strings.TrimSpace(*q.IPv6Mode))
+	}
+	if q.StartupMode != nil {
+		updated.StartupMode = strings.ToLower(strings.TrimSpace(*q.StartupMode))
+	}
+	if q.AutoConnect != nil {
+		updated.AutoConnect = *q.AutoConnect
+	}
+	if q.AutoRequireEncrypted != nil {
+		updated.AutoRequireEncrypted = *q.AutoRequireEncrypted
+	}
+	if q.AutoRequireObfuscation != nil {
+		updated.AutoRequireObfuscation = *q.AutoRequireObfuscation
+	}
 	if q.BaseTunnel != nil {
 		value := strings.ToLower(strings.TrimSpace(*q.BaseTunnel))
-		switch value { case "", "auto": updated.BaseTunnel = "auto"; case "wg", "awg": updated.BaseTunnel = value; default: return profile, errors.New("base_tunnel must be auto, wg, or awg") }
+		switch value {
+		case "", "auto":
+			updated.BaseTunnel = "auto"
+		case "wg", "awg":
+			updated.BaseTunnel = value
+		default:
+			return profile, errors.New("base_tunnel must be auto, wg, or awg")
+		}
 	}
-	if q.BaseFallback != nil { updated.BaseFallback = *q.BaseFallback }
-	if q.MTUPolicy != nil { updated.MTUPolicy = strings.ToLower(strings.TrimSpace(*q.MTUPolicy)) }
-	if q.ManualMTU != nil { updated.ManualMTU = *q.ManualMTU }
-	if updated.MTUPolicy != "manual" { updated.ManualMTU = 0 }
-	if q.DAITAEnabled != nil { updated.DAITAEnabled = *q.DAITAEnabled }
-	if q.JumboTUN != nil { updated.JumboTUN = *q.JumboTUN }
-	if q.SocksEnabled != nil { updated.SocksEnabled = *q.SocksEnabled }
-	if err := common.NormalizeRouterProfile(&updated); err != nil { return profile, err }
+	if q.BaseFallback != nil {
+		updated.BaseFallback = *q.BaseFallback
+	}
+	if q.MTUPolicy != nil {
+		updated.MTUPolicy = strings.ToLower(strings.TrimSpace(*q.MTUPolicy))
+	}
+	if q.ManualMTU != nil {
+		updated.ManualMTU = *q.ManualMTU
+	}
+	if updated.MTUPolicy != "manual" {
+		updated.ManualMTU = 0
+	}
+	if q.DAITAEnabled != nil {
+		updated.DAITAEnabled = *q.DAITAEnabled
+	}
+	if q.JumboTUN != nil {
+		updated.JumboTUN = *q.JumboTUN
+	}
+	if q.SocksEnabled != nil {
+		updated.SocksEnabled = *q.SocksEnabled
+	}
+	if err := common.NormalizeRouterProfile(&updated); err != nil {
+		return profile, err
+	}
 	if updated.AutoConnect && updated.StartupMode == "manual" {
 		return profile, errors.New("auto_connect requires startup_mode auto, smart-auto, or last; Manual intentionally leaves Router VPN disconnected")
 	}
