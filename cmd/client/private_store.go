@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"io/fs"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -50,15 +50,14 @@ func readPrivateRegular(path string, limit int64) ([]byte, error) {
 	if !info.Mode().IsRegular() || info.Size() > limit {
 		return nil, fmt.Errorf("private store %s is not a bounded regular file", path)
 	}
-	buf := make([]byte, info.Size()+1)
-	n, err := file.Read(buf)
-	if err != nil && n == 0 {
+	buf, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
 		return nil, err
 	}
-	if int64(n) > limit {
+	if int64(len(buf)) > limit {
 		return nil, fmt.Errorf("private store %s exceeds safety limit", path)
 	}
-	return buf[:n], nil
+	return buf, nil
 }
 
 // atomicWritePrivate publishes one private file without an interval containing a
@@ -112,22 +111,4 @@ func atomicWritePrivate(path string, data []byte) error {
 		_ = dir.Close()
 	}
 	return nil
-}
-
-func privateStoreExists(path string) (bool, error) {
-	if err := hardenPrivateRegular(path); err != nil {
-		return false, err
-	}
-	_, err := os.Lstat(path)
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, err
-}
-
-func isPrivateStoreNotExist(err error) bool {
-	return err != nil && (os.IsNotExist(err) || fs.ErrNotExist == err)
 }
