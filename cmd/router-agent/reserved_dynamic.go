@@ -144,9 +144,25 @@ func init() {
 	if err != nil {
 		return
 	}
-	tmp := "/tmp/router-vpn-agent.json"
-	if os.WriteFile(tmp, append(out, '\n'), 0o600) == nil {
-		os.Setenv("ROUTER_VPN_CONFIG", tmp)
+	tmp, err := os.CreateTemp("/tmp", "router-vpn-agent-*.json")
+	if err == nil {
+		tmpPath := tmp.Name()
+		ok := tmp.Chmod(0o600) == nil
+		if ok {
+			_, err = tmp.Write(append(out, '\n'))
+			ok = err == nil
+		}
+		if ok {
+			ok = tmp.Sync() == nil
+		}
+		if closeErr := tmp.Close(); ok && closeErr != nil {
+			ok = false
+		}
+		if ok {
+			os.Setenv("ROUTER_VPN_CONFIG", tmpPath)
+		} else {
+			_ = os.Remove(tmpPath)
+		}
 	}
 
 	_ = strings.Builder{}
