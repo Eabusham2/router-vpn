@@ -14,8 +14,13 @@ mkdir -p "$BASE/config/xray" \
   "$BASE/client-bundle/generated/reality-vision" \
   "$BASE/client-bundle/generated/reality-pq-vision"
 
-PRESERVED=$(python3 /src/server/scripts/preserve-generated-state.py xray "$BASE" 2>/dev/null || true)
-if [[ -n "$PRESERVED" ]]; then
+XRAY_SERVER="$BASE/config/xray/server.json"
+XRAY_SECRETS="$BASE/config/xray/generated-secrets.json"
+if [[ -e "$XRAY_SERVER" || -e "$XRAY_SECRETS" ]]; then
+  if ! PRESERVED=$(python3 /src/server/scripts/preserve-generated-state.py xray "$BASE"); then
+    echo 'Existing Xray/REALITY identity is corrupt/incomplete; refusing silent credential rotation.' >&2
+    exit 1
+  fi
   eval "$PRESERVED"
   MLDSA_SEED=''
   echo 'Preserving existing standard/PQ REALITY identity for same-deployment upgrade.' >&2
