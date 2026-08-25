@@ -18,8 +18,8 @@ import (
 func registerPlatformStandardExitRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/standard-exits/capabilities", platformStandardExitCapabilitiesHandler)
 	h.HandleFunc("/api/standard-exits", standardExitListHandler)
-	h.HandleFunc("/api/standard-exit/save", standardExitSaveHandler)
-	h.HandleFunc("/api/standard-exit/delete", standardExitDeleteHandler)
+	h.HandleFunc("/api/standard-exit/save", a.guardedStandardExitSave)
+	h.HandleFunc("/api/standard-exit/delete", a.guardedStandardExitDelete)
 	h.HandleFunc("/api/standard-exit/connect", a.platformStandardExitConnect)
 }
 
@@ -30,11 +30,11 @@ func platformStandardExitCapabilitiesHandler(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"schema_version": standardExitStoreVersion,
-		"capabilities": externalProfileProtocolCapabilities(),
-		"external_entry_hop": true,
+		"schema_version":           standardExitStoreVersion,
+		"capabilities":             externalProfileProtocolCapabilities(),
+		"external_entry_hop":       true,
 		"external_entry_protocols": []string{"wireguard", "socks5", "shadowsocks", "hysteria2"},
-		"openvpn_entry_hop": false,
+		"openvpn_entry_hop":        false,
 	})
 }
 
@@ -81,6 +81,13 @@ func standardExitEntry(profiles []common.RouterProfile, control common.RouterPro
 }
 
 func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request) {
+	_, finish, guardErr := a.beginConnectionOperation()
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer finish()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -199,12 +206,19 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if err := a.checkConnectionOperation(); err != nil {
+		a.stopOwnedConnectionRuntime(cmd)
+		sessionTrackerFor(a).markRequestFailure(err.Error())
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	a.mu.Lock()
 	if a.cmd != cmd {
 		a.mu.Unlock()
 		http.Error(w, "standard exit runtime changed during proof", http.StatusConflict)
 		return
 	}
+	previousStore := cloneRouterProfileStore(a.profiles)
 	a.state.Connected = true
 	a.state.Phase = "connected"
 	a.state.LastError = ""
@@ -216,6 +230,9 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 		}
 	}
 	persistErr := a.persistProfilesLocked()
+	if persistErr != nil {
+		a.rollbackProfilesLocked(previousStore)
+	}
 	a.mu.Unlock()
 	if persistErr != nil {
 		_ = a.stopMode()
@@ -236,17 +253,17 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": true,
-		"mode": "standard-exit",
-		"direct": q.Direct,
-		"entry_id": entryID,
-		"entry_name": entryName,
-		"entry_kind": entryKind,
-		"standard_exit_id": exit.ID,
+		"ok":                 true,
+		"mode":               "standard-exit",
+		"direct":             q.Direct,
+		"entry_id":           entryID,
+		"entry_name":         entryName,
+		"entry_kind":         entryKind,
+		"standard_exit_id":   exit.ID,
 		"standard_exit_name": exit.Name,
-		"protocol": exit.Protocol,
+		"protocol":           exit.Protocol,
 		"expected_public_ip": exit.ExpectedPublicIP,
-		"exit_path_proof": "expected-public-ip-passed",
-		"route": route,
+		"exit_path_proof":    "expected-public-ip-passed",
+		"route":              route,
 	})
 }
