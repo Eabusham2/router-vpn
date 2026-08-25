@@ -176,8 +176,8 @@ func (a *app) logicalStatuses() []logicalModeStatus {
 		status := logicalModeStatus{
 			ID: logical.ID, Name: logical.Name, Description: logical.Description,
 			BaseSelector: logical.BaseSelector, Fallback: logical.Fallback,
-			PreferredBase: preferred,
-			Variants: map[string]logicalVariantStatus{},
+			PreferredBase:  preferred,
+			Variants:       map[string]logicalVariantStatus{},
 			DAITASupported: true, JumboSupported: true,
 		}
 		firstMetric := true
@@ -205,12 +205,24 @@ func (a *app) logicalStatuses() []logicalModeStatus {
 				status.DAITASupported, status.JumboSupported = raw.DAITASupported, raw.JumboSupported
 				firstMetric = false
 			} else {
-				if raw.PingMinMs < status.PingMinMs { status.PingMinMs = raw.PingMinMs }
-				if raw.PingMaxMs > status.PingMaxMs { status.PingMaxMs = raw.PingMaxMs }
-				if raw.TrafficMinPct < status.TrafficMinPct { status.TrafficMinPct = raw.TrafficMinPct }
-				if raw.TrafficMaxPct > status.TrafficMaxPct { status.TrafficMaxPct = raw.TrafficMaxPct }
-				if raw.SpeedLossMinPct < status.SpeedLossMinPct { status.SpeedLossMinPct = raw.SpeedLossMinPct }
-				if raw.SpeedLossMaxPct > status.SpeedLossMaxPct { status.SpeedLossMaxPct = raw.SpeedLossMaxPct }
+				if raw.PingMinMs < status.PingMinMs {
+					status.PingMinMs = raw.PingMinMs
+				}
+				if raw.PingMaxMs > status.PingMaxMs {
+					status.PingMaxMs = raw.PingMaxMs
+				}
+				if raw.TrafficMinPct < status.TrafficMinPct {
+					status.TrafficMinPct = raw.TrafficMinPct
+				}
+				if raw.TrafficMaxPct > status.TrafficMaxPct {
+					status.TrafficMaxPct = raw.TrafficMaxPct
+				}
+				if raw.SpeedLossMinPct < status.SpeedLossMinPct {
+					status.SpeedLossMinPct = raw.SpeedLossMinPct
+				}
+				if raw.SpeedLossMaxPct > status.SpeedLossMaxPct {
+					status.SpeedLossMaxPct = raw.SpeedLossMaxPct
+				}
 				status.DAITASupported = status.DAITASupported && raw.DAITASupported
 				status.JumboSupported = status.JumboSupported && raw.JumboSupported
 			}
@@ -222,9 +234,11 @@ func (a *app) logicalStatuses() []logicalModeStatus {
 		} else if logical.BaseSelector {
 			if v, ok := status.Variants[preferred]; ok && !v.Available && logical.Fallback {
 				other := "awg"
-				if preferred == "awg" { other = "wg" }
+				if preferred == "awg" {
+					other = "wg"
+				}
 				if ov, ok := status.Variants[other]; ok && ov.Available {
-					status.Reason = strings.ToUpper(preferred)+" unavailable; "+strings.ToUpper(other)+" fallback ready"
+					status.Reason = strings.ToUpper(preferred) + " unavailable; " + strings.ToUpper(other) + " fallback ready"
 				}
 			}
 		}
@@ -242,8 +256,13 @@ func (a *app) persistBasePreference(base string) error {
 	defer a.mu.Unlock()
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == a.profiles.SelectedID {
+			previous := a.profiles.Profiles[i].BaseTunnel
 			a.profiles.Profiles[i].BaseTunnel = base
-			return a.persistProfilesLocked()
+			if err := a.persistProfilesLocked(); err != nil {
+				a.profiles.Profiles[i].BaseTunnel = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return errors.New("no selected router profile")
@@ -379,6 +398,13 @@ func (a *app) listLogicalModes(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
+	_, finish, guardErr := a.beginConnectionOperation()
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer finish()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -416,10 +442,10 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": true,
-		"logical_mode": q.Mode,
-		"runtime_mode": used.RuntimeID,
-		"base": used.Base,
+		"ok":            true,
+		"logical_mode":  q.Mode,
+		"runtime_mode":  used.RuntimeID,
+		"base":          used.Base,
 		"fallback_used": fallbackUsed,
 	})
 }
