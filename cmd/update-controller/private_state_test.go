@@ -1,0 +1,96 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestUpdaterPrivateFileRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "update-controller.json")
+	if err := atomicWriteUpdaterPrivate(path, []byte("{\"version\":1}\n")); err != nil {
+		t.Fatal(err)
+	}
+	body, err := readUpdaterPrivate(path, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "{\"version\":1}\n" {
+		t.Fatalf("body=%q", string(body))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode=%#o", info.Mode().Perm())
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".update-controller.json.tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files survived commit: %v", matches)
+	}
+}
+
+func TestUpdaterPrivateFileRejectsBroadPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "update-controller.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readUpdaterPrivate(path, 1024); err == nil {
+		t.Fatal("group/world-readable updater state was accepted")
+	}
+	if err := atomicWriteUpdaterPrivate(path, []byte("{}\n")); err == nil {
+		t.Fatal("group/world-readable updater target was silently replaced")
+	}
+}
+
+func TestUpdaterPrivateFileRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	realPath := filepath.Join(dir, "real.json")
+	linkPath := filepath.Join(dir, "update-controller.json")
+	if err := os.WriteFile(realPath, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realPath, linkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := readUpdaterPrivate(linkPath, 1024); err == nil {
+		t.Fatal("symlink updater file was accepted")
+	}
+	if err := atomicWriteUpdaterPrivate(linkPath, []byte("replacement\n")); err == nil {
+		t.Fatal("symlink updater file was accepted for replacement")
+	}
+	got, err := os.ReadFile(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "secret\n" {
+		t.Fatalf("symlink target changed: %q", string(got))
+	}
+}
+
+func TestUpdaterPrivateFileRejectsOversizedRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "update-controller.json")
+	if err := os.WriteFile(path, []byte("12345"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readUpdaterPrivate(path, 4); err == nil {
+		t.Fatal("oversized updater state was accepted")
+	}
+}
+
+func TestValidateUpdateStateRejectsUnknownStatusAndInvalidSHA(t *testing.T) {
+	for _, state := range []updateState{
+		{Version: 1, Status: "future-state"},
+		{Version: 2, Status: "idle"},
+		{Version: 1, Status: "applying", FromSHA: "short", TargetSHA: testNewSHA},
+		{Version: 1, Status: "applying", FromSHA: testOldSHA, TargetSHA: "SHORT"},
+	} {
+		if err := validateUpdateState(state); err == nil {
+			t.Fatalf("invalid recovery state accepted: %+v", state)
+		}
+	}
+}
