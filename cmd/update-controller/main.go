@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -91,10 +90,7 @@ func env(k, fallback string) string {
 }
 
 func readSecret(path string, min int) (string, error) {
-	st, err := os.Stat(path)
-	if err != nil { return "", err }
-	if st.Mode().Perm()&0o077 != 0 { return "", fmt.Errorf("%s permissions are too broad", path) }
-	b, err := os.ReadFile(path)
+	b, err := readUpdaterPrivate(path, 64<<10)
 	if err != nil { return "", err }
 	v := strings.TrimSpace(string(b))
 	if len(v) < min { return "", fmt.Errorf("%s is empty or too short", path) }
@@ -130,29 +126,48 @@ func loadController() (*controller, error) {
 		state: updateState{Version: 1, Status: "idle"},
 	}
 	if strings.Count(c.repo, "/") != 1 || strings.ContainsAny(c.repo, " \\?#") { return nil, errors.New("invalid GitHub repository") }
-	_ = c.loadState()
+	if err := c.loadState(); err != nil {
+		return nil, fmt.Errorf("load update recovery state: %w", err)
+	}
 	return c, nil
 }
 
-func (c *controller) loadState() error {
-	b, err := os.ReadFile(c.statePath)
-	if errors.Is(err, os.ErrNotExist) { return nil }
-	if err != nil { return err }
-	var s updateState
-	if err := json.Unmarshal(b, &s); err != nil { return err }
+func validUpdateStatus(status string) bool {
+	switch status {
+	case "idle", "applying", "finalizing", "rolling-back", "failed", "complete":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateUpdateState(s updateState) error {
 	if s.Version != 1 { return fmt.Errorf("unsupported update state version %d", s.Version) }
-	c.state = s
+	if !validUpdateStatus(s.Status) { return fmt.Errorf("unsupported update state status %q", s.Status) }
+	if s.FromSHA != "" && !shaRE.MatchString(s.FromSHA) { return errors.New("update state contains invalid from_sha") }
+	if s.TargetSHA != "" && !shaRE.MatchString(s.TargetSHA) { return errors.New("update state contains invalid target_sha") }
 	return nil
 }
 
-func (c *controller) persistStateLocked(status, from, target, message string) {
-	c.state = updateState{Version: 1, Status: status, FromSHA: from, TargetSHA: target, Message: message, UpdatedAt: time.Now().Unix()}
-	if err := os.MkdirAll(filepath.Dir(c.statePath), 0o700); err != nil { log.Printf("update state mkdir: %v", err); return }
-	body, _ := json.MarshalIndent(c.state, "", "  ")
-	tmp := c.statePath + ".tmp"
-	if err := os.WriteFile(tmp, append(body, '\n'), 0o600); err != nil { log.Printf("update state write: %v", err); return }
-	if err := os.Chmod(tmp, 0o600); err != nil { _ = os.Remove(tmp); return }
-	if err := os.Rename(tmp, c.statePath); err != nil { _ = os.Remove(tmp); log.Printf("update state rename: %v", err) }
+func (c *controller) loadState() error {
+	b, err := readUpdaterPrivate(c.statePath, 64<<10)
+	if errors.Is(err, os.ErrNotExist) { return nil }
+	if err != nil { return err }
+	var state updateState
+	if err := json.Unmarshal(b, &state); err != nil { return err }
+	if err := validateUpdateState(state); err != nil { return err }
+	c.state = state
+	return nil
+}
+
+func (c *controller) persistStateLocked(status, from, target, message string) error {
+	next := updateState{Version: 1, Status: status, FromSHA: from, TargetSHA: target, Message: message, UpdatedAt: time.Now().Unix()}
+	if err := validateUpdateState(next); err != nil { return err }
+	body, err := json.MarshalIndent(next, "", "  ")
+	if err != nil { return err }
+	if err := atomicWriteUpdaterPrivate(c.statePath, append(body, '\n')); err != nil { return err }
+	c.state = next
+	return nil
 }
 
 func (c *controller) authorized(r *http.Request) bool {
