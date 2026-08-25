@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -145,10 +144,23 @@ func normalizeAdminForwardingExtensionState(s adminForwardingExtensionState) adm
 	return s
 }
 
+func cloneAdminForwardingExtensionState(s adminForwardingExtensionState) adminForwardingExtensionState {
+	out := s
+	out.Owners = make(map[string]string, len(s.Owners))
+	for id, owner := range s.Owners {
+		out.Owners[id] = owner
+	}
+	if s.DMZ != nil {
+		dmz := *s.DMZ
+		out.DMZ = &dmz
+	}
+	return out
+}
+
 func (s *adminForwardingExtensionServer) loadState() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b, err := os.ReadFile(s.statePath)
+	b, err := readPrivilegedState(s.statePath, 256<<10)
 	if errors.Is(err, os.ErrNotExist) {
 		s.state = defaultAdminForwardingExtensionState()
 		return s.persistLocked()
@@ -165,28 +177,17 @@ func (s *adminForwardingExtensionServer) loadState() error {
 }
 
 func (s *adminForwardingExtensionServer) persistLocked() error {
-	s.state = normalizeAdminForwardingExtensionState(s.state)
-	s.state.UpdatedAt = time.Now().Unix()
-	if err := os.MkdirAll(filepath.Dir(s.statePath), 0o700); err != nil {
-		return err
-	}
-	body, err := json.MarshalIndent(s.state, "", "  ")
+	next := normalizeAdminForwardingExtensionState(cloneAdminForwardingExtensionState(s.state))
+	next.UpdatedAt = time.Now().Unix()
+	body, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.statePath + ".tmp"
-	if err := os.WriteFile(tmp, append(body, '\n'), 0o600); err != nil {
+	if err := atomicWritePrivilegedState(s.statePath, append(body, '\n')); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, s.statePath); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return os.Chmod(s.statePath, 0o600)
+	s.state = next
+	return nil
 }
 
 func (s *adminForwardingExtensionServer) authorized(r *http.Request) bool {

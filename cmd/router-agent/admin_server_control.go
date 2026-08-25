@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,7 +102,7 @@ func defaultServerControlState() adminServerControlState {
 func (s *adminServerControl) load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b, err := os.ReadFile(s.statePath)
+	b, err := readPrivilegedState(s.statePath, 64<<10)
 	if errors.Is(err, os.ErrNotExist) {
 		s.state = defaultServerControlState()
 		return s.persistLocked()
@@ -123,28 +122,18 @@ func (s *adminServerControl) load() error {
 }
 
 func (s *adminServerControl) persistLocked() error {
-	s.state.Version = 1
-	s.state.UpdatedAt = time.Now().Unix()
-	if err := os.MkdirAll(filepath.Dir(s.statePath), 0o700); err != nil {
-		return err
-	}
-	body, err := json.MarshalIndent(s.state, "", "  ")
+	next := s.state
+	next.Version = 1
+	next.UpdatedAt = time.Now().Unix()
+	body, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.statePath + ".tmp"
-	if err := os.WriteFile(tmp, append(body, '\n'), 0o600); err != nil {
+	if err := atomicWritePrivilegedState(s.statePath, append(body, '\n')); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, s.statePath); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return os.Chmod(s.statePath, 0o600)
+	s.state = next
+	return nil
 }
 
 func (s *adminServerControl) authorized(r *http.Request) bool {

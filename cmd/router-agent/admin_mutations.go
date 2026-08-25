@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -176,7 +175,7 @@ func normalizeAdminState(s adminPersistentState) adminPersistentState {
 func (a *adminMutationServer) loadState() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	b, err := os.ReadFile(a.statePath)
+	b, err := readPrivilegedState(a.statePath, 512<<10)
 	if errors.Is(err, os.ErrNotExist) {
 		a.state = defaultAdminState()
 		return a.persistLocked()
@@ -196,23 +195,17 @@ func (a *adminMutationServer) loadState() error {
 }
 
 func (a *adminMutationServer) persistLocked() error {
-	a.state.UpdatedAt = time.Now().Unix()
-	if err := os.MkdirAll(filepath.Dir(a.statePath), 0700); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(a.state, "", "  ")
+	next := normalizeAdminState(cloneAdminState(a.state))
+	next.UpdatedAt = time.Now().Unix()
+	b, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := a.statePath + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0600); err != nil {
+	if err := atomicWritePrivilegedState(a.statePath, append(b, '\n')); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, 0600); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, a.statePath)
+	a.state = next
+	return nil
 }
 
 func (a *adminMutationServer) authorized(r *http.Request) bool {
