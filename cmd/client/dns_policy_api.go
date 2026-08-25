@@ -51,11 +51,19 @@ func (a *app) dnsPolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	if r.Method == http.MethodPost {
+		release, err := a.beginMutationOperation(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		defer release()
+	}
 
 	a.mu.Lock()
 	selected := a.profiles.SelectedID
 	profile, ok := a.profileByIDLocked(selected)
-	busy := a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking"
+	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
 	a.mu.Unlock()
 	if !ok {
 		http.Error(w, "add and select your home router first", http.StatusBadRequest)
@@ -86,14 +94,16 @@ func (a *app) dnsPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.mu.Lock()
-	if a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" {
+	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		http.Error(w, "disconnect before changing DNS policy", http.StatusConflict)
 		return
 	}
 	found := false
+	oldProfile := profile
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == selected {
+			oldProfile = a.profiles.Profiles[i]
 			a.profiles.Profiles[i] = updated
 			found = true
 			break
@@ -105,6 +115,14 @@ func (a *app) dnsPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = a.persistProfilesLocked()
+	if err != nil {
+		for i := range a.profiles.Profiles {
+			if a.profiles.Profiles[i].ID == selected {
+				a.profiles.Profiles[i] = oldProfile
+				break
+			}
+		}
+	}
 	a.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
