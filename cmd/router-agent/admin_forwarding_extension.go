@@ -41,6 +41,7 @@ type adminForwardingExtensionServer struct {
 	statePath      string
 	adminStatePath string
 	mu             sync.Mutex
+	dmzMu          sync.Mutex
 	state          adminForwardingExtensionState
 	tunnelNets     []*net.IPNet
 }
@@ -172,6 +173,9 @@ func (s *adminForwardingExtensionServer) loadState() error {
 	if err := json.Unmarshal(b, &state); err != nil {
 		return fmt.Errorf("decode forwarding extension state: %w", err)
 	}
+	if state.Version != 0 && state.Version != 1 {
+		return fmt.Errorf("unsupported forwarding extension state version %d", state.Version)
+	}
 	s.state = normalizeAdminForwardingExtensionState(state)
 	return nil
 }
@@ -246,29 +250,37 @@ func validForwardingRuleID(value string) bool {
 	return true
 }
 
-func (s *adminForwardingExtensionServer) readAdminState() adminPersistentState {
-	b, err := os.ReadFile(s.adminStatePath)
+func (s *adminForwardingExtensionServer) readAdminState() (adminPersistentState, error) {
+	b, err := readPrivilegedState(s.adminStatePath, 512<<10)
 	if err != nil {
-		return defaultAdminState()
+		return adminPersistentState{}, fmt.Errorf("read admin forwarding state: %w", err)
 	}
 	var state adminPersistentState
-	if json.Unmarshal(b, &state) != nil {
-		return defaultAdminState()
+	if err := json.Unmarshal(b, &state); err != nil {
+		return adminPersistentState{}, fmt.Errorf("decode admin forwarding state: %w", err)
 	}
-	return normalizeAdminState(state)
+	if state.Version != 1 {
+		return adminPersistentState{}, fmt.Errorf("unsupported admin forwarding state version %d", state.Version)
+	}
+	return normalizeAdminState(state), nil
 }
 
 func (s *adminForwardingExtensionServer) status(w http.ResponseWriter, r *http.Request) {
 	if !s.require(w, r, http.MethodGet) {
 		return
 	}
-	adminState := s.readAdminState()
+	adminState, err := s.readAdminState()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	ids := map[string]bool{}
 	for _, rule := range adminState.ForwardRules {
 		ids[rule.ID] = true
 	}
 
 	s.mu.Lock()
+	old := cloneAdminForwardingExtensionState(s.state)
 	changed := false
 	for id := range s.state.Owners {
 		if !ids[id] {
@@ -276,8 +288,12 @@ func (s *adminForwardingExtensionServer) status(w http.ResponseWriter, r *http.R
 			changed = true
 		}
 	}
+	persistenceWarning := ""
 	if changed {
-		_ = s.persistLocked()
+		if err := s.persistLocked(); err != nil {
+			s.state = old
+			persistenceWarning = "stale-owner cleanup was not committed: " + err.Error()
+		}
 	}
 	owners := make(map[string]string, len(s.state.Owners))
 	for id, owner := range s.state.Owners {
@@ -301,6 +317,7 @@ func (s *adminForwardingExtensionServer) status(w http.ResponseWriter, r *http.R
 	writeAdminJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "forwarding_master": adminState.ForwardingMaster, "rules": rules,
 		"protected_dmz": dmz, "reserved_ports": s.cfg.ReservedPorts,
+		"persistence_warning": persistenceWarning,
 		"semantics": "owners persist per normal rule; Protected DMZ covers only otherwise-unused unreserved WAN ports, excludes enabled explicit forwarding ranges, and remains gated by the forwarding master",
 	})
 }
@@ -314,7 +331,11 @@ func (s *adminForwardingExtensionServer) owner(w http.ResponseWriter, r *http.Re
 		http.Error(w, "invalid forwarding rule id", http.StatusBadRequest)
 		return
 	}
-	adminState := s.readAdminState()
+	adminState, err := s.readAdminState()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	found := false
 	for _, rule := range adminState.ForwardRules {
 		if rule.ID == id {
@@ -329,9 +350,11 @@ func (s *adminForwardingExtensionServer) owner(w http.ResponseWriter, r *http.Re
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	old := cloneAdminForwardingExtensionState(s.state)
 	if r.Method == http.MethodDelete {
 		delete(s.state.Owners, id)
 		if err := s.persistLocked(); err != nil {
+			s.state = old
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -352,6 +375,7 @@ func (s *adminForwardingExtensionServer) owner(w http.ResponseWriter, r *http.Re
 	}
 	s.state.Owners[id] = body.Owner
 	if err := s.persistLocked(); err != nil {
+		s.state = old
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -362,19 +386,23 @@ func (s *adminForwardingExtensionServer) dmz(w http.ResponseWriter, r *http.Requ
 	if !s.require(w, r, http.MethodPost, http.MethodDelete) {
 		return
 	}
+	s.dmzMu.Lock()
+	defer s.dmzMu.Unlock()
+
 	if r.Method == http.MethodDelete {
 		s.mu.Lock()
-		old := s.state.DMZ
+		old := cloneAdminForwardingExtensionState(s.state)
 		s.state.DMZ = nil
 		if err := s.persistLocked(); err != nil {
-			s.state.DMZ = old
+			s.state = old
 			s.mu.Unlock()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		s.mu.Unlock()
-		if err := s.applyProtectedDMZ(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if err := s.applyProtectedDMZLocked(); err != nil {
+			rollbackErr := s.rollbackProtectedDMZLocked(old)
+			http.Error(w, protectedDMZTransactionError(err, rollbackErr), http.StatusInternalServerError)
 			return
 		}
 		writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "protected_dmz": nil})
@@ -406,25 +434,53 @@ func (s *adminForwardingExtensionServer) dmz(w http.ResponseWriter, r *http.Requ
 	}
 	now := time.Now().Unix()
 	s.mu.Lock()
-	old := s.state.DMZ
+	old := cloneAdminForwardingExtensionState(s.state)
 	body.CreatedAt = now
-	if old != nil && old.CreatedAt > 0 {
-		body.CreatedAt = old.CreatedAt
+	if old.DMZ != nil && old.DMZ.CreatedAt > 0 {
+		body.CreatedAt = old.DMZ.CreatedAt
 	}
 	body.UpdatedAt = now
 	s.state.DMZ = &body
 	if err := s.persistLocked(); err != nil {
-		s.state.DMZ = old
+		s.state = old
 		s.mu.Unlock()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	s.mu.Unlock()
-	if err := s.applyProtectedDMZ(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := s.applyProtectedDMZLocked(); err != nil {
+		rollbackErr := s.rollbackProtectedDMZLocked(old)
+		http.Error(w, protectedDMZTransactionError(err, rollbackErr), http.StatusInternalServerError)
 		return
 	}
 	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "protected_dmz": body})
+}
+
+func protectedDMZTransactionError(applyErr, rollbackErr error) string {
+	if rollbackErr == nil {
+		return "Protected DMZ live apply failed; prior durable/live state was restored: " + applyErr.Error()
+	}
+	return "Protected DMZ live apply failed and rollback is incomplete: " + applyErr.Error() + "; " + rollbackErr.Error()
+}
+
+// rollbackProtectedDMZLocked requires dmzMu. It restores durable intent first,
+// then reasserts the prior live nftables state. Both failures are reported.
+func (s *adminForwardingExtensionServer) rollbackProtectedDMZLocked(old adminForwardingExtensionState) error {
+	s.mu.Lock()
+	s.state = cloneAdminForwardingExtensionState(old)
+	persistErr := s.persistLocked()
+	s.mu.Unlock()
+	liveErr := s.applyProtectedDMZLocked()
+	if persistErr == nil && liveErr == nil {
+		return nil
+	}
+	if persistErr != nil && liveErr != nil {
+		return fmt.Errorf("durable restore failed: %v; live restore failed: %v", persistErr, liveErr)
+	}
+	if persistErr != nil {
+		return fmt.Errorf("durable restore failed: %w", persistErr)
+	}
+	return fmt.Errorf("live restore failed: %w", liveErr)
 }
 
 func (s *adminForwardingExtensionServer) validateTunnelTarget(raw string) error {
@@ -441,6 +497,12 @@ func (s *adminForwardingExtensionServer) validateTunnelTarget(raw string) error 
 }
 
 func (s *adminForwardingExtensionServer) applyProtectedDMZ() error {
+	s.dmzMu.Lock()
+	defer s.dmzMu.Unlock()
+	return s.applyProtectedDMZLocked()
+}
+
+func (s *adminForwardingExtensionServer) applyProtectedDMZLocked() error {
 	s.mu.Lock()
 	var dmz *adminProtectedDMZ
 	if s.state.DMZ != nil {
@@ -454,7 +516,10 @@ func (s *adminForwardingExtensionServer) applyProtectedDMZ() error {
 	if dmz == nil || !dmz.Enabled {
 		return nil
 	}
-	adminState := s.readAdminState()
+	adminState, err := s.readAdminState()
+	if err != nil {
+		return err
+	}
 	if !adminState.ForwardingMaster {
 		return nil
 	}
