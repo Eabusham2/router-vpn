@@ -20,39 +20,64 @@ OVERTLS_PORT=${OVERTLS_PORT:-14443}
 OVERTLS_INTERNAL_PORT=${OVERTLS_INTERNAL_PORT:-14444}
 SSR_PORT=${SSR_PORT:-15443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
+PRIVATE_WRITE=/src/server/scripts/atomic-private-write.py
+PRIVATE_BATCH=/src/server/scripts/atomic-private-batch.py
 
 for required in \
   "$BASE/config/router-agent.json" \
   "$BASE/config/socks5.json" \
   "$BASE/client-bundle/routers.json" \
   "$BASE/client-bundle/modes.json"; do
-  [[ -s "$required" ]] || { echo "Base initialization missing $required" >&2; exit 1; }
+  [[ -s "$required" && ! -L "$required" ]] || { echo "Base initialization missing/unsafe $required" >&2; exit 1; }
 done
 
 bash /src/server/finalize/sync-client-runtime.sh "$BASE"
 eval "$(python3 /src/server/finalize/detect-settings.py "$BASE")"
 CONFIG_ENDPOINT=${ENDPOINT:-router.invalid}
 
-python3 - "$BASE" "$ADGUARD4" <<'PY'
+META_TMP=$(mktemp -d "$BASE/config/.finalize-meta.XXXXXX")
+trap 'rm -rf "${META_TMP:-}"' EXIT
+python3 - "$BASE" "$ADGUARD4" "$META_TMP" <<'PY'
 from pathlib import Path
-import json,sys
-base=Path(sys.argv[1]); dns=sys.argv[2]
+import json,os,stat,sys
+base=Path(sys.argv[1]); dns=sys.argv[2]; out=Path(sys.argv[3])
+
+def read_private_json(path: Path):
+    info=path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise RuntimeError(f"refusing non-regular/symlink private JSON input: {path}")
+    if info.st_size <= 0 or info.st_size > (32 << 20):
+        raise RuntimeError(f"private JSON input is empty/oversized: {path}")
+    return json.loads(path.read_text(encoding='utf-8'))
+
+def stage(name: str, value):
+    path=out/name
+    path.write_text(json.dumps(value,indent=2)+'\n',encoding='utf-8')
+    os.chmod(path,0o600)
+
 socks_path=base/'config'/'socks5.json'
-socks=json.load(open(socks_path))
+socks=read_private_json(socks_path)
 for inbound in socks.get('inbounds',[]):
     if inbound.get('type')=='socks': inbound.pop('users',None)
 for server in socks.get('dns',{}).get('servers',[]):
     if isinstance(server,dict) and server.get('tag')=='home-dns': server['server']=dns
-socks_path.write_text(json.dumps(socks,indent=2)+'\n')
+stage('socks5.json',socks)
+
 routers_path=base/'client-bundle'/'routers.json'
-routers=json.load(open(routers_path))
+routers=read_private_json(routers_path)
 for profile in routers.get('profiles',[]):
     profile['socks_host']=profile.get('socks_host') or dns
     profile['socks_port']=int(profile.get('socks_port') or 1080)
     profile['socks_username']=''
     profile['socks_password']=''
-routers_path.write_text(json.dumps(routers,indent=2)+'\n')
+stage('routers.json',routers)
 PY
+python3 "$PRIVATE_BATCH" \
+  "$BASE/config/socks5.json=$META_TMP/socks5.json" \
+  "$BASE/client-bundle/routers.json=$META_TMP/routers.json"
+rm -rf "$META_TMP"
+META_TMP=
+trap - EXIT
 
 if ! bash /src/server/scripts/ensure-rosenpass.sh "$BASE" "$CONFIG_ENDPOINT" "$ROSENPASS_PORT"; then
   echo 'Warning: Rosenpass PQ profiles were not generated; WG-PQ/AWG-PQ remain unavailable.' >&2
@@ -161,7 +186,7 @@ except Exception:
 PY
 )
 
-cat >"$BASE/client-bundle/CREDENTIALS.txt" <<TXT
+python3 "$PRIVATE_WRITE" "$BASE/client-bundle/CREDENTIALS.txt" <<TXT
 Endpoint: ${ENDPOINT:-CHOOSE_IN_APP}
 WireGuard UDP: $WG_PORT
 AmneziaWG UDP: $AWG_PORT
@@ -199,6 +224,6 @@ rm -f "$BASE/router-vpn-client-bundle.zip"
 
 export WG_PORT AWG_PORT ROSENPASS_PORT REALITY_PORT HY2_PORT SS_PORT XRAY_PQ_PORT XHTTP_PORT SS_V2RAY_PORT NAIVE_PORT OVERTLS_PORT SSR_PORT
 bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
-touch "$BASE/.finalized"
+printf 'finalized\n' | python3 "$PRIVATE_WRITE" "$BASE/.finalized"
 
 echo 'Finalization complete: current transport/PQ/TLS profiles and ephemeral setup assets generated; auxiliary OverTLS/SSR remain separate from AUTO.'
