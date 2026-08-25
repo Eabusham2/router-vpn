@@ -6,6 +6,7 @@ ADGUARD4=${3:?adguard ipv4}
 PQ_PORT=${4:-10443}
 TARGET=${5:-www.microsoft.com:443}
 REALITY_PORT=${6:-443}
+PRIVATE_BATCH=/src/server/scripts/atomic-private-batch.py
 xr(){ if command -v xray >/dev/null 2>&1; then xray "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/xtls/xray-core:26.7.11 "$@"; fi; }
 sb(){ if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/sagernet/sing-box:v1.13.12 "$@"; fi; }
 umask 077
@@ -40,16 +41,20 @@ for v in STD_UUID PQ_UUID REALITY_PRIVATE REALITY_PASSWORD SERVER_DEC CLIENT_ENC
   [[ -n ${!v} ]] || { echo "Failed generating/preserving $v" >&2; exit 1; }
 done
 
-python3 - "$BASE" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$PQ_PORT" "$TARGET_HOST" "$TARGET_PORT" "$STD_UUID" "$PQ_UUID" "$REALITY_PRIVATE" "$REALITY_PASSWORD" "$STD_SHORT_ID" "$PQ_SHORT_ID" "$SERVER_DEC" "$CLIENT_ENC" "$MLDSA_SEED" "$MLDSA_VERIFY" <<'PY'
-import json,sys,os
-(base,endpoint,dns,std_port,pq_port,target,tport,std_uuid,pq_uuid,rpriv,rpass,std_short,pq_short,sdec,cenc,mseed,mverify)=sys.argv[1:]
-std_port,pq_port,tport=map(int,(std_port,pq_port,tport))
-server_path=f"{base}/config/xray/server.json"
+GEN_TMP=$(mktemp -d "$BASE/config/xray/.generate.XXXXXX")
+trap 'rm -rf "${GEN_TMP:-}"' EXIT
+python3 - "$BASE/config/xray/server.json" "$GEN_TMP" "$ENDPOINT" "$ADGUARD4" "$REALITY_PORT" "$PQ_PORT" "$TARGET_HOST" "$TARGET_PORT" "$STD_UUID" "$PQ_UUID" "$REALITY_PRIVATE" "$REALITY_PASSWORD" "$STD_SHORT_ID" "$PQ_SHORT_ID" "$SERVER_DEC" "$CLIENT_ENC" "$MLDSA_SEED" "$MLDSA_VERIFY" <<'PY'
+import json,os,pathlib,stat,sys
+(old_server,tmp,endpoint,dns,std_port,pq_port,target,tport,std_uuid,pq_uuid,rpriv,rpass,std_short,pq_short,sdec,cenc,mseed,mverify)=sys.argv[1:]
+tmp=pathlib.Path(tmp); std_port,pq_port,tport=map(int,(std_port,pq_port,tport))
 kept=[]
 try:
-    old=json.load(open(server_path))
+    info=os.lstat(old_server)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise RuntimeError('refusing non-regular/symlink existing Xray server config')
+    old=json.load(open(old_server))
     kept=[x for x in old.get('inbounds',[]) if isinstance(x,dict) and x.get('tag')=='max-xhttp-in']
-except Exception:
+except FileNotFoundError:
     kept=[]
 
 def reality(short_id):
@@ -89,30 +94,40 @@ def wrapper(name,mtu,socks_port,v4,v6):
       "route":{"rules":[{"protocol":"dns","action":"hijack-dns"}],"auto_detect_interface":True,"final":"proxy"}
     }
 
-os.makedirs(f"{base}/config/xray",exist_ok=True)
-json.dump(server,open(server_path,"w"),indent=2); open(server_path,"a").write("\n")
-
-std_dir=f"{base}/client-bundle/generated/reality-vision"
-pq_dir=f"{base}/client-bundle/generated/reality-pq-vision"
-os.makedirs(std_dir,exist_ok=True); os.makedirs(pq_dir,exist_ok=True)
-json.dump(client_xray(std_uuid,std_port,"none",std_short,1091),open(f"{std_dir}/xray.json","w"),indent=2); open(f"{std_dir}/xray.json","a").write("\n")
-json.dump(wrapper("router-vpn-reality",1380,1091,"172.19.3.1/30","fdfe:dcba:9876:3::1/126"),open(f"{std_dir}/sing-box.json","w"),indent=2); open(f"{std_dir}/sing-box.json","a").write("\n")
-json.dump(client_xray(pq_uuid,pq_port,cenc,pq_short,1090),open(f"{pq_dir}/xray.json","w"),indent=2); open(f"{pq_dir}/xray.json","a").write("\n")
-json.dump(wrapper("router-vpn-pq",1360,1090,"172.19.4.1/30","fdfe:dcba:9876:4::1/126"),open(f"{pq_dir}/sing-box.json","w"),indent=2); open(f"{pq_dir}/sing-box.json","a").write("\n")
-
-secrets={
- "target":f"{target}:{tport}",
- "reality_public_key":rpass,
- "standard_uuid":std_uuid,"standard_short_id":std_short,
- "pq_uuid":pq_uuid,"pq_short_id":pq_short,
- "vless_encryption":cenc,"mldsa65_verify":mverify
+values={
+ "server.json":server,
+ "reality-xray.json":client_xray(std_uuid,std_port,"none",std_short,1091),
+ "reality-sing-box.json":wrapper("router-vpn-reality",1380,1091,"172.19.3.1/30","fdfe:dcba:9876:3::1/126"),
+ "pq-xray.json":client_xray(pq_uuid,pq_port,cenc,pq_short,1090),
+ "pq-sing-box.json":wrapper("router-vpn-pq",1360,1090,"172.19.4.1/30","fdfe:dcba:9876:4::1/126"),
+ "generated-secrets.json":{
+   "target":f"{target}:{tport}",
+   "reality_public_key":rpass,
+   "standard_uuid":std_uuid,"standard_short_id":std_short,
+   "pq_uuid":pq_uuid,"pq_short_id":pq_short,
+   "vless_encryption":cenc,"mldsa65_verify":mverify
+ },
 }
-json.dump(secrets,open(f"{base}/config/xray/generated-secrets.json","w"),indent=2); open(f"{base}/config/xray/generated-secrets.json","a").write("\n")
+for name,value in values.items():
+    (tmp/name).write_text(json.dumps(value,indent=2)+"\n",encoding="utf-8")
 PY
 
-xr run -test -c "$BASE/config/xray/server.json" >/dev/null
-for d in reality-vision reality-pq-vision; do
-  xr run -test -c "$BASE/client-bundle/generated/$d/xray.json" >/dev/null
-  sb check -D "$BASE/client-bundle/generated/$d" -c "$BASE/client-bundle/generated/$d/sing-box.json" >/dev/null
-done
-chmod 600 "$BASE/config/xray/"*.json "$BASE/client-bundle/generated/reality-vision/"*.json "$BASE/client-bundle/generated/reality-pq-vision/"*.json
+# Validate the complete candidate generation before any authoritative file is
+# replaced. A validation failure therefore leaves the prior working identity and
+# client configs untouched.
+xr run -test -c "$GEN_TMP/server.json" >/dev/null
+xr run -test -c "$GEN_TMP/reality-xray.json" >/dev/null
+sb check -D "$GEN_TMP" -c "$GEN_TMP/reality-sing-box.json" >/dev/null
+xr run -test -c "$GEN_TMP/pq-xray.json" >/dev/null
+sb check -D "$GEN_TMP" -c "$GEN_TMP/pq-sing-box.json" >/dev/null
+
+python3 "$PRIVATE_BATCH" \
+  "$BASE/config/xray/server.json=$GEN_TMP/server.json" \
+  "$BASE/client-bundle/generated/reality-vision/xray.json=$GEN_TMP/reality-xray.json" \
+  "$BASE/client-bundle/generated/reality-vision/sing-box.json=$GEN_TMP/reality-sing-box.json" \
+  "$BASE/client-bundle/generated/reality-pq-vision/xray.json=$GEN_TMP/pq-xray.json" \
+  "$BASE/client-bundle/generated/reality-pq-vision/sing-box.json=$GEN_TMP/pq-sing-box.json" \
+  "$BASE/config/xray/generated-secrets.json=$GEN_TMP/generated-secrets.json"
+rm -rf "$GEN_TMP"
+GEN_TMP=
+trap - EXIT
