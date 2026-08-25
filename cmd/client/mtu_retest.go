@@ -147,7 +147,10 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateMTURetestSnapshot(a, snapshot); err != nil {
 		rollbackMTULiveResult(a, root, snapshot, measurement)
-		_ = restoreMTUMeasurementFields(a, snapshot)
+		if restoreErr := restoreMTUMeasurementFields(a, snapshot); restoreErr != nil {
+			http.Error(w, "MTU result became stale and durable rollback was incomplete: "+err.Error()+"; "+restoreErr.Error(), http.StatusInternalServerError)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -300,6 +303,7 @@ func persistMTUMeasurement(a *app, snapshot mtuRetestSnapshot, measurement mtuMe
 			continue
 		}
 		x := &a.profiles.Profiles[i]
+		previous := *x
 		if mtuProfileSnapshotToken(*x) != snapshot.ProfileToken || strings.ToLower(strings.TrimSpace(x.MTUPolicy)) != "auto" {
 			return common.RouterProfile{}, errors.New("Router VPN profile changed before MTU result persistence")
 		}
@@ -313,6 +317,7 @@ func persistMTUMeasurement(a *app, snapshot mtuRetestSnapshot, measurement mtuMe
 		x.EffectiveMTUMedianRTTMs = measurement.Winner.MedianRTTMs
 		x.EffectiveMTUSuccessRatio = measurement.Winner.SuccessRatio
 		if err := a.persistProfilesLocked(); err != nil {
+			*x = previous
 			return common.RouterProfile{}, err
 		}
 		return *x, nil
