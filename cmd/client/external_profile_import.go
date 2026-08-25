@@ -49,10 +49,16 @@ func (a *app) externalProfileImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "external profile is not runnable: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.state.Connected || a.state.Phase == "starting" || a.state.Phase == "checking" {
+	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		http.Error(w, "disconnect before importing an external node", http.StatusConflict)
 		return
 	}
