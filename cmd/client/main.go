@@ -54,7 +54,7 @@ type app struct {
 func main() {
 	configPath := getenv("HOMEVPN_CLIENT_CONFIG", "./client.json")
 	var c common.ClientConfig
-	b, err := os.ReadFile(configPath)
+	b, err := readPrivateRegular(configPath, maxPrivateStoreBytes)
 	if err == nil {
 		if err = json.Unmarshal(b, &c); err != nil {
 			log.Fatal(err)
@@ -136,18 +136,11 @@ func main() {
 }
 
 func persistClientConfig(path string, c common.ClientConfig) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil && filepath.Dir(path) != "." {
-		return err
-	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err = os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicWritePrivate(path, append(b, '\n'))
 }
 
 func getenv(k, v string) string {
@@ -209,6 +202,12 @@ func validProfileID(id string) bool {
 }
 
 func (a *app) saveProfile(w http.ResponseWriter, r *http.Request) {
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	var p common.RouterProfile
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&p) != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
@@ -242,6 +241,8 @@ func (a *app) saveProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "disconnect before changing router settings", http.StatusConflict)
 		return
 	}
+	previousProfiles := cloneRouterProfileStore(a.profiles)
+	previousRouterID := a.state.RouterID
 	found := false
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID != p.ID {
@@ -290,6 +291,10 @@ func (a *app) saveProfile(w http.ResponseWriter, r *http.Request) {
 	a.profiles.SelectedID = p.ID
 	a.state.RouterID = p.ID
 	err = a.persistProfilesLocked()
+	if err != nil {
+		a.rollbackProfilesLocked(previousProfiles)
+		a.state.RouterID = previousRouterID
+	}
 	a.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -299,6 +304,12 @@ func (a *app) saveProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) selectProfile(w http.ResponseWriter, r *http.Request) {
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	var q struct {
 		ID string `json:"id"`
 	}
@@ -321,9 +332,15 @@ func (a *app) selectProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown router profile", http.StatusNotFound)
 		return
 	}
+	previousSelectedID := a.profiles.SelectedID
+	previousRouterID := a.state.RouterID
 	a.profiles.SelectedID = q.ID
 	a.state.RouterID = q.ID
 	err := a.persistProfilesLocked()
+	if err != nil {
+		a.profiles.SelectedID = previousSelectedID
+		a.state.RouterID = previousRouterID
+	}
 	a.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -333,6 +350,12 @@ func (a *app) selectProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) deleteProfile(w http.ResponseWriter, r *http.Request) {
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	var q struct {
 		ID string `json:"id"`
 	}
@@ -422,6 +445,12 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	var b profileBundle
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&b); err != nil {
 		http.Error(w, "invalid router bundle", http.StatusBadRequest)
@@ -581,7 +610,7 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) loadProfiles() error {
-	b, err := os.ReadFile(a.cfg.ProfilesFile)
+	b, err := readPrivateRegular(a.cfg.ProfilesFile, maxPrivateStoreBytes)
 	if err == nil {
 		if err = json.Unmarshal(b, &a.profiles); err != nil {
 			return fmt.Errorf("read router profiles: %w", err)
@@ -620,19 +649,11 @@ func (a *app) persistProfiles() error {
 }
 
 func (a *app) persistProfilesLocked() error {
-	if err := os.MkdirAll(filepath.Dir(a.cfg.ProfilesFile), 0o700); err != nil {
-		return err
-	}
 	b, err := json.MarshalIndent(a.profiles, "", "  ")
 	if err != nil {
 		return err
 	}
-	b = append(b, '\n')
-	tmp := a.cfg.ProfilesFile + ".tmp"
-	if err = os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, a.cfg.ProfilesFile)
+	return atomicWritePrivate(a.cfg.ProfilesFile, append(b, '\n'))
 }
 
 func (a *app) profileByIDLocked(id string) (common.RouterProfile, bool) {
