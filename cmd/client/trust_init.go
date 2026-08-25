@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -33,7 +32,7 @@ func init() {
 
 func migrateClientTrustConfig(path string) error {
 	raw := map[string]any{}
-	b, err := os.ReadFile(path)
+	b, err := readPrivateRegular(path, maxPrivateStoreBytes)
 	if err == nil {
 		if err := json.Unmarshal(b, &raw); err != nil {
 			return fmt.Errorf("decode %s: %w", path, err)
@@ -49,25 +48,11 @@ func migrateClientTrustConfig(path string) error {
 	}
 	raw["health_url"] = defaultPrivatePathProbeURL
 
-	parent := filepath.Dir(path)
-	if parent != "." {
-		if err := os.MkdirAll(parent, 0o700); err != nil {
-			return err
-		}
-	}
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".trust.tmp"
-	if err := os.WriteFile(tmp, append(out, '\n'), 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return atomicWritePrivate(path, append(out, '\n'))
 }
 
 func trustedPathProbeURL(value string) bool {
