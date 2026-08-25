@@ -285,6 +285,12 @@ func (a *app) saveConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	q, err := decodeConnectionProfileSave(w, r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -302,6 +308,12 @@ func (a *app) updateConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	q, err := decodeConnectionProfileSave(w, r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -385,6 +397,12 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	var q connectionProfileRefRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
 	dec.DisallowUnknownFields()
@@ -468,9 +486,8 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	old := a.profiles
-	old.Profiles = append([]common.RouterProfile(nil), a.profiles.Profiles...)
-	oldRouterID := a.state.RouterID
+	old := cloneRouterProfileStore(a.profiles)
+	oldState := a.state
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == updated.ID {
 			a.profiles.Profiles[i] = updated
@@ -483,8 +500,8 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		a.syncProfileOptionStateLocked(updated)
 	}
 	if err := a.persistProfilesLocked(); err != nil {
-		a.profiles = old
-		a.state.RouterID = oldRouterID
+		a.rollbackProfilesLocked(old)
+		a.state = oldState
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -492,7 +509,12 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok": true, "profile": saved, "selected_node_id": updated.ID, "mode": saved.Mode,
-		"custom_layers": func() []string { if saved.Prefs == nil { return nil }; return append([]string(nil), saved.Prefs.CustomLayers...) }(),
+		"custom_layers": func() []string {
+			if saved.Prefs == nil {
+				return nil
+			}
+			return append([]string(nil), saved.Prefs.CustomLayers...)
+		}(),
 		"note": "connection choices loaded while disconnected; connect separately so the selected platform can establish and prove the requested dataplane",
 	})
 }
@@ -502,6 +524,12 @@ func (a *app) deleteConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	var q connectionProfileRefRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
 	dec.DisallowUnknownFields()
