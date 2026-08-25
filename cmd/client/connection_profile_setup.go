@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,6 +32,14 @@ type connectionProfileSetupMeta struct {
 type connectionProfileSetupMetaStore struct {
 	Version int                                   `json:"version"`
 	Entries map[string]connectionProfileSetupMeta `json:"entries"`
+}
+
+func cloneConnectionProfileSetupMetaStore(store connectionProfileSetupMetaStore) connectionProfileSetupMetaStore {
+	cloned := connectionProfileSetupMetaStore{Version: store.Version, Entries: make(map[string]connectionProfileSetupMeta, len(store.Entries))}
+	for id, meta := range store.Entries {
+		cloned.Entries[id] = meta
+	}
+	return cloned
 }
 
 type capturedResponse struct {
@@ -212,6 +221,12 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	q, err := decodeConnectionProfileSetup(w, r, updating)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -236,6 +251,7 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 		return
 	}
 	oldMeta, err := loadConnectionProfileSetupMeta(a)
+	oldMeta = cloneConnectionProfileSetupMetaStore(oldMeta)
 	a.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -249,6 +265,7 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 	raw, _ := json.Marshal(innerBody)
 	innerReq, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1/", bytes.NewReader(raw))
 	innerReq.Header.Set("content-type", "application/json")
+	innerReq = withInternalMutationContext(innerReq)
 	recorder := httptest.NewRecorder()
 	if updating {
 		a.updateConnectionProfile(recorder, innerReq)
@@ -294,7 +311,7 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 	if err == nil {
 		err = persistConnectionProfileStore(a, store)
 	}
-	meta := oldMeta
+	meta := cloneConnectionProfileSetupMetaStore(oldMeta)
 	if meta.Entries == nil {
 		meta.Entries = map[string]connectionProfileSetupMeta{}
 	}
@@ -302,12 +319,25 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 		meta.Entries[id] = connectionProfileSetupMeta{MultihopExitMode: q.MultihopExitMode}
 		err = persistConnectionProfileSetupMeta(a, meta)
 	}
+	var rollbackErr error
 	if err != nil {
-		_ = persistConnectionProfileStore(a, oldProfiles)
-		_ = persistConnectionProfileSetupMeta(a, oldMeta)
+		if restoreErr := persistConnectionProfileStore(a, oldProfiles); restoreErr != nil {
+			rollbackErr = fmt.Errorf("restore profile store: %w", restoreErr)
+		}
+		if restoreMetaErr := persistConnectionProfileSetupMeta(a, oldMeta); restoreMetaErr != nil {
+			if rollbackErr == nil {
+				rollbackErr = fmt.Errorf("restore setup metadata: %w", restoreMetaErr)
+			} else {
+				rollbackErr = fmt.Errorf("%v; restore setup metadata: %w", rollbackErr, restoreMetaErr)
+			}
+		}
 	}
 	a.mu.Unlock()
 	if err != nil {
+		if rollbackErr != nil {
+			http.Error(w, "connection setup snapshot failed and rollback was incomplete: "+err.Error()+"; "+rollbackErr.Error(), http.StatusInternalServerError)
+			return
+		}
 		http.Error(w, "connection setup snapshot failed and was rolled back: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -326,13 +356,32 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	raw, err := readBoundedBody(r, 8<<10)
 	if err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
+	var ref connectionProfileRefRequest
+	if json.Unmarshal(raw, &ref) != nil || !validProfileID(strings.TrimSpace(ref.ID)) {
+		http.Error(w, "load requires a valid connection profile id", http.StatusBadRequest)
+		return
+	}
+	a.mu.Lock()
+	meta, metaErr := loadConnectionProfileSetupMeta(a)
+	a.mu.Unlock()
+	if metaErr != nil {
+		http.Error(w, metaErr.Error(), http.StatusInternalServerError)
+		return
+	}
 	innerReq, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1/", bytes.NewReader(raw))
 	innerReq.Header.Set("content-type", "application/json")
+	innerReq = withInternalMutationContext(innerReq)
 	recorder := httptest.NewRecorder()
 	a.loadConnectionProfile(recorder, innerReq)
 	if recorder.Code < 200 || recorder.Code >= 300 {
@@ -346,13 +395,6 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 	}
 	profileMap, _ := payload["profile"].(map[string]any)
 	id, _ := profileMap["id"].(string)
-	a.mu.Lock()
-	meta, metaErr := loadConnectionProfileSetupMeta(a)
-	a.mu.Unlock()
-	if metaErr != nil {
-		http.Error(w, metaErr.Error(), http.StatusInternalServerError)
-		return
-	}
 	if item, ok := meta.Entries[id]; ok {
 		payload["multihop_exit_mode"] = item.MultihopExitMode
 	}
@@ -371,6 +413,12 @@ func (a *app) deleteConnectionProfileSetup(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	raw, err := readBoundedBody(r, 8<<10)
 	if err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
@@ -381,8 +429,22 @@ func (a *app) deleteConnectionProfileSetup(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "delete requires a valid connection profile id", http.StatusBadRequest)
 		return
 	}
+	a.mu.Lock()
+	oldProfiles, snapshotErr := loadConnectionProfileStore(a)
+	oldMeta, metaSnapshotErr := loadConnectionProfileSetupMeta(a)
+	oldMeta = cloneConnectionProfileSetupMetaStore(oldMeta)
+	a.mu.Unlock()
+	if snapshotErr != nil {
+		http.Error(w, snapshotErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	if metaSnapshotErr != nil {
+		http.Error(w, metaSnapshotErr.Error(), http.StatusInternalServerError)
+		return
+	}
 	innerReq, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1/", bytes.NewReader(raw))
 	innerReq.Header.Set("content-type", "application/json")
+	innerReq = withInternalMutationContext(innerReq)
 	recorder := httptest.NewRecorder()
 	a.deleteConnectionProfile(recorder, innerReq)
 	if recorder.Code < 200 || recorder.Code >= 300 {
@@ -390,14 +452,23 @@ func (a *app) deleteConnectionProfileSetup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	a.mu.Lock()
-	meta, metaErr := loadConnectionProfileSetupMeta(a)
-	if metaErr == nil {
-		delete(meta.Entries, strings.TrimSpace(ref.ID))
-		metaErr = persistConnectionProfileSetupMeta(a, meta)
+	meta := cloneConnectionProfileSetupMetaStore(oldMeta)
+	delete(meta.Entries, strings.TrimSpace(ref.ID))
+	metaErr := persistConnectionProfileSetupMeta(a, meta)
+	var rollbackErr error
+	if metaErr != nil {
+		rollbackErr = persistConnectionProfileStore(a, oldProfiles)
+		if restoreMetaErr := persistConnectionProfileSetupMeta(a, oldMeta); restoreMetaErr != nil && rollbackErr == nil {
+			rollbackErr = restoreMetaErr
+		}
 	}
 	a.mu.Unlock()
 	if metaErr != nil {
-		http.Error(w, "connection profile deleted but setup metadata cleanup failed: "+metaErr.Error(), http.StatusInternalServerError)
+		if rollbackErr != nil {
+			http.Error(w, "connection profile delete failed and rollback was incomplete: "+metaErr.Error()+"; "+rollbackErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, "connection profile delete failed and was rolled back: "+metaErr.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("content-type", "application/json")
