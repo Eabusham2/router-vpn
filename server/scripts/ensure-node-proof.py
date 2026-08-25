@@ -1,23 +1,39 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
+import subprocess
 import sys
+import tempfile
 
 BASE = Path(sys.argv[1] if len(sys.argv) > 1 else "/opt/router-vpn")
 WG_CLIENT = BASE / "client-bundle" / "generated" / "wg" / "wg.conf"
 AGENT_CONFIG = BASE / "config" / "router-agent.json"
 PROOF_FILE = BASE / "config" / "node-proof-id"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+MAX_PRIVATE_BYTES = 4 << 20
+
+
+def read_regular_text(path: Path, label: str) -> str:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as exc:
+        raise SystemExit(f"missing {label}: {path}") from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise SystemExit(f"refusing non-regular/symlink {label}: {path}")
+    if info.st_size <= 0 or info.st_size > MAX_PRIVATE_BYTES:
+        raise SystemExit(f"invalid/oversized {label}: {path}")
+    return path.read_text(encoding="utf-8")
 
 
 def peer_public_key(path: Path) -> str:
-    if not path.is_file():
-        raise SystemExit(f"missing WireGuard client profile: {path}")
     peer = False
-    for raw in path.read_text().splitlines():
+    for raw in read_regular_text(path, "WireGuard client profile").splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
@@ -37,16 +53,48 @@ def derive(public_key: str) -> str:
     return hashlib.sha256(("router-vpn-node-proof-v1\n" + public_key).encode()).hexdigest()
 
 
-public_key = peer_public_key(WG_CLIENT)
-node_id = derive(public_key)
-if not HEX64.fullmatch(node_id):
-    raise SystemExit("derived node proof id is invalid")
-if not AGENT_CONFIG.is_file():
-    raise SystemExit(f"missing router-agent config: {AGENT_CONFIG}")
-config = json.loads(AGENT_CONFIG.read_text())
-config["node_id"] = node_id
-AGENT_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
-os.chmod(AGENT_CONFIG, 0o600)
-PROOF_FILE.write_text(node_id + "\n")
-os.chmod(PROOF_FILE, 0o600)
-print(node_id)
+def main() -> int:
+    public_key = peer_public_key(WG_CLIENT)
+    node_id = derive(public_key)
+    if not HEX64.fullmatch(node_id):
+        raise SystemExit("derived node proof id is invalid")
+
+    try:
+        config = json.loads(read_regular_text(AGENT_CONFIG, "router-agent config"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"router-agent config is invalid JSON: {exc}") from exc
+    if not isinstance(config, dict):
+        raise SystemExit("router-agent config must be a JSON object")
+    existing = str(config.get("node_id") or "").strip()
+    if existing and existing != node_id:
+        raise SystemExit("preserved router-agent node proof identity conflicts with WireGuard server identity")
+    config["node_id"] = node_id
+
+    helper = Path(__file__).with_name("atomic-private-batch.py")
+    tmp_dir = Path(tempfile.mkdtemp(prefix=".node-proof-", dir=AGENT_CONFIG.parent))
+    try:
+        config_tmp = tmp_dir / "router-agent.json"
+        proof_tmp = tmp_dir / "node-proof-id"
+        config_tmp.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        proof_tmp.write_text(node_id + "\n", encoding="utf-8")
+        os.chmod(config_tmp, 0o600)
+        os.chmod(proof_tmp, 0o600)
+        subprocess.run(
+            [
+                sys.executable,
+                str(helper),
+                f"{AGENT_CONFIG}={config_tmp}",
+                f"{PROOF_FILE}={proof_tmp}",
+            ],
+            check=True,
+        )
+    finally:
+        for child in tmp_dir.iterdir():
+            child.unlink(missing_ok=True)
+        tmp_dir.rmdir()
+    print(node_id)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
