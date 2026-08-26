@@ -128,7 +128,7 @@ if "Action='Block'" in kill or "Action = 'Block'" in kill:errors.append("Windows
 need("client/Setup-Windows-Runtime.ps1","1.13.12","26.7.11","SHA-256 mismatch","e93fc531134eb1beb4efa3c74990a24e48456098a31c03b60d5ddf17f223cf98","af801b62c4d41d248d3db8016d4c6e2a7ccfb7ed443e3738aeb6f9e062321512")
 need("client/Prepare-Windows-Mode-Catalog-v2.ps1","$mode.id -eq 'wg'","native-wireguard-windows.ps1","native-windows-mode.ps1","no native Windows adapter yet","Write-Utf8NoBom")
 need("cmd/client/windows_runtime.go","Prepare-Windows-Mode-Catalog-v2.ps1","sing-box/Xray TUN adapter")
-need("cmd/portable-launcher/main.go",'modeID=="wg"',"native-wireguard-windows.ps1","native-windows-mode.ps1","nativeLayeredWindowsModes","no native Windows adapter yet")
+need("cmd/portable-launcher/main.go",'modeID == "wg"',"native-wireguard-windows.ps1","native-windows-mode.ps1","nativeLayeredWindowsModes","no native Windows adapter yet")
 for retired in ("client/Prepare-Windows-Mode-Catalog.ps1","client/RouterVPN-Windows-Product.ps1"):
  if (ROOT/retired).exists():errors.append(f"retired Windows payload still ships in source tree: {retired}")
 for rel in("client/native-windows-mode.ps1","client/Setup-Windows-Runtime.ps1","client/Prepare-Windows-Mode-Catalog-v2.ps1","cmd/client/windows_runtime.go","cmd/portable-launcher/main.go","deploy/package-builds.sh"):
