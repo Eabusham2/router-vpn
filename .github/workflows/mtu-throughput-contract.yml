@@ -102,6 +102,9 @@ jobs:
       - name: Run deterministic Windows self-test
         shell: powershell
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/Optimize-RouterVPN-MTU.ps1 -Action self-test
+      - name: Test private Windows profile-store reader
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-private-router-vpn-state.ps1
       - name: Check Windows fail-closed network-specific contract markers
         shell: powershell
         run: |
