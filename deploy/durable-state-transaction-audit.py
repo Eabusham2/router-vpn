@@ -123,6 +123,36 @@ require(
     "Windows kill-switch plan/rollback/private-state contract: OK",
 )
 
+# Elevated Windows native helpers consume the controller-owned private node store
+# through one read-only reparse-safe helper; they may never persist routers.json.
+require(
+    "client/Private-RouterVPN-State.ps1",
+    "Assert-RouterVPNNoReparseAncestors",
+    "[IO.FileShare]::Read",
+    "Get-RouterVPNProfileStore",
+    "Get-RouterVPNSelectedProfile",
+    "exposes no profile-store writer",
+)
+require(
+    "client/test-private-router-vpn-state.ps1",
+    "missing selected profile silently fell back",
+    "corrupt profile store did not fail closed",
+    "symlink profile store was accepted",
+)
+for rel in ("client/native-windows-mode.ps1", "client/native-wireguard-windows.ps1", "client/Optimize-RouterVPN-MTU.ps1"):
+    require(rel, "Private-RouterVPN-State.ps1", "Get-RouterVPNSelectedProfile")
+require(
+    "client/Optimize-RouterVPN-MTU.ps1",
+    "durable_adoption=$false",
+    "Router VPN Go controller /api/mtu/retest",
+)
+forbid(
+    "client/Optimize-RouterVPN-MTU.ps1",
+    "function Persist-Winner",
+    ".mtu.tmp",
+    "Move-Item -LiteralPath $tmp -Destination $Ctx.Path -Force",
+)
+
 # macOS PF uses the same hardened private state store. Poisoned-state force-off
 # may clear only Router VPN's scoped anchor; without the persisted reference
 # token it must never guess at global PF ownership.
