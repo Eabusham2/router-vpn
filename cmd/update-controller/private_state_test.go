@@ -72,6 +72,25 @@ func TestUpdaterPrivateFileRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestUpdaterPrivateFileRejectsSymlinkParent(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedDir := filepath.Join(root, "linked")
+	if err := os.Symlink(realDir, linkedDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	path := filepath.Join(linkedDir, "update-controller.json")
+	if err := atomicWriteUpdaterPrivate(path, []byte("{}\n")); err == nil {
+		t.Fatal("symlink updater-state parent was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(realDir, "update-controller.json")); !os.IsNotExist(err) {
+		t.Fatalf("updater state escaped through symlink parent: %v", err)
+	}
+}
+
 func TestUpdaterPrivateFileRejectsOversizedRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "update-controller.json")
 	if err := os.WriteFile(path, []byte("12345"), 0o600); err != nil {
