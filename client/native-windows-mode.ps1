@@ -4,6 +4,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$PrivateState=Join-Path $PSScriptRoot 'Private-RouterVPN-State.ps1'
+if(-not(Test-Path -LiteralPath $PrivateState -PathType Leaf)){throw 'Router VPN private-state helper is missing.'}
+. $PrivateState
 $Supported = @('hysteria2','shadowsocks','naive-h2','naive-h3','reality-vision','reality-pq-vision','split','max')
 $NeedsXray = @('reality-vision','reality-pq-vision','split','max')
 if ($Supported -notcontains $Mode) { throw "No native Windows adapter is implemented for mode '$Mode'." }
@@ -34,8 +37,9 @@ function Stop-PidFile([string]$PidFile) {
   Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
 }
 
-$RootText=[string]$env:HOMEVPN_ROOT;if([string]::IsNullOrWhiteSpace($RootText)){throw 'HOMEVPN_ROOT is required.'}
-$Root=[IO.Path]::GetFullPath($RootText);$ProfileId=Safe-ProfileId([string]$env:HOMEVPN_PROFILE_ID)
+$RootText=[string]$env:HOMEVPN_ROOT
+$Root=Resolve-RouterVPNPrivateRoot $RootText
+$ProfileId=Safe-ProfileId([string]$env:HOMEVPN_PROFILE_ID)
 $GeneratedRoot=Safe-Under $Root (Join-Path $Root 'generated')
 $Source=Safe-Under $GeneratedRoot (Join-Path $GeneratedRoot (Join-Path $ProfileId $Mode))
 if(-not(Test-Path -LiteralPath $Source -PathType Container)){$legacy=Safe-Under $GeneratedRoot (Join-Path $GeneratedRoot $Mode);if(Test-Path -LiteralPath $legacy -PathType Container){$Source=$legacy}}
@@ -80,10 +84,9 @@ function Patch-JsonRecursive($Node,[string]$Endpoint,[string]$BaseDir) {
   if(Has-Property $Node 'outbounds'){foreach($outbound in @($Node.outbounds)){if($null-eq$outbound){continue};if((Has-Property $outbound 'tag')-and$outbound.tag-in@('proxy','outer','transport')-and(Has-Property $outbound 'server')){$outbound.server=$Endpoint};if(Has-Property $outbound 'settings'){$settings=$outbound.settings;if($settings-and(Has-Property $settings 'vnext')){foreach($vnext in @($settings.vnext)){if($vnext-and(Has-Property $vnext 'address')){$vnext.address=$Endpoint}}}}}}
 }
 function Get-SelectedProfile {
-  $storePath=Join-Path $Root 'routers.json';if(-not(Test-Path -LiteralPath $storePath -PathType Leaf)){return $null}
-  try{$store=Get-Content -Raw -LiteralPath $storePath|ConvertFrom-Json}catch{return $null}
+  $store=Get-RouterVPNProfileStore $Root
   $selected=if($env:HOMEVPN_PROFILE_ID){[string]$env:HOMEVPN_PROFILE_ID}elseif(Has-Property $store 'selected_id'){[string]$store.selected_id}else{''}
-  foreach($p in @($store.profiles)){if($p-and[string]$p.id-eq$selected){return $p}};foreach($p in @($store.profiles)){if($p){return $p}};return $null
+  return Get-RouterVPNSelectedProfile $store $selected
 }
 function Profile-String($Profile,[string]$Name,[string]$Default=''){if($Profile-and(Has-Property $Profile $Name)){$v=[string]$Profile.$Name;if(-not[string]::IsNullOrWhiteSpace($v)){return $v}};return $Default}
 function Profile-Int($Profile,[string]$Name,[int]$Default=0){if($Profile-and(Has-Property $Profile $Name)){$n=0;if([int]::TryParse(([string]$Profile.$Name),[ref]$n)-and$n-gt0){return $n}};return $Default}
