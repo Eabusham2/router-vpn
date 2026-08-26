@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 )
@@ -236,23 +235,10 @@ func standardExitSummaryFor(e standardExit) standardExitSummary {
 
 func loadStandardExitStore() (standardExitStore, error) {
 	path := standardExitStorePath()
-	info, err := os.Lstat(path)
+	raw, err := readPrivateRegular(path, standardExitMaxStore)
 	if errors.Is(err, os.ErrNotExist) {
 		return standardExitStore{SchemaVersion: standardExitStoreVersion, Exits: []standardExit{}}, nil
 	}
-	if err != nil {
-		return standardExitStore{}, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return standardExitStore{}, errors.New("standard-exits.json must be a regular non-symlink file")
-	}
-	if info.Size() > standardExitMaxStore {
-		return standardExitStore{}, errors.New("standard-exits.json exceeds size limit")
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return standardExitStore{}, errors.New("standard-exits.json permissions are too broad; expected 0600")
-	}
-	raw, err := os.ReadFile(path)
 	if err != nil {
 		return standardExitStore{}, err
 	}
@@ -286,16 +272,6 @@ func persistStandardExitStore(store standardExitStore) error {
 			return err
 		}
 	}
-	path := standardExitStorePath()
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("refusing to replace symlink standard-exits.json")
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
 	raw, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
 		return err
@@ -303,28 +279,7 @@ func persistStandardExitStore(store standardExitStore) error {
 	if int64(len(raw)) > standardExitMaxStore {
 		return errors.New("standard exit store exceeds size limit")
 	}
-	tmp, err := os.CreateTemp(dir, ".standard-exits-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err = tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err = tmp.Write(append(raw, '\n')); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return atomicWritePrivate(standardExitStorePath(), append(raw, '\n'))
 }
 
 func standardExitByID(id string) (standardExit, error) {
