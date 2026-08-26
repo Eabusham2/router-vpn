@@ -25,6 +25,7 @@ function Safe-ProfileId([string]$Value) {
 function Safe-Under([string]$Parent,[string]$Child) {
   $p=[IO.Path]::GetFullPath($Parent).TrimEnd('\')+'\';$c=[IO.Path]::GetFullPath($Child)
   if (-not $c.StartsWith($p,[StringComparison]::OrdinalIgnoreCase)) { throw "Refusing unsafe path outside $Parent" }
+  Assert-RouterVPNNoReparseAncestors $c
   return $c
 }
 function Write-Utf8NoBom([string]$Path,[string]$Text) { [IO.File]::WriteAllText($Path,$Text,(New-Object Text.UTF8Encoding($false))) }
@@ -69,6 +70,13 @@ function Get-TunAlias([string]$ConfigPath) {
 
 function Assert-Ready {
   if(-not(Test-Administrator)){throw 'Native Windows TUN modes require an elevated Router VPN process.'}
+  Assert-RouterVPNNoReparseAncestors $Source
+  Assert-RouterVPNNoReparseAncestors (Join-Path $Source 'sing-box.json')
+  Assert-RouterVPNNoReparseAncestors $SingBox
+  if($NeedsXray -contains $Mode){
+    Assert-RouterVPNNoReparseAncestors (Join-Path $Source 'xray.json')
+    Assert-RouterVPNNoReparseAncestors $Xray
+  }
   if(-not(Test-Path -LiteralPath $Source -PathType Container)){throw "Missing generated profile directory: $Source"}
   if(-not(Test-Path -LiteralPath (Join-Path $Source 'sing-box.json') -PathType Leaf)){throw "Missing sing-box.json for $Mode"}
   if(-not(Test-Path -LiteralPath $SingBox -PathType Leaf)){throw 'sing-box.exe is missing. Run Setup-Windows-Runtime.ps1.'}
