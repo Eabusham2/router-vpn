@@ -91,7 +91,7 @@ def darwin_apply(*, spawn_watch: bool = True) -> int:
         if previous and previous.get("platform") == "darwin":
             _stop_watcher(previous)
             _darwin.remove_darwin(previous, dry_run=_dry_run())
-            _linux.state_path(root).unlink(missing_ok=True)
+            _linux.remove_state(root)
         print("kill switch off", file=sys.stderr)
         return 0
 
@@ -145,7 +145,24 @@ def darwin_watch() -> int:
 
 def darwin_release(force: bool = False) -> int:
     root = _linux.root_dir()
-    state = _linux.read_state(root)
+    try:
+        state = _linux.read_state(root)
+    except RuntimeError:
+        if not force:
+            raise
+        # Explicit local recovery for poisoned state: without a valid persisted
+        # pf_token we cannot safely call pfctl -X, because that could interfere
+        # with another PF owner. Clear only Router VPN's scoped anchor, retain PF
+        # enablement, and remove only the poisoned state leaf without following it.
+        if not _dry_run():
+            _darwin._clear_anchor(check=False)
+        _linux.remove_state(root, force_recovery=True)
+        print(
+            "strict macOS kill switch force-off cleared the Router VPN PF anchor; "
+            "persisted PF reference token was unreadable, so global PF enablement was left untouched",
+            file=sys.stderr,
+        )
+        return 0
     if not state:
         return 0
     _stop_watcher(state)
@@ -166,10 +183,9 @@ def darwin_release(force: bool = False) -> int:
         print("strict macOS kill switch remains active (always policy)", file=sys.stderr)
         return 0
     _darwin.remove_darwin(state, dry_run=_dry_run())
-    _linux.state_path(root).unlink(missing_ok=True)
+    _linux.remove_state(root, force_recovery=force)
     print("strict macOS kill switch released", file=sys.stderr)
     return 0
-
 
 def darwin_reassert() -> int:
     root = _linux.root_dir()
