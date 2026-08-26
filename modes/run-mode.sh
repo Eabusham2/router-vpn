@@ -8,62 +8,12 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROFILE_ID=$(homevpn_profile_id)
 RUN="$ROOT/run"
 ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend in the app first}
-mkdir -p "$RUN"
 
-if [[ $MODE == all ]]; then
-  CONF="$RUN/profile-$PROFILE_ID-all"
-  rm -rf "$CONF"
-  mkdir -p "$CONF"
-else
-  SOURCE_CONF="$ROOT/generated/$PROFILE_ID/$MODE"
-  [[ -d "$SOURCE_CONF" ]] || SOURCE_CONF="$ROOT/generated/$MODE"
-  CONF="$RUN/profile-$PROFILE_ID-$MODE"
-  rm -rf "$CONF"
-  cp -a "$SOURCE_CONF" "$CONF"
-  python3 - "$CONF" "$ENDPOINT" <<'PY_ENDPOINT'
-from pathlib import Path
-import json,re,sys
-root=Path(sys.argv[1]); endpoint=sys.argv[2].strip().strip('[]')
-wg_host=f'[{endpoint}]' if ':' in endpoint else endpoint
-
-def patch_json(obj):
-    if isinstance(obj,dict):
-        outbounds=obj.get('outbounds')
-        if isinstance(outbounds,list):
-            for outbound in outbounds:
-                if not isinstance(outbound,dict): continue
-                if outbound.get('tag') in ('proxy','outer','transport') and isinstance(outbound.get('server'),str): outbound['server']=endpoint
-                settings=outbound.get('settings')
-                if isinstance(settings,dict):
-                    for vnext in settings.get('vnext',[]) if isinstance(settings.get('vnext'),list) else []:
-                        if isinstance(vnext,dict) and 'address' in vnext: vnext['address']=endpoint
-        for key,value in list(obj.items()):
-            if key in ('endpoint','remote_address') and isinstance(value,str): obj[key]=endpoint
-            elif key in ('certificate_path','key_path') and isinstance(value,str) and not value.startswith('/'): obj[key]=str(root/value)
-            else: patch_json(value)
-    elif isinstance(obj,list):
-        for value in obj: patch_json(value)
-
-def patch_text_endpoint(match):
-    prefix, old, quote = match.group(1), match.group(2), match.group(3)
-    port_match=re.search(r':(\d+)$',old)
-    if not port_match: return f'{prefix}{endpoint}{quote}'
-    port=port_match.group(1); host=f'[{endpoint}]' if ':' in endpoint else endpoint
-    return f'{prefix}{host}:{port}{quote}'
-
-for p in root.rglob('*'):
-    if not p.is_file(): continue
-    if p.suffix.lower()=='.json':
-        try: data=json.loads(p.read_text())
-        except Exception: continue
-        patch_json(data); p.write_text(json.dumps(data,indent=2)+'\n'); continue
-    try: text=p.read_text()
-    except UnicodeDecodeError: continue
-    text=re.sub(r'(?m)^(Endpoint\s*=\s*).*:(\d+)\s*$', lambda m:f'{m.group(1)}{wg_host}:{m.group(2)}', text)
-    text=re.sub(r'(?m)^(endpoint\s*=\s*["\'])(.*?)(["\'])', patch_text_endpoint, text)
-    p.write_text(text)
-PY_ENDPOINT
-fi
+# Build one complete private per-session profile tree before the launcher can
+# consume it. The helper rejects symlink/non-regular generated inputs, rewrites
+# endpoint/certificate paths in staging, fsyncs files, and atomically adopts the
+# directory while restoring the prior complete tree if adoption fails.
+CONF=$(python3 "$SCRIPT_DIR/prepare-runtime-profile.py" "$ROOT" "$PROFILE_ID" "$MODE" "$ENDPOINT")
 
 export HOMEVPN_MODE="$MODE"
 export HOMEVPN_MTU=${HOMEVPN_MTU:-1380}
