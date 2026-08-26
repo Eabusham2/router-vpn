@@ -88,6 +88,25 @@ func TestPrivateStoreRejectsSymlinkParent(t *testing.T) {
 	}
 }
 
+func TestPrivateStoreRejectsNestedSymlinkAncestor(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.MkdirAll(filepath.Join(realDir, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedDir := filepath.Join(root, "linked")
+	if err := os.Symlink(realDir, linkedDir); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	path := filepath.Join(linkedDir, "nested", "state", "routers.json")
+	if err := atomicWritePrivate(path, []byte("secret\n")); err == nil {
+		t.Fatal("nested symlink ancestor was accepted for private store write")
+	}
+	if _, err := os.Stat(filepath.Join(realDir, "nested", "state")); !os.IsNotExist(err) {
+		t.Fatalf("nested symlink-ancestor write created redirected state: %v", err)
+	}
+}
+
 func TestPrivateStoreRejectsOversizedRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "routers.json")
 	if err := os.WriteFile(path, []byte("12345"), 0o600); err != nil {
