@@ -193,6 +193,26 @@ require(
     "auto-cache",
 )
 
+# Kill-switch state is the exception to disposable runtime state: policy=always
+# is authoritative restart/reconnect recovery state. Corruption or path
+# redirection must fail closed and force-off is the explicit local recovery path.
+require(
+    "modes/kill-switch.py",
+    "def _private_regular_bytes",
+    "cannot safely read routers.json",
+    "cannot safely read persistent kill-switch state",
+    "def write_state",
+    "kill-switch state target changed before adoption",
+    "def remove_state",
+    "force-off is the explicit local recovery path",
+)
+require(
+    "modes/test_kill_switch.py",
+    "router-vpn-killswitch-state-safety-",
+    "router-vpn-killswitch-parent-safety-",
+    "force-off",
+)
+
 # The mode launcher reconstructs one complete private per-session tree under
 # run/. Generated inputs are scanned/read without following symlinks, transformed
 # in staging, fsynced, and directory-adopted with prior-tree rollback.
@@ -229,6 +249,7 @@ for rel in (
     "modes/test_multihop_private_runtime.py",
     "modes/test_all_result.py",
     "modes/test_prepare_runtime_profile.py",
+    "modes/test_kill_switch.py",
 ):
     proc = subprocess.run([sys.executable, str(ROOT / rel)], cwd=ROOT, text=True, capture_output=True)
     if proc.returncode != 0:
