@@ -23,6 +23,13 @@ func (c *controller) saveRollbackCompose(previous, from string) error {
 	if actual := composeSHA(previous); actual != from {
 		return fmt.Errorf("previous compose identity changed while snapshotting: got %s want %s", actual, from)
 	}
+	// A terminal prior update may have left a validated snapshot behind only
+	// because cleanup failed after the terminal state was durably committed.
+	// Clear it before publishing the new transaction's snapshot. Unsafe/broad/
+	// symlink leftovers fail closed here, before any Portainer mutation begins.
+	if err := c.clearRollbackCompose(); err != nil {
+		return fmt.Errorf("clear stale rollback snapshot before new update: %w", err)
+	}
 	if err := atomicWriteUpdaterPrivate(c.rollbackComposePath(), []byte(previous)); err != nil {
 		return fmt.Errorf("persist previous exact compose snapshot: %w", err)
 	}
