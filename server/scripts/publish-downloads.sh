@@ -8,6 +8,7 @@ OUT="$BASE/downloads"
 PRIVATE_DIR=/src/server/scripts/private-directory.py
 PRIVATE_WRITE=/src/server/scripts/atomic-private-write.py
 PRIVATE_BATCH=/src/server/scripts/atomic-private-batch.py
+VERIFIED_READ=/src/server/scripts/verified-regular-read.py
 
 # Validate the private roots before *any* deletion, staging or publication. In
 # particular, never let an old/malicious downloads symlink turn rm/copy into a
@@ -136,20 +137,26 @@ python3 "$PRIVATE_BATCH" \
   "$BUNDLE/router-vpn-device-setup.html=$WORK/patched/router-vpn-device-setup.html" \
   "$BUNDLE/setup-assets.json=$WORK/patched/setup-assets.json"
 
-# Stage the complete static generation. Every source read goes through the
-# private batch helper, which validates regular files/ancestors and re-checks
-# identity during read. Nothing is copied directly into the served directory.
-stage_static(){
+# Public catalog/helper inputs are intentionally normal repository files (0644
+# or 0755), not private state. Verify they are bounded stable regular files, then
+# republish their bytes into the private 0600 staging generation. Private Setup
+# Center assets continue to use the strict private batch reader.
+stage_public(){
   local src=$1 name=${2:-$(basename "$1")}
-  if [[ ! -e "$src" ]]; then return 0; fi
+  [[ -e "$src" ]] || return 0
+  python3 "$VERIFIED_READ" "$src" | python3 "$PRIVATE_WRITE" "$WORK/out/$name"
+}
+stage_private(){
+  local src=$1 name=${2:-$(basename "$1")}
+  [[ -e "$src" ]] || return 0
   python3 "$PRIVATE_BATCH" "$WORK/out/$name=$src"
 }
-stage_static "$BUNDLE/router/asus-merlin-router-vpn-forwards.sh" "asus-merlin-router-vpn-forwards.sh"
-stage_static "$BUNDLE/modes.json"
-stage_static "$BUNDLE/logical-modes.json"
-stage_static "$BUNDLE/router-vpn-device-setup.html" "index.html"
-stage_static "$BUNDLE/router-vpn-device-setup.html"
-stage_static "$BUNDLE/setup-assets.json"
+stage_public "$BUNDLE/router/asus-merlin-router-vpn-forwards.sh" "asus-merlin-router-vpn-forwards.sh"
+stage_public "$BUNDLE/modes.json"
+stage_public "$BUNDLE/logical-modes.json"
+stage_private "$BUNDLE/router-vpn-device-setup.html" "index.html"
+stage_private "$BUNDLE/router-vpn-device-setup.html"
+stage_private "$BUNDLE/setup-assets.json"
 
 cat <<'JSON' | python3 "$PRIVATE_WRITE" "$WORK/out/download-policy.json"
 {
