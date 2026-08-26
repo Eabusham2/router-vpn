@@ -9,10 +9,37 @@ import (
 
 const maxPrivateStoreBytes = 4 << 20
 
+func validatePrivateParent(path string) error {
+	parent := filepath.Dir(path)
+	if parent == "." {
+		return nil
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			return err
+		}
+		info, err = os.Lstat(parent)
+		if err != nil {
+			return err
+		}
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("refusing non-directory/symlink private store parent %s", parent)
+	}
+	return nil
+}
+
 // hardenPrivateRegular validates a private authoritative file before it is read
 // or replaced. Existing group/world permission bits are removed before reading
 // so upgrades from older packages converge to the private-store contract.
 func hardenPrivateRegular(path string) error {
+	if err := validatePrivateParent(path); err != nil {
+		return err
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -43,11 +70,18 @@ func readPrivateRegular(path string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	defer file.Close()
-	info, err := file.Stat()
+	opened, err := file.Stat()
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > limit {
+	current, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+		return nil, fmt.Errorf("private store %s changed during open", path)
+	}
+	if !opened.Mode().IsRegular() || opened.Size() > limit {
 		return nil, fmt.Errorf("private store %s is not a bounded regular file", path)
 	}
 	buf, err := io.ReadAll(io.LimitReader(file, limit+1))
@@ -67,12 +101,10 @@ func readPrivateRegular(path string, limit int64) ([]byte, error) {
 // deliberately not returned as a false post-commit failure to callers that may
 // otherwise roll RAM back while disk already contains the new value.
 func atomicWritePrivate(path string, data []byte) error {
-	parent := filepath.Dir(path)
-	if parent != "." {
-		if err := os.MkdirAll(parent, 0o700); err != nil {
-			return err
-		}
+	if err := validatePrivateParent(path); err != nil {
+		return err
 	}
+	parent := filepath.Dir(path)
 	if err := hardenPrivateRegular(path); err != nil {
 		return err
 	}
@@ -98,6 +130,9 @@ func atomicWritePrivate(path string, data []byte) error {
 		return err
 	}
 	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := validatePrivateParent(path); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
