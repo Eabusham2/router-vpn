@@ -20,13 +20,25 @@ MAX_PRIVATE_BYTES = 4 << 20
 PRIVATE_MODE = 0o600
 
 
+def _validate_existing_ancestors(parent: Path, label: str) -> None:
+    for current in (parent, *parent.parents):
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise SystemExit(f"refusing non-directory/symlink {label} path component: {current}")
+
+
 def ensure_private_parent(path: Path, label: str) -> None:
+    _validate_existing_ancestors(path.parent, label)
     try:
         info = path.parent.lstat()
     except FileNotFoundError as exc:
         raise SystemExit(f"missing {label} parent: {path.parent}") from exc
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise SystemExit(f"refusing non-directory/symlink {label} parent: {path.parent}")
+    _validate_existing_ancestors(path.parent, label)
 
 
 def read_regular_text(path: Path, label: str) -> str:
@@ -59,6 +71,10 @@ def read_regular_text(path: Path, label: str) -> str:
             total += len(chunk)
             if total > MAX_PRIVATE_BYTES:
                 raise SystemExit(f"invalid/oversized {label}: {path}")
+        ensure_private_parent(path, label)
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise SystemExit(f"{label} changed during read: {path}")
         try:
             return b"".join(chunks).decode("utf-8", errors="strict")
         except UnicodeDecodeError as exc:
@@ -108,6 +124,7 @@ def main() -> int:
 
     helper = Path(__file__).with_name("atomic-private-batch.py")
     ensure_private_parent(AGENT_CONFIG, "router-agent config")
+    ensure_private_parent(PROOF_FILE, "node proof id")
     tmp_dir = Path(tempfile.mkdtemp(prefix=".node-proof-", dir=AGENT_CONFIG.parent))
     try:
         config_tmp = tmp_dir / "router-agent.json"
