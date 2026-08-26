@@ -3,6 +3,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$PrivateState=Join-Path $PSScriptRoot 'Private-RouterVPN-State.ps1'
+if(-not(Test-Path -LiteralPath $PrivateState -PathType Leaf)){throw 'Router VPN private-state helper is missing.'}
+. $PrivateState
 $MinMtu = 1200
 $MaxMtu = 1500
 $Step = 20
@@ -23,20 +26,14 @@ function Require-Admin {
   if(-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Optimize MTU requires Administrator rights to change the live tunnel interface.'}
 }
 function Root-Path {
-  $r=[string]$env:HOMEVPN_ROOT
-  if([string]::IsNullOrWhiteSpace($r)){throw 'HOMEVPN_ROOT is required.'}
-  return [IO.Path]::GetFullPath($r)
+  return Resolve-RouterVPNPrivateRoot ([string]$env:HOMEVPN_ROOT)
 }
 function Read-Store {
-  $path=Join-Path (Root-Path) 'routers.json'
-  if(-not(Test-Path -LiteralPath $path -PathType Leaf)){throw "Router profile store is missing: $path"}
-  $store=Get-Content -Raw -LiteralPath $path|ConvertFrom-Json
+  $root=Root-Path
+  $store=Get-RouterVPNProfileStore $root
   $selected=if($env:HOMEVPN_PROFILE_ID){[string]$env:HOMEVPN_PROFILE_ID}elseif(Has-Property $store 'selected_id'){[string]$store.selected_id}else{''}
-  $profile=$null
-  foreach($item in @($store.profiles)){if($item-and[string]$item.id-eq$selected){$profile=$item;break}}
-  if(-not$profile){foreach($item in @($store.profiles)){if($item){$profile=$item;break}}}
-  if(-not$profile){throw 'Router VPN has no selected node profile.'}
-  [pscustomobject]@{Path=$path;Store=$store;Profile=$profile}
+  $profile=Get-RouterVPNSelectedProfile $store $selected
+  [pscustomobject]@{Path=(Join-Path $root 'routers.json');Store=$store;Profile=$profile}
 }
 function Private-IP([string]$Value){
   $ip=$null
@@ -122,10 +119,6 @@ function Path-Context($Profile){
   $endpoint=([string]$Profile.endpoint).Trim().ToLowerInvariant();$mode=([string]$env:HOMEVPN_MODE).Trim().ToLowerInvariant();$logical=([string]$env:HOMEVPN_LOGICAL_MODE).Trim().ToLowerInvariant();$base=([string]$env:HOMEVPN_BASE).Trim().ToLowerInvariant();$family=([string]$env:HOMEVPN_IP_FAMILY).Trim().ToLowerInvariant();$id=if(Has-Property $Profile 'id'){([string]$Profile.id).Trim().ToLowerInvariant()}else{([string]$env:HOMEVPN_PROFILE_ID).Trim().ToLowerInvariant()};if(-not$family){$ip=Resolve-EndpointIP $endpoint;if($ip){$family=if($ip.AddressFamily-eq[Net.Sockets.AddressFamily]::InterNetworkV6){'6'}else{'4'}}else{$family='unknown'}};$network=Get-NetworkFingerprint $Profile;$generated=Get-GeneratedProfileFingerprint $Profile;$raw=[string]::Join('|',@($endpoint,$mode,$logical,$base,$family,$id,$network,$generated));[pscustomobject]@{Key=(Hash-Text 'mtu-path-v2' $raw);Network=$network;Generated=$generated}
 }
 function Path-Key($Profile){return (Path-Context $Profile).Key}
-function Persist-Winner($Ctx,$Winner,$Results){
-  $p=$Ctx.Profile;$path=Path-Context $p;$p|Add-Member effective_mtu ([int]$Winner.mtu) -Force;$p|Add-Member effective_mtu_source 'auto-throughput' -Force;$p|Add-Member effective_mtu_path_key $path.Key -Force;$p|Add-Member effective_mtu_network_fingerprint $path.Network -Force;$p|Add-Member effective_mtu_profile_fingerprint $path.Generated -Force;$p|Add-Member effective_mtu_tested_at ([DateTime]::UtcNow.ToString('o')) -Force;$p|Add-Member effective_mtu_mbps ([double]$Winner.mbps) -Force;$p|Add-Member effective_mtu_median_rtt_ms ([double]$Winner.median_rtt_ms) -Force;$p|Add-Member effective_mtu_success_ratio ([double]$Winner.success_ratio) -Force;$p|Add-Member effective_mtu_candidates @($Results) -Force
-  $tmp=$Ctx.Path+'.mtu.tmp';[IO.File]::WriteAllText($tmp,(($Ctx.Store|ConvertTo-Json -Depth 100)+"`n"),(New-Object Text.UTF8Encoding($false)));Move-Item -LiteralPath $tmp -Destination $Ctx.Path -Force
-}
 function Ensure-KillSwitch($Profile,[string]$Alias){
   $policy=if(Has-Property $Profile 'kill_switch_policy'){([string]$Profile.kill_switch_policy).ToLowerInvariant()}else{'off'}
   if($policy-eq'off'){return}
@@ -156,4 +149,4 @@ if($Action-eq'restore'){Invoke-ApplyMeasured $true;exit 0}
 
 Require-Admin;$ctx=Read-Store;$profile=$ctx.Profile;$policy=if(Has-Property $profile 'mtu_policy'){([string]$profile.mtu_policy).ToLowerInvariant()}else{'default'};if($policy-ne'auto'-and$env:HOMEVPN_MTU_OPTIMIZE_FORCE-notin@('1','true','yes')){throw'Set this node MTU policy to Auto before running Optimize MTU.'};if($env:HOMEVPN_JUMBO-eq'true'){throw'Jumbo is explicit; disable Jumbo before automatic MTU optimization.'}
 Prove-Node $profile;$target=if((Has-Property $profile 'daita_host')-and$profile.daita_host){[string]$profile.daita_host}else{'10.77.0.1'};$ip=Private-IP $target;$port=if((Has-Property $profile 'daita_port')-and[int]$profile.daita_port-gt0){[int]$profile.daita_port}else{45999};$alias=Route-Alias $target;$family=Address-Family $ip;$familyNumber=if($family-eq'IPv6'){6}else{4};$original=Read-Mtu $alias $family;Ensure-KillSwitch $profile $alias;$ceiling=if((Has-Property $profile 'effective_mtu')-and[int]$profile.effective_mtu-ge$MinMtu){[int]$profile.effective_mtu}else{[Math]::Min($MaxMtu,$original)};$results=New-Object System.Collections.ArrayList;$winner=$null
-try{foreach($mtu in @(Candidate-Mtus $ceiling)){Set-Mtu $alias $family $mtu;Start-Sleep -Milliseconds 120;Prove-Node $profile;[void]$results.Add((Bench-Candidate $ip $port $mtu))};$winner=Pick-Winner @($results);Set-Mtu $alias $family ([int]$winner.mtu);Prove-Node $profile;$path=Path-Context $profile;$adopted=$true;if($Action-eq'measure'){Set-Mtu $alias $family $original;$adopted=$false}else{Persist-Winner $ctx $winner @($results)};[pscustomobject]@{ok=$true;interface=$alias;family=$familyNumber;original_mtu=$original;winner=$winner;results=@($results);path_key=$path.Key;network_fingerprint=$path.Network;profile_fingerprint=$path.Generated;adopted=$adopted}|ConvertTo-Json -Depth 20}catch{try{Set-Mtu $alias $family $original}catch{};throw}
+try{foreach($mtu in @(Candidate-Mtus $ceiling)){Set-Mtu $alias $family $mtu;Start-Sleep -Milliseconds 120;Prove-Node $profile;[void]$results.Add((Bench-Candidate $ip $port $mtu))};$winner=Pick-Winner @($results);Set-Mtu $alias $family ([int]$winner.mtu);Prove-Node $profile;$path=Path-Context $profile;$adopted=$true;if($Action-eq'measure'){Set-Mtu $alias $family $original;$adopted=$false};[pscustomobject]@{ok=$true;interface=$alias;family=$familyNumber;original_mtu=$original;winner=$winner;results=@($results);path_key=$path.Key;network_fingerprint=$path.Network;profile_fingerprint=$path.Generated;adopted=$adopted;durable_adoption=$false;durable_owner='Router VPN Go controller /api/mtu/retest'}|ConvertTo-Json -Depth 20}catch{try{Set-Mtu $alias $family $original}catch{};throw}
