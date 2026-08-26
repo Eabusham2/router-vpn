@@ -11,10 +11,7 @@ BASE=${HOMEVPN_BASE:-auto}
 RESULT_FILE=${HOMEVPN_ALL_RESULT_FILE:-}
 
 if [[ -n $RESULT_FILE ]]; then
-  mkdir -p "$(dirname -- "$RESULT_FILE")"
-  probe="${RESULT_FILE}.probe.$$"
-  : > "$probe"
-  rm -f "$probe" "$RESULT_FILE"
+  python3 "$SCRIPT_DIR/all-result.py" prepare "$ROOT" "$RESULT_FILE"
 fi
 
 if [[ $BASE == auto ]]; then
@@ -73,9 +70,7 @@ for candidate in "${candidates[@]}"; do
   sleep 2
   if kill -0 "$pid" >/dev/null 2>&1 && health; then
     if [[ -n $RESULT_FILE ]]; then
-      tmp="${RESULT_FILE}.tmp.$$"
-      printf '%s\n' "$candidate" > "$tmp"
-      mv -f "$tmp" "$RESULT_FILE"
+      python3 "$SCRIPT_DIR/all-result.py" publish "$ROOT" "$RESULT_FILE" "$candidate"
     fi
     echo "ALL connected with $candidate" >&2
     wait "$pid"
