@@ -69,14 +69,33 @@ require(
 )
 
 # DNS policy runtime may read the selected profile and patch only the explicit
-# runtime config passed by run-mode. It has no persistence command/API.
-dns = require("modes/dns-policy.py", 'ROOT / "routers.json"', "def patch_sing", "patch_sing(Path(sys.argv[2]), s)")
-for marker in ("save_profile", "atomicWritePrivate"):
+# per-session config passed by run-mode. That patch itself must be a bounded,
+# symlink-safe atomic private replacement; it still has no persistent-profile API.
+dns = require(
+    "modes/dns-policy.py",
+    'ROOT / "routers.json"',
+    "def _read_runtime_json",
+    "os.path.samestat(opened, current)",
+    "def _atomic_private_runtime_json",
+    "os.fsync(stream.fileno())",
+    "os.replace(tmp, path)",
+    "def patch_sing",
+    "patch_sing(Path(sys.argv[2]), s)",
+)
+for marker in ("save_profile", "atomicWritePrivate", "persistProfiles"):
     if marker in dns:
         errors.append(f"modes/dns-policy.py unexpectedly gained persistent-profile logic: {marker}")
 for line, call in python_write_calls("modes/dns-policy.py"):
-    if "write_text" in call and "path.write_text" not in call:
-        errors.append(f"modes/dns-policy.py:{line}: unexpected write outside explicit runtime config: {call}")
+    if "write_text" in call or "write_bytes" in call or "rename" in call:
+        errors.append(f"modes/dns-policy.py:{line}: unexpected direct runtime write: {call}")
+    if "replace" in call and call != "os.replace(tmp, path)":
+        errors.append(f"modes/dns-policy.py:{line}: unexpected replacement target: {call}")
+require(
+    "modes/test_dns_policy_runtime.py",
+    "failed DNS adoption changed the authoritative runtime config",
+    "DNS runtime patch followed a symlink target",
+    "DNS runtime accepted an oversized config",
+)
 
 # Multihop builder reads linked nodes but may only materialize one disposable
 # graph below HOMEVPN_ROOT/run. It must never write routers.json.
@@ -140,11 +159,12 @@ require(
     'python3 "$SCRIPT_DIR/dns-policy.py" patch-sing',
 )
 
-# Behavioral proof: policy/cache tests assert routers.json byte identity across
-# default/manual/auto/Jumbo and cache invalidation cases.
-proc = subprocess.run([sys.executable, str(ROOT / "modes/test_mtu_policy.py")], cwd=ROOT, text=True, capture_output=True)
-if proc.returncode != 0:
-    errors.append("modes/test_mtu_policy.py failed: " + (proc.stdout + "\n" + proc.stderr)[-4000:])
+# Behavioral proof: MTU policy/cache tests assert routers.json byte identity and
+# DNS tests prove failure-safe atomic mutation of only the disposable run config.
+for rel in ("modes/test_mtu_policy.py", "modes/test_dns_policy_runtime.py"):
+    proc = subprocess.run([sys.executable, str(ROOT / rel)], cwd=ROOT, text=True, capture_output=True)
+    if proc.returncode != 0:
+        errors.append(f"{rel} failed: " + (proc.stdout + "\n" + proc.stderr)[-4000:])
 
 if errors:
     print("Runtime state ownership audit: FAIL", file=sys.stderr)
