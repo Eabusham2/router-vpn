@@ -73,9 +73,24 @@ require("cmd/client/router_profile_transaction_test.go", "RollsRAMBackWhenPersis
 require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSymlinkParent", "RejectsOversizedRead")
 
 # MTU adoption remains a two-phase live/session transaction and persistence
-# failure must restore the live interface/in-memory state.
+# failure must restore the live interface/in-memory state. Runtime-profile MTU
+# edits are disposable pre-connect state, but still reject path redirection and
+# restore earlier files if a later adoption fails.
 require("cmd/client/mtu_retest.go", "mtuRetestSnapshot", "rollbackMTULiveResult", "restoreMTUMeasurementFields")
 require("cmd/client/mtu_retest_test.go", "stale", "rollback")
+require(
+    "modes/mtu-policy.py",
+    "_runtime_regular_bytes",
+    "os.path.samestat(opened, current)",
+    "MTU runtime profile adoption failed; prior runtime profile restored",
+    "_load_measurement_cache",
+)
+require(
+    "modes/test_mtu_policy.py",
+    "test_runtime_profile_symlink_is_never_followed",
+    "test_runtime_profile_late_adoption_failure_rolls_back",
+    "test_symlink_cache_is_never_followed",
+)
 
 # Router-agent privileged state must fail closed on symlink/broad permissions and
 # transactionally coordinate durable state with live firewall/DMZ changes.
