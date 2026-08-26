@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import stat
 import sys
+import tempfile
 from pathlib import Path
 
 from profile_id import validate_profile_id
@@ -13,6 +15,8 @@ ROOT = Path(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 PROFILE_ID = os.environ.get("HOMEVPN_PROFILE_ID", "").strip()
 if PROFILE_ID:
     PROFILE_ID = validate_profile_id(PROFILE_ID, default="")
+
+MAX_RUNTIME_CONFIG_BYTES = 8 << 20
 
 KNOWN_TLS_NAMES = {
     "1.1.1.1": "cloudflare-dns.com",
@@ -150,15 +154,73 @@ def sing_server(s: dict, detour: str) -> dict:
     return out
 
 
+def _read_runtime_json(path: Path) -> dict:
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise RuntimeError(f"refusing non-regular/symlink runtime DNS config: {path}")
+    if before.st_size < 0 or before.st_size > MAX_RUNTIME_CONFIG_BYTES:
+        raise RuntimeError(f"runtime DNS config exceeds safety limit: {path}")
+    with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise RuntimeError(f"runtime DNS config changed during open: {path}")
+        body = stream.read(MAX_RUNTIME_CONFIG_BYTES + 1)
+    if len(body) > MAX_RUNTIME_CONFIG_BYTES:
+        raise RuntimeError(f"runtime DNS config exceeds safety limit: {path}")
+    value = json.loads(body)
+    if not isinstance(value, dict):
+        raise RuntimeError("runtime DNS config must be a JSON object")
+    return value
+
+
+def _atomic_private_runtime_json(path: Path, cfg: dict) -> None:
+    body = (json.dumps(cfg, indent=2) + "\n").encode("utf-8")
+    if not body or len(body) > MAX_RUNTIME_CONFIG_BYTES:
+        raise RuntimeError(f"patched runtime DNS config is empty or oversized: {path}")
+    parent = path.parent
+    parent_before = parent.lstat()
+    if stat.S_ISLNK(parent_before.st_mode) or not stat.S_ISDIR(parent_before.st_mode):
+        raise RuntimeError(f"refusing unsafe runtime DNS config parent: {parent}")
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.dns-", dir=parent)
+    tmp = Path(name)
+    committed = False
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb", closefd=True) as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        parent_current = parent.lstat()
+        if stat.S_ISLNK(parent_current.st_mode) or not stat.S_ISDIR(parent_current.st_mode) or not os.path.samestat(parent_before, parent_current):
+            raise RuntimeError(f"runtime DNS config parent changed during patch: {parent}")
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode):
+            raise RuntimeError(f"runtime DNS config target changed before adoption: {path}")
+        os.replace(tmp, path)
+        committed = True
+        try:
+            dir_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    finally:
+        if not committed:
+            tmp.unlink(missing_ok=True)
+
+
 def patch_sing(path: Path, s: dict) -> None:
-    cfg = json.loads(path.read_text())
+    cfg = _read_runtime_json(path)
     detour = choose_detour(cfg)
     cfg["dns"] = {"servers": [sing_server(s, detour)], "final": "selected-dns"}
     route = cfg.setdefault("route", {})
     rules = route.setdefault("rules", [])
     if not any(isinstance(r, dict) and r.get("protocol") == "dns" for r in rules):
         rules.insert(0, {"protocol": "dns", "action": "hijack-dns"})
-    path.write_text(json.dumps(cfg, indent=2) + "\n")
+    _atomic_private_runtime_json(path, cfg)
 
 
 def main() -> None:
