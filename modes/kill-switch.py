@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -28,8 +29,70 @@ PRIVATE_V4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16")
 PRIVATE_V6 = ("fc00::/7", "fe80::/10")
 
 
+MAX_PRIVATE_JSON_BYTES = 4 << 20
+
+
+def _validate_existing_ancestors(path: Path) -> None:
+    current = path.parent
+    while True:
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise RuntimeError(f"refusing non-directory/symlink private path component: {current}")
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+
+def _require_private_dir(path: Path, *, create: bool = False) -> os.stat_result:
+    _validate_existing_ancestors(path)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        if not create:
+            raise
+        path.mkdir(mode=0o700)
+        info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing non-directory/symlink private directory: {path}")
+    return info
+
+
+def _private_regular_bytes(path: Path, limit: int = MAX_PRIVATE_JSON_BYTES) -> bytes:
+    if limit <= 0 or limit > MAX_PRIVATE_JSON_BYTES:
+        limit = MAX_PRIVATE_JSON_BYTES
+    _validate_existing_ancestors(path)
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise RuntimeError(f"refusing non-regular/symlink private file: {path}")
+    if before.st_size < 0 or before.st_size > limit:
+        raise RuntimeError(f"private file exceeds safety limit: {path}")
+    if before.st_mode & 0o077:
+        raise RuntimeError(f"private file permissions are too broad; expected 0600: {path}")
+    with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or opened.st_dev != current.st_dev
+            or opened.st_ino != current.st_ino
+        ):
+            raise RuntimeError(f"private file changed during open: {path}")
+        body = stream.read(limit + 1)
+    if len(body) > limit:
+        raise RuntimeError(f"private file exceeds safety limit: {path}")
+    return body
+
+
 def root_dir() -> Path:
-    return Path(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client")).resolve()
+    root = Path(os.path.abspath(os.path.expanduser(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))))
+    _require_private_dir(root)
+    return root
 
 
 def validate_profile_id(value: str, label: str) -> str:
@@ -50,10 +113,11 @@ def policy_profile_id(runtime_id: str) -> str:
 
 
 def read_store(root: Path) -> dict[str, Any]:
+    path = root / "routers.json"
     try:
-        value = json.loads((root / "routers.json").read_text(encoding="utf-8"))
+        value = json.loads(_private_regular_bytes(path).decode("utf-8"))
     except Exception as exc:
-        raise RuntimeError(f"cannot read routers.json: {exc}") from exc
+        raise RuntimeError(f"cannot safely read routers.json: {exc}") from exc
     if not isinstance(value, dict):
         raise RuntimeError("routers.json is not an object")
     return value
@@ -146,35 +210,112 @@ def state_path(root: Path) -> Path:
     return root / "run" / "kill-switch.json"
 
 
+def _runtime_state_dir(root: Path) -> tuple[Path, os.stat_result]:
+    _require_private_dir(root)
+    run = root / "run"
+    info = _require_private_dir(run, create=True)
+    if info.st_mode & 0o077:
+        os.chmod(run, 0o700)
+        info = run.lstat()
+    return run, info
+
+
 def read_state(root: Path) -> dict[str, Any]:
+    path = state_path(root)
     try:
-        value = json.loads(state_path(root).read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except Exception:
+        raw = _private_regular_bytes(path)
+    except FileNotFoundError:
         return {}
+    except Exception as exc:
+        raise RuntimeError(f"cannot safely read persistent kill-switch state: {exc}") from exc
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"persistent kill-switch state is corrupt: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("persistent kill-switch state must be a JSON object")
+    if value.get("policy") not in {"on-connect", "always"}:
+        raise RuntimeError("persistent kill-switch state contains an invalid policy")
+    return value
 
 
 def write_state(root: Path, value: dict[str, Any]) -> None:
+    if not isinstance(value, dict) or value.get("policy") not in {"on-connect", "always"}:
+        raise RuntimeError("refusing invalid persistent kill-switch state")
     path = state_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix="kill-switch.", dir=str(path.parent))
+    run, parent_before = _runtime_state_dir(root)
+    prior = None
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(value, f, indent=2)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
+        prior = path.lstat()
+    except FileNotFoundError:
+        pass
+    if prior is not None and (stat.S_ISLNK(prior.st_mode) or not stat.S_ISREG(prior.st_mode)):
+        raise RuntimeError(f"refusing non-regular/symlink kill-switch state target: {path}")
+
+    body = (json.dumps(value, indent=2) + "\n").encode("utf-8")
+    if not body or len(body) > MAX_PRIVATE_JSON_BYTES:
+        raise RuntimeError("persistent kill-switch state is empty or oversized")
+    fd, tmp_name = tempfile.mkstemp(prefix=".kill-switch.", dir=str(run))
+    tmp = Path(tmp_name)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb", closefd=True) as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        parent_now = _require_private_dir(run)
+        if parent_now.st_dev != parent_before.st_dev or parent_now.st_ino != parent_before.st_ino:
+            raise RuntimeError("kill-switch state parent changed before adoption")
+        try:
+            current = path.lstat()
+        except FileNotFoundError:
+            current = None
+        if prior is None:
+            if current is not None:
+                raise RuntimeError("kill-switch state target appeared before adoption")
+        elif (
+            current is None
+            or stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or current.st_dev != prior.st_dev
+            or current.st_ino != prior.st_ino
+        ):
+            raise RuntimeError("kill-switch state target changed before adoption")
         os.replace(tmp, path)
         try:
-            os.chmod(path, 0o600)
+            dir_fd = os.open(run, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
         except OSError:
             pass
     finally:
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
+        tmp.unlink(missing_ok=True)
 
+
+def remove_state(root: Path, *, force_recovery: bool = False) -> None:
+    path = state_path(root)
+    run, _ = _runtime_state_dir(root)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(info.st_mode):
+        if not force_recovery:
+            raise RuntimeError("refusing symlink persistent kill-switch state; use local force-off recovery")
+    elif not stat.S_ISREG(info.st_mode):
+        raise RuntimeError("refusing non-regular persistent kill-switch state")
+    path.unlink()
+    try:
+        dir_fd = os.open(run, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError:
+        pass
 
 def remove_table() -> None:
     if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") == "1":
@@ -199,9 +340,11 @@ def apply() -> int:
     control_profile = required_profile(store, control_id, "policy/control")
     policy = policy_value(control_profile)
     if policy == "off":
-        if read_state(root):
+        state = read_state(root)
+        if state or table_exists():
             remove_table()
-            state_path(root).unlink(missing_ok=True)
+        if state:
+            remove_state(root)
         print("kill switch off", file=sys.stderr)
         return 0
     if not sys.platform.startswith("linux"):
@@ -238,7 +381,17 @@ def apply() -> int:
 
 def release(force: bool = False) -> int:
     root = root_dir()
-    state = read_state(root)
+    try:
+        state = read_state(root)
+    except RuntimeError:
+        if not force:
+            raise
+        # force-off is the explicit local recovery path: remove the firewall
+        # first, then unlink only the poisoned leaf itself without following it.
+        remove_table()
+        remove_state(root, force_recovery=True)
+        print("strict kill switch force-off recovery completed", file=sys.stderr)
+        return 0
     if not state:
         if force:
             remove_table()
@@ -247,10 +400,9 @@ def release(force: bool = False) -> int:
         print("strict kill switch remains active (always policy)", file=sys.stderr)
         return 0
     remove_table()
-    state_path(root).unlink(missing_ok=True)
+    remove_state(root, force_recovery=force)
     print("strict kill switch released", file=sys.stderr)
     return 0
-
 
 def reassert() -> int:
     root = root_dir()
@@ -279,7 +431,7 @@ def reassert() -> int:
     current_policy = policy_value(control_profile)
     if current_policy != "always":
         remove_table()
-        state_path(root).unlink(missing_ok=True)
+        remove_state(root)
         print("persistent always state cleared because the current profile policy is no longer always", file=sys.stderr)
         return 0
 
