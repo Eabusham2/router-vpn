@@ -176,12 +176,56 @@ require("server/scripts/create-bundle-json.py", "write_private_json", '"client.j
 
 # Stable identity/credential generators must preserve valid existing state,
 # reject corrupt preserved state, validate candidates before adoption, and batch
-# related identity files together.
-require("server/scripts/ensure-setup-auth.py", "refusing silent rotation", "atomic-private-write.py")
-require("server/scripts/test_setup_auth.py", "corrupt preserved Setup Center token was silently rotated", "symlink Setup Center token")
-require("server/scripts/ensure-node-proof.py", "atomic-private-batch.py", "conflicts with WireGuard server identity")
-require("server/scripts/preserve-generated-state.py", "refusing non-regular/symlink", "corrupt JSON", "expected exactly one preserved")
-require("server/scripts/test_preserve_generated_state.py", "corrupt preserved transport state", "ambiguous preserved TLS credentials", "symlink preserved transport state")
+# related identity files together. Reads are also strict: no symlink parent/leaf,
+# no broad permissions, and no validate-then-replace race.
+require(
+    "server/scripts/ensure-setup-auth.py",
+    "ensure_private_config_dir",
+    "read_preserved_token",
+    "os.path.samestat(opened, current)",
+    "os.fchmod(fd, PRIVATE_MODE)",
+    "refusing silent rotation",
+    "atomic-private-write.py",
+)
+require(
+    "server/scripts/test_setup_auth.py",
+    "corrupt preserved Setup Center token was silently rotated",
+    "symlink Setup Center token",
+    "symlink Setup Center config parent was accepted",
+    "Setup Center token replacement race was accepted",
+)
+require(
+    "server/scripts/ensure-node-proof.py",
+    "ensure_private_parent",
+    "os.path.samestat(opened, current)",
+    "must be mode 0600",
+    "atomic-private-batch.py",
+    "conflicts with WireGuard server identity",
+)
+require(
+    "server/scripts/test_node_proof_private_state.py",
+    "broad router-agent identity state was accepted",
+    "symlink parent for WireGuard identity source was accepted",
+    "WireGuard identity source replacement race was accepted",
+)
+require(
+    "server/scripts/preserve-generated-state.py",
+    "_ensure_private_parent",
+    "must be mode 0600",
+    "os.path.samestat(opened, current)",
+    "refusing non-regular/symlink",
+    "corrupt JSON",
+    "expected exactly one preserved",
+)
+require(
+    "server/scripts/test_preserve_generated_state.py",
+    "corrupt preserved transport state",
+    "ambiguous preserved TLS credentials",
+    "symlink preserved transport state",
+    "symlink parent for preserved transport state was accepted",
+    "broad-permission preserved credential state was accepted",
+    "preserved credential file replacement race was accepted",
+)
 require("server/scripts/generate-transports.sh", "refusing silent", "PRIVATE_BATCH", "private batch helper")
 require("server/scripts/generate-xray-pq.sh", "refusing silent", "Validate the complete candidate generation", "PRIVATE_BATCH")
 require("server/scripts/generate-tls-alternates.sh", "refusing silent", "Validate every candidate", "PRIVATE_BATCH")
@@ -217,6 +261,7 @@ for test in (
     "server/scripts/test_atomic_private_publication.py",
     "server/scripts/test_dns_benchmark_persistence.py",
     "server/scripts/test_setup_auth.py",
+    "server/scripts/test_node_proof_private_state.py",
     "server/scripts/test_preserve_generated_state.py",
 ):
     run_test(test)
