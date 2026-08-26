@@ -68,12 +68,33 @@ require(
     "atomicWritePrivate",
 )
 
+# Privileged/runtime Python helpers share one strict read-only view of the
+# controller-owned profile store. It rejects redirected ancestors/leaves,
+# re-proves the opened inode, and safely hardens legacy broad mode bits.
+require(
+    "modes/private_profile_store.py",
+    "def private_root",
+    "def read_private_bytes",
+    "getattr(os, \"O_NOFOLLOW\"",
+    "os.path.samestat(opened, current)",
+    "os.fchmod(stream.fileno(), 0o600)",
+    "def read_profile_store",
+)
+require(
+    "modes/test_private_profile_store.py",
+    "corrupt profile store was accepted",
+    "symlink profile store was accepted",
+    "symlink private root was accepted",
+    "profile-store identity swap was accepted",
+)
+
 # DNS policy runtime may read the selected profile and patch only the explicit
 # per-session config passed by run-mode. That patch itself must be a bounded,
 # symlink-safe atomic private replacement; it still has no persistent-profile API.
 dns = require(
     "modes/dns-policy.py",
-    'ROOT / "routers.json"',
+    "from private_profile_store import private_root, read_profile_store",
+    "store = read_profile_store(ROOT)",
     "def _read_runtime_json",
     "os.path.samestat(opened, current)",
     "def _atomic_private_runtime_json",
@@ -82,7 +103,7 @@ dns = require(
     "def patch_sing",
     "patch_sing(Path(sys.argv[2]), s)",
 )
-for marker in ("save_profile", "atomicWritePrivate", "persistProfiles"):
+for marker in ("save_profile", "atomicWritePrivate", "persistProfiles", '(ROOT / "routers.json").read_text'):
     if marker in dns:
         errors.append(f"modes/dns-policy.py unexpectedly gained persistent-profile logic: {marker}")
 for line, call in python_write_calls("modes/dns-policy.py"):
@@ -102,7 +123,8 @@ require(
 # bounded/private/atomic and source profile trees may not contain symlinks.
 require(
     "modes/multihop.py",
-    'root / "routers.json"',
+    "from private_profile_store import private_root, read_profile_store",
+    "return read_profile_store(root)",
     'run_root = (root / "run").resolve()',
     "safe_under(run_root, outdir)",
     "def _runtime_parent",
@@ -113,7 +135,7 @@ require(
     "os.replace(tmp, path)",
     "exit multihop profile contains a symlink",
 )
-forbid("modes/multihop.py", "routers_path.write", 'root / "routers.json").write', "persistProfiles")
+forbid("modes/multihop.py", "routers_path.write", 'root / "routers.json").write', '(root / "routers.json").read_text', "persistProfiles")
 for line, call in python_write_calls("modes/multihop.py"):
     if "write_text" in call or "write_bytes" in call or "rename" in call:
         errors.append(f"modes/multihop.py:{line}: unexpected direct runtime write: {call}")
@@ -130,13 +152,16 @@ require(
 # stop/start candidate processes, but selected profile policy remains controller-owned.
 require(
     "modes/orchestrate.py",
-    '(ROOT / "routers.json").read_text()',
+    "from private_profile_store import private_root, read_profile_store",
+    "store = read_profile_store(ROOT)",
     "def selected_profile()",
     "def smart_auto()",
     "def custom()",
 )
 for line, call in python_write_calls("modes/orchestrate.py"):
     errors.append(f"modes/orchestrate.py:{line}: orchestrator unexpectedly writes filesystem state: {call}")
+if '(ROOT / "routers.json").read_text' in read("modes/orchestrate.py"):
+    errors.append("modes/orchestrate.py regained plain profile-store reads")
 
 # ALL reads base preference and owns only a caller-selected runtime result file.
 # Its result publisher is confined to HOMEVPN_ROOT, validates all ancestors and
@@ -178,6 +203,8 @@ require(
 require(
     "modes/mtu-policy.py",
     "The Go controller is the sole writer of routers.json/profile policy.",
+    "from private_profile_store import private_root, read_private_json, read_profile_store",
+    "store = read_profile_store(root)",
     'root / "state" / "mtu-auto-cache.json"',
     "measurement-only auto-MTU memory, never routers.json",
     "runtime MTU policy",
@@ -185,7 +212,12 @@ require(
 for line, call in python_write_calls("modes/mtu-policy.py"):
     if "routers.json" in call:
         errors.append(f"modes/mtu-policy.py:{line}: runtime regained routers.json write ownership: {call}")
-forbid("modes/mtu-policy.py", 'os.replace(tmp_name, root / "routers.json")', 'path = root / "routers.json"\n    path.parent.mkdir')
+forbid(
+    "modes/mtu-policy.py",
+    'os.replace(tmp_name, root / "routers.json")',
+    'path = root / "routers.json"\n    path.parent.mkdir',
+    '(root / "routers.json").read_text',
+)
 require(
     "modes/test_mtu_policy.py",
     "runtime MTU policy mutated controller-owned routers.json",
@@ -250,6 +282,7 @@ for rel in (
     "modes/test_all_result.py",
     "modes/test_prepare_runtime_profile.py",
     "modes/test_kill_switch.py",
+    "modes/test_private_profile_store.py",
 ):
     proc = subprocess.run([sys.executable, str(ROOT / rel)], cwd=ROOT, text=True, capture_output=True)
     if proc.returncode != 0:
