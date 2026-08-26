@@ -116,5 +116,47 @@ func TestStandardExitStoreRefusesSymlink(t *testing.T) {
 	root := t.TempDir(); old := os.Getenv("HOMEVPN_ROOT"); t.Cleanup(func() { _ = os.Setenv("HOMEVPN_ROOT", old) }); _ = os.Setenv("HOMEVPN_ROOT", root)
 	target := filepath.Join(root, "target"); if err := os.WriteFile(target, []byte(`{"schema_version":1,"exits":[]}`), 0o600); err != nil { t.Fatal(err) }
 	if err := os.Symlink(target, filepath.Join(root, "standard-exits.json")); err != nil { t.Fatal(err) }
-	if _, err := loadStandardExitStore(); err == nil || !strings.Contains(err.Error(), "non-symlink") { t.Fatalf("unexpected %v", err) }
+	if _, err := loadStandardExitStore(); err == nil || !strings.Contains(err.Error(), "symlink") { t.Fatalf("unexpected %v", err) }
+}
+
+
+func TestStandardExitStoreRejectsSymlinkParent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions vary on Windows runners")
+	}
+	root := t.TempDir()
+	realRoot := filepath.Join(root, "real")
+	if err := os.Mkdir(realRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkRoot := filepath.Join(root, "linked")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	old := os.Getenv("HOMEVPN_ROOT")
+	t.Cleanup(func() { _ = os.Setenv("HOMEVPN_ROOT", old) })
+	_ = os.Setenv("HOMEVPN_ROOT", linkRoot)
+	store := standardExitStore{SchemaVersion: 1, Exits: []standardExit{validTestStandardExit("wireguard")}}
+	if err := persistStandardExitStore(store); err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("symlinked standard-exit parent was accepted: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(realRoot, "standard-exits.json")); !os.IsNotExist(err) {
+		t.Fatalf("write escaped through symlink parent: %v", err)
+	}
+}
+
+func TestStandardExitStoreAtomicWriterLeavesNoTempFiles(t *testing.T) {
+	root := t.TempDir()
+	old := os.Getenv("HOMEVPN_ROOT")
+	t.Cleanup(func() { _ = os.Setenv("HOMEVPN_ROOT", old) })
+	_ = os.Setenv("HOMEVPN_ROOT", root)
+	store := standardExitStore{SchemaVersion: 1, Exits: []standardExit{validTestStandardExit("hysteria2")}}
+	if err := persistStandardExitStore(store); err != nil {
+		t.Fatal(err)
+	}
+	if matches, err := filepath.Glob(filepath.Join(root, ".standard-exits.json.tmp-*")); err != nil {
+		t.Fatal(err)
+	} else if len(matches) != 0 {
+		t.Fatalf("temporary standard-exit files survived commit: %v", matches)
+	}
 }
