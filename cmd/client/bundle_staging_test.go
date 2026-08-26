@@ -93,39 +93,58 @@ func TestBundleCommitRejectsClientRootRetargetAfterStaging(t *testing.T) {
 		t.Skip("Windows CI may not grant symlink privileges; containment is covered by path tests there")
 	}
 	parent := t.TempDir()
-	realA := filepath.Join(parent, "root-a")
-	realB := filepath.Join(parent, "root-b")
-	if err := os.Mkdir(realA, 0o700); err != nil {
+	root := filepath.Join(parent, "client-root")
+	outside := filepath.Join(parent, "root-b")
+	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(realB, 0o700); err != nil {
+	if err := os.Mkdir(outside, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(parent, "client-root")
-	if err := os.Symlink(realA, link); err != nil {
-		t.Fatal(err)
-	}
-	stage, err := newStagedBundle(link, "router-test")
+	stage, err := newStagedBundle(root, "router-test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stage.cleanup()
 	if err := stage.writeProfiles(map[string]map[string]string{
 		"wg": {"wg.conf": base64.StdEncoding.EncodeToString([]byte("private"))},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(link); err != nil {
+
+	preserved := filepath.Join(parent, "root-a-preserved")
+	if err := os.Rename(root, preserved); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(realB, link); err != nil {
+	if err := os.WriteFile(filepath.Join(outside, "sentinel"), []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := stage.commit(link, "router-test"); err == nil {
-		t.Fatal("commit accepted client-root symlink retargeted after staging")
+	if err := os.Symlink(outside, root); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(realB, "generated", "router-test")); !os.IsNotExist(err) {
+	if err := stage.commit(root, "router-test"); err == nil {
+		t.Fatal("commit accepted client root retargeted after staging")
+	}
+	// cleanup while the lexical root is redirected must fail closed and must not
+	// follow that redirect into the new target.
+	stage.cleanup()
+	if got, err := os.ReadFile(filepath.Join(outside, "sentinel")); err != nil || string(got) != "keep" {
+		t.Fatalf("retargeted client root was modified during cleanup: %q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "generated", "router-test")); !os.IsNotExist(err) {
 		t.Fatalf("retargeted client root received private profile: %v", err)
+	}
+
+	// Restore the original lexical root and prove the staged private directory can
+	// then be cleaned without leaking data indefinitely.
+	if err := os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(preserved, root); err != nil {
+		t.Fatal(err)
+	}
+	stage.cleanup()
+	if _, err := os.Stat(stage.root); !os.IsNotExist(err) {
+		t.Fatalf("staging directory survived cleanup after original root restored: %v", err)
 	}
 }
 
