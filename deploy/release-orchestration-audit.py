@@ -81,6 +81,7 @@ for marker in (
     "python3 deploy/latest-a20-product-contract-audit.py",
     "python3 deploy/binding-edge-requirements-audit.py",
     "client\\test-windows-kill-switch.ps1",
+    "client\\test-private-router-vpn-state.ps1",
     "python3 server/scripts/test_setup_center_ux_patch.py",
     "python3 server/scripts/test_setup_center_router_onboarding.py",
     "python3 android/test_android_connection_profiles_contract.py",
