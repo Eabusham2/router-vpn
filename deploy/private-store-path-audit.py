@@ -30,6 +30,19 @@ require(
     "TestPrivateStoreRejectsNestedSymlinkAncestor",
 )
 require(
+    "cmd/client/bundle_staging.go",
+    "canonicalBundleRoot",
+    "validatePrivateParent",
+    "client root must be a non-symlink directory",
+    "ensurePrivateDirectoryNoSymlink",
+)
+require(
+    "cmd/client/bundle_staging_path_test.go",
+    "TestBundleOperationsRejectSymlinkedClientRoot",
+    "TestBundleOperationsRejectNestedSymlinkAncestor",
+    "TestStagedBundleImportRejectsExistingDestination",
+)
+require(
     "cmd/router-agent/private_state.go",
     "validatePrivilegedStateParent",
     "validateAncestors",
@@ -71,6 +84,39 @@ require(
     "accepted a nested symlink ancestor",
 )
 require(
+    "server/scripts/ensure-setup-auth.py",
+    "_validate_existing_ancestors",
+    "changed during read",
+    "Path(os.path.abspath(base))",
+)
+require(
+    "server/scripts/test_setup_auth.py",
+    "nested Setup Center symlink ancestor was accepted",
+    "post-read replacement race was accepted",
+)
+require(
+    "server/scripts/ensure-node-proof.py",
+    "_validate_existing_ancestors",
+    "changed during read",
+    "path component",
+)
+require(
+    "server/scripts/test_node_proof_private_state.py",
+    "nested node-proof symlink ancestor was accepted",
+    "router-agent replacement during node-proof read was accepted",
+)
+require(
+    "server/scripts/preserve-generated-state.py",
+    "_validate_existing_ancestors",
+    "changed during read",
+    "Path(os.path.abspath(sys.argv[2]))",
+)
+require(
+    "server/scripts/test_preserve_generated_state.py",
+    "nested preserved credential symlink ancestor was accepted",
+    "preserved credential post-read replacement race was accepted",
+)
+require(
     "server/scripts/rosenpass-private-state.py",
     "_validate_existing_ancestors",
     "changed during read",
@@ -81,9 +127,20 @@ require(
     "nested Rosenpass symlink ancestor was accepted",
     "changed during open",
 )
+require(
+    "server/finalize/sync-endpoint.py",
+    "_validate_owned_ancestors",
+    "changed during read",
+    "Path(os.path.abspath(base))",
+)
+require(
+    "server/finalize/test_sync_endpoint.py",
+    "test_nested_symlink_owned_ancestor_is_rejected_before_mutation",
+    "test_owned_file_identity_change_during_read_is_rejected",
+)
 
 if errors:
     for error in errors:
         print("ERROR:", error)
     raise SystemExit(1)
-print("Router VPN recursive private-store path boundary audit: PASS")
+print("Router VPN recursive private-store/import/identity path boundary audit: PASS")
