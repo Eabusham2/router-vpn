@@ -21,10 +21,22 @@ MAX_PRIVATE_STATE = 4 << 20
 PRIVATE_MODE = 0o600
 
 
+def _validate_existing_ancestors(parent: Path, label: str) -> None:
+    for current in (parent, *parent.parents):
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise ValueError(f"refusing non-directory/symlink path component for {label}: {current}")
+
+
 def _ensure_private_parent(path: Path, label: str) -> None:
+    _validate_existing_ancestors(path.parent, label)
     info = path.parent.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise ValueError(f"refusing non-directory/symlink parent for {label}")
+    _validate_existing_ancestors(path.parent, label)
 
 
 def _read_regular_text(path: Path, label: str) -> str:
@@ -54,6 +66,10 @@ def _read_regular_text(path: Path, label: str) -> str:
             total += len(chunk)
             if total > MAX_PRIVATE_STATE:
                 raise ValueError(f"{label} is oversized")
+        _ensure_private_parent(path, label)
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise ValueError(f"{label} changed during read")
         try:
             return b"".join(chunks).decode("utf-8", errors="strict")
         except UnicodeDecodeError as exc:
@@ -191,7 +207,10 @@ def main() -> int:
         print("usage: preserve-generated-state.py transports|xray|tls|advanced BASE", file=sys.stderr)
         return 2
     try:
-        base = Path(sys.argv[2]).resolve()
+        # Keep the lexical path so a symlinked base remains visible to the
+        # recursive private-parent checks instead of being resolved away.
+        base = Path(os.path.abspath(sys.argv[2]))
+        _validate_existing_ancestors(base, "preserved state base")
         _emit(READERS[sys.argv[1]](base))
     except Exception as exc:
         print(f"preserved state unavailable: {exc}", file=sys.stderr)
