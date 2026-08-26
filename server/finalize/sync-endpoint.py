@@ -49,16 +49,41 @@ def parse_endpoint(value: str) -> tuple[str, str]:
         return endpoint, endpoint
 
 
+def ensure_owned_parent(path: pathlib.Path) -> None:
+    parent = path.parent
+    info = parent.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing non-directory/symlink owned parent: {parent}")
+
+
 def read_owned_file(path: pathlib.Path) -> bytes:
+    ensure_owned_parent(path)
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink owned file: {path}")
     if info.st_size > MAX_OWNED_FILE:
         raise RuntimeError(f"owned file exceeds safety limit: {path}")
-    data = path.read_bytes()
-    if len(data) > MAX_OWNED_FILE:
-        raise RuntimeError(f"owned file exceeds safety limit: {path}")
-    return data
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise RuntimeError(f"owned file changed during open: {path}")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, min(64 * 1024, MAX_OWNED_FILE + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_OWNED_FILE:
+                raise RuntimeError(f"owned file exceeds safety limit: {path}")
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
 
 
 def build_changes(base: pathlib.Path, endpoint: str, rendered: str) -> list[Change]:
@@ -123,7 +148,7 @@ def build_changes(base: pathlib.Path, endpoint: str, rendered: str) -> list[Chan
 
 
 def stage_private(path: pathlib.Path, data: bytes) -> pathlib.Path:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    ensure_owned_parent(path)
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.endpoint-", dir=path.parent)
     tmp = pathlib.Path(name)
     try:
@@ -143,6 +168,9 @@ def stage_private(path: pathlib.Path, data: bytes) -> pathlib.Path:
 
 
 def fsync_directory(path: pathlib.Path) -> None:
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing non-directory/symlink owned parent: {path}")
     flags = getattr(os, "O_DIRECTORY", 0) | os.O_RDONLY
     fd = os.open(path, flags)
     try:
@@ -157,6 +185,7 @@ def restore_changes(changes: Iterable[Change]) -> list[str]:
         tmp: pathlib.Path | None = None
         try:
             tmp = stage_private(change.path, change.before)
+            ensure_owned_parent(change.path)
             os.replace(tmp, change.path)
             tmp = None
             fsync_directory(change.path.parent)
@@ -180,6 +209,7 @@ def apply_transaction(changes: list[Change]) -> None:
             staged[change.path] = stage_private(change.path, change.after)
 
         for change in changes:
+            ensure_owned_parent(change.path)
             tmp = staged.pop(change.path)
             os.replace(tmp, change.path)
             adopted.append(change)
