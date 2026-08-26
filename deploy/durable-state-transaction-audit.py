@@ -72,12 +72,7 @@ require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsOve
 
 # MTU adoption remains a two-phase live/session transaction and persistence
 # failure must restore the live interface/in-memory state.
-require(
-    "cmd/client/mtu_retest.go",
-    "mtuRetestSnapshot",
-    "rollback",
-    "session",
-)
+require("cmd/client/mtu_retest.go", "mtuRetestSnapshot", "rollbackMTULiveResult", "restoreMTUMeasurementFields")
 require("cmd/client/mtu_retest_test.go", "stale", "rollback")
 
 # Router-agent privileged state must fail closed on symlink/broad permissions and
@@ -111,12 +106,7 @@ require("cmd/router-agent/admin_rollback_test.go", "ReportsIncompleteRollback")
 
 # Exact-SHA updater recovery state is a hard transaction boundary. The previous
 # exact compose must survive process restart until success or proven rollback.
-require(
-    "cmd/update-controller/private_state.go",
-    "validateUpdaterPrivateFile",
-    "os.SameFile",
-    "atomicWriteUpdaterPrivate",
-)
+require("cmd/update-controller/private_state.go", "validateUpdaterPrivateFile", "os.SameFile", "atomicWriteUpdaterPrivate")
 require(
     "cmd/update-controller/recovery.go",
     "rollbackComposePath",
@@ -161,13 +151,7 @@ require("server/scripts/test_dns_benchmark_persistence.py", "DNS benchmark code 
 require("server/scripts/atomic-private-write.py", "mkstemp", "os.fsync", "os.replace", "0o600")
 require("server/scripts/atomic-private-batch.py", "restore", "adopt", "rollback was incomplete", "os.replace")
 require("server/scripts/test_atomic_private_publication.py", "fail_second_adoption", "prior state restored")
-require(
-    "server/scripts/create-bundle-json.py",
-    "write_private_json",
-    '"client.json"',
-    '"routers.json"',
-    '"router-vpn-bundle.json"',
-)
+require("server/scripts/create-bundle-json.py", "write_private_json", '"client.json"', '"routers.json"', '"router-vpn-bundle.json"')
 
 # Stable identity/credential generators must preserve valid existing state,
 # reject corrupt preserved state, validate candidates before adoption, and batch
@@ -176,6 +160,7 @@ require("server/scripts/ensure-setup-auth.py", "refusing silent rotation", "atom
 require("server/scripts/test_setup_auth.py", "corrupt preserved Setup Center token was silently rotated", "symlink Setup Center token")
 require("server/scripts/ensure-node-proof.py", "atomic-private-batch.py", "conflicts with WireGuard server identity")
 require("server/scripts/preserve-generated-state.py", "refusing non-regular/symlink", "corrupt JSON", "expected exactly one preserved")
+require("server/scripts/test_preserve_generated_state.py", "corrupt preserved transport state", "ambiguous preserved TLS credentials", "symlink preserved transport state")
 require("server/scripts/generate-transports.sh", "refusing silent", "PRIVATE_BATCH", "private batch helper")
 require("server/scripts/generate-xray-pq.sh", "refusing silent", "Validate the complete candidate generation", "PRIVATE_BATCH")
 require("server/scripts/generate-tls-alternates.sh", "refusing silent", "Validate every candidate", "PRIVATE_BATCH")
@@ -183,6 +168,9 @@ require("server/scripts/generate-aux-proxies.py", "refusing silent credential ro
 require("server/scripts/generate-rosenpass.sh", "Refusing to overwrite existing Rosenpass identity", "PRIVATE_BATCH")
 require("server/scripts/ensure-rosenpass.sh", "partial/unsafe", "PRIVATE_BATCH")
 require("server/scripts/generate-advanced-profiles.sh", "refusing silent REALITY credential rotation", "Validate the entire candidate tree", "PRIVATE_BATCH")
+require("server/scripts/enhance-max-pq.py", "atomic-private-batch.py", "one private transaction")
+require("server/scripts/wrap-xhttp-tun.py", "before atomic adoption", "atomic-private-write.py")
+require("server/scripts/generate-stack-profiles.py", "atomic-private-batch.py", "stack-profiles-")
 forbid("server/scripts/generate-transports.sh", "preserve-generated-state.py transports \"$BASE\" 2>/dev/null || true")
 forbid("server/scripts/generate-xray-pq.sh", "preserve-generated-state.py xray \"$BASE\" 2>/dev/null || true")
 forbid("server/scripts/generate-tls-alternates.sh", "preserve-generated-state.py tls \"$BASE\" 2>/dev/null || true")
@@ -190,11 +178,17 @@ forbid("server/scripts/generate-advanced-profiles.sh", "preserve-generated-state
 
 # Fresh init, finalization, and upgrade paths publish credential-bearing state
 # through the same helpers and only mark completion after runtime application.
-require("server/init/noninteractive.sh", "atomic-private-write.py", 'CREDENTIALS.txt', ".initialized")
-require("server/finalize/finalize.sh", "atomic-private-write.py", "atomic-private-batch.py", 'CREDENTIALS.txt', ".finalized")
-require("server/finalize/upgrade-safe.sh", "atomic-private-write.py", "atomic-private-batch.py", 'CREDENTIALS.txt', ".finalized")
+require("server/init/noninteractive.sh", "atomic-private-write.py", "CREDENTIALS.txt", ".initialized")
+require("server/finalize/finalize.sh", "atomic-private-write.py", "atomic-private-batch.py", "CREDENTIALS.txt", ".finalized")
+require("server/finalize/upgrade-safe.sh", "atomic-private-write.py", "atomic-private-batch.py", "CREDENTIALS.txt", ".finalized")
 forbid("server/finalize/finalize.sh", 'cat >"$BASE/client-bundle/CREDENTIALS.txt"', 'touch "$BASE/.finalized"')
 forbid("server/finalize/upgrade-safe.sh", 'cat >"$BASE/client-bundle/CREDENTIALS.txt"', 'touch "$BASE/.finalized"')
+
+# Setup assets are derived private presentation data containing import payloads,
+# not stable identity or active policy. They are deliberately excluded from the
+# authoritative-state transaction set; failure aborts finalization and they are
+# regenerated from the already-transactional private source bundle.
+require("server/scripts/generate-setup-assets.py", "private router credentials", 'chmod(0o600)')
 
 # Execute the focused Python behavior contracts from the authoritative gate.
 for test in (
@@ -202,6 +196,7 @@ for test in (
     "server/scripts/test_atomic_private_publication.py",
     "server/scripts/test_dns_benchmark_persistence.py",
     "server/scripts/test_setup_auth.py",
+    "server/scripts/test_preserve_generated_state.py",
 ):
     run_test(test)
 
