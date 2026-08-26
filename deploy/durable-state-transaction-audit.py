@@ -53,6 +53,8 @@ require(
     "cmd/client/private_store.go",
     "hardenPrivateRegular",
     "readPrivateRegular",
+    "validatePrivateParent",
+    "os.SameFile(opened, current)",
     "os.CreateTemp",
     "tmp.Sync()",
     "os.Rename(tmpPath, path)",
@@ -68,7 +70,7 @@ require("cmd/client/connection_profiles.go", "readPrivateRegular", "atomicWriteP
 require("cmd/client/connection_profile_setup.go", "readPrivateRegular", "atomicWritePrivate")
 require("cmd/client/strategy_modes.go", "readPrivateRegular", "atomicWritePrivate")
 require("cmd/client/router_profile_transaction_test.go", "RollsRAMBackWhenPersistenceFails", "CompetingMutation")
-require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsOversizedRead")
+require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSymlinkParent", "RejectsOversizedRead")
 
 # MTU adoption remains a two-phase live/session transaction and persistence
 # failure must restore the live interface/in-memory state.
@@ -80,6 +82,7 @@ require("cmd/client/mtu_retest_test.go", "stale", "rollback")
 require(
     "cmd/router-agent/private_state.go",
     "validatePrivilegedStateFile",
+    "validatePrivilegedStateParent",
     "os.SameFile",
     "os.CreateTemp",
     "tmp.Sync()",
@@ -100,17 +103,18 @@ require(
     "atomicWritePrivilegedState",
 )
 require("cmd/router-agent/admin_server_control.go", "readPrivilegedState", "atomicWritePrivilegedState")
-require("cmd/router-agent/private_state_test.go", "RejectsSymlink", "RejectsOversizedRead")
+require("cmd/router-agent/private_state_test.go", "RejectsSymlink", "RejectsSymlinkParent", "RejectsOversizedRead")
 require("cmd/router-agent/admin_forwarding_extension_test.go", "LiveApplyFailureRestoresDurableAndRAMState")
 require("cmd/router-agent/admin_rollback_test.go", "ReportsIncompleteRollback")
 
 # Exact-SHA updater recovery state is a hard transaction boundary. The previous
 # exact compose must survive process restart until success or proven rollback.
-require("cmd/update-controller/private_state.go", "validateUpdaterPrivateFile", "os.SameFile", "atomicWriteUpdaterPrivate")
+require("cmd/update-controller/private_state.go", "validateUpdaterPrivateFile", "validateUpdaterPrivateParent", "os.SameFile", "atomicWriteUpdaterPrivate")
 require(
     "cmd/update-controller/recovery.go",
     "rollbackComposePath",
     "saveRollbackCompose",
+    "clear stale rollback snapshot before new update",
     "loadRollbackCompose",
     "restorePreviousStack",
     "rollbackAfterDeploymentFailure",
@@ -124,13 +128,17 @@ require(
     "completeRecoveredUpdate",
     "exact_compose_verified",
 )
-require("cmd/update-controller/recovery_test.go", "RollbackComposeSnapshotIsPrivateAndExact", "InterruptedPreDeploymentApplying")
-require("cmd/update-controller/private_state_test.go", "RejectsBroadPermissions", "RejectsSymlink", "RejectsOversizedRead")
+require("cmd/update-controller/recovery_test.go", "RollbackComposeSnapshotIsPrivateAndExact", "UnsafeStaleSnapshotBlocksNewTransaction", "InterruptedPreDeploymentApplying")
+require("cmd/update-controller/private_state_test.go", "RejectsBroadPermissions", "RejectsSymlink", "RejectsSymlinkParent", "RejectsOversizedRead")
 
 # Endpoint synchronization owns only explicit raw WG/AWG endpoint fields + the
 # owned home Router VPN profile and adopts all changed files as one transaction.
+# Its independent publisher must reject symlink parents and re-prove open-file
+# identity before reading an owned authoritative target.
 require(
     "server/finalize/sync-endpoint.py",
+    "ensure_owned_parent",
+    "os.path.samestat(opened, current)",
     "build_changes",
     "stage_private",
     "apply_transaction",
@@ -138,7 +146,13 @@ require(
     'profile.get("id")',
     '"home"',
 )
-require("server/finalize/test_sync_endpoint.py", "late_adoption_failure", "symlink_owned_target")
+require(
+    "server/finalize/test_sync_endpoint.py",
+    "late_adoption_failure",
+    "symlink_owned_target",
+    "symlink_owned_parent",
+    "identity_change_during_open",
+)
 require_absent("server/scripts/update-endpoint.sh")
 
 # DNS benchmark is measurement-only; fresh bundle generation may consume the
