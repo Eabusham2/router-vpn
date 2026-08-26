@@ -132,3 +132,39 @@ func TestValidateUpdateStateRejectsUnknownStatusAndInvalidSHA(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateUpdateStateRejectsImpossibleRecoveryShapes(t *testing.T) {
+	invalid := []updateState{
+		{Version: 1, Status: "idle", TargetSHA: testNewSHA},
+		{Version: 1, Status: "idle", FromSHA: testOldSHA},
+		{Version: 1, Status: "applying"},
+		{Version: 1, Status: "finalizing", TargetSHA: testNewSHA},
+		{Version: 1, Status: "finalizing", FromSHA: testOldSHA},
+		{Version: 1, Status: "rolling-back", TargetSHA: testNewSHA},
+		{Version: 1, Status: "rolling-back", FromSHA: testOldSHA},
+		{Version: 1, Status: "complete", TargetSHA: testNewSHA},
+		{Version: 1, Status: "complete", FromSHA: testOldSHA},
+		{Version: 1, Status: "failed"},
+	}
+	for _, state := range invalid {
+		if err := validateUpdateState(state); err == nil {
+			t.Fatalf("impossible recovery state accepted: %+v", state)
+		}
+	}
+
+	valid := []updateState{
+		{Version: 1, Status: "idle"},
+		{Version: 1, Status: "applying", TargetSHA: testNewSHA},
+		{Version: 1, Status: "applying", FromSHA: testOldSHA, TargetSHA: testNewSHA},
+		{Version: 1, Status: "finalizing", FromSHA: testOldSHA, TargetSHA: testNewSHA},
+		{Version: 1, Status: "rolling-back", FromSHA: testOldSHA, TargetSHA: testNewSHA},
+		{Version: 1, Status: "failed", TargetSHA: testNewSHA},
+		{Version: 1, Status: "failed", FromSHA: testOldSHA, TargetSHA: testNewSHA},
+		{Version: 1, Status: "complete", FromSHA: testOldSHA, TargetSHA: testNewSHA},
+	}
+	for _, state := range valid {
+		if err := validateUpdateState(state); err != nil {
+			t.Fatalf("valid recovery state rejected: %+v: %v", state, err)
+		}
+	}
+}
