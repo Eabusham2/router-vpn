@@ -101,6 +101,7 @@ for audit in (
     "deploy/profile-persistence-error-audit.py",
     "deploy/standard-exit-private-runtime-audit.py",
     "deploy/portable-private-state-audit.py",
+    "deploy/bundle-staging-durability-audit.py",
     "deploy/durable-state-syntax-audit.py",
     "deploy/durable-state-transaction-audit.py",
     "server/scripts/test_preserve_generated_state.py",
@@ -133,4 +134,4 @@ assert not [
     if g.get("kind") == "source" and not g.get("pass")
 ], "legacy source gate failed inside recovered release audit"
 
-print("authoritative one-SHA release orchestration + Portable private bootstrap/state + standard-exit private runtimes + runtime/profile ownership + profile persistence error classification + private-store boundaries + durable-state syntax/transactions + upgrade preservation + complete recovered source/security audit: OK")
+print("authoritative one-SHA release orchestration + bundle staging durability + Portable private bootstrap/state + standard-exit private runtimes + runtime/profile ownership + profile persistence error classification + private-store boundaries + durable-state syntax/transactions + upgrade preservation + complete recovered source/security audit: OK")
