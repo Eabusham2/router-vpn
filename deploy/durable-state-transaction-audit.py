@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+errors: list[str] = []
+
+
+def text(rel: str) -> str:
+    path = ROOT / rel
+    if not path.is_file():
+        errors.append(f"missing required durable-state source: {rel}")
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def require(rel: str, *markers: str) -> None:
+    source = text(rel)
+    for marker in markers:
+        if marker not in source:
+            errors.append(f"{rel}: missing durable-state marker {marker!r}")
+
+
+def forbid(rel: str, *markers: str) -> None:
+    source = text(rel)
+    for marker in markers:
+        if marker in source:
+            errors.append(f"{rel}: forbidden durability regression marker {marker!r}")
+
+
+def require_absent(rel: str) -> None:
+    if (ROOT / rel).exists():
+        errors.append(f"obsolete unsafe path must stay removed: {rel}")
+
+
+def run_test(rel: str) -> None:
+    path = ROOT / rel
+    if not path.is_file():
+        errors.append(f"missing durable-state behavior test: {rel}")
+        return
+    proc = subprocess.run([sys.executable, str(path)], cwd=ROOT, text=True, capture_output=True)
+    if proc.returncode != 0:
+        output = (proc.stdout + "\n" + proc.stderr).strip()
+        errors.append(f"{rel}: behavior test failed: {output[-4000:]}")
+
+
+# Client-side authoritative state: bounded private regular files, random
+# same-directory temps, fsync-before-rename, and no post-rename false failure.
+require(
+    "cmd/client/private_store.go",
+    "hardenPrivateRegular",
+    "readPrivateRegular",
+    "os.CreateTemp",
+    "tmp.Sync()",
+    "os.Rename(tmpPath, path)",
+)
+require(
+    "cmd/client/main.go",
+    "beginMutationOperation",
+    "previousProfiles := cloneRouterProfileStore",
+    "a.rollbackProfilesLocked(previousProfiles)",
+    "atomicWritePrivate(a.cfg.ProfilesFile",
+)
+require("cmd/client/connection_profiles.go", "readPrivateRegular", "atomicWritePrivate")
+require("cmd/client/connection_profile_setup.go", "readPrivateRegular", "atomicWritePrivate")
+require("cmd/client/strategy_modes.go", "readPrivateRegular", "atomicWritePrivate")
+require("cmd/client/router_profile_transaction_test.go", "RollsRAMBackWhenPersistenceFails", "CompetingMutation")
+require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsOversizedRead")
+
+# MTU adoption remains a two-phase live/session transaction and persistence
+# failure must restore the live interface/in-memory state.
+require(
+    "cmd/client/mtu_retest.go",
+    "mtuRetestSnapshot",
+    "rollback",
+    "session",
+)
+require("cmd/client/mtu_retest_test.go", "stale", "rollback")
+
+# Router-agent privileged state must fail closed on symlink/broad permissions and
+# transactionally coordinate durable state with live firewall/DMZ changes.
+require(
+    "cmd/router-agent/private_state.go",
+    "validatePrivilegedStateFile",
+    "os.SameFile",
+    "os.CreateTemp",
+    "tmp.Sync()",
+    "atomicWritePrivilegedState",
+)
+require(
+    "cmd/router-agent/admin_forwarding_extension.go",
+    "dmzMu",
+    "cloneAdminForwardingExtensionState",
+    "rollbackProtectedDMZLocked",
+    "protectedDMZTransactionError",
+    "readPrivilegedState",
+)
+require(
+    "cmd/router-agent/admin_mutations.go",
+    "adminMutationFailure",
+    "rollback incomplete",
+    "atomicWritePrivilegedState",
+)
+require("cmd/router-agent/admin_server_control.go", "readPrivilegedState", "atomicWritePrivilegedState")
+require("cmd/router-agent/private_state_test.go", "RejectsSymlink", "RejectsOversizedRead")
+require("cmd/router-agent/admin_forwarding_extension_test.go", "LiveApplyFailureRestoresDurableAndRAMState")
+require("cmd/router-agent/admin_rollback_test.go", "ReportsIncompleteRollback")
+
+# Exact-SHA updater recovery state is a hard transaction boundary. The previous
+# exact compose must survive process restart until success or proven rollback.
+require(
+    "cmd/update-controller/private_state.go",
+    "validateUpdaterPrivateFile",
+    "os.SameFile",
+    "atomicWriteUpdaterPrivate",
+)
+require(
+    "cmd/update-controller/recovery.go",
+    "rollbackComposePath",
+    "saveRollbackCompose",
+    "loadRollbackCompose",
+    "restorePreviousStack",
+    "rollbackAfterDeploymentFailure",
+    "rolling-back",
+    "reconcileRecovery",
+)
+require(
+    "cmd/update-controller/main.go",
+    "saveRollbackCompose(previous, from)",
+    "rollbackAfterDeploymentFailure",
+    "completeRecoveredUpdate",
+    "exact_compose_verified",
+)
+require("cmd/update-controller/recovery_test.go", "RollbackComposeSnapshotIsPrivateAndExact", "InterruptedPreDeploymentApplying")
+require("cmd/update-controller/private_state_test.go", "RejectsBroadPermissions", "RejectsSymlink", "RejectsOversizedRead")
+
+# Endpoint synchronization owns only explicit raw WG/AWG endpoint fields + the
+# owned home Router VPN profile and adopts all changed files as one transaction.
+require(
+    "server/finalize/sync-endpoint.py",
+    "build_changes",
+    "stage_private",
+    "apply_transaction",
+    "restore_changes",
+    'profile.get("id")',
+    '"home"',
+)
+require("server/finalize/test_sync_endpoint.py", "late_adoption_failure", "symlink_owned_target")
+require_absent("server/scripts/update-endpoint.sh")
+
+# DNS benchmark is measurement-only; fresh bundle generation may consume the
+# result, but benchmark execution may never own current routers.json policy.
+require("server/scripts/benchmark-dns.py", "measurement_only", "write_private_atomic")
+forbid("server/scripts/benchmark-dns.py", 'BASE / "client-bundle" / "routers.json"', "routers_path =")
+require("server/scripts/test_dns_benchmark_persistence.py", "DNS benchmark code regained routers.json ownership")
+
+# Generic private publishers and private node/bundle generation.
+require("server/scripts/atomic-private-write.py", "mkstemp", "os.fsync", "os.replace", "0o600")
+require("server/scripts/atomic-private-batch.py", "restore", "adopt", "rollback was incomplete", "os.replace")
+require("server/scripts/test_atomic_private_publication.py", "fail_second_adoption", "prior state restored")
+require(
+    "server/scripts/create-bundle-json.py",
+    "write_private_json",
+    '"client.json"',
+    '"routers.json"',
+    '"router-vpn-bundle.json"',
+)
+
+# Stable identity/credential generators must preserve valid existing state,
+# reject corrupt preserved state, validate candidates before adoption, and batch
+# related identity files together.
+require("server/scripts/ensure-setup-auth.py", "refusing silent rotation", "atomic-private-write.py")
+require("server/scripts/test_setup_auth.py", "corrupt preserved Setup Center token was silently rotated", "symlink Setup Center token")
+require("server/scripts/ensure-node-proof.py", "atomic-private-batch.py", "conflicts with WireGuard server identity")
+require("server/scripts/preserve-generated-state.py", "refusing non-regular/symlink", "corrupt JSON", "expected exactly one preserved")
+require("server/scripts/generate-transports.sh", "refusing silent", "PRIVATE_BATCH", "private batch helper")
+require("server/scripts/generate-xray-pq.sh", "refusing silent", "Validate the complete candidate generation", "PRIVATE_BATCH")
+require("server/scripts/generate-tls-alternates.sh", "refusing silent", "Validate every candidate", "PRIVATE_BATCH")
+require("server/scripts/generate-aux-proxies.py", "refusing silent credential rotation", "atomic-private-batch.py")
+require("server/scripts/generate-rosenpass.sh", "Refusing to overwrite existing Rosenpass identity", "PRIVATE_BATCH")
+require("server/scripts/ensure-rosenpass.sh", "partial/unsafe", "PRIVATE_BATCH")
+require("server/scripts/generate-advanced-profiles.sh", "refusing silent REALITY credential rotation", "Validate the entire candidate tree", "PRIVATE_BATCH")
+forbid("server/scripts/generate-transports.sh", "preserve-generated-state.py transports \"$BASE\" 2>/dev/null || true")
+forbid("server/scripts/generate-xray-pq.sh", "preserve-generated-state.py xray \"$BASE\" 2>/dev/null || true")
+forbid("server/scripts/generate-tls-alternates.sh", "preserve-generated-state.py tls \"$BASE\" 2>/dev/null || true")
+forbid("server/scripts/generate-advanced-profiles.sh", "preserve-generated-state.py advanced \"$BASE\" 2>/dev/null || true")
+
+# Fresh init, finalization, and upgrade paths publish credential-bearing state
+# through the same helpers and only mark completion after runtime application.
+require("server/init/noninteractive.sh", "atomic-private-write.py", 'CREDENTIALS.txt', ".initialized")
+require("server/finalize/finalize.sh", "atomic-private-write.py", "atomic-private-batch.py", 'CREDENTIALS.txt', ".finalized")
+require("server/finalize/upgrade-safe.sh", "atomic-private-write.py", "atomic-private-batch.py", 'CREDENTIALS.txt', ".finalized")
+forbid("server/finalize/finalize.sh", 'cat >"$BASE/client-bundle/CREDENTIALS.txt"', 'touch "$BASE/.finalized"')
+forbid("server/finalize/upgrade-safe.sh", 'cat >"$BASE/client-bundle/CREDENTIALS.txt"', 'touch "$BASE/.finalized"')
+
+# Execute the focused Python behavior contracts from the authoritative gate.
+for test in (
+    "server/finalize/test_sync_endpoint.py",
+    "server/scripts/test_atomic_private_publication.py",
+    "server/scripts/test_dns_benchmark_persistence.py",
+    "server/scripts/test_setup_auth.py",
+):
+    run_test(test)
+
+if errors:
+    print("Durable-state transaction audit: FAIL", file=sys.stderr)
+    for error in errors:
+        print(f" - {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+print("Durable-state transaction audit: PASS")
