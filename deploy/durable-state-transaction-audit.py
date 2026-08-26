@@ -144,6 +144,17 @@ for rel in ("client/native-windows-mode.ps1", "client/native-wireguard-windows.p
     require(rel, "Private-RouterVPN-State.ps1", "Get-RouterVPNSelectedProfile")
 for rel in ("client/native-windows-mode.ps1", "client/native-wireguard-windows.ps1"):
     require(rel, "Assert-RouterVPNNoReparseAncestors")
+for rel in (
+    "client/native-windows-mode.ps1",
+    "client/native-wireguard-windows.ps1",
+    "client/Optimize-RouterVPN-MTU.ps1",
+):
+    forbid(rel, "Get-Content -Raw -LiteralPath $storePath", "foreach($item in @($store.profiles)){if($item)")
+require(
+    "client/Optimize-RouterVPN-MTU.ps1",
+    "Resolve-RouterVPNPrivateChild",
+    "Generated MTU path profile contains a reparse point.",
+)
 require(
     "client/Optimize-RouterVPN-MTU.ps1",
     "durable_adoption=$false",
