@@ -21,13 +21,16 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import stat
 import sys
+import tempfile
 from typing import Any
 
 from profile_id import validate_profile_id
 
 SUPPORTED_EXIT = {"shadowsocks": "shadowsocks", "hysteria2": "hysteria2"}
 PROOF_PORT = 1099
+MAX_RUNTIME_FILE_BYTES = 8 << 20
 
 
 def root_dir() -> Path:
@@ -83,8 +86,10 @@ def patch_entry_conf(text: str, endpoint: str, socks_host: str) -> str:
     if "[Peer]" not in text or "Endpoint" not in text:
         raise RuntimeError("entry split config has no WireGuard/AmneziaWG peer endpoint")
     host = f"[{endpoint}]" if ":" in endpoint else endpoint
+
     def endpoint_repl(match: re.Match[str]) -> str:
         return f"{match.group(1)}{host}:{match.group(2)}"
+
     text, count = re.subn(r"(?mi)^(Endpoint\s*=\s*).*:(\d+)\s*$", endpoint_repl, text)
     if count != 1:
         raise RuntimeError("entry split config must contain exactly one Endpoint")
@@ -192,13 +197,61 @@ def patch_exit_config(config: dict[str, Any], exit_mode: str, exit_endpoint: str
     return config
 
 
-def write_private(path: Path, data: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(data, encoding="utf-8")
+def _runtime_parent(path: Path) -> os.stat_result:
+    parent = path.parent
     try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+        info = parent.lstat()
+    except FileNotFoundError:
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        info = parent.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing non-directory/symlink multihop runtime parent: {parent}")
+    return info
+
+
+def write_private(path: Path, data: str) -> None:
+    body = data.encode("utf-8")
+    if not body or len(body) > MAX_RUNTIME_FILE_BYTES:
+        raise RuntimeError(f"multihop runtime file is empty or oversized: {path}")
+    parent_info = _runtime_parent(path)
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        current = None
+    if current is not None and (stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode)):
+        raise RuntimeError(f"refusing non-regular/symlink multihop runtime target: {path}")
+
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.multihop-", dir=path.parent)
+    tmp = Path(name)
+    committed = False
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb", closefd=True) as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        parent_current = _runtime_parent(path)
+        if not os.path.samestat(parent_info, parent_current):
+            raise RuntimeError(f"multihop runtime parent changed before adoption: {path.parent}")
+        try:
+            target = path.lstat()
+        except FileNotFoundError:
+            target = None
+        if target is not None and (stat.S_ISLNK(target.st_mode) or not stat.S_ISREG(target.st_mode)):
+            raise RuntimeError(f"multihop runtime target changed before adoption: {path}")
+        os.replace(tmp, path)
+        committed = True
+        try:
+            dfd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+    finally:
+        if not committed:
+            tmp.unlink(missing_ok=True)
 
 
 def write_env(path: Path, values: dict[str, str]) -> None:
@@ -240,17 +293,24 @@ def build(entry_id: str, exit_id: str, base: str, exit_mode: str, outdir: Path) 
     exit_source = safe_under(root, root / "generated" / exit_id / exit_mode)
     if not exit_source.is_dir():
         raise RuntimeError(f"exit {exit_mode} profile is missing: {exit_source}")
+    for source_path in exit_source.rglob("*"):
+        if source_path.is_symlink():
+            raise RuntimeError(f"exit multihop profile contains a symlink: {source_path}")
+        if not source_path.is_dir() and not source_path.is_file():
+            raise RuntimeError(f"exit multihop profile contains a non-regular entry: {source_path}")
     shutil.copytree(exit_source, exit_dir)
     exit_config = exit_dir / "sing-box.json"
-    if not exit_config.is_file():
-        raise RuntimeError("exit profile has no sing-box.json")
+    if not exit_config.is_file() or exit_config.is_symlink():
+        raise RuntimeError("exit profile has no safe sing-box.json")
     raw_exit = json.loads(exit_config.read_text(encoding="utf-8"))
     patched = patch_exit_config(raw_exit, exit_mode, exit_endpoint, entry)
     write_private(exit_config, json.dumps(patched, indent=2) + "\n")
     for p in exit_dir.iterdir():
         if p.is_file():
-            try: p.chmod(0o600)
-            except OSError: pass
+            try:
+                p.chmod(0o600)
+            except OSError:
+                pass
 
     proof_url = str(exit_profile.get("path_probe_url") or "http://10.77.0.1:8787/health")
     manifest = {
@@ -271,20 +331,23 @@ def build(entry_id: str, exit_id: str, base: str, exit_mode: str, outdir: Path) 
         "direct_exit_exception": False,
     }
     write_private(outdir / "manifest.json", json.dumps(manifest, indent=2) + "\n")
-    write_env(outdir / "runtime.env", {
-        "ENTRY_ID": entry_id,
-        "EXIT_ID": exit_id,
-        "ENTRY_ENDPOINT": entry_endpoint,
-        "EXIT_ENDPOINT": exit_endpoint,
-        "ENTRY_SOCKS_HOST": socks_host,
-        "ENTRY_SOCKS_PORT": str(manifest["entry_socks_port"]),
-        "QUICK_TOOL": quick_tool,
-        "ENTRY_CONF": str(entry_conf),
-        "EXIT_DIR": str(exit_dir),
-        "EXIT_CONFIG": str(exit_config),
-        "EXIT_PROOF_URL": proof_url,
-        "PROOF_PROXY": str(manifest["proof_proxy"]),
-    })
+    write_env(
+        outdir / "runtime.env",
+        {
+            "ENTRY_ID": entry_id,
+            "EXIT_ID": exit_id,
+            "ENTRY_ENDPOINT": entry_endpoint,
+            "EXIT_ENDPOINT": exit_endpoint,
+            "ENTRY_SOCKS_HOST": socks_host,
+            "ENTRY_SOCKS_PORT": str(manifest["entry_socks_port"]),
+            "QUICK_TOOL": quick_tool,
+            "ENTRY_CONF": str(entry_conf),
+            "EXIT_DIR": str(exit_dir),
+            "EXIT_CONFIG": str(exit_config),
+            "EXIT_PROOF_URL": proof_url,
+            "PROOF_PROXY": str(manifest["proof_proxy"]),
+        },
+    )
     return manifest
 
 
