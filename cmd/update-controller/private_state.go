@@ -10,27 +10,34 @@ import (
 const maxUpdaterPrivateBytes int64 = 4 << 20
 
 func validateUpdaterPrivateParent(path string) error {
-	parent := filepath.Dir(path)
+	parent := filepath.Clean(filepath.Dir(path))
 	if parent == "." {
 		return nil
 	}
-	info, err := os.Lstat(parent)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
+	validateAncestors := func() error {
+		for current := parent; ; current = filepath.Dir(current) {
+			info, err := os.Lstat(current)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					return err
+				}
+			} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return fmt.Errorf("refusing non-directory/symlink private updater path component %s", current)
+			}
+			next := filepath.Dir(current)
+			if next == current {
+				break
+			}
 		}
-		if err := os.MkdirAll(parent, 0o700); err != nil {
-			return err
-		}
-		info, err = os.Lstat(parent)
-		if err != nil {
-			return err
-		}
+		return nil
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("refusing non-directory/symlink private updater parent %s", parent)
+	if err := validateAncestors(); err != nil {
+		return err
 	}
-	return nil
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	return validateAncestors()
 }
 
 func validateUpdaterPrivateFile(path string, limit int64) error {
