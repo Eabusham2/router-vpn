@@ -955,14 +955,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	a.state.Connected = true
 	a.state.Phase = "connected"
 	daitaEnabled := a.state.DAITA
-	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID == p.ID {
-			a.profiles.Profiles[i].UseCount++
-			a.profiles.Profiles[i].LastUsedAt = time.Now().UTC().Format(time.RFC3339)
-			break
-		}
+	if usageErr := a.recordProfileUsageLocked(p.ID, time.Now().UTC()); usageErr != nil {
+		log.Printf("profile usage metadata was not persisted: %v", usageErr)
 	}
-	_ = a.persistProfilesLocked()
 	a.mu.Unlock()
 	if daitaEnabled {
 		a.startCoverTraffic(p)
