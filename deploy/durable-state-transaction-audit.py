@@ -128,6 +128,7 @@ require(
 require(
     "client/Private-RouterVPN-State.ps1",
     "Assert-RouterVPNNoReparseAncestors",
+    "Resolve-RouterVPNPrivateChild",
     "[IO.FileShare]::Read",
     "Get-RouterVPNProfileStore",
     "Get-RouterVPNSelectedProfile",
@@ -141,6 +142,8 @@ require(
 )
 for rel in ("client/native-windows-mode.ps1", "client/native-wireguard-windows.ps1", "client/Optimize-RouterVPN-MTU.ps1"):
     require(rel, "Private-RouterVPN-State.ps1", "Get-RouterVPNSelectedProfile")
+for rel in ("client/native-windows-mode.ps1", "client/native-wireguard-windows.ps1"):
+    require(rel, "Assert-RouterVPNNoReparseAncestors")
 require(
     "client/Optimize-RouterVPN-MTU.ps1",
     "durable_adoption=$false",
