@@ -55,6 +55,18 @@ def main() -> int:
                 raise AssertionError("single-file private publisher accepted a symlink target")
             assert real.read_text(encoding="utf-8") == "keep\n"
 
+            real_dir = root / "real-dir"
+            real_dir.mkdir()
+            linked_dir = root / "linked-dir"
+            linked_dir.symlink_to(real_dir, target_is_directory=True)
+            try:
+                single.atomic_private_write(linked_dir / "escaped", b"nope\n")
+            except RuntimeError as exc:
+                assert "private parent" in str(exc)
+            else:
+                raise AssertionError("single-file private publisher accepted a symlink parent")
+            assert not (real_dir / "escaped").exists()
+
     with tempfile.TemporaryDirectory(prefix="router-vpn-private-batch-") as td:
         root = Path(td)
         d1, d2 = root / "one.json", root / "two.json"
@@ -94,6 +106,20 @@ def main() -> int:
         assert d2.read_bytes() == b"new-two\n"
         if os.name != "nt":
             assert mode(d1) == 0o600 and mode(d2) == 0o600
+            real_dir = root / "batch-real-dir"
+            real_dir.mkdir()
+            linked_dir = root / "batch-linked-dir"
+            linked_dir.symlink_to(real_dir, target_is_directory=True)
+            source = root / "batch-source"
+            source.write_bytes(b"secret\n")
+            os.chmod(source, 0o600)
+            try:
+                batch.parse_item(f"{linked_dir / 'escaped'}={source}")
+            except RuntimeError as exc:
+                assert "private parent" in str(exc)
+            else:
+                raise AssertionError("batch private publisher accepted a symlink parent")
+            assert not (real_dir / "escaped").exists()
         assert not list(root.glob(".*.batch-*"))
 
     print("Atomic private single/batch publication tests: OK")
