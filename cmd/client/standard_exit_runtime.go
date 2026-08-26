@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -250,16 +248,8 @@ func prepareDirectStandardExit(root string, control common.RouterProfile, exit s
 }
 
 func writeStandardExitRuntime(root string, cfg map[string]any) (string, string, error) {
-	base := filepath.Join(root, "run", "native-standard-exit")
-	if err := os.MkdirAll(base, 0o700); err != nil {
-		return "", "", err
-	}
-	random := make([]byte, 12)
-	if _, err := rand.Read(random); err != nil {
-		return "", "", err
-	}
-	runtimeDir := filepath.Join(base, hex.EncodeToString(random))
-	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
+	runtimeDir, err := newPrivateRuntimeDir(root, "native-standard-exit")
+	if err != nil {
 		return "", "", err
 	}
 	raw, err := json.MarshalIndent(cfg, "", "  ")
@@ -271,7 +261,7 @@ func writeStandardExitRuntime(root string, cfg map[string]any) (string, string, 
 		_ = os.RemoveAll(runtimeDir)
 		return "", "", errors.New("prepared standard exit config exceeds safety limit")
 	}
-	if err = os.WriteFile(filepath.Join(runtimeDir, "sing-box.json"), append(raw, '\n'), 0o600); err != nil {
+	if err = writePrivateRuntimeFile(filepath.Join(runtimeDir, "sing-box.json"), append(raw, '\n')); err != nil {
 		_ = os.RemoveAll(runtimeDir)
 		return "", "", err
 	}
