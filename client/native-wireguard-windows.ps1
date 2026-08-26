@@ -3,6 +3,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$PrivateState=Join-Path $PSScriptRoot 'Private-RouterVPN-State.ps1'
+if(-not(Test-Path -LiteralPath $PrivateState -PathType Leaf)){throw 'Router VPN private-state helper is missing.'}
+. $PrivateState
 
 function Fail([string]$Message) {
   [Console]::Error.WriteLine($Message)
@@ -70,11 +73,8 @@ function Source-Profile-Path {
 }
 
 function Get-SelectedProfile {
-  $storePath = Join-Path $root 'routers.json'
-  if (-not (Test-Path -LiteralPath $storePath -PathType Leaf)) { return $null }
-  try { $store = Get-Content -Raw -LiteralPath $storePath -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
-  foreach ($p in @($store.profiles)) { if ($p -and [string]$p.id -eq $profileId) { return $p } }
-  return $null
+  $store = Get-RouterVPNProfileStore $root
+  return Get-RouterVPNSelectedProfile $store $profileId
 }
 
 function Profile-String($Profile,[string]$Name,[string]$Default='') {
@@ -222,7 +222,7 @@ if (-not $wireguard) {
 
 $rootText = [string]$env:HOMEVPN_ROOT
 if ([string]::IsNullOrWhiteSpace($rootText)) { Fail 'HOMEVPN_ROOT is not set.' }
-$root = [IO.Path]::GetFullPath($rootText)
+$root = Resolve-RouterVPNPrivateRoot $rootText
 $profileId = Safe-ProfileId ([string]$env:HOMEVPN_PROFILE_ID)
 $killSwitch = Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 if (-not (Test-Path -LiteralPath $killSwitch -PathType Leaf)) { Fail "Windows kill-switch helper is missing: $killSwitch" }
