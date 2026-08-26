@@ -25,6 +25,7 @@ full = read("client/linux/routervpn-connection-profiles-v11.inc")
 build = read("client/linux/build-native-app.sh")
 profiles = read("cmd/client/connection_profiles.go")
 setup = read("cmd/client/connection_profile_setup.go")
+private_store = read("cmd/client/private_store.go")
 
 # The current shipping composition is build -> telemetry-v9 -> v10 compatibility
 # seam -> v11. Prove every link so an orphaned v11 source file cannot be called
@@ -62,7 +63,8 @@ require(full, "Linux full connection profile manager v11",
 # The setup route intentionally sends only UI-owned mode/CUSTOM/multihop fields;
 # the underlying controller save snapshots the remaining current node settings.
 # Guard that full snapshot so DNS/kill-switch/IPv6/MTU/AUTO/base settings cannot
-# silently disappear from Linux profiles.
+# silently disappear from Linux profiles. Persistence privacy is owned by the
+# shared private-store primitive, not duplicated as a literal chmod in this file.
 require(profiles, "Shared connection profile snapshot",
         "snapshotConnectionPreferences",
         "HomeLANAccess", "KillSwitchPolicy", "IPv6Mode",
@@ -72,7 +74,9 @@ require(profiles, "Shared connection profile snapshot",
         "DNSMode", "DNSProtocol", "DNSHost", "DNSPort",
         "DNSServerName", "DNSPath",
         "MultihopEnabled", "MultihopEntryID", "MultihopExitID",
-        "CustomLayers", "0o600")
+        "CustomLayers", "readPrivateRegular", "atomicWritePrivate")
+require(private_store, "Shared private profile persistence",
+        "readPrivateRegular", "atomicWritePrivate", "0o600", "os.SameFile")
 require(setup, "Whole-connection setup routes",
         "/api/connection-profile/setup/save",
         "/api/connection-profile/setup/update",
