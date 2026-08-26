@@ -25,8 +25,66 @@ function Require-FirewallCmdlets {
     if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { throw "Missing Windows firewall primitive: $name" }
   }
 }
-function Write-Utf8NoBom([string]$Path,[string]$Text) {
-  [IO.File]::WriteAllText($Path,$Text,(New-Object Text.UTF8Encoding($false)))
+function Assert-NoReparseAncestors([string]$Path) {
+  $full = [IO.Path]::GetFullPath($Path)
+  $cursor = if (Test-Path -LiteralPath $full) { $full } else { Split-Path -Parent $full }
+  while ($cursor) {
+    if (Test-Path -LiteralPath $cursor) {
+      $item = Get-Item -LiteralPath $cursor -Force
+      if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing reparse-point/junction kill-switch path component: $cursor"
+      }
+    }
+    $parent = Split-Path -Parent $cursor
+    if (-not $parent -or $parent -eq $cursor) { break }
+    $cursor = $parent
+  }
+}
+function Assert-SafeStateRoot {
+  $dir = Get-StateRoot
+  Assert-NoReparseAncestors $dir
+  if (-not (Test-Path -LiteralPath $dir)) {
+    New-Item -ItemType Directory -Path $dir | Out-Null
+  }
+  $item = Get-Item -LiteralPath $dir -Force
+  if (-not $item.PSIsContainer -or (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+    throw "Windows kill-switch state root is not a real directory: $dir"
+  }
+  Assert-NoReparseAncestors $dir
+  return $dir
+}
+function Assert-SafeStateLeaf([string]$Path) {
+  Assert-NoReparseAncestors $Path
+  if (-not (Test-Path -LiteralPath $Path)) { return $null }
+  $item = Get-Item -LiteralPath $Path -Force
+  if ($item.PSIsContainer -or (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+    throw "Windows kill-switch state is not a regular non-reparse file: $Path"
+  }
+  if ($item.Length -gt 1048576) { throw "Windows kill-switch state exceeds safety limit: $Path" }
+  return $item
+}
+function Read-SafeJsonFile([string]$Path,[string]$Label,[int]$Limit=1048576) {
+  Assert-NoReparseAncestors $Path
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Label is missing: $Path" }
+  $before = Get-Item -LiteralPath $Path -Force
+  if ($before.PSIsContainer -or (($before.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or $before.Length -gt $Limit) {
+    throw "Unsafe or oversized $Label file: $Path"
+  }
+  $stream = [IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+  try {
+    if ($stream.Length -gt $Limit) { throw "$Label exceeds safety limit: $Path" }
+    $reader = New-Object IO.StreamReader($stream,(New-Object Text.UTF8Encoding($false)),$true,4096,$true)
+    try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    $after = Get-Item -LiteralPath $Path -Force
+    if ($after.PSIsContainer -or (($after.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
+        $after.FullName -ne $before.FullName -or $after.Length -ne $stream.Length -or
+        $after.LastWriteTimeUtc -ne $before.LastWriteTimeUtc) {
+      throw "$Label changed during read: $Path"
+    }
+  } finally {
+    $stream.Dispose()
+  }
+  try { return $text | ConvertFrom-Json } catch { throw "Invalid $Label JSON: $Path" }
 }
 function Safe-ProfileId([string]$Value) {
   if ([string]::IsNullOrWhiteSpace($Value)) { return 'router' }
@@ -46,26 +104,60 @@ function Get-StateRoot {
 }
 function Get-StatePath { return Join-Path (Get-StateRoot) 'windows-state.json' }
 function Read-State {
-  $path = Get-StatePath
-  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
-  try { return Get-Content -Raw -LiteralPath $path | ConvertFrom-Json } catch { throw "Invalid Windows kill-switch rollback state: $path" }
+  $dir = Assert-SafeStateRoot
+  $path = Join-Path $dir 'windows-state.json'
+  if (-not (Test-Path -LiteralPath $path)) { return $null }
+  [void](Assert-SafeStateLeaf $path)
+  return Read-SafeJsonFile $path 'Windows kill-switch rollback state'
 }
 function Write-State($Value) {
-  $dir = Get-StateRoot
-  New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  $path = Get-StatePath
-  $tmp = "$path.tmp"
-  Write-Utf8NoBom $tmp (($Value | ConvertTo-Json -Depth 20) + "`n")
-  Move-Item -LiteralPath $tmp -Destination $path -Force
+  $dir = Assert-SafeStateRoot
+  $path = Join-Path $dir 'windows-state.json'
+  $prior = Assert-SafeStateLeaf $path
+  $tmp = Join-Path $dir ('.windows-state.'+[Guid]::NewGuid().ToString('N')+'.tmp')
+  $backup = Join-Path $dir ('.windows-state.'+[Guid]::NewGuid().ToString('N')+'.bak')
+  $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes((($Value | ConvertTo-Json -Depth 20) + "`n"))
+  if ($bytes.Length -eq 0 -or $bytes.Length -gt 1048576) { throw 'Windows kill-switch state is empty or oversized.' }
+  try {
+    $stream = New-Object IO.FileStream($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try {
+      $stream.Write($bytes,0,$bytes.Length)
+      $stream.Flush($true)
+    } finally { $stream.Dispose() }
+    [void](Assert-SafeStateRoot)
+    $current = Assert-SafeStateLeaf $path
+    if ($prior -and -not $current) { throw 'Windows kill-switch state disappeared before adoption.' }
+    if (-not $prior -and $current) { throw 'Windows kill-switch state appeared before adoption.' }
+    if ($prior -and $current -and
+        ($prior.Length -ne $current.Length -or $prior.LastWriteTimeUtc -ne $current.LastWriteTimeUtc)) {
+      throw 'Windows kill-switch state changed before adoption.'
+    }
+    if ($current) {
+      [IO.File]::Replace($tmp,$path,$backup,$true)
+    } else {
+      [IO.File]::Move($tmp,$path)
+    }
+  } finally {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+  }
 }
-function Remove-State {
-  Remove-Item -LiteralPath (Get-StatePath) -Force -ErrorAction SilentlyContinue
+function Remove-State([switch]$ForceRecovery) {
+  $dir = Assert-SafeStateRoot
+  $path = Join-Path $dir 'windows-state.json'
+  if (-not (Test-Path -LiteralPath $path)) { return }
+  try {
+    [void](Assert-SafeStateLeaf $path)
+  } catch {
+    if (-not $ForceRecovery) { throw }
+  }
+  Remove-Item -LiteralPath $path -Force
 }
 function Get-SelectedProfile {
   $rootPath = Resolve-Root
+  Assert-NoReparseAncestors $rootPath
   $storePath = Join-Path $rootPath 'routers.json'
-  if (-not (Test-Path -LiteralPath $storePath -PathType Leaf)) { throw "Router profile store is missing: $storePath" }
-  $store = Get-Content -Raw -LiteralPath $storePath | ConvertFrom-Json
+  $store = Read-SafeJsonFile $storePath 'Router profile store' 4194304
   $selected = if ($env:HOMEVPN_PROFILE_ID) { Safe-ProfileId([string]$env:HOMEVPN_PROFILE_ID) } elseif ($store.selected_id) { Safe-ProfileId([string]$store.selected_id) } else { 'router' }
   foreach ($item in @($store.profiles)) { if ($item -and [string]$item.id -eq $selected) { return $item } }
   throw "Selected Router VPN profile '$selected' was not found."
@@ -214,8 +306,22 @@ switch ($Action) {
   'force-off' {
     Require-Administrator
     Require-FirewallCmdlets
-    $state = Read-State
-    if ($state) { Restore-State $state } else { Remove-Rules }
+    try {
+      $state = Read-State
+      if ($state) { Restore-State $state } else { Remove-Rules }
+    } catch {
+      # Explicit local recovery when rollback JSON itself is poisoned. The exact
+      # pre-kill-switch defaults are unknowable without valid state, so force-off
+      # restores outbound Allow for the three Windows profiles to recover network
+      # access, removes only Router VPN's rule group, and deletes only the state
+      # leaf without following a reparse target.
+      Remove-Rules
+      foreach ($name in @('Domain','Private','Public')) {
+        Set-NetFirewallProfile -Name $name -DefaultOutboundAction Allow
+      }
+      Remove-State -ForceRecovery
+      Write-Warning 'Windows kill-switch state was unreadable; force-off used emergency outbound-Allow recovery.'
+    }
     Write-Output 'Windows kill switch force-disabled.'
     exit 0
   }
