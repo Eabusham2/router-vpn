@@ -159,7 +159,7 @@ jobs:
           $arch=$env:ROUTER_VPN_ARCH; $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Windows-$arch.zip"|Select-Object -First 1).FullName
           $extract=Join-Path $env:RUNNER_TEMP "installed-$arch"; Expand-Archive $archive $extract -Force; $root=Get-ChildItem $extract -Directory|Select-Object -First 1; $start=Get-Content (Join-Path $root.FullName 'Start-RouterVPN.ps1') -Raw
           if($start-notmatch'RouterVPN-Windows-App\.ps1'){throw 'installed package not native WPF'}; if($start-match'msedge\.exe|chrome\.exe|--app='){throw 'browser shell regression'}
-          $killTest=Join-Path $root.FullName 'client\test-windows-kill-switch.ps1'; if(-not(Test-Path $killTest)){throw 'shipped Windows package missing kill-switch contract test'}; & $killTest
+          $killTest=Join-Path $root.FullName 'client\test-windows-kill-switch.ps1'; if(-not(Test-Path $killTest)){throw 'shipped Windows package missing kill-switch contract test'}; & $killTest; $privateStateTest=Join-Path $root.FullName 'client\test-private-router-vpn-state.ps1'; if(-not(Test-Path $privateStateTest)){throw 'shipped Windows package missing private profile-store contract test'}; & $privateStateTest
 
   android:
     name: Android native APK
