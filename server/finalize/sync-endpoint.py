@@ -49,11 +49,23 @@ def parse_endpoint(value: str) -> tuple[str, str]:
         return endpoint, endpoint
 
 
+def _validate_owned_ancestors(parent: pathlib.Path) -> None:
+    for current in (parent, *parent.parents):
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError(f"refusing non-directory/symlink owned path component: {current}")
+
+
 def ensure_owned_parent(path: pathlib.Path) -> None:
     parent = path.parent
+    _validate_owned_ancestors(parent)
     info = parent.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise RuntimeError(f"refusing non-directory/symlink owned parent: {parent}")
+    _validate_owned_ancestors(parent)
 
 
 def read_owned_file(path: pathlib.Path) -> bytes:
@@ -81,6 +93,10 @@ def read_owned_file(path: pathlib.Path) -> bytes:
             total += len(chunk)
             if total > MAX_OWNED_FILE:
                 raise RuntimeError(f"owned file exceeds safety limit: {path}")
+        ensure_owned_parent(path)
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise RuntimeError(f"owned file changed during read: {path}")
         return b"".join(chunks)
     finally:
         os.close(fd)
@@ -96,7 +112,9 @@ def build_changes(base: pathlib.Path, endpoint: str, rendered: str) -> list[Chan
     for mode, names in RAW_PROFILES.items():
         for name in names:
             path = base / "client-bundle" / "generated" / mode / name
-            if not path.exists():
+            try:
+                path.lstat()
+            except FileNotFoundError:
                 continue
             before = read_owned_file(path)
             try:
@@ -116,7 +134,12 @@ def build_changes(base: pathlib.Path, endpoint: str, rendered: str) -> list[Chan
         raise RuntimeError("no raw WireGuard/AmneziaWG Endpoint lines were found")
 
     routers_path = base / "client-bundle" / "routers.json"
-    if routers_path.exists():
+    try:
+        routers_path.lstat()
+        routers_present = True
+    except FileNotFoundError:
+        routers_present = False
+    if routers_present:
         before = read_owned_file(routers_path)
         try:
             routers = json.loads(before.decode("utf-8"))
@@ -168,6 +191,7 @@ def stage_private(path: pathlib.Path, data: bytes) -> pathlib.Path:
 
 
 def fsync_directory(path: pathlib.Path) -> None:
+    _validate_owned_ancestors(path)
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise RuntimeError(f"refusing non-directory/symlink owned parent: {path}")
@@ -230,6 +254,10 @@ def apply_transaction(changes: list[Change]) -> None:
 
 def sync(base: pathlib.Path, value: str) -> int:
     endpoint, rendered = parse_endpoint(value)
+    # Keep the lexical path: resolving would hide a symlinked ancestor that the
+    # owned-file boundary is specifically required to reject.
+    base = pathlib.Path(os.path.abspath(base))
+    _validate_owned_ancestors(base)
     changes = build_changes(base, endpoint, rendered)
     apply_transaction(changes)
     return sum(1 for change in changes if change.path.name != "routers.json")
