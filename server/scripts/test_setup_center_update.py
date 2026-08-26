@@ -8,8 +8,11 @@ ROOT = Path(__file__).resolve().parents[2]
 def text(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
-controller = text("cmd/update-controller/main.go")
+controller_main = text("cmd/update-controller/main.go")
+controller_recovery = text("cmd/update-controller/recovery.go")
+controller = controller_main + "\n" + controller_recovery
 controller_test = text("cmd/update-controller/main_test.go")
+recovery_test = text("cmd/update-controller/recovery_test.go")
 ui = text("server/scripts/setup_center_update.py")
 product = text("server/scripts/setup-center-product-server.py")
 release = text("server/scripts/setup_center_release_status.py")
@@ -33,8 +36,12 @@ for marker in (
     '"release-candidate.yml", "publish-arm64-images.yml", "production-release-compose.yml"',
     '"PullImage": true, "Prune": false',
     'preserveUpdater(target, previous)',
-    'waitCoreHealthy(stack, 120*time.Second)',
-    'automatic rollback also failed',
+    'saveRollbackCompose(previous, from)',
+    'rollbackAfterDeploymentFailure',
+    'persistRecoveryState("rolling-back"',
+    'rollback remains incomplete',
+    'restored and health-verified',
+    'composeSHA(current)',
     '/api/admin/update/status',
     '/api/admin/update/check',
     '/api/admin/update/apply',
@@ -61,6 +68,12 @@ for marker in (
     'TestComposeSHARejectsMixedPhaseOneEvenWithGeneratedHeader',
 ):
     assert marker in controller_test, f"update-controller Go tests missing {marker!r}"
+for marker in (
+    'TestRollbackComposeSnapshotIsPrivateAndExact',
+    'TestRollbackComposeRejectsMixedOrUnknownPreviousStack',
+    'TestInterruptedPreDeploymentApplyingCanFailWithoutSnapshot',
+):
+    assert marker in recovery_test, f"update-controller recovery tests missing {marker!r}"
 
 for marker in (
     'Update Router VPN',
