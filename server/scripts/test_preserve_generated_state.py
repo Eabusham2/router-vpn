@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 
@@ -16,11 +17,14 @@ SPEC.loader.exec_module(MOD)
 def write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(path, 0o600)
 
 
 with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-state-") as td:
     base = Path(td)
-    write_json(base / "config/transports/generated-secrets.json", {
+    transport_state = base / "config/transports/generated-secrets.json"
+    write_json(transport_state, {
         "hysteria2_password": "hy2-existing-password",
         "shadowsocks_key": "ss-existing-key-material",
     })
@@ -84,6 +88,8 @@ with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-state-") as td:
         "NAIVE_PASSWORD='existing-naive-password'\n",
         encoding="utf-8",
     )
+    if os.name != "nt":
+        os.chmod(settings, 0o600)
     tls = MOD.tls(base)
     assert tls == {
         "SS_V2RAY_PASSWORD": "existing-v2ray-secret",
@@ -102,5 +108,48 @@ with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-state-") as td:
         pass
     else:
         raise AssertionError("inconsistent preserved Xray state was accepted")
+
+    # Corrupt existing transport state is not equivalent to missing first-run
+    # state and therefore must not be silently regenerated.
+    transport_state.write_text("{broken json\n", encoding="utf-8")
+    try:
+        MOD.transports(base)
+    except ValueError as exc:
+        assert "corrupt JSON" in str(exc)
+    else:
+        raise AssertionError("corrupt preserved transport state was accepted")
+
+    # Duplicate credential assignments are ambiguous and fail closed instead of
+    # taking whichever line happens to be last.
+    settings.write_text(
+        "TLS_NAME='vpn.example'\n"
+        "SS_V2RAY_PASSWORD='first-secret'\n"
+        "SS_V2RAY_PASSWORD='second-secret'\n"
+        "NAIVE_USER='existing-naive-user'\n"
+        "NAIVE_PASSWORD='existing-naive-password'\n",
+        encoding="utf-8",
+    )
+    try:
+        MOD.tls(base)
+    except ValueError as exc:
+        assert "exactly one preserved SS_V2RAY_PASSWORD" in str(exc)
+    else:
+        raise AssertionError("ambiguous preserved TLS credentials were accepted")
+
+if os.name != "nt":
+    with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-symlink-") as td:
+        base = Path(td)
+        real = base / "real.json"
+        real.write_text(json.dumps({"hysteria2_password": "hy2-existing-password", "shadowsocks_key": "ss-existing-key-material"}), encoding="utf-8")
+        os.chmod(real, 0o600)
+        link = base / "config/transports/generated-secrets.json"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(real)
+        try:
+            MOD.transports(base)
+        except ValueError as exc:
+            assert "symlink" in str(exc)
+        else:
+            raise AssertionError("symlink preserved transport state was accepted")
 
 print("Preserved generated state tests: OK")
