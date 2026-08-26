@@ -5,6 +5,7 @@ import importlib.util
 import os
 from pathlib import Path
 import tempfile
+from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -57,6 +58,20 @@ def main() -> int:
         assert path.read_text(encoding="utf-8") == "short\n"
 
     if os.name != "nt":
+        # Older valid installs may have broad mode bits. Harden the same inode
+        # through its verified open fd; never rotate the token while converging.
+        with tempfile.TemporaryDirectory(prefix="router-vpn-auth-legacy-mode-") as td:
+            base = Path(td)
+            config = base / "config"
+            config.mkdir(mode=0o700)
+            path = config / "setup-center.token"
+            legacy = "l" * 48
+            path.write_text(legacy + "\n", encoding="utf-8")
+            os.chmod(path, 0o644)
+            assert auth.ensure_token(base) == path
+            assert path.read_text(encoding="utf-8").strip() == legacy
+            assert path.stat().st_mode & 0o777 == 0o600
+
         with tempfile.TemporaryDirectory(prefix="router-vpn-auth-symlink-") as td:
             base = Path(td)
             config = base / "config"
@@ -71,6 +86,50 @@ def main() -> int:
                 assert "symlink" in str(exc)
             else:
                 raise AssertionError("symlink Setup Center token was accepted")
+
+        with tempfile.TemporaryDirectory(prefix="router-vpn-auth-parent-") as td:
+            base = Path(td)
+            real_config = base / "real-config"
+            real_config.mkdir(mode=0o700)
+            real_token = real_config / "setup-center.token"
+            real_token.write_text("p" * 48 + "\n", encoding="utf-8")
+            os.chmod(real_token, 0o600)
+            (base / "config").symlink_to(real_config, target_is_directory=True)
+            try:
+                auth.ensure_token(base)
+            except RuntimeError as exc:
+                assert "config parent" in str(exc) and "symlink" in str(exc)
+            else:
+                raise AssertionError("symlink Setup Center config parent was accepted")
+            assert real_token.read_text(encoding="utf-8").strip() == "p" * 48
+
+        with tempfile.TemporaryDirectory(prefix="router-vpn-auth-race-") as td:
+            base = Path(td)
+            config = base / "config"
+            config.mkdir(mode=0o700)
+            path = config / "setup-center.token"
+            path.write_text("a" * 48 + "\n", encoding="utf-8")
+            os.chmod(path, 0o600)
+            replacement = config / "replacement-token"
+            replacement.write_text("b" * 48 + "\n", encoding="utf-8")
+            os.chmod(replacement, 0o600)
+            real_fstat = auth.os.fstat
+            changed = [False]
+
+            def swap_after_open(fd):
+                info = real_fstat(fd)
+                if not changed[0]:
+                    changed[0] = True
+                    os.replace(replacement, path)
+                return info
+
+            with mock.patch.object(auth.os, "fstat", side_effect=swap_after_open):
+                try:
+                    auth.ensure_token(base)
+                except RuntimeError as exc:
+                    assert "changed during open" in str(exc)
+                else:
+                    raise AssertionError("Setup Center token replacement race was accepted")
 
     # Pairing accepts only explicit RFC1918/ULA plus loopback/link-local. Do not
     # use ipaddress.is_private here: Python intentionally treats additional
