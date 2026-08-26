@@ -9,6 +9,7 @@ import tempfile
 from dataclasses import dataclass
 
 MAX_BYTES = 32 << 20
+PRIVATE_MODE = 0o600
 
 
 @dataclass(frozen=True)
@@ -19,27 +20,51 @@ class Item:
     after: bytes
 
 
-def ensure_private_parent(path: pathlib.Path) -> None:
+def ensure_private_parent(path: pathlib.Path, *, create: bool = True) -> None:
     parent = path.parent
     try:
         info = parent.lstat()
     except FileNotFoundError:
-        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not create:
+            raise
+        parent.mkdir(parents=True, exist_ok=False, mode=0o700)
         info = parent.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise RuntimeError(f"refusing non-directory/symlink private parent: {parent}")
 
 
 def read_regular(path: pathlib.Path, label: str) -> bytes:
+    ensure_private_parent(path, create=False)
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink {label}: {path}")
-    if info.st_size < 0 or info.st_size > MAX_BYTES:
-        raise RuntimeError(f"{label} is oversized: {path}")
-    body = path.read_bytes()
-    if not body or len(body) > MAX_BYTES:
+    if info.st_mode & 0o777 != PRIVATE_MODE:
+        raise RuntimeError(f"{label} must be mode 0600: {path}")
+    if info.st_size <= 0 or info.st_size > MAX_BYTES:
         raise RuntimeError(f"{label} is empty or oversized: {path}")
-    return body
+
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(fd)
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise RuntimeError(f"{label} changed during open: {path}")
+        body = bytearray()
+        while True:
+            chunk = os.read(fd, min(64 * 1024, MAX_BYTES + 1 - len(body)))
+            if not chunk:
+                break
+            body.extend(chunk)
+            if len(body) > MAX_BYTES:
+                raise RuntimeError(f"{label} is oversized: {path}")
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise RuntimeError(f"{label} changed during read: {path}")
+        if not body:
+            raise RuntimeError(f"{label} is empty: {path}")
+        return bytes(body)
+    finally:
+        os.close(fd)
 
 
 def existing_bytes(path: pathlib.Path) -> bytes | None:
@@ -54,7 +79,7 @@ def stage(dest: pathlib.Path, body: bytes) -> pathlib.Path:
     fd, name = tempfile.mkstemp(prefix=f".{dest.name}.batch-", dir=dest.parent)
     tmp = pathlib.Path(name)
     try:
-        os.fchmod(fd, 0o600)
+        os.fchmod(fd, PRIVATE_MODE)
         with os.fdopen(fd, "wb", closefd=True) as stream:
             stream.write(body)
             stream.flush()
@@ -71,6 +96,9 @@ def stage(dest: pathlib.Path, body: bytes) -> pathlib.Path:
 
 def fsync_dir(path: pathlib.Path) -> None:
     try:
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError(f"refusing non-directory/symlink private parent: {path}")
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             os.fsync(fd)
@@ -91,6 +119,7 @@ def restore(items: list[Item]) -> list[str]:
                 continue
             tmp = stage(item.dest, item.before)
             try:
+                ensure_private_parent(item.dest)
                 os.replace(tmp, item.dest)
             finally:
                 tmp.unlink(missing_ok=True)
