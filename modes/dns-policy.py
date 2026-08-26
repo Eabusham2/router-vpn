@@ -12,7 +12,7 @@ from pathlib import Path
 from profile_id import validate_profile_id
 from private_profile_store import private_root, read_profile_store
 
-ROOT = private_root(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+ROOT = Path(os.path.abspath(os.path.expanduser(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))))
 PROFILE_ID = os.environ.get("HOMEVPN_PROFILE_ID", "").strip()
 if PROFILE_ID:
     PROFILE_ID = validate_profile_id(PROFILE_ID, default="")
@@ -35,7 +35,7 @@ KNOWN_TLS_NAMES = {
 
 
 def load_profile() -> dict:
-    store = read_profile_store(ROOT)
+    store = read_profile_store(private_root(str(ROOT)))
     selected = PROFILE_ID or str(store.get("selected_id") or "").strip()
     if selected:
         selected = validate_profile_id(selected, default="")
