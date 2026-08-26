@@ -27,6 +27,7 @@ function Find-WireGuard {
 
 function Find-DnsProxy {
   $candidate = Join-Path $root 'router-vpn-dns.exe'
+  Assert-RouterVPNNoReparseAncestors $candidate
   if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
   $cmd = Get-Command router-vpn-dns.exe -ErrorAction SilentlyContinue
   if ($cmd) { return $cmd.Source }
@@ -54,6 +55,7 @@ function Safe-Under([string]$Parent,[string]$Child) {
   $p = [IO.Path]::GetFullPath($Parent).TrimEnd('\') + '\'
   $c = [IO.Path]::GetFullPath($Child)
   if (-not $c.StartsWith($p,[StringComparison]::OrdinalIgnoreCase)) { Fail "Refusing unsafe path outside $Parent" }
+  Assert-RouterVPNNoReparseAncestors $c
   return $c
 }
 
@@ -68,6 +70,7 @@ function Source-Profile-Path {
   $fullGenerated = [IO.Path]::GetFullPath($generated).TrimEnd('\') + '\'
   $fullCandidate = [IO.Path]::GetFullPath($candidate)
   if (-not $fullCandidate.StartsWith($fullGenerated, [StringComparison]::OrdinalIgnoreCase)) { Fail 'Unsafe WireGuard profile path.' }
+  Assert-RouterVPNNoReparseAncestors $fullCandidate
   if (-not (Test-Path -LiteralPath $fullCandidate -PathType Leaf)) { Fail "Raw WireGuard profile is missing: $fullCandidate" }
   return $fullCandidate
 }
