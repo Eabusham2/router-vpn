@@ -12,13 +12,17 @@ MAX_BYTES = 64
 
 
 def trusted_target(root_text: str, target_text: str) -> tuple[Path, os.stat_result]:
-    root = Path(root_text).resolve(strict=True)
+    root_input = Path(root_text)
+    root = root_input.resolve(strict=True)
     if not root.is_dir():
         raise RuntimeError("Router VPN root is not a directory")
-    target = Path(target_text)
-    if not target.is_absolute():
-        target = Path.cwd() / target
-    target = Path(os.path.abspath(target))
+    target_input = Path(target_text)
+    if target_input.is_absolute():
+        target = Path(os.path.abspath(target_input))
+    else:
+        # The controller's state/result paths are relative to HOMEVPN_ROOT, not
+        # the shell process cwd. Resolve them against the explicit trusted root.
+        target = Path(os.path.abspath(root_input / target_input)).resolve(strict=False)
     try:
         rel_parent = target.parent.relative_to(root)
     except ValueError as exc:
@@ -51,13 +55,28 @@ def validate_existing(target: Path) -> None:
         raise RuntimeError(f"ALL result target exceeds safety limit: {target}")
 
 
+def _sync_parent_best_effort(parent: Path) -> None:
+    try:
+        dfd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
 def prepare(root: str, target_text: str) -> None:
-    target, _ = trusted_target(root, target_text)
+    target, parent_before = trusted_target(root, target_text)
     validate_existing(target)
     try:
         target.unlink()
     except FileNotFoundError:
-        pass
+        return
+    target_now, parent_now = trusted_target(root, target_text)
+    if target_now != target or not os.path.samestat(parent_before, parent_now):
+        raise RuntimeError("ALL result parent changed during stale-result cleanup")
+    _sync_parent_best_effort(target.parent)
 
 
 def publish(root: str, target_text: str, value: str) -> None:
@@ -83,14 +102,7 @@ def publish(root: str, target_text: str, value: str) -> None:
         validate_existing(target)
         os.replace(tmp, target)
         committed = True
-        try:
-            dfd = os.open(target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
-        except OSError:
-            pass
+        _sync_parent_best_effort(target.parent)
     finally:
         if not committed:
             tmp.unlink(missing_ok=True)
