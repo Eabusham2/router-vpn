@@ -10,21 +10,32 @@ import tempfile
 MAX_BYTES = 32 << 20
 
 
-def ensure_private_parent(path: pathlib.Path) -> None:
+def _validate_existing_ancestors(parent: pathlib.Path) -> None:
+    for current in (parent, *parent.parents):
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError(f"refusing non-directory/symlink private path component: {current}")
+
+
+def ensure_private_parent(path: pathlib.Path) -> pathlib.Path:
+    path = pathlib.Path(os.path.abspath(path))
     parent = path.parent
-    try:
-        info = parent.lstat()
-    except FileNotFoundError:
-        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        info = parent.lstat()
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-        raise RuntimeError(f"refusing non-directory/symlink private parent: {parent}")
+    # Validate lexical ancestors before creation so a symlink in an earlier path
+    # component cannot redirect MkdirAll-equivalent work outside the intended
+    # private state tree. Then re-check after creation before any file adoption.
+    _validate_existing_ancestors(parent)
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _validate_existing_ancestors(parent)
+    return path
 
 
 def atomic_private_write(path: pathlib.Path, body: bytes) -> None:
     if not body or len(body) > MAX_BYTES:
         raise RuntimeError(f"private output is empty or oversized: {path}")
-    ensure_private_parent(path)
+    path = ensure_private_parent(path)
     try:
         info = path.lstat()
     except FileNotFoundError:
@@ -41,6 +52,7 @@ def atomic_private_write(path: pathlib.Path, body: bytes) -> None:
             stream.write(body)
             stream.flush()
             os.fsync(stream.fileno())
+        path = ensure_private_parent(path)
         os.replace(tmp, path)
         committed = True
         try:
