@@ -10,8 +10,9 @@ import tempfile
 from pathlib import Path
 
 from profile_id import validate_profile_id
+from private_profile_store import private_root, read_profile_store
 
-ROOT = Path(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+ROOT = private_root(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 PROFILE_ID = os.environ.get("HOMEVPN_PROFILE_ID", "").strip()
 if PROFILE_ID:
     PROFILE_ID = validate_profile_id(PROFILE_ID, default="")
@@ -34,19 +35,19 @@ KNOWN_TLS_NAMES = {
 
 
 def load_profile() -> dict:
-    path = ROOT / "routers.json"
-    try:
-        store = json.loads(path.read_text())
-    except Exception:
-        return {}
+    store = read_profile_store(ROOT)
     selected = PROFILE_ID or str(store.get("selected_id") or "").strip()
     if selected:
         selected = validate_profile_id(selected, default="")
-    profiles = store.get("profiles", [])
+    profiles = [p for p in store.get("profiles", []) if isinstance(p, dict)]
     for p in profiles:
         if p.get("id") == selected:
             return p
-    return profiles[0] if profiles else {}
+    if selected:
+        raise RuntimeError(f"selected Router VPN profile {selected!r} is missing")
+    if len(profiles) == 1:
+        return profiles[0]
+    raise RuntimeError("Router VPN DNS policy requires one selected profile")
 
 
 def infer_server_name(host: str, explicit: str) -> str:
