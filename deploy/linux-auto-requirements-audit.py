@@ -15,9 +15,14 @@ for marker in (
     'Save requirements', 'Disconnect before saving', 'refresh_home_summary_v6(app)',
 ):
     assert marker in req, f"Linux AUTO requirement UI missing {marker!r}"
+
+# Prove the canonical builder actually compiles/installs the requirements UI and
+# gates mutation on node-present/disconnected state. Do not depend on decorative
+# heading text: labels are allowed to change without changing shipping behavior.
 for marker in (
-    'routervpn-auto-requirements-v11.inc', 'AUTO / SMART requirements',
-    'G_CALLBACK(on_linux_auto_requirements_v11)', 'router-vpn-auto-requirements-v11',
+    'routervpn-auto-requirements-v11.inc',
+    'G_CALLBACK(on_linux_auto_requirements_v11)',
+    'router-vpn-auto-requirements-v11',
     'has_node && !connected',
 ):
     assert marker in builder, f"Linux canonical shipping builder missing {marker!r}"
