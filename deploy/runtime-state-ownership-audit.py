@@ -71,8 +71,8 @@ require(
 # DNS policy runtime may read the selected profile and patch only the explicit
 # runtime config passed by run-mode. It has no persistence command/API.
 dns = require("modes/dns-policy.py", 'ROOT / "routers.json"', "def patch_sing", "patch_sing(Path(sys.argv[2]), s)")
-for marker in ("persist", "save_profile", "atomicWritePrivate"):
-    if marker in dns and marker != "persist":
+for marker in ("save_profile", "atomicWritePrivate"):
+    if marker in dns:
         errors.append(f"modes/dns-policy.py unexpectedly gained persistent-profile logic: {marker}")
 for line, call in python_write_calls("modes/dns-policy.py"):
     if "write_text" in call and "path.write_text" not in call:
@@ -80,7 +80,7 @@ for line, call in python_write_calls("modes/dns-policy.py"):
 
 # Multihop builder reads linked nodes but may only materialize one disposable
 # graph below HOMEVPN_ROOT/run. It must never write routers.json.
-multihop = require(
+require(
     "modes/multihop.py",
     'root / "routers.json"',
     'run_root = (root / "run").resolve()',
@@ -88,9 +88,31 @@ multihop = require(
 )
 forbid("modes/multihop.py", "routers_path.write", 'root / "routers.json").write', "persistProfiles")
 
+# SMART/CUSTOM orchestration is also read-only with respect to profiles. It may
+# stop/start candidate processes, but selected profile policy remains controller-owned.
+require(
+    "modes/orchestrate.py",
+    '(ROOT / "routers.json").read_text()',
+    "def selected_profile()",
+    "def smart_auto()",
+    "def custom()",
+)
+for line, call in python_write_calls("modes/orchestrate.py"):
+    errors.append(f"modes/orchestrate.py:{line}: orchestrator unexpectedly writes filesystem state: {call}")
+
+# ALL reads base preference and owns only a caller-selected runtime result file.
+# It never writes routers.json or selected profile policy.
+require(
+    "modes/run-all.sh",
+    '"$ROOT/routers.json"',
+    "RESULT_FILE=${HOMEVPN_ALL_RESULT_FILE:-}",
+    'mv -f "$tmp" "$RESULT_FILE"',
+)
+forbid("modes/run-all.sh", '> "$ROOT/routers.json"', 'mv -f "$tmp" "$ROOT/routers.json"')
+
 # MTU startup is explicitly measurement-only. Policy fields are controller-owned;
 # normal starts may cache path measurements privately but routers.json is read-only.
-mtu = require(
+require(
     "modes/mtu-policy.py",
     "The Go controller is the sole writer of routers.json/profile policy.",
     'root / "state" / "mtu-auto-cache.json"',
