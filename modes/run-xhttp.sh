@@ -1,31 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client};SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")"&&pwd)
+ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/profile-id.sh"
-PROFILE_ID=$(homevpn_profile_id);ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend first};SOURCE="$ROOT/generated/$PROFILE_ID/reality-xhttp";[[ -d "$SOURCE" ]]||SOURCE="$ROOT/generated/reality-xhttp";RUN="$ROOT/run";CONF="$RUN/profile-$PROFILE_ID-reality-xhttp";rm -rf "$CONF";mkdir -p "$RUN";cp -a "$SOURCE" "$CONF"
-python3 - "$CONF/xray.json" "$ENDPOINT" <<'PY'
-import json,sys
-p=sys.argv[1];endpoint=sys.argv[2].strip().strip('[]');x=json.load(open(p))
-for out in x.get('outbounds',[]):
-    settings=out.get('settings',{}) if isinstance(out,dict) else {}
-    for v in settings.get('vnext',[]) if isinstance(settings.get('vnext'),list) else []:
-        if isinstance(v,dict) and 'address' in v:v['address']=endpoint
-json.dump(x,open(p,'w'),indent=2);open(p,'a').write('\n')
-PY
-export HOMEVPN_MODE=reality-xhttp;export HOMEVPN_MTU=${HOMEVPN_MTU:-1320};python3 "$SCRIPT_DIR/mtu-policy.py" apply "$CONF"
-HOMEVPN_PROFILE_ID="$PROFILE_ID" "$SCRIPT_DIR/check-mode.sh" reality-xhttp >/dev/null
-HOMEVPN_PROFILE_ID="$PROFILE_ID" python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json";xray run -test -c "$CONF/xray.json" >/dev/null;sing-box check -D "$CONF" -c "$CONF/sing-box.json" >/dev/null
-: >"$RUN/reality-xhttp.pids";sudo xray run -c "$CONF/xray.json" >>"$RUN/reality-xhttp.log" 2>&1 & XPID=$!;echo "$XPID" >>"$RUN/reality-xhttp.pids";sleep 1;kill -0 "$XPID" >/dev/null 2>&1||{ echo 'XHTTP Xray outer process failed to start' >&2;exit 1; }
+PROFILE_ID=$(homevpn_profile_id)
+ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend first}
+RUN="$ROOT/run"
+MODE=reality-xhttp
+
+# XHTTP can be entered directly or from run-mode; always establish the same
+# validated private staging boundary here instead of copying generated state.
+CONF=$(python3 "$SCRIPT_DIR/prepare-runtime-profile.py" "$ROOT" "$PROFILE_ID" "$MODE" "$ENDPOINT")
+python3 "$SCRIPT_DIR/runtime-pids.py" init "$ROOT" "$MODE"
+export HOMEVPN_MODE="$MODE"
+export HOMEVPN_MTU=${HOMEVPN_MTU:-1320}
+python3 "$SCRIPT_DIR/mtu-policy.py" apply "$CONF"
+HOMEVPN_PROFILE_ID="$PROFILE_ID" "$SCRIPT_DIR/check-mode.sh" "$MODE" >/dev/null
+HOMEVPN_PROFILE_ID="$PROFILE_ID" python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json"
+xray run -test -c "$CONF/xray.json" >/dev/null
+sing-box check -D "$CONF" -c "$CONF/sing-box.json" >/dev/null
+
+sudo xray run -c "$CONF/xray.json" >>"$RUN/$MODE.log" 2>&1 &
+XPID=$!
+python3 "$SCRIPT_DIR/runtime-pids.py" record "$ROOT" "$MODE" "$XPID"
+sleep 1
+kill -0 "$XPID" >/dev/null 2>&1 || { echo 'XHTTP Xray outer process failed to start' >&2; exit 1; }
+
 CFG="$CONF/sing-box.json"
-if [[ ${HOMEVPN_SOCKS:-false} == true || ${HOMEVPN_JUMBO:-false} == true ]];then TMP="$RUN/reality-xhttp-sing-box.json";python3 - "$CFG" "$TMP" <<'PY'
-import json,os,sys
-x=json.load(open(sys.argv[1]))
-if os.environ.get('HOMEVPN_SOCKS','false')=='true':x['inbounds']=[{'type':'socks','tag':'socks-in','listen':'127.0.0.1','listen_port':1080,'users':[]}]
-elif os.environ.get('HOMEVPN_JUMBO','false')=='true':
-    for inbound in x.get('inbounds',[]):
-        if inbound.get('type')=='tun':inbound['mtu']=9000
-json.dump(x,open(sys.argv[2],'w'),indent=2);open(sys.argv[2],'a').write('\n')
-PY
-CFG="$TMP";fi
-sing-box check -D "$CONF" -c "$CFG" >/dev/null;exec sudo sing-box run -D "$CONF" -c "$CFG"
+if [[ ${HOMEVPN_SOCKS:-false} == true || ${HOMEVPN_JUMBO:-false} == true ]]; then
+  TMP="$RUN/$MODE-sing-box.json"
+  variant=jumbo
+  [[ ${HOMEVPN_SOCKS:-false} == true ]] && variant=socks
+  python3 "$SCRIPT_DIR/runtime-config.py" sing-variant "$ROOT" "$CFG" "$TMP" "$variant"
+  CFG="$TMP"
+fi
+sing-box check -D "$CONF" -c "$CFG" >/dev/null
+exec sudo sing-box run -D "$CONF" -c "$CFG"
