@@ -15,10 +15,22 @@ MAX_PRIVATE_BYTES = 4 << 20
 PRIVATE_MODE = 0o600
 
 
+def _validate_existing_ancestors(parent: Path, label: str) -> None:
+    for current in (parent, *parent.parents):
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError(f"refusing non-directory/symlink {label} path component: {current}")
+
+
 def ensure_parent(path: Path, label: str) -> None:
+    _validate_existing_ancestors(path.parent, label)
     info = path.parent.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise RuntimeError(f"refusing non-directory/symlink {label} parent: {path.parent}")
+    _validate_existing_ancestors(path.parent, label)
 
 
 def read_private(path: Path, label: str) -> bytes:
@@ -44,6 +56,7 @@ def read_private(path: Path, label: str) -> bytes:
             out.extend(chunk)
             if len(out) > MAX_PRIVATE_BYTES:
                 raise RuntimeError(f"{label} is oversized: {path}")
+        ensure_parent(path, label)
         current = path.lstat()
         if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
             raise RuntimeError(f"{label} changed during read: {path}")
@@ -86,6 +99,7 @@ def paths(base: Path) -> dict[str, Path]:
 def family_presence(items: dict[str, Path]) -> tuple[bool, bool]:
     present = []
     for path in items.values():
+        _validate_existing_ancestors(path.parent, "Rosenpass identity")
         try:
             path.lstat()
             present.append(True)
