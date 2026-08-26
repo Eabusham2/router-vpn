@@ -89,8 +89,8 @@ for marker in (
     assert marker in rc, f"release candidate lost authoritative gate: {marker}"
 
 # These source-level destructive/security, durable-state, credential-preservation,
-# runtime-ownership, persistence-error, and historical boundaries must travel
-# with exact release orchestration instead of living as orphan scripts.
+# runtime-ownership, persistence-error, publication, and historical boundaries
+# must travel with exact release orchestration instead of living as orphan scripts.
 for audit in (
     "deploy/docker-cleanup-safety-audit.py",
     "deploy/private-bundle-boundary-audit.py",
@@ -102,6 +102,7 @@ for audit in (
     "deploy/standard-exit-private-runtime-audit.py",
     "deploy/portable-private-state-audit.py",
     "deploy/bundle-staging-durability-audit.py",
+    "deploy/setup-center-publication-audit.py",
     "deploy/durable-state-syntax-audit.py",
     "deploy/durable-state-transaction-audit.py",
     "server/scripts/test_preserve_generated_state.py",
@@ -134,4 +135,4 @@ assert not [
     if g.get("kind") == "source" and not g.get("pass")
 ], "legacy source gate failed inside recovered release audit"
 
-print("authoritative one-SHA release orchestration + bundle staging durability + Portable private bootstrap/state + standard-exit private runtimes + runtime/profile ownership + profile persistence error classification + private-store boundaries + durable-state syntax/transactions + upgrade preservation + complete recovered source/security audit: OK")
+print("authoritative one-SHA release orchestration + atomic Setup Center publication + bundle staging durability + Portable private bootstrap/state + standard-exit private runtimes + runtime/profile ownership + profile persistence error classification + private-store boundaries + durable-state syntax/transactions + upgrade preservation + complete recovered source/security audit: OK")
