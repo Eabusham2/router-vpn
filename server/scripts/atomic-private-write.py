@@ -10,10 +10,21 @@ import tempfile
 MAX_BYTES = 32 << 20
 
 
+def ensure_private_parent(path: pathlib.Path) -> None:
+    parent = path.parent
+    try:
+        info = parent.lstat()
+    except FileNotFoundError:
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        info = parent.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing non-directory/symlink private parent: {parent}")
+
+
 def atomic_private_write(path: pathlib.Path, body: bytes) -> None:
     if not body or len(body) > MAX_BYTES:
         raise RuntimeError(f"private output is empty or oversized: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    ensure_private_parent(path)
     try:
         info = path.lstat()
     except FileNotFoundError:
