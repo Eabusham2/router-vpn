@@ -98,10 +98,28 @@ def main() -> int:
             try:
                 auth.ensure_token(base)
             except RuntimeError as exc:
-                assert "config parent" in str(exc) and "symlink" in str(exc)
+                assert "symlink" in str(exc)
             else:
                 raise AssertionError("symlink Setup Center config parent was accepted")
             assert real_token.read_text(encoding="utf-8").strip() == "p" * 48
+
+        with tempfile.TemporaryDirectory(prefix="router-vpn-auth-ancestor-") as td:
+            root = Path(td)
+            real_base = root / "real-base"
+            real_config = real_base / "config"
+            real_config.mkdir(parents=True, mode=0o700)
+            real_token = real_config / "setup-center.token"
+            real_token.write_text("n" * 48 + "\n", encoding="utf-8")
+            os.chmod(real_token, 0o600)
+            linked_base = root / "linked-base"
+            linked_base.symlink_to(real_base, target_is_directory=True)
+            try:
+                auth.ensure_token(linked_base)
+            except RuntimeError as exc:
+                assert "symlink" in str(exc) and "path component" in str(exc)
+            else:
+                raise AssertionError("nested Setup Center symlink ancestor was accepted")
+            assert real_token.read_text(encoding="utf-8").strip() == "n" * 48
 
         with tempfile.TemporaryDirectory(prefix="router-vpn-auth-race-") as td:
             base = Path(td)
@@ -130,6 +148,35 @@ def main() -> int:
                     assert "changed during open" in str(exc)
                 else:
                     raise AssertionError("Setup Center token replacement race was accepted")
+
+        with tempfile.TemporaryDirectory(prefix="router-vpn-auth-read-race-") as td:
+            base = Path(td)
+            config = base / "config"
+            config.mkdir(mode=0o700)
+            path = config / "setup-center.token"
+            path.write_text("c" * 48 + "\n", encoding="utf-8")
+            os.chmod(path, 0o600)
+            replacement = config / "replacement-token"
+            replacement.write_text("d" * 48 + "\n", encoding="utf-8")
+            os.chmod(replacement, 0o600)
+            real_read = auth.os.read
+            changed = [False]
+
+            def swap_after_bytes(fd, size):
+                chunk = real_read(fd, size)
+                if chunk and not changed[0]:
+                    changed[0] = True
+                    os.replace(replacement, path)
+                return chunk
+
+            with mock.patch.object(auth.os, "read", side_effect=swap_after_bytes):
+                try:
+                    auth.read_preserved_token(path)
+                except RuntimeError as exc:
+                    assert "changed during read" in str(exc)
+                else:
+                    raise AssertionError("Setup Center token post-read replacement race was accepted")
+            assert path.read_text(encoding="utf-8").strip() == "d" * 48
 
     # Pairing accepts only explicit RFC1918/ULA plus loopback/link-local. Do not
     # use ipaddress.is_private here: Python intentionally treats additional
