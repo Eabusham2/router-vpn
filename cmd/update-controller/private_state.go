@@ -9,7 +9,34 @@ import (
 
 const maxUpdaterPrivateBytes int64 = 4 << 20
 
+func validateUpdaterPrivateParent(path string) error {
+	parent := filepath.Dir(path)
+	if parent == "." {
+		return nil
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			return err
+		}
+		info, err = os.Lstat(parent)
+		if err != nil {
+			return err
+		}
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("refusing non-directory/symlink private updater parent %s", parent)
+	}
+	return nil
+}
+
 func validateUpdaterPrivateFile(path string, limit int64) error {
+	if err := validateUpdaterPrivateParent(path); err != nil {
+		return err
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
@@ -66,12 +93,10 @@ func atomicWriteUpdaterPrivate(path string, body []byte) error {
 	if int64(len(body)) > maxUpdaterPrivateBytes {
 		return fmt.Errorf("private updater file %s exceeds safety limit", path)
 	}
-	parent := filepath.Dir(path)
-	if parent != "." {
-		if err := os.MkdirAll(parent, 0o700); err != nil {
-			return err
-		}
+	if err := validateUpdaterPrivateParent(path); err != nil {
+		return err
 	}
+	parent := filepath.Dir(path)
 	if _, err := os.Lstat(path); err == nil {
 		if err := validateUpdaterPrivateFile(path, maxUpdaterPrivateBytes); err != nil {
 			return err
@@ -101,6 +126,9 @@ func atomicWriteUpdaterPrivate(path string, body []byte) error {
 		return err
 	}
 	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := validateUpdaterPrivateParent(path); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
