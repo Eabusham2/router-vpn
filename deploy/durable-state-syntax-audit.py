@@ -24,6 +24,7 @@ PYTHON_FILES = (
     "server/scripts/ensure-setup-auth.py",
     "server/scripts/test_setup_auth.py",
     "server/scripts/ensure-node-proof.py",
+    "server/scripts/test_node_proof_private_state.py",
     "server/scripts/preserve-generated-state.py",
     "server/scripts/test_preserve_generated_state.py",
     "server/scripts/generate-aux-proxies.py",
