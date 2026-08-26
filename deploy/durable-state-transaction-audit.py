@@ -69,6 +69,8 @@ require(
 require("cmd/client/connection_profiles.go", "readPrivateRegular", "atomicWritePrivate")
 require("cmd/client/connection_profile_setup.go", "readPrivateRegular", "atomicWritePrivate")
 require("cmd/client/strategy_modes.go", "readPrivateRegular", "atomicWritePrivate")
+require("cmd/client/standard_exits.go", "readPrivateRegular", "atomicWritePrivate")
+require("cmd/client/standard_exits_test.go", "TestStandardExitStoreRejectsSymlinkParent", "TestStandardExitStoreAtomicWriterLeavesNoTempFiles")
 require("cmd/client/router_profile_transaction_test.go", "RollsRAMBackWhenPersistenceFails", "CompetingMutation")
 require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSymlinkParent", "RejectsOversizedRead")
 
