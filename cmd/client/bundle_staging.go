@@ -140,6 +140,11 @@ func syncBundleDirectoryBestEffort(path string) {
 	}
 }
 
+func pathWithinBundleRoot(baseRoot, candidate string) bool {
+	rel, err := filepath.Rel(baseRoot, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
 type stagedBundle struct {
 	root       string
 	baseRoot   string
@@ -181,9 +186,20 @@ func newStagedBundle(root, profileID string) (*stagedBundle, error) {
 }
 
 func (s *stagedBundle) cleanup() {
-	if s != nil && s.root != "" {
-		_ = os.RemoveAll(s.root)
+	if s == nil || s.root == "" || s.baseRoot == "" {
+		return
 	}
+	baseRoot, err := canonicalBundleRoot(s.baseRoot)
+	if err != nil || baseRoot != s.baseRoot || !pathWithinBundleRoot(baseRoot, s.root) {
+		// The private root moved or was replaced after staging. Never follow the
+		// new lexical path during cleanup; leaving the old private staging tree for
+		// later recovery is safer than deleting through a retargeted ancestor.
+		return
+	}
+	if err := validatePrivateParent(s.root); err != nil {
+		return
+	}
+	_ = os.RemoveAll(s.root)
 }
 
 func (s *stagedBundle) writeProfiles(profiles map[string]map[string]string) error {
@@ -383,6 +399,20 @@ func (s *stagedProfileDeletion) rollback() error {
 func (s *stagedProfileDeletion) commitCleanup() error {
 	if s == nil || !s.moved {
 		return nil
+	}
+	baseRoot, err := canonicalBundleRoot(s.baseRoot)
+	if err != nil || baseRoot != s.baseRoot {
+		return errors.New("client root changed during profile deletion cleanup")
+	}
+	trashRoot := filepath.Join(baseRoot, ".bundle-trash")
+	if !pathWithinBundleRoot(trashRoot, s.holder) {
+		return errors.New("unsafe profile deletion cleanup path")
+	}
+	if err := ensurePrivateDirectoryNoSymlink(trashRoot); err != nil {
+		return err
+	}
+	if err := validatePrivateParent(s.holder); err != nil {
+		return err
 	}
 	if err := os.RemoveAll(s.holder); err != nil {
 		return err
