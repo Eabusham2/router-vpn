@@ -30,6 +30,18 @@ function Resolve-RouterVPNPrivateRoot([string]$RootText) {
   return $root
 }
 
+function Resolve-RouterVPNPrivateChild([string]$RootText,[string]$ChildPath) {
+  $root=Resolve-RouterVPNPrivateRoot $RootText
+  if([IO.Path]::IsPathRooted($ChildPath)){$full=[IO.Path]::GetFullPath($ChildPath)}
+  else{$full=[IO.Path]::GetFullPath((Join-Path $root $ChildPath))}
+  $prefix=$root.TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar
+  if($full-ne$root-and-not$full.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){
+    throw "Refusing Router VPN path outside private root: $full"
+  }
+  Assert-RouterVPNNoReparseAncestors $full
+  return $full
+}
+
 function Read-RouterVPNPrivateJson([string]$Path,[string]$Label='Router VPN private JSON',[int]$Limit=4194304) {
   Assert-RouterVPNNoReparseAncestors $Path
   if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){throw "$Label is missing: $Path"}
