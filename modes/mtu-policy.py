@@ -22,6 +22,7 @@ from typing import Any
 
 from network_context import generated_profile_fingerprint, network_fingerprint
 from profile_id import validate_profile_id
+from private_profile_store import private_root, read_private_json, read_profile_store
 
 MIN_MTU = 576
 MAX_PROBE_MTU = 1500
@@ -31,7 +32,7 @@ CACHE_VERSION = 1
 
 
 def root_dir() -> Path:
-    return Path(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client")).resolve()
+    return private_root(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 
 
 def profile_id() -> str:
@@ -41,28 +42,29 @@ def profile_id() -> str:
         raise SystemExit("invalid HOMEVPN_PROFILE_ID") from exc
 
 
-def load_store(root: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    try:
-        store = json.loads((root / "routers.json").read_text(encoding="utf-8"))
-    except Exception:
-        return {}, None
+def load_store(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    store = read_profile_store(root)
     selected = profile_id()
     profile = next(
         (p for p in store.get("profiles", []) if isinstance(p, dict) and p.get("id") == selected),
         None,
     )
+    if profile is None:
+        raise RuntimeError(f"selected Router VPN profile {selected!r} is missing")
     return store, profile
 
 
 def catalog_default(root: Path, mode: str, fallback: int) -> int:
     try:
-        for item in json.loads((root / "modes.json").read_text(encoding="utf-8")):
+        catalog = read_private_json(root / "modes.json")
+    except RuntimeError:
+        catalog = []
+    if isinstance(catalog, list):
+        for item in catalog:
             if isinstance(item, dict) and item.get("id") == mode:
                 value = int(item.get("mtu", 0))
                 if MIN_MTU <= value <= 9000:
                     return value
-    except Exception:
-        pass
     return fallback if MIN_MTU <= fallback <= 9000 else 1380
 
 
