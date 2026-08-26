@@ -30,8 +30,19 @@ try{
     if(-not$caught-or$caught-notmatch'reparse'){throw "symlink profile store was accepted: $caught"}
   }else{Write-Host 'Windows symlink creation unavailable; source reparse contract still checked.'}
 
+  $outside=Join-Path $temp 'outside'
+  New-Item -ItemType Directory -Path $outside|Out-Null
+  $childLink=Join-Path $temp 'linked-child'
+  $childLinkCreated=$false
+  try{New-Item -ItemType SymbolicLink -Path $childLink -Target $outside -ErrorAction Stop|Out-Null;$childLinkCreated=$true}catch{}
+  if($childLinkCreated){
+    $caught=$null
+    try{[void](Resolve-RouterVPNPrivateChild $temp (Join-Path $childLink 'runtime.exe'))}catch{$caught=$_.Exception.Message}
+    if(-not$caught-or$caught-notmatch'reparse'){throw "symlink private child path was accepted: $caught"}
+  }
+
   $source=Get-Content -Raw -LiteralPath $helper
-  foreach($marker in @('Assert-RouterVPNNoReparseAncestors','FileShare]::Read','Get-RouterVPNProfileStore','Get-RouterVPNSelectedProfile')){
+  foreach($marker in @('Assert-RouterVPNNoReparseAncestors','Resolve-RouterVPNPrivateChild','FileShare]::Read','Get-RouterVPNProfileStore','Get-RouterVPNSelectedProfile')){
     if(-not$source.Contains($marker)){throw "private profile helper lost marker: $marker"}
   }
   foreach($forbidden in @('WriteAllText($Path','Move-Item','File]::Replace')){
