@@ -44,9 +44,7 @@ class EndpointSyncTransactionTests(unittest.TestCase):
             ],
         }
         self.routers_path.write_text(json.dumps(original) + "\n")
-        self.before = {
-            path: path.read_bytes() for path in (self.wg, self.awg, self.routers_path)
-        }
+        self.before = {path: path.read_bytes() for path in (self.wg, self.awg, self.routers_path)}
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -61,12 +59,17 @@ class EndpointSyncTransactionTests(unittest.TestCase):
         self.assertEqual(profiles["home"]["endpoint"], "203.0.113.9")
         self.assertEqual(profiles["other-router"]["endpoint"], "other.example")
         self.assertEqual(profiles["external-exit"]["endpoint"], "exit.example")
-        self.assertEqual(
-            profiles["external-exit"]["external"]["shadowsocks"]["server"],
-            "ss.example",
-        )
+        self.assertEqual(profiles["external-exit"]["external"]["shadowsocks"]["server"], "ss.example")
         for path in (self.wg, self.awg, self.routers_path):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_legacy_broad_mode_is_hardened_before_read(self) -> None:
+        if os.name == "nt":
+            self.skipTest("POSIX mode contract")
+        os.chmod(self.wg, 0o644)
+        before = self.wg.read_bytes()
+        self.assertEqual(module.read_owned_file(self.wg), before)
+        self.assertEqual(self.wg.stat().st_mode & 0o777, 0o600)
 
     def test_late_adoption_failure_restores_every_changed_file(self) -> None:
         real_replace = os.replace
@@ -103,11 +106,25 @@ class EndpointSyncTransactionTests(unittest.TestCase):
         real_dir = self.wg.parent.with_name("wg-real")
         self.wg.parent.replace(real_dir)
         self.wg.parent.symlink_to(real_dir, target_is_directory=True)
-        with self.assertRaisesRegex(RuntimeError, "owned parent"):
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
             module.sync(self.base, "203.0.113.9")
         self.assertEqual((real_dir / "wg.conf").read_bytes(), self.before[self.wg])
         self.assertEqual(self.awg.read_bytes(), self.before[self.awg])
         self.assertEqual(self.routers_path.read_bytes(), self.before[self.routers_path])
+
+    def test_nested_symlink_owned_ancestor_is_rejected_before_mutation(self) -> None:
+        if os.name == "nt":
+            self.skipTest("POSIX symlink ancestor contract")
+        root = self.base.parent
+        real_base = root / (self.base.name + "-real")
+        self.base.rename(real_base)
+        self.base.symlink_to(real_base, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, "path component"):
+            module.sync(self.base, "203.0.113.9")
+        self.assertEqual((real_base / "client-bundle/generated/wg/wg.conf").read_bytes(), self.before[self.wg])
+        # Restore lexical base for TemporaryDirectory cleanup.
+        self.base.unlink()
+        real_base.rename(self.base)
 
     def test_owned_file_identity_change_during_open_is_rejected(self) -> None:
         real_fstat = module.os.fstat
@@ -127,11 +144,28 @@ class EndpointSyncTransactionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "changed during open"):
                 module.read_owned_file(self.wg)
 
+    def test_owned_file_identity_change_during_read_is_rejected(self) -> None:
+        replacement = self.wg.with_name("replacement.conf")
+        replacement.write_text("[Peer]\nEndpoint = newer.example:51820\n")
+        real_read = module.os.read
+        changed = False
+
+        def swap_after_bytes(fd, size):
+            nonlocal changed
+            chunk = real_read(fd, size)
+            if chunk and not changed:
+                changed = True
+                os.replace(replacement, self.wg)
+            return chunk
+
+        with mock.patch.object(module.os, "read", side_effect=swap_after_bytes):
+            with self.assertRaisesRegex(RuntimeError, "changed during read"):
+                module.read_owned_file(self.wg)
+        self.assertIn("newer.example", self.wg.read_text())
+
     def test_duplicate_owned_home_profiles_fail_closed(self) -> None:
         data = json.loads(self.routers_path.read_text())
-        data["profiles"].append(
-            {"id": "home", "node_kind": "router-vpn", "endpoint": "duplicate.example"}
-        )
+        data["profiles"].append({"id": "home", "node_kind": "router-vpn", "endpoint": "duplicate.example"})
         self.routers_path.write_text(json.dumps(data) + "\n")
         with self.assertRaisesRegex(RuntimeError, "multiple owned home"):
             module.sync(self.base, "203.0.113.9")
