@@ -132,6 +132,12 @@ def transform(rel: Path, body: bytes, endpoint: str, final_root: Path) -> bytes:
             return body
         patch_json(value, endpoint, final_root)
         return (json.dumps(value, indent=2) + "\n").encode("utf-8")
+    # Rosenpass owns its own hop endpoint. Standard PQ patches this explicitly
+    # to the public Rosenpass UDP port in run-pq.sh; MAX intentionally keeps the
+    # private base-tunnel Rosenpass endpoint. Generic endpoint rewriting must not
+    # destroy either mode-specific contract here.
+    if rel.name == "rosenpass.toml":
+        return body
     try:
         text = body.decode("utf-8")
     except UnicodeDecodeError:
