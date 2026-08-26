@@ -91,6 +91,25 @@ func TestUpdaterPrivateFileRejectsSymlinkParent(t *testing.T) {
 	}
 }
 
+func TestUpdaterPrivateFileRejectsNestedSymlinkAncestor(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.MkdirAll(filepath.Join(realDir, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedDir := filepath.Join(root, "linked")
+	if err := os.Symlink(realDir, linkedDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	path := filepath.Join(linkedDir, "nested", "state", "update-controller.json")
+	if err := atomicWriteUpdaterPrivate(path, []byte("{}\n")); err == nil {
+		t.Fatal("nested symlink ancestor was accepted for updater state")
+	}
+	if _, err := os.Stat(filepath.Join(realDir, "nested", "state")); !os.IsNotExist(err) {
+		t.Fatalf("updater state created redirected nested state: %v", err)
+	}
+}
+
 func TestUpdaterPrivateFileRejectsOversizedRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "update-controller.json")
 	if err := os.WriteFile(path, []byte("12345"), 0o600); err != nil {
