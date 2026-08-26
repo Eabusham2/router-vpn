@@ -35,6 +35,8 @@ PYTHON_FILES = (
     "server/scripts/enhance-max-pq.py",
     "server/scripts/wrap-xhttp-tun.py",
     "server/scripts/generate-stack-profiles.py",
+    "modes/kill-switch.py",
+    "modes/test_kill_switch.py",
     "modes/mtu-policy.py",
     "modes/mtu-policy-platform.py",
     "modes/test_mtu_policy.py",
