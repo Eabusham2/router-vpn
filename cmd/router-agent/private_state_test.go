@@ -66,6 +66,25 @@ func TestPrivilegedStateRejectsSymlinkAndBroadPermissions(t *testing.T) {
 	}
 }
 
+func TestPrivilegedStateRejectsSymlinkParent(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedDir := filepath.Join(root, "linked")
+	if err := os.Symlink(realDir, linkedDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	path := filepath.Join(linkedDir, "admin-state.json")
+	if err := atomicWritePrivilegedState(path, []byte("{}\n")); err == nil {
+		t.Fatal("symlink privileged-state parent was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(realDir, "admin-state.json")); !os.IsNotExist(err) {
+		t.Fatalf("privileged state escaped through symlink parent: %v", err)
+	}
+}
+
 func TestPrivilegedStateRejectsOversizedRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	if err := os.WriteFile(path, []byte("12345"), 0o600); err != nil {
