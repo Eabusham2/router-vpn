@@ -28,6 +28,8 @@ def make_source(root: Path) -> Path:
     }
     (source / "sing-box.json").write_text(json.dumps(cfg) + "\n", encoding="utf-8")
     os.chmod(source / "sing-box.json", 0o600)
+    (source / "rosenpass.toml").write_text('endpoint = "10.77.0.1:51822"\n', encoding="utf-8")
+    os.chmod(source / "rosenpass.toml", 0o600)
     return source
 
 
@@ -41,6 +43,7 @@ def main() -> int:
         proxy = cfg["outbounds"][0]
         assert proxy["server"] == "203.0.113.9"
         assert proxy["tls"]["certificate_path"] == str(dest / "cert.pem")
+        assert (dest / "rosenpass.toml").read_text() == 'endpoint = "10.77.0.1:51822"\n', "generic staging stole Rosenpass hop-endpoint ownership"
         assert not list((root / "run").glob(".profile-home-hysteria2.stage-*"))
         if os.name != "nt":
             assert (dest / "sing-box.json").stat().st_mode & 0o777 == 0o600
@@ -52,6 +55,7 @@ def main() -> int:
         assert (dest / "new.txt").read_text() == "new\n"
         cfg = json.loads((dest / "sing-box.json").read_text())
         assert cfg["outbounds"][0]["server"] == "203.0.113.10"
+        assert (dest / "rosenpass.toml").read_text() == 'endpoint = "10.77.0.1:51822"\n'
 
         # Inject failure when staged tree is adopted after the prior tree was
         # moved aside; the old complete tree must be restored.
