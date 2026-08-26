@@ -147,10 +147,17 @@ require("server/scripts/benchmark-dns.py", "measurement_only", "write_private_at
 forbid("server/scripts/benchmark-dns.py", 'BASE / "client-bundle" / "routers.json"', "routers_path =")
 require("server/scripts/test_dns_benchmark_persistence.py", "DNS benchmark code regained routers.json ownership")
 
-# Generic private publishers and private node/bundle generation.
-require("server/scripts/atomic-private-write.py", "mkstemp", "os.fsync", "os.replace", "0o600")
-require("server/scripts/atomic-private-batch.py", "restore", "adopt", "rollback was incomplete", "os.replace")
-require("server/scripts/test_atomic_private_publication.py", "fail_second_adoption", "prior state restored")
+# Generic private publishers reject symlink leaf targets and symlinked immediate
+# parents, then adopt 0600 files through random same-directory fsynced temps.
+require("server/scripts/atomic-private-write.py", "ensure_private_parent", "mkstemp", "os.fsync", "os.replace", "0o600")
+require("server/scripts/atomic-private-batch.py", "ensure_private_parent", "restore", "adopt", "rollback was incomplete", "os.replace")
+require(
+    "server/scripts/test_atomic_private_publication.py",
+    "fail_second_adoption",
+    "prior state restored",
+    "single-file private publisher accepted a symlink parent",
+    "batch private publisher accepted a symlink parent",
+)
 require("server/scripts/create-bundle-json.py", "write_private_json", '"client.json"', '"routers.json"', '"router-vpn-bundle.json"')
 
 # Stable identity/credential generators must preserve valid existing state,
