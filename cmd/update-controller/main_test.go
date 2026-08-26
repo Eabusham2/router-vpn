@@ -110,3 +110,52 @@ func TestUpdaterRequiresCompleteExactSHAReleaseWorkflowSet(t *testing.T) {
 		}
 	}
 }
+
+
+func TestOwnedImageProofRejectsMissingDuplicatedAndUnknownRepos(t *testing.T) {
+	missingAgent := strings.Replace(testTemplate(), "router-vpn-agent:"+testOldSHA, "router-vpn-init:"+testOldSHA, 1)
+	if _, err := validateAndMaterializeTemplate(missingAgent, testNewSHA); err == nil || !strings.Contains(err.Error(), "router-vpn-agent") {
+		t.Fatalf("missing required owned image was accepted: %v", err)
+	}
+	if got := composeSHA(missingAgent); got != "unknown" {
+		t.Fatalf("missing required owned image resolved to exact SHA %q", got)
+	}
+
+	unknown := testTemplate() + "  future:\n    image: ghcr.io/eabusham2/router-vpn-future:" + testOldSHA + "\n"
+	if _, err := validateAndMaterializeTemplate(unknown, testNewSHA); err == nil || !strings.Contains(err.Error(), "unrecognized") {
+		t.Fatalf("unrecognized Router VPN image was accepted: %v", err)
+	}
+	if got := composeSHA(unknown); got != "unknown" {
+		t.Fatalf("unrecognized Router VPN image resolved to exact SHA %q", got)
+	}
+
+	floating := testTemplate() + "  duplicate-agent:\n    image: ghcr.io/eabusham2/router-vpn-agent:edge\n"
+	if _, err := validateAndMaterializeTemplate(floating, testNewSHA); err == nil || !strings.Contains(err.Error(), "full SHA") {
+		t.Fatalf("floating Router VPN image tag was accepted: %v", err)
+	}
+	if got := composeSHA(floating); got != "unknown" {
+		t.Fatalf("floating Router VPN image tag resolved to exact SHA %q", got)
+	}
+}
+
+func TestRequiredOwnedImageRepositoriesAreClosedAndComplete(t *testing.T) {
+	want := []string{
+		"router-vpn-init",
+		"router-vpn-agent",
+		"router-vpn-wireguard",
+		"router-vpn-awg2",
+		"router-vpn-rosenpass",
+		"router-vpn-naive",
+		"router-vpn-ss-v2ray",
+		"router-vpn-aux",
+		"router-vpn-updater",
+	}
+	if len(requiredCustomImageRepos) != len(want) {
+		t.Fatalf("owned image repository count=%d want=%d: %v", len(requiredCustomImageRepos), len(want), requiredCustomImageRepos)
+	}
+	for i := range want {
+		if requiredCustomImageRepos[i] != want[i] {
+			t.Fatalf("owned image repository[%d]=%q want=%q", i, requiredCustomImageRepos[i], want[i])
+		}
+	}
+}
