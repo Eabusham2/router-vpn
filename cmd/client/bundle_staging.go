@@ -28,29 +28,30 @@ func safeBundleToken(value string) bool {
 }
 
 func canonicalBundleRoot(root string) (string, error) {
-	clean := filepath.Clean(root)
-	if err := os.MkdirAll(clean, 0o700); err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(clean)
-	if err != nil {
-		return "", fmt.Errorf("resolve client root: %w", err)
-	}
-	resolved, err = filepath.Abs(resolved)
+	clean, err := filepath.Abs(filepath.Clean(root))
 	if err != nil {
 		return "", err
 	}
-	st, err := os.Stat(resolved)
+	// Bundle import/deletion shares the same private-state root as routers.json.
+	// Preserve the lexical path and reject every symlinked ancestor instead of
+	// EvalSymlinks-resolving the path and silently writing through a redirect.
+	if err := validatePrivateParent(filepath.Join(clean, ".bundle-root-check")); err != nil {
+		return "", fmt.Errorf("validate client root: %w", err)
+	}
+	st, err := os.Lstat(clean)
 	if err != nil {
 		return "", err
 	}
-	if !st.IsDir() {
-		return "", errors.New("client root is not a directory")
+	if st.Mode()&os.ModeSymlink != 0 || !st.IsDir() {
+		return "", errors.New("client root must be a non-symlink directory")
 	}
-	return resolved, nil
+	return clean, nil
 }
 
 func ensurePrivateDirectoryNoSymlink(path string) error {
+	if err := validatePrivateParent(filepath.Join(path, ".bundle-dir-check")); err != nil {
+		return err
+	}
 	st, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.Mkdir(path, 0o700); err != nil {
@@ -66,6 +67,9 @@ func ensurePrivateDirectoryNoSymlink(path string) error {
 	}
 	if !st.IsDir() {
 		return fmt.Errorf("private bundle path is not a directory: %s", filepath.Base(path))
+	}
+	if err := validatePrivateParent(filepath.Join(path, ".bundle-dir-check")); err != nil {
+		return err
 	}
 	if err := os.Chmod(path, 0o700); err != nil {
 		return err
@@ -196,6 +200,9 @@ func (s *stagedBundle) commit(root, profileID string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if err := ensurePrivateDirectoryNoSymlink(generated); err != nil {
+		return err
+	}
 	if err := os.Rename(s.profileDir, final); err != nil {
 		return err
 	}
@@ -204,12 +211,12 @@ func (s *stagedBundle) commit(root, profileID string) error {
 }
 
 type stagedProfileDeletion struct {
-	baseRoot   string
-	generated  string
-	final      string
-	holder     string
-	tombstone  string
-	moved      bool
+	baseRoot  string
+	generated string
+	final     string
+	holder    string
+	tombstone string
+	moved     bool
 }
 
 func stageGeneratedProfileDeletion(root, profileID string) (*stagedProfileDeletion, error) {
@@ -285,6 +292,9 @@ func (s *stagedProfileDeletion) rollback() error {
 		if err == nil {
 			return errors.New("profile deletion rollback destination already exists")
 		}
+		return err
+	}
+	if err := ensurePrivateDirectoryNoSymlink(s.generated); err != nil {
 		return err
 	}
 	if err := os.Rename(s.tombstone, s.final); err != nil {
