@@ -42,6 +42,11 @@ for marker in ("darwin_apply", "darwin_watch", "darwin_release", "darwin_reasser
     assert marker in dispatch, marker
 assert 'state.get("policy") == "always"' in dispatch
 assert "Fail closed" in dispatch or "fail-closed" in dispatch
+assert "_linux.remove_state(root" in dispatch
+assert "_linux.state_path(root).unlink" not in dispatch
+assert "persisted PF reference token was unreadable" in dispatch
+assert "_darwin._clear_anchor(check=False)" in dispatch
+assert "global PF enablement was left untouched" in dispatch
 
 # Established MTU logic is imported and only its pre-connect protection callback
 # is replaced; the mature Linux MTU implementation itself is not duplicated.
