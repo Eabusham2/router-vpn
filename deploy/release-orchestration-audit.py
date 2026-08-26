@@ -63,6 +63,7 @@ assert "RouterVPN-Portainer-${GITHUB_SHA}.yaml" in compose, "production compose 
 for marker in (
     "python3 deploy/historical-regression-audit.py",
     "python3 deploy/backend-session-transaction-audit.py",
+    "python3 deploy/release-orchestration-audit.py",
     "python3 modes/test_kill_switch.py",
     "python3 server/scripts/test_preserve_generated_state.py",
     "python3 modes/test_mtu_policy.py",
@@ -87,14 +88,16 @@ for marker in (
 ):
     assert marker in rc, f"release candidate lost authoritative gate: {marker}"
 
-# These source-level destructive/security, credential-preservation, and
-# historical runtime boundaries must travel with exact release orchestration
-# instead of living as orphan scripts.
+# These source-level destructive/security, durable-state, credential-preservation,
+# and historical runtime boundaries must travel with exact release orchestration
+# instead of living as orphan scripts. release-candidate.yml invokes this
+# orchestration audit, so the durable-state gate executes on that exact SHA too.
 for audit in (
     "deploy/docker-cleanup-safety-audit.py",
     "deploy/private-bundle-boundary-audit.py",
     "deploy/historical-regression-audit.py",
     "deploy/binding-edge-requirements-audit.py",
+    "deploy/durable-state-transaction-audit.py",
     "server/scripts/test_preserve_generated_state.py",
 ):
     subprocess.run([sys.executable, str(ROOT / audit)], cwd=ROOT, check=True)
@@ -125,4 +128,4 @@ assert not [
     if g.get("kind") == "source" and not g.get("pass")
 ], "legacy source gate failed inside recovered release audit"
 
-print("authoritative one-SHA release orchestration + upgrade preservation + complete recovered source/security audit: OK")
+print("authoritative one-SHA release orchestration + durable-state + upgrade preservation + complete recovered source/security audit: OK")
