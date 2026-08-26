@@ -1,11 +1,8 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 
 	"router-vpn/internal/common"
@@ -21,6 +18,9 @@ const openVPNEntrySOCKSPort = 1100
 func writeOpenVPNEntryBridge(root, runtimeDir string, entry common.RouterProfile) (string, error) {
 	if entry.ID == "" {
 		return "", errors.New("OpenVPN hop requires a linked entry node")
+	}
+	if err := ensurePrivateRuntimeDirectory(runtimeDir); err != nil {
+		return "", err
 	}
 	var cfg map[string]any
 	if entry.NodeKind == "external" {
@@ -69,27 +69,12 @@ func writeOpenVPNEntryBridge(root, runtimeDir string, entry common.RouterProfile
 		return "", errors.New("OpenVPN entry bridge config exceeds safety limit")
 	}
 	path := filepath.Join(runtimeDir, "entry-bridge.json")
-	if err = os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
-		return "", err
-	}
-	if err = os.Chmod(path, 0o600); err != nil {
+	if err = writePrivateRuntimeFile(path, append(raw, '\n')); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
 func newOpenVPNRuntimeDir(root string) (string, error) {
-	base := filepath.Join(root, "run", "openvpn-standard-exit")
-	if err := os.MkdirAll(base, 0o700); err != nil {
-		return "", err
-	}
-	nonce := make([]byte, 12)
-	if _, err := rand.Read(nonce); err != nil {
-		return "", err
-	}
-	dir := filepath.Join(base, hex.EncodeToString(nonce))
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		return "", err
-	}
-	return dir, nil
+	return newPrivateRuntimeDir(root, "openvpn-standard-exit")
 }
