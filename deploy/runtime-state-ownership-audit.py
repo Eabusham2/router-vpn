@@ -193,23 +193,42 @@ require(
     "auto-cache",
 )
 
-# The mode launcher reconstructs per-session state under run/. Patching those
-# copies is allowed and deliberately excluded from durable profile ownership.
+# The mode launcher reconstructs one complete private per-session tree under
+# run/. Generated inputs are scanned/read without following symlinks, transformed
+# in staging, fsynced, and directory-adopted with prior-tree rollback.
 require(
     "modes/run-mode.sh",
     'RUN="$ROOT/run"',
-    'CONF="$RUN/profile-$PROFILE_ID-$MODE"',
+    'CONF=$(python3 "$SCRIPT_DIR/prepare-runtime-profile.py" "$ROOT" "$PROFILE_ID" "$MODE" "$ENDPOINT")',
     'python3 "$SCRIPT_DIR/mtu-policy.py" apply "$CONF"',
     'python3 "$SCRIPT_DIR/dns-policy.py" patch-sing',
 )
+forbid("modes/run-mode.sh", 'cp -a "$SOURCE_CONF" "$CONF"', 'rm -rf "$CONF"')
+require(
+    "modes/prepare-runtime-profile.py",
+    "runtime profile source contains symlink",
+    "runtime profile file changed during open",
+    "tempfile.mkdtemp",
+    "os.fsync(fd)",
+    "os.rename(stage, dest)",
+    "prior runtime profile",
+    "false post-commit failure",
+)
+require(
+    "modes/test_prepare_runtime_profile.py",
+    "failed runtime tree adoption did not restore prior tree",
+    "runtime profile staging followed a source symlink",
+    "runtime staging followed a symlink run directory",
+)
 
 # Behavioral proof: persistent MTU ownership stays read-only, while DNS,
-# multihop and ALL prove failure-safe atomic publication of disposable state.
+# multihop, ALL, and the mode staging layer prove failure-safe runtime publication.
 for rel in (
     "modes/test_mtu_policy.py",
     "modes/test_dns_policy_runtime.py",
     "modes/test_multihop_private_runtime.py",
     "modes/test_all_result.py",
+    "modes/test_prepare_runtime_profile.py",
 ):
     proc = subprocess.run([sys.executable, str(ROOT / rel)], cwd=ROOT, text=True, capture_output=True)
     if proc.returncode != 0:
