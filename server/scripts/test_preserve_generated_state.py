@@ -22,13 +22,14 @@ def write_json(path: Path, value: dict) -> None:
         os.chmod(path, 0o600)
 
 
+def transport_value() -> dict:
+    return {"hysteria2_password": "hy2-existing-password", "shadowsocks_key": "ss-existing-key-material"}
+
+
 with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-state-") as td:
     base = Path(td)
     transport_state = base / "config/transports/generated-secrets.json"
-    write_json(transport_state, {
-        "hysteria2_password": "hy2-existing-password",
-        "shadowsocks_key": "ss-existing-key-material",
-    })
+    write_json(transport_state, transport_value())
     got = MOD.transports(base)
     assert got["HY2_PASSWORD"] == "hy2-existing-password"
     assert got["SS_KEY"] == "ss-existing-key-material"
@@ -135,8 +136,7 @@ if os.name != "nt":
     with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-symlink-") as td:
         base = Path(td)
         real = base / "real.json"
-        real.write_text(json.dumps({"hysteria2_password": "hy2-existing-password", "shadowsocks_key": "ss-existing-key-material"}), encoding="utf-8")
-        os.chmod(real, 0o600)
+        write_json(real, transport_value())
         link = base / "config/transports/generated-secrets.json"
         link.parent.mkdir(parents=True)
         link.symlink_to(real)
@@ -152,23 +152,34 @@ if os.name != "nt":
         real_parent = base / "real-transports"
         real_parent.mkdir(parents=True)
         state = real_parent / "generated-secrets.json"
-        state.write_text(json.dumps({"hysteria2_password": "hy2-existing-password", "shadowsocks_key": "ss-existing-key-material"}), encoding="utf-8")
-        os.chmod(state, 0o600)
+        write_json(state, transport_value())
         linked_parent = base / "config" / "transports"
         linked_parent.parent.mkdir(parents=True)
         linked_parent.symlink_to(real_parent, target_is_directory=True)
         try:
             MOD.transports(base)
         except ValueError as exc:
-            assert "parent" in str(exc) and "symlink" in str(exc)
+            assert "symlink" in str(exc)
         else:
             raise AssertionError("symlink parent for preserved transport state was accepted")
+
+    with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-ancestor-") as td:
+        root = Path(td)
+        real_base = root / "real-base"
+        write_json(real_base / "config/transports/generated-secrets.json", transport_value())
+        linked_base = root / "linked-base"
+        linked_base.symlink_to(real_base, target_is_directory=True)
+        try:
+            MOD.transports(linked_base)
+        except ValueError as exc:
+            assert "symlink" in str(exc) and "path component" in str(exc)
+        else:
+            raise AssertionError("nested preserved credential symlink ancestor was accepted")
 
     with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-mode-") as td:
         base = Path(td)
         path = base / "config/transports/generated-secrets.json"
-        path.parent.mkdir(parents=True)
-        path.write_text(json.dumps({"hysteria2_password": "hy2-existing-password", "shadowsocks_key": "ss-existing-key-material"}), encoding="utf-8")
+        write_json(path, transport_value())
         os.chmod(path, 0o644)
         try:
             MOD.transports(base)
@@ -177,11 +188,10 @@ if os.name != "nt":
         else:
             raise AssertionError("broad-permission preserved credential state was accepted")
 
-    with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-race-") as td:
+    with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-open-race-") as td:
         base = Path(td)
         path = base / "config/transports/generated-secrets.json"
-        path.parent.mkdir(parents=True)
-        write_json(path, {"hysteria2_password": "hy2-existing-password", "shadowsocks_key": "ss-existing-key-material"})
+        write_json(path, transport_value())
         replacement = path.with_name("replacement.json")
         write_json(replacement, {"hysteria2_password": "replacement-password", "shadowsocks_key": "replacement-key-material"})
         real_fstat = MOD.os.fstat
@@ -201,5 +211,31 @@ if os.name != "nt":
                 assert "changed during open" in str(exc)
             else:
                 raise AssertionError("preserved credential file replacement race was accepted")
+
+    with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-read-race-") as td:
+        base = Path(td)
+        path = base / "config/transports/generated-secrets.json"
+        write_json(path, transport_value())
+        replacement = path.with_name("replacement.json")
+        replacement_value = {"hysteria2_password": "replacement-password", "shadowsocks_key": "replacement-key-material"}
+        write_json(replacement, replacement_value)
+        real_read = MOD.os.read
+        changed = [False]
+
+        def swap_after_bytes(fd, size):
+            chunk = real_read(fd, size)
+            if chunk and not changed[0]:
+                changed[0] = True
+                os.replace(replacement, path)
+            return chunk
+
+        with mock.patch.object(MOD.os, "read", side_effect=swap_after_bytes):
+            try:
+                MOD.transports(base)
+            except ValueError as exc:
+                assert "changed during read" in str(exc)
+            else:
+                raise AssertionError("preserved credential post-read replacement race was accepted")
+        assert json.loads(path.read_text()) == replacement_value
 
 print("Preserved generated state tests: OK")
