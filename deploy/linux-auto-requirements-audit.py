@@ -13,21 +13,25 @@ for marker in (
     '/api/profile/settings', 'auto_require_encrypted', 'auto_require_obfuscation',
     'Require encrypted AUTO candidates', 'Require obfuscation for AUTO candidates',
     'Save requirements', 'Disconnect before saving', 'refresh_home_summary_v6(app)',
+    'on_linux_auto_requirements_v11', 'AUTO / SMART requirements',
 ):
     assert marker in req, f"Linux AUTO requirement UI missing {marker!r}"
 
-# Prove the canonical builder actually compiles/installs the requirements UI and
-# gates mutation on node-present/disconnected state. Do not depend on decorative
-# heading text: labels are allowed to change without changing shipping behavior.
+# The canonical builder owns the include/injection seam. The callback body lives
+# in routervpn-auto-requirements-v11.inc and must not be duplicated in the shell
+# builder merely to satisfy an audit string.
 for marker in (
+    'AUTO_REQ_INC=',
     'routervpn-auto-requirements-v11.inc',
-    'G_CALLBACK(on_linux_auto_requirements_v11)',
-    'router-vpn-auto-requirements-v11',
+    '#include "routervpn-auto-requirements-v11.inc"',
     'has_node && !connected',
 ):
     assert marker in builder, f"Linux canonical shipping builder missing {marker!r}"
-for marker in ('exec bash "$BASE" "$@"', 'Canonical Linux builder missing'):
-    assert marker in wrapper, f"Linux current shipping wrapper missing thin-wrapper marker {marker!r}"
+for marker in (
+    'exec bash "$BASE" "$@"', 'Canonical Linux builder missing',
+    'Linux AUTO requirements include missing', 'on_linux_auto_requirements_v11',
+):
+    assert marker in wrapper, f"Linux current shipping wrapper missing validation marker {marker!r}"
 for marker in ('linux_unified_auto_requirements_v8', 'AUTO requirements', 'on_linux_auto_requirements_v11'):
     assert marker in unified, f"Linux map-first shell missing AUTO requirements access {marker!r}"
 assert 'build-native-app-current.sh' in package, "Linux package path bypasses current shipping wrapper"
