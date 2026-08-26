@@ -11,6 +11,7 @@ on:
       - 'modes/mtu-throughput-tuner-platform.py'
       - 'modes/kill-switch-platform.py'
       - 'client/Optimize-RouterVPN-MTU.ps1'
+      - 'client/Private-RouterVPN-State.ps1'
       - 'cmd/client/mtu_retest.go'
       - 'cmd/client/mtu_retest_test.go'
       - 'cmd/client/extras.go'
@@ -93,8 +94,11 @@ jobs:
         shell: powershell
         run: |
           $tokens=$null;$errors=$null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'client/Optimize-RouterVPN-MTU.ps1'),[ref]$tokens,[ref]$errors)|Out-Null
-          if($errors.Count){$errors|ForEach-Object{Write-Error $_};exit 1}
+          foreach($file in @('client/Private-RouterVPN-State.ps1','client/Optimize-RouterVPN-MTU.ps1')){
+            $tokens=$null;$errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file),[ref]$tokens,[ref]$errors)|Out-Null
+            if($errors.Count){$errors|ForEach-Object{Write-Error $_};exit 1}
+          }
       - name: Run deterministic Windows self-test
         shell: powershell
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/Optimize-RouterVPN-MTU.ps1 -Action self-test
@@ -102,7 +106,14 @@ jobs:
         shell: powershell
         run: |
           $s=Get-Content -Raw client/Optimize-RouterVPN-MTU.ps1
-          foreach($marker in @('Prove-Node $profile','Ensure-KillSwitch $profile $alias','Set-Mtu $alias $family $original','effective_mtu_source','auto-throughput','Find-NetRoute','Set-NetIPInterface','Get-NetworkFingerprint','Get-GeneratedProfileFingerprint','effective_mtu_network_fingerprint','HOMEVPN_NETWORK_CONTEXT')){
+          foreach($marker in @('Prove-Node $profile','Ensure-KillSwitch $profile $alias','Set-Mtu $alias $family $original','Find-NetRoute','Set-NetIPInterface','Get-NetworkFingerprint','Get-GeneratedProfileFingerprint','HOMEVPN_NETWORK_CONTEXT','Private-RouterVPN-State.ps1','Get-RouterVPNSelectedProfile','durable_owner=''Router VPN Go controller /api/mtu/retest''')){
             if(-not $s.Contains($marker)){throw "missing contract marker: $marker"}
           }
-          Write-Host 'Windows MTU optimizer fail-closed network-specific contract OK'
+          foreach($forbidden in @('Persist-Winner','$Ctx.Path+''.mtu.tmp''','Move-Item -LiteralPath $tmp -Destination $Ctx.Path -Force')){
+            if($s.Contains($forbidden)){throw "Windows MTU helper regained direct profile-store persistence: $forbidden"}
+          }
+          $private=Get-Content -Raw client/Private-RouterVPN-State.ps1
+          foreach($marker in @('Assert-RouterVPNNoReparseAncestors','FileShare]::Read','Get-RouterVPNProfileStore','Get-RouterVPNSelectedProfile')){
+            if(-not $private.Contains($marker)){throw "missing private-state helper marker: $marker"}
+          }
+          Write-Host 'Windows MTU optimizer fail-closed controller-owned persistence contract OK'
