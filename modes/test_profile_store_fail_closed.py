@@ -44,11 +44,13 @@ with tempfile.TemporaryDirectory(prefix="router-vpn-profile-consumers-") as td:
         mtu = load("router_vpn_mtu_profile_fail_closed", "mtu-policy.py")
         multihop = load("router_vpn_multihop_profile_fail_closed", "multihop.py")
         orchestrate = load("router_vpn_orchestrate_profile_fail_closed", "orchestrate.py")
+        tuner = load("router_vpn_mtu_tuner_profile_fail_closed", "mtu-throughput-tuner.py")
 
         assert dns.load_profile()["id"] == "node"
         assert mtu.load_store(mtu.root_dir())[1]["id"] == "node"
         assert multihop.profile(multihop.read_store(multihop.root_dir()), "node", "test")["id"] == "node"
         assert orchestrate.selected_profile()["id"] == "node"
+        assert tuner.load_profile(tuner.root_dir())[1]["id"] == "node"
 
         store_path.write_text("{broken\n", encoding="utf-8")
         if os.name != "nt":
@@ -58,6 +60,7 @@ with tempfile.TemporaryDirectory(prefix="router-vpn-profile-consumers-") as td:
             ("mtu", lambda: mtu.load_store(mtu.root_dir())),
             ("multihop", lambda: multihop.read_store(multihop.root_dir())),
             ("orchestrate", orchestrate.selected_profile),
+            ("mtu-tuner", lambda: tuner.load_profile(tuner.root_dir())),
         ):
             try:
                 call()
@@ -72,6 +75,7 @@ with tempfile.TemporaryDirectory(prefix="router-vpn-profile-consumers-") as td:
             ("mtu", lambda: mtu.load_store(mtu.root_dir())),
             ("multihop", lambda: multihop.profile(multihop.read_store(multihop.root_dir()), "missing", "test")),
             ("orchestrate", orchestrate.selected_profile),
+            ("mtu-tuner", lambda: tuner.load_profile(tuner.root_dir())),
         ):
             try:
                 call()
@@ -90,6 +94,7 @@ with tempfile.TemporaryDirectory(prefix="router-vpn-profile-consumers-") as td:
                 ("mtu", lambda: mtu.load_store(mtu.root_dir())),
                 ("multihop", lambda: multihop.read_store(multihop.root_dir())),
                 ("orchestrate", orchestrate.selected_profile),
+            ("mtu-tuner", lambda: tuner.load_profile(tuner.root_dir())),
             ):
                 try:
                     call()
