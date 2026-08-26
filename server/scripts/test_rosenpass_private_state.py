@@ -109,9 +109,25 @@ if os.name != "nt":
         try:
             MOD.verify_existing(base)
         except RuntimeError as exc:
-            assert "parent" in str(exc) and "symlink" in str(exc)
+            assert "symlink" in str(exc)
         else:
             raise AssertionError("symlink Rosenpass identity parent was accepted")
+
+    with tempfile.TemporaryDirectory(prefix="router-vpn-rp-ancestor-") as td:
+        root = Path(td)
+        real_base = root / "real-base"
+        make_family(real_base)
+        linked_base = root / "linked-base"
+        linked_base.symlink_to(real_base, target_is_directory=True)
+        # Every immediate Rosenpass file parent resolves to a normal directory;
+        # only the earlier base component is a symlink. This is the escape case
+        # recursive ancestor validation must reject.
+        try:
+            MOD.verify_existing(linked_base)
+        except RuntimeError as exc:
+            assert "symlink" in str(exc) and "path component" in str(exc)
+        else:
+            raise AssertionError("nested Rosenpass symlink ancestor was accepted")
 
     with tempfile.TemporaryDirectory(prefix="router-vpn-rp-race-") as td:
         base = Path(td)
