@@ -40,7 +40,7 @@ func TestRollbackComposeSnapshotIsPrivateAndExact(t *testing.T) {
 	}
 }
 
-func TestRollbackComposeClearsValidatedStaleSnapshotBeforeNewTransaction(t *testing.T) {
+func TestClearRollbackComposeRemovesValidatedStaleSnapshotBeforeNewTransaction(t *testing.T) {
 	c := testRecoveryController(t)
 	stale := strings.ReplaceAll(testTemplate(), testOldSHA, testNewSHA)
 	if composeSHA(stale) != testNewSHA {
@@ -48,6 +48,12 @@ func TestRollbackComposeClearsValidatedStaleSnapshotBeforeNewTransaction(t *test
 	}
 	if err := atomicWriteUpdaterPrivate(c.rollbackComposePath(), []byte(stale)); err != nil {
 		t.Fatal(err)
+	}
+	if err := c.clearRollbackCompose(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(c.rollbackComposePath()); !os.IsNotExist(err) {
+		t.Fatalf("validated stale snapshot survived preflight cleanup: %v", err)
 	}
 	if err := c.saveRollbackCompose(testTemplate(), testOldSHA); err != nil {
 		t.Fatal(err)
@@ -57,18 +63,18 @@ func TestRollbackComposeClearsValidatedStaleSnapshotBeforeNewTransaction(t *test
 		t.Fatal(err)
 	}
 	if loaded != testTemplate() {
-		t.Fatal("new transaction did not replace validated stale rollback snapshot")
+		t.Fatal("new transaction snapshot was not published exactly")
 	}
 }
 
-func TestRollbackComposeUnsafeStaleSnapshotBlocksNewTransaction(t *testing.T) {
+func TestClearRollbackComposeUnsafeStaleSnapshotBlocksNewTransaction(t *testing.T) {
 	c := testRecoveryController(t)
 	path := c.rollbackComposePath()
 	if err := os.WriteFile(path, []byte(testTemplate()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.saveRollbackCompose(testTemplate(), testOldSHA); err == nil || !strings.Contains(err.Error(), "clear stale rollback snapshot") {
-		t.Fatalf("unsafe stale rollback snapshot did not block new transaction: %v", err)
+	if err := c.clearRollbackCompose(); err == nil {
+		t.Fatal("unsafe stale rollback snapshot did not block preflight cleanup")
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -76,6 +82,24 @@ func TestRollbackComposeUnsafeStaleSnapshotBlocksNewTransaction(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o644 {
 		t.Fatalf("unsafe stale snapshot was silently rewritten: %#o", info.Mode().Perm())
+	}
+}
+
+func TestSaveRollbackComposeRefusesUnexpectedExistingSnapshotAfterTransactionStart(t *testing.T) {
+	c := testRecoveryController(t)
+	unexpected := strings.ReplaceAll(testTemplate(), testOldSHA, testNewSHA)
+	if err := atomicWriteUpdaterPrivate(c.rollbackComposePath(), []byte(unexpected)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.saveRollbackCompose(testTemplate(), testOldSHA); err == nil || !strings.Contains(err.Error(), "unexpectedly exists") {
+		t.Fatalf("unexpected recovery evidence was overwritten/accepted: %v", err)
+	}
+	body, err := os.ReadFile(c.rollbackComposePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != unexpected {
+		t.Fatal("unexpected rollback evidence was modified")
 	}
 }
 
