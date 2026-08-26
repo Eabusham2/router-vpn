@@ -32,12 +32,35 @@ try {
     'original_profiles',
     'ProgramData',
     'Router VPN Kill Switch',
-    'InterfaceAlias'
+    'InterfaceAlias',
+    'Assert-NoReparseAncestors',
+    'Assert-SafeStateLeaf',
+    '[IO.File]::Replace',
+    '[Guid]::NewGuid().ToString(''N'')',
+    '$stream.Flush($true)',
+    'Remove-State -ForceRecovery',
+    'emergency outbound-Allow recovery'
   )) {
     if (-not $source.Contains($marker)) { throw "Windows kill-switch source missing marker: $marker" }
   }
   if ($source -match 'Action=.Block.*RemoteAddress=.Any') { throw 'explicit block-all rule would override intended allow rules' }
-  Write-Host 'Windows kill-switch plan/rollback contract: OK'
+  if ($source.Contains('$path.tmp')) { throw 'predictable Windows kill-switch state temp path returned' }
+  if ($source -match 'Move-Item\s+-LiteralPath\s+\$tmp\s+-Destination\s+\$path\s+-Force') { throw 'non-atomic force move returned for Windows kill-switch state' }
+
+  $badState = Join-Path $temp 'windows-state.json'
+  [IO.File]::WriteAllText($badState,'{broken',(New-Object Text.UTF8Encoding($false)))
+  $caughtState = $null
+  try {
+    & $script -Action status -Endpoint '203.0.113.7' -Policy 'on-connect' -HomeLANAccess 'false' -StateRoot $temp | Out-Null
+  } catch {
+    $caughtState = $_.Exception.Message
+  }
+  if (-not $caughtState -or $caughtState -notmatch 'Invalid Windows kill-switch rollback state JSON') {
+    throw "corrupt persistent Windows kill-switch state did not fail closed: $caughtState"
+  }
+  Remove-Item -LiteralPath $badState -Force
+
+  Write-Host 'Windows kill-switch plan/rollback/private-state contract: OK'
 } finally {
   Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
