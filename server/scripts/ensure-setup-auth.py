@@ -15,17 +15,33 @@ MAX_TOKEN_BYTES = 4096
 PRIVATE_MODE = 0o600
 
 
+def _validate_existing_ancestors(path: Path) -> None:
+    for current in (path, *path.parents):
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError(f"refusing non-directory/symlink Setup Center path component: {current}")
+
+
 def ensure_private_config_dir(config: Path) -> None:
+    # Preserve the lexical path. Resolving it first would hide a symlinked base
+    # component and let a privileged token write escape the intended state tree.
+    _validate_existing_ancestors(config.parent)
     try:
         info = config.lstat()
     except FileNotFoundError:
         config.mkdir(parents=True, exist_ok=False, mode=0o700)
+        _validate_existing_ancestors(config.parent)
         info = config.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise RuntimeError(f"refusing non-directory/symlink Setup Center config parent: {config}")
+    _validate_existing_ancestors(config)
 
 
 def read_preserved_token(path: Path) -> str:
+    ensure_private_config_dir(path.parent)
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink Setup Center token: {path}")
@@ -63,7 +79,8 @@ def read_preserved_token(path: Path) -> str:
         except UnicodeDecodeError as exc:
             raise RuntimeError("existing Setup Center token is not UTF-8; refusing silent rotation") from exc
 
-        # Re-prove that the path still names the exact inode we consumed.
+        # Re-prove both the lexical ancestry and the exact inode we consumed.
+        ensure_private_config_dir(path.parent)
         current = path.lstat()
         if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
             raise RuntimeError("existing Setup Center token changed during read; refusing silent rotation")
@@ -75,6 +92,9 @@ def read_preserved_token(path: Path) -> str:
 
 
 def ensure_token(base: Path) -> Path:
+    # abspath makes a stable absolute lexical path without following symlinks.
+    base = Path(os.path.abspath(base))
+    _validate_existing_ancestors(base)
     config = base / "config"
     ensure_private_config_dir(config)
     path = config / "setup-center.token"
@@ -104,7 +124,7 @@ def main() -> int:
     ap.add_argument("base", nargs="?", default="/opt/router-vpn")
     args = ap.parse_args()
     try:
-        path = ensure_token(Path(args.base).resolve())
+        path = ensure_token(Path(args.base))
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         raise SystemExit(str(exc)) from exc
     # Never print the token itself: this helper is safe to call from init/finalizer
