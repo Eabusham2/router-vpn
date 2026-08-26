@@ -106,3 +106,44 @@ func TestPortablePackageSourceRejectsSymlink(t *testing.T) {
 		t.Fatal("Portable launcher accepted a symlinked package source")
 	}
 }
+
+func TestPortablePackageSourceRejectsSymlinkAncestor(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "modes.json"), []byte("[]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := filepath.Join(root, "App")
+	if err := os.Mkdir(app, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	redirect := filepath.Join(app, "RouterVPN")
+	if err := os.Symlink(outside, redirect); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := readPortablePackageFile(filepath.Join(redirect, "modes.json"), 1024); err == nil {
+		t.Fatal("Portable launcher accepted a package source through a symlink ancestor")
+	}
+}
+
+func TestPortableRegularExistsRejectsRuntimeSymlinkAncestor(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "Data")
+	if err := os.Mkdir(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	windows := filepath.Join(outside, "windows")
+	if err := os.Mkdir(windows, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(windows, "sing-box.exe"), []byte("fake\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(data, "runtime")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if portableRegularExists(filepath.Join(data, "runtime", "windows", "sing-box.exe")) {
+		t.Fatal("Portable runtime readiness accepted a binary through a symlink ancestor")
+	}
+}
