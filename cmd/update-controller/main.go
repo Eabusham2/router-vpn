@@ -164,6 +164,33 @@ func validateUpdateState(s updateState) error {
 	if s.TargetSHA != "" && !shaRE.MatchString(s.TargetSHA) {
 		return errors.New("update state contains invalid target_sha")
 	}
+
+	// Status is part of the durable recovery protocol, not presentation metadata.
+	// Reject impossible status/SHA combinations so a truncated/manual/corrupt
+	// state file cannot make restart reconciliation guess which mutation boundary
+	// had been crossed.
+	switch s.Status {
+	case "idle":
+		if s.FromSHA != "" || s.TargetSHA != "" {
+			return errors.New("idle update state may not retain release SHAs")
+		}
+	case "applying":
+		if s.TargetSHA == "" {
+			return errors.New("applying update state requires target_sha")
+		}
+		// from_sha is intentionally optional only for the first pre-deployment
+		// applying checkpoint, before the current exact stack is discovered.
+	case "finalizing", "rolling-back", "complete":
+		if s.FromSHA == "" || s.TargetSHA == "" {
+			return fmt.Errorf("%s update state requires exact from_sha and target_sha", s.Status)
+		}
+	case "failed":
+		// A failure before stack discovery legitimately has no from_sha, but the
+		// requested exact target must always remain attributable.
+		if s.TargetSHA == "" {
+			return errors.New("failed update state requires target_sha")
+		}
+	}
 	return nil
 }
 
