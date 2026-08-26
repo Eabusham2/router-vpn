@@ -22,10 +22,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $files = @(
+            'client/Private-RouterVPN-State.ps1',
             'client/native-wireguard-windows.ps1',
             'client/native-windows-mode.ps1',
+            'client/Optimize-RouterVPN-MTU.ps1',
             'client/windows-kill-switch.ps1',
             'client/test-windows-kill-switch.ps1',
+            'client/test-private-router-vpn-state.ps1',
             'client/Prepare-Windows-Mode-Catalog-v2.ps1',
             'client/Setup-Windows-Runtime.ps1',
             'client/install-windows.ps1'
@@ -47,6 +50,7 @@ jobs:
             if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { throw "Missing Windows firewall primitive: $name" }
           }
           ./client/test-windows-kill-switch.ps1
+          ./client/test-private-router-vpn-state.ps1
       - name: Assert no current WSL dependency
         shell: pwsh
         run: |
