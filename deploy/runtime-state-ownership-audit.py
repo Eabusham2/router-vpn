@@ -94,7 +94,7 @@ require(
 dns = require(
     "modes/dns-policy.py",
     "from private_profile_store import private_root, read_profile_store",
-    "store = read_profile_store(ROOT)",
+    "store = read_profile_store(private_root(str(ROOT)))",
     "def _read_runtime_json",
     "os.path.samestat(opened, current)",
     "def _atomic_private_runtime_json",
