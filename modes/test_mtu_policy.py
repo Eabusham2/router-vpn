@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import pathlib
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 
 SCRIPT = pathlib.Path(__file__).with_name("mtu-policy.py")
+SPEC = importlib.util.spec_from_file_location("router_vpn_mtu_policy", SCRIPT)
+assert SPEC and SPEC.loader
+MOD = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MOD)
 
 
 def cache_entries(root: pathlib.Path) -> dict:
@@ -143,6 +149,71 @@ def test_network_specific_cache() -> None:
         assert newest[0]["effective_mtu"] == 1280
 
 
+def test_runtime_profile_symlink_is_never_followed() -> None:
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory(prefix="router-vpn-mtu-runtime-symlink-") as td:
+        root = pathlib.Path(td)
+        conf = root / "run" / "profile-node-shadowsocks"
+        conf.mkdir(parents=True)
+        generated = root / "generated" / "node" / "shadowsocks"
+        generated.mkdir(parents=True)
+        (generated / "sing-box.json").write_text(json.dumps({"server": "203.0.113.10", "server_port": 8388}) + "\n")
+        (root / "modes.json").write_text(json.dumps([{"id": "shadowsocks", "mtu": 1380}]) + "\n")
+        routers = root / "routers.json"
+        routers.write_text(json.dumps({"selected_id": "node", "profiles": [{"id": "node", "endpoint": "203.0.113.10", "mtu_policy": "default"}]}) + "\n")
+        routers_before = routers.read_bytes()
+        runtime = conf / "sing-box.json"
+        runtime.write_text(json.dumps({"inbounds": [{"type": "tun", "mtu": 1280}]}) + "\n")
+        runtime_before = runtime.read_bytes()
+        outside = root / "outside.conf"
+        outside.write_text("[Interface]\nMTU = 777\n")
+        (conf / "escape.conf").symlink_to(outside)
+        env = os.environ.copy()
+        env.update({
+            "HOMEVPN_ROOT": str(root), "HOMEVPN_PROFILE_ID": "node", "HOMEVPN_MODE": "shadowsocks",
+            "HOMEVPN_ENDPOINT": "203.0.113.10", "HOMEVPN_MTU": "1380", "HOMEVPN_JUMBO": "false",
+            "HOMEVPN_NETWORK_CONTEXT": "wifi-a",
+        })
+        p = subprocess.run([sys.executable, str(SCRIPT), "apply", str(conf)], env=env, text=True, capture_output=True)
+        assert p.returncode != 0
+        assert "symlink MTU runtime profile path" in p.stderr, p.stderr
+        assert outside.read_text() == "[Interface]\nMTU = 777\n"
+        assert runtime.read_bytes() == runtime_before, "runtime tree changed before symlink rejection"
+        assert routers.read_bytes() == routers_before
+
+
+def test_runtime_profile_late_adoption_failure_rolls_back() -> None:
+    with tempfile.TemporaryDirectory(prefix="router-vpn-mtu-runtime-rollback-") as td:
+        conf = pathlib.Path(td).resolve()
+        first = conf / "a.json"
+        second = conf / "b.conf"
+        first.write_text(json.dumps({"inbounds": [{"type": "tun", "mtu": 1280}]}) + "\n")
+        second.write_text("[Interface]\nMTU = 1280\n")
+        before_first, before_second = first.read_bytes(), second.read_bytes()
+        real_replace = MOD.os.replace
+        calls = 0
+        failed = False
+
+        def fail_second_replace(src, dst):
+            nonlocal calls, failed
+            calls += 1
+            if calls == 2 and not failed:
+                failed = True
+                raise OSError("injected second MTU adoption failure")
+            return real_replace(src, dst)
+
+        with mock.patch.object(MOD.os, "replace", side_effect=fail_second_replace):
+            try:
+                MOD.apply_tree(conf, 1380)
+            except RuntimeError as exc:
+                assert "prior runtime profile restored" in str(exc), exc
+            else:
+                raise AssertionError("late MTU runtime adoption failure was ignored")
+        assert first.read_bytes() == before_first
+        assert second.read_bytes() == before_second
+
+
 def test_symlink_cache_is_never_followed() -> None:
     if os.name == "nt":
         return
@@ -183,5 +254,7 @@ run_case("auto", 1280, probe="1400")
 run_case("auto", 1380, probe="0")
 run_case("auto", 9000, probe="1500", jumbo=True)
 test_network_specific_cache()
+test_runtime_profile_symlink_is_never_followed()
+test_runtime_profile_late_adoption_failure_rolls_back()
 test_symlink_cache_is_never_followed()
 print("MTU policy tests: OK")
