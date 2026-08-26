@@ -69,6 +69,25 @@ func TestPrivateStoreRejectsSymlinkTargets(t *testing.T) {
 	}
 }
 
+func TestPrivateStoreRejectsSymlinkParent(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedDir := filepath.Join(root, "linked")
+	if err := os.Symlink(realDir, linkedDir); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	path := filepath.Join(linkedDir, "routers.json")
+	if err := atomicWritePrivate(path, []byte("secret\n")); err == nil {
+		t.Fatal("symlink parent was accepted for private store write")
+	}
+	if _, err := os.Stat(filepath.Join(realDir, "routers.json")); !os.IsNotExist(err) {
+		t.Fatalf("symlink-parent write escaped into real directory: %v", err)
+	}
+}
+
 func TestPrivateStoreRejectsOversizedRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "routers.json")
 	if err := os.WriteFile(path, []byte("12345"), 0o600); err != nil {
