@@ -16,9 +16,10 @@ func TestBundleGeneratorEmbedsStableNodeProof(t *testing.T) {
 	text := string(bundle)
 	for _, marker := range []string{
 		"ensure-node-proof.py",
-		"'node_proof_id':node_proof_id",
-		"'nodeProofId':node_proof_id",
-		"re.fullmatch(r'[0-9a-f]{64}',node_proof_id)",
+		`"node_proof_id": node_proof_id`,
+		`"nodeProofId": node_proof_id`,
+		`re.fullmatch(r"[0-9a-f]{64}", node_proof_id)`,
+		"write_private_json",
 	} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("bundle generator lost node proof marker %q", marker)
@@ -36,8 +37,11 @@ func TestNodeProofDerivesOnlyFromWireGuardServerPublicIdentity(t *testing.T) {
 	for _, marker := range []string{
 		"router-vpn-node-proof-v1\\n",
 		"WireGuard server public key",
-		"config[\"node_id\"] = node_id",
-		"os.chmod(AGENT_CONFIG, 0o600)",
+		`config["node_id"] = node_id`,
+		"preserved router-agent node proof identity conflicts with WireGuard server identity",
+		"atomic-private-batch.py",
+		"PRIVATE_MODE = 0o600",
+		"os.path.samestat",
 	} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("node proof helper lost marker %q", marker)
