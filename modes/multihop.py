@@ -27,6 +27,7 @@ import tempfile
 from typing import Any
 
 from profile_id import validate_profile_id
+from private_profile_store import private_root, read_profile_store
 
 SUPPORTED_EXIT = {"shadowsocks": "shadowsocks", "hysteria2": "hysteria2"}
 PROOF_PORT = 1099
@@ -34,7 +35,7 @@ MAX_RUNTIME_FILE_BYTES = 8 << 20
 
 
 def root_dir() -> Path:
-    return Path(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client")).resolve()
+    return private_root(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 
 
 def valid_id(value: str, label: str) -> str:
@@ -55,13 +56,7 @@ def safe_under(parent: Path, child: Path) -> Path:
 
 
 def read_store(root: Path) -> dict[str, Any]:
-    try:
-        value = json.loads((root / "routers.json").read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise RuntimeError(f"cannot read routers.json: {exc}") from exc
-    if not isinstance(value, dict):
-        raise RuntimeError("routers.json is not an object")
-    return value
+    return read_profile_store(root)
 
 
 def profile(store: dict[str, Any], profile_id: str, role: str) -> dict[str, Any]:
