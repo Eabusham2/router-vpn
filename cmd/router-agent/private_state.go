@@ -9,7 +9,34 @@ import (
 
 const maxPrivilegedStateBytes int64 = 4 << 20
 
+func validatePrivilegedStateParent(path string) error {
+	parent := filepath.Dir(path)
+	if parent == "." {
+		return nil
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			return err
+		}
+		info, err = os.Lstat(parent)
+		if err != nil {
+			return err
+		}
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("refusing non-directory/symlink privileged state parent %s", parent)
+	}
+	return nil
+}
+
 func validatePrivilegedStateFile(path string, limit int64) error {
+	if err := validatePrivilegedStateParent(path); err != nil {
+		return err
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
@@ -66,12 +93,10 @@ func atomicWritePrivilegedState(path string, body []byte) error {
 	if int64(len(body)) > maxPrivilegedStateBytes {
 		return fmt.Errorf("privileged state %s exceeds safety limit", path)
 	}
-	parent := filepath.Dir(path)
-	if parent != "." {
-		if err := os.MkdirAll(parent, 0o700); err != nil {
-			return err
-		}
+	if err := validatePrivilegedStateParent(path); err != nil {
+		return err
 	}
+	parent := filepath.Dir(path)
 	if _, err := os.Lstat(path); err == nil {
 		if err := validatePrivilegedStateFile(path, maxPrivilegedStateBytes); err != nil {
 			return err
@@ -101,6 +126,9 @@ func atomicWritePrivilegedState(path string, body []byte) error {
 		return err
 	}
 	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := validatePrivilegedStateParent(path); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
