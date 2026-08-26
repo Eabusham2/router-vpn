@@ -88,7 +88,7 @@ def patch_json(obj, endpoint: str, final_root: Path) -> None:
             for outbound in outbounds:
                 if not isinstance(outbound, dict):
                     continue
-                if outbound.get("tag") in ("proxy", "outer", "transport") and isinstance(outbound.get("server"), str):
+                if outbound.get("tag") in ("proxy", "outer", "transport", "tcp-stack", "udp-stack") and isinstance(outbound.get("server"), str):
                     outbound["server"] = endpoint
                 settings = outbound.get("settings")
                 if isinstance(settings, dict):
