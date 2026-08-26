@@ -11,6 +11,18 @@ import tempfile
 SCRIPT = pathlib.Path(__file__).with_name("mtu-policy.py")
 
 
+def cache_entries(root: pathlib.Path) -> dict:
+    path = root / "state" / "mtu-auto-cache.json"
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text())
+    assert data.get("version") == 1
+    assert isinstance(data.get("entries"), dict)
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+    return data["entries"]
+
+
 def run_case(policy: str, expected: int, probe: str = "", manual: int = 0, jumbo: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="router-vpn-mtu-") as td:
         root = pathlib.Path(td)
@@ -21,7 +33,9 @@ def run_case(policy: str, expected: int, probe: str = "", manual: int = 0, jumbo
         (generated / "sing-box.json").write_text(json.dumps({"server": "203.0.113.10", "server_port": 8388}) + "\n")
         (root / "modes.json").write_text(json.dumps([{"id": "shadowsocks", "mtu": 1380}]) + "\n")
         profile = {"id": "node", "endpoint": "203.0.113.10", "mtu_policy": policy, "manual_mtu": manual}
-        (root / "routers.json").write_text(json.dumps({"selected_id": "node", "profiles": [profile]}) + "\n")
+        routers = root / "routers.json"
+        routers.write_text(json.dumps({"selected_id": "node", "profiles": [profile]}) + "\n")
+        before = routers.read_bytes()
         (conf / "sing-box.json").write_text(json.dumps({"inbounds": [{"type": "tun", "tag": "tun-in", "mtu": 1280}]}) + "\n")
         (conf / "wg.conf").write_text("[Interface]\nPrivateKey = test\n")
         env = os.environ.copy()
@@ -43,9 +57,15 @@ def run_case(policy: str, expected: int, probe: str = "", manual: int = 0, jumbo
         sj = json.loads((conf / "sing-box.json").read_text())
         assert sj["inbounds"][0]["mtu"] == expected, (sj, p.stderr)
         assert f"MTU = {expected}" in (conf / "wg.conf").read_text()
-        store = json.loads((root / "routers.json").read_text())
-        assert store["profiles"][0]["effective_mtu"] == expected
-        assert store["profiles"][0].get("effective_mtu_network_fingerprint") != "test-network-a"
+        assert routers.read_bytes() == before, "runtime MTU policy mutated controller-owned routers.json"
+        entries = cache_entries(root)
+        if policy == "auto" and not jumbo:
+            assert len(entries) == 1
+            entry = next(iter(entries.values()))
+            assert entry["effective_mtu"] == expected
+            assert entry.get("network_fingerprint") != "test-network-a"
+        else:
+            assert entries == {}, f"non-auto runtime unexpectedly persisted MTU cache: {entries}"
 
 
 def test_network_specific_cache() -> None:
@@ -57,7 +77,9 @@ def test_network_specific_cache() -> None:
         generated.mkdir(parents=True)
         (generated / "sing-box.json").write_text(json.dumps({"server": "203.0.113.10", "server_port": 8388}) + "\n")
         (root / "modes.json").write_text(json.dumps([{"id": "shadowsocks", "mtu": 1380}]) + "\n")
-        (root / "routers.json").write_text(json.dumps({"selected_id": "node", "profiles": [{"id": "node", "endpoint": "203.0.113.10", "mtu_policy": "auto"}]}) + "\n")
+        routers = root / "routers.json"
+        routers.write_text(json.dumps({"selected_id": "node", "profiles": [{"id": "node", "endpoint": "203.0.113.10", "mtu_policy": "auto"}]}) + "\n")
+        before = routers.read_bytes()
         (conf / "sing-box.json").write_text(json.dumps({"inbounds": [{"type": "tun", "mtu": 1380}]}) + "\n")
 
         base = os.environ.copy()
@@ -75,51 +97,91 @@ def test_network_specific_cache() -> None:
         first = dict(base, HOMEVPN_NETWORK_CONTEXT="wifi-a", HOMEVPN_MTU_PROBE_RESULT="1400")
         p = subprocess.run([sys.executable, str(SCRIPT), "apply", str(conf)], env=first, text=True, capture_output=True)
         assert p.returncode == 0, p.stderr
-        store = json.loads((root / "routers.json").read_text())
-        profile = store["profiles"][0]
-        assert profile["effective_mtu"] == 1280
-        key_a = profile["effective_mtu_path_key"]
-        fp_a = profile["effective_mtu_network_fingerprint"]
+        assert routers.read_bytes() == before
+        entries = cache_entries(root)
+        assert len(entries) == 1
+        key_a, entry_a = next(iter(entries.items()))
+        assert entry_a["effective_mtu"] == 1280
+        fp_a = entry_a["network_fingerprint"]
         assert fp_a != "wifi-a"
 
-        # Same network/path must reuse the cached 1280 even though the fake
-        # probe would now allow the catalog default.
+        # Same network/path must reuse cached 1280 even though the fake probe
+        # would now allow the catalog default.
         second = dict(base, HOMEVPN_NETWORK_CONTEXT="wifi-a", HOMEVPN_MTU_PROBE_RESULT="1500")
         p = subprocess.run([sys.executable, str(SCRIPT), "apply", str(conf)], env=second, text=True, capture_output=True)
         assert p.returncode == 0, p.stderr
         assert "auto-cache" in p.stderr
-        store = json.loads((root / "routers.json").read_text())
-        assert store["profiles"][0]["effective_mtu"] == 1280
-        assert store["profiles"][0]["effective_mtu_path_key"] == key_a
+        assert routers.read_bytes() == before
+        entries = cache_entries(root)
+        assert entries[key_a]["effective_mtu"] == 1280
 
-        # Network change must invalidate the old winner and retest.
+        # Network change must invalidate the old winner and retest, keeping the
+        # old path measurement as a separate bounded cache entry.
         third = dict(base, HOMEVPN_NETWORK_CONTEXT="cellular-b", HOMEVPN_MTU_PROBE_RESULT="1500")
         p = subprocess.run([sys.executable, str(SCRIPT), "apply", str(conf)], env=third, text=True, capture_output=True)
         assert p.returncode == 0, p.stderr
         assert "auto-proven" in p.stderr
-        store = json.loads((root / "routers.json").read_text())
-        profile = store["profiles"][0]
-        assert profile["effective_mtu"] == 1380
-        assert profile["effective_mtu_path_key"] != key_a
-        assert profile["effective_mtu_network_fingerprint"] != fp_a
-        assert profile["effective_mtu_network_fingerprint"] != "cellular-b"
+        assert routers.read_bytes() == before
+        entries = cache_entries(root)
+        assert len(entries) == 2
+        new_keys = [key for key in entries if key != key_a]
+        assert len(new_keys) == 1
+        key_b = new_keys[0]
+        assert entries[key_b]["effective_mtu"] == 1380
+        assert entries[key_b]["network_fingerprint"] != fp_a
+        assert entries[key_b]["network_fingerprint"] != "cellular-b"
 
         # Protocol/port/profile-input change must also invalidate the path key.
         (generated / "sing-box.json").write_text(json.dumps({"server": "203.0.113.10", "server_port": 443}) + "\n")
         fourth = dict(base, HOMEVPN_NETWORK_CONTEXT="cellular-b", HOMEVPN_MTU_PROBE_RESULT="1400")
-        old_key = profile["effective_mtu_path_key"]
         p = subprocess.run([sys.executable, str(SCRIPT), "apply", str(conf)], env=fourth, text=True, capture_output=True)
         assert p.returncode == 0, p.stderr
-        store = json.loads((root / "routers.json").read_text())
-        assert store["profiles"][0]["effective_mtu_path_key"] != old_key
-        assert store["profiles"][0]["effective_mtu"] == 1280
+        assert routers.read_bytes() == before
+        entries = cache_entries(root)
+        newest = [item for key, item in entries.items() if key not in {key_a, key_b}]
+        assert len(newest) == 1
+        assert newest[0]["effective_mtu"] == 1280
+
+
+def test_symlink_cache_is_never_followed() -> None:
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory(prefix="router-vpn-mtu-symlink-") as td:
+        root = pathlib.Path(td)
+        conf = root / "run" / "profile-node-shadowsocks"
+        conf.mkdir(parents=True)
+        generated = root / "generated" / "node" / "shadowsocks"
+        generated.mkdir(parents=True)
+        (generated / "sing-box.json").write_text(json.dumps({"server": "203.0.113.10", "server_port": 8388}) + "\n")
+        (root / "modes.json").write_text(json.dumps([{"id": "shadowsocks", "mtu": 1380}]) + "\n")
+        routers = root / "routers.json"
+        routers.write_text(json.dumps({"selected_id": "node", "profiles": [{"id": "node", "endpoint": "203.0.113.10", "mtu_policy": "auto"}]}) + "\n")
+        before = routers.read_bytes()
+        (conf / "sing-box.json").write_text(json.dumps({"inbounds": [{"type": "tun", "mtu": 1380}]}) + "\n")
+        state = root / "state"
+        state.mkdir()
+        outside = root / "outside-cache"
+        outside.write_text("do-not-touch\n")
+        (state / "mtu-auto-cache.json").symlink_to(outside)
+        env = os.environ.copy()
+        env.update({
+            "HOMEVPN_ROOT": str(root), "HOMEVPN_PROFILE_ID": "node", "HOMEVPN_MODE": "shadowsocks",
+            "HOMEVPN_ENDPOINT": "203.0.113.10", "HOMEVPN_MTU": "1380", "HOMEVPN_JUMBO": "false",
+            "HOMEVPN_MTU_PROBE_RESULT": "1400", "HOMEVPN_NETWORK_CONTEXT": "wifi-a",
+        })
+        p = subprocess.run([sys.executable, str(SCRIPT), "apply", str(conf)], env=env, text=True, capture_output=True)
+        assert p.returncode == 0, p.stderr
+        assert "cache was not persisted" in p.stderr
+        assert outside.read_text() == "do-not-touch\n"
+        assert routers.read_bytes() == before
 
 
 run_case("default", 1380)
 run_case("manual", 1312, manual=1312)
 run_case("auto", 1380, probe="1500")
 run_case("auto", 1280, probe="1400")
-run_case("auto", 1380, probe="0")  # filtered/unavailable -> safe default
+run_case("auto", 1380, probe="0")
 run_case("auto", 9000, probe="1500", jumbo=True)
 test_network_specific_cache()
+test_symlink_cache_is_never_followed()
 print("MTU policy tests: OK")
