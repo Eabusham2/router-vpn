@@ -157,16 +157,18 @@ func (c *controller) reconcileRecovery() error {
 	if state.Status == "idle" || state.Status == "complete" || state.Status == "failed" {
 		return nil
 	}
-	configured, reason := c.configured()
-	if !configured {
-		return fmt.Errorf("cannot reconcile %s update: %s", state.Status, reason)
-	}
 
 	if state.Status == "applying" && state.FromSHA == "" {
 		// The first applying checkpoint is written before stack discovery or any
 		// Portainer PUT. An empty from_sha therefore proves deployment had not
-		// reached the mutation boundary.
+		// reached the mutation boundary, so Portainer configuration is not needed
+		// to close this interrupted transaction truthfully.
 		return c.persistRecoveryState("failed", "", state.TargetSHA, "update controller restarted before Portainer deployment began")
+	}
+
+	configured, reason := c.configured()
+	if !configured {
+		return fmt.Errorf("cannot reconcile %s update: %s", state.Status, reason)
 	}
 	if !shaRE.MatchString(state.FromSHA) || !shaRE.MatchString(state.TargetSHA) {
 		return errors.New("interrupted update state lacks exact rollback/target identity")
