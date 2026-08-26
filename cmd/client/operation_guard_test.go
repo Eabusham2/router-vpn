@@ -3,8 +3,18 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+func privateOperationRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("HOMEVPN_ROOT", root)
+	return root
+}
 
 func TestProfileSettingsBusyFailsClosedForUnknownAndTransitionPhases(t *testing.T) {
 	for _, phase := range []string{"requested", "starting", "checking", "auto:trying:wg", "multihop:proving-exit", "reconnecting", "stopping", "future-unknown"} {
@@ -23,6 +33,7 @@ func TestProfileSettingsBusyFailsClosedForUnknownAndTransitionPhases(t *testing.
 }
 
 func TestOperationGuardSerializesConnectionAndMutationTransactions(t *testing.T) {
+	privateOperationRoot(t)
 	a := &app{state: state{Mode: "off", Phase: "off"}}
 	req := httptest.NewRequest("POST", "/api/profile/save", nil)
 
@@ -52,6 +63,7 @@ func TestOperationGuardSerializesConnectionAndMutationTransactions(t *testing.T)
 }
 
 func TestConnectionOperationCancellationBlocksAdoption(t *testing.T) {
+	privateOperationRoot(t)
 	a := &app{state: state{Mode: "off", Phase: "off"}}
 	_, finish, err := a.beginConnectionOperation()
 	if err != nil {
@@ -64,7 +76,62 @@ func TestConnectionOperationCancellationBlocksAdoption(t *testing.T) {
 	}
 }
 
+func TestConnectionOperationPreflightsPrivateRuntimeBeforeRequested(t *testing.T) {
+	root := privateOperationRoot(t)
+	a := &app{state: state{Mode: "off", Phase: "off"}}
+	_, finish, err := a.beginConnectionOperation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.state.Phase != "requested" || a.connectionContext == nil || a.connectionCancel == nil {
+		t.Fatalf("safe preflight did not enter requested state: phase=%q ctx=%v cancel=%v", a.state.Phase, a.connectionContext != nil, a.connectionCancel != nil)
+	}
+	for _, category := range []string{"native-standard-exit", "native-multihop", "openvpn-standard-exit"} {
+		path := filepath.Join(root, "run", category)
+		info, statErr := os.Lstat(path)
+		if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("private runtime category %s was not safely prepared: info=%v err=%v", category, info, statErr)
+		}
+	}
+	finish()
+	if a.state.Phase != "off" || a.connectionContext != nil || a.connectionCancel != nil {
+		t.Fatalf("finish did not clear requested state: phase=%q", a.state.Phase)
+	}
+}
+
+func TestConnectionOperationRejectsPoisonedRuntimeBeforeStateChange(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows CI may not grant symlink privileges")
+	}
+	root := privateOperationRoot(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "run")); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{state: state{Mode: "off", Phase: "off"}}
+	if _, _, err := a.beginConnectionOperation(); err == nil {
+		t.Fatal("connection operation accepted a symlinked private runtime root")
+	}
+	if a.state.Phase != "off" || a.connectionContext != nil || a.connectionCancel != nil {
+		t.Fatalf("failed preflight mutated connection state: phase=%q ctx=%v cancel=%v", a.state.Phase, a.connectionContext != nil, a.connectionCancel != nil)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed runtime preflight touched symlink target: %v", entries)
+	}
+	// A failed preflight must also release the operation mutex for recovery.
+	release, err := a.beginMutationOperation(httptest.NewRequest(http.MethodPost, "/api/profile/save", nil))
+	if err != nil {
+		t.Fatalf("failed connection preflight leaked operation lock: %v", err)
+	}
+	release()
+}
+
 func TestNodeBoundOperationSerializesWithoutRequiringDisconnect(t *testing.T) {
+	privateOperationRoot(t)
 	a := &app{state: state{Connected: true, Phase: "connected"}}
 	release, err := a.beginNodeBoundOperation()
 	if err != nil {
