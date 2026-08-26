@@ -98,8 +98,6 @@ with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-state-") as td:
         "NAIVE_PASSWORD": "existing-naive-password",
     }
 
-    # Inconsistent persisted public/private identity must fail closed instead of
-    # silently mixing old and new credentials into a broken upgrade.
     broken = json.loads((base / "config/xray/generated-secrets.json").read_text())
     broken["standard_uuid"] = "ffffffff-ffff-ffff-ffff-ffffffffffff"
     write_json(base / "config/xray/generated-secrets.json", broken)
@@ -110,8 +108,6 @@ with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-state-") as td:
     else:
         raise AssertionError("inconsistent preserved Xray state was accepted")
 
-    # Corrupt existing transport state is not equivalent to missing first-run
-    # state and therefore must not be silently regenerated.
     transport_state.write_text("{broken json\n", encoding="utf-8")
     try:
         MOD.transports(base)
@@ -120,8 +116,6 @@ with tempfile.TemporaryDirectory(prefix="router-vpn-preserve-state-") as td:
     else:
         raise AssertionError("corrupt preserved transport state was accepted")
 
-    # Duplicate credential assignments are ambiguous and fail closed instead of
-    # taking whichever line happens to be last.
     settings.write_text(
         "TLS_NAME='vpn.example'\n"
         "SS_V2RAY_PASSWORD='first-secret'\n"
@@ -191,13 +185,12 @@ if os.name != "nt":
         replacement = path.with_name("replacement.json")
         write_json(replacement, {"hysteria2_password": "replacement-password", "shadowsocks_key": "replacement-key-material"})
         real_fstat = MOD.os.fstat
-        changed = False
+        changed = [False]
 
         def swap_after_open(fd):
-            nonlocal changed
             info = real_fstat(fd)
-            if not changed:
-                changed = True
+            if not changed[0]:
+                changed[0] = True
                 os.replace(replacement, path)
             return info
 
