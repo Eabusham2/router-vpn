@@ -13,8 +13,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from profile_id import validate_profile_id
+from private_profile_store import private_root, read_profile_store
 
-ROOT = Path(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+ROOT = private_root(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 PROFILE_ID = validate_profile_id(os.environ.get("HOMEVPN_PROFILE_ID"))
 SCRIPT_DIR = Path(__file__).resolve().parent
 MODES_PATH = ROOT / "modes.json"
@@ -30,12 +31,19 @@ current_mode: dict | None = None
 
 
 def selected_profile() -> dict:
-    try:
-        store = json.loads((ROOT / "routers.json").read_text())
-    except Exception:
-        return {}
-    wanted = PROFILE_ID or store.get("selected_id", "")
-    return next((p for p in store.get("profiles", []) if p.get("id") == wanted), store.get("profiles", [{}])[0] if store.get("profiles") else {})
+    store = read_profile_store(ROOT)
+    wanted = PROFILE_ID or str(store.get("selected_id") or "").strip()
+    if wanted:
+        wanted = validate_profile_id(wanted)
+    profiles = [p for p in store.get("profiles", []) if isinstance(p, dict)]
+    for profile in profiles:
+        if profile.get("id") == wanted:
+            return profile
+    if wanted:
+        raise RuntimeError(f"selected Router VPN profile {wanted!r} is missing")
+    if len(profiles) == 1:
+        return profiles[0]
+    raise RuntimeError("SMART/CUSTOM requires one selected Router VPN profile")
 
 
 def path_probe_url() -> str:
