@@ -87,6 +87,12 @@ require(
     "symlink private root was accepted",
     "profile-store identity swap was accepted",
 )
+require(
+    "modes/test_profile_store_fail_closed.py",
+    "silently fell back after profile-store corruption",
+    "silently selected another profile after selected-id loss",
+    "followed a symlink profile store",
+)
 
 # DNS policy runtime may read the selected profile and patch only the explicit
 # per-session config passed by run-mode. That patch itself must be a bounded,
@@ -283,6 +289,7 @@ for rel in (
     "modes/test_prepare_runtime_profile.py",
     "modes/test_kill_switch.py",
     "modes/test_private_profile_store.py",
+    "modes/test_profile_store_fail_closed.py",
 ):
     proc = subprocess.run([sys.executable, str(ROOT / rel)], cwd=ROOT, text=True, capture_output=True)
     if proc.returncode != 0:
