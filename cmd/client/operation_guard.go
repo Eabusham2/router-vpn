@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os/exec"
+	"path/filepath"
 
 	"router-vpn/internal/common"
 )
@@ -44,15 +46,48 @@ func (a *app) beginMutationOperation(r *http.Request) (func(), error) {
 	return a.operationMu.Unlock, nil
 }
 
+func preflightPrivateConnectionRuntime() error {
+	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	for _, category := range []string{
+		"native-standard-exit",
+		"native-multihop",
+		"openvpn-standard-exit",
+	} {
+		if _, err := privateRuntimeBase(root, category); err != nil {
+			return fmt.Errorf("private connection runtime %s is unsafe: %w", category, err)
+		}
+	}
+	return nil
+}
+
 func (a *app) beginConnectionOperation() (context.Context, func(), error) {
 	if !a.operationMu.TryLock() {
 		return nil, nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
 	a.mu.Lock()
+	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
+	a.mu.Unlock()
+	if busy {
+		a.operationMu.Unlock()
+		return nil, nil, errors.New("Router VPN is connected or transitioning; disconnect before starting another connection")
+	}
+
+	// Validate/create every secret-bearing desktop runtime root before recording
+	// Phase=requested or starting any helper. A poisoned run/ tree therefore
+	// fails closed without changing connection state or touching the network.
+	if err := preflightPrivateConnectionRuntime(); err != nil {
+		a.operationMu.Unlock()
+		return nil, nil, err
+	}
+
+	// Re-check under the app lock after filesystem validation before publishing
+	// connection context/state. operationMu keeps competing Router VPN operations
+	// out, while this second check protects against any independent state change.
+	a.mu.Lock()
 	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		a.operationMu.Unlock()
-		return nil, nil, errors.New("Router VPN is connected or transitioning; disconnect before starting another connection")
+		return nil, nil, errors.New("Router VPN state changed while validating private connection runtime")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.connectionContext = ctx
