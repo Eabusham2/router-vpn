@@ -142,10 +142,7 @@ func openVPNLANLines(control common.RouterProfile) ([]string, error) {
 }
 
 func writePrivateFile(path, text string) error {
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o600)
+	return writePrivateRuntimeFile(path, []byte(text))
 }
 
 func openVPNProtocolIsTCP(proto string) bool {
