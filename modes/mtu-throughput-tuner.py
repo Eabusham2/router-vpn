@@ -31,6 +31,8 @@ import urllib.request
 from typing import Any
 
 from network_context import generated_profile_fingerprint, network_fingerprint
+from private_profile_store import private_root, read_profile_store
+from profile_id import validate_profile_id
 
 MIN_OPT_MTU = 1200
 MAX_OPT_MTU = 1500
@@ -44,17 +46,22 @@ PROOF_KIND = "router-vpn-private-agent-v1"
 
 
 def root_dir() -> Path:
-    return Path(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client")).resolve()
+    return private_root(os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 
 
 def load_profile(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    path = root / "routers.json"
-    store = json.loads(path.read_text(encoding="utf-8"))
-    selected = os.environ.get("HOMEVPN_PROFILE_ID", "").strip() or str(store.get("selected_id") or "")
+    store = read_profile_store(root)
+    selected = os.environ.get("HOMEVPN_PROFILE_ID", "").strip() or str(store.get("selected_id") or "").strip()
+    try:
+        selected = validate_profile_id(selected, default="")
+    except ValueError as exc:
+        raise RuntimeError("MTU optimizer selected profile id is invalid") from exc
+    if not selected:
+        raise RuntimeError("MTU optimizer requires one selected Router VPN node")
     profiles = [p for p in store.get("profiles", []) if isinstance(p, dict)]
-    profile = next((p for p in profiles if str(p.get("id") or "") == selected), profiles[0] if profiles else None)
+    profile = next((p for p in profiles if str(p.get("id") or "") == selected), None)
     if profile is None:
-        raise RuntimeError("Router VPN has no selected node profile")
+        raise RuntimeError(f"MTU optimizer selected node {selected!r} is missing")
     return store, profile
 
 
