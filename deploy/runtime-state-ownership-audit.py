@@ -231,6 +231,17 @@ require(
     "auto-cache",
 )
 
+# Explicit post-connect MTU throughput tuning participates in the controller's
+# selected-session transaction and must read exactly that private selected node.
+require(
+    "modes/mtu-throughput-tuner.py",
+    "from private_profile_store import private_root, read_profile_store",
+    "validate_profile_id",
+    "store = read_profile_store(root)",
+    "MTU optimizer selected node",
+)
+forbid("modes/mtu-throughput-tuner.py", '(root / "routers.json").read_text', "profiles[0] if profiles else None")
+
 # Kill-switch state is the exception to disposable runtime state: policy=always
 # is authoritative restart/reconnect recovery state. Corruption or path
 # redirection must fail closed and force-off is the explicit local recovery path.
