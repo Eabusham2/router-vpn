@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -29,6 +30,28 @@ func validatePortableExistingAncestors(path string) error {
 		}
 	}
 	return nil
+}
+
+func rejectPortableSymlinksUnder(root string) error {
+	info, err := os.Lstat(root)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("Portable tree root is not a non-symlink directory: %s", root)
+	}
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing symlink inside Portable tree: %s", path)
+		}
+		return nil
+	})
 }
 
 func validatePortablePrivateParent(path string) error {
@@ -61,7 +84,14 @@ func ensurePortablePrivateDir(path string) error {
 			return err
 		}
 	}
-	return validatePortablePrivateParent(filepath.Join(path, ".portable-private-check"))
+	if err := validatePortablePrivateParent(filepath.Join(path, ".portable-private-check")); err != nil {
+		return err
+	}
+	// Portable Data contains controller state, imported nodes, generated
+	// credentials and native runtime binaries. Refuse an existing symlink
+	// anywhere below the validated state root so later leaf checks cannot be
+	// redirected through a sibling/nested path component.
+	return rejectPortableSymlinksUnder(path)
 }
 
 func hardenPortablePrivateFile(path string) error {
@@ -124,6 +154,13 @@ func readPortablePackageFile(path string, limit int64) ([]byte, error) {
 		limit = maxPortablePrivateBytes
 	}
 	if err := validatePortableExistingAncestors(path); err != nil {
+		return nil, err
+	}
+	// All bootstrap sources live together under App/RouterVPN. Reject symlinks
+	// anywhere in that package tree before trusting even one catalog/default;
+	// this also prevents a symlinked sibling controller/helper binary from being
+	// accepted later merely because os.Stat follows it.
+	if err := rejectPortableSymlinksUnder(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	info, err := os.Lstat(path)
