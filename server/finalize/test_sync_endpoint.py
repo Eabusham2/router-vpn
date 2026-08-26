@@ -97,6 +97,36 @@ class EndpointSyncTransactionTests(unittest.TestCase):
         self.assertEqual(self.awg.read_bytes(), self.before[self.awg])
         self.assertEqual(self.routers_path.read_bytes(), self.before[self.routers_path])
 
+    def test_symlink_owned_parent_is_rejected_before_mutation(self) -> None:
+        if os.name == "nt":
+            self.skipTest("POSIX symlink parent contract")
+        real_dir = self.wg.parent.with_name("wg-real")
+        self.wg.parent.replace(real_dir)
+        self.wg.parent.symlink_to(real_dir, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, "owned parent"):
+            module.sync(self.base, "203.0.113.9")
+        self.assertEqual((real_dir / "wg.conf").read_bytes(), self.before[self.wg])
+        self.assertEqual(self.awg.read_bytes(), self.before[self.awg])
+        self.assertEqual(self.routers_path.read_bytes(), self.before[self.routers_path])
+
+    def test_owned_file_identity_change_during_open_is_rejected(self) -> None:
+        real_fstat = module.os.fstat
+        replacement = self.wg.with_name("replacement.conf")
+        replacement.write_text("[Peer]\nEndpoint = attacker.example:51820\n")
+        changed = False
+
+        def swap_after_open(fd):
+            nonlocal changed
+            info = real_fstat(fd)
+            if not changed:
+                changed = True
+                os.replace(replacement, self.wg)
+            return info
+
+        with mock.patch.object(module.os, "fstat", side_effect=swap_after_open):
+            with self.assertRaisesRegex(RuntimeError, "changed during open"):
+                module.read_owned_file(self.wg)
+
     def test_duplicate_owned_home_profiles_fail_closed(self) -> None:
         data = json.loads(self.routers_path.read_text())
         data["profiles"].append(
