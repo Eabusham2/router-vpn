@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Resolve/apply Router VPN MTU policy and enforce pre-connect leak policy."""
+"""Resolve/apply Router VPN MTU policy and enforce pre-connect leak policy.
+
+Normal connection startup owns only runtime config plus a private measurement
+cache. The Go controller is the sole writer of routers.json/profile policy.
+"""
 from __future__ import annotations
 
 import datetime
@@ -10,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,6 +26,8 @@ from profile_id import validate_profile_id
 MIN_MTU = 576
 MAX_PROBE_MTU = 1500
 AUTO_CACHE_HOURS = 24
+MAX_CACHE_ENTRIES = 64
+CACHE_VERSION = 1
 
 
 def root_dir() -> Path:
@@ -166,13 +173,7 @@ def _fallback_generated_fingerprint(root: Path, mode: str) -> str:
 
 
 def path_context(root: Path, endpoint: str, mode: str) -> tuple[str, str, str]:
-    """Return cache key plus privacy-safe network/profile fingerprints.
-
-    The generated-profile digest covers the selected protocol/port/profile
-    inputs without storing their private contents. The underlay digest changes
-    when the route/interface/gateway/source context changes, which invalidates a
-    learned PMTU automatically on Wi-Fi/cellular/network changes.
-    """
+    """Return cache key plus privacy-safe network/profile fingerprints."""
     base = os.environ.get("HOMEVPN_BASE", "").strip().lower()
     logical = os.environ.get("HOMEVPN_LOGICAL_MODE", "").strip().lower()
     family = os.environ.get("HOMEVPN_IP_FAMILY", "").strip().lower()
@@ -183,8 +184,6 @@ def path_context(root: Path, endpoint: str, mode: str) -> tuple[str, str, str]:
     try:
         generated = generated_profile_fingerprint(root, profile_id(), mode)
     except RuntimeError:
-        # Fingerprinting must not make a previously working VPN fail to start.
-        # A unique safe fallback prevents accidental reuse across unknown input.
         generated = _fallback_generated_fingerprint(root, mode)
     raw = "|".join(
         [
@@ -206,29 +205,74 @@ def path_context_key(endpoint: str, mode: str) -> str:
     return path_context(root_dir(), endpoint, mode)[0]
 
 
-def cached_auto(profile: dict[str, Any] | None, key: str) -> tuple[int, str, int | None] | None:
-    if not isinstance(profile, dict) or str(profile.get("mtu_policy") or "").lower() != "auto":
-        return None
-    if str(profile.get("effective_mtu_path_key") or "") != key:
+def _cache_path(root: Path) -> Path:
+    return root / "state" / "mtu-auto-cache.json"
+
+
+def _valid_cached_entry(entry: Any, key: str) -> tuple[int, str, int | None] | None:
+    if not isinstance(entry, dict) or str(entry.get("path_key") or "") != key:
         return None
     try:
-        mtu = int(profile.get("effective_mtu") or 0)
-        outer = int(profile.get("effective_underlay_pmtu") or 0)
+        mtu = int(entry.get("effective_mtu") or 0)
+        outer = int(entry.get("effective_underlay_pmtu") or 0)
     except (TypeError, ValueError):
         return None
     if not MIN_MTU <= mtu <= 9000:
         return None
-    raw = str(profile.get("effective_mtu_tested_at") or "")
+    raw = str(entry.get("tested_at") or "")
     try:
         tested = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
         now = datetime.datetime.now(datetime.timezone.utc)
         if tested.tzinfo is None:
             tested = tested.replace(tzinfo=datetime.timezone.utc)
-        if now - tested > datetime.timedelta(hours=AUTO_CACHE_HOURS):
+        if now - tested > datetime.timedelta(hours=AUTO_CACHE_HOURS) or tested - now > datetime.timedelta(minutes=5):
             return None
     except (ValueError, TypeError):
         return None
     return mtu, "auto-cache", outer or None
+
+
+def _profile_cached_auto(profile: dict[str, Any] | None, key: str) -> tuple[int, str, int | None] | None:
+    if not isinstance(profile, dict) or str(profile.get("mtu_policy") or "").lower() != "auto":
+        return None
+    entry = {
+        "path_key": profile.get("effective_mtu_path_key"),
+        "effective_mtu": profile.get("effective_mtu"),
+        "effective_underlay_pmtu": profile.get("effective_underlay_pmtu"),
+        "tested_at": profile.get("effective_mtu_tested_at"),
+    }
+    return _valid_cached_entry(entry, key)
+
+
+def _load_measurement_cache(root: Path) -> dict[str, Any]:
+    path = _cache_path(root)
+    try:
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 256 * 1024:
+            return {}
+        if os.name != "nt" and info.st_mode & 0o077:
+            return {}
+        body = path.read_text(encoding="utf-8")
+        data = json.loads(body)
+        if not isinstance(data, dict) or data.get("version") != CACHE_VERSION or not isinstance(data.get("entries"), dict):
+            return {}
+        return data
+    except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+
+
+def cached_auto(
+    profile: dict[str, Any] | None,
+    key: str,
+    root: Path | None = None,
+) -> tuple[int, str, int | None] | None:
+    profile_value = _profile_cached_auto(profile, key)
+    if profile_value is not None:
+        return profile_value
+    if root is None:
+        return None
+    cache = _load_measurement_cache(root)
+    return _valid_cached_entry((cache.get("entries") or {}).get(key), key)
 
 
 def patch_json(value: Any, mtu: int) -> bool:
@@ -281,6 +325,55 @@ def apply_tree(conf: Path, mtu: int) -> int:
     return changed
 
 
+def _ensure_cache_parent(path: Path) -> None:
+    parent = path.parent
+    try:
+        info = parent.lstat()
+    except FileNotFoundError:
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        info = parent.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing non-directory/symlink MTU cache parent: {parent}")
+
+
+def _atomic_write_cache(path: Path, data: dict[str, Any]) -> None:
+    _ensure_cache_parent(path)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        info = None
+    if info is not None and (stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode)):
+        raise RuntimeError(f"refusing non-regular/symlink MTU cache: {path}")
+    body = (json.dumps(data, indent=2) + "\n").encode("utf-8")
+    if len(body) > 256 * 1024:
+        raise RuntimeError("MTU cache exceeds safety limit")
+    fd, tmp_name = tempfile.mkstemp(prefix=".mtu-auto-cache-", dir=str(path.parent))
+    committed = False
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb", closefd=True) as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _ensure_cache_parent(path)
+        os.replace(tmp_name, path)
+        committed = True
+        try:
+            dfd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+    finally:
+        if not committed:
+            try:
+                os.unlink(tmp_name)
+            except FileNotFoundError:
+                pass
+
+
 def persist_effective(
     root: Path,
     store: dict[str, Any],
@@ -292,36 +385,34 @@ def persist_effective(
     network: str = "",
     generated: str = "",
 ) -> None:
-    if profile is None or not store:
+    """Persist measurement-only auto-MTU memory, never routers.json.
+
+    `store`/`profile` stay in the signature for compatibility with older tests and
+    callers, but the Go controller exclusively owns profile persistence.
+    """
+    del store, profile
+    if source not in {"auto-proven", "auto-fallback", "auto-cache"}:
         return
-    profile["effective_mtu"] = mtu
-    profile["effective_mtu_source"] = source
-    profile["effective_mtu_path_key"] = path_key
-    profile["effective_underlay_pmtu"] = int(outer or 0)
-    profile["effective_mtu_tested_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-    if network:
-        profile["effective_mtu_network_fingerprint"] = network
-    if generated:
-        profile["effective_mtu_profile_fingerprint"] = generated
-    path = root / "routers.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix="routers.json.", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(store, handle, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    finally:
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
+    path = _cache_path(root)
+    cache = _load_measurement_cache(root)
+    entries = cache.get("entries") if isinstance(cache.get("entries"), dict) else {}
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    entries[path_key] = {
+        "path_key": path_key,
+        "effective_mtu": mtu,
+        "effective_underlay_pmtu": int(outer or 0),
+        "tested_at": now,
+        "network_fingerprint": network,
+        "profile_fingerprint": generated,
+    }
+    if len(entries) > MAX_CACHE_ENTRIES:
+        ordered = sorted(
+            entries.items(),
+            key=lambda item: str(item[1].get("tested_at") or "") if isinstance(item[1], dict) else "",
+            reverse=True,
+        )[:MAX_CACHE_ENTRIES]
+        entries = dict(ordered)
+    _atomic_write_cache(path, {"version": CACHE_VERSION, "entries": entries})
 
 
 def enforce_kill_switch() -> None:
@@ -367,13 +458,18 @@ def main() -> int:
     except ValueError:
         fallback = 1380
     default_mtu = catalog_default(root, mode, fallback)
-    reuse = cached_auto(profile, key) if os.environ.get("HOMEVPN_JUMBO", "false").lower() != "true" else None
+    reuse = cached_auto(profile, key, root) if os.environ.get("HOMEVPN_JUMBO", "false").lower() != "true" else None
     if reuse is not None:
         effective, source, outer = reuse
     else:
         effective, source, outer = choose_effective(profile, default_mtu, endpoint)
     changed = apply_tree(conf, effective)
-    persist_effective(root, store, profile, effective, source, key, outer, network, generated)
+    try:
+        persist_effective(root, store, profile, effective, source, key, outer, network, generated)
+    except (OSError, RuntimeError) as exc:
+        # Cache persistence is measurement-only and must never break an otherwise
+        # valid/leak-safe connection. Refuse unsafe writes and simply remeasure.
+        print(f"warning: MTU measurement cache was not persisted: {exc}", file=sys.stderr)
     details = f"MTU {effective} ({source}"
     if outer is not None:
         details += f", underlay PMTU {outer}"
