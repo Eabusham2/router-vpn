@@ -4,20 +4,30 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import pathlib
 import shutil
+import stat
+import subprocess
 import sys
+import tempfile
 
 
 def load(path: pathlib.Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size <= 0:
+        raise RuntimeError(f"missing/unsafe generated prerequisite: {path}")
+    with path.open("r", encoding="utf-8") as file:
+        value = json.load(file)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"generated prerequisite is not a JSON object: {path}")
+    return value
 
 
 def write(path: pathlib.Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    path.chmod(0o600)
+    os.chmod(path, 0o600)
 
 
 def tagged_proxy(config: dict) -> dict:
@@ -87,83 +97,91 @@ def main() -> int:
     pq_xray_path = generated / "reality-pq-vision" / "xray.json"
     pq_wrapper_path = generated / "reality-pq-vision" / "sing-box.json"
     for path in (reality_path, reality_xray_path, hy2_path, hy2_cert_path, pq_xray_path, pq_wrapper_path):
-        if not path.is_file():
-            raise RuntimeError(f"missing generated prerequisite: {path}")
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size <= 0:
+            raise RuntimeError(f"missing/unsafe generated prerequisite: {path}")
 
     reality = load(reality_path)
     hy2 = load(hy2_path)
     pq_wrapper = load(pq_wrapper_path)
     hy2_outbound = tagged_proxy(hy2)
 
-    split = base_config(
-        tun_inbound(reality, "router-vpn-split", 1340),
-        reality.get("dns", {}),
-        tagged_proxy(reality),
-        copy.deepcopy(hy2_outbound),
-    )
-    split_dir = generated / "split"
-    write(split_dir / "xray.json", load(reality_xray_path))
-    write(split_dir / "sing-box.json", split)
-    shutil.copy2(hy2_cert_path, split_dir / "cert.pem")
-    (split_dir / "cert.pem").chmod(0o600)
-    write(
-        split_dir / "stack.json",
-        manifest(
-            "Dual Transport",
-            False,
-            ["VLESS", "REALITY", "XTLS Vision", "Chrome uTLS", "TCP"],
-            ["Hysteria2", "QUIC", "TLS 1.3", "Salamander obfuscation", "UDP"],
-        ),
-    )
+    tmp_root = pathlib.Path(tempfile.mkdtemp(prefix=".stack-profiles-", dir=generated))
+    try:
+        split = base_config(
+            tun_inbound(reality, "router-vpn-split", 1340),
+            reality.get("dns", {}),
+            tagged_proxy(reality),
+            copy.deepcopy(hy2_outbound),
+        )
+        split_dir = tmp_root / "split"
+        write(split_dir / "xray.json", load(reality_xray_path))
+        write(split_dir / "sing-box.json", split)
+        shutil.copy2(hy2_cert_path, split_dir / "cert.pem")
+        os.chmod(split_dir / "cert.pem", 0o600)
+        write(
+            split_dir / "stack.json",
+            manifest(
+                "Dual Transport",
+                False,
+                ["VLESS", "REALITY", "XTLS Vision", "Chrome uTLS", "TCP"],
+                ["Hysteria2", "QUIC", "TLS 1.3", "Salamander obfuscation", "UDP"],
+            ),
+        )
 
-    max_tcp = {
-        "type": "socks",
-        "tag": "tcp-stack",
-        "server": "127.0.0.1",
-        "server_port": 1090,
-        "version": "5",
-    }
-    max_config = base_config(
-        tun_inbound(pq_wrapper, "router-vpn-max", 1280),
-        pq_wrapper.get("dns", {}),
-        max_tcp,
-        copy.deepcopy(hy2_outbound),
-    )
-    max_dir = generated / "max"
-    write(max_dir / "xray.json", load(pq_xray_path))
-    write(max_dir / "sing-box.json", max_config)
-    shutil.copy2(hy2_cert_path, max_dir / "cert.pem")
-    (max_dir / "cert.pem").chmod(0o600)
-    write(
-        max_dir / "stack.json",
-        manifest(
-            "PQ Dual Transport",
-            True,
-            ["VLESS hybrid-PQ encryption", "REALITY", "XTLS Vision", "Chrome uTLS", "TCP"],
-            ["Hysteria2", "QUIC", "TLS 1.3", "Salamander obfuscation", "UDP"],
-        ),
-    )
+        max_tcp = {"type": "socks", "tag": "tcp-stack", "server": "127.0.0.1", "server_port": 1090, "version": "5"}
+        max_config = base_config(
+            tun_inbound(pq_wrapper, "router-vpn-max", 1280),
+            pq_wrapper.get("dns", {}),
+            max_tcp,
+            copy.deepcopy(hy2_outbound),
+        )
+        max_dir = tmp_root / "max"
+        write(max_dir / "xray.json", load(pq_xray_path))
+        write(max_dir / "sing-box.json", max_config)
+        shutil.copy2(hy2_cert_path, max_dir / "cert.pem")
+        os.chmod(max_dir / "cert.pem", 0o600)
+        write(
+            max_dir / "stack.json",
+            manifest(
+                "PQ Dual Transport",
+                True,
+                ["VLESS hybrid-PQ encryption", "REALITY", "XTLS Vision", "Chrome uTLS", "TCP"],
+                ["Hysteria2", "QUIC", "TLS 1.3", "Salamander obfuscation", "UDP"],
+            ),
+        )
 
-    catalog = {
-        "generated_profiles": ["split", "max"],
-        "integrated_adapters": [
-            "wg-pq",
-            "awg2-pq",
-            "ss-v2ray",
-            "reality-xhttp",
-            "naive-h2",
-            "naive-h3",
-            "max-tls-wg",
-            "max-tls-awg",
-            "max-quic-wg",
-            "max-quic-awg",
-        ],
-        "remaining_optional": {
-            "exact-daita": "requires a Maybenot-enabled tunnel implementation on both ends",
-            "wireguard-over-additional-transports": "use generated MAX TLS/QUIC chains unless another validated transport engine is installed",
-        },
-    }
-    write(generated / "STACK-CATALOG.json", catalog)
+        catalog = {
+            "generated_profiles": ["split", "max"],
+            "integrated_adapters": [
+                "wg-pq", "awg2-pq", "ss-v2ray", "reality-xhttp", "naive-h2", "naive-h3",
+                "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg",
+            ],
+            "remaining_optional": {
+                "exact-daita": "requires a Maybenot-enabled tunnel implementation on both ends",
+                "wireguard-over-additional-transports": "use generated MAX TLS/QUIC chains unless another validated transport engine is installed",
+            },
+        }
+        write(tmp_root / "STACK-CATALOG.json", catalog)
+
+        for path in tmp_root.rglob("*"):
+            if path.is_file() and path.stat().st_size <= 0:
+                raise RuntimeError(f"empty staged combined profile: {path}")
+
+        helper = pathlib.Path(__file__).with_name("atomic-private-batch.py")
+        args = [sys.executable, str(helper)]
+        for rel in (
+            "split/xray.json", "split/sing-box.json", "split/cert.pem", "split/stack.json",
+            "max/xray.json", "max/sing-box.json", "max/cert.pem", "max/stack.json",
+            "STACK-CATALOG.json",
+        ):
+            src = tmp_root / rel
+            dst = generated / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            args.append(f"{dst}={src}")
+        subprocess.run(args, check=True)
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
     return 0
 
 
