@@ -18,6 +18,8 @@ PYTHON_FILES = (
     "server/scripts/atomic-private-write.py",
     "server/scripts/atomic-private-batch.py",
     "server/scripts/test_atomic_private_publication.py",
+    "server/scripts/verified-regular-read.py",
+    "server/scripts/test_verified_regular_read.py",
     "server/scripts/benchmark-dns.py",
     "server/scripts/test_dns_benchmark_persistence.py",
     "server/scripts/create-bundle-json.py",
