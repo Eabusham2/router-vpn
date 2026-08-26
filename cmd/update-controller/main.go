@@ -755,6 +755,15 @@ func (c *controller) applyUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "an update is already in progress", http.StatusConflict)
 		return
 	}
+	// A stale rollback snapshot may remain only after a prior terminal update's
+	// cleanup failed. Clear only a validated private snapshot while holding the
+	// update-state lock, before this new transaction enters applying. Any unsafe
+	// leftover therefore blocks before durable state changes or Portainer writes.
+	if err := c.clearRollbackCompose(); err != nil {
+		c.mu.Unlock()
+		http.Error(w, "cannot safely clear stale rollback snapshot before update: "+err.Error(), http.StatusConflict)
+		return
+	}
 	if err := c.persistStateLocked("applying", "", sha, "verifying exact release"); err != nil {
 		c.mu.Unlock()
 		http.Error(w, "cannot persist update recovery state: "+err.Error(), http.StatusInternalServerError)
