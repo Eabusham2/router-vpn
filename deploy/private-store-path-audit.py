@@ -70,6 +70,17 @@ require(
     "accepted a symlink parent",
     "accepted a nested symlink ancestor",
 )
+require(
+    "server/scripts/rosenpass-private-state.py",
+    "_validate_existing_ancestors",
+    "changed during read",
+    "path component",
+)
+require(
+    "server/scripts/test_rosenpass_private_state.py",
+    "nested Rosenpass symlink ancestor was accepted",
+    "changed during open",
+)
 
 if errors:
     for error in errors:
