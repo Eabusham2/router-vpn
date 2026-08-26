@@ -17,18 +17,54 @@ AGENT_CONFIG = BASE / "config" / "router-agent.json"
 PROOF_FILE = BASE / "config" / "node-proof-id"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 MAX_PRIVATE_BYTES = 4 << 20
+PRIVATE_MODE = 0o600
+
+
+def ensure_private_parent(path: Path, label: str) -> None:
+    try:
+        info = path.parent.lstat()
+    except FileNotFoundError as exc:
+        raise SystemExit(f"missing {label} parent: {path.parent}") from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise SystemExit(f"refusing non-directory/symlink {label} parent: {path.parent}")
 
 
 def read_regular_text(path: Path, label: str) -> str:
+    ensure_private_parent(path, label)
     try:
         info = path.lstat()
     except FileNotFoundError as exc:
         raise SystemExit(f"missing {label}: {path}") from exc
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise SystemExit(f"refusing non-regular/symlink {label}: {path}")
+    if info.st_mode & 0o777 != PRIVATE_MODE:
+        raise SystemExit(f"{label} must be mode 0600: {path}")
     if info.st_size <= 0 or info.st_size > MAX_PRIVATE_BYTES:
         raise SystemExit(f"invalid/oversized {label}: {path}")
-    return path.read_text(encoding="utf-8")
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise SystemExit(f"{label} changed during open: {path}")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, min(64 * 1024, MAX_PRIVATE_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_PRIVATE_BYTES:
+                raise SystemExit(f"invalid/oversized {label}: {path}")
+        try:
+            return b"".join(chunks).decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise SystemExit(f"{label} is not UTF-8: {path}") from exc
+    finally:
+        os.close(fd)
 
 
 def peer_public_key(path: Path) -> str:
@@ -71,6 +107,7 @@ def main() -> int:
     config["node_id"] = node_id
 
     helper = Path(__file__).with_name("atomic-private-batch.py")
+    ensure_private_parent(AGENT_CONFIG, "router-agent config")
     tmp_dir = Path(tempfile.mkdtemp(prefix=".node-proof-", dir=AGENT_CONFIG.parent))
     try:
         config_tmp = tmp_dir / "router-agent.json"
