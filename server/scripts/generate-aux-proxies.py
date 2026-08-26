@@ -12,15 +12,57 @@ import sys
 import tempfile
 
 MAX_PRIVATE_BYTES = 4 << 20
+PRIVATE_MODE = 0o600
+
+
+def ensure_private_dir(path: pathlib.Path, label: str, *, create: bool = False) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        if not create:
+            raise
+        path.mkdir(parents=True, exist_ok=False, mode=0o700)
+        info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing non-directory/symlink {label}: {path}")
 
 
 def read_private_text(path: pathlib.Path, label: str) -> str:
+    ensure_private_dir(path.parent, f"{label} parent")
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink {label}: {path}")
+    if info.st_mode & 0o777 != PRIVATE_MODE:
+        raise RuntimeError(f"{label} must be mode 0600: {path}")
     if info.st_size <= 0 or info.st_size > MAX_PRIVATE_BYTES:
         raise RuntimeError(f"{label} is empty or oversized: {path}")
-    return path.read_text(encoding="utf-8")
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise RuntimeError(f"{label} changed during open: {path}")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, min(64 * 1024, MAX_PRIVATE_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_PRIVATE_BYTES:
+                raise RuntimeError(f"{label} is oversized: {path}")
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise RuntimeError(f"{label} changed during read: {path}")
+        try:
+            return b"".join(chunks).decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f"{label} is not UTF-8: {path}") from exc
+    finally:
+        os.close(fd)
 
 
 def load_preserved_json(path: pathlib.Path) -> dict:
@@ -74,9 +116,10 @@ def main() -> int:
 
     aux = base / "config" / "aux"
     gen = base / "client-bundle" / "generated"
-    aux.mkdir(parents=True, exist_ok=True, mode=0o700)
-    (gen / "overtls").mkdir(parents=True, exist_ok=True, mode=0o700)
-    (gen / "shadowsocksr").mkdir(parents=True, exist_ok=True, mode=0o700)
+    ensure_private_dir(aux, "auxiliary config directory", create=True)
+    ensure_private_dir(gen, "generated client directory")
+    ensure_private_dir(gen / "overtls", "OverTLS generated directory", create=True)
+    ensure_private_dir(gen / "shadowsocksr", "SSR generated directory", create=True)
 
     secrets_path = aux / "secrets.json"
     saved = load_preserved_json(secrets_path)
