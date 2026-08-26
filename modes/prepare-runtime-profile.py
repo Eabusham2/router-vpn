@@ -81,7 +81,7 @@ def read_regular(path: Path) -> tuple[bytes, int]:
         os.close(fd)
 
 
-def patch_json(obj, endpoint: str, root: Path) -> None:
+def patch_json(obj, endpoint: str, final_root: Path) -> None:
     if isinstance(obj, dict):
         outbounds = obj.get("outbounds")
         if isinstance(outbounds, list):
@@ -100,12 +100,12 @@ def patch_json(obj, endpoint: str, root: Path) -> None:
             if key in ("endpoint", "remote_address") and isinstance(value, str):
                 obj[key] = endpoint
             elif key in ("certificate_path", "key_path") and isinstance(value, str) and not value.startswith("/"):
-                obj[key] = str(root / value)
+                obj[key] = str(final_root / value)
             else:
-                patch_json(value, endpoint, root)
+                patch_json(value, endpoint, final_root)
     elif isinstance(obj, list):
         for value in obj:
-            patch_json(value, endpoint, root)
+            patch_json(value, endpoint, final_root)
 
 
 def patch_text(body: str, endpoint: str) -> str:
@@ -124,13 +124,13 @@ def patch_text(body: str, endpoint: str) -> str:
     return re.sub(r"(?m)^(endpoint\s*=\s*[\"'])(.*?)([\"'])", repl, body)
 
 
-def transform(rel: Path, body: bytes, endpoint: str, stage: Path) -> bytes:
+def transform(rel: Path, body: bytes, endpoint: str, final_root: Path) -> bytes:
     if rel.suffix.lower() == ".json":
         try:
             value = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return body
-        patch_json(value, endpoint, stage)
+        patch_json(value, endpoint, final_root)
         return (json.dumps(value, indent=2) + "\n").encode("utf-8")
     try:
         text = body.decode("utf-8")
@@ -139,7 +139,7 @@ def transform(rel: Path, body: bytes, endpoint: str, stage: Path) -> bytes:
     return patch_text(text, endpoint).encode("utf-8")
 
 
-def copy_profile(source: Path, stage: Path, endpoint: str) -> None:
+def copy_profile(source: Path, stage: Path, final_root: Path, endpoint: str) -> None:
     require_dir(source, "runtime profile source")
     total = 0
     for path in sorted(source.rglob("*")):
@@ -154,7 +154,7 @@ def copy_profile(source: Path, stage: Path, endpoint: str) -> None:
         if not stat.S_ISREG(info.st_mode):
             raise RuntimeError(f"runtime profile source contains non-regular entry: {path}")
         body, mode = read_regular(path)
-        body = transform(rel, body, endpoint, stage)
+        body = transform(rel, body, endpoint, final_root)
         total += len(body)
         if total > MAX_TOTAL:
             raise RuntimeError("runtime profile tree exceeds safety limit")
@@ -185,6 +185,7 @@ def sync_dir(path: Path) -> None:
 def adopt(run: Path, stage: Path, dest: Path) -> None:
     require_dir(run, "runtime directory")
     backup: Path | None = None
+    committed = False
     try:
         try:
             info = dest.lstat()
@@ -197,19 +198,22 @@ def adopt(run: Path, stage: Path, dest: Path) -> None:
             os.rename(dest, backup)
         try:
             os.rename(stage, dest)
+            committed = True
         except Exception:
             if backup is not None and backup.exists() and not dest.exists():
                 os.rename(backup, dest)
                 backup = None
             raise
         sync_dir(run)
+        # New runtime tree is authoritative after rename. Old-tree cleanup must
+        # never be reported as a false post-commit failure.
         if backup is not None:
-            shutil.rmtree(backup)
+            shutil.rmtree(backup, ignore_errors=True)
             backup = None
     finally:
-        if stage.exists():
+        if not committed and stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
-        if backup is not None and backup.exists() and not dest.exists():
+        if not committed and backup is not None and backup.exists() and not dest.exists():
             try:
                 os.rename(backup, dest)
             except OSError:
@@ -230,19 +234,20 @@ def prepare(root_text: str, profile_id: str, mode: str, endpoint: str) -> Path:
     dest = ensure_child(root, run / f"profile-{profile_id}-{mode}", "runtime profile destination")
     stage = Path(tempfile.mkdtemp(prefix=f".{dest.name}.stage-", dir=run))
     os.chmod(stage, 0o700)
+    adopted = False
     try:
         if mode != "all":
             primary = root / "generated" / profile_id / mode
             fallback = root / "generated" / mode
             source = primary if primary.is_dir() else fallback
             source = ensure_child(root, source, "runtime profile source")
-            copy_profile(source, stage, endpoint)
+            copy_profile(source, stage, dest, endpoint)
         sync_dir(stage)
         adopt(run, stage, dest)
-        stage = Path("/__adopted__")
+        adopted = True
         return dest
     finally:
-        if stage.exists():
+        if not adopted and stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
 
 
