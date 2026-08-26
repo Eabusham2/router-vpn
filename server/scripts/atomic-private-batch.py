@@ -19,6 +19,17 @@ class Item:
     after: bytes
 
 
+def ensure_private_parent(path: pathlib.Path) -> None:
+    parent = path.parent
+    try:
+        info = parent.lstat()
+    except FileNotFoundError:
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        info = parent.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing non-directory/symlink private parent: {parent}")
+
+
 def read_regular(path: pathlib.Path, label: str) -> bytes:
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
@@ -39,7 +50,7 @@ def existing_bytes(path: pathlib.Path) -> bytes | None:
 
 
 def stage(dest: pathlib.Path, body: bytes) -> pathlib.Path:
-    dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    ensure_private_parent(dest)
     fd, name = tempfile.mkstemp(prefix=f".{dest.name}.batch-", dir=dest.parent)
     tmp = pathlib.Path(name)
     try:
@@ -73,6 +84,7 @@ def restore(items: list[Item]) -> list[str]:
     errors: list[str] = []
     for item in reversed(items):
         try:
+            ensure_private_parent(item.dest)
             if item.before is None:
                 item.dest.unlink(missing_ok=True)
                 fsync_dir(item.dest.parent)
@@ -95,6 +107,7 @@ def adopt(items: list[Item]) -> None:
         for item in items:
             staged[item.dest] = stage(item.dest, item.after)
         for item in items:
+            ensure_private_parent(item.dest)
             tmp = staged.pop(item.dest)
             os.replace(tmp, item.dest)
             adopted.append(item)
@@ -118,6 +131,7 @@ def parse_item(arg: str) -> Item:
     source = pathlib.Path(source_text)
     if not str(dest) or not str(source):
         raise RuntimeError("batch destination/source may not be empty")
+    ensure_private_parent(dest)
     return Item(dest=dest, source=source, before=existing_bytes(dest), after=read_regular(source, "private source"))
 
 
