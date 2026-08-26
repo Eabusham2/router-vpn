@@ -247,13 +247,27 @@ def _profile_cached_auto(profile: dict[str, Any] | None, key: str) -> tuple[int,
 def _load_measurement_cache(root: Path) -> dict[str, Any]:
     path = _cache_path(root)
     try:
+        parent = path.parent.lstat()
+        if stat.S_ISLNK(parent.st_mode) or not stat.S_ISDIR(parent.st_mode):
+            return {}
         info = path.lstat()
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 256 * 1024:
             return {}
         if os.name != "nt" and info.st_mode & 0o077:
             return {}
-        body = path.read_text(encoding="utf-8")
-        data = json.loads(body)
+        with path.open("rb") as handle:
+            opened = os.fstat(handle.fileno())
+            current = path.lstat()
+            if (
+                stat.S_ISLNK(current.st_mode)
+                or not stat.S_ISREG(current.st_mode)
+                or not os.path.samestat(opened, current)
+            ):
+                return {}
+            raw = handle.read(256 * 1024 + 1)
+        if len(raw) > 256 * 1024:
+            return {}
+        data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict) or data.get("version") != CACHE_VERSION or not isinstance(data.get("entries"), dict):
             return {}
         return data
@@ -289,40 +303,140 @@ def patch_json(value: Any, mtu: int) -> bool:
     return changed
 
 
-def patch_conf(path: Path, mtu: int) -> bool:
-    text = path.read_text(encoding="utf-8")
+RUNTIME_PATCH_MAX_BYTES = 2 << 20
+
+
+def _patched_conf_text(text: str, mtu: int) -> str:
     if "[Interface]" not in text:
-        return False
-    updated = (
+        return text
+    return (
         re.sub(r"(?mi)^MTU\s*=.*$", f"MTU = {mtu}", text)
         if re.search(r"(?mi)^MTU\s*=", text)
         else text.replace("[Interface]\n", f"[Interface]\nMTU = {mtu}\n", 1)
     )
-    if updated != text:
-        path.write_text(updated, encoding="utf-8")
-        return True
-    return False
+
+
+def _runtime_regular_bytes(conf: Path, path: Path) -> tuple[bytes, os.stat_result]:
+    root = conf.resolve()
+    try:
+        rel = path.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError(f"refusing MTU runtime path outside profile tree: {path}") from exc
+    cursor = root
+    for part in rel.parts[:-1]:
+        cursor = cursor / part
+        info = cursor.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError(f"refusing non-directory/symlink MTU runtime parent: {cursor}")
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise RuntimeError(f"refusing non-regular/symlink MTU runtime profile: {path}")
+    if info.st_size < 0 or info.st_size > RUNTIME_PATCH_MAX_BYTES:
+        raise RuntimeError(f"MTU runtime profile is oversized: {path}")
+    with path.open("rb") as handle:
+        opened = os.fstat(handle.fileno())
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(opened, current)
+        ):
+            raise RuntimeError(f"MTU runtime profile changed during open: {path}")
+        body = handle.read(RUNTIME_PATCH_MAX_BYTES + 1)
+    if len(body) > RUNTIME_PATCH_MAX_BYTES:
+        raise RuntimeError(f"MTU runtime profile is oversized: {path}")
+    return body, opened
+
+
+def _replace_runtime_regular(conf: Path, path: Path, expected: bytes, replacement: bytes) -> None:
+    current_body, opened = _runtime_regular_bytes(conf, path)
+    if current_body != expected:
+        raise RuntimeError(f"MTU runtime profile changed before adoption: {path}")
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.mtu-", dir=str(path.parent))
+    committed = False
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb", closefd=True) as handle:
+            handle.write(replacement)
+            handle.flush()
+            os.fsync(handle.fileno())
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(opened, current)
+        ):
+            raise RuntimeError(f"MTU runtime profile changed before replace: {path}")
+        os.replace(tmp_name, path)
+        committed = True
+        try:
+            dfd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+    finally:
+        if not committed:
+            try:
+                os.unlink(tmp_name)
+            except FileNotFoundError:
+                pass
 
 
 def apply_tree(conf: Path, mtu: int) -> int:
-    changed = 0
+    patches: list[tuple[Path, bytes, bytes]] = []
     for path in conf.rglob("*"):
-        if not path.is_file():
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise RuntimeError(f"refusing symlink MTU runtime profile path: {path}")
+        if stat.S_ISDIR(info.st_mode):
             continue
-        if path.suffix.lower() == ".json":
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f"refusing non-regular MTU runtime profile path: {path}")
+        suffix = path.suffix.lower()
+        if suffix not in {".json", ".conf"}:
+            continue
+        before, _ = _runtime_regular_bytes(conf, path)
+        try:
+            text = before.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f"MTU runtime profile is not UTF-8: {path}") from exc
+        if suffix == ".json":
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
+                data = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"invalid JSON in MTU runtime profile: {path}") from exc
+            if not patch_json(data, mtu):
                 continue
-            if patch_json(data, mtu):
-                path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-                changed += 1
-        elif path.suffix.lower() == ".conf":
+            after = (json.dumps(data, indent=2) + "\n").encode("utf-8")
+        else:
+            updated = _patched_conf_text(text, mtu)
+            if updated == text:
+                continue
+            after = updated.encode("utf-8")
+        patches.append((path, before, after))
+
+    adopted: list[tuple[Path, bytes, bytes]] = []
+    try:
+        for path, before, after in patches:
+            _replace_runtime_regular(conf, path, before, after)
+            adopted.append((path, before, after))
+    except Exception as exc:
+        rollback_errors: list[str] = []
+        for path, before, after in reversed(adopted):
             try:
-                changed += int(patch_conf(path, mtu))
-            except UnicodeDecodeError:
-                pass
-    return changed
+                _replace_runtime_regular(conf, path, after, before)
+            except Exception as rollback_exc:
+                rollback_errors.append(f"{path}: {rollback_exc}")
+        if rollback_errors:
+            raise RuntimeError(
+                f"MTU runtime profile adoption failed and rollback was incomplete: {exc}; "
+                + "; ".join(rollback_errors)
+            ) from exc
+        raise RuntimeError(f"MTU runtime profile adoption failed; prior runtime profile restored: {exc}") from exc
+    return len(patches)
 
 
 def _ensure_cache_parent(path: Path) -> None:
@@ -463,7 +577,11 @@ def main() -> int:
         effective, source, outer = reuse
     else:
         effective, source, outer = choose_effective(profile, default_mtu, endpoint)
-    changed = apply_tree(conf, effective)
+    try:
+        changed = apply_tree(conf, effective)
+    except (OSError, RuntimeError) as exc:
+        print(f"MTU runtime profile patch failed closed: {exc}", file=sys.stderr)
+        return 1
     try:
         persist_effective(root, store, profile, effective, source, key, outer, network, generated)
     except (OSError, RuntimeError) as exc:
