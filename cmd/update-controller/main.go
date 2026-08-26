@@ -87,6 +87,18 @@ var (
 		"publish-arm64-images.yml",
 		"production-release-compose.yml",
 	}
+	ownedImageRE = regexp.MustCompile(`ghcr\\.io/eabusham2/(router-vpn-[a-z0-9-]+):([^\\s]+)`)
+	requiredCustomImageRepos = []string{
+		"router-vpn-init",
+		"router-vpn-agent",
+		"router-vpn-wireguard",
+		"router-vpn-awg2",
+		"router-vpn-rosenpass",
+		"router-vpn-naive",
+		"router-vpn-ss-v2ray",
+		"router-vpn-aux",
+		"router-vpn-updater",
+	}
 )
 
 type updateState struct {
@@ -520,6 +532,33 @@ func (c *controller) latestVerified() (string, error) {
 	return "", errors.New("no recent exact-SHA release has all required green workflows")
 }
 
+func ownedImageSHAs(content string) (map[string]string, error) {
+	seen := map[string]string{}
+	allowed := map[string]bool{}
+	for _, repo := range requiredCustomImageRepos {
+		allowed[repo] = true
+	}
+	for _, match := range ownedImageRE.FindAllStringSubmatch(content, -1) {
+		repo, tag := match[1], match[2]
+		if !allowed[repo] {
+			return nil, fmt.Errorf("production compose contains unrecognized Router VPN image %s", repo)
+		}
+		if !shaRE.MatchString(tag) {
+			return nil, fmt.Errorf("production compose Router VPN image %s is not pinned to a full SHA", repo)
+		}
+		if prior, ok := seen[repo]; ok && prior != tag {
+			return nil, fmt.Errorf("production compose image %s has mixed SHAs", repo)
+		}
+		seen[repo] = tag
+	}
+	for _, repo := range requiredCustomImageRepos {
+		if seen[repo] == "" {
+			return nil, fmt.Errorf("production compose is missing required Router VPN image %s", repo)
+		}
+	}
+	return seen, nil
+}
+
 func validateAndMaterializeTemplate(text, target string) (string, error) {
 	if !shaRE.MatchString(target) {
 		return "", errors.New("invalid target SHA")
@@ -532,9 +571,8 @@ func validateAndMaterializeTemplate(text, target string) (string, error) {
 			return "", fmt.Errorf("production compose contains forbidden marker %q", forbidden)
 		}
 	}
-	matches := customImageRE.FindAllStringSubmatch(text, -1)
-	if len(matches) < 11 {
-		return "", errors.New("production compose does not contain the complete Router VPN exact-image set")
+	if _, err := ownedImageSHAs(text); err != nil {
+		return "", err
 	}
 	if !strings.Contains(text, "router-vpn-updater:") {
 		return "", errors.New("target release does not contain the rollback-safe update controller service")
@@ -545,15 +583,19 @@ func validateAndMaterializeTemplate(text, target string) (string, error) {
 	} else {
 		return "", errors.New("production compose broker provenance SHA is missing")
 	}
-	for _, match := range customImageRE.FindAllStringSubmatch(out, -1) {
-		if match[2] != target {
-			return "", errors.New("materialized compose contains non-target Router VPN image")
+	images, err := ownedImageSHAs(out)
+	if err != nil {
+		return "", err
+	}
+	for repo, imageSHA := range images {
+		if imageSHA != target {
+			return "", fmt.Errorf("materialized compose image %s contains non-target SHA", repo)
 		}
 	}
 	if !strings.Contains(out, "ROUTER_VPN_GITHUB_SHA: "+target) {
 		return "", errors.New("materialized compose broker SHA mismatch")
 	}
-	header := "# GENERATED exact-SHA Router VPN production compose: " + target + "\n# Update controller verified RC + ARM64 image publication before materialization.\n"
+	header := "# GENERATED exact-SHA Router VPN production compose: " + target + "\n# Update controller verified RC + ARM64 Portainer preflight + ARM64 image publication + production compose before materialization.\n"
 	return header + out, nil
 }
 
@@ -672,9 +714,13 @@ func preserveUpdater(target, current string) (string, error) {
 }
 
 func composeSHA(content string) string {
+	images, err := ownedImageSHAs(content)
+	if err != nil {
+		return "unknown"
+	}
 	values := map[string]bool{}
-	for _, item := range customImageRE.FindAllStringSubmatch(content, -1) {
-		values[item[2]] = true
+	for _, imageSHA := range images {
+		values[imageSHA] = true
 	}
 	if len(values) != 1 {
 		return "unknown"
