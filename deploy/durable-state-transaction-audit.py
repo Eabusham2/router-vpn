@@ -122,6 +122,23 @@ require(
     "predictable Windows kill-switch state temp path returned",
     "Windows kill-switch plan/rollback/private-state contract: OK",
 )
+
+# macOS PF uses the same hardened private state store. Poisoned-state force-off
+# may clear only Router VPN's scoped anchor; without the persisted reference
+# token it must never guess at global PF ownership.
+require(
+    "modes/kill-switch-platform.py",
+    "_linux.remove_state(root",
+    "_darwin._clear_anchor(check=False)",
+    "persisted PF reference token was unreadable",
+    "global PF enablement was left untouched",
+)
+forbid("modes/kill-switch-platform.py", "_linux.state_path(root).unlink")
+require(
+    "deploy/test_macos_killswitch_contract.py",
+    "_linux.remove_state(root",
+    "global PF enablement was left untouched",
+)
 require(
     "modes/mtu-policy.py",
     "_runtime_regular_bytes",
