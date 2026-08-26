@@ -98,14 +98,33 @@ require(
 )
 
 # Multihop builder reads linked nodes but may only materialize one disposable
-# graph below HOMEVPN_ROOT/run. It must never write routers.json.
+# graph below HOMEVPN_ROOT/run. Its credential-bearing runtime files must be
+# bounded/private/atomic and source profile trees may not contain symlinks.
 require(
     "modes/multihop.py",
     'root / "routers.json"',
     'run_root = (root / "run").resolve()',
     "safe_under(run_root, outdir)",
+    "def _runtime_parent",
+    "def write_private",
+    "tempfile.mkstemp",
+    "os.fsync(stream.fileno())",
+    "os.path.samestat(parent_info, parent_current)",
+    "os.replace(tmp, path)",
+    "exit multihop profile contains a symlink",
 )
 forbid("modes/multihop.py", "routers_path.write", 'root / "routers.json").write', "persistProfiles")
+for line, call in python_write_calls("modes/multihop.py"):
+    if "write_text" in call or "write_bytes" in call or "rename" in call:
+        errors.append(f"modes/multihop.py:{line}: unexpected direct runtime write: {call}")
+    if "replace" in call and call != "os.replace(tmp, path)":
+        errors.append(f"modes/multihop.py:{line}: unexpected replacement target: {call}")
+require(
+    "modes/test_multihop_private_runtime.py",
+    "failed multihop adoption changed the prior runtime file",
+    "multihop private publisher followed a symlink target",
+    "multihop private publisher followed a symlink parent",
+)
 
 # SMART/CUSTOM orchestration is also read-only with respect to profiles. It may
 # stop/start candidate processes, but selected profile policy remains controller-owned.
@@ -159,9 +178,13 @@ require(
     'python3 "$SCRIPT_DIR/dns-policy.py" patch-sing',
 )
 
-# Behavioral proof: MTU policy/cache tests assert routers.json byte identity and
-# DNS tests prove failure-safe atomic mutation of only the disposable run config.
-for rel in ("modes/test_mtu_policy.py", "modes/test_dns_policy_runtime.py"):
+# Behavioral proof: persistent MTU ownership stays read-only, while DNS and
+# multihop prove failure-safe atomic publication of disposable runtime state.
+for rel in (
+    "modes/test_mtu_policy.py",
+    "modes/test_dns_policy_runtime.py",
+    "modes/test_multihop_private_runtime.py",
+):
     proc = subprocess.run([sys.executable, str(ROOT / rel)], cwd=ROOT, text=True, capture_output=True)
     if proc.returncode != 0:
         errors.append(f"{rel} failed: " + (proc.stdout + "\n" + proc.stderr)[-4000:])
