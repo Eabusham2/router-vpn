@@ -139,14 +139,39 @@ for line, call in python_write_calls("modes/orchestrate.py"):
     errors.append(f"modes/orchestrate.py:{line}: orchestrator unexpectedly writes filesystem state: {call}")
 
 # ALL reads base preference and owns only a caller-selected runtime result file.
-# It never writes routers.json or selected profile policy.
+# Its result publisher is confined to HOMEVPN_ROOT, validates all ancestors and
+# target type, allowlists the four real MAX branches, and atomically adopts 0600.
 require(
     "modes/run-all.sh",
     '"$ROOT/routers.json"',
     "RESULT_FILE=${HOMEVPN_ALL_RESULT_FILE:-}",
-    'mv -f "$tmp" "$RESULT_FILE"',
+    'python3 "$SCRIPT_DIR/all-result.py" prepare "$ROOT" "$RESULT_FILE"',
+    'python3 "$SCRIPT_DIR/all-result.py" publish "$ROOT" "$RESULT_FILE" "$candidate"',
 )
-forbid("modes/run-all.sh", '> "$ROOT/routers.json"', 'mv -f "$tmp" "$ROOT/routers.json"')
+forbid(
+    "modes/run-all.sh",
+    '> "$ROOT/routers.json"',
+    'mv -f "$tmp" "$ROOT/routers.json"',
+    '${RESULT_FILE}.tmp.$$',
+    '${RESULT_FILE}.probe.$$',
+)
+require(
+    "modes/all-result.py",
+    "ALL result path must stay inside HOMEVPN_ROOT",
+    "refusing non-directory/symlink ALL result ancestor",
+    "ALLOWED =",
+    "tempfile.mkstemp",
+    "os.fsync(stream.fileno())",
+    "os.path.samestat(parent_before, parent_now)",
+    "os.replace(tmp, target)",
+)
+require(
+    "modes/test_all_result.py",
+    "failed ALL adoption changed",
+    "ALL result escaped HOMEVPN_ROOT",
+    "ALL result followed a symlink target",
+    "ALL result followed a symlink ancestor",
+)
 
 # MTU startup is explicitly measurement-only. Policy fields are controller-owned;
 # normal starts may cache path measurements privately but routers.json is read-only.
@@ -178,12 +203,13 @@ require(
     'python3 "$SCRIPT_DIR/dns-policy.py" patch-sing',
 )
 
-# Behavioral proof: persistent MTU ownership stays read-only, while DNS and
-# multihop prove failure-safe atomic publication of disposable runtime state.
+# Behavioral proof: persistent MTU ownership stays read-only, while DNS,
+# multihop and ALL prove failure-safe atomic publication of disposable state.
 for rel in (
     "modes/test_mtu_policy.py",
     "modes/test_dns_policy_runtime.py",
     "modes/test_multihop_private_runtime.py",
+    "modes/test_all_result.py",
 ):
     proc = subprocess.run([sys.executable, str(ROOT / rel)], cwd=ROOT, text=True, capture_output=True)
     if proc.returncode != 0:
