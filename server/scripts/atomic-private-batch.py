@@ -20,17 +20,30 @@ class Item:
     after: bytes
 
 
+def _validate_existing_ancestors(parent: pathlib.Path) -> None:
+    for current in (parent, *parent.parents):
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError(f"refusing non-directory/symlink private path component: {current}")
+
+
 def ensure_private_parent(path: pathlib.Path, *, create: bool = True) -> None:
     parent = path.parent
+    _validate_existing_ancestors(parent)
     try:
         info = parent.lstat()
     except FileNotFoundError:
         if not create:
             raise
-        parent.mkdir(parents=True, exist_ok=False, mode=0o700)
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _validate_existing_ancestors(parent)
         info = parent.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise RuntimeError(f"refusing non-directory/symlink private parent: {parent}")
+    _validate_existing_ancestors(parent)
 
 
 def read_regular(path: pathlib.Path, label: str) -> bytes:
@@ -57,6 +70,7 @@ def read_regular(path: pathlib.Path, label: str) -> bytes:
             body.extend(chunk)
             if len(body) > MAX_BYTES:
                 raise RuntimeError(f"{label} is oversized: {path}")
+        ensure_private_parent(path, create=False)
         current = path.lstat()
         if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
             raise RuntimeError(f"{label} changed during read: {path}")
@@ -96,6 +110,7 @@ def stage(dest: pathlib.Path, body: bytes) -> pathlib.Path:
 
 def fsync_dir(path: pathlib.Path) -> None:
     try:
+        _validate_existing_ancestors(path)
         info = path.lstat()
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
             raise RuntimeError(f"refusing non-directory/symlink private parent: {path}")
