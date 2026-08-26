@@ -80,6 +80,23 @@ require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSym
 # restore earlier files if a later adoption fails.
 require("cmd/client/mtu_retest.go", "mtuRetestSnapshot", "rollbackMTULiveResult", "restoreMTUMeasurementFields")
 require("cmd/client/mtu_retest_test.go", "stale", "rollback")
+
+# Persistent Linux kill-switch state is authoritative recovery policy. Corrupt or
+# redirected state must fail closed instead of being interpreted as "off".
+require(
+    "modes/kill-switch.py",
+    "_private_regular_bytes",
+    "cannot safely read persistent kill-switch state",
+    "write_state",
+    "remove_state",
+    "kill-switch state target changed before adoption",
+)
+require(
+    "modes/test_kill_switch.py",
+    "router-vpn-killswitch-state-safety-",
+    "router-vpn-killswitch-parent-safety-",
+    "force-off",
+)
 require(
     "modes/mtu-policy.py",
     "_runtime_regular_bytes",
