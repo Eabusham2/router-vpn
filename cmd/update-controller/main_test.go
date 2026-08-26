@@ -92,3 +92,21 @@ func TestComposeSHARejectsMixedPhaseOneEvenWithGeneratedHeader(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if got := composeSHA(phaseOne); got != "unknown" { t.Fatalf("mixed image set reported exact SHA %q despite generated target header", got) }
 }
+
+
+func TestUpdaterRequiresCompleteExactSHAReleaseWorkflowSet(t *testing.T) {
+	want := []string{
+		"release-candidate.yml",
+		"arm64-portainer-preflight.yml",
+		"publish-arm64-images.yml",
+		"production-release-compose.yml",
+	}
+	if len(requiredReleaseWorkflows) != len(want) {
+		t.Fatalf("required release workflow count=%d want=%d: %v", len(requiredReleaseWorkflows), len(want), requiredReleaseWorkflows)
+	}
+	for i := range want {
+		if requiredReleaseWorkflows[i] != want[i] {
+			t.Fatalf("required release workflow[%d]=%q want=%q", i, requiredReleaseWorkflows[i], want[i])
+		}
+	}
+}
