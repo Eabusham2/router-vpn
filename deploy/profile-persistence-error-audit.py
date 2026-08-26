@@ -16,35 +16,23 @@ for path in sorted(CLIENT.glob("*.go")):
     body = path.read_text(encoding="utf-8", errors="replace")
     lines = body.splitlines()
     for idx, line in enumerate(lines):
-        if "_ = a.persistProfilesLocked()" not in line:
-            continue
-        start = max(0, idx - 12)
-        end = min(len(lines), idx + 4)
-        context = "\n".join(lines[start:end])
-        ignored.append((path.name, idx + 1, context))
-        # One legacy best-effort metadata write is explicitly non-authoritative:
-        # after a mode is already path-proved Connected, main.go increments only
-        # UseCount/LastUsedAt. A disk failure may lose/revert those ranking hints
-        # but must not change connection truth, profile identity, DNS, MTU, exit,
-        # selected node, or any security policy. No second ignored call is allowed.
-        allowed = (
-            path.name == "main.go"
-            and "UseCount++" in context
-            and "LastUsedAt = time.Now().UTC().Format(time.RFC3339)" in context
-            and "a.state.Connected = true" in context
-            and "a.state.Phase = \"connected\"" in context
-        )
-        if not allowed:
-            errors.append(f"{path.name}:{idx + 1}: ignored persistProfilesLocked result outside non-authoritative usage metadata")
-
-    # Whole-store persistence must never be discarded either.
-    for idx, line in enumerate(lines):
+        if "_ = a.persistProfilesLocked()" in line:
+            ignored.append((path.name, idx + 1, line.strip()))
+            errors.append(f"{path.name}:{idx + 1}: ignored persistProfilesLocked result")
         if re.search(r"\b_\s*=\s*a\.persistProfiles\(\)", line):
             errors.append(f"{path.name}:{idx + 1}: ignored persistProfiles result")
 
-if len(ignored) != 1:
-    rendered = ", ".join(f"{name}:{line}" for name, line, _ in ignored) or "none"
-    errors.append(f"expected exactly one classified best-effort usage-metadata persistence call, found {len(ignored)}: {rendered}")
+if ignored:
+    rendered = ", ".join(f"{name}:{line}" for name, line, _ in ignored)
+    errors.append(f"profile persistence failures must never be ignored: {rendered}")
+
+main_body = (CLIENT / "main.go").read_text(encoding="utf-8", errors="replace")
+usage_body = (CLIENT / "usage_metadata.go").read_text(encoding="utf-8", errors="replace")
+if "recordProfileUsageLocked" not in main_body or 'log.Printf("profile usage metadata was not persisted:' not in main_body:
+    errors.append("main.go no longer handles bounded post-connect usage metadata persistence errors")
+for marker in ("previous := a.profiles.Profiles[i]", "a.profiles.Profiles[i] = previous", "persistProfilesLocked()"):
+    if marker not in usage_body:
+        errors.append(f"usage_metadata.go missing rollback/persistence marker {marker!r}")
 
 # Critical mutation families must continue to carry explicit rollback markers.
 critical = {
@@ -70,4 +58,4 @@ if errors:
     for error in errors:
         print("ERROR:", error)
     raise SystemExit(1)
-print("Router VPN profile persistence error audit: PASS (only post-connect usage ranking metadata is best-effort)")
+print("Router VPN profile persistence error audit: PASS (zero ignored profile persistence failures)")
