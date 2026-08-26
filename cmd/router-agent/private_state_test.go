@@ -85,6 +85,25 @@ func TestPrivilegedStateRejectsSymlinkParent(t *testing.T) {
 	}
 }
 
+func TestPrivilegedStateRejectsNestedSymlinkAncestor(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.MkdirAll(filepath.Join(realDir, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedDir := filepath.Join(root, "linked")
+	if err := os.Symlink(realDir, linkedDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	path := filepath.Join(linkedDir, "nested", "state", "admin-state.json")
+	if err := atomicWritePrivilegedState(path, []byte("{}\n")); err == nil {
+		t.Fatal("nested symlink ancestor was accepted for privileged state")
+	}
+	if _, err := os.Stat(filepath.Join(realDir, "nested", "state")); !os.IsNotExist(err) {
+		t.Fatalf("privileged state created redirected nested state: %v", err)
+	}
+}
+
 func TestPrivilegedStateRejectsOversizedRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	if err := os.WriteFile(path, []byte("12345"), 0o600); err != nil {
