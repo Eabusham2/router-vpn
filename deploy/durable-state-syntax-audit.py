@@ -9,6 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 errors: list[str] = []
 
 PYTHON_FILES = (
+    "deploy/private-store-path-audit.py",
+    "deploy/runtime-state-ownership-audit.py",
+    "deploy/profile-persistence-error-audit.py",
     "deploy/durable-state-transaction-audit.py",
     "server/finalize/sync-endpoint.py",
     "server/finalize/test_sync_endpoint.py",
@@ -27,6 +30,12 @@ PYTHON_FILES = (
     "server/scripts/enhance-max-pq.py",
     "server/scripts/wrap-xhttp-tun.py",
     "server/scripts/generate-stack-profiles.py",
+    "modes/mtu-policy.py",
+    "modes/mtu-policy-platform.py",
+    "modes/test_mtu_policy.py",
+    "modes/dns-policy.py",
+    "modes/multihop.py",
+    "modes/orchestrate.py",
 )
 
 SHELL_FILES = (
@@ -40,6 +49,8 @@ SHELL_FILES = (
     "server/scripts/ensure-rosenpass.sh",
     "server/scripts/generate-advanced-profiles.sh",
     "server/scripts/publish-downloads.sh",
+    "modes/run-mode.sh",
+    "modes/run-all.sh",
 )
 
 
