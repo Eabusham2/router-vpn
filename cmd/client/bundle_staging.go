@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -75,6 +76,68 @@ func ensurePrivateDirectoryNoSymlink(path string) error {
 		return err
 	}
 	return nil
+}
+
+func writeStagedBundleFile(path string, data []byte) error {
+	if len(data) > maxBundleFileBytes {
+		return fmt.Errorf("staged bundle file exceeds safety limit: %s", filepath.Base(path))
+	}
+	if err := validatePrivateParent(path); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		_ = file.Close()
+		if !ok {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := validatePrivateParent(path); err != nil {
+		return err
+	}
+	ok = true
+	return nil
+}
+
+func syncBundleDirectory(path string) error {
+	// Windows does not expose POSIX directory fsync semantics. File contents are
+	// still flushed before adoption there; Unix additionally flushes staging
+	// directory entries before the authoritative directory rename.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+func syncBundleDirectoryBestEffort(path string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if dir, err := os.Open(path); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
 }
 
 type stagedBundle struct {
@@ -161,13 +224,16 @@ func (s *stagedBundle) writeProfiles(profiles map[string]map[string]string) erro
 				return fmt.Errorf("router bundle exceeds the staged-byte limit")
 			}
 			path := filepath.Join(dir, name)
-			if err := os.WriteFile(path, data, 0o600); err != nil {
-				return err
-			}
-			if err := os.Chmod(path, 0o600); err != nil {
+			if err := writeStagedBundleFile(path, data); err != nil {
 				return err
 			}
 		}
+		if err := syncBundleDirectory(dir); err != nil {
+			return fmt.Errorf("sync staged mode directory %s: %w", mode, err)
+		}
+	}
+	if err := syncBundleDirectory(s.profileDir); err != nil {
+		return fmt.Errorf("sync staged router profile: %w", err)
 	}
 	return nil
 }
@@ -203,10 +269,19 @@ func (s *stagedBundle) commit(root, profileID string) error {
 	if err := ensurePrivateDirectoryNoSymlink(generated); err != nil {
 		return err
 	}
+	// Re-flush the fully staged profile immediately before the rename. All
+	// fallible durability work therefore occurs before the commit point.
+	if err := syncBundleDirectory(s.profileDir); err != nil {
+		return fmt.Errorf("sync staged profile before adoption: %w", err)
+	}
 	if err := os.Rename(s.profileDir, final); err != nil {
 		return err
 	}
 	s.profileDir = ""
+	// Rename is the commit point. A directory fsync is useful durability
+	// reinforcement, but cannot be reported as a false failure after the profile
+	// has already become authoritative and visible to the controller.
+	syncBundleDirectoryBestEffort(generated)
 	return nil
 }
 
@@ -301,6 +376,7 @@ func (s *stagedProfileDeletion) rollback() error {
 		return err
 	}
 	s.moved = false
+	syncBundleDirectoryBestEffort(s.generated)
 	return os.RemoveAll(s.holder)
 }
 
