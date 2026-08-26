@@ -83,6 +83,14 @@ def read_owned_file(path: pathlib.Path) -> bytes:
         current = path.lstat()
         if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
             raise RuntimeError(f"owned file changed during open: {path}")
+        # Older generated files may predate the strict private-mode contract.
+        # Harden the already-open verified inode before reading instead of
+        # following/chmodding the pathname after validation.
+        if opened.st_mode & 0o077:
+            os.fchmod(fd, PRIVATE_MODE)
+            opened = os.fstat(fd)
+        if opened.st_mode & 0o777 != PRIVATE_MODE:
+            raise RuntimeError(f"owned file could not be hardened to mode 0600: {path}")
         chunks: list[bytes] = []
         total = 0
         while True:
