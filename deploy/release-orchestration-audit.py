@@ -103,6 +103,7 @@ for audit in (
     "deploy/portable-private-state-audit.py",
     "deploy/bundle-staging-durability-audit.py",
     "deploy/setup-center-publication-audit.py",
+    "deploy/public-metadata-publication-audit.py",
     "deploy/durable-state-syntax-audit.py",
     "deploy/durable-state-transaction-audit.py",
     "server/scripts/test_preserve_generated_state.py",
@@ -135,4 +136,4 @@ assert not [
     if g.get("kind") == "source" and not g.get("pass")
 ], "legacy source gate failed inside recovered release audit"
 
-print("authoritative one-SHA release orchestration + atomic Setup Center publication + bundle staging durability + Portable private bootstrap/state + standard-exit private runtimes + runtime/profile ownership + profile persistence error classification + private-store boundaries + durable-state syntax/transactions + upgrade preservation + complete recovered source/security audit: OK")
+print("authoritative one-SHA release orchestration + public/private metadata publication + atomic Setup Center publication + bundle staging durability + Portable private bootstrap/state + standard-exit private runtimes + runtime/profile ownership + profile persistence error classification + private-store boundaries + durable-state syntax/transactions + upgrade preservation + complete recovered source/security audit: OK")
