@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lock private authoritative stores to regular leaves + symlink-free ancestor paths."""
+"""Lock private authoritative stores and secret runtimes to symlink-free paths."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +28,44 @@ require(
     "cmd/client/private_store_test.go",
     "TestPrivateStoreRejectsSymlinkParent",
     "TestPrivateStoreRejectsNestedSymlinkAncestor",
+)
+require(
+    "cmd/client/private_runtime.go",
+    "ensurePrivateRuntimeDirectory",
+    "privateRuntimeBase",
+    "newPrivateRuntimeDir",
+    "writePrivateRuntimeFile",
+    "validatePrivateParent",
+)
+require(
+    "cmd/client/private_runtime_test.go",
+    "TestPrivateRuntimeRejectsSymlinkedRunAndNestedAncestor",
+    "TestPrivateRuntimeRejectsSymlinkedCategory",
+    "TestPrivateRuntimeCreatesUniquePrivateSession",
+)
+require(
+    "cmd/client/operation_guard.go",
+    "preflightPrivateConnectionRuntime",
+    '"native-standard-exit"',
+    '"native-multihop"',
+    '"openvpn-standard-exit"',
+    'a.state.Phase = "requested"',
+)
+require(
+    "cmd/client/operation_guard_test.go",
+    "TestConnectionOperationPreflightsPrivateRuntimeBeforeRequested",
+    "TestConnectionOperationRejectsPoisonedRuntimeBeforeStateChange",
+)
+require(
+    "cmd/client/multihop_native.go",
+    "newPrivateRuntimeDir",
+    "readPrivateRegular",
+    "writePrivateRuntimeFile",
+)
+require(
+    "cmd/client/openvpn_entry_bridge.go",
+    "newPrivateRuntimeDir",
+    "writePrivateRuntimeFile",
 )
 require(
     "cmd/client/bundle_staging.go",
@@ -143,4 +181,4 @@ if errors:
     for error in errors:
         print("ERROR:", error)
     raise SystemExit(1)
-print("Router VPN recursive private-store/import/identity path boundary audit: PASS")
+print("Router VPN recursive private-store/import/identity/runtime path boundary audit: PASS")
