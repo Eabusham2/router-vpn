@@ -9,35 +9,40 @@ import (
 
 const maxPortablePrivateBytes int64 = 8 << 20
 
+func validatePortableExistingAncestors(path string) error {
+	parent := filepath.Clean(filepath.Dir(path))
+	if parent == "." {
+		return nil
+	}
+	for current := parent; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+		} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("refusing non-directory/symlink Portable path component %s", current)
+		}
+		next := filepath.Dir(current)
+		if next == current {
+			break
+		}
+	}
+	return nil
+}
+
 func validatePortablePrivateParent(path string) error {
 	parent := filepath.Clean(filepath.Dir(path))
 	if parent == "." {
 		return nil
 	}
-	validate := func() error {
-		for current := parent; ; current = filepath.Dir(current) {
-			info, err := os.Lstat(current)
-			if err != nil {
-				if !os.IsNotExist(err) {
-					return err
-				}
-			} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-				return fmt.Errorf("refusing non-directory/symlink Portable private path component %s", current)
-			}
-			next := filepath.Dir(current)
-			if next == current {
-				break
-			}
-		}
-		return nil
-	}
-	if err := validate(); err != nil {
+	if err := validatePortableExistingAncestors(path); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
 	}
-	return validate()
+	return validatePortableExistingAncestors(path)
 }
 
 func ensurePortablePrivateDir(path string) error {
@@ -118,6 +123,9 @@ func readPortablePackageFile(path string, limit int64) ([]byte, error) {
 	if limit <= 0 || limit > maxPortablePrivateBytes {
 		limit = maxPortablePrivateBytes
 	}
+	if err := validatePortableExistingAncestors(path); err != nil {
+		return nil, err
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -138,8 +146,11 @@ func readPortablePackageFile(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !os.SameFile(opened, current) {
+	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
 		return nil, fmt.Errorf("Portable package source %s changed during open", path)
+	}
+	if err := validatePortableExistingAncestors(path); err != nil {
+		return nil, err
 	}
 	body, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
@@ -149,6 +160,14 @@ func readPortablePackageFile(path string, limit int64) ([]byte, error) {
 		return nil, fmt.Errorf("Portable package source %s exceeds safety limit", path)
 	}
 	return body, nil
+}
+
+func portableRegularExists(path string) bool {
+	if err := validatePortableExistingAncestors(path); err != nil {
+		return false
+	}
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular()
 }
 
 func atomicWritePortablePrivate(path string, body []byte) error {
