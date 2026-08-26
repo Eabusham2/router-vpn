@@ -97,6 +97,31 @@ require(
     "router-vpn-killswitch-parent-safety-",
     "force-off",
 )
+
+# Windows strict kill-switch rollback state is equally authoritative. Its state
+# tree must reject reparse redirects and use flushed random staging + atomic
+# replacement; corrupt-state force-off is explicit local recovery.
+require(
+    "client/windows-kill-switch.ps1",
+    "Assert-NoReparseAncestors",
+    "Assert-SafeStateLeaf",
+    "[IO.File]::Replace",
+    "[Guid]::NewGuid().ToString('N')",
+    "$stream.Flush($true)",
+    "Remove-State -ForceRecovery",
+    "emergency outbound-Allow recovery",
+)
+forbid(
+    "client/windows-kill-switch.ps1",
+    '$tmp = "$path.tmp"',
+    "Move-Item -LiteralPath $tmp -Destination $path -Force",
+)
+require(
+    "client/test-windows-kill-switch.ps1",
+    "corrupt persistent Windows kill-switch state did not fail closed",
+    "predictable Windows kill-switch state temp path returned",
+    "Windows kill-switch plan/rollback/private-state contract: OK",
+)
 require(
     "modes/mtu-policy.py",
     "_runtime_regular_bytes",
