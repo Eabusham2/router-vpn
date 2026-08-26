@@ -91,12 +91,13 @@ for marker in (
 # These source-level destructive/security, durable-state, credential-preservation,
 # and historical runtime boundaries must travel with exact release orchestration
 # instead of living as orphan scripts. release-candidate.yml invokes this
-# orchestration audit, so the durable-state gate executes on that exact SHA too.
+# orchestration audit, so both durable-state gates execute on that exact SHA too.
 for audit in (
     "deploy/docker-cleanup-safety-audit.py",
     "deploy/private-bundle-boundary-audit.py",
     "deploy/historical-regression-audit.py",
     "deploy/binding-edge-requirements-audit.py",
+    "deploy/durable-state-syntax-audit.py",
     "deploy/durable-state-transaction-audit.py",
     "server/scripts/test_preserve_generated_state.py",
 ):
@@ -128,4 +129,4 @@ assert not [
     if g.get("kind") == "source" and not g.get("pass")
 ], "legacy source gate failed inside recovered release audit"
 
-print("authoritative one-SHA release orchestration + durable-state + upgrade preservation + complete recovered source/security audit: OK")
+print("authoritative one-SHA release orchestration + durable-state syntax/transactions + upgrade preservation + complete recovered source/security audit: OK")
