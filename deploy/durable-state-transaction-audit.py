@@ -114,7 +114,7 @@ require(
     "cmd/update-controller/recovery.go",
     "rollbackComposePath",
     "saveRollbackCompose",
-    "clear stale rollback snapshot before new update",
+    "unexpectedly exists after update transaction started",
     "loadRollbackCompose",
     "restorePreviousStack",
     "rollbackAfterDeploymentFailure",
@@ -123,12 +123,19 @@ require(
 )
 require(
     "cmd/update-controller/main.go",
+    "cannot safely clear stale rollback snapshot before update",
     "saveRollbackCompose(previous, from)",
     "rollbackAfterDeploymentFailure",
     "completeRecoveredUpdate",
     "exact_compose_verified",
 )
-require("cmd/update-controller/recovery_test.go", "RollbackComposeSnapshotIsPrivateAndExact", "UnsafeStaleSnapshotBlocksNewTransaction", "InterruptedPreDeploymentApplying")
+require(
+    "cmd/update-controller/recovery_test.go",
+    "RollbackComposeSnapshotIsPrivateAndExact",
+    "ClearRollbackComposeUnsafeStaleSnapshotBlocksNewTransaction",
+    "SaveRollbackComposeRefusesUnexpectedExistingSnapshotAfterTransactionStart",
+    "InterruptedPreDeploymentApplying",
+)
 require("cmd/update-controller/private_state_test.go", "RejectsBroadPermissions", "RejectsSymlink", "RejectsSymlinkParent", "RejectsOversizedRead")
 
 # Endpoint synchronization owns only explicit raw WG/AWG endpoint fields + the
