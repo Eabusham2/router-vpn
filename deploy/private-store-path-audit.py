@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lock private authoritative stores to regular leaf + non-symlink parent paths."""
+"""Lock private authoritative stores to regular leaves + symlink-free ancestor paths."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,54 +20,59 @@ def require(rel: str, *markers: str) -> None:
 require(
     "cmd/client/private_store.go",
     "validatePrivateParent",
+    "validateAncestors",
     "os.SameFile(opened, current)",
-    "refusing non-directory/symlink private store parent",
+    "path component",
 )
 require(
     "cmd/client/private_store_test.go",
     "TestPrivateStoreRejectsSymlinkParent",
-    "symlink parent was accepted for private store write",
+    "TestPrivateStoreRejectsNestedSymlinkAncestor",
 )
 require(
     "cmd/router-agent/private_state.go",
     "validatePrivilegedStateParent",
+    "validateAncestors",
     "os.SameFile(opened, current)",
-    "refusing non-directory/symlink privileged state parent",
+    "path component",
 )
 require(
     "cmd/router-agent/private_state_test.go",
     "TestPrivilegedStateRejectsSymlinkParent",
-    "symlink privileged-state parent was accepted",
+    "TestPrivilegedStateRejectsNestedSymlinkAncestor",
 )
 require(
     "cmd/update-controller/private_state.go",
     "validateUpdaterPrivateParent",
+    "validateAncestors",
     "os.SameFile(opened, current)",
-    "refusing non-directory/symlink private updater parent",
+    "path component",
 )
 require(
     "cmd/update-controller/private_state_test.go",
     "TestUpdaterPrivateFileRejectsSymlinkParent",
-    "symlink updater-state parent was accepted",
+    "TestUpdaterPrivateFileRejectsNestedSymlinkAncestor",
 )
 require(
     "server/scripts/atomic-private-write.py",
+    "_validate_existing_ancestors",
     "ensure_private_parent",
-    "refusing non-directory/symlink private parent",
+    "private path component",
 )
 require(
     "server/scripts/atomic-private-batch.py",
+    "_validate_existing_ancestors",
     "ensure_private_parent",
-    "refusing non-directory/symlink private parent",
+    "changed during read",
 )
 require(
     "server/scripts/test_atomic_private_publication.py",
-    "single-file private publisher accepted a symlink parent",
-    "batch private publisher accepted a symlink parent",
+    "accepted a symlink parent",
+    "accepted a nested symlink ancestor",
 )
 
 if errors:
     for error in errors:
         print("ERROR:", error)
     raise SystemExit(1)
-print("Router VPN private-store path boundary audit: PASS")
+print("Router VPN recursive private-store path boundary audit: PASS")
