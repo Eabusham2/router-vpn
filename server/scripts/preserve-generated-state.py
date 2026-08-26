@@ -9,6 +9,7 @@ state is an error and must never be converted into silent credential rotation.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -17,15 +18,48 @@ import sys
 from typing import Any
 
 MAX_PRIVATE_STATE = 4 << 20
+PRIVATE_MODE = 0o600
+
+
+def _ensure_private_parent(path: Path, label: str) -> None:
+    info = path.parent.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise ValueError(f"refusing non-directory/symlink parent for {label}")
 
 
 def _read_regular_text(path: Path, label: str) -> str:
+    _ensure_private_parent(path, label)
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise ValueError(f"refusing non-regular/symlink {label}")
+    if info.st_mode & 0o777 != PRIVATE_MODE:
+        raise ValueError(f"{label} must be mode 0600")
     if info.st_size <= 0 or info.st_size > MAX_PRIVATE_STATE:
         raise ValueError(f"{label} is empty or oversized")
-    return path.read_text(encoding="utf-8")
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+            raise ValueError(f"{label} changed during open")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, min(64 * 1024, MAX_PRIVATE_STATE + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_PRIVATE_STATE:
+                raise ValueError(f"{label} is oversized")
+        try:
+            return b"".join(chunks).decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{label} is not UTF-8") from exc
+    finally:
+        os.close(fd)
 
 
 def _load_json(path: Path, label: str) -> dict[str, Any]:
