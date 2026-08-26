@@ -62,10 +62,22 @@ def main() -> int:
             try:
                 single.atomic_private_write(linked_dir / "escaped", b"nope\n")
             except RuntimeError as exc:
-                assert "private parent" in str(exc)
+                assert "symlink" in str(exc)
             else:
                 raise AssertionError("single-file private publisher accepted a symlink parent")
             assert not (real_dir / "escaped").exists()
+
+            nested_real = root / "nested-real"
+            (nested_real / "middle").mkdir(parents=True)
+            nested_link = root / "nested-link"
+            nested_link.symlink_to(nested_real, target_is_directory=True)
+            try:
+                single.atomic_private_write(nested_link / "middle" / "state" / "escaped", b"nope\n")
+            except RuntimeError as exc:
+                assert "symlink" in str(exc)
+            else:
+                raise AssertionError("single-file publisher accepted a nested symlink ancestor")
+            assert not (nested_real / "middle" / "state").exists()
 
     with tempfile.TemporaryDirectory(prefix="router-vpn-private-batch-") as td:
         root = Path(td)
@@ -116,10 +128,22 @@ def main() -> int:
             try:
                 batch.parse_item(f"{linked_dir / 'escaped'}={source}")
             except RuntimeError as exc:
-                assert "private parent" in str(exc)
+                assert "symlink" in str(exc)
             else:
                 raise AssertionError("batch private publisher accepted a symlink parent")
             assert not (real_dir / "escaped").exists()
+
+            nested_real = root / "batch-nested-real"
+            (nested_real / "middle").mkdir(parents=True)
+            nested_link = root / "batch-nested-link"
+            nested_link.symlink_to(nested_real, target_is_directory=True)
+            try:
+                batch.parse_item(f"{nested_link / 'middle' / 'state' / 'escaped'}={source}")
+            except RuntimeError as exc:
+                assert "symlink" in str(exc)
+            else:
+                raise AssertionError("batch publisher accepted a nested symlink ancestor")
+            assert not (nested_real / "middle" / "state").exists()
         assert not list(root.glob(".*.batch-*"))
 
     print("Atomic private single/batch publication tests: OK")
