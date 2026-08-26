@@ -51,6 +51,20 @@ with tempfile.TemporaryDirectory(prefix="router-vpn-node-proof-") as td:
     assert MOD.main() == 0
     assert json.loads(MOD.AGENT_CONFIG.read_text())["node_id"] == expected
 
+with tempfile.TemporaryDirectory(prefix="router-vpn-node-proof-conflict-") as td:
+    base = Path(td)
+    valid_fixture(base)
+    before = {"token": "private-token", "node_id": "f" * 64}
+    private_write(MOD.AGENT_CONFIG, json.dumps(before) + "\n")
+    try:
+        MOD.main()
+    except SystemExit as exc:
+        assert "conflicts with WireGuard server identity" in str(exc)
+    else:
+        raise AssertionError("conflicting node proof identity was silently replaced")
+    assert json.loads(MOD.AGENT_CONFIG.read_text()) == before
+    assert not MOD.PROOF_FILE.exists()
+
 if os.name != "nt":
     with tempfile.TemporaryDirectory(prefix="router-vpn-node-proof-mode-") as td:
         base = Path(td)
@@ -86,11 +100,26 @@ if os.name != "nt":
         try:
             MOD.main()
         except SystemExit as exc:
-            assert "parent" in str(exc) and "symlink" in str(exc)
+            assert "symlink" in str(exc)
         else:
             raise AssertionError("symlink parent for WireGuard identity source was accepted")
 
-    with tempfile.TemporaryDirectory(prefix="router-vpn-node-proof-race-") as td:
+    with tempfile.TemporaryDirectory(prefix="router-vpn-node-proof-ancestor-") as td:
+        root = Path(td)
+        real_base = root / "real-base"
+        valid_fixture(real_base)
+        linked_base = root / "linked-base"
+        linked_base.symlink_to(real_base, target_is_directory=True)
+        configure(linked_base)
+        try:
+            MOD.main()
+        except SystemExit as exc:
+            assert "symlink" in str(exc) and "path component" in str(exc)
+        else:
+            raise AssertionError("nested node-proof symlink ancestor was accepted")
+        configure(real_base)
+
+    with tempfile.TemporaryDirectory(prefix="router-vpn-node-proof-open-race-") as td:
         base = Path(td)
         valid_fixture(base)
         replacement = MOD.WG_CLIENT.with_name("replacement.conf")
@@ -112,5 +141,31 @@ if os.name != "nt":
                 assert "changed during open" in str(exc)
             else:
                 raise AssertionError("WireGuard identity source replacement race was accepted")
+
+    with tempfile.TemporaryDirectory(prefix="router-vpn-node-proof-read-race-") as td:
+        base = Path(td)
+        valid_fixture(base)
+        target = MOD.AGENT_CONFIG
+        replacement = target.with_name("replacement-agent.json")
+        replacement_body = {"token": "newer-token", "node_id": "e" * 64}
+        private_write(replacement, json.dumps(replacement_body) + "\n")
+        real_read = MOD.os.read
+        swapped = [False]
+
+        def swap_after_bytes(fd, size):
+            chunk = real_read(fd, size)
+            if chunk and not swapped[0]:
+                swapped[0] = True
+                os.replace(replacement, target)
+            return chunk
+
+        with mock.patch.object(MOD.os, "read", side_effect=swap_after_bytes):
+            try:
+                MOD.read_regular_text(target, "router-agent config")
+            except SystemExit as exc:
+                assert "changed during read" in str(exc)
+            else:
+                raise AssertionError("router-agent replacement during node-proof read was accepted")
+        assert json.loads(target.read_text()) == replacement_body
 
 print("Node proof private-state tests: OK")
