@@ -48,9 +48,10 @@ def read_private_bytes(path: Path, limit: int = MAX_PROFILE_STORE_BYTES) -> byte
         raise RuntimeError(f"refusing non-regular/symlink private profile store: {path}")
     if before.st_size < 0 or before.st_size > limit:
         raise RuntimeError(f"private profile store exceeds safety limit: {path}")
-    if os.name != "nt" and before.st_mode & 0o077:
-        raise RuntimeError(f"private profile store must be mode 0600: {path}")
-    with path.open("rb") as stream:
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd, "rb", closefd=True) as stream:
         opened = os.fstat(stream.fileno())
         current = path.lstat()
         if (
@@ -59,11 +60,14 @@ def read_private_bytes(path: Path, limit: int = MAX_PROFILE_STORE_BYTES) -> byte
             or not os.path.samestat(opened, current)
         ):
             raise RuntimeError(f"private profile store changed during open: {path}")
+        if os.name != "nt" and opened.st_mode & 0o077:
+            # Match the Go controller's safe-upgrade behavior, but harden the
+            # already-opened inode rather than chmodding a raceable pathname.
+            os.fchmod(stream.fileno(), 0o600)
         body = stream.read(limit + 1)
     if len(body) > limit:
         raise RuntimeError(f"private profile store exceeds safety limit: {path}")
     return body
-
 
 def read_private_json(path: Path, limit: int = MAX_PROFILE_STORE_BYTES) -> Any:
     try:
