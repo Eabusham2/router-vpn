@@ -13,6 +13,8 @@ PYTHON_FILES = (
     "deploy/runtime-state-ownership-audit.py",
     "deploy/profile-persistence-error-audit.py",
     "deploy/durable-state-transaction-audit.py",
+    "modes/mtu-policy.py",
+    "modes/test_mtu_policy.py",
     "server/finalize/sync-endpoint.py",
     "server/finalize/test_sync_endpoint.py",
     "server/scripts/atomic-private-write.py",
