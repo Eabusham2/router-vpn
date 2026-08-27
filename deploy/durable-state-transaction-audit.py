@@ -382,6 +382,19 @@ require(
     "duplicate broker provenance",
 )
 require(
+    "cmd/update-controller/main.go",
+    "newestMeaningfulWorkflowSuccess",
+    "evidence is unsettled",
+    "newest meaningful completed attempt",
+)
+require(
+    "cmd/update-controller/main_test.go",
+    "older green workflow survived a newer failed rerun",
+    "older green workflow was accepted while a newer rerun was unsettled",
+    "neutral cancelled duplicate erased prior successful evidence",
+    "wrong SHA/branch workflow evidence was accepted",
+)
+require(
     "cmd/update-controller/recovery_test.go",
     "RollbackComposeSnapshotIsPrivateAndExact",
     "ExactComposeIdentityRequiresOneExpectedSHA",
