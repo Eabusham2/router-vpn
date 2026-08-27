@@ -32,7 +32,13 @@ export HOMEVPN_MODE="$MODE"; export HOMEVPN_MTU=${HOMEVPN_MTU:-1380}
 python3 "$SCRIPT_DIR/mtu-policy.py" apply "$CONF"
 HOMEVPN_PROFILE_ID="$PROFILE_ID" "$SCRIPT_DIR/check-combined.sh" "$MODE" >/dev/null
 HOMEVPN_PROFILE_ID="$PROFILE_ID" python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json"
-: >"$RUN/$MODE.pids"; start_bg(){ "$@" >>"$RUN/$MODE.log" 2>&1 & echo $! >>"$RUN/$MODE.pids"; }
+python3 "$SCRIPT_DIR/runtime-pids.py" init "$ROOT" "$MODE"
+LAST_BG_PID=''
+start_bg(){
+  "$@" >>"$RUN/$MODE.log" 2>&1 &
+  LAST_BG_PID=$!
+  python3 "$SCRIPT_DIR/runtime-pids.py" record "$ROOT" "$MODE" "$LAST_BG_PID"
+}
 CFG="$CONF/sing-box.json";TMP="$RUN/$MODE-sing-box.json"
 if [[ ${HOMEVPN_SOCKS:-false} == true || ${HOMEVPN_JUMBO:-false} == true ]]; then
 python3 - "$CFG" "$TMP" <<'PY'
@@ -46,5 +52,5 @@ json.dump(x,open(sys.argv[2],'w'),indent=2);open(sys.argv[2],'a').write('\n')
 PY
 CFG="$TMP";fi
 xray run -test -c "$CONF/xray.json" >/dev/null;sing-box check -D "$CONF" -c "$CFG" >/dev/null
-start_bg sudo xray run -c "$CONF/xray.json";XPID=$(tail -n 1 "$RUN/$MODE.pids");sleep 1;kill -0 "$XPID" >/dev/null 2>&1||{ echo 'combined REALITY Xray branch failed to start' >&2;exit 1; }
+start_bg sudo xray run -c "$CONF/xray.json";XPID=$LAST_BG_PID;sleep 1;kill -0 "$XPID" >/dev/null 2>&1||{ echo 'combined REALITY Xray branch failed to start' >&2;exit 1; }
 exec sudo sing-box run -D "$CONF" -c "$CFG"
