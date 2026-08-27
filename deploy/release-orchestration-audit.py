@@ -63,6 +63,7 @@ assert "RouterVPN-Portainer-${GITHUB_SHA}.yaml" in compose, "production compose 
 for marker in (
     "python3 deploy/historical-regression-audit.py",
     "python3 deploy/backend-session-transaction-audit.py",
+    "python3 deploy/test_source_provenance.py",
     "python3 deploy/release-orchestration-audit.py",
     "python3 modes/test_kill_switch.py",
     "python3 server/scripts/test_preserve_generated_state.py",
@@ -99,6 +100,8 @@ for audit in (
     "deploy/binding-edge-requirements-audit.py",
     "deploy/private-store-path-audit.py",
     "deploy/runtime-state-ownership-audit.py",
+    "deploy/native-artifact-workflow-parity-audit.py",
+    "deploy/test_source_provenance.py",
     "deploy/profile-persistence-error-audit.py",
     "deploy/standard-exit-private-runtime-audit.py",
     "deploy/portable-private-state-audit.py",
@@ -137,4 +140,4 @@ assert not [
     if g.get("kind") == "source" and not g.get("pass")
 ], "legacy source gate failed inside recovered release audit"
 
-print("authoritative one-SHA release orchestration + public/private metadata publication + atomic Setup Center publication + bundle staging durability + Portable private bootstrap/state + standard-exit private runtimes + runtime/profile ownership + profile persistence error classification + private-store boundaries + durable-state syntax/transactions + upgrade preservation + complete recovered source/security audit: OK")
+print("authoritative one-SHA release orchestration + exact-source package provenance + public/private metadata publication + atomic Setup Center publication + bundle staging durability + Portable private bootstrap/state + standard-exit private runtimes + runtime/profile ownership + profile persistence error classification + private-store boundaries + durable-state syntax/transactions + upgrade preservation + complete recovered source/security audit: OK")
