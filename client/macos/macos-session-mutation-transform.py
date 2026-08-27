@@ -15,6 +15,13 @@ def transform(source: str, mode: str) -> str:
         if count != 1:
             raise SystemExit(f"{mode} session-mutation source contract drifted: anchor count={count}")
         source=source.replace(old,new,1)
+    if mode == "unified":
+        bad = 'for id in ["unified-kill-switch", "unified-multihop-toggle", "unified-mode-popup", "unified-dns-popup"] { self.findUnifiedView(id)?.isEnabled = !busy }'
+        good = 'for id in ["unified-kill-switch", "unified-multihop-toggle", "unified-mode-popup", "unified-dns-popup"] { if let control = self.findUnifiedView(id) as? NSControl { control.isEnabled = !busy } }'
+        count = source.count(bad)
+        if count != 1:
+            raise SystemExit(f"unified session-mutation control typing drifted: anchor count={count}")
+        source = source.replace(bad, good, 1)
     return source
 
 def main() -> None:
