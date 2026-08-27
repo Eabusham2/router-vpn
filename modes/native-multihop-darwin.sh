@@ -23,29 +23,31 @@ case "$RUNTIME_DIR/" in
 esac
 
 CONFIG="$RUNTIME_DIR/sing-box.json"
-PID_FILE="$RUNTIME_DIR/native-multihop.pid"
+PID_REGISTRY="$ROOT/modes/runtime-pids.py"
+PID_MODE=native-multihop-darwin
 KILL_SWITCH="$ROOT/modes/kill-switch-platform.py"
 SING_BOX=$(command -v sing-box || true)
 
 [[ -f "$CONFIG" ]] || { echo 'prepared multihop sing-box.json is missing' >&2; exit 1; }
 [[ -x "$KILL_SWITCH" || -f "$KILL_SWITCH" ]] || { echo 'macOS kill-switch dispatcher is missing' >&2; exit 1; }
+[[ -f "$PID_REGISTRY" && ! -L "$PID_REGISTRY" ]] || { echo 'verified Router VPN PID registry is missing or unsafe' >&2; exit 1; }
 [[ -n "$SING_BOX" && -x "$SING_BOX" ]] || { echo 'sing-box is required for native macOS multihop' >&2; exit 1; }
 
 stop_owned() {
-  if [[ -f "$PID_FILE" ]]; then
-    local pid
-    pid=$(cat "$PID_FILE" 2>/dev/null || true)
-    if [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )); then
-      kill -INT "$pid" 2>/dev/null || true
-      for _ in 1 2 3 4 5 6 7 8 9 10; do
-        kill -0 "$pid" 2>/dev/null || break
-        sleep 0.1
-      done
-      kill -TERM "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-    fi
-    rm -f "$PID_FILE"
-  fi
+  local pid
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) || continue
+    kill -INT "$pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done < <(python3 "$PID_REGISTRY" verified-mode "$ROOT" "$PID_MODE" 2>/dev/null || true)
+  # Empty the owned registry atomically. If the registry path itself is unsafe,
+  # the helper refuses it; cleanup never guesses a process from raw PID text.
+  python3 "$PID_REGISTRY" init "$ROOT" "$PID_MODE" >/dev/null 2>&1 || true
 }
 
 release_guard() {
@@ -85,7 +87,13 @@ fi
 stop_owned
 "$SING_BOX" run -D "$RUNTIME_DIR" -c "$CONFIG" &
 child=$!
-printf '%s\n' "$child" > "$PID_FILE"
+if ! python3 "$PID_REGISTRY" record "$ROOT" "$PID_MODE" "$child"; then
+  kill -TERM "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+  child=''
+  echo 'could not prove ownership of native macOS multihop process' >&2
+  exit 1
+fi
 
 sleep 0.5
 if ! kill -0 "$child" 2>/dev/null; then
