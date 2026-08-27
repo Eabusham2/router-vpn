@@ -7,6 +7,7 @@ ENDPOINT=${3:-}
 TUNNEL_ALIAS=${4:-router-vpn-multihop}
 
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROFILE_ID=${HOMEVPN_PROFILE_ID:-}
 POLICY_PROFILE_ID=${HOMEVPN_POLICY_PROFILE_ID:-$PROFILE_ID}
 
@@ -14,22 +15,19 @@ POLICY_PROFILE_ID=${HOMEVPN_POLICY_PROFILE_ID:-$PROFILE_ID}
 [[ -n "$RUNTIME_DIR" ]] || { echo 'multihop runtime directory is required' >&2; exit 2; }
 [[ -n "$PROFILE_ID" && -n "$POLICY_PROFILE_ID" ]] || { echo 'HOMEVPN_PROFILE_ID and HOMEVPN_POLICY_PROFILE_ID are required' >&2; exit 2; }
 
-ROOT=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ROOT")
-RUNTIME_DIR=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$RUNTIME_DIR")
-RUN_ROOT=$(python3 -c 'import os,sys; print(os.path.realpath(os.path.join(sys.argv[1],"run")))' "$ROOT")
-case "$RUNTIME_DIR/" in
-  "$RUN_ROOT"/*) ;;
-  *) echo 'refusing multihop runtime outside HOMEVPN_ROOT/run' >&2; exit 2;;
-esac
+RUNTIME_DIR=$(HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" verify-dir "$RUNTIME_DIR") || {
+  echo 'refusing unsafe native macOS multihop runtime directory' >&2
+  exit 2
+}
 
 CONFIG="$RUNTIME_DIR/sing-box.json"
-PID_REGISTRY="$ROOT/modes/runtime-pids.py"
+PID_REGISTRY="$SCRIPT_DIR/runtime-pids.py"
 PID_MODE=native-multihop-darwin
-KILL_SWITCH="$ROOT/modes/kill-switch-platform.py"
+KILL_SWITCH="$SCRIPT_DIR/kill-switch-platform.py"
 SING_BOX=$(command -v sing-box || true)
 
-[[ -f "$CONFIG" ]] || { echo 'prepared multihop sing-box.json is missing' >&2; exit 1; }
-[[ -x "$KILL_SWITCH" || -f "$KILL_SWITCH" ]] || { echo 'macOS kill-switch dispatcher is missing' >&2; exit 1; }
+[[ -f "$CONFIG" && ! -L "$CONFIG" ]] || { echo 'prepared multihop sing-box.json is missing or unsafe' >&2; exit 1; }
+[[ -f "$KILL_SWITCH" && ! -L "$KILL_SWITCH" ]] || { echo 'macOS kill-switch dispatcher is missing or unsafe' >&2; exit 1; }
 [[ -f "$PID_REGISTRY" && ! -L "$PID_REGISTRY" ]] || { echo 'verified Router VPN PID registry is missing or unsafe' >&2; exit 1; }
 [[ -n "$SING_BOX" && -x "$SING_BOX" ]] || { echo 'sing-box is required for native macOS multihop' >&2; exit 1; }
 
@@ -59,7 +57,7 @@ cleanup() {
   trap - EXIT INT TERM HUP
   stop_owned
   release_guard
-  HOMEVPN_ROOT="$ROOT" python3 "$ROOT/modes/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
+  HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -79,7 +77,7 @@ HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_POLICY_PROFILE_ID=
 if [[ "$ACTION" == "check" ]]; then
   release_guard
   trap - EXIT INT TERM HUP
-  HOMEVPN_ROOT="$ROOT" python3 "$ROOT/modes/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
+  HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
   echo 'native macOS multihop graph ready'
   exit 0
 fi
