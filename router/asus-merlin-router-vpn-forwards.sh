@@ -22,6 +22,18 @@ if [ -L "$JFFS_DIR" ]; then
   printf 'ERROR: refusing symlinked Router VPN JFFS directory: %s\n' "$JFFS_DIR" >&2
   exit 1
 fi
+if [ -d "$JFFS_DIR" ]; then
+  JFFS_TEXT=${JFFS_DIR%/}
+  [ -n "$JFFS_TEXT" ] || JFFS_TEXT=/
+  JFFS_PHYSICAL=$(CDPATH= cd -- "$JFFS_DIR" 2>/dev/null && pwd -P) || {
+    printf 'ERROR: cannot resolve Router VPN JFFS directory safely: %s\n' "$JFFS_DIR" >&2
+    exit 1
+  }
+  if [ "$JFFS_PHYSICAL" != "$JFFS_TEXT" ]; then
+    printf 'ERROR: refusing Router VPN JFFS path with symlinked/non-canonical ancestors: %s -> %s\n' "$JFFS_DIR" "$JFFS_PHYSICAL" >&2
+    exit 1
+  fi
+fi
 if [ -L "$CONFIG" ]; then
   printf 'ERROR: refusing symlinked Router VPN forwarding config: %s\n' "$CONFIG" >&2
   exit 1
@@ -447,6 +459,7 @@ install(){
     cat "$SELF" > "$ACTIVE_TMP"
     commit_jffs_tmp "$RUNTIME" 755
   else
+    safe_jffs_file "$RUNTIME"
     chmod 755 "$RUNTIME"
   fi
   write_config
