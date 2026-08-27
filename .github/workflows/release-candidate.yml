@@ -147,11 +147,11 @@ jobs:
           if(-not $archive){throw "Missing Portable $arch package"}
           $extract=Join-Path $env:RUNNER_TEMP "portable-$arch"; Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue; Expand-Archive $archive $extract -Force
           $root=Get-ChildItem $extract -Directory|Select-Object -First 1; $exe=Join-Path $root.FullName 'RouterVPNPortable.exe'
-          $p=Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru; if($p.ExitCode-ne 0){throw "Portable self-test failed: $($p.ExitCode)"}
+          $p=Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru; if($p.ExitCode-ne 0){$diag=Join-Path $root.FullName 'Data\self-test-error.txt';$detail=if(Test-Path $diag){(Get-Content $diag -Raw).Trim()}else{'no diagnostic file'};throw "Portable self-test failed: $($p.ExitCode): $detail"}
           foreach($rel in @('Data\client.json','Data\routers.json','Data\modes.windows.json','Data\logical-modes.json','Data\windows-runtime.json')){if(-not(Test-Path(Join-Path $root.FullName $rel))){throw "Missing $rel"}}
           try{Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8788/api/status' -TimeoutSec 1|Out-Null;throw 'controller remained alive'}catch{if($_.Exception.Message-eq'controller remained alive'){throw}}
           $movedParent=Join-Path $env:RUNNER_TEMP "portable-moved-$arch"; New-Item -ItemType Directory -Force $movedParent|Out-Null; $moved=Join-Path $movedParent $root.Name; Move-Item $root.FullName $moved
-          $p2=Start-Process (Join-Path $moved 'RouterVPNPortable.exe') -ArgumentList '--self-test' -Wait -PassThru; if($p2.ExitCode-ne 0){throw 'Relocated Portable self-test failed'}
+          $p2=Start-Process (Join-Path $moved 'RouterVPNPortable.exe') -ArgumentList '--self-test' -Wait -PassThru; if($p2.ExitCode-ne 0){$diag=Join-Path $moved 'Data\self-test-error.txt';$detail=if(Test-Path $diag){(Get-Content $diag -Raw).Trim()}else{'no diagnostic file'};throw "Relocated Portable self-test failed: $($p2.ExitCode): $detail"}
       - name: Verify installed package native entrypoint
         shell: pwsh
         env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
