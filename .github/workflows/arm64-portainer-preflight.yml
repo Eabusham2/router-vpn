@@ -3,8 +3,6 @@ name: ARM64 Portainer preflight
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
