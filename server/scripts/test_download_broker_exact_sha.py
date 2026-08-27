@@ -70,6 +70,29 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
                 broker.fetch_direct_mobile("router-vpn-ios.ipa", Path(td))
             self.assertIn("ROUTER_VPN_GITHUB_SHA is required", str(caught.exception))
 
+    def test_mobile_binary_is_reverified_after_exact_sha_artifact_selection(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-broker-mobile-prov-test-") as td:
+            temp = Path(td)
+            selected = temp / "router-vpn-ios.ipa"
+            selected.write_bytes(b"synthetic-ipa")
+            with mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
+                 mock.patch.object(broker, "_fetch_first_artifact", return_value=selected), \
+                 mock.patch.object(broker._mobile_provenance, "verify") as verify:
+                got = broker.fetch_direct_mobile("router-vpn-ios.ipa", temp)
+            self.assertEqual(got, selected)
+            verify.assert_called_once_with("router-vpn-ios.ipa", selected, SHA, "Eabusham2/router-vpn")
+
+    def test_mobile_binary_provenance_failure_blocks_delivery(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-broker-mobile-prov-fail-") as td:
+            temp = Path(td)
+            selected = temp / "router-vpn-android.apk"
+            selected.write_bytes(b"synthetic-apk")
+            with mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
+                 mock.patch.object(broker, "_fetch_first_artifact", return_value=selected), \
+                 mock.patch.object(broker._mobile_provenance, "verify", side_effect=RuntimeError("mobile artifact source SHA mismatch")):
+                with self.assertRaisesRegex(RuntimeError, "same-SHA GitHub mobile artifact.*source SHA mismatch"):
+                    broker.fetch_direct_mobile("router-vpn-android.apk", temp)
+
 
 if __name__ == "__main__":
     unittest.main()
