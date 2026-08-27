@@ -68,7 +68,7 @@ func TestASUSProtectedJFFSScriptsAreNeverTargeted(t *testing.T) {
 		`grep -Fqx "$LINE" "$ACTIVE_TMP" 2>/dev/null || printf '%s\n' "$LINE" >> "$ACTIVE_TMP"`,
 		`awk -v runtime="$RUNTIME"`,
 		`commit_jffs_tmp "$FILE" 755`,
-		`LINE="$LINE || true"`,
+		`LINE="$2 || true"`,
 		`write_hook "$NAT_START" "$RUNTIME apply"`,
 		`write_hook "$FIREWALL_START" "$RUNTIME apply"`,
 		`TAG=ROUTER_VPN`,
