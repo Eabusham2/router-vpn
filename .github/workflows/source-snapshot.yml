@@ -27,10 +27,28 @@ jobs:
           set -euo pipefail
           archive="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.tar.gz"
           members="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.members.txt"
+          manifest="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.json"
           git archive --format=tar.gz --prefix="router-vpn-${GITHUB_SHA}/" -o "$archive" HEAD
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          [[ "$tree_sha" =~ ^[0-9a-f]{40}$ ]]
+          python3 - "$manifest" "$GITHUB_SHA" "$tree_sha" "$GITHUB_REPOSITORY" <<'PY'
+          import json, pathlib, re, sys
+          path, commit, tree, repo = sys.argv[1:]
+          if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[0-9a-f]{40}", tree):
+              raise SystemExit("invalid exact source snapshot identity")
+          pathlib.Path(path).write_text(json.dumps({
+              "schema_version": 1,
+              "repository": repo,
+              "source_sha": commit,
+              "tree_sha": tree,
+              "artifact_family": "exact-source-snapshot",
+          }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
           (cd "$RUNNER_TEMP" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
+          (cd "$RUNNER_TEMP" && sha256sum -c "$(basename "$archive").sha256")
           tar -tzf "$archive" > "$members"
           test -s "$members"
+          grep -Fxq "router-vpn-${GITHUB_SHA}/" "$members"
           head -n 5 "$members"
       - name: Upload exact source snapshot
         id: upload
@@ -40,6 +58,7 @@ jobs:
           path: |
             ${{ runner.temp }}/router-vpn-source-${{ github.sha }}.tar.gz
             ${{ runner.temp }}/router-vpn-source-${{ github.sha }}.tar.gz.sha256
+            ${{ runner.temp }}/router-vpn-source-${{ github.sha }}.json
           if-no-files-found: error
           retention-days: 1
       - name: Publish artifact pointer on exact commit
