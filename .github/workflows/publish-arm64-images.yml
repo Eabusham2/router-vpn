@@ -3,8 +3,6 @@ name: Publish ARM64 Portainer images
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -15,7 +13,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  validate-source:
+    name: Validate source before registry publication
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24.x', cache: false}
+      - name: Compile and syntax gates
+        run: |
+          set -euo pipefail
+          go test ./cmd/update-controller -count=1
+          find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
+          find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          python3 deploy/validate-repo.py
+          python3 deploy/durable-state-syntax-audit.py
+
   publish:
+    needs: validate-source
     name: Build and publish ARM64 images
     runs-on: ubuntu-24.04-arm
     strategy:
