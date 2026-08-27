@@ -48,7 +48,7 @@ verify_aar() {
   done
 
   unzip -p "$AAR" classes.jar >"$classes"
-  unzip -Z1 "$classes" >"$class_list"
+  jar tf "$classes" >"$class_list"
   grep -Fxq 'io/nekohasekai/libbox/RouterXrayDialerController.class' "$class_list" || {
     echo 'combined libbox AAR is missing RouterXrayDialerController' >&2
     return 1
@@ -91,6 +91,7 @@ command -v git >/dev/null || { echo 'git is required to build the pinned Android
 command -v go >/dev/null || { echo 'Go with toolchain download support is required' >&2; exit 1; }
 command -v java >/dev/null || { echo 'Java 17 is required to validate the combined AAR' >&2; exit 1; }
 command -v javap >/dev/null || { echo 'javap is required to validate the combined AAR API' >&2; exit 1; }
+command -v jar >/dev/null || { echo 'JDK jar tool is required to inspect the combined AAR classes' >&2; exit 1; }
 
 SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
