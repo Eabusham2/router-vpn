@@ -47,6 +47,8 @@ mobile_provenance_test_rel = "server/scripts/test_mobile_artifact_provenance.py"
 broker_exact_sha_test_rel = "server/scripts/test_download_broker_exact_sha.py"
 android_gradle_rel = "android/app/build.gradle"
 ios_project_rel = "ios/RouterVPN/project.yml"
+aggregate_provenance_rel = "deploy/verify-release-candidate-provenance.py"
+aggregate_provenance_test_rel = "deploy/test-release-candidate-provenance.py"
 rc = read(rc_rel)
 client = read(client_rel)
 mac = read(mac_rel)
@@ -65,6 +67,8 @@ mobile_provenance_test = read(mobile_provenance_test_rel)
 broker_exact_sha_test = read(broker_exact_sha_test_rel)
 android_gradle = read(android_gradle_rel)
 ios_project = read(ios_project_rel)
+aggregate_provenance = read(aggregate_provenance_rel)
+aggregate_provenance_test = read(aggregate_provenance_test_rel)
 
 
 # A workflow name/head SHA is not enough after an artifact has been downloaded or
@@ -144,6 +148,22 @@ for rel, body in ((rc_rel, rc), (client_rel, client)):
 require(rc, rc_rel,
         "python3 server/scripts/test_mobile_artifact_provenance.py",
         "python3 server/scripts/test_download_broker_exact_sha.py")
+require(aggregate_provenance, aggregate_provenance_rel,
+        "RouterVPN-Windows-amd64.zip",
+        "RouterVPN-Portable-Windows-arm64.zip",
+        "RouterVPN-darwin-arm64.tar.gz",
+        "RouterVPN-linux-arm64.tar.gz",
+        "app-debug.apk",
+        "RouterVPN-native-unsigned-resignable.ipa",
+        "release candidate embedded provenance")
+require(aggregate_provenance_test, aggregate_provenance_test_rel,
+        "one_exact_sha_tree_passes",
+        "one_wrong_package_sha_fails_whole_tree",
+        "duplicate_expected_package_fails",
+        "duplicate_embedded_manifest_fails")
+require(rc, rc_rel,
+        "python3 deploy/test-release-candidate-provenance.py",
+        'python3 deploy/verify-release-candidate-provenance.py dist/release-candidate --sha "$GITHUB_SHA"')
 
 # Every workflow that assembles the full Android APK also executes native AAR
 # build tasks; all of them must pin the exact Go toolchain required by libbox.
