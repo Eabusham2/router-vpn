@@ -92,7 +92,7 @@ need(".github/workflows/multihop-contract.yml","go test ./cmd/client ./internal/
 
 # Linux strict/persistent kill switch, including multihop-aware physical-entry policy.
 need("modes/kill-switch.py","policy drop",'action == "reassert"',"current profile policy is no longer always","use force-off recovery locally","HOMEVPN_POLICY_PROFILE_ID","policy_profile_id","physical entry")
-need("modes/test_kill_switch.py","router-vpn-killswitch-reassert-","router-vpn-killswitch-multihop-","cannot read routers.json")
+need("modes/test_kill_switch.py","router-vpn-killswitch-reassert-","router-vpn-killswitch-multihop-","cannot safely read routers.json")
 need("client/install-linux.sh","nftables","Before=network-pre.target","RequiredBy=network-pre.target","kill-switch.py reassert","router-vpn-killswitch-recovery","force-off")
 
 # Android: real raw WG/AWG, embedded libbox AUTO/SMART/CUSTOM, and narrow WG->SS/Hysteria2 multihop.
@@ -122,7 +122,7 @@ need("android/test_android_multihop_contract.py","android multihop source contra
 need("client/native-wireguard-windows.ps1","WireGuard\\wireguard.exe","/installtunnelservice","/uninstalltunnelservice","Is-Administrator","Unsafe WireGuard profile path","will not fake native readiness through WSL","windows-kill-switch.ps1","Invoke-KillSwitch 'prepare'","Invoke-KillSwitch 'release'")
 need("client/native-windows-mode.ps1","sing-box.exe","xray.exe","hysteria2","shadowsocks","reality-vision","reality-pq-vision","split","max","Patch-SingBox","Get-SelectedProfile","fastest_dns_host","hijack-dns","HOMEVPN_JUMBO","9000","Write-Utf8NoBom","Native Windows TUN modes require an elevated Router VPN process","windows-kill-switch.ps1","Invoke-KillSwitch 'prepare'","Invoke-KillSwitch 'release'","Get-TunAlias")
 need("client/windows-kill-switch.ps1","Get-NetFirewallProfile -PolicyStore ActiveStore","Set-NetFirewallProfile","DefaultOutboundAction Block","New-NetFirewallRule","Remove-NetFirewallRule","original_profiles","ProgramData","Router VPN Kill Switch","InterfaceAlias","on-connect","always","force-off","literal IPv4/IPv6")
-need("client/test-windows-kill-switch.ps1","plan/rollback contract","hostname endpoint was accepted","default_outbound")
+need("client/test-windows-kill-switch.ps1","plan/rollback/private-state contract","hostname endpoint was accepted","default_outbound")
 kill=read("client/windows-kill-switch.ps1")
 if "Action='Block'" in kill or "Action = 'Block'" in kill:errors.append("Windows kill switch uses an explicit block-all rule; narrow allow rules may be overridden")
 need("client/Setup-Windows-Runtime.ps1","1.13.12","26.7.11","SHA-256 mismatch","e93fc531134eb1beb4efa3c74990a24e48456098a31c03b60d5ddf17f223cf98","af801b62c4d41d248d3db8016d4c6e2a7ccfb7ed443e3738aeb6f9e062321512")
