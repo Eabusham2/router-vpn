@@ -102,6 +102,7 @@ require(
     "modes/runtime-pids.py",
     "process_start",
     "process_command_hash(pid) == expected_command",
+    "def verified_mode",
     "command_sha256",
     "runtime PID registry changed during open",
     "runtime PID target changed before adoption",
@@ -110,6 +111,8 @@ require(
     "modes/test_runtime_pids.py",
     "wrong-start-token",
     "wrong_command",
+    "verified_mode",
+    "native-multihop-darwin.sh",
     "runtime PID registry followed a symlink target",
     "run-combined.sh",
     "raw numeric .pids files",
@@ -117,6 +120,14 @@ require(
 for rel in ("modes/run-mode.sh", "modes/run-max.sh", "modes/run-pq.sh", "modes/run-xhttp.sh", "modes/run-combined.sh"):
     require(rel, 'runtime-pids.py" init', 'runtime-pids.py" record')
     forbid(rel, ': >"$RUN/$MODE.pids"', 'echo $! >>"$RUN/$MODE.pids"')
+
+require(
+    "modes/native-multihop-darwin.sh",
+    'verified-mode "$ROOT" "$PID_MODE"',
+    'record "$ROOT" "$PID_MODE" "$child"',
+    "could not prove ownership of native macOS multihop process",
+)
+forbid("modes/native-multihop-darwin.sh", "native-multihop.pid", "PID_FILE")
 
 # Per-session runtime config adoption must bind the exact target identity:
 # a foreign regular file appearing/replacing the target after staging is not
