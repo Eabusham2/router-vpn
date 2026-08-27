@@ -6,6 +6,9 @@ param(
 )
 
 $ErrorActionPreference='Stop'
+$PrivateState=Join-Path $PSScriptRoot 'Private-RouterVPN-State.ps1'
+if(-not(Test-Path -LiteralPath $PrivateState -PathType Leaf)){throw 'Router VPN private-state helper is missing.'}
+. $PrivateState
 
 function Test-Administrator {
   $id=[Security.Principal.WindowsIdentity]::GetCurrent()
@@ -13,29 +16,20 @@ function Test-Administrator {
   return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-$Root=[IO.Path]::GetFullPath([string]$env:HOMEVPN_ROOT)
-if([string]::IsNullOrWhiteSpace($Root)){throw 'HOMEVPN_ROOT is required.'}
-$RuntimeDir=[IO.Path]::GetFullPath($RuntimeDir)
-$RunRoot=[IO.Path]::GetFullPath((Join-Path $Root 'run'))
+$Root=Resolve-RouterVPNPrivateRoot ([string]$env:HOMEVPN_ROOT)
+$RuntimeDir=Resolve-RouterVPNPrivateChild $Root $RuntimeDir
+$RunRoot=Resolve-RouterVPNPrivateChild $Root 'run'
 if(-not $RuntimeDir.StartsWith($RunRoot.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Refusing OpenVPN runtime outside HOMEVPN_ROOT\run.'}
 $Config=Join-Path $RuntimeDir 'client.ovpn'
 $BridgeConfig=Join-Path $RuntimeDir 'entry-bridge.json'
-$OpenVPNPid=Join-Path $RuntimeDir 'openvpn-windows.pid'
-$BridgePid=Join-Path $RuntimeDir 'openvpn-entry-bridge.pid'
+$OpenVPNPid=Join-Path $RuntimeDir 'openvpn-windows.process.json'
+$BridgePid=Join-Path $RuntimeDir 'openvpn-entry-bridge.process.json'
 $KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 $SingBox=Join-Path $Root 'runtime\windows\sing-box.exe'
 
-function Stop-PidFile([string]$Path) {
-  if(-not(Test-Path -LiteralPath $Path -PathType Leaf)){return}
-  $n=0
-  if([int]::TryParse((Get-Content -Raw -LiteralPath $Path).Trim(),[ref]$n)-and$n-gt 0){
-    Stop-Process -Id $n -Force -ErrorAction SilentlyContinue
-  }
-  Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-}
 function Stop-Owned {
-  Stop-PidFile $OpenVPNPid
-  Stop-PidFile $BridgePid
+  [void](Stop-RouterVPNRecordedProcess $OpenVPNPid)
+  [void](Stop-RouterVPNRecordedProcess $BridgePid)
 }
 function Remove-PrivateRuntime {
   if(Test-Path -LiteralPath $RuntimeDir){[IO.Directory]::Delete($RuntimeDir,$true)}
@@ -83,6 +77,9 @@ if($Action-eq'down'){
   exit 0
 }
 if(-not(Test-Administrator)){throw 'Native Windows OpenVPN requires an elevated Router VPN process.'}
+Assert-RouterVPNNoReparseAncestors $Config
+Assert-RouterVPNNoReparseAncestors $OpenVPNBin
+Assert-RouterVPNNoReparseAncestors $KillSwitch
 if(-not(Test-Path -LiteralPath $Config -PathType Leaf)){throw 'Prepared OpenVPN client.ovpn is missing.'}
 if(-not(Test-Path -LiteralPath $OpenVPNBin -PathType Leaf)){throw 'OpenVPN 2.7 executable is missing.'}
 if(-not(Test-Path -LiteralPath $KillSwitch -PathType Leaf)){throw 'Windows kill-switch helper is missing.'}
@@ -107,14 +104,14 @@ try{
   if(Test-Path -LiteralPath $BridgeConfig -PathType Leaf){
     $quotedBridge='"'+$BridgeConfig+'"'
     $bridge=Start-Process -FilePath $SingBox -ArgumentList @('run','-D',$RuntimeDir,'-c',$quotedBridge)-WorkingDirectory $RuntimeDir -PassThru -WindowStyle Hidden
-    Set-Content -LiteralPath $BridgePid -Encoding ASCII -Value $bridge.Id
+    Write-RouterVPNProcessRecord $BridgePid $bridge
     Wait-LoopbackPort 1100
     if($bridge.HasExited){throw 'External-entry bridge exited during Windows OpenVPN startup.'}
   }
 
   $quotedConfig='"'+$Config+'"'
   $openvpn=Start-Process -FilePath $OpenVPNBin -ArgumentList @('--config',$quotedConfig)-WorkingDirectory $RuntimeDir -PassThru -WindowStyle Hidden
-  Set-Content -LiteralPath $OpenVPNPid -Encoding ASCII -Value $openvpn.Id
+  Write-RouterVPNProcessRecord $OpenVPNPid $openvpn
   Start-Sleep -Milliseconds 300
   if($openvpn.HasExited){throw 'OpenVPN exited during native Windows startup.'}
 
