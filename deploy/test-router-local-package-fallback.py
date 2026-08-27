@@ -109,7 +109,6 @@ def main() -> int:
         assert_blank_store(portable / "Data/routers.json")
         builder.assert_generic_tree(portable)
 
-
         # A GitHub package is accepted only when its embedded source manifest
         # proves the exact expected commit and package family.
         prov_root = td / "provenance-package"
@@ -150,7 +149,8 @@ def main() -> int:
             assert "family mismatch" in str(exc)
         else:
             raise AssertionError("GitHub package with wrong embedded family was accepted")
-\n        for request, platform in (
+
+        for request, platform in (
             ("router-vpn-macos-arm64.zip", "AppKit"),
             ("router-vpn-linux-arm64.zip", "GTK"),
         ):
