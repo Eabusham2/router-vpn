@@ -118,6 +118,21 @@ for rel in ("modes/run-mode.sh", "modes/run-max.sh", "modes/run-pq.sh", "modes/r
     require(rel, 'runtime-pids.py" init', 'runtime-pids.py" record')
     forbid(rel, ': >"$RUN/$MODE.pids"', 'echo $! >>"$RUN/$MODE.pids"')
 
+# Per-session runtime config adoption must bind the exact target identity:
+# a foreign regular file appearing/replacing the target after staging is not
+# Router VPN state and must never be overwritten.
+require(
+    "modes/runtime-config.py",
+    "runtime config target appeared before adoption",
+    "runtime config target identity changed before adoption",
+    "os.path.samestat(current, target)",
+)
+require(
+    "modes/test_runtime_config.py",
+    "runtime config replacement race was accepted",
+    "foreign-replacement",
+)
+
 # Persistent Linux kill-switch state is authoritative recovery policy. Corrupt or
 # redirected state must fail closed instead of being interpreted as "off".
 require(
@@ -431,6 +446,7 @@ for test in (
     "server/scripts/test_node_proof_private_state.py",
     "server/scripts/test_preserve_generated_state.py",
     "modes/test_runtime_pids.py",
+    "modes/test_runtime_config.py",
     "modes/test_prepare_runtime_profile.py",
 ):
     run_test(test)
