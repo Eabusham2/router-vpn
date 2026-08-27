@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from unittest import mock
 
 import source_provenance as prov
 
@@ -44,6 +45,29 @@ def main() -> int:
         else:
             raise AssertionError("short source SHA was accepted")
 
+        # Missing repository metadata must not silently fall back to the default
+        # repository merely because the verifier itself knows the default.
+        path.write_text(json.dumps({
+            "schema_version": 1,
+            "source_sha": OLD,
+            "artifact_family": "windows-amd64",
+        }) + "\n")
+        try:
+            prov.read_manifest(root)
+        except RuntimeError as exc:
+            assert "repository" in str(exc)
+        else:
+            raise AssertionError("missing source repository was silently defaulted")
+
+        prov.write_manifest(root, OLD, "windows-amd64")
+        with mock.patch.object(prov.os.path, "samestat", return_value=False):
+            try:
+                prov.read_manifest(root)
+            except RuntimeError as exc:
+                assert "changed during open" in str(exc)
+            else:
+                raise AssertionError("source provenance replacement race was accepted")
+
     if os.name != "nt":
         with tempfile.TemporaryDirectory(prefix="router-vpn-source-provenance-link-") as td:
             root = Path(td)
@@ -58,6 +82,20 @@ def main() -> int:
             else:
                 raise AssertionError("source provenance writer followed a symlink target")
             assert outside.read_text() == "keep\n"
+
+        with tempfile.TemporaryDirectory(prefix="router-vpn-source-provenance-root-link-") as td:
+            base = Path(td)
+            real = base / "real-root"
+            real.mkdir()
+            linked = base / "linked-root"
+            linked.symlink_to(real, target_is_directory=True)
+            try:
+                prov.write_manifest(linked, OLD, "windows-amd64")
+            except RuntimeError as exc:
+                assert "symlink" in str(exc)
+            else:
+                raise AssertionError("source provenance writer accepted a symlink package root")
+            assert not list(real.iterdir())
 
     print("Exact source package provenance tests: OK")
     return 0
