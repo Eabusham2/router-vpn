@@ -7,7 +7,7 @@ import secrets
 import stat
 import sys
 
-ALLOWED_ROOTS = {"multihop", "native-multihop"}
+ALLOWED_ROOTS = {"multihop", "native-multihop", "native-standard-exit", "openvpn-standard-exit"}
 DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
