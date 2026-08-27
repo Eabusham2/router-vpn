@@ -107,7 +107,12 @@ def main() -> int:
                 raise AssertionError("runtime staging followed a symlink run directory")
             assert not list(outside.iterdir())
 
-    print("Transactional runtime profile staging tests: OK")
+
+    combined = (HERE / "run-combined.sh").read_text(encoding="utf-8")
+    assert 'prepare-runtime-profile.py" "$ROOT" "$PROFILE_ID" "$MODE" "$ENDPOINT"' in combined
+    assert 'cp -a "$SOURCE" "$CONF"' not in combined
+    assert 'for p in root.glob(\'*.json\')' not in combined
+\n    print("Transactional runtime profile staging tests: OK")
     return 0
 
 
