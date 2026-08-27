@@ -14,6 +14,7 @@ SCHEMA_VERSION = 1
 MANIFEST = "ROUTER-VPN-SOURCE.json"
 MAX_MANIFEST = 64 << 10
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 def normalize_sha(value: str) -> str:
@@ -47,11 +48,29 @@ def resolve_sha(explicit: str = "", root: Path | None = None) -> str:
     raise RuntimeError("source provenance SHA is unavailable; set GITHUB_SHA or ROUTER_VPN_GITHUB_SHA")
 
 
-def resolve_repo(explicit: str = "") -> str:
-    repo = str(explicit or os.environ.get("ROUTER_VPN_GITHUB_REPO", "") or os.environ.get("GITHUB_REPOSITORY", "") or "Eabusham2/router-vpn").strip()
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+def validate_repo(value: str) -> str:
+    repo = str(value or "").strip()
+    if not repo or not REPO_RE.fullmatch(repo):
         raise RuntimeError("invalid source provenance repository")
     return repo
+
+
+def resolve_repo(explicit: str = "") -> str:
+    repo = str(
+        explicit
+        or os.environ.get("ROUTER_VPN_GITHUB_REPO", "")
+        or os.environ.get("GITHUB_REPOSITORY", "")
+        or "Eabusham2/router-vpn"
+    ).strip()
+    return validate_repo(repo)
+
+
+def _regular_root(root: Path) -> Path:
+    root = Path(os.path.abspath(root))
+    info = root.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing non-directory/symlink source provenance root: {root}")
+    return root
 
 
 def _safe_existing(path: Path) -> None:
@@ -64,9 +83,7 @@ def _safe_existing(path: Path) -> None:
 
 
 def write_manifest(root: Path, sha: str, family: str, repo: str = "") -> Path:
-    root = root.resolve(strict=True)
-    if not root.is_dir():
-        raise RuntimeError("source provenance root is not a directory")
+    root = _regular_root(root)
     sha = normalize_sha(sha)
     repo = resolve_repo(repo)
     family = str(family or "").strip()
@@ -89,6 +106,12 @@ def write_manifest(root: Path, sha: str, family: str, repo: str = "") -> Path:
             stream.write(body)
             stream.flush()
             os.fsync(stream.fileno())
+        # Re-prove the root and leaf immediately before adoption. A build path
+        # redirected after staging must not receive a trusted provenance file.
+        current_root = root.lstat()
+        if stat.S_ISLNK(current_root.st_mode) or not stat.S_ISDIR(current_root.st_mode):
+            raise RuntimeError("source provenance root changed before adoption")
+        _safe_existing(path)
         os.replace(tmp, path)
         committed = True
         try:
@@ -105,26 +128,50 @@ def write_manifest(root: Path, sha: str, family: str, repo: str = "") -> Path:
     return path
 
 
-def read_manifest(root: Path) -> dict:
-    root = root.resolve(strict=True)
+def _read_manifest_bytes(root: Path) -> bytes:
+    root = _regular_root(root)
     path = root / MANIFEST
-    info = path.lstat()
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise RuntimeError("source provenance manifest is not a regular file")
-    if info.st_size <= 0 or info.st_size > MAX_MANIFEST:
+    if before.st_size <= 0 or before.st_size > MAX_MANIFEST:
         raise RuntimeError("source provenance manifest size is invalid")
-    data = json.loads(path.read_text(encoding="utf-8"))
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(opened, current)
+        ):
+            raise RuntimeError("source provenance manifest changed during open")
+        body = os.read(fd, MAX_MANIFEST + 1)
+    finally:
+        os.close(fd)
+    if not body or len(body) > MAX_MANIFEST:
+        raise RuntimeError("source provenance manifest size is invalid")
+    return body
+
+
+def read_manifest(root: Path) -> dict:
+    try:
+        data = json.loads(_read_manifest_bytes(root).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("source provenance manifest JSON is invalid") from exc
     if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
         raise RuntimeError("source provenance manifest schema is invalid")
     data["source_sha"] = normalize_sha(str(data.get("source_sha") or ""))
-    resolve_repo(str(data.get("repository") or ""))
-    family = str(data.get("artifact_family") or "")
+    data["repository"] = validate_repo(str(data.get("repository") or ""))
+    family = str(data.get("artifact_family") or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", family):
         raise RuntimeError("source provenance artifact family is invalid")
+    data["artifact_family"] = family
     return data
 
 
-def verify_manifest(root: Path, expected_sha: str, expected_family: str = "") -> dict:
+def verify_manifest(root: Path, expected_sha: str, expected_family: str = "", expected_repo: str = "") -> dict:
     data = read_manifest(root)
     expected_sha = normalize_sha(expected_sha)
     if data["source_sha"] != expected_sha:
@@ -135,6 +182,12 @@ def verify_manifest(root: Path, expected_sha: str, expected_family: str = "") ->
         raise RuntimeError(
             f"source provenance family mismatch: package={data.get('artifact_family')} expected={expected_family}"
         )
+    if expected_repo:
+        repo = validate_repo(expected_repo)
+        if data.get("repository") != repo:
+            raise RuntimeError(
+                f"source provenance repository mismatch: package={data.get('repository')} expected={repo}"
+            )
     return data
 
 
@@ -149,7 +202,7 @@ def main() -> int:
     root = Path(args.root)
     sha = resolve_sha(args.sha, root)
     if args.verify:
-        verify_manifest(root, sha, args.family)
+        verify_manifest(root, sha, args.family, args.repo)
     else:
         write_manifest(root, sha, args.family, args.repo)
     return 0
