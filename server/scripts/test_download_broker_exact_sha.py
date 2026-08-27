@@ -76,7 +76,7 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
             selected = temp / "router-vpn-ios.ipa"
             selected.write_bytes(b"synthetic-ipa")
             with mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
-                 mock.patch.object(broker, "_fetch_first_artifact", return_value=selected), \
+                 mock.patch.object(broker, "fetch_artifact_member", return_value=selected), \
                  mock.patch.object(broker._mobile_provenance, "verify") as verify:
                 got = broker.fetch_direct_mobile("router-vpn-ios.ipa", temp)
             self.assertEqual(got, selected)
@@ -88,10 +88,36 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
             selected = temp / "router-vpn-android.apk"
             selected.write_bytes(b"synthetic-apk")
             with mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
-                 mock.patch.object(broker, "_fetch_first_artifact", return_value=selected), \
+                 mock.patch.object(broker, "fetch_artifact_member", return_value=selected), \
                  mock.patch.object(broker._mobile_provenance, "verify", side_effect=RuntimeError("mobile artifact source SHA mismatch")):
                 with self.assertRaisesRegex(RuntimeError, "same-SHA GitHub mobile artifact.*source SHA mismatch"):
                     broker.fetch_direct_mobile("router-vpn-android.apk", temp)
+            self.assertFalse(selected.exists(), "rejected mobile artifact survived provenance failure")
+
+    def test_corrupt_preferred_mobile_artifact_falls_through_to_second_same_sha_source(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-broker-mobile-prov-fallback-") as td:
+            temp = Path(td)
+            selected = temp / "router-vpn-ios.ipa"
+            calls = []
+
+            def fetch(artifact_name, wanted, root, output_name, progress=None):
+                calls.append(artifact_name)
+                selected.write_bytes(("candidate-" + artifact_name).encode())
+                return selected
+
+            def verify(name, path, sha, repo):
+                if len(calls) == 1:
+                    raise RuntimeError("preferred artifact has wrong embedded source")
+                self.assertEqual((name, sha, repo), ("router-vpn-ios.ipa", SHA, "Eabusham2/router-vpn"))
+                self.assertTrue(path.is_file())
+
+            with mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
+                 mock.patch.object(broker, "fetch_artifact_member", side_effect=fetch), \
+                 mock.patch.object(broker._mobile_provenance, "verify", side_effect=verify):
+                got = broker.fetch_direct_mobile("router-vpn-ios.ipa", temp)
+            self.assertEqual(got, selected)
+            self.assertEqual(calls, ["RouterVPN-iOS-release-candidate", "RouterVPN-iOS-Native-CI"])
+            self.assertIn(b"RouterVPN-iOS-Native-CI", selected.read_bytes())
 
 
 if __name__ == "__main__":
