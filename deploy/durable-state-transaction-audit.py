@@ -80,6 +80,20 @@ require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSym
 # restore earlier files if a later adoption fails.
 require("cmd/client/mtu_retest.go", "mtuRetestSnapshot", "rollbackMTULiveResult", "restoreMTUMeasurementFields")
 require("cmd/client/mtu_retest_test.go", "stale", "rollback")
+require(
+    "modes/prepare-runtime-profile.py",
+    "runtime profile file changed during open",
+    "runtime profile source contains symlink",
+    "failed runtime tree adoption did not restore prior tree",
+)
+require(
+    "modes/test_prepare_runtime_profile.py",
+    "runtime profile staging followed a source symlink",
+    "runtime staging followed a symlink run directory",
+    "run-combined.sh",
+)
+require("modes/run-combined.sh", "prepare-runtime-profile.py", "runtime-pids.py")
+forbid("modes/run-combined.sh", 'cp -a "$SOURCE" "$CONF"', "for p in root.glob('*.json')")
 
 # Background process ownership is recovery state too. Every launcher that starts
 # long-lived children must use the verified PID registry (PID + process-start
@@ -415,6 +429,7 @@ for test in (
     "server/scripts/test_node_proof_private_state.py",
     "server/scripts/test_preserve_generated_state.py",
     "modes/test_runtime_pids.py",
+    "modes/test_prepare_runtime_profile.py",
 ):
     run_test(test)
 
