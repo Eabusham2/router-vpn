@@ -36,6 +36,12 @@ linux_rel = ".github/workflows/linux-native-app.yml"
 diag_rel = ".github/workflows/android-diagnostic.yml"
 combined_rel = ".github/workflows/android-combined-runtime.yml"
 package_rel = "deploy/package-builds.sh"
+mac_package_rel = "deploy/package-macos-native.sh"
+linux_package_rel = "deploy/package-linux-native.sh"
+broker_builder_rel = "server/scripts/build-download-on-demand.py"
+provenance_rel = "deploy/source_provenance.py"
+provenance_test_rel = "deploy/test_source_provenance.py"
+local_fallback_test_rel = "deploy/test-router-local-package-fallback.py"
 rc = read(rc_rel)
 client = read(client_rel)
 mac = read(mac_rel)
@@ -43,6 +49,50 @@ linux = read(linux_rel)
 diag = read(diag_rel)
 combined = read(combined_rel)
 package_builds = read(package_rel)
+mac_package = read(mac_package_rel)
+linux_package = read(linux_package_rel)
+broker_builder = read(broker_builder_rel)
+provenance = read(provenance_rel)
+provenance_test = read(provenance_test_rel)
+local_fallback_test = read(local_fallback_test_rel)
+
+
+# A workflow name/head SHA is not enough after an artifact has been downloaded or
+# repacked. Every desktop/native archive carries a self-describing full source
+# SHA and the authenticated broker re-verifies it against the deployed exact SHA.
+require(provenance, provenance_rel,
+        "ROUTER-VPN-SOURCE.json",
+        "source provenance requires one full 40-character Git commit SHA",
+        "os.path.samestat(opened, current)",
+        "source provenance mismatch",
+        "source provenance repository mismatch")
+require(provenance_test, provenance_test_rel,
+        "wrong exact source SHA was accepted",
+        "missing source repository was silently defaulted",
+        "source provenance replacement race was accepted",
+        "symlink package root")
+require(package_builds, package_rel,
+        "source_provenance.py",
+        "write_provenance",
+        "windows-$arch",
+        "windows-portable-$arch")
+require(mac_package, mac_package_rel,
+        "source_provenance.py",
+        'macos-$arch',
+        "ROUTER-VPN-SOURCE.json")
+require(linux_package, linux_package_rel,
+        "source_provenance.py",
+        'linux-$ARCH',
+        "ROUTER-VPN-SOURCE.json")
+require(broker_builder, broker_builder_rel,
+        "_provenance.verify_manifest",
+        "provenance_family",
+        "expected_sha",
+        "expected_family")
+require(local_fallback_test, local_fallback_test_rel,
+        "wrong embedded source SHA was accepted",
+        "wrong embedded family was accepted")
+require(rc, rc_rel, "python3 deploy/test_source_provenance.py")
 
 # Every workflow that assembles the full Android APK also executes native AAR
 # build tasks; all of them must pin the exact Go toolchain required by libbox.
