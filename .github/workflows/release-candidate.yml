@@ -225,7 +225,7 @@ jobs:
         working-directory: ios/RouterVPN
         run: |
           xcodegen generate
-          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" build
+          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" build
       - name: Verify pinned engines and package IPA
         working-directory: ios/RouterVPN
         run: |
