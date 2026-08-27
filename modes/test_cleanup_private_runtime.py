@@ -23,9 +23,16 @@ def main() -> int:
         nested = owned / "nested"
         nested.mkdir()
         (nested / "state").write_text("private\n", encoding="utf-8")
+        assert CLEAN.verify_directory(str(root), str(owned)) == owned
         CLEAN.cleanup(str(root), str(owned))
         assert not owned.exists()
         assert not list(run.glob(".router-vpn-cleanup-*"))
+
+        session = run / "native-multihop" / "session-1"
+        session.mkdir(parents=True)
+        assert CLEAN.verify_directory(str(root), str(session)) == session
+        CLEAN.cleanup(str(root), str(session))
+        assert not session.exists()
 
         # First launch with no run directory is an intentional no-op.
         fresh = root / "fresh"
@@ -60,6 +67,12 @@ def main() -> int:
             (outside / "keep").write_text("keep\n", encoding="utf-8")
             owned = run / "multihop"
             owned.symlink_to(outside, target_is_directory=True)
+            try:
+                CLEAN.verify_directory(str(root), str(owned))
+            except RuntimeError as exc:
+                assert "symlink" in str(exc)
+            else:
+                raise AssertionError("runtime execution validator followed an owned symlink leaf")
             CLEAN.cleanup(str(root), str(owned))
             assert not owned.exists(), "owned symlink leaf survived cleanup"
             assert (outside / "keep").read_text(encoding="utf-8") == "keep\n"
@@ -92,6 +105,11 @@ def main() -> int:
             else:
                 raise AssertionError("cleanup followed a symlinked run directory")
             assert (outside / "keep").read_text(encoding="utf-8") == "keep\n"
+
+    native = (HERE / "native-multihop-darwin.sh").read_text(encoding="utf-8")
+    assert 'cleanup-private-runtime.py" verify-dir' in native
+    assert "os.path.realpath" not in native
+    assert '[[ -f "$CONFIG" && ! -L "$CONFIG" ]]' in native
 
     print("Private runtime no-follow cleanup tests: OK")
     return 0
