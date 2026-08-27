@@ -136,6 +136,32 @@ func TestUpdaterRequiresCompleteExactSHAReleaseWorkflowSet(t *testing.T) {
 	}
 }
 
+func TestNewestMeaningfulWorkflowEvidenceControlsVerification(t *testing.T) {
+	base := []workflowRun{{ID: 10, HeadSHA: testNewSHA, HeadBranch: "main", Status: "completed", Conclusion: "success"}}
+	if !newestMeaningfulWorkflowSuccess(base, testNewSHA, "main") {
+		t.Fatal("single successful exact-SHA workflow was not accepted")
+	}
+	failedNewer := append(append([]workflowRun{}, base...), workflowRun{ID: 11, HeadSHA: testNewSHA, HeadBranch: "main", Status: "completed", Conclusion: "failure"})
+	if newestMeaningfulWorkflowSuccess(failedNewer, testNewSHA, "main") {
+		t.Fatal("older green workflow survived a newer failed rerun")
+	}
+	pendingNewer := append(append([]workflowRun{}, base...), workflowRun{ID: 12, HeadSHA: testNewSHA, HeadBranch: "main", Status: "in_progress", Conclusion: ""})
+	if newestMeaningfulWorkflowSuccess(pendingNewer, testNewSHA, "main") {
+		t.Fatal("older green workflow was accepted while a newer rerun was unsettled")
+	}
+	cancelledNewer := append(append([]workflowRun{}, base...), workflowRun{ID: 13, HeadSHA: testNewSHA, HeadBranch: "main", Status: "completed", Conclusion: "cancelled"})
+	if !newestMeaningfulWorkflowSuccess(cancelledNewer, testNewSHA, "main") {
+		t.Fatal("neutral cancelled duplicate erased prior successful evidence")
+	}
+	wrongIdentity := []workflowRun{
+		{ID: 20, HeadSHA: testOldSHA, HeadBranch: "main", Status: "completed", Conclusion: "success"},
+		{ID: 21, HeadSHA: testNewSHA, HeadBranch: "other", Status: "completed", Conclusion: "success"},
+	}
+	if newestMeaningfulWorkflowSuccess(wrongIdentity, testNewSHA, "main") {
+		t.Fatal("wrong SHA/branch workflow evidence was accepted")
+	}
+}
+
 
 func TestOwnedImageProofRejectsMissingDuplicatedAndUnknownRepos(t *testing.T) {
 	missingAgent := strings.Replace(testTemplate(), "router-vpn-agent:"+testOldSHA, "router-vpn-init:"+testOldSHA, 1)
