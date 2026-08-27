@@ -249,6 +249,21 @@ forbid(
     "router-vpn-dns.pid",
     "Stop-Process -Id $pidValue",
 )
+
+# The Windows tray holds only an in-memory identity for the WPF UI process, but
+# it must bind PID + start time + executable before any restore/close/fallback
+# stop action. A recycled PID is treated as the UI having exited.
+require(
+    "client/RouterVPN-Windows-Tray.ps1",
+    "Get-RouterVPNProcessIdentity",
+    "start_time_utc_ticks",
+    "executable_path",
+    "Stop-Process -InputObject $ownedUi",
+)
+forbid(
+    "client/RouterVPN-Windows-Tray.ps1",
+    "Stop-Process -Id $UiPid",
+)
 for rel in (
     "client/native-windows-mode.ps1",
     "client/native-wireguard-windows.ps1",
