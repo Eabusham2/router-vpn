@@ -262,6 +262,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM='' \
             ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" \
+            INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" \
             build 2>&1 | tee "$LOG"
           status=${PIPESTATUS[0]}
           set -e
