@@ -48,9 +48,16 @@ verify_aar() {
   done
 
   unzip -p "$AAR" classes.jar >"$classes"
-  jar tf "$classes" >"$class_list"
+  unzip -Z1 "$classes" >"$class_list"
   grep -Fxq 'io/nekohasekai/libbox/RouterXrayDialerController.class' "$class_list" || {
     echo 'combined libbox AAR is missing RouterXrayDialerController' >&2
+    return 1
+  }
+  # Prove the generated Java binding is the expected socket-protection
+  # interface rather than accepting a same-named class by filename alone.
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterXrayDialerController >"$tmp/router-xray-controller.javap"
+  grep -Fq 'boolean protectFd(long);' "$tmp/router-xray-controller.javap" || {
+    echo 'combined libbox AAR RouterXrayDialerController has the wrong API' >&2
     return 1
   }
 
