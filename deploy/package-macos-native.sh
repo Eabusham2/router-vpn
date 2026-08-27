@@ -97,12 +97,14 @@ TXT
 
   codesign --verify --deep --strict --verbose=2 "$dir/RouterVPN.app"
   codesign -dv --verbose=2 "$dir/RouterVPN.app" 2>&1 | grep -Eq 'Signature=adhoc|Authority=Developer ID Application'
+  python3 "$ROOT/deploy/source_provenance.py" "$dir" --family "macos-$arch"
 
   tar -C "$WORK" -czf "$OUT/$name.tar.gz" "$name"
   archive_list="$WORK/$name-members.txt"
   tar -tzf "$OUT/$name.tar.gz" > "$archive_list"
   grep -Fxq "$name/RouterVPN.app/Contents/MacOS/RouterVPN" "$archive_list"
   grep -Fxq "$name/RouterVPN.app/Contents/Resources/RouterVPN.icns" "$archive_list"
+  grep -Fxq "$name/ROUTER-VPN-SOURCE.json" "$archive_list"
   [[ "$(plutil -extract CFBundleIconFile raw -o - "$dir/RouterVPN.app/Contents/Info.plist")" == "RouterVPN" ]]
 done
 
