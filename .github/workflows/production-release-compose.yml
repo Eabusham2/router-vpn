@@ -3,8 +3,6 @@ name: Exact-SHA production compose
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
