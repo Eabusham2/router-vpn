@@ -201,7 +201,7 @@ function Get-RouterVPNProcessIdentity($Process) {
   }
   if([string]::IsNullOrWhiteSpace($exe)){throw "Cannot read Router VPN process executable identity for PID $pidValue."}
   $exe=[IO.Path]::GetFullPath($exe)
-  return[pscustomobject]@{
+  return [pscustomobject]@{
     version=1
     pid=$pidValue
     start_time_utc_ticks=$start
