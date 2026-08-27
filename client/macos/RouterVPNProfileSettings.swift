@@ -287,7 +287,7 @@ extension ProductWindowController {
 
                 let connectionProfiles = MacConnectionProfileControls(api: self.api, owner: self)
                 form.addArrangedSubview(connectionProfiles.root)
-                let nodePreferenceViews: [NSView] = [lan, kill, ipv6, base, fallback, autoEncrypted, autoObfuscated, mtu, manual, daita, jumbo, socks, startup, auto, forwarding, retest]
+                let nodePreferenceViews: [NSControl] = [lan, kill, ipv6, base, fallback, autoEncrypted, autoObfuscated, mtu, manual, daita, jumbo, socks, startup, auto, forwarding, retest]
                 if !supportsNodeSettings || settingsMutationBusy {
                     nodePreferenceViews.forEach { $0.isEnabled = false }
                 }
