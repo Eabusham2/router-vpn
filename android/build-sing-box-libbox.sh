@@ -99,12 +99,30 @@ export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
 # The combined binary must satisfy libXray's pinned Go 1.26.3 module while
 # preserving sing-box at its immutable source commit. Do not use ambient Go.
 export GOTOOLCHAIN="$GO_TOOLCHAIN+auto"
+# Keep public-module integrity verification enabled. Hosted runners occasionally
+# see transient HTTP/2 failures from proxy/sumdb infrastructure; retry the exact
+# same verified command instead of disabling GOSUMDB or accepting unverified
+# module bytes.
+export GOPROXY="${GOPROXY:-https://proxy.golang.org,direct}"
+export GOSUMDB="${GOSUMDB:-sum.golang.org}"
+go_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    if go "$@"; then
+      return 0
+    fi
+    echo "Go command failed transiently: go $* (attempt $attempt/3)" >&2
+    (( attempt < 3 )) && sleep $((attempt * 4))
+  done
+  echo "Go command failed after 3 verified attempts: go $*" >&2
+  return 1
+}
 
 GO_BIN_DIR="$(go env GOPATH)/bin"
 mkdir -p "$GO_BIN_DIR"
 echo "Installing pinned SagerNet gomobile toolchain v$GOMOBILE_VERSION under $GO_TOOLCHAIN..."
-GOBIN="$GO_BIN_DIR" go install "github.com/sagernet/gomobile/cmd/gomobile@v$GOMOBILE_VERSION"
-GOBIN="$GO_BIN_DIR" go install "github.com/sagernet/gomobile/cmd/gobind@v$GOMOBILE_VERSION"
+GOBIN="$GO_BIN_DIR" go_retry install "github.com/sagernet/gomobile/cmd/gomobile@v$GOMOBILE_VERSION"
+GOBIN="$GO_BIN_DIR" go_retry install "github.com/sagernet/gomobile/cmd/gobind@v$GOMOBILE_VERSION"
 [[ -x "$GO_BIN_DIR/gomobile" && -x "$GO_BIN_DIR/gobind" ]] || { echo 'Pinned gomobile/gobind installation failed' >&2; exit 1; }
 export PATH="$GO_BIN_DIR:$PATH"
 
@@ -153,8 +171,8 @@ install -m 0644 "$ROOT/routervpn_xray_bridge.go" "$VENDOR/experimental/libbox/ro
   go mod edit -go="$GO_MOD_VERSION"
   go mod edit -require=github.com/xtls/libxray@v0.0.0
   go mod edit -replace="github.com/xtls/libxray=$XRAY_VENDOR"
-  go mod tidy
-  resolved=$(go list -m -f '{{.Version}}' github.com/xtls/xray-core)
+  go_retry mod tidy
+  resolved=$(go_retry list -m -f '{{.Version}}' github.com/xtls/xray-core)
   [[ "$resolved" == "$XRAY_CORE_VERSION" ]] || {
     echo "combined module resolved unexpected Xray-core: $resolved" >&2
     exit 1
@@ -168,8 +186,8 @@ install -m 0644 "$ROOT/routervpn_xray_bridge.go" "$VENDOR/experimental/libbox/ro
     exit 1
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
-  go test ./experimental/libbox
-  go run ./cmd/internal/build_libbox -target android
+  go_retry test ./experimental/libbox
+  go_retry run ./cmd/internal/build_libbox -target android
 )
 
 SOURCE_AAR="$VENDOR/libbox.aar"
