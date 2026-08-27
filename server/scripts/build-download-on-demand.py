@@ -31,6 +31,13 @@ import tempfile
 import urllib.parse
 import zipfile
 
+PROVENANCE_PATH = Path(__file__).resolve().parents[2] / "deploy" / "source_provenance.py"
+_prov_spec = __import__("importlib.util").util.spec_from_file_location("router_vpn_source_provenance", PROVENANCE_PATH)
+if _prov_spec is None or _prov_spec.loader is None:
+    raise RuntimeError(f"cannot load {PROVENANCE_PATH}")
+_provenance = __import__("importlib.util").util.module_from_spec(_prov_spec)
+_prov_spec.loader.exec_module(_provenance)
+
 MAX_UNPACKED = 768 * 1024 * 1024
 MAX_MEMBERS = 10_000
 MAX_MEMBER = 512 * 1024 * 1024
@@ -412,7 +419,21 @@ def compile_requested(work: Path, name: str, src_root: Path) -> Path:
     return compiled
 
 
-def build_from_github(work: Path, source_archive: Path) -> Path:
+def provenance_family(family: str, arch: str) -> str:
+    if family == "windows":
+        return f"windows-{arch}"
+    if family == "portable":
+        return f"windows-portable-{arch}"
+    if family == "darwin":
+        return f"macos-{arch}"
+    if family == "linux":
+        return f"linux-{arch}"
+    if family == "bundle":
+        return "private-node-bundle"
+    raise ValueError(f"unsupported provenance family: {family}")
+
+
+def build_from_github(work: Path, source_archive: Path, expected_sha: str, expected_family: str) -> Path:
     unpack = work / "github"
     unpack.mkdir()
     if source_archive.name.endswith(".tar.gz"):
@@ -421,6 +442,7 @@ def build_from_github(work: Path, source_archive: Path) -> Path:
         safe_extract_zip(source_archive, unpack)
     root = one_root(unpack)
     assert_generic_tree(root)
+    _provenance.verify_manifest(root, expected_sha, expected_family)
     return root
 
 
@@ -436,17 +458,27 @@ def main() -> int:
     output = Path(args.output).resolve()
     base = Path(args.base).resolve()
     src_root = Path(args.source_root).resolve()
-    family = PACKAGE_MAP[args.name][1]
+    _, family, arch = PACKAGE_MAP[args.name]
+    try:
+        expected_sha = _provenance.resolve_sha(root=src_root)
+    except RuntimeError:
+        # Unit/developer source roots may be synthetic; the checked-out script
+        # tree is the final fallback. Production images still require the exact
+        # ROUTER_VPN_GITHUB_SHA because /src intentionally has no .git metadata.
+        expected_sha = _provenance.resolve_sha(root=Path(__file__).resolve().parents[2])
+    expected_family = provenance_family(family, arch)
 
     with tempfile.TemporaryDirectory(prefix="router-vpn-one-package-") as td:
         work = Path(td)
         if args.source_archive:
             if family == "bundle":
                 raise SystemExit("private node bundle cannot be sourced from a public generic artifact")
-            root = build_from_github(work, Path(args.source_archive))
+            root = build_from_github(work, Path(args.source_archive), expected_sha, expected_family)
         else:
             compiled_root = compile_requested(work, args.name, src_root)
             root = build_local(work, args.name, src_root, compiled_root, base)
+            _provenance.write_manifest(root, expected_sha, expected_family)
+        _provenance.verify_manifest(root, expected_sha, expected_family)
         zip_dir(root, output)
 
     if not output.is_file() or output.stat().st_size == 0:
