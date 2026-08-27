@@ -40,6 +40,23 @@ func TestRollbackComposeSnapshotIsPrivateAndExact(t *testing.T) {
 	}
 }
 
+func TestExactComposeIdentityRequiresOneExpectedSHA(t *testing.T) {
+	exact := testTemplate()
+	if !exactComposeIdentity(exact, testOldSHA) {
+		t.Fatal("exact rollback compose was not recognized")
+	}
+	if exactComposeIdentity(exact, testNewSHA) {
+		t.Fatal("wrong target SHA was accepted as exact rollback identity")
+	}
+	mixed := strings.Replace(exact, "router-vpn-agent:"+testOldSHA, "router-vpn-agent:"+testNewSHA, 1)
+	if exactComposeIdentity(mixed, testOldSHA) || exactComposeIdentity(mixed, testNewSHA) {
+		t.Fatal("mixed compose was accepted as an exact identity")
+	}
+	if exactComposeIdentity(exact, "short") {
+		t.Fatal("non-SHA expected identity was accepted")
+	}
+}
+
 func TestClearRollbackComposeRemovesValidatedStaleSnapshotBeforeNewTransaction(t *testing.T) {
 	c := testRecoveryController(t)
 	stale := strings.ReplaceAll(testTemplate(), testOldSHA, testNewSHA)
