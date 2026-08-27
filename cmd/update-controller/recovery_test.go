@@ -15,9 +15,21 @@ func testRecoveryController(t *testing.T) *controller {
 	}
 }
 
+func testExactCompose(t *testing.T, sha string) string {
+	t.Helper()
+	exact, err := validateAndMaterializeTemplate(testTemplate(), sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := composeSHA(exact); got != sha {
+		t.Fatalf("materialized test compose SHA=%q want=%q", got, sha)
+	}
+	return exact
+}
+
 func TestRollbackComposeSnapshotIsPrivateAndExact(t *testing.T) {
 	c := testRecoveryController(t)
-	previous := testTemplate()
+	previous := testExactCompose(t, testOldSHA)
 	if got := composeSHA(previous); got != testOldSHA {
 		t.Fatalf("test previous compose SHA=%q", got)
 	}
@@ -41,7 +53,7 @@ func TestRollbackComposeSnapshotIsPrivateAndExact(t *testing.T) {
 }
 
 func TestExactComposeIdentityRequiresOneExpectedSHA(t *testing.T) {
-	exact := testTemplate()
+	exact := testExactCompose(t, testOldSHA)
 	if !exactComposeIdentity(exact, testOldSHA) {
 		t.Fatal("exact rollback compose was not recognized")
 	}
@@ -59,7 +71,7 @@ func TestExactComposeIdentityRequiresOneExpectedSHA(t *testing.T) {
 
 func TestClearRollbackComposeRemovesValidatedStaleSnapshotBeforeNewTransaction(t *testing.T) {
 	c := testRecoveryController(t)
-	stale := strings.ReplaceAll(testTemplate(), testOldSHA, testNewSHA)
+	stale := testExactCompose(t, testNewSHA)
 	if composeSHA(stale) != testNewSHA {
 		t.Fatal("stale test compose is not exact new SHA")
 	}
@@ -72,14 +84,15 @@ func TestClearRollbackComposeRemovesValidatedStaleSnapshotBeforeNewTransaction(t
 	if _, err := os.Lstat(c.rollbackComposePath()); !os.IsNotExist(err) {
 		t.Fatalf("validated stale snapshot survived preflight cleanup: %v", err)
 	}
-	if err := c.saveRollbackCompose(testTemplate(), testOldSHA); err != nil {
+	newPrevious := testExactCompose(t, testOldSHA)
+	if err := c.saveRollbackCompose(newPrevious, testOldSHA); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := c.loadRollbackCompose(testOldSHA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != testTemplate() {
+	if loaded != newPrevious {
 		t.Fatal("new transaction snapshot was not published exactly")
 	}
 }
@@ -87,7 +100,7 @@ func TestClearRollbackComposeRemovesValidatedStaleSnapshotBeforeNewTransaction(t
 func TestClearRollbackComposeUnsafeStaleSnapshotBlocksNewTransaction(t *testing.T) {
 	c := testRecoveryController(t)
 	path := c.rollbackComposePath()
-	if err := os.WriteFile(path, []byte(testTemplate()), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(testExactCompose(t, testOldSHA)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.clearRollbackCompose(); err == nil {
@@ -104,11 +117,11 @@ func TestClearRollbackComposeUnsafeStaleSnapshotBlocksNewTransaction(t *testing.
 
 func TestSaveRollbackComposeRefusesUnexpectedExistingSnapshotAfterTransactionStart(t *testing.T) {
 	c := testRecoveryController(t)
-	unexpected := strings.ReplaceAll(testTemplate(), testOldSHA, testNewSHA)
+	unexpected := testExactCompose(t, testNewSHA)
 	if err := atomicWriteUpdaterPrivate(c.rollbackComposePath(), []byte(unexpected)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.saveRollbackCompose(testTemplate(), testOldSHA); err == nil || !strings.Contains(err.Error(), "unexpectedly exists") {
+	if err := c.saveRollbackCompose(testExactCompose(t, testOldSHA), testOldSHA); err == nil || !strings.Contains(err.Error(), "unexpectedly exists") {
 		t.Fatalf("unexpected recovery evidence was overwritten/accepted: %v", err)
 	}
 	body, err := os.ReadFile(c.rollbackComposePath())
@@ -122,7 +135,7 @@ func TestSaveRollbackComposeRefusesUnexpectedExistingSnapshotAfterTransactionSta
 
 func TestRollbackComposeRejectsWrongExpectedSHA(t *testing.T) {
 	c := testRecoveryController(t)
-	if err := c.saveRollbackCompose(testTemplate(), testOldSHA); err != nil {
+	if err := c.saveRollbackCompose(testExactCompose(t, testOldSHA), testOldSHA); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.loadRollbackCompose(testNewSHA); err == nil || !strings.Contains(err.Error(), "mismatch") {
@@ -132,7 +145,7 @@ func TestRollbackComposeRejectsWrongExpectedSHA(t *testing.T) {
 
 func TestRollbackComposeRejectsMixedOrUnknownPreviousStack(t *testing.T) {
 	c := testRecoveryController(t)
-	mixed := strings.Replace(testTemplate(), "router-vpn-agent:"+testOldSHA, "router-vpn-agent:"+testNewSHA, 1)
+	mixed := strings.Replace(testExactCompose(t, testOldSHA), "router-vpn-agent:"+testOldSHA, "router-vpn-agent:"+testNewSHA, 1)
 	if got := composeSHA(mixed); got != "unknown" {
 		t.Fatalf("mixed compose unexpectedly resolved to %q", got)
 	}
@@ -144,13 +157,14 @@ func TestRollbackComposeRejectsMixedOrUnknownPreviousStack(t *testing.T) {
 func TestRollbackComposeSymlinkFailsClosed(t *testing.T) {
 	c := testRecoveryController(t)
 	realPath := filepath.Join(filepath.Dir(c.statePath), "real-compose")
-	if err := os.WriteFile(realPath, []byte(testTemplate()), 0o600); err != nil {
+	exactPrevious := testExactCompose(t, testOldSHA)
+	if err := os.WriteFile(realPath, []byte(exactPrevious), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(realPath, c.rollbackComposePath()); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	if err := c.saveRollbackCompose(testTemplate(), testOldSHA); err == nil {
+	if err := c.saveRollbackCompose(exactPrevious, testOldSHA); err == nil {
 		t.Fatal("symlink rollback snapshot target was accepted")
 	}
 	if _, err := c.loadRollbackCompose(testOldSHA); err == nil {
@@ -160,7 +174,7 @@ func TestRollbackComposeSymlinkFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != testTemplate() {
+	if string(got) != exactPrevious {
 		t.Fatal("symlink target was modified")
 	}
 }
