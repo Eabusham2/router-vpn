@@ -81,6 +81,27 @@ require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSym
 require("cmd/client/mtu_retest.go", "mtuRetestSnapshot", "rollbackMTULiveResult", "restoreMTUMeasurementFields")
 require("cmd/client/mtu_retest_test.go", "stale", "rollback")
 
+# Background process ownership is recovery state too. Every launcher that starts
+# long-lived children must use the verified PID registry (PID + process-start
+# identity) rather than trusting reusable raw numeric PID files.
+require(
+    "modes/runtime-pids.py",
+    "process_start",
+    "command_sha256",
+    "runtime PID registry changed during open",
+    "runtime PID target changed before adoption",
+)
+require(
+    "modes/test_runtime_pids.py",
+    "wrong-start-token",
+    "runtime PID registry followed a symlink target",
+    "run-combined.sh",
+    "raw numeric .pids files",
+)
+for rel in ("modes/run-mode.sh", "modes/run-max.sh", "modes/run-pq.sh", "modes/run-xhttp.sh", "modes/run-combined.sh"):
+    require(rel, 'runtime-pids.py" init', 'runtime-pids.py" record')
+    forbid(rel, ': >"$RUN/$MODE.pids"', 'echo $! >>"$RUN/$MODE.pids"')
+
 # Persistent Linux kill-switch state is authoritative recovery policy. Corrupt or
 # redirected state must fail closed instead of being interpreted as "off".
 require(
@@ -393,6 +414,7 @@ for test in (
     "server/scripts/test_setup_auth.py",
     "server/scripts/test_node_proof_private_state.py",
     "server/scripts/test_preserve_generated_state.py",
+    "modes/test_runtime_pids.py",
 ):
     run_test(test)
 
