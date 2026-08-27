@@ -121,6 +121,7 @@ func TestComposeSHARequiresMaterializedHeaderAndBrokerProvenance(t *testing.T) {
 
 func TestUpdaterRequiresCompleteExactSHAReleaseWorkflowSet(t *testing.T) {
 	want := []string{
+		"source-snapshot.yml",
 		"release-candidate.yml",
 		"arm64-portainer-preflight.yml",
 		"publish-arm64-images.yml",
