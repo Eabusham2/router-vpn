@@ -12,12 +12,14 @@ def read(rel: str) -> str:
     return path.read_text(encoding="utf-8")
 
 build = read(".github/workflows/build-all.yml")
+snapshot = read(".github/workflows/source-snapshot.yml")
 rc = read(".github/workflows/release-candidate.yml")
 preflight = read(".github/workflows/arm64-portainer-preflight.yml")
 publish = read(".github/workflows/publish-arm64-images.yml")
 compose = read(".github/workflows/production-release-compose.yml")
 
 for rel, body, concurrency in (
+    ("source-snapshot.yml", snapshot, "group: source-snapshot-${{ github.ref }}-${{ github.sha }}"),
     ("release-candidate.yml", rc, "group: release-candidate-${{ github.ref }}-${{ github.sha }}"),
     ("arm64-portainer-preflight.yml", preflight, "group: arm64-portainer-${{ github.ref }}-${{ github.sha }}"),
     ("publish-arm64-images.yml", publish, "group: publish-arm64-portainer-${{ github.ref }}-${{ github.sha }}"),
@@ -29,9 +31,11 @@ for rel, body, concurrency in (
 
 for marker in (
     "packages: write",
+    "statuses: write",
+    "uses: ./.github/workflows/source-snapshot.yml",
     "uses: ./.github/workflows/release-candidate.yml",
     "uses: ./.github/workflows/arm64-portainer-preflight.yml",
-    "needs: [release-candidate, portainer-preflight]",
+    "needs: [source-snapshot, release-candidate, portainer-preflight]",
     "uses: ./.github/workflows/publish-arm64-images.yml",
     "needs: [publish-arm64-images]",
     "uses: ./.github/workflows/production-release-compose.yml",
