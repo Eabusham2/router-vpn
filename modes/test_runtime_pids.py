@@ -64,6 +64,30 @@ def main() -> int:
         assert path.read_bytes() == original
         assert not list(path.parent.glob(f".{path.name}.pid-*"))
 
+        # Replacing a tracked registry with another regular file while a new
+        # version is staged must fail before adoption and preserve the foreign
+        # replacement instead of overwriting it.
+        foreign = path.parent / "foreign.pids"
+        foreign_body = b'{"version":1,"pid":999999,"start":"foreign","command_sha256":"deadbeef"}\n'
+        foreign.write_bytes(foreign_body)
+        os.chmod(foreign, 0o600)
+        real_mkstemp = PIDS.tempfile.mkstemp
+
+        def mkstemp_then_swap(*args, **kwargs):
+            fd, name = real_mkstemp(*args, **kwargs)
+            os.replace(foreign, path)
+            return fd, name
+
+        with mock.patch.object(PIDS.tempfile, "mkstemp", side_effect=mkstemp_then_swap):
+            try:
+                PIDS.atomic_write(path, records)
+            except RuntimeError as exc:
+                assert "target identity changed" in str(exc)
+            else:
+                raise AssertionError("runtime PID replacement race was accepted")
+        assert path.read_bytes() == foreign_body
+        assert not list(path.parent.glob(f".{path.name}.pid-*"))
+
         PIDS.clear(str(root))
         assert not path.exists()
 
