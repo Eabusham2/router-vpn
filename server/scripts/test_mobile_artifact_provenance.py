@@ -7,6 +7,7 @@ from pathlib import Path
 import plistlib
 import tempfile
 import unittest
+from unittest import mock
 import warnings
 import zipfile
 
@@ -134,6 +135,20 @@ class MobileArtifactProvenanceTests(unittest.TestCase):
             write_ipa(duplicate, duplicate_app=True)
             with self.assertRaisesRegex(RuntimeError, "2 copies"):
                 prov.verify("router-vpn-ios.ipa", duplicate, SHA, REPO)
+
+    def test_cli_verifies_packaged_ios_artifact(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-mobile-prov-cli-") as td:
+            path = Path(td) / "RouterVPN.ipa"
+            write_ipa(path)
+            argv = [
+                "mobile-artifact-provenance.py",
+                "--name", "router-vpn-ios.ipa",
+                "--path", str(path),
+                "--sha", SHA,
+                "--repo", REPO,
+            ]
+            with mock.patch("sys.argv", argv):
+                self.assertEqual(prov.main(), 0)
 
     def test_unsupported_request_and_invalid_expected_identity_fail_closed(self):
         with tempfile.TemporaryDirectory(prefix="routervpn-mobile-prov-") as td:
