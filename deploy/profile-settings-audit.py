@@ -68,9 +68,13 @@ connection_profiles = require(
     "cmd/client/connection_profiles.go",
     "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
     "/api/connection-profile/load", "/api/connection-profile/delete",
-    "connection-profiles.json", "0o600", "profileSettingsBusy", "saved multihop profile references",
+    "connection-profiles.json", "readPrivateRegular", "atomicWritePrivate", "profileSettingsBusy", "saved multihop profile references",
     "connect separately so the selected platform can establish and prove the requested dataplane",
     "snapshotConnectionPreferences", "CustomLayers", "DNSMode", "MultihopEntryID", "MultihopExitID",
+)
+require(
+    "cmd/client/private_store.go",
+    "0o600", "os.CreateTemp", "tmp.Sync()", "os.Rename(tmpPath, path)", "os.SameFile",
 )
 for forbidden_field in (
     "APIToken string", "PrivateKey string", "PresharedKey string", "SocksUsername string",
