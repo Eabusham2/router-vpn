@@ -221,6 +221,34 @@ for rel in ("client/native-windows-mode.ps1", "client/native-wireguard-windows.p
     require(rel, "Private-RouterVPN-State.ps1", "Get-RouterVPNSelectedProfile")
 for rel in ("client/native-windows-mode.ps1", "client/native-wireguard-windows.ps1"):
     require(rel, "Assert-RouterVPNNoReparseAncestors")
+
+# Native Windows runtime children use verified process records (PID + process
+# start identity + executable path), never reusable raw numeric PID files.
+require(
+    "client/native-windows-mode.ps1",
+    "native-windows-mode.process.json",
+    "xray.process.json",
+    "Write-RouterVPNProcessRecord",
+    "Test-RouterVPNRecordedProcess",
+    "Stop-RouterVPNRecordedProcess",
+)
+forbid(
+    "client/native-windows-mode.ps1",
+    "children.pids",
+    "Stop-PidFile",
+    "Set-Content -Encoding ASCII -LiteralPath $PidFile",
+)
+require(
+    "client/native-wireguard-windows.ps1",
+    "router-vpn-dns.process.json",
+    "Write-RouterVPNProcessRecord",
+    "Stop-RouterVPNRecordedProcess",
+)
+forbid(
+    "client/native-wireguard-windows.ps1",
+    "router-vpn-dns.pid",
+    "Stop-Process -Id $pidValue",
+)
 for rel in (
     "client/native-windows-mode.ps1",
     "client/native-wireguard-windows.ps1",
