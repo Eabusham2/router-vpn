@@ -98,6 +98,11 @@ def atomic_write(root: str, path_text: str, body: bytes) -> Path:
             target = None
         if target is not None and (stat.S_ISLNK(target.st_mode) or not stat.S_ISREG(target.st_mode)):
             raise RuntimeError("runtime config target changed before adoption")
+        if current is None:
+            if target is not None:
+                raise RuntimeError("runtime config target appeared before adoption")
+        elif target is None or not os.path.samestat(current, target):
+            raise RuntimeError("runtime config target identity changed before adoption")
         os.replace(tmp, path)
         committed = True
         try:
