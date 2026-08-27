@@ -31,7 +31,7 @@ try{
 }finally{
   if($owned){
     try{Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8788/api/emergency-stop' -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 2|Out-Null}catch{}
-    if($controller-and-not$controller.HasExited){Stop-Process -Id $controller.Id -Force -ErrorAction SilentlyContinue;try{$controller.WaitForExit(3000)|Out-Null}catch{}}
+    if($controller-and-not$controller.HasExited){Stop-Process -InputObject $controller -Force -ErrorAction SilentlyContinue;try{$controller.WaitForExit(3000)|Out-Null}catch{}}
   }
 }
 PS1
