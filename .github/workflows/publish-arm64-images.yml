@@ -58,6 +58,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
+        id: publish
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -69,3 +70,15 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/Eabusham2/router-vpn
             org.opencontainers.image.revision=${{ github.sha }}
+      - name: Verify published exact-SHA ARM64 image provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/eabusham2/${{ matrix.image }}:${GITHUB_SHA}"
+          digest='${{ steps.publish.outputs.digest }}'
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull --platform linux/arm64 "$ref" >/dev/null
+          test "$(docker image inspect "$ref" --format '{{.Architecture}}')" = 'arm64'
+          test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = 'https://github.com/Eabusham2/router-vpn'
+          printf '%s %s\n' "$ref" "$digest"
