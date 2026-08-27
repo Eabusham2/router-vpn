@@ -1,6 +1,8 @@
 # Shared read-only access to controller-owned Router VPN profile state.
 # This file intentionally exposes no profile-store writer. Durable profile
-# mutation belongs to the Go controller transaction layer.
+# mutation belongs to the Go controller transaction layer. The only write
+# primitive below is create-only and scoped to ephemeral process-ownership
+# records; it never mutates routers.json or other controller-owned profile state.
 
 function Assert-RouterVPNNoReparseAncestors([string]$Path) {
   $full = [IO.Path]::GetFullPath($Path)
@@ -146,13 +148,17 @@ function Get-RouterVPNSelectedProfile($Store, [string]$ProfileId) {
 
 
 function Write-RouterVPNPrivateTextAtomic([string]$Path,[string]$Text) {
-  Assert-RouterVPNNoReparseAncestors $Path
-  $parent=Split-Path -Parent ([IO.Path]::GetFullPath($Path))
+  $full=[IO.Path]::GetFullPath($Path)
+  Assert-RouterVPNNoReparseAncestors $full
+  $parent=Split-Path -Parent $full
   if([string]::IsNullOrWhiteSpace($parent) -or -not (Test-Path -LiteralPath $parent -PathType Container)){
     throw "Router VPN private parent is missing: $parent"
   }
   Assert-RouterVPNNoReparseAncestors $parent
-  $leaf=Split-Path -Leaf $Path
+  if(Test-Path -LiteralPath $full){
+    throw "Refusing to overwrite existing Router VPN process ownership record: $full"
+  }
+  $leaf=Split-Path -Leaf $full
   $tmp=Join-Path $parent ('.'+$leaf+'.tmp-'+[Guid]::NewGuid().ToString('N'))
   try {
     $encoding=New-Object Text.UTF8Encoding($false)
@@ -170,13 +176,13 @@ function Write-RouterVPNPrivateTextAtomic([string]$Path,[string]$Text) {
       $stream.Dispose()
     }
     Assert-RouterVPNNoReparseAncestors $parent
-    if(Test-Path -LiteralPath $Path){
-      $current=Get-Item -LiteralPath $Path -Force
-      if($current.PSIsContainer -or (($current.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)){
-        throw "Refusing unsafe Router VPN private target: $Path"
-      }
+    if(Test-Path -LiteralPath $full){
+      throw "Router VPN process ownership target appeared before adoption: $full"
     }
-    Move-Item -LiteralPath $tmp -Destination $Path -Force
+    # Two-argument File.Move is intentionally non-overwriting. If a foreign
+    # target wins the race after the check, adoption fails rather than replacing
+    # ambiguous process-ownership evidence.
+    [IO.File]::Move($tmp,$full)
   } finally {
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
   }
