@@ -73,6 +73,38 @@ require(
     "TestOpenVPNPrivateFileUsesPrivateRuntimeWriter",
 )
 
+require(
+    "modes/native-standard-exit-linux.sh",
+    'cleanup-private-runtime.py" verify-dir',
+    'verified-mode "$ROOT" "$PID_MODE"',
+    'record "$ROOT" "$PID_MODE" "$child"',
+    'cleanup-private-runtime.py" "$RUNTIME_DIR"',
+)
+forbid(
+    "modes/native-standard-exit-linux.sh",
+    "os.path.realpath",
+    "native-standard-exit.pid",
+    "PID_FILE",
+)
+
+require(
+    "modes/native-openvpn-standard-exit.sh",
+    'cleanup-private-runtime.py" verify-dir',
+    'verified-mode "$ROOT" "$mode"',
+    'record "$ROOT" "$PID_MODE_BRIDGE" "$BRIDGE_PID"',
+    'record "$ROOT" "$PID_MODE_OPENVPN" "$child"',
+    'cleanup-private-runtime.py" "$RUNTIME_DIR"',
+)
+forbid(
+    "modes/native-openvpn-standard-exit.sh",
+    "os.path.realpath",
+    "openvpn.pid",
+    "entry-bridge.pid",
+    "PID_FILE",
+    "BRIDGE_PID_FILE",
+    'rm -rf "$RUNTIME_DIR"',
+)
+
 if errors:
     for error in errors:
         print("ERROR:", error)
