@@ -356,6 +356,29 @@ require(
 )
 require("server/scripts/create-bundle-json.py", "write_private_json", '"client.json"', '"routers.json"', '"router-vpn-bundle.json"')
 
+# Portainer updater credentials are one privileged identity: API key + TLS pin.
+# Configuration must validate the destination ancestry before staging, keep the
+# key out of output, and batch-adopt both files so partial replacement rolls back.
+require(
+    "server/scripts/configure-portainer-update.sh",
+    "atomic-private-batch.py",
+    'python3 "$PRIVATE_BATCH" "$KEY_FILE=$KEY_TMP" "$PIN_FILE=$PIN_TMP"',
+    ".portainer-api.key.input.XXXXXX",
+    "unset API_KEY",
+)
+forbid(
+    "server/scripts/configure-portainer-update.sh",
+    ".tmp.$",
+    'mv -f "$KEY_TMP" "$KEY_FILE"',
+    'mv -f "$PIN_TMP" "$PIN_FILE"',
+)
+require(
+    "server/scripts/test_configure_portainer_update.py",
+    "symlinked Portainer config parent received credentials",
+    "key not in proc.stdout",
+    "Portainer update credential transaction tests: OK",
+)
+
 # Stable identity/credential generators must preserve valid existing state,
 # reject corrupt preserved state, validate candidates before adoption, and batch
 # related identity files together. Reads are also strict: no symlink parent/leaf,
@@ -444,6 +467,7 @@ for test in (
     "server/scripts/test_dns_benchmark_persistence.py",
     "server/scripts/test_setup_auth.py",
     "server/scripts/test_node_proof_private_state.py",
+    "server/scripts/test_configure_portainer_update.py",
     "server/scripts/test_preserve_generated_state.py",
     "modes/test_runtime_pids.py",
     "modes/test_runtime_config.py",
