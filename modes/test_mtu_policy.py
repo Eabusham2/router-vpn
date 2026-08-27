@@ -41,6 +41,7 @@ def run_case(policy: str, expected: int, probe: str = "", manual: int = 0, jumbo
         profile = {"id": "node", "endpoint": "203.0.113.10", "mtu_policy": policy, "manual_mtu": manual}
         routers = root / "routers.json"
         routers.write_text(json.dumps({"selected_id": "node", "profiles": [profile]}) + "\n")
+        routers.chmod(0o600)
         before = routers.read_bytes()
         (conf / "sing-box.json").write_text(json.dumps({"inbounds": [{"type": "tun", "tag": "tun-in", "mtu": 1280}]}) + "\n")
         (conf / "wg.conf").write_text("[Interface]\nPrivateKey = test\n")
@@ -85,6 +86,7 @@ def test_network_specific_cache() -> None:
         (root / "modes.json").write_text(json.dumps([{"id": "shadowsocks", "mtu": 1380}]) + "\n")
         routers = root / "routers.json"
         routers.write_text(json.dumps({"selected_id": "node", "profiles": [{"id": "node", "endpoint": "203.0.113.10", "mtu_policy": "auto"}]}) + "\n")
+        routers.chmod(0o600)
         before = routers.read_bytes()
         (conf / "sing-box.json").write_text(json.dumps({"inbounds": [{"type": "tun", "mtu": 1380}]}) + "\n")
 
@@ -162,6 +164,7 @@ def test_runtime_profile_symlink_is_never_followed() -> None:
         (root / "modes.json").write_text(json.dumps([{"id": "shadowsocks", "mtu": 1380}]) + "\n")
         routers = root / "routers.json"
         routers.write_text(json.dumps({"selected_id": "node", "profiles": [{"id": "node", "endpoint": "203.0.113.10", "mtu_policy": "default"}]}) + "\n")
+        routers.chmod(0o600)
         routers_before = routers.read_bytes()
         runtime = conf / "sing-box.json"
         runtime.write_text(json.dumps({"inbounds": [{"type": "tun", "mtu": 1280}]}) + "\n")
@@ -227,6 +230,7 @@ def test_symlink_cache_is_never_followed() -> None:
         (root / "modes.json").write_text(json.dumps([{"id": "shadowsocks", "mtu": 1380}]) + "\n")
         routers = root / "routers.json"
         routers.write_text(json.dumps({"selected_id": "node", "profiles": [{"id": "node", "endpoint": "203.0.113.10", "mtu_policy": "auto"}]}) + "\n")
+        routers.chmod(0o600)
         before = routers.read_bytes()
         (conf / "sing-box.json").write_text(json.dumps({"inbounds": [{"type": "tun", "mtu": 1380}]}) + "\n")
         state = root / "state"
