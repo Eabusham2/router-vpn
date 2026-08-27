@@ -18,6 +18,16 @@ preflight = read(".github/workflows/arm64-portainer-preflight.yml")
 publish = read(".github/workflows/publish-arm64-images.yml")
 compose = read(".github/workflows/production-release-compose.yml")
 
+assert "\n  push:\n    branches: [main]\n" in build, "Build all must be the automatic main-branch release orchestrator"
+for rel, body in (
+    ("source-snapshot.yml", read(".github/workflows/source-snapshot.yml")),
+    ("release-candidate.yml", rc),
+    ("arm64-portainer-preflight.yml", preflight),
+    ("publish-arm64-images.yml", publish),
+    ("production-release-compose.yml", compose),
+):
+    assert "\n  push:\n" not in body, f"{rel} must not bypass Build-all ordering with an autonomous push trigger"
+
 for rel, body, concurrency in (
     ("source-snapshot.yml", snapshot, "group: source-snapshot-${{ github.ref }}-${{ github.sha }}"),
     ("release-candidate.yml", rc, "group: release-candidate-${{ github.ref }}-${{ github.sha }}"),
