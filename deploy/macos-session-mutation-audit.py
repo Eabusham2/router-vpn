@@ -29,7 +29,7 @@ need(unified,
     'changing the selected mode', 'editing CUSTOM presets', 'saving a CUSTOM preset', 'deleting a CUSTOM preset',
     'changing multihop selection', 'changing persistent kill-switch policy', 'changing DNS policy',
     'unified-kill-switch', 'unified-multihop-toggle', 'unified-mode-popup', 'unified-dns-popup',
-    'self.routerPopup.isEnabled = !busy', 'self.multihopEntryPopup.isEnabled = !busy',
+    'as? NSControl', 'control.isEnabled = !busy', 'self.routerPopup.isEnabled = !busy', 'self.multihopEntryPopup.isEnabled = !busy',
     'button.isEnabled = !unknown && !disconnecting')
 
 build=BUILD.read_text(encoding='utf-8')
