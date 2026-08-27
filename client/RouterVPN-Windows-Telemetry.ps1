@@ -61,7 +61,7 @@ function TickUnifiedMapAnimation{if($null -eq $script:UnifiedRoutePacket -or $nu
 '@
     $drawPattern='(?s)function DrawMap\(\$Profiles,\[string\]\$Selected\)\{.*?\}\r?\nfunction SessionEvents'
     if(-not [regex]::IsMatch($ProductSource,$drawPattern)){throw 'Windows globe renderer contract drifted.'}
-    $ProductSource=[regex]::Replace($ProductSource,$drawPattern,$globe+"`nfunction SessionEvents",1)
+    $ProductSource=[regex]::Replace($ProductSource,$drawPattern,[System.Text.RegularExpressions.MatchEvaluator]{ param($m) $globe+"`nfunction SessionEvents" },1)
 
     $startup='$BaseCombo.SelectedIndex=0'
     if(-not $ProductSource.Contains($startup)){throw 'Windows telemetry startup seam drifted.'}
