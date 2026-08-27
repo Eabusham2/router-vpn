@@ -31,35 +31,50 @@ final class IOSUserLocationController: NSObject, ObservableObject, CLLocationMan
         }
     }
 
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        guard requestedByUser else { return }
-        switch manager.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse: requestRealFix()
-        case .denied, .restricted: state = "denied"; detail = "Location unavailable"
-        case .notDetermined: break
-        @unknown default: state = "unavailable"; detail = "Location unavailable"
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let authorization = manager.authorizationStatus
+        Task { @MainActor [weak self] in
+            guard let self, self.requestedByUser else { return }
+            switch authorization {
+            case .authorizedAlways, .authorizedWhenInUse: self.requestRealFix()
+            case .denied, .restricted: self.state = "denied"; self.detail = "Location unavailable"
+            case .notDetermined: break
+            @unknown default: self.state = "unavailable"; self.detail = "Location unavailable"
+            }
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard requestedByUser,
-              let location = locations.last,
-              location.horizontalAccuracy >= 0,
-              location.horizontalAccuracy <= 10_000,
-              abs(location.timestamp.timeIntervalSinceNow) <= 30,
-              CLLocationCoordinate2DIsValid(location.coordinate) else {
-            state = "unavailable"; detail = "No fresh location fix"
-            return
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        let sample = locations.last.map { location in
+            (
+                latitude: location.coordinate.latitude,
+                longitude: location.coordinate.longitude,
+                accuracy: location.horizontalAccuracy,
+                age: abs(location.timestamp.timeIntervalSinceNow)
+            )
         }
-        state = "shown"
-        detail = "You • real device fix"
-        attachRealUserLocation(to: location.coordinate)
+        Task { @MainActor [weak self] in
+            guard let self, self.requestedByUser, let sample else { return }
+            let coordinate = CLLocationCoordinate2D(latitude: sample.latitude, longitude: sample.longitude)
+            guard sample.accuracy >= 0,
+                  sample.accuracy <= 10_000,
+                  sample.age <= 30,
+                  CLLocationCoordinate2DIsValid(coordinate) else {
+                self.state = "unavailable"; self.detail = "No fresh location fix"
+                return
+            }
+            self.state = "shown"
+            self.detail = "You • real device fix"
+            self.attachRealUserLocation(to: coordinate)
+        }
     }
 
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        guard requestedByUser else { return }
-        state = "unavailable"
-        detail = "Location fix unavailable"
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Task { @MainActor [weak self] in
+            guard let self, self.requestedByUser else { return }
+            self.state = "unavailable"
+            self.detail = "Location fix unavailable"
+        }
     }
 
     private func requestRealFix() {
