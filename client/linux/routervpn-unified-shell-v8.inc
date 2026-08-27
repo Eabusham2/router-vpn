@@ -15,6 +15,11 @@ typedef struct {
     gboolean syncing;
 } LinuxUnifiedV8;
 
+// Forward declaration: callbacks above the refresh implementation may request an
+// immediate UI refresh. Keep this explicit so -Werror never relies on an implicit
+// function declaration on either amd64 or arm64 GTK builds.
+static gboolean linux_unified_refresh_v8(gpointer data);
+
 static const char *const linux_unified_mode_ids_v8[] = {
     "smart-auto","auto","base-raw","base-pq","awg-strong","shadowsocks","reality-vision","hysteria2",
     "reality-pq-vision","ss-v2ray","naive-h2","naive-h3","split","reality-xhttp","max","max-quic","max-tls","all",NULL
