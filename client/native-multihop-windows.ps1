@@ -5,18 +5,20 @@ param(
   [string]$TunnelAlias='router-vpn-multihop'
 )
 $ErrorActionPreference='Stop'
+$PrivateState=Join-Path $PSScriptRoot 'Private-RouterVPN-State.ps1'
+if(-not(Test-Path -LiteralPath $PrivateState -PathType Leaf)){throw 'Router VPN private-state helper is missing.'}
+. $PrivateState
 function Test-Administrator{$id=[Security.Principal.WindowsIdentity]::GetCurrent();$p=New-Object Security.Principal.WindowsPrincipal($id);return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)}
-$Root=[IO.Path]::GetFullPath([string]$env:HOMEVPN_ROOT)
-if([string]::IsNullOrWhiteSpace($Root)){throw 'HOMEVPN_ROOT is required.'}
-$RuntimeDir=[IO.Path]::GetFullPath($RuntimeDir)
-$RunRoot=[IO.Path]::GetFullPath((Join-Path $Root 'run'))
+$Root=Resolve-RouterVPNPrivateRoot ([string]$env:HOMEVPN_ROOT)
+$RuntimeDir=Resolve-RouterVPNPrivateChild $Root $RuntimeDir
+$RunRoot=Resolve-RouterVPNPrivateChild $Root 'run'
 if(-not $RuntimeDir.StartsWith($RunRoot.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Refusing multihop runtime outside HOMEVPN_ROOT\run.'}
 $Config=Join-Path $RuntimeDir 'sing-box.json'
 $SingBox=Join-Path $Root 'runtime\windows\sing-box.exe'
 $KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
-$PidFile=Join-Path $RuntimeDir 'native-multihop.pid'
+$PidFile=Join-Path $RuntimeDir 'native-multihop.process.json'
 function Kill([string]$Kind){& $KillSwitch -Action $Kind -Root $Root -Endpoint $Endpoint -TunnelAlias $TunnelAlias;if($LASTEXITCODE-ne 0){throw "Windows kill-switch $Kind failed."}}
-function Stop-Owned{if(Test-Path -LiteralPath $PidFile){$n=0;if([int]::TryParse((Get-Content -Raw -LiteralPath $PidFile).Trim(),[ref]$n)-and$n-gt 0){Stop-Process -Id $n -Force -ErrorAction SilentlyContinue};Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue}}
+function Stop-Owned{[void](Stop-RouterVPNRecordedProcess $PidFile)}
 function Remove-PrivateRuntime{if(Test-Path -LiteralPath $RuntimeDir){[IO.Directory]::Delete($RuntimeDir,$true)}}
 if($Action-eq'down'){Stop-Owned;try{Kill 'release'}catch{Write-Warning $_.Exception.Message};Remove-PrivateRuntime;exit 0}
 if(-not(Test-Administrator)){throw 'Native Windows multihop requires an elevated Router VPN process.'}
@@ -32,7 +34,7 @@ Kill 'prepare'
 try{
   $quoted='"'+$Config+'"'
   $p=Start-Process -FilePath $SingBox -ArgumentList @('run','-D',$RuntimeDir,'-c',$quoted)-WorkingDirectory $RuntimeDir -PassThru -WindowStyle Hidden
-  Set-Content -LiteralPath $PidFile -Encoding ASCII -Value $p.Id
+  Write-RouterVPNProcessRecord $PidFile $p
   Start-Sleep -Milliseconds 500
   if($p.HasExited){throw 'sing-box exited during native Windows multihop startup.'}
   $p.WaitForExit()
