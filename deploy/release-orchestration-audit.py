@@ -50,6 +50,11 @@ for marker in (
 ):
     assert marker in build, f"Build all lost release-order marker: {marker}"
 
+assert "\n  push:\n" not in publish, "ARM64 publisher must not bypass Build-all ordering with an autonomous push trigger"
+assert "validate-source:" in publish and "needs: validate-source" in publish, "ARM64 publication lost its whole-source validation prerequisite"
+assert "go test ./cmd/update-controller -count=1" in publish, "ARM64 publication no longer compiles the updater before pushing images"
+assert "python3 deploy/durable-state-syntax-audit.py" in publish, "ARM64 publication lost durability syntax preflight"
+
 for marker in (
     "platforms: linux/arm64",
     "push: true",
