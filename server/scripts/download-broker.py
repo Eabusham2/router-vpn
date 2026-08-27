@@ -197,11 +197,25 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     if progress:
         progress("validating", 42)
     selected = temp / output_name
-    with zipfile.ZipFile(outer) as zf:
-        item = _pick_member(zf, wanted)
-        with zf.open(item) as r, selected.open("wb") as w:
-            shutil.copyfileobj(r, w, CHUNK)
-    outer.unlink(missing_ok=True)
+    fd, staged_name = tempfile.mkstemp(prefix=f".{Path(output_name).name}.", suffix=".part", dir=temp)
+    os.close(fd)
+    staged = Path(staged_name)
+    committed = False
+    try:
+        with zipfile.ZipFile(outer) as zf:
+            item = _pick_member(zf, wanted)
+            with zf.open(item) as r, staged.open("wb") as w:
+                shutil.copyfileobj(r, w, CHUNK)
+                w.flush()
+                os.fsync(w.fileno())
+        if staged.stat().st_size == 0:
+            raise RuntimeError("selected GitHub package is empty")
+        os.replace(staged, selected)
+        committed = True
+    finally:
+        outer.unlink(missing_ok=True)
+        if not committed:
+            staged.unlink(missing_ok=True)
     if not selected.is_file() or selected.stat().st_size == 0:
         raise RuntimeError("selected GitHub package is empty")
     return selected
@@ -231,18 +245,30 @@ def fetch_github_package(home_name: str, temp: Path, progress=None) -> Path:
 
 def fetch_direct_mobile(name: str, temp: Path, progress=None) -> Path:
     spec = DIRECT_ARTIFACTS[name]
+    failures = []
     try:
         repo, _, head_sha = _github_scope()
-        selected = _fetch_first_artifact(spec["sources"], temp, name, progress=progress)
-        # Workflow metadata narrows discovery to the exact SHA, but the binary
-        # itself is the final trust boundary. Re-prove embedded source identity
-        # after extraction from the Actions artifact and before any delivery.
-        _mobile_provenance.verify(name, selected, head_sha, repo)
-        return selected
     except Exception as exc:
         raise RuntimeError(
             f"{name} requires its same-SHA GitHub mobile artifact; the Linux home node does not fake a platform-specific mobile build fallback: {exc}"
         ) from exc
+    for artifact_name, wanted in spec["sources"]:
+        selected = temp / name
+        try:
+            selected = fetch_artifact_member(str(artifact_name), str(wanted), temp, name, progress=progress)
+            # Workflow metadata narrows discovery to the exact SHA, but the
+            # binary itself is the final trust boundary. Verify each candidate
+            # before accepting it so a corrupt preferred artifact can fall
+            # through to the second same-SHA native producer safely.
+            _mobile_provenance.verify(name, selected, head_sha, repo)
+            return selected
+        except Exception as exc:
+            selected.unlink(missing_ok=True)
+            failures.append(f"{artifact_name}: {type(exc).__name__}: {exc}")
+    detail = "; ".join(failures) if failures else "no GitHub mobile artifact sources configured"
+    raise RuntimeError(
+        f"{name} requires its same-SHA GitHub mobile artifact; the Linux home node does not fake a platform-specific mobile build fallback: {detail}"
+    )
 
 
 def _run_builder(base: Path, name: str, temp: Path, source: Path | None, progress=None) -> Path:
