@@ -6,8 +6,14 @@ on:
 permissions:
   contents: read
   packages: write
+  statuses: write
 
 jobs:
+  source-snapshot:
+    name: Exact-SHA source snapshot
+    uses: ./.github/workflows/source-snapshot.yml
+    secrets: inherit
+
   release-candidate:
     name: Authoritative one-SHA native release matrix
     uses: ./.github/workflows/release-candidate.yml
@@ -20,7 +26,7 @@ jobs:
 
   publish-arm64-images:
     name: Publish exact-SHA ARM64 server images
-    needs: [release-candidate, portainer-preflight]
+    needs: [source-snapshot, release-candidate, portainer-preflight]
     uses: ./.github/workflows/publish-arm64-images.yml
     secrets: inherit
 
