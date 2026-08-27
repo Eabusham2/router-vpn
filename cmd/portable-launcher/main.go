@@ -42,13 +42,13 @@ func main() {
 	nativeApp := filepath.Join(appDir, "client", "RouterVPN-Windows-App.ps1")
 
 	if err := validatePortablePrivateParent(filepath.Join(dataDir, ".root-check")); err != nil {
-		fatal(fmt.Errorf("unsafe Portable Data path: %w", err))
+		portableFatal(dataDir, selfTest, fmt.Errorf("unsafe Portable Data path: %w", err))
 	}
 	if err := ensurePortablePrivateDir(dataDir); err != nil {
-		fatal(fmt.Errorf("prepare Portable Data directory: %w", err))
+		portableFatal(dataDir, selfTest, fmt.Errorf("prepare Portable Data directory: %w", err))
 	}
 	if err := ensurePortablePrivateDir(generatedDir); err != nil {
-		fatal(fmt.Errorf("prepare Portable generated directory: %w", err))
+		portableFatal(dataDir, selfTest, fmt.Errorf("prepare Portable generated directory: %w", err))
 	}
 
 	for _, required := range []string{
@@ -59,24 +59,24 @@ func main() {
 		nativeApp,
 	} {
 		if _, err := os.Stat(required); err != nil {
-			fatal(fmt.Errorf("portable package is incomplete: %s: %w", required, err))
+			portableFatal(dataDir, selfTest, fmt.Errorf("portable package is incomplete: %s: %w", required, err))
 		}
 	}
 	if err := copyPortablePrivate(filepath.Join(appDir, "routers.json"), filepath.Join(dataDir, "routers.json"), false); err != nil {
-		fatal(fmt.Errorf("prepare Portable router store: %w", err))
+		portableFatal(dataDir, selfTest, fmt.Errorf("prepare Portable router store: %w", err))
 	}
 	if err := copyPortablePrivate(filepath.Join(appDir, "logical-modes.json"), dataLogical, true); err != nil {
-		fatal(fmt.Errorf("publish Portable logical-mode catalog: %w", err))
+		portableFatal(dataDir, selfTest, fmt.Errorf("publish Portable logical-mode catalog: %w", err))
 	}
 	nativeOK, nativeReason, err := prepareWindowsModeCatalog(filepath.Join(appDir, "modes.json"), dataModes, modesDir)
 	if err != nil {
-		fatal(err)
+		portableFatal(dataDir, selfTest, err)
 	}
 	if err := ensurePortableConfig(filepath.Join(dataDir, "client.json"), dataModes, modesDir, dataDir); err != nil {
-		fatal(err)
+		portableFatal(dataDir, selfTest, err)
 	}
 	if err := writeRuntimeStatus(filepath.Join(dataDir, "windows-runtime.json"), nativeOK, nativeReason, dataDir); err != nil {
-		fatal(err)
+		portableFatal(dataDir, selfTest, err)
 	}
 
 	binary := filepath.Join(appDir, "router-vpn-client.exe")
@@ -95,7 +95,7 @@ func main() {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
-			fatal(err)
+			portableFatal(dataDir, selfTest, err)
 		}
 		started = true
 	}
@@ -104,14 +104,14 @@ func main() {
 			_ = cmd.Process.Kill()
 			_, _ = cmd.Process.Wait()
 		}
-		fatal(errors.New("local Router VPN controller did not become ready on 127.0.0.1:8788 within 30 seconds"))
+		portableFatal(dataDir, selfTest, errors.New("local Router VPN controller did not become ready on 127.0.0.1:8788 within 30 seconds"))
 	}
 	if selfTest {
 		if err := runSelfTest(dataDir, nativeApp); err != nil {
 			if started {
 				stopPortableController(cmd)
 			}
-			fatal(err)
+			portableFatal(dataDir, selfTest, err)
 		}
 		if started {
 			stopPortableController(cmd)
@@ -346,6 +346,17 @@ func stopPortableController(cmd *exec.Cmd) {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	}
+}
+
+func portableFatal(dataDir string, selfTest bool, err error) {
+	if selfTest && dataDir != "" {
+		// RouterVPNPortable.exe is built as a Windows GUI binary, so hosted CI may
+		// not inherit stderr. Persist only the bounded self-test failure reason in
+		// the disposable Portable Data directory; never include node/profile bytes.
+		_ = ensurePortablePrivateDir(dataDir)
+		_ = atomicWritePortablePrivate(filepath.Join(dataDir, "self-test-error.txt"), []byte(err.Error()+"\n"))
+	}
+	fatal(err)
 }
 
 func fatal(err error) {
