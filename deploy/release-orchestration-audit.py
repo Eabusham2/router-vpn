@@ -30,6 +30,14 @@ for rel, body, concurrency in (
     assert "cancel-in-progress: true" in body, f"{rel} does not collapse duplicate same-SHA runs"
 
 for marker in (
+    'artifact_family": "exact-source-snapshot"',
+    '"tree_sha": tree',
+    'sha256sum -c "$(basename "$archive").sha256"',
+    'router-vpn-source-${{ github.sha }}.json',
+):
+    assert marker in snapshot, f"source snapshot lost exact identity marker: {marker}"
+
+for marker in (
     "packages: write",
     "statuses: write",
     "uses: ./.github/workflows/source-snapshot.yml",
