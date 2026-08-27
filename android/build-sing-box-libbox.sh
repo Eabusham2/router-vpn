@@ -48,8 +48,7 @@ verify_aar() {
   done
 
   unzip -p "$AAR" classes.jar >"$classes"
-  jar tf "$classes" >"$class_list"
-  grep -Fxq 'io/nekohasekai/libbox/RouterXrayDialerController.class' "$class_list" || {
+  # The JDK jar tool may emit CRLF even on a Linux runner. Normalize its\n  # complete listing before exact-line checks so a present class cannot become\n  # a false negative because of a trailing carriage return.\n  jar tf "$classes" >"$class_list.raw"\n  tr -d '\\r' <"$class_list.raw" >"$class_list"\n  grep -Fxq 'io/nekohasekai/libbox/RouterXrayDialerController.class' "$class_list" || {
     echo 'combined libbox AAR is missing RouterXrayDialerController' >&2
     return 1
   }
