@@ -57,12 +57,6 @@ changes = (
         'let strategyRow = NSStackView(); strategyRow.orientation = .horizontal; strategyRow.spacing = 8; strategyRow.addArrangedSubview(button("AUTO", #selector(autoConnect))); strategyRow.addArrangedSubview(button("SMART AUTO", #selector(smartAutoConnect))); strategyRow.addArrangedSubview(button("CUSTOM", #selector(customConnect))); strategyRow.addArrangedSubview(button("Connect Selected", #selector(connectSelected))); s.addArrangedSubview(strategyRow); let actionRow = NSStackView(); actionRow.orientation = .horizontal; actionRow.spacing = 8; actionRow.addArrangedSubview(button("Disconnect", #selector(disconnect))); actionRow.addArrangedSubview(button("Prove actual exit", #selector(proveActualHomeExit))); actionRow.addArrangedSubview(button("Emergency Disconnect", #selector(emergencyDisconnectHome))); actionRow.addArrangedSubview(button("Refresh", #selector(refreshAction))); s.addArrangedSubview(actionRow)',
     ),
     (
-        '@objc func autoConnect() { asyncAction { String(data: try self.api.request("/api/auto", method: "POST", body: [:], timeout: 150), encoding: .utf8) ?? "AUTO connected" } }',
-        '''@objc func autoConnect() { asyncAction { String(data: try self.api.request("/api/strategy/auto", method: "POST", body: [:], timeout: 180), encoding: .utf8) ?? "AUTO connected" } }
-    @objc func smartAutoConnect() { asyncAction { String(data: try self.api.request("/api/strategy/smart-auto", method: "POST", body: [:], timeout: 240), encoding: .utf8) ?? "SMART AUTO connected" } }
-    @objc func customConnect() { openUnifiedCustomBuilder() }''',
-    ),
-    (
         'func refreshLive() { refreshStatus(); refreshSessionEvents() }',
         'func refreshLive() { refreshStatus(); refreshHomeSummary(); refreshSessionEvents(); refreshUnifiedChrome(); refreshUnifiedTelemetry() }',
     ),
@@ -90,6 +84,59 @@ for old, new in changes:
         pass
     else:
         raise SystemExit(f"macOS adaptive/unified strategy/settings/onboarding contract drifted: {old}")
+
+# Session hardening runs before this adaptive migration. Locate the complete
+# hardened AUTO method structurally, preserve any requireMutationIdle guard, and
+# change only the API endpoint. Then add SMART/CUSTOM actions if the canonical
+# source has not already grown them.
+signature = '@objc func autoConnect() {'
+start = text.find(signature)
+if start < 0:
+    raise SystemExit('macOS AUTO method missing after session hardening')
+brace = text.find('{', start)
+depth = 0
+in_string = False
+escaped = False
+end = None
+for pos in range(brace, len(text)):
+    ch = text[pos]
+    if in_string:
+        if escaped:
+            escaped = False
+        elif ch == '\\':
+            escaped = True
+        elif ch == '"':
+            in_string = False
+        continue
+    if ch == '"':
+        in_string = True
+    elif ch == '{':
+        depth += 1
+    elif ch == '}':
+        depth -= 1
+        if depth == 0:
+            end = pos + 1
+            break
+if end is None:
+    raise SystemExit('macOS AUTO method braces are unbalanced after session hardening')
+block = text[start:end]
+old_request = 'self.api.request("/api/auto", method: "POST"'
+new_request = 'self.api.request("/api/strategy/auto", method: "POST"'
+if old_request in block:
+    block = block.replace(old_request, new_request, 1)
+elif new_request not in block:
+    raise SystemExit('macOS AUTO method no longer contains a recognized AUTO endpoint')
+text = text[:start] + block + text[end:]
+end = start + len(block)
+line_start = text.rfind('\n', 0, start) + 1
+indent = text[line_start:start]
+insertions = []
+if '@objc func smartAutoConnect()' not in text:
+    insertions.append(indent + '@objc func smartAutoConnect() { asyncAction { String(data: try self.api.request("/api/strategy/smart-auto", method: "POST", body: [:], timeout: 240), encoding: .utf8) ?? "SMART AUTO connected" } }')
+if '@objc func customConnect()' not in text:
+    insertions.append(indent + '@objc func customConnect() { openUnifiedCustomBuilder() }')
+if insertions:
+    text = text[:end] + '\n' + '\n'.join(insertions) + text[end:]
 for marker in (
     'window.minSize = NSSize(width: 720, height: 520)',
     'buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry()',
