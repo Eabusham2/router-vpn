@@ -77,6 +77,34 @@ def main() -> int:
         assert wg.read_bytes() == original
         assert not list(conf.glob(".wg.conf.runtime-*"))
 
+        # A same-type target swap after staging must be detected by inode
+        # identity, not merely by checking that the replacement is a regular file.
+        race = conf / "race.json"
+        foreign = conf / "foreign.json"
+        private(race, "old-owned\n")
+        private(foreign, "foreign-replacement\n")
+        real_trusted_path = CFG.trusted_path
+        trusted_calls = 0
+
+        def swap_target_on_recheck(root_text, path_text, *, must_exist=False):
+            nonlocal trusted_calls
+            result = real_trusted_path(root_text, path_text, must_exist=must_exist)
+            if Path(path_text) == race:
+                trusted_calls += 1
+                if trusted_calls == 2:
+                    os.replace(foreign, race)
+            return result
+
+        with mock.patch.object(CFG, "trusted_path", side_effect=swap_target_on_recheck):
+            try:
+                CFG.atomic_write(str(root), str(race), b"new-owned\n")
+            except RuntimeError as exc:
+                assert "target identity changed" in str(exc)
+            else:
+                raise AssertionError("runtime config replacement race was accepted")
+        assert race.read_text(encoding="utf-8") == "foreign-replacement\n"
+        assert not list(conf.glob(".race.json.runtime-*"))
+
         outside = root / "outside.conf"
         private(outside, "keep\n")
         try:
