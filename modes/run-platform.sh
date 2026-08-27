@@ -15,11 +15,11 @@ if [[ $(uname -s) != Darwin ]]; then
   exec bash "$SOURCE" "$@"
 fi
 
-RUN="$ROOT/run"
-mkdir -p "$RUN"
-TMP=$(mktemp "$RUN/platform-runner.XXXXXX")
+umask 077
+RUN=$(python3 "$SCRIPT_DIR/runtime-pids.py" run-dir "$ROOT")
+TMP=$(mktemp "$RUN/.platform-runner.XXXXXX")
 chmod 700 "$TMP"
-cleanup(){ rm -f "$TMP"; }
+cleanup(){ rm -f -- "$TMP"; }
 trap cleanup EXIT INT TERM
 python3 - "$SOURCE" "$TMP" "$SCRIPT_DIR" <<'PY'
 from pathlib import Path
@@ -55,4 +55,4 @@ text=text.replace('bash "$SCRIPT_DIR/run-max.sh" "$candidate"','bash "$SCRIPT_DI
 text=text.replace('bash "$SCRIPT_DIR/stop-mode.sh"','bash "$SCRIPT_DIR/stop-mode-platform.sh"')
 dst.write_text(text,encoding='utf-8')
 PY
-exec bash "$TMP" "$@"
+bash "$TMP" "$@"
