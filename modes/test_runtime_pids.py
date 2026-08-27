@@ -147,6 +147,21 @@ def main() -> int:
     assert "native-multihop.pid" not in native_multihop
     assert "PID_FILE" not in native_multihop
 
+    linux_standard = (HERE / "native-standard-exit-linux.sh").read_text(encoding="utf-8")
+    assert 'verified-mode "$ROOT" "$PID_MODE"' in linux_standard
+    assert 'record "$ROOT" "$PID_MODE" "$child"' in linux_standard
+    assert "native-standard-exit.pid" not in linux_standard
+    assert "PID_FILE" not in linux_standard
+
+    openvpn_standard = (HERE / "native-openvpn-standard-exit.sh").read_text(encoding="utf-8")
+    assert 'verified-mode "$ROOT" "$mode"' in openvpn_standard
+    assert 'record "$ROOT" "$PID_MODE_BRIDGE" "$BRIDGE_PID"' in openvpn_standard
+    assert 'record "$ROOT" "$PID_MODE_OPENVPN" "$child"' in openvpn_standard
+    assert "openvpn.pid" not in openvpn_standard
+    assert "entry-bridge.pid" not in openvpn_standard
+    assert "PID_FILE" not in openvpn_standard
+    assert "BRIDGE_PID_FILE" not in openvpn_standard
+
     # Every launcher that records background processes must use the verified
     # JSON PID registry. Raw numeric .pids files can target unrelated reused
     # processes after a crash/restart and are forbidden.
