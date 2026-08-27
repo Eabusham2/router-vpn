@@ -175,9 +175,14 @@ private struct IOSUnifiedMap: UIViewRepresentable {
             self.map = map
             timer?.invalidate()
             timer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-                guard let self, let a = self.entry, let b = self.exit, let packet = self.packet else { return }
-                self.phase += 0.035; if self.phase >= 1 { self.phase -= 1 }
-                packet.coordinate = CLLocationCoordinate2D(latitude: a.latitude + (b.latitude-a.latitude)*self.phase, longitude: a.longitude + (b.longitude-a.longitude)*self.phase)
+                // Timer's callback is @Sendable under Swift 6. Re-enter the UI
+                // actor before touching MapKit/coordinator state instead of
+                // weakening concurrency checking for the whole target.
+                Task { @MainActor [weak self] in
+                    guard let self, let a = self.entry, let b = self.exit, let packet = self.packet else { return }
+                    self.phase += 0.035; if self.phase >= 1 { self.phase -= 1 }
+                    packet.coordinate = CLLocationCoordinate2D(latitude: a.latitude + (b.latitude-a.latitude)*self.phase, longitude: a.longitude + (b.longitude-a.longitude)*self.phase)
+                }
             }
         }
         func ensurePacket(on map: MKMapView) {
