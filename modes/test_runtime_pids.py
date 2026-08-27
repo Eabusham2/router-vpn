@@ -19,6 +19,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="router-vpn-runtime-pids-") as td:
         root = Path(td)
         mode = "reality-vision"
+        assert PIDS.run_dir(str(root)) == root / "run"
         PIDS.init(str(root), mode)
         path = root / "run" / f"{mode}.pids"
         if os.name != "nt":
@@ -124,6 +125,14 @@ def main() -> int:
             else:
                 raise AssertionError("runtime PID registry followed a symlink run directory")
             assert not list(outside.iterdir())
+
+    # Darwin transient platform runners must resolve the same verified run
+    # directory and must not exec away the EXIT cleanup trap.
+    platform_runner = (HERE / "run-platform.sh").read_text(encoding="utf-8")
+    assert 'runtime-pids.py" run-dir' in platform_runner
+    assert 'bash "$TMP" "$@"' in platform_runner
+    assert 'exec bash "$TMP" "$@"' not in platform_runner
+    assert 'trap cleanup EXIT INT TERM' in platform_runner
 
     # Every launcher that records background processes must use the verified
     # JSON PID registry. Raw numeric .pids files can target unrelated reused
