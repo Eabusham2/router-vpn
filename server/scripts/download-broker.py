@@ -59,6 +59,12 @@ _policy_spec.loader.exec_module(_artifact_policy)
 NATIVE_PACKAGE_ARTIFACTS = _artifact_policy.NATIVE_PACKAGE_ARTIFACTS
 DIRECT_ARTIFACTS = _artifact_policy.DIRECT_ARTIFACTS
 
+_mobile_provenance_spec = spec_from_file_location("router_vpn_mobile_artifact_provenance", SCRIPT_DIR / "mobile-artifact-provenance.py")
+if _mobile_provenance_spec is None or _mobile_provenance_spec.loader is None:
+    raise RuntimeError("cannot load mobile-artifact-provenance.py")
+_mobile_provenance = module_from_spec(_mobile_provenance_spec)
+_mobile_provenance_spec.loader.exec_module(_mobile_provenance)
+
 MAX_GITHUB_ARTIFACT = 768 * 1024 * 1024
 MAX_MEMBER = 512 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
@@ -226,7 +232,13 @@ def fetch_github_package(home_name: str, temp: Path, progress=None) -> Path:
 def fetch_direct_mobile(name: str, temp: Path, progress=None) -> Path:
     spec = DIRECT_ARTIFACTS[name]
     try:
-        return _fetch_first_artifact(spec["sources"], temp, name, progress=progress)
+        repo, _, head_sha = _github_scope()
+        selected = _fetch_first_artifact(spec["sources"], temp, name, progress=progress)
+        # Workflow metadata narrows discovery to the exact SHA, but the binary
+        # itself is the final trust boundary. Re-prove embedded source identity
+        # after extraction from the Actions artifact and before any delivery.
+        _mobile_provenance.verify(name, selected, head_sha, repo)
+        return selected
     except Exception as exc:
         raise RuntimeError(
             f"{name} requires its same-SHA GitHub mobile artifact; the Linux home node does not fake a platform-specific mobile build fallback: {exc}"
