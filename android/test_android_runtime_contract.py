@@ -72,6 +72,17 @@ for marker in (
 assert "libs/libbox.aar" in gradle
 assert "libs/libxray.aar" not in gradle
 assert "prepareXrayLibXray" not in gradle
+# Verification must not stream jar/unzip/javap producers into grep -q while
+# pipefail is enabled: an early successful grep can SIGPIPE the producer and
+# turn a present class/API into a false missing-bridge failure.
+for forbidden in (
+    'jar tf "$classes" | grep',
+    'unzip -l "$AAR" | grep',
+    'javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep',
+):
+    assert forbidden not in combined_build, f"pipefail-sensitive AAR verifier pipeline returned: {forbidden}"
+for marker in ('aar_list="$tmp/aar.list"', 'class_list="$tmp/classes.list"', 'api_list="$tmp/libbox.javap"'):
+    assert marker in combined_build, f"AAR verifier no longer snapshots producer output: {marker}"
 assert 'android:name=".XrayVpnService"' in manifest
 
 # Xray VpnService must own the TUN, protect core and bootstrap-DNS sockets,
