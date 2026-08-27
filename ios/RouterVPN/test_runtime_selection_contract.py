@@ -75,6 +75,9 @@ for marker in [
     'IOSUnifiedMap', 'Connect', 'Disconnect', 'Kill switch', 'Multihop', 'Settings', 'Mode', 'DNS',
     'New CUSTOM preset', 'systemBlue', 'systemOrange', 'systemPink', 'real coordinates',
     'IOSHomeSummaryView', 'Require encrypted', 'Require obfuscation',
+    'static func dismantleUIView(_ uiView: MKMapView, coordinator: Coordinator)',
+    'coordinator.stopPacketAnimation()', 'func stopPacketAnimation()', 'timer = nil', 'map = nil',
 ]:
     assert marker in unified, marker
+assert 'deinit { timer?.invalidate() }' not in unified, 'Swift 6 nonisolated deinit must not touch non-Sendable Timer'
 print('iOS runtime + helper-chain fail-closed + unified AUTO/SMART/CUSTOM strategy contract OK')
