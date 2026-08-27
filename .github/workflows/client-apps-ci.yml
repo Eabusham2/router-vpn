@@ -261,6 +261,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM='' \
+            ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" \
             build 2>&1 | tee "$LOG"
           status=${PIPESTATUS[0]}
           set -e
@@ -288,6 +289,12 @@ jobs:
           test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
           grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
           test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$APP/Info.plist")" = 'Eabusham2/router-vpn'
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$APP/Info.plist")" = 'ios-app'
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$EXT/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$EXT/Info.plist")" = 'Eabusham2/router-vpn'
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$EXT/Info.plist")" = 'ios-packet-tunnel'
           grep -q 'import WireGuardKit' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift
           grep -q 'RouterVPNWireGuardConfig.parse' PacketTunnel/PacketTunnelProvider.swift
