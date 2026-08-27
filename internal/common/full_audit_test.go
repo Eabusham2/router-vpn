@@ -63,8 +63,11 @@ func TestASUSProtectedJFFSScriptsAreNeverTargeted(t *testing.T) {
 		}
 	}
 	for _, marker := range []string{
-		`grep -Fqx "$LINE" "$FILE" 2>/dev/null || printf '%s\n' "$LINE" >> "$FILE"`,
-		`grep -Fvx -- "$LINE" "$FILE" > "$TMP" || true`,
+		`safe_jffs_file "$FILE"`,
+		`new_jffs_tmp "$FILE"`,
+		`grep -Fqx "$LINE" "$ACTIVE_TMP" 2>/dev/null || printf '%s\n' "$LINE" >> "$ACTIVE_TMP"`,
+		`awk -v runtime="$RUNTIME"`,
+		`commit_jffs_tmp "$FILE" 755`,
 		`LINE="$LINE || true"`,
 		`write_hook "$NAT_START" "$RUNTIME apply"`,
 		`write_hook "$FIREWALL_START" "$RUNTIME apply"`,
