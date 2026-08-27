@@ -34,6 +34,14 @@ def main() -> int:
         CLEAN.cleanup(str(root), str(session))
         assert not session.exists()
 
+        for category in ("native-standard-exit", "openvpn-standard-exit"):
+            standard = run / category / "session-1"
+            standard.mkdir(parents=True)
+            (standard / "secret").write_text("private\n", encoding="utf-8")
+            assert CLEAN.verify_directory(str(root), str(standard)) == standard
+            CLEAN.cleanup(str(root), str(standard))
+            assert not standard.exists()
+
         # First launch with no run directory is an intentional no-op.
         fresh = root / "fresh"
         fresh.mkdir()
