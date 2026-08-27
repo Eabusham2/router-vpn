@@ -15,6 +15,21 @@ FIREWALL_START="$JFFS_DIR/firewall-start"
 TAG=ROUTER_VPN
 SELF=$0
 
+# The saved config is shell syntax, so validate its leaf and JFFS directory
+# before sourcing anything from persistent storage. A symlink here would turn a
+# forwarding helper into arbitrary root-shell execution.
+if [ -L "$JFFS_DIR" ]; then
+  printf 'ERROR: refusing symlinked Router VPN JFFS directory: %s\n' "$JFFS_DIR" >&2
+  exit 1
+fi
+if [ -L "$CONFIG" ]; then
+  printf 'ERROR: refusing symlinked Router VPN forwarding config: %s\n' "$CONFIG" >&2
+  exit 1
+fi
+if [ -e "$CONFIG" ] && [ ! -f "$CONFIG" ]; then
+  printf 'ERROR: refusing non-regular Router VPN forwarding config: %s\n' "$CONFIG" >&2
+  exit 1
+fi
 [ ! -f "$CONFIG" ] || . "$CONFIG"
 
 DST=${ROUTER_VPN_HOST:-192.168.50.133}
@@ -42,6 +57,44 @@ say(){ printf '%s\n' "$*"; }
 warn(){ printf 'WARNING: %s\n' "$*" >&2; }
 fail(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 invalid(){ printf 'ERROR: %s\n' "$*" >&2; return 1; }
+
+ACTIVE_TMP=''
+cleanup_tmp(){
+  [ -z "$ACTIVE_TMP" ] || rm -f -- "$ACTIVE_TMP"
+  ACTIVE_TMP=''
+}
+trap cleanup_tmp EXIT
+trap 'cleanup_tmp; exit 1' HUP INT TERM
+
+safe_jffs_file(){
+  FILE=$1
+  case "$FILE" in
+    "$JFFS_DIR"/*) ;;
+    *) fail "refusing Router VPN persistence path outside $JFFS_DIR: $FILE" ;;
+  esac
+  [ -d "$JFFS_DIR" ] && [ ! -L "$JFFS_DIR" ] || fail "Router VPN JFFS directory is missing or unsafe: $JFFS_DIR"
+  [ ! -L "$FILE" ] || fail "refusing symlinked Router VPN persistent file: $FILE"
+  [ ! -e "$FILE" ] || [ -f "$FILE" ] || fail "refusing non-regular Router VPN persistent file: $FILE"
+}
+
+new_jffs_tmp(){
+  FILE=$1
+  DIR=${FILE%/*}
+  NAME=${FILE##*/}
+  TMP=$(mktemp "$DIR/.$NAME.router-vpn.XXXXXX") || fail "could not create private JFFS staging file for $FILE"
+  ACTIVE_TMP=$TMP
+}
+
+commit_jffs_tmp(){
+  FILE=$1 MODE=$2
+  [ -n "$ACTIVE_TMP" ] || fail "no Router VPN JFFS staging file exists for $FILE"
+  chmod "$MODE" "$ACTIVE_TMP"
+  [ -d "$JFFS_DIR" ] && [ ! -L "$JFFS_DIR" ] || fail "Router VPN JFFS directory changed before adoption"
+  [ ! -L "$FILE" ] || fail "Router VPN persistent target became a symlink before adoption: $FILE"
+  [ ! -e "$FILE" ] || [ -f "$FILE" ] || fail "Router VPN persistent target changed type before adoption: $FILE"
+  mv -f "$ACTIVE_TMP" "$FILE"
+  ACTIVE_TMP=''
+}
 
 validate_port(){
   NAME=$1; VALUE=$2
@@ -97,8 +150,11 @@ need_router(){
   if [ "$JFFS_DIR" = /jffs/scripts ]; then
     [ -d /jffs ] || fail 'This installer must run on the ASUS Asuswrt-Merlin router.'
   else
+    [ ! -L "$JFFS_DIR" ] || fail "refusing symlinked Router VPN JFFS directory: $JFFS_DIR"
     [ -d "$JFFS_DIR" ] || mkdir -p "$JFFS_DIR"
   fi
+  [ -d "$JFFS_DIR" ] && [ ! -L "$JFFS_DIR" ] || fail "Router VPN JFFS directory is missing or unsafe: $JFFS_DIR"
+  command -v mktemp >/dev/null 2>&1 || fail 'mktemp is required for atomic Router VPN JFFS persistence.'
   resolve_iptables
   "$IPTABLES" -m comment -h >/dev/null 2>&1 || fail 'iptables comment match is required so Router VPN can own/remove only its own rules.'
   "$IPTABLES" -m state -h >/dev/null 2>&1 || fail 'iptables state match is required for narrow NEW-only Router VPN forwarding.'
@@ -307,67 +363,77 @@ apply_all(){
 }
 
 write_hook(){
-  FILE=$1 LINE=$2
-  LINE="$LINE || true"
-  [ -f "$FILE" ] || printf '#!/bin/sh\n' > "$FILE"
-  grep -Fqx "$LINE" "$FILE" 2>/dev/null || printf '%s\n' "$LINE" >> "$FILE"
-  chmod 755 "$FILE"
+  FILE=$1
+  LINE="$2 || true"
+  safe_jffs_file "$FILE"
+  new_jffs_tmp "$FILE"
+  if [ -f "$FILE" ]; then
+    cat "$FILE" > "$ACTIVE_TMP"
+  else
+    printf '#!/bin/sh\n' > "$ACTIVE_TMP"
+  fi
+  grep -Fqx "$LINE" "$ACTIVE_TMP" 2>/dev/null || printf '%s\n' "$LINE" >> "$ACTIVE_TMP"
+  commit_jffs_tmp "$FILE" 755
 }
 
 remove_hook_lines(){
   FILE=$1
-  [ -f "$FILE" ] || return 0
-  for LINE in \
-    "$RUNTIME apply-nat" \
-    "$RUNTIME apply-filter" \
-    "$RUNTIME apply" \
-    '/jffs/scripts/router-vpn-forward.sh apply-nat' \
-    '/jffs/scripts/router-vpn-forward.sh apply-filter' \
-    '/jffs/scripts/router-vpn-forward.sh apply' \
-    '/jffs/scripts/router-vpn-forward.sh nat' \
-    '/jffs/scripts/router-vpn-forward.sh filter "$1"'
-  do
-    TMP="$FILE.router-vpn.$$"
-    grep -Fvx -- "$LINE" "$FILE" > "$TMP" || true
-    cat "$TMP" > "$FILE"
-    rm -f "$TMP"
-    GUARDED_LINE="$LINE || true"
-    TMP="$FILE.router-vpn.$$"
-    grep -Fvx -- "$GUARDED_LINE" "$FILE" > "$TMP" || true
-    cat "$TMP" > "$FILE"
-    rm -f "$TMP"
-  done
-  chmod 755 "$FILE"
+  [ -e "$FILE" ] || return 0
+  safe_jffs_file "$FILE"
+  new_jffs_tmp "$FILE"
+  awk -v runtime="$RUNTIME" '
+    function owned(line) {
+      return line == runtime " apply-nat" ||
+             line == runtime " apply-nat || true" ||
+             line == runtime " apply-filter" ||
+             line == runtime " apply-filter || true" ||
+             line == runtime " apply" ||
+             line == runtime " apply || true" ||
+             line == "/jffs/scripts/router-vpn-forward.sh apply-nat" ||
+             line == "/jffs/scripts/router-vpn-forward.sh apply-nat || true" ||
+             line == "/jffs/scripts/router-vpn-forward.sh apply-filter" ||
+             line == "/jffs/scripts/router-vpn-forward.sh apply-filter || true" ||
+             line == "/jffs/scripts/router-vpn-forward.sh apply" ||
+             line == "/jffs/scripts/router-vpn-forward.sh apply || true" ||
+             line == "/jffs/scripts/router-vpn-forward.sh nat" ||
+             line == "/jffs/scripts/router-vpn-forward.sh nat || true" ||
+             line == "/jffs/scripts/router-vpn-forward.sh filter \"$1\"" ||
+             line == "/jffs/scripts/router-vpn-forward.sh filter \"$1\" || true"
+    }
+    !owned($0) { print }
+  ' "$FILE" > "$ACTIVE_TMP"
+  commit_jffs_tmp "$FILE" 755
 }
 
 write_saved(){
-  NAME=$1 VALUE=$2
-  printf ': "${%s:=%s}"\n' "$NAME" "$VALUE" >> "$CONFIG"
+  NAME=$1 VALUE=$2 OUT=$3
+  printf ': "${%s:=%s}"\n' "$NAME" "$VALUE" >> "$OUT"
 }
 
 write_config(){
   validate_settings || return 1
-  : > "$CONFIG"
-  printf '%s\n' '# Generated by router-vpn. Public forwarding settings only; no VPN keys/tokens.' >> "$CONFIG"
-  write_saved ROUTER_VPN_HOST "$DST"
-  write_saved ROUTER_VPN_WAN_INTERFACE "$ROUTER_VPN_WAN_INTERFACE"
-  write_saved ROUTER_VPN_HEALTH_PORT "$ROUTER_VPN_HEALTH_PORT"
-  write_saved ROUTER_VPN_HEALTH_PATH "$ROUTER_VPN_HEALTH_PATH"
-  write_saved WG_PORT "$WG_PORT"
-  write_saved AWG_PORT "$AWG_PORT"
-  write_saved ROSENPASS_PORT "$ROSENPASS_PORT"
-  write_saved REALITY_PORT "$REALITY_PORT"
-  write_saved HY2_PORT "$HY2_PORT"
-  write_saved SS_PORT "$SS_PORT"
-  write_saved XRAY_PQ_PORT "$XRAY_PQ_PORT"
-  write_saved XHTTP_PORT "$XHTTP_PORT"
-  write_saved SS_V2RAY_PORT "$SS_V2RAY_PORT"
-  write_saved NAIVE_PORT "$NAIVE_PORT"
-  write_saved OVERTLS_PORT "$OVERTLS_PORT"
-  write_saved SSR_PORT "$SSR_PORT"
-  write_saved ACME_EXTERNAL_PORT "$ACME_EXTERNAL_PORT"
-  write_saved ACME_INTERNAL_PORT "$ACME_INTERNAL_PORT"
-  chmod 600 "$CONFIG"
+  safe_jffs_file "$CONFIG"
+  new_jffs_tmp "$CONFIG"
+  printf '%s\n' '# Generated by router-vpn. Public forwarding settings only; no VPN keys/tokens.' > "$ACTIVE_TMP"
+  write_saved ROUTER_VPN_HOST "$DST" "$ACTIVE_TMP"
+  write_saved ROUTER_VPN_WAN_INTERFACE "$ROUTER_VPN_WAN_INTERFACE" "$ACTIVE_TMP"
+  write_saved ROUTER_VPN_HEALTH_PORT "$ROUTER_VPN_HEALTH_PORT" "$ACTIVE_TMP"
+  write_saved ROUTER_VPN_HEALTH_PATH "$ROUTER_VPN_HEALTH_PATH" "$ACTIVE_TMP"
+  write_saved WG_PORT "$WG_PORT" "$ACTIVE_TMP"
+  write_saved AWG_PORT "$AWG_PORT" "$ACTIVE_TMP"
+  write_saved ROSENPASS_PORT "$ROSENPASS_PORT" "$ACTIVE_TMP"
+  write_saved REALITY_PORT "$REALITY_PORT" "$ACTIVE_TMP"
+  write_saved HY2_PORT "$HY2_PORT" "$ACTIVE_TMP"
+  write_saved SS_PORT "$SS_PORT" "$ACTIVE_TMP"
+  write_saved XRAY_PQ_PORT "$XRAY_PQ_PORT" "$ACTIVE_TMP"
+  write_saved XHTTP_PORT "$XHTTP_PORT" "$ACTIVE_TMP"
+  write_saved SS_V2RAY_PORT "$SS_V2RAY_PORT" "$ACTIVE_TMP"
+  write_saved NAIVE_PORT "$NAIVE_PORT" "$ACTIVE_TMP"
+  write_saved OVERTLS_PORT "$OVERTLS_PORT" "$ACTIVE_TMP"
+  write_saved SSR_PORT "$SSR_PORT" "$ACTIVE_TMP"
+  write_saved ACME_EXTERNAL_PORT "$ACME_EXTERNAL_PORT" "$ACTIVE_TMP"
+  write_saved ACME_INTERNAL_PORT "$ACME_INTERNAL_PORT" "$ACTIVE_TMP"
+  commit_jffs_tmp "$CONFIG" 600
 }
 
 install(){
@@ -375,8 +441,14 @@ install(){
   validate_settings || { remove_owned_from_chain nat PREROUTING; remove_owned_from_chain filter FORWARD; return 1; }
   mkdir -p "$JFFS_DIR"
   remove_rules
-  if [ "$SELF" != "$RUNTIME" ]; then cp "$SELF" "$RUNTIME"; fi
-  chmod 755 "$RUNTIME"
+  if [ "$SELF" != "$RUNTIME" ]; then
+    safe_jffs_file "$RUNTIME"
+    new_jffs_tmp "$RUNTIME"
+    cat "$SELF" > "$ACTIVE_TMP"
+    commit_jffs_tmp "$RUNTIME" 755
+  else
+    chmod 755 "$RUNTIME"
+  fi
   write_config
   remove_hook_lines "$NAT_START"
   remove_hook_lines "$FIREWALL_START"
