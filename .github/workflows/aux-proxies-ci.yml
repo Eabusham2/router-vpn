@@ -117,6 +117,7 @@ jobs:
           test ${#SETUP_TOKEN} -ge 32
           BROKER=$(docker run -d --rm --platform linux/arm64 --network host \
             -e ROUTER_VPN_GITHUB_DISABLE=1 \
+            -e ROUTER_VPN_GITHUB_SHA="$GITHUB_SHA" \
             -v "$TEST_ROOT:/opt/router-vpn:ro" \
             --entrypoint python3 router-vpn-ci-init:arm64 \
             /src/server/scripts/download-broker.py --base /opt/router-vpn --port 8786)
