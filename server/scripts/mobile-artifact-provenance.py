@@ -2,6 +2,7 @@
 """Verify source identity embedded inside Router VPN mobile artifacts."""
 from __future__ import annotations
 
+import argparse
 import json
 import plistlib
 from pathlib import Path, PurePosixPath
@@ -146,7 +147,6 @@ def verify_ios(path: Path, expected_sha: str, expected_repo: str) -> None:
     _verify_common(app, expected_sha, expected_repo, "ios-app")
     _verify_common(tunnel, expected_sha, expected_repo, "ios-packet-tunnel")
 
-
 def verify(name: str, path: Path, expected_sha: str, expected_repo: str) -> None:
     if name == "router-vpn-android.apk":
         verify_android(path, expected_sha, expected_repo)
@@ -155,3 +155,23 @@ def verify(name: str, path: Path, expected_sha: str, expected_repo: str) -> None
         verify_ios(path, expected_sha, expected_repo)
         return
     raise RuntimeError(f"unsupported mobile artifact provenance request: {name}")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Verify embedded Router VPN mobile artifact source provenance.")
+    ap.add_argument("--name", required=True)
+    ap.add_argument("--path", required=True)
+    ap.add_argument("--sha", required=True)
+    ap.add_argument("--repo", default="Eabusham2/router-vpn")
+    args = ap.parse_args()
+    try:
+        verify(args.name, Path(args.path), args.sha, args.repo)
+    except RuntimeError as exc:
+        raise SystemExit(f"mobile artifact provenance verification failed: {exc}") from exc
+    print(f"mobile artifact provenance verified: {args.name} @ {args.sha}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
