@@ -107,7 +107,7 @@ func TestAndroidNativeWireGuardAmneziaWGLayeredAndNarrowMultihopAreReal(t *testi
 
 func TestWindowsRawAndLayeredNativeRuntimeIsRealAndUnsupportedModesStayGated(t *testing.T) {
 	wg := repoFile(t, "client/native-wireguard-windows.ps1")
-	for _, required := range []string{"WireGuard\\wireguard.exe", "/installtunnelservice", "/uninstalltunnelservice", "WireGuardTunnel`$", "Is-Administrator", "HOMEVPN_PROFILE_ID", "Unsafe WireGuard profile path", "will not fake native readiness through WSL", "windows-kill-switch.ps1", "Invoke-KillSwitch 'prepare'", "Invoke-KillSwitch 'release'"} {
+	for _, required := range []string{"WireGuard\\wireguard.exe", "/installtunnelservice", "/uninstalltunnelservice", "WireGuardTunnel`$", "Is-Administrator", "HOMEVPN_PROFILE_ID", "Unsafe WireGuard profile path", "will not fake native readiness through WSL", "windows-kill-switch.ps1", "Invoke-KillSwitch 'prepare'", "Invoke-KillSwitch 'release'", "router-vpn-dns.process.json", "Write-RouterVPNProcessRecord", "Stop-RouterVPNRecordedProcess"} {
 		if !strings.Contains(wg, required) {
 			t.Fatalf("Windows native WireGuard helper missing %q", required)
 		}
@@ -115,10 +115,20 @@ func TestWindowsRawAndLayeredNativeRuntimeIsRealAndUnsupportedModesStayGated(t *
 	if strings.Contains(wg, "wsl.exe") {
 		t.Fatal("native Windows WireGuard helper must not implement its tunnel through WSL")
 	}
+	for _, forbidden := range []string{"router-vpn-dns.pid", "Stop-Process -Id $pidValue"} {
+		if strings.Contains(wg, forbidden) {
+			t.Fatalf("Windows WireGuard process ownership regressed to raw PID handling %q", forbidden)
+		}
+	}
 	layered := repoFile(t, "client/native-windows-mode.ps1")
-	for _, required := range []string{"sing-box.exe", "xray.exe", "hysteria2", "shadowsocks", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "split", "max", "Patch-SingBox", "Get-SelectedProfile", "fastest_dns_host", "hijack-dns", "HOMEVPN_JUMBO", "9000", "Write-Utf8NoBom", "Native Windows TUN modes require an elevated Router VPN process", "windows-kill-switch.ps1", "Invoke-KillSwitch 'prepare'", "Invoke-KillSwitch 'release'", "Get-TunAlias"} {
+	for _, required := range []string{"sing-box.exe", "xray.exe", "hysteria2", "shadowsocks", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "split", "max", "Patch-SingBox", "Get-SelectedProfile", "fastest_dns_host", "hijack-dns", "HOMEVPN_JUMBO", "9000", "Write-Utf8NoBom", "Native Windows TUN modes require an elevated Router VPN process", "windows-kill-switch.ps1", "Invoke-KillSwitch 'prepare'", "Invoke-KillSwitch 'release'", "Get-TunAlias", "native-windows-mode.process.json", "xray.process.json", "Write-RouterVPNProcessRecord", "Test-RouterVPNRecordedProcess", "Stop-RouterVPNRecordedProcess"} {
 		if !strings.Contains(layered, required) {
 			t.Fatalf("Windows native layered helper missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"children.pids", "Stop-PidFile", "Set-Content -Encoding ASCII -LiteralPath $PidFile"} {
+		if strings.Contains(layered, forbidden) {
+			t.Fatalf("Windows layered process ownership regressed to raw PID handling %q", forbidden)
 		}
 	}
 	kill := repoFile(t, "client/windows-kill-switch.ps1")
