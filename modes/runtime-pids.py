@@ -154,6 +154,11 @@ def atomic_write(path: Path, records: list[dict]) -> None:
             target = None
         if target is not None and (stat.S_ISLNK(target.st_mode) or not stat.S_ISREG(target.st_mode)):
             raise RuntimeError("runtime PID target changed before adoption")
+        if current is None:
+            if target is not None:
+                raise RuntimeError("runtime PID target appeared before adoption")
+        elif target is None or not os.path.samestat(current, target):
+            raise RuntimeError("runtime PID target identity changed before adoption")
         os.replace(tmp, path)
         committed = True
         try:
