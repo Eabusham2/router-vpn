@@ -23,44 +23,50 @@ EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN"
 verify_aar() {
   test -s "$AAR"
   unzip -tq "$AAR" >/dev/null
-  unzip -l "$AAR" | grep -q 'classes.jar' || { echo 'combined libbox AAR is missing classes.jar' >&2; return 1; }
-  for abi in armeabi-v7a arm64-v8a x86 x86_64; do
-    unzip -l "$AAR" | grep -q "jni/$abi/libbox\.so" || { echo "combined libbox AAR is missing jni/$abi/libbox.so" >&2; return 1; }
-  done
-  local tmp classes
+
+  local tmp classes aar_list class_list api_list
   tmp=$(mktemp -d)
   classes="$tmp/classes.jar"
+  aar_list="$tmp/aar.list"
+  class_list="$tmp/classes.list"
+  api_list="$tmp/libbox.javap"
   trap 'rm -rf "$tmp"' RETURN
+
+  # Avoid producer | grep -q under pipefail: grep may exit as soon as it finds
+  # the wanted member, SIGPIPE the producer, and turn a proven match into a
+  # false-negative verification failure.
+  unzip -Z1 "$AAR" >"$aar_list"
+  grep -Fxq 'classes.jar' "$aar_list" || {
+    echo 'combined libbox AAR is missing classes.jar' >&2
+    return 1
+  }
+  for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+    grep -Fxq "jni/$abi/libbox.so" "$aar_list" || {
+      echo "combined libbox AAR is missing jni/$abi/libbox.so" >&2
+      return 1
+    }
+  done
+
   unzip -p "$AAR" classes.jar >"$classes"
-  jar tf "$classes" | grep -qx 'io/nekohasekai/libbox/RouterXrayDialerController.class' || {
+  jar tf "$classes" >"$class_list"
+  grep -Fxq 'io/nekohasekai/libbox/RouterXrayDialerController.class' "$class_list" || {
     echo 'combined libbox AAR is missing RouterXrayDialerController' >&2
     return 1
   }
-  javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep -q 'routerXrayInvoke' || {
-    echo 'combined libbox AAR is missing routerXrayInvoke bridge' >&2
-    return 1
-  }
-  javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep -q 'routerXrayRegisterDialerController' || {
-    echo 'combined libbox AAR is missing Xray dialer-controller bridge' >&2
-    return 1
-  }
-  javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep -q 'routerXraySetDNS' || {
-    echo 'combined libbox AAR is missing protected Xray DNS bridge' >&2
-    return 1
-  }
-  javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep -q 'routerXrayResetDNS' || {
-    echo 'combined libbox AAR is missing Xray DNS reset bridge' >&2
-    return 1
-  }
-  javap -classpath "$classes" io.nekohasekai.libbox.Libbox | grep -q 'routerXrayBridgeRevision' || {
-    echo 'combined libbox AAR is missing Xray revision trust marker' >&2
-    return 1
-  }
-  [[ $(jar tf "$classes" | grep -c '^go/Seq.class$') == 1 ]] || {
+
+  javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
+  for symbol in     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
+    grep -Fq "$symbol" "$api_list" || {
+      echo "combined libbox AAR is missing $symbol bridge" >&2
+      return 1
+    }
+  done
+
+  [[ $(grep -c '^go/Seq.class$' "$class_list") == 1 ]] || {
     echo 'combined libbox AAR must contain exactly one gomobile go.Seq runtime class' >&2
     return 1
   }
-  if unzip -l "$AAR" | grep -q '/libgojni\.so'; then
+  if grep -Eq '^jni/[^/]+/libgojni\.so$' "$aar_list"; then
     echo 'combined SagerNet libbox AAR unexpectedly contains a second generic libgojni.so' >&2
     return 1
   fi
