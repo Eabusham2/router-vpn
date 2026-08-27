@@ -38,6 +38,9 @@ targets:
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Router VPN connects to your home VPN node on the local network to import its private profile and manage tunnel-only services.
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Router VPN can show your real device location on the VPN map when you explicitly tap the location button. Location is not required for the VPN and is never inferred from your IP address.
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
+        INFOPLIST_KEY_RouterVPNSourceSHA: "$(ROUTER_VPN_SOURCE_SHA)"
+        INFOPLIST_KEY_RouterVPNSourceRepository: "Eabusham2/router-vpn"
+        INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-app"
         TARGETED_DEVICE_FAMILY: "1,2"
     dependencies:
       - target: RouterVPNPacketTunnel
@@ -73,6 +76,9 @@ targets:
         INFOPLIST_KEY_NSExtension_NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
         INFOPLIST_KEY_NSExtension_NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
+        INFOPLIST_KEY_RouterVPNSourceSHA: "$(ROUTER_VPN_SOURCE_SHA)"
+        INFOPLIST_KEY_RouterVPNSourceRepository: "Eabusham2/router-vpn"
+        INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-packet-tunnel"
         LIBRARY_SEARCH_PATHS: "$(inherited) $(CONFIGURATION_BUILD_DIR)"
         OTHER_LDFLAGS: "$(inherited) -lresolv -framework UIKit"
         SKIP_INSTALL: YES
