@@ -58,6 +58,12 @@ C=${ROUTER_VPN_TEST_HEALTH_COUNT:-}; if [ -n "$C" ]; then N=0; [ ! -f "$C" ] || 
 
     run(['/bin/sh',str(HELPER),'install'],env); rt=jffs/'router-vpn-forward.sh'; cfg=jffs/'router-vpn-forward.conf'
     assert rt.exists() and cfg.exists(); assert f'{rt} apply || true' in nat.read_text(); assert f'{rt} apply || true' in fw.read_text(); assert unrelated(state)==baseline
+    assert 'echo unrelated-nat-hook >/dev/null' in nat.read_text()
+    for protected in ('cod-na-block.sh','rogue-dhcp-ra-guard.sh','att-bgw-guard.sh'): assert protected in fw.read_text()
+    if os.name != 'nt':
+        assert rt.stat().st_mode & 0o777 == 0o755 and cfg.stat().st_mode & 0o777 == 0o600
+        assert nat.stat().st_mode & 0o777 == 0o755 and fw.stat().st_mode & 0o777 == 0o755
+    assert not list(jffs.glob('.*.router-vpn.*')), 'atomic JFFS staging files survived install'
     assert not (state/'nat.ROUTER_VPN_DNAT').exists() and not (state/'filter.ROUTER_VPN_FWD').exists(); assert tuple(map(len,owned(state)))==(16,16)
     run(['/bin/sh',str(rt),'verify'],env)
 
@@ -84,5 +90,22 @@ C=${ROUTER_VPN_TEST_HEALTH_COUNT:-}; if [ -n "$C" ]; then N=0; [ ! -f "$C" ] || 
 
     bad='-A PREROUTING -i eth0 -p udp --dport 45999 -m comment --comment ROUTER_VPN -j DNAT --to-destination 192.168.50.133:45999'; nf.write_text(nf.read_text()+bad+'\n'); run(['/bin/sh',str(rt),'verify'],env,False); nf.write_text('\n'.join(x for x in lines(state,'nat','PREROUTING') if x!=bad)+'\n'); run(['/bin/sh',str(rt),'verify'],env)
     for protected in ('cod-na-block.sh','rogue-dhcp-ra-guard.sh','att-bgw-guard.sh'): assert protected in fw.read_text()
+
+    # The persisted config is sourced as root. A symlink must be rejected before
+    # any content in its target can execute.
+    marker=b/'config-was-sourced'
+    evil=b/'evil-forward.conf'; evil.write_text(f'touch {marker}\n')
+    cfg.unlink(); cfg.symlink_to(evil)
+    run(['/bin/sh',str(rt),'status'],env,False)
+    assert not marker.exists(), 'symlinked Router VPN config was sourced as root'
+    cfg.unlink(); cfg.write_text(good); cfg.chmod(0o600)
+
+    # A symlink in the JFFS ancestry is also rejected before persistent files are
+    # read or written.
+    real_parent=b/'real-jffs'; real_scripts=real_parent/'scripts'; real_scripts.mkdir(parents=True)
+    alias=b/'jffs-alias'; alias.symlink_to(real_parent, target_is_directory=True)
+    redirected=env|{'ROUTER_VPN_JFFS_DIR':str(alias/'scripts')}
+    run(['/bin/sh',str(HELPER),'status'],redirected,False)
+    assert not list(real_scripts.iterdir()), 'redirected JFFS ancestry received Router VPN state'
   print('ASUS Router VPN fail-open forwarding simulation: OK')
 if __name__=='__main__': main()
