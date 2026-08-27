@@ -252,9 +252,12 @@ def main(argv: list[str]) -> int:
             for pid in verified(argv[2]):
                 print(pid)
             return 0
+        if len(argv) == 3 and argv[1] == "run-dir":
+            print(run_dir(argv[2]))
+            return 0
         if len(argv) == 3 and argv[1] == "clear":
             clear(argv[2]); return 0
-        raise RuntimeError("usage: runtime-pids.py init ROOT MODE | record ROOT MODE PID | verified ROOT | clear ROOT")
+        raise RuntimeError("usage: runtime-pids.py init ROOT MODE | record ROOT MODE PID | verified ROOT | run-dir ROOT | clear ROOT")
     except (OSError, RuntimeError) as exc:
         print(f"runtime PID error: {exc}", file=sys.stderr)
         return 1
