@@ -229,13 +229,24 @@ jobs:
       - name: Verify pinned engines and package IPA
         working-directory: ios/RouterVPN
         run: |
-          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"; EXT="$APP/PlugIns/RouterVPNPacketTunnel.appex"; WG="$PWD/.deps/wireguard-apple"
-          test -d "$EXT"; test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'; test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5'; test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'; test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
-          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA"; test "$(plutil -extract RouterVPNSourceRepository raw -o - "$APP/Info.plist")" = 'Eabusham2/router-vpn'; test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$APP/Info.plist")" = 'ios-app'
-          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$EXT/Info.plist")" = "$GITHUB_SHA"; test "$(plutil -extract RouterVPNSourceRepository raw -o - "$EXT/Info.plist")" = 'Eabusham2/router-vpn'; test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$EXT/Info.plist")" = 'ios-packet-tunnel'
-          test -d .deps/Libbox.xcframework; test -s .deps/libbox-LICENSE.txt; grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
-          grep -Fq 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift; grep -Fq 'startLibbox' PacketTunnel/PacketTunnelProvider.swift; grep -Fq 'RouterVPNLibboxEngine' PacketTunnel/PacketTunnelProvider.swift; grep -Fq 'body["node_id"] as? String == expectedNodeID' PacketTunnel/PacketTunnelProvider.swift; grep -Fq 'body["proof"] as? String == Self.proofKind' PacketTunnel/PacketTunnelProvider.swift
-          rm -rf build/unsigned; mkdir -p build/unsigned/Payload; ditto "$APP" build/unsigned/Payload/RouterVPN.app; (cd build/unsigned && zip -qry ../RouterVPN-native-unsigned-resignable.ipa Payload); unzip -tq build/RouterVPN-native-unsigned-resignable.ipa >/dev/null
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"; EXT="$APP/PlugIns/RouterVPNPacketTunnel.appex"; WG="$PWD/.deps/wireguard-apple"; IPA="$PWD/build/RouterVPN-native-unsigned-resignable.ipa"
+          test -d "$EXT" || { echo "::error::PacketTunnel extension is missing"; exit 1; }
+          test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1' || { echo "::error::WireGuardKit commit pin mismatch"; exit 1; }
+          test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5' || { echo "::error::WireGuardKit Package.swift toolchain contract changed"; exit 1; }
+          test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1' || { echo "::error::WireGuardKit recorded pin mismatch"; exit 1; }
+          test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a" || { echo "::error::libwg-go.a is missing"; exit 1; }
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA" || { echo "::error::iOS app source SHA mismatch"; exit 1; }
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$APP/Info.plist")" = 'Eabusham2/router-vpn' || { echo "::error::iOS app source repository mismatch"; exit 1; }
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$APP/Info.plist")" = 'ios-app' || { echo "::error::iOS app artifact family mismatch"; exit 1; }
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$EXT/Info.plist")" = "$GITHUB_SHA" || { echo "::error::iOS PacketTunnel source SHA mismatch"; exit 1; }
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$EXT/Info.plist")" = 'Eabusham2/router-vpn' || { echo "::error::iOS PacketTunnel source repository mismatch"; exit 1; }
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$EXT/Info.plist")" = 'ios-packet-tunnel' || { echo "::error::iOS PacketTunnel artifact family mismatch"; exit 1; }
+          test -d .deps/Libbox.xcframework || { echo "::error::Libbox.xcframework is missing"; exit 1; }
+          test -s .deps/libbox-LICENSE.txt || { echo "::error::Libbox license is missing"; exit 1; }
+          grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin || { echo "::error::Libbox exact pin mismatch"; exit 1; }
+          for marker in 'WireGuardAdapter(with: self)' 'startLibbox' 'RouterVPNLibboxEngine' 'body["node_id"] as? String == expectedNodeID' 'body["proof"] as? String == Self.proofKind'; do grep -Fq "$marker" PacketTunnel/PacketTunnelProvider.swift || { echo "::error::PacketTunnel source contract missing: $marker"; exit 1; }; done
+          rm -rf build/unsigned; mkdir -p build/unsigned/Payload; ditto "$APP" build/unsigned/Payload/RouterVPN.app; (cd build/unsigned && zip -qry ../RouterVPN-native-unsigned-resignable.ipa Payload); unzip -tq "$IPA" >/dev/null
+          python3 ../../server/scripts/mobile-artifact-provenance.py --name router-vpn-ios.ipa --path "$IPA" --sha "$GITHUB_SHA" --repo Eabusham2/router-vpn
       - uses: actions/upload-artifact@v4
         with: {name: RouterVPN-iOS-release-candidate, path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa, if-no-files-found: error, retention-days: 1}
 
