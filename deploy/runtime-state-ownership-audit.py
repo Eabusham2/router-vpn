@@ -154,6 +154,25 @@ require(
     "multihop private publisher followed a symlink parent",
 )
 
+# Cleanup owns only multihop/native-multihop runtime trees. It must never
+# resolve/follow an attacker-controlled leaf into another directory; quarantine
+# and deletion are descriptor-relative beneath the already-open run directory.
+require(
+    "modes/cleanup-private-runtime.py",
+    "src_dir_fd=parent_fd",
+    "dst_dir_fd=run_fd",
+    "follow_symlinks=False",
+    "remove_tree_at",
+    "refusing cleanup of unrelated runtime path",
+)
+require(
+    "modes/test_cleanup_private_runtime.py",
+    "owned symlink leaf survived cleanup",
+    "cleanup followed a symlinked run directory",
+    "outside-link",
+    "Private runtime no-follow cleanup tests: OK",
+)
+
 # SMART/CUSTOM orchestration is also read-only with respect to profiles. It may
 # stop/start candidate processes, but selected profile policy remains controller-owned.
 require(
@@ -296,6 +315,7 @@ for rel in (
     "modes/test_mtu_policy.py",
     "modes/test_dns_policy_runtime.py",
     "modes/test_multihop_private_runtime.py",
+    "modes/test_cleanup_private_runtime.py",
     "modes/test_all_result.py",
     "modes/test_prepare_runtime_profile.py",
     "modes/test_kill_switch.py",
