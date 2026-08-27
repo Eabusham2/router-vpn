@@ -109,7 +109,48 @@ def main() -> int:
         assert_blank_store(portable / "Data/routers.json")
         builder.assert_generic_tree(portable)
 
-        for request, platform in (
+
+        # A GitHub package is accepted only when its embedded source manifest
+        # proves the exact expected commit and package family.
+        prov_root = td / "provenance-package"
+        prov_root.mkdir()
+        builder._provenance.write_manifest(
+            prov_root,
+            "0123456789abcdef0123456789abcdef01234567",
+            "windows-amd64",
+        )
+        archive = td / "provenance-package.zip"
+        builder.zip_dir(prov_root, archive)
+        checked = builder.build_from_github(
+            td / "provenance-ok",
+            archive,
+            "0123456789abcdef0123456789abcdef01234567",
+            "windows-amd64",
+        )
+        assert checked.name == "provenance-package"
+        try:
+            builder.build_from_github(
+                td / "provenance-wrong-sha",
+                archive,
+                "89abcdef0123456789abcdef0123456789abcdef",
+                "windows-amd64",
+            )
+        except RuntimeError as exc:
+            assert "provenance mismatch" in str(exc)
+        else:
+            raise AssertionError("GitHub package with wrong embedded source SHA was accepted")
+        try:
+            builder.build_from_github(
+                td / "provenance-wrong-family",
+                archive,
+                "0123456789abcdef0123456789abcdef01234567",
+                "linux-amd64",
+            )
+        except RuntimeError as exc:
+            assert "family mismatch" in str(exc)
+        else:
+            raise AssertionError("GitHub package with wrong embedded family was accepted")
+\n        for request, platform in (
             ("router-vpn-macos-arm64.zip", "AppKit"),
             ("router-vpn-linux-arm64.zip", "GTK"),
         ):
