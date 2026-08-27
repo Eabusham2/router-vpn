@@ -129,6 +129,20 @@ require(
 )
 forbid("modes/native-multihop-darwin.sh", "native-multihop.pid", "PID_FILE")
 
+require(
+    "modes/stop-mode.sh",
+    'verified "$ROOT"',
+    'clear "$ROOT"',
+    "refusing broad process-name cleanup",
+)
+forbid("modes/stop-mode.sh", 'cat "$RUN"/*.pids', "pkill -f")
+require(
+    "modes/test_stop_mode_pid_ownership.py",
+    "raw legacy PID registry",
+    "kill_calls ==",
+    "Verified central stop-mode PID ownership tests: OK",
+)
+
 # Per-session runtime config adoption must bind the exact target identity:
 # a foreign regular file appearing/replacing the target after staging is not
 # Router VPN state and must never be overwritten.
@@ -481,6 +495,7 @@ for test in (
     "server/scripts/test_configure_portainer_update.py",
     "server/scripts/test_preserve_generated_state.py",
     "modes/test_runtime_pids.py",
+    "modes/test_stop_mode_pid_ownership.py",
     "modes/test_runtime_config.py",
     "modes/test_prepare_runtime_profile.py",
 ):
