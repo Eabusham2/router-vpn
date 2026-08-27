@@ -80,9 +80,16 @@ changes = (
     ),
 )
 for old, new in changes:
-    if text.count(old) != 1:
-        raise SystemExit(f"macOS adaptive/unified strategy/settings/onboarding contract drifted before: {old}")
-    text = text.replace(old, new, 1)
+    count = text.count(old)
+    if count == 1:
+        text = text.replace(old, new, 1)
+    elif count == 0 and new in text:
+        # The canonical source may already contain the migrated unified behavior.
+        # Treat that as converged instead of making packaging depend on a stale
+        # one-time source transform.
+        pass
+    else:
+        raise SystemExit(f"macOS adaptive/unified strategy/settings/onboarding contract drifted: {old}")
 for marker in (
     'window.minSize = NSSize(width: 720, height: 520)',
     'buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry()',
