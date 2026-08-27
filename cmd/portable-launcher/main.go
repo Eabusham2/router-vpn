@@ -176,10 +176,19 @@ func runSelfTest(dataDir, nativeApp string) error {
 		}
 	}
 	test := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", nativeApp, "-BaseUrl", "http://127.0.0.1:8788", "-SelfTest")
-	test.Stdout = os.Stdout
-	test.Stderr = os.Stderr
-	if err := test.Run(); err != nil {
-		return fmt.Errorf("native WPF shell self-test: %w", err)
+	output, err := test.CombinedOutput()
+	if err != nil {
+		// RouterVPNPortable.exe is a GUI binary and may not inherit a hosted-CI
+		// console. Capture only this bounded local shell self-test diagnostic so
+		// self-test-error.txt names the failed UI/source assertion.
+		detail := strings.TrimSpace(string(output))
+		if len(detail) > 4096 {
+			detail = detail[len(detail)-4096:]
+		}
+		if detail == "" {
+			detail = "PowerShell produced no diagnostic output"
+		}
+		return fmt.Errorf("native WPF shell self-test: %w: %s", err, detail)
 	}
 	return nil
 }
