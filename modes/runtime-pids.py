@@ -179,15 +179,23 @@ def record(root: str, mode: str, pid_text: str) -> None:
     except ValueError as exc:
         raise RuntimeError("invalid runtime PID") from exc
     start = process_start(pid)
+    command_hash = process_command_hash(pid)
+    if not command_hash:
+        raise RuntimeError(f"cannot identify runtime PID {pid} command")
     path = mode_file(root, mode)
     records = read_registry(path)
-    if any(int(x.get("pid") or 0) == pid and str(x.get("start") or "") == start for x in records):
+    if any(
+        int(x.get("pid") or 0) == pid
+        and str(x.get("start") or "") == start
+        and str(x.get("command_sha256") or "") == command_hash
+        for x in records
+    ):
         return
     records.append({
         "version": VERSION,
         "pid": pid,
         "start": start,
-        "command_sha256": process_command_hash(pid),
+        "command_sha256": command_hash,
     })
     atomic_write(path, records)
 
@@ -204,8 +212,14 @@ def verified(root: str) -> list[int]:
         for item in records:
             try:
                 pid = int(item.get("pid") or 0)
-                expected = str(item.get("start") or "")
-                if expected and process_start(pid) == expected:
+                expected_start = str(item.get("start") or "")
+                expected_command = str(item.get("command_sha256") or "")
+                if (
+                    expected_start
+                    and expected_command
+                    and process_start(pid) == expected_start
+                    and process_command_hash(pid) == expected_command
+                ):
                     out.append(pid)
             except (RuntimeError, ValueError, TypeError):
                 continue
