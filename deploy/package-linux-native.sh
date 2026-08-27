@@ -138,6 +138,7 @@ the normal Router VPN Linux runtime setup; unsupported mode checks remain unavai
 than being substituted with a fake compatibility path.
 TXT
 
+python3 "$ROOT/deploy/source_provenance.py" "$dir" --family "linux-$ARCH"
 tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
 archive_list="$work/archive-members.txt"
 tar -tzf "$OUT/$name.tar.gz" > "$archive_list"
@@ -146,6 +147,7 @@ grep -Fxq "$name/router-vpn.png" "$archive_list"
 grep -Fxq "$name/router-vpn.desktop" "$archive_list"
 grep -Fxq "$name/install-router-vpn.sh" "$archive_list"
 grep -Fxq "$name/LICENSE" "$archive_list"
+grep -Fxq "$name/ROUTER-VPN-SOURCE.json" "$archive_list"
 if grep -Fq 'router-vpn-bundle.json' "$archive_list"; then
   echo 'Native Linux package unexpectedly contains a private router bundle.' >&2
   exit 1
