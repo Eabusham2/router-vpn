@@ -21,6 +21,8 @@ compose = read(".github/workflows/production-release-compose.yml")
 assert "\n  push:\n    branches: [main]\n" in build, "Build all must be the automatic main-branch release orchestrator"
 assert "group: build-all-${{ github.ref }}" in build, "Build all must cancel superseded main-branch release chains"
 assert "cancel-in-progress: true" in build, "Build all must cancel superseded release chains"
+updater = read("cmd/update-controller/main.go")
+assert '"build-all.yml"' in updater, "update controller must require successful exact-SHA Build-all proof"
 for rel, body in (
     ("source-snapshot.yml", read(".github/workflows/source-snapshot.yml")),
     ("release-candidate.yml", rc),
