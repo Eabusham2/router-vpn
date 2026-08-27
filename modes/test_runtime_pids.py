@@ -26,6 +26,10 @@ def main() -> int:
             assert path.stat().st_mode & 0o777 == 0o600
         PIDS.record(str(root), mode, str(os.getpid()))
         assert os.getpid() in PIDS.verified(str(root))
+        assert os.getpid() in PIDS.verified_mode(str(root), mode)
+        PIDS.init(str(root), "other-mode")
+        assert PIDS.verified_mode(str(root), "other-mode") == []
+        assert os.getpid() in PIDS.verified_mode(str(root), mode)
         records = PIDS.read_registry(path)
         assert len(records) == 1 and records[0]["pid"] == os.getpid()
         assert records[0]["command_sha256"], records
@@ -133,6 +137,15 @@ def main() -> int:
     assert 'bash "$TMP" "$@"' in platform_runner
     assert 'exec bash "$TMP" "$@"' not in platform_runner
     assert 'trap cleanup EXIT INT TERM' in platform_runner
+
+    # Native macOS multihop uses the same birth+command-verified registry;
+    # raw numeric PID files are not an ownership boundary.
+    native_multihop = (HERE / "native-multihop-darwin.sh").read_text(encoding="utf-8")
+    assert 'runtime-pids.py' in native_multihop
+    assert 'verified-mode "$ROOT" "$PID_MODE"' in native_multihop
+    assert 'record "$ROOT" "$PID_MODE" "$child"' in native_multihop
+    assert "native-multihop.pid" not in native_multihop
+    assert "PID_FILE" not in native_multihop
 
     # Every launcher that records background processes must use the verified
     # JSON PID registry. Raw numeric .pids files can target unrelated reused
