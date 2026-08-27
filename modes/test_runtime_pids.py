@@ -93,7 +93,17 @@ def main() -> int:
                 raise AssertionError("runtime PID registry followed a symlink run directory")
             assert not list(outside.iterdir())
 
-    print("Verified runtime PID registry tests: OK")
+
+    # Every launcher that records background processes must use the verified
+    # JSON PID registry. Raw numeric .pids files can target unrelated reused
+    # processes after a crash/restart and are forbidden.
+    for runner_name in ("run-mode.sh", "run-max.sh", "run-pq.sh", "run-xhttp.sh", "run-combined.sh"):
+        runner = (HERE / runner_name).read_text(encoding="utf-8")
+        assert 'runtime-pids.py" init' in runner, runner_name
+        assert 'runtime-pids.py" record' in runner, runner_name
+        assert ': >"$RUN/$MODE.pids"' not in runner, runner_name
+        assert 'echo $! >>"$RUN/$MODE.pids"' not in runner, runner_name
+\n    print("Verified runtime PID registry tests: OK")
     return 0
 
 
