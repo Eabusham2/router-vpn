@@ -112,7 +112,7 @@ def main() -> int:
     assert 'prepare-runtime-profile.py" "$ROOT" "$PROFILE_ID" "$MODE" "$ENDPOINT"' in combined
     assert 'cp -a "$SOURCE" "$CONF"' not in combined
     assert 'for p in root.glob(\'*.json\')' not in combined
-\n    print("Transactional runtime profile staging tests: OK")
+    print("Transactional runtime profile staging tests: OK")
     return 0
 
 
