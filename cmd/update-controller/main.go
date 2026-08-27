@@ -41,6 +41,7 @@ var (
 	customImageRE = regexp.MustCompile(`(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):)([0-9a-f]{40})`)
 	brokerSHARe = regexp.MustCompile(`(?m)^(\s*ROUTER_VPN_GITHUB_SHA:\s*)([0-9a-f]{40})(\s*)$`)
 	requiredReleaseWorkflows = []string{
+		"source-snapshot.yml",
 		"release-candidate.yml",
 		"arm64-portainer-preflight.yml",
 		"publish-arm64-images.yml",
