@@ -237,6 +237,8 @@ require(
     "unexpectedly exists after update transaction started",
     "loadRollbackCompose",
     "restorePreviousStack",
+    "exactComposeIdentity",
+    "already restored+healthy stack",
     "rollbackAfterDeploymentFailure",
     "rolling-back",
     "reconcileRecovery",
@@ -252,6 +254,7 @@ require(
 require(
     "cmd/update-controller/recovery_test.go",
     "RollbackComposeSnapshotIsPrivateAndExact",
+    "ExactComposeIdentityRequiresOneExpectedSHA",
     "ClearRollbackComposeUnsafeStaleSnapshotBlocksNewTransaction",
     "SaveRollbackComposeRefusesUnexpectedExistingSnapshotAfterTransactionStart",
     "InterruptedPreDeploymentApplying",
