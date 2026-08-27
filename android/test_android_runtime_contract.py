@@ -87,6 +87,9 @@ for forbidden in (
     assert forbidden not in combined_build, f"pipefail-sensitive AAR verifier pipeline returned: {forbidden}"
 for marker in ('aar_list="$tmp/aar.list"', 'class_list="$tmp/classes.list"', 'api_list="$tmp/libbox.javap"'):
     assert marker in combined_build, f"AAR verifier no longer snapshots producer output: {marker}"
+assert 'unzip -Z1 "$classes" >"$class_list"' in combined_build, "AAR verifier must use ZIP-native class listing"
+assert 'javap -classpath "$classes" io.nekohasekai.libbox.RouterXrayDialerController' in combined_build
+assert "boolean protectFd(long);" in combined_build, "AAR verifier must prove the bound socket-protection interface API"
 assert 'android:name=".XrayVpnService"' in manifest
 
 # Xray VpnService must own the TUN, protect core and bootstrap-DNS sockets,
