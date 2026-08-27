@@ -148,7 +148,7 @@ function Get-RouterVPNSelectedProfile($Store, [string]$ProfileId) {
 function Write-RouterVPNPrivateTextAtomic([string]$Path,[string]$Text) {
   Assert-RouterVPNNoReparseAncestors $Path
   $parent=Split-Path -Parent ([IO.Path]::GetFullPath($Path))
-  if([string]::IsNullOrWhiteSpace($parent)-or-not(Test-Path -LiteralPath $parent -PathType Container)){
+  if([string]::IsNullOrWhiteSpace($parent) -or -not (Test-Path -LiteralPath $parent -PathType Container)){
     throw "Router VPN private parent is missing: $parent"
   }
   Assert-RouterVPNNoReparseAncestors $parent
@@ -172,7 +172,7 @@ function Write-RouterVPNPrivateTextAtomic([string]$Path,[string]$Text) {
     Assert-RouterVPNNoReparseAncestors $parent
     if(Test-Path -LiteralPath $Path){
       $current=Get-Item -LiteralPath $Path -Force
-      if($current.PSIsContainer-or(($current.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0)){
+      if($current.PSIsContainer -or (($current.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)){
         throw "Refusing unsafe Router VPN private target: $Path"
       }
     }
@@ -205,19 +205,18 @@ function Get-RouterVPNProcessIdentity($Process) {
 
 function Write-RouterVPNProcessRecord([string]$Path,$Process) {
   $record=Get-RouterVPNProcessIdentity $Process
-  $json=($record|ConvertTo-Json -Compress)+'
-'
+  $json=($record|ConvertTo-Json -Compress)+"`n"
   Write-RouterVPNPrivateTextAtomic $Path $json
 }
 
 function Get-RouterVPNVerifiedRecordedProcess([string]$Path) {
   if(-not(Test-Path -LiteralPath $Path)){return $null}
   $record=Read-RouterVPNPrivateJson $Path 'Router VPN process record' 65536
-  if($null-eq$record-or[int]$record.version-ne1){return $null}
+  if($null -eq $record -or [int]$record.version -ne 1){return $null}
   $pidValue=0
-  if(-not[int]::TryParse(([string]$record.pid),[ref]$pidValue)-or$pidValue-le0){return $null}
+  if(-not [int]::TryParse(([string]$record.pid),[ref]$pidValue) -or $pidValue -le 0){return $null}
   $expectedTicks=[Int64]0
-  if(-not[Int64]::TryParse(([string]$record.start_time_utc_ticks),[ref]$expectedTicks)-or$expectedTicks-le0){return $null}
+  if(-not [Int64]::TryParse(([string]$record.start_time_utc_ticks),[ref]$expectedTicks) -or $expectedTicks -le 0){return $null}
   $expectedExe=[string]$record.executable_path
   if([string]::IsNullOrWhiteSpace($expectedExe)){return $null}
   try{$expectedExe=[IO.Path]::GetFullPath($expectedExe)}catch{return $null}
@@ -238,7 +237,7 @@ function Remove-RouterVPNProcessRecord([string]$Path) {
   if(-not(Test-Path -LiteralPath $Path)){return}
   Assert-RouterVPNNoReparseAncestors $Path
   $item=Get-Item -LiteralPath $Path -Force
-  if($item.PSIsContainer-or(($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0)){
+  if($item.PSIsContainer -or (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)){
     throw "Refusing unsafe Router VPN process-record target: $Path"
   }
   Remove-Item -LiteralPath $Path -Force
