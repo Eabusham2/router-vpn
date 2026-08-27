@@ -93,6 +93,31 @@ func TestComposeSHARejectsMixedPhaseOneEvenWithGeneratedHeader(t *testing.T) {
 	if got := composeSHA(phaseOne); got != "unknown" { t.Fatalf("mixed image set reported exact SHA %q despite generated target header", got) }
 }
 
+func TestComposeSHARequiresMaterializedHeaderAndBrokerProvenance(t *testing.T) {
+	if got := composeSHA(testTemplate()); got != "unknown" {
+		t.Fatalf("raw tracked baseline masqueraded as deployed exact SHA %q", got)
+	}
+	exact, err := validateAndMaterializeTemplate(testTemplate(), testNewSHA)
+	if err != nil { t.Fatal(err) }
+	header := "# GENERATED exact-SHA Router VPN production compose: " + testNewSHA + "\n"
+	withoutHeader := strings.Replace(exact, header, "", 1)
+	if got := composeSHA(withoutHeader); got != "unknown" {
+		t.Fatalf("compose without generated provenance header resolved to %q", got)
+	}
+	broker := "ROUTER_VPN_GITHUB_SHA: " + testNewSHA
+	withoutBroker := strings.Replace(exact, broker, "ROUTER_VPN_GITHUB_SHA: missing", 1)
+	if got := composeSHA(withoutBroker); got != "unknown" {
+		t.Fatalf("compose without broker provenance resolved to %q", got)
+	}
+	if got := composeSHA(header + exact); got != "unknown" {
+		t.Fatalf("duplicate generated provenance headers resolved to %q", got)
+	}
+	duplicateBroker := strings.Replace(exact, broker, broker+"\n      "+broker, 1)
+	if got := composeSHA(duplicateBroker); got != "unknown" {
+		t.Fatalf("duplicate broker provenance resolved to %q", got)
+	}
+}
+
 
 func TestUpdaterRequiresCompleteExactSHAReleaseWorkflowSet(t *testing.T) {
 	want := []string{
