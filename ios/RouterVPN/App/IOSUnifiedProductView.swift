@@ -119,6 +119,14 @@ private struct IOSUnifiedMap: UIViewRepresentable {
         return map
     }
 
+    static func dismantleUIView(_ uiView: MKMapView, coordinator: Coordinator) {
+        // Swift 6 treats deinit as nonisolated, so Timer (a non-Sendable UI
+        // object) must be stopped while SwiftUI still owns the coordinator on
+        // the UI actor rather than from deinit.
+        coordinator.stopPacketAnimation()
+        uiView.delegate = nil
+    }
+
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.parent = self
         let packet = context.coordinator.packet
@@ -169,7 +177,12 @@ private struct IOSUnifiedMap: UIViewRepresentable {
         private var timer: Timer?
         private var phase: Double = 0
         init(_ parent: IOSUnifiedMap) { self.parent = parent }
-        deinit { timer?.invalidate() }
+
+        func stopPacketAnimation() {
+            timer?.invalidate()
+            timer = nil
+            map = nil
+        }
 
         func startPacketAnimation(_ map: MKMapView) {
             self.map = map
