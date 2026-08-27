@@ -25,11 +25,14 @@ public static class RouterVPNWindowNative {
 
 $Root = Split-Path -Parent $PSScriptRoot
 $IconPath = Join-Path $Root 'RouterVPN.ico'
+$PrivateState = Join-Path $PSScriptRoot 'Private-RouterVPN-State.ps1'
+if (-not (Test-Path -LiteralPath $PrivateState -PathType Leaf)) { throw 'Router VPN private-state helper is missing.' }
+. $PrivateState
 
 if ($SelfTest) {
     if (-not (Test-Path -LiteralPath $IconPath -PathType Leaf)) { throw "Router VPN tray icon missing: $IconPath" }
     $Source = Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw
-    foreach ($Marker in @('System.Windows.Forms.NotifyIcon','Open Router VPN','Emergency Stop','Exit Router VPN','/api/emergency-stop','ShowWindowAsync','SetForegroundWindow','PostMessage','IsIconic')) {
+    foreach ($Marker in @('System.Windows.Forms.NotifyIcon','Open Router VPN','Emergency Stop','Exit Router VPN','/api/emergency-stop','ShowWindowAsync','SetForegroundWindow','PostMessage','IsIconic','Get-RouterVPNProcessIdentity','start_time_utc_ticks','executable_path')) {
         if ($Source -notlike "*$Marker*") { throw "Router VPN tray self-test missing $Marker" }
     }
     Write-Host 'Router VPN Windows system-tray self-test: OK'
@@ -39,8 +42,18 @@ if ($SelfTest) {
 if ($UiPid -le 0) { throw 'Router VPN tray requires the native WPF process ID.' }
 if (-not (Test-Path -LiteralPath $IconPath -PathType Leaf)) { throw "Router VPN tray icon missing: $IconPath" }
 
+$InitialUiProcess = Get-Process -Id $UiPid -ErrorAction Stop
+$UiIdentity = Get-RouterVPNProcessIdentity $InitialUiProcess
+$UiStartTicks = [Int64]$UiIdentity.start_time_utc_ticks
+$UiExecutable = [string]$UiIdentity.executable_path
+
 function Get-UiProcess {
-    Get-Process -Id $UiPid -ErrorAction SilentlyContinue
+    $p = Get-Process -Id $UiPid -ErrorAction SilentlyContinue
+    if (-not $p) { return $null }
+    try { $identity = Get-RouterVPNProcessIdentity $p } catch { return $null }
+    if ([Int64]$identity.start_time_utc_ticks -ne $UiStartTicks) { return $null }
+    if (-not [string]::Equals([string]$identity.executable_path,$UiExecutable,[StringComparison]::OrdinalIgnoreCase)) { return $null }
+    return $p
 }
 function Get-UiHandle {
     $p = Get-UiProcess
@@ -94,7 +107,8 @@ $Notify.Add_DoubleClick({ Show-RouterVPNWindow })
 $EmergencyItem.Add_Click({ Emergency-StopRouterVPN })
 $ExitItem.Add_Click({
     if (-not (Close-RouterVPNWindow)) {
-        Stop-Process -Id $UiPid -ErrorAction SilentlyContinue
+        $ownedUi = Get-UiProcess
+        if ($ownedUi) { Stop-Process -InputObject $ownedUi -ErrorAction SilentlyContinue }
     }
     [System.Windows.Forms.Application]::ExitThread()
 })
