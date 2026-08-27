@@ -74,12 +74,20 @@ class DownloadSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             src = base / "generic.zip"
+            expected_sha = "a" * 40
+            expected_family = "windows-amd64"
+            package = base / "RouterVPN"
+            package.mkdir()
+            builder.write_blank_routers(package / "routers.json")
+            (package / "LICENSE").write_text("MIT", encoding="utf-8")
+            builder._provenance.write_manifest(package, expected_sha, expected_family)
             with zipfile.ZipFile(src, "w") as zf:
-                zf.writestr("RouterVPN/routers.json", json.dumps({"selected_id": "", "profiles": []}))
-                zf.writestr("RouterVPN/LICENSE", "MIT")
+                for path in package.rglob("*"):
+                    if path.is_file():
+                        zf.write(path, path.relative_to(base))
             work = base / "work"
             work.mkdir()
-            root = builder.build_from_github(work, src)
+            root = builder.build_from_github(work, src, expected_sha, expected_family)
             self.assertFalse((root / "router-vpn-bundle.json").exists())
             self.assertEqual(json.loads((root / "routers.json").read_text())["profiles"], [])
 
