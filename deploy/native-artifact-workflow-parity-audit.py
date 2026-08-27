@@ -42,6 +42,11 @@ broker_builder_rel = "server/scripts/build-download-on-demand.py"
 provenance_rel = "deploy/source_provenance.py"
 provenance_test_rel = "deploy/test_source_provenance.py"
 local_fallback_test_rel = "deploy/test-router-local-package-fallback.py"
+mobile_provenance_rel = "server/scripts/mobile-artifact-provenance.py"
+mobile_provenance_test_rel = "server/scripts/test_mobile_artifact_provenance.py"
+broker_exact_sha_test_rel = "server/scripts/test_download_broker_exact_sha.py"
+android_gradle_rel = "android/app/build.gradle"
+ios_project_rel = "ios/RouterVPN/project.yml"
 rc = read(rc_rel)
 client = read(client_rel)
 mac = read(mac_rel)
@@ -55,6 +60,11 @@ broker_builder = read(broker_builder_rel)
 provenance = read(provenance_rel)
 provenance_test = read(provenance_test_rel)
 local_fallback_test = read(local_fallback_test_rel)
+mobile_provenance = read(mobile_provenance_rel)
+mobile_provenance_test = read(mobile_provenance_test_rel)
+broker_exact_sha_test = read(broker_exact_sha_test_rel)
+android_gradle = read(android_gradle_rel)
+ios_project = read(ios_project_rel)
 
 
 # A workflow name/head SHA is not enough after an artifact has been downloaded or
@@ -93,6 +103,47 @@ require(local_fallback_test, local_fallback_test_rel,
         "wrong embedded source SHA was accepted",
         "wrong embedded family was accepted")
 require(rc, rc_rel, "python3 deploy/test_source_provenance.py")
+
+# Mobile artifacts are also self-identifying. Android embeds a bounded source
+# manifest inside the APK; iOS embeds the exact source identity in both the app
+# and PacketTunnel Info.plists. The authenticated broker re-verifies those
+# values after artifact extraction and before delivery.
+require(mobile_provenance, mobile_provenance_rel,
+        "assets/ROUTER-VPN-SOURCE.json",
+        "RouterVPNSourceSHA",
+        "RouterVPNSourceRepository",
+        "ios-packet-tunnel",
+        "mobile artifact source SHA mismatch")
+require(mobile_provenance_test, mobile_provenance_test_rel,
+        "wrong-sha.apk",
+        "duplicate-app.ipa",
+        "missing-tunnel.ipa",
+        "exact_ios_app_and_packet_tunnel_are_both_required")
+require(broker_builder, broker_builder_rel, "_provenance.verify_manifest")
+broker = read("server/scripts/download-broker.py")
+require(broker, "server/scripts/download-broker.py",
+        "mobile-artifact-provenance.py",
+        "_mobile_provenance.verify(name, selected, head_sha, repo)")
+require(broker_exact_sha_test, broker_exact_sha_test_rel,
+        "mobile_binary_is_reverified_after_exact_sha_artifact_selection",
+        "mobile_binary_provenance_failure_blocks_delivery")
+require(android_gradle, android_gradle_rel,
+        "ROUTER-VPN-SOURCE.json",
+        "artifact_family: 'android-apk'",
+        "Android APK source provenance mismatch")
+require(ios_project, ios_project_rel,
+        "INFOPLIST_KEY_RouterVPNSourceSHA",
+        "INFOPLIST_KEY_RouterVPNSourceRepository",
+        'INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-app"',
+        'INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-packet-tunnel"')
+for rel, body in ((rc_rel, rc), (client_rel, client)):
+    require(body, rel,
+            'ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA"',
+            "plutil -extract RouterVPNSourceSHA",
+            "RouterVPNArtifactFamily")
+require(rc, rc_rel,
+        "python3 server/scripts/test_mobile_artifact_provenance.py",
+        "python3 server/scripts/test_download_broker_exact_sha.py")
 
 # Every workflow that assembles the full Android APK also executes native AAR
 # build tasks; all of them must pin the exact Go toolchain required by libbox.
