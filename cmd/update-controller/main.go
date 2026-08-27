@@ -39,55 +39,14 @@ const (
 var (
 	shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	customImageRE = regexp.MustCompile(`(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):)([0-9a-f]{40})`)
-	brokerSHARe = regexp.MustCompile(`(?m)^(\s*ROUTER_VPN_GITHUB_SHA:\s*)([0-9a-f]{40})(\s*)package main
-
-import (
-	"bytes"
-	"crypto/sha256"
-	"crypto/subtle"
-	"crypto/tls"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"log"
-	"net"
-	"net/http"
-	"net/url"
-	"os"
-	"regexp"
-	"sort"
-	"strings"
-	"sync"
-	"time"
-)
-
-const (
-	defaultListen          = "127.0.0.1:8793"
-	defaultPortainerURL    = "https://127.0.0.1:9443"
-	defaultStackName       = "router-vpn"
-	defaultRepo            = "Eabusham2/router-vpn"
-	defaultBranch          = "main"
-	defaultSetupTokenFile  = "/etc/router-vpn/setup-center.token"
-	defaultPortainerKey    = "/etc/router-vpn/portainer-api.key"
-	defaultPortainerPin    = "/etc/router-vpn/portainer-tls.sha256"
-	defaultStatePath       = "/var/lib/router-vpn/update-controller.json"
-	maxJSON                = 4 << 20
-	maxCompose             = 2 << 20
-)
-
-var (
-	shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	customImageRE = regexp.MustCompile(`(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):)([0-9a-f]{40})`)
-)
+	brokerSHARe = regexp.MustCompile(`(?m)^(\s*ROUTER_VPN_GITHUB_SHA:\s*)([0-9a-f]{40})(\s*)$`)
 	requiredReleaseWorkflows = []string{
 		"release-candidate.yml",
 		"arm64-portainer-preflight.yml",
 		"publish-arm64-images.yml",
 		"production-release-compose.yml",
 	}
-	ownedImageRE = regexp.MustCompile(`ghcr\\.io/eabusham2/(router-vpn-[a-z0-9-]+):([^\\s]+)`)
+	ownedImageRE = regexp.MustCompile(`ghcr\.io/eabusham2/(router-vpn-[a-z0-9-]+):([^\s]+)`)
 	requiredCustomImageRepos = []string{
 		"router-vpn-init",
 		"router-vpn-agent",
