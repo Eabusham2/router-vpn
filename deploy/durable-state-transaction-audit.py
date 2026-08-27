@@ -97,10 +97,11 @@ forbid("modes/run-combined.sh", 'cp -a "$SOURCE" "$CONF"', "for p in root.glob('
 
 # Background process ownership is recovery state too. Every launcher that starts
 # long-lived children must use the verified PID registry (PID + process-start
-# identity) rather than trusting reusable raw numeric PID files.
+# + command identity) rather than trusting reusable raw numeric PID files.
 require(
     "modes/runtime-pids.py",
     "process_start",
+    "process_command_hash(pid) == expected_command",
     "command_sha256",
     "runtime PID registry changed during open",
     "runtime PID target changed before adoption",
@@ -108,6 +109,7 @@ require(
 require(
     "modes/test_runtime_pids.py",
     "wrong-start-token",
+    "wrong_command",
     "runtime PID registry followed a symlink target",
     "run-combined.sh",
     "raw numeric .pids files",
