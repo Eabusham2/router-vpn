@@ -29,13 +29,13 @@ function Safe-Under([string]$Parent,[string]$Child) {
   return $c
 }
 function Write-Utf8NoBom([string]$Path,[string]$Text) { [IO.File]::WriteAllText($Path,$Text,(New-Object Text.UTF8Encoding($false))) }
-function Stop-PidFile([string]$PidFile) {
-  if (-not (Test-Path -LiteralPath $PidFile -PathType Leaf)) { return }
-  foreach ($line in Get-Content -LiteralPath $PidFile -ErrorAction SilentlyContinue) {
-    $pidValue=0
-    if ([int]::TryParse(([string]$line).Trim(),[ref]$pidValue) -and $pidValue -gt 0) { Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue }
-  }
-  Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+function Stop-XrayOwned { [void](Stop-RouterVPNRecordedProcess $XrayProcessFile) }
+function Stop-AllOwned {
+  [void](Stop-RouterVPNRecordedProcess $XrayProcessFile)
+  [void](Stop-RouterVPNRecordedProcess $WrapperProcessFile)
+}
+function Remove-WrapperRecord {
+  try { Remove-RouterVPNProcessRecord $WrapperProcessFile } catch { }
 }
 
 $RootText=[string]$env:HOMEVPN_ROOT
@@ -46,7 +46,7 @@ $Source=Safe-Under $GeneratedRoot (Join-Path $GeneratedRoot (Join-Path $ProfileI
 if(-not(Test-Path -LiteralPath $Source -PathType Container)){$legacy=Safe-Under $GeneratedRoot (Join-Path $GeneratedRoot $Mode);if(Test-Path -LiteralPath $legacy -PathType Container){$Source=$legacy}}
 $Runtime=Safe-Under $Root (Join-Path $Root 'runtime\windows');$SingBox=Join-Path $Runtime 'sing-box.exe';$Xray=Join-Path $Runtime 'xray.exe'
 $RunBase=Safe-Under $Root (Join-Path $Root 'run\windows');$RunDir=Safe-Under $RunBase (Join-Path $RunBase (Join-Path $ProfileId $Mode))
-$PidFile=Join-Path $RunDir 'children.pids';$SingConfig=Join-Path $RunDir 'sing-box.json';$XrayConfig=Join-Path $RunDir 'xray.json'
+$WrapperProcessFile=Join-Path $RunDir 'native-windows-mode.process.json';$XrayProcessFile=Join-Path $RunDir 'xray.process.json';$SingConfig=Join-Path $RunDir 'sing-box.json';$XrayConfig=Join-Path $RunDir 'xray.json'
 $KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 
 function Invoke-KillSwitch([string]$KillAction,[string]$EndpointValue='',[string]$Alias='') {
@@ -122,13 +122,36 @@ function Patch-Xray([string]$Path,[string]$Endpoint){$cfg=Get-Content -Raw -Lite
 
 switch($Action){
  'check'{Assert-Ready;Write-Output "native Windows $Mode ready";exit 0}
- 'status'{if(-not(Test-Path -LiteralPath $PidFile -PathType Leaf)){Write-Output'down';exit 1};$alive=$false;foreach($line in Get-Content -LiteralPath $PidFile -ErrorAction SilentlyContinue){$p=0;if([int]::TryParse(([string]$line).Trim(),[ref]$p)-and(Get-Process -Id $p -ErrorAction SilentlyContinue)){$alive=$true}};if($alive){Write-Output'up';exit 0};Write-Output'down';exit 1}
- 'down'{Stop-PidFile $PidFile;try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message};exit 0}
+ 'status'{
+  $wrapperAlive=Test-RouterVPNRecordedProcess $WrapperProcessFile
+  $xrayAlive=if($NeedsXray-contains$Mode){Test-RouterVPNRecordedProcess $XrayProcessFile}else{$true}
+  if($wrapperAlive-and$xrayAlive){Write-Output'up';exit 0}
+  Write-Output'down';exit 1
+ }
+ 'down'{Stop-AllOwned;try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message};exit 0}
  'up'{
-  Assert-Ready;$Endpoint=[string]$env:HOMEVPN_ENDPOINT;if([string]::IsNullOrWhiteSpace($Endpoint)){throw 'Choose a router backend in the app first.'};$Endpoint=$Endpoint.Trim().Trim('[]');Stop-PidFile $PidFile;if(Test-Path -LiteralPath $RunDir){Remove-Item -LiteralPath $RunDir -Recurse -Force};New-Item -ItemType Directory -Force -Path $RunDir|Out-Null;Copy-Item -Path(Join-Path $Source '*')-Destination $RunDir -Recurse -Force;Patch-SingBox $SingConfig $Endpoint;if($NeedsXray-contains$Mode){Patch-Xray $XrayConfig $Endpoint};&$SingBox check -D $RunDir -c $SingConfig|Out-Null;if($LASTEXITCODE-ne0){throw 'Patched native Windows sing-box config failed validation.'}
+  Assert-Ready;$Endpoint=[string]$env:HOMEVPN_ENDPOINT;if([string]::IsNullOrWhiteSpace($Endpoint)){throw 'Choose a router backend in the app first.'};$Endpoint=$Endpoint.Trim().Trim('[]');Stop-AllOwned;if(Test-Path -LiteralPath $RunDir){Remove-Item -LiteralPath $RunDir -Recurse -Force};New-Item -ItemType Directory -Force -Path $RunDir|Out-Null;Copy-Item -Path(Join-Path $Source '*')-Destination $RunDir -Recurse -Force;Patch-SingBox $SingConfig $Endpoint;if($NeedsXray-contains$Mode){Patch-Xray $XrayConfig $Endpoint};&$SingBox check -D $RunDir -c $SingConfig|Out-Null;if($LASTEXITCODE-ne0){throw 'Patched native Windows sing-box config failed validation.'}
   $tunAlias=Get-TunAlias $SingConfig
   Invoke-KillSwitch 'prepare' $Endpoint $tunAlias
-  $childPids=New-Object System.Collections.Generic.List[int]
-  try{if($NeedsXray-contains$Mode){&$Xray run -test -c $XrayConfig|Out-Null;if($LASTEXITCODE-ne0){throw 'Patched native Windows Xray config failed validation.'};$quotedConfig='"'+$XrayConfig+'"';$xp=Start-Process -FilePath $Xray -ArgumentList @('run','-c',$quotedConfig)-WorkingDirectory $RunDir -PassThru -WindowStyle Hidden;$childPids.Add($xp.Id);Start-Sleep -Milliseconds 350;if($xp.HasExited){throw 'Xray exited during native Windows startup.'}};$childPids|Set-Content -Encoding ASCII -LiteralPath $PidFile;&$SingBox run -D $RunDir -c $SingConfig;$exitCode=$LASTEXITCODE;if($exitCode-ne0){throw "sing-box exited with code $exitCode"}}finally{Stop-PidFile $PidFile;try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message}}
+  $self=Get-Process -Id $PID -ErrorAction Stop
+  Write-RouterVPNProcessRecord $WrapperProcessFile $self
+  try{
+    if($NeedsXray-contains$Mode){
+      &$Xray run -test -c $XrayConfig|Out-Null
+      if($LASTEXITCODE-ne0){throw 'Patched native Windows Xray config failed validation.'}
+      $quotedConfig='"'+$XrayConfig+'"'
+      $xp=Start-Process -FilePath $Xray -ArgumentList @('run','-c',$quotedConfig)-WorkingDirectory $RunDir -PassThru -WindowStyle Hidden
+      Write-RouterVPNProcessRecord $XrayProcessFile $xp
+      Start-Sleep -Milliseconds 350
+      if($xp.HasExited){throw 'Xray exited during native Windows startup.'}
+    }
+    &$SingBox run -D $RunDir -c $SingConfig
+    $exitCode=$LASTEXITCODE
+    if($exitCode-ne0){throw "sing-box exited with code $exitCode"}
+  }finally{
+    Stop-XrayOwned
+    Remove-WrapperRecord
+    try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message}
+  }
  }
 }
