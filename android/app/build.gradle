@@ -4,6 +4,8 @@ plugins {
 
 def projectLicense = rootProject.file('../LICENSE')
 def generatedLicenseAssets = file("$buildDir/generated/routervpn-license-assets")
+def generatedProvenanceAssets = file("$buildDir/generated/routervpn-provenance-assets")
+def generatedProvenanceFile = file("$generatedProvenanceAssets/ROUTER-VPN-SOURCE.json")
 
 android {
     namespace 'com.eabusham.routervpn'
@@ -26,6 +28,7 @@ android {
     sourceSets {
         main {
             assets.srcDir generatedLicenseAssets
+            assets.srcDir generatedProvenanceAssets
         }
     }
 }
@@ -41,6 +44,23 @@ tasks.register('stageProjectLicense', Copy) {
     }
     from projectLicense
     into generatedLicenseAssets
+}
+
+tasks.register('stageSourceProvenance') {
+    outputs.file generatedProvenanceFile
+    doLast {
+        generatedProvenanceAssets.mkdirs()
+        def rawSha = (System.getenv('GITHUB_SHA') ?: System.getenv('ROUTER_VPN_SOURCE_SHA') ?: '').trim().toLowerCase()
+        def sourceSha = (rawSha ==~ /[0-9a-f]{40}/) ? rawSha : 'development'
+        def repository = (System.getenv('GITHUB_REPOSITORY') ?: 'Eabusham2/router-vpn').trim()
+        def body = [
+            schema_version: 1,
+            repository: repository,
+            source_sha: sourceSha,
+            artifact_family: 'android-apk',
+        ]
+        generatedProvenanceFile.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(body)) + '\n'
+    }
 }
 
 tasks.register('prepareAmneziaWgTunnel', Exec) {
@@ -70,6 +90,7 @@ bash "$patched"
 
 tasks.named('preBuild').configure {
     dependsOn tasks.named('stageProjectLicense')
+    dependsOn tasks.named('stageSourceProvenance')
     dependsOn tasks.named('prepareAmneziaWgTunnel')
     dependsOn tasks.named('prepareSingBoxLibbox')
 }
@@ -86,6 +107,20 @@ tasks.register('verifyDebugProjectLicense') {
             def entry = zip.getEntry('assets/LICENSE')
             if (entry == null || entry.size <= 0) {
                 throw new GradleException('Android APK is missing assets/LICENSE')
+            }
+            def provenanceEntry = zip.getEntry('assets/ROUTER-VPN-SOURCE.json')
+            if (provenanceEntry == null || provenanceEntry.size <= 0) {
+                throw new GradleException('Android APK is missing assets/ROUTER-VPN-SOURCE.json')
+            }
+            def provenance = new groovy.json.JsonSlurper().parse(zip.getInputStream(provenanceEntry))
+            if (provenance.artifact_family != 'android-apk' || provenance.repository != (System.getenv('GITHUB_REPOSITORY') ?: 'Eabusham2/router-vpn')) {
+                throw new GradleException('Android APK source provenance family/repository mismatch')
+            }
+            def expectedSha = (System.getenv('GITHUB_SHA') ?: '').trim().toLowerCase()
+            if (expectedSha ==~ /[0-9a-f]{40}/) {
+                if (provenance.source_sha != expectedSha) {
+                    throw new GradleException("Android APK source provenance mismatch: " + provenance.source_sha + " != " + expectedSha)
+                }
             }
         } finally {
             zip.close()
