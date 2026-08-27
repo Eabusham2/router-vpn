@@ -370,6 +370,16 @@ require(
     "rollbackAfterDeploymentFailure",
     "completeRecoveredUpdate",
     "exact_compose_verified",
+    "Raw tracked baselines therefore never masquerade as deployed",
+    "FindAllStringSubmatch(content, -1)",
+)
+require(
+    "cmd/update-controller/main_test.go",
+    "raw tracked baseline masqueraded as deployed exact SHA",
+    "compose without generated provenance header",
+    "compose without broker provenance",
+    "duplicate generated provenance headers",
+    "duplicate broker provenance",
 )
 require(
     "cmd/update-controller/recovery_test.go",
