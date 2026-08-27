@@ -7,6 +7,7 @@ JSON
 }
 copy_runtime(){ local dir=$1;mkdir -p "$dir/modes" "$dir/generated";cp "$ROOT/configs/client/client.json.example" "$dir/client.json";cp "$ROOT/configs/client/modes.json" "$dir/modes.json";cp "$ROOT/configs/client/logical-modes.json" "$dir/logical-modes.json";cp -a "$ROOT/modes/." "$dir/modes/";write_blank_routers "$dir/routers.json";cp "$ROOT/docs/MODES.md" "$dir/MODES.md";cp "$ROOT/docs/CLIENT.md" "$dir/CLIENT.md";cp "$ROOT/SECURITY.md" "$dir/SECURITY.md";cp "$ROOT/LICENSE" "$dir/LICENSE";}
 materialize_icons(){ python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$1/RouterVPN.png" --ico "$1/RouterVPN.ico"; }
+write_provenance(){ python3 "$ROOT/deploy/source_provenance.py" "$1" --family "$2"; }
 package_zip(){ local name=$1 dir=$2;(cd "$(dirname "$dir")"&&zip -qr "$OUT/$name.zip" "$(basename "$dir")");}
 package_tgz(){ local name=$1 dir=$2;tar -C "$(dirname "$dir")" -czf "$OUT/$name.tar.gz" "$(basename "$dir")";}
 # Product/audit contract: the normal installed package launches the native Windows Router VPN WPF app.
@@ -48,7 +49,7 @@ Raw WireGuard/AmneziaWG profiles can also be imported into compatible third-part
 This generic application package contains no linked home/server node; link nodes separately.
 Router VPN is MIT-licensed open-source software; see LICENSE.
 TXT
-package_zip "RouterVPN-Windows-$arch" "$dir";done
+write_provenance "$dir" "windows-$arch";package_zip "RouterVPN-Windows-$arch" "$dir";done
 for arch in amd64 arm64;do root="$OUT/work/RouterVPNPortable-$arch";app="$root/App/RouterVPN";data="$root/Data";mkdir -p "$app" "$data/generated";copy_runtime "$app";cp -a "$ROOT/client" "$app/client";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe";cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe";cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1";materialize_icons "$app";cat >"$root/README.txt" <<'TXT'
 Double-click RouterVPNPortable.exe. It starts the local controller, opens the native Windows WPF
 app from App/RouterVPN/client/RouterVPN-Windows-App.ps1, then cleanly stops the controller it owns
@@ -63,11 +64,11 @@ Xray runtime is stored under Data and moves with the Portable folder. Unsupporte
 with an exact reason rather than being substituted with a compatibility-layer engine.
 Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.
 TXT
-package_zip "RouterVPN-Portable-Windows-$arch" "$root";done
+write_provenance "$root" "windows-portable-$arch";package_zip "RouterVPN-Portable-Windows-$arch" "$root";done
 while IFS= read -r binary;do file=$(basename "$binary");target=${file#router-vpn-client-};os=${target%%-*};rest=${target#*-};arch=${rest%.exe};case "$os" in windows)continue;;esac;name="RouterVPN-${os}-${arch}";dir="$OUT/work/$name";mkdir -p "$dir";copy_runtime "$dir";cp "$binary" "$dir/router-vpn-client";cp "$DIST/dnsproxy/router-vpn-dns-${os}-${arch}" "$dir/router-vpn-dns";chmod +x "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/modes/"*.sh;cat >"$dir/start-router-vpn.sh" <<'SH2'
 #!/usr/bin/env sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd);export HOMEVPN_ROOT="$ROOT";export HOMEVPN_CLIENT_CONFIG="$ROOT/client.json";cd "$ROOT";exec ./router-vpn-client
 SH2
-chmod +x "$dir/start-router-vpn.sh";package_tgz "$name" "$dir";done < <(find "$DIST/client" -maxdepth 1 -type f -name 'router-vpn-client-*'|sort)
+chmod +x "$dir/start-router-vpn.sh";write_provenance "$dir" "$os-$arch";package_tgz "$name" "$dir";done < <(find "$DIST/client" -maxdepth 1 -type f -name 'router-vpn-client-*'|sort)
 python3 "$ROOT/deploy/check-generic-package-secrets.py" "$OUT";cp "$DIST/SHA256SUMS" "$OUT/BINARY-SHA256SUMS";(cd "$OUT";find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0|sort -z|xargs -0 sha256sum>SHA256SUMS);rm -rf "$OUT/work";printf 'Packaged MIT-licensed secret-free generic artifacts in %s\n' "$OUT"
