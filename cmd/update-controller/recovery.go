@@ -79,15 +79,31 @@ func (c *controller) persistRecoveryState(status, from, target, message string) 
 	return c.persistStateLocked(status, from, target, message)
 }
 
+func exactComposeIdentity(content, expected string) bool {
+	expected = strings.TrimSpace(expected)
+	return shaRE.MatchString(expected) && composeSHA(content) == expected
+}
+
 // restorePreviousStack is the only path that may declare rollback complete. It
-// reloads the private exact compose snapshot, asks Portainer to restore it,
-// waits for the full core health contract, and finally proves Portainer now
-// reports the exact prior SHA again.
+// reloads the private exact compose snapshot, first recognizes an already
+// restored+healthy stack (important after a terminal-state persistence failure),
+// otherwise asks Portainer to restore the snapshot, waits for the full core
+// health contract, and finally proves the exact prior SHA again.
 func (c *controller) restorePreviousStack(stack stackInfo, from string, timeout time.Duration) error {
 	previous, err := c.loadRollbackCompose(from)
 	if err != nil {
 		return err
 	}
+
+	// A previous recovery attempt may already have restored Portainer before the
+	// controller failed to persist terminal state. Do not redeploy a healthy
+	// exact prior stack merely to rediscover that fact on restart.
+	if current, currentErr := c.stackFile(stack); currentErr == nil && exactComposeIdentity(current, from) {
+		if healthErr := c.waitCoreHealthy(stack, timeout); healthErr == nil {
+			return nil
+		}
+	}
+
 	if err := c.putStack(stack, previous); err != nil {
 		return fmt.Errorf("restore previous Portainer stack: %w", err)
 	}
@@ -98,8 +114,8 @@ func (c *controller) restorePreviousStack(stack stackInfo, from string, timeout 
 	if err != nil {
 		return fmt.Errorf("read restored Portainer stack identity: %w", err)
 	}
-	if actual := composeSHA(current); actual != from {
-		return fmt.Errorf("rollback health passed but Portainer compose is %s, expected %s", actual, from)
+	if !exactComposeIdentity(current, from) {
+		return fmt.Errorf("rollback health passed but Portainer compose is %s, expected %s", composeSHA(current), from)
 	}
 	return nil
 }
@@ -181,7 +197,7 @@ func (c *controller) reconcileRecovery() error {
 
 	if state.Status == "finalizing" {
 		current, err := c.stackFile(stack)
-		if err == nil && composeSHA(current) == state.TargetSHA {
+		if err == nil && exactComposeIdentity(current, state.TargetSHA) {
 			if healthErr := c.waitCoreHealthy(stack, 60*time.Second); healthErr == nil {
 				return c.completeRecoveredUpdate(state, "exact-SHA update completed after update-controller restart")
 			}
