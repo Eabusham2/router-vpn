@@ -75,6 +75,64 @@ def quarantine_name(run_fd: int) -> str:
     raise RuntimeError("could not reserve private runtime cleanup quarantine name")
 
 
+def verify_directory(root_value: str, target_value: str) -> Path:
+    root = lexical(root_value)
+    require_directory(root, "Router VPN root")
+    run_root = root / "run"
+    run_info = require_directory(run_root, "Router VPN run directory")
+    target = lexical(target_value)
+    try:
+        rel = target.relative_to(run_root)
+    except ValueError as exc:
+        raise RuntimeError("refusing runtime directory outside HOMEVPN_ROOT/run") from exc
+    if not rel.parts or rel.parts[0] not in ALLOWED_ROOTS or len(rel.parts) > 2:
+        raise RuntimeError("refusing unrelated/deep private runtime directory")
+
+    run_fd = open_directory(run_root, run_info, "Router VPN run directory")
+    parent_fd: int | None = None
+    try:
+        if len(rel.parts) == 1:
+            parent_fd = run_fd
+            leaf = rel.parts[0]
+        else:
+            parent_name, leaf = rel.parts
+            parent_info = os.stat(parent_name, dir_fd=run_fd, follow_symlinks=False)
+            if stat.S_ISLNK(parent_info.st_mode) or not stat.S_ISDIR(parent_info.st_mode):
+                raise RuntimeError("refusing non-directory/symlink private runtime parent")
+            parent_fd = os.open(parent_name, DIR_FLAGS, dir_fd=run_fd)
+            opened_parent = os.fstat(parent_fd)
+            current_parent = os.stat(parent_name, dir_fd=run_fd, follow_symlinks=False)
+            if (
+                stat.S_ISLNK(current_parent.st_mode)
+                or not stat.S_ISDIR(current_parent.st_mode)
+                or not os.path.samestat(opened_parent, current_parent)
+                or not os.path.samestat(parent_info, current_parent)
+            ):
+                raise RuntimeError("private runtime parent changed during open")
+
+        info = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError("refusing non-directory/symlink private runtime directory")
+        fd = os.open(leaf, DIR_FLAGS, dir_fd=parent_fd)
+        try:
+            opened = os.fstat(fd)
+            current = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                stat.S_ISLNK(current.st_mode)
+                or not stat.S_ISDIR(current.st_mode)
+                or not os.path.samestat(opened, current)
+                or not os.path.samestat(info, current)
+            ):
+                raise RuntimeError("private runtime directory changed during open")
+        finally:
+            os.close(fd)
+        return target
+    finally:
+        if parent_fd is not None and parent_fd != run_fd:
+            os.close(parent_fd)
+        os.close(run_fd)
+
+
 def cleanup(root_value: str, target_value: str) -> None:
     root = lexical(root_value)
     require_directory(root, "Router VPN root")
@@ -138,11 +196,14 @@ def cleanup(root_value: str, target_value: str) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: cleanup-private-runtime.py RUNTIME_DIR", file=sys.stderr)
-        return 2
     root = os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client")
     try:
+        if len(sys.argv) == 3 and sys.argv[1] == "verify-dir":
+            print(verify_directory(root, sys.argv[2]))
+            return 0
+        if len(sys.argv) != 2:
+            print("usage: cleanup-private-runtime.py [verify-dir] RUNTIME_DIR", file=sys.stderr)
+            return 2
         cleanup(root, sys.argv[1])
         return 0
     except Exception as exc:
