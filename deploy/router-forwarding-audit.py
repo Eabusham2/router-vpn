@@ -108,24 +108,34 @@ assert "ip6tables-save" in text, "verify should read-check IPv6 for unexpected R
 # No Router VPN mutation may target LAN->WAN or broad DNS/DHCP paths.
 assert '-s "$LAN"' not in mutations and '-o "$WAN"' not in mutations, "Router VPN forwarding helper may not mutate LAN->WAN path"
 
-# Hooks append one exact owned line and removal filters only exact Router VPN
-# invocations; protected/unrelated JFFS lines are not named or rewritten.
+# Hooks/config/runtime publication must preserve unrelated JFFS content while
+# replacing only Router VPN-owned files through random same-directory staging.
+# Config is shell syntax, so unsafe config/JFFS paths must be rejected before it
+# is ever sourced as root.
 for marker in (
-    '[ -f "$FILE" ] || printf \'#!/bin/sh\\n\' > "$FILE"',
-    'grep -Fqx "$LINE" "$FILE" 2>/dev/null || printf \'%s\\n\' "$LINE" >> "$FILE"',
+    'refusing symlinked Router VPN forwarding config',
+    'refusing Router VPN JFFS path with symlinked/non-canonical ancestors',
+    'safe_jffs_file(){',
+    'new_jffs_tmp(){',
+    'commit_jffs_tmp(){',
+    'mktemp "$DIR/.$NAME.router-vpn.XXXXXX"',
+    'awk -v runtime="$RUNTIME"',
     'write_hook "$NAT_START" "$RUNTIME apply"',
     'write_hook "$FIREWALL_START" "$RUNTIME apply"',
+    'commit_jffs_tmp "$CONFIG" 600',
     'preflight_port_conflicts(){',
     'Existing non-Router-VPN DNAT owns',
-    'grep -Fvx -- "$LINE" "$FILE" > "$TMP" || true',
 ):
-    assert marker in text, f"Merlin hook preservation marker missing: {marker}"
+    assert marker in text, f"Merlin atomic hook/config preservation marker missing: {marker}"
 for forbidden in (
     'cat > "$NAT_START"', 'cat > "$FIREWALL_START"',
     ': > "$NAT_START"', ': > "$FIREWALL_START"',
     'rm -f "$NAT_START"', 'rm -f "$FIREWALL_START"',
+    '$FILE.router-vpn.$$', ': > "$CONFIG"',
+    'cat "$TMP" > "$FILE"',
+    'cp "$SELF" "$RUNTIME"',
 ):
-    assert forbidden not in text, f"Router VPN would overwrite/remove unrelated Merlin hook content: {forbidden}"
+    assert forbidden not in text, f"Router VPN would non-atomically overwrite/remove JFFS state: {forbidden}"
 for protected in ("cod-na-block.sh", "rogue-dhcp-ra-guard.sh", "att-bgw-guard.sh"):
     assert protected not in text, f"Router VPN helper must not target unrelated protected JFFS script {protected}"
 
