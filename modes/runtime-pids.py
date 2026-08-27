@@ -205,29 +205,40 @@ def record(root: str, mode: str, pid_text: str) -> None:
     atomic_write(path, records)
 
 
+def verified_records(records: list[dict]) -> list[int]:
+    out: list[int] = []
+    for item in records:
+        try:
+            pid = int(item.get("pid") or 0)
+            expected_start = str(item.get("start") or "")
+            expected_command = str(item.get("command_sha256") or "")
+            if (
+                expected_start
+                and expected_command
+                and process_start(pid) == expected_start
+                and process_command_hash(pid) == expected_command
+            ):
+                out.append(pid)
+        except (RuntimeError, ValueError, TypeError):
+            continue
+    return sorted(set(out))
+
+
+def verified_mode(root: str, mode: str) -> list[int]:
+    # Mode-scoped consumers (native platform launchers) must never receive
+    # another Router VPN mode's PIDs as kill input.
+    return verified_records(read_registry(mode_file(root, mode)))
+
+
 def verified(root: str) -> list[int]:
     run = run_dir(root)
     out: list[int] = []
     for path in sorted(run.glob("*.pids")):
         try:
-            records = read_registry(path)
+            out.extend(verified_records(read_registry(path)))
         except RuntimeError:
             # Never turn a malformed/stale PID file into sudo kill input.
             continue
-        for item in records:
-            try:
-                pid = int(item.get("pid") or 0)
-                expected_start = str(item.get("start") or "")
-                expected_command = str(item.get("command_sha256") or "")
-                if (
-                    expected_start
-                    and expected_command
-                    and process_start(pid) == expected_start
-                    and process_command_hash(pid) == expected_command
-                ):
-                    out.append(pid)
-            except (RuntimeError, ValueError, TypeError):
-                continue
     return sorted(set(out))
 
 
@@ -252,12 +263,16 @@ def main(argv: list[str]) -> int:
             for pid in verified(argv[2]):
                 print(pid)
             return 0
+        if len(argv) == 4 and argv[1] == "verified-mode":
+            for pid in verified_mode(argv[2], argv[3]):
+                print(pid)
+            return 0
         if len(argv) == 3 and argv[1] == "run-dir":
             print(run_dir(argv[2]))
             return 0
         if len(argv) == 3 and argv[1] == "clear":
             clear(argv[2]); return 0
-        raise RuntimeError("usage: runtime-pids.py init ROOT MODE | record ROOT MODE PID | verified ROOT | run-dir ROOT | clear ROOT")
+        raise RuntimeError("usage: runtime-pids.py init ROOT MODE | record ROOT MODE PID | verified ROOT | verified-mode ROOT MODE | run-dir ROOT | clear ROOT")
     except (OSError, RuntimeError) as exc:
         print(f"runtime PID error: {exc}", file=sys.stderr)
         return 1
