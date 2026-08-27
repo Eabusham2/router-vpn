@@ -143,3 +143,113 @@ function Get-RouterVPNSelectedProfile($Store, [string]$ProfileId) {
   }
   throw "Selected Router VPN profile '$selected' was not found."
 }
+
+
+function Write-RouterVPNPrivateTextAtomic([string]$Path,[string]$Text) {
+  Assert-RouterVPNNoReparseAncestors $Path
+  $parent=Split-Path -Parent ([IO.Path]::GetFullPath($Path))
+  if([string]::IsNullOrWhiteSpace($parent)-or-not(Test-Path -LiteralPath $parent -PathType Container)){
+    throw "Router VPN private parent is missing: $parent"
+  }
+  Assert-RouterVPNNoReparseAncestors $parent
+  $leaf=Split-Path -Leaf $Path
+  $tmp=Join-Path $parent ('.'+$leaf+'.tmp-'+[Guid]::NewGuid().ToString('N'))
+  try {
+    $encoding=New-Object Text.UTF8Encoding($false)
+    $bytes=$encoding.GetBytes($Text)
+    $stream=New-Object IO.FileStream(
+      $tmp,
+      [IO.FileMode]::CreateNew,
+      [IO.FileAccess]::Write,
+      [IO.FileShare]::None
+    )
+    try {
+      $stream.Write($bytes,0,$bytes.Length)
+      $stream.Flush($true)
+    } finally {
+      $stream.Dispose()
+    }
+    Assert-RouterVPNNoReparseAncestors $parent
+    if(Test-Path -LiteralPath $Path){
+      $current=Get-Item -LiteralPath $Path -Force
+      if($current.PSIsContainer-or(($current.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0)){
+        throw "Refusing unsafe Router VPN private target: $Path"
+      }
+    }
+    Move-Item -LiteralPath $tmp -Destination $Path -Force
+  } finally {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Get-RouterVPNProcessIdentity($Process) {
+  if($null-eq$Process){throw 'Router VPN process handle is missing.'}
+  try{$Process.Refresh()}catch{}
+  $pidValue=[int]$Process.Id
+  if($pidValue-le0){throw 'Router VPN process id is invalid.'}
+  try{$start=[Int64]$Process.StartTime.ToUniversalTime().Ticks}catch{throw "Cannot read Router VPN process start identity for PID $pidValue."}
+  $exe=''
+  try{$exe=[string]$Process.Path}catch{}
+  if([string]::IsNullOrWhiteSpace($exe)){
+    try{$exe=[string]$Process.MainModule.FileName}catch{}
+  }
+  if([string]::IsNullOrWhiteSpace($exe)){throw "Cannot read Router VPN process executable identity for PID $pidValue."}
+  $exe=[IO.Path]::GetFullPath($exe)
+  return[pscustomobject]@{
+    version=1
+    pid=$pidValue
+    start_time_utc_ticks=$start
+    executable_path=$exe
+  }
+}
+
+function Write-RouterVPNProcessRecord([string]$Path,$Process) {
+  $record=Get-RouterVPNProcessIdentity $Process
+  $json=($record|ConvertTo-Json -Compress)+'
+'
+  Write-RouterVPNPrivateTextAtomic $Path $json
+}
+
+function Get-RouterVPNVerifiedRecordedProcess([string]$Path) {
+  if(-not(Test-Path -LiteralPath $Path)){return $null}
+  $record=Read-RouterVPNPrivateJson $Path 'Router VPN process record' 65536
+  if($null-eq$record-or[int]$record.version-ne1){return $null}
+  $pidValue=0
+  if(-not[int]::TryParse(([string]$record.pid),[ref]$pidValue)-or$pidValue-le0){return $null}
+  $expectedTicks=[Int64]0
+  if(-not[Int64]::TryParse(([string]$record.start_time_utc_ticks),[ref]$expectedTicks)-or$expectedTicks-le0){return $null}
+  $expectedExe=[string]$record.executable_path
+  if([string]::IsNullOrWhiteSpace($expectedExe)){return $null}
+  try{$expectedExe=[IO.Path]::GetFullPath($expectedExe)}catch{return $null}
+
+  $process=Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+  if($null-eq$process){return $null}
+  try{$identity=Get-RouterVPNProcessIdentity $process}catch{return $null}
+  if([Int64]$identity.start_time_utc_ticks-ne$expectedTicks){return $null}
+  if(-not[string]::Equals([string]$identity.executable_path,$expectedExe,[StringComparison]::OrdinalIgnoreCase)){return $null}
+  return $process
+}
+
+function Test-RouterVPNRecordedProcess([string]$Path) {
+  try{return $null-ne(Get-RouterVPNVerifiedRecordedProcess $Path)}catch{return $false}
+}
+
+function Remove-RouterVPNProcessRecord([string]$Path) {
+  if(-not(Test-Path -LiteralPath $Path)){return}
+  Assert-RouterVPNNoReparseAncestors $Path
+  $item=Get-Item -LiteralPath $Path -Force
+  if($item.PSIsContainer-or(($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0)){
+    throw "Refusing unsafe Router VPN process-record target: $Path"
+  }
+  Remove-Item -LiteralPath $Path -Force
+}
+
+function Stop-RouterVPNRecordedProcess([string]$Path) {
+  $process=$null
+  try{$process=Get-RouterVPNVerifiedRecordedProcess $Path}catch{$process=$null}
+  if($null-ne$process){
+    Stop-Process -InputObject $process -Force -ErrorAction SilentlyContinue
+  }
+  try{Remove-RouterVPNProcessRecord $Path}catch{}
+  return $null-ne$process
+}
