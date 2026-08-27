@@ -53,11 +53,15 @@ for marker in (
     "294fb37343205b9b0cb7b7b1b423d3d4b60d9998",
     "v1.260327.1-0.20260711155151-50231eaff98c",
     "GO_TOOLCHAIN=go1.26.3",
+    'GOSUMDB="${GOSUMDB:-sum.golang.org}"',
+    "go_retry()",
     "RouterXrayDialerController.class",
     "exactly one gomobile go.Seq runtime class",
     "github.com/xtls/libxray=$XRAY_VENDOR",
 ):
     assert marker in combined_build, f"Combined Android Go build missing marker: {marker}"
+assert "GOSUMDB=off" not in combined_build, "Android Go build must not disable checksum verification"
+assert "GONOSUMDB=*" not in combined_build, "Android Go build must not bypass checksum verification"
 for marker in (
     "RouterXrayDialerController",
     "RouterXrayRegisterDialerController",
