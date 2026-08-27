@@ -27,12 +27,20 @@ def main() -> int:
         assert os.getpid() in PIDS.verified(str(root))
         records = PIDS.read_registry(path)
         assert len(records) == 1 and records[0]["pid"] == os.getpid()
+        assert records[0]["command_sha256"], records
 
         # A stale/reused PID record with the wrong start identity is never
         # returned as kill input even though the numeric PID is currently alive.
         stale = dict(records[0])
         stale["start"] = "wrong-start-token"
         PIDS.atomic_write(path, [stale])
+        assert os.getpid() not in PIDS.verified(str(root))
+
+        # An exec/replacement that keeps the same PID and start time but changes
+        # command identity must also lose Router VPN ownership.
+        wrong_command = dict(records[0])
+        wrong_command["command_sha256"] = "0" * 64
+        PIDS.atomic_write(path, [wrong_command])
         assert os.getpid() not in PIDS.verified(str(root))
 
         # Legacy plain numeric PID files are intentionally untrusted.
@@ -93,7 +101,6 @@ def main() -> int:
                 raise AssertionError("runtime PID registry followed a symlink run directory")
             assert not list(outside.iterdir())
 
-
     # Every launcher that records background processes must use the verified
     # JSON PID registry. Raw numeric .pids files can target unrelated reused
     # processes after a crash/restart and are forbidden.
@@ -103,7 +110,8 @@ def main() -> int:
         assert 'runtime-pids.py" record' in runner, runner_name
         assert ': >"$RUN/$MODE.pids"' not in runner, runner_name
         assert 'echo $! >>"$RUN/$MODE.pids"' not in runner, runner_name
-\n    print("Verified runtime PID registry tests: OK")
+
+    print("Verified runtime PID registry tests: OK")
     return 0
 
 
