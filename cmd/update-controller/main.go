@@ -91,15 +91,17 @@ type stackInfo struct {
 	Env        json.RawMessage `json:"Env"`
 }
 
+type workflowRun struct {
+	ID         int64  `json:"id"`
+	HeadSHA    string `json:"head_sha"`
+	HeadBranch string `json:"head_branch"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	CreatedAt  string `json:"created_at"`
+}
+
 type workflowRuns struct {
-	Runs []struct {
-		ID         int64  `json:"id"`
-		HeadSHA    string `json:"head_sha"`
-		HeadBranch string `json:"head_branch"`
-		Status     string `json:"status"`
-		Conclusion string `json:"conclusion"`
-		CreatedAt  string `json:"created_at"`
-	} `json:"workflow_runs"`
+	Runs []workflowRun `json:"workflow_runs"`
 }
 
 func env(k, fallback string) string {
@@ -435,22 +437,43 @@ func githubText(endpoint string, limit int64) (string, error) {
 	return string(raw), nil
 }
 
+func newestMeaningfulWorkflowSuccess(runs []workflowRun, sha, branch string) bool {
+	matches := make([]workflowRun, 0, len(runs))
+	for _, run := range runs {
+		if strings.ToLower(run.HeadSHA) == sha && run.HeadBranch == branch {
+			matches = append(matches, run)
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].ID > matches[j].ID })
+	for _, run := range matches {
+		// A newer queued/in-progress exact-SHA run means evidence is unsettled;
+		// never fall back to an older green result while a rerun is still proving
+		// the release.
+		if run.Status != "completed" {
+			return false
+		}
+		// Duplicate workflow invocations can be cancelled/skipped by concurrency
+		// without saying anything about source correctness. Ignore only those
+		// neutral conclusions and use the newest meaningful completed attempt.
+		if run.Conclusion == "cancelled" || run.Conclusion == "skipped" {
+			continue
+		}
+		return run.Conclusion == "success"
+	}
+	return false
+}
+
 func (c *controller) workflowSuccess(file, sha string) (bool, error) {
 	if !shaRE.MatchString(sha) {
 		return false, errors.New("invalid SHA")
 	}
-	q := url.Values{"branch": {c.branch}, "status": {"success"}, "head_sha": {sha}, "per_page": {"20"}}
+	q := url.Values{"branch": {c.branch}, "head_sha": {sha}, "per_page": {"50"}}
 	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/actions/workflows/%s/runs?%s", c.repo, url.PathEscape(file), q.Encode())
 	var runs workflowRuns
 	if err := githubJSON(endpoint, &runs); err != nil {
 		return false, err
 	}
-	for _, run := range runs.Runs {
-		if strings.ToLower(run.HeadSHA) == sha && run.HeadBranch == c.branch && run.Status == "completed" && run.Conclusion == "success" {
-			return true, nil
-		}
-	}
-	return false, nil
+	return newestMeaningfulWorkflowSuccess(runs.Runs, sha, c.branch), nil
 }
 
 func (c *controller) verifiedTarget(sha string) error {
