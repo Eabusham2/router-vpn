@@ -175,13 +175,7 @@ function Remove-OwnedDnsHint {
 
 function Stop-DnsProxy {
   if (-not (Test-RuntimeOwner)) { return }
-  if (Test-Path -LiteralPath $dnsPidFile -PathType Leaf) {
-    $pidValue=0
-    if ([int]::TryParse(((Get-Content -Raw -LiteralPath $dnsPidFile -ErrorAction SilentlyContinue).Trim()),[ref]$pidValue) -and $pidValue -gt 1) {
-      Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
-    }
-    Remove-Item -LiteralPath $dnsPidFile -Force -ErrorAction SilentlyContinue
-  }
+  [void](Stop-RouterVPNRecordedProcess $dnsProcessFile)
 }
 
 function Remove-PrivateRuntime {
@@ -209,7 +203,7 @@ function Start-DnsProxy($Dns) {
   if (-not [string]::IsNullOrWhiteSpace([string]$Dns.server_name)) { $args += @('-server-name',[string]$Dns.server_name) }
   if (-not [string]::IsNullOrWhiteSpace([string]$Dns.path)) { $args += @('-path',[string]$Dns.path) }
   $process = Start-Process -FilePath $dnsProxy -ArgumentList $args -WorkingDirectory $runDir -PassThru -WindowStyle Hidden
-  Set-Content -LiteralPath $dnsPidFile -Value $process.Id -Encoding ASCII
+  Write-RouterVPNProcessRecord $dnsProcessFile $process
   Start-Sleep -Milliseconds 250
   if ($process.HasExited) { throw "Router VPN selected-DNS proxy exited during startup with code $($process.ExitCode)." }
   $server = if ([string]$Dns.dns_host -match ':') { "[$($Dns.dns_host)]:$($Dns.port)" } else { "$($Dns.dns_host):$($Dns.port)" }
@@ -232,7 +226,7 @@ if (-not (Test-Path -LiteralPath $killSwitch -PathType Leaf)) { Fail "Windows ki
 $runBase = Safe-Under $root (Join-Path $root 'run\windows')
 $runDir = Safe-Under $runBase (Join-Path $runBase (Join-Path $profileId 'wg'))
 $runtimeConfig = Join-Path $runDir 'wg.conf'
-$dnsPidFile = Join-Path $runDir 'router-vpn-dns.pid'
+$dnsProcessFile = Join-Path $runDir 'router-vpn-dns.process.json'
 $dnsOwnerFile = Join-Path $runDir 'dns.owner'
 $dnsHint = Safe-Under $root (Join-Path $root 'run\dns.txt')
 $script:dnsOwnerToken=''
