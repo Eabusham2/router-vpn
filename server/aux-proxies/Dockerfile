@@ -1,4 +1,4 @@
-FROM rust:1.88-bookworm AS overtls-build
+FROM rust:1.88.0-bookworm AS overtls-build
 ARG OVERTLS_VERSION=0.3.12
 RUN cargo install overtls --version "${OVERTLS_VERSION}" --locked --root /out \
  && /out/bin/overtls-bin --version >/dev/null
