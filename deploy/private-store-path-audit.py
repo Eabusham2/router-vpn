@@ -117,6 +117,8 @@ require(
     "server/scripts/atomic-private-write.py",
     "_validate_existing_ancestors",
     "ensure_private_parent",
+    "require_target_unchanged",
+    "identity changed before adoption",
     "private path component",
 )
 require(
