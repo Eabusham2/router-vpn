@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import runpy
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
@@ -44,6 +45,10 @@ MAX_MEMBER = 512 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
 LOCAL_BUILD_TIMEOUT = 300
 PROFILE_SCHEMA_VERSION = 4
+
+_VERIFIED = runpy.run_path(str(Path(__file__).with_name("verified-regular-read.py")))
+parent_chain_snapshot = _VERIFIED["parent_chain_snapshot"]
+verify_parent_chain = _VERIFIED["verify_parent_chain"]
 
 PACKAGE_MAP = {
     "router-vpn-windows-amd64.zip": ("RouterVPN-Windows-amd64.zip", "windows", "amd64"),
@@ -183,25 +188,115 @@ def one_root(work: Path) -> Path:
 
 
 def copy_file(src: Path, dst: Path, required: bool = True) -> None:
-    if not src.is_file():
+    try:
+        before = src.lstat()
+    except FileNotFoundError:
         if required:
-            raise FileNotFoundError(src)
+            raise
         return
-    if src.is_symlink():
-        raise ValueError(f"refusing to package symlink: {src}")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"refusing to package non-regular/symlink file: {src}")
+    if before.st_size < 0 or before.st_size > MAX_MEMBER:
+        raise ValueError(f"package source exceeds safety limit: {src}")
+
+    source_parents = parent_chain_snapshot(src)
+    src_fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    tmp: Path | None = None
+    try:
+        opened = os.fstat(src_fd)
+        current = src.lstat()
+        verify_parent_chain(source_parents)
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(opened, current)
+            or not os.path.samestat(opened, before)
+        ):
+            raise ValueError(f"package source changed during open: {src}")
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists() or dst.is_symlink():
+            dest_info = dst.lstat()
+            if stat.S_ISLNK(dest_info.st_mode) or not stat.S_ISREG(dest_info.st_mode):
+                raise ValueError(f"refusing unsafe package destination: {dst}")
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{dst.name}.copy-", dir=dst.parent)
+        tmp = Path(tmp_name)
+        total = 0
+        try:
+            mode = stat.S_IMODE(opened.st_mode) & 0o777
+            os.fchmod(fd, mode or 0o600)
+            while True:
+                chunk = os.read(src_fd, 1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_MEMBER:
+                    raise ValueError(f"package source exceeds safety limit while reading: {src}")
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(fd, view)
+                    view = view[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+        final_source = src.lstat()
+        verify_parent_chain(source_parents)
+        if (
+            stat.S_ISLNK(final_source.st_mode)
+            or not stat.S_ISREG(final_source.st_mode)
+            or not os.path.samestat(opened, final_source)
+            or total != opened.st_size
+        ):
+            raise ValueError(f"package source changed during read: {src}")
+        os.replace(tmp, dst)
+        tmp = None
+    finally:
+        os.close(src_fd)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 def copy_tree(src: Path, dst: Path, required: bool = True) -> None:
-    if not src.is_dir():
+    try:
+        before = src.lstat()
+    except FileNotFoundError:
         if required:
-            raise FileNotFoundError(src)
+            raise
         return
-    for path in src.rglob("*"):
-        if path.is_symlink():
-            raise ValueError(f"refusing to package symlink: {path}")
-    shutil.copytree(src, dst, dirs_exist_ok=True)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
+        raise ValueError(f"refusing to package non-directory/symlink tree: {src}")
+    source_parents = parent_chain_snapshot(src)
+    verify_parent_chain(source_parents)
+
+    if dst.exists() or dst.is_symlink():
+        info = dst.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise ValueError(f"refusing unsafe package tree destination: {dst}")
+    else:
+        dst.mkdir(parents=True, mode=stat.S_IMODE(before.st_mode) & 0o777 or 0o700)
+
+    for entry in sorted(os.scandir(src), key=lambda item: item.name):
+        child = Path(entry.path)
+        info = child.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise ValueError(f"refusing to package symlink: {child}")
+        target = dst / entry.name
+        if stat.S_ISDIR(info.st_mode):
+            copy_tree(child, target)
+        elif stat.S_ISREG(info.st_mode):
+            copy_file(child, target)
+        else:
+            raise ValueError(f"refusing to package special filesystem entry: {child}")
+
+    current = src.lstat()
+    verify_parent_chain(source_parents)
+    if (
+        stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)
+    ):
+        raise ValueError(f"package source directory changed during traversal: {src}")
 
 
 def write_blank_routers(path: Path) -> None:
