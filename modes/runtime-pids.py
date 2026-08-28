@@ -97,7 +97,17 @@ def read_registry(path: Path) -> list[dict]:
         current = path.lstat()
         if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
             raise RuntimeError(f"runtime PID registry changed during open: {path}")
-        body = os.read(fd, MAX_FILE + 1)
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, min(8192, MAX_FILE + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_FILE:
+                raise RuntimeError(f"runtime PID registry exceeds safety limit: {path}")
+        body = b"".join(chunks)
     finally:
         os.close(fd)
     if len(body) > MAX_FILE:
@@ -212,11 +222,16 @@ def verified_records(records: list[dict]) -> list[int]:
             pid = int(item.get("pid") or 0)
             expected_start = str(item.get("start") or "")
             expected_command = str(item.get("command_sha256") or "")
+            first_start = process_start(pid)
+            current_command = process_command_hash(pid)
+            second_start = process_start(pid)
             if (
                 expected_start
                 and expected_command
-                and process_start(pid) == expected_start
-                and process_command_hash(pid) == expected_command
+                and first_start == expected_start
+                and second_start == expected_start
+                and first_start == second_start
+                and current_command == expected_command
             ):
                 out.append(pid)
         except (RuntimeError, ValueError, TypeError):
