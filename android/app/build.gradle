@@ -71,20 +71,10 @@ tasks.register('prepareAmneziaWgTunnel', Exec) {
 
 tasks.register('prepareSingBoxLibbox', Exec) {
     workingDir rootProject.projectDir
-    // The pinned gomobile output uses its module package path
-    // io.nekohasekai.libbox. Older verifier literals used libbox.* and rejected
-    // an otherwise complete AAR. Patch only those verifier literals in a
-    // same-directory disposable copy so ROOT/pins/build behavior stay exact.
-    commandLine 'bash', '-c', '''
-set -euo pipefail
-patched=.routervpn-build-sing-box-libbox.sh
-trap 'rm -f "$patched"' EXIT
-sed \
-  -e 's#libbox/RouterXrayDialerController.class#io/nekohasekai/libbox/RouterXrayDialerController.class#g' \
-  -e 's#libbox\\.Libbox#io.nekohasekai.libbox.Libbox#g' \
-  build-sing-box-libbox.sh > "$patched"
-bash "$patched"
-'''
+    // The canonical pinned builder owns its verifier. Do not rewrite it at
+    // Gradle execution time: source-level sed patches can drift and mutate an
+    // already-correct package path into a false verifier failure.
+    commandLine 'bash', 'build-sing-box-libbox.sh'
     outputs.file libboxAar
 }
 
