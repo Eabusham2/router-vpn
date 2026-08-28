@@ -435,7 +435,9 @@ def provenance_family(family: str, arch: str) -> str:
 
 def build_from_github(work: Path, source_archive: Path, expected_sha: str, expected_family: str) -> Path:
     unpack = work / "github"
-    unpack.mkdir()
+    # Callers may pass a fresh per-request work path. Create the complete private
+    # extraction parent here instead of relying on an unrelated caller side effect.
+    unpack.mkdir(parents=True)
     if source_archive.name.endswith(".tar.gz"):
         safe_extract_tar(source_archive, unpack)
     else:
