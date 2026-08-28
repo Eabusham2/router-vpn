@@ -34,6 +34,34 @@ def main() -> int:
         assert len(records) == 1 and records[0]["pid"] == os.getpid()
         assert records[0]["command_sha256"], records
 
+        # Regular-file reads may legally return short chunks. The registry must
+        # loop until EOF instead of silently accepting only an initial prefix.
+        PIDS.atomic_write(path, records * 3)
+        real_read = PIDS.os.read
+        with mock.patch.object(
+            PIDS.os,
+            "read",
+            side_effect=lambda fd, count: real_read(fd, min(count, 7)),
+        ):
+            short_read_records = PIDS.read_registry(path)
+        assert len(short_read_records) == 3, short_read_records
+        PIDS.atomic_write(path, records)
+
+        # A PID reused between the first birth-token check and command hashing
+        # must not be accepted even when the replacement process has the exact
+        # same command hash. Verification re-proves the birth token afterward.
+        expected = records[0]
+        with mock.patch.object(
+            PIDS,
+            "process_start",
+            side_effect=[expected["start"], "replacement-start-token"],
+        ), mock.patch.object(
+            PIDS,
+            "process_command_hash",
+            return_value=expected["command_sha256"],
+        ):
+            assert PIDS.verified_records([expected]) == []
+
         # A stale/reused PID record with the wrong start identity is never
         # returned as kill input even though the numeric PID is currently alive.
         stale = dict(records[0])
