@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from unittest import mock
 
 SCRIPT = Path(__file__).with_name("benchmark-dns.py")
 
@@ -31,6 +32,25 @@ def main() -> int:
         if os.name != "nt":
             assert target.stat().st_mode & 0o777 == 0o600
         assert not list(root.glob(".dns-fastest.json.tmp-*"))
+
+        foreign = root / "foreign-dns.json"
+        foreign.write_text('{"foreign":true}\n', encoding="utf-8")
+        os.chmod(foreign, 0o600)
+        real_mkstemp = module.PRIVATE_WRITER.tempfile.mkstemp
+
+        def mkstemp_then_swap(*args, **kwargs):
+            fd, name = real_mkstemp(*args, **kwargs)
+            os.replace(foreign, target)
+            return fd, name
+
+        with mock.patch.object(module.PRIVATE_WRITER.tempfile, "mkstemp", side_effect=mkstemp_then_swap):
+            try:
+                module.write_private_atomic(target, '{"measurement_only":false}\n')
+            except RuntimeError as exc:
+                assert "identity changed before adoption" in str(exc)
+            else:
+                raise AssertionError("DNS benchmark overwrote a foreign regular replacement")
+        assert target.read_text(encoding="utf-8") == '{"foreign":true}\n'
 
         if os.name != "nt":
             real = root / "real.json"
