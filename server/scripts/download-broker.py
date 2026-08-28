@@ -31,6 +31,17 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from importlib.util import module_from_spec, spec_from_file_location
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+_verified_spec = spec_from_file_location(
+    "router_vpn_broker_verified_regular_read",
+    SCRIPT_DIR / "verified-regular-read.py",
+)
+if _verified_spec is None or _verified_spec.loader is None:
+    raise RuntimeError("cannot load verified-regular-read.py")
+_verified = module_from_spec(_verified_spec)
+_verified_spec.loader.exec_module(_verified)
+read_verified_regular = _verified.read_verified_regular
+
 BUILDER_PATH = SCRIPT_DIR / "build-download-on-demand.py"
 _spec = spec_from_file_location("router_vpn_one_package", BUILDER_PATH)
 if _spec is None or _spec.loader is None:
@@ -365,6 +376,41 @@ def _job_route(path: str) -> tuple[str, str] | None:
     return None
 
 
+def _verified_private_text(path: Path, limit: int, label: str) -> str:
+    try:
+        body = read_verified_regular(path, limit, private=True)
+        return body.decode("utf-8", errors="strict")
+    except Exception as exc:
+        raise RuntimeError(f"cannot safely read {label}: {exc}") from exc
+
+
+def _setup_token(path: Path) -> str:
+    text = _verified_private_text(path, 4096, "Setup Center authentication token")
+    lines = text.splitlines()
+    if len(lines) != 1:
+        raise RuntimeError("Setup Center authentication token must contain exactly one line")
+    token = lines[0].strip()
+    if (
+        len(token) < 32
+        or len(token) > 512
+        or any(ord(ch) < 0x21 or ord(ch) > 0x7e for ch in token)
+    ):
+        raise RuntimeError("Setup Center authentication token is invalid")
+    return token
+
+
+def _pairing_bundle(base: Path) -> bytes:
+    path = base / "client-bundle" / "router-vpn-bundle.json"
+    try:
+        data = read_verified_regular(path, MAX_PAIR_BUNDLE, private=True)
+        value = json.loads(data)
+    except Exception as exc:
+        raise RuntimeError(f"private node bundle is unavailable or unsafe: {exc}") from exc
+    if not isinstance(value, dict) or int(value.get("bundleVersion") or 0) < 1:
+        raise RuntimeError("private node bundle is invalid")
+    return data
+
+
 class Handler(SimpleHTTPRequestHandler):
     server_version = "RouterVPNSetupCenter/4"
 
@@ -495,13 +541,11 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             body = self._read_body_json()
             code = str(body.get("code") or "")
-            self.server.pairing.redeem(code, str(self.client_address[0]))
-            bundle = Path(self.server.base_dir) / "client-bundle" / "router-vpn-bundle.json"
-            if not bundle.is_file():
-                raise RuntimeError("private node bundle is unavailable")
-            if bundle.stat().st_size > MAX_PAIR_BUNDLE:
-                raise RuntimeError("private node bundle exceeds pairing safety limit")
-            data = bundle.read_bytes()
+            data = self.server.pairing.redeem(
+                code,
+                str(self.client_address[0]),
+                lambda: _pairing_bundle(Path(self.server.base_dir)),
+            )
         except (ValueError, PermissionError) as exc:
             self._json(403, {"ok": False, "error_code": "pairing_rejected", "error": str(exc)})
             return
@@ -687,11 +731,7 @@ class Server(ThreadingHTTPServer):
         self.base_dir = base_dir
         self.static_dir = static_dir
         token_path = base_dir / "config" / "setup-center.token"
-        if not token_path.is_file():
-            raise RuntimeError(f"missing Setup Center authentication token: {token_path}")
-        self.setup_token = token_path.read_text(encoding="utf-8").strip()
-        if len(self.setup_token) < 32:
-            raise RuntimeError("Setup Center authentication token is invalid")
+        self.setup_token = _setup_token(token_path)
         self.jobs = _jobs.DownloadJobManager(base_dir, build_package, content_type_for, BUILD_SLOTS, ALLOWED_DOWNLOADS, max_active=8)
         self.pairing = _pairing.PairingManager()
         super().__init__(address, handler)
