@@ -387,8 +387,13 @@ require(
 require(
     "cmd/update-controller/main.go",
     "newestMeaningfulWorkflowSuccess",
+    "newestMeaningfulWorkflowRun",
     "evidence is unsettled",
     "newest meaningful completed attempt",
+    "expectedReleaseArtifact",
+    "workflowArtifactAvailable",
+    "artifactBelongsToCurrentAttempt",
+    "live current-attempt artifact",
 )
 require(
     "cmd/update-controller/main_test.go",
@@ -396,6 +401,10 @@ require(
     "older green workflow was accepted while a newer rerun was unsettled",
     "neutral cancelled duplicate erased prior successful evidence",
     "wrong SHA/branch workflow evidence was accepted",
+    "ExactReleaseArtifactNamesAreSHAQualified",
+    "ReleaseArtifactMustBelongToCurrentSuccessfulAttempt",
+    "artifact from a prior run attempt was accepted",
+    "expired release artifact was accepted",
 )
 require(
     "cmd/update-controller/recovery_test.go",
