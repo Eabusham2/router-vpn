@@ -34,7 +34,7 @@ require(
 main = require(
     "cmd/client/main.go",
     "beginMutationOperation(r)", "beginConnectionOperation()", "cancelConnectionOperation()",
-    "a.operationMu.Lock()", "checkConnectionOperation()", "a.cmd != cmd",
+    "a.operationMu.Lock()", "checkConnectionOperation()", "a.ownsConnectionRuntime(cmd)",
     "oldStore := a.profiles", "a.profiles = oldStore",
 )
 for handler in ("saveProfile", "selectProfile", "deleteProfile", "importProfileBundle", "options"):
