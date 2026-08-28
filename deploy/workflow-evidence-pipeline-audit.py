@@ -16,6 +16,7 @@ FILES = {
     "preflight": ".github/workflows/arm64-portainer-preflight.yml",
     "macos": ".github/workflows/macos-native-app.yml",
     "ios_libbox": ".github/workflows/ios-libbox-engine.yml",
+    "aux": ".github/workflows/aux-proxies-ci.yml",
 }
 
 body = {key: (ROOT / rel).read_text(encoding="utf-8") for key, rel in FILES.items()}
@@ -37,6 +38,13 @@ assert "grep -q '/logical-modes.json$' \"$list\"" in client
 
 preflight = body["preflight"]
 assert 'test -z "$(find /opt/router-vpn/downloads -maxdepth 1 -type f -name "*.zip" -print -quit)"' in preflight
+
+aux = body["aux"]
+assert 'unzip -Z1 "$archive" >"$members"' in aux
+assert 'unzip -Z1 "$portable" >"$portable_members"' in aux
+assert 'unzip -Z1 "$bundle" >"$bundle_members"' in aux
+assert 'unzip -p "$bundle" \'*/router-vpn-bundle.json\' >"$bundle_json"' in aux
+assert 'test -z "$(find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name \'*.zip\' -print -quit)"' in aux
 
 macos = body["macos"]
 assert 'codesign -dv --verbose=2 "$app" >"$signature" 2>&1' in macos
