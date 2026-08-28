@@ -295,9 +295,30 @@ def write_state(root: Path, value: dict[str, Any]) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _require_removal_identity(
+    path: Path,
+    before: os.stat_result,
+    run: Path,
+    parent_before: os.stat_result,
+) -> bool:
+    parent_now = _require_private_dir(run)
+    if (
+        parent_now.st_dev != parent_before.st_dev
+        or parent_now.st_ino != parent_before.st_ino
+    ):
+        raise RuntimeError("kill-switch state parent changed before removal")
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        return False
+    if not os.path.samestat(before, current):
+        raise RuntimeError("kill-switch state target identity changed before removal")
+    return True
+
+
 def remove_state(root: Path, *, force_recovery: bool = False) -> None:
     path = state_path(root)
-    run, _ = _runtime_state_dir(root)
+    run, parent_before = _runtime_state_dir(root)
     try:
         info = path.lstat()
     except FileNotFoundError:
@@ -307,6 +328,8 @@ def remove_state(root: Path, *, force_recovery: bool = False) -> None:
             raise RuntimeError("refusing symlink persistent kill-switch state; use local force-off recovery")
     elif not stat.S_ISREG(info.st_mode):
         raise RuntimeError("refusing non-regular persistent kill-switch state")
+    if not _require_removal_identity(path, info, run, parent_before):
+        return
     path.unlink()
     try:
         dir_fd = os.open(run, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
