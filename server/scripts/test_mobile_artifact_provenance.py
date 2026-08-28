@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import plistlib
 import tempfile
@@ -105,6 +106,39 @@ class MobileArtifactProvenanceTests(unittest.TestCase):
             write_apk(duplicate, android_body(), duplicate=True)
             with self.assertRaisesRegex(RuntimeError, "2 copies"):
                 prov.verify("router-vpn-android.apk", duplicate, SHA, REPO)
+
+    def test_outer_mobile_artifact_symlink_and_replacement_race_fail_closed(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-mobile-prov-outer-") as td:
+            root = Path(td)
+            real = root / "real.apk"
+            write_apk(real, android_body())
+            link = root / "link.apk"
+            try:
+                link.symlink_to(real)
+            except OSError:
+                link = None
+            if link is not None:
+                with self.assertRaisesRegex(RuntimeError, "redirected|regular file"):
+                    prov.verify("router-vpn-android.apk", link, SHA, REPO)
+
+            target = root / "race.apk"
+            replacement = root / "replacement.apk"
+            write_apk(target, android_body())
+            write_apk(replacement, android_body(OTHER))
+            real_open = Path.open
+            swapped = False
+
+            def swap_before_open(path_obj, *args, **kwargs):
+                nonlocal swapped
+                if path_obj == target and not swapped:
+                    swapped = True
+                    os.replace(replacement, target)
+                return real_open(path_obj, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", new=swap_before_open):
+                with self.assertRaisesRegex(RuntimeError, "changed identity during verification open"):
+                    prov.verify("router-vpn-android.apk", target, SHA, REPO)
+            self.assertTrue(swapped, "replacement race hook did not run")
 
     def test_exact_ios_app_and_packet_tunnel_are_both_required(self):
         with tempfile.TemporaryDirectory(prefix="routervpn-mobile-prov-") as td:
