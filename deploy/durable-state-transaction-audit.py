@@ -58,6 +58,7 @@ require(
     "os.CreateTemp",
     "tmp.Sync()",
     "os.Rename(tmpPath, path)",
+    "atomicWritePrivateTargetUnchanged",
 )
 require(
     "cmd/client/main.go",
@@ -72,7 +73,7 @@ require("cmd/client/strategy_modes.go", "readPrivateRegular", "atomicWritePrivat
 require("cmd/client/standard_exits.go", "readPrivateRegular", "atomicWritePrivate")
 require("cmd/client/standard_exits_test.go", "TestStandardExitStoreRejectsSymlinkParent", "TestStandardExitStoreAtomicWriterLeavesNoTempFiles")
 require("cmd/client/router_profile_transaction_test.go", "RollsRAMBackWhenPersistenceFails", "CompetingMutation")
-require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSymlinkParent", "RejectsOversizedRead")
+require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSymlinkParent", "RejectsOversizedRead", "TargetReplacementBeforeAdoption")
 
 # MTU adoption remains a two-phase live/session transaction and persistence
 # failure must restore the live interface/in-memory state. Runtime-profile MTU
@@ -337,6 +338,7 @@ require(
     "os.CreateTemp",
     "tmp.Sync()",
     "atomicWritePrivilegedState",
+    "atomicWritePrivilegedStateTargetUnchanged",
 )
 require(
     "cmd/router-agent/admin_forwarding_extension.go",
@@ -359,7 +361,7 @@ require("cmd/router-agent/admin_rollback_test.go", "ReportsIncompleteRollback")
 
 # Exact-SHA updater recovery state is a hard transaction boundary. The previous
 # exact compose must survive process restart until success or proven rollback.
-require("cmd/update-controller/private_state.go", "validateUpdaterPrivateFile", "validateUpdaterPrivateParent", "os.SameFile", "atomicWriteUpdaterPrivate")
+require("cmd/update-controller/private_state.go", "validateUpdaterPrivateFile", "validateUpdaterPrivateParent", "os.SameFile", "atomicWriteUpdaterPrivate", "atomicWriteUpdaterPrivateTargetUnchanged")
 require(
     "cmd/update-controller/recovery.go",
     "rollbackComposePath",
