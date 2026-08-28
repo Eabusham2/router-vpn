@@ -91,6 +91,8 @@ assert '\\n  jar tf "$classes"' not in combined_build, "AAR verifier commands we
 assert 'jar tf "$classes" >"$class_list.raw"' in combined_build, "AAR verifier must snapshot the JDK jar listing"
 assert 'tr -d \'\\r\' <"$class_list.raw" >"$class_list"' in combined_build, "AAR verifier must normalize JDK class-list line endings before exact checks"
 assert "tr -d '\\\\r'" not in combined_build, "AAR verifier must not delete literal r characters while normalizing CRLF"
+normalizer_lines = [line.strip() for line in combined_build.splitlines() if line.strip().startswith("tr -d ")]
+assert normalizer_lines == [r'''tr -d '\\r' <"$class_list.raw" >"$class_list"'''], f"unexpected AAR CR normalizer: {normalizer_lines}"
 assert 'javap -classpath "$classes" io.nekohasekai.libbox.RouterXrayDialerController' in combined_build
 assert "boolean protectFd(long);" in combined_build, "AAR verifier must prove the bound socket-protection interface API"
 assert 'android:name=".XrayVpnService"' in manifest
