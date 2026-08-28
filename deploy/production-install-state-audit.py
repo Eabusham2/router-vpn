@@ -69,6 +69,27 @@ for forbidden in (
     if forbidden in upgrade:
         errors.append(f"server/upgrade.sh contains stale unsafe marker {forbidden!r}")
 
+
+doctor = read("server/scripts/doctor-current.sh")
+for marker in (
+    "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
+    'verified_private(){ python3 "$VERIFIED_READ" --private "$1"',
+    'read_verified_regular=runpy.run_path(sys.argv[2])["read_verified_regular"]',
+    "load_private_json('config/xray/server.json')",
+    "load_private_json('config/transports/server.json')",
+    "load_private_json('config/socks5.json')",
+    '[[ ! -e "$leaked" && ! -L "$leaked" ]]',
+    '&& ! -L "$BASE/client-bundle/generated/$mode"',
+):
+    if marker not in doctor:
+        errors.append(f"server/scripts/doctor-current.sh missing verified-state marker {marker!r}")
+for forbidden in (
+    "json.load(open(base/",
+    '[[ -s "$f" ]] && ok',
+):
+    if forbidden in doctor:
+        errors.append(f"server/scripts/doctor-current.sh contains stale unsafe read marker {forbidden!r}")
+
 reader = read("server/scripts/verified-regular-read.py")
 for marker in (
     'argv[1] == "--private"',
