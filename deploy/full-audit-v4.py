@@ -69,7 +69,8 @@ need("server/scripts/create-bundle-json.py","nodeProofId","node_proof_id","ensur
 for wf in(ROOT/".github"/"workflows").glob("*.yml"):
  text=wf.read_text(encoding="utf-8",errors="ignore")
  if"--method DELETE"in text and"git/refs/heads"in text:errors.append(f"workflow blindly deletes branches: {wf.relative_to(ROOT)}")
-need(".github/workflows/keep-main-only.yml","Unexpected non-main branch","exit 1")
+need(".github/workflows/keep-main-only.yml","cleanup-known-stale-branches.sh")
+need("deploy/cleanup-known-stale-branches.sh","Unexpected non-main branch","exit 1","Refusing to delete changed stale-branch candidate")
 
 # Current controller/native app UI: 16 logical modes, typed validation, real Windows WPF shell, real Linux multihop UI.
 need("cmd/portable-launcher/main.go","RouterVPN-Windows-App.ps1","openNativeApp(nativeApp)","nativeCmd.Wait()","-SelfTest","stopPortableController",'localURL+"api/emergency-stop"')
