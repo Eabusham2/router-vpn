@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import socket
-import stat
 import statistics
 import struct
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 BASE = Path(sys.argv[1] if len(sys.argv) > 1 else "/opt/router-vpn")
 OUT = BASE / "config" / "dns-fastest.json"
 MAX_RESULT_BYTES = 1 << 20
+
+_PRIVATE_SPEC = importlib.util.spec_from_file_location(
+    "router_vpn_dns_atomic_private_write",
+    Path(__file__).with_name("atomic-private-write.py"),
+)
+if _PRIVATE_SPEC is None or _PRIVATE_SPEC.loader is None:
+    raise RuntimeError("cannot load Router VPN private publisher")
+PRIVATE_WRITER = importlib.util.module_from_spec(_PRIVATE_SPEC)
+_PRIVATE_SPEC.loader.exec_module(PRIVATE_WRITER)
 
 # Common public recursive resolvers, including primary/secondary addresses and
 # both address families where the provider publishes them. The benchmark runs
@@ -76,36 +84,7 @@ def write_private_atomic(path: Path, text: str) -> None:
     body = text.encode("utf-8")
     if not body or len(body) > MAX_RESULT_BYTES:
         raise RuntimeError("DNS benchmark result is empty or oversized")
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        info = None
-    if info is not None:
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-            raise RuntimeError(f"refusing non-regular/symlink DNS benchmark output: {path}")
-    fd, name = tempfile.mkstemp(prefix=f".{path.name}.tmp-", dir=path.parent)
-    tmp = Path(name)
-    committed = False
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "wb", closefd=True) as stream:
-            stream.write(body)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(tmp, path)
-        committed = True
-        try:
-            dir_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            pass
-    finally:
-        if not committed:
-            tmp.unlink(missing_ok=True)
+    PRIVATE_WRITER.atomic_private_write(path, body)
 
 
 def main() -> int:
