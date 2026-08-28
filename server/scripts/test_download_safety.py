@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 import importlib.util
+import io
 import json
 from pathlib import Path
 import stat
+import tarfile
 import tempfile
 import unittest
+import warnings
 import zipfile
 
 HERE = Path(__file__).resolve().parent
@@ -41,6 +44,27 @@ class DownloadSafetyTests(unittest.TestCase):
                 zf.writestr(info, "../../outside")
             with self.assertRaises(ValueError):
                 builder.safe_extract_zip(src, base / "out")
+
+    def test_duplicate_normalized_zip_and_tar_paths_are_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            zpath = base / "duplicate.zip"
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                with zipfile.ZipFile(zpath, "w") as zf:
+                    zf.writestr("root/value.txt", b"one")
+                    zf.writestr("root/value.txt", b"two")
+            with self.assertRaisesRegex(ValueError, "duplicate normalized path"):
+                builder.safe_extract_zip(zpath, base / "zip-out")
+
+            tpath = base / "duplicate.tar.gz"
+            with tarfile.open(tpath, "w:gz") as tf:
+                for body in (b"one", b"two"):
+                    info = tarfile.TarInfo("root/value.txt")
+                    info.size = len(body)
+                    tf.addfile(info, io.BytesIO(body))
+            with self.assertRaisesRegex(ValueError, "duplicate normalized path"):
+                builder.safe_extract_tar(tpath, base / "tar-out")
 
     def test_unpacked_limit_is_enforced(self):
         old = builder.MAX_UNPACKED
