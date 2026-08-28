@@ -82,6 +82,20 @@ for forbidden in (
     if forbidden in normalizer:
         errors.append(f"normalize-setup-imports.py contains stale live-write marker {forbidden!r}")
 
+setup_server = read("server/scripts/setup-center-server.py")
+for marker in (
+    "_broker.read_verified_regular(path, private=True)",
+    'raw.decode("utf-8")',
+):
+    if marker not in setup_server:
+        errors.append(f"setup-center-server.py missing verified private HTML marker {marker!r}")
+for forbidden in (
+    "path.is_file()",
+    'path.read_text(encoding="utf-8")',
+):
+    if forbidden in setup_server:
+        errors.append(f"setup-center-server.py contains stale unverified HTML read marker {forbidden!r}")
+
 private_dir = read("server/scripts/private-directory.py")
 for marker in (
     "validate_existing_ancestors",
@@ -97,6 +111,7 @@ if not errors:
     for rel, label in (
         ("server/scripts/test_private_directory.py", "private-directory"),
         ("server/scripts/test_setup_generation_transaction.py", "Setup Center generation transaction"),
+        ("server/scripts/test_setup_center_private_html.py", "Setup Center verified private HTML"),
     ):
         test = ROOT / rel
         proc = subprocess.run([sys.executable, str(test)], cwd=ROOT, text=True, capture_output=True)
