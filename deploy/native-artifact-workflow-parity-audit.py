@@ -47,6 +47,7 @@ mobile_provenance_test_rel = "server/scripts/test_mobile_artifact_provenance.py"
 broker_exact_sha_test_rel = "server/scripts/test_download_broker_exact_sha.py"
 android_gradle_rel = "android/app/build.gradle"
 ios_project_rel = "ios/RouterVPN/project.yml"
+ios_stamper_rel = "ios/RouterVPN/stamp-provenance.sh"
 aggregate_provenance_rel = "deploy/verify-release-candidate-provenance.py"
 aggregate_provenance_test_rel = "deploy/test-release-candidate-provenance.py"
 rc = read(rc_rel)
@@ -67,6 +68,7 @@ mobile_provenance_test = read(mobile_provenance_test_rel)
 broker_exact_sha_test = read(broker_exact_sha_test_rel)
 android_gradle = read(android_gradle_rel)
 ios_project = read(ios_project_rel)
+ios_stamper = read(ios_stamper_rel)
 aggregate_provenance = read(aggregate_provenance_rel)
 aggregate_provenance_test = read(aggregate_provenance_test_rel)
 
@@ -139,7 +141,15 @@ require(ios_project, ios_project_rel,
         "INFOPLIST_KEY_RouterVPNSourceSHA",
         "INFOPLIST_KEY_RouterVPNSourceRepository",
         'INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-app"',
-        'INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-packet-tunnel"')
+        'INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-packet-tunnel"',
+        'ROUTER_VPN_ARTIFACT_FAMILY=ios-app bash "$SRCROOT/stamp-provenance.sh"',
+        'ROUTER_VPN_ARTIFACT_FAMILY=ios-packet-tunnel bash "$SRCROOT/stamp-provenance.sh"')
+require(ios_stamper, ios_stamper_rel,
+        '[[ "$SHA" =~ ^[0-9a-f]{40}$ ]]',
+        'PLIST="$TARGET_BUILD_DIR/$INFOPLIST_PATH"',
+        "RouterVPNSourceSHA",
+        "RouterVPNSourceRepository",
+        "RouterVPNArtifactFamily")
 for rel, body in ((rc_rel, rc), (client_rel, client)):
     require(body, rel,
             'ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA"',
