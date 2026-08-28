@@ -96,7 +96,9 @@ Router VPN is MIT-licensed; see LICENSE.
 TXT
 
   codesign --verify --deep --strict --verbose=2 "$dir/RouterVPN.app"
-  codesign -dv --verbose=2 "$dir/RouterVPN.app" 2>&1 | grep -Eq 'Signature=adhoc|Authority=Developer ID Application'
+  signature_info="$WORK/$name-codesign.txt"
+  codesign -dv --verbose=2 "$dir/RouterVPN.app" >"$signature_info" 2>&1
+  grep -Eq 'Signature=adhoc|Authority=Developer ID Application' "$signature_info"
   python3 "$ROOT/deploy/source_provenance.py" "$dir" --family "macos-$arch"
 
   tar -C "$WORK" -czf "$OUT/$name.tar.gz" "$name"
