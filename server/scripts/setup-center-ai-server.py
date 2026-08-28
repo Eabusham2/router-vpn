@@ -67,11 +67,12 @@ class Handler(_core.Handler):
 
     def _serve_setup_html(self, name: str) -> None:
         path = Path(self.server.static_dir) / name
-        if not path.is_file():
+        try:
+            raw_source = _core._broker.read_verified_regular(path, private=True)
+            text = self._inject_product_ui(raw_source.decode("utf-8"))
+        except FileNotFoundError:
             self.send_error(404)
             return
-        try:
-            text = self._inject_product_ui(path.read_text(encoding="utf-8"))
         except Exception as exc:
             self._json(500, {"ok": False, "error_code": "setup_ui_error", "error": str(exc)})
             return
