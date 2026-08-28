@@ -886,7 +886,7 @@ func (c *controller) applyUpdate(w http.ResponseWriter, r *http.Request) {
 	// cleanup failed. Clear only a validated private snapshot while holding the
 	// update-state lock, before this new transaction enters applying. Any unsafe
 	// leftover therefore blocks before durable state changes or Portainer writes.
-	if err := c.clearRollbackCompose(); err != nil {
+	if err := c.clearTerminalRollbackSnapshot(c.state); err != nil {
 		c.mu.Unlock()
 		http.Error(w, "cannot safely clear stale rollback snapshot before update: "+err.Error(), http.StatusConflict)
 		return
