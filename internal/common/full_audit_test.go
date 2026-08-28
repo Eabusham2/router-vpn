@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -44,9 +45,21 @@ func TestAuthoritativeRepositoryPythonSafetyContracts(t *testing.T) {
 		"modes/test_mtu_policy.py",
 		"modes/test_multihop.py",
 	}
+	linuxRuntimeOnly := map[string]bool{
+		"deploy/test_router_forwarding_fail_open.py":       true,
+		"server/scripts/test_preserve_generated_state.py": true,
+		"modes/test_kill_switch.py":                       true,
+		"modes/test_mtu_policy.py":                        true,
+		"modes/test_multihop.py":                          true,
+	}
 	for _, path := range paths {
 		path := path
-		t.Run(path, func(t *testing.T) { runRepositoryPythonPath(t, path) })
+		t.Run(path, func(t *testing.T) {
+			if runtime.GOOS == "windows" && linuxRuntimeOnly[path] {
+				t.Skip("Linux/server runtime contract is executed by the authoritative Ubuntu release audit")
+			}
+			runRepositoryPythonPath(t, path)
+		})
 	}
 }
 
