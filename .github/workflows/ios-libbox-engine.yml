@@ -55,7 +55,9 @@ jobs:
           HEADER=$(find .deps/Libbox.xcframework -path '*/Headers/Libbox.h' -print -quit)
           test -s "$HEADER"
           echo '=== exact pinned Libbox PlatformInterface/command signatures ==='
-          grep -nE 'PlatformInterface|CommandServer|StartOrReloadService|OpenTun|openTun|LibboxVersion|SetupOptions' "$HEADER" | head -n 240
+          SIGNATURES="$RUNNER_TEMP/routervpn-libbox-signatures.txt"
+          grep -nE 'PlatformInterface|CommandServer|StartOrReloadService|OpenTun|openTun|LibboxVersion|SetupOptions' "$HEADER" >"$SIGNATURES" || true
+          head -n 240 "$SIGNATURES"
           grep -Fq 'LibboxVersion' "$HEADER"
           grep -Fq 'LibboxPlatformInterface' "$HEADER"
           grep -Fq 'LibboxCommandServer' "$HEADER"
