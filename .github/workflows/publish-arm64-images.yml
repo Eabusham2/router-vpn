@@ -28,6 +28,7 @@ jobs:
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
           python3 deploy/validate-repo.py
           python3 deploy/durable-state-syntax-audit.py
+          python3 deploy/server-image-dependency-audit.py
 
   publish:
     needs: validate-source
