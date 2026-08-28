@@ -40,6 +40,8 @@ require(
     "os.CreateTemp",
     "tmp.Sync()",
     "atomicWritePortablePrivate",
+    "atomicWritePortablePrivateTargetUnchanged",
+    "identity changed before adoption",
     "copyPortablePrivate",
 )
 require(
@@ -68,6 +70,7 @@ require(
     "TestPortablePrivateStoreRejectsNestedSymlinkAncestor",
     "TestPortablePackageSourceRejectsSymlinkAncestor",
     "TestPortableRegularExistsRejectsRuntimeSymlinkAncestor",
+    "TestPortablePrivateStoreRejectsTargetReplacementBeforeAdoption",
 )
 require(
     "cmd/portable-launcher/native_windows_catalog_test.go",
