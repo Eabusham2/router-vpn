@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Keep private node credentials outside persistent Setup Center downloads."""
 from pathlib import Path
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,6 +18,8 @@ upgrade = read("server/upgrade.sh")
 doctor = read("server/scripts/doctor-current.sh")
 broker = read("server/scripts/download-broker.py")
 bundle_gen = read("server/scripts/create-bundle-json.py")
+builder = read("server/scripts/build-download-on-demand.py")
+sync_runtime = read("server/finalize/sync-client-runtime.sh")
 
 # Public/static publishing must delete every historical credential-bearing form
 # and never copy the canonical private bundle/CREDENTIALS into downloads.
@@ -57,6 +61,53 @@ for marker in (
     'if not self._require_auth()',
 ):
     assert marker in broker, f"broker private-node boundary lost marker: {marker}"
+
+
+# A private node-link bundle must combine private node state with runtime code
+# from the exact current source tree at request time. Persistent client-bundle
+# copies of modes/client/dist are never authoritative package inputs.
+for marker in (
+    "def build_private_bundle(work: Path, base: Path, src_root: Path)",
+    'for stale in ("modes", "client", "dist")',
+    'copy_tree(src_root / "modes", root / "modes")',
+    'copy_tree(src_root / "client", root / "client")',
+    'copy_file(src_root / "configs" / "client" / "modes.json", root / "modes.json")',
+    'copy_file(src_root / "configs" / "client" / "logical-modes.json", root / "logical-modes.json")',
+    'copy_file(src_root / "LICENSE", root / "LICENSE")',
+    "return build_private_bundle(work, base, src_root)",
+):
+    assert marker in builder, f"private bundle builder lost exact-runtime marker: {marker}"
+for stale in (
+    "return build_private_bundle(work, base)",
+):
+    assert stale not in builder, f"private bundle builder revived stale persistent-runtime input: {stale}"
+
+for marker in (
+    "PRIVATE_BATCH=/src/server/scripts/atomic-private-batch.py",
+    "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
+    'mktemp -d "$BUNDLE/.runtime-metadata.XXXXXX"',
+    '"$BUNDLE/modes.json=$STAGE/modes.json"',
+    '"$BUNDLE/logical-modes.json=$STAGE/logical-modes.json"',
+    '"$BUNDLE/LICENSE=$STAGE/LICENSE"',
+    "runtime code is injected from exact source",
+):
+    assert marker in sync_runtime, f"sync-client-runtime lost atomic metadata marker: {marker}"
+for stale in (
+    'cp -a /src/modes',
+    'cp -a /src/client',
+    'rm -rf "$BUNDLE/modes"',
+    'rm -rf "$BUNDLE/client"',
+):
+    assert stale not in sync_runtime, f"sync-client-runtime revived mixed persistent runtime mutation: {stale}"
+
+proc = subprocess.run(
+    [sys.executable, str(ROOT / "server/scripts/test_private_bundle_runtime_source.py")],
+    cwd=ROOT,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+assert proc.returncode == 0, "private bundle runtime source test failed: " + (proc.stdout + proc.stderr)[-4000:]
 
 # Pairing/private bundles may contain the node API credential needed by the client,
 # but never the Setup Center/admin bearer secret used for management mutations.
