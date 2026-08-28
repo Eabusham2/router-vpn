@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import stat
 import sys
 from pathlib import Path
+import tempfile
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CUSTOM_IMAGES = {
@@ -119,9 +122,52 @@ def main() -> int:
     rendered = materialize(text, args.sha)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output.with_suffix(output.suffix + ".tmp")
-    tmp.write_text(rendered, encoding="utf-8")
-    tmp.replace(output)
+    parent = output.parent
+    parent_info = parent.lstat()
+    if stat.S_ISLNK(parent_info.st_mode) or not stat.S_ISDIR(parent_info.st_mode):
+        fail("production compose output parent is redirected or not a directory")
+    try:
+        existing = output.lstat()
+    except FileNotFoundError:
+        existing = None
+    if existing is not None and (stat.S_ISLNK(existing.st_mode) or not stat.S_ISREG(existing.st_mode)):
+        fail("production compose output is redirected or not a regular file")
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{output.name}.tmp-", dir=parent)
+    tmp = Path(tmp_name)
+    committed = False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", closefd=True) as stream:
+            stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+        current_parent = parent.lstat()
+        if (
+            stat.S_ISLNK(current_parent.st_mode)
+            or not stat.S_ISDIR(current_parent.st_mode)
+            or not os.path.samestat(parent_info, current_parent)
+        ):
+            fail("production compose output parent changed before adoption")
+        try:
+            current_output = output.lstat()
+        except FileNotFoundError:
+            current_output = None
+        if current_output is not None and (
+            stat.S_ISLNK(current_output.st_mode) or not stat.S_ISREG(current_output.st_mode)
+        ):
+            fail("production compose output changed to an unsafe target")
+        os.replace(tmp, output)
+        committed = True
+        try:
+            dfd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+    finally:
+        if not committed:
+            tmp.unlink(missing_ok=True)
     print(f"Materialized {output} for exact release SHA {args.sha}")
     return 0
 
