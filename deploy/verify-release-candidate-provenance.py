@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
@@ -38,6 +39,29 @@ EXPECTED = {
     "app-debug.apk": ("android", "android-apk"),
     "RouterVPN-native-unsigned-resignable.ipa": ("ios", "ios-app"),
 }
+
+
+def _open_regular_package(path: Path):
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise RuntimeError(f"{path.name}: package is redirected or not a regular file")
+    if before.st_size <= 0 or before.st_size > MAX_ARCHIVE:
+        raise RuntimeError(f"{path.name}: package is empty or oversized")
+    stream = path.open("rb")
+    try:
+        opened = os.fstat(stream.fileno())
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(before, opened)
+            or not os.path.samestat(opened, current)
+        ):
+            raise RuntimeError(f"{path.name}: package changed identity during verification open")
+        return stream
+    except BaseException:
+        stream.close()
+        raise
 
 
 def _sha(value: str) -> str:
@@ -79,7 +103,7 @@ def _manifest_data(raw: bytes, expected_sha: str, family: str) -> None:
 
 
 def _zip_manifest(path: Path, expected_sha: str, family: str) -> None:
-    with zipfile.ZipFile(path, "r") as zf:
+    with _open_regular_package(path) as artifact, zipfile.ZipFile(artifact, "r") as zf:
         infos = zf.infolist()
         if len(infos) > MAX_MEMBERS:
             raise RuntimeError(f"{path.name}: too many ZIP members")
@@ -102,7 +126,7 @@ def _zip_manifest(path: Path, expected_sha: str, family: str) -> None:
 
 
 def _tar_manifest(path: Path, expected_sha: str, family: str) -> None:
-    with tarfile.open(path, "r:gz") as tf:
+    with _open_regular_package(path) as artifact, tarfile.open(fileobj=artifact, mode="r:gz") as tf:
         members = tf.getmembers()
         if len(members) > MAX_MEMBERS:
             raise RuntimeError(f"{path.name}: too many TAR members")
@@ -127,20 +151,26 @@ def _tar_manifest(path: Path, expected_sha: str, family: str) -> None:
 
 
 def _unique(root: Path, filename: str) -> Path:
-    matches = [p for p in root.rglob(filename) if p.is_file() and not p.is_symlink()]
+    matches = list(root.rglob(filename))
     if len(matches) != 1:
         raise RuntimeError(f"release candidate requires exactly one {filename}, found {len(matches)}")
     path = matches[0]
-    size = path.stat().st_size
-    if size <= 0 or size > MAX_ARCHIVE:
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise RuntimeError(f"{filename}: package is redirected or not a regular file")
+    if info.st_size <= 0 or info.st_size > MAX_ARCHIVE:
         raise RuntimeError(f"{filename}: package is empty or oversized")
     return path
 
 
 def verify_tree(root: Path, expected_sha: str) -> None:
     expected_sha = _sha(expected_sha)
-    root = root.resolve()
-    if not root.is_dir() or root.is_symlink():
+    root = Path(os.path.abspath(root))
+    try:
+        root_info = root.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError("release candidate artifact root is missing or redirected") from exc
+    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
         raise RuntimeError("release candidate artifact root is missing or redirected")
 
     for filename, (kind, family) in EXPECTED.items():
