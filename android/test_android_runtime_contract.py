@@ -76,6 +76,9 @@ for marker in (
 assert "libs/libbox.aar" in gradle
 assert "libs/libxray.aar" not in gradle
 assert "prepareXrayLibXray" not in gradle
+assert "commandLine 'bash', 'build-sing-box-libbox.sh'" in gradle, "Gradle must execute the canonical pinned libbox builder directly"
+assert ".routervpn-build-sing-box-libbox.sh" not in gradle, "Gradle must not rewrite the libbox builder into a disposable patched copy"
+assert "s#libbox/RouterXrayDialerController.class#io/nekohasekai/libbox/RouterXrayDialerController.class#g" not in gradle, "stale class-path rewrite can double-prefix the canonical verifier"
 # Verification must not stream jar/unzip/javap producers into grep -q while
 # pipefail is enabled: an early successful grep can SIGPIPE the producer and
 # turn a present class/API into a false missing-bridge failure.
