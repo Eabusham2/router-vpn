@@ -105,6 +105,7 @@ def _check_zip_member(item: zipfile.ZipInfo) -> None:
 
 def safe_extract_zip(src: Path, dst: Path) -> None:
     total = 0
+    seen: set[str] = set()
     with zipfile.ZipFile(src) as zf:
         items = zf.infolist()
         if len(items) > MAX_MEMBERS:
@@ -118,6 +119,10 @@ def safe_extract_zip(src: Path, dst: Path) -> None:
             if total > MAX_UNPACKED:
                 raise ValueError("archive expands beyond safety limit")
             rel = _safe_rel(clean)
+            key = rel.as_posix()
+            if key in seen:
+                raise ValueError(f"archive contains duplicate normalized path: {key}")
+            seen.add(key)
             target = _safe_target(dst, rel)
             if item.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
@@ -129,6 +134,7 @@ def safe_extract_zip(src: Path, dst: Path) -> None:
 
 def safe_extract_tar(src: Path, dst: Path) -> None:
     total = 0
+    seen: set[str] = set()
     with tarfile.open(src, "r:gz") as tf:
         members = tf.getmembers()
         if len(members) > MAX_MEMBERS:
@@ -138,6 +144,10 @@ def safe_extract_tar(src: Path, dst: Path) -> None:
             if not clean:
                 continue
             rel = _safe_rel(clean)
+            key = rel.as_posix()
+            if key in seen:
+                raise ValueError(f"archive contains duplicate normalized path: {key}")
+            seen.add(key)
             _safe_target(dst, rel)
             if item.issym() or item.islnk() or item.isdev() or item.isfifo():
                 raise ValueError(f"unsafe tar member: {item.name}")
