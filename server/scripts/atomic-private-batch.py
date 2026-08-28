@@ -152,8 +152,11 @@ def adopt(items: list[Item]) -> None:
             staged[item.dest] = stage(item.dest, item.after)
         for item in items:
             ensure_private_parent(item.dest)
-            tmp = staged.pop(item.dest)
+            # Keep the staged path tracked until replace succeeds. If replace
+            # fails, finally must still unlink this not-yet-adopted private temp.
+            tmp = staged[item.dest]
             os.replace(tmp, item.dest)
+            staged.pop(item.dest, None)
             adopted.append(item)
             fsync_dir(item.dest.parent)
     except Exception as exc:
