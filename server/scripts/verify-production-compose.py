@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import stat
 from pathlib import Path
 
 SHA = r"[0-9a-f]{40}"
@@ -21,13 +23,45 @@ EXPECTED = {
     "updater": 1,
 }
 
+MAX_COMPOSE_BYTES = 4 << 20
+
+
+def _read_compose(path: Path) -> str:
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        fail("production release compose is redirected or not a regular file")
+    if before.st_size <= 0 or before.st_size > MAX_COMPOSE_BYTES:
+        fail("production release compose size is invalid")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(before, opened)
+            or not os.path.samestat(opened, current)
+        ):
+            fail("production release compose changed identity during open")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            raw = stream.read(MAX_COMPOSE_BYTES + 1)
+    finally:
+        os.close(fd)
+    if not raw or len(raw) > MAX_COMPOSE_BYTES:
+        fail("production release compose size is invalid")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SystemExit("production release compose is not UTF-8") from exc
+
 
 def fail(message: str) -> "NoReturn":
     raise SystemExit(message)
 
 
 def verify(path: Path) -> str:
-    text = path.read_text(encoding="utf-8")
+    text = _read_compose(path)
     if re.search(r"(?m)^\s*build:\s*$", text):
         fail("production release compose contains build:")
     if re.search(r"(?m)^\s*context:\s*https?://", text):
