@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from importlib.util import module_from_spec, spec_from_file_location
 import json
+import os
 from pathlib import Path
 import urllib.error
 import urllib.parse
@@ -254,9 +255,9 @@ def main() -> int:
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8786)
     args = ap.parse_args()
-    base = Path(args.base).resolve()
-    static = base / "downloads"
-    static.mkdir(parents=True, exist_ok=True)
+    base = Path(os.path.abspath(os.path.expanduser(args.base)))
+    _broker.ensure_private_directory(base)
+    static = _broker.ensure_private_directory(base / "downloads")
     _broker.cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
     print(f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated downloads + loopback read/mutation admin proxy", flush=True)
