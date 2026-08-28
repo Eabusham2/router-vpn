@@ -84,12 +84,14 @@ require(
     "modes/prepare-runtime-profile.py",
     "runtime profile file changed during open",
     "runtime profile source contains symlink",
-    "failed runtime tree adoption did not restore prior tree",
+    "os.rename(dest, backup)",
+    "os.rename(stage, dest)",
 )
 require(
     "modes/test_prepare_runtime_profile.py",
     "runtime profile staging followed a source symlink",
     "runtime staging followed a symlink run directory",
+    "failed runtime tree adoption did not restore prior tree",
     "run-combined.sh",
 )
 require("modes/run-combined.sh", "prepare-runtime-profile.py", "runtime-pids.py")
@@ -115,7 +117,7 @@ require(
     "native-multihop-darwin.sh",
     "runtime PID registry followed a symlink target",
     "run-combined.sh",
-    "raw numeric .pids files",
+    "Legacy plain numeric PID files are intentionally untrusted.",
 )
 for rel in ("modes/run-mode.sh", "modes/run-max.sh", "modes/run-pq.sh", "modes/run-xhttp.sh", "modes/run-combined.sh"):
     require(rel, 'runtime-pids.py" init', 'runtime-pids.py" record')
@@ -138,7 +140,7 @@ require(
 forbid("modes/stop-mode.sh", 'cat "$RUN"/*.pids', "pkill -f")
 require(
     "modes/test_stop_mode_pid_ownership.py",
-    "raw legacy PID registry",
+    "legacy/raw PID registry",
     "kill_calls ==",
     "Verified central stop-mode PID ownership tests: OK",
 )
@@ -358,7 +360,8 @@ require(
     "loadRollbackCompose",
     "restorePreviousStack",
     "exactComposeIdentity",
-    "already restored+healthy stack",
+    "exactComposeIdentity(current, from)",
+    "waitCoreHealthy(stack, timeout)",
     "rollbackAfterDeploymentFailure",
     "rolling-back",
     "reconcileRecovery",
@@ -527,7 +530,8 @@ require("server/scripts/generate-xray-pq.sh", "refusing silent", "Validate the c
 require("server/scripts/generate-tls-alternates.sh", "refusing silent", "Validate every candidate", "PRIVATE_BATCH")
 require("server/scripts/generate-aux-proxies.py", "refusing silent credential rotation", "atomic-private-batch.py")
 require("server/scripts/generate-rosenpass.sh", "Refusing to overwrite existing Rosenpass identity", "PRIVATE_BATCH")
-require("server/scripts/ensure-rosenpass.sh", "partial/unsafe", "PRIVATE_BATCH")
+require("server/scripts/ensure-rosenpass.sh", "STATE_HELPER", 'probe "$BASE"', 'refresh "$BASE" "$ENDPOINT" "$RP_PORT"')
+require("server/scripts/rosenpass-private-state.py", "partial/unsafe", "atomic-private-batch.py", "refusing silent key rotation")
 require("server/scripts/generate-advanced-profiles.sh", "refusing silent REALITY credential rotation", "Validate the entire candidate tree", "PRIVATE_BATCH")
 require("server/scripts/enhance-max-pq.py", "atomic-private-batch.py", "one private transaction")
 require("server/scripts/wrap-xhttp-tun.py", "before atomic adoption", "atomic-private-write.py")
