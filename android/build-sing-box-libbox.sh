@@ -52,7 +52,7 @@ verify_aar() {
   # complete listing before exact-line checks so a present class cannot become
   # a false negative because of a trailing carriage return.
   jar tf "$classes" >"$class_list.raw"
-  tr -d '\\r' <"$class_list.raw" >"$class_list"
+  tr -d '\r' <"$class_list.raw" >"$class_list"
   grep -Fxq 'io/nekohasekai/libbox/RouterXrayDialerController.class' "$class_list" || {
     echo 'combined libbox AAR is missing RouterXrayDialerController' >&2
     return 1
