@@ -81,7 +81,9 @@ jobs:
             codesign --verify --deep --strict --verbose=2 "$app"
             codesign --verify --strict --verbose=2 "$root/router-vpn-client"
             codesign --verify --strict --verbose=2 "$root/router-vpn-dns"
-            codesign -dv --verbose=2 "$app" 2>&1 | grep -Eq 'Signature=adhoc|Authority=Developer ID Application'
+            signature="$RUNNER_TEMP/macos-$arch-codesign.txt"
+            codesign -dv --verbose=2 "$app" >"$signature" 2>&1
+            grep -Eq 'Signature=adhoc|Authority=Developer ID Application' "$signature"
           done
           (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
           test ! -d dist/macos-native/work
