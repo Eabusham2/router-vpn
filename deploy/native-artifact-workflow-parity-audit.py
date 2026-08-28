@@ -185,6 +185,15 @@ for rel, body in (
 ):
     require(body, rel, ":app:assembleDebug", "actions/setup-go@v5", "go-version: '1.26.3'", "gradle-version: '9.5.0'")
 
+# The dedicated combined-runtime gate must track both native dependency builders,
+# and Gradle must execute the canonical libbox builder without source rewriting.
+require(combined, combined_rel,
+        "'android/build-sing-box-libbox.sh'",
+        "'android/build-awg-tunnel.sh'",
+        "hashFiles('android/build-sing-box-libbox.sh', 'android/routervpn_xray_bridge.go', 'android/build-awg-tunnel.sh')")
+require(android_gradle, android_gradle_rel, "commandLine 'bash', 'build-sing-box-libbox.sh'")
+assert ".routervpn-build-sing-box-libbox.sh" not in android_gradle, "Android Gradle resurrected a rewritten libbox builder"
+
 # Release-candidate and dedicated fallback artifacts must use the names/members
 # that the authenticated download broker actually asks GitHub for.
 require(rc, rc_rel,
