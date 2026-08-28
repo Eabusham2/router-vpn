@@ -32,10 +32,16 @@ def _open_mobile_artifact(path: Path, label: str):
         raise RuntimeError(f"{label} is redirected or not a regular file")
     if before.st_size <= 0 or before.st_size > MAX_MOBILE_ARTIFACT:
         raise RuntimeError(f"{label} is empty or oversized")
-    stream = path.open("rb")
+    try:
+        stream = path.open("rb")
+    except OSError as exc:
+        raise RuntimeError(f"{label} could not be safely opened") from exc
     try:
         opened = os.fstat(stream.fileno())
-        current = path.lstat()
+        try:
+            current = path.lstat()
+        except OSError as exc:
+            raise RuntimeError(f"{label} changed identity during verification open") from exc
         if (
             stat.S_ISLNK(current.st_mode)
             or not stat.S_ISREG(current.st_mode)
