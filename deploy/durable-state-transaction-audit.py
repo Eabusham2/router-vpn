@@ -106,6 +106,8 @@ require(
     "first_start = process_start(pid)",
     "second_start = process_start(pid)",
     "current_command == expected_command",
+    "first_start == second_start",
+    "chunks: list[bytes] = []",
     "def verified_mode",
     "command_sha256",
     "runtime PID registry changed during open",
@@ -122,6 +124,8 @@ require(
     "Legacy plain numeric PID files are intentionally untrusted.",
     "Regular-file reads may legally return short chunks.",
     "PID reused between the first birth-token check",
+    "short_read_records",
+    "replacement-start-token",
 )
 for rel in ("modes/run-mode.sh", "modes/run-max.sh", "modes/run-pq.sh", "modes/run-xhttp.sh", "modes/run-combined.sh"):
     require(rel, 'runtime-pids.py" init', 'runtime-pids.py" record')
