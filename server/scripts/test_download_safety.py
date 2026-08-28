@@ -2,11 +2,13 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import stat
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import warnings
 import zipfile
 
@@ -79,6 +81,60 @@ class DownloadSafetyTests(unittest.TestCase):
                     builder.safe_extract_zip(src, base / "out")
         finally:
             builder.MAX_UNPACKED = old
+
+    def test_copy_tree_rejects_symlink_source_entry(self):
+        if os.name == "nt":
+            self.skipTest("symlink semantics differ on Windows test runners")
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = base / "src"
+            src.mkdir()
+            outside = base / "outside"
+            outside.write_text("secret", encoding="utf-8")
+            (src / "link").symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                builder.copy_tree(src, base / "dst")
+            self.assertFalse((base / "dst/link").exists())
+
+    def test_copy_file_rejects_parent_identity_swap(self):
+        if os.name == "nt":
+            self.skipTest("directory replacement semantics differ on Windows")
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            parent = base / "source"
+            parent.mkdir()
+            src = parent / "payload.bin"
+            src.write_bytes(b"original")
+            dst = base / "out" / "payload.bin"
+            real_open = builder.os.open
+            swapped = False
+
+            def swap_on_source_open(path, flags, *args, **kwargs):
+                nonlocal swapped
+                fd = real_open(path, flags, *args, **kwargs)
+                if not swapped and Path(path) == src:
+                    swapped = True
+                    old = base / "source-old"
+                    parent.rename(old)
+                    parent.mkdir()
+                    (parent / "payload.bin").write_bytes(b"replacement")
+                return fd
+
+            with mock.patch.object(builder.os, "open", side_effect=swap_on_source_open):
+                with self.assertRaisesRegex(ValueError, "changed during"):
+                    builder.copy_file(src, dst)
+            self.assertFalse(dst.exists(), "raced source was published into package output")
+
+    def test_copy_tree_rejects_special_entry(self):
+        if os.name == "nt" or not hasattr(os, "mkfifo"):
+            self.skipTest("FIFO unavailable on this platform")
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = base / "src"
+            src.mkdir()
+            os.mkfifo(src / "pipe")
+            with self.assertRaisesRegex(ValueError, "special filesystem entry"):
+                builder.copy_tree(src, base / "dst")
 
     def test_generic_tree_rejects_linked_profile(self):
         with tempfile.TemporaryDirectory() as td:
