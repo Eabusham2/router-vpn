@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: read
   issues: read
 
@@ -15,6 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Remove only verified obsolete publisher branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash deploy/cleanup-known-stale-branches.sh
 
       - name: Reject tracked generated Python artifacts
         run: |
