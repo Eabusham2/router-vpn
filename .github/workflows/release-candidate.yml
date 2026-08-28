@@ -43,6 +43,7 @@ jobs:
           python3 deploy/server-image-dependency-audit.py
           python3 deploy/setup-center-publication-audit.py
           python3 deploy/production-install-state-audit.py
+          python3 deploy/profile-readiness-marker-audit.py
           python3 deploy/test_source_provenance.py
           python3 deploy/test-release-candidate-provenance.py
           python3 deploy/private-bundle-boundary-audit.py
