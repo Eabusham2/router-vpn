@@ -40,6 +40,7 @@ PYTHON_FILES = (
     "server/scripts/normalize-setup-imports.py",
     "server/scripts/test_setup_generation_transaction.py",
     "server/scripts/test_private_bundle_runtime_source.py",
+    "server/scripts/test_create_bundle_transaction.py",
     "server/scripts/generate-setup-assets.py",
     "modes/kill-switch.py",
     "modes/test_kill_switch.py",
