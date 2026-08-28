@@ -207,6 +207,29 @@ func portableRegularExists(path string) bool {
 	return err == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular()
 }
 
+func atomicWritePortablePrivateTargetUnchanged(path string, before os.FileInfo) error {
+	current, err := os.Lstat(path)
+	if before == nil {
+		if err == nil {
+			return fmt.Errorf("Portable private target %s appeared before adoption", path)
+		}
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("Portable private target %s disappeared before adoption", path)
+		}
+		return err
+	}
+	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(before, current) {
+		return fmt.Errorf("Portable private target %s identity changed before adoption", path)
+	}
+	return nil
+}
+
 func atomicWritePortablePrivate(path string, body []byte) error {
 	if len(body) == 0 || int64(len(body)) > maxPortablePrivateBytes {
 		return fmt.Errorf("Portable private output %s is empty or oversized", path)
@@ -222,6 +245,12 @@ func atomicWritePortablePrivate(path string, body []byte) error {
 		return err
 	}
 	parent := filepath.Dir(path)
+	var targetBefore os.FileInfo
+	if info, err := os.Lstat(path); err == nil {
+		targetBefore = info
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	tmp, err := os.CreateTemp(parent, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
@@ -247,6 +276,9 @@ func atomicWritePortablePrivate(path string, body []byte) error {
 		return err
 	}
 	if err := validatePortablePrivateParent(path); err != nil {
+		return err
+	}
+	if err := atomicWritePortablePrivateTargetUnchanged(path, targetBefore); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
