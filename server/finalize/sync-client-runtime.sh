@@ -2,18 +2,33 @@
 set -euo pipefail
 BASE=${1:-/opt/router-vpn}
 BUNDLE="$BASE/client-bundle"
-mkdir -p "$BUNDLE"
+PRIVATE_DIR=/src/server/scripts/private-directory.py
+PRIVATE_BATCH=/src/server/scripts/atomic-private-batch.py
+VERIFIED_READ=/src/server/scripts/verified-regular-read.py
 
-# Refresh only the small public runtime/catalog. Never replace generated private
-# profiles, router choices, tokens, or the client config created for this node.
-# Platform binaries remain in immutable /src/dist inside the server image and
-# are read only for an on-demand local fallback package; they are not duplicated
-# into persistent AI Board storage.
-cp /src/configs/client/modes.json "$BUNDLE/modes.json"
-cp /src/configs/client/logical-modes.json "$BUNDLE/logical-modes.json"
-cp /src/LICENSE "$BUNDLE/LICENSE"
-rm -rf "$BUNDLE/modes" "$BUNDLE/client" "$BUNDLE/dist"
-cp -a /src/modes "$BUNDLE/modes"
-cp -a /src/client "$BUNDLE/client"
-chmod +x "$BUNDLE/modes/"*.sh "$BUNDLE/client/"*.sh 2>/dev/null || true
-printf 'Synced current client runtime/catalog/license; platform binaries stay in the image and are packaged only on demand.\n'
+python3 "$PRIVATE_DIR" "$BUNDLE"
+STAGE=$(mktemp -d "$BUNDLE/.runtime-metadata.XXXXXX")
+cleanup(){ rm -rf -- "$STAGE"; }
+trap cleanup EXIT
+
+# Persistent state owns only the small catalogs/license used by node metadata.
+# Runtime code itself is injected from the immutable exact-image source tree
+# when an on-demand private bundle is built, so interrupted sync can never
+# publish mixed old/new modes or client directories.
+for spec in \
+  "/src/configs/client/modes.json|modes.json" \
+  "/src/configs/client/logical-modes.json|logical-modes.json" \
+  "/src/LICENSE|LICENSE"; do
+  src=${spec%%|*}; name=${spec#*|}
+  python3 "$VERIFIED_READ" "$src" >"$STAGE/$name"
+  chmod 600 "$STAGE/$name"
+done
+
+python3 "$PRIVATE_BATCH" \
+  "$BUNDLE/modes.json=$STAGE/modes.json" \
+  "$BUNDLE/logical-modes.json=$STAGE/logical-modes.json" \
+  "$BUNDLE/LICENSE=$STAGE/LICENSE"
+
+trap - EXIT
+cleanup
+printf 'Synced current client catalogs/license atomically; runtime code is injected from exact source only when a private bundle is built.\n'
