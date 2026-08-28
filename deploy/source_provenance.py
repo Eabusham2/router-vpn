@@ -101,8 +101,15 @@ def write_manifest(root: Path, sha: str, family: str, repo: str = "") -> Path:
     tmp = Path(name)
     committed = False
     try:
-        os.fchmod(fd, 0o644)
-        with os.fdopen(fd, "wb", closefd=True) as stream:
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o644)
+        else:
+            # Windows has no POSIX fchmod; provenance is public package metadata,
+            # so chmod the already-created temp path instead.
+            os.chmod(tmp, 0o644)
+        stream = os.fdopen(fd, "wb", closefd=True)
+        fd = -1
+        with stream:
             stream.write(body)
             stream.flush()
             os.fsync(stream.fileno())
@@ -123,6 +130,11 @@ def write_manifest(root: Path, sha: str, family: str, repo: str = "") -> Path:
         except OSError:
             pass
     finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         if not committed:
             tmp.unlink(missing_ok=True)
     return path
