@@ -70,7 +70,7 @@ class PairingManager:
                 "lan_only": True,
             }
 
-    def redeem(self, code: str, source: str) -> None:
+    def redeem(self, code: str, source: str, before_consume=None):
         code = str(code or "").strip()
         if not lan_source(source):
             raise PermissionError("pairing redemption is LAN/local-network only")
@@ -84,8 +84,18 @@ class PairingManager:
             if not item or item.get("redeemed") or float(item["expires_epoch"]) <= now:
                 self.failures.setdefault(source, []).append(now)
                 raise PermissionError("invalid or expired pairing code")
+
+            # The one-time code is a commit token, not a preflight token.
+            # Callers that must obtain private material may do that work while
+            # this code remains reserved under the manager lock. If the callback
+            # fails, the code remains active so a transient storage/read failure
+            # does not burn the user's one-time pairing attempt. Concurrent
+            # redeemers cannot pass this point until the first attempt commits
+            # or aborts.
+            result = before_consume() if before_consume is not None else None
             item["redeemed"] = True
             self.codes.pop(code, None)
+            return result
 
     def active_count(self) -> int:
         with self.lock:
