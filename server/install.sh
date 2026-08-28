@@ -7,6 +7,8 @@ docker compose version >/dev/null 2>&1 || { echo 'Docker Compose v2 is required.
 command -v python3 >/dev/null 2>&1 || { echo 'Python 3 is required to verify the exact-SHA production compose.'; exit 1; }
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+PRIVATE_WRITE="$ROOT_DIR/server/scripts/atomic-private-write.py"
+[[ -f "$PRIVATE_WRITE" && ! -L "$PRIVATE_WRITE" ]] || { echo 'Private state publisher is missing or unsafe.' >&2; exit 1; }
 COMPOSE=${ROUTER_VPN_PRODUCTION_COMPOSE:-}
 [[ -n "$COMPOSE" ]] || { echo 'ROUTER_VPN_PRODUCTION_COMPOSE must point to a generated exact-SHA production compose; the tracked baseline is not a release.' >&2; exit 2; }
 [[ -f "$COMPOSE" ]] || { echo "Production release compose not found: $COMPOSE" >&2; exit 2; }
@@ -63,9 +65,8 @@ prompt SSR_PORT 'ShadowsocksR legacy TCP and UDP port' '15443'
 prompt ROUTER_VPN_TLS_NAME 'Optional custom TLS hostname; blank auto-selects one when possible' ''
 prompt REALITY_TARGET 'REALITY camouflage target host:port' 'www.microsoft.com:443'
 
-mkdir -p "$INSTALL"
 umask 077
-cat >"$ENV_FILE" <<ENV
+python3 "$PRIVATE_WRITE" "$ENV_FILE" <<ENV
 WAN_INTERFACE=$WAN_INTERFACE
 LAN_CIDR=$LAN_CIDR
 LAN_CIDR6=$LAN_CIDR6
@@ -87,7 +88,6 @@ SSR_PORT=$SSR_PORT
 ROUTER_VPN_TLS_NAME=$ROUTER_VPN_TLS_NAME
 REALITY_TARGET=$REALITY_TARGET
 ENV
-chmod 600 "$ENV_FILE"
 
 echo "Starting Router VPN release $RELEASE_SHA from exact published images..."
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --remove-orphans
