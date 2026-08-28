@@ -59,6 +59,41 @@ def main() -> int:
         else:
             raise AssertionError("missing source repository was silently defaulted")
 
+        # Replace the manifest after the pre-open lstat but before the fd is
+        # opened. The replacement contains the same valid provenance, so only
+        # identity re-proof can detect this race.
+        prov.write_manifest(root, OLD, "windows-amd64")
+        replacement = root / "replacement.json"
+        replacement.write_bytes(path.read_bytes())
+        real_open = prov.os.open
+        swapped = False
+        def swap_manifest_before_open(target, flags, *args, **kwargs):
+            nonlocal swapped
+            if Path(target) == path and not swapped:
+                swapped = True
+                os.replace(replacement, path)
+            return real_open(target, flags, *args, **kwargs)
+        with mock.patch.object(prov.os, "open", side_effect=swap_manifest_before_open):
+            try:
+                prov.read_manifest(root)
+            except RuntimeError as exc:
+                assert "changed during open" in str(exc)
+            else:
+                raise AssertionError("pre-open source provenance replacement race was accepted")
+        assert swapped
+
+        # The writer must also prove that the package root it staged into is the
+        # same directory at the atomic adoption point.
+        path.unlink(missing_ok=True)
+        with mock.patch.object(prov.os.path, "samestat", return_value=False):
+            try:
+                prov.write_manifest(root, OLD, "windows-amd64")
+            except RuntimeError as exc:
+                assert "root changed before adoption" in str(exc)
+            else:
+                raise AssertionError("source provenance writer accepted a changed package root")
+        assert not path.exists()
+
         prov.write_manifest(root, OLD, "windows-amd64")
         with mock.patch.object(prov.os.path, "samestat", return_value=False):
             try:
