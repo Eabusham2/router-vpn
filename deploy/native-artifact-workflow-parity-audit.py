@@ -119,11 +119,14 @@ require(mobile_provenance, mobile_provenance_rel,
         "RouterVPNSourceSHA",
         "RouterVPNSourceRepository",
         "ios-packet-tunnel",
+        "os.path.samestat(before, opened)",
+        "os.path.samestat(opened, current)",
         "mobile artifact source SHA mismatch")
 require(mobile_provenance_test, mobile_provenance_test_rel,
         "wrong-sha.apk",
         "duplicate-app.ipa",
         "missing-tunnel.ipa",
+        "changed identity during verification open",
         "exact_ios_app_and_packet_tunnel_are_both_required")
 require(broker_builder, broker_builder_rel, "_provenance.verify_manifest")
 broker = read("server/scripts/download-broker.py")
