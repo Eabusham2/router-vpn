@@ -105,6 +105,20 @@ for forbidden in (
     if forbidden in setup_server:
         errors.append(f"setup-center-server.py contains stale unverified HTML read marker {forbidden!r}")
 
+ai_setup_server = read("server/scripts/setup-center-ai-server.py")
+for marker in (
+    "_core._broker.read_verified_regular(path, private=True)",
+    'raw_source.decode("utf-8")',
+):
+    if marker not in ai_setup_server:
+        errors.append(f"setup-center-ai-server.py missing verified private HTML marker {marker!r}")
+for forbidden in (
+    "path.is_file()",
+    'path.read_text(encoding="utf-8")',
+):
+    if forbidden in ai_setup_server:
+        errors.append(f"setup-center-ai-server.py contains stale unverified HTML read marker {forbidden!r}")
+
 private_dir = read("server/scripts/private-directory.py")
 for marker in (
     "validate_existing_ancestors",
@@ -123,6 +137,7 @@ if not errors:
         ("server/scripts/test_setup_center_private_html.py", "Setup Center verified private HTML"),
         ("server/scripts/test_setup_assets_verified_sources.py", "Setup asset verified source reads"),
         ("server/scripts/test_normalize_setup_verified_input.py", "Setup normalizer verified input"),
+        ("server/scripts/test_setup_center_ai.py", "AI Setup Center verified private HTML"),
     ):
         test = ROOT / rel
         proc = subprocess.run([sys.executable, str(test)], cwd=ROOT, text=True, capture_output=True)
