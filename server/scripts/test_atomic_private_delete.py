@@ -74,6 +74,62 @@ def main() -> int:
         assert delete_path.read_bytes() == b"preserve-me\n"
         assert replace_path.read_bytes() == b"old-provider\n"
 
+    # A delete owns the exact destination inode observed during parsing. If a
+    # foreign regular file is swapped in before adoption, it must survive.
+    with tempfile.TemporaryDirectory(prefix="router-vpn-private-delete-swap-") as td:
+        root = Path(td)
+        target = root / "api.key"
+        foreign = root / "foreign"
+        private_write(target, b"old-key\n")
+        private_write(foreign, b"foreign-key\n")
+        item = batch.parse_delete(str(target))
+        os.replace(foreign, target)
+        try:
+            batch.adopt([item])
+        except RuntimeError as exc:
+            assert "identity changed before adoption" in str(exc)
+        else:
+            raise AssertionError("transactional delete removed a foreign regular replacement")
+        assert target.read_bytes() == b"foreign-key\n"
+
+    # If a delete has already committed but a foreign file reappears before a
+    # later mutation fails, rollback may not overwrite that new file to restore
+    # the old secret. It must surface incomplete rollback instead.
+    with tempfile.TemporaryDirectory(prefix="router-vpn-private-delete-rollback-swap-") as td:
+        root = Path(td)
+        delete_path = root / "api.key"
+        replace_path = root / "provider"
+        replacement = root / "provider.new"
+        foreign_body = b"foreign-recreated\n"
+        private_write(delete_path, b"old-secret\n")
+        private_write(replace_path, b"old-provider\n")
+        private_write(replacement, b"new-provider\n")
+        items = [
+            batch.parse_delete(str(delete_path)),
+            batch.parse_item(f"{replace_path}={replacement}"),
+        ]
+        real_replace = batch.os.replace
+        failed = False
+
+        def recreate_deleted_then_fail(src, dst):
+            nonlocal failed
+            if not failed:
+                failed = True
+                private_write(delete_path, foreign_body)
+                raise OSError("injected adoption failure after foreign recreate")
+            return real_replace(src, dst)
+
+        with mock.patch.object(batch.os, "replace", side_effect=recreate_deleted_then_fail):
+            try:
+                batch.adopt(items)
+            except RuntimeError as exc:
+                assert "rollback was incomplete" in str(exc)
+                assert "appeared before adoption" in str(exc)
+            else:
+                raise AssertionError("delete rollback overwrote a foreign recreated file")
+        assert delete_path.read_bytes() == foreign_body
+        assert replace_path.read_bytes() == b"old-provider\n"
+
     if os.name != "nt":
         with tempfile.TemporaryDirectory(prefix="router-vpn-private-delete-symlink-") as td:
             root = Path(td)
