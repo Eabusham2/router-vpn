@@ -3,64 +3,102 @@ set -euo pipefail
 BASE=${1:-/opt/router-vpn}
 CONFIG="$BASE/config"
 GEN="$BASE/client-bundle/generated"
-mkdir -p "$CONFIG"
+PRIVATE_DIR=/src/server/scripts/private-directory.py
+PRIVATE_WRITE=/src/server/scripts/atomic-private-write.py
+PRIVATE_BATCH=/src/server/scripts/atomic-private-batch.py
+VERIFIED_READ=/src/server/scripts/verified-regular-read.py
+python3 "$PRIVATE_DIR" "$CONFIG"
+python3 "$PRIVATE_DIR" "$GEN"
 
-core_current(){
-  [[ -s "$CONFIG/transports/server.json" \
-    && -s "$CONFIG/transports/generated-secrets.json" \
-    && -s "$CONFIG/xray/server.json" \
-    && -s "$CONFIG/xray/generated-secrets.json" \
-    && -s "$GEN/reality-vision/xray.json" \
-    && -s "$GEN/reality-vision/sing-box.json" \
-    && -s "$GEN/reality-pq-vision/xray.json" \
-    && -s "$GEN/reality-pq-vision/sing-box.json" ]] || return 1
-  python3 - "$CONFIG/xray/server.json" "$CONFIG/transports/server.json" <<'PY'
-import json,sys
-x=json.load(open(sys.argv[1])); s=json.load(open(sys.argv[2]))
-xtags={i.get('tag') for i in x.get('inbounds',[]) if isinstance(i,dict)}
-stags={i.get('tag') for i in s.get('inbounds',[]) if isinstance(i,dict)}
-raise SystemExit(0 if {'reality-in','pq-reality-in'} <= xtags and {'hy2-in','ss-in'} <= stags and 'reality-in' not in stags else 1)
+CORE_MARKER="$CONFIG/.core-transports-xray-v2"
+ADV_MARKER="$CONFIG/.advanced-profiles-v2"
+TLS_MARKER="$CONFIG/.tls-alternates-v1"
+
+private_ok(){ python3 "$VERIFIED_READ" --private "$1" >/dev/null 2>&1; }
+private_text(){ python3 "$VERIFIED_READ" --private "$1"; }
+write_marker(){ local path=$1 value=$2; printf '%s\n' "$value" | python3 "$PRIVATE_WRITE" "$path"; }
+clear_marker(){
+  local path=$1
+  if [[ -e "$path" || -L "$path" ]]; then
+    python3 "$PRIVATE_BATCH" --delete "$path"
+  fi
+}
+
+verified_json_tags(){
+  local xray=$1 transports=${2:-}
+  python3 - "$VERIFIED_READ" "$xray" "$transports" <<'PY'
+import json,runpy,sys
+read=runpy.run_path(sys.argv[1])["read_verified_regular"]
+def load(path):
+    return json.loads(read(path, private=True).decode("utf-8"))
+x=load(sys.argv[2]); xtags={i.get("tag") for i in x.get("inbounds",[]) if isinstance(i,dict)}
+if sys.argv[3]:
+    s=load(sys.argv[3]); stags={i.get("tag") for i in s.get("inbounds",[]) if isinstance(i,dict)}
+    raise SystemExit(0 if {"reality-in","pq-reality-in"} <= xtags and {"hy2-in","ss-in"} <= stags and "reality-in" not in stags else 1)
+raise SystemExit(0 if "max-xhttp-in" in xtags else 1)
 PY
 }
 
+core_current(){
+  local f
+  for f in \
+    "$CONFIG/transports/server.json" "$CONFIG/transports/generated-secrets.json" \
+    "$CONFIG/xray/server.json" "$CONFIG/xray/generated-secrets.json" \
+    "$GEN/reality-vision/xray.json" "$GEN/reality-vision/sing-box.json" \
+    "$GEN/reality-pq-vision/xray.json" "$GEN/reality-pq-vision/sing-box.json"; do
+    private_ok "$f" || return 1
+  done
+  verified_json_tags "$CONFIG/xray/server.json" "$CONFIG/transports/server.json"
+}
+
 advanced_current(){
-  [[ -s "$CONFIG/xray/advanced-secrets.json" \
-    && -s "$GEN/reality-xhttp/xray.json" \
-    && -s "$GEN/reality-xhttp/sing-box.json" ]] || return 1
-  python3 - "$CONFIG/xray/server.json" <<'PY'
-import json,sys
-x=json.load(open(sys.argv[1])); tags={i.get('tag') for i in x.get('inbounds',[]) if isinstance(i,dict)}
-raise SystemExit(0 if 'max-xhttp-in' in tags else 1)
-PY
+  local f d env
+  for f in \
+    "$CONFIG/xray/server.json" "$CONFIG/xray/advanced-secrets.json" \
+    "$GEN/reality-xhttp/xray.json" "$GEN/reality-xhttp/sing-box.json"; do
+    private_ok "$f" || return 1
+  done
+  verified_json_tags "$CONFIG/xray/server.json" || return 1
   for d in max-tls-wg max-tls-awg max-quic-wg max-quic-awg; do
-    [[ -s "$GEN/$d/chain.env" ]] || return 1
-    grep -q '^CHAIN_READY=1$' "$GEN/$d/chain.env" || return 1
-    grep -q '^PQ_BASE=1$' "$GEN/$d/chain.env" || return 1
-    [[ -s "$GEN/$d/rosenpass.toml" && -s "$GEN/$d/rosenpass-client-secret" ]] || return 1
+    env="$GEN/$d/chain.env"
+    private_ok "$env" || return 1
+    private_text "$env" | grep -q '^CHAIN_READY=1$' || return 1
+    private_text "$env" | grep -q '^PQ_BASE=1$' || return 1
+    private_ok "$GEN/$d/rosenpass.toml" || return 1
+    private_ok "$GEN/$d/rosenpass-client-secret" || return 1
   done
 }
 
 tls_current(){
-  [[ -s "$CONFIG/tls/settings.env" \
-    && -s "$CONFIG/tls/generated.json" \
-    && -s "$GEN/ss-v2ray/sslocal.json" \
-    && -s "$GEN/ss-v2ray/sing-box.json" \
-    && -s "$GEN/naive-h2/sing-box.json" \
-    && -s "$GEN/naive-h3/sing-box.json" ]]
+  local f
+  for f in \
+    "$CONFIG/tls/settings.env" "$CONFIG/tls/generated.json" \
+    "$GEN/ss-v2ray/sslocal.json" "$GEN/ss-v2ray/sing-box.json" \
+    "$GEN/naive-h2/sing-box.json" "$GEN/naive-h3/sing-box.json"; do
+    private_ok "$f" || return 1
+  done
 }
 
-if [[ ! -s "$CONFIG/.core-transports-xray-v2" ]] && core_current; then
-  printf '%s\n' 'core-transports-xray-v2' >"$CONFIG/.core-transports-xray-v2"
-  chmod 600 "$CONFIG/.core-transports-xray-v2"
-  echo 'Adopted current core transport credentials.'
+# Existing state is the source of truth. Markers are repaired/created only after
+# the complete corresponding private generation proves current; stale markers
+# are removed transactionally instead of being trusted by existence alone.
+if core_current; then
+  write_marker "$CORE_MARKER" 'core-transports-xray-v2'
+  echo 'Adopted/re-proved current core transport credentials.'
+else
+  clear_marker "$CORE_MARKER"
 fi
-if [[ ! -s "$CONFIG/.advanced-profiles-v2" ]] && advanced_current; then
-  printf '%s\n' 'advanced-profiles-v2' >"$CONFIG/.advanced-profiles-v2"
-  chmod 600 "$CONFIG/.advanced-profiles-v2"
-  echo 'Adopted current MAX/XHTTP credentials.'
+
+if advanced_current; then
+  write_marker "$ADV_MARKER" 'advanced-profiles-v2'
+  echo 'Adopted/re-proved current complete MAX/XHTTP runtime.'
+else
+  clear_marker "$ADV_MARKER"
 fi
-if [[ ! -s "$CONFIG/.tls-alternates-v1" ]] && tls_current; then
-  printf '%s\n' 'tls-alternates-v1' >"$CONFIG/.tls-alternates-v1"
-  chmod 600 "$CONFIG/.tls-alternates-v1"
-  echo 'Adopted current automatic TLS credentials.'
+
+if tls_current; then
+  write_marker "$TLS_MARKER" 'tls-alternates-v1'
+  echo 'Adopted/re-proved current automatic TLS credentials.'
+else
+  clear_marker "$TLS_MARKER"
 fi
