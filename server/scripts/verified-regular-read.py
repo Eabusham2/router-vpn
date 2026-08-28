@@ -31,14 +31,18 @@ def validate_parent_chain(path: pathlib.Path) -> None:
             raise RuntimeError(f"refusing non-directory/symlink source ancestor: {current}")
 
 
-def read_verified_regular(path: pathlib.Path, limit: int = MAX_BYTES) -> bytes:
+def read_verified_regular(path: pathlib.Path, limit: int = MAX_BYTES, *, private: bool = False) -> bytes:
     path = pathlib.Path(os.path.abspath(os.path.normpath(path)))
     validate_parent_chain(path)
     before = path.lstat()
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink public metadata source: {path}")
     if before.st_size <= 0 or before.st_size > limit:
-        raise RuntimeError(f"public metadata source is empty/oversized: {path}")
+        raise RuntimeError(f"verified source is empty/oversized: {path}")
+    if private and stat.S_IMODE(before.st_mode) != 0o600:
+        raise RuntimeError(
+            f"private verified source must be mode 0600: {path} has {oct(stat.S_IMODE(before.st_mode))}"
+        )
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)
     try:
@@ -49,8 +53,10 @@ def read_verified_regular(path: pathlib.Path, limit: int = MAX_BYTES) -> bytes:
             or not stat.S_ISREG(current.st_mode)
             or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
             or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            or (private and stat.S_IMODE(opened.st_mode) != 0o600)
+            or (private and stat.S_IMODE(current.st_mode) != 0o600)
         ):
-            raise RuntimeError(f"public metadata source changed during open: {path}")
+            raise RuntimeError(f"verified source changed during open or violated private mode: {path}")
         chunks: list[bytes] = []
         remaining = limit + 1
         while remaining > 0:
@@ -61,17 +67,23 @@ def read_verified_regular(path: pathlib.Path, limit: int = MAX_BYTES) -> bytes:
             remaining -= len(chunk)
         body = b"".join(chunks)
         if not body or len(body) > limit:
-            raise RuntimeError(f"public metadata source is empty/oversized: {path}")
+            raise RuntimeError(f"verified source is empty/oversized: {path}")
         return body
     finally:
         os.close(fd)
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        raise SystemExit("usage: verified-regular-read.py SOURCE")
+    private = False
+    if len(argv) == 3 and argv[1] == "--private":
+        private = True
+        source = argv[2]
+    elif len(argv) == 2:
+        source = argv[1]
+    else:
+        raise SystemExit("usage: verified-regular-read.py [--private] SOURCE")
     try:
-        body = read_verified_regular(pathlib.Path(argv[1]))
+        body = read_verified_regular(pathlib.Path(source), private=private)
     except (OSError, RuntimeError) as exc:
         raise SystemExit(str(exc)) from exc
     sys.stdout.buffer.write(body)
