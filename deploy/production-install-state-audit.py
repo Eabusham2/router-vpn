@@ -35,10 +35,28 @@ for forbidden in (
     if forbidden in install:
         errors.append(f"server/install.sh contains stale unsafe marker {forbidden!r}")
 
+
+init = read("server/init/noninteractive.sh")
+for marker in (
+    "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
+    '[[ -e "$BASE/.initialized" || -L "$BASE/.initialized" ]]',
+    'python3 "$VERIFIED_READ" --private "$BASE/.initialized"',
+    "refusing credential regeneration",
+    'printf \'initialized\\n\' | python3 "$PRIVATE_WRITE" "$BASE/.initialized"',
+):
+    if marker not in init:
+        errors.append(f"server/init/noninteractive.sh missing initialization-state marker {marker!r}")
+apply_pos = init.rfind('/src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"')
+marker_pos = init.rfind('printf \'initialized\\n\' | python3 "$PRIVATE_WRITE" "$BASE/.initialized"')
+if apply_pos < 0 or marker_pos < 0 or apply_pos > marker_pos:
+    errors.append("initialization marker is not published strictly after successful runtime application")
+
 upgrade = read("server/upgrade.sh")
 for marker in (
     'VERIFIED_READ="$ROOT_DIR/server/scripts/verified-regular-read.py"',
     'python3 "$VERIFIED_READ" --private "$ENV_FILE" >/dev/null',
+    'python3 "$VERIFIED_READ" --private "$INIT_MARKER"',
+    '[[ "$marker" == initialized ]]',
     'verify-production-compose.py" "$COMPOSE"',
     'docker compose --env-file "$ENV_FILE" -f "$COMPOSE"',
 ):
