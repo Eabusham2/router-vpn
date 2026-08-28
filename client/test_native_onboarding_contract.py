@@ -178,7 +178,7 @@ require("iOS/iPadOS unified product", ios_root + ios_unified, (
 require("iOS opt-in real user location", ios_root + ios_location + ios_project, (
     "IOSUserLocationControl", "requestFromUserTap", "requestedByUser",
     "requestWhenInUseAuthorization", "requestLocation()", "horizontalAccuracy",
-    "abs(location.timestamp.timeIntervalSinceNow) <= 30", "CLLocationCoordinate2DIsValid",
+    "age: abs(location.timestamp.timeIntervalSinceNow)", "sample.age <= 30", "CLLocationCoordinate2DIsValid",
     "map.showsUserLocation = true", ".systemGreen", "no automatic request",
     "no IP geolocation", "INFOPLIST_KEY_NSLocationWhenInUseUsageDescription",
     "when you explicitly tap the location button", "never inferred from your IP address",
