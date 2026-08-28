@@ -79,6 +79,36 @@ for marker in (
     assert marker in broker, f"broker private-node boundary lost marker: {marker}"
 
 
+
+# Package/runtime source copies are one-pass descriptor reads, not
+# validate-then-shutil races. Parent-chain and leaf identity are re-proved before
+# the temporary package file is atomically adopted.
+for marker in (
+    'parent_chain_snapshot = _VERIFIED["parent_chain_snapshot"]',
+    'verify_parent_chain = _VERIFIED["verify_parent_chain"]',
+    'os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)',
+    "package source changed during open",
+    "package source changed during read",
+    "refusing to package special filesystem entry",
+    "package source directory changed during traversal",
+    "os.replace(tmp, dst)",
+):
+    assert marker in builder, f"package builder lost race-safe copy marker: {marker}"
+for forbidden in (
+    "shutil.copy2(src, dst)",
+    "shutil.copytree(src, dst, dirs_exist_ok=True)",
+):
+    assert forbidden not in builder, f"package builder revived validate-then-copy race: {forbidden}"
+
+download_safety = subprocess.run(
+    [sys.executable, str(ROOT / "server/scripts/test_download_safety.py")],
+    cwd=ROOT,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+assert download_safety.returncode == 0, "download/package safety tests failed: " + (download_safety.stdout + download_safety.stderr)[-4000:]
+
 # A private node-link bundle must combine private node state with runtime code
 # from the exact current source tree at request time. Persistent client-bundle
 # copies of modes/client/dist are never authoritative package inputs.
