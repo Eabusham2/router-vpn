@@ -100,6 +100,8 @@ for marker in (
     "python3 deploy/native-artifact-workflow-parity-audit.py",
     "python3 deploy/workflow-evidence-pipeline-audit.py",
     "python3 deploy/server-image-dependency-audit.py",
+    "python3 deploy/setup-center-publication-audit.py",
+    "python3 deploy/production-install-state-audit.py",
     "python3 deploy/test_source_provenance.py",
     "python3 deploy/release-orchestration-audit.py",
     "python3 modes/test_kill_switch.py",
@@ -151,6 +153,7 @@ for audit in (
     "deploy/public-metadata-publication-audit.py",
     "deploy/durable-state-syntax-audit.py",
     "deploy/durable-state-transaction-audit.py",
+    "deploy/production-install-state-audit.py",
     "server/scripts/test_preserve_generated_state.py",
 ):
     subprocess.run([sys.executable, str(ROOT / audit)], cwd=ROOT, check=True)
