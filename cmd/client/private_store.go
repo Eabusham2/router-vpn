@@ -111,12 +111,41 @@ func readPrivateRegular(path string, limit int64) ([]byte, error) {
 // succeeds the new bytes are authoritative, so a best-effort directory fsync is
 // deliberately not returned as a false post-commit failure to callers that may
 // otherwise roll RAM back while disk already contains the new value.
+func atomicWritePrivateTargetUnchanged(path string, before os.FileInfo) error {
+	current, err := os.Lstat(path)
+	if before == nil {
+		if err == nil {
+			return fmt.Errorf("private store %s appeared before adoption", path)
+		}
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("private store %s disappeared before adoption", path)
+		}
+		return err
+	}
+	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(before, current) {
+		return fmt.Errorf("private store %s identity changed before adoption", path)
+	}
+	return nil
+}
+
 func atomicWritePrivate(path string, data []byte) error {
 	if err := validatePrivateParent(path); err != nil {
 		return err
 	}
 	parent := filepath.Dir(path)
 	if err := hardenPrivateRegular(path); err != nil {
+		return err
+	}
+	var targetBefore os.FileInfo
+	if info, err := os.Lstat(path); err == nil {
+		targetBefore = info
+	} else if !os.IsNotExist(err) {
 		return err
 	}
 	tmp, err := os.CreateTemp(parent, "."+filepath.Base(path)+".tmp-*")
@@ -144,6 +173,9 @@ func atomicWritePrivate(path string, data []byte) error {
 		return err
 	}
 	if err := validatePrivateParent(path); err != nil {
+		return err
+	}
+	if err := atomicWritePrivateTargetUnchanged(path, targetBefore); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
