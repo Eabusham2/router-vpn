@@ -13,10 +13,19 @@ COMPOSE=${ROUTER_VPN_PRODUCTION_COMPOSE:-}
 [[ -f "$COMPOSE" ]] || { echo "Production release compose not found: $COMPOSE" >&2; exit 2; }
 RELEASE_SHA=$(python3 "$ROOT_DIR/server/scripts/verify-production-compose.py" "$COMPOSE") || exit $?
 ENV_FILE=/opt/router-vpn/.env
+INIT_MARKER=/opt/router-vpn/.initialized
 if ! python3 "$VERIFIED_READ" --private "$ENV_FILE" >/dev/null; then
   echo 'Existing Router VPN environment is missing, redirected, non-private, or unsafe: /opt/router-vpn/.env' >&2
   exit 1
 fi
+marker=$(python3 "$VERIFIED_READ" --private "$INIT_MARKER") || {
+  echo 'Existing Router VPN initialization marker is missing, redirected, non-private, or unsafe.' >&2
+  exit 1
+}
+[[ "$marker" == initialized ]] || {
+  echo 'Existing Router VPN initialization marker is invalid; refusing upgrade.' >&2
+  exit 1
+}
 
 echo "Refreshing Router VPN release $RELEASE_SHA from exact published images..."
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --force-recreate init finalize-current
