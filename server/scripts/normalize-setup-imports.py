@@ -24,6 +24,8 @@ def load_module(name: str, path: Path):
 
 imports = load_module("router_vpn_import_payloads", SCRIPT_DIR / "import_payloads.py")
 generator = load_module("router_vpn_setup_generator", SCRIPT_DIR / "generate-setup-assets.py")
+_verified = load_module("router_vpn_normalize_verified_read", SCRIPT_DIR / "verified-regular-read.py")
+read_verified_regular = _verified.read_verified_regular
 
 
 CONTRACTS = {
@@ -222,9 +224,16 @@ def main() -> int:
     bundle = base / "client-bundle"
     assets_path = bundle / "setup-assets.json"
     html_path = bundle / "router-vpn-device-setup.html"
-    if not assets_path.is_file():
-        raise SystemExit(f"missing setup assets: {assets_path}")
-    data = json.loads(assets_path.read_text())
+    try:
+        assets_raw = read_verified_regular(assets_path, private=True)
+    except FileNotFoundError as exc:
+        raise SystemExit(f"missing setup assets: {assets_path}") from exc
+    except (OSError, RuntimeError) as exc:
+        raise SystemExit(f"unsafe setup assets source: {exc}") from exc
+    try:
+        data = json.loads(assets_raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"invalid setup assets JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit("setup-assets.json must be an object")
     endpoint = str(data.get("endpoint") or "").strip().strip("[]")
