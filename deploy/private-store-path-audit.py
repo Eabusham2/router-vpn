@@ -22,12 +22,15 @@ require(
     "validatePrivateParent",
     "validateAncestors",
     "os.SameFile(opened, current)",
+    "atomicWritePrivateTargetUnchanged",
+    "identity changed before adoption",
     "path component",
 )
 require(
     "cmd/client/private_store_test.go",
     "TestPrivateStoreRejectsSymlinkParent",
     "TestPrivateStoreRejectsNestedSymlinkAncestor",
+    "TestPrivateStoreRejectsTargetReplacementBeforeAdoption",
 )
 require(
     "cmd/client/private_runtime.go",
@@ -85,24 +88,30 @@ require(
     "validatePrivilegedStateParent",
     "validateAncestors",
     "os.SameFile(opened, current)",
+    "atomicWritePrivilegedStateTargetUnchanged",
+    "identity changed before adoption",
     "path component",
 )
 require(
     "cmd/router-agent/private_state_test.go",
     "TestPrivilegedStateRejectsSymlinkParent",
     "TestPrivilegedStateRejectsNestedSymlinkAncestor",
+    "TestPrivilegedStateRejectsTargetReplacementBeforeAdoption",
 )
 require(
     "cmd/update-controller/private_state.go",
     "validateUpdaterPrivateParent",
     "validateAncestors",
     "os.SameFile(opened, current)",
+    "atomicWriteUpdaterPrivateTargetUnchanged",
+    "identity changed before adoption",
     "path component",
 )
 require(
     "cmd/update-controller/private_state_test.go",
     "TestUpdaterPrivateFileRejectsSymlinkParent",
     "TestUpdaterPrivateFileRejectsNestedSymlinkAncestor",
+    "TestUpdaterPrivateFileRejectsTargetReplacementBeforeAdoption",
 )
 require(
     "server/scripts/atomic-private-write.py",
