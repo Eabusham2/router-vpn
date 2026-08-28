@@ -14,9 +14,21 @@ SS_PORT=${SS_PORT:-8388}
 XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 PRIVATE_WRITE=/src/server/scripts/atomic-private-write.py
+PRIVATE_DIR=/src/server/scripts/private-directory.py
 VERIFIED_READ=/src/server/scripts/verified-regular-read.py
 umask 077
-mkdir -p "$BASE"/{config/{wireguard,awg2},client-bundle/generated,scripts,logs,downloads}
+for dir in \
+  "$BASE" \
+  "$BASE/config" \
+  "$BASE/config/wireguard" \
+  "$BASE/config/awg2" \
+  "$BASE/client-bundle" \
+  "$BASE/client-bundle/generated" \
+  "$BASE/scripts" \
+  "$BASE/logs" \
+  "$BASE/downloads"; do
+  python3 "$PRIVATE_DIR" "$dir"
+done
 
 # Setup Center authentication is a router-local credential. Preserve it across
 # safe upgrades, never print it, and never copy it into a client/node bundle.
