@@ -94,16 +94,29 @@ type stackInfo struct {
 }
 
 type workflowRun struct {
-	ID         int64  `json:"id"`
-	HeadSHA    string `json:"head_sha"`
-	HeadBranch string `json:"head_branch"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	CreatedAt  string `json:"created_at"`
+	ID           int64  `json:"id"`
+	HeadSHA      string `json:"head_sha"`
+	HeadBranch   string `json:"head_branch"`
+	Status       string `json:"status"`
+	Conclusion   string `json:"conclusion"`
+	CreatedAt    string `json:"created_at"`
+	RunStartedAt string `json:"run_started_at"`
 }
 
 type workflowRuns struct {
 	Runs []workflowRun `json:"workflow_runs"`
+}
+
+type workflowArtifact struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	SizeInBytes int64  `json:"size_in_bytes"`
+	Expired     bool   `json:"expired"`
+	CreatedAt   string `json:"created_at"`
+}
+
+type workflowArtifacts struct {
+	Artifacts []workflowArtifact `json:"artifacts"`
 }
 
 func env(k, fallback string) string {
@@ -439,7 +452,7 @@ func githubText(endpoint string, limit int64) (string, error) {
 	return string(raw), nil
 }
 
-func newestMeaningfulWorkflowSuccess(runs []workflowRun, sha, branch string) bool {
+func newestMeaningfulWorkflowRun(runs []workflowRun, sha, branch string) (workflowRun, bool) {
 	matches := make([]workflowRun, 0, len(runs))
 	for _, run := range runs {
 		if strings.ToLower(run.HeadSHA) == sha && run.HeadBranch == branch {
@@ -452,7 +465,7 @@ func newestMeaningfulWorkflowSuccess(runs []workflowRun, sha, branch string) boo
 		// never fall back to an older green result while a rerun is still proving
 		// the release.
 		if run.Status != "completed" {
-			return false
+			return workflowRun{}, false
 		}
 		// Duplicate workflow invocations can be cancelled/skipped by concurrency
 		// without saying anything about source correctness. Ignore only those
@@ -460,22 +473,87 @@ func newestMeaningfulWorkflowSuccess(runs []workflowRun, sha, branch string) boo
 		if run.Conclusion == "cancelled" || run.Conclusion == "skipped" {
 			continue
 		}
-		return run.Conclusion == "success"
+		return run, true
 	}
-	return false
+	return workflowRun{}, false
 }
 
-func (c *controller) workflowSuccess(file, sha string) (bool, error) {
+func newestMeaningfulWorkflowSuccess(runs []workflowRun, sha, branch string) bool {
+	run, ok := newestMeaningfulWorkflowRun(runs, sha, branch)
+	return ok && run.Conclusion == "success"
+}
+
+func (c *controller) successfulWorkflowRun(file, sha string) (workflowRun, error) {
 	if !shaRE.MatchString(sha) {
-		return false, errors.New("invalid SHA")
+		return workflowRun{}, errors.New("invalid SHA")
 	}
 	q := url.Values{"branch": {c.branch}, "head_sha": {sha}, "per_page": {"50"}}
 	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/actions/workflows/%s/runs?%s", c.repo, url.PathEscape(file), q.Encode())
 	var runs workflowRuns
 	if err := githubJSON(endpoint, &runs); err != nil {
+		return workflowRun{}, err
+	}
+	run, ok := newestMeaningfulWorkflowRun(runs.Runs, sha, c.branch)
+	if !ok || run.Conclusion != "success" {
+		return workflowRun{}, fmt.Errorf("%s has no settled successful exact-SHA run", file)
+	}
+	if run.ID <= 0 {
+		return workflowRun{}, fmt.Errorf("%s successful run has invalid id", file)
+	}
+	return run, nil
+}
+
+func (c *controller) workflowSuccess(file, sha string) (bool, error) {
+	_, err := c.successfulWorkflowRun(file, sha)
+	if err != nil {
 		return false, err
 	}
-	return newestMeaningfulWorkflowSuccess(runs.Runs, sha, c.branch), nil
+	return true, nil
+}
+
+func expectedReleaseArtifact(file, sha string) string {
+	switch file {
+	case "source-snapshot.yml":
+		return "router-vpn-source-" + sha
+	case "release-candidate.yml":
+		return "RouterVPN-release-candidate-" + sha
+	case "production-release-compose.yml":
+		return "RouterVPN-production-compose-" + sha
+	default:
+		return ""
+	}
+}
+
+func artifactBelongsToCurrentAttempt(artifact workflowArtifact, expectedName, runStartedAt string) bool {
+	if artifact.ID <= 0 || artifact.Name != expectedName || artifact.Expired || artifact.SizeInBytes <= 0 {
+		return false
+	}
+	started, err := time.Parse(time.RFC3339, strings.TrimSpace(runStartedAt))
+	if err != nil {
+		return false
+	}
+	created, err := time.Parse(time.RFC3339, strings.TrimSpace(artifact.CreatedAt))
+	if err != nil {
+		return false
+	}
+	return !created.Before(started)
+}
+
+func (c *controller) workflowArtifactAvailable(run workflowRun, expectedName string) (bool, error) {
+	if run.ID <= 0 || strings.TrimSpace(expectedName) == "" {
+		return false, errors.New("invalid workflow artifact evidence request")
+	}
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/actions/runs/%d/artifacts?per_page=100", c.repo, run.ID)
+	var payload workflowArtifacts
+	if err := githubJSON(endpoint, &payload); err != nil {
+		return false, err
+	}
+	for _, artifact := range payload.Artifacts {
+		if artifactBelongsToCurrentAttempt(artifact, expectedName, run.RunStartedAt) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *controller) verifiedTarget(sha string) error {
@@ -484,12 +562,18 @@ func (c *controller) verifiedTarget(sha string) error {
 		return errors.New("target must be a lowercase full 40-character commit SHA")
 	}
 	for _, workflow := range requiredReleaseWorkflows {
-		ok, err := c.workflowSuccess(workflow, sha)
+		run, err := c.successfulWorkflowRun(workflow, sha)
 		if err != nil {
 			return fmt.Errorf("verify %s: %w", workflow, err)
 		}
-		if !ok {
-			return fmt.Errorf("%s has no successful exact-SHA %s run", sha, workflow)
+		if expected := expectedReleaseArtifact(workflow, sha); expected != "" {
+			ok, err := c.workflowArtifactAvailable(run, expected)
+			if err != nil {
+				return fmt.Errorf("verify %s artifact %s: %w", workflow, expected, err)
+			}
+			if !ok {
+				return fmt.Errorf("%s successful %s run lacks a live current-attempt artifact %s", sha, workflow, expected)
+			}
 		}
 	}
 	return nil
