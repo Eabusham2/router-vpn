@@ -39,6 +39,8 @@ for forbidden in (
 init = read("server/init/noninteractive.sh")
 for marker in (
     "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
+    "PRIVATE_DIR=/src/server/scripts/private-directory.py",
+    'python3 "$PRIVATE_DIR" "$dir"',
     '[[ -e "$BASE/.initialized" || -L "$BASE/.initialized" ]]',
     'python3 "$VERIFIED_READ" --private "$BASE/.initialized"',
     "refusing credential regeneration",
@@ -50,6 +52,10 @@ apply_pos = init.rfind('/src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$
 marker_pos = init.rfind('printf \'initialized\\n\' | python3 "$PRIVATE_WRITE" "$BASE/.initialized"')
 if apply_pos < 0 or marker_pos < 0 or apply_pos > marker_pos:
     errors.append("initialization marker is not published strictly after successful runtime application")
+dir_pos = init.find('python3 "$PRIVATE_DIR" "$dir"')
+purge_pos = init.find('rm -f "$BASE/downloads/router-vpn-client-bundle.zip"')
+if dir_pos < 0 or purge_pos < 0 or dir_pos > purge_pos:
+    errors.append("init private-directory validation does not precede cached private-material cleanup")
 
 upgrade = read("server/upgrade.sh")
 for marker in (
