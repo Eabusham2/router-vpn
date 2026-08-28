@@ -80,6 +80,13 @@ assert "prepareXrayLibXray" not in gradle
 assert "commandLine 'bash', 'build-sing-box-libbox.sh'" in gradle, "Gradle must execute the canonical pinned libbox builder directly"
 assert ".routervpn-build-sing-box-libbox.sh" not in gradle, "Gradle must not rewrite the libbox builder into a disposable patched copy"
 assert "s#libbox/RouterXrayDialerController.class#io/nekohasekai/libbox/RouterXrayDialerController.class#g" not in gradle, "stale class-path rewrite can double-prefix the canonical verifier"
+for marker in (
+    "inputs.file rootProject.file('build-awg-tunnel.sh')",
+    "outputs.files awgAar, awgStamp, awgLicense",
+    "inputs.files rootProject.file('build-sing-box-libbox.sh'), rootProject.file('routervpn_xray_bridge.go')",
+    "outputs.files libboxAar, libboxStamp, libboxLicense, libxrayLicense",
+):
+    assert marker in gradle, f"Android native AAR Gradle task lost input/sidecar dependency: {marker}"
 # Verification must not stream jar/unzip/javap producers into grep -q while
 # pipefail is enabled: an early successful grep can SIGPIPE the producer and
 # turn a present class/API into a false missing-bridge failure.
