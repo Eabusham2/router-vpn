@@ -17,6 +17,7 @@ class Item:
     dest: pathlib.Path
     source: pathlib.Path | None
     before: bytes | None
+    before_stat: os.stat_result | None
     after: bytes | None
 
 
@@ -46,7 +47,7 @@ def ensure_private_parent(path: pathlib.Path, *, create: bool = True) -> None:
     _validate_existing_ancestors(parent)
 
 
-def read_regular(path: pathlib.Path, label: str) -> bytes:
+def read_regular_snapshot(path: pathlib.Path, label: str) -> tuple[bytes, os.stat_result]:
     ensure_private_parent(path, create=False)
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
@@ -76,16 +77,42 @@ def read_regular(path: pathlib.Path, label: str) -> bytes:
             raise RuntimeError(f"{label} changed during read: {path}")
         if not body:
             raise RuntimeError(f"{label} is empty: {path}")
-        return bytes(body)
+        return bytes(body), current
     finally:
         os.close(fd)
 
 
-def existing_bytes(path: pathlib.Path) -> bytes | None:
+def read_regular(path: pathlib.Path, label: str) -> bytes:
+    body, _ = read_regular_snapshot(path, label)
+    return body
+
+
+def existing_snapshot(path: pathlib.Path) -> tuple[bytes | None, os.stat_result | None]:
     try:
-        return read_regular(path, "private destination")
+        return read_regular_snapshot(path, "private destination")
     except FileNotFoundError:
-        return None
+        return None, None
+
+
+def require_destination_state(path: pathlib.Path, expected: os.stat_result | None, label: str) -> None:
+    ensure_private_parent(path, create=False)
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        current = None
+    if expected is None:
+        if current is not None:
+            raise RuntimeError(f"{label} appeared before adoption: {path}")
+        return
+    if current is None:
+        raise RuntimeError(f"{label} disappeared before adoption: {path}")
+    if (
+        stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISREG(current.st_mode)
+        or current.st_mode & 0o777 != PRIVATE_MODE
+        or not os.path.samestat(expected, current)
+    ):
+        raise RuntimeError(f"{label} identity changed before adoption: {path}")
 
 
 def stage(dest: pathlib.Path, body: bytes) -> pathlib.Path:
@@ -123,42 +150,50 @@ def fsync_dir(path: pathlib.Path) -> None:
         pass
 
 
-def restore(items: list[Item]) -> list[str]:
+def restore(adopted: list[tuple[Item, os.stat_result | None]]) -> list[str]:
     errors: list[str] = []
-    for item in reversed(items):
+    for item, adopted_stat in reversed(adopted):
+        tmp: pathlib.Path | None = None
         try:
-            ensure_private_parent(item.dest)
+            # Rollback owns only the exact inode (or exact absence for a
+            # deletion) that this transaction just adopted. If another actor
+            # replaced/recreated the destination, report incomplete rollback
+            # rather than overwriting foreign state.
+            require_destination_state(item.dest, adopted_stat, "adopted private destination")
             if item.before is None:
-                item.dest.unlink(missing_ok=True)
+                if adopted_stat is not None:
+                    item.dest.unlink()
                 fsync_dir(item.dest.parent)
                 continue
             tmp = stage(item.dest, item.before)
-            try:
-                ensure_private_parent(item.dest)
-                os.replace(tmp, item.dest)
-            finally:
-                tmp.unlink(missing_ok=True)
+            require_destination_state(item.dest, adopted_stat, "adopted private destination")
+            os.replace(tmp, item.dest)
+            tmp = None
             fsync_dir(item.dest.parent)
         except Exception as exc:
             errors.append(f"{item.dest}: {exc}")
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
     return errors
 
 
 def adopt(items: list[Item]) -> None:
     staged: dict[pathlib.Path, pathlib.Path] = {}
-    adopted: list[Item] = []
+    adopted: list[tuple[Item, os.stat_result | None]] = []
     try:
         for item in items:
             if item.after is not None:
                 staged[item.dest] = stage(item.dest, item.after)
         for item in items:
-            ensure_private_parent(item.dest)
+            require_destination_state(item.dest, item.before_stat, "private destination")
             if item.after is None:
-                # Explicit deletion is part of the same transaction. Missing
-                # targets are a safe no-op; existing targets were snapshotted
-                # and validated by parse_delete() before mutation started.
-                item.dest.unlink(missing_ok=True)
-                adopted.append(item)
+                # Deletion owns the exact pre-transaction inode. Missing-at-
+                # snapshot is a safe no-op; a foreign file that appears later
+                # is never unlinked.
+                if item.before_stat is not None:
+                    item.dest.unlink()
+                adopted.append((item, None))
                 fsync_dir(item.dest.parent)
                 continue
 
@@ -167,7 +202,10 @@ def adopt(items: list[Item]) -> None:
             tmp = staged[item.dest]
             os.replace(tmp, item.dest)
             staged.pop(item.dest, None)
-            adopted.append(item)
+            adopted_stat = item.dest.lstat()
+            if stat.S_ISLNK(adopted_stat.st_mode) or not stat.S_ISREG(adopted_stat.st_mode):
+                raise RuntimeError(f"adopted private destination is unsafe: {item.dest}")
+            adopted.append((item, adopted_stat))
             fsync_dir(item.dest.parent)
     except Exception as exc:
         rollback_errors = restore(adopted)
@@ -189,7 +227,14 @@ def parse_item(arg: str) -> Item:
     if not str(dest) or not str(source):
         raise RuntimeError("batch destination/source may not be empty")
     ensure_private_parent(dest)
-    return Item(dest=dest, source=source, before=existing_bytes(dest), after=read_regular(source, "private source"))
+    before, before_stat = existing_snapshot(dest)
+    return Item(
+        dest=dest,
+        source=source,
+        before=before,
+        before_stat=before_stat,
+        after=read_regular(source, "private source"),
+    )
 
 
 def parse_delete(arg: str) -> Item:
@@ -197,7 +242,8 @@ def parse_delete(arg: str) -> Item:
         raise RuntimeError("--delete requires a destination")
     dest = pathlib.Path(arg)
     ensure_private_parent(dest)
-    return Item(dest=dest, source=None, before=existing_bytes(dest), after=None)
+    before, before_stat = existing_snapshot(dest)
+    return Item(dest=dest, source=None, before=before, before_stat=before_stat, after=None)
 
 
 def parse_args(argv: list[str]) -> list[Item]:
