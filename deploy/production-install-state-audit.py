@@ -70,6 +70,37 @@ for forbidden in (
         errors.append(f"server/upgrade.sh contains stale unsafe marker {forbidden!r}")
 
 
+
+classifier = read("server/scripts/install-state.py")
+for marker in (
+    'read_verified_regular(env_path, 256 << 10, private=True)',
+    'read_verified_regular(marker_path, 4096, private=True)',
+    'return "absent"',
+    'return "complete"',
+    "partial Router VPN install state",
+    'marker != "initialized"',
+    '"WAN_INTERFACE=", "LAN_CIDR=", "ADGUARD4="',
+):
+    if marker not in classifier:
+        errors.append(f"server/scripts/install-state.py missing classifier marker {marker!r}")
+
+for rel in ("server/setup.sh", "server/router-vpn.sh", "server/manage.sh"):
+    entry = read(rel)
+    for marker in (
+        'INSTALL_STATE="$ROOT_DIR/server/scripts/install-state.py"',
+        'python3 "$INSTALL_STATE" /opt/router-vpn',
+        '3)',
+        "partial, redirected, or unsafe",
+    ):
+        if marker not in entry:
+            errors.append(f"{rel} missing verified install routing marker {marker!r}")
+    for forbidden in (
+        '[[ -s /opt/router-vpn/.env',
+        '[[ ! -s /opt/router-vpn/.env',
+    ):
+        if forbidden in entry:
+            errors.append(f"{rel} contains stale install-state probe {forbidden!r}")
+
 doctor = read("server/scripts/doctor-current.sh")
 for marker in (
     "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
@@ -102,15 +133,19 @@ for marker in (
         errors.append(f"verified-regular-read.py missing private read marker {marker!r}")
 
 if not errors:
-    proc = subprocess.run(
-        [sys.executable, str(ROOT / "server/scripts/test_verified_regular_read.py")],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if proc.returncode != 0:
-        errors.append("verified regular/private reader tests failed: " + (proc.stdout + proc.stderr)[-4000:])
+    for rel, label in (
+        ("server/scripts/test_verified_regular_read.py", "verified regular/private reader"),
+        ("server/scripts/test_install_state.py", "verified install-state classifier"),
+    ):
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / rel)],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if proc.returncode != 0:
+            errors.append(label + " tests failed: " + (proc.stdout + proc.stderr)[-4000:])
 
 if errors:
     print("Production install state audit: FAIL", file=sys.stderr)
