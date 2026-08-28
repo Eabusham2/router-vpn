@@ -28,7 +28,19 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from importlib.util import module_from_spec, spec_from_file_location
 from typing import Any, Callable
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+_verified_spec = spec_from_file_location(
+    "router_vpn_ai_verified_regular_read",
+    SCRIPT_DIR / "verified-regular-read.py",
+)
+if _verified_spec is None or _verified_spec.loader is None:
+    raise RuntimeError("cannot load verified-regular-read.py")
+_verified = module_from_spec(_verified_spec)
+_verified_spec.loader.exec_module(_verified)
+read_verified_regular = _verified.read_verified_regular
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
@@ -84,20 +96,24 @@ class AIHelpError(RuntimeError):
 def _read_private_text(path: str, *, label: str, max_bytes: int, allow_missing: bool = False) -> str:
     p = Path(path)
     try:
-        if p.is_symlink():
-            raise AIHelpError(f"AI Help {label} file must not be a symlink")
-        st = p.stat()
+        raw = read_verified_regular(p, max_bytes, private=True)
     except FileNotFoundError as exc:
         if allow_missing:
             return ""
         raise AIHelpError(f"AI Help is not configured: {label} file is missing") from exc
-    if not stat.S_ISREG(st.st_mode):
-        raise AIHelpError(f"AI Help {label} path is not a regular file")
-    if st.st_mode & 0o077:
-        raise AIHelpError(f"AI Help {label} file permissions are too broad; require mode 0600 or stricter")
-    if st.st_size <= 0 or st.st_size > max_bytes:
-        raise AIHelpError(f"AI Help {label} file has an invalid size")
-    return p.read_text(encoding="utf-8").strip()
+    except RuntimeError as exc:
+        detail = str(exc)
+        if "symlink" in detail or "non-regular" in detail:
+            raise AIHelpError(f"AI Help {label} file must not be a symlink and must remain a regular file") from exc
+        if "mode 0600" in detail or "private mode" in detail:
+            raise AIHelpError(f"AI Help {label} file permissions are too broad; require mode 0600") from exc
+        if "empty/oversized" in detail:
+            raise AIHelpError(f"AI Help {label} file has an invalid size") from exc
+        raise AIHelpError(f"AI Help {label} file could not be verified safely") from exc
+    try:
+        return raw.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise AIHelpError(f"AI Help {label} file is not valid UTF-8") from exc
 
 
 def _first_private(paths: list[str], *, label: str, max_bytes: int, allow_missing: bool = False) -> tuple[str, str]:
@@ -236,15 +252,13 @@ def load_repo_context(roots: list[str] | None = None, max_chars: int = 18_000) -
             except ValueError:
                 continue
             key = str(p)
-            if key in seen or p.is_symlink() or not p.is_file():
+            if key in seen:
                 continue
             seen.add(key)
             try:
-                st = p.stat()
-                if st.st_size <= 0 or st.st_size > 2 * 1024 * 1024:
-                    continue
-                text = p.read_text(encoding="utf-8")
-            except (OSError, UnicodeError):
+                raw = read_verified_regular(p, 2 * 1024 * 1024, private=False)
+                text = raw.decode("utf-8")
+            except (OSError, RuntimeError, UnicodeError):
                 continue
             take = min(remaining, 5_000)
             out[rel] = text[:take]
