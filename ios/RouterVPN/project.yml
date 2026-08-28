@@ -22,6 +22,11 @@ targets:
       - path: ../../LICENSE
         buildPhase: resources
     postBuildScripts:
+      - name: Stamp exact source provenance
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          ROUTER_VPN_ARTIFACT_FAMILY=ios-app bash "$SRCROOT/stamp-provenance.sh"
       - name: Verify MIT license resource
         basedOnDependencyAnalysis: false
         script: |
@@ -67,6 +72,12 @@ targets:
           test -d "$SRCROOT/.deps/Libbox.xcframework"
           test -s "$SRCROOT/.deps/libbox-LICENSE.txt"
           test "$(tr -d '\r\n' < "$SRCROOT/.deps/Libbox.xcframework.pin")" = '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator'
+    postBuildScripts:
+      - name: Stamp exact source provenance
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          ROUTER_VPN_ARTIFACT_FAMILY=ios-packet-tunnel bash "$SRCROOT/stamp-provenance.sh"
     settings:
       base:
         PRODUCT_NAME: RouterVPNPacketTunnel
