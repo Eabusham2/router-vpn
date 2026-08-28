@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("router_vpn_verified_regular_read", HERE / "verified-regular-read.py")
@@ -64,6 +65,37 @@ def main() -> int:
                 assert "symlink" in str(exc) or "ancestor" in str(exc)
             else:
                 raise AssertionError("verified public reader followed symlink ancestor")
+
+        # Replacing a real ancestor directory with another real directory
+        # during the file open must be detected, not only symlink substitution.
+        race_parent = root / "race-parent"
+        race_parent.mkdir()
+        race_source = race_parent / "state.json"
+        race_source.write_text("old-parent\n", encoding="utf-8")
+        os.chmod(race_source, 0o600)
+        real_open = MOD.os.open
+        swapped = False
+
+        def swap_parent_on_open(path, flags, *args, **kwargs):
+            nonlocal swapped
+            fd = real_open(path, flags, *args, **kwargs)
+            if not swapped and Path(path) == race_source:
+                swapped = True
+                old_parent = root / "race-parent-old"
+                race_parent.rename(old_parent)
+                race_parent.mkdir()
+                replacement = race_parent / "state.json"
+                replacement.write_text("new-parent\n", encoding="utf-8")
+                os.chmod(replacement, 0o600)
+            return fd
+
+        with mock.patch.object(MOD.os, "open", side_effect=swap_parent_on_open):
+            try:
+                MOD.read_verified_regular(race_source, private=True)
+            except (OSError, RuntimeError) as exc:
+                assert "ancestor changed" in str(exc) or "changed during" in str(exc)
+            else:
+                raise AssertionError("verified reader accepted an ancestor directory identity swap")
 
         oversized = root / "oversized.bin"
         oversized.write_bytes(b"x" * 5)
