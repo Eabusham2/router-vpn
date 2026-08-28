@@ -84,6 +84,7 @@ def _safe_existing(path: Path) -> None:
 
 def write_manifest(root: Path, sha: str, family: str, repo: str = "") -> Path:
     root = _regular_root(root)
+    root_before = root.lstat()
     sha = normalize_sha(sha)
     repo = resolve_repo(repo)
     family = str(family or "").strip()
@@ -116,7 +117,11 @@ def write_manifest(root: Path, sha: str, family: str, repo: str = "") -> Path:
         # Re-prove the root and leaf immediately before adoption. A build path
         # redirected after staging must not receive a trusted provenance file.
         current_root = root.lstat()
-        if stat.S_ISLNK(current_root.st_mode) or not stat.S_ISDIR(current_root.st_mode):
+        if (
+            stat.S_ISLNK(current_root.st_mode)
+            or not stat.S_ISDIR(current_root.st_mode)
+            or not os.path.samestat(root_before, current_root)
+        ):
             raise RuntimeError("source provenance root changed before adoption")
         _safe_existing(path)
         os.replace(tmp, path)
@@ -156,6 +161,7 @@ def _read_manifest_bytes(root: Path) -> bytes:
         if (
             stat.S_ISLNK(current.st_mode)
             or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(before, opened)
             or not os.path.samestat(opened, current)
         ):
             raise RuntimeError("source provenance manifest changed during open")
