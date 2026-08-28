@@ -9,31 +9,48 @@ import sys
 MAX_BYTES = 8 << 20
 
 
-def validate_parent_chain(path: pathlib.Path) -> None:
-    absolute = path.resolve(strict=False) if not path.is_absolute() else path
+def parent_chain_snapshot(path: pathlib.Path) -> list[tuple[pathlib.Path, int, int]]:
+    absolute = pathlib.Path(os.path.abspath(os.path.normpath(path)))
     parent = absolute.parent
-    # Check lexical ancestors without following a symlink supplied inside the
-    # path. Existing ancestors must be real directories; missing ancestors are
-    # invalid for a read-only source path.
-    parts = parent.parts
-    if not parts:
-        return
-    current = pathlib.Path(parts[0])
-    if current == pathlib.Path(os.sep):
-        current = pathlib.Path(os.sep)
-        start = 1
-    else:
-        start = 1
-    for part in parts[start:]:
-        current = current / part
+    chain: list[pathlib.Path] = []
+    current = parent
+    while True:
+        chain.append(current)
+        if current.parent == current:
+            break
+        current = current.parent
+    chain.reverse()
+
+    snapshot: list[tuple[pathlib.Path, int, int]] = []
+    for current in chain:
         info = current.lstat()
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
             raise RuntimeError(f"refusing non-directory/symlink source ancestor: {current}")
+        snapshot.append((current, info.st_dev, info.st_ino))
+    return snapshot
+
+
+def verify_parent_chain(snapshot: list[tuple[pathlib.Path, int, int]]) -> None:
+    for current, dev, ino in snapshot:
+        info = current.lstat()
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_dev != dev
+            or info.st_ino != ino
+        ):
+            raise RuntimeError(f"verified source ancestor changed during read: {current}")
+
+
+def validate_parent_chain(path: pathlib.Path) -> None:
+    # Compatibility wrapper retained for callers/tests that only need a
+    # one-point validation. Reads use the stronger snapshot + reproof below.
+    parent_chain_snapshot(path)
 
 
 def read_verified_regular(path: pathlib.Path, limit: int = MAX_BYTES, *, private: bool = False) -> bytes:
     path = pathlib.Path(os.path.abspath(os.path.normpath(path)))
-    validate_parent_chain(path)
+    parent_snapshot = parent_chain_snapshot(path)
     before = path.lstat()
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink public metadata source: {path}")
@@ -48,6 +65,7 @@ def read_verified_regular(path: pathlib.Path, limit: int = MAX_BYTES, *, private
     try:
         opened = os.fstat(fd)
         current = path.lstat()
+        verify_parent_chain(parent_snapshot)
         if (
             stat.S_ISLNK(current.st_mode)
             or not stat.S_ISREG(current.st_mode)
@@ -68,6 +86,14 @@ def read_verified_regular(path: pathlib.Path, limit: int = MAX_BYTES, *, private
         body = b"".join(chunks)
         if not body or len(body) > limit:
             raise RuntimeError(f"verified source is empty/oversized: {path}")
+        verify_parent_chain(parent_snapshot)
+        final = path.lstat()
+        if (
+            stat.S_ISLNK(final.st_mode)
+            or not stat.S_ISREG(final.st_mode)
+            or (opened.st_dev, opened.st_ino) != (final.st_dev, final.st_ino)
+        ):
+            raise RuntimeError(f"verified source changed during read: {path}")
         return body
     finally:
         os.close(fd)
