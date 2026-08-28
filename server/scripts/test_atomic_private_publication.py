@@ -166,6 +166,71 @@ def main() -> int:
             assert not (nested_real / "middle" / "state").exists()
         assert not list(root.glob(".*.batch-*"))
 
+    # A foreign regular file swapped in after destination snapshotting is not
+    # Router VPN state and must never be overwritten by batch adoption.
+    with tempfile.TemporaryDirectory(prefix="router-vpn-private-batch-swap-") as td:
+        root = Path(td)
+        dest = root / "owned"
+        source = root / "candidate"
+        foreign = root / "foreign"
+        for path, body in (
+            (dest, b"old\n"),
+            (source, b"new\n"),
+            (foreign, b"foreign\n"),
+        ):
+            path.write_bytes(body)
+            os.chmod(path, 0o600)
+        item = batch.parse_item(f"{dest}={source}")
+        os.replace(foreign, dest)
+        try:
+            batch.adopt([item])
+        except RuntimeError as exc:
+            assert "identity changed before adoption" in str(exc)
+        else:
+            raise AssertionError("batch publisher overwrote a foreign regular replacement")
+        assert dest.read_bytes() == b"foreign\n"
+
+    # Rollback is ownership-bound too. If the first adopted destination is
+    # replaced by a foreign inode before a later adoption fails, rollback must
+    # report incomplete recovery and leave the foreign bytes untouched.
+    with tempfile.TemporaryDirectory(prefix="router-vpn-private-batch-rollback-swap-") as td:
+        root = Path(td)
+        d1, d2 = root / "one", root / "two"
+        s1, s2 = root / "one.new", root / "two.new"
+        foreign = root / "foreign"
+        for path, body in (
+            (d1, b"old-one\n"),
+            (d2, b"old-two\n"),
+            (s1, b"new-one\n"),
+            (s2, b"new-two\n"),
+            (foreign, b"foreign-one\n"),
+        ):
+            path.write_bytes(body)
+            os.chmod(path, 0o600)
+        items = [batch.parse_item(f"{d1}={s1}"), batch.parse_item(f"{d2}={s2}")]
+        real_replace = batch.os.replace
+        calls = 0
+
+        def replace_then_foreign_swap(src, dst):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                real_replace(foreign, d1)
+                raise OSError("injected later adoption failure after foreign swap")
+            return real_replace(src, dst)
+
+        with mock.patch.object(batch.os, "replace", side_effect=replace_then_foreign_swap):
+            try:
+                batch.adopt(items)
+            except RuntimeError as exc:
+                assert "rollback was incomplete" in str(exc)
+                assert "identity changed before adoption" in str(exc)
+            else:
+                raise AssertionError("batch rollback overwrote a foreign replacement")
+        assert d1.read_bytes() == b"foreign-one\n"
+        assert d2.read_bytes() == b"old-two\n"
+        assert not list(root.glob(".*.batch-*"))
+
     print("Atomic private single/batch publication tests: OK")
     return 0
 
