@@ -448,7 +448,18 @@ require(
     "single-file private publisher accepted a symlink parent",
     "batch private publisher accepted a symlink parent",
 )
-require("server/scripts/create-bundle-json.py", "write_private_json", '"client.json"', '"routers.json"', '"router-vpn-bundle.json"')
+require(
+    "server/scripts/create-bundle-json.py",
+    "write_private_json",
+    "write_private_json_batch",
+    "read_verified_regular",
+    "read_generated_profiles",
+    "refusing symlink generated profile entry",
+    "generated mode directory changed during read",
+    '"client.json"',
+    '"routers.json"',
+    '"router-vpn-bundle.json"',
+)
 
 # Portainer updater credentials are one privileged identity: API key + TLS pin.
 # Configuration must validate the destination ancestry before staging, keep the
@@ -518,6 +529,7 @@ require(
 )
 require(
     "server/scripts/test_preserve_generated_state.py",
+    "server/scripts/test_create_bundle_transaction.py",
     "server/scripts/test_setup_generation_transaction.py",
     "server/scripts/test_install_state.py",
     "server/scripts/test_verified_regular_read.py",
