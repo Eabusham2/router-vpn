@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'android/build-sing-box-libbox.sh'
+      - 'android/build-awg-tunnel.sh'
       - 'android/routervpn_xray_bridge.go'
       - 'android/app/build.gradle'
       - 'android/app/src/main/java/com/eabusham/routervpn/XrayVpnService.java'
