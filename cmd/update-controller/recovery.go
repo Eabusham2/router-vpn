@@ -82,6 +82,26 @@ func (c *controller) clearRollbackCompose() error {
 	return nil
 }
 
+func (c *controller) clearTerminalRollbackSnapshot(state updateState) error {
+	path := c.rollbackComposePath()
+	if _, err := os.Lstat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect terminal rollback snapshot: %w", err)
+	}
+	if state.Status != "complete" && state.Status != "failed" {
+		return fmt.Errorf("rollback snapshot exists while update state is %q; refusing unattributed cleanup", state.Status)
+	}
+	if !shaRE.MatchString(strings.TrimSpace(state.FromSHA)) {
+		return errors.New("terminal update retained a rollback snapshot without an exact from_sha")
+	}
+	if _, err := c.loadRollbackCompose(state.FromSHA); err != nil {
+		return fmt.Errorf("terminal rollback snapshot is not attributable to state from_sha %s: %w", state.FromSHA, err)
+	}
+	return c.clearRollbackCompose()
+}
+
 func (c *controller) persistRecoveryState(status, from, target, message string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -181,7 +201,11 @@ func (c *controller) reconcileRecovery() error {
 	state := c.state
 	c.mu.Unlock()
 	if state.Status == "idle" || state.Status == "complete" || state.Status == "failed" {
-		return nil
+		// Terminal cleanup is retryable after restart, but only when any retained
+		// rollback snapshot is provably the snapshot named by terminal from_sha.
+		// Idle state has no attributable prior SHA, so an unexpected snapshot
+		// blocks rather than being silently discarded.
+		return c.clearTerminalRollbackSnapshot(state)
 	}
 
 	if state.Status == "applying" && state.FromSHA == "" {
