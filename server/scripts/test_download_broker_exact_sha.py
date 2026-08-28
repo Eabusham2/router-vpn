@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 HERE = Path(__file__).resolve().parent
 BROKER_PATH = HERE / "download-broker.py"
@@ -49,6 +50,37 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
         ]}
         got = broker._artifact_candidates(meta, "RouterVPN-iOS-release-candidate", "main", SHA)
         self.assertEqual([item["id"] for item in got], [1])
+
+    def test_artifact_member_scan_rejects_encryption_count_and_duplicates(self):
+        class FakeZip:
+            def __init__(self, items):
+                self._items = items
+            def infolist(self):
+                return self._items
+
+        encrypted = zipfile.ZipInfo("RouterVPN-Windows-amd64.zip")
+        encrypted.flag_bits = 0x1
+        encrypted.file_size = 16
+        encrypted.compress_size = 16
+        with self.assertRaisesRegex(RuntimeError, "encrypted member"):
+            broker._pick_member(FakeZip([encrypted]), "RouterVPN-Windows-amd64.zip")
+
+        first = zipfile.ZipInfo("one.txt")
+        second = zipfile.ZipInfo("two.txt")
+        for item in (first, second):
+            item.file_size = 1
+            item.compress_size = 1
+        with mock.patch.object(broker, "MAX_ARTIFACT_MEMBERS", 1):
+            with self.assertRaisesRegex(RuntimeError, "too many members"):
+                broker._pick_member(FakeZip([first, second]), "one.txt")
+
+        dup1 = zipfile.ZipInfo("a/RouterVPN-Windows-amd64.zip")
+        dup2 = zipfile.ZipInfo("b/RouterVPN-Windows-amd64.zip")
+        for item in (dup1, dup2):
+            item.file_size = 1
+            item.compress_size = 1
+        with self.assertRaisesRegex(RuntimeError, "2 copies"):
+            broker._pick_member(FakeZip([dup1, dup2]), "RouterVPN-Windows-amd64.zip")
 
     def test_desktop_can_fall_back_to_router_local_same_image_builder(self):
         with tempfile.TemporaryDirectory(prefix="routervpn-broker-sha-test-") as td:
