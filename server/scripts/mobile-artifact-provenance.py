@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import plistlib
 from pathlib import Path, PurePosixPath
 import re
@@ -20,6 +21,34 @@ MAX_COMPRESSION_RATIO = 200
 ANDROID_MEMBER = "assets/ROUTER-VPN-SOURCE.json"
 IOS_APP_INFO = "Payload/RouterVPN.app/Info.plist"
 IOS_TUNNEL_INFO = "Payload/RouterVPN.app/PlugIns/RouterVPNPacketTunnel.appex/Info.plist"
+
+
+def _open_mobile_artifact(path: Path, label: str):
+    try:
+        before = path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"{label} is missing") from exc
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise RuntimeError(f"{label} is redirected or not a regular file")
+    if before.st_size <= 0 or before.st_size > MAX_MOBILE_ARTIFACT:
+        raise RuntimeError(f"{label} is empty or oversized")
+    stream = path.open("rb")
+    try:
+        opened = os.fstat(stream.fileno())
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(before, opened)
+            or not os.path.samestat(opened, current)
+        ):
+            raise RuntimeError(f"{label} changed identity during verification open")
+        if opened.st_size <= 0 or opened.st_size > MAX_MOBILE_ARTIFACT:
+            raise RuntimeError(f"{label} is empty or oversized")
+        return stream
+    except BaseException:
+        stream.close()
+        raise
 
 
 def _normalize_sha(value: str) -> str:
@@ -103,11 +132,10 @@ def _verify_common(data: dict, expected_sha: str, expected_repo: str, expected_f
 def verify_android(path: Path, expected_sha: str, expected_repo: str) -> None:
     expected_sha = _normalize_sha(expected_sha)
     expected_repo = _normalize_repo(expected_repo)
-    if not path.is_file() or path.is_symlink() or path.stat().st_size <= 0 or path.stat().st_size > MAX_MOBILE_ARTIFACT:
-        raise RuntimeError("Android APK is missing, redirected, empty, or oversized")
     try:
-        with zipfile.ZipFile(path, "r") as zf:
-            raw = _read_member(zf, ANDROID_MEMBER)
+        with _open_mobile_artifact(path, "Android APK") as artifact:
+            with zipfile.ZipFile(artifact, "r") as zf:
+                raw = _read_member(zf, ANDROID_MEMBER)
     except zipfile.BadZipFile as exc:
         raise RuntimeError("Android APK is not a valid ZIP container") from exc
     try:
@@ -136,12 +164,11 @@ def _plist_dict(raw: bytes, label: str) -> dict:
 def verify_ios(path: Path, expected_sha: str, expected_repo: str) -> None:
     expected_sha = _normalize_sha(expected_sha)
     expected_repo = _normalize_repo(expected_repo)
-    if not path.is_file() or path.is_symlink() or path.stat().st_size <= 0 or path.stat().st_size > MAX_MOBILE_ARTIFACT:
-        raise RuntimeError("iOS IPA is missing, redirected, empty, or oversized")
     try:
-        with zipfile.ZipFile(path, "r") as zf:
-            app = _plist_dict(_read_member(zf, IOS_APP_INFO), "RouterVPN.app")
-            tunnel = _plist_dict(_read_member(zf, IOS_TUNNEL_INFO), "RouterVPNPacketTunnel.appex")
+        with _open_mobile_artifact(path, "iOS IPA") as artifact:
+            with zipfile.ZipFile(artifact, "r") as zf:
+                app = _plist_dict(_read_member(zf, IOS_APP_INFO), "RouterVPN.app")
+                tunnel = _plist_dict(_read_member(zf, IOS_TUNNEL_INFO), "RouterVPNPacketTunnel.appex")
     except zipfile.BadZipFile as exc:
         raise RuntimeError("iOS IPA is not a valid ZIP container") from exc
     _verify_common(app, expected_sha, expected_repo, "ios-app")
