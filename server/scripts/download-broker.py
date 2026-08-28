@@ -66,6 +66,7 @@ _mobile_provenance = module_from_spec(_mobile_provenance_spec)
 _mobile_provenance_spec.loader.exec_module(_mobile_provenance)
 
 MAX_GITHUB_ARTIFACT = 768 * 1024 * 1024
+MAX_ARTIFACT_MEMBERS = 20_000
 MAX_MEMBER = 512 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
 MAX_PAIR_BUNDLE = 64 * 1024 * 1024
@@ -133,11 +134,16 @@ def _safe_artifact_name(name: str) -> None:
 
 def _pick_member(zf: zipfile.ZipFile, wanted: str) -> zipfile.ZipInfo:
     matches = []
-    for item in zf.infolist():
+    items = zf.infolist()
+    if len(items) > MAX_ARTIFACT_MEMBERS:
+        raise RuntimeError("GitHub artifact contains too many members")
+    for item in items:
         _safe_artifact_name(item.filename.rstrip("/"))
         mode = (item.external_attr >> 16) & 0o170000
         if mode == stat.S_IFLNK:
             raise RuntimeError("GitHub artifact contains a symlink")
+        if item.flag_bits & 0x1:
+            raise RuntimeError("GitHub artifact contains an encrypted member")
         if item.file_size > MAX_MEMBER:
             raise RuntimeError("GitHub artifact member exceeds safety limit")
         if item.compress_size > 0 and item.file_size > 8 * 1024 * 1024:
