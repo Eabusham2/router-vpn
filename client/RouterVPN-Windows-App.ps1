@@ -38,7 +38,7 @@ $TelemetrySource=Get-Content -LiteralPath $TelemetryHelpers -Raw -Encoding UTF8
 # and verify the actual implementation is present during -SelfTest.
 $UnifiedControllerContract=@(
     '/api/status','/api/profiles','/api/logical-modes','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom',
-    '/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/profile/fastest','/api/profile/live-latency',
+    '/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/profile/fastest',
     '/api/connection/live-latency','/api/connection/speed-test','/api/multihop/live-latency','/api/multihop/speed-test','/api/public-ip','/api/dns/retest','/api/emergency-stop'
 )
 # Compatibility marker for older repository audits only. The retired /api/auto
