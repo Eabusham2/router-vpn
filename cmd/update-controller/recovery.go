@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -58,7 +59,8 @@ func (c *controller) loadRollbackCompose(expected string) (string, error) {
 
 func (c *controller) clearRollbackCompose() error {
 	path := c.rollbackComposePath()
-	if _, err := os.Lstat(path); err != nil {
+	before, err := os.Lstat(path)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
@@ -67,8 +69,15 @@ func (c *controller) clearRollbackCompose() error {
 	if err := validateUpdaterPrivateFile(path, maxCompose); err != nil {
 		return err
 	}
+	if err := atomicWriteUpdaterPrivateTargetUnchanged(path, before); err != nil {
+		return fmt.Errorf("rollback snapshot changed before cleanup: %w", err)
+	}
 	if err := os.Remove(path); err != nil {
 		return err
+	}
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
 	}
 	return nil
 }
