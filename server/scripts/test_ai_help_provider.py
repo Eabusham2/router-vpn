@@ -119,6 +119,36 @@ class AIHelpProviderTests(unittest.TestCase):
             provider = ai.AIHelpProvider(model="test-model", key_file=str(link), opener=lambda *_a, **_k: None)
             with self.assertRaisesRegex(ai.AIHelpError, "must not be a symlink"): provider.ask("help")
 
+    def test_private_read_fails_closed_if_verified_inode_changes(self):
+        original = ai.read_verified_regular
+        try:
+            def changed(*_args, **_kwargs):
+                raise RuntimeError("verified source changed during read")
+            ai.read_verified_regular = changed
+            with self.assertRaisesRegex(ai.AIHelpError, "could not be verified safely"):
+                ai._read_private_text(self.make_key(), label="openai key", max_bytes=ai.MAX_KEY_BYTES)
+        finally:
+            ai.read_verified_regular = original
+
+    def test_repo_context_uses_verified_regular_reader(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "docs").mkdir()
+            page = root / "README.md"
+            page.write_text("verified docs", encoding="utf-8")
+            seen = []
+            original = ai.read_verified_regular
+            try:
+                def verified(path, limit, private=False):
+                    seen.append((Path(path).name, limit, private))
+                    return original(path, limit, private=private)
+                ai.read_verified_regular = verified
+                context = ai.load_repo_context([td], max_chars=1000)
+            finally:
+                ai.read_verified_regular = original
+            self.assertEqual(context.get("README.md"), "verified docs")
+            self.assertTrue(any(name == "README.md" and private is False for name, _limit, private in seen))
+
     def test_disabled_without_model(self):
         provider = ai.AIHelpProvider(model="", key_file=self.make_key())
         self.assertFalse(provider.status()["available"])
