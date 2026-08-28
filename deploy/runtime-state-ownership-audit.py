@@ -101,9 +101,11 @@ dns = require(
     "modes/dns-policy.py",
     "from private_profile_store import private_root, read_profile_store",
     "store = read_profile_store(private_root(str(ROOT)))",
-    "def _read_runtime_json",
+    "def _read_runtime_json_snapshot",
     "os.path.samestat(opened, current)",
+    "runtime DNS config changed during read",
     "def _atomic_private_runtime_json",
+    "os.path.samestat(expected, current)",
     "os.fsync(stream.fileno())",
     "os.replace(tmp, path)",
     "def patch_sing",
@@ -121,6 +123,7 @@ require(
     "modes/test_dns_policy_runtime.py",
     "failed DNS adoption changed the authoritative runtime config",
     "DNS runtime patch followed a symlink target",
+    "DNS runtime patch overwrote a foreign regular replacement",
     "DNS runtime accepted an oversized config",
 )
 
