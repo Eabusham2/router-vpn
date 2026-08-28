@@ -38,7 +38,7 @@ rc_has('python3 server/scripts/test_setup_center_router_onboarding.py')
 # 320-329: native launch surfaces, broad build family, Windows Portable behavior,
 # short artifact retention, archive safety, ID safety, cancellation cleanup.
 need('deploy/build-client.sh','freebsd/amd64','openbsd/arm64','netbsd/arm64','dragonfly/amd64','illumos/amd64')
-need('cmd/portable-launcher/main.go','HOMEVPN_PORTABLE=1','nativeCmd.Wait()','stopPortableController(cmd)','filepath.Join(dataDir,"state.json")','filepath.Join(dataDir,"routers.json")')
+need('cmd/portable-launcher/main.go','HOMEVPN_PORTABLE=1','nativeCmd.Wait()','stopPortableController(cmd)','filepath.Join(dataDir, "state.json")','filepath.Join(dataDir, "routers.json")')
 forbid('cmd/portable-launcher/main.go','wsl.exe','bash.exe','msedge.exe','chrome.exe','--app=')
 exists('cmd/portable-launcher/portable_contract_test.go','cmd/portable-launcher/portable_state_test.go')
 need('.github/workflows/release-candidate.yml','retention-days: 1','Relocated Portable self-test failed','controller remained alive')
