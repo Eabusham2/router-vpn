@@ -125,6 +125,42 @@ proc = subprocess.run(
 )
 assert proc.returncode == 0, "private bundle runtime source test failed: " + (proc.stdout + proc.stderr)[-4000:]
 
+
+# Canonical private bundle metadata itself is one three-file transaction and all
+# generated-profile inputs are verified no-follow private files. A symlinked
+# mode directory/file or corrupt catalog must never be silently serialized.
+for marker in (
+    "read_verified_regular = VERIFIED[\"read_verified_regular\"]",
+    "def read_generated_profiles",
+    "refusing symlink generated profile entry",
+    "generated mode contains non-regular/symlink entry",
+    "generated mode directory changed during read",
+    "generated profile root changed during read",
+    "def write_private_json_batch",
+    'str(SCRIPT_DIR / "atomic-private-batch.py")',
+    '(base / "client-bundle" / "client.json", client_config)',
+    '(base / "client-bundle" / "routers.json", routers_store)',
+    '(base / "client-bundle" / "router-vpn-bundle.json", bundle)',
+):
+    assert marker in bundle_gen, f"private bundle generator lost verified transaction marker: {marker}"
+for forbidden in (
+    '(base / "config" / "router-agent.json").read_text',
+    '(base / "client-bundle/modes.json").read_text',
+    "mode_dir.is_dir()",
+    "path.read_bytes()",
+    "logical_modes = []",
+):
+    assert forbidden not in bundle_gen, f"private bundle generator revived unsafe read/fallback marker: {forbidden}"
+
+bundle_test = subprocess.run(
+    [sys.executable, str(ROOT / "server/scripts/test_create_bundle_transaction.py")],
+    cwd=ROOT,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+assert bundle_test.returncode == 0, "private bundle generation transaction test failed: " + (bundle_test.stdout + bundle_test.stderr)[-4000:]
+
 # Pairing/private bundles may contain the node API credential needed by the client,
 # but never the Setup Center/admin bearer secret used for management mutations.
 for forbidden in ("setup_token", "setup-center.token", "ROUTER_VPN_ADMIN_TOKEN_FILE", "admin_token"):
