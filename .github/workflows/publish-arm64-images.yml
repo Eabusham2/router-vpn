@@ -104,5 +104,5 @@ jobs:
           test "$(docker image inspect "$ref" --format '{{.Architecture}}')" = 'arm64'
           test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
           test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = 'https://github.com/Eabusham2/router-vpn'
-          test "$(docker image inspect \"$ref\" --format '{{ index .Config.Labels \"org.opencontainers.image.source-tree\" }}')" = "$SOURCE_TREE_SHA"
+          test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.source-tree" }}')" = "$SOURCE_TREE_SHA"
           printf '%s %s %s\n' "$ref" "$digest" "$SOURCE_TREE_SHA"
