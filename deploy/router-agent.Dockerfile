@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS build
+FROM golang:1.24.13-alpine AS build
 WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /router-vpn-agent ./cmd/router-agent
