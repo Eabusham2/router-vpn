@@ -49,6 +49,39 @@ purge_pos = publish.find('"$OUT"/router-vpn-client-bundle.zip')
 if validate_pos < 0 or purge_pos < 0 or validate_pos > purge_pos:
     errors.append("downloads private-directory validation does not precede legacy private-material purge")
 
+
+generator = read("server/scripts/generate-setup-assets.py")
+for marker in (
+    "atomic-private-batch.py",
+    'TemporaryDirectory(prefix=".setup-assets.", dir=out)',
+    'f"{assets_path}={staged_assets}"',
+    'f"{html_path}={staged_html}"',
+):
+    if marker not in generator:
+        errors.append(f"generate-setup-assets.py missing transactional generation marker {marker!r}")
+for forbidden in (
+    '(out/"setup-assets.json").write_text',
+    '(out/"router-vpn-device-setup.html").write_text',
+):
+    if forbidden in generator:
+        errors.append(f"generate-setup-assets.py contains stale live-write marker {forbidden!r}")
+
+normalizer = read("server/scripts/normalize-setup-imports.py")
+for marker in (
+    "atomic-private-batch.py",
+    'TemporaryDirectory(prefix=".normalize-setup.", dir=bundle)',
+    'f"{assets_path}={staged_assets}"',
+    'f"{html_path}={staged_html}"',
+):
+    if marker not in normalizer:
+        errors.append(f"normalize-setup-imports.py missing transactional normalization marker {marker!r}")
+for forbidden in (
+    "assets_path.write_text(",
+    "html_path.write_text(",
+):
+    if forbidden in normalizer:
+        errors.append(f"normalize-setup-imports.py contains stale live-write marker {forbidden!r}")
+
 private_dir = read("server/scripts/private-directory.py")
 for marker in (
     "validate_existing_ancestors",
