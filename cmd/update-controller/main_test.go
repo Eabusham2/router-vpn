@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testOldSHA = "1111111111111111111111111111111111111111"
@@ -161,6 +162,57 @@ func TestNewestMeaningfulWorkflowEvidenceControlsVerification(t *testing.T) {
 	}
 	if newestMeaningfulWorkflowSuccess(wrongIdentity, testNewSHA, "main") {
 		t.Fatal("wrong SHA/branch workflow evidence was accepted")
+	}
+}
+
+
+func TestExactReleaseArtifactNamesAreSHAQualified(t *testing.T) {
+	want := map[string]string{
+		"source-snapshot.yml": "router-vpn-source-" + testNewSHA,
+		"release-candidate.yml": "RouterVPN-release-candidate-" + testNewSHA,
+		"production-release-compose.yml": "RouterVPN-production-compose-" + testNewSHA,
+	}
+	for workflow, expected := range want {
+		if got := expectedReleaseArtifact(workflow, testNewSHA); got != expected {
+			t.Fatalf("%s artifact=%q want=%q", workflow, got, expected)
+		}
+	}
+	if got := expectedReleaseArtifact("publish-arm64-images.yml", testNewSHA); got != "" {
+		t.Fatalf("non-artifact workflow unexpectedly requires %q", got)
+	}
+}
+
+func TestReleaseArtifactMustBelongToCurrentSuccessfulAttempt(t *testing.T) {
+	started := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	base := workflowArtifact{
+		ID: 77, Name: "RouterVPN-release-candidate-" + testNewSHA,
+		SizeInBytes: 4096, CreatedAt: started.Add(time.Second).Format(time.RFC3339),
+	}
+	if !artifactBelongsToCurrentAttempt(base, base.Name, started.Format(time.RFC3339)) {
+		t.Fatal("current-attempt exact-SHA artifact was rejected")
+	}
+	old := base
+	old.CreatedAt = started.Add(-time.Second).Format(time.RFC3339)
+	if artifactBelongsToCurrentAttempt(old, base.Name, started.Format(time.RFC3339)) {
+		t.Fatal("artifact from a prior run attempt was accepted")
+	}
+	expired := base
+	expired.Expired = true
+	if artifactBelongsToCurrentAttempt(expired, base.Name, started.Format(time.RFC3339)) {
+		t.Fatal("expired release artifact was accepted")
+	}
+	empty := base
+	empty.SizeInBytes = 0
+	if artifactBelongsToCurrentAttempt(empty, base.Name, started.Format(time.RFC3339)) {
+		t.Fatal("empty release artifact was accepted")
+	}
+	wrong := base
+	wrong.Name = "RouterVPN-release-candidate-" + testOldSHA
+	if artifactBelongsToCurrentAttempt(wrong, base.Name, started.Format(time.RFC3339)) {
+		t.Fatal("wrong-SHA release artifact was accepted")
+	}
+	if artifactBelongsToCurrentAttempt(base, base.Name, "not-a-time") {
+		t.Fatal("artifact with invalid attempt start time was accepted")
 	}
 }
 
