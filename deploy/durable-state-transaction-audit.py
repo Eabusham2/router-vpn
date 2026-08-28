@@ -183,6 +183,8 @@ require(
     "modes/test_kill_switch.py",
     "router-vpn-killswitch-state-safety-",
     "router-vpn-killswitch-parent-safety-",
+    "router-vpn-killswitch-remove-identity-",
+    "router-vpn-killswitch-forceoff-swap-",
     "force-off",
 )
 
@@ -368,6 +370,9 @@ require(
     "saveRollbackCompose",
     "unexpectedly exists after update transaction started",
     "loadRollbackCompose",
+    "clearRollbackCompose",
+    "rollback snapshot changed before cleanup",
+    "atomicWriteUpdaterPrivateTargetUnchanged",
     "restorePreviousStack",
     "exactComposeIdentity",
     "exactComposeIdentity(current, from)",
