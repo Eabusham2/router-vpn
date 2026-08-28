@@ -183,7 +183,8 @@ for rel, body in (
     (diag_rel, diag),
     (combined_rel, combined),
 ):
-    require(body, rel, ":app:assembleDebug", "actions/setup-go@v5", "go-version: '1.26.3'", "gradle-version: '9.5.0'")
+    require(body, rel, ":app:assembleDebug", "actions/setup-java@v5", "actions/setup-go@v5", "go-version: '1.26.3'", "gradle-version: '9.5.0'")
+    assert "actions/setup-java@v4" not in body, f"{rel}: deprecated setup-java v4 returned"
 
 # The dedicated combined-runtime gate must track both native dependency builders,
 # and Gradle must execute the canonical libbox builder without source rewriting.
