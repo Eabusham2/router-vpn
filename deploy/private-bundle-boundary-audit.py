@@ -34,7 +34,8 @@ assert 'copy_static "$BUNDLE/router-vpn-bundle.json"' not in publish
 assert 'copy_static "$BUNDLE/CREDENTIALS.txt"' not in publish
 
 # Init also removes cached legacy credential files before both new-install and
-# already-initialized upgrade paths.
+# already-initialized upgrade paths. It persists only catalog/license metadata;
+# runtime code and platform binaries remain exact-source/on-demand inputs.
 for marker in (
     '"$BASE/downloads/router-vpn-client-bundle.zip"',
     '"$BASE/router-vpn-client-bundle.zip"',
@@ -42,6 +43,21 @@ for marker in (
     '"$BASE/downloads/CREDENTIALS.txt"',
 ):
     assert marker in init, f"init no longer purges historical private material: {marker}"
+
+for marker in (
+    'python3 "$PRIVATE_WRITE" "$BASE/client-bundle/modes.json" < /src/configs/client/modes.json',
+    'python3 "$PRIVATE_WRITE" "$BASE/client-bundle/logical-modes.json" < /src/configs/client/logical-modes.json',
+    'python3 "$PRIVATE_WRITE" "$BASE/client-bundle/LICENSE" < /src/LICENSE',
+    "Runtime code/binaries are injected",
+):
+    assert marker in init, f"init lost exact-source metadata/runtime separation marker: {marker}"
+for stale in (
+    "cp -a /src/modes /src/dist /src/client",
+    'cp -a /src/modes "$BASE/client-bundle/"',
+    'cp -a /src/client "$BASE/client-bundle/"',
+    'cp -a /src/dist "$BASE/client-bundle/"',
+):
+    assert stale not in init, f"init revived persistent duplicate runtime tree: {stale}"
 
 # Install/upgrade/doctor must validate the canonical private source rather than
 # demanding or recreating a persistent public credential file.
