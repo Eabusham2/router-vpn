@@ -91,6 +91,51 @@ class EndpointSyncTransactionTests(unittest.TestCase):
         for path, before in self.before.items():
             self.assertEqual(path.read_bytes(), before, str(path))
 
+    def test_foreign_regular_replacement_before_adoption_is_preserved(self) -> None:
+        endpoint, rendered = module.parse_endpoint("203.0.113.9")
+        changes = module.build_changes(self.base, endpoint, rendered)
+        self.assertTrue(changes)
+        first = changes[0]
+        foreign = first.path.with_name(first.path.name + ".foreign")
+        foreign.write_bytes(b"[Peer]\nEndpoint = foreign.example:59999\n")
+        os.chmod(foreign, 0o600)
+        os.replace(foreign, first.path)
+
+        with self.assertRaisesRegex(RuntimeError, "identity changed before adoption"):
+            module.apply_transaction(changes)
+
+        self.assertIn(b"foreign.example", first.path.read_bytes())
+        for path, before in self.before.items():
+            if path != first.path:
+                self.assertEqual(path.read_bytes(), before, str(path))
+
+    def test_rollback_preserves_foreign_replacement_after_adoption(self) -> None:
+        endpoint, rendered = module.parse_endpoint("203.0.113.9")
+        changes = module.build_changes(self.base, endpoint, rendered)
+        self.assertGreaterEqual(len(changes), 2)
+        first = changes[0]
+        foreign = first.path.with_name(first.path.name + ".foreign")
+        foreign.write_bytes(b"[Peer]\nEndpoint = foreign-after-adopt.example:59999\n")
+        os.chmod(foreign, 0o600)
+        real_replace = module.os.replace
+        calls = 0
+
+        def fail_later_after_foreign_swap(src, dst):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                real_replace(foreign, first.path)
+                raise OSError("injected later adoption failure after foreign swap")
+            return real_replace(src, dst)
+
+        with mock.patch.object(module.os, "replace", side_effect=fail_later_after_foreign_swap):
+            with self.assertRaisesRegex(RuntimeError, "rollback was incomplete"):
+                module.apply_transaction(changes)
+
+        self.assertIn(b"foreign-after-adopt.example", first.path.read_bytes())
+        for change in changes[1:]:
+            self.assertEqual(change.path.read_bytes(), change.before, str(change.path))
+
     def test_symlink_owned_target_is_rejected_before_mutation(self) -> None:
         real = self.wg.with_name("real.conf")
         self.wg.replace(real)
