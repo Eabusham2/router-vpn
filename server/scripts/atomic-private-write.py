@@ -32,6 +32,25 @@ def ensure_private_parent(path: pathlib.Path) -> pathlib.Path:
     return path
 
 
+def require_target_unchanged(path: pathlib.Path, before: os.stat_result | None) -> None:
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        current = None
+    if before is None:
+        if current is not None:
+            raise RuntimeError(f"private target appeared before adoption: {path}")
+        return
+    if current is None:
+        raise RuntimeError(f"private target disappeared before adoption: {path}")
+    if (
+        stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISREG(current.st_mode)
+        or not os.path.samestat(before, current)
+    ):
+        raise RuntimeError(f"private target identity changed before adoption: {path}")
+
+
 def atomic_private_write(path: pathlib.Path, body: bytes) -> None:
     if not body or len(body) > MAX_BYTES:
         raise RuntimeError(f"private output is empty or oversized: {path}")
@@ -53,6 +72,7 @@ def atomic_private_write(path: pathlib.Path, body: bytes) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         path = ensure_private_parent(path)
+        require_target_unchanged(path, info)
         os.replace(tmp, path)
         committed = True
         try:
