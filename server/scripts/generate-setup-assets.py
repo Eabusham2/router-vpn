@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from importlib.util import module_from_spec, spec_from_file_location
 import json
 import pathlib
 import subprocess
@@ -11,13 +12,13 @@ import tempfile
 import urllib.parse
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
-_verified_spec = __import__("importlib.util", fromlist=["spec_from_file_location"]).spec_from_file_location(
+_verified_spec = spec_from_file_location(
     "router_vpn_setup_assets_verified_read",
     SCRIPT_DIR / "verified-regular-read.py",
 )
 if _verified_spec is None or _verified_spec.loader is None:
     raise RuntimeError("cannot load verified-regular-read.py")
-_verified = __import__("importlib.util", fromlist=["module_from_spec"]).module_from_spec(_verified_spec)
+_verified = module_from_spec(_verified_spec)
 _verified_spec.loader.exec_module(_verified)
 read_verified_regular = _verified.read_verified_regular
 
