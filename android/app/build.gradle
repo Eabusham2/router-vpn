@@ -34,7 +34,12 @@ android {
 }
 
 def awgAar = file('libs/amneziawg-tunnel.aar')
+def awgStamp = file('libs/amneziawg-tunnel.commit')
+def awgLicense = file('libs/amneziawg-tunnel-LICENSE.txt')
 def libboxAar = file('libs/libbox.aar')
+def libboxStamp = file('libs/libbox.commit')
+def libboxLicense = file('libs/libbox-LICENSE.txt')
+def libxrayLicense = file('libs/libxray-LICENSE.txt')
 
 tasks.register('stageProjectLicense', Copy) {
     doFirst {
@@ -66,7 +71,8 @@ tasks.register('stageSourceProvenance') {
 tasks.register('prepareAmneziaWgTunnel', Exec) {
     workingDir rootProject.projectDir
     commandLine 'bash', 'build-awg-tunnel.sh'
-    outputs.file awgAar
+    inputs.file rootProject.file('build-awg-tunnel.sh')
+    outputs.files awgAar, awgStamp, awgLicense
 }
 
 tasks.register('prepareSingBoxLibbox', Exec) {
@@ -75,7 +81,8 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     // Gradle execution time: source-level sed patches can drift and mutate an
     // already-correct package path into a false verifier failure.
     commandLine 'bash', 'build-sing-box-libbox.sh'
-    outputs.file libboxAar
+    inputs.files rootProject.file('build-sing-box-libbox.sh'), rootProject.file('routervpn_xray_bridge.go')
+    outputs.files libboxAar, libboxStamp, libboxLicense, libxrayLicense
 }
 
 tasks.named('preBuild').configure {
