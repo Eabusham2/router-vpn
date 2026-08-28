@@ -199,7 +199,12 @@ for marker in 'RouterVPNProductOnboardingDoneV2' 'Add or link a node' 'router-vp
 for marker in '/api/home-summary' '/api/home-summary/prove-exit' 'actualExitStatus == "proved"' 'Node latency' 'LAN access' 'Kill switch' 'Effective MTU' 'Warnings'; do grep -Fq "$marker" "$HOME_SRC"; done
 for marker in '/api/profile/settings' 'Allow home LAN access' 'Always / strict' 'AmneziaWG' 'Auto measured' 'DAITA-like' 'Jumbo TUN' 'SOCKS5' 'startup' 'auto-connect'; do grep -Fiq "$marker" "$SETTINGS_SRC"; done
 grep -Fq 'NSStatusBar' "$MENU_SRC"; grep -Fq 'Open Router VPN' "$MENU_SRC"; grep -Fq 'Emergency Stop' "$MENU_SRC"; grep -Fq 'Quit Router VPN' "$MENU_SRC"
-strings "$BIN" | grep -Fq 'RouterVPNMenuBarBootstrap'; ! otool -L "$BIN" | grep -q '/WebKit.framework/'
+# Avoid producer | grep -q under pipefail: an early successful grep can
+# SIGPIPE the producer and turn a proven marker into a false build failure.
+strings "$BIN" >"$BUILD_WORK/RouterVPN.strings"
+grep -Fq 'RouterVPNMenuBarBootstrap' "$BUILD_WORK/RouterVPN.strings"
+otool -L "$BIN" >"$BUILD_WORK/RouterVPN.otool"
+! grep -Fq '/WebKit.framework/' "$BUILD_WORK/RouterVPN.otool"
 
 if [[ "$(uname -m)" == arm64 && "$ARCH" == arm64 ]] || [[ "$(uname -m)" == x86_64 && "$ARCH" == amd64 ]]; then "$BIN" --self-test; fi
 
