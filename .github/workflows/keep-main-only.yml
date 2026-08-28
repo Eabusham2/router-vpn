@@ -12,32 +12,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Remove known stale UI trigger branch
+      - uses: actions/checkout@v4
+      - name: Remove only verified obsolete publisher branches
         env:
           GH_TOKEN: ${{ github.token }}
-          STALE_BRANCH: trigger-cross-platform-ui-remaining
-          STALE_SHA: e33765d96c46d41c84350c67aec790cc72ee4261
-        run: |
-          set -euo pipefail
-          current="$(gh api "repos/$GITHUB_REPOSITORY/branches/$STALE_BRANCH" --jq '.commit.sha' 2>/dev/null || true)"
-          if [[ -n "$current" ]]; then
-            if [[ "$current" != "$STALE_SHA" ]]; then
-              echo "Refusing to delete changed stale-branch candidate: $STALE_BRANCH is $current, expected $STALE_SHA" >&2
-              exit 1
-            fi
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$STALE_BRANCH"
-            echo "Removed verified stale trigger branch $STALE_BRANCH at $STALE_SHA"
-          fi
-      - name: Verify no unexpected branch exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mapfile -t extra < <(gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq '.[].name' | grep -vx main || true)
-          if ((${#extra[@]})); then
-            printf 'Unexpected non-main branch(es):\n' >&2
-            printf '  %s\n' "${extra[@]}" >&2
-            printf 'Inspect merge/contents before deleting anything.\n' >&2
-            exit 1
-          fi
-          echo 'Branch policy OK: main is the only branch.'
+        run: bash deploy/cleanup-known-stale-branches.sh
