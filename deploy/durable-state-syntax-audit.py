@@ -37,6 +37,7 @@ PYTHON_FILES = (
     "server/scripts/generate-stack-profiles.py",
     "deploy/setup-center-publication-audit.py",
     "server/scripts/normalize-setup-imports.py",
+    "server/scripts/test_setup_generation_transaction.py",
     "server/scripts/generate-setup-assets.py",
     "modes/kill-switch.py",
     "modes/test_kill_switch.py",
