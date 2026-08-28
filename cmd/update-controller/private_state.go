@@ -96,6 +96,29 @@ func readUpdaterPrivate(path string, limit int64) ([]byte, error) {
 	return body, nil
 }
 
+func atomicWriteUpdaterPrivateTargetUnchanged(path string, before os.FileInfo) error {
+	current, err := os.Lstat(path)
+	if before == nil {
+		if err == nil {
+			return fmt.Errorf("private updater file %s appeared before adoption", path)
+		}
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("private updater file %s disappeared before adoption", path)
+		}
+		return err
+	}
+	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(before, current) {
+		return fmt.Errorf("private updater file %s identity changed before adoption", path)
+	}
+	return nil
+}
+
 func atomicWriteUpdaterPrivate(path string, body []byte) error {
 	if int64(len(body)) > maxUpdaterPrivateBytes {
 		return fmt.Errorf("private updater file %s exceeds safety limit", path)
@@ -108,6 +131,12 @@ func atomicWriteUpdaterPrivate(path string, body []byte) error {
 		if err := validateUpdaterPrivateFile(path, maxUpdaterPrivateBytes); err != nil {
 			return err
 		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	var targetBefore os.FileInfo
+	if info, err := os.Lstat(path); err == nil {
+		targetBefore = info
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -136,6 +165,9 @@ func atomicWriteUpdaterPrivate(path string, body []byte) error {
 		return err
 	}
 	if err := validateUpdaterPrivateParent(path); err != nil {
+		return err
+	}
+	if err := atomicWriteUpdaterPrivateTargetUnchanged(path, targetBefore); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
