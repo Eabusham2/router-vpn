@@ -21,9 +21,16 @@ SSR_PORT=${SSR_PORT:-15443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 PRIVATE_WRITE=/src/server/scripts/atomic-private-write.py
 PRIVATE_BATCH=/src/server/scripts/atomic-private-batch.py
+PRIVATE_DIR=/src/server/scripts/private-directory.py
+VERIFIED_READ=/src/server/scripts/verified-regular-read.py
 
+for dir in \
+  "$BASE" "$BASE/config" "$BASE/config/xray" "$BASE/config/transports" \
+  "$BASE/client-bundle" "$BASE/client-bundle/generated" "$BASE/client-bundle/router" "$BASE/downloads"; do
+  python3 "$PRIVATE_DIR" "$dir"
+done
 for required in "$BASE/config/router-agent.json" "$BASE/config/socks5.json" "$BASE/client-bundle/routers.json"; do
-  [[ -s "$required" && ! -L "$required" ]] || { echo "Existing installation missing/unsafe $required" >&2; exit 1; }
+  python3 "$VERIFIED_READ" --private "$required" >/dev/null || { echo "Existing installation missing/unsafe private state $required" >&2; exit 1; }
 done
 
 bash /src/server/finalize/sync-client-runtime.sh "$BASE"
