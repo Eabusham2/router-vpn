@@ -94,10 +94,14 @@ for marker in (
         errors.append(f"private-directory.py missing path-safety marker {marker!r}")
 
 if not errors:
-    test = ROOT / "server/scripts/test_private_directory.py"
-    proc = subprocess.run([sys.executable, str(test)], cwd=ROOT, text=True, capture_output=True)
-    if proc.returncode != 0:
-        errors.append("private-directory behavior test failed: " + (proc.stdout + proc.stderr)[-3000:])
+    for rel, label in (
+        ("server/scripts/test_private_directory.py", "private-directory"),
+        ("server/scripts/test_setup_generation_transaction.py", "Setup Center generation transaction"),
+    ):
+        test = ROOT / rel
+        proc = subprocess.run([sys.executable, str(test)], cwd=ROOT, text=True, capture_output=True)
+        if proc.returncode != 0:
+            errors.append(label + " behavior test failed: " + (proc.stdout + proc.stderr)[-3000:])
 
 if errors:
     print("Router VPN Setup Center publication audit: FAIL", file=sys.stderr)
