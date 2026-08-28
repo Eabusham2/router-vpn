@@ -83,6 +83,31 @@ def test_replace_failure_preserves_original() -> None:
         assert not list(root.glob(".sing-box.json.dns-*")), "failed DNS adoption leaked a temp file"
 
 
+def test_foreign_regular_replacement_rejected() -> None:
+    with tempfile.TemporaryDirectory(prefix="router-vpn-dns-runtime-swap-") as td:
+        root = Path(td)
+        path = root / "sing-box.json"
+        write_config(path, base_config())
+        foreign = root / "foreign.json"
+        foreign_body = write_config(foreign, {"foreign": True})
+        real_mkstemp = DNS.tempfile.mkstemp
+
+        def mkstemp_then_swap(*args, **kwargs):
+            fd, name = real_mkstemp(*args, **kwargs)
+            os.replace(foreign, path)
+            return fd, name
+
+        with mock.patch.object(DNS.tempfile, "mkstemp", side_effect=mkstemp_then_swap):
+            try:
+                DNS.patch_sing(path, policy())
+            except RuntimeError as exc:
+                assert "target identity changed before adoption" in str(exc)
+            else:
+                raise AssertionError("DNS runtime patch overwrote a foreign regular replacement")
+        assert path.read_bytes() == foreign_body
+        assert not list(root.glob(".sing-box.json.dns-*"))
+
+
 def test_symlink_target_rejected() -> None:
     if os.name == "nt":
         return
@@ -132,6 +157,7 @@ def test_invalid_and_oversized_rejected() -> None:
 def main() -> int:
     test_atomic_patch()
     test_replace_failure_preserves_original()
+    test_foreign_regular_replacement_rejected()
     test_symlink_target_rejected()
     test_invalid_and_oversized_rejected()
     print("DNS runtime atomic adoption tests: OK")
