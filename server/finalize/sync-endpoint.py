@@ -31,6 +31,7 @@ ENDPOINT_LINE = re.compile(
 class Change:
     path: pathlib.Path
     before: bytes
+    before_stat: os.stat_result
     after: bytes
 
 
@@ -68,7 +69,7 @@ def ensure_owned_parent(path: pathlib.Path) -> None:
     _validate_owned_ancestors(parent)
 
 
-def read_owned_file(path: pathlib.Path) -> bytes:
+def read_owned_file_snapshot(path: pathlib.Path) -> tuple[bytes, os.stat_result]:
     ensure_owned_parent(path)
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
@@ -105,9 +106,28 @@ def read_owned_file(path: pathlib.Path) -> bytes:
         current = path.lstat()
         if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
             raise RuntimeError(f"owned file changed during read: {path}")
-        return b"".join(chunks)
+        return b"".join(chunks), current
     finally:
         os.close(fd)
+
+
+def read_owned_file(path: pathlib.Path) -> bytes:
+    body, _ = read_owned_file_snapshot(path)
+    return body
+
+
+def require_owned_state(path: pathlib.Path, expected: os.stat_result, label: str) -> None:
+    ensure_owned_parent(path)
+    try:
+        current = path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"{label} disappeared before adoption: {path}") from exc
+    if (
+        stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISREG(current.st_mode)
+        or not os.path.samestat(expected, current)
+    ):
+        raise RuntimeError(f"{label} identity changed before adoption: {path}")
 
 
 def build_changes(base: pathlib.Path, endpoint: str, rendered: str) -> list[Change]:
@@ -124,7 +144,7 @@ def build_changes(base: pathlib.Path, endpoint: str, rendered: str) -> list[Chan
                 path.lstat()
             except FileNotFoundError:
                 continue
-            before = read_owned_file(path)
+            before, before_stat = read_owned_file_snapshot(path)
             try:
                 text = before.decode("utf-8")
             except UnicodeDecodeError as exc:
@@ -135,7 +155,7 @@ def build_changes(base: pathlib.Path, endpoint: str, rendered: str) -> list[Chan
             if count:
                 after = updated.encode("utf-8")
                 if after != before:
-                    changes.append(Change(path, before, after))
+                    changes.append(Change(path, before, before_stat, after))
                 raw_patched += 1
 
     if raw_patched == 0:
@@ -148,7 +168,7 @@ def build_changes(base: pathlib.Path, endpoint: str, rendered: str) -> list[Chan
     except FileNotFoundError:
         routers_present = False
     if routers_present:
-        before = read_owned_file(routers_path)
+        before, before_stat = read_owned_file_snapshot(routers_path)
         try:
             routers = json.loads(before.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -173,7 +193,7 @@ def build_changes(base: pathlib.Path, endpoint: str, rendered: str) -> list[Chan
             owned[0]["endpoint"] = endpoint
             after = (json.dumps(routers, indent=2) + "\n").encode("utf-8")
             if after != before:
-                changes.append(Change(routers_path, before, after))
+                changes.append(Change(routers_path, before, before_stat, after))
 
     return changes
 
@@ -211,19 +231,21 @@ def fsync_directory(path: pathlib.Path) -> None:
         os.close(fd)
 
 
-def restore_changes(changes: Iterable[Change]) -> list[str]:
+def restore_changes(changes: Iterable[tuple[Change, os.stat_result]]) -> list[str]:
     errors: list[str] = []
-    for change in changes:
+    for change, adopted_stat in changes:
         tmp: pathlib.Path | None = None
         try:
+            # Rollback owns only the exact inode this transaction adopted. If
+            # another actor replaced it after adoption, preserve that foreign
+            # state and report incomplete recovery instead of clobbering it.
+            require_owned_state(change.path, adopted_stat, "adopted endpoint file")
             tmp = stage_private(change.path, change.before)
-            ensure_owned_parent(change.path)
+            require_owned_state(change.path, adopted_stat, "adopted endpoint file")
             os.replace(tmp, change.path)
             tmp = None
             fsync_directory(change.path.parent)
         except Exception as exc:
-            # Rollback must attempt every already-adopted file and report every
-            # recovery failure instead of pretending the transaction completed.
             errors.append(f"{change.path}: {exc}")
         finally:
             if tmp is not None:
@@ -233,7 +255,7 @@ def restore_changes(changes: Iterable[Change]) -> list[str]:
 
 def apply_transaction(changes: list[Change]) -> None:
     staged: dict[pathlib.Path, pathlib.Path] = {}
-    adopted: list[Change] = []
+    adopted: list[tuple[Change, os.stat_result]] = []
     try:
         # Validate/compute happened in build_changes(). Stage every private
         # replacement before changing any authoritative path.
@@ -241,10 +263,14 @@ def apply_transaction(changes: list[Change]) -> None:
             staged[change.path] = stage_private(change.path, change.after)
 
         for change in changes:
-            ensure_owned_parent(change.path)
-            tmp = staged.pop(change.path)
+            require_owned_state(change.path, change.before_stat, "owned endpoint file")
+            tmp = staged[change.path]
             os.replace(tmp, change.path)
-            adopted.append(change)
+            staged.pop(change.path, None)
+            adopted_stat = change.path.lstat()
+            if stat.S_ISLNK(adopted_stat.st_mode) or not stat.S_ISREG(adopted_stat.st_mode):
+                raise RuntimeError(f"adopted endpoint file is unsafe: {change.path}")
+            adopted.append((change, adopted_stat))
             fsync_directory(change.path.parent)
     except Exception as exc:
         rollback_errors = restore_changes(reversed(adopted))
