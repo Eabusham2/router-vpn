@@ -136,7 +136,9 @@ require(broker_exact_sha_test, broker_exact_sha_test_rel,
 require(android_gradle, android_gradle_rel,
         "ROUTER-VPN-SOURCE.json",
         "artifact_family: 'android-apk'",
-        "Android APK source provenance mismatch")
+        "Android APK source provenance mismatch",
+        "inputs.property 'routerVpnSourceSha', provenanceSourceSha",
+        "inputs.property 'routerVpnSourceRepository', provenanceRepository")
 require(ios_project, ios_project_rel,
         "INFOPLIST_KEY_RouterVPNSourceSHA",
         "INFOPLIST_KEY_RouterVPNSourceRepository",
