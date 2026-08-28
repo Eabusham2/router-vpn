@@ -17,7 +17,11 @@ declare -A STALE=(
 
 for branch in "${!STALE[@]}"; do
   expected="${STALE[$branch]}"
-  current="$(gh api "repos/$GITHUB_REPOSITORY/branches/$branch" --jq '.commit.sha' 2>/dev/null || true)"
+  if ! current="$(gh api "repos/$GITHUB_REPOSITORY/branches/$branch" --jq '.commit.sha' 2>/dev/null)"; then
+    # A 404 means this exact stale branch was already removed. Treat absence as
+    # the desired idempotent state instead of parsing GitHub's error JSON as a SHA.
+    current=""
+  fi
   [[ -n "$current" ]] || continue
   if [[ "$current" != "$expected" ]]; then
     echo "Refusing to delete changed stale-branch candidate: $branch is $current, expected $expected" >&2
