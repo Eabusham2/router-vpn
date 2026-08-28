@@ -14,6 +14,7 @@ SS_PORT=${SS_PORT:-8388}
 XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 REALITY_TARGET=${REALITY_TARGET:-www.microsoft.com:443}
 PRIVATE_WRITE=/src/server/scripts/atomic-private-write.py
+VERIFIED_READ=/src/server/scripts/verified-regular-read.py
 umask 077
 mkdir -p "$BASE"/{config/{wireguard,awg2},client-bundle/generated,scripts,logs,downloads}
 
@@ -30,7 +31,15 @@ rm -f "$BASE/downloads/router-vpn-client-bundle.zip" "$BASE/router-vpn-client-bu
 rm -rf "$BASE/source"
 mkdir -p "$BASE/source"
 cp -a /src/. "$BASE/source/"
-if [[ -f $BASE/.initialized ]]; then
+if [[ -e "$BASE/.initialized" || -L "$BASE/.initialized" ]]; then
+  marker=$(python3 "$VERIFIED_READ" --private "$BASE/.initialized") || {
+    echo 'Existing initialization marker is unsafe; refusing credential regeneration.' >&2
+    exit 1
+  }
+  [[ "$marker" == initialized ]] || {
+    echo 'Existing initialization marker is invalid; refusing credential regeneration.' >&2
+    exit 1
+  }
   echo 'Router VPN config already initialized; keeping current keys and Setup Center access token.'
   /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
   exit 0
@@ -170,6 +179,6 @@ Router API client-control token: $TOKEN
 Setup Center access credential is NOT in this bundle; it remains only on the router at /opt/router-vpn/config/setup-center.token.
 TXT
 /src/server/scripts/create-bundle-json.py "$BASE" "$ENDPOINT" "$TOKEN" "http://$ADGUARD4:8787" "$ADGUARD4" "$SOCKS_USER" "$SOCKS_PASSWORD"
-printf 'initialized\n' | python3 "$PRIVATE_WRITE" "$BASE/.initialized"
 /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"
+printf 'initialized\n' | python3 "$PRIVATE_WRITE" "$BASE/.initialized"
 echo 'Initialization complete: private node material prepared; Setup Center authentication stays router-local and client bundles are built only on demand.'
