@@ -7,7 +7,10 @@ import json
 import pathlib
 import subprocess
 import sys
+import tempfile
 import urllib.parse
+
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 
 
 def hostport(host: str, port: int) -> str:
@@ -281,10 +284,25 @@ def main() -> int:
     }
     out=base/"client-bundle"
     out.mkdir(parents=True, exist_ok=True)
-    (out/"setup-assets.json").write_text(json.dumps(data,indent=2)+"\n")
-    (out/"setup-assets.json").chmod(0o600)
-    (out/"router-vpn-device-setup.html").write_text(build_html(data))
-    (out/"router-vpn-device-setup.html").chmod(0o600)
+    assets_path=out/"setup-assets.json"
+    html_path=out/"router-vpn-device-setup.html"
+    with tempfile.TemporaryDirectory(prefix=".setup-assets.", dir=out) as td:
+        stage=pathlib.Path(td)
+        staged_assets=stage/"setup-assets.json"
+        staged_html=stage/"router-vpn-device-setup.html"
+        staged_assets.write_text(json.dumps(data,indent=2)+"\n",encoding="utf-8")
+        staged_html.write_text(build_html(data),encoding="utf-8")
+        staged_assets.chmod(0o600)
+        staged_html.chmod(0o600)
+        subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR/"atomic-private-batch.py"),
+                f"{assets_path}={staged_assets}",
+                f"{html_path}={staged_html}",
+            ],
+            check=True,
+        )
     return 0
 
 
