@@ -41,6 +41,26 @@ def main() -> int:
             assert mode(target) == 0o600
         assert not list(root.glob(".secret.json.tmp-*"))
 
+        foreign = root / "foreign-secret"
+        foreign.write_bytes(b"foreign\n")
+        os.chmod(foreign, 0o600)
+        real_mkstemp = single.tempfile.mkstemp
+
+        def mkstemp_then_swap_single(*args, **kwargs):
+            fd, name = real_mkstemp(*args, **kwargs)
+            os.replace(foreign, target)
+            return fd, name
+
+        with mock.patch.object(single.tempfile, "mkstemp", side_effect=mkstemp_then_swap_single):
+            try:
+                single.atomic_private_write(target, b"must-not-overwrite\n")
+            except RuntimeError as exc:
+                assert "identity changed before adoption" in str(exc)
+            else:
+                raise AssertionError("single-file private publisher overwrote a foreign regular replacement")
+        assert target.read_bytes() == b"foreign\n"
+        assert not list(root.glob(".secret.json.tmp-*"))
+
         if os.name != "nt":
             real = root / "real-secret"
             real.write_text("keep\n", encoding="utf-8")
