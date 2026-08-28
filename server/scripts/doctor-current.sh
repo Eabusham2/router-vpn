@@ -4,6 +4,7 @@ BASE=${BASE:-/opt/router-vpn}
 VERIFIED_READ=/src/server/scripts/verified-regular-read.py
 [[ -f "$VERIFIED_READ" && ! -L "$VERIFIED_READ" ]] || { echo 'verified private-state reader missing or unsafe' >&2; exit 1; }
 verified_private(){ python3 "$VERIFIED_READ" --private "$1" >/dev/null 2>&1; }
+verified_private_text(){ python3 "$VERIFIED_READ" --private "$1" 2>/dev/null; }
 verified_regular(){ python3 "$VERIFIED_READ" "$1" >/dev/null 2>&1; }
 PASS=0
 WARN=0
@@ -45,8 +46,15 @@ for leaked in \
   [[ ! -e "$leaked" && ! -L "$leaked" ]] && ok "private material not publicly cached: $(basename "$leaked")" || bad "private Router VPN material leaked/cached at $leaked"
 done
 
-for marker in "$BASE/config/.core-transports-xray-v2" "$BASE/config/.advanced-profiles-v2" "$BASE/config/.tls-alternates-v1"; do
-  [[ -s "$marker" ]] && ok "profile marker $(basename "$marker")" || warn "profile marker not present yet: $(basename "$marker")"
+for spec in \
+  "$BASE/config/.core-transports-xray-v2|core-transports-xray-v2" \
+  "$BASE/config/.advanced-profiles-v2|advanced-profiles-v2" \
+  "$BASE/config/.tls-alternates-v1|tls-alternates-v1"; do
+  marker=${spec%%|*}; expected=${spec#*|}
+  value=$(verified_private_text "$marker" || true)
+  [[ "$value" == "$expected" ]] \
+    && ok "profile marker $(basename "$marker") verified" \
+    || warn "profile marker missing/unsafe/stale: $(basename "$marker")"
 done
 for f in "$BASE/config/aux/overtls-server.json" "$BASE/config/aux/ssr-server.json" "$BASE/config/aux/generated.json"; do
   verified_private "$f" && ok "$(basename "$f") verified private" || warn "aux compatibility profile unavailable/unsafe: $f"
