@@ -89,7 +89,8 @@ for marker in ('aar_list="$tmp/aar.list"', 'class_list="$tmp/classes.list"', 'ap
     assert marker in combined_build, f"AAR verifier no longer snapshots producer output: {marker}"
 assert '\\n  jar tf "$classes"' not in combined_build, "AAR verifier commands were encoded as literal \\n text instead of shell lines"
 assert 'jar tf "$classes" >"$class_list.raw"' in combined_build, "AAR verifier must snapshot the JDK jar listing"
-assert 'tr -d \'\\\\r\' <"$class_list.raw" >"$class_list"' in combined_build, "AAR verifier must normalize JDK class-list line endings before exact checks"
+assert 'tr -d \'\\r\' <"$class_list.raw" >"$class_list"' in combined_build, "AAR verifier must normalize JDK class-list line endings before exact checks"
+assert "tr -d '\\\\r'" not in combined_build, "AAR verifier must not delete literal r characters while normalizing CRLF"
 assert 'javap -classpath "$classes" io.nekohasekai.libbox.RouterXrayDialerController' in combined_build
 assert "boolean protectFd(long);" in combined_build, "AAR verifier must prove the bound socket-protection interface API"
 assert 'android:name=".XrayVpnService"' in manifest
