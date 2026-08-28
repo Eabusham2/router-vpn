@@ -275,12 +275,16 @@ require(
     "def write_state",
     "kill-switch state target changed before adoption",
     "def remove_state",
+    "_require_removal_identity",
+    "target identity changed before removal",
     "force-off is the explicit local recovery path",
 )
 require(
     "modes/test_kill_switch.py",
     "router-vpn-killswitch-state-safety-",
     "router-vpn-killswitch-parent-safety-",
+    "router-vpn-killswitch-remove-identity-",
+    "router-vpn-killswitch-forceoff-swap-",
     "force-off",
 )
 
