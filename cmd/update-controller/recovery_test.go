@@ -133,6 +133,86 @@ func TestSaveRollbackComposeRefusesUnexpectedExistingSnapshotAfterTransactionSta
 	}
 }
 
+func TestTerminalRollbackSnapshotCleanupRequiresMatchingStateIdentity(t *testing.T) {
+	c := testRecoveryController(t)
+	previous := testExactCompose(t, testOldSHA)
+	if err := atomicWriteUpdaterPrivate(c.rollbackComposePath(), []byte(previous)); err != nil {
+		t.Fatal(err)
+	}
+	state := updateState{Version: 1, Status: "complete", FromSHA: testOldSHA, TargetSHA: testNewSHA}
+	if err := c.clearTerminalRollbackSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(c.rollbackComposePath()); !os.IsNotExist(err) {
+		t.Fatalf("matching terminal snapshot survived cleanup: %v", err)
+	}
+}
+
+func TestTerminalRollbackSnapshotCleanupRejectsMismatchedEvidence(t *testing.T) {
+	c := testRecoveryController(t)
+	unexpected := testExactCompose(t, testNewSHA)
+	if err := atomicWriteUpdaterPrivate(c.rollbackComposePath(), []byte(unexpected)); err != nil {
+		t.Fatal(err)
+	}
+	state := updateState{Version: 1, Status: "failed", FromSHA: testOldSHA, TargetSHA: testNewSHA}
+	if err := c.clearTerminalRollbackSnapshot(state); err == nil || !strings.Contains(err.Error(), "not attributable") {
+		t.Fatalf("mismatched terminal rollback evidence was accepted: %v", err)
+	}
+	body, err := os.ReadFile(c.rollbackComposePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != unexpected {
+		t.Fatal("mismatched terminal rollback evidence was modified")
+	}
+}
+
+func TestTerminalRollbackSnapshotCleanupRejectsUnattributedIdleOrPreflightFailure(t *testing.T) {
+	for _, state := range []updateState{
+		{Version: 1, Status: "idle"},
+		{Version: 1, Status: "failed", TargetSHA: testNewSHA},
+	} {
+		c := testRecoveryController(t)
+		previous := testExactCompose(t, testOldSHA)
+		if err := atomicWriteUpdaterPrivate(c.rollbackComposePath(), []byte(previous)); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.clearTerminalRollbackSnapshot(state); err == nil {
+			t.Fatalf("unattributed snapshot was accepted for state %+v", state)
+		}
+		if _, err := os.Stat(c.rollbackComposePath()); err != nil {
+			t.Fatalf("unattributed snapshot was removed for state %+v: %v", state, err)
+		}
+	}
+}
+
+func TestReconcileTerminalStateRetriesOnlyAttributableSnapshotCleanup(t *testing.T) {
+	c := testRecoveryController(t)
+	previous := testExactCompose(t, testOldSHA)
+	if err := atomicWriteUpdaterPrivate(c.rollbackComposePath(), []byte(previous)); err != nil {
+		t.Fatal(err)
+	}
+	c.state = updateState{Version: 1, Status: "complete", FromSHA: testOldSHA, TargetSHA: testNewSHA}
+	if err := c.reconcileRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(c.rollbackComposePath()); !os.IsNotExist(err) {
+		t.Fatalf("restart did not clear attributable terminal snapshot: %v", err)
+	}
+
+	c2 := testRecoveryController(t)
+	if err := atomicWriteUpdaterPrivate(c2.rollbackComposePath(), []byte(previous)); err != nil {
+		t.Fatal(err)
+	}
+	c2.state = updateState{Version: 1, Status: "idle"}
+	if err := c2.reconcileRecovery(); err == nil {
+		t.Fatal("idle restart silently discarded unattributed rollback evidence")
+	}
+	if _, err := os.Stat(c2.rollbackComposePath()); err != nil {
+		t.Fatalf("idle restart removed unattributed rollback evidence: %v", err)
+	}
+}
+
 func TestRollbackComposeRejectsWrongExpectedSHA(t *testing.T) {
 	c := testRecoveryController(t)
 	if err := c.saveRollbackCompose(testExactCompose(t, testOldSHA), testOldSHA); err != nil {
