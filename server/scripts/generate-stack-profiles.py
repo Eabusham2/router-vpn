@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import pathlib
+import runpy
 import shutil
 import stat
 import subprocess
@@ -13,12 +14,22 @@ import sys
 import tempfile
 
 
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+VERIFIED = runpy.run_path(str(SCRIPT_DIR / "verified-regular-read.py"))
+PRIVATE_DIR = runpy.run_path(str(SCRIPT_DIR / "private-directory.py"))
+read_verified_regular = VERIFIED["read_verified_regular"]
+ensure_private_directory = PRIVATE_DIR["ensure_private_directory"]
+
+
+def read_private_bytes(path: pathlib.Path) -> bytes:
+    return read_verified_regular(path, 32 << 20, private=True)
+
+
 def load(path: pathlib.Path) -> dict:
-    info = path.lstat()
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size <= 0:
-        raise RuntimeError(f"missing/unsafe generated prerequisite: {path}")
-    with path.open("r", encoding="utf-8") as file:
-        value = json.load(file)
+    try:
+        value = json.loads(read_private_bytes(path).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid generated JSON prerequisite: {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise RuntimeError(f"generated prerequisite is not a JSON object: {path}")
     return value
@@ -87,8 +98,9 @@ def manifest(name: str, pq: bool, tcp_layers: list[str], udp_layers: list[str]) 
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: generate-stack-profiles.py BASE")
-    base = pathlib.Path(sys.argv[1])
+    base = pathlib.Path(os.path.abspath(sys.argv[1]))
     generated = base / "client-bundle" / "generated"
+    ensure_private_directory(generated)
 
     reality_path = generated / "reality-vision" / "sing-box.json"
     reality_xray_path = generated / "reality-vision" / "xray.json"
@@ -97,9 +109,7 @@ def main() -> int:
     pq_xray_path = generated / "reality-pq-vision" / "xray.json"
     pq_wrapper_path = generated / "reality-pq-vision" / "sing-box.json"
     for path in (reality_path, reality_xray_path, hy2_path, hy2_cert_path, pq_xray_path, pq_wrapper_path):
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size <= 0:
-            raise RuntimeError(f"missing/unsafe generated prerequisite: {path}")
+        read_private_bytes(path)
 
     reality = load(reality_path)
     hy2 = load(hy2_path)
@@ -117,7 +127,7 @@ def main() -> int:
         split_dir = tmp_root / "split"
         write(split_dir / "xray.json", load(reality_xray_path))
         write(split_dir / "sing-box.json", split)
-        shutil.copy2(hy2_cert_path, split_dir / "cert.pem")
+        (split_dir / "cert.pem").write_bytes(read_private_bytes(hy2_cert_path))
         os.chmod(split_dir / "cert.pem", 0o600)
         write(
             split_dir / "stack.json",
@@ -139,7 +149,7 @@ def main() -> int:
         max_dir = tmp_root / "max"
         write(max_dir / "xray.json", load(pq_xray_path))
         write(max_dir / "sing-box.json", max_config)
-        shutil.copy2(hy2_cert_path, max_dir / "cert.pem")
+        (max_dir / "cert.pem").write_bytes(read_private_bytes(hy2_cert_path))
         os.chmod(max_dir / "cert.pem", 0o600)
         write(
             max_dir / "stack.json",
@@ -168,7 +178,7 @@ def main() -> int:
             if path.is_file() and path.stat().st_size <= 0:
                 raise RuntimeError(f"empty staged combined profile: {path}")
 
-        helper = pathlib.Path(__file__).with_name("atomic-private-batch.py")
+        helper = SCRIPT_DIR / "atomic-private-batch.py"
         args = [sys.executable, str(helper)]
         for rel in (
             "split/xray.json", "split/sing-box.json", "split/cert.pem", "split/stack.json",
@@ -177,7 +187,6 @@ def main() -> int:
         ):
             src = tmp_root / rel
             dst = generated / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
             args.append(f"{dst}={src}")
         subprocess.run(args, check=True)
     finally:
