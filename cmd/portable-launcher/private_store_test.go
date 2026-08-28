@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -21,7 +22,10 @@ func TestPortablePrivateStoreRoundTrip(t *testing.T) {
 	}
 	if info, err := os.Lstat(path); err != nil {
 		t.Fatal(err)
-	} else if info.Mode().Perm() != 0o600 {
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		// POSIX mode bits are the Linux/macOS private-store contract. Windows
+		// reports synthesized 0666-style permission bits; its security boundary is
+		// covered by the reparse/symlink ancestry and atomic replacement tests.
 		t.Fatalf("mode=%#o", info.Mode().Perm())
 	}
 	if matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".client.json.tmp-*")); err != nil {
