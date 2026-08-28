@@ -114,17 +114,806 @@ jobs:
           done
       - name: Verify logical catalog ships on desktop/Unix packages
         run: |
+          set -euo pipefail
           for archive in dist/packages/RouterVPN-Windows-amd64.zip dist/packages/RouterVPN-Windows-arm64.zip; do
-            unzip -Z1 "$archive" | grep -q '/logical-modes.json$'
-            unzip -Z1 "$archive" | grep -q '/LICENSE$'
+            list="$RUNNER_TEMP/$(basename "$archive").members"
+            unzip -Z1 "$archive" >"$list"
+            grep -q '/logical-modes.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: |
+            dist/packages/*
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-portable-smoke:
+    name: Execute Windows Portable ${{ matrix.arch }}
+    needs: desktop-unix
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: artifacts
+      - name: Run Portable self-test and relocation test
+        shell: pwsh
+        env:
+          ROUTER_VPN_ARCH: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arch = $env:ROUTER_VPN_ARCH
+          $archive = (Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Portable-Windows-$arch.zip" | Select-Object -First 1).FullName
+          if (-not $archive) { throw "Missing $arch portable artifact" }
+          $extract = Join-Path $env:RUNNER_TEMP "portable-$arch"
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $archive -DestinationPath $extract -Force
+          $root = Get-ChildItem $extract -Directory | Select-Object -First 1
+          if (-not $root) { throw "No package root in $archive" }
+          $exe = Join-Path $root.FullName 'RouterVPNPortable.exe'
+          if (-not (Test-Path $exe)) { throw "Missing launcher in $archive" }
+          $proc = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Portable $arch self-test failed with $($proc.ExitCode)" }
+          foreach ($relative in @('Data\\client.json','Data\\routers.json','Data\\modes.windows.json','Data\\logical-modes.json','Data\\windows-runtime.json')) {
+            if (-not (Test-Path (Join-Path $root.FullName $relative))) { throw "Self-test did not create $relative" }
+          }
+          $logical = Get-Content (Join-Path $root.FullName 'Data\\logical-modes.json') -Raw | ConvertFrom-Json
+          if ($logical.Count -ne 16) { throw "Expected 16 portable logical modes; got $($logical.Count)" }
+          Start-Sleep -Milliseconds 400
+          try {
+            Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8788/api/status' -TimeoutSec 1 | Out-Null
+            throw 'Portable controller was still running after self-test'
+          } catch {
+            if ($_.Exception.Message -eq 'Portable controller was still running after self-test') { throw }
+          }
+          $movedParent = Join-Path $env:RUNNER_TEMP "relocated-$arch"
+          Remove-Item $movedParent -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $movedParent | Out-Null
+          $moved = Join-Path $movedParent $root.Name
+          Move-Item $root.FullName $moved
+          $proc2 = Start-Process (Join-Path $moved 'RouterVPNPortable.exe') -ArgumentList '--self-test' -Wait -PassThru
+          if ($proc2.ExitCode -ne 0) { throw "Relocated portable $arch self-test failed" }
+
+  android:
+    name: Android native app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Install Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build APK
+        run: gradle -p android --no-daemon :app:assembleDebug
+      - name: Verify APK
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -tq "$APK" >/dev/null
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Android-CI
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  ios-native:
+    name: iOS/iPadOS native WireGuard + Libbox PacketTunnel build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Prepare exact WireGuardKit checkout
+        working-directory: ios/RouterVPN
+        run: sh prepare-wireguard-kit.sh
+      - name: Prepare exact Libbox XCFramework before Xcode dependency resolution
+        working-directory: ios/RouterVPN
+        run: ./prepare-libbox.sh
+      - name: Generate project
+        working-directory: ios/RouterVPN
+        run: xcodegen generate
+      - name: Build unsigned native WireGuard + Libbox app and PacketTunnel
+        working-directory: ios/RouterVPN
+        shell: bash
+        run: |
+          set -o pipefail
+          LOG="$RUNNER_TEMP/routervpn-xcodebuild.log"
+          set +e
+          xcodebuild \
+            -project RouterVPN.xcodeproj \
+            -scheme RouterVPN \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM='' \
+            ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" \
+            INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" \
+            build 2>&1 | tee "$LOG"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- Xcode compiler diagnostics ---'
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:' "$LOG" | tail -n 120 || true
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:' "$LOG" | tail -n 120 | while IFS= read -r line; do
+              printf '::error::%s\n' "${line//'%'/'%25'}"
+            done || true
+            exit "$status"
+          fi
+      - name: Verify pinned engines and strict runtime contract
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          EXT="$APP/PlugIns/RouterVPNPacketTunnel.appex"
+          WG="$PWD/.deps/wireguard-apple"
+          test -d "$APP"
+          test -d "$EXT"
+          test -d "$WG"
+          test -d .deps/Libbox.xcframework
+          test -s .deps/libbox-LICENSE.txt
+          test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5'
+          test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
+          test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$APP/Info.plist")" = 'Eabusham2/router-vpn'
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$APP/Info.plist")" = 'ios-app'
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$EXT/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$EXT/Info.plist")" = 'Eabusham2/router-vpn'
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$EXT/Info.plist")" = 'ios-packet-tunnel'
+          grep -q 'import WireGuardKit' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'RouterVPNWireGuardConfig.parse' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'startLibbox' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'RouterVPNLibboxEngine' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'strict apple kill switch requested' <(tr '[:upper:]' '[:lower:]' < PacketTunnel/PacketTunnelProvider.swift)
+          grep -q 'body\["node_id"\] as? String == expectedNodeID' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'body\["proof"\] as? String == Self.proofKind' PacketTunnel/PacketTunnelProvider.swift
+          ! grep -q 'Link AmneziaWGKit/Xray engine before signing this target.' PacketTunnel/PacketTunnelProvider.swift
+      - name: Package unsigned re-signable native IPA
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          rm -rf build/unsigned
+          mkdir -p build/unsigned/Payload
+          ditto "$APP" build/unsigned/Payload/RouterVPN.app
+          (cd build/unsigned && zip -qry ../RouterVPN-native-unsigned-resignable.ipa Payload)
+          unzip -tq build/RouterVPN-native-unsigned-resignable.ipa >/dev/null
+          shasum -a 256 build/RouterVPN-native-unsigned-resignable.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-Native-CI
+          path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa
+          if-no-files-found: error
+          retention-days: 1
+ "$list"
+            grep -q '/LICENSE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: |
+            dist/packages/*
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-portable-smoke:
+    name: Execute Windows Portable ${{ matrix.arch }}
+    needs: desktop-unix
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: artifacts
+      - name: Run Portable self-test and relocation test
+        shell: pwsh
+        env:
+          ROUTER_VPN_ARCH: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arch = $env:ROUTER_VPN_ARCH
+          $archive = (Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Portable-Windows-$arch.zip" | Select-Object -First 1).FullName
+          if (-not $archive) { throw "Missing $arch portable artifact" }
+          $extract = Join-Path $env:RUNNER_TEMP "portable-$arch"
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $archive -DestinationPath $extract -Force
+          $root = Get-ChildItem $extract -Directory | Select-Object -First 1
+          if (-not $root) { throw "No package root in $archive" }
+          $exe = Join-Path $root.FullName 'RouterVPNPortable.exe'
+          if (-not (Test-Path $exe)) { throw "Missing launcher in $archive" }
+          $proc = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Portable $arch self-test failed with $($proc.ExitCode)" }
+          foreach ($relative in @('Data\\client.json','Data\\routers.json','Data\\modes.windows.json','Data\\logical-modes.json','Data\\windows-runtime.json')) {
+            if (-not (Test-Path (Join-Path $root.FullName $relative))) { throw "Self-test did not create $relative" }
+          }
+          $logical = Get-Content (Join-Path $root.FullName 'Data\\logical-modes.json') -Raw | ConvertFrom-Json
+          if ($logical.Count -ne 16) { throw "Expected 16 portable logical modes; got $($logical.Count)" }
+          Start-Sleep -Milliseconds 400
+          try {
+            Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8788/api/status' -TimeoutSec 1 | Out-Null
+            throw 'Portable controller was still running after self-test'
+          } catch {
+            if ($_.Exception.Message -eq 'Portable controller was still running after self-test') { throw }
+          }
+          $movedParent = Join-Path $env:RUNNER_TEMP "relocated-$arch"
+          Remove-Item $movedParent -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $movedParent | Out-Null
+          $moved = Join-Path $movedParent $root.Name
+          Move-Item $root.FullName $moved
+          $proc2 = Start-Process (Join-Path $moved 'RouterVPNPortable.exe') -ArgumentList '--self-test' -Wait -PassThru
+          if ($proc2.ExitCode -ne 0) { throw "Relocated portable $arch self-test failed" }
+
+  android:
+    name: Android native app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Install Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build APK
+        run: gradle -p android --no-daemon :app:assembleDebug
+      - name: Verify APK
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -tq "$APK" >/dev/null
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Android-CI
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  ios-native:
+    name: iOS/iPadOS native WireGuard + Libbox PacketTunnel build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Prepare exact WireGuardKit checkout
+        working-directory: ios/RouterVPN
+        run: sh prepare-wireguard-kit.sh
+      - name: Prepare exact Libbox XCFramework before Xcode dependency resolution
+        working-directory: ios/RouterVPN
+        run: ./prepare-libbox.sh
+      - name: Generate project
+        working-directory: ios/RouterVPN
+        run: xcodegen generate
+      - name: Build unsigned native WireGuard + Libbox app and PacketTunnel
+        working-directory: ios/RouterVPN
+        shell: bash
+        run: |
+          set -o pipefail
+          LOG="$RUNNER_TEMP/routervpn-xcodebuild.log"
+          set +e
+          xcodebuild \
+            -project RouterVPN.xcodeproj \
+            -scheme RouterVPN \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM='' \
+            ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" \
+            INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" \
+            build 2>&1 | tee "$LOG"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- Xcode compiler diagnostics ---'
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:' "$LOG" | tail -n 120 || true
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:' "$LOG" | tail -n 120 | while IFS= read -r line; do
+              printf '::error::%s\n' "${line//'%'/'%25'}"
+            done || true
+            exit "$status"
+          fi
+      - name: Verify pinned engines and strict runtime contract
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          EXT="$APP/PlugIns/RouterVPNPacketTunnel.appex"
+          WG="$PWD/.deps/wireguard-apple"
+          test -d "$APP"
+          test -d "$EXT"
+          test -d "$WG"
+          test -d .deps/Libbox.xcframework
+          test -s .deps/libbox-LICENSE.txt
+          test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5'
+          test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
+          test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$APP/Info.plist")" = 'Eabusham2/router-vpn'
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$APP/Info.plist")" = 'ios-app'
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$EXT/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$EXT/Info.plist")" = 'Eabusham2/router-vpn'
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$EXT/Info.plist")" = 'ios-packet-tunnel'
+          grep -q 'import WireGuardKit' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'RouterVPNWireGuardConfig.parse' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'startLibbox' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'RouterVPNLibboxEngine' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'strict apple kill switch requested' <(tr '[:upper:]' '[:lower:]' < PacketTunnel/PacketTunnelProvider.swift)
+          grep -q 'body\["node_id"\] as? String == expectedNodeID' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'body\["proof"\] as? String == Self.proofKind' PacketTunnel/PacketTunnelProvider.swift
+          ! grep -q 'Link AmneziaWGKit/Xray engine before signing this target.' PacketTunnel/PacketTunnelProvider.swift
+      - name: Package unsigned re-signable native IPA
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          rm -rf build/unsigned
+          mkdir -p build/unsigned/Payload
+          ditto "$APP" build/unsigned/Payload/RouterVPN.app
+          (cd build/unsigned && zip -qry ../RouterVPN-native-unsigned-resignable.ipa Payload)
+          unzip -tq build/RouterVPN-native-unsigned-resignable.ipa >/dev/null
+          shasum -a 256 build/RouterVPN-native-unsigned-resignable.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-Native-CI
+          path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa
+          if-no-files-found: error
+          retention-days: 1
+ "$list"
           done
           for archive in \
             dist/packages/RouterVPN-darwin-amd64.tar.gz \
             dist/packages/RouterVPN-darwin-arm64.tar.gz \
             dist/packages/RouterVPN-linux-amd64.tar.gz \
             dist/packages/RouterVPN-linux-arm64.tar.gz; do
-            tar -tzf "$archive" | grep -q '/logical-modes.json$'
-            tar -tzf "$archive" | grep -q '/LICENSE$'
+            list="$RUNNER_TEMP/$(basename "$archive").members"
+            tar -tzf "$archive" >"$list"
+            grep -q '/logical-modes.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: |
+            dist/packages/*
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-portable-smoke:
+    name: Execute Windows Portable ${{ matrix.arch }}
+    needs: desktop-unix
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: artifacts
+      - name: Run Portable self-test and relocation test
+        shell: pwsh
+        env:
+          ROUTER_VPN_ARCH: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arch = $env:ROUTER_VPN_ARCH
+          $archive = (Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Portable-Windows-$arch.zip" | Select-Object -First 1).FullName
+          if (-not $archive) { throw "Missing $arch portable artifact" }
+          $extract = Join-Path $env:RUNNER_TEMP "portable-$arch"
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $archive -DestinationPath $extract -Force
+          $root = Get-ChildItem $extract -Directory | Select-Object -First 1
+          if (-not $root) { throw "No package root in $archive" }
+          $exe = Join-Path $root.FullName 'RouterVPNPortable.exe'
+          if (-not (Test-Path $exe)) { throw "Missing launcher in $archive" }
+          $proc = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Portable $arch self-test failed with $($proc.ExitCode)" }
+          foreach ($relative in @('Data\\client.json','Data\\routers.json','Data\\modes.windows.json','Data\\logical-modes.json','Data\\windows-runtime.json')) {
+            if (-not (Test-Path (Join-Path $root.FullName $relative))) { throw "Self-test did not create $relative" }
+          }
+          $logical = Get-Content (Join-Path $root.FullName 'Data\\logical-modes.json') -Raw | ConvertFrom-Json
+          if ($logical.Count -ne 16) { throw "Expected 16 portable logical modes; got $($logical.Count)" }
+          Start-Sleep -Milliseconds 400
+          try {
+            Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8788/api/status' -TimeoutSec 1 | Out-Null
+            throw 'Portable controller was still running after self-test'
+          } catch {
+            if ($_.Exception.Message -eq 'Portable controller was still running after self-test') { throw }
+          }
+          $movedParent = Join-Path $env:RUNNER_TEMP "relocated-$arch"
+          Remove-Item $movedParent -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $movedParent | Out-Null
+          $moved = Join-Path $movedParent $root.Name
+          Move-Item $root.FullName $moved
+          $proc2 = Start-Process (Join-Path $moved 'RouterVPNPortable.exe') -ArgumentList '--self-test' -Wait -PassThru
+          if ($proc2.ExitCode -ne 0) { throw "Relocated portable $arch self-test failed" }
+
+  android:
+    name: Android native app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Install Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build APK
+        run: gradle -p android --no-daemon :app:assembleDebug
+      - name: Verify APK
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -tq "$APK" >/dev/null
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Android-CI
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  ios-native:
+    name: iOS/iPadOS native WireGuard + Libbox PacketTunnel build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Prepare exact WireGuardKit checkout
+        working-directory: ios/RouterVPN
+        run: sh prepare-wireguard-kit.sh
+      - name: Prepare exact Libbox XCFramework before Xcode dependency resolution
+        working-directory: ios/RouterVPN
+        run: ./prepare-libbox.sh
+      - name: Generate project
+        working-directory: ios/RouterVPN
+        run: xcodegen generate
+      - name: Build unsigned native WireGuard + Libbox app and PacketTunnel
+        working-directory: ios/RouterVPN
+        shell: bash
+        run: |
+          set -o pipefail
+          LOG="$RUNNER_TEMP/routervpn-xcodebuild.log"
+          set +e
+          xcodebuild \
+            -project RouterVPN.xcodeproj \
+            -scheme RouterVPN \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM='' \
+            ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" \
+            INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" \
+            build 2>&1 | tee "$LOG"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- Xcode compiler diagnostics ---'
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:' "$LOG" | tail -n 120 || true
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:' "$LOG" | tail -n 120 | while IFS= read -r line; do
+              printf '::error::%s\n' "${line//'%'/'%25'}"
+            done || true
+            exit "$status"
+          fi
+      - name: Verify pinned engines and strict runtime contract
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          EXT="$APP/PlugIns/RouterVPNPacketTunnel.appex"
+          WG="$PWD/.deps/wireguard-apple"
+          test -d "$APP"
+          test -d "$EXT"
+          test -d "$WG"
+          test -d .deps/Libbox.xcframework
+          test -s .deps/libbox-LICENSE.txt
+          test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5'
+          test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
+          test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$APP/Info.plist")" = 'Eabusham2/router-vpn'
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$APP/Info.plist")" = 'ios-app'
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$EXT/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$EXT/Info.plist")" = 'Eabusham2/router-vpn'
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$EXT/Info.plist")" = 'ios-packet-tunnel'
+          grep -q 'import WireGuardKit' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'RouterVPNWireGuardConfig.parse' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'startLibbox' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'RouterVPNLibboxEngine' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'strict apple kill switch requested' <(tr '[:upper:]' '[:lower:]' < PacketTunnel/PacketTunnelProvider.swift)
+          grep -q 'body\["node_id"\] as? String == expectedNodeID' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'body\["proof"\] as? String == Self.proofKind' PacketTunnel/PacketTunnelProvider.swift
+          ! grep -q 'Link AmneziaWGKit/Xray engine before signing this target.' PacketTunnel/PacketTunnelProvider.swift
+      - name: Package unsigned re-signable native IPA
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          rm -rf build/unsigned
+          mkdir -p build/unsigned/Payload
+          ditto "$APP" build/unsigned/Payload/RouterVPN.app
+          (cd build/unsigned && zip -qry ../RouterVPN-native-unsigned-resignable.ipa Payload)
+          unzip -tq build/RouterVPN-native-unsigned-resignable.ipa >/dev/null
+          shasum -a 256 build/RouterVPN-native-unsigned-resignable.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-Native-CI
+          path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa
+          if-no-files-found: error
+          retention-days: 1
+ "$list"
+            grep -q '/LICENSE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: |
+            dist/packages/*
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-portable-smoke:
+    name: Execute Windows Portable ${{ matrix.arch }}
+    needs: desktop-unix
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-client-desktop-unix-ci
+          path: artifacts
+      - name: Run Portable self-test and relocation test
+        shell: pwsh
+        env:
+          ROUTER_VPN_ARCH: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arch = $env:ROUTER_VPN_ARCH
+          $archive = (Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Portable-Windows-$arch.zip" | Select-Object -First 1).FullName
+          if (-not $archive) { throw "Missing $arch portable artifact" }
+          $extract = Join-Path $env:RUNNER_TEMP "portable-$arch"
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $archive -DestinationPath $extract -Force
+          $root = Get-ChildItem $extract -Directory | Select-Object -First 1
+          if (-not $root) { throw "No package root in $archive" }
+          $exe = Join-Path $root.FullName 'RouterVPNPortable.exe'
+          if (-not (Test-Path $exe)) { throw "Missing launcher in $archive" }
+          $proc = Start-Process $exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Portable $arch self-test failed with $($proc.ExitCode)" }
+          foreach ($relative in @('Data\\client.json','Data\\routers.json','Data\\modes.windows.json','Data\\logical-modes.json','Data\\windows-runtime.json')) {
+            if (-not (Test-Path (Join-Path $root.FullName $relative))) { throw "Self-test did not create $relative" }
+          }
+          $logical = Get-Content (Join-Path $root.FullName 'Data\\logical-modes.json') -Raw | ConvertFrom-Json
+          if ($logical.Count -ne 16) { throw "Expected 16 portable logical modes; got $($logical.Count)" }
+          Start-Sleep -Milliseconds 400
+          try {
+            Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8788/api/status' -TimeoutSec 1 | Out-Null
+            throw 'Portable controller was still running after self-test'
+          } catch {
+            if ($_.Exception.Message -eq 'Portable controller was still running after self-test') { throw }
+          }
+          $movedParent = Join-Path $env:RUNNER_TEMP "relocated-$arch"
+          Remove-Item $movedParent -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $movedParent | Out-Null
+          $moved = Join-Path $movedParent $root.Name
+          Move-Item $root.FullName $moved
+          $proc2 = Start-Process (Join-Path $moved 'RouterVPNPortable.exe') -ArgumentList '--self-test' -Wait -PassThru
+          if ($proc2.ExitCode -ne 0) { throw "Relocated portable $arch self-test failed" }
+
+  android:
+    name: Android native app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - name: Install Android SDK components
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build APK
+        run: gradle -p android --no-daemon :app:assembleDebug
+      - name: Verify APK
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -tq "$APK" >/dev/null
+          sha256sum "$APK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Android-CI
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  ios-native:
+    name: iOS/iPadOS native WireGuard + Libbox PacketTunnel build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Prepare exact WireGuardKit checkout
+        working-directory: ios/RouterVPN
+        run: sh prepare-wireguard-kit.sh
+      - name: Prepare exact Libbox XCFramework before Xcode dependency resolution
+        working-directory: ios/RouterVPN
+        run: ./prepare-libbox.sh
+      - name: Generate project
+        working-directory: ios/RouterVPN
+        run: xcodegen generate
+      - name: Build unsigned native WireGuard + Libbox app and PacketTunnel
+        working-directory: ios/RouterVPN
+        shell: bash
+        run: |
+          set -o pipefail
+          LOG="$RUNNER_TEMP/routervpn-xcodebuild.log"
+          set +e
+          xcodebuild \
+            -project RouterVPN.xcodeproj \
+            -scheme RouterVPN \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM='' \
+            ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" \
+            INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" \
+            build 2>&1 | tee "$LOG"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '--- Xcode compiler diagnostics ---'
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:' "$LOG" | tail -n 120 || true
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:' "$LOG" | tail -n 120 | while IFS= read -r line; do
+              printf '::error::%s\n' "${line//'%'/'%25'}"
+            done || true
+            exit "$status"
+          fi
+      - name: Verify pinned engines and strict runtime contract
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          EXT="$APP/PlugIns/RouterVPNPacketTunnel.appex"
+          WG="$PWD/.deps/wireguard-apple"
+          test -d "$APP"
+          test -d "$EXT"
+          test -d "$WG"
+          test -d .deps/Libbox.xcframework
+          test -s .deps/libbox-LICENSE.txt
+          test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5'
+          test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
+          test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$APP/Info.plist")" = 'Eabusham2/router-vpn'
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$APP/Info.plist")" = 'ios-app'
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$EXT/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$EXT/Info.plist")" = 'Eabusham2/router-vpn'
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$EXT/Info.plist")" = 'ios-packet-tunnel'
+          grep -q 'import WireGuardKit' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'WireGuardAdapter(with: self)' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'RouterVPNWireGuardConfig.parse' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'startLibbox' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'RouterVPNLibboxEngine' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'strict apple kill switch requested' <(tr '[:upper:]' '[:lower:]' < PacketTunnel/PacketTunnelProvider.swift)
+          grep -q 'body\["node_id"\] as? String == expectedNodeID' PacketTunnel/PacketTunnelProvider.swift
+          grep -q 'body\["proof"\] as? String == Self.proofKind' PacketTunnel/PacketTunnelProvider.swift
+          ! grep -q 'Link AmneziaWGKit/Xray engine before signing this target.' PacketTunnel/PacketTunnelProvider.swift
+      - name: Package unsigned re-signable native IPA
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          rm -rf build/unsigned
+          mkdir -p build/unsigned/Payload
+          ditto "$APP" build/unsigned/Payload/RouterVPN.app
+          (cd build/unsigned && zip -qry ../RouterVPN-native-unsigned-resignable.ipa Payload)
+          unzip -tq build/RouterVPN-native-unsigned-resignable.ipa >/dev/null
+          shasum -a 256 build/RouterVPN-native-unsigned-resignable.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-Native-CI
+          path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa
+          if-no-files-found: error
+          retention-days: 1
+ "$list"
           done
       - uses: actions/upload-artifact@v4
         with:
