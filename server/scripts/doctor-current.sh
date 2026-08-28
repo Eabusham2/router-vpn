@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -uo pipefail
 BASE=${BASE:-/opt/router-vpn}
+VERIFIED_READ=/src/server/scripts/verified-regular-read.py
+[[ -f "$VERIFIED_READ" && ! -L "$VERIFIED_READ" ]] || { echo 'verified private-state reader missing or unsafe' >&2; exit 1; }
+verified_private(){ python3 "$VERIFIED_READ" --private "$1" >/dev/null 2>&1; }
+verified_regular(){ python3 "$VERIFIED_READ" "$1" >/dev/null 2>&1; }
 PASS=0
 WARN=0
 FAIL=0
@@ -14,19 +18,23 @@ for f in \
   "$BASE/.finalized" \
   "$BASE/.env" \
   "$BASE/config/router-agent.json" \
+  "$BASE/config/socks5.json" \
   "$BASE/config/wireguard/wg0.conf" \
   "$BASE/config/awg2/awg0.conf" \
   "$BASE/config/transports/server.json" \
   "$BASE/config/xray/server.json" \
-  "$BASE/client-bundle/modes.json" \
   "$BASE/client-bundle/setup-assets.json" \
   "$BASE/client-bundle/router-vpn-device-setup.html" \
-  "$BASE/client-bundle/router-vpn-bundle.json" \
+  "$BASE/client-bundle/router-vpn-bundle.json"; do
+  verified_private "$f" && ok "$(basename "$f") verified private" || bad "missing/unsafe private file $f"
+done
+for f in \
+  "$BASE/client-bundle/modes.json" \
   "$BASE/downloads/index.html" \
   "$BASE/downloads/router-vpn-device-setup.html" \
   "$BASE/downloads/setup-assets.json" \
   "$BASE/downloads/download-policy.json"; do
-  [[ -s "$f" ]] && ok "$(basename "$f") present" || bad "missing $f"
+  verified_regular "$f" && ok "$(basename "$f") verified regular" || bad "missing/unsafe file $f"
 done
 
 for leaked in \
@@ -34,7 +42,7 @@ for leaked in \
   "$BASE/downloads/router-vpn-client-bundle.zip" \
   "$BASE/downloads/CREDENTIALS.txt" \
   "$BASE/router-vpn-client-bundle.zip"; do
-  [[ ! -e "$leaked" ]] && ok "private material not publicly cached: $(basename "$leaked")" || bad "private Router VPN material leaked/cached at $leaked"
+  [[ ! -e "$leaked" && ! -L "$leaked" ]] && ok "private material not publicly cached: $(basename "$leaked")" || bad "private Router VPN material leaked/cached at $leaked"
 done
 
 for marker in "$BASE/config/.core-transports-xray-v2" "$BASE/config/.advanced-profiles-v2" "$BASE/config/.tls-alternates-v1"; do
