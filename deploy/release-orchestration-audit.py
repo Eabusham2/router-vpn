@@ -68,6 +68,7 @@ assert "\n  push:\n" not in publish, "ARM64 publisher must not bypass Build-all 
 assert "validate-source:" in publish and "needs: validate-source" in publish, "ARM64 publication lost its whole-source validation prerequisite"
 assert "go test ./cmd/update-controller -count=1" in publish, "ARM64 publication no longer compiles the updater before pushing images"
 assert "python3 deploy/durable-state-syntax-audit.py" in publish, "ARM64 publication lost durability syntax preflight"
+assert "python3 deploy/server-image-dependency-audit.py" in publish, "ARM64 publication lost server dependency pin preflight"
 
 for marker in (
     "platforms: linux/arm64",
@@ -98,6 +99,7 @@ for marker in (
     "python3 deploy/backend-session-transaction-audit.py",
     "python3 deploy/native-artifact-workflow-parity-audit.py",
     "python3 deploy/workflow-evidence-pipeline-audit.py",
+    "python3 deploy/server-image-dependency-audit.py",
     "python3 deploy/test_source_provenance.py",
     "python3 deploy/release-orchestration-audit.py",
     "python3 modes/test_kill_switch.py",
@@ -139,6 +141,7 @@ for audit in (
     "deploy/runtime-state-ownership-audit.py",
     "deploy/native-artifact-workflow-parity-audit.py",
     "deploy/workflow-evidence-pipeline-audit.py",
+    "deploy/server-image-dependency-audit.py",
     "deploy/test_source_provenance.py",
     "deploy/profile-persistence-error-audit.py",
     "deploy/standard-exit-private-runtime-audit.py",
