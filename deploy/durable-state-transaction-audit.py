@@ -444,9 +444,9 @@ require_absent("server/scripts/update-endpoint.sh")
 
 # DNS benchmark is measurement-only; fresh bundle generation may consume the
 # result, but benchmark execution may never own current routers.json policy.
-require("server/scripts/benchmark-dns.py", "measurement_only", "write_private_atomic")
+require("server/scripts/benchmark-dns.py", "measurement_only", "write_private_atomic", "PRIVATE_WRITER.atomic_private_write")
 forbid("server/scripts/benchmark-dns.py", 'BASE / "client-bundle" / "routers.json"', "routers_path =")
-require("server/scripts/test_dns_benchmark_persistence.py", "DNS benchmark code regained routers.json ownership")
+require("server/scripts/test_dns_benchmark_persistence.py", "DNS benchmark code regained routers.json ownership", "DNS benchmark overwrote a foreign regular replacement")
 
 # Generic private publishers reject symlink leaf targets and symlinked immediate
 # parents, then adopt 0600 files through random same-directory fsynced temps.
