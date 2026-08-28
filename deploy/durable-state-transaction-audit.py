@@ -103,7 +103,9 @@ forbid("modes/run-combined.sh", 'cp -a "$SOURCE" "$CONF"', "for p in root.glob('
 require(
     "modes/runtime-pids.py",
     "process_start",
-    "process_command_hash(pid) == expected_command",
+    "first_start = process_start(pid)",
+    "second_start = process_start(pid)",
+    "current_command == expected_command",
     "def verified_mode",
     "command_sha256",
     "runtime PID registry changed during open",
@@ -118,6 +120,8 @@ require(
     "runtime PID registry followed a symlink target",
     "run-combined.sh",
     "Legacy plain numeric PID files are intentionally untrusted.",
+    "Regular-file reads may legally return short chunks.",
+    "PID reused between the first birth-token check",
 )
 for rel in ("modes/run-mode.sh", "modes/run-max.sh", "modes/run-pq.sh", "modes/run-xhttp.sh", "modes/run-combined.sh"):
     require(rel, 'runtime-pids.py" init', 'runtime-pids.py" record')
