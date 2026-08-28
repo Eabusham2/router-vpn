@@ -80,7 +80,7 @@ jobs:
             test -s /opt/router-vpn/client-bundle/client/Setup-Windows-Runtime.ps1
             test ! -e /opt/router-vpn/client-bundle/dist
             test ! -e /opt/router-vpn/router-vpn-client-bundle.zip
-            ! find /opt/router-vpn/downloads -maxdepth 1 -type f -name "*.zip" | grep -q .
+            test -z "$(find /opt/router-vpn/downloads -maxdepth 1 -type f -name "*.zip" -print -quit)"
             ! grep -q "setup-center.token" /opt/router-vpn/client-bundle/router-vpn-bundle.json
             grep -q "WireGuard" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
             grep -q "Potatso" /opt/router-vpn/client-bundle/router-vpn-device-setup.html
@@ -145,8 +145,16 @@ jobs:
           test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"code\":\"$PAIR_CODE\"}" http://127.0.0.1:8786/api/pairing/redeem)" = 403
 
           require_file() {
-            local archive=$1 path=$2
-            unzip -Z1 "$archive" | grep -Fxq "$path" || { echo "MISSING in $(basename "$archive"): $path" >&2; unzip -Z1 "$archive" >&2; return 1; }
+            local archive=$1 path=$2 members
+            members=$(mktemp)
+            unzip -Z1 "$archive" >"$members"
+            if ! grep -Fxq "$path" "$members"; then
+              echo "MISSING in $(basename "$archive"): $path" >&2
+              cat "$members" >&2
+              rm -f "$members"
+              return 1
+            fi
+            rm -f "$members"
           }
           fetch_one() {
             local name=$1 out=$2 headers=$3 expected_source=$4
@@ -157,7 +165,7 @@ jobs:
               return 1
             fi
             unzip -tq "$out" >/dev/null
-            ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
+            test -z "$(find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' -print -quit)"
           }
 
           for arch in amd64 arm64; do
@@ -176,11 +184,625 @@ jobs:
               "$root/Data/routers.json"; do
               require_file "$portable" "$path"
             done
-            ! unzip -Z1 "$portable" | grep -Eq '(^|/)router-vpn-bundle\.json$'
-            ! unzip -Z1 "$portable" | grep -Eq "$root/(App/RouterVPN/|Data/)generated/.+"
+            portable_members="$RUNNER_TEMP/portable-$arch.members"
+            unzip -Z1 "$portable" >"$portable_members"
+            ! grep -Eq '(^|/)router-vpn-bundle\.json          done
+
+          bundle="$RUNNER_TEMP/private-node-bundle.zip"
+          fetch_one router-vpn-client-bundle.zip "$bundle" "$RUNNER_TEMP/h-bundle" private-node-bundle
+          bundle_members="$RUNNER_TEMP/private-node-bundle.members"
+          bundle_json="$RUNNER_TEMP/private-node-router-vpn-bundle.json"
+          unzip -Z1 "$bundle" >"$bundle_members"
+          grep -q '/router-vpn-bundle.json
+      - name: Validate formerly grey combined and MAX modes
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint /bin/bash router-vpn-ci-init:arm64 -euo pipefail -c '
+              export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
+              export HOMEVPN_PROFILE_ID=home
+              cd /src/modes
+              ./check-combined.sh split
+              ./check-combined.sh max
+              ./check-mode.sh max-quic-wg
+              ./check-mode.sh max-tls-wg
+              mkdir -p /tmp/awg-check-bin
+              for cmd in amneziawg-go awg awg-quick; do
+                printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
+                chmod +x "/tmp/awg-check-bin/$cmd"
+              done
+              export PATH="/tmp/awg-check-bin:$PATH"
+              ./check-mode.sh max-quic-awg
+              ./check-mode.sh max-tls-awg
+              ./check-mode.sh all
+            '
+
+      - name: Build auxiliary proxy ARM64 image
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
+
+      - name: Smoke-test generated OverTLS and SSR services
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 --version
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 -h >/dev/null 2>&1
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          AUX="$TEST_ROOT/config/aux"
+          CIDS=()
+          cleanup() {
+            for cid in "${CIDS[@]:-}"; do docker rm -f "$cid" >/dev/null 2>&1 || true; done
+          }
+          trap cleanup EXIT
+          fail_with_logs() {
+            local title=$1 cid=$2 state logs
+            state=$(docker inspect -f 'running={{.State.Running}} exit={{.State.ExitCode}} error={{.State.Error}}' "$cid" 2>/dev/null || true)
+            logs=$(docker logs "$cid" 2>&1 | tail -40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')
+            echo "::error title=${title} ARM64 runtime::${state} | ${logs}"
+            return 1
+          }
+          assert_running() {
+            local title=$1 cid=$2
+            sleep 2
+            if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)" != true ]; then
+              fail_with_logs "$title" "$cid"
+            fi
+          }
+
+          OT=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 \
+            -r server -c /router-vpn/overtls-server.json)
+          CIDS+=("$OT")
+          assert_running OverTLS "$OT"
+          docker rm -f "$OT" >/dev/null
+          CIDS=()
+
+          SSR=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 \
+            -c /router-vpn/ssr-server.json)
+          CIDS+=("$SSR")
+          assert_running ShadowsocksR "$SSR"
+          docker rm -f "$SSR" >/dev/null
+          CIDS=()
+
+          BOTH=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" router-vpn-ci-aux:arm64)
+          CIDS+=("$BOTH")
+          assert_running Combined-aux "$BOTH"
+          docker logs "$BOTH"
+ "$portable_members"
+            ! grep -Eq "$root/(App/RouterVPN/|Data/)generated/.+" "$portable_members"
             unzip -p "$portable" "$root/Data/routers.json" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x.get("selected_id","")=="" and x.get("profiles",[])==[]'
-            ! unzip -Z1 "$portable" | grep -q "$root/App/AppInfo/"
-            rm -f "$portable"
+            ! grep -q "$root/App/AppInfo/" "$portable_members"
+            rm -f "$portable" "$portable_members"
+          done
+
+          bundle="$RUNNER_TEMP/private-node-bundle.zip"
+          fetch_one router-vpn-client-bundle.zip "$bundle" "$RUNNER_TEMP/h-bundle" private-node-bundle
+          unzip -Z1 "$bundle" | grep -q '/router-vpn-bundle.json$'
+          unzip -Z1 "$bundle" | grep -q '/generated/wg/wg.conf$'
+          unzip -Z1 "$bundle" | grep -q '/generated/max-tls-wg/chain.env$'
+          ! unzip -p "$bundle" '*/router-vpn-bundle.json' | grep -q 'setup-center.token'
+          rm -f "$bundle"
+          ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
+
+      - name: Validate formerly grey combined and MAX modes
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint /bin/bash router-vpn-ci-init:arm64 -euo pipefail -c '
+              export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
+              export HOMEVPN_PROFILE_ID=home
+              cd /src/modes
+              ./check-combined.sh split
+              ./check-combined.sh max
+              ./check-mode.sh max-quic-wg
+              ./check-mode.sh max-tls-wg
+              mkdir -p /tmp/awg-check-bin
+              for cmd in amneziawg-go awg awg-quick; do
+                printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
+                chmod +x "/tmp/awg-check-bin/$cmd"
+              done
+              export PATH="/tmp/awg-check-bin:$PATH"
+              ./check-mode.sh max-quic-awg
+              ./check-mode.sh max-tls-awg
+              ./check-mode.sh all
+            '
+
+      - name: Build auxiliary proxy ARM64 image
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
+
+      - name: Smoke-test generated OverTLS and SSR services
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 --version
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 -h >/dev/null 2>&1
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          AUX="$TEST_ROOT/config/aux"
+          CIDS=()
+          cleanup() {
+            for cid in "${CIDS[@]:-}"; do docker rm -f "$cid" >/dev/null 2>&1 || true; done
+          }
+          trap cleanup EXIT
+          fail_with_logs() {
+            local title=$1 cid=$2 state logs
+            state=$(docker inspect -f 'running={{.State.Running}} exit={{.State.ExitCode}} error={{.State.Error}}' "$cid" 2>/dev/null || true)
+            logs=$(docker logs "$cid" 2>&1 | tail -40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')
+            echo "::error title=${title} ARM64 runtime::${state} | ${logs}"
+            return 1
+          }
+          assert_running() {
+            local title=$1 cid=$2
+            sleep 2
+            if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)" != true ]; then
+              fail_with_logs "$title" "$cid"
+            fi
+          }
+
+          OT=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 \
+            -r server -c /router-vpn/overtls-server.json)
+          CIDS+=("$OT")
+          assert_running OverTLS "$OT"
+          docker rm -f "$OT" >/dev/null
+          CIDS=()
+
+          SSR=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 \
+            -c /router-vpn/ssr-server.json)
+          CIDS+=("$SSR")
+          assert_running ShadowsocksR "$SSR"
+          docker rm -f "$SSR" >/dev/null
+          CIDS=()
+
+          BOTH=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" router-vpn-ci-aux:arm64)
+          CIDS+=("$BOTH")
+          assert_running Combined-aux "$BOTH"
+          docker logs "$BOTH"
+ "$bundle_members"
+          grep -q '/generated/wg/wg.conf
+      - name: Validate formerly grey combined and MAX modes
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint /bin/bash router-vpn-ci-init:arm64 -euo pipefail -c '
+              export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
+              export HOMEVPN_PROFILE_ID=home
+              cd /src/modes
+              ./check-combined.sh split
+              ./check-combined.sh max
+              ./check-mode.sh max-quic-wg
+              ./check-mode.sh max-tls-wg
+              mkdir -p /tmp/awg-check-bin
+              for cmd in amneziawg-go awg awg-quick; do
+                printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
+                chmod +x "/tmp/awg-check-bin/$cmd"
+              done
+              export PATH="/tmp/awg-check-bin:$PATH"
+              ./check-mode.sh max-quic-awg
+              ./check-mode.sh max-tls-awg
+              ./check-mode.sh all
+            '
+
+      - name: Build auxiliary proxy ARM64 image
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
+
+      - name: Smoke-test generated OverTLS and SSR services
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 --version
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 -h >/dev/null 2>&1
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          AUX="$TEST_ROOT/config/aux"
+          CIDS=()
+          cleanup() {
+            for cid in "${CIDS[@]:-}"; do docker rm -f "$cid" >/dev/null 2>&1 || true; done
+          }
+          trap cleanup EXIT
+          fail_with_logs() {
+            local title=$1 cid=$2 state logs
+            state=$(docker inspect -f 'running={{.State.Running}} exit={{.State.ExitCode}} error={{.State.Error}}' "$cid" 2>/dev/null || true)
+            logs=$(docker logs "$cid" 2>&1 | tail -40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')
+            echo "::error title=${title} ARM64 runtime::${state} | ${logs}"
+            return 1
+          }
+          assert_running() {
+            local title=$1 cid=$2
+            sleep 2
+            if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)" != true ]; then
+              fail_with_logs "$title" "$cid"
+            fi
+          }
+
+          OT=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 \
+            -r server -c /router-vpn/overtls-server.json)
+          CIDS+=("$OT")
+          assert_running OverTLS "$OT"
+          docker rm -f "$OT" >/dev/null
+          CIDS=()
+
+          SSR=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 \
+            -c /router-vpn/ssr-server.json)
+          CIDS+=("$SSR")
+          assert_running ShadowsocksR "$SSR"
+          docker rm -f "$SSR" >/dev/null
+          CIDS=()
+
+          BOTH=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" router-vpn-ci-aux:arm64)
+          CIDS+=("$BOTH")
+          assert_running Combined-aux "$BOTH"
+          docker logs "$BOTH"
+ "$portable_members"
+            ! grep -Eq "$root/(App/RouterVPN/|Data/)generated/.+" "$portable_members"
+            unzip -p "$portable" "$root/Data/routers.json" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x.get("selected_id","")=="" and x.get("profiles",[])==[]'
+            ! grep -q "$root/App/AppInfo/" "$portable_members"
+            rm -f "$portable" "$portable_members"
+          done
+
+          bundle="$RUNNER_TEMP/private-node-bundle.zip"
+          fetch_one router-vpn-client-bundle.zip "$bundle" "$RUNNER_TEMP/h-bundle" private-node-bundle
+          unzip -Z1 "$bundle" | grep -q '/router-vpn-bundle.json$'
+          unzip -Z1 "$bundle" | grep -q '/generated/wg/wg.conf$'
+          unzip -Z1 "$bundle" | grep -q '/generated/max-tls-wg/chain.env$'
+          ! unzip -p "$bundle" '*/router-vpn-bundle.json' | grep -q 'setup-center.token'
+          rm -f "$bundle"
+          ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
+
+      - name: Validate formerly grey combined and MAX modes
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint /bin/bash router-vpn-ci-init:arm64 -euo pipefail -c '
+              export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
+              export HOMEVPN_PROFILE_ID=home
+              cd /src/modes
+              ./check-combined.sh split
+              ./check-combined.sh max
+              ./check-mode.sh max-quic-wg
+              ./check-mode.sh max-tls-wg
+              mkdir -p /tmp/awg-check-bin
+              for cmd in amneziawg-go awg awg-quick; do
+                printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
+                chmod +x "/tmp/awg-check-bin/$cmd"
+              done
+              export PATH="/tmp/awg-check-bin:$PATH"
+              ./check-mode.sh max-quic-awg
+              ./check-mode.sh max-tls-awg
+              ./check-mode.sh all
+            '
+
+      - name: Build auxiliary proxy ARM64 image
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
+
+      - name: Smoke-test generated OverTLS and SSR services
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 --version
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 -h >/dev/null 2>&1
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          AUX="$TEST_ROOT/config/aux"
+          CIDS=()
+          cleanup() {
+            for cid in "${CIDS[@]:-}"; do docker rm -f "$cid" >/dev/null 2>&1 || true; done
+          }
+          trap cleanup EXIT
+          fail_with_logs() {
+            local title=$1 cid=$2 state logs
+            state=$(docker inspect -f 'running={{.State.Running}} exit={{.State.ExitCode}} error={{.State.Error}}' "$cid" 2>/dev/null || true)
+            logs=$(docker logs "$cid" 2>&1 | tail -40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')
+            echo "::error title=${title} ARM64 runtime::${state} | ${logs}"
+            return 1
+          }
+          assert_running() {
+            local title=$1 cid=$2
+            sleep 2
+            if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)" != true ]; then
+              fail_with_logs "$title" "$cid"
+            fi
+          }
+
+          OT=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 \
+            -r server -c /router-vpn/overtls-server.json)
+          CIDS+=("$OT")
+          assert_running OverTLS "$OT"
+          docker rm -f "$OT" >/dev/null
+          CIDS=()
+
+          SSR=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 \
+            -c /router-vpn/ssr-server.json)
+          CIDS+=("$SSR")
+          assert_running ShadowsocksR "$SSR"
+          docker rm -f "$SSR" >/dev/null
+          CIDS=()
+
+          BOTH=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" router-vpn-ci-aux:arm64)
+          CIDS+=("$BOTH")
+          assert_running Combined-aux "$BOTH"
+          docker logs "$BOTH"
+ "$bundle_members"
+          grep -q '/generated/max-tls-wg/chain.env
+      - name: Validate formerly grey combined and MAX modes
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint /bin/bash router-vpn-ci-init:arm64 -euo pipefail -c '
+              export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
+              export HOMEVPN_PROFILE_ID=home
+              cd /src/modes
+              ./check-combined.sh split
+              ./check-combined.sh max
+              ./check-mode.sh max-quic-wg
+              ./check-mode.sh max-tls-wg
+              mkdir -p /tmp/awg-check-bin
+              for cmd in amneziawg-go awg awg-quick; do
+                printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
+                chmod +x "/tmp/awg-check-bin/$cmd"
+              done
+              export PATH="/tmp/awg-check-bin:$PATH"
+              ./check-mode.sh max-quic-awg
+              ./check-mode.sh max-tls-awg
+              ./check-mode.sh all
+            '
+
+      - name: Build auxiliary proxy ARM64 image
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
+
+      - name: Smoke-test generated OverTLS and SSR services
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 --version
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 -h >/dev/null 2>&1
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          AUX="$TEST_ROOT/config/aux"
+          CIDS=()
+          cleanup() {
+            for cid in "${CIDS[@]:-}"; do docker rm -f "$cid" >/dev/null 2>&1 || true; done
+          }
+          trap cleanup EXIT
+          fail_with_logs() {
+            local title=$1 cid=$2 state logs
+            state=$(docker inspect -f 'running={{.State.Running}} exit={{.State.ExitCode}} error={{.State.Error}}' "$cid" 2>/dev/null || true)
+            logs=$(docker logs "$cid" 2>&1 | tail -40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')
+            echo "::error title=${title} ARM64 runtime::${state} | ${logs}"
+            return 1
+          }
+          assert_running() {
+            local title=$1 cid=$2
+            sleep 2
+            if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)" != true ]; then
+              fail_with_logs "$title" "$cid"
+            fi
+          }
+
+          OT=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 \
+            -r server -c /router-vpn/overtls-server.json)
+          CIDS+=("$OT")
+          assert_running OverTLS "$OT"
+          docker rm -f "$OT" >/dev/null
+          CIDS=()
+
+          SSR=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 \
+            -c /router-vpn/ssr-server.json)
+          CIDS+=("$SSR")
+          assert_running ShadowsocksR "$SSR"
+          docker rm -f "$SSR" >/dev/null
+          CIDS=()
+
+          BOTH=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" router-vpn-ci-aux:arm64)
+          CIDS+=("$BOTH")
+          assert_running Combined-aux "$BOTH"
+          docker logs "$BOTH"
+ "$portable_members"
+            ! grep -Eq "$root/(App/RouterVPN/|Data/)generated/.+" "$portable_members"
+            unzip -p "$portable" "$root/Data/routers.json" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x.get("selected_id","")=="" and x.get("profiles",[])==[]'
+            ! grep -q "$root/App/AppInfo/" "$portable_members"
+            rm -f "$portable" "$portable_members"
+          done
+
+          bundle="$RUNNER_TEMP/private-node-bundle.zip"
+          fetch_one router-vpn-client-bundle.zip "$bundle" "$RUNNER_TEMP/h-bundle" private-node-bundle
+          unzip -Z1 "$bundle" | grep -q '/router-vpn-bundle.json$'
+          unzip -Z1 "$bundle" | grep -q '/generated/wg/wg.conf$'
+          unzip -Z1 "$bundle" | grep -q '/generated/max-tls-wg/chain.env$'
+          ! unzip -p "$bundle" '*/router-vpn-bundle.json' | grep -q 'setup-center.token'
+          rm -f "$bundle"
+          ! find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' | grep -q .
+
+      - name: Validate formerly grey combined and MAX modes
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint /bin/bash router-vpn-ci-init:arm64 -euo pipefail -c '
+              export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
+              export HOMEVPN_PROFILE_ID=home
+              cd /src/modes
+              ./check-combined.sh split
+              ./check-combined.sh max
+              ./check-mode.sh max-quic-wg
+              ./check-mode.sh max-tls-wg
+              mkdir -p /tmp/awg-check-bin
+              for cmd in amneziawg-go awg awg-quick; do
+                printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
+                chmod +x "/tmp/awg-check-bin/$cmd"
+              done
+              export PATH="/tmp/awg-check-bin:$PATH"
+              ./check-mode.sh max-quic-awg
+              ./check-mode.sh max-tls-awg
+              ./check-mode.sh all
+            '
+
+      - name: Build auxiliary proxy ARM64 image
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
+
+      - name: Smoke-test generated OverTLS and SSR services
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 --version
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 -h >/dev/null 2>&1
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          AUX="$TEST_ROOT/config/aux"
+          CIDS=()
+          cleanup() {
+            for cid in "${CIDS[@]:-}"; do docker rm -f "$cid" >/dev/null 2>&1 || true; done
+          }
+          trap cleanup EXIT
+          fail_with_logs() {
+            local title=$1 cid=$2 state logs
+            state=$(docker inspect -f 'running={{.State.Running}} exit={{.State.ExitCode}} error={{.State.Error}}' "$cid" 2>/dev/null || true)
+            logs=$(docker logs "$cid" 2>&1 | tail -40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')
+            echo "::error title=${title} ARM64 runtime::${state} | ${logs}"
+            return 1
+          }
+          assert_running() {
+            local title=$1 cid=$2
+            sleep 2
+            if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)" != true ]; then
+              fail_with_logs "$title" "$cid"
+            fi
+          }
+
+          OT=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 \
+            -r server -c /router-vpn/overtls-server.json)
+          CIDS+=("$OT")
+          assert_running OverTLS "$OT"
+          docker rm -f "$OT" >/dev/null
+          CIDS=()
+
+          SSR=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 \
+            -c /router-vpn/ssr-server.json)
+          CIDS+=("$SSR")
+          assert_running ShadowsocksR "$SSR"
+          docker rm -f "$SSR" >/dev/null
+          CIDS=()
+
+          BOTH=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" router-vpn-ci-aux:arm64)
+          CIDS+=("$BOTH")
+          assert_running Combined-aux "$BOTH"
+          docker logs "$BOTH"
+ "$bundle_members"
+          unzip -p "$bundle" '*/router-vpn-bundle.json' >"$bundle_json"
+          ! grep -q 'setup-center.token' "$bundle_json"
+          rm -f "$bundle" "$bundle_members" "$bundle_json"
+          test -z "$(find "$TEST_ROOT/downloads" -maxdepth 1 -type f -name '*.zip' -print -quit)"
+
+      - name: Validate formerly grey combined and MAX modes
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          docker run --rm --platform linux/arm64 \
+            -v "$TEST_ROOT:/opt/router-vpn:ro" \
+            --entrypoint /bin/bash router-vpn-ci-init:arm64 -euo pipefail -c '
+              export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
+              export HOMEVPN_PROFILE_ID=home
+              cd /src/modes
+              ./check-combined.sh split
+              ./check-combined.sh max
+              ./check-mode.sh max-quic-wg
+              ./check-mode.sh max-tls-wg
+              mkdir -p /tmp/awg-check-bin
+              for cmd in amneziawg-go awg awg-quick; do
+                printf "#!/bin/sh\nexit 0\n" >"/tmp/awg-check-bin/$cmd"
+                chmod +x "/tmp/awg-check-bin/$cmd"
+              done
+              export PATH="/tmp/awg-check-bin:$PATH"
+              ./check-mode.sh max-quic-awg
+              ./check-mode.sh max-tls-awg
+              ./check-mode.sh all
+            '
+
+      - name: Build auxiliary proxy ARM64 image
+        run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
+
+      - name: Smoke-test generated OverTLS and SSR services
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 --version
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 -h >/dev/null 2>&1
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-aux-test"
+          AUX="$TEST_ROOT/config/aux"
+          CIDS=()
+          cleanup() {
+            for cid in "${CIDS[@]:-}"; do docker rm -f "$cid" >/dev/null 2>&1 || true; done
+          }
+          trap cleanup EXIT
+          fail_with_logs() {
+            local title=$1 cid=$2 state logs
+            state=$(docker inspect -f 'running={{.State.Running}} exit={{.State.ExitCode}} error={{.State.Error}}' "$cid" 2>/dev/null || true)
+            logs=$(docker logs "$cid" 2>&1 | tail -40 | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g')
+            echo "::error title=${title} ARM64 runtime::${state} | ${logs}"
+            return 1
+          }
+          assert_running() {
+            local title=$1 cid=$2
+            sleep 2
+            if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)" != true ]; then
+              fail_with_logs "$title" "$cid"
+            fi
+          }
+
+          OT=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/overtls-bin router-vpn-ci-aux:arm64 \
+            -r server -c /router-vpn/overtls-server.json)
+          CIDS+=("$OT")
+          assert_running OverTLS "$OT"
+          docker rm -f "$OT" >/dev/null
+          CIDS=()
+
+          SSR=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" \
+            --entrypoint /usr/local/bin/ssr-server router-vpn-ci-aux:arm64 \
+            -c /router-vpn/ssr-server.json)
+          CIDS+=("$SSR")
+          assert_running ShadowsocksR "$SSR"
+          docker rm -f "$SSR" >/dev/null
+          CIDS=()
+
+          BOTH=$(docker run -d --platform linux/arm64 --network host \
+            -v "$AUX:/router-vpn:ro" router-vpn-ci-aux:arm64)
+          CIDS+=("$BOTH")
+          assert_running Combined-aux "$BOTH"
+          docker logs "$BOTH"
+ "$portable_members"
+            ! grep -Eq "$root/(App/RouterVPN/|Data/)generated/.+" "$portable_members"
+            unzip -p "$portable" "$root/Data/routers.json" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x.get("selected_id","")=="" and x.get("profiles",[])==[]'
+            ! grep -q "$root/App/AppInfo/" "$portable_members"
+            rm -f "$portable" "$portable_members"
           done
 
           bundle="$RUNNER_TEMP/private-node-bundle.zip"
