@@ -53,6 +53,9 @@ if validate_pos < 0 or purge_pos < 0 or validate_pos > purge_pos:
 generator = read("server/scripts/generate-setup-assets.py")
 for marker in (
     "atomic-private-batch.py",
+    "read_verified_regular",
+    'read_json(base/"client-bundle"/"modes.json", private=False)',
+    '["openssl", "x509", "-inform", "PEM", "-outform", "DER"]',
     'TemporaryDirectory(prefix=".setup-assets.", dir=out)',
     'f"{assets_path}={staged_assets}"',
     'f"{html_path}={staged_html}"',
@@ -62,6 +65,8 @@ for marker in (
 for forbidden in (
     '(out/"setup-assets.json").write_text',
     '(out/"router-vpn-device-setup.html").write_text',
+    'path.read_text()',
+    '"-in", str(path)',
 ):
     if forbidden in generator:
         errors.append(f"generate-setup-assets.py contains stale live-write marker {forbidden!r}")
@@ -112,6 +117,7 @@ if not errors:
         ("server/scripts/test_private_directory.py", "private-directory"),
         ("server/scripts/test_setup_generation_transaction.py", "Setup Center generation transaction"),
         ("server/scripts/test_setup_center_private_html.py", "Setup Center verified private HTML"),
+        ("server/scripts/test_setup_assets_verified_sources.py", "Setup asset verified source reads"),
     ):
         test = ROOT / rel
         proc = subprocess.run([sys.executable, str(test)], cwd=ROOT, text=True, capture_output=True)
