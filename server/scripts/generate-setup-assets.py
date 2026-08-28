@@ -11,6 +11,15 @@ import tempfile
 import urllib.parse
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+_verified_spec = __import__("importlib.util", fromlist=["spec_from_file_location"]).spec_from_file_location(
+    "router_vpn_setup_assets_verified_read",
+    SCRIPT_DIR / "verified-regular-read.py",
+)
+if _verified_spec is None or _verified_spec.loader is None:
+    raise RuntimeError("cannot load verified-regular-read.py")
+_verified = __import__("importlib.util", fromlist=["module_from_spec"]).module_from_spec(_verified_spec)
+_verified_spec.loader.exec_module(_verified)
+read_verified_regular = _verified.read_verified_regular
 
 
 def hostport(host: str, port: int) -> str:
@@ -18,16 +27,16 @@ def hostport(host: str, port: int) -> str:
     return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
 
 
-def read_text(path: pathlib.Path) -> str:
+def read_text(path: pathlib.Path, *, private: bool = True) -> str:
     try:
-        return path.read_text()
-    except Exception:
+        return read_verified_regular(path, private=private).decode("utf-8")
+    except (OSError, RuntimeError, UnicodeError):
         return ""
 
 
-def read_json(path: pathlib.Path) -> dict | list:
+def read_json(path: pathlib.Path, *, private: bool = True) -> dict | list:
     try:
-        return json.loads(path.read_text())
+        return json.loads(read_text(path, private=private))
     except Exception:
         return {}
 
@@ -47,8 +56,11 @@ def qr_png(payload: str) -> str:
 
 def cert_sha256(path: pathlib.Path) -> str:
     try:
+        pem = read_verified_regular(path, private=True)
         der = subprocess.check_output(
-            ["openssl", "x509", "-in", str(path), "-outform", "DER"], stderr=subprocess.DEVNULL
+            ["openssl", "x509", "-inform", "PEM", "-outform", "DER"],
+            input=pem,
+            stderr=subprocess.DEVNULL,
         )
         return hashlib.sha256(der).hexdigest()
     except Exception:
@@ -270,7 +282,8 @@ def main() -> int:
       "linux":{"label":"Linux","customApp":"Router VPN is a native GTK application on x86-64 and ARM64.","steps":["Download the matching Linux package.","Install/launch Router VPN and grant the required TUN/firewall privileges.","Import/pair router-vpn-bundle.json.","Use the native app for complex modes/stacks; Methods below are only simple external-client options."]},
       "manual":{"label":"Other / manual","customApp":"Use only a simple generated protocol that another client explicitly supports. Complex Router VPN stacks are not exported as fake universal imports.","steps":["Choose a simple Method below.","Follow its exact client/import guidance.","If no compact interoperable QR exists, use the config/manual fields instead.","Never expose Setup Center, admin, SSH or private SOCKS5 ports to WAN."]},
     }
-    modes = read_json(base/"client-bundle"/"modes.json")
+    # modes.json is a public source catalog; generated tunnel/import material above is private.
+    modes = read_json(base/"client-bundle"/"modes.json", private=False)
     if not isinstance(modes, list):
         modes=[]
     data={
