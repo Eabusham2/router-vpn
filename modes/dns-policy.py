@@ -155,7 +155,7 @@ def sing_server(s: dict, detour: str) -> dict:
     return out
 
 
-def _read_runtime_json(path: Path) -> dict:
+def _read_runtime_json_snapshot(path: Path) -> tuple[dict, os.stat_result]:
     before = path.lstat()
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink runtime DNS config: {path}")
@@ -167,15 +167,27 @@ def _read_runtime_json(path: Path) -> dict:
         if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
             raise RuntimeError(f"runtime DNS config changed during open: {path}")
         body = stream.read(MAX_RUNTIME_CONFIG_BYTES + 1)
+        after = path.lstat()
+        if (
+            stat.S_ISLNK(after.st_mode)
+            or not stat.S_ISREG(after.st_mode)
+            or not os.path.samestat(opened, after)
+        ):
+            raise RuntimeError(f"runtime DNS config changed during read: {path}")
     if len(body) > MAX_RUNTIME_CONFIG_BYTES:
         raise RuntimeError(f"runtime DNS config exceeds safety limit: {path}")
     value = json.loads(body)
     if not isinstance(value, dict):
         raise RuntimeError("runtime DNS config must be a JSON object")
+    return value, after
+
+
+def _read_runtime_json(path: Path) -> dict:
+    value, _ = _read_runtime_json_snapshot(path)
     return value
 
 
-def _atomic_private_runtime_json(path: Path, cfg: dict) -> None:
+def _atomic_private_runtime_json(path: Path, cfg: dict, expected: os.stat_result) -> None:
     body = (json.dumps(cfg, indent=2) + "\n").encode("utf-8")
     if not body or len(body) > MAX_RUNTIME_CONFIG_BYTES:
         raise RuntimeError(f"patched runtime DNS config is empty or oversized: {path}")
@@ -196,8 +208,12 @@ def _atomic_private_runtime_json(path: Path, cfg: dict) -> None:
         if stat.S_ISLNK(parent_current.st_mode) or not stat.S_ISDIR(parent_current.st_mode) or not os.path.samestat(parent_before, parent_current):
             raise RuntimeError(f"runtime DNS config parent changed during patch: {parent}")
         current = path.lstat()
-        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode):
-            raise RuntimeError(f"runtime DNS config target changed before adoption: {path}")
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(expected, current)
+        ):
+            raise RuntimeError(f"runtime DNS config target identity changed before adoption: {path}")
         os.replace(tmp, path)
         committed = True
         try:
@@ -214,14 +230,14 @@ def _atomic_private_runtime_json(path: Path, cfg: dict) -> None:
 
 
 def patch_sing(path: Path, s: dict) -> None:
-    cfg = _read_runtime_json(path)
+    cfg, expected = _read_runtime_json_snapshot(path)
     detour = choose_detour(cfg)
     cfg["dns"] = {"servers": [sing_server(s, detour)], "final": "selected-dns"}
     route = cfg.setdefault("route", {})
     rules = route.setdefault("rules", [])
     if not any(isinstance(r, dict) and r.get("protocol") == "dns" for r in rules):
         rules.insert(0, {"protocol": "dns", "action": "hijack-dns"})
-    _atomic_private_runtime_json(path, cfg)
+    _atomic_private_runtime_json(path, cfg, expected)
 
 
 def main() -> None:
