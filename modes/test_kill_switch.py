@@ -90,6 +90,44 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-state-safety-') a
         assert p.returncode==0,p.stderr
         assert not state.exists() and real.exists()
 
+# Kill-switch cleanup is bound to the exact leaf inspected before removal.
+# A foreign regular replacement (including one swapped over a force-off symlink)
+# must be preserved rather than unlinked.
+with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-remove-identity-') as td:
+    root=pathlib.Path(td);(root/'run').mkdir()
+    state=root/'run'/'kill-switch.json'
+    write_private_json(state,{'policy':'on-connect'})
+    run,parent_before=mod._runtime_state_dir(root)
+    before=state.lstat()
+    foreign=root/'run'/'foreign.json'
+    write_private_json(foreign,{'foreign':True})
+    os.replace(foreign,state)
+    try:
+        mod._require_removal_identity(state,before,run,parent_before)
+    except RuntimeError as exc:
+        assert 'identity changed before removal' in str(exc)
+    else:
+        raise AssertionError('kill-switch cleanup accepted a foreign regular replacement')
+    assert json.loads(state.read_text())=={'foreign':True}
+
+if os.name != 'nt':
+    with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-forceoff-swap-') as td:
+        root=pathlib.Path(td);(root/'run').mkdir()
+        real=root/'run'/'real.json';write_private_json(real,{'policy':'always'})
+        state=root/'run'/'kill-switch.json';state.symlink_to(real)
+        run,parent_before=mod._runtime_state_dir(root)
+        before=state.lstat()
+        foreign=root/'run'/'foreign.json';write_private_json(foreign,{'foreign':True})
+        os.replace(foreign,state)
+        try:
+            mod._require_removal_identity(state,before,run,parent_before)
+        except RuntimeError as exc:
+            assert 'identity changed before removal' in str(exc)
+        else:
+            raise AssertionError('force-off cleanup accepted a swapped foreign leaf')
+        assert json.loads(state.read_text())=={'foreign':True}
+        assert real.exists()
+
 # A symlinked HOMEVPN_ROOT/run cannot redirect privileged state publication.
 with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-parent-safety-') as td:
     root=pathlib.Path(td)
