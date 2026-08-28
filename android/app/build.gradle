@@ -6,6 +6,9 @@ def projectLicense = rootProject.file('../LICENSE')
 def generatedLicenseAssets = file("$buildDir/generated/routervpn-license-assets")
 def generatedProvenanceAssets = file("$buildDir/generated/routervpn-provenance-assets")
 def generatedProvenanceFile = file("$generatedProvenanceAssets/ROUTER-VPN-SOURCE.json")
+def provenanceRawSha = (System.getenv('GITHUB_SHA') ?: System.getenv('ROUTER_VPN_SOURCE_SHA') ?: '').trim().toLowerCase()
+def provenanceSourceSha = (provenanceRawSha ==~ /[0-9a-f]{40}/) ? provenanceRawSha : 'development'
+def provenanceRepository = (System.getenv('GITHUB_REPOSITORY') ?: 'Eabusham2/router-vpn').trim()
 
 android {
     namespace 'com.eabusham.routervpn'
@@ -52,16 +55,15 @@ tasks.register('stageProjectLicense', Copy) {
 }
 
 tasks.register('stageSourceProvenance') {
+    inputs.property 'routerVpnSourceSha', provenanceSourceSha
+    inputs.property 'routerVpnSourceRepository', provenanceRepository
     outputs.file generatedProvenanceFile
     doLast {
         generatedProvenanceAssets.mkdirs()
-        def rawSha = (System.getenv('GITHUB_SHA') ?: System.getenv('ROUTER_VPN_SOURCE_SHA') ?: '').trim().toLowerCase()
-        def sourceSha = (rawSha ==~ /[0-9a-f]{40}/) ? rawSha : 'development'
-        def repository = (System.getenv('GITHUB_REPOSITORY') ?: 'Eabusham2/router-vpn').trim()
         def body = [
             schema_version: 1,
-            repository: repository,
-            source_sha: sourceSha,
+            repository: provenanceRepository,
+            source_sha: provenanceSourceSha,
             artifact_family: 'android-apk',
         ]
         generatedProvenanceFile.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(body)) + '\n'
