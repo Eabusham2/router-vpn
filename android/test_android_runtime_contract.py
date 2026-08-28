@@ -87,6 +87,7 @@ for forbidden in (
     assert forbidden not in combined_build, f"pipefail-sensitive AAR verifier pipeline returned: {forbidden}"
 for marker in ('aar_list="$tmp/aar.list"', 'class_list="$tmp/classes.list"', 'api_list="$tmp/libbox.javap"'):
     assert marker in combined_build, f"AAR verifier no longer snapshots producer output: {marker}"
+assert '\\n  jar tf "$classes"' not in combined_build, "AAR verifier commands were encoded as literal \\n text instead of shell lines"
 assert 'jar tf "$classes" >"$class_list.raw"' in combined_build, "AAR verifier must snapshot the JDK jar listing"
 assert 'tr -d \'\\\\r\' <"$class_list.raw" >"$class_list"' in combined_build, "AAR verifier must normalize JDK class-list line endings before exact checks"
 assert 'javap -classpath "$classes" io.nekohasekai.libbox.RouterXrayDialerController' in combined_build
