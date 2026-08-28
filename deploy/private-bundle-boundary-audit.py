@@ -73,7 +73,11 @@ for marker in (
     'name == "router-vpn-client-bundle.zip"',
     '"private-node-bundle"',
     'if path == "/api/pairing/redeem"',
-    'Path(self.server.base_dir) / "client-bundle" / "router-vpn-bundle.json"',
+    'read_verified_regular = _verified.read_verified_regular',
+    'def _setup_token',
+    'def _pairing_bundle',
+    'private=True',
+    'lambda: _pairing_bundle(Path(self.server.base_dir))',
     'if not self._require_auth()',
 ):
     assert marker in broker, f"broker private-node boundary lost marker: {marker}"
@@ -195,6 +199,23 @@ assert bundle_test.returncode == 0, "private bundle generation transaction test 
 # but never the Setup Center/admin bearer secret used for management mutations.
 for forbidden in ("setup_token", "setup-center.token", "ROUTER_VPN_ADMIN_TOKEN_FILE", "admin_token"):
     assert forbidden not in bundle_gen, f"private client bundle generator leaked management credential concept: {forbidden}"
+for forbidden in (
+    'token_path.is_file()',
+    'token_path.read_text(',
+    'bundle.is_file()',
+    'bundle.read_bytes()',
+):
+    assert forbidden not in broker, f"broker revived pathname-following private read: {forbidden}"
+
+broker_security = subprocess.run(
+    [sys.executable, str(ROOT / "server/scripts/test_broker_security.py")],
+    cwd=ROOT,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+assert broker_security.returncode == 0, "broker private-read/pairing transaction tests failed: " + (broker_security.stdout + broker_security.stderr)[-4000:]
+
 assert 'self.server.setup_token' not in broker[broker.index('def _redeem_pairing'):broker.index('def _dynamic')], "pairing redemption serialized Setup Center token"
 assert 'router-vpn-bundle.json' in broker[broker.index('def _redeem_pairing'):broker.index('def _dynamic')], "pairing does not return the canonical minimal node bundle"
 
