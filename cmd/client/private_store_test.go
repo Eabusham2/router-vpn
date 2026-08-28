@@ -125,3 +125,34 @@ func mustPrivateMode(t *testing.T, path string) os.FileMode {
 	}
 	return info.Mode().Perm()
 }
+
+
+func TestPrivateStoreRejectsTargetReplacementBeforeAdoption(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "client.json")
+	if err := os.WriteFile(path, []byte("owned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(dir, "foreign-replacement")
+	if err := os.WriteFile(replacement, []byte("foreign\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWritePrivateTargetUnchanged(path, before); err == nil {
+		t.Fatal("foreign regular-file replacement was accepted before private adoption")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "foreign\n" {
+		t.Fatalf("foreign replacement was modified: %q", string(got))
+	}
+}
+
