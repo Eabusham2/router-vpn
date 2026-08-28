@@ -93,7 +93,7 @@ require(
 require(
     "modes/run-all.sh",
     "HOMEVPN_ALL_RESULT_FILE",
-    "printf '%s\\n' \"$candidate\"",
+    'python3 "$SCRIPT_DIR/all-result.py" publish "$ROOT" "$RESULT_FILE" "$candidate"',
     "HOMEVPN_KILLSWITCH_HOLD=1",
     "ALL could not establish any validated MAX TLS or MAX QUIC branch.",
 )
