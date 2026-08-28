@@ -66,6 +66,13 @@ jobs:
             image: router-vpn-aux
     steps:
       - uses: actions/checkout@v4
+      - name: Record exact source tree identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          [[ "$tree_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf 'SOURCE_TREE_SHA=%s\n' "$tree_sha" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -85,6 +92,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/Eabusham2/router-vpn
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source-tree=${{ env.SOURCE_TREE_SHA }}
       - name: Verify published exact-SHA ARM64 image provenance
         shell: bash
         run: |
@@ -96,4 +104,5 @@ jobs:
           test "$(docker image inspect "$ref" --format '{{.Architecture}}')" = 'arm64'
           test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
           test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = 'https://github.com/Eabusham2/router-vpn'
-          printf '%s %s\n' "$ref" "$digest"
+          test "$(docker image inspect \"$ref\" --format '{{ index .Config.Labels \"org.opencontainers.image.source-tree\" }}')" = "$SOURCE_TREE_SHA"
+          printf '%s %s %s\n' "$ref" "$digest" "$SOURCE_TREE_SHA"
