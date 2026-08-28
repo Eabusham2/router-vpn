@@ -72,8 +72,10 @@ assert "python3 deploy/durable-state-syntax-audit.py" in publish, "ARM64 publica
 for marker in (
     "platforms: linux/arm64",
     "push: true",
+    "Record exact source tree identity",
     "ghcr.io/eabusham2/${{ matrix.image }}:${{ github.sha }}",
     "org.opencontainers.image.revision=${{ github.sha }}",
+    "org.opencontainers.image.source-tree=${{ env.SOURCE_TREE_SHA }}",
     "image: router-vpn-updater",
     "dockerfile: deploy/update-controller.Dockerfile",
 ):
