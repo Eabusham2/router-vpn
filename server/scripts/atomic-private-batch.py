@@ -15,9 +15,9 @@ PRIVATE_MODE = 0o600
 @dataclass(frozen=True)
 class Item:
     dest: pathlib.Path
-    source: pathlib.Path
+    source: pathlib.Path | None
     before: bytes | None
-    after: bytes
+    after: bytes | None
 
 
 def _validate_existing_ancestors(parent: pathlib.Path) -> None:
@@ -149,9 +149,19 @@ def adopt(items: list[Item]) -> None:
     adopted: list[Item] = []
     try:
         for item in items:
-            staged[item.dest] = stage(item.dest, item.after)
+            if item.after is not None:
+                staged[item.dest] = stage(item.dest, item.after)
         for item in items:
             ensure_private_parent(item.dest)
+            if item.after is None:
+                # Explicit deletion is part of the same transaction. Missing
+                # targets are a safe no-op; existing targets were snapshotted
+                # and validated by parse_delete() before mutation started.
+                item.dest.unlink(missing_ok=True)
+                adopted.append(item)
+                fsync_dir(item.dest.parent)
+                continue
+
             # Keep the staged path tracked until replace succeeds. If replace
             # fails, finally must still unlink this not-yet-adopted private temp.
             tmp = staged[item.dest]
@@ -182,15 +192,45 @@ def parse_item(arg: str) -> Item:
     return Item(dest=dest, source=source, before=existing_bytes(dest), after=read_regular(source, "private source"))
 
 
+def parse_delete(arg: str) -> Item:
+    if not arg:
+        raise RuntimeError("--delete requires a destination")
+    dest = pathlib.Path(arg)
+    ensure_private_parent(dest)
+    return Item(dest=dest, source=None, before=existing_bytes(dest), after=None)
+
+
+def parse_args(argv: list[str]) -> list[Item]:
+    items: list[Item] = []
+    index = 1
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--delete":
+            index += 1
+            if index >= len(argv):
+                raise RuntimeError("--delete requires a destination")
+            items.append(parse_delete(argv[index]))
+        elif arg.startswith("--"):
+            raise RuntimeError(f"unknown private batch option: {arg}")
+        else:
+            items.append(parse_item(arg))
+        index += 1
+    if not items:
+        raise RuntimeError("private batch requires at least one mutation")
+    destinations = [item.dest for item in items]
+    if len(set(destinations)) != len(destinations):
+        raise RuntimeError("duplicate private batch destination")
+    return items
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        raise SystemExit("usage: atomic-private-batch.py DEST=SOURCE [DEST=SOURCE ...]")
+        raise SystemExit(
+            "usage: atomic-private-batch.py DEST=SOURCE [DEST=SOURCE ...] "
+            "[--delete DEST ...]"
+        )
     try:
-        items = [parse_item(arg) for arg in argv[1:]]
-        destinations = [item.dest for item in items]
-        if len(set(destinations)) != len(destinations):
-            raise RuntimeError("duplicate private batch destination")
-        adopt(items)
+        adopt(parse_args(argv))
     except (OSError, RuntimeError) as exc:
         raise SystemExit(str(exc)) from exc
     return 0
