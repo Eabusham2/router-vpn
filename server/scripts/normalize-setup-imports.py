@@ -48,6 +48,22 @@ CONTRACTS = {
 SETUP_METHOD_LANES = ("simple-native", "universal", "universal-compat", "manual-app-proxy")
 
 
+def load_private_setup_assets(path: Path) -> dict:
+    try:
+        raw = read_verified_regular(path, private=True)
+    except FileNotFoundError:
+        raise
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError(f"unsafe setup assets source: {exc}") from exc
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid setup assets JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("setup-assets.json must be an object")
+    return data
+
+
 def normalize_method(method: dict, endpoint: str) -> None:
     ident = str(method.get("id") or "")
     contract = CONTRACTS.get(ident, ("config-file", "manual-advanced", False, False, "unknown"))
@@ -225,17 +241,11 @@ def main() -> int:
     assets_path = bundle / "setup-assets.json"
     html_path = bundle / "router-vpn-device-setup.html"
     try:
-        assets_raw = read_verified_regular(assets_path, private=True)
+        data = load_private_setup_assets(assets_path)
     except FileNotFoundError as exc:
         raise SystemExit(f"missing setup assets: {assets_path}") from exc
-    except (OSError, RuntimeError) as exc:
-        raise SystemExit(f"unsafe setup assets source: {exc}") from exc
-    try:
-        data = json.loads(assets_raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"invalid setup assets JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise SystemExit("setup-assets.json must be an object")
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     endpoint = str(data.get("endpoint") or "").strip().strip("[]")
     methods = data.get("methods")
     if not isinstance(methods, list):
