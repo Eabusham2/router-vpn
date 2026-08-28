@@ -371,6 +371,8 @@ require(
     "unexpectedly exists after update transaction started",
     "loadRollbackCompose",
     "clearRollbackCompose",
+    "clearTerminalRollbackSnapshot",
+    "not attributable to state from_sha",
     "rollback snapshot changed before cleanup",
     "atomicWriteUpdaterPrivateTargetUnchanged",
     "restorePreviousStack",
@@ -419,6 +421,9 @@ require(
     "ExactComposeIdentityRequiresOneExpectedSHA",
     "ClearRollbackComposeUnsafeStaleSnapshotBlocksNewTransaction",
     "SaveRollbackComposeRefusesUnexpectedExistingSnapshotAfterTransactionStart",
+    "TerminalRollbackSnapshotCleanupRequiresMatchingStateIdentity",
+    "TerminalRollbackSnapshotCleanupRejectsMismatchedEvidence",
+    "ReconcileTerminalStateRetriesOnlyAttributableSnapshotCleanup",
     "InterruptedPreDeploymentApplying",
 )
 require("cmd/update-controller/private_state_test.go", "RejectsBroadPermissions", "RejectsSymlink", "RejectsSymlinkParent", "RejectsOversizedRead")
