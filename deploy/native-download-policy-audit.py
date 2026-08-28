@@ -244,10 +244,13 @@ forbid("server/aux-proxies/Dockerfile", "SSR_TAG=", '--branch "${SSR_TAG}"')
 
 need(
     "modes/cleanup-private-runtime.py",
+    'ALLOWED_ROOTS = {"multihop", "native-multihop", "native-standard-exit", "openvpn-standard-exit"}',
     'relative_to(run_root)',
-    '{"multihop", "native-multihop"}',
-    'target == run_root',
-    'shutil.rmtree(target)',
+    'O_NOFOLLOW',
+    'follow_symlinks=False',
+    'os.path.samestat',
+    'os.rename(leaf, quarantine, src_dir_fd=parent_fd, dst_dir_fd=run_fd)',
+    'remove_tree_at(run_fd, quarantine)',
 )
 need("modes/run-multihop.sh", "cleanup-private-runtime.py")
 forbid("modes/run-multihop.sh", 'rm -rf "$RUN"')
