@@ -32,9 +32,19 @@ for stale in range(store_version):
     assert f"PROFILE_SCHEMA_VERSION = {stale}" not in fallback, f"router-local package fallback still declares stale schema v{stale}"
 
 bundle = read("server/scripts/create-bundle-json.py")
-assert f"'schema_version':{profile_version}" in bundle, "generated home profile schema is stale"
-assert f"json.dump({{'schema_version':{store_version},'selected_id':'home','profiles':[router_profile]}}" in bundle, "generated routers.json store schema is stale"
-assert f"'profileSchemaVersion':{profile_version}" in bundle, "portable/mobile bundle profileSchemaVersion is stale"
+def mapping_value(source: str, key: str, value: int) -> bool:
+    return re.search(rf'["\\\']{re.escape(key)}["\\\']\\s*:\\s*{value}(?=\\s*[,}}])', source) is not None
+
+assert mapping_value(bundle, "schema_version", profile_version), "generated home profile schema is stale"
+assert re.search(
+    rf'write_private_json\\s*\\(.*?["\\\']routers\\.json["\\\'].*?'
+    rf'["\\\']schema_version["\\\']\\s*:\\s*{store_version}.*?'
+    rf'["\\\']selected_id["\\\']\\s*:\\s*["\\\']home["\\\'].*?'
+    rf'["\\\']profiles["\\\']\\s*:\\s*\\[router_profile\\]',
+    bundle,
+    re.S,
+), "generated routers.json store schema is stale"
+assert mapping_value(bundle, "profileSchemaVersion", profile_version), "portable/mobile bundle profileSchemaVersion is stale"
 
 # Current product defaults are intentionally explicit in generated home-node data.
 # A v4 label with old defaults would be a silent behavior regression.
