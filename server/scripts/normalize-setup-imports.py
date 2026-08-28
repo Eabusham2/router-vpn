@@ -6,6 +6,9 @@ import argparse
 from importlib.util import module_from_spec, spec_from_file_location
 import json
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -243,10 +246,24 @@ def main() -> int:
         "action_driven_checks": ["health", "admin-status", "admin-settings", "admin-forwarding"],
         "daily_use_surface": "native-app-not-setup-center",
     }
-    assets_path.write_text(json.dumps(data, indent=2) + "\n")
-    assets_path.chmod(0o600)
-    html_path.write_text(patch_html(generator.build_html(data)))
-    html_path.chmod(0o600)
+    normalized_html = patch_html(generator.build_html(data))
+    with tempfile.TemporaryDirectory(prefix=".normalize-setup.", dir=bundle) as td:
+        stage = Path(td)
+        staged_assets = stage / "setup-assets.json"
+        staged_html = stage / "router-vpn-device-setup.html"
+        staged_assets.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        staged_html.write_text(normalized_html, encoding="utf-8")
+        staged_assets.chmod(0o600)
+        staged_html.chmod(0o600)
+        subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "atomic-private-batch.py"),
+                f"{assets_path}={staged_assets}",
+                f"{html_path}={staged_html}",
+            ],
+            check=True,
+        )
     return 0
 
 
