@@ -518,6 +518,9 @@ require(
 )
 require(
     "server/scripts/test_preserve_generated_state.py",
+    "server/scripts/test_setup_generation_transaction.py",
+    "server/scripts/test_install_state.py",
+    "server/scripts/test_verified_regular_read.py",
     "corrupt preserved transport state",
     "ambiguous preserved TLS credentials",
     "symlink preserved transport state",
@@ -542,12 +545,68 @@ forbid("server/scripts/generate-tls-alternates.sh", "preserve-generated-state.py
 forbid("server/scripts/generate-advanced-profiles.sh", "preserve-generated-state.py advanced \"$BASE\" 2>/dev/null || true")
 
 # Fresh init, finalization, and upgrade paths publish credential-bearing state
-# through the same helpers and only mark completion after runtime application.
-require("server/init/noninteractive.sh", "atomic-private-write.py", "CREDENTIALS.txt", ".initialized")
-require("server/finalize/finalize.sh", "atomic-private-write.py", "atomic-private-batch.py", "CREDENTIALS.txt", ".finalized")
-require("server/finalize/upgrade-safe.sh", "atomic-private-write.py", "atomic-private-batch.py", "CREDENTIALS.txt", ".finalized")
+# through the same helpers, validate the complete private state tree before any
+# cleanup/mutation, and only mark completion after runtime application.
+require(
+    "server/init/noninteractive.sh",
+    "atomic-private-write.py",
+    "PRIVATE_DIR=/src/server/scripts/private-directory.py",
+    "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
+    'python3 "$PRIVATE_DIR" "$dir"',
+    'python3 "$VERIFIED_READ" --private "$BASE/.initialized"',
+    "refusing credential regeneration",
+    "CREDENTIALS.txt",
+    ".initialized",
+)
+require(
+    "server/finalize/finalize.sh",
+    "atomic-private-write.py",
+    "atomic-private-batch.py",
+    "PRIVATE_DIR=/src/server/scripts/private-directory.py",
+    "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
+    'python3 "$PRIVATE_DIR" "$dir"',
+    'python3 "$VERIFIED_READ" --private "$required"',
+    "CREDENTIALS.txt",
+    ".finalized",
+)
+require(
+    "server/finalize/upgrade-safe.sh",
+    "atomic-private-write.py",
+    "atomic-private-batch.py",
+    "PRIVATE_DIR=/src/server/scripts/private-directory.py",
+    "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
+    'python3 "$PRIVATE_DIR" "$dir"',
+    'python3 "$VERIFIED_READ" --private "$required"',
+    "CREDENTIALS.txt",
+    ".finalized",
+)
 forbid("server/finalize/finalize.sh", 'cat >"$BASE/client-bundle/CREDENTIALS.txt"', 'touch "$BASE/.finalized"')
 forbid("server/finalize/upgrade-safe.sh", 'cat >"$BASE/client-bundle/CREDENTIALS.txt"', 'touch "$BASE/.finalized"')
+
+init_body = text("server/init/noninteractive.sh")
+init_dir = init_body.find('python3 "$PRIVATE_DIR" "$dir"')
+init_purge = init_body.find('rm -f "$BASE/downloads/router-vpn-client-bundle.zip"')
+init_apply = init_body.rfind('/src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"')
+init_marker = init_body.rfind('printf \'initialized\\n\' | python3 "$PRIVATE_WRITE" "$BASE/.initialized"')
+if min(init_dir, init_purge, init_apply, init_marker) < 0 or init_dir > init_purge or init_apply > init_marker:
+    errors.append("server/init/noninteractive.sh: private-directory/initialization ordering regressed")
+
+for rel, first_mutation in (
+    ("server/finalize/finalize.sh", 'bash /src/server/finalize/sync-client-runtime.sh "$BASE"'),
+    ("server/finalize/upgrade-safe.sh", 'bash /src/server/finalize/sync-client-runtime.sh "$BASE"'),
+):
+    body = text(rel)
+    private_dir_pos = body.find('python3 "$PRIVATE_DIR" "$dir"')
+    mutation_pos = body.find(first_mutation)
+    apply_pos = body.rfind('bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"')
+    finalized_pos = body.rfind('printf \'finalized\\n\' | python3 "$PRIVATE_WRITE" "$BASE/.finalized"')
+    if min(private_dir_pos, mutation_pos, apply_pos, finalized_pos) < 0:
+        errors.append(f"{rel}: finalization ordering markers are incomplete")
+    else:
+        if private_dir_pos > mutation_pos:
+            errors.append(f"{rel}: private-directory validation happens after state mutation begins")
+        if apply_pos > finalized_pos:
+            errors.append(f"{rel}: finalized marker is published before runtime application succeeds")
 
 # Setup assets are derived private presentation data containing import payloads,
 # not stable identity or active policy. They are deliberately excluded from the
