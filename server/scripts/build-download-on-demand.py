@@ -268,12 +268,28 @@ def require_dist(src_root: Path, name: str) -> Path:
     return p
 
 
-def build_private_bundle(work: Path, base: Path) -> Path:
+def build_private_bundle(work: Path, base: Path, src_root: Path) -> Path:
     bundle = base / "client-bundle"
-    if not bundle.is_dir():
-        raise FileNotFoundError(f"missing private client bundle: {bundle}")
+    if not bundle.is_dir() or bundle.is_symlink():
+        raise FileNotFoundError(f"missing/unsafe private client bundle: {bundle}")
     root = work / "router-vpn-client-bundle"
     copy_tree(bundle, root)
+
+    # Persistent node state owns routers/client config and generated private
+    # profiles only. Runtime code/catalogs come from the exact source tree for
+    # this request so an interrupted server sync can never ship a mixed
+    # old/new modes or client directory.
+    for stale in ("modes", "client", "dist"):
+        path = root / stale
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+    copy_tree(src_root / "modes", root / "modes")
+    copy_tree(src_root / "client", root / "client")
+    copy_file(src_root / "configs" / "client" / "modes.json", root / "modes.json")
+    copy_file(src_root / "configs" / "client" / "logical-modes.json", root / "logical-modes.json")
+    copy_file(src_root / "LICENSE", root / "LICENSE")
     return root
 
 
@@ -293,7 +309,7 @@ def materialize_icons(src_root: Path, root: Path) -> None:
 def build_local(work: Path, name: str, src_root: Path, compiled_root: Path, base: Path) -> Path:
     _, family, arch = PACKAGE_MAP[name]
     if family == "bundle":
-        return build_private_bundle(work, base)
+        return build_private_bundle(work, base, src_root)
 
     if family in {"darwin", "linux"}:
         platform = "AppKit" if family == "darwin" else "GTK"
