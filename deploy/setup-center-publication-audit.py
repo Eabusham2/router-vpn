@@ -74,6 +74,8 @@ for forbidden in (
 normalizer = read("server/scripts/normalize-setup-imports.py")
 for marker in (
     "atomic-private-batch.py",
+    "load_private_setup_assets",
+    "read_verified_regular(path, private=True)",
     'TemporaryDirectory(prefix=".normalize-setup.", dir=bundle)',
     'f"{assets_path}={staged_assets}"',
     'f"{html_path}={staged_html}"',
@@ -83,6 +85,8 @@ for marker in (
 for forbidden in (
     "assets_path.write_text(",
     "html_path.write_text(",
+    "assets_path.is_file()",
+    "assets_path.read_text(",
 ):
     if forbidden in normalizer:
         errors.append(f"normalize-setup-imports.py contains stale live-write marker {forbidden!r}")
@@ -118,6 +122,7 @@ if not errors:
         ("server/scripts/test_setup_generation_transaction.py", "Setup Center generation transaction"),
         ("server/scripts/test_setup_center_private_html.py", "Setup Center verified private HTML"),
         ("server/scripts/test_setup_assets_verified_sources.py", "Setup asset verified source reads"),
+        ("server/scripts/test_normalize_setup_verified_input.py", "Setup normalizer verified input"),
     ):
         test = ROOT / rel
         proc = subprocess.run([sys.executable, str(test)], cwd=ROOT, text=True, capture_output=True)
