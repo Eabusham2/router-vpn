@@ -17,7 +17,7 @@ def write_exe(path: Path, body: str) -> None:
 
 def fake_tools(root: Path) -> Path:
     bindir = root / "bin"
-    bindir.mkdir()
+    bindir.mkdir(parents=True)
     write_exe(
         bindir / "id",
         "#!/bin/sh\n"
