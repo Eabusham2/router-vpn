@@ -828,6 +828,12 @@ func (a *app) mode(id string) (common.Mode, error) {
 }
 
 func (a *app) connect(w http.ResponseWriter, r *http.Request) {
+	_, finish, guardErr := a.beginConnectionOperation()
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer finish()
 	var q struct {
 		Mode string `json:"mode"`
 	}
@@ -843,6 +849,11 @@ func (a *app) connect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) disconnect(w http.ResponseWriter, _ *http.Request) {
+	// Cancel any in-flight connection proof first, then serialize teardown behind
+	// that transaction so a stale connect cannot publish Connected afterward.
+	a.cancelConnectionOperation()
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
 	if err := a.stopMode(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -851,6 +862,12 @@ func (a *app) disconnect(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *app) options(w http.ResponseWriter, r *http.Request) {
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	var q struct {
 		DAITA *bool `json:"daita"`
 		Jumbo *bool `json:"jumbo"`
@@ -937,6 +954,10 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	a.mu.Unlock()
 
 	time.Sleep(1200 * time.Millisecond)
+	if err := a.checkConnectionOperation(); err != nil {
+		a.stopOwnedConnectionRuntime(cmd)
+		return err
+	}
 	a.mu.Lock()
 	a.state.Phase = "checking"
 	a.mu.Unlock()
@@ -949,6 +970,13 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 		a.state.Phase = "failed"
 		a.mu.Unlock()
 		return failure
+	}
+	if err := a.checkConnectionOperation(); err != nil {
+		a.stopOwnedConnectionRuntime(cmd)
+		return err
+	}
+	if !a.ownsConnectionRuntime(cmd) {
+		return errors.New("connection runtime changed before selected-router path proof could be adopted")
 	}
 
 	a.mu.Lock()
@@ -1022,6 +1050,12 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 }
 
 func (a *app) auto(w http.ResponseWriter, _ *http.Request) {
+	_, finish, guardErr := a.beginConnectionOperation()
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer finish()
 	if _, err := a.activeProfile(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1143,6 +1177,12 @@ func (a *app) clearForward(w http.ResponseWriter, r *http.Request) {
 }
 
 func proxyJSON(a *app, w http.ResponseWriter, r *http.Request, path string) {
+	release, guardErr := a.beginNodeBoundOperation()
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
 	p, err := a.activeProfile()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
