@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import plistlib
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import warnings
 import zipfile
 
@@ -118,6 +120,48 @@ class ReleaseCandidateProvenanceTests(unittest.TestCase):
             zip_desktop(duplicate, "windows-amd64")
             with self.assertRaisesRegex(RuntimeError, "exactly one RouterVPN-Windows-amd64.zip"):
                 mod.verify_tree(root, SHA)
+
+    def test_symlinked_root_and_expected_package_fail_closed(self):
+        if os.name == "nt":
+            self.skipTest("symlink semantics are platform-specific")
+        with tempfile.TemporaryDirectory(prefix="routervpn-release-prov-link-") as td:
+            base = Path(td)
+            real = base / "real"
+            real.mkdir()
+            build_tree(real)
+            linked = base / "linked"
+            linked.symlink_to(real, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "root is missing or redirected"):
+                mod.verify_tree(linked, SHA)
+
+            package = next(real.rglob("RouterVPN-Windows-amd64.zip"))
+            outside = base / "outside.zip"
+            package.replace(outside)
+            package.symlink_to(outside)
+            with self.assertRaisesRegex(RuntimeError, "redirected or not a regular file"):
+                mod.verify_tree(real, SHA)
+
+    def test_outer_desktop_package_replacement_race_fails_closed(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-release-prov-race-") as td:
+            root = Path(td)
+            build_tree(root)
+            package = next(root.rglob("RouterVPN-Windows-amd64.zip"))
+            replacement = root / "replacement.zip"
+            zip_desktop(replacement, "windows-amd64")
+            real_open = Path.open
+            swapped = False
+
+            def swap_before_open(path_obj, *args, **kwargs):
+                nonlocal swapped
+                if path_obj == package and not swapped:
+                    swapped = True
+                    os.replace(replacement, package)
+                return real_open(path_obj, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", new=swap_before_open):
+                with self.assertRaisesRegex(RuntimeError, "changed identity during verification open"):
+                    mod.verify_tree(root, SHA)
+            self.assertTrue(swapped)
 
     def test_duplicate_embedded_manifest_fails(self):
         with tempfile.TemporaryDirectory(prefix="routervpn-release-prov-") as td:
