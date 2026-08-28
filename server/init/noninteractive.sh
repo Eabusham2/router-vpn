@@ -174,8 +174,11 @@ import json,sys
 x=json.load(open('/src/configs/router/socks5.json.example')); x['inbounds'][0]['users'][0]={'username':sys.argv[1],'password':sys.argv[2]}; x['dns']['servers'][0]['server']=sys.argv[3]
 print(json.dumps(x,indent=2))
 PY
-cp /src/configs/client/modes.json "$BASE/client-bundle/modes.json"
-cp -a /src/modes /src/dist /src/client "$BASE/client-bundle/"
+# Publish only catalog metadata persistently. Runtime code/binaries are injected
+# from the exact immutable source image during on-demand package construction.
+python3 "$PRIVATE_WRITE" "$BASE/client-bundle/modes.json" < /src/configs/client/modes.json
+python3 "$PRIVATE_WRITE" "$BASE/client-bundle/logical-modes.json" < /src/configs/client/logical-modes.json
+python3 "$PRIVATE_WRITE" "$BASE/client-bundle/LICENSE" < /src/LICENSE
 python3 "$PRIVATE_WRITE" "$BASE/client-bundle/CREDENTIALS.txt" <<TXT
 Endpoint: ${ENDPOINT:-CHOOSE_IN_APP}
 WireGuard UDP: $WG_PORT
