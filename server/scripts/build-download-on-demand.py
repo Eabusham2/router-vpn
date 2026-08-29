@@ -202,13 +202,19 @@ def copy_file(src: Path, dst: Path, required: bool = True) -> None:
     if before.st_size < 0 or before.st_size > MAX_MEMBER:
         raise ValueError(f"package source exceeds safety limit: {src}")
 
-    source_parents = parent_chain_snapshot(src)
+    try:
+        source_parents = parent_chain_snapshot(src)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"unsafe package source ancestry: {exc}") from exc
     src_fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     tmp: Path | None = None
     try:
         opened = os.fstat(src_fd)
         current = src.lstat()
-        verify_parent_chain(source_parents)
+        try:
+            verify_parent_chain(source_parents)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"package source changed during open: {src}: {exc}") from exc
         if (
             stat.S_ISLNK(current.st_mode)
             or not stat.S_ISREG(current.st_mode)
@@ -244,7 +250,10 @@ def copy_file(src: Path, dst: Path, required: bool = True) -> None:
             os.close(fd)
 
         final_source = src.lstat()
-        verify_parent_chain(source_parents)
+        try:
+            verify_parent_chain(source_parents)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"package source changed during read: {src}: {exc}") from exc
         if (
             stat.S_ISLNK(final_source.st_mode)
             or not stat.S_ISREG(final_source.st_mode)
@@ -269,8 +278,11 @@ def copy_tree(src: Path, dst: Path, required: bool = True) -> None:
         return
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
         raise ValueError(f"refusing to package non-directory/symlink tree: {src}")
-    source_parents = parent_chain_snapshot(src)
-    verify_parent_chain(source_parents)
+    try:
+        source_parents = parent_chain_snapshot(src)
+        verify_parent_chain(source_parents)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"unsafe package tree ancestry: {exc}") from exc
 
     if dst.exists() or dst.is_symlink():
         info = dst.lstat()
