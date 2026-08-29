@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -118,6 +119,123 @@ func TestComposeSHARequiresMaterializedHeaderAndBrokerProvenance(t *testing.T) {
 	}
 }
 
+
+func TestGitHubRepositoryAndBranchValidationRejectsURLAndRefInjection(t *testing.T) {
+	for _, good := range []string{
+		"Eabusham2/router-vpn",
+		"owner_name/repo.name",
+		"owner-1/repo_2",
+	} {
+		if !validGitHubRepo(good) {
+			t.Fatalf("valid GitHub repository rejected: %q", good)
+		}
+	}
+	for _, bad := range []string{
+		"",
+		"Eabusham2",
+		"Eabusham2/router/vpn",
+		"../router-vpn",
+		"Eabusham2/..",
+		"Eabusham2/router?vpn",
+		"Eabusham2/router#vpn",
+		"Eabusham2/router vpn",
+		"Eabusham2/router\\vpn",
+	} {
+		if validGitHubRepo(bad) {
+			t.Fatalf("unsafe GitHub repository accepted: %q", bad)
+		}
+	}
+
+	for _, good := range []string{"main", "release/2026-08", "feature.safe-1", "a_b/c-d"} {
+		if !validGitHubBranch(good) {
+			t.Fatalf("valid GitHub branch rejected: %q", good)
+		}
+	}
+	for _, bad := range []string{
+		"",
+		"@",
+		"/main",
+		"main/",
+		"feature//x",
+		"feature/../main",
+		"feature@{1",
+		"feature.lock",
+		".hidden/main",
+		"feature?",
+		"feature#bad",
+		"feature bad",
+		"feature\\bad",
+	} {
+		if validGitHubBranch(bad) {
+			t.Fatalf("unsafe GitHub branch accepted: %q", bad)
+		}
+	}
+}
+
+func TestGitHubEndpointOriginsAndCredentialSeparation(t *testing.T) {
+	for _, tc := range []struct {
+		endpoint string
+		host     string
+		ok       bool
+	}{
+		{"https://api.github.com/repos/Eabusham2/router-vpn/actions/runs", "api.github.com", true},
+		{"https://raw.githubusercontent.com/Eabusham2/router-vpn/" + testNewSHA + "/server/portainer-current.yaml", "raw.githubusercontent.com", true},
+		{"http://api.github.com/repos/Eabusham2/router-vpn", "api.github.com", false},
+		{"https://api.github.com.evil.invalid/repos/x/y", "api.github.com", false},
+		{"https://user@api.github.com/repos/x/y", "api.github.com", false},
+		{"https://api.github.com:443/repos/x/y", "api.github.com", false},
+		{"https://raw.githubusercontent.com/Eabusham2/router-vpn/file#fragment", "raw.githubusercontent.com", false},
+	} {
+		_, err := validateGitHubEndpoint(tc.endpoint, tc.host)
+		if tc.ok && err != nil {
+			t.Fatalf("valid GitHub endpoint rejected: %s: %v", tc.endpoint, err)
+		}
+		if !tc.ok && err == nil {
+			t.Fatalf("unsafe GitHub endpoint accepted: %s", tc.endpoint)
+		}
+	}
+
+	t.Setenv("GITHUB_TOKEN", "top-secret")
+	apiReq, _ := http.NewRequest(http.MethodGet, "https://api.github.com/repos/x/y", nil)
+	githubAPIHeaders(apiReq)
+	if got := apiReq.Header.Get("Authorization"); got != "Bearer top-secret" {
+		t.Fatalf("API request did not receive configured token: %q", got)
+	}
+	rawReq, _ := http.NewRequest(http.MethodGet, "https://raw.githubusercontent.com/x/y/main/file", nil)
+	githubBaseHeaders(rawReq)
+	if got := rawReq.Header.Get("Authorization"); got != "" {
+		t.Fatalf("raw request unexpectedly received GitHub token: %q", got)
+	}
+}
+
+func TestGitHubRedirectsStayOnExpectedHTTPSOrigin(t *testing.T) {
+	apiClient := githubClient("api.github.com")
+	prev, _ := http.NewRequest(http.MethodGet, "https://api.github.com/repos/x/y", nil)
+	same, _ := http.NewRequest(http.MethodGet, "https://api.github.com/repos/x/y?page=2", nil)
+	if err := apiClient.CheckRedirect(same, []*http.Request{prev}); err != nil {
+		t.Fatalf("same-origin API redirect rejected: %v", err)
+	}
+	cross, _ := http.NewRequest(http.MethodGet, "https://objects.githubusercontent.com/archive", nil)
+	if err := apiClient.CheckRedirect(cross, []*http.Request{prev}); err == nil {
+		t.Fatal("cross-origin authenticated API redirect was accepted")
+	}
+	downgrade, _ := http.NewRequest(http.MethodGet, "http://api.github.com/repos/x/y", nil)
+	if err := apiClient.CheckRedirect(downgrade, []*http.Request{prev}); err == nil {
+		t.Fatal("GitHub API HTTPS downgrade redirect was accepted")
+	}
+
+	rawClient := githubClient("raw.githubusercontent.com")
+	rawPrev, _ := http.NewRequest(http.MethodGet, "https://raw.githubusercontent.com/x/y/main/file", nil)
+	rawSame, _ := http.NewRequest(http.MethodGet, "https://raw.githubusercontent.com/x/y/main/file2", nil)
+	rawSame.Header.Set("Authorization", "Bearer should-be-removed")
+	rawSame.Header.Set("Cookie", "secret=1")
+	if err := rawClient.CheckRedirect(rawSame, []*http.Request{rawPrev}); err != nil {
+		t.Fatalf("same-origin raw redirect rejected: %v", err)
+	}
+	if rawSame.Header.Get("Authorization") != "" || rawSame.Header.Get("Cookie") != "" {
+		t.Fatal("raw redirect retained credentials")
+	}
+}
 
 func TestUpdaterUsesBuildAllCallerAsAuthoritativeReleaseRun(t *testing.T) {
 	want := []string{"build-all.yml"}
