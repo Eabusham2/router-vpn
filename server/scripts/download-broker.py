@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from http import cookies
+import hashlib
 import hmac
 import json
 import os
@@ -166,23 +167,99 @@ def _download_limited(url: str, path: Path, progress=None) -> None:
     total = 0
     if progress:
         progress("downloading", 28)
-    with _urlopen(url, timeout=25) as r, path.open("wb") as w:
-        try:
-            expected = int(r.headers.get("Content-Length", "0") or 0)
-        except ValueError:
-            expected = 0
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    complete = False
+    try:
+        with _urlopen(url, timeout=25) as r, os.fdopen(fd, "wb", closefd=True) as w:
+            try:
+                expected = int(r.headers.get("Content-Length", "0") or 0)
+            except ValueError:
+                expected = 0
+            if expected < 0 or expected > MAX_GITHUB_ARTIFACT:
+                raise RuntimeError("GitHub artifact Content-Length exceeds safety limit")
+            while True:
+                chunk = r.read(CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_GITHUB_ARTIFACT:
+                    raise RuntimeError("GitHub artifact exceeds safety limit")
+                w.write(chunk)
+                if progress and expected > 0:
+                    progress("downloading", min(39, 28 + int(11 * total / expected)))
+            w.flush()
+            os.fsync(w.fileno())
+        if total == 0:
+            raise RuntimeError("GitHub returned an empty artifact")
+        if expected > 0 and total != expected:
+            raise RuntimeError(
+                f"GitHub artifact Content-Length mismatch: received {total}, expected {expected}"
+            )
+        complete = True
+    finally:
+        if not complete:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            path.unlink(missing_ok=True)
+
+
+def _artifact_sha256(item: dict) -> str:
+    raw = str(item.get("digest") or "").strip().lower()
+    if not raw.startswith("sha256:"):
+        raise RuntimeError("GitHub artifact metadata is missing a SHA-256 digest")
+    digest = raw[len("sha256:"):]
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise RuntimeError("GitHub artifact metadata has an invalid SHA-256 digest")
+    return digest
+
+
+@contextmanager
+def _verified_artifact_zip(path: Path, expected_sha256: str):
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise RuntimeError("downloaded GitHub artifact is not a regular file")
+    if before.st_size <= 0 or before.st_size > MAX_GITHUB_ARTIFACT:
+        raise RuntimeError("downloaded GitHub artifact has an unsafe size")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    stream = os.fdopen(fd, "rb", closefd=True)
+    try:
+        opened = os.fstat(stream.fileno())
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(before, opened)
+            or not os.path.samestat(opened, current)
+        ):
+            raise RuntimeError("downloaded GitHub artifact changed during verification open")
+        digest = hashlib.sha256()
+        total = 0
         while True:
-            chunk = r.read(CHUNK)
+            chunk = stream.read(CHUNK)
             if not chunk:
                 break
             total += len(chunk)
             if total > MAX_GITHUB_ARTIFACT:
-                raise RuntimeError("GitHub artifact exceeds safety limit")
-            w.write(chunk)
-            if progress and expected > 0:
-                progress("downloading", min(39, 28 + int(11 * total / expected)))
-    if total == 0:
-        raise RuntimeError("GitHub returned an empty artifact")
+                raise RuntimeError("downloaded GitHub artifact exceeds safety limit")
+            digest.update(chunk)
+        if digest.hexdigest() != expected_sha256:
+            raise RuntimeError("GitHub artifact archive SHA-256 digest mismatch")
+        after = path.lstat()
+        if (
+            stat.S_ISLNK(after.st_mode)
+            or not stat.S_ISREG(after.st_mode)
+            or not os.path.samestat(opened, after)
+            or after.st_size != total
+        ):
+            raise RuntimeError("downloaded GitHub artifact changed during digest verification")
+        stream.seek(0)
+        yield stream
+    finally:
+        stream.close()
 
 
 def _safe_artifact_name(name: str) -> None:
@@ -304,8 +381,10 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
         raise RuntimeError(
             f"expected exactly one unexpired {artifact_name} artifact for {scope}; found {len(candidates)}"
         )
+    artifact = candidates[0]
+    expected_digest = _artifact_sha256(artifact)
     outer = temp / (artifact_name + "-artifact.zip")
-    _download_limited(candidates[0]["archive_download_url"], outer, progress=progress)
+    _download_limited(artifact["archive_download_url"], outer, progress=progress)
     if progress:
         progress("validating", 42)
     selected = temp / output_name
@@ -314,12 +393,13 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     staged = Path(staged_name)
     committed = False
     try:
-        with zipfile.ZipFile(outer) as zf:
-            item = _pick_member(zf, wanted)
-            with zf.open(item) as r, staged.open("wb") as w:
-                shutil.copyfileobj(r, w, CHUNK)
-                w.flush()
-                os.fsync(w.fileno())
+        with _verified_artifact_zip(outer, expected_digest) as verified_outer:
+            with zipfile.ZipFile(verified_outer) as zf:
+                item = _pick_member(zf, wanted)
+                with zf.open(item) as r, staged.open("wb") as w:
+                    shutil.copyfileobj(r, w, CHUNK)
+                    w.flush()
+                    os.fsync(w.fileno())
         if staged.stat().st_size == 0:
             raise RuntimeError("selected GitHub package is empty")
         os.replace(staged, selected)
