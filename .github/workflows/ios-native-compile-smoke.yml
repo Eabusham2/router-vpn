@@ -39,7 +39,7 @@ jobs:
           xcodegen generate
           LOG="$RUNNER_TEMP/routervpn-ios-xcodebuild.log"
           set +e
-          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' build >"$LOG" 2>&1
+          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" build >"$LOG" 2>&1
           status=$?
           set -e
           if [ "$status" -ne 0 ]; then
