@@ -52,6 +52,17 @@ _private_dir = module_from_spec(_private_dir_spec)
 _private_dir_spec.loader.exec_module(_private_dir)
 ensure_private_directory = _private_dir.ensure_private_directory
 
+_owned_temp_spec = spec_from_file_location(
+    "router_vpn_broker_owned_temp",
+    SCRIPT_DIR / "owned-temp.py",
+)
+if _owned_temp_spec is None or _owned_temp_spec.loader is None:
+    raise RuntimeError("cannot load owned-temp.py")
+_owned_temp = module_from_spec(_owned_temp_spec)
+_owned_temp_spec.loader.exec_module(_owned_temp)
+create_owned_temp = _owned_temp.create_owned_temp
+cleanup_owned_temp = _owned_temp.cleanup_owned_temp
+
 BUILDER_PATH = SCRIPT_DIR / "build-download-on-demand.py"
 _spec = spec_from_file_location("router_vpn_one_package", BUILDER_PATH)
 if _spec is None or _spec.loader is None:
@@ -346,10 +357,16 @@ def build_package(base: Path, name: str, temp: Path, progress=None) -> tuple[Pat
 
 @contextmanager
 def request_temp():
-    with tempfile.TemporaryDirectory(prefix="router-vpn-request-") as td:
-        path = Path(td)
-        os.chmod(path, 0o700)
+    path = create_owned_temp("router-vpn-request-")
+    try:
         yield path
+    finally:
+        # If ownership evidence was tampered with, fail safe by leaving the
+        # directory for manual/OS cleanup rather than deleting an unproved path.
+        try:
+            cleanup_owned_temp(path)
+        except OSError:
+            pass
 
 
 def cleanup_stale_temp() -> None:
@@ -357,10 +374,7 @@ def cleanup_stale_temp() -> None:
     for pattern in ("router-vpn-request-*", "router-vpn-job-*", "router-vpn-one-package-*"):
         for path in temp.glob(pattern):
             try:
-                if path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
+                cleanup_owned_temp(path)
             except OSError:
                 pass
 
