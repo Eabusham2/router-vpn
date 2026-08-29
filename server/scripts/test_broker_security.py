@@ -125,22 +125,27 @@ def main() -> int:
                 status, _, _ = request(port, "POST", "/api/pairing/redeem", headers=pair_headers, body=payload)
                 assert status == 403, status
 
-                # Storage/read failure must not burn the one-time pairing code.
-                status, _, data = request(
-                    port, "POST", "/api/pairing",
-                    headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", "Content-Length": "2"},
-                    body=b"{}",
-                )
-                assert status == 201, (status, data)
-                retry_code = json.loads(data)["pairing"]["code"]
-                retry_payload = json.dumps({"code": retry_code}).encode()
-                retry_headers = {"Content-Type": "application/json", "Content-Length": str(len(retry_payload))}
-                os.chmod(bundle_path, 0o644)
-                status, _, _ = request(port, "POST", "/api/pairing/redeem", headers=retry_headers, body=retry_payload)
-                assert status == 503, status
-                os.chmod(bundle_path, 0o600)
-                status, _, data = request(port, "POST", "/api/pairing/redeem", headers=retry_headers, body=retry_payload)
-                assert status == 200 and json.loads(data) == private, (status, data)
+                # POSIX deployments require exact 0600 on private bundle
+                # material. Windows does not expose equivalent ACL semantics
+                # through chmod/stat, so this mode-bit failure case belongs only
+                # to the Linux/server contract; Windows still runs all identity,
+                # bounds, path and one-time-code tests below.
+                if os.name != "nt":
+                    status, _, data = request(
+                        port, "POST", "/api/pairing",
+                        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", "Content-Length": "2"},
+                        body=b"{}",
+                    )
+                    assert status == 201, (status, data)
+                    retry_code = json.loads(data)["pairing"]["code"]
+                    retry_payload = json.dumps({"code": retry_code}).encode()
+                    retry_headers = {"Content-Type": "application/json", "Content-Length": str(len(retry_payload))}
+                    os.chmod(bundle_path, 0o644)
+                    status, _, _ = request(port, "POST", "/api/pairing/redeem", headers=retry_headers, body=retry_payload)
+                    assert status == 503, status
+                    os.chmod(bundle_path, 0o600)
+                    status, _, data = request(port, "POST", "/api/pairing/redeem", headers=retry_headers, body=retry_payload)
+                    assert status == 200 and json.loads(data) == private, (status, data)
 
                 if os.name != "nt":
                     status, _, data = request(
