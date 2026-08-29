@@ -4,6 +4,7 @@ from __future__ import annotations
 from http import client
 from importlib.util import module_from_spec, spec_from_file_location
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -130,7 +131,10 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="router-vpn-setup-admin-test-") as td:
             base = Path(td)
             (base / "config").mkdir()
-            (base / "config" / "setup-center.token").write_text(TOKEN + "\n")
+            token_path = base / "config" / "setup-center.token"
+            token_path.write_text(TOKEN + "\n")
+            if os.name != "nt":
+                token_path.chmod(0o600)
             static = base / "downloads"
             static.mkdir()
             html = '<!doctype html><body><div id="tabs"></div><section class="panel active" data-tab="start">Start</section><div id="wizard" class="overlay"></div><script>function gotoTab(name){document.querySelectorAll(\'.panel\').forEach(x=>x.classList.toggle(\'active\',x.dataset.tab===name))}</script></body>'
