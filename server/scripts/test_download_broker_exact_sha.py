@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -137,6 +139,185 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
                     "router-vpn-ios.ipa",
                 )
         self.assertIn("/actions/runs/77/artifacts?", read.call_args.args[0])
+
+    def test_artifact_digest_metadata_is_mandatory_and_strict(self):
+        digest = "a" * 64
+        self.assertEqual(broker._artifact_sha256({"digest": "sha256:" + digest}), digest)
+        for item in (
+            {},
+            {"digest": ""},
+            {"digest": "md5:" + ("a" * 32)},
+            {"digest": "sha256:short"},
+            {"digest": "sha256:" + ("g" * 64)},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "SHA-256 digest"):
+                broker._artifact_sha256(item)
+
+    def test_verified_artifact_zip_hashes_and_uses_same_descriptor(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-artifact-digest-") as td:
+            root = Path(td)
+            outer = root / "artifact.zip"
+            with zipfile.ZipFile(outer, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("payload.txt", b"hello")
+            expected = hashlib.sha256(outer.read_bytes()).hexdigest()
+            with broker._verified_artifact_zip(outer, expected) as stream:
+                with zipfile.ZipFile(stream) as zf:
+                    self.assertEqual(zf.read("payload.txt"), b"hello")
+            with self.assertRaisesRegex(RuntimeError, "digest mismatch"):
+                with broker._verified_artifact_zip(outer, "0" * 64):
+                    pass
+
+    def test_verified_artifact_zip_rejects_replacement_between_lstat_and_open(self):
+        if os.name == "nt":
+            self.skipTest("POSIX replacement identity semantics required")
+        with tempfile.TemporaryDirectory(prefix="routervpn-artifact-open-race-") as td:
+            root = Path(td)
+            outer = root / "artifact.zip"
+            foreign = root / "foreign.zip"
+            for path, value in ((outer, b"owned"), (foreign, b"foreign")):
+                path.write_bytes(value)
+                os.chmod(path, 0o600)
+            expected = hashlib.sha256(b"owned").hexdigest()
+            real_open = broker.os.open
+            swapped = False
+
+            def swap_then_open(path, flags, *args, **kwargs):
+                nonlocal swapped
+                if Path(path) == outer and not swapped:
+                    swapped = True
+                    os.replace(foreign, outer)
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(broker.os, "open", side_effect=swap_then_open):
+                with self.assertRaisesRegex(RuntimeError, "changed during verification open"):
+                    with broker._verified_artifact_zip(outer, expected):
+                        pass
+            self.assertEqual(outer.read_bytes(), b"foreign")
+
+    def test_download_limited_cleans_partial_and_length_mismatched_artifacts(self):
+        class FakeResponse:
+            def __init__(self, chunks, length):
+                self._chunks = iter(chunks)
+                self.headers = {"Content-Length": str(length)}
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return False
+            def read(self, _size):
+                value = next(self._chunks)
+                if isinstance(value, BaseException):
+                    raise value
+                return value
+
+        with tempfile.TemporaryDirectory(prefix="routervpn-artifact-partial-") as td:
+            root = Path(td)
+            partial = root / "partial.zip"
+            with mock.patch.object(
+                broker, "_urlopen",
+                return_value=FakeResponse([b"abc", OSError("network reset")], 6),
+            ):
+                with self.assertRaisesRegex(OSError, "network reset"):
+                    broker._download_limited("https://api.github.com/fake", partial)
+            self.assertFalse(partial.exists(), "partial failed download survived")
+
+            mismatch = root / "mismatch.zip"
+            with mock.patch.object(
+                broker, "_urlopen",
+                return_value=FakeResponse([b"abc", b""], 4),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Content-Length mismatch"):
+                    broker._download_limited("https://api.github.com/fake", mismatch)
+            self.assertFalse(mismatch.exists(), "length-mismatched download survived")
+
+    def test_fetch_artifact_member_verifies_outer_digest_before_extraction(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-artifact-fetch-digest-") as td:
+            temp = Path(td)
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("RouterVPN-native-unsigned-resignable.ipa", b"ipa-bytes")
+            archive = buf.getvalue()
+            good_digest = hashlib.sha256(archive).hexdigest()
+            base_item = {
+                "id": 9,
+                "name": "RouterVPN-iOS-release-candidate",
+                "expired": False,
+                "created_at": "2026-08-22T01:00:00Z",
+                "archive_download_url": "https://api.github.com/artifacts/9/zip",
+                "digest": "sha256:" + good_digest,
+                "workflow_run": {"id": 77, "head_branch": "main", "head_sha": SHA},
+            }
+
+            def write_archive(_url, path, progress=None):
+                path.write_bytes(archive)
+                os.chmod(path, 0o600)
+
+            with mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
+                 mock.patch.object(broker, "_successful_producer_run_id", return_value=77), \
+                 mock.patch.object(broker, "_read_limited_json", return_value={"artifacts": [base_item]}), \
+                 mock.patch.object(broker, "_download_limited", side_effect=write_archive):
+                selected = broker.fetch_artifact_member(
+                    "RouterVPN-iOS-release-candidate",
+                    "RouterVPN-native-unsigned-resignable.ipa",
+                    temp,
+                    "router-vpn-ios.ipa",
+                )
+            self.assertEqual(selected.read_bytes(), b"ipa-bytes")
+
+            bad_item = dict(base_item, digest="sha256:" + ("0" * 64))
+            with mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
+                 mock.patch.object(broker, "_successful_producer_run_id", return_value=77), \
+                 mock.patch.object(broker, "_read_limited_json", return_value={"artifacts": [bad_item]}), \
+                 mock.patch.object(broker, "_download_limited", side_effect=write_archive):
+                with self.assertRaisesRegex(RuntimeError, "digest mismatch"):
+                    broker.fetch_artifact_member(
+                        "RouterVPN-iOS-release-candidate",
+                        "RouterVPN-native-unsigned-resignable.ipa",
+                        temp,
+                        "router-vpn-ios-bad.ipa",
+                    )
+            self.assertFalse((temp / "router-vpn-ios-bad.ipa").exists())
+
+            missing = dict(base_item)
+            missing.pop("digest")
+            with mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
+                 mock.patch.object(broker, "_successful_producer_run_id", return_value=77), \
+                 mock.patch.object(broker, "_read_limited_json", return_value={"artifacts": [missing]}), \
+                 mock.patch.object(broker, "_download_limited", side_effect=AssertionError("missing digest must fail before download")):
+                with self.assertRaisesRegex(RuntimeError, "missing a SHA-256 digest"):
+                    broker.fetch_artifact_member(
+                        "RouterVPN-iOS-release-candidate",
+                        "RouterVPN-native-unsigned-resignable.ipa",
+                        temp,
+                        "router-vpn-ios-missing.ipa",
+                    )
+
+    def test_digest_failure_falls_through_to_next_exact_sha_desktop_producer(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-digest-fallback-") as td:
+            temp = Path(td)
+            name = "router-vpn-macos-arm64.zip"
+            result = temp / name
+            calls = []
+
+            def fetch(artifact_name, wanted, root, output_name, progress=None):
+                calls.append(artifact_name)
+                if len(calls) == 1:
+                    raise RuntimeError("GitHub artifact archive SHA-256 digest mismatch")
+                candidate = root / output_name
+                candidate.write_bytes(b"second-producer")
+                return candidate
+
+            def validate(base, request_name, root, candidate, progress=None):
+                result.write_bytes(b"validated-second-producer")
+                return result
+
+            with mock.patch.object(broker, "fetch_artifact_member", side_effect=fetch), \
+                 mock.patch.object(broker, "_run_builder", side_effect=validate):
+                got = broker.build_github_package(Path(td), name, temp)
+            self.assertEqual(got.read_bytes(), b"validated-second-producer")
+            self.assertEqual(
+                calls,
+                ["RouterVPN-macOS-release-candidate", "RouterVPN-macOS-Native-CI"],
+            )
 
     def test_artifact_member_scan_rejects_encryption_count_and_duplicates(self):
         class FakeZip:
