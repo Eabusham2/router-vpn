@@ -33,14 +33,15 @@ def main() -> int:
         private.write_text("SECRET=value\n", encoding="utf-8")
         os.chmod(private, 0o600)
         assert MOD.read_verified_regular(private, private=True) == private.read_bytes()
-        os.chmod(private, 0o640)
-        try:
-            MOD.read_verified_regular(private, private=True)
-        except RuntimeError as exc:
-            assert "0600" in str(exc) or "private mode" in str(exc)
-        else:
-            raise AssertionError("private verified reader accepted broad permissions")
-        os.chmod(private, 0o600)
+        if os.name != "nt":
+            os.chmod(private, 0o640)
+            try:
+                MOD.read_verified_regular(private, private=True)
+            except RuntimeError as exc:
+                assert "0600" in str(exc) or "private mode" in str(exc)
+            else:
+                raise AssertionError("private verified reader accepted broad permissions")
+            os.chmod(private, 0o600)
 
         if os.name != "nt":
             real = root / "real.sh"
