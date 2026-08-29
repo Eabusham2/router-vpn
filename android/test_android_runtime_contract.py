@@ -115,7 +115,12 @@ for forbidden in ('unzip -l "$AAR" | grep -q', 'unzip -l "$AAR" | grep -Eq'):
     assert forbidden not in awg_build, f"pipefail-sensitive AWG AAR verifier pipeline returned: {forbidden}"
 for marker in (
     'unzip -Z1 "$AAR" >"$members"',
-    "'^jni/[^/]+/libawg-go\\.so
+    r'''grep -Eq '^jni/[^/]+/libawg-go\.so$' "$members"''',
+    r'''grep -Eq '^jni/[^/]+/libwg(-go|-quick)?\.so$' "$members"''',
+    'rm -f "$members"',
+):
+    assert marker in awg_build, f"AWG AAR verifier missing complete-list marker: {marker}"
+
 # Xray VpnService must own the TUN, protect core and bootstrap-DNS sockets,
 # inject only the app-owned fd, enforce strict lockdown, prove the selected
 # node, and re-prove after an underlying-network transition.
