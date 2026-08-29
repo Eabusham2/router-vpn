@@ -55,6 +55,21 @@ assert "latestSuccessfulWorkflowSHAs" in updater, (
 assert "actions/workflows/release-candidate.yml/runs" not in updater, (
     "update controller still queries reusable release-candidate as if it had an automatic standalone run"
 )
+for marker in (
+    "func validGitHubRepo",
+    "func validGitHubBranch",
+    'validateGitHubEndpoint(endpoint, "api.github.com")',
+    'validateGitHubEndpoint(endpoint, "raw.githubusercontent.com")',
+    'githubAPIHeaders(req)',
+    'githubBaseHeaders(req)',
+    'req.Header.Del("Authorization")',
+    'githubClient("raw.githubusercontent.com")',
+    'Portainer redirects are forbidden',
+):
+    assert marker in updater, f"update controller lost network credential boundary: {marker}"
+assert "githubHeaders(req)" not in updater, (
+    "update controller revived one shared authenticated header path for API and raw GitHub origins"
+)
 for rel, body in (
     ("source-snapshot.yml", read(".github/workflows/source-snapshot.yml")),
     ("release-candidate.yml", rc),
