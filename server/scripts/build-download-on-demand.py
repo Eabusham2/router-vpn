@@ -344,19 +344,69 @@ def assert_generic_tree(root: Path) -> None:
                 raise ValueError("generic package contains linked router profiles")
 
 
+def _output_target_snapshot(output: Path):
+    try:
+        info = output.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"refusing unsafe package output target: {output}")
+    return info
+
+
+def _require_output_target_unchanged(output: Path, before) -> None:
+    try:
+        current = output.lstat()
+    except FileNotFoundError:
+        if before is None:
+            return
+        raise ValueError(f"package output disappeared before adoption: {output}")
+    if before is None:
+        raise ValueError(f"package output appeared before adoption: {output}")
+    if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(before, current):
+        raise ValueError(f"package output identity changed before adoption: {output}")
+
+
 def zip_dir(root: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
-        for path in sorted(root.rglob("*")):
-            if path.is_symlink():
-                raise ValueError(f"refusing to archive symlink: {path}")
-            rel = Path(root.name) / path.relative_to(root)
-            if path.is_dir():
-                info = zipfile.ZipInfo(rel.as_posix().rstrip("/") + "/")
-                info.external_attr = (0o40755 << 16) | 0x10
-                zf.writestr(info, b"")
-            elif path.is_file():
-                zf.write(path, rel.as_posix())
+    parent_snapshot = parent_chain_snapshot(output)
+    before = _output_target_snapshot(output)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{output.name}.archive-", dir=output.parent)
+    tmp = Path(tmp_name)
+    committed = False
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w+b", closefd=True) as stream:
+            with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
+                for path in sorted(root.rglob("*")):
+                    if path.is_symlink():
+                        raise ValueError(f"refusing to archive symlink: {path}")
+                    rel = Path(root.name) / path.relative_to(root)
+                    if path.is_dir():
+                        info = zipfile.ZipInfo(rel.as_posix().rstrip("/") + "/")
+                        info.external_attr = (0o40755 << 16) | 0x10
+                        zf.writestr(info, b"")
+                    elif path.is_file():
+                        zf.write(path, rel.as_posix())
+            stream.flush()
+            os.fsync(stream.fileno())
+        if tmp.stat().st_size <= 0:
+            raise RuntimeError("staged package archive is empty")
+        verify_parent_chain(parent_snapshot)
+        _require_output_target_unchanged(output, before)
+        os.replace(tmp, output)
+        committed = True
+        try:
+            directory = os.open(output.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError:
+            pass
+    finally:
+        if not committed:
+            tmp.unlink(missing_ok=True)
 
 
 def require_dist(src_root: Path, name: str) -> Path:
@@ -612,9 +662,10 @@ def main() -> int:
         except OSError:
             pass
 
-    if not output.is_file() or output.stat().st_size == 0:
-        raise SystemExit("package creation returned an empty file")
-    os.chmod(output, 0o600)
+    if not output.is_file() or output.is_symlink() or output.stat().st_size == 0:
+        raise SystemExit("package creation returned an empty/unsafe file")
+    if os.name != "nt" and output.stat().st_mode & 0o777 != 0o600:
+        raise SystemExit("package output lost private 0600 mode")
     return 0
 
 
