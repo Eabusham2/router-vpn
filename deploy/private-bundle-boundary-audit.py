@@ -151,6 +151,25 @@ for forbidden in (
 ):
     assert forbidden not in builder, f"package builder revived validate-then-copy race: {forbidden}"
 
+# Final package archives are private publications too: build into a same-directory
+# temporary file, fsync it, re-prove parent + target identity, then replace once.
+for marker in (
+    "def _output_target_snapshot",
+    "def _require_output_target_unchanged",
+    'tempfile.mkstemp(prefix=f".{output.name}.archive-"',
+    "os.fsync(stream.fileno())",
+    "verify_parent_chain(parent_snapshot)",
+    "_require_output_target_unchanged(output, before)",
+    "os.replace(tmp, output)",
+    "package output lost private 0600 mode",
+):
+    assert marker in builder, f"package builder lost atomic output marker: {marker}"
+for forbidden in (
+    'zipfile.ZipFile(output, "w"',
+    "os.chmod(output, 0o600)",
+):
+    assert forbidden not in builder, f"package builder revived direct/post-commit package publication: {forbidden}"
+
 download_safety = subprocess.run(
     [sys.executable, str(ROOT / "server/scripts/test_download_safety.py")],
     cwd=ROOT,
