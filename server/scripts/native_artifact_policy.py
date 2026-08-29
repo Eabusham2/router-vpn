@@ -54,6 +54,22 @@ _IOS_SOURCES = (
     ("RouterVPN-iOS-Native-CI", "RouterVPN-native-unsigned-resignable.ipa"),
 )
 
+ARTIFACT_PRODUCER_WORKFLOWS: dict[str, str] = {
+    "RouterVPN-generic-release-candidate": "release-candidate.yml",
+    "RouterVPN-macOS-release-candidate": "release-candidate.yml",
+    "RouterVPN-Linux-amd64-release-candidate": "release-candidate.yml",
+    "RouterVPN-Linux-arm64-release-candidate": "release-candidate.yml",
+    "RouterVPN-Android-release-candidate": "release-candidate.yml",
+    "RouterVPN-iOS-release-candidate": "release-candidate.yml",
+    "RouterVPN-client-desktop-unix-ci": "client-apps-ci.yml",
+    "RouterVPN-Android-CI": "client-apps-ci.yml",
+    "RouterVPN-iOS-Native-CI": "client-apps-ci.yml",
+    "RouterVPN-macOS-Native-CI": "macos-native-app.yml",
+    "RouterVPN-Linux-Native-amd64-CI": "linux-native-app.yml",
+    "RouterVPN-Linux-Native-arm64-CI": "linux-native-app.yml",
+}
+
+
 DIRECT_ARTIFACTS: dict[str, dict[str, object]] = {
     "router-vpn-android.apk": {
         "sources": _ANDROID_SOURCES,
