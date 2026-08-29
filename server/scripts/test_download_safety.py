@@ -150,6 +150,79 @@ class DownloadSafetyTests(unittest.TestCase):
             (root / "generated").mkdir()
             builder.assert_generic_tree(root)
 
+    def test_zip_dir_failure_preserves_existing_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / "payload"
+            root.mkdir()
+            (root / "file.txt").write_text("new payload", encoding="utf-8")
+            output = base / "package.zip"
+            output.write_bytes(b"previous-valid-package")
+            with mock.patch.object(builder.zipfile.ZipFile, "write", side_effect=RuntimeError("injected archive failure")):
+                with self.assertRaisesRegex(RuntimeError, "injected archive failure"):
+                    builder.zip_dir(root, output)
+            self.assertEqual(output.read_bytes(), b"previous-valid-package")
+            self.assertFalse(list(base.glob(".package.zip.archive-*")))
+
+    def test_zip_dir_rejects_symlink_output(self):
+        if os.name == "nt":
+            self.skipTest("symlink semantics differ on Windows")
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / "payload"
+            root.mkdir()
+            (root / "file.txt").write_text("payload", encoding="utf-8")
+            real = base / "real.zip"
+            real.write_bytes(b"keep")
+            output = base / "package.zip"
+            output.symlink_to(real)
+            with self.assertRaisesRegex(ValueError, "unsafe package output target"):
+                builder.zip_dir(root, output)
+            self.assertEqual(real.read_bytes(), b"keep")
+
+    def test_zip_dir_rejects_target_replacement_before_adoption(self):
+        if os.name == "nt":
+            self.skipTest("atomic replacement identity semantics differ on Windows")
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / "payload"
+            root.mkdir()
+            (root / "file.txt").write_text("payload", encoding="utf-8")
+            output = base / "package.zip"
+            output.write_bytes(b"owned-old")
+            foreign = base / "foreign.zip"
+            foreign.write_bytes(b"foreign")
+            real_verify = builder.verify_parent_chain
+            swapped = False
+
+            def replace_target(snapshot):
+                nonlocal swapped
+                if not swapped:
+                    swapped = True
+                    os.replace(foreign, output)
+                return real_verify(snapshot)
+
+            with mock.patch.object(builder, "verify_parent_chain", side_effect=replace_target):
+                with self.assertRaisesRegex(ValueError, "identity changed before adoption"):
+                    builder.zip_dir(root, output)
+            self.assertEqual(output.read_bytes(), b"foreign")
+            self.assertFalse(list(base.glob(".package.zip.archive-*")))
+
+    def test_zip_dir_atomic_publish_is_private_and_valid(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / "payload"
+            root.mkdir()
+            (root / "file.txt").write_text("payload", encoding="utf-8")
+            output = base / "package.zip"
+            builder.zip_dir(root, output)
+            self.assertTrue(zipfile.is_zipfile(output))
+            with zipfile.ZipFile(output) as zf:
+                self.assertEqual(zf.read("payload/file.txt"), b"payload")
+            if os.name != "nt":
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            self.assertFalse(list(base.glob(".package.zip.archive-*")))
+
     def test_github_repack_does_not_overlay_private_bundle(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
