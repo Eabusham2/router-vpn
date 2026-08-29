@@ -51,6 +51,35 @@ class NativeArtifactPolicyTests(unittest.TestCase):
             names = [x[0] for x in policy.NATIVE_PACKAGE_ARTIFACTS[request]]
             self.assertEqual(names, ["RouterVPN-generic-release-candidate", "RouterVPN-client-desktop-unix-ci"])
 
+    def test_every_download_artifact_has_closed_producer_workflow_mapping(self):
+        expected = {}
+        for sources in policy.NATIVE_PACKAGE_ARTIFACTS.values():
+            for artifact, _member in sources:
+                expected.setdefault(artifact, None)
+        for spec in policy.DIRECT_ARTIFACTS.values():
+            for artifact, _member in spec["sources"]:
+                expected.setdefault(artifact, None)
+        self.assertEqual(set(policy.ARTIFACT_PRODUCER_WORKFLOWS), set(expected))
+        for artifact, workflow in policy.ARTIFACT_PRODUCER_WORKFLOWS.items():
+            self.assertIn(workflow, {
+                "release-candidate.yml",
+                "client-apps-ci.yml",
+                "macos-native-app.yml",
+                "linux-native-app.yml",
+            }, artifact)
+        for artifact in (
+            "RouterVPN-generic-release-candidate",
+            "RouterVPN-macOS-release-candidate",
+            "RouterVPN-Linux-amd64-release-candidate",
+            "RouterVPN-Linux-arm64-release-candidate",
+            "RouterVPN-Android-release-candidate",
+            "RouterVPN-iOS-release-candidate",
+        ):
+            self.assertEqual(policy.ARTIFACT_PRODUCER_WORKFLOWS[artifact], "release-candidate.yml")
+        self.assertEqual(policy.ARTIFACT_PRODUCER_WORKFLOWS["RouterVPN-macOS-Native-CI"], "macos-native-app.yml")
+        self.assertEqual(policy.ARTIFACT_PRODUCER_WORKFLOWS["RouterVPN-Linux-Native-amd64-CI"], "linux-native-app.yml")
+        self.assertEqual(policy.ARTIFACT_PRODUCER_WORKFLOWS["RouterVPN-Linux-Native-arm64-CI"], "linux-native-app.yml")
+
     def test_mobile_is_same_sha_artifact_only_and_ios_preview_is_alias(self):
         android = policy.DIRECT_ARTIFACTS["router-vpn-android.apk"]["sources"]
         self.assertEqual(android[0], ("RouterVPN-Android-release-candidate", "app-debug.apk"))
