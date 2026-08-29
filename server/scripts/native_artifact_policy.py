@@ -55,12 +55,12 @@ _IOS_SOURCES = (
 )
 
 ARTIFACT_PRODUCER_WORKFLOWS: dict[str, str] = {
-    "RouterVPN-generic-release-candidate": "release-candidate.yml",
-    "RouterVPN-macOS-release-candidate": "release-candidate.yml",
-    "RouterVPN-Linux-amd64-release-candidate": "release-candidate.yml",
-    "RouterVPN-Linux-arm64-release-candidate": "release-candidate.yml",
-    "RouterVPN-Android-release-candidate": "release-candidate.yml",
-    "RouterVPN-iOS-release-candidate": "release-candidate.yml",
+    "RouterVPN-generic-release-candidate": "build-all.yml",
+    "RouterVPN-macOS-release-candidate": "build-all.yml",
+    "RouterVPN-Linux-amd64-release-candidate": "build-all.yml",
+    "RouterVPN-Linux-arm64-release-candidate": "build-all.yml",
+    "RouterVPN-Android-release-candidate": "build-all.yml",
+    "RouterVPN-iOS-release-candidate": "build-all.yml",
     "RouterVPN-client-desktop-unix-ci": "client-apps-ci.yml",
     "RouterVPN-Android-CI": "client-apps-ci.yml",
     "RouterVPN-iOS-Native-CI": "client-apps-ci.yml",
