@@ -119,21 +119,30 @@ func TestComposeSHARequiresMaterializedHeaderAndBrokerProvenance(t *testing.T) {
 }
 
 
-func TestUpdaterRequiresCompleteExactSHAReleaseWorkflowSet(t *testing.T) {
-	want := []string{
-		"build-all.yml",
-		"source-snapshot.yml",
-		"release-candidate.yml",
-		"arm64-portainer-preflight.yml",
-		"publish-arm64-images.yml",
-		"production-release-compose.yml",
-	}
+func TestUpdaterUsesBuildAllCallerAsAuthoritativeReleaseRun(t *testing.T) {
+	want := []string{"build-all.yml"}
 	if len(requiredReleaseWorkflows) != len(want) {
 		t.Fatalf("required release workflow count=%d want=%d: %v", len(requiredReleaseWorkflows), len(want), requiredReleaseWorkflows)
 	}
 	for i := range want {
 		if requiredReleaseWorkflows[i] != want[i] {
 			t.Fatalf("required release workflow[%d]=%q want=%q", i, requiredReleaseWorkflows[i], want[i])
+		}
+	}
+}
+
+func TestReusableReleaseChildrenAreNotStandaloneRunRequirements(t *testing.T) {
+	for _, forbidden := range []string{
+		"source-snapshot.yml",
+		"release-candidate.yml",
+		"arm64-portainer-preflight.yml",
+		"publish-arm64-images.yml",
+		"production-release-compose.yml",
+	} {
+		for _, required := range requiredReleaseWorkflows {
+			if required == forbidden {
+				t.Fatalf("called reusable workflow %q was treated as a standalone run requirement", forbidden)
+			}
 		}
 	}
 }
