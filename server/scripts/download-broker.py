@@ -316,16 +316,47 @@ def _fetch_first_artifact(sources, temp: Path, output_name: str, progress=None) 
     raise RuntimeError("; ".join(failures) if failures else "no GitHub artifact sources configured")
 
 
-def fetch_github_package(home_name: str, temp: Path, progress=None) -> Path:
+def _desktop_github_sources(home_name: str):
     generic = _builder.generic_name(home_name)
     if not generic:
         raise RuntimeError("this download has no generic GitHub package")
     override = os.environ.get("ROUTER_VPN_GITHUB_ARTIFACT", "").strip()
     if override:
-        sources = ((override, generic),)
-    else:
-        sources = NATIVE_PACKAGE_ARTIFACTS.get(home_name, (("RouterVPN-client-desktop-unix-ci", generic),))
+        return ((override, generic),), generic
+    return NATIVE_PACKAGE_ARTIFACTS.get(
+        home_name, (("RouterVPN-client-desktop-unix-ci", generic),)
+    ), generic
+
+
+def fetch_github_package(home_name: str, temp: Path, progress=None) -> Path:
+    # Retained for focused callers/tests that need only artifact extraction.
+    # Product delivery uses build_github_package so each producer candidate is
+    # provenance-validated/repacked before falling through to the next source.
+    sources, generic = _desktop_github_sources(home_name)
     return _fetch_first_artifact(sources, temp, generic, progress=progress)
+
+
+def build_github_package(base: Path, name: str, temp: Path, progress=None) -> Path:
+    sources, generic = _desktop_github_sources(name)
+    failures: list[str] = []
+    for artifact_name, wanted in sources:
+        source = temp / generic
+        try:
+            source.unlink(missing_ok=True)
+            candidate = fetch_artifact_member(
+                str(artifact_name), str(wanted), temp, generic, progress=progress
+            )
+            if progress:
+                progress("validating", 48)
+            # Validation/repack is part of candidate selection. A downloaded
+            # artifact with wrong embedded source/family is not allowed to
+            # suppress the next same-SHA native producer.
+            return _run_builder(base, name, temp, candidate, progress=progress)
+        except Exception as exc:
+            failures.append(f"{artifact_name}: {type(exc).__name__}: {exc}")
+        finally:
+            source.unlink(missing_ok=True)
+    raise RuntimeError("; ".join(failures) if failures else "no GitHub artifact sources configured")
 
 
 def fetch_direct_mobile(name: str, temp: Path, progress=None) -> Path:
@@ -385,18 +416,14 @@ def build_package(base: Path, name: str, temp: Path, progress=None) -> tuple[Pat
         if progress:
             progress("packaging", 70)
         return _run_builder(base, name, temp, None, progress=progress), "private-node-bundle"
-    source = None
     try:
-        source = fetch_github_package(name, temp, progress=progress)
+        return build_github_package(base, name, temp, progress=progress), "github"
     except Exception as exc:
-        print(f"download broker: GitHub build unavailable for {name}: {type(exc).__name__}: {exc}; compiling requested generic package locally", flush=True)
-    if source is not None:
-        try:
-            if progress:
-                progress("validating", 48)
-            return _run_builder(base, name, temp, source, progress=progress), "github"
-        except Exception as exc:
-            print(f"download broker: GitHub package validation/repack failed for {name}: {type(exc).__name__}: {exc}; compiling requested generic package locally", flush=True)
+        print(
+            f"download broker: all exact-SHA GitHub package candidates failed for {name}: "
+            f"{type(exc).__name__}: {exc}; compiling requested generic package locally",
+            flush=True,
+        )
     if progress:
         progress("building", 58)
     return _run_builder(base, name, temp, None, progress=progress), "router-local-generic-build"
