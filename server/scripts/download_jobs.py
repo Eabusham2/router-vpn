@@ -196,10 +196,17 @@ class DownloadJobManager:
                 with self.lock:
                     job = self.jobs.get(job_id)
                     terminal_status = str(job.get("status") or "") if job else ""
-                self._update(job_id, phase="cleanup", progress=100)
+                if terminal_status in ("cancelled", "failed"):
+                    # Do not expose a terminal status until its owned temporary
+                    # directory is actually gone. Otherwise status() can observe
+                    # status=cancelled/failed with phase=cleanup and race callers
+                    # that treat terminal state as cleanup-complete.
+                    self._update(job_id, status="building", phase="cleanup", progress=100)
+                else:
+                    self._update(job_id, phase="cleanup", progress=100)
                 self._cleanup_dir(work)
                 if terminal_status in ("cancelled", "failed"):
-                    self._update(job_id, work_dir="", path="", phase=terminal_status, progress=0)
+                    self._update(job_id, work_dir="", path="", status=terminal_status, phase=terminal_status, progress=0)
                 else:
                     self._update(job_id, work_dir="", path="", status="failed", phase="failed", progress=0, error_code="cleanup_without_result", error="download job ended without a deliverable package")
 
