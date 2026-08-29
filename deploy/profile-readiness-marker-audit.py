@@ -44,9 +44,9 @@ ensure = need(
     'private_ok "$GENERATED/$d/rosenpass-client-secret"',
     "Marker files are derived readiness attestations only.",
     "preserving the prior transactional generation",
-    "write_marker "$CORE_MARKER" 'core-transports-xray-v2'",
-    "write_marker "$ADV_MARKER" 'advanced-profiles-v2'",
-    "write_marker "$TLS_MARKER" 'tls-alternates-v1'",
+    """write_marker "$CORE_MARKER" 'core-transports-xray-v2'""",
+    """write_marker "$ADV_MARKER" 'advanced-profiles-v2'""",
+    """write_marker "$TLS_MARKER" 'tls-alternates-v1'""",
 )
 for forbidden in (
     'printf \'%s\\n\' \'core-transports-xray-v2\' >"$CORE_MARKER"',
@@ -69,7 +69,7 @@ for forbidden in (
 # complete runtime after both refresh attempts, never immediately after raw
 # credential generation.
 adv_runtime = ensure.find("if advanced_runtime_ready; then")
-adv_marker = ensure.find("write_marker "$ADV_MARKER" 'advanced-profiles-v2'")
+adv_marker = ensure.find("""write_marker "$ADV_MARKER" 'advanced-profiles-v2'""")
 raw_generation = ensure.find("generate-advanced-profiles.sh")
 if min(adv_runtime, adv_marker, raw_generation) < 0 or not (raw_generation < adv_runtime < adv_marker):
     errors.append("advanced readiness marker is not ordered after complete runtime proof")
@@ -87,9 +87,9 @@ adopt = need(
     "grep -q '^PQ_BASE=1$'",
     'private_ok "$GEN/$d/rosenpass-client-secret"',
     "Existing state is the source of truth.",
-    "write_marker "$CORE_MARKER" 'core-transports-xray-v2'",
-    "write_marker "$ADV_MARKER" 'advanced-profiles-v2'",
-    "write_marker "$TLS_MARKER" 'tls-alternates-v1'",
+    """write_marker "$CORE_MARKER" 'core-transports-xray-v2'""",
+    """write_marker "$ADV_MARKER" 'advanced-profiles-v2'""",
+    """write_marker "$TLS_MARKER" 'tls-alternates-v1'""",
     'clear_marker "$CORE_MARKER"',
     'clear_marker "$ADV_MARKER"',
     'clear_marker "$TLS_MARKER"',
