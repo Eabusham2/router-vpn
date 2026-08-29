@@ -41,12 +41,12 @@ var (
 	customImageRE = regexp.MustCompile(`(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):)([0-9a-f]{40})`)
 	brokerSHARe = regexp.MustCompile(`(?m)^(\s*ROUTER_VPN_GITHUB_SHA:\s*)([0-9a-f]{40})(\s*)$`)
 	requiredReleaseWorkflows = []string{
+		// Reusable workflow jobs run in the caller's GitHub run context. Build-all
+		// is the single automatic caller and its dependency graph owns source
+		// snapshot, release candidate, ARM64 preflight/images, and production
+		// compose. A successful exact-SHA Build-all run therefore is the run-level
+		// proof; source audits separately prevent that graph from being weakened.
 		"build-all.yml",
-		"source-snapshot.yml",
-		"release-candidate.yml",
-		"arm64-portainer-preflight.yml",
-		"publish-arm64-images.yml",
-		"production-release-compose.yml",
 	}
 	ownedImageRE = regexp.MustCompile(`ghcr\.io/eabusham2/(router-vpn-[a-z0-9-]+):([^\s]+)`)
 	requiredCustomImageRepos = []string{
@@ -513,7 +513,7 @@ func (c *controller) verifiedTarget(sha string) error {
 
 func (c *controller) latestVerified() (string, error) {
 	q := url.Values{"branch": {c.branch}, "status": {"success"}, "per_page": {"30"}}
-	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/actions/workflows/release-candidate.yml/runs?%s", c.repo, q.Encode())
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/actions/workflows/build-all.yml/runs?%s", c.repo, q.Encode())
 	var runs workflowRuns
 	if err := githubJSON(endpoint, &runs); err != nil {
 		return "", err
