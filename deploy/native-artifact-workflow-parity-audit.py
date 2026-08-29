@@ -205,6 +205,36 @@ require(combined, combined_rel,
 require(android_gradle, android_gradle_rel, "commandLine 'bash', 'build-sing-box-libbox.sh'")
 assert ".routervpn-build-sing-box-libbox.sh" not in android_gradle, "Android Gradle resurrected a rewritten libbox builder"
 
+# Artifact selection must prove the producer workflow's newest meaningful
+# exact-SHA run is settled-successful, then retrieve artifacts only from that
+# exact workflow-run id. Artifact names alone are not release evidence.
+all_policy_artifacts = {
+    artifact
+    for sources in policy.NATIVE_PACKAGE_ARTIFACTS.values()
+    for artifact, _member in sources
+} | {
+    artifact
+    for spec in policy.DIRECT_ARTIFACTS.values()
+    for artifact, _member in spec["sources"]
+}
+assert set(policy.ARTIFACT_PRODUCER_WORKFLOWS) == all_policy_artifacts, (
+    "native artifact producer map is not closed over download policy"
+)
+require(broker, "server/scripts/download-broker.py",
+        "ARTIFACT_PRODUCER_WORKFLOWS",
+        "def _newest_meaningful_workflow_run",
+        "def _successful_producer_run_id",
+        "has no settled successful exact-SHA run",
+        "actions/workflows/{workflow_path}/runs",
+        "actions/runs/{producer_run_id}/artifacts",
+        "expected exactly one unexpired")
+require(broker_exact_sha_test, broker_exact_sha_test_rel,
+        "newest_meaningful_producer_run_controls_artifact_evidence",
+        "successful_producer_run_requires_settled_success_and_closed_mapping",
+        "fetch_artifact_member_rejects_artifact_from_older_producer_run",
+        "fetch_artifact_member_scopes_lookup_to_exact_producer_run_and_rejects_duplicate_artifacts")
+
+
 # Release-candidate and dedicated fallback artifacts must use the names/members
 # that the authenticated download broker actually asks GitHub for.
 require(rc, rc_rel,
