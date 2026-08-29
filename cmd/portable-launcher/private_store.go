@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"io/fs"
@@ -207,7 +208,30 @@ func portableRegularExists(path string) bool {
 	return err == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular()
 }
 
-func atomicWritePortablePrivateTargetUnchanged(path string, before os.FileInfo) error {
+type portableTargetSnapshot struct {
+	info   os.FileInfo
+	digest [sha256.Size]byte
+}
+
+func snapshotPortablePrivateTarget(path string) (*portableTargetSnapshot, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("refusing unsafe Portable private target %s", path)
+	}
+	body, err := readPortablePrivate(path, maxPortablePrivateBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &portableTargetSnapshot{info: info, digest: sha256.Sum256(body)}, nil
+}
+
+func atomicWritePortablePrivateTargetUnchanged(path string, before *portableTargetSnapshot) error {
 	current, err := os.Lstat(path)
 	if before == nil {
 		if err == nil {
@@ -224,8 +248,18 @@ func atomicWritePortablePrivateTargetUnchanged(path string, before os.FileInfo) 
 		}
 		return err
 	}
-	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(before, current) {
+	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() {
 		return fmt.Errorf("Portable private target %s identity changed before adoption", path)
+	}
+	if !os.SameFile(before.info, current) && before.info.Size() != current.Size() {
+		return fmt.Errorf("Portable private target %s identity changed before adoption", path)
+	}
+	body, err := readPortablePrivate(path, maxPortablePrivateBytes)
+	if err != nil {
+		return fmt.Errorf("re-prove Portable private target %s: %w", path, err)
+	}
+	if sha256.Sum256(body) != before.digest {
+		return fmt.Errorf("Portable private target %s content changed before adoption", path)
 	}
 	return nil
 }
@@ -245,10 +279,8 @@ func atomicWritePortablePrivate(path string, body []byte) error {
 		return err
 	}
 	parent := filepath.Dir(path)
-	var targetBefore os.FileInfo
-	if info, err := os.Lstat(path); err == nil {
-		targetBefore = info
-	} else if !os.IsNotExist(err) {
+	targetBefore, err := snapshotPortablePrivateTarget(path)
+	if err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(parent, "."+filepath.Base(path)+".tmp-*")
