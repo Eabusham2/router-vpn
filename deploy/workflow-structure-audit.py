@@ -46,12 +46,19 @@ for name in critical_steps:
 # Step declarations belong only at the workflow indentation. If one appears
 # inside a shell body or quoted evidence string, the file was likely pasted
 # into itself.
-for match in re.finditer(r"(?m)^(\s+)- name:\s+(.+)$", aux):
+for match in re.finditer(r"(?m)^([ \t]+)- name:[ \t]+(.+)$", aux):
     indent = len(match.group(1))
     assert indent == 6, (
         f"{aux_rel}: embedded/misindented workflow step {match.group(2)!r} "
         f"at indentation {indent}"
     )
+
+
+# Horizontal indentation only: \\s includes newlines and can count the line
+# break before a valid six-space step as a seventh indentation character.
+assert re.search(r"(?m)^([ \\t]{6})- name:[ \\t]+Static checks$", aux), (
+    f"{aux_rel}: Static checks is not a six-space workflow step"
+)
 
 # These are the exact evidence-boundary changes that motivated the last valid
 # edit. Keep the fixed pipefail-safe shape while guarding the file structure.
