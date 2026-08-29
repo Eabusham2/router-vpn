@@ -37,7 +37,86 @@ const (
 )
 
 var (
-	shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	shaRE = regexp.MustCompile(`^[0-9a-f]{40}package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	defaultListen          = "127.0.0.1:8793"
+	defaultPortainerURL    = "https://127.0.0.1:9443"
+	defaultStackName       = "router-vpn"
+	defaultRepo            = "Eabusham2/router-vpn"
+	defaultBranch          = "main"
+	defaultSetupTokenFile  = "/etc/router-vpn/setup-center.token"
+	defaultPortainerKey    = "/etc/router-vpn/portainer-api.key"
+	defaultPortainerPin    = "/etc/router-vpn/portainer-tls.sha256"
+	defaultStatePath       = "/var/lib/router-vpn/update-controller.json"
+	maxJSON                = 4 << 20
+	maxCompose             = 2 << 20
+)
+
+var (
+)
+	githubRepoComponentRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	defaultListen          = "127.0.0.1:8793"
+	defaultPortainerURL    = "https://127.0.0.1:9443"
+	defaultStackName       = "router-vpn"
+	defaultRepo            = "Eabusham2/router-vpn"
+	defaultBranch          = "main"
+	defaultSetupTokenFile  = "/etc/router-vpn/setup-center.token"
+	defaultPortainerKey    = "/etc/router-vpn/portainer-api.key"
+	defaultPortainerPin    = "/etc/router-vpn/portainer-tls.sha256"
+	defaultStatePath       = "/var/lib/router-vpn/update-controller.json"
+	maxJSON                = 4 << 20
+	maxCompose             = 2 << 20
+)
+
+var (
+)
 	customImageRE = regexp.MustCompile(`(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):)([0-9a-f]{40})`)
 	brokerSHARe = regexp.MustCompile(`(?m)^(\s*ROUTER_VPN_GITHUB_SHA:\s*)([0-9a-f]{40})(\s*)$`)
 	requiredReleaseWorkflows = []string{
@@ -113,6 +192,39 @@ func env(k, fallback string) string {
 	return fallback
 }
 
+func validGitHubRepo(value string) bool {
+	if len(value) == 0 || len(value) > 200 || strings.Count(value, "/") != 1 {
+		return false
+	}
+	parts := strings.Split(value, "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." || len(part) > 100 || !githubRepoComponentRE.MatchString(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func validGitHubBranch(value string) bool {
+	if len(value) == 0 || len(value) > 255 || value == "@" ||
+		strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") ||
+		strings.HasSuffix(value, ".") || strings.Contains(value, "//") ||
+		strings.Contains(value, "..") || strings.Contains(value, "@{") {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(" ~^:?*[\\", r) {
+			return false
+		}
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
+}
+
 func readSecret(path string, min int) (string, error) {
 	b, err := readUpdaterPrivate(path, 64<<10)
 	if err != nil {
@@ -155,8 +267,11 @@ func loadController() (*controller, error) {
 		statePath:        env("ROUTER_VPN_UPDATE_STATE", defaultStatePath),
 		state:            updateState{Version: 1, Status: "idle"},
 	}
-	if strings.Count(c.repo, "/") != 1 || strings.ContainsAny(c.repo, " \\?#") {
+	if !validGitHubRepo(c.repo) {
 		return nil, errors.New("invalid GitHub repository")
+	}
+	if !validGitHubBranch(c.branch) {
+		return nil, errors.New("invalid GitHub branch")
 	}
 	if err := c.loadState(); err != nil {
 		return nil, fmt.Errorf("load update recovery state: %w", err)
@@ -380,23 +495,61 @@ func (c *controller) portainer(method, path string, body any, out any) error {
 	return nil
 }
 
-func githubHeaders(req *http.Request) {
-	req.Header.Set("Accept", "application/vnd.github+json")
+func validateGitHubEndpoint(endpoint, expectedHost string) (*url.URL, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), expectedHost) ||
+		parsed.Port() != "" || parsed.User != nil || parsed.Fragment != "" {
+		return nil, fmt.Errorf("GitHub endpoint must stay on https://%s", expectedHost)
+	}
+	return parsed, nil
+}
+
+func githubClient(expectedHost string) *http.Client {
+	return &http.Client{
+		Timeout:   15 * time.Second,
+		Transport: &http.Transport{Proxy: nil},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("too many GitHub redirects")
+			}
+			if _, err := validateGitHubEndpoint(req.URL.String(), expectedHost); err != nil {
+				return err
+			}
+			if !strings.EqualFold(expectedHost, "api.github.com") {
+				req.Header.Del("Authorization")
+				req.Header.Del("Cookie")
+			}
+			return nil
+		},
+	}
+}
+
+func githubBaseHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", "router-vpn-update-controller/1")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+}
+
+func githubAPIHeaders(req *http.Request) {
+	githubBaseHeaders(req)
+	req.Header.Set("Accept", "application/vnd.github+json")
 	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 }
 
 func githubJSON(endpoint string, out any) error {
+	if _, err := validateGitHubEndpoint(endpoint, "api.github.com"); err != nil {
+		return err
+	}
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
-	githubHeaders(req)
-	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: nil}}
-	resp, err := client.Do(req)
+	githubAPIHeaders(req)
+	resp, err := githubClient("api.github.com").Do(req)
 	if err != nil {
 		return err
 	}
@@ -411,17 +564,29 @@ func githubJSON(endpoint string, out any) error {
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("GitHub HTTP %d", resp.StatusCode)
 	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return errors.New("GitHub returned an empty JSON response")
+	}
 	return json.Unmarshal(raw, out)
 }
 
 func githubText(endpoint string, limit int64) (string, error) {
+	if limit <= 0 || limit > maxCompose {
+		return "", errors.New("invalid GitHub text response limit")
+	}
+	if _, err := validateGitHubEndpoint(endpoint, "raw.githubusercontent.com"); err != nil {
+		return "", err
+	}
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", err
 	}
-	githubHeaders(req)
-	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: nil}}
-	resp, err := client.Do(req)
+	githubBaseHeaders(req)
+	req.Header.Set("Accept", "text/plain")
+	// Raw source is public repository content. Never send GITHUB_TOKEN to the
+	// raw-content origin; authenticated release evidence stays on api.github.com.
+	req.Header.Del("Authorization")
+	resp, err := githubClient("raw.githubusercontent.com").Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -435,6 +600,9 @@ func githubText(endpoint string, limit int64) (string, error) {
 	}
 	if resp.StatusCode/100 != 2 {
 		return "", fmt.Errorf("GitHub file HTTP %d", resp.StatusCode)
+	}
+	if len(raw) == 0 {
+		return "", errors.New("GitHub returned an empty file")
 	}
 	return string(raw), nil
 }
