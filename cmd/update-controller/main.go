@@ -364,7 +364,16 @@ func (c *controller) portainerClient() (*http.Client, string, error) {
 		},
 	}
 	transport := &http.Transport{TLSClientConfig: tlsConfig, Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext}
-	return &http.Client{Transport: transport, Timeout: 90 * time.Second}, key, nil
+	return &http.Client{
+		Transport: transport,
+		Timeout:   90 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			// Portainer is pinned to one loopback HTTPS origin. Its API never
+			// needs redirects, and following one could forward X-API-Key to an
+			// unpinned/downgraded destination.
+			return errors.New("Portainer redirects are forbidden")
+		},
+	}, key, nil
 }
 
 func (c *controller) portainer(method, path string, body any, out any) error {
@@ -937,7 +946,7 @@ func (c *controller) status(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "configured": configured, "configuration_reason": reason, "current_sha": current, "busy": busy, "state": state, "semantics": "Exact-SHA update requires green release-candidate, ARM64 image publication and production-compose workflows; Portainer owns deployment; prune is always false; stack environment and previous exact compose are preserved; terminal failed is written only after exact prior-stack rollback is health-verified."})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "configured": configured, "configuration_reason": reason, "current_sha": current, "busy": busy, "state": state, "semantics": "Exact-SHA update requires a settled successful authoritative Build-all chain (source snapshot, release candidate, ARM64 preflight/images and production compose); Portainer owns deployment; prune is always false; stack environment and previous exact compose are preserved; terminal failed is written only after exact prior-stack rollback is health-verified."})
 }
 
 func decodeSHARequest(w http.ResponseWriter, r *http.Request) (string, bool) {
