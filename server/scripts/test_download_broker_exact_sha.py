@@ -140,6 +140,77 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
                 )
         self.assertIn("/actions/runs/77/artifacts?", read.call_args.args[0])
 
+    def test_selected_artifact_output_is_validated_before_network_and_adoption(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-selected-output-") as td:
+            temp = Path(td)
+            with mock.patch.object(broker, "_github_scope", side_effect=AssertionError("network/scope must not run")):
+                for bad in ("../escape.zip", "nested/file.zip", ".", ""):
+                    with self.assertRaisesRegex(RuntimeError, "invalid selected artifact output name"):
+                        broker.fetch_artifact_member("artifact", "wanted", temp, bad)
+
+            existing = temp / "existing.zip"
+            existing.write_bytes(b"foreign")
+            with mock.patch.object(broker, "_github_scope", side_effect=AssertionError("network/scope must not run")):
+                with self.assertRaisesRegex(RuntimeError, "already exists"):
+                    broker.fetch_artifact_member("artifact", "wanted", temp, "existing.zip")
+            self.assertEqual(existing.read_bytes(), b"foreign")
+
+            if os.name != "nt":
+                real = temp / "real.zip"
+                real.write_bytes(b"keep")
+                link = temp / "link.zip"
+                link.symlink_to(real)
+                with mock.patch.object(broker, "_github_scope", side_effect=AssertionError("network/scope must not run")):
+                    with self.assertRaisesRegex(RuntimeError, "unsafe"):
+                        broker.fetch_artifact_member("artifact", "wanted", temp, "link.zip")
+                self.assertEqual(real.read_bytes(), b"keep")
+
+    def test_selected_artifact_replacement_race_preserves_foreign_target(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-selected-race-") as td:
+            temp = Path(td)
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("RouterVPN-native-unsigned-resignable.ipa", b"ipa-bytes")
+            archive = buf.getvalue()
+            digest = hashlib.sha256(archive).hexdigest()
+            item = {
+                "id": 19,
+                "name": "RouterVPN-iOS-release-candidate",
+                "expired": False,
+                "archive_download_url": "https://api.github.com/artifacts/19/zip",
+                "digest": "sha256:" + digest,
+                "workflow_run": {"id": 88, "head_branch": "main", "head_sha": SHA},
+            }
+            selected = temp / "router-vpn-ios.ipa"
+
+            def write_archive(_url, path, progress=None):
+                path.write_bytes(archive)
+                os.chmod(path, 0o600)
+
+            real_absent = broker._require_selected_output_absent
+            injected = False
+            def inject_foreign(path):
+                nonlocal injected
+                if not injected:
+                    injected = True
+                    path.write_bytes(b"foreign-winner")
+                return real_absent(path)
+
+            with mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
+                 mock.patch.object(broker, "_successful_producer_run_id", return_value=88), \
+                 mock.patch.object(broker, "_read_limited_json", return_value={"artifacts": [item]}), \
+                 mock.patch.object(broker, "_download_limited", side_effect=write_archive), \
+                 mock.patch.object(broker, "_require_selected_output_absent", side_effect=inject_foreign):
+                with self.assertRaisesRegex(RuntimeError, "appeared before adoption"):
+                    broker.fetch_artifact_member(
+                        "RouterVPN-iOS-release-candidate",
+                        "RouterVPN-native-unsigned-resignable.ipa",
+                        temp,
+                        "router-vpn-ios.ipa",
+                    )
+            self.assertEqual(selected.read_bytes(), b"foreign-winner")
+            self.assertFalse(list(temp.glob(".router-vpn-ios.ipa.*.part")))
+
     def test_artifact_digest_metadata_is_mandatory_and_strict(self):
         digest = "a" * 64
         self.assertEqual(broker._artifact_sha256({"digest": "sha256:" + digest}), digest)
