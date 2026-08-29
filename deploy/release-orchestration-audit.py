@@ -201,6 +201,7 @@ for audit in (
     "deploy/public-metadata-publication-audit.py",
     "deploy/durable-state-syntax-audit.py",
     "deploy/durable-state-transaction-audit.py",
+    "deploy/workflow-source-integrity-audit.py",
     "deploy/production-install-state-audit.py",
     "deploy/profile-readiness-marker-audit.py",
     "server/scripts/test_preserve_generated_state.py",
