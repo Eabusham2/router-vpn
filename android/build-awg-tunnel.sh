@@ -14,7 +14,7 @@ verify_aar(){
   members=$(mktemp)
   unzip -tq "$AAR" >/dev/null || { rm -f "$members"; return 1; }
   unzip -Z1 "$AAR" >"$members" || { rm -f "$members"; return 1; }
-  grep -Eq '^jni/[^/]+/libawg-go\.so
+  if ! grep -Eq '^jni/[^/]+/libawg-go\.so
 if [[ -s "$AAR" && -f "$STAMP" && $(tr -d '\r\n' <"$STAMP") == "$COMMIT" ]]; then
   verify_aar
   printf 'Pinned namespaced AmneziaWG Android tunnel already built: %s (%s)\n' "$VERSION" "$COMMIT"
@@ -77,11 +77,11 @@ install -m 0644 "$VENDOR/COPYING" "$LICENSE_OUT"
 printf '%s\n' "$COMMIT" >"$STAMP"
 verify_aar
 printf 'Built pinned namespaced AmneziaWG Android tunnel %s at %s\n' "$VERSION" "$COMMIT"
- "$members" || {
+ "$members"; then
     rm -f "$members"
     echo 'AmneziaWG AAR is missing namespaced libawg-go.so' >&2
     return 1
-  }
+  fi
   if grep -Eq '^jni/[^/]+/libwg(-go|-quick)?\.so
 if [[ -s "$AAR" && -f "$STAMP" && $(tr -d '\r\n' <"$STAMP") == "$COMMIT" ]]; then
   verify_aar
