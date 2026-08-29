@@ -227,12 +227,17 @@ require(broker, "server/scripts/download-broker.py",
         "has no settled successful exact-SHA run",
         "actions/workflows/{workflow_path}/runs",
         "actions/runs/{producer_run_id}/artifacts",
-        "expected exactly one unexpired")
+        "expected exactly one unexpired",
+        "def build_github_package",
+        "Validation/repack is part of candidate selection",
+        "all exact-SHA GitHub package candidates failed")
 require(broker_exact_sha_test, broker_exact_sha_test_rel,
         "newest_meaningful_producer_run_controls_artifact_evidence",
         "successful_producer_run_requires_settled_success_and_closed_mapping",
         "fetch_artifact_member_rejects_artifact_from_older_producer_run",
-        "fetch_artifact_member_scopes_lookup_to_exact_producer_run_and_rejects_duplicate_artifacts")
+        "fetch_artifact_member_scopes_lookup_to_exact_producer_run_and_rejects_duplicate_artifacts",
+        "corrupt_preferred_desktop_artifact_falls_through_to_second_same_sha_source",
+        "desktop_does_not_use_local_fallback_when_second_github_candidate_validates")
 
 
 # Release-candidate and dedicated fallback artifacts must use the names/members
