@@ -387,7 +387,8 @@ def zip_dir(root: Path, output: Path) -> None:
     tmp = Path(tmp_name)
     committed = False
     try:
-        os.fchmod(fd, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w+b", closefd=True) as stream:
             with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
                 for path in sorted(root.rglob("*")):
@@ -418,6 +419,10 @@ def zip_dir(root: Path, output: Path) -> None:
             pass
     finally:
         if not committed:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
             tmp.unlink(missing_ok=True)
 
 
