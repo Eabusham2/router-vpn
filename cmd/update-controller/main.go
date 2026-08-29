@@ -37,86 +37,8 @@ const (
 )
 
 var (
-	shaRE = regexp.MustCompile(`^[0-9a-f]{40}package main
-
-import (
-	"bytes"
-	"crypto/sha256"
-	"crypto/subtle"
-	"crypto/tls"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"log"
-	"net"
-	"net/http"
-	"net/url"
-	"os"
-	"regexp"
-	"sort"
-	"strings"
-	"sync"
-	"time"
-)
-
-const (
-	defaultListen          = "127.0.0.1:8793"
-	defaultPortainerURL    = "https://127.0.0.1:9443"
-	defaultStackName       = "router-vpn"
-	defaultRepo            = "Eabusham2/router-vpn"
-	defaultBranch          = "main"
-	defaultSetupTokenFile  = "/etc/router-vpn/setup-center.token"
-	defaultPortainerKey    = "/etc/router-vpn/portainer-api.key"
-	defaultPortainerPin    = "/etc/router-vpn/portainer-tls.sha256"
-	defaultStatePath       = "/var/lib/router-vpn/update-controller.json"
-	maxJSON                = 4 << 20
-	maxCompose             = 2 << 20
-)
-
-var (
-)
-	githubRepoComponentRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+package main
-
-import (
-	"bytes"
-	"crypto/sha256"
-	"crypto/subtle"
-	"crypto/tls"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"log"
-	"net"
-	"net/http"
-	"net/url"
-	"os"
-	"regexp"
-	"sort"
-	"strings"
-	"sync"
-	"time"
-)
-
-const (
-	defaultListen          = "127.0.0.1:8793"
-	defaultPortainerURL    = "https://127.0.0.1:9443"
-	defaultStackName       = "router-vpn"
-	defaultRepo            = "Eabusham2/router-vpn"
-	defaultBranch          = "main"
-	defaultSetupTokenFile  = "/etc/router-vpn/setup-center.token"
-	defaultPortainerKey    = "/etc/router-vpn/portainer-api.key"
-	defaultPortainerPin    = "/etc/router-vpn/portainer-tls.sha256"
-	defaultStatePath       = "/var/lib/router-vpn/update-controller.json"
-	maxJSON                = 4 << 20
-	maxCompose             = 2 << 20
-)
-
-var (
-)
+	shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	githubRepoComponentRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 	customImageRE = regexp.MustCompile(`(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):)([0-9a-f]{40})`)
 	brokerSHARe = regexp.MustCompile(`(?m)^(\s*ROUTER_VPN_GITHUB_SHA:\s*)([0-9a-f]{40})(\s*)$`)
 	requiredReleaseWorkflows = []string{
@@ -213,7 +135,7 @@ func validGitHubBranch(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if r < 0x20 || r == 0x7f || strings.ContainsRune(" ~^:?*[\\", r) {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(" ~^:?*[\\\\", r) {
 			return false
 		}
 	}
@@ -224,7 +146,6 @@ func validGitHubBranch(value string) bool {
 	}
 	return true
 }
-
 func readSecret(path string, min int) (string, error) {
 	b, err := readUpdaterPrivate(path, 64<<10)
 	if err != nil {
@@ -583,8 +504,8 @@ func githubText(endpoint string, limit int64) (string, error) {
 	}
 	githubBaseHeaders(req)
 	req.Header.Set("Accept", "text/plain")
-	// Raw source is public repository content. Never send GITHUB_TOKEN to the
-	// raw-content origin; authenticated release evidence stays on api.github.com.
+	// Raw public source does not need GitHub credentials. Never send the token
+	// outside the authenticated api.github.com release-evidence origin.
 	req.Header.Del("Authorization")
 	resp, err := githubClient("raw.githubusercontent.com").Do(req)
 	if err != nil {
@@ -606,7 +527,6 @@ func githubText(endpoint string, limit int64) (string, error) {
 	}
 	return string(raw), nil
 }
-
 func newestMeaningfulWorkflowRun(runs []workflowRun, sha, branch string) (workflowRun, bool) {
 	matches := make([]workflowRun, 0, len(runs))
 	for _, run := range runs {
