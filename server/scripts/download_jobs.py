@@ -5,12 +5,16 @@ from __future__ import annotations
 import inspect
 import secrets
 from pathlib import Path
+import runpy
 import shutil
-import tempfile
 import threading
 import time
 from typing import Callable
 
+
+_OWNED_TEMP = runpy.run_path(str(Path(__file__).with_name("owned-temp.py")))
+create_owned_temp = _OWNED_TEMP["create_owned_temp"]
+cleanup_owned_temp = _OWNED_TEMP["cleanup_owned_temp"]
 
 JOB_TTL_SECONDS = 15 * 60
 MAX_HISTORY = 64
@@ -137,15 +141,14 @@ class DownloadJobManager:
         if not path:
             return
         try:
-            shutil.rmtree(path)
+            cleanup_owned_temp(Path(path))
         except FileNotFoundError:
             pass
         except OSError:
             pass
 
     def _run(self, job_id: str) -> None:
-        work = tempfile.mkdtemp(prefix="router-vpn-job-")
-        Path(work).chmod(0o700)
+        work = str(create_owned_temp("router-vpn-job-"))
         self._update(job_id, work_dir=work)
         acquired = False
         try:
