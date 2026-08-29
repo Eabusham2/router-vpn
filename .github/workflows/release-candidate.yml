@@ -33,6 +33,7 @@ jobs:
           python3 deploy/release-gap-audit.py
           python3 deploy/product-parity-audit.py
           python3 deploy/profile-settings-audit.py
+          python3 deploy/native-auto-requirements-ui-audit.py
           python3 deploy/native-session-mutation-audit.py
           python3 deploy/backend-session-transaction-audit.py
           python3 deploy/profile-schema-shipping-audit.py
