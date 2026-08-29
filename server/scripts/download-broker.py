@@ -90,6 +90,7 @@ _artifact_policy = module_from_spec(_policy_spec)
 _policy_spec.loader.exec_module(_artifact_policy)
 NATIVE_PACKAGE_ARTIFACTS = _artifact_policy.NATIVE_PACKAGE_ARTIFACTS
 DIRECT_ARTIFACTS = _artifact_policy.DIRECT_ARTIFACTS
+ARTIFACT_PRODUCER_WORKFLOWS = _artifact_policy.ARTIFACT_PRODUCER_WORKFLOWS
 
 _mobile_provenance_spec = spec_from_file_location("router_vpn_mobile_artifact_provenance", SCRIPT_DIR / "mobile-artifact-provenance.py")
 if _mobile_provenance_spec is None or _mobile_provenance_spec.loader is None:
@@ -200,7 +201,46 @@ def _github_scope() -> tuple[str, str, str]:
     return repo, branch, head_sha
 
 
-def _artifact_candidates(meta: dict, artifact_name: str, branch: str, head_sha: str) -> list[dict]:
+def _newest_meaningful_workflow_run(runs: list[dict], branch: str, head_sha: str) -> dict | None:
+    matches = [
+        run for run in runs
+        if str(run.get("head_sha") or "").lower() == head_sha
+        and str(run.get("head_branch") or "") == branch
+    ]
+    matches.sort(key=lambda run: int(run.get("id") or 0), reverse=True)
+    for run in matches:
+        # A newer exact-SHA producer that is queued/in-progress means artifact
+        # evidence is unsettled. Never fall back to an older green producer.
+        if str(run.get("status") or "") != "completed":
+            return None
+        conclusion = str(run.get("conclusion") or "")
+        # Concurrency duplicates may be cancelled/skipped without invalidating
+        # the newest meaningful completed producer.
+        if conclusion in ("cancelled", "skipped"):
+            continue
+        return run
+    return None
+
+
+def _successful_producer_run_id(repo: str, artifact_name: str, branch: str, head_sha: str) -> int:
+    workflow = ARTIFACT_PRODUCER_WORKFLOWS.get(artifact_name)
+    if not workflow:
+        raise RuntimeError(f"artifact {artifact_name} has no closed producer-workflow mapping")
+    q = urllib.parse.urlencode({"branch": branch, "head_sha": head_sha, "per_page": 50})
+    workflow_path = urllib.parse.quote(workflow, safe="")
+    meta = _read_limited_json(f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_path}/runs?{q}")
+    run = _newest_meaningful_workflow_run(list(meta.get("workflow_runs") or []), branch, head_sha)
+    if not run or str(run.get("conclusion") or "") != "success":
+        raise RuntimeError(
+            f"artifact producer {workflow} has no settled successful exact-SHA run for {branch} at {head_sha}"
+        )
+    run_id = int(run.get("id") or 0)
+    if run_id <= 0:
+        raise RuntimeError(f"artifact producer {workflow} returned an invalid workflow run id")
+    return run_id
+
+
+def _artifact_candidates(meta: dict, artifact_name: str, branch: str, head_sha: str, producer_run_id: int) -> list[dict]:
     candidates: list[dict] = []
     for item in meta.get("artifacts", []):
         if item.get("expired") or item.get("name") != artifact_name:
@@ -208,7 +248,9 @@ def _artifact_candidates(meta: dict, artifact_name: str, branch: str, head_sha: 
         run = item.get("workflow_run") or {}
         if branch and run.get("head_branch") != branch:
             continue
-        if run.get("head_sha") != head_sha:
+        if str(run.get("head_sha") or "").lower() != head_sha:
+            continue
+        if int(run.get("id") or 0) != producer_run_id:
             continue
         candidates.append(item)
     candidates.sort(key=lambda x: (x.get("created_at", ""), int(x.get("id", 0))), reverse=True)
@@ -223,9 +265,10 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     repo, branch, head_sha = _github_scope()
     if not artifact_name:
         raise RuntimeError("invalid GitHub artifact name")
+    producer_run_id = _successful_producer_run_id(repo, artifact_name, branch, head_sha)
     q = urllib.parse.urlencode({"name": artifact_name, "per_page": 100})
     meta = _read_limited_json(f"https://api.github.com/repos/{repo}/actions/artifacts?{q}")
-    candidates = _artifact_candidates(meta, artifact_name, branch, head_sha)
+    candidates = _artifact_candidates(meta, artifact_name, branch, head_sha, producer_run_id)
     if not candidates:
         scope = branch or "any branch"
         scope += f" at {head_sha}"
