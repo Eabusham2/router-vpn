@@ -159,7 +159,7 @@ func TestPortablePrivateStoreRejectsTargetReplacementBeforeAdoption(t *testing.T
 	if err := os.WriteFile(path, []byte("owned\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Lstat(path)
+	before, err := snapshotPortablePrivateTarget(path)
 	if err != nil {
 		t.Fatal(err)
 	}
