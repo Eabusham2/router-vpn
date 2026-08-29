@@ -262,6 +262,27 @@ def _verified_artifact_zip(path: Path, expected_sha256: str):
         stream.close()
 
 
+def _safe_selected_output(temp: Path, output_name: str) -> Path:
+    if not output_name or output_name in (".", "..") or Path(output_name).name != output_name:
+        raise RuntimeError("invalid selected artifact output name")
+    selected = temp / output_name
+    try:
+        info = selected.lstat()
+    except FileNotFoundError:
+        return selected
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise RuntimeError("selected artifact output target is unsafe")
+    raise RuntimeError("selected artifact output already exists before adoption")
+
+
+def _require_selected_output_absent(selected: Path) -> None:
+    try:
+        selected.lstat()
+    except FileNotFoundError:
+        return
+    raise RuntimeError("selected artifact output appeared before adoption")
+
+
 def _safe_artifact_name(name: str) -> None:
     normalized = urllib.parse.unquote(name.replace("\\", "/"))
     p = PurePosixPath(normalized)
@@ -387,7 +408,7 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     _download_limited(artifact["archive_download_url"], outer, progress=progress)
     if progress:
         progress("validating", 42)
-    selected = temp / output_name
+    selected = _safe_selected_output(temp, output_name)
     fd, staged_name = tempfile.mkstemp(prefix=f".{Path(output_name).name}.", suffix=".part", dir=temp)
     os.close(fd)
     staged = Path(staged_name)
@@ -402,6 +423,7 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
                     os.fsync(w.fileno())
         if staged.stat().st_size == 0:
             raise RuntimeError("selected GitHub package is empty")
+        _require_selected_output_absent(selected)
         os.replace(staged, selected)
         committed = True
     finally:
