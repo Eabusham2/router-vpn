@@ -123,8 +123,35 @@ def _api_headers() -> dict[str, str]:
     return headers
 
 
+class _SafeGitHubRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+        old = urllib.parse.urlsplit(req.full_url)
+        new = urllib.parse.urlsplit(redirected.full_url)
+        if new.scheme.lower() != "https":
+            raise RuntimeError(f"refusing non-HTTPS GitHub redirect to {new.scheme or 'unknown'}")
+        old_origin = (old.scheme.lower(), (old.hostname or "").lower(), old.port)
+        new_origin = (new.scheme.lower(), (new.hostname or "").lower(), new.port)
+        if new_origin != old_origin:
+            # Python urllib copies arbitrary headers during redirects. Artifact
+            # downloads intentionally redirect from api.github.com to GitHub's
+            # blob storage, so strip credentials before the cross-origin hop.
+            redirected.remove_header("Authorization")
+            redirected.remove_header("Cookie")
+        return redirected
+
+
+_GITHUB_OPENER = urllib.request.build_opener(_SafeGitHubRedirect())
+
+
 def _urlopen(url: str, timeout: int = 12):
-    return urllib.request.urlopen(urllib.request.Request(url, headers=_api_headers()), timeout=timeout)
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme.lower() != "https" or (parsed.hostname or "").lower() != "api.github.com":
+        raise RuntimeError("authenticated GitHub requests must start at https://api.github.com")
+    request = urllib.request.Request(url, headers=_api_headers())
+    return _GITHUB_OPENER.open(request, timeout=timeout)
 
 
 def _read_limited_json(url: str) -> dict:
