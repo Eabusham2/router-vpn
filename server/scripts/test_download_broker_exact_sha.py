@@ -107,13 +107,36 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
              mock.patch.object(broker, "_successful_producer_run_id", return_value=41), \
              mock.patch.object(broker, "_read_limited_json", return_value=artifact_meta), \
              mock.patch.object(broker, "_download_limited", side_effect=AssertionError("stale producer artifact must not download")):
-            with self.assertRaisesRegex(RuntimeError, "no unexpired RouterVPN-iOS-release-candidate artifact"):
+            with self.assertRaisesRegex(RuntimeError, "expected exactly one unexpired RouterVPN-iOS-release-candidate artifact"):
                 broker.fetch_artifact_member(
                     "RouterVPN-iOS-release-candidate",
                     "RouterVPN-native-unsigned-resignable.ipa",
                     Path(td),
                     "router-vpn-ios.ipa",
                 )
+
+    def test_fetch_artifact_member_scopes_lookup_to_exact_producer_run_and_rejects_duplicate_artifacts(self):
+        base_item = {
+            "id": 9,
+            "name": "RouterVPN-iOS-release-candidate",
+            "expired": False,
+            "created_at": "2026-08-22T01:00:00Z",
+            "archive_download_url": "https://example.invalid/artifact",
+            "workflow_run": {"id": 77, "head_branch": "main", "head_sha": SHA},
+        }
+        with tempfile.TemporaryDirectory(prefix="routervpn-artifact-scope-test-") as td, \
+             mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
+             mock.patch.object(broker, "_successful_producer_run_id", return_value=77), \
+             mock.patch.object(broker, "_read_limited_json", return_value={"artifacts": [base_item, dict(base_item, id=10)}) as read, \
+             mock.patch.object(broker, "_download_limited", side_effect=AssertionError("ambiguous artifacts must not download")):
+            with self.assertRaisesRegex(RuntimeError, "found 2"):
+                broker.fetch_artifact_member(
+                    "RouterVPN-iOS-release-candidate",
+                    "RouterVPN-native-unsigned-resignable.ipa",
+                    Path(td),
+                    "router-vpn-ios.ipa",
+                )
+        self.assertIn("/actions/runs/77/artifacts?", read.call_args.args[0])
 
     def test_artifact_member_scan_rejects_encryption_count_and_duplicates(self):
         class FakeZip:
