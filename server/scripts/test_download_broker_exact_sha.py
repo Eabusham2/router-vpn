@@ -43,13 +43,77 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
 
     def test_artifact_candidates_never_float_to_other_main_sha(self):
         meta = {"artifacts": [
-            {"id": 1, "name": "RouterVPN-iOS-release-candidate", "expired": False, "created_at": "2026-08-22T01:00:00Z", "workflow_run": {"head_branch": "main", "head_sha": SHA}},
-            {"id": 2, "name": "RouterVPN-iOS-release-candidate", "expired": False, "created_at": "2026-08-22T02:00:00Z", "workflow_run": {"head_branch": "main", "head_sha": OTHER}},
-            {"id": 3, "name": "RouterVPN-iOS-release-candidate", "expired": True, "created_at": "2026-08-22T03:00:00Z", "workflow_run": {"head_branch": "main", "head_sha": SHA}},
-            {"id": 4, "name": "RouterVPN-iOS-release-candidate", "expired": False, "created_at": "2026-08-22T04:00:00Z", "workflow_run": {"head_branch": "other", "head_sha": SHA}},
+            {"id": 1, "name": "RouterVPN-iOS-release-candidate", "expired": False, "created_at": "2026-08-22T01:00:00Z", "workflow_run": {"id": 101, "head_branch": "main", "head_sha": SHA}},
+            {"id": 2, "name": "RouterVPN-iOS-release-candidate", "expired": False, "created_at": "2026-08-22T02:00:00Z", "workflow_run": {"id": 101, "head_branch": "main", "head_sha": OTHER}},
+            {"id": 3, "name": "RouterVPN-iOS-release-candidate", "expired": True, "created_at": "2026-08-22T03:00:00Z", "workflow_run": {"id": 101, "head_branch": "main", "head_sha": SHA}},
+            {"id": 4, "name": "RouterVPN-iOS-release-candidate", "expired": False, "created_at": "2026-08-22T04:00:00Z", "workflow_run": {"id": 101, "head_branch": "other", "head_sha": SHA}},
+            {"id": 5, "name": "RouterVPN-iOS-release-candidate", "expired": False, "created_at": "2026-08-22T05:00:00Z", "workflow_run": {"id": 99, "head_branch": "main", "head_sha": SHA}},
         ]}
-        got = broker._artifact_candidates(meta, "RouterVPN-iOS-release-candidate", "main", SHA)
+        got = broker._artifact_candidates(meta, "RouterVPN-iOS-release-candidate", "main", SHA, 101)
         self.assertEqual([item["id"] for item in got], [1])
+
+    def test_newest_meaningful_producer_run_controls_artifact_evidence(self):
+        base = [{"id": 10, "head_sha": SHA, "head_branch": "main", "status": "completed", "conclusion": "success"}]
+        self.assertEqual(broker._newest_meaningful_workflow_run(base, "main", SHA)["id"], 10)
+
+        failed = base + [{"id": 11, "head_sha": SHA, "head_branch": "main", "status": "completed", "conclusion": "failure"}]
+        self.assertEqual(broker._newest_meaningful_workflow_run(failed, "main", SHA)["conclusion"], "failure")
+
+        pending = base + [{"id": 12, "head_sha": SHA, "head_branch": "main", "status": "in_progress", "conclusion": ""}]
+        self.assertIsNone(broker._newest_meaningful_workflow_run(pending, "main", SHA))
+
+        cancelled = base + [{"id": 13, "head_sha": SHA, "head_branch": "main", "status": "completed", "conclusion": "cancelled"}]
+        self.assertEqual(broker._newest_meaningful_workflow_run(cancelled, "main", SHA)["id"], 10)
+
+        wrong = [
+            {"id": 20, "head_sha": OTHER, "head_branch": "main", "status": "completed", "conclusion": "success"},
+            {"id": 21, "head_sha": SHA, "head_branch": "other", "status": "completed", "conclusion": "success"},
+        ]
+        self.assertIsNone(broker._newest_meaningful_workflow_run(wrong, "main", SHA))
+
+    def test_successful_producer_run_requires_settled_success_and_closed_mapping(self):
+        success_meta = {"workflow_runs": [
+            {"id": 44, "head_sha": SHA, "head_branch": "main", "status": "completed", "conclusion": "success"},
+        ]}
+        with mock.patch.object(broker, "_read_limited_json", return_value=success_meta) as read:
+            got = broker._successful_producer_run_id(
+                "Eabusham2/router-vpn", "RouterVPN-iOS-release-candidate", "main", SHA
+            )
+        self.assertEqual(got, 44)
+        self.assertIn("/actions/workflows/release-candidate.yml/runs?", read.call_args.args[0])
+
+        failed_meta = {"workflow_runs": [
+            {"id": 45, "head_sha": SHA, "head_branch": "main", "status": "completed", "conclusion": "failure"},
+        ]}
+        with mock.patch.object(broker, "_read_limited_json", return_value=failed_meta):
+            with self.assertRaisesRegex(RuntimeError, "no settled successful exact-SHA run"):
+                broker._successful_producer_run_id(
+                    "Eabusham2/router-vpn", "RouterVPN-iOS-release-candidate", "main", SHA
+                )
+
+        with self.assertRaisesRegex(RuntimeError, "no closed producer-workflow mapping"):
+            broker._successful_producer_run_id(
+                "Eabusham2/router-vpn", "Unknown-RouterVPN-artifact", "main", SHA
+            )
+
+    def test_fetch_artifact_member_rejects_artifact_from_older_producer_run(self):
+        artifact_meta = {"artifacts": [
+            {"id": 1, "name": "RouterVPN-iOS-release-candidate", "expired": False,
+             "created_at": "2026-08-22T01:00:00Z",
+             "workflow_run": {"id": 40, "head_branch": "main", "head_sha": SHA}},
+        ]}
+        with tempfile.TemporaryDirectory(prefix="routervpn-artifact-run-test-") as td, \
+             mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
+             mock.patch.object(broker, "_successful_producer_run_id", return_value=41), \
+             mock.patch.object(broker, "_read_limited_json", return_value=artifact_meta), \
+             mock.patch.object(broker, "_download_limited", side_effect=AssertionError("stale producer artifact must not download")):
+            with self.assertRaisesRegex(RuntimeError, "no unexpired RouterVPN-iOS-release-candidate artifact"):
+                broker.fetch_artifact_member(
+                    "RouterVPN-iOS-release-candidate",
+                    "RouterVPN-native-unsigned-resignable.ipa",
+                    Path(td),
+                    "router-vpn-ios.ipa",
+                )
 
     def test_artifact_member_scan_rejects_encryption_count_and_duplicates(self):
         class FakeZip:
