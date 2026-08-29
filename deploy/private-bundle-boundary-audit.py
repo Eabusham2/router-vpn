@@ -19,6 +19,8 @@ doctor = read("server/scripts/doctor-current.sh")
 broker = read("server/scripts/download-broker.py")
 bundle_gen = read("server/scripts/create-bundle-json.py")
 builder = read("server/scripts/build-download-on-demand.py")
+download_jobs = read("server/scripts/download_jobs.py")
+owned_temp = read("server/scripts/owned-temp.py")
 sync_runtime = read("server/finalize/sync-client-runtime.sh")
 
 # Public/static publishing must delete every historical credential-bearing form
@@ -82,6 +84,51 @@ for marker in (
 ):
     assert marker in broker, f"broker private-node boundary lost marker: {marker}"
 
+
+
+# Shared-temp cleanup must prove Router VPN ownership, not merely trust a
+# predictable filename prefix. Request, async-job, and nested package-build roots
+# all carry the same private marker; foreign lookalikes/symlinks are skipped.
+for marker in (
+    "MARKER_NAME = \".router-vpn-owned-temp\"",
+    "MARKER_BODY = b\"router-vpn-owned-temp-v1\\n\"",
+    "def create_owned_temp",
+    "def is_owned_temp",
+    "def cleanup_owned_temp",
+    "stat.S_ISLNK",
+    "os.path.samestat",
+):
+    assert marker in owned_temp, f"owned-temp helper lost cleanup-ownership marker: {marker}"
+for marker in (
+    'create_owned_temp("router-vpn-request-")',
+    "cleanup_owned_temp(path)",
+):
+    assert marker in broker, f"download broker lost owned request/stale-temp marker: {marker}"
+for marker in (
+    'create_owned_temp("router-vpn-job-")',
+    "cleanup_owned_temp(Path(path))",
+):
+    assert marker in download_jobs, f"download jobs lost owned temp marker: {marker}"
+for marker in (
+    'create_owned_temp("router-vpn-one-package-")',
+    "cleanup_owned_temp(work)",
+):
+    assert marker in builder, f"package builder lost owned temp marker: {marker}"
+for forbidden in (
+    'if path.is_dir():\n                    shutil.rmtree(path)',
+    'work = tempfile.mkdtemp(prefix="router-vpn-job-")',
+    'TemporaryDirectory(prefix="router-vpn-one-package-")',
+):
+    assert forbidden not in broker + download_jobs + builder, f"prefix-only temp cleanup/creation revived: {forbidden}"
+
+owned_temp_test = subprocess.run(
+    [sys.executable, str(ROOT / "server/scripts/test_owned_temp.py")],
+    cwd=ROOT,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+assert owned_temp_test.returncode == 0, "owned temporary-root safety tests failed: " + (owned_temp_test.stdout + owned_temp_test.stderr)[-4000:]
 
 
 # Package/runtime source copies are one-pass descriptor reads, not
