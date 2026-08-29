@@ -67,7 +67,12 @@ jobs:
           sh prepare-wireguard-kit.sh
           brew install xcodegen
           xcodegen generate
-          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/LibboxProbeDerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' build
+          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/LibboxProbeDerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" build
+          APP="$PWD/build/LibboxProbeDerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          test "$(plutil -extract RouterVPNSourceSHA raw "$APP/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNArtifactFamily raw "$APP/Info.plist")" = "ios-app"
+          test "$(plutil -extract RouterVPNSourceSHA raw "$APP/PlugIns/RouterVPNPacketTunnel.appex/Info.plist")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNArtifactFamily raw "$APP/PlugIns/RouterVPNPacketTunnel.appex/Info.plist")" = "ios-packet-tunnel"
           grep -Fq 'import Libbox' PacketTunnel/LibboxCompileProbe.swift
           grep -Fq 'LibboxVersion()' PacketTunnel/LibboxCompileProbe.swift
       - uses: actions/upload-artifact@v4
