@@ -129,7 +129,7 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="routervpn-artifact-scope-test-") as td, \
              mock.patch.object(broker, "_github_scope", return_value=("Eabusham2/router-vpn", "main", SHA)), \
              mock.patch.object(broker, "_successful_producer_run_id", return_value=77), \
-             mock.patch.object(broker, "_read_limited_json", return_value={"artifacts": [base_item, dict(base_item, id=10)}) as read, \
+             mock.patch.object(broker, "_read_limited_json", return_value={"artifacts": [base_item, dict(base_item, id=10)]}) as read, \
              mock.patch.object(broker, "_download_limited", side_effect=AssertionError("ambiguous artifacts must not download")):
             with self.assertRaisesRegex(RuntimeError, "found 2"):
                 broker.fetch_artifact_member(
