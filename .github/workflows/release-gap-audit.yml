@@ -32,6 +32,8 @@ jobs:
           bash -n server/scripts/generate-xray-pq.sh
           bash -n server/scripts/generate-tls-alternates.sh
           bash -n server/scripts/generate-advanced-profiles.sh
+      - name: Guard workflow structural integrity
+        run: python3 deploy/workflow-structure-audit.py
       - name: Run strict native AI identity release-gap audit
         run: python3 deploy/release-gap-audit.py
       - name: Guard shipping native app onboarding lifecycle
