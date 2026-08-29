@@ -62,7 +62,7 @@ class NativeArtifactPolicyTests(unittest.TestCase):
         self.assertEqual(set(policy.ARTIFACT_PRODUCER_WORKFLOWS), set(expected))
         for artifact, workflow in policy.ARTIFACT_PRODUCER_WORKFLOWS.items():
             self.assertIn(workflow, {
-                "release-candidate.yml",
+                "build-all.yml",
                 "client-apps-ci.yml",
                 "macos-native-app.yml",
                 "linux-native-app.yml",
@@ -75,7 +75,7 @@ class NativeArtifactPolicyTests(unittest.TestCase):
             "RouterVPN-Android-release-candidate",
             "RouterVPN-iOS-release-candidate",
         ):
-            self.assertEqual(policy.ARTIFACT_PRODUCER_WORKFLOWS[artifact], "release-candidate.yml")
+            self.assertEqual(policy.ARTIFACT_PRODUCER_WORKFLOWS[artifact], "build-all.yml")
         self.assertEqual(policy.ARTIFACT_PRODUCER_WORKFLOWS["RouterVPN-macOS-Native-CI"], "macos-native-app.yml")
         self.assertEqual(policy.ARTIFACT_PRODUCER_WORKFLOWS["RouterVPN-Linux-Native-amd64-CI"], "linux-native-app.yml")
         self.assertEqual(policy.ARTIFACT_PRODUCER_WORKFLOWS["RouterVPN-Linux-Native-arm64-CI"], "linux-native-app.yml")
