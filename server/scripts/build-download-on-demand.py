@@ -49,6 +49,9 @@ PROFILE_SCHEMA_VERSION = 4
 _VERIFIED = runpy.run_path(str(Path(__file__).with_name("verified-regular-read.py")))
 parent_chain_snapshot = _VERIFIED["parent_chain_snapshot"]
 verify_parent_chain = _VERIFIED["verify_parent_chain"]
+_OWNED_TEMP = runpy.run_path(str(Path(__file__).with_name("owned-temp.py")))
+create_owned_temp = _OWNED_TEMP["create_owned_temp"]
+cleanup_owned_temp = _OWNED_TEMP["cleanup_owned_temp"]
 
 PACKAGE_MAP = {
     "router-vpn-windows-amd64.zip": ("RouterVPN-Windows-amd64.zip", "windows", "amd64"),
@@ -591,8 +594,8 @@ def main() -> int:
         expected_sha = _provenance.resolve_sha(root=Path(__file__).resolve().parents[2])
     expected_family = provenance_family(family, arch)
 
-    with tempfile.TemporaryDirectory(prefix="router-vpn-one-package-") as td:
-        work = Path(td)
+    work = create_owned_temp("router-vpn-one-package-")
+    try:
         if args.source_archive:
             if family == "bundle":
                 raise SystemExit("private node bundle cannot be sourced from a public generic artifact")
@@ -603,6 +606,11 @@ def main() -> int:
             _provenance.write_manifest(root, expected_sha, expected_family)
         _provenance.verify_manifest(root, expected_sha, expected_family)
         zip_dir(root, output)
+    finally:
+        try:
+            cleanup_owned_temp(work)
+        except OSError:
+            pass
 
     if not output.is_file() or output.stat().st_size == 0:
         raise SystemExit("package creation returned an empty file")
