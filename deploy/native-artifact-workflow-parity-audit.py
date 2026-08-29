@@ -49,6 +49,7 @@ broker_exact_sha_test_rel = "server/scripts/test_download_broker_exact_sha.py"
 android_gradle_rel = "android/app/build.gradle"
 ios_project_rel = "ios/RouterVPN/project.yml"
 ios_stamper_rel = "ios/RouterVPN/stamp-provenance.sh"
+ios_compile_smoke_rel = ".github/workflows/ios-native-compile-smoke.yml"
 aggregate_provenance_rel = "deploy/verify-release-candidate-provenance.py"
 aggregate_provenance_test_rel = "deploy/test-release-candidate-provenance.py"
 build = read(build_rel)
@@ -71,6 +72,7 @@ broker_exact_sha_test = read(broker_exact_sha_test_rel)
 android_gradle = read(android_gradle_rel)
 ios_project = read(ios_project_rel)
 ios_stamper = read(ios_stamper_rel)
+ios_compile_smoke = read(ios_compile_smoke_rel)
 aggregate_provenance = read(aggregate_provenance_rel)
 aggregate_provenance_test = read(aggregate_provenance_test_rel)
 
@@ -157,6 +159,16 @@ require(ios_stamper, ios_stamper_rel,
         "RouterVPNSourceSHA",
         "RouterVPNSourceRepository",
         "RouterVPNArtifactFamily")
+require(ios_compile_smoke, ios_compile_smoke_rel,
+        'ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA"',
+        'APP_PLIST="$APP/Info.plist"',
+        'TUNNEL_PLIST="$APP/PlugIns/RouterVPNPacketTunnel.appex/Info.plist"',
+        'plutil -extract RouterVPNSourceSHA raw "$APP_PLIST"',
+        'plutil -extract RouterVPNArtifactFamily raw "$APP_PLIST"',
+        'plutil -extract RouterVPNSourceSHA raw "$TUNNEL_PLIST"',
+        'plutil -extract RouterVPNArtifactFamily raw "$TUNNEL_PLIST"',
+        '"ios-app"',
+        '"ios-packet-tunnel"')
 for rel, body in ((rc_rel, rc), (client_rel, client)):
     require(body, rel,
             'ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA"',
