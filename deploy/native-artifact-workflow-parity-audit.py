@@ -29,6 +29,7 @@ def require(body: str, rel: str, *markers: str) -> None:
 
 
 policy = load_policy()
+build_rel = ".github/workflows/build-all.yml"
 rc_rel = ".github/workflows/release-candidate.yml"
 client_rel = ".github/workflows/client-apps-ci.yml"
 mac_rel = ".github/workflows/macos-native-app.yml"
@@ -50,6 +51,7 @@ ios_project_rel = "ios/RouterVPN/project.yml"
 ios_stamper_rel = "ios/RouterVPN/stamp-provenance.sh"
 aggregate_provenance_rel = "deploy/verify-release-candidate-provenance.py"
 aggregate_provenance_test_rel = "deploy/test-release-candidate-provenance.py"
+build = read(build_rel)
 rc = read(rc_rel)
 client = read(client_rel)
 mac = read(mac_rel)
@@ -219,6 +221,21 @@ all_policy_artifacts = {
 }
 assert set(policy.ARTIFACT_PRODUCER_WORKFLOWS) == all_policy_artifacts, (
     "native artifact producer map is not closed over download policy"
+)
+release_artifacts = {
+    "RouterVPN-generic-release-candidate",
+    "RouterVPN-macOS-release-candidate",
+    "RouterVPN-Linux-amd64-release-candidate",
+    "RouterVPN-Linux-arm64-release-candidate",
+    "RouterVPN-Android-release-candidate",
+    "RouterVPN-iOS-release-candidate",
+}
+for artifact in release_artifacts:
+    assert policy.ARTIFACT_PRODUCER_WORKFLOWS[artifact] == "build-all.yml", (
+        f"{artifact}: reusable release artifact must be attributed to Build-all caller run"
+    )
+assert "uses: ./.github/workflows/release-candidate.yml" in build, (
+    "Build-all stopped calling the reusable release-candidate producer"
 )
 require(broker, "server/scripts/download-broker.py",
         "ARTIFACT_PRODUCER_WORKFLOWS",
