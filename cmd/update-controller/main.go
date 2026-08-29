@@ -135,7 +135,7 @@ func validGitHubBranch(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if r < 0x20 || r == 0x7f || strings.ContainsRune(" ~^:?*[\\\\", r) {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(" ~^:?#*[\\\\", r) {
 			return false
 		}
 	}
