@@ -80,7 +80,7 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
                 "Eabusham2/router-vpn", "RouterVPN-iOS-release-candidate", "main", SHA
             )
         self.assertEqual(got, 44)
-        self.assertIn("/actions/workflows/release-candidate.yml/runs?", read.call_args.args[0])
+        self.assertIn("/actions/workflows/build-all.yml/runs?", read.call_args.args[0])
 
         failed_meta = {"workflow_runs": [
             {"id": 45, "head_sha": SHA, "head_branch": "main", "status": "completed", "conclusion": "failure"},
