@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -205,6 +207,32 @@ func TestGitHubEndpointOriginsAndCredentialSeparation(t *testing.T) {
 	githubBaseHeaders(rawReq)
 	if got := rawReq.Header.Get("Authorization"); got != "" {
 		t.Fatalf("raw request unexpectedly received GitHub token: %q", got)
+	}
+}
+
+func TestPortainerClientForbidsRedirectsBeforeCredentialReuse(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "portainer-api.key")
+	pinPath := filepath.Join(dir, "portainer-tls.sha256")
+	if err := os.WriteFile(keyPath, []byte("0123456789abcdef0123456789abcdef\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pinPath, []byte(strings.Repeat("a", 64)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &controller{portainerKeyFile: keyPath, portainerPinFile: pinPath}
+	client, key, err := c.portainerClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("unexpected Portainer key read: %q", key)
+	}
+	next, _ := http.NewRequest(http.MethodGet, "http://example.invalid/leak", nil)
+	prev, _ := http.NewRequest(http.MethodGet, "https://127.0.0.1:9443/api/stacks", nil)
+	if err := client.CheckRedirect(next, []*http.Request{prev}); err == nil ||
+		!strings.Contains(err.Error(), "redirects are forbidden") {
+		t.Fatalf("Portainer redirect was not refused: %v", err)
 	}
 }
 
