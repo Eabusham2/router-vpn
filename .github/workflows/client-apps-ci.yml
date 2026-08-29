@@ -118,8 +118,7 @@ jobs:
           for archive in dist/packages/RouterVPN-Windows-amd64.zip dist/packages/RouterVPN-Windows-arm64.zip; do
             list="$RUNNER_TEMP/$(basename "$archive").members"
             unzip -Z1 "$archive" >"$list"
-            grep -q '/logical-modes.json
-      - uses: actions/upload-artifact@v4
+            grep -q '/logical-modes.json      - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-client-desktop-unix-ci
           path: |
@@ -315,8 +314,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
  "$list"
-            grep -q '/LICENSE
-      - uses: actions/upload-artifact@v4
+            grep -q '/LICENSE      - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-client-desktop-unix-ci
           path: |
@@ -520,8 +518,7 @@ jobs:
             dist/packages/RouterVPN-linux-arm64.tar.gz; do
             list="$RUNNER_TEMP/$(basename "$archive").members"
             tar -tzf "$archive" >"$list"
-            grep -q '/logical-modes.json
-      - uses: actions/upload-artifact@v4
+            grep -q '/logical-modes.json      - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-client-desktop-unix-ci
           path: |
@@ -717,8 +714,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
  "$list"
-            grep -q '/LICENSE
-      - uses: actions/upload-artifact@v4
+            grep -q '/LICENSE      - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-client-desktop-unix-ci
           path: |
