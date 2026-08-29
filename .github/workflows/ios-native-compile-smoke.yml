@@ -50,7 +50,18 @@ jobs:
             exit "$status"
           fi
           grep -Fq '** BUILD SUCCEEDED **' "$LOG"
-          echo 'iOS native compile passed'
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"
+          APP_PLIST="$APP/Info.plist"
+          TUNNEL_PLIST="$APP/PlugIns/RouterVPNPacketTunnel.appex/Info.plist"
+          test -f "$APP_PLIST"
+          test -f "$TUNNEL_PLIST"
+          test "$(plutil -extract RouterVPNSourceSHA raw "$APP_PLIST")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw "$APP_PLIST")" = "Eabusham2/router-vpn"
+          test "$(plutil -extract RouterVPNArtifactFamily raw "$APP_PLIST")" = "ios-app"
+          test "$(plutil -extract RouterVPNSourceSHA raw "$TUNNEL_PLIST")" = "$GITHUB_SHA"
+          test "$(plutil -extract RouterVPNSourceRepository raw "$TUNNEL_PLIST")" = "Eabusham2/router-vpn"
+          test "$(plutil -extract RouterVPNArtifactFamily raw "$TUNNEL_PLIST")" = "ios-packet-tunnel"
+          echo 'iOS native compile + exact provenance passed'
       - name: Upload Xcode log on failure
         if: failure()
         uses: actions/upload-artifact@v4
