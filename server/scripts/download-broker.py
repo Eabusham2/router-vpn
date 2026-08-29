@@ -387,6 +387,7 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
         raise RuntimeError("GitHub artifact use disabled")
     if progress:
         progress("locating", 15)
+    selected = _safe_selected_output(temp, output_name)
     repo, branch, head_sha = _github_scope()
     if not artifact_name:
         raise RuntimeError("invalid GitHub artifact name")
@@ -408,7 +409,6 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     _download_limited(artifact["archive_download_url"], outer, progress=progress)
     if progress:
         progress("validating", 42)
-    selected = _safe_selected_output(temp, output_name)
     fd, staged_name = tempfile.mkstemp(prefix=f".{Path(output_name).name}.", suffix=".part", dir=temp)
     os.close(fd)
     staged = Path(staged_name)
