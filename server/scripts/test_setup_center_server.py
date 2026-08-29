@@ -138,8 +138,10 @@ def main() -> int:
             static = base / "downloads"
             static.mkdir()
             html = '<!doctype html><body><div id="tabs"></div><section class="panel active" data-tab="start">Start</section><div id="wizard" class="overlay"></div><script>function gotoTab(name){document.querySelectorAll(\'.panel\').forEach(x=>x.classList.toggle(\'active\',x.dataset.tab===name))}</script></body>'
-            (static / "index.html").write_text(html)
-            (static / "router-vpn-device-setup.html").write_text(html)
+            for setup_page in (static / "index.html", static / "router-vpn-device-setup.html"):
+                setup_page.write_text(html)
+                if os.name != "nt":
+                    setup_page.chmod(0o600)
             server = mod.Server(("127.0.0.1", 0), mod.Handler, base, static)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
