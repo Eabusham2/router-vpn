@@ -174,12 +174,56 @@ class DownloadBrokerExactSHATests(unittest.TestCase):
             temp = Path(td)
             expected = temp / "router-vpn-windows-amd64.zip"
             expected.write_bytes(b"fake-local-package")
-            with mock.patch.object(broker, "fetch_github_package", side_effect=RuntimeError("exact SHA unavailable")), \
+            with mock.patch.object(broker, "build_github_package", side_effect=RuntimeError("exact SHA unavailable")), \
                  mock.patch.object(broker, "_run_builder", return_value=expected) as run_builder:
                 result, source = broker.build_package(Path(td), "router-vpn-windows-amd64.zip", temp)
             self.assertEqual(result, expected)
             self.assertEqual(source, "router-local-generic-build")
             self.assertIsNone(run_builder.call_args.args[3])
+
+    def test_corrupt_preferred_desktop_artifact_falls_through_to_second_same_sha_source(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-desktop-prov-fallback-") as td:
+            temp = Path(td)
+            name = "router-vpn-macos-arm64.zip"
+            generic = broker._builder.generic_name(name)
+            self.assertIsNotNone(generic)
+            calls = []
+            result = temp / name
+
+            def fetch(artifact_name, wanted, root, output_name, progress=None):
+                calls.append(artifact_name)
+                candidate = root / output_name
+                candidate.write_bytes(("candidate-" + artifact_name).encode())
+                return candidate
+
+            def validate(base, request_name, root, candidate, progress=None):
+                self.assertEqual(request_name, name)
+                if len(calls) == 1:
+                    raise RuntimeError("preferred artifact embedded source SHA mismatch")
+                result.write_bytes(b"validated-second-source")
+                return result
+
+            with mock.patch.object(broker, "fetch_artifact_member", side_effect=fetch), \
+                 mock.patch.object(broker, "_run_builder", side_effect=validate):
+                got = broker.build_github_package(Path(td), name, temp)
+            self.assertEqual(got, result)
+            self.assertEqual(
+                calls,
+                ["RouterVPN-macOS-release-candidate", "RouterVPN-macOS-Native-CI"],
+            )
+            self.assertEqual(result.read_bytes(), b"validated-second-source")
+            self.assertFalse((temp / generic).exists(), "rejected/consumed source artifact survived")
+
+    def test_desktop_does_not_use_local_fallback_when_second_github_candidate_validates(self):
+        with tempfile.TemporaryDirectory(prefix="routervpn-desktop-second-source-") as td:
+            temp = Path(td)
+            expected = temp / "router-vpn-linux-arm64.zip"
+            expected.write_bytes(b"validated-native-ci")
+            with mock.patch.object(broker, "build_github_package", return_value=expected), \
+                 mock.patch.object(broker, "_run_builder", side_effect=AssertionError("local fallback must not run")):
+                got, source = broker.build_package(Path(td), "router-vpn-linux-arm64.zip", temp)
+            self.assertEqual(got, expected)
+            self.assertEqual(source, "github")
 
     def test_mobile_missing_sha_fails_before_any_github_network_call(self):
         with tempfile.TemporaryDirectory(prefix="routervpn-broker-mobile-sha-test-") as td, \
