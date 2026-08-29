@@ -71,6 +71,19 @@ for rel, body in (("install", install), ("upgrade", upgrade), ("doctor", doctor)
 
 # The only user retrieval path is authenticated/on-demand broker generation or
 # one-time LAN pairing. Broker reads the canonical client-bundle source directly.
+# GitHub bearer credentials are valid only for the initial api.github.com
+# request. Artifact downloads redirect to blob storage; cross-origin redirects
+# must remain HTTPS and must never carry Authorization/Cookie headers.
+for marker in (
+    "class _SafeGitHubRedirect",
+    'new.scheme.lower() != "https"',
+    'redirected.remove_header("Authorization")',
+    'redirected.remove_header("Cookie")',
+    'must start at https://api.github.com',
+):
+    assert marker in broker, f"broker lost GitHub redirect credential boundary: {marker}"
+
+
 for marker in (
     'name == "router-vpn-client-bundle.zip"',
     '"private-node-bundle"',
@@ -280,7 +293,7 @@ broker_security = subprocess.run(
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
 )
-assert broker_security.returncode == 0, "broker private-read/pairing transaction tests failed: " + (broker_security.stdout + broker_security.stderr)[-4000:]
+assert broker_security.returncode == 0, "broker private-read/pairing/redirect security tests failed: " + (broker_security.stdout + broker_security.stderr)[-4000:]
 
 assert 'self.server.setup_token' not in broker[broker.index('def _redeem_pairing'):broker.index('def _dynamic')], "pairing redemption serialized Setup Center token"
 assert 'router-vpn-bundle.json' in broker[broker.index('def _redeem_pairing'):broker.index('def _dynamic')], "pairing does not return the canonical minimal node bundle"
