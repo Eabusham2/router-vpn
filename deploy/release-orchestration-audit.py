@@ -46,6 +46,12 @@ for called in (
 assert "actions/workflows/build-all.yml/runs" in updater, (
     "update controller latest-verified discovery must query the Build-all caller workflow"
 )
+assert '"status": {"success"}' not in updater, (
+    "update controller must not hide newer failed/pending Build-all reruns with a success-only query"
+)
+assert "latestSuccessfulWorkflowSHAs" in updater, (
+    "update controller lost newest-meaningful per-SHA release candidate selection"
+)
 assert "actions/workflows/release-candidate.yml/runs" not in updater, (
     "update controller still queries reusable release-candidate as if it had an automatic standalone run"
 )
