@@ -56,7 +56,8 @@ def read_verified_regular(path: pathlib.Path, limit: int = MAX_BYTES, *, private
         raise RuntimeError(f"refusing non-regular/symlink public metadata source: {path}")
     if before.st_size <= 0 or before.st_size > limit:
         raise RuntimeError(f"verified source is empty/oversized: {path}")
-    if private and stat.S_IMODE(before.st_mode) != 0o600:
+    enforce_private_mode = private and os.name != "nt"
+    if enforce_private_mode and stat.S_IMODE(before.st_mode) != 0o600:
         raise RuntimeError(
             f"private verified source must be mode 0600: {path} has {oct(stat.S_IMODE(before.st_mode))}"
         )
@@ -71,8 +72,8 @@ def read_verified_regular(path: pathlib.Path, limit: int = MAX_BYTES, *, private
             or not stat.S_ISREG(current.st_mode)
             or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
             or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
-            or (private and stat.S_IMODE(opened.st_mode) != 0o600)
-            or (private and stat.S_IMODE(current.st_mode) != 0o600)
+            or (enforce_private_mode and stat.S_IMODE(opened.st_mode) != 0o600)
+            or (enforce_private_mode and stat.S_IMODE(current.st_mode) != 0o600)
         ):
             raise RuntimeError(f"verified source changed during open or violated private mode: {path}")
         chunks: list[bytes] = []
