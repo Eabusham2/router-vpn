@@ -267,12 +267,16 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
         raise RuntimeError("invalid GitHub artifact name")
     producer_run_id = _successful_producer_run_id(repo, artifact_name, branch, head_sha)
     q = urllib.parse.urlencode({"name": artifact_name, "per_page": 100})
-    meta = _read_limited_json(f"https://api.github.com/repos/{repo}/actions/artifacts?{q}")
+    meta = _read_limited_json(
+        f"https://api.github.com/repos/{repo}/actions/runs/{producer_run_id}/artifacts?{q}"
+    )
     candidates = _artifact_candidates(meta, artifact_name, branch, head_sha, producer_run_id)
-    if not candidates:
+    if len(candidates) != 1:
         scope = branch or "any branch"
-        scope += f" at {head_sha}"
-        raise RuntimeError(f"no unexpired {artifact_name} artifact for {scope}")
+        scope += f" at {head_sha} producer run {producer_run_id}"
+        raise RuntimeError(
+            f"expected exactly one unexpired {artifact_name} artifact for {scope}; found {len(candidates)}"
+        )
     outer = temp / (artifact_name + "-artifact.zip")
     _download_limited(candidates[0]["archive_download_url"], outer, progress=progress)
     if progress:
