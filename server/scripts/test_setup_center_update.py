@@ -34,10 +34,7 @@ for marker in (
     'Portainer TLS certificate fingerprint changed',
     '"X-API-Key"',
     'requiredReleaseWorkflows = []string{',
-    '"release-candidate.yml"',
-    '"arm64-portainer-preflight.yml"',
-    '"publish-arm64-images.yml"',
-    '"production-release-compose.yml"',
+    '"build-all.yml"',
     '"PullImage": true, "Prune": false',
     'preserveUpdater(target, previous)',
     'saveRollbackCompose(previous, from)',
@@ -51,6 +48,14 @@ for marker in (
     '/api/admin/update/apply',
 ):
     assert marker in controller, f"update controller missing {marker!r}"
+
+# Reusable release-candidate/preflight/publish/compose workflows execute inside
+# the authoritative build-all caller run. Requiring each as a separate Actions
+# run would reject a valid exact-SHA release even after the caller proved them.
+workflow_block = controller_main.split("requiredReleaseWorkflows = []string{", 1)[1].split("}", 1)[0]
+assert '"build-all.yml"' in workflow_block
+for stale in ('"release-candidate.yml"', '"arm64-portainer-preflight.yml"', '"publish-arm64-images.yml"', '"production-release-compose.yml"'):
+    assert stale not in workflow_block, f"updater still requires reusable workflow as standalone run: {stale}"
 
 for forbidden in (
     'docker system prune',
