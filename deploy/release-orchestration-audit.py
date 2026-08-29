@@ -144,6 +144,7 @@ assert "RouterVPN-Portainer-${GITHUB_SHA}.yaml" in compose, "production compose 
 for marker in (
     "python3 deploy/historical-regression-audit.py",
     "python3 deploy/backend-session-transaction-audit.py",
+    "python3 deploy/native-auto-requirements-ui-audit.py",
     "python3 deploy/native-artifact-workflow-parity-audit.py",
     "python3 deploy/workflow-structure-audit.py",
     "python3 deploy/workflow-evidence-pipeline-audit.py",
@@ -190,6 +191,7 @@ for audit in (
     "deploy/binding-edge-requirements-audit.py",
     "deploy/private-store-path-audit.py",
     "deploy/runtime-state-ownership-audit.py",
+    "deploy/native-auto-requirements-ui-audit.py",
     "deploy/native-artifact-workflow-parity-audit.py",
     "deploy/workflow-structure-audit.py",
     "deploy/workflow-evidence-pipeline-audit.py",
