@@ -147,6 +147,49 @@ func TestReusableReleaseChildrenAreNotStandaloneRunRequirements(t *testing.T) {
 	}
 }
 
+func TestLatestSuccessfulWorkflowSHAsUsesNewestMeaningfulEvidencePerSHA(t *testing.T) {
+	shaA := testNewSHA
+	shaB := testOldSHA
+	runs := []workflowRun{
+		{ID: 100, HeadSHA: shaA, HeadBranch: "main", Status: "completed", Conclusion: "success"},
+		{ID: 110, HeadSHA: shaA, HeadBranch: "main", Status: "completed", Conclusion: "failure"},
+		{ID: 90, HeadSHA: shaB, HeadBranch: "main", Status: "completed", Conclusion: "success"},
+	}
+	got := latestSuccessfulWorkflowSHAs(runs, "main")
+	if len(got) != 1 || got[0] != shaB {
+		t.Fatalf("newer failed rerun did not block older green SHA evidence: %v", got)
+	}
+
+	runs = []workflowRun{
+		{ID: 100, HeadSHA: shaA, HeadBranch: "main", Status: "completed", Conclusion: "success"},
+		{ID: 111, HeadSHA: shaA, HeadBranch: "main", Status: "in_progress"},
+		{ID: 90, HeadSHA: shaB, HeadBranch: "main", Status: "completed", Conclusion: "success"},
+	}
+	got = latestSuccessfulWorkflowSHAs(runs, "main")
+	if len(got) != 1 || got[0] != shaB {
+		t.Fatalf("newer pending rerun did not block older green SHA evidence: %v", got)
+	}
+
+	runs = []workflowRun{
+		{ID: 100, HeadSHA: shaA, HeadBranch: "main", Status: "completed", Conclusion: "success"},
+		{ID: 112, HeadSHA: shaA, HeadBranch: "main", Status: "completed", Conclusion: "cancelled"},
+		{ID: 105, HeadSHA: shaB, HeadBranch: "main", Status: "completed", Conclusion: "success"},
+	}
+	got = latestSuccessfulWorkflowSHAs(runs, "main")
+	if len(got) != 2 || got[0] != shaB || got[1] != shaA {
+		t.Fatalf("neutral cancellation or candidate ordering wrong: %v", got)
+	}
+
+	runs = append(runs,
+		workflowRun{ID: 200, HeadSHA: "not-a-sha", HeadBranch: "main", Status: "completed", Conclusion: "success"},
+		workflowRun{ID: 201, HeadSHA: shaA, HeadBranch: "other", Status: "completed", Conclusion: "success"},
+	)
+	got = latestSuccessfulWorkflowSHAs(runs, "main")
+	if len(got) != 2 || got[0] != shaB || got[1] != shaA {
+		t.Fatalf("invalid/wrong-branch evidence affected candidates: %v", got)
+	}
+}
+
 func TestNewestMeaningfulWorkflowEvidenceControlsVerification(t *testing.T) {
 	base := []workflowRun{{ID: 10, HeadSHA: testNewSHA, HeadBranch: "main", Status: "completed", Conclusion: "success"}}
 	if !newestMeaningfulWorkflowSuccess(base, testNewSHA, "main") {
