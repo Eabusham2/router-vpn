@@ -29,7 +29,48 @@ def request(port: int, method: str, path: str, *, headers: dict | None = None, b
     return r.status, out_headers, data
 
 
+def test_github_redirect_credentials() -> None:
+    handler = b._SafeGitHubRedirect()
+    original = b.urllib.request.Request(
+        "https://api.github.com/repos/Eabusham2/router-vpn/actions/artifacts/1/zip",
+        headers={"Authorization": "Bearer super-secret", "Cookie": "private-cookie"},
+    )
+    cross = handler.redirect_request(
+        original, None, 302, "Found", {},
+        "https://objects.githubusercontent.com/github-production-repository-file/blob",
+    )
+    assert cross is not None
+    assert cross.get_header("Authorization") is None
+    assert cross.get_header("Cookie") is None
+
+    same = handler.redirect_request(
+        original, None, 302, "Found", {},
+        "https://api.github.com/repos/Eabusham2/router-vpn/actions/artifacts/2/zip",
+    )
+    assert same is not None
+    assert same.get_header("Authorization") == "Bearer super-secret"
+    assert same.get_header("Cookie") == "private-cookie"
+
+    try:
+        handler.redirect_request(
+            original, None, 302, "Found", {},
+            "http://objects.githubusercontent.com/insecure",
+        )
+    except RuntimeError as exc:
+        assert "non-HTTPS" in str(exc)
+    else:
+        raise AssertionError("GitHub artifact redirect allowed HTTPS downgrade")
+
+    try:
+        b._urlopen("https://example.com/not-github")
+    except RuntimeError as exc:
+        assert "must start at https://api.github.com" in str(exc)
+    else:
+        raise AssertionError("authenticated GitHub request was allowed to start cross-origin")
+
+
 def main() -> int:
+    test_github_redirect_credentials()
     with tempfile.TemporaryDirectory(prefix="router-vpn-broker-auth-") as td:
         base = Path(td)
         (base / "config").mkdir()
