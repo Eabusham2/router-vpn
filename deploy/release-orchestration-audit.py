@@ -2,6 +2,7 @@
 """Protect the authoritative Router VPN release chain from workflow drift."""
 from pathlib import Path
 import json
+import re
 import subprocess
 import sys
 
@@ -22,7 +23,32 @@ assert "\n  push:\n    branches: [main]\n" in build, "Build all must be the auto
 assert "group: build-all-${{ github.ref }}" in build, "Build all must cancel superseded main-branch release chains"
 assert "cancel-in-progress: true" in build, "Build all must cancel superseded release chains"
 updater = read("cmd/update-controller/main.go")
-assert '"build-all.yml"' in updater, "update controller must require successful exact-SHA Build-all proof"
+workflow_block_match = re.search(
+    r"requiredReleaseWorkflows\s*=\s*\[\]string\{(?P<body>.*?)\n\s*\}",
+    updater,
+    re.S,
+)
+assert workflow_block_match, "update controller requiredReleaseWorkflows declaration is missing"
+workflow_block = workflow_block_match.group("body")
+assert workflow_block.count('"build-all.yml"') == 1, (
+    "update controller must require exactly one successful exact-SHA Build-all caller proof"
+)
+for called in (
+    "source-snapshot.yml",
+    "release-candidate.yml",
+    "arm64-portainer-preflight.yml",
+    "publish-arm64-images.yml",
+    "production-release-compose.yml",
+):
+    assert f'"{called}"' not in workflow_block, (
+        f"called reusable workflow {called} was incorrectly restored as a standalone run requirement"
+    )
+assert "actions/workflows/build-all.yml/runs" in updater, (
+    "update controller latest-verified discovery must query the Build-all caller workflow"
+)
+assert "actions/workflows/release-candidate.yml/runs" not in updater, (
+    "update controller still queries reusable release-candidate as if it had an automatic standalone run"
+)
 for rel, body in (
     ("source-snapshot.yml", read(".github/workflows/source-snapshot.yml")),
     ("release-candidate.yml", rc),
