@@ -104,9 +104,13 @@ for marker in (
 # all carry the same private marker; foreign lookalikes/symlinks are skipped.
 for marker in (
     "MARKER_NAME = \".router-vpn-owned-temp\"",
-    "MARKER_BODY = b\"router-vpn-owned-temp-v1\\n\"",
+    "MARKER_VERSION = 2",
+    "MARKER_PREFIX = b\"router-vpn-owned-temp-v2\\n\"",
     "def create_owned_temp",
+    "def owned_temp_owner_pid",
     "def is_owned_temp",
+    "def _pid_alive",
+    "owner_pid != current_pid and _pid_alive(owner_pid)",
     "def cleanup_owned_temp",
     "stat.S_ISLNK",
     "os.path.samestat",
