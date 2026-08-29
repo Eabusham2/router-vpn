@@ -14,7 +14,9 @@ mark_owned_temp = OWNED["mark_owned_temp"]
 is_owned_temp = OWNED["is_owned_temp"]
 cleanup_owned_temp = OWNED["cleanup_owned_temp"]
 MARKER_NAME = OWNED["MARKER_NAME"]
-MARKER_BODY = OWNED["MARKER_BODY"]
+MARKER_PREFIX = OWNED["MARKER_PREFIX"]
+_marker_body = OWNED["_marker_body"]
+owned_temp_owner_pid = OWNED["owned_temp_owner_pid"]
 
 
 def remove_manual(path: Path) -> None:
@@ -29,7 +31,8 @@ def main() -> int:
     try:
         assert is_owned_temp(owned)
         marker = owned / MARKER_NAME
-        assert marker.read_bytes() == MARKER_BODY
+        assert marker.read_bytes().startswith(MARKER_PREFIX)
+        assert owned_temp_owner_pid(owned) == os.getpid()
         if os.name != "nt":
             assert owned.stat().st_mode & 0o777 == 0o700
             assert marker.stat().st_mode & 0o777 == 0o600
@@ -67,15 +70,49 @@ def main() -> int:
         outside = Path(tempfile.mkstemp(prefix="router-vpn-marker-target-")[1])
         try:
             os.chmod(forged, 0o700)
-            outside.write_bytes(MARKER_BODY)
+            outside.write_bytes(_marker_body(os.getpid()))
             os.chmod(outside, 0o600)
             (forged / MARKER_NAME).symlink_to(outside)
             assert cleanup_owned_temp(forged) is False
             assert forged.exists()
-            assert outside.read_bytes() == MARKER_BODY
+            assert outside.read_bytes().startswith(MARKER_PREFIX)
         finally:
             remove_manual(forged)
             outside.unlink(missing_ok=True)
+
+        live_other = create_owned_temp("router-vpn-job-")
+        try:
+            parent_pid = os.getppid()
+            if parent_pid > 0 and parent_pid != os.getpid():
+                marker = live_other / MARKER_NAME
+                marker.write_bytes(_marker_body(parent_pid))
+                os.chmod(marker, 0o600)
+                assert owned_temp_owner_pid(live_other) == parent_pid
+                assert cleanup_owned_temp(live_other) is False
+                assert live_other.exists(), "live foreign Router VPN temp owner was disrupted"
+        finally:
+            remove_manual(live_other)
+
+        dead_owner = create_owned_temp("router-vpn-one-package-")
+        try:
+            marker = dead_owner / MARKER_NAME
+            marker.write_bytes(_marker_body(2147483647))
+            os.chmod(marker, 0o600)
+            assert cleanup_owned_temp(dead_owner) is True
+            assert not dead_owner.exists(), "dead-owner crash temp was not reclaimed"
+        finally:
+            remove_manual(dead_owner)
+
+        mutated = create_owned_temp("router-vpn-request-")
+        try:
+            marker = mutated / MARKER_NAME
+            original = marker.read_bytes()
+            marker.write_bytes(original.replace(b"nonce=", b"nonce=bad", 1))
+            os.chmod(marker, 0o600)
+            assert cleanup_owned_temp(mutated) is False
+            assert mutated.exists(), "mutated ownership evidence was trusted"
+        finally:
+            remove_manual(mutated)
 
         broad = create_owned_temp("router-vpn-request-")
         try:
