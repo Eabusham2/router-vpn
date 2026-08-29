@@ -206,6 +206,7 @@ for audit in (
     "deploy/durable-state-syntax-audit.py",
     "deploy/durable-state-transaction-audit.py",
     "deploy/workflow-source-integrity-audit.py",
+    "deploy/macos-mutation-build-audit.py",
     "deploy/production-install-state-audit.py",
     "deploy/profile-readiness-marker-audit.py",
     "server/scripts/test_preserve_generated_state.py",
