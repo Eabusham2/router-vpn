@@ -470,6 +470,40 @@ func newestMeaningfulWorkflowSuccess(runs []workflowRun, sha, branch string) boo
 	return ok && run.Conclusion == "success"
 }
 
+func latestSuccessfulWorkflowSHAs(runs []workflowRun, branch string) []string {
+	bySHA := map[string][]workflowRun{}
+	for _, run := range runs {
+		sha := strings.ToLower(strings.TrimSpace(run.HeadSHA))
+		if !shaRE.MatchString(sha) || run.HeadBranch != branch {
+			continue
+		}
+		bySHA[sha] = append(bySHA[sha], run)
+	}
+	type candidate struct {
+		sha string
+		id  int64
+	}
+	candidates := make([]candidate, 0, len(bySHA))
+	for sha, items := range bySHA {
+		run, ok := newestMeaningfulWorkflowRun(items, sha, branch)
+		if !ok || run.Conclusion != "success" || run.ID <= 0 {
+			continue
+		}
+		candidates = append(candidates, candidate{sha: sha, id: run.ID})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].id == candidates[j].id {
+			return candidates[i].sha < candidates[j].sha
+		}
+		return candidates[i].id > candidates[j].id
+	})
+	out := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		out = append(out, item.sha)
+	}
+	return out
+}
+
 func (c *controller) successfulWorkflowRun(file, sha string) (workflowRun, error) {
 	if !shaRE.MatchString(sha) {
 		return workflowRun{}, errors.New("invalid SHA")
@@ -512,24 +546,21 @@ func (c *controller) verifiedTarget(sha string) error {
 }
 
 func (c *controller) latestVerified() (string, error) {
-	q := url.Values{"branch": {c.branch}, "status": {"success"}, "per_page": {"30"}}
+	// Do not filter the GitHub query to successful runs. A newer failed or
+	// in-progress rerun for the same SHA is meaningful negative/unsettled
+	// evidence and must block resurrection of an older green run.
+	q := url.Values{"branch": {c.branch}, "per_page": {"100"}}
 	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/actions/workflows/build-all.yml/runs?%s", c.repo, q.Encode())
 	var runs workflowRuns
 	if err := githubJSON(endpoint, &runs); err != nil {
 		return "", err
 	}
-	seen := map[string]bool{}
-	for _, run := range runs.Runs {
-		sha := strings.ToLower(run.HeadSHA)
-		if seen[sha] || !shaRE.MatchString(sha) || run.HeadBranch != c.branch || run.Status != "completed" || run.Conclusion != "success" {
-			continue
-		}
-		seen[sha] = true
+	for _, sha := range latestSuccessfulWorkflowSHAs(runs.Runs, c.branch) {
 		if err := c.verifiedTarget(sha); err == nil {
 			return sha, nil
 		}
 	}
-	return "", errors.New("no recent exact-SHA release has all required green workflows")
+	return "", errors.New("no recent exact-SHA release has settled current Build-all evidence")
 }
 
 func ownedImageSHAs(content string) (map[string]string, error) {
