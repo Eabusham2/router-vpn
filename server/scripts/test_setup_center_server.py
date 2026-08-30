@@ -136,7 +136,7 @@ def main() -> int:
             if os.name != "nt":
                 token_path.chmod(0o600)
             static = base / "downloads"
-            static.mkdir()
+            static.mkdir(mode=0o700)
             html = '<!doctype html><body><div id="tabs"></div><section class="panel active" data-tab="start">Start</section><div id="wizard" class="overlay"></div><script>function gotoTab(name){document.querySelectorAll(\'.panel\').forEach(x=>x.classList.toggle(\'active\',x.dataset.tab===name))}</script></body>'
             for setup_page in (static / "index.html", static / "router-vpn-device-setup.html"):
                 setup_page.write_text(html)

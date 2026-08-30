@@ -35,35 +35,78 @@ for stale in range(store_version):
 bundle = read("server/scripts/create-bundle-json.py")
 tree = ast.parse(bundle, filename="server/scripts/create-bundle-json.py")
 
-def assigned_dict(name: str) -> dict[str, object]:
+def assigned_value(name: str) -> ast.AST:
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
-        if not any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
-            continue
-        if not isinstance(node.value, ast.Dict):
-            raise AssertionError(f"{name} is no longer a literal mapping")
-        values: dict[str, object] = {}
-        for key, value in zip(node.value.keys, node.value.values):
-            if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                try:
-                    values[key.value] = ast.literal_eval(value)
-                except (ValueError, TypeError):
-                    values[key.value] = object()
-        return values
-    raise AssertionError(f"missing generated mapping {name}")
+        if any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+            return node.value
+    raise AssertionError(f"missing generated assignment {name}")
+
+
+def assigned_dict(name: str) -> dict[str, object]:
+    value = assigned_value(name)
+    if not isinstance(value, ast.Dict):
+        raise AssertionError(f"{name} is no longer a literal mapping")
+    values: dict[str, object] = {}
+    for key, item in zip(value.keys, value.values):
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            try:
+                values[key.value] = ast.literal_eval(item)
+            except (ValueError, TypeError):
+                values[key.value] = object()
+    return values
+
+
+def dict_value_node(mapping: ast.Dict, key_name: str) -> ast.AST:
+    for key, value in zip(mapping.keys, mapping.values):
+        if isinstance(key, ast.Constant) and key.value == key_name:
+            return value
+    raise AssertionError(f"generated mapping is missing {key_name}")
+
+
+def expression_contains_string(node: ast.AST, expected: str) -> bool:
+    return any(isinstance(part, ast.Constant) and part.value == expected for part in ast.walk(node))
+
 
 router_defaults = assigned_dict("router_profile")
 bundle_defaults = assigned_dict("bundle")
 assert router_defaults.get("schema_version") == profile_version, "generated home profile schema is stale"
-assert re.search(
-    rf'write_private_json\\s*\\(.*?["\\\']routers\\.json["\\\'].*?'
-    rf'["\\\']schema_version["\\\']\\s*:\\s*{store_version}.*?'
-    rf'["\\\']selected_id["\\\']\\s*:\\s*["\\\']home["\\\'].*?'
-    rf'["\\\']profiles["\\\']\\s*:\\s*\\[router_profile\\]',
-    bundle,
-    re.S,
-), "generated routers.json store schema is stale"
+
+routers_store_node = assigned_value("routers_store")
+assert isinstance(routers_store_node, ast.Dict), "routers_store is no longer a literal mapping"
+assert ast.literal_eval(dict_value_node(routers_store_node, "schema_version")) == store_version, "generated routers.json store schema is stale"
+assert ast.literal_eval(dict_value_node(routers_store_node, "selected_id")) == "home", "generated routers.json selected profile is stale"
+profiles_node = dict_value_node(routers_store_node, "profiles")
+assert (
+    isinstance(profiles_node, ast.List)
+    and len(profiles_node.elts) == 1
+    and isinstance(profiles_node.elts[0], ast.Name)
+    and profiles_node.elts[0].id == "router_profile"
+), "generated routers.json no longer contains exactly the generated home profile"
+
+routers_store_published = False
+for node in ast.walk(tree):
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "write_private_json_batch"
+        and node.args
+        and isinstance(node.args[0], (ast.List, ast.Tuple))
+    ):
+        continue
+    for item in node.args[0].elts:
+        if not isinstance(item, (ast.Tuple, ast.List)) or len(item.elts) != 2:
+            continue
+        target, value = item.elts
+        if (
+            expression_contains_string(target, "routers.json")
+            and isinstance(value, ast.Name)
+            and value.id == "routers_store"
+        ):
+            routers_store_published = True
+            break
+assert routers_store_published, "routers_store is not published through the private atomic batch"
 assert bundle_defaults.get("profileSchemaVersion") == profile_version, "portable/mobile bundle profileSchemaVersion is stale"
 
 # Current product defaults are intentionally explicit in generated home-node data.

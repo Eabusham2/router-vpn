@@ -133,7 +133,7 @@ for marker in (
     'stat.S_IMODE(before.st_mode) != 0o600',
     'stat.S_IMODE(opened.st_mode) != 0o600',
     'stat.S_IMODE(current.st_mode) != 0o600',
-    'os.O_NOFOLLOW',
+    'getattr(os, "O_NOFOLLOW", 0)',
 ):
     if marker not in reader:
         errors.append(f"verified-regular-read.py missing private read marker {marker!r}")

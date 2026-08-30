@@ -82,7 +82,7 @@ adopt = need(
     "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
     "verified_json_tags(){",
     "advanced_current(){",
-    'private_ok "$GEN/reality-xhttp/sing-box.json"',
+    '"$GEN/reality-xhttp/xray.json" "$GEN/reality-xhttp/sing-box.json"',
     "grep -q '^CHAIN_READY=1$'",
     "grep -q '^PQ_BASE=1$'",
     'private_ok "$GEN/$d/rosenpass-client-secret"',

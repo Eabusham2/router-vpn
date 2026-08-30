@@ -74,7 +74,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="router-vpn-broker-auth-") as td:
         base = Path(td)
         (base / "config").mkdir()
-        (base / "downloads").mkdir()
+        (base / "downloads").mkdir(mode=0o700)
         (base / "client-bundle").mkdir()
         token = "setup-auth-test-token-0123456789abcdef"
         token_path = base / "config" / "setup-center.token"
@@ -179,7 +179,7 @@ def main() -> int:
             with tempfile.TemporaryDirectory(prefix=f"router-vpn-broker-token-{kind}-") as td:
                 base = Path(td)
                 (base / "config").mkdir()
-                (base / "downloads").mkdir()
+                (base / "downloads").mkdir(mode=0o700)
                 token_path = base / "config" / "setup-center.token"
                 if kind == "symlink":
                     real = base / "config" / "real-token"

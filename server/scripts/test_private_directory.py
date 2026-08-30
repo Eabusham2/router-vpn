@@ -21,8 +21,20 @@ def main() -> int:
         assert got == target.resolve()
         if os.name != "nt":
             assert target.stat().st_mode & 0o777 == 0o700
+        assert mod.validate_private_directory(target) == target.resolve()
 
     if os.name != "nt":
+        with tempfile.TemporaryDirectory(prefix="router-vpn-private-dir-mode-") as td:
+            broad = Path(td) / "downloads"
+            broad.mkdir(mode=0o755)
+            broad.chmod(0o755)
+            try:
+                mod.validate_private_directory(broad)
+            except RuntimeError as exc:
+                assert "permissions" in str(exc)
+            else:
+                raise AssertionError("read-only private-directory validation accepted broad permissions")
+
         with tempfile.TemporaryDirectory(prefix="router-vpn-private-dir-link-") as td, tempfile.TemporaryDirectory(prefix="router-vpn-private-dir-out-") as out:
             root = Path(td)
             link = root / "state"

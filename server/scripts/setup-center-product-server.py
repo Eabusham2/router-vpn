@@ -234,9 +234,8 @@ def main() -> int:
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8786)
     args = ap.parse_args()
-    base = Path(args.base).resolve()
-    static = base / "downloads"
-    static.mkdir(parents=True, exist_ok=True)
+    base = _ai._core._broker.validate_private_directory(Path(args.base).resolve())
+    static = _ai._core._broker.validate_private_directory(base / "downloads")
     _ai._core._broker.cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
     print(

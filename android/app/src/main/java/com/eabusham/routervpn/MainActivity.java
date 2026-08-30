@@ -629,7 +629,7 @@ public final class MainActivity extends Activity {
         if (rawActiveOrBusy() || layeredActiveOrBusy()) { statusView.setText("Another VPN became active; multihop start cancelled."); refreshNativeState(); return; }
         multihopBusy = true;
         refreshNativeState();
-        multihop.connect(entry.file, exit.file, mode, new AndroidMultihopRuntime.Callback() {
+        multihop.connect(entry, exit, mode, new AndroidMultihopRuntime.Callback() {
             @Override public void progress(String message) { runOnUiThread(() -> { statusView.setText(message); refreshNativeState(); }); }
             @Override public void finished(boolean ok, String message) { runOnUiThread(() -> { multihopBusy = false; statusView.setText(message); if (!ok) toast(message); refreshNativeState(); }); }
         });

@@ -52,6 +52,7 @@ if _private_dir_spec is None or _private_dir_spec.loader is None:
 _private_dir = module_from_spec(_private_dir_spec)
 _private_dir_spec.loader.exec_module(_private_dir)
 ensure_private_directory = _private_dir.ensure_private_directory
+validate_private_directory = _private_dir.validate_private_directory
 
 _owned_temp_spec = spec_from_file_location(
     "router_vpn_broker_owned_temp",
@@ -955,8 +956,8 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address, handler, base_dir: Path, static_dir: Path):
-        self.base_dir = ensure_private_directory(base_dir)
-        self.static_dir = ensure_private_directory(static_dir)
+        self.base_dir = validate_private_directory(base_dir)
+        self.static_dir = validate_private_directory(static_dir)
         token_path = self.base_dir / "config" / "setup-center.token"
         self.setup_token = _setup_token(token_path)
         self.jobs = _jobs.DownloadJobManager(base_dir, build_package, content_type_for, BUILD_SLOTS, ALLOWED_DOWNLOADS, max_active=8)
@@ -975,8 +976,8 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8786)
     args = ap.parse_args()
     base = Path(os.path.abspath(os.path.expanduser(args.base)))
-    ensure_private_directory(base)
-    static = ensure_private_directory(base / "downloads")
+    validate_private_directory(base)
+    static = validate_private_directory(base / "downloads")
     cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
     print(f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated private UI, one-time LAN pairing, ephemeral packages", flush=True)

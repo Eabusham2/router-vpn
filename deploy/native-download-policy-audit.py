@@ -90,7 +90,8 @@ need(
     "native_artifact_policy.py",
     "NATIVE_PACKAGE_ARTIFACTS",
     "_fetch_first_artifact",
-    "NATIVE_PACKAGE_ARTIFACTS.get(home_name",
+    "def _desktop_github_sources",
+    "NATIVE_PACKAGE_ARTIFACTS.get(",
     'spec["sources"]',
     "ROUTER_VPN_GITHUB_SHA",
 )

@@ -28,7 +28,8 @@ for marker in (
     '"$BUNDLE/setup-assets.json=$WORK/normalized/client-bundle/setup-assets.json"',
     '"$BUNDLE/router-vpn-device-setup.html=$WORK/normalized/client-bundle/router-vpn-device-setup.html"',
     "setup-assets.json must remain an object",
-    'stage_static "$BUNDLE/router-vpn-device-setup.html" "index.html"',
+    'stage_private "$BUNDLE/router-vpn-device-setup.html" "index.html"',
+    'stage_public "$BUNDLE/router/asus-merlin-router-vpn-forwards.sh" "asus-merlin-router-vpn-forwards.sh"',
     'python3 "$PRIVATE_BATCH" "${publish[@]}"',
     "one staged generation",
 ):

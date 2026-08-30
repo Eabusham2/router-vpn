@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -93,7 +94,50 @@ final class AndroidConnectionProfileStore {
     private SharedPreferences prefs(){return context.getSharedPreferences(PREFS,Context.MODE_PRIVATE);}
     private JSONObject find(String id)throws Exception{if(!safeId(id))throw new IllegalArgumentException("Invalid connection profile id.");JSONArray rows=readRows();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(id.equals(row.optString("id")))return row;}throw new IllegalArgumentException("Connection profile was not found.");}
 
-    private JSONArray readRows() throws Exception {if(!file.exists())return new JSONArray();if(!file.isFile()||file.length()<=0||file.length()>MAX_STORE)throw new IllegalStateException("Connection profile store is invalid or too large.");JSONObject root=new JSONObject(new String(readLimited(file,MAX_STORE),StandardCharsets.UTF_8));if(root.optInt("schema_version",0)!=SCHEMA_VERSION)throw new IllegalStateException("Unsupported connection profile store schema.");JSONArray rows=root.optJSONArray("profiles");if(rows==null)rows=new JSONArray();if(rows.length()>MAX_PROFILES)throw new IllegalStateException("Too many saved connection profiles.");Set<String>ids=new HashSet<>();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);String id=row.optString("id","");cleanName(row.optString("name",""));if(!safeId(id)||!ids.add(id))throw new IllegalStateException("Connection profile store contains invalid/duplicate ids.");String kind=row.optString("node_kind","");if(!"router-vpn".equals(kind)&&!"external".equals(kind))throw new IllegalStateException("Connection profile node kind is invalid.");if(row.optString("node_id","").isEmpty())throw new IllegalStateException("Connection profile node id is missing.");normalizeMode(row.optString("mode","smart-auto"));jsonStrings(row.optJSONArray("custom_layers"),32);normalizeMultiMode(row.optString("multihop_exit_mode","shadowsocks"));JSONObject policy=row.optJSONObject("policy");if(policy!=null)for(String key:JSONObject.getNames(policy)==null?new String[0]:JSONObject.getNames(policy))if(!allowedPolicyKey(key))throw new IllegalStateException("Connection profile contains non-whitelisted node data: "+key);}return rows;}
+    private JSONArray readRows() throws Exception {
+        if (!file.exists()) return new JSONArray();
+        if (!file.isFile() || file.length() <= 0 || file.length() > MAX_STORE) {
+            throw new IllegalStateException("Connection profile store is invalid or too large.");
+        }
+        JSONObject root = new JSONObject(new String(readLimited(file, MAX_STORE), StandardCharsets.UTF_8));
+        if (root.optInt("schema_version", 0) != SCHEMA_VERSION) {
+            throw new IllegalStateException("Unsupported connection profile store schema.");
+        }
+        JSONArray rows = root.optJSONArray("profiles");
+        if (rows == null) rows = new JSONArray();
+        if (rows.length() > MAX_PROFILES) throw new IllegalStateException("Too many saved connection profiles.");
+        Set<String> ids = new HashSet<>();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.getJSONObject(i);
+            String id = row.optString("id", "");
+            cleanName(row.optString("name", ""));
+            if (!safeId(id) || !ids.add(id)) {
+                throw new IllegalStateException("Connection profile store contains invalid/duplicate ids.");
+            }
+            String kind = row.optString("node_kind", "");
+            if (!"router-vpn".equals(kind) && !"external".equals(kind)) {
+                throw new IllegalStateException("Connection profile node kind is invalid.");
+            }
+            if (row.optString("node_id", "").isEmpty()) {
+                throw new IllegalStateException("Connection profile node id is missing.");
+            }
+            normalizeMode(row.optString("mode", "smart-auto"));
+            jsonStrings(row.optJSONArray("custom_layers"), 32);
+            normalizeMultiMode(row.optString("multihop_exit_mode", "shadowsocks"));
+            JSONObject policy = row.optJSONObject("policy");
+            if (policy != null) {
+                Iterator<String> keys = policy.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    if (!allowedPolicyKey(key)) {
+                        throw new IllegalStateException("Connection profile contains non-whitelisted node data: " + key);
+                    }
+                }
+            }
+        }
+        return rows;
+    }
+
     private void writeRows(JSONArray rows)throws Exception{byte[]raw=(new JSONObject().put("schema_version",SCHEMA_VERSION).put("profiles",rows).toString(2)+"\n").getBytes(StandardCharsets.UTF_8);if(raw.length>MAX_STORE)throw new IllegalStateException("Connection profile store exceeds safety limit.");File tmp=new File(file.getParentFile(),".connection-profiles-"+randomHex(6)+".tmp");try(FileOutputStream out=new FileOutputStream(tmp,false)){out.write(raw);out.flush();out.getFD().sync();}tmp.setReadable(false,false);tmp.setReadable(true,true);tmp.setWritable(false,false);tmp.setWritable(true,true);if(file.exists()&&!file.delete())throw new IllegalStateException("Cannot replace connection profile store.");if(!tmp.renameTo(file))throw new IllegalStateException("Cannot commit connection profile store atomically.");}
 
     private List<String> customLayers(String mode)throws Exception{if(mode==null||!mode.startsWith("custom:"))return new ArrayList<>();String name=mode.substring(7);JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&name.equals(p.optString("name","")))return jsonStrings(p.optJSONArray("layers"),32);}return new ArrayList<>();}

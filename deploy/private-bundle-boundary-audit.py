@@ -299,7 +299,11 @@ broker_security = subprocess.run(
 )
 assert broker_security.returncode == 0, "broker private-read/pairing/redirect security tests failed: " + (broker_security.stdout + broker_security.stderr)[-4000:]
 
-assert 'self.server.setup_token' not in broker[broker.index('def _redeem_pairing'):broker.index('def _dynamic')], "pairing redemption serialized Setup Center token"
-assert 'router-vpn-bundle.json' in broker[broker.index('def _redeem_pairing'):broker.index('def _dynamic')], "pairing does not return the canonical minimal node bundle"
+pairing_redeem = broker[broker.index('def _redeem_pairing'):broker.index('def _dynamic')]
+pairing_bundle = broker[broker.index('def _pairing_bundle'):broker.index('class Handler')]
+assert 'self.server.setup_token' not in pairing_redeem, "pairing redemption serialized Setup Center token"
+assert '_pairing_bundle(Path(self.server.base_dir))' in pairing_redeem, "pairing redemption bypasses the canonical private-bundle loader"
+assert 'router-vpn-bundle.json' in pairing_bundle, "canonical pairing bundle loader no longer reads the minimal node bundle"
+assert 'read_verified_regular(path, MAX_PAIR_BUNDLE, private=True)' in pairing_bundle, "canonical pairing bundle loader lost verified private reading"
 
 print("private node bundle publication/authentication/token-separation boundary audit: OK")
