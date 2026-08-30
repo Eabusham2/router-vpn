@@ -550,10 +550,6 @@ require(
 )
 require(
     "server/scripts/test_preserve_generated_state.py",
-    "server/scripts/test_create_bundle_transaction.py",
-    "server/scripts/test_setup_generation_transaction.py",
-    "server/scripts/test_install_state.py",
-    "server/scripts/test_verified_regular_read.py",
     "corrupt preserved transport state",
     "ambiguous preserved TLS credentials",
     "symlink preserved transport state",
@@ -656,6 +652,10 @@ for test in (
     "server/scripts/test_node_proof_private_state.py",
     "server/scripts/test_configure_portainer_update.py",
     "server/scripts/test_preserve_generated_state.py",
+    "server/scripts/test_create_bundle_transaction.py",
+    "server/scripts/test_setup_generation_transaction.py",
+    "server/scripts/test_install_state.py",
+    "server/scripts/test_verified_regular_read.py",
     "modes/test_runtime_pids.py",
     "modes/test_stop_mode_pid_ownership.py",
     "modes/test_runtime_config.py",

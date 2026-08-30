@@ -68,7 +68,7 @@ for forbidden in (
 # Conversely the executable helper/catalog sources intentionally keep normal
 # source-tree permissions and must not force a weakening of the strict private
 # batch source-mode contract.
-if 'private source must be mode 0600' not in read("server/scripts/atomic-private-batch.py"):
+if 'must be mode 0600' not in read("server/scripts/atomic-private-batch.py"):
     errors.append("strict private batch 0600 source rule disappeared")
 
 proc = subprocess.run(

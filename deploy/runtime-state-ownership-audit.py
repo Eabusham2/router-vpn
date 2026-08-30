@@ -220,7 +220,8 @@ require(
 )
 require(
     "modes/test_all_result.py",
-    "failed ALL adoption changed",
+    "injected ALL adoption failure",
+    "assert target.read_bytes() == original",
     "ALL result escaped HOMEVPN_ROOT",
     "ALL result followed a symlink target",
     "ALL result followed a symlink ancestor",
@@ -235,7 +236,7 @@ require(
     "store = read_profile_store(root)",
     'root / "state" / "mtu-auto-cache.json"',
     "measurement-only auto-MTU memory, never routers.json",
-    "runtime MTU policy",
+    "Normal connection startup owns only runtime config plus a private measurement",
 )
 for line, call in python_write_calls("modes/mtu-policy.py"):
     if "routers.json" in call:
