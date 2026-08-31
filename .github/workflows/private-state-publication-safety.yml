@@ -1,0 +1,30 @@
+name: Private state and generated-secret publication safety
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-state-publication-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  private-state:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove durable private-state transactions
+        run: python3 deploy/durable-state-transaction-audit.py
+      - name: Prove private bundle boundaries
+        run: python3 deploy/private-bundle-boundary-audit.py
+      - name: Prove Setup Center publication boundaries
+        run: python3 deploy/setup-center-publication-audit.py
+      - name: Prove preserved credentials and generated state
+        run: python3 deploy/historical-regression-audit.py
+      - name: Prove endpoint ownership remains narrow
+        run: python3 deploy/endpoint-sync-ownership-audit.py
