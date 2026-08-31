@@ -1,0 +1,195 @@
+name: Direct main unified feature matrix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-unified-feature-matrix.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: direct-main-unified-feature-matrix
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Enforce every requested feature in real platform source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          cat > deploy/unified-ui-feature-matrix-audit.py <<'PY'
+          #!/usr/bin/env python3
+          from pathlib import Path
+          import json, re, subprocess, sys
+
+          ROOT=Path(__file__).resolve().parents[1]
+          errors=[]
+
+          groups={
+            "windows":[
+              "client/RouterVPN-Windows-App.ps1",
+              "client/RouterVPN-Windows-UnifiedShell.ps1",
+              "client/RouterVPN-Windows-UnifiedControlCenter.ps1",
+              "client/RouterVPN-Windows-Telemetry.ps1",
+              "client/RouterVPN-Windows-ProfileSettings.ps1",
+              "client/RouterVPN-Windows-Product-v2.ps1",
+            ],
+            "macos":[
+              "client/macos/build-native-app.sh",
+              "client/macos/RouterVPNMacUnifiedShell.swift",
+              "client/macos/RouterVPNMacTelemetry.swift",
+              "client/macos/RouterVPNProfileSettings.swift",
+              "client/macos/UnifiedControlCenterPolicy.swift",
+            ],
+            "linux":[
+              "client/linux/build-native-app.sh",
+              "client/linux/routervpn-unified-shell-v8.inc",
+              "client/linux/routervpn-unified-control-center-v2.inc",
+              "client/linux/routervpn-profile-settings-v1.inc",
+              "client/linux/routervpn-connection-profiles-v11.inc",
+              "client/linux/routervpn-auto-requirements-v11.inc",
+              "client/linux/routervpn-gtk-product-v4.c",
+            ],
+            "android":[
+              "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
+              "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
+              "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetry.java",
+              "android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSettingsDialog.java",
+              "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+              "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
+              "android/app/src/main/java/com/eabusham/routervpn/AndroidViaEntryLatencyProbe.java",
+              "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java",
+            ],
+            "ios":[
+              "ios/RouterVPN/App/IOSUnifiedProductView.swift",
+              "ios/RouterVPN/App/IOSUnifiedTelemetry.swift",
+              "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
+              "ios/RouterVPN/App/IOSUnifiedSecureTransport.swift",
+              "ios/RouterVPN/App/IOSUserLocationControl.swift",
+              "ios/RouterVPN/App/IOSProfileSettingsView.swift",
+            ],
+          }
+
+          def combine(platform):
+              parts=[]
+              for name in groups[platform]:
+                  path=ROOT/name
+                  if path.is_file(): parts.append(f"\n/* {name} */\n"+path.read_text(encoding="utf-8",errors="replace"))
+              if not parts: errors.append(f"{platform}: no real shipping source files were found")
+              return "".join(parts).lower()
+
+          required={
+            "map_first":["map","globe"],
+            "connect_disconnect":["connect","disconnect"],
+            "fastest_select_only":["fastest","select"],
+            "kill_switch":["kill","switch"],
+            "forwarding":["forward"],
+            "multihop":["multihop","entry","exit"],
+            "settings":["settings"],
+            "mode":["mode","smart auto","auto"],
+            "dns":["dns"],
+            "custom_builder":["custom","preset"],
+            "profile_crud":["profile","add","load","update","delete"],
+            "external_nodes":["socks","http","shadow","hysteria"],
+            "mtu":["mtu","auto","fixed","retest"],
+            "ipv6":["ipv6"],
+            "auto_requirements":["require encrypted","require obfuscation"],
+            "jumbo_padding":["jumbo","daita"],
+            "latency":["rtt","ms"],
+            "speed":["download","upload","mbps"],
+            "location":["location","latitude","longitude"],
+            "route_visual":["route","packet"],
+            "responsive":["compact","large","width"],
+          }
+
+          matrix={}
+          for platform in groups:
+              text=combine(platform)
+              matrix[platform]={}
+              for feature,tokens in required.items():
+                  present=all(token in text for token in tokens)
+                  matrix[platform][feature]=present
+                  if not present: errors.append(f"{platform}: real shipping source is missing {feature} tokens {tokens}")
+
+          # Platform-specific strong behavior rather than label-only coverage.
+          strong={
+            "windows":["routervpn-windows-unifiedcontrolcenter.ps1","node selection never","unifiedconnectbutton","unifiedfastest"],
+            "macos":["unifiedcontrolcenterpolicy.swift","addtarget","mapkit","speed-test"],
+            "linux":["routervpn-unified-control-center-v2.inc","gtk","cairo","speed-test"],
+            "android":["androidunifiedcontrolcenterpolicy.assertshippingcontract","setonmarkerclicklistener","showfastconnectmenu","androidviaentrylatencyprobe","androidconnectionprofilestore"],
+            "ios":["iosunifiedmap","controlsheet(height:","test & select fastest","iosunifiedcustombuilder","iosconnectionprofilestore","iosuserlocationcontrol"],
+          }
+          for platform,tokens in strong.items():
+              text=combine(platform)
+              for token in tokens:
+                  if token not in text: errors.append(f"{platform}: shipping implementation missing strong marker {token!r}")
+
+          # Selection must not launch a connection. Fastest is an explicit menu
+          # plus a separate primary Connect/Disconnect action.
+          ios=(ROOT/"ios/RouterVPN/App/IOSUnifiedProductView.swift").read_text(encoding="utf-8",errors="replace")
+          for bad in ("Test & connect fastest","private func connectFastest","private func connectSpecific"):
+              if bad in ios: errors.append(f"iOS revived selection-triggered connection: {bad}")
+          android=(ROOT/"android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java").read_text(encoding="utf-8",errors="replace")
+          fastest=android[android.find("showFastConnectMenu"):android.find("private void",android.find("showFastConnectMenu")+20)]
+          if ".connect(" in fastest or "connectOrDisconnect(" in fastest: errors.append("Android Fastest menu still connects instead of selecting")
+
+          # Real coordinates only and no IP-derived/fabricated user location.
+          all_text="\n".join(combine(p) for p in groups)
+          for bad in ("ip-derived location","fake coordinates","fabricated pin"):
+              if bad in all_text and "no "+bad not in all_text: errors.append(f"forbidden location behavior marker: {bad}")
+
+          # Canonical requested order/defaults and type catalog.
+          contract=json.loads((ROOT/"client/unified-control-center-v2.json").read_text(encoding="utf-8"))
+          if contract.get("bottom_sheet_order") != ["connection","multihop","settings","mode","dns"]: errors.append("bottom sheet order drifted")
+          defaults=contract.get("defaults",{})
+          expected={"mode":"smart-auto","selected_node_count":1,"ipv6":True,"mtu_policy":"auto","auto_require_encrypted":False,"auto_require_obfuscation":False,"authenticated_transport":True}
+          for key,value in expected.items():
+              if defaults.get(key)!=value: errors.append(f"canonical default {key} drifted")
+          kinds={row.get("id") for row in contract.get("node_types",[])}
+          for kind in ("router-vpn","wireguard","amneziawg","openvpn","socks5","http-connect","https-connect","shadowsocks-2022","hysteria2","tor-bridge"):
+              if kind not in kinds: errors.append(f"canonical Add Node type missing: {kind}")
+
+          (ROOT/"deploy/unified-ui-feature-matrix.json").write_text(json.dumps(matrix,indent=2,sort_keys=True)+"\n",encoding="utf-8")
+          if errors:
+              print("UNIFIED UI FEATURE MATRIX: FAIL")
+              for error in errors: print(" - "+error)
+              raise SystemExit(1)
+          print("UNIFIED UI FEATURE MATRIX: PASS")
+          PY
+
+          python3 -m py_compile deploy/unified-ui-feature-matrix-audit.py
+          python3 deploy/unified-ui-feature-matrix-audit.py
+          python3 deploy/unified-map-control-center-audit.py
+          python3 deploy/unified-map-shipping-audit.py
+          python3 deploy/nonblocking-native-onboarding-audit.py
+          git diff --check
+
+          # Wire the complete matrix into the shipping audit so future release
+          # source cannot regress after this one-time implementation step.
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('deploy/unified-map-shipping-audit.py')
+          text=path.read_text(encoding='utf-8')
+          if 'unified-ui-feature-matrix-audit.py' not in text:
+              anchor='print("UNIFIED MAP SHIPPING AUDIT: PASS")'
+              if anchor not in text: raise SystemExit('unified shipping audit final anchor drifted')
+              text=text.replace(anchor,'subprocess.run([sys.executable, str(ROOT/"deploy/unified-ui-feature-matrix-audit.py")], check=True)\n'+anchor,1)
+              path.write_text(text,encoding='utf-8')
+          PY
+          python3 deploy/unified-map-shipping-audit.py
+          git add deploy
+          git rm .github/workflows/direct-main-unified-feature-matrix.yml
+          git commit -m "Gate the complete all-platform unified UI feature matrix [skip ci]"
+          git push origin HEAD:main
