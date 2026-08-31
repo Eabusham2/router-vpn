@@ -147,6 +147,9 @@ def fsync_dir(path: pathlib.Path) -> None:
         finally:
             os.close(fd)
     except OSError:
+        # Some filesystems do not support directory fsync. The file itself was
+        # already fsynced before rename, and a post-rename error would be a
+        # false transaction failure because adoption has already occurred.
         pass
 
 
@@ -197,15 +200,35 @@ def adopt(items: list[Item]) -> None:
                 fsync_dir(item.dest.parent)
                 continue
 
-            # Keep the staged path tracked until replace succeeds. If replace
-            # fails, finally must still unlink this not-yet-adopted private temp.
+            # Bind ownership to the exact staged inode before rename. A foreign
+            # actor can replace the destination immediately after os.replace;
+            # recording a fresh lstat without this identity would make rollback
+            # mistake that foreign inode for Router VPN state and overwrite it.
             tmp = staged[item.dest]
+            staged_stat = tmp.lstat()
+            if (
+                stat.S_ISLNK(staged_stat.st_mode)
+                or not stat.S_ISREG(staged_stat.st_mode)
+                or staged_stat.st_mode & 0o777 != PRIVATE_MODE
+            ):
+                raise RuntimeError(f"staged private destination is unsafe: {tmp}")
             os.replace(tmp, item.dest)
             staged.pop(item.dest, None)
+
+            # Register the expected staged identity before re-reading the
+            # destination. If verification detects an immediate replacement,
+            # rollback will refuse to touch the foreign inode and report the
+            # transaction as incompletely recoverable.
+            adopted.append((item, staged_stat))
             adopted_stat = item.dest.lstat()
-            if stat.S_ISLNK(adopted_stat.st_mode) or not stat.S_ISREG(adopted_stat.st_mode):
-                raise RuntimeError(f"adopted private destination is unsafe: {item.dest}")
-            adopted.append((item, adopted_stat))
+            if (
+                stat.S_ISLNK(adopted_stat.st_mode)
+                or not stat.S_ISREG(adopted_stat.st_mode)
+                or adopted_stat.st_mode & 0o777 != PRIVATE_MODE
+                or not os.path.samestat(staged_stat, adopted_stat)
+            ):
+                raise RuntimeError(f"adopted private destination identity changed before verification: {item.dest}")
+            adopted[-1] = (item, adopted_stat)
             fsync_dir(item.dest.parent)
     except Exception as exc:
         rollback_errors = restore(adopted)
