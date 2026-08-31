@@ -1,0 +1,46 @@
+name: Recovered native UI exact-head gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recovered-native-ui-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recovered-native-ui:
+    name: Recovered native UI source and shipping contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Prove exact checkout and clean source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git status --porcelain)" = ""
+
+      - name: Run recovered native UI exact-head gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/recovered-native-ui-release-gate.py
+
+      - name: Reject generated source drift
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test "$(git status --porcelain)" = ""
