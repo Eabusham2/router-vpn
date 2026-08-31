@@ -128,23 +128,23 @@ private enum IOSConnectionProfileStore {
     }
 
     static func add(model: RouterVPNModel, name: String) throws -> IOSConnectionProfileRecord {
-        var values = all(); guard values.count < 64 else { throw issue("Connection profile limit reached.") }
+        var values = try loadAll(); guard values.count < 64 else { throw issue("Connection profile limit reached.") }
         let value = try snapshot(model: model, name: name); values.append(value); try persist(values); return value
     }
 
     static func update(model: RouterVPNModel, id: String, name: String) throws -> IOSConnectionProfileRecord {
-        var values = all(); guard let index = values.firstIndex(where: { $0.id == id }) else { throw issue("Connection profile was not found.") }
+        var values = try loadAll(); guard let index = values.firstIndex(where: { $0.id == id }) else { throw issue("Connection profile was not found.") }
         let value = try snapshot(model: model, name: name, id: id); values[index] = value; try persist(values); return value
     }
 
     static func delete(model: RouterVPNModel, id: String) throws {
         guard !model.profileMutationBlocked else { throw issue("Disconnect or let the active VPN transition finish before deleting a connection profile.") }
-        var values = all(); let before = values.count; values.removeAll { $0.id == id }; guard values.count != before else { throw issue("Connection profile was not found.") }; try persist(values)
+        var values = try loadAll(); let before = values.count; values.removeAll { $0.id == id }; guard values.count != before else { throw issue("Connection profile was not found.") }; try persist(values)
     }
 
     static func load(model: RouterVPNModel, id: String) throws -> IOSConnectionProfileRecord {
         guard !model.profileMutationBlocked else { throw issue("Disconnect or let the active VPN transition finish before loading a connection profile.") }
-        guard let saved = all().first(where: { $0.id == id }) else { throw issue("Connection profile was not found.") }
+        guard let saved = try loadAll().first(where: { $0.id == id }) else { throw issue("Connection profile was not found.") }
         guard let linked = model.allNodeProfiles.first(where: { $0.id == saved.nodeID }), linked.normalizedNodeKind == saved.nodeKind else {
             throw issue("The linked node referenced by this connection profile is missing or changed type.")
         }

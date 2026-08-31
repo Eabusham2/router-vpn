@@ -118,22 +118,25 @@ forbid(
     "try manager.setAttributes(attributes, ofItemAtPath: destination.path)",
 )
 run_test("ios/RouterVPN/test_private_json_store_contract.py")
+run_test("ios/RouterVPN/test_connection_profile_store_fail_closed.py")
 
-# Android whole-connection profiles are app-private authoritative state. The
-# verified 0600 temporary inode is fsynced and atomically adopted; no fallible
-# post-rename operation may make callers report failure after disk committed.
+# Android whole-connection profiles share the same verified-inode primitive as
+# linked nodes/exits and retain node-policy rollback when preference persistence
+# fails. No bespoke delete/rename writer may bypass that contract.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
-    "Os.chmod(tmp.getAbsolutePath(), 0600)",
-    "out.getFD().sync()",
-    "Os.rename(tmp.getAbsolutePath(), file.getAbsolutePath())",
-    "Rename preserves that inode and mode",
+    "AndroidPrivateFileStore.read(file, MAX_STORE)",
+    "AndroidPrivateFileStore.write(file, raw, MAX_STORE)",
+    "nodes.importBundle(originalBundle)",
 )
 forbid(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
-    "Os.chmod(file.getAbsolutePath(), 0600)",
+    "Os.rename(",
+    "FileOutputStream",
+    "requirePrivateRegularFile",
 )
 run_test("android/test_android_connection_profile_store_contract.py")
+run_test("android/test_android_node_store_transaction_contract.py")
 
 # MTU adoption remains a two-phase live/session transaction and persistence
 # failure must restore the live interface/in-memory state. Runtime-profile MTU

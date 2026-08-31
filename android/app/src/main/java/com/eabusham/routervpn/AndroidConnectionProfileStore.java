@@ -2,17 +2,11 @@ package com.eabusham.routervpn;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.system.Os;
-import android.system.OsConstants;
-import android.system.StructStat;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -107,11 +101,8 @@ final class AndroidConnectionProfileStore {
 
     private JSONArray readRows() throws Exception {
         if (!file.exists()) return new JSONArray();
-        requirePrivateRegularFile(file);
-        if (file.length() <= 0 || file.length() > MAX_STORE) {
-            throw new IllegalStateException("Connection profile store is invalid or too large.");
-        }
-        JSONObject root = new JSONObject(new String(readLimited(file, MAX_STORE), StandardCharsets.UTF_8));
+        byte[] stored = AndroidPrivateFileStore.read(file, MAX_STORE);
+        JSONObject root = new JSONObject(new String(stored, StandardCharsets.UTF_8));
         if (root.optInt("schema_version", 0) != SCHEMA_VERSION) {
             throw new IllegalStateException("Unsupported connection profile store schema.");
         }
@@ -154,49 +145,12 @@ final class AndroidConnectionProfileStore {
         byte[] raw = (new JSONObject()
                 .put("schema_version", SCHEMA_VERSION)
                 .put("profiles", rows)
-                .toString(2) + "
-").getBytes(StandardCharsets.UTF_8);
+                .toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
         if (raw.length > MAX_STORE) throw new IllegalStateException("Connection profile store exceeds safety limit.");
-
-        File parent = file.getParentFile();
-        if (parent == null || (!parent.isDirectory() && !parent.mkdirs())) {
-            throw new IllegalStateException("Connection profile directory is unavailable.");
-        }
-        File tmp = new File(parent, ".connection-profiles-" + randomHex(12) + ".tmp");
-        boolean adopted = false;
-        try {
-            if (!tmp.createNewFile()) throw new IllegalStateException("Cannot create private profile temporary file.");
-            Os.chmod(tmp.getAbsolutePath(), 0600);
-            try (FileOutputStream out = new FileOutputStream(tmp, false)) {
-                out.write(raw);
-                out.flush();
-                out.getFD().sync();
-            }
-            requirePrivateRegularFile(tmp);
-            if (file.exists()) requirePrivateRegularFile(file);
-            // POSIX rename is atomic and replaces the old same-filesystem file.
-            // Never delete the authoritative store before the replacement exists.
-            Os.rename(tmp.getAbsolutePath(), file.getAbsolutePath());
-            adopted = true;
-            // The verified same-directory temporary file already owns mode 0600.
-            // Rename preserves that inode and mode. Do not add a fallible
-            // post-commit chmod/lstat that could report failure after disk has
-            // already adopted the new authoritative profile store.
-        } finally {
-            if (!adopted && tmp.exists() && !tmp.delete()) tmp.deleteOnExit();
-        }
+        AndroidPrivateFileStore.write(file, raw, MAX_STORE);
     }
 
-    private static void requirePrivateRegularFile(File target) throws Exception {
-        StructStat stat = Os.lstat(target.getAbsolutePath());
-        int kind = stat.st_mode & OsConstants.S_IFMT;
-        if (kind != OsConstants.S_IFREG) {
-            throw new IllegalStateException("Connection profile state is not a regular file.");
-        }
-        if ((stat.st_mode & 0077) != 0) {
-            throw new IllegalStateException("Connection profile state permissions are not private.");
-        }
-    }
+
 
     private List<String> customLayers(String mode)throws Exception{if(mode==null||!mode.startsWith("custom:"))return new ArrayList<>();String name=mode.substring(7);JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&name.equals(p.optString("name","")))return jsonStrings(p.optJSONArray("layers"),32);}return new ArrayList<>();}
     private String prepareCustomPresetJSON(String mode,List<String>layers)throws Exception{if(mode==null||!mode.startsWith("custom:")||layers.isEmpty())return null;String name=mode.substring(7);if(name.trim().isEmpty()||name.length()>64)throw new IllegalArgumentException("CUSTOM profile name is invalid.");JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]")),next=new JSONArray();for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&!name.equals(p.optString("name","")))next.put(p);}next.put(new JSONObject().put("name",name).put("layers",new JSONArray(layers)));return next.toString();}
@@ -208,7 +162,7 @@ final class AndroidConnectionProfileStore {
     private static Record toRecord(JSONObject row){JSONObject policy=row.optJSONObject("policy");boolean encrypted=policy!=null&&policy.optBoolean("auto_require_encrypted",false),obfuscated=policy!=null&&policy.optBoolean("auto_require_obfuscation",false);return new Record(row.optString("id",""),row.optString("name",""),row.optString("node_kind",""),row.optString("node_id",""),row.optString("mode","smart-auto"),jsonStrings(row.optJSONArray("custom_layers"),32),encrypted,obfuscated);}
     private static JSONObject readBundle(File file)throws Exception{return new JSONObject(new String(readLimited(file,AndroidNodeStore.MAX_BUNDLE),StandardCharsets.UTF_8));}
     private static JSONObject selectedProfile(JSONObject bundle){JSONArray a=bundle.optJSONArray("routerProfiles");String id=bundle.optString("selectedRouterID","");if(a==null)return null;for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p!=null&&id.equals(p.optString("id","")))return p;}return a.length()>0?a.optJSONObject(0):null;}
-    private static byte[] readLimited(File f,int max)throws Exception{if(f==null||!f.isFile()||f.length()<=0||f.length()>max)throw new IllegalStateException("Private node/store file is invalid or too large.");try(FileInputStream in=new FileInputStream(f);ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[8192];int total=0,n;while((n=in.read(b))!=-1){total+=n;if(total>max)throw new IllegalStateException("Private node/store file exceeds safety limit.");out.write(b,0,n);}return out.toByteArray();}}
+    private static byte[] readLimited(File f,int max)throws Exception{return AndroidPrivateFileStore.read(f,max);}
     private static boolean safeId(String value){return value!=null&&value.matches("cp-[0-9a-f]{24}");}
     private static String newId(){return "cp-"+randomHex(12);}
     private static String randomHex(int n){byte[]b=new byte[n];RANDOM.nextBytes(b);StringBuilder s=new StringBuilder();for(byte x:b)s.append(String.format(Locale.ROOT,"%02x",x&255));return s.toString();}

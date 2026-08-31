@@ -1,6 +1,7 @@
 package com.eabusham.routervpn;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.util.Base64;
 
 import org.json.JSONArray;
@@ -55,8 +56,20 @@ final class AndroidNodeStore {
         File[] existing = root.listFiles((dir, name) -> name.matches("[0-9a-f]{32}\\.json"));
         int count = existing == null ? 0 : existing.length;
         if (!target.isFile() && count >= MAX_NODES) throw new IllegalStateException("Android node store is full (max " + MAX_NODES + "). Remove a node before importing another.");
-        atomicWrite(target, bytes);
-        selectInternal(id);
+
+        byte[] previousNode = snapshotOptional(target);
+        boolean nodeAdopted = false;
+        try {
+            atomicWrite(target, bytes);
+            nodeAdopted = true;
+            selectInternal(id);
+        } catch (Exception failure) {
+            if (nodeAdopted) {
+                try { restoreFile(target, previousNode); }
+                catch (Exception rollback) { throw incompleteRollback("Router node import", failure, rollback); }
+            }
+            throw failure;
+        }
         return describe(id, bundle, target);
     }
 
@@ -85,13 +98,39 @@ final class AndroidNodeStore {
     synchronized void remove(String id) throws Exception {
         requireMutable("deleting a Router VPN node");
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
-        File file = nodeFile(id);
-        if (file.exists()) AndroidPrivateFileStore.remove(file, MAX_BUNDLE);
-        String active = activeId();
-        if (id.equals(active)) context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(ACTIVE_ID).apply();
+        File nodeFile = nodeFile(id);
+        byte[] previousNode = snapshotOptional(nodeFile);
+        String previousId = activeId();
+        boolean active = id.equals(previousId);
+        File activeBundle = activeBundleFile();
+        byte[] previousActiveBundle = active ? snapshotOptional(activeBundle) : null;
+        boolean mutated = false;
+        try {
+            if (previousNode != null) {
+                AndroidPrivateFileStore.remove(nodeFile, MAX_BUNDLE);
+                mutated = true;
+            }
+            if (active) {
+                if (previousActiveBundle != null) AndroidPrivateFileStore.remove(activeBundle, MAX_BUNDLE);
+                mutated = true;
+                if (!preferences().edit().remove(ACTIVE_ID).commit()) {
+                    throw new IllegalStateException("Could not persist removal of the selected Router VPN node.");
+                }
+            }
+        } catch (Exception failure) {
+            if (mutated) {
+                try {
+                    restoreFile(nodeFile, previousNode);
+                    if (active) rollbackSelection(activeBundle, previousActiveBundle, previousId);
+                } catch (Exception rollback) {
+                    throw incompleteRollback("Router node delete", failure, rollback);
+                }
+            }
+            throw failure;
+        }
     }
 
-    String activeId() { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(ACTIVE_ID, ""); }
+    String activeId() { return preferences().getString(ACTIVE_ID, ""); }
 
     File file(String id) {
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
@@ -127,13 +166,67 @@ final class AndroidNodeStore {
     private void selectInternal(String id) throws Exception {
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
         File source = nodeFile(id);
-        if (!source.isFile()) throw new IllegalStateException("Selected node is not stored.");
         byte[] bytes = readLimited(source, MAX_BUNDLE);
         JSONObject bundle = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
         validateBundle(bundle);
         if (!id.equals(deriveId(bundle, bytes))) throw new IllegalStateException("Stored node identity check failed.");
-        atomicWrite(new File(context.getFilesDir(), ACTIVE_BUNDLE), bytes);
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(ACTIVE_ID, id).apply();
+
+        File activeBundle = activeBundleFile();
+        byte[] previousActiveBundle = snapshotOptional(activeBundle);
+        String previousId = activeId();
+        boolean bundleAdopted = false;
+        try {
+            atomicWrite(activeBundle, bytes);
+            bundleAdopted = true;
+            if (!preferences().edit().putString(ACTIVE_ID, id).commit()) {
+                throw new IllegalStateException("Could not persist the selected Router VPN node.");
+            }
+        } catch (Exception failure) {
+            if (bundleAdopted) {
+                try { rollbackSelection(activeBundle, previousActiveBundle, previousId); }
+                catch (Exception rollback) { throw incompleteRollback("Router node selection", failure, rollback); }
+            }
+            throw failure;
+        }
+    }
+
+    private SharedPreferences preferences() {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    private File activeBundleFile() {
+        return new File(context.getFilesDir(), ACTIVE_BUNDLE);
+    }
+
+    private static byte[] snapshotOptional(File target) throws Exception {
+        return target.exists() ? readLimited(target, MAX_BUNDLE) : null;
+    }
+
+    private static void restoreFile(File target, byte[] previous) throws Exception {
+        if (previous == null) AndroidPrivateFileStore.remove(target, MAX_BUNDLE);
+        else atomicWrite(target, previous);
+    }
+
+    private void rollbackSelection(File activeBundle, byte[] previousBundle, String previousId) throws Exception {
+        Exception rollbackFailure = null;
+        try { restoreFile(activeBundle, previousBundle); }
+        catch (Exception error) { rollbackFailure = error; }
+        try {
+            SharedPreferences.Editor editor = preferences().edit();
+            if (previousId == null || previousId.isEmpty()) editor.remove(ACTIVE_ID);
+            else editor.putString(ACTIVE_ID, previousId);
+            if (!editor.commit()) throw new IllegalStateException("Could not restore the prior selected node identity.");
+        } catch (Exception error) {
+            if (rollbackFailure == null) rollbackFailure = error;
+            else rollbackFailure.addSuppressed(error);
+        }
+        if (rollbackFailure != null) throw rollbackFailure;
+    }
+
+    private static IllegalStateException incompleteRollback(String action, Exception failure, Exception rollback) {
+        IllegalStateException combined = new IllegalStateException(action + " failed and rollback was incomplete: " + rollback.getMessage(), failure);
+        combined.addSuppressed(rollback);
+        return combined;
     }
 
     private void ensureRoot() throws Exception {
