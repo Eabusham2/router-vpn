@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small progressive-enhancement patch for Setup Center download/method UX."""
+"""Progressive, private Setup Center download and method UX."""
 
 UX_PATCH = r'''
 <style>
@@ -8,7 +8,6 @@ UX_PATCH = r'''
 .overlay:not([hidden]),.wizard-overlay:not([hidden]),[data-routervpn-overlay]:not([hidden]){pointer-events:auto}
 @media(max-width:820px){.wizard,.overlay>*,.wizard-overlay>*{max-height:calc(100dvh - 24px);overflow:auto}.rvpn-primary-controls{position:relative;z-index:3}}
 </style>
-
 <style>
 /* Shipping Setup Center accessibility/responsive overrides. This patch is inserted after the generated base CSS. */
 .tabs button,.btn,button{appearance:none}
@@ -19,7 +18,16 @@ UX_PATCH = r'''
 #rvpn-device-download[disabled]{opacity:.55;cursor:not-allowed}
 #rvpn-device-download-note{position:fixed;left:22px;bottom:72px;z-index:997;max-width:460px;background:#111827;color:#e2e8f0;border:1px solid #334155;border-radius:12px;padding:9px 12px;font:12px/1.4 system-ui;display:none}
 #rvpn-download-job{position:fixed;left:22px;bottom:22px;z-index:1002;width:min(520px,calc(100vw - 44px));max-height:calc(100vh - 44px);overflow:auto;background:#101827;color:#f8fafc;border:1px solid #334155;border-radius:16px;padding:14px;box-shadow:0 20px 70px #0009;font:13px/1.4 system-ui;display:none}
-#rvpn-download-job .rvpn-job-head{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}#rvpn-download-job .rvpn-job-title{font-weight:800;overflow-wrap:anywhere}#rvpn-download-job .rvpn-job-track{height:9px;border-radius:999px;background:#25334a;overflow:hidden;margin:10px 0}#rvpn-download-job .rvpn-job-fill{height:100%;width:0;background:#22c55e;transition:width .2s ease}#rvpn-download-job .rvpn-job-meta{color:#a9b6cc;font-size:12px;overflow-wrap:anywhere}#rvpn-download-job .rvpn-job-history{margin-top:7px;color:#94a3b8;font-size:11px;overflow-wrap:anywhere}#rvpn-download-job .rvpn-job-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}#rvpn-download-job button{border:1px solid #475569;border-radius:9px;padding:7px 10px;background:#172033;color:#f8fafc;cursor:pointer}#rvpn-download-job button.rvpn-cancel{border-color:#7f1d1d;background:#3f151b}#rvpn-download-job button:disabled{opacity:.5;cursor:not-allowed}
+#rvpn-download-job .rvpn-job-head{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}
+#rvpn-download-job .rvpn-job-title{font-weight:800;overflow-wrap:anywhere}
+#rvpn-download-job .rvpn-job-track{height:9px;border-radius:999px;background:#25334a;overflow:hidden;margin:10px 0}
+#rvpn-download-job .rvpn-job-fill{height:100%;width:0;background:#22c55e;transition:width .2s ease}
+#rvpn-download-job .rvpn-job-meta{color:#a9b6cc;font-size:12px;overflow-wrap:anywhere}
+#rvpn-download-job .rvpn-job-history{margin-top:7px;color:#94a3b8;font-size:11px;overflow-wrap:anywhere}
+#rvpn-download-job .rvpn-job-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+#rvpn-download-job button{border:1px solid #475569;border-radius:9px;padding:7px 10px;background:#172033;color:#f8fafc;cursor:pointer}
+#rvpn-download-job button.rvpn-cancel{border-color:#7f1d1d;background:#3f151b}
+#rvpn-download-job button:disabled{opacity:.5;cursor:not-allowed}
 @media(max-width:560px){#rvpn-device-download{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));width:auto;max-width:none;text-align:center}#rvpn-device-download-note{left:12px;right:12px;bottom:calc(64px + env(safe-area-inset-bottom));max-width:none}#rvpn-download-job{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));width:auto;max-height:calc(100vh - 24px - env(safe-area-inset-bottom))}}
 </style>
 <button id="rvpn-device-download" type="button">Download for this device</button>
@@ -39,8 +47,7 @@ UX_PATCH = r'''
  const ua=(navigator.userAgent||'').toLowerCase(),plat=(navigator.platform||'').toLowerCase();
  let arch=/arm64|aarch64|\barm\b/.test(ua+' '+plat)?'arm64':(/x86_64|amd64|x64|win64/.test(ua+' '+plat)?'amd64':'unknown');
  if(navigator.userAgentData&&navigator.userAgentData.getHighEntropyValues){try{const h=await navigator.userAgentData.getHighEntropyValues(['architecture','bitness']);const a=String(h.architecture||'').toLowerCase();if(/arm/.test(a))arch='arm64';else if(/x86/.test(a)&&String(h.bitness||'')==='64')arch='amd64'}catch(_){}}
- const isArm=arch==='arm64';
- const persistedJobKey='routervpn.setup.download-job.v2';
+ const isArm=arch==='arm64',persistedJobKey='routervpn.setup.download-job.v2';
  let family='unknown',active=null,pollTimer=0,lastRequest=null,downloadStarted=false;
  if(/android/.test(ua))family='android';
  else if(/iphone|ipad|ipod/.test(ua)||(/mac/.test(plat)&&navigator.maxTouchPoints>1))family='ios';
@@ -52,56 +59,54 @@ UX_PATCH = r'''
  function score(a){const s=(a.textContent+' '+a.getAttribute('href')).toLowerCase();let n=0;if(/native|router vpn app|installer/.test(s))n+=8;if(isArm&&/arm64|aarch64/.test(s))n+=6;if(!isArm&&/amd64|x86_64|x64/.test(s))n+=6;if(/portable/.test(s))n-=2;if(/all.platform|bundle/.test(s))n-=5;return n}
  function best(){if(['windows','macos','linux'].includes(family)&&arch==='unknown')return null;return candidates().sort((a,b)=>score(b)-score(a))[0]||null}
  function packageName(a){try{const u=new URL(a.href,location.href);if(u.origin!==location.origin)return'';const name=decodeURIComponent(u.pathname.split('/').pop()||'');return /\.(zip|apk|ipa|tar\.gz|tar\.xz|deb|rpm|pkg|dmg|exe|msi)$/i.test(name)?name:''}catch(_){return''}}
- function fmtBytes(n){n=Number(n||0);if(!n)return'0 B';const units=['B','KiB','MiB','GiB'];let i=0;while(n>=1024&&i<units.length-1){n/=1024;i++}return `${n.toFixed(i?1:0)} ${units[i]}`}
+ function fmtBytes(n){n=Number(n||0);if(!n)return'0 B';const u=['B','KiB','MiB','GiB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return `${n.toFixed(i?1:0)} ${u[i]}`}
+ function fmtTime(n){n=Math.max(0,Number(n||0));const m=Math.floor(n/60),s=Math.floor(n%60);return `${m}:${String(s).padStart(2,'0')}`}
  function labelPhase(p){return String(p||'queued').split('-').map(x=>x?x[0].toUpperCase()+x.slice(1):x).join(' ')}
- function terminal(j){return ['failed','cancelled','delivered','delivery-interrupted','expired'].includes(j.status)}
+ function terminal(j){return ['failed','cancelled','expired'].includes(j.status)}
+ function retained(j){return ['ready','delivered','delivery-interrupted'].includes(j.status)&&Number(j.expires_in_seconds||0)>0&&!!j.download_url}
+ function settled(j){return terminal(j)||['delivered','delivery-interrupted'].includes(j.status)}
  function safeSameOriginPath(value,prefix){try{const u=new URL(String(value||''),location.href);return u.origin===location.origin&&u.pathname.startsWith(prefix)?u.pathname+u.search:''}catch(_){return''}}
- function persistActive(){try{if(!active||terminal(active)){sessionStorage.removeItem(persistedJobKey);return}const status=safeSameOriginPath(active.status_url,'/api/download-jobs/');if(!status){sessionStorage.removeItem(persistedJobKey);return}sessionStorage.setItem(persistedJobKey,JSON.stringify({status_url:status,name:active.name||'',direct_href:safeSameOriginPath(lastRequest&&lastRequest.directHref,'/'),saved_at:Date.now()}))}catch(_){}}
  function clearPersisted(){try{sessionStorage.removeItem(persistedJobKey)}catch(_){}}
+ function persistActive(){try{if(!active||(terminal(active)&&!retained(active))){clearPersisted();return}const status=safeSameOriginPath(active.status_url,'/api/download-jobs/');if(!status){clearPersisted();return}sessionStorage.setItem(persistedJobKey,JSON.stringify({status_url:status,name:active.name||'',direct_href:safeSameOriginPath(lastRequest&&lastRequest.directHref,'/'),saved_at:Date.now()}))}catch(_){}}
  function render(j){
-   active=j;panel.style.display='block';title.textContent=j.name||'Router VPN package';phase.textContent=`${labelPhase(j.phase)} • ${Math.max(0,Math.min(100,Number(j.progress||0)))}%`;fill.style.width=`${Math.max(0,Math.min(100,Number(j.progress||0)))}%`;
+   active=j;panel.style.display='block';title.textContent=j.name||'Router VPN package';
+   const pct=Math.max(0,Math.min(100,Number(j.progress||0)));phase.textContent=`${labelPhase(j.phase)} • ${pct}%`;fill.style.width=`${pct}%`;
    const bytes=Number(j.bytes_total||0)?`${fmtBytes(j.bytes_sent||0)} / ${fmtBytes(j.bytes_total||0)}`:(Number(j.size||0)?fmtBytes(j.size):'size pending');
-   meta.textContent=[j.source?`Source: ${j.source}`:'',bytes,j.error?`Error: ${j.error}`:''].filter(Boolean).join(' • ');
+   const keep=retained(j)?`Temporary package deletes in ${fmtTime(j.expires_in_seconds)}${j.retained_until?` • ${j.retained_until}`:''}`:'';
+   meta.textContent=[j.source?`Source: ${j.source}`:'',bytes,keep,j.error?`Status: ${j.error}`:''].filter(Boolean).join(' • ');
    history.textContent=`Lifecycle: ${(j.phase_history||[]).map(labelPhase).join(' → ')||labelPhase(j.phase)}`;
-   cancel.disabled=terminal(j)||j.status==='delivered';cancel.style.display=terminal(j)?'none':'';retry.style.display=(j.status==='failed'||j.status==='cancelled'||j.status==='delivery-interrupted'||j.status==='expired')?'':'none';
-   if(terminal(j))clearPersisted();else persistActive();
+   const canDelete=retained(j),canCancel=!settled(j)&&j.status!=='cleaning'&&j.status!=='cleanup-pending';
+   cancel.textContent=canDelete?'Delete now':'Cancel';cancel.style.display=(canDelete||canCancel)?'':'none';cancel.disabled=!(canDelete||canCancel);
+   retry.textContent=retained(j)?'Download again':'Retry';retry.style.display=(retained(j)||terminal(j))?'':'none';
+   if(terminal(j)&&!retained(j))clearPersisted();else persistActive();
  }
  async function json(path,opt={}){const safe=safeSameOriginPath(path,'/api/');if(!safe)throw new Error('Refused a non-local Setup Center job URL');const r=await fetch(safe,{credentials:'same-origin',cache:'no-store',redirect:'error',...opt});let d={};try{d=await r.json()}catch{}if(!r.ok||d.ok===false)throw new Error(d.error||`HTTP ${r.status}`);return d}
  function stopPoll(){if(pollTimer){clearTimeout(pollTimer);pollTimer=0}}
  function schedulePoll(delay){stopPoll();pollTimer=setTimeout(poll,document.hidden?Math.max(delay,1600):delay)}
+ function downloadExisting(j){const path=safeSameOriginPath(j&&j.download_url,'/api/download-jobs/');if(!path){phase.textContent='The job returned an unsafe download URL and was not opened.';return false}downloadStarted=true;frame.src=path+(path.includes('?')?'&':'?')+'attempt='+Date.now();phase.textContent='Browser download requested. Setup Center will not claim delivery until the server confirms it.';schedulePoll(300);return true}
  async function poll(){
    if(!active||!active.status_url)return;
-   try{
-     const d=await json(active.status_url),j=d.job;render(j);
-     if(j.status==='ready'&&!downloadStarted&&j.download_url){const download=safeSameOriginPath(j.download_url,'/api/download-jobs/');if(!download){phase.textContent='The job returned an unsafe download URL and was not opened.'}else{downloadStarted=true;frame.src=download;phase.textContent='Browser download requested. Setup Center will not claim delivery until the server confirms it.'}}
-     if(!terminal(j))schedulePoll(500)
-   }catch(e){phase.textContent=navigator.onLine?`Progress check failed: ${e.message}`:'Offline. The authenticated download job will resume when this device reconnects.';persistActive();schedulePoll(1200)}
+   try{const d=await json(active.status_url),j=d.job;render(j);if(j.status==='ready'&&!downloadStarted)downloadExisting(j);if(!settled(j))schedulePoll(500)}
+   catch(e){phase.textContent=navigator.onLine?`Progress check failed: ${e.message}`:'Offline. The authenticated download job will resume when this device reconnects.';persistActive();schedulePoll(1200)}
  }
  async function startJob(name,directHref){
-   stopPoll();downloadStarted=false;lastRequest={name,directHref};panel.style.display='block';title.textContent=name;phase.textContent='Creating authenticated download job…';fill.style.width='0%';meta.textContent='';history.textContent='';cancel.style.display='';cancel.disabled=true;retry.style.display='none';
-   try{
-     const d=await json('/api/download-jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});render(d.job);persistActive();poll();
-   }catch(e){
-     // Static helpers/private profile links are intentionally not async jobs. If
-     // a future package link is not in the broker allow-list, preserve its exact
-     // same-origin download instead of manufacturing a different package.
-     phase.textContent=`Async package job unavailable: ${e.message}`;meta.textContent='Using the exact original Setup Center link.';retry.style.display='';
-     if(directHref)setTimeout(()=>{location.href=directHref},250);
-   }
+   stopPoll();downloadStarted=false;lastRequest={name,directHref};panel.style.display='block';title.textContent=name;phase.textContent='Creating authenticated download job…';fill.style.width='0%';meta.textContent='';history.textContent='';cancel.textContent='Cancel';cancel.style.display='';cancel.disabled=true;retry.style.display='none';
+   try{const d=await json('/api/download-jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});render(d.job);persistActive();poll()}
+   catch(e){phase.textContent=`Async package job unavailable: ${e.message}`;meta.textContent='Using the exact original Setup Center link. Its direct route uses the same 30-minute retained job policy.';retry.style.display='';if(directHref)setTimeout(()=>{location.href=directHref},250)}
  }
  const found=best();
  if(found){btn.dataset.href=found.href;btn.title=`Detected ${family}${arch==='arm64'?' ARM64':arch==='amd64'?' x64':''}; uses the best matching generic/native Setup Center package link with real job progress.`}
  else if(['windows','macos','linux'].includes(family)&&arch==='unknown'){btn.title=`Detected ${family}, but CPU architecture is not safely exposed by this browser. Choose the x64/Intel or ARM64/Apple Silicon package explicitly.`}
  else{btn.title='No matching platform package link is currently published by this node.'}
- btn.addEventListener('click',()=>{const a=best();if(a){const name=packageName(a);if(name){startJob(name,a.href);return}a.click();return}note.textContent=(['windows','macos','linux'].includes(family)&&arch==='unknown')?`Detected ${family}, but this browser does not safely reveal whether the CPU is x64/Intel or ARM64/Apple Silicon. Choose the matching platform package below; Router VPN will not guess the wrong architecture.`:`No ${family==='unknown'?'detected-platform':family} package is currently published. Keep this Setup Center open and use the platform package/download section or retry after the node finishes publishing artifacts.`;note.style.display='block';setTimeout(()=>note.style.display='none',7000)});
+ btn.addEventListener('click',()=>{const a=best();if(a){const name=packageName(a);if(name){startJob(name,a.href);return}a.click();return}note.textContent=(['windows','macos','linux'].includes(family)&&arch==='unknown')?`Detected ${family}, but this browser does not safely reveal whether the CPU is x64/Intel or ARM64/Apple Silicon. Choose the matching platform package below; Router VPN will not guess the wrong architecture.`:`No ${family==='unknown'?'detected-platform':family} package is currently published. Use the platform package section or retry after exact-SHA artifacts finish publishing.`;note.style.display='block';setTimeout(()=>note.style.display='none',7000)});
  document.addEventListener('click',e=>{const a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a)return;const name=packageName(a);if(!name)return;e.preventDefault();startJob(name,a.href)},true);
- cancel.addEventListener('click',async()=>{if(!active||!active.status_url)return;cancel.disabled=true;phase.textContent='Cancellation requested…';try{const d=await json(active.status_url,{method:'DELETE'});render(d.job);if(!terminal(d.job))poll()}catch(e){phase.textContent=`Cancel failed: ${e.message}`;cancel.disabled=false}});
- retry.addEventListener('click',()=>{if(lastRequest)startJob(lastRequest.name,lastRequest.directHref)});
+ cancel.addEventListener('click',async()=>{if(!active||!active.status_url)return;cancel.disabled=true;phase.textContent=retained(active)?'Deleting temporary package now…':'Cancellation requested…';try{const d=await json(active.status_url,{method:'DELETE'});render(d.job);if(!settled(d.job))poll()}catch(e){phase.textContent=`Cancel failed: ${e.message}`;cancel.disabled=false}});
+ retry.addEventListener('click',()=>{if(retained(active)){downloadExisting(active);return}if(lastRequest)startJob(lastRequest.name,lastRequest.directHref)});
  close.addEventListener('click',()=>{panel.style.display='none'});
- frame.addEventListener('load',()=>{if(active&&!terminal(active)){phase.textContent='The browser accepted the download request; waiting for server delivery confirmation…';persistActive()}});
- document.addEventListener('visibilitychange',()=>{if(active&&!terminal(active)&&!document.hidden)schedulePoll(0)});
- window.addEventListener('online',()=>{if(active&&!terminal(active)){phase.textContent='Back online; resuming authenticated download progress…';schedulePoll(0)}});
- window.addEventListener('offline',()=>{if(active&&!terminal(active)){stopPoll();phase.textContent='Offline. The authenticated download job is preserved for this tab.';persistActive()}});
+ frame.addEventListener('load',()=>{if(active&&!settled(active)){phase.textContent='The browser accepted the download request; waiting for server delivery confirmation…';persistActive();schedulePoll(250)}});
+ document.addEventListener('visibilitychange',()=>{if(active&&!document.hidden)schedulePoll(0)});
+ window.addEventListener('online',()=>{if(active){phase.textContent='Back online; resuming authenticated download progress…';schedulePoll(0)}});
+ window.addEventListener('offline',()=>{if(active){stopPoll();phase.textContent='Offline. The authenticated download job is preserved for this tab.';persistActive()}});
  try{const saved=JSON.parse(sessionStorage.getItem(persistedJobKey)||'null');const status=safeSameOriginPath(saved&&saved.status_url,'/api/download-jobs/');if(status&&Date.now()-Number(saved.saved_at||0)<6*60*60*1000){active={status_url:status,name:String(saved.name||'Router VPN package')};const direct=safeSameOriginPath(saved&&saved.direct_href,'/');lastRequest={name:active.name,directHref:direct||''};panel.style.display='block';title.textContent=active.name;phase.textContent='Resuming authenticated download job…';poll()}else clearPersisted()}catch(_){clearPersisted()}
 
  // A method with a missing prerequisite is still a method, not a reason to hide
