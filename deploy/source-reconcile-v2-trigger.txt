@@ -1,2 +1,0 @@
-Router VPN source reconciliation v2 complete.
-This commit intentionally triggers the normal full main workflow matrix after the one-shot Linux settings include reconciliation.
