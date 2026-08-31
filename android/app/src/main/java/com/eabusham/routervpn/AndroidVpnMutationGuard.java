@@ -16,12 +16,12 @@ final class AndroidVpnMutationGuard {
             AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(context);
             AndroidRuntimeRegistry e = AndroidRuntimeRegistry.get(context);
             String phase = home.phase == null ? "" : home.phase.trim().toLowerCase(java.util.Locale.ROOT);
-            return home.connected
-                    || phase.contains("connecting") || phase.contains("starting") || phase.contains("checking")
-                    || phase.contains("trying") || phase.contains("proving") || phase.contains("disconnecting")
-                    || phase.contains("stopping") || phase.contains("switching") || phase.contains("reconnecting")
+            return phaseBusy(home.connected, phase)
                     || e.orchestrator.isRunning()
                     || e.multihop.isActiveOrTransitioning()
+                    || e.standardExit.isActiveOrTransitioning()
+                    || tunnelBusy(e.wireGuard.getState())
+                    || tunnelBusy(e.amneziaWG.getState())
                     || runtimeBusy(e.singBox.getState())
                     || runtimeBusy(e.xray.getState());
         } catch (Throwable ignored) {
@@ -29,8 +29,25 @@ final class AndroidVpnMutationGuard {
         }
     }
 
+    private static boolean phaseBusy(boolean connected, String phase) {
+        if (connected) return true;
+        // Mutation is safe only in explicit, stable idle states. Unknown/future
+        // phases fail closed instead of silently becoming mutable.
+        return !("off".equals(phase) || "disconnected".equals(phase) || "failed".equals(phase));
+    }
+
+    private static boolean tunnelBusy(com.wireguard.android.backend.Tunnel.State state) {
+        return state != null && state != com.wireguard.android.backend.Tunnel.State.DOWN;
+    }
+
+    private static boolean tunnelBusy(org.amnezia.awg.backend.Tunnel.State state) {
+        return state != null && state != org.amnezia.awg.backend.Tunnel.State.DOWN;
+    }
+
     private static boolean runtimeBusy(String state) {
-        return "UP".equals(state) || "STARTING".equals(state) || "STOPPING".equals(state);
+        if (state == null) return true;
+        String normalized = state.trim().toUpperCase(java.util.Locale.ROOT);
+        return !("DOWN".equals(normalized) || "FAILED".equals(normalized) || "REVOKED".equals(normalized));
     }
 
     private static boolean hasOwnedVpnTransport(Context context) {

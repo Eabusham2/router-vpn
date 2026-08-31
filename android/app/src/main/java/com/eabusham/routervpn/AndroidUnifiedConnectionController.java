@@ -47,7 +47,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         multihop = runtime.multihop;
     }
 
-    boolean isActiveOrTransitioning() { return multihop.isActiveOrTransitioning() || orchestrator.isRunning() || orchestrator.isActive() || "connecting".equals(AndroidHomeStateStore.snapshot(activity).phase); }
+    boolean isActiveOrTransitioning() { return AndroidVpnMutationGuard.isBusy(activity); }
     boolean isConnected() { return AndroidHomeStateStore.snapshot(activity).connected; }
     boolean isMultihopConnected() { return multihop.isConnected(); }
     String activeMultihopEntryId() { return multihop.activeEntryId(); }
