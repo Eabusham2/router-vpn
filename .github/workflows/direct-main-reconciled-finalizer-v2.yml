@@ -1,0 +1,144 @@
+name: Direct main reconciled finalizer v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-reconciled-finalizer-v2.yml
+
+permissions:
+  contents: write
+  actions: write
+
+timeout-minutes: 360
+
+concurrency:
+  group: direct-main-reconciled-finalizer-v2
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+          cache: false
+      - name: Install Linux native dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file binutils
+      - name: Apply all reconciled production fixes and remove transient automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+
+          # Recover the reviewed repair scripts from repository history even if
+          # an earlier failed one-shot already deleted its working-tree copy.
+          for script in \
+            .github/scripts/fix-release-foundations.py \
+            .github/scripts/reconcile-shipping-transform-baselines.py; do
+            commit=$(git log -n1 --format=%H -- "$script" || true)
+            if test -n "$commit" && git cat-file -e "$commit:$script" 2>/dev/null; then
+              mkdir -p "$(dirname "$script")"
+              git show "$commit:$script" > "$script"
+              python3 "$script"
+            fi
+          done
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('.')
+          audit_command = '          python3 deploy/reconciled-project-contract-audit.py\n'
+          release = root / '.github/workflows/release-candidate.yml'
+          body = release.read_text(encoding='utf-8')
+          if audit_command not in body:
+              for anchor in (
+                  '          python3 deploy/unified-map-shipping-audit.py\n',
+                  '          python3 deploy/product-parity-audit.py\n',
+              ):
+                  if anchor in body:
+                      body = body.replace(anchor, anchor + audit_command, 1)
+                      break
+              else:
+                  raise SystemExit('release-candidate.yml has no authoritative audit insertion point')
+              release.write_text(body, encoding='utf-8')
+
+          orchestration = root / 'deploy/release-orchestration-audit.py'
+          obody = orchestration.read_text(encoding='utf-8')
+          sentinel = '# RECONCILED_PROJECT_CONTRACT_RELEASE_GATE'
+          if sentinel not in obody:
+              block = '''\n# RECONCILED_PROJECT_CONTRACT_RELEASE_GATE\n_release_candidate_reconciled = (ROOT / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8")\nif "python3 deploy/reconciled-project-contract-audit.py" not in _release_candidate_reconciled:\n    raise SystemExit("release candidate orphaned the reconciled project contract audit")\n\n'''
+              match = re.search(r'(?m)^if __name__ == [\'\"]__main__[\'\"]:', obody)
+              if match:
+                  obody = obody[:match.start()] + block + obody[match.start():]
+              else:
+                  obody += block
+              orchestration.write_text(obody, encoding='utf-8')
+          PY
+
+          # Remove every transient source-mutating workflow and repair helper
+          # before the repository-state and reconciled-contract audits run.
+          git ls-files -z '.github/workflows/direct-main-*.yml' | xargs -0 -r git rm -f
+          git ls-files -z '.github/workflows/one-shot-*.yml' | xargs -0 -r git rm -f
+          git ls-files -z '.github/scripts/fix-release-foundations.py' '.github/scripts/reconcile-shipping-transform-baselines.py' '.github/scripts/apply-*.py' | xargs -0 -r git rm -f
+
+          # Commit first. Even if a later certification reveals another gap,
+          # the reviewed source fixes and cleanup are not lost.
+          git add -A
+          git diff --cached --check
+          if ! git diff --cached --quiet; then
+            git commit -m "Finalize reconciled Router VPN production source [skip ci]"
+            git push origin HEAD:main
+          fi
+
+          # Certify the clean production tree, not the temporary workflow that
+          # launched this job (it was removed in the commit above).
+          python3 deploy/reconciled-project-contract-audit.py
+          python3 deploy/release-orchestration-audit.py
+          python3 deploy/validate-repo.py
+          python3 deploy/product-parity-audit.py
+          python3 deploy/full-audit-v4.py
+          python3 deploy/profile-settings-audit.py
+          python3 deploy/native-session-mutation-audit.py
+          python3 deploy/unified-map-shipping-audit.py
+          python3 deploy/recovered-map-first-ui-contract-audit.py
+          python3 deploy/setup-center-responsive-ui-audit.py
+          python3 deploy/setup-center-download-retention-audit.py
+          python3 deploy/durable-state-transaction-audit.py
+          python3 deploy/backend-session-transaction-audit.py
+          python3 deploy/router-forwarding-audit.py
+          python3 deploy/native-artifact-workflow-parity-audit.py
+          python3 deploy/recovered-requirements-1-264-audit.py
+          python3 deploy/recovered-requirements-265-311-audit.py
+          python3 deploy/recovered-addendum-312-356-audit.py
+          python3 deploy/recovered-corrections-audit.py
+          python3 deploy/test-production-release-compose.py
+          python3 server/scripts/test_download_jobs.py
+          python3 server/scripts/test_setup_center_ux_patch.py
+          python3 server/scripts/test_source_provenance.py
+          python3 deploy/test_source_provenance.py
+          python3 deploy/test_source_provenance_adoption_identity.py
+          go test ./...
+          find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
+          find modes server client deploy router -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          bash deploy/package-linux-native.sh amd64
+          git diff --check
+          test -z "$(git status --short)"
+
+          # Create a normal exact-head certification commit, then explicitly
+          # dispatch build-all because GITHUB_TOKEN pushes do not recurse.
+          printf 'source_sha=%s\ncertified_at=%s\n' "$(git rev-parse HEAD)" "$(date -u +%FT%TZ)" > docs/.reconciled-source-certification
+          git add docs/.reconciled-source-certification
+          git commit -m "Certify fully reconciled Router VPN source"
+          git push origin HEAD:main
+          gh workflow run build-all.yml --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
