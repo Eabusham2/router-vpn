@@ -2,6 +2,9 @@ package com.eabusham.routervpn;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructStat;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -96,7 +99,8 @@ final class AndroidConnectionProfileStore {
 
     private JSONArray readRows() throws Exception {
         if (!file.exists()) return new JSONArray();
-        if (!file.isFile() || file.length() <= 0 || file.length() > MAX_STORE) {
+        requirePrivateRegularFile(file);
+        if (file.length() <= 0 || file.length() > MAX_STORE) {
             throw new IllegalStateException("Connection profile store is invalid or too large.");
         }
         JSONObject root = new JSONObject(new String(readLimited(file, MAX_STORE), StandardCharsets.UTF_8));
@@ -138,7 +142,51 @@ final class AndroidConnectionProfileStore {
         return rows;
     }
 
-    private void writeRows(JSONArray rows)throws Exception{byte[]raw=(new JSONObject().put("schema_version",SCHEMA_VERSION).put("profiles",rows).toString(2)+"\n").getBytes(StandardCharsets.UTF_8);if(raw.length>MAX_STORE)throw new IllegalStateException("Connection profile store exceeds safety limit.");File tmp=new File(file.getParentFile(),".connection-profiles-"+randomHex(6)+".tmp");try(FileOutputStream out=new FileOutputStream(tmp,false)){out.write(raw);out.flush();out.getFD().sync();}tmp.setReadable(false,false);tmp.setReadable(true,true);tmp.setWritable(false,false);tmp.setWritable(true,true);if(file.exists()&&!file.delete())throw new IllegalStateException("Cannot replace connection profile store.");if(!tmp.renameTo(file))throw new IllegalStateException("Cannot commit connection profile store atomically.");}
+    private void writeRows(JSONArray rows) throws Exception {
+        byte[] raw = (new JSONObject()
+                .put("schema_version", SCHEMA_VERSION)
+                .put("profiles", rows)
+                .toString(2) + "
+").getBytes(StandardCharsets.UTF_8);
+        if (raw.length > MAX_STORE) throw new IllegalStateException("Connection profile store exceeds safety limit.");
+
+        File parent = file.getParentFile();
+        if (parent == null || (!parent.isDirectory() && !parent.mkdirs())) {
+            throw new IllegalStateException("Connection profile directory is unavailable.");
+        }
+        File tmp = new File(parent, ".connection-profiles-" + randomHex(12) + ".tmp");
+        boolean adopted = false;
+        try {
+            if (!tmp.createNewFile()) throw new IllegalStateException("Cannot create private profile temporary file.");
+            Os.chmod(tmp.getAbsolutePath(), 0600);
+            try (FileOutputStream out = new FileOutputStream(tmp, false)) {
+                out.write(raw);
+                out.flush();
+                out.getFD().sync();
+            }
+            requirePrivateRegularFile(tmp);
+            if (file.exists()) requirePrivateRegularFile(file);
+            // POSIX rename is atomic and replaces the old same-filesystem file.
+            // Never delete the authoritative store before the replacement exists.
+            Os.rename(tmp.getAbsolutePath(), file.getAbsolutePath());
+            adopted = true;
+            Os.chmod(file.getAbsolutePath(), 0600);
+            requirePrivateRegularFile(file);
+        } finally {
+            if (!adopted && tmp.exists() && !tmp.delete()) tmp.deleteOnExit();
+        }
+    }
+
+    private static void requirePrivateRegularFile(File target) throws Exception {
+        StructStat stat = Os.lstat(target.getAbsolutePath());
+        int kind = stat.st_mode & OsConstants.S_IFMT;
+        if (kind != OsConstants.S_IFREG) {
+            throw new IllegalStateException("Connection profile state is not a regular file.");
+        }
+        if ((stat.st_mode & 0077) != 0) {
+            throw new IllegalStateException("Connection profile state permissions are not private.");
+        }
+    }
 
     private List<String> customLayers(String mode)throws Exception{if(mode==null||!mode.startsWith("custom:"))return new ArrayList<>();String name=mode.substring(7);JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&name.equals(p.optString("name","")))return jsonStrings(p.optJSONArray("layers"),32);}return new ArrayList<>();}
     private String prepareCustomPresetJSON(String mode,List<String>layers)throws Exception{if(mode==null||!mode.startsWith("custom:")||layers.isEmpty())return null;String name=mode.substring(7);if(name.trim().isEmpty()||name.length()>64)throw new IllegalArgumentException("CUSTOM profile name is invalid.");JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]")),next=new JSONArray();for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&!name.equals(p.optString("name","")))next.put(p);}next.put(new JSONObject().put("name",name).put("layers",new JSONArray(layers)));return next.toString();}
