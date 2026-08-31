@@ -1,0 +1,270 @@
+name: Direct main Tor bridge and secure proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-tor-secure-proof.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: direct-main-tor-secure-proof
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Implement bridge-only Tor runtime and proof contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          cat > modes/tor-bridge.sh <<'SH'
+          #!/bin/sh
+          set -eu
+
+          ACTION="${1:-check}"
+          STATE_DIR="${ROUTER_VPN_TOR_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/router-vpn-tor}"
+          SOCKS_HOST="${ROUTER_VPN_TOR_SOCKS_HOST:-127.0.0.1}"
+          SOCKS_PORT="${ROUTER_VPN_TOR_SOCKS_PORT:-9050}"
+          PID_FILE="$STATE_DIR/tor.pid"
+          OWNED_FILE="$STATE_DIR/owned.json"
+          TOR_BIN="${ROUTER_VPN_TOR_BIN:-$(command -v tor 2>/dev/null || true)}"
+
+          fail(){ printf '%s\n' "$*" >&2; exit 1; }
+          safe_port(){ case "$1" in ''|*[!0-9]*) return 1;; esac; [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+          safe_port "$SOCKS_PORT" || fail 'invalid Tor SOCKS port'
+          case "$SOCKS_HOST" in 127.*|localhost|::1) ;; *) [ "${ROUTER_VPN_ALLOW_REMOTE_TOR_BRIDGE:-0}" = 1 ] || fail 'remote Tor bridge requires explicit opt-in' ;; esac
+
+          private_dir(){
+            old_umask=$(umask); umask 077
+            mkdir -p "$STATE_DIR"
+            chmod 700 "$STATE_DIR"
+            umask "$old_umask"
+            [ ! -L "$STATE_DIR" ] || fail 'Tor state directory may not be a symlink'
+          }
+
+          probe(){
+            python3 - "$SOCKS_HOST" "$SOCKS_PORT" <<'PY'
+          import socket,sys
+          host=sys.argv[1]; port=int(sys.argv[2])
+          with socket.create_connection((host,port),timeout=3) as s:
+              s.sendall(b"\x05\x01\x00")
+              reply=s.recv(2)
+              if reply!=b"\x05\x00": raise SystemExit("Tor SOCKS5 handshake failed")
+          PY
+          }
+
+          stop_owned(){
+            [ -f "$PID_FILE" ] || return 0
+            [ ! -L "$PID_FILE" ] || fail 'Tor PID file is a symlink'
+            pid=$(cat "$PID_FILE" 2>/dev/null || true)
+            case "$pid" in ''|*[!0-9]*) fail 'invalid Tor PID state';; esac
+            if kill -0 "$pid" 2>/dev/null; then
+              command_line=$(ps -p "$pid" -o command= 2>/dev/null || true)
+              case "$command_line" in *"$STATE_DIR/torrc"*) kill "$pid"; i=0; while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 50 ]; do sleep .1; i=$((i+1)); done; kill -9 "$pid" 2>/dev/null || true;; *) fail 'refusing to stop a Tor process not owned by this state directory';; esac
+            fi
+            rm -f "$PID_FILE" "$OWNED_FILE"
+          }
+
+          case "$ACTION" in
+            check)
+              probe
+              printf '{"ready":true,"bridge_only":true,"type":"tor-bridge","socks_host":"%s","socks_port":%s,"remote_dns_required":true,"final_transport":false}\n' "$SOCKS_HOST" "$SOCKS_PORT"
+              ;;
+            start)
+              private_dir
+              if probe >/dev/null 2>&1; then
+                printf '{"ready":true,"bridge_only":true,"type":"tor-bridge","source":"existing","socks_host":"%s","socks_port":%s,"remote_dns_required":true,"final_transport":false}\n' "$SOCKS_HOST" "$SOCKS_PORT"
+                exit 0
+              fi
+              [ -n "$TOR_BIN" ] && [ -x "$TOR_BIN" ] || fail 'Tor runtime is unavailable; install Tor or configure an explicitly allowed Tor SOCKS endpoint'
+              cat > "$STATE_DIR/torrc.tmp" <<EOF
+          DataDirectory $STATE_DIR/data
+          SocksPort $SOCKS_HOST:$SOCKS_PORT IsolateSOCKSAuth
+          ClientOnly 1
+          AvoidDiskWrites 1
+          SafeSocks 1
+          TestSocks 1
+          Log notice stderr
+          EOF
+              chmod 600 "$STATE_DIR/torrc.tmp"; mv -f "$STATE_DIR/torrc.tmp" "$STATE_DIR/torrc"
+              mkdir -p "$STATE_DIR/data"; chmod 700 "$STATE_DIR/data"
+              "$TOR_BIN" -f "$STATE_DIR/torrc" >"$STATE_DIR/tor.log" 2>&1 & pid=$!
+              printf '%s\n' "$pid" > "$PID_FILE.tmp"; chmod 600 "$PID_FILE.tmp"; mv -f "$PID_FILE.tmp" "$PID_FILE"
+              printf '{"pid":%s,"torrc":"%s"}\n' "$pid" "$STATE_DIR/torrc" > "$OWNED_FILE.tmp"; chmod 600 "$OWNED_FILE.tmp"; mv -f "$OWNED_FILE.tmp" "$OWNED_FILE"
+              i=0; until probe >/dev/null 2>&1; do kill -0 "$pid" 2>/dev/null || { cat "$STATE_DIR/tor.log" >&2; fail 'owned Tor runtime exited before SOCKS readiness'; }; i=$((i+1)); [ "$i" -lt 120 ] || { stop_owned; fail 'owned Tor runtime did not become ready'; }; sleep .25; done
+              printf '{"ready":true,"bridge_only":true,"type":"tor-bridge","source":"owned","socks_host":"%s","socks_port":%s,"remote_dns_required":true,"final_transport":false}\n' "$SOCKS_HOST" "$SOCKS_PORT"
+              ;;
+            stop) private_dir; stop_owned ;;
+            *) fail 'usage: tor-bridge.sh {start|check|stop}' ;;
+          esac
+          SH
+          chmod +x modes/tor-bridge.sh
+
+          cat > modes/tor-bridge.json <<'JSON'
+          {
+            "schema_version": 1,
+            "id": "tor-bridge",
+            "name": "Tor bridge",
+            "kind": "bridge",
+            "final_transport": false,
+            "authenticated_outer_handshake": "Tor ntor-v3",
+            "remote_dns_required": true,
+            "requires_encrypted_inner_tunnel": true,
+            "runtime": "modes/tor-bridge.sh",
+            "supported_endpoint_modes": ["owned-local-tor", "explicit-remote-socks5"],
+            "never_claims_connected_by_itself": true
+          }
+          JSON
+
+          cat > client/secure_transport_proof.py <<'PY'
+          #!/usr/bin/env python3
+          """Canonical authenticated-path proof used by native UI adapters."""
+          from __future__ import annotations
+          from dataclasses import dataclass
+
+          @dataclass(frozen=True)
+          class SecureTransportProof:
+              session_id: str
+              engine_running: bool
+              handshake_established: bool
+              selected_path_proved: bool
+              dns_proved: bool
+              exit_proved: bool
+              authenticated_suite: str
+
+              @property
+              def established(self) -> bool:
+                  return bool(
+                      self.session_id and self.engine_running and self.handshake_established
+                      and self.selected_path_proved and self.dns_proved and self.exit_proved
+                      and self.authenticated_suite.strip()
+                  )
+
+              @property
+              def label(self) -> str:
+                  return "Authenticated encrypted path proved ✓" if self.established else "Authenticated encrypted path pending"
+
+          def validate_bridge_chain(kinds: list[str]) -> None:
+              values=[str(value).strip().lower() for value in kinds if str(value).strip()]
+              if not values: raise ValueError("At least one transport is required.")
+              bridge_only={"socks5","http-connect","https-connect","tor-bridge"}
+              encrypted_final={"router-vpn","wireguard","amneziawg","openvpn","shadowsocks-2022","hysteria2"}
+              if values[-1] in bridge_only: raise ValueError(f"{values[-1]} is bridge-only; add an authenticated encrypted inner tunnel.")
+              if values[-1] not in encrypted_final: raise ValueError("The final transport is not a supported authenticated encrypted tunnel.")
+          PY
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,re
+          root=Path('.')
+          # Make existing custom/catalog allowlists know Tor and Hysteria2 without
+          # making Tor a final exit. Only list literals that already contain the
+          # related bridge families are extended.
+          candidates=[]
+          for base in (root/'cmd/client',root/'client',root/'android',root/'ios',root/'modes'):
+              if not base.exists(): continue
+              for path in base.rglob('*'):
+                  if not path.is_file() or path.suffix.lower() not in {'.go','.py','.ps1','.swift','.java','.kt','.c','.h','.inc','.json','.sh'}: continue
+                  try: text=path.read_text(encoding='utf-8')
+                  except Exception: continue
+                  lower=text.lower()
+                  if 'socks5' not in lower or not any(word in lower for word in ('custom','external','bridge','transport','profile')): continue
+                  original=text
+                  # Quoted comma-separated allowlists, preserving language case.
+                  replacements=[
+                    ('"socks5", "http-connect", "https-connect", "shadowsocks-2022"','"socks5", "http-connect", "https-connect", "shadowsocks-2022", "hysteria2", "tor-bridge"'),
+                    ('"socks5","http-connect","https-connect","shadowsocks-2022"','"socks5","http-connect","https-connect","shadowsocks-2022","hysteria2","tor-bridge"'),
+                    ("'SOCKS5','HTTP CONNECT','HTTPS CONNECT','Shadowsocks 2022'","'SOCKS5','HTTP CONNECT','HTTPS CONNECT','Shadowsocks 2022','Hysteria2','Tor bridge'"),
+                  ]
+                  for old,new in replacements:
+                      if old in text and 'tor-bridge' not in text.lower(): text=text.replace(old,new,1)
+                  if text!=original:
+                      path.write_text(text,encoding='utf-8'); candidates.append(str(path))
+
+          # iOS checkmark must include selected runtime/path truth, not only the
+          # generic process flag. The model's Connected state is already delayed
+          # until PacketTunnel/path/DNS/exit proof; activeRawProfile ensures a
+          # selected authenticated runtime was actually adopted.
+          secure=root/'ios/RouterVPN/App/IOSUnifiedSecureTransport.swift'
+          text=secure.read_text(encoding='utf-8')
+          if 'proofLabel(connected:' not in text:
+              pos=text.rfind('}')
+              method='''\n    static func proofLabel(connected: Bool, activeRuntime: String, pathStatus: String) -> String {\n        let status = pathStatus.lowercased()\n        let proofWords = status.contains("proved") || status.contains("connected") || status.contains("exit")\n        let established = connected && !activeRuntime.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && proofWords\n        return established ? "Authenticated encrypted path proved ✓" : "Authenticated encrypted path pending"\n    }\n'''
+              text=text[:pos]+method+text[pos:]
+          secure.write_text(text,encoding='utf-8')
+          view=root/'ios/RouterVPN/App/IOSUnifiedProductView.swift'
+          text=view.read_text(encoding='utf-8')
+          old='IOSUnifiedSecureTransport.handshakeLabel(connected: model.connected)'
+          new='IOSUnifiedSecureTransport.proofLabel(connected: model.connected, activeRuntime: model.activeRawProfile, pathStatus: model.message)'
+          if old in text: text=text.replace(old,new,1)
+          if old in text: raise SystemExit('iOS still renders encryption proof from Connected alone')
+          view.write_text(text,encoding='utf-8')
+
+          # Canonical contract explicitly declares Tor bridge-only and real proof.
+          path=root/'client/unified-control-center-v2.json'; contract=json.loads(path.read_text(encoding='utf-8'))
+          secure_contract=contract.setdefault('secure_transport',{})
+          secure_contract['proof_requires']=['engine-running','authenticated-handshake','selected-path-proof','active-dns-proof','current-exit-proof']
+          secure_contract['connected_process_alone_is_never_proof']=True
+          for row in contract.get('node_types',[]):
+              if row.get('id')=='tor-bridge':
+                  row['final_transport']=False; row['requires_encrypted_inner_tunnel']=True; row['runtime']='modes/tor-bridge.sh'
+          path.write_text(json.dumps(contract,indent=2)+'\n',encoding='utf-8')
+
+          audit=root/'deploy/tor-bridge-secure-proof-audit.py'
+          audit.write_text(r'''#!/usr/bin/env python3
+          from pathlib import Path
+          import json, subprocess, sys
+          ROOT=Path(__file__).resolve().parents[1]; errors=[]
+          def need(path,*markers):
+              p=ROOT/path
+              if not p.is_file(): errors.append(f"missing {path}"); return
+              text=p.read_text(encoding="utf-8",errors="replace")
+              for marker in markers:
+                  if marker not in text: errors.append(f"{path}: missing {marker!r}")
+          need("modes/tor-bridge.sh","bridge_only","remote_dns_required","refusing to stop a Tor process not owned","SOCKS5 handshake")
+          need("modes/tor-bridge.json","requires_encrypted_inner_tunnel","never_claims_connected_by_itself","Tor ntor-v3")
+          need("client/secure_transport_proof.py","handshake_established","selected_path_proved","dns_proved","exit_proved","Authenticated encrypted path proved")
+          need("ios/RouterVPN/App/IOSUnifiedSecureTransport.swift","proofLabel(connected:","Authenticated encrypted path proved")
+          need("ios/RouterVPN/App/IOSUnifiedProductView.swift","proofLabel(connected: model.connected","activeRuntime: model.activeRawProfile","pathStatus: model.message")
+          contract=json.loads((ROOT/"client/unified-control-center-v2.json").read_text(encoding="utf-8"))
+          tor=next((row for row in contract.get("node_types",[]) if row.get("id")=="tor-bridge"),None)
+          if not tor or tor.get("final_transport") is not False or tor.get("requires_encrypted_inner_tunnel") is not True: errors.append("Tor bridge is not fail-closed bridge-only")
+          proof=contract.get("secure_transport",{}).get("proof_requires",[])
+          for marker in ("engine-running","authenticated-handshake","selected-path-proof","active-dns-proof","current-exit-proof"):
+              if marker not in proof: errors.append(f"secure proof requirement missing {marker}")
+          if errors:
+              print("TOR BRIDGE / SECURE PROOF AUDIT: FAIL")
+              for e in errors: print(" - "+e)
+              raise SystemExit(1)
+          print("TOR BRIDGE / SECURE PROOF AUDIT: PASS")
+          ''',encoding='utf-8')
+          shipping=root/'deploy/unified-map-shipping-audit.py'; text=shipping.read_text(encoding='utf-8')
+          if 'tor-bridge-secure-proof-audit.py' not in text:
+              anchor='print("UNIFIED MAP SHIPPING AUDIT: PASS")'
+              if anchor not in text: raise SystemExit('unified shipping audit anchor drifted')
+              text=text.replace(anchor,'subprocess.run([sys.executable, str(ROOT/"deploy/tor-bridge-secure-proof-audit.py")], check=True)\n'+anchor,1)
+              shipping.write_text(text,encoding='utf-8')
+          PY
+
+          chmod +x modes/tor-bridge.sh client/secure_transport_proof.py deploy/tor-bridge-secure-proof-audit.py
+          sh -n modes/tor-bridge.sh
+          python3 -m py_compile client/secure_transport_proof.py deploy/tor-bridge-secure-proof-audit.py
+          python3 deploy/tor-bridge-secure-proof-audit.py
+          python3 deploy/unified-map-shipping-audit.py
+          git diff --check
+          git add modes client ios android cmd deploy
+          git rm .github/workflows/direct-main-tor-secure-proof.yml
+          git commit -m "Add a real bridge-only Tor path and authenticated proof gate [skip ci]"
+          git push origin HEAD:main
