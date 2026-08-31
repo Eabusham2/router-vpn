@@ -154,7 +154,7 @@ PY
 
 xcrun clang -fobjc-arc -fblocks -fmodules -isysroot "$SDK" -mmacosx-version-min=13.0 -arch "$CLANG_ARCH" -c "$MENU_SRC" -o "$MENU_OBJ"
 
-xcrun swiftc -O -sdk "$SDK" -target "$TARGET" -framework AppKit -framework Foundation -framework MapKit \
+xcrun swiftc -O -sdk "$SDK" -target "$TARGET" -framework AppKit -framework CoreLocation -framework Foundation -framework MapKit \
   "$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$MENU_OBJ" -o "$BIN"
 chmod 755 "$BIN"
 
@@ -178,6 +178,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key><string>APPL</string><key>CFBundleIconFile</key><string>RouterVPN</string>
   <key>CFBundleShortVersionString</key><string>0.9.0</string><key>CFBundleVersion</key><string>14</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string><key>NSHighResolutionCapable</key><true/><key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSLocationUsageDescription</key><string>Router VPN shows your real Mac location on the VPN map only after you press Show my location. It never infers a device pin from your IP address.</string>
 </dict></plist>
 PLIST
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
