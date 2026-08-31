@@ -95,14 +95,24 @@ require(
     "gtk_dialog_get_widget_for_response",
     "Disconnect Router VPN or let the active transition finish",
 )
+# Android no longer enumerates a fragile list of known STARTING/STOPPING labels.
+# Mutation is allowed only in explicit stable idle states; every unknown/future
+# phase and every non-DOWN engine state fails closed. This covers STARTING,
+# STOPPING, reconnecting and new runtime phases without an audit-only string.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidVpnMutationGuard.java",
     "hasOwnedVpnTransport",
     "AndroidHomeStateStore.snapshot",
     "orchestrator.isRunning()",
     "multihop.isActiveOrTransitioning()",
-    "STARTING",
-    "STOPPING",
+    "standardExit.isActiveOrTransitioning()",
+    "phaseBusy(home.connected, phase)",
+    'return !("off".equals(phase) || "disconnected".equals(phase) || "failed".equals(phase));',
+    "tunnelBusy(e.wireGuard.getState())",
+    "tunnelBusy(e.amneziaWG.getState())",
+    "runtimeBusy(e.singBox.getState())",
+    "runtimeBusy(e.xray.getState())",
+    'return !("DOWN".equals(normalized) || "FAILED".equals(normalized) || "REVOKED".equals(normalized));',
     "return true;",
 )
 require(
