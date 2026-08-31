@@ -6,11 +6,13 @@ TRANSFORM=ROOT/'client/macos/macos-session-mutation-transform.py'
 BUILD=ROOT/'client/macos/build-native-app.sh'
 PRODUCT=ROOT/'client/macos/RouterVPNMacProduct.swift'
 UNIFIED=ROOT/'client/macos/RouterVPNMacUnifiedShell.swift'
+TELEMETRY=ROOT/'client/macos/RouterVPNMacTelemetry.swift'
 
 spec=importlib.util.spec_from_file_location('mac_session_transform',TRANSFORM)
 mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 product=mod.transform(PRODUCT.read_text(encoding='utf-8'),'product')
 unified=mod.transform(UNIFIED.read_text(encoding='utf-8'),'unified')
+telemetry=TELEMETRY.read_text(encoding='utf-8')
 
 def need(body,*markers):
     missing=[m for m in markers if m not in body]
@@ -31,6 +33,18 @@ need(unified,
     'unified-kill-switch', 'unified-multihop-toggle', 'unified-mode-popup', 'unified-dns-popup',
     'as? NSControl', 'control.isEnabled = !busy', 'self.routerPopup.isEnabled = !busy', 'self.multihopEntryPopup.isEnabled = !busy',
     'button.isEnabled = !unknown && !disconnecting')
+need(telemetry,
+    'root["selected_id"]', 'var selectedIndex = 0', 'popup.selectItem(at: selectedIndex)',
+    'Use Connect separately.', 'sender.isEnabled = false', 'Press Connect when ready.',
+    '"/api/profile/fastest"', '"/api/profile/select"')
+try:
+    selector=telemetry.split('@objc private func unifiedFastConnectChanged',1)[1].split('private func setUnifiedForwardState',1)[0]
+except IndexError:
+    raise SystemExit('macOS node selector shipping handler is missing')
+if 'connectUnified()' in selector:
+    raise SystemExit('macOS node selector must not auto-connect; Connect is a separate control')
+if 'sender.selectItem(at: 0)' in selector:
+    raise SystemExit('macOS node selector must not reset the visible selected node to Fastest')
 
 build=BUILD.read_text(encoding='utf-8')
 need(build,
@@ -42,7 +56,9 @@ need(build,
 
 with tempfile.TemporaryDirectory() as td:
     p=Path(td)
-    pp=p/'product.swift'; uu=p/'unified.swift'; pp.write_text(product); uu.write_text(unified)
+    pp=p/'product.swift'; uu=p/'unified.swift'; tt=p/'telemetry.swift'
+    pp.write_text(product); uu.write_text(unified); tt.write_text(telemetry)
     subprocess.run(['swiftc','-parse',str(pp)],check=True)
     subprocess.run(['swiftc','-parse',str(uu),str(ROOT/'client/macos/RouterVPNProfileSettings.swift')],check=True)
+    subprocess.run(['swiftc','-parse',str(tt)],check=True)
 print('macOS session mutation shipping audit: PASS')
