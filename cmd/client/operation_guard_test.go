@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -71,8 +73,27 @@ func TestConnectionOperationCancellationBlocksAdoption(t *testing.T) {
 	}
 	defer finish()
 	a.cancelConnectionOperation()
-	if err := a.checkConnectionOperation(); err == nil {
-		t.Fatal("cancelled connection transaction remained eligible to adopt a runtime")
+	if err := a.checkConnectionOperation(); !errors.Is(err, errConnectionOperationCancelled) {
+		t.Fatalf("cancelled transaction returned %v instead of the stable cancellation sentinel", err)
+	}
+}
+
+func TestCancelConnectionOperationSuppressesPendingStartupPolicy(t *testing.T) {
+	a := &app{state: state{Mode: "off", Phase: "off"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	startupPolicyCancels.Store(a, context.CancelFunc(cancel))
+	t.Cleanup(func() {
+		cancelPendingStartupPolicy(a)
+	})
+
+	a.cancelConnectionOperation()
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("Disconnect did not cancel the pending startup auto-connect policy")
+	}
+	if _, loaded := startupPolicyCancels.Load(a); loaded {
+		t.Fatal("cancelled startup policy remained registered")
 	}
 }
 
