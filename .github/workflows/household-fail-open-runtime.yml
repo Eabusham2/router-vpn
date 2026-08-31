@@ -1,0 +1,37 @@
+name: ASUS household Internet fail-open contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'router/**'
+      - 'scripts/**'
+      - 'deploy/router-forwarding-audit.py'
+      - 'deploy/test_router_forwarding_fail_open.py'
+      - 'deploy/router-acceleration-safety-audit.py'
+      - 'deploy/router-private-port-exposure-audit.py'
+      - '.github/workflows/household-fail-open-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: household-fail-open-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fail-open:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove exact tagged per-port ownership
+        run: python3 deploy/router-forwarding-audit.py
+      - name: Exercise helper failure and stale-rule withdrawal
+        run: python3 deploy/test_router_forwarding_fail_open.py
+      - name: Prove acceleration remains untouched
+        run: python3 deploy/router-acceleration-safety-audit.py
+      - name: Prove management ports remain private
+        run: python3 deploy/router-private-port-exposure-audit.py
