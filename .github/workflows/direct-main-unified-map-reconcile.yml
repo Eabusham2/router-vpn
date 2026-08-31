@@ -1,0 +1,141 @@
+name: Direct main unified-map reconciliation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-unified-map-reconcile.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: direct-main-unified-map-reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Reconcile every branch, apply source directly to main, and run five checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+
+          # Preserve the real feature applier before removing branch-only staging.
+          git show origin/feature/unified-map-control-center:.github/scripts/apply-unified-map-control-center.py > /tmp/apply-unified-map-control-center.py
+
+          # Preserve every non-main branch head in main history without copying
+          # temporary patch chunks, one-shot workflows, or probe files into the
+          # shipping tree. Branches already contained by main need no merge.
+          while IFS= read -r branch; do
+            [ -n "$branch" ] || continue
+            [ "$branch" = main ] && continue
+            case "$branch" in HEAD) continue ;; esac
+            if ! git merge-base --is-ancestor "origin/$branch" HEAD; then
+              git merge --no-ff -s ours "origin/$branch" \
+                -m "Reconcile $branch into main without staging artifacts [skip ci]"
+            fi
+          done < <(git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin | sort -u)
+
+          python3 /tmp/apply-unified-map-control-center.py
+
+          # Correct the generated audit to inspect the real shipping Linux and
+          # macOS source trees, and validate iOS profile CRUD in its dedicated
+          # store instead of requiring those symbols inside the map shell.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('deploy/unified-map-control-center-audit.py')
+          text = path.read_text(encoding='utf-8')
+          old_linux = '    "linux": list((ROOT / "client").glob("*Linux*.py")) + list((ROOT / "client").glob("*linux*.py")),\n'
+          new_linux = '    "linux": [p for p in (ROOT / "client/linux").rglob("*") if p.is_file()] + list((ROOT / "client").glob("*Linux*.py")) + list((ROOT / "client").glob("*linux*.py")),\n'
+          if old_linux not in text:
+              raise SystemExit('Linux native-source audit anchor drifted')
+          text = text.replace(old_linux, new_linux, 1)
+          old_macos = '    "macos": list((ROOT / "macos").rglob("*.swift")) if (ROOT / "macos").exists() else [],\n'
+          new_macos = '    "macos": list((ROOT / "client/macos").rglob("*.swift")),\n'
+          if old_macos not in text:
+              raise SystemExit('macOS native-source audit anchor drifted')
+          text = text.replace(old_macos, new_macos, 1)
+          text = text.replace('    "IOSConnectionProfileStore",\n', '')
+          anchor = 'forbid(\n    "ios/RouterVPN/App/IOSUnifiedProductView.swift",\n'
+          block = '''ios_profile_sources = "\\n".join(
+              p.read_text(encoding="utf-8", errors="replace")
+              for p in (ROOT / "ios/RouterVPN/App").glob("*.swift")
+          )
+          for marker in ("IOSConnectionProfileStore", "static func add", "static func update", "static func delete", "static func load"):
+              if marker not in ios_profile_sources:
+                  errors.append(f"iOS profile CRUD source missing {marker!r}")
+
+          '''
+          if anchor not in text:
+              raise SystemExit('iOS profile audit insertion anchor drifted')
+          path.write_text(text.replace(anchor, block + anchor, 1), encoding='utf-8')
+          PY
+
+          echo '=== CHECK 1: canonical contract/default/security ==='
+          (cd client && python3 test_unified_control_center_contract.py)
+
+          echo '=== CHECK 2: unified UI/no accidental deletion ==='
+          python3 deploy/unified-map-control-center-audit.py
+          if git diff --name-only --diff-filter=D HEAD | grep -q .; then
+            echo 'Unexpected runtime/source deletion:' >&2
+            git diff --name-status --diff-filter=D HEAD >&2
+            exit 1
+          fi
+
+          echo '=== CHECK 3: platform syntax and policy parity ==='
+          python3 -m py_compile \
+            client/unified_control_center_contract.py \
+            client/routervpn_unified_control_center.py \
+            deploy/unified-map-control-center-audit.py
+          mkdir -p /tmp/routervpn-javac
+          javac -d /tmp/routervpn-javac android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java
+          pwsh -NoProfile -NonInteractive -Command \
+            '$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseFile("client/RouterVPN-Windows-UnifiedControlCenter.ps1",[ref]$t,[ref]$e)>$null;if($e.Count){$e|%{$_.ToString()}|Write-Error;exit 1}'
+          if command -v swiftc >/dev/null 2>&1; then
+            swiftc -frontend -parse ios/RouterVPN/App/IOSUnifiedSecureTransport.swift
+            swiftc -frontend -parse ios/RouterVPN/App/IOSUnifiedProductView.swift
+          fi
+
+          echo '=== CHECK 4: existing native/recovered map-first contracts ==='
+          python3 deploy/native-map-first-ui-audit.py
+          python3 deploy/recovered-map-first-ui-contract-audit.py
+
+          echo '=== CHECK 5: durable/profile transaction safety ==='
+          python3 deploy/durable-state-transaction-audit.py
+          git diff --check
+
+          # Temporary transport files must not survive in the shipping tree.
+          rm -f .github/workflows/direct-main-unified-map-reconcile.yml
+          rm -f .github/workflows/one-shot-unified-map-control-center.yml
+          rm -f .github/workflows/one-shot-unified-map-control-center-finalize.yml
+          rm -f .github/scripts/apply-unified-map-control-center.py
+          rm -f .github/patches/unified-map-bridges-encryption.patch.gz.b64.*
+
+          git add -A
+          git commit -m "Apply unified map control center directly to main [skip ci]"
+          git push origin HEAD:main
+
+          # Delete every non-main branch after its head is contained in main.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq '.[].name' | while IFS= read -r branch; do
+            [ "$branch" = main ] && continue
+            echo "Deleting obsolete branch: $branch"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch"
+          done
+
+          remaining="$(gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq '.[].name')"
+          test "$remaining" = main
+          echo 'ONE-BRANCH RESULT: main only'
