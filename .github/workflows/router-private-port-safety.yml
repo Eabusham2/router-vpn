@@ -1,0 +1,36 @@
+name: Router private-port exposure safety
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**/*.sh'
+      - 'router/**/*.sh'
+      - 'scripts/**/*.sh'
+      - 'client/**/*.sh'
+      - 'deploy/router-private-port-exposure-audit.py'
+      - '.github/workflows/router-private-port-safety.yml'
+  pull_request:
+    paths:
+      - 'server/**/*.sh'
+      - 'router/**/*.sh'
+      - 'scripts/**/*.sh'
+      - 'client/**/*.sh'
+      - 'deploy/router-private-port-exposure-audit.py'
+      - '.github/workflows/router-private-port-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: router-private-port-safety-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  protected-ports:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove private and admin ports are never WAN forwarded
+        run: python3 deploy/router-private-port-exposure-audit.py
