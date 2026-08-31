@@ -1,0 +1,39 @@
+name: Direct main shipping transform reconciliation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/scripts/reconcile-shipping-transform-baselines.py
+      - .github/workflows/direct-main-shipping-transform-reconcile.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: direct-main-shipping-transform-reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Reconcile exact shipping transform baselines
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          python3 .github/scripts/reconcile-shipping-transform-baselines.py
+          python3 deploy/native-session-mutation-audit.py
+          python3 deploy/unified-map-shipping-audit.py
+          git diff --check
+          git rm .github/scripts/reconcile-shipping-transform-baselines.py .github/workflows/direct-main-shipping-transform-reconcile.yml
+          git add client/linux client/macos client/RouterVPN-Windows-SessionMutation.ps1
+          git commit -m "Reconcile native shipping transforms with map-first source [skip ci]"
+          git push origin HEAD:main
