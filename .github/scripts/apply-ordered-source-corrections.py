@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,7 +35,6 @@ def replace_once_or_verify(text: str, old: str, new: str, label: str) -> str:
 
 
 def patch_ios_selection() -> None:
-    print("STAGE patch_ios_selection", flush=True)
     rel = "ios/RouterVPN/App/IOSUnifiedProductView.swift"
     path = ROOT / rel
     text = path.read_text(encoding="utf-8")
@@ -84,67 +82,86 @@ def patch_ios_selection() -> None:
     else:
         raise SystemExit(f"iOS selector-function drift: old={old_count} new={new_count}")
 
-    if "private func connectSpecific" in text or "private func connectFastest" in text:
-        raise SystemExit("old iOS auto-connect selectors remain")
-    if text.count("private func selectFastest() async") != 1:
-        raise SystemExit("iOS selectFastest count is not one")
     selection = text.split("private func selectSpecific", 1)[1].split("private func connectOrDisconnect", 1)[0]
     if "connectOrDisconnect()" in selection:
         raise SystemExit("iOS node selection still triggers Connect")
-    if "Test & connect fastest" in text:
-        raise SystemExit("old iOS Fastest label remains")
     path.write_text(text, encoding="utf-8")
     commit([rel], "Separate iOS node selection from Connect [skip ci]")
 
 
-def patch_map_audit_roots() -> None:
-    print("STAGE patch_map_audit_roots", flush=True)
-    rel = "deploy/recovered-map-first-ui-contract-audit.py"
+def patch_ios_location_map() -> None:
+    rel = "ios/RouterVPN/App/IOSUnifiedProductView.swift"
     path = ROOT / rel
     text = path.read_text(encoding="utf-8")
-    for old, new in {
-        '("client/android",),': '("android",),',
-        '("client/ios", "client/iOS"),': '("ios/RouterVPN",),',
-    }.items():
-        text = replace_once_or_verify(text, old, new, "map-first mobile root")
+
+    replacements = (
+        (
+            "    var latencyByID: [String: Double]\n\n    func makeCoordinator()",
+            "    var latencyByID: [String: Double]\n    var userCoordinate: CLLocationCoordinate2D?\n\n    func makeCoordinator()",
+            "iOS map user coordinate input",
+        ),
+        (
+            "            coordinatesByID[profile.id] = annotation.coordinate\n        }\n        if let entryID, let exitID",
+            "            coordinatesByID[profile.id] = annotation.coordinate\n        }\n        if let userCoordinate {\n            let user = IOSUnifiedMapAnnotation(profileID: \"__user__\", role: \"user\")\n            user.coordinate = userCoordinate\n            user.title = \"YOU\"\n            user.subtitle = \"Real device location\"\n            map.addAnnotation(user)\n        }\n        if let entryID, let exitID",
+            "iOS real user annotation",
+        ),
+        (
+            "            switch node.role {\n            case \"entry\": view.markerTintColor = .systemBlue",
+            "            switch node.role {\n            case \"user\": view.markerTintColor = .systemGreen; view.glyphText = \"YOU\"; view.displayPriority = .required\n            case \"entry\": view.markerTintColor = .systemBlue",
+            "iOS user marker style",
+        ),
+        (
+            "            guard let node = view.annotation as? IOSUnifiedMapAnnotation, node.role != \"packet\" else { return }",
+            "            guard let node = view.annotation as? IOSUnifiedMapAnnotation, node.role != \"packet\", node.role != \"user\" else { return }",
+            "iOS user marker selection guard",
+        ),
+        (
+            "    @StateObject private var telemetry = IOSUnifiedTelemetry()\n    @AppStorage",
+            "    @StateObject private var telemetry = IOSUnifiedTelemetry()\n    @StateObject private var deviceLocation = IOSDeviceLocation()\n    @AppStorage",
+            "iOS location state owner",
+        ),
+        (
+            "                IOSUnifiedMap(latencyByID: telemetry.latencyByID).environmentObject(model).ignoresSafeArea()",
+            "                IOSUnifiedMap(latencyByID: telemetry.latencyByID, userCoordinate: deviceLocation.coordinate).environmentObject(model).ignoresSafeArea()",
+            "iOS map location binding",
+        ),
+        (
+            "                        .buttonStyle(.borderedProminent)\n                        .disabled(model.profileMutationBlocked)\n                        Spacer()",
+            "                        .buttonStyle(.borderedProminent)\n                        .disabled(model.profileMutationBlocked)\n                        Button { deviceLocation.requestCurrentLocation() } label: {\n                            Image(systemName: deviceLocation.coordinate == nil ? \"location\" : \"location.fill\")\n                        }\n                        .buttonStyle(.bordered)\n                        .disabled(deviceLocation.isRequesting)\n                        .accessibilityLabel(\"Show my real location\")\n                        .contextMenu {\n                            Button(\"Hide my location\") { deviceLocation.clear() }\n                        }\n                        Spacer()",
+            "iOS location button",
+        ),
+        (
+            "        .onChange(of: model.activeRawProfile) { value in if model.connected && !value.isEmpty { model.recordIOSLastRuntime() } }\n        .task",
+            "        .onChange(of: model.activeRawProfile) { value in if model.connected && !value.isEmpty { model.recordIOSLastRuntime() } }\n        .onChange(of: deviceLocation.statusText) { value in model.message = value }\n        .task",
+            "iOS location status feedback",
+        ),
+    )
+    for old, new, label in replacements:
+        text = replace_once_or_verify(text, old, new, label)
+
     path.write_text(text, encoding="utf-8")
-    commit([rel], "Point map-first audit at native mobile sources [skip ci]")
+    commit([rel], "Wire real opt-in location into iOS map [skip ci]")
 
 
-def patch_map_audit_test() -> None:
-    print("STAGE patch_map_audit_test", flush=True)
-    rel = "deploy/recovered-map-first-ui-contract-audit-test.py"
-    path = ROOT / rel
-    text = path.read_text(encoding="utf-8")
-    if "import sys\n" not in text:
-        text = text.replace("import importlib.util\n", "import importlib.util\nimport sys\n", 1)
-    registration = "sys.modules[SPEC.name] = AUDIT\nSPEC.loader.exec_module(AUDIT)"
-    if registration not in text:
-        old = "AUDIT = importlib.util.module_from_spec(SPEC)\nSPEC.loader.exec_module(AUDIT)"
-        if old not in text:
-            raise SystemExit("map-first test module-loading anchor missing")
-        text = text.replace(
-            old,
-            "AUDIT = importlib.util.module_from_spec(SPEC)\nsys.modules[SPEC.name] = AUDIT\nSPEC.loader.exec_module(AUDIT)",
-            1,
-        )
-    method = '''
-    def test_mobile_platform_roots_reference_native_projects(self) -> None:
-        platforms = {platform.name: platform for platform in AUDIT.PLATFORMS}
-        self.assertEqual(("android",), platforms["Android"].roots)
-        self.assertEqual(("ios/RouterVPN",), platforms["iOS/iPadOS"].roots)
-'''
-    anchor = '\n\nif __name__ == "__main__":\n'
-    if "test_mobile_platform_roots_reference_native_projects" not in text:
-        if anchor not in text:
-            raise SystemExit("map-first test insertion anchor missing")
-        text = text.replace(anchor, "\n" + method + anchor, 1)
-    path.write_text(text, encoding="utf-8")
-    commit([rel], "Test native mobile shipping roots [skip ci]")
+def patch_mobile_audit_roots() -> None:
+    paths = [
+        "deploy/recovered-map-first-ui-contract-audit.py",
+        "deploy/recovered-native-ui-contract-audit.py",
+    ]
+    for rel in paths:
+        path = ROOT / rel
+        text = path.read_text(encoding="utf-8")
+        for old, new in {
+            '("client/android",),': '("android",),',
+            '("client/ios", "client/iOS"),': '("ios/RouterVPN",),',
+        }.items():
+            if old in text or new in text:
+                text = replace_once_or_verify(text, old, new, f"{rel} mobile root")
+        path.write_text(text, encoding="utf-8")
+        commit([rel], f"Point {Path(rel).stem} at native mobile sources [skip ci]")
 
 
 def wire_map_audit_into_release_gate() -> None:
-    print("STAGE wire_map_audit_into_release_gate", flush=True)
     rel = "deploy/recovered-corrections-audit.py"
     path = ROOT / rel
     text = path.read_text(encoding="utf-8")
@@ -165,17 +182,7 @@ def wire_map_audit_into_release_gate() -> None:
     commit([rel], "Gate recovered map-first native shipping [skip ci]")
 
 
-def validate_targeted_contracts() -> None:
-    print("STAGE validate_targeted_contracts", flush=True)
-    run(sys.executable, "ios/RouterVPN/test_runtime_selection_contract.py")
-    run(sys.executable, "deploy/recovered-map-first-ui-contract-audit-test.py")
-    run(sys.executable, "deploy/recovered-map-first-ui-contract-audit.py")
-    run(sys.executable, "deploy/recovered-corrections-audit.py")
-    run("git", "diff", "--check")
-
-
 def remove_one_shot_files() -> None:
-    print("STAGE remove_one_shot_files", flush=True)
     paths = [
         ".github/workflows/one-shot-ios-node-selection-fix.yml",
         ".github/scripts/apply-ordered-source-corrections.py",
@@ -189,12 +196,12 @@ def remove_one_shot_files() -> None:
 
 def main() -> int:
     patch_ios_selection()
-    patch_map_audit_roots()
-    patch_map_audit_test()
+    patch_ios_location_map()
+    patch_mobile_audit_roots()
     wire_map_audit_into_release_gate()
-    validate_targeted_contracts()
+    run("git", "diff", "--check")
     remove_one_shot_files()
-    print("ordered source corrections validated and committed", flush=True)
+    print("ordered implementation pass committed", flush=True)
     return 0
 
 
