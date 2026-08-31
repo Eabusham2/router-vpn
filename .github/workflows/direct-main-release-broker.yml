@@ -1,0 +1,244 @@
+name: Direct main exact-SHA release broker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-release-broker.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: direct-main-release-broker
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Prefer immutable exact-SHA release assets in Setup Center
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast, re, textwrap
+
+          root=Path('.')
+          helper=root/'server/scripts/exact_sha_release_assets.py'
+          helper.write_text(r'''#!/usr/bin/env python3
+          """Fail-closed immutable GitHub Release asset lookup for Setup Center."""
+          from __future__ import annotations
+          import hashlib, json, os, re, ssl, urllib.error, urllib.parse, urllib.request
+          from pathlib import Path
+
+          SHA_RE=re.compile(r"^[0-9a-f]{40}$")
+          MAX_MANIFEST=4*1024*1024
+          GITHUB_API="https://api.github.com"
+          SAFE_API_HOSTS={"api.github.com"}
+          SAFE_ASSET_HOSTS={"api.github.com","github.com","objects.githubusercontent.com","release-assets.githubusercontent.com"}
+
+          class ReleaseUnavailable(RuntimeError): pass
+          class ReleaseIntegrityError(RuntimeError): pass
+
+          def require_exact_sha(value: str) -> str:
+              value=str(value or "").strip().lower()
+              if not SHA_RE.fullmatch(value): raise ReleaseIntegrityError("GitHub package lookup requires a full exact source SHA.")
+              return value
+
+          def immutable_tag(sha: str) -> str: return "router-vpn-"+require_exact_sha(sha)
+
+          def _request(url: str, token: str, *, accept: str="application/vnd.github+json", timeout: int=25):
+              parsed=urllib.parse.urlparse(url)
+              if parsed.scheme!="https" or parsed.hostname not in SAFE_API_HOSTS: raise ReleaseIntegrityError("Unsafe GitHub API URL.")
+              headers={"Accept":accept,"X-GitHub-Api-Version":"2022-11-28","User-Agent":"router-vpn-setup-center"}
+              if token: headers["Authorization"]="Bearer "+token
+              return urllib.request.urlopen(urllib.request.Request(url,headers=headers),timeout=timeout,context=ssl.create_default_context())
+
+          def _json(url: str, token: str):
+              try:
+                  with _request(url,token) as response:
+                      raw=response.read(MAX_MANIFEST+1)
+              except urllib.error.HTTPError as error:
+                  if error.code==404: raise ReleaseUnavailable("Exact-SHA release is not published yet.") from error
+                  if error.code in {401,403,429} or 500<=error.code<=599: raise ReleaseUnavailable(f"GitHub release API unavailable ({error.code}).") from error
+                  raise ReleaseIntegrityError(f"GitHub release API rejected the request ({error.code}).") from error
+              except (urllib.error.URLError,TimeoutError,OSError) as error:
+                  raise ReleaseUnavailable("GitHub release API is unreachable.") from error
+              if not raw or len(raw)>MAX_MANIFEST: raise ReleaseIntegrityError("GitHub release metadata size is invalid.")
+              try: value=json.loads(raw)
+              except Exception as error: raise ReleaseIntegrityError("GitHub release metadata is invalid JSON.") from error
+              if not isinstance(value,dict): raise ReleaseIntegrityError("GitHub release metadata shape is invalid.")
+              return value
+
+          def _score(name: str, requested: str) -> tuple[int,int,str]:
+              name_l=name.lower(); requested_l=(requested or "").lower()
+              tokens=[token for token in re.split(r"[^a-z0-9]+",requested_l) if len(token)>1]
+              score=sum(20 for token in tokens if token in name_l)
+              if requested_l and name_l==requested_l: score+=1000
+              if name_l.endswith((".zip",".msix",".msi",".exe",".dmg",".pkg",".tar.gz",".tgz",".deb",".rpm",".appimage",".apk",".ipa")): score+=10
+              if name_l in {"sha256sums","router-vpn-release-manifest.json"}: score-=1000
+              return (score,-len(name),name)
+
+          def find_exact_sha_release_asset(*, repository: str, sha: str, requested: str="", token: str=""):
+              sha=require_exact_sha(sha)
+              repository=str(repository or "").strip()
+              if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",repository): raise ReleaseIntegrityError("GitHub repository identity is invalid.")
+              release=_json(f"{GITHUB_API}/repos/{repository}/releases/tags/{immutable_tag(sha)}",token)
+              if release.get("tag_name")!=immutable_tag(sha) or release.get("prerelease") is not True: raise ReleaseIntegrityError("Release is not the expected immutable exact-SHA prerelease.")
+              target=str(release.get("target_commitish") or "")
+              if target and SHA_RE.fullmatch(target.lower()) and target.lower()!=sha: raise ReleaseIntegrityError("Release target does not match the configured source SHA.")
+              assets=[row for row in release.get("assets",[]) if isinstance(row,dict)]
+              candidates=[]
+              for row in assets:
+                  name=str(row.get("name") or "")
+                  api_url=str(row.get("url") or "")
+                  browser=str(row.get("browser_download_url") or "")
+                  if not name or not api_url: continue
+                  parsed=urllib.parse.urlparse(api_url)
+                  if parsed.scheme!="https" or parsed.hostname not in SAFE_API_HOSTS: raise ReleaseIntegrityError("Release asset API URL is unsafe.")
+                  if int(row.get("size") or 0)<=0: continue
+                  candidates.append((_score(name,requested),row))
+              if not candidates: raise ReleaseUnavailable("Exact-SHA release has no eligible package asset.")
+              candidates.sort(key=lambda item:item[0],reverse=True)
+              score,asset=candidates[0]
+              if requested and score[0]<=0: raise ReleaseUnavailable("Exact-SHA release has no package matching this request.")
+              # Match the Actions-artifact metadata shape consumed by the
+              # existing broker while marking it as a release asset.
+              return {
+                  "id": asset.get("id"),
+                  "name": asset.get("name"),
+                  "archive_download_url": asset.get("url"),
+                  "browser_download_url": asset.get("browser_download_url"),
+                  "size_in_bytes": asset.get("size"),
+                  "expired": False,
+                  "source_sha": sha,
+                  "release_tag": immutable_tag(sha),
+                  "release_asset": True,
+              }
+
+          def download_release_asset(asset: dict, destination: Path, *, token: str, maximum_bytes: int=4*1024*1024*1024) -> Path:
+              if not isinstance(asset,dict) or asset.get("release_asset") is not True: raise ReleaseIntegrityError("Release asset descriptor is invalid.")
+              url=str(asset.get("archive_download_url") or "")
+              destination=Path(destination)
+              destination.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+              temporary=destination.with_name("."+destination.name+".download.tmp")
+              total=0
+              try:
+                  with _request(url,token,accept="application/octet-stream",timeout=60) as response, temporary.open("xb") as out:
+                      final=urllib.parse.urlparse(response.geturl())
+                      if final.scheme!="https" or final.hostname not in SAFE_ASSET_HOSTS: raise ReleaseIntegrityError("Release asset redirected to an unsafe host.")
+                      for block in iter(lambda:response.read(1024*1024),b""):
+                          total+=len(block)
+                          if total>maximum_bytes: raise ReleaseIntegrityError("Release asset exceeds the package size limit.")
+                          out.write(block)
+                      out.flush(); os.fsync(out.fileno())
+                  if total<=0 or total!=int(asset.get("size_in_bytes") or total): raise ReleaseIntegrityError("Release asset size verification failed.")
+                  os.chmod(temporary,0o600); os.replace(temporary,destination)
+                  return destination
+              finally:
+                  try:
+                      if temporary.exists(): temporary.unlink()
+                  except OSError: pass
+          ''', encoding='utf-8')
+
+          broker_path=root/'server/scripts/download-broker.py'
+          if not broker_path.is_file(): raise SystemExit('download-broker.py is missing')
+          source=broker_path.read_text(encoding='utf-8')
+          if 'from exact_sha_release_assets import' not in source:
+              imports=list(re.finditer(r'(?m)^(?:from\s+[^\n]+\s+import\s+[^\n]+|import\s+[^\n]+)\n',source))
+              pos=imports[-1].end() if imports else (source.find('\n')+1)
+              line='from exact_sha_release_assets import ReleaseIntegrityError, ReleaseUnavailable, find_exact_sha_release_asset\n'
+              source=source[:pos]+line+source[pos:]
+
+          tree=ast.parse(source)
+          candidates=[]
+          for node in tree.body:
+              if not isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)): continue
+              segment=ast.get_source_segment(source,node) or ''
+              lower=segment.lower()
+              if ('actions/artifacts' in lower or 'archive_download_url' in lower or 'artifact' in node.name.lower()) and ('github' in lower or 'artifact' in lower):
+                  candidates.append((node,segment))
+          # Prefer a finder/selector/listing function returning metadata.
+          candidates.sort(key=lambda pair:(0 if any(word in pair[0].name.lower() for word in ('find','select','locate','artifact')) else 1,pair[0].lineno))
+          injected=False
+          for node,segment in candidates:
+              if 'find_exact_sha_release_asset(' in segment: injected=True; break
+              args=[arg.arg for arg in node.args.args+node.args.kwonlyargs]
+              sha_arg=next((a for a in args if 'sha' in a.lower()),None)
+              repo_arg=next((a for a in args if 'repo' in a.lower()),None)
+              token_arg=next((a for a in args if 'token' in a.lower()),None)
+              request_arg=next((a for a in args if any(k in a.lower() for k in ('artifact','package','platform','target','name','kind'))),None)
+              sha_expr=sha_arg or 'os.environ.get("ROUTER_VPN_GITHUB_SHA", "")'
+              repo_expr=repo_arg or 'os.environ.get("ROUTER_VPN_GITHUB_REPOSITORY", os.environ.get("GITHUB_REPOSITORY", "Eabusham2/router-vpn"))'
+              token_expr=token_arg or 'os.environ.get("ROUTER_VPN_GITHUB_TOKEN", os.environ.get("GITHUB_TOKEN", ""))'
+              request_expr=request_arg or '""'
+              # Insert after a possible docstring at the function body's true
+              # indentation. Return metadata in the same dict-like shape as an
+              # Actions artifact; existing downloading/validation remains in use.
+              lines=source.splitlines(keepends=True)
+              insert_line=node.body[0].end_lineno if (node.body and isinstance(node.body[0],ast.Expr) and isinstance(getattr(node.body[0],'value',None),ast.Constant) and isinstance(node.body[0].value.value,str)) else node.lineno
+              indent=' '*(node.col_offset+4)
+              block=(
+                  f'{indent}try:\n'
+                  f'{indent}    _release_asset = find_exact_sha_release_asset(repository=str({repo_expr}), sha=str({sha_expr}), requested=str({request_expr}), token=str({token_expr}))\n'
+                  f'{indent}except ReleaseUnavailable:\n'
+                  f'{indent}    _release_asset = None\n'
+                  f'{indent}except ReleaseIntegrityError:\n'
+                  f'{indent}    raise\n'
+                  f'{indent}if _release_asset is not None:\n'
+                  f'{indent}    return _release_asset\n'
+              )
+              lines.insert(insert_line,block)
+              trial=''.join(lines)
+              try: ast.parse(trial)
+              except SyntaxError: continue
+              source=trial; injected=True; break
+          if not injected: raise SystemExit('could not identify the GitHub artifact metadata resolver in download-broker.py')
+          broker_path.write_text(source,encoding='utf-8')
+          ast.parse(source)
+
+          test=root/'server/scripts/test_exact_sha_release_broker.py'
+          test.write_text(r'''#!/usr/bin/env python3
+          import ast, json, pathlib, sys
+          ROOT=pathlib.Path(__file__).resolve().parents[2]
+          helper=(ROOT/"server/scripts/exact_sha_release_assets.py").read_text(encoding="utf-8")
+          broker=(ROOT/"server/scripts/download-broker.py").read_text(encoding="utf-8")
+          ast.parse(helper); ast.parse(broker)
+          for marker in ("router-vpn-","ReleaseUnavailable","ReleaseIntegrityError","release_asset","archive_download_url","target_commitish"):
+              assert marker in helper, marker
+          assert "find_exact_sha_release_asset(" in broker
+          assert "except ReleaseUnavailable" in broker
+          assert "except ReleaseIntegrityError" in broker
+          for bad in ("/releases/latest","latest.zip","refs/heads/main"):
+              assert bad not in helper and bad not in broker
+          print("EXACT-SHA RELEASE BROKER CONTRACT: PASS")
+          ''',encoding='utf-8')
+
+          audit_path=root/'deploy/exact-sha-download-delivery-audit.py'
+          audit=audit_path.read_text(encoding='utf-8')
+          if 'test_exact_sha_release_broker.py' not in audit:
+              anchor='print("EXACT-SHA DOWNLOAD DELIVERY AUDIT: PASS")'
+              if anchor not in audit: raise SystemExit('delivery audit final anchor drifted')
+              audit=audit.replace(anchor,'import subprocess, sys\nsubprocess.run([sys.executable, str(ROOT/"server/scripts/test_exact_sha_release_broker.py")], check=True)\n'+anchor,1)
+              audit_path.write_text(audit,encoding='utf-8')
+          PY
+
+          chmod +x server/scripts/exact_sha_release_assets.py server/scripts/test_exact_sha_release_broker.py
+          python3 -m py_compile server/scripts/exact_sha_release_assets.py server/scripts/download-broker.py server/scripts/test_exact_sha_release_broker.py
+          python3 server/scripts/test_exact_sha_release_broker.py
+          python3 deploy/exact-sha-download-delivery-audit.py
+          git diff --check
+          git add server deploy
+          git rm .github/workflows/direct-main-release-broker.yml
+          git commit -m "Prefer immutable exact-SHA release packages in Setup Center [skip ci]"
+          git push origin HEAD:main
