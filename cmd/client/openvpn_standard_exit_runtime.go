@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -13,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"router-vpn/internal/common"
 )
@@ -256,215 +252,13 @@ func openVPNStandardExitCommand(a *app, control, entry common.RouterProfile, exi
 	return cmd, nil
 }
 
-func proveOpenVPNStandardExit(expected string) error {
-	expectedIP := net.ParseIP(strings.TrimSpace(expected))
-	if expectedIP == nil {
-		return errors.New("expected public exit IP is invalid")
-	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	client := &http.Client{Timeout: 2 * time.Second, Transport: transport}
-	endpoints := []string{"https://api64.ipify.org", "https://api.ipify.org"}
-	deadline := time.Now().Add(14 * time.Second)
-	var last error
-	for time.Now().Before(deadline) {
-		for _, endpoint := range endpoints {
-			resp, err := client.Get(endpoint)
-			if err != nil {
-				last = err
-				continue
-			}
-			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
-			_ = resp.Body.Close()
-			if readErr != nil {
-				last = readErr
-				continue
-			}
-			if resp.StatusCode/100 != 2 {
-				last = fmt.Errorf("OpenVPN exit proof returned HTTP %d", resp.StatusCode)
-				continue
-			}
-			observed := net.ParseIP(strings.TrimSpace(string(raw)))
-			if observed == nil {
-				last = errors.New("OpenVPN exit proof returned a non-IP value")
-				continue
-			}
-			if observed.Equal(expectedIP) {
-				return nil
-			}
-			last = fmt.Errorf("OpenVPN custom exit reached public address %s, expected %s", observed.String(), expectedIP.String())
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	if last == nil {
-		last = errors.New("OpenVPN public exit proof timed out")
-	}
-	return last
-}
-
+// Compatibility registration delegates to the one authoritative platform
+// transaction. The former dispatcher acquired operationMu and then delegated to
+// another handler that acquired it again, making non-OpenVPN requests deadlock.
 func registerStandardExitDispatchRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/standard-exit/connect", a.standardExitConnectDispatch)
 }
 
 func (a *app) standardExitConnectDispatch(w http.ResponseWriter, r *http.Request) {
-	_, finish, guardErr := a.beginConnectionOperation()
-	if guardErr != nil {
-		http.Error(w, guardErr.Error(), http.StatusConflict)
-		return
-	}
-	defer finish()
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
-	if err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	var q standardExitConnectRequest
-	if err = json.Unmarshal(raw, &q); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	exit, err := standardExitByID(strings.TrimSpace(q.StandardExitID))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if exit.Protocol != "openvpn" {
-		r.Body = io.NopCloser(bytes.NewReader(raw))
-		a.standardExitConnect(w, r)
-		return
-	}
-	a.openVPNStandardExitConnect(w, r, q, exit)
-}
-
-func (a *app) openVPNStandardExitConnect(w http.ResponseWriter, r *http.Request, q standardExitConnectRequest, exit standardExit) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		http.Error(w, "native OpenVPN custom exits are source-enabled on Linux/macOS first; this platform remains unavailable instead of faking Connected", http.StatusNotImplemented)
-		return
-	}
-	if !q.Direct && normalizeBase(q.Base) != "" && normalizeBase(q.Base) != "auto" && normalizeBase(q.Base) != "wg" {
-		http.Error(w, "OpenVPN custom exit hopping currently requires a standard WireGuard Router VPN entry", http.StatusBadRequest)
-		return
-	}
-	a.mu.Lock()
-	control, ok := a.profileByIDLocked(a.profiles.SelectedID)
-	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
-	a.mu.Unlock()
-	if !ok {
-		http.Error(w, "select a Router VPN policy profile first", http.StatusBadRequest)
-		return
-	}
-	entry := common.RouterProfile{}
-	if !q.Direct {
-		entryID := strings.TrimSpace(q.EntryID)
-		if entryID == "" {
-			entryID = strings.TrimSpace(control.MultihopEntryID)
-		}
-		entry, ok = profileByID(profiles, entryID)
-		if !ok {
-			http.Error(w, "choose a linked Router VPN entry node", http.StatusBadRequest)
-			return
-		}
-		if strings.TrimSpace(entry.Endpoint) == "" {
-			http.Error(w, "entry node needs a public endpoint", http.StatusBadRequest)
-			return
-		}
-	}
-	sessionBase := "external"
-	if !q.Direct {
-		sessionBase = "wg"
-	}
-	sessionTrackerFor(a).declareRequest("standard-exit", sessionBase)
-	if err := a.stopMode(); err != nil {
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	cmd, err := openVPNStandardExitCommand(a, control, entry, exit, q.Direct)
-	if err != nil {
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err = cmd.Start(); err != nil {
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	stateID := "standard:" + exit.ID
-	a.mu.Lock()
-	a.cmd = cmd
-	a.state.Mode = "standard-exit"
-	a.state.LogicalMode = "standard-exit"
-	a.state.RuntimeMode = "standard-openvpn"
-	a.state.Base = sessionBase
-	a.state.RouterID = stateID
-	a.state.Connected = false
-	a.state.Phase = "standard-exit:openvpn:proving-public-exit"
-	a.state.LastError = ""
-	a.mu.Unlock()
-	if err = proveOpenVPNStandardExit(exit.ExpectedPublicIP); err != nil {
-		_ = a.stopMode()
-		msg := "OpenVPN standard exit proof failed: " + err.Error()
-		a.mu.Lock()
-		a.state.Mode = "standard-exit"
-		a.state.LogicalMode = "standard-exit"
-		a.state.RuntimeMode = "standard-openvpn"
-		a.state.Base = sessionBase
-		a.state.RouterID = stateID
-		a.state.Phase = "failed"
-		a.state.LastError = msg
-		a.state.Connected = false
-		a.mu.Unlock()
-		sessionTrackerFor(a).markRequestFailure(msg)
-		http.Error(w, msg, http.StatusBadGateway)
-		return
-	}
-	if err = a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	a.mu.Lock()
-	if a.cmd != cmd {
-		a.mu.Unlock()
-		http.Error(w, "OpenVPN runtime changed during proof", http.StatusConflict)
-		return
-	}
-	previousStore := cloneRouterProfileStore(a.profiles)
-	a.state.Connected = true
-	a.state.Phase = "connected"
-	a.state.LastError = ""
-	if !q.Direct {
-		for i := range a.profiles.Profiles {
-			if a.profiles.Profiles[i].ID == entry.ID {
-				a.profiles.Profiles[i].UseCount++
-			}
-		}
-	}
-	persistErr := a.persistProfilesLocked()
-	if persistErr != nil {
-		a.rollbackProfilesLocked(previousStore)
-	}
-	a.mu.Unlock()
-	if persistErr != nil {
-		_ = a.stopMode()
-		sessionTrackerFor(a).markRequestFailure(persistErr.Error())
-		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
-		return
-	}
-	route := "client OpenVPN TUN -> direct external OpenVPN node -> Internet"
-	entryID, entryName := "", ""
-	if !q.Direct {
-		route = "client OpenVPN TUN -> loopback SOCKS -> Router VPN WireGuard entry -> external OpenVPN node -> Internet"
-		entryID = entry.ID
-		entryName = entry.Name
-	}
-	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": "standard-exit", "direct": q.Direct, "entry_id": entryID, "entry_name": entryName, "standard_exit_id": exit.ID, "standard_exit_name": exit.Name, "protocol": "openvpn", "expected_public_ip": exit.ExpectedPublicIP, "exit_path_proof": "expected-public-ip-passed", "route": route})
+	a.platformStandardExitConnect(w, r)
 }
