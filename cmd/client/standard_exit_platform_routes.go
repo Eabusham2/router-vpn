@@ -164,6 +164,11 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err = a.checkConnectionOperation(); err != nil {
+		sessionTrackerFor(a).markRequestFailure(err.Error())
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err = cmd.Start(); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -182,6 +187,12 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 	a.state.Phase = "standard-exit:proving-public-exit"
 	a.state.LastError = ""
 	a.mu.Unlock()
+	if err = a.checkConnectionOperation(); err != nil {
+		a.stopOwnedConnectionRuntime(cmd)
+		sessionTrackerFor(a).markRequestFailure(err.Error())
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 
 	if exit.Protocol == "openvpn" {
 		err = proveOpenVPNStandardExit(exit.ExpectedPublicIP)
