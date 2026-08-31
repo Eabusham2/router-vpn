@@ -1,0 +1,66 @@
+name: Direct main final current-requirements reconciliation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-final-current-reconcile.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: direct-main-final-current-reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Reconcile latest requirements into real shipping and release paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          python3 .github/scripts/final-current-reconcile.py
+
+          python3 deploy/current-requirements-audit.py
+          python3 deploy/test-production-release-compose.py
+          python3 deploy/test_source_provenance.py
+          python3 server/scripts/test_download_jobs.py
+          python3 deploy/setup-center-download-retention-audit.py
+          python3 deploy/linux-session-mutation-audit.py
+          python3 deploy/unified-map-shipping-audit.py
+          python3 deploy/native-map-first-ui-audit.py
+          python3 deploy/product-parity-audit.py
+          python3 deploy/profile-settings-audit.py
+          python3 deploy/native-session-mutation-audit.py
+          python3 deploy/durable-state-transaction-audit.py
+          python3 deploy/validate-repo.py
+          go test ./cmd/client ./cmd/update-controller -count=1
+          git diff --check
+
+          rm -f .github/scripts/final-current-reconcile.py
+          rm -f .github/workflows/direct-main-final-current-reconcile.yml
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No source delta remained after reconciliation.'
+          else
+            git commit -m 'Reconcile current requirements and shipping release paths'
+            git push origin HEAD:main
+          fi
+
+          # The user explicitly canceled feature/PR branches. Keep main only.
+          for ref in $(git ls-remote --heads origin | awk '{sub("refs/heads/","",$2); if($2!="main") print $2}'); do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${ref}" || true
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
