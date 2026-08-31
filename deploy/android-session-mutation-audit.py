@@ -53,8 +53,9 @@ require(
     "boolean isActiveOrTransitioning() { return AndroidVpnMutationGuard.isBusy(activity); }",
 )
 
+product_path = "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java"
 require(
-    "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
+    product_path,
     "private boolean mutationBusy()",
     "AndroidVpnMutationGuard.isBusy(this)",
     "nodeButton.setEnabled(!busy)",
@@ -74,7 +75,32 @@ require(
     "before saving multihop",
     "before changing persistent kill-switch policy",
     "before changing DNS",
+    "Selecting a target does not connect",
+    "values==null||values.isEmpty()",
+    "Press Connect when ready.",
+    "fastestButton.setText(chosen==null?\"⚡ Fastest ▾\":\"⚡ \"+chosen.name+\" ▾\")",
 )
+product = (ROOT / product_path).read_text(encoding="utf-8")
+try:
+    selector = product.split("private void showFastConnectMenu()", 1)[1].split(
+        "private void refreshTelemetry", 1
+    )[0]
+except IndexError as exc:
+    raise SystemExit(f"{product_path}: Fastest/node selector handler is missing") from exc
+if "connectOrDisconnect()" in selector:
+    raise SystemExit(
+        f"{product_path}: Fastest/node selection must not auto-connect; Connect is a separate control"
+    )
+for marker in (
+    "telemetry.measureAll(3",
+    "if(mutationBusy())",
+    "nodeStore.select(pick.id)",
+    "prefs().edit().putString(SELECTED_KIND,\"router-vpn\")",
+    "refreshAll()",
+):
+    if marker not in selector:
+        raise SystemExit(f"{product_path}: Fastest/node selector missing {marker!r}")
+
 require(
     "android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java",
     "AndroidVpnMutationGuard.isBusy(this)",
