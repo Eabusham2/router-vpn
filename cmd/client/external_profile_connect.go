@@ -232,7 +232,13 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		a.state.Phase = "external-node:openvpn:proving-public-exit"
 		a.state.LastError = ""
 		a.mu.Unlock()
-		proofErr = proveOpenVPNStandardExit(exit.ExpectedPublicIP)
+		if err = a.checkConnectionOperation(); err != nil {
+			a.stopOwnedConnectionRuntime(cmd)
+			sessionTrackerFor(a).markRequestFailure(err.Error())
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		proofErr = a.proveOpenVPNStandardExitForOperation(exit.ExpectedPublicIP)
 		if proofErr == nil {
 			a.mu.Lock()
 			if a.cmd != cmd {
@@ -275,7 +281,13 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		a.state.Phase = "external-node:proving-public-exit"
 		a.state.LastError = ""
 		a.mu.Unlock()
-		proofErr = proveStandardExit(exit.ExpectedPublicIP)
+		if err = a.checkConnectionOperation(); err != nil {
+			a.stopOwnedConnectionRuntime(realCmd)
+			sessionTrackerFor(a).markRequestFailure(err.Error())
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		proofErr = a.proveStandardExitForOperation(exit.ExpectedPublicIP)
 		if proofErr == nil {
 			a.mu.Lock()
 			if a.cmd != realCmd {
@@ -289,9 +301,11 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		cmdErr = cancelErr
 	}
 	if proofErr != nil || cmdErr != nil {
-		failure := proofErr
+		failure := cmdErr
+		status := http.StatusConflict
 		if failure == nil {
-			failure = cmdErr
+			failure = proofErr
+			status = http.StatusBadGateway
 		}
 		a.stopOwnedConnectionRuntime(startedCmd)
 		msg := "external node exit proof failed: " + failure.Error()
@@ -306,7 +320,7 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		a.state.Connected = false
 		a.mu.Unlock()
 		sessionTrackerFor(a).markRequestFailure(msg)
-		http.Error(w, msg, http.StatusBadGateway)
+		http.Error(w, msg, status)
 		return
 	}
 
@@ -314,6 +328,7 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	if a.cmd != startedCmd || startedCmd == nil {
 		a.mu.Unlock()
+		sessionTrackerFor(a).markRequestFailure("external-node runtime changed before result adoption")
 		http.Error(w, "external-node runtime changed before result adoption", http.StatusConflict)
 		return
 	}
