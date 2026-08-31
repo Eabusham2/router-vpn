@@ -80,14 +80,14 @@ for rel, body in (
     assert "\n  push:\n" not in body, f"{rel} must not bypass Build-all ordering with an autonomous push trigger"
 
 for rel, body, concurrency in (
-    ("source-snapshot.yml", snapshot, "group: source-snapshot-${{ github.ref }}-${{ github.sha }}"),
-    ("release-candidate.yml", rc, "group: release-candidate-${{ github.ref }}-${{ github.sha }}"),
-    ("arm64-portainer-preflight.yml", preflight, "group: arm64-portainer-${{ github.ref }}-${{ github.sha }}"),
-    ("publish-arm64-images.yml", publish, "group: publish-arm64-portainer-${{ github.ref }}-${{ github.sha }}"),
-    ("production-release-compose.yml", compose, "group: production-release-compose-${{ github.ref }}-${{ github.sha }}"),
+    ("source-snapshot.yml", snapshot, "group: source-snapshot-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}"),
+    ("release-candidate.yml", rc, "group: release-candidate-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}"),
+    ("arm64-portainer-preflight.yml", preflight, "group: arm64-portainer-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}"),
+    ("publish-arm64-images.yml", publish, "group: publish-arm64-portainer-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}"),
+    ("production-release-compose.yml", compose, "group: production-release-compose-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}"),
 ):
     assert "workflow_call:" in body, f"{rel} cannot participate in authoritative Build all chain"
-    assert concurrency in body, f"{rel} can be canceled by a different release SHA"
+    assert concurrency in body, f"{rel} can cancel caller-owned exact-SHA evidence"
     assert "cancel-in-progress: true" in body, f"{rel} does not collapse duplicate same-SHA runs"
 
 for marker in (
@@ -147,6 +147,7 @@ for marker in (
     "python3 deploy/native-auto-requirements-ui-audit.py",
     "python3 deploy/native-artifact-workflow-parity-audit.py",
     "python3 deploy/workflow-structure-audit.py",
+    "python3 deploy/reusable-workflow-concurrency-audit.py",
     "python3 deploy/workflow-evidence-pipeline-audit.py",
     "python3 deploy/server-image-dependency-audit.py",
     "python3 deploy/setup-center-publication-audit.py",
@@ -194,6 +195,7 @@ for audit in (
     "deploy/native-auto-requirements-ui-audit.py",
     "deploy/native-artifact-workflow-parity-audit.py",
     "deploy/workflow-structure-audit.py",
+    "deploy/reusable-workflow-concurrency-audit.py",
     "deploy/workflow-evidence-pipeline-audit.py",
     "deploy/server-image-dependency-audit.py",
     "deploy/test_source_provenance.py",

@@ -41,6 +41,7 @@ jobs:
           python3 deploy/native-download-policy-audit.py
           python3 deploy/native-artifact-workflow-parity-audit.py
           python3 deploy/workflow-structure-audit.py
+          python3 deploy/reusable-workflow-concurrency-audit.py
           python3 deploy/workflow-evidence-pipeline-audit.py
           python3 deploy/server-image-dependency-audit.py
           python3 deploy/setup-center-publication-audit.py
