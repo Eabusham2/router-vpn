@@ -1,0 +1,66 @@
+name: Finalize current main contracts
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/finalize-current-main.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-current-main
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply current main reconciliation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          python3 .github/scripts/finalize-current-main.py
+      - name: Prove targeted shipping and release contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            .github/scripts/finalize-current-main.py \
+            deploy/materialize-production-compose.py \
+            deploy/test-production-release-compose.py \
+            client/linux/apply-session-mutation.py
+          bash -n deploy/package-macos-native.sh
+          bash -n deploy/package-linux-native.sh
+          python3 deploy/test-production-release-compose.py
+          python3 deploy/linux-session-mutation-audit.py
+          python3 deploy/unified-map-shipping-audit.py
+          python3 deploy/setup-center-download-retention-audit.py
+          python3 deploy/release-orchestration-audit.py
+          python3 deploy/validate-repo.py
+          git diff --check
+      - name: Commit corrected source directly to main and remove helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          git add -A
+          git rm -f --ignore-unmatch \
+            .github/scripts/reconcile-current-contracts.py \
+            .github/workflows/reconcile-current-contracts.yml \
+            .github/scripts/finalize-current-main.py \
+            .github/workflows/finalize-current-main.yml
+          if git diff --cached --quiet; then
+            echo 'No source reconciliation changes remain.'
+            exit 0
+          fi
+          git commit -m 'Finalize native shipping and exact-SHA release contracts [skip ci]'
+          git push origin HEAD:main
