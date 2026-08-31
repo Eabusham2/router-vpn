@@ -236,9 +236,16 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if err = a.proveMultihopExit(sel.Exit); err != nil {
+	proofErr := a.proveMultihopExit(sel.Exit)
+	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
+		a.stopOwnedConnectionRuntime(cmd)
+		sessionTrackerFor(a).markRequestFailure(cancelErr.Error())
+		http.Error(w, cancelErr.Error(), http.StatusConflict)
+		return
+	}
+	if proofErr != nil {
 		_ = a.stopMode()
-		msg := "multihop exit proof failed: " + err.Error()
+		msg := "multihop exit proof failed: " + proofErr.Error()
 		a.mu.Lock()
 		a.state.Mode = "multihop"
 		a.state.LogicalMode = "multihop"
@@ -253,15 +260,10 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, http.StatusBadGateway)
 		return
 	}
-	if err := a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
 	a.mu.Lock()
 	if a.cmd != cmd {
 		a.mu.Unlock()
+		sessionTrackerFor(a).markRequestFailure("multihop runtime changed during exit proof")
 		http.Error(w, "multihop runtime changed during exit proof", http.StatusConflict)
 		return
 	}
