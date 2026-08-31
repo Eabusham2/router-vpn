@@ -329,15 +329,25 @@ func (a *app) startAllLogical(requestedBase string) (runtimeCandidate, error) {
 		return runtimeCandidate{}, err
 	}
 
+	ctx := a.connectionOperationContextOrBackground()
 	seconds := 4*(a.cfg.AutoTestSeconds+3) + 5
 	if seconds < 25 {
 		seconds = 25
 	}
 	deadline := time.Now().Add(time.Duration(seconds) * time.Second)
 	for {
+		if ctx.Err() != nil {
+			_ = os.Remove(resultFile)
+			_ = a.stopMode()
+			return runtimeCandidate{}, errConnectionOperationCancelled
+		}
 		b, readErr := os.ReadFile(resultFile)
 		if readErr == nil {
 			_ = os.Remove(resultFile)
+			if err := a.checkConnectionOperation(); err != nil {
+				_ = a.stopMode()
+				return runtimeCandidate{}, err
+			}
 			actual, parseErr := allRuntimeCandidate(string(b))
 			if parseErr != nil {
 				_ = a.stopMode()
@@ -353,7 +363,17 @@ func (a *app) startAllLogical(requestedBase string) (runtimeCandidate, error) {
 			_ = a.stopMode()
 			return runtimeCandidate{}, errors.New("ALL did not establish a healthy MAX TLS/QUIC branch before timeout")
 		}
-		time.Sleep(200 * time.Millisecond)
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			_ = os.Remove(resultFile)
+			_ = a.stopMode()
+			return runtimeCandidate{}, errConnectionOperationCancelled
+		case <-timer.C:
+		}
 	}
 }
 
@@ -367,11 +387,19 @@ func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, erro
 		if err := a.startMode(candidate.RuntimeID); err != nil {
 			return runtimeCandidate{}, err
 		}
+		if err := a.checkConnectionOperation(); err != nil {
+			_ = a.stopMode()
+			return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL "+id)
+		}
 		return candidate, nil
 	}
 
 	if id == "all" {
-		return a.startAllLogical(requestedBase)
+		candidate, err := a.startAllLogical(requestedBase)
+		if errors.Is(err, errConnectionOperationCancelled) {
+			return runtimeCandidate{}, a.finalizeCancelledFallback("ALL")
+		}
+		return candidate, err
 	}
 
 	candidates := a.candidatesForLogical(logical, requestedBase)
@@ -380,9 +408,19 @@ func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, erro
 	}
 	var failures []string
 	for _, candidate := range candidates {
+		if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
+			return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL "+logical.Name)
+		}
 		if err := a.startModeAttempt(candidate.RuntimeID, true); err != nil {
+			if errors.Is(err, errConnectionOperationCancelled) {
+				return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL "+logical.Name)
+			}
 			failures = append(failures, fmt.Sprintf("%s: %v", candidate.Base, err))
 			continue
+		}
+		if err := a.checkConnectionOperation(); err != nil {
+			_ = a.stopMode()
+			return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL "+logical.Name)
 		}
 		return candidate, nil
 	}
@@ -431,7 +469,16 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 	}
 	used, err := a.startLogicalMode(q.Mode, q.Base)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		status := http.StatusServiceUnavailable
+		if errors.Is(err, errConnectionOperationCancelled) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	if err := a.checkConnectionOperation(); err != nil {
+		_ = a.stopMode()
+		http.Error(w, a.finalizeCancelledFallback("LOGICAL "+q.Mode).Error(), http.StatusConflict)
 		return
 	}
 	fallbackUsed := used.Base != "native" && used.Base != "auto" && used.Base != preferred
