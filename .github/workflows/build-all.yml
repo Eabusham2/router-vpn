@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   packages: write
   statuses: write
 
@@ -15,6 +15,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-delivery-contracts:
+    name: Unified app and exact-SHA download delivery contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify every shipping app and Release-first delivery
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            server/scripts/exact_sha_release_download.py \
+            server/scripts/native_artifact_policy.py \
+            deploy/materialize-exact-sha-release.py \
+            deploy/exact-sha-release-pipeline-audit.py \
+            deploy/unified-map-shipping-audit.py
+          (cd client && python3 test_unified_control_center_contract.py)
+          python3 deploy/unified-map-control-center-audit.py
+          python3 deploy/unified-map-shipping-audit.py
+          python3 server/scripts/test_exact_sha_release_download.py
+          python3 deploy/test_exact_sha_release_materialization.py
+          python3 deploy/exact-sha-release-pipeline-audit.py
+
   source-snapshot:
     name: Exact-SHA source snapshot
     uses: ./.github/workflows/source-snapshot.yml
@@ -41,3 +62,105 @@ jobs:
     needs: [publish-arm64-images]
     uses: ./.github/workflows/production-release-compose.yml
     secrets: inherit
+
+  publish-exact-sha-release:
+    name: Publish immutable exact-SHA native download release
+    needs:
+      - release-delivery-contracts
+      - source-snapshot
+      - release-candidate
+      - portainer-preflight
+      - publish-arm64-images
+      - production-compose
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-release-candidate-${{ github.sha }}
+          path: dist/release-input
+      - name: Materialize ten native assets and exact-SHA manifests
+        run: |
+          set -euo pipefail
+          rm -rf dist/exact-sha-release
+          python3 deploy/materialize-exact-sha-release.py \
+            --input dist/release-input \
+            --output dist/exact-sha-release \
+            --sha "$GITHUB_SHA" \
+            --repository "$GITHUB_REPOSITORY"
+          (cd dist/exact-sha-release && sha256sum -c SHA256SUMS)
+      - name: Create or refresh the immutable exact-SHA prerelease
+        run: |
+          set -euo pipefail
+          TAG="router-vpn-sha-${GITHUB_SHA}"
+          cat > dist/exact-sha-release-notes.md <<EOF
+          Router VPN native packages built and verified from exact source SHA \`${GITHUB_SHA}\`.
+
+          Delivery order in the private Setup Center:
+          1. this exact-SHA GitHub Release;
+          2. exact-SHA GitHub Actions artifact;
+          3. one bounded router-local desktop/Portable build when GitHub is unavailable.
+
+          Android and iOS remain exact-SHA GitHub-only. Generic assets are secret-free; private node linking is separate.
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            ACTUAL_TARGET="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .target_commitish)"
+            test "$ACTUAL_TARGET" = "$GITHUB_SHA" || {
+              echo "Existing exact-SHA release target mismatch: $ACTUAL_TARGET" >&2
+              exit 1
+            }
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Router VPN exact SHA ${GITHUB_SHA}" \
+              --notes-file dist/exact-sha-release-notes.md \
+              --prerelease
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Router VPN exact SHA ${GITHUB_SHA}" \
+              --notes-file dist/exact-sha-release-notes.md \
+              --prerelease
+          fi
+          mapfile -d '' ASSETS < <(find dist/exact-sha-release -maxdepth 1 -type f -print0 | sort -z)
+          test "${#ASSETS[@]}" -eq 12
+          gh release upload "$TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Verify release target, tag and uploaded asset digests
+        run: |
+          set -euo pipefail
+          TAG="router-vpn-sha-${GITHUB_SHA}"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > dist/exact-sha-release-api.json
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" > dist/exact-sha-tag-api.json
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+
+          sha = os.environ["GITHUB_SHA"]
+          tag = "router-vpn-sha-" + sha
+          root = Path("dist/exact-sha-release")
+          release = json.loads(Path("dist/exact-sha-release-api.json").read_text())
+          ref = json.loads(Path("dist/exact-sha-tag-api.json").read_text())
+          assert release["tag_name"] == tag, release
+          assert release["target_commitish"] == sha, release
+          assert release["draft"] is False, release
+          assert ref["object"]["type"] == "commit" and ref["object"]["sha"] == sha, ref
+          expected = {path.name: path for path in root.iterdir() if path.is_file()}
+          actual = {item["name"]: item for item in release.get("assets", [])}
+          assert set(actual) == set(expected), (sorted(actual), sorted(expected))
+          for name, path in expected.items():
+              item = actual[name]
+              digest = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+              assert int(item["size"]) == path.stat().st_size, (name, item)
+              assert item.get("digest") == digest, (name, item.get("digest"), digest)
+          print("exact-SHA GitHub Release assets verified", tag)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-exact-sha-release-${{ github.sha }}
+          path: |
+            dist/exact-sha-release/**
+            dist/exact-sha-release-api.json
+            dist/exact-sha-tag-api.json
+          if-no-files-found: error
+          retention-days: 30
