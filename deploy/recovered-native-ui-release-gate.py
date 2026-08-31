@@ -10,15 +10,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy"
 
+# Ordered from focused semantic/unit contracts into platform composition and
+# shared state-ownership contracts. Every gate runs even after an earlier one
+# fails so the final report contains the complete exact-head blocker set.
 GATES = (
     "recovered-native-ui-contract-test.py",
     "recovered-native-ui-contract-audit.py",
+    "recovered-map-first-ui-contract-audit-test.py",
+    "recovered-map-first-ui-contract-audit.py",
+    "native-map-first-ui-audit.py",
+    "setup-center-responsive-ui-audit.py",
     "native-session-mutation-audit.py",
     "windows-session-mutation-audit.py",
     "macos-session-mutation-audit.py",
     "linux-session-mutation-audit.py",
     "android-session-mutation-audit.py",
     "ios-session-mutation-audit.py",
+    "endpoint-sync-ownership-audit.py",
     "product-parity-audit.py",
     "profile-settings-audit.py",
     "backend-session-transaction-audit.py",
