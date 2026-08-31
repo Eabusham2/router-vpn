@@ -582,6 +582,7 @@ private struct IOSUnifiedSettingsView: View {
     @ObservedObject var telemetry: IOSUnifiedTelemetry
     @State private var showingAdvanced = false
     @State private var showingPerformance = false
+    @State private var showingProfiles = false
     @State private var requireEncrypted = false
     @State private var requireObfuscation = false
 
@@ -611,6 +612,12 @@ private struct IOSUnifiedSettingsView: View {
                         LabeledContent("Last Auto-MTU path throughput", value: String(format: "%.1f Mbps", mbps))
                     }
                 }
+                Section("Connection Profiles") {
+                    Button("Add / Load / Update / Delete…") { showingProfiles = true }
+                        .disabled(model.profileMutationBlocked)
+                    Text("Profiles save the selected node and supported non-secret Mode/CUSTOM, DNS, kill-switch, IPv6, LAN, base/fallback, AUTO-requirement, MTU and startup choices. Private keys, tokens and external credentials remain only in the linked node store.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Platform truth") {
                     Text("DAITA-like traffic padding, Jumbo TUN, arbitrary tunnel port forwarding and full multihop are shown only when this Apple PacketTunnel/runtime can actually enforce them. Current unsupported paths stay unavailable instead of becoming cosmetic toggles.").font(.caption).foregroundStyle(.secondary)
                     Button("DNS details / Retest…") { dismiss(); DispatchQueue.main.async { model.message = "Open DNS from the main control sheet for resolver policy and real DNS-query RTT." } }
@@ -623,6 +630,7 @@ private struct IOSUnifiedSettingsView: View {
             .onChange(of: requireObfuscation) { value in model.setUnifiedRequirement("obfuscation", enabled: value) }
             .sheet(isPresented: $showingAdvanced) { IOSProfileSettingsView().environmentObject(model) }
             .sheet(isPresented: $showingPerformance) { IOSUnifiedPerformanceView(telemetry: telemetry).environmentObject(model) }
+            .sheet(isPresented: $showingProfiles) { IOSConnectionProfilesView().environmentObject(model) }
         }
     }
     private func saveRequirements() { guard !model.profileMutationBlocked else { return }; model.setUnifiedRequirement("encrypted", enabled: requireEncrypted); model.setUnifiedRequirement("obfuscation", enabled: requireObfuscation) }
@@ -670,4 +678,4 @@ private struct IOSUnifiedPerformanceView: View {
     private func runAll() { busy = true; Task { let values = await telemetry.measureAll(model.allNodeProfiles, samples: 5); output = values.isEmpty ? telemetry.lastError : values.map(\.detail).joined(separator: "\n"); busy = false } }
 }
 
-private let iosUnifiedUXContract = "map-first swipe-up Connect Disconnect fastest-node live RTT real path Mbps quick kill switch forwarding shortcut Multihop Settings Performance Mode DNS SMART AUTO default AUTO all presets CUSTOM builder saved delete Router node Custom external color-coded hops real coordinates node ms animated packet path IPv6 On Auto MTU Require encrypted Require obfuscation schema-v4 profile-shared requirements"
+private let iosUnifiedUXContract = "map-first swipe-up Connect Disconnect fastest-node live RTT real path Mbps quick kill switch forwarding shortcut Multihop Settings Performance Mode DNS SMART AUTO default AUTO all presets CUSTOM builder saved delete Router node Custom external color-coded hops real coordinates node ms animated packet path IPv6 On Auto MTU Require encrypted Require obfuscation schema-v4 profile-shared requirements Connection Profiles Add Load Update Delete real opt-in user location"
