@@ -1,0 +1,62 @@
+name: Recovered map-first UI gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "client/**"
+      - "cmd/client/**"
+      - "deploy/*map-first*"
+      - "deploy/*session-mutation*"
+      - "deploy/product-parity-audit.py"
+      - "deploy/profile-settings-audit.py"
+      - ".github/workflows/recovered-map-first-ui-gate.yml"
+  pull_request:
+    paths:
+      - "client/**"
+      - "cmd/client/**"
+      - "deploy/*map-first*"
+      - "deploy/*session-mutation*"
+      - "deploy/product-parity-audit.py"
+      - "deploy/profile-settings-audit.py"
+      - ".github/workflows/recovered-map-first-ui-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recovered-map-first-ui-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recovered-map-first-ui:
+    name: Exact-head native UI source/shipping contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Prove checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git status --porcelain)" = ""
+
+      - name: Run recovered map-first UI release gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/recovered-map-first-ui-release-gate.py
+
+      - name: Reject generated repository drift
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test "$(git status --porcelain)" = ""
