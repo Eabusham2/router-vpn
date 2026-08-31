@@ -38,7 +38,7 @@ require(
     'profile.get("id")',
     '"home"',
     'profile.get("node_kind")',
-    '"Router-vpn"',
+    '"router-vpn"',
     'multiple owned home Router VPN profiles',
     'stage_private',
     'os.fchmod(fd, PRIVATE_MODE)',
