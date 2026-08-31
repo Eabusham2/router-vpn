@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "client/**"
+      - "android/**"
+      - "ios/RouterVPN/**"
       - "cmd/client/**"
       - "deploy/*map-first*"
       - "deploy/*session-mutation*"
@@ -14,6 +16,8 @@ on:
   pull_request:
     paths:
       - "client/**"
+      - "android/**"
+      - "ios/RouterVPN/**"
       - "cmd/client/**"
       - "deploy/*map-first*"
       - "deploy/*session-mutation*"
