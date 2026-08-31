@@ -48,7 +48,7 @@ extension ProductWindowController {
         fast.controlSize = .small
         fast.target = self
         fast.action = #selector(unifiedFastConnectChanged(_:))
-        fast.toolTip = "Test and connect the fastest Router VPN node, or choose a node directly."
+        fast.toolTip = "Select the fastest measured Router VPN node or choose a specific node. Use Connect separately."
         telemetryFastPopup = fast
         connectRow.insertArrangedSubview(fast, at: min(1, connectRow.arrangedSubviews.count))
 
@@ -115,6 +115,7 @@ extension ProductWindowController {
                 popup.removeAllItems()
                 popup.addItem(withTitle: "⚡ Fastest")
                 popup.lastItem?.representedObject = "fastest"
+                var selectedIndex = 0
                 for p in routers {
                     let id = p["id"] as? String ?? ""; guard !id.isEmpty else { continue }
                     let name = p["name"] as? String ?? id
@@ -122,17 +123,17 @@ extension ProductWindowController {
                     let label = ms > 0 ? String(format: "%@  %.1f ms", name, ms) : name
                     popup.addItem(withTitle: label)
                     popup.lastItem?.representedObject = id
-                    if id == selected { popup.lastItem?.state = .on }
+                    if id == selected { selectedIndex = popup.numberOfItems - 1 }
                 }
-                popup.selectItem(at: 0)
+                popup.selectItem(at: selectedIndex)
             }
         }
     }
 
     @objc private func unifiedFastConnectChanged(_ sender: NSPopUpButton) {
         let id = sender.selectedItem?.representedObject as? String ?? "fastest"
-        sender.selectItem(at: 0)
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        sender.isEnabled = false
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak sender] in
             guard let self else { return }
             do {
                 if id == "fastest" {
@@ -141,10 +142,17 @@ extension ProductWindowController {
                     _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": id], timeout: 8)
                 }
                 DispatchQueue.main.async {
+                    sender?.isEnabled = true
                     self.refreshAll(); self.refreshUnifiedChrome(); self.refreshUnifiedFastNodeMenu()
-                    self.connectUnified()
+                    self.errorLabel.stringValue = id == "fastest" ? "Selected the fastest measured Router VPN node. Press Connect when ready." : "Selected Router VPN node. Press Connect when ready."
                 }
-            } catch { DispatchQueue.main.async { self.errorLabel.stringValue = "Fast connect failed: \(error.localizedDescription)" } }
+            } catch {
+                DispatchQueue.main.async {
+                    sender?.isEnabled = true
+                    self.refreshUnifiedFastNodeMenu()
+                    self.errorLabel.stringValue = "Node selection failed: \(error.localizedDescription)"
+                }
+            }
         }
     }
 
