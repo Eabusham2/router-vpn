@@ -55,6 +55,8 @@ class DownloadJobManager:
 
     @staticmethod
     def _remaining(job: dict, now: float | None = None) -> int:
+        if str(job.get("status") or "") in CLEAN_TERMINAL | {"cleaning", "cleanup-pending"}:
+            return 0
         deadline = float(job.get("retention_deadline_epoch") or 0)
         if deadline <= 0:
             return PACKAGE_RETENTION_SECONDS
@@ -348,6 +350,9 @@ class DownloadJobManager:
                 elif status in RETAINED:
                     deadline = float(job.get("retention_deadline_epoch") or 0)
                     if deadline > 0 and current >= deadline:
+                        # Claim the job under the lock so a repeat download cannot
+                        # begin between expiry selection and owned cleanup.
+                        job.update(status="cleaning", phase="cleanup", progress=100)
                         doomed.append((job_id, str(job.get("work_dir") or ""),
                             "expired", "expired", "expired",
                             "temporary package and build workspace deleted after 30 minutes"))
