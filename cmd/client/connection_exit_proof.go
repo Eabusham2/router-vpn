@@ -14,6 +14,16 @@ import (
 
 var publicExitProofProviders = []string{"https://api64.ipify.org", "https://api.ipify.org"}
 
+func stopTimerWithoutBlocking(timer *time.Timer) {
+	if timer == nil || timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
+	}
+}
+
 func proveExpectedPublicExit(ctx context.Context, client *http.Client, providers []string, expected, label string, window time.Duration) error {
 	expectedIP := net.ParseIP(strings.TrimSpace(expected))
 	if expectedIP == nil {
@@ -86,9 +96,7 @@ func proveExpectedPublicExit(ctx context.Context, client *http.Client, providers
 		timer := time.NewTimer(250 * time.Millisecond)
 		select {
 		case <-proofCtx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+			stopTimerWithoutBlocking(timer)
 			if ctx.Err() != nil {
 				return fmt.Errorf("%s proof cancelled: %w", label, ctx.Err())
 			}
