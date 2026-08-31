@@ -1,0 +1,59 @@
+name: Router VPN recovered requirements closure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: requirements-closure-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Compile and test Go source
+        run: go test ./...
+      - name: Prove recovered requirements and corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/recovered-requirements-1-264-audit.py
+          python3 deploy/recovered-requirements-265-311-audit.py
+          python3 deploy/recovered-addendum-312-356-audit.py
+          python3 deploy/recovered-corrections-audit.py
+      - name: Prove transaction and native-session safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/backend-session-transaction-audit.py
+          python3 deploy/durable-state-transaction-audit.py
+          python3 deploy/native-session-mutation-audit.py
+          python3 deploy/profile-settings-audit.py
+      - name: Prove product, shipping, and household safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/product-parity-audit.py
+          python3 deploy/full-audit-v4.py
+          python3 deploy/router-acceleration-safety-audit.py
+          python3 deploy/source-snapshot-durability-audit.py
+      - name: Prove repository and release orchestration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/validate-repo.py
+          python3 deploy/release-orchestration-audit.py
+          git diff --check
