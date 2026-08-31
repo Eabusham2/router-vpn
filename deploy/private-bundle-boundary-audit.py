@@ -121,11 +121,20 @@ for marker in (
     "cleanup_owned_temp(path)",
 ):
     assert marker in broker, f"download broker lost owned request/stale-temp marker: {marker}"
+# Download jobs intentionally route every cleanup request through _cleanup_dir so
+# cleanup failures can become cleanup-pending and be retried without losing the
+# job's retained-package state. The wrapper converts the stored string to Path
+# once, invokes the shared ownership verifier, and reports whether deletion was
+# actually completed.
 for marker in (
     'create_owned_temp("router-vpn-job-")',
-    "cleanup_owned_temp(Path(path))",
+    "def _cleanup_dir(self, value: str) -> bool:",
+    "path = Path(value)",
+    "cleanup_owned_temp(path)",
+    "return not path.exists()",
+    "removed = self._cleanup_dir(work)",
 ):
-    assert marker in download_jobs, f"download jobs lost owned temp marker: {marker}"
+    assert marker in download_jobs, f"download jobs lost owned/retryable temp cleanup marker: {marker}"
 for marker in (
     'create_owned_temp("router-vpn-one-package-")',
     "cleanup_owned_temp(work)",
