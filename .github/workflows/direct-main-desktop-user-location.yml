@@ -1,0 +1,336 @@
+name: Direct main desktop user location
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-desktop-user-location.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: direct-main-desktop-user-location
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Implement real permission-based desktop location markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+
+          cat > client/RouterVPN-Windows-Location.ps1 <<'PS1'
+          Set-StrictMode -Version Latest
+
+          function Await-RouterVPNWinRT {
+              param([Parameter(Mandatory)]$Operation,[Parameter(Mandatory)][Type]$ResultType)
+              Add-Type -AssemblyName System.Runtime.WindowsRuntime
+              $method=[System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+                  $_.Name -eq 'AsTask' -and $_.IsGenericMethod -and $_.GetParameters().Count -eq 1
+              } | Select-Object -First 1
+              if(-not $method){throw 'Windows Runtime task adapter is unavailable.'}
+              $task=$method.MakeGenericMethod($ResultType).Invoke($null,@($Operation))
+              $task.GetAwaiter().GetResult()
+          }
+
+          function Get-RouterVPNWindowsUserLocation {
+              [CmdletBinding()]
+              param()
+              [void][Windows.Devices.Geolocation.Geolocator,Windows.Devices.Geolocation,ContentType=WindowsRuntime]
+              [void][Windows.Devices.Geolocation.GeolocationAccessStatus,Windows.Devices.Geolocation,ContentType=WindowsRuntime]
+              $access=Await-RouterVPNWinRT -Operation ([Windows.Devices.Geolocation.Geolocator]::RequestAccessAsync()) -ResultType ([Windows.Devices.Geolocation.GeolocationAccessStatus])
+              if($access -ne [Windows.Devices.Geolocation.GeolocationAccessStatus]::Allowed){throw 'Windows location permission was not granted.'}
+              $locator=[Windows.Devices.Geolocation.Geolocator]::new()
+              $locator.DesiredAccuracy=[Windows.Devices.Geolocation.PositionAccuracy]::Default
+              $position=Await-RouterVPNWinRT -Operation ($locator.GetGeopositionAsync()) -ResultType ([Windows.Devices.Geolocation.Geoposition])
+              $point=$position.Coordinate.Point.Position
+              $age=[DateTimeOffset]::UtcNow-$position.Coordinate.Timestamp
+              if($age.TotalMinutes -gt 5){throw 'Windows returned a stale location fix.'}
+              if([Math]::Abs([double]$point.Latitude)-gt 90 -or [Math]::Abs([double]$point.Longitude)-gt 180){throw 'Windows returned an invalid location fix.'}
+              [pscustomobject]@{Latitude=[double]$point.Latitude;Longitude=[double]$point.Longitude;AccuracyMeters=[double]$position.Coordinate.Accuracy;Source='Windows Geolocator permission';CapturedAt=[DateTimeOffset]::UtcNow}
+          }
+
+          function Set-RouterVPNWindowsUserLocationMarker {
+              [CmdletBinding()]
+              param([Parameter(Mandatory)]$Window,[Parameter(Mandatory)]$Location)
+              Add-Type -AssemblyName PresentationFramework,PresentationCore
+              $canvas=$null
+              foreach($name in @('UnifiedMapCanvas','UnifiedGlobeCanvas','MapCanvas','GlobeCanvas')){
+                  try{$candidate=$Window.FindName($name)}catch{$candidate=$null}
+                  if($candidate -is [System.Windows.Controls.Canvas]){$canvas=$candidate;break}
+              }
+              if(-not $canvas){throw 'The shipping map canvas is unavailable.'}
+              foreach($child in @($canvas.Children)){
+                  if([string]$child.Tag -eq 'routervpn-user-location'){$canvas.Children.Remove($child)}
+              }
+              $width=[Math]::Max(1.0,$canvas.ActualWidth);$height=[Math]::Max(1.0,$canvas.ActualHeight)
+              $x=(([double]$Location.Longitude+180.0)/360.0)*$width
+              $y=((90.0-[double]$Location.Latitude)/180.0)*$height
+              $dot=[System.Windows.Shapes.Ellipse]::new();$dot.Width=16;$dot.Height=16;$dot.Tag='routervpn-user-location'
+              $dot.Fill=[System.Windows.Media.Brushes]::LimeGreen;$dot.Stroke=[System.Windows.Media.Brushes]::White;$dot.StrokeThickness=2
+              [System.Windows.Controls.Canvas]::SetLeft($dot,$x-8);[System.Windows.Controls.Canvas]::SetTop($dot,$y-8);$canvas.Children.Add($dot)|Out-Null
+              $label=[System.Windows.Controls.TextBlock]::new();$label.Text='YOU';$label.Tag='routervpn-user-location';$label.Foreground=[System.Windows.Media.Brushes]::White;$label.FontWeight='Bold';$label.FontSize=10
+              [System.Windows.Controls.Canvas]::SetLeft($label,$x+10);[System.Windows.Controls.Canvas]::SetTop($label,$y-8);$canvas.Children.Add($label)|Out-Null
+          }
+          PS1
+
+          cat > client/macos/RouterVPNMacUserLocation.swift <<'SWIFT'
+          import AppKit
+          import CoreLocation
+          import MapKit
+
+          @MainActor
+          final class RouterVPNMacUserLocationController: NSObject, CLLocationManagerDelegate {
+              private let manager = CLLocationManager()
+              private weak var mapView: MKMapView?
+              private weak var presentingView: NSView?
+              private var marker: MKPointAnnotation?
+              private var requested = false
+
+              override init() {
+                  super.init()
+                  manager.delegate = self
+                  manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+              }
+
+              func request(on mapView: MKMapView, presentingView: NSView) {
+                  self.mapView = mapView; self.presentingView = presentingView; requested = true
+                  switch manager.authorizationStatus {
+                  case .notDetermined: manager.requestWhenInUseAuthorization()
+                  case .authorized, .authorizedAlways: manager.requestLocation()
+                  case .denied, .restricted: show("macOS location permission is disabled. No user marker was created.")
+                  @unknown default: show("macOS location permission state is unavailable.")
+                  }
+              }
+
+              func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+                  guard requested else { return }
+                  if manager.authorizationStatus == .authorized || manager.authorizationStatus == .authorizedAlways { manager.requestLocation() }
+                  else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted { show("macOS location permission was not granted. No user marker was created.") }
+              }
+
+              func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+                  guard let location = locations.last,
+                        location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 10_000,
+                        abs(location.timestamp.timeIntervalSinceNow) <= 300,
+                        (-90...90).contains(location.coordinate.latitude), (-180...180).contains(location.coordinate.longitude) else {
+                      show("macOS did not return a fresh usable location fix."); return
+                  }
+                  guard let mapView else { return }
+                  if let marker { mapView.removeAnnotation(marker) }
+                  let point = MKPointAnnotation(); point.coordinate = location.coordinate; point.title = "YOU"; point.subtitle = "Permission-approved macOS location"
+                  marker = point; mapView.addAnnotation(point); mapView.showAnnotations(mapView.annotations, animated: true)
+              }
+
+              func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { show("Location unavailable: \(error.localizedDescription)") }
+
+              private func show(_ message: String) {
+                  guard let presentingView else { return }
+                  let alert = NSAlert(); alert.messageText = "LOCATE ME"; alert.informativeText = message; alert.addButton(withTitle: "OK")
+                  alert.beginSheetModal(for: presentingView.window ?? NSWindow())
+              }
+          }
+          SWIFT
+
+          cat > client/linux/routervpn-user-location-v1.inc <<'C'
+          #ifndef ROUTERVPN_USER_LOCATION_V1_INC
+          #define ROUTERVPN_USER_LOCATION_V1_INC
+          #include <glib.h>
+          #include <gtk/gtk.h>
+          #include <math.h>
+
+          static gboolean routervpn_user_location_valid_v1 = FALSE;
+          static gdouble routervpn_user_latitude_v1 = 0.0;
+          static gdouble routervpn_user_longitude_v1 = 0.0;
+          static GtkWidget *routervpn_user_location_map_v1 = NULL;
+
+          static gboolean routervpn_parse_location_line_v1(const gchar *text, const gchar *label, gdouble *out) {
+              const gchar *start = g_strstr_len(text, -1, label); if (!start) return FALSE;
+              start += strlen(label); while (*start && !(g_ascii_isdigit(*start) || *start=='-' || *start=='+')) start++;
+              gchar *end = NULL; gdouble value = g_ascii_strtod(start, &end); if (end == start || !isfinite(value)) return FALSE;
+              *out = value; return TRUE;
+          }
+
+          static void routervpn_locate_user_v1(GtkWidget *map, GtkWindow *parent) {
+              gchar *program = g_find_program_in_path("where-am-i");
+              if (!program) program = g_find_program_in_path("geoclue-where-am-i");
+              if (!program) {
+                  GtkWidget *dialog = gtk_message_dialog_new(parent, GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE,
+                      "GeoClue's permission-aware location client is unavailable. No IP-derived location is used.");
+                  gtk_dialog_run(GTK_DIALOG(dialog)); gtk_widget_destroy(dialog); return;
+              }
+              gchar *quoted = g_shell_quote(program); gchar *command = g_strdup_printf("%s -t 10", quoted); gchar *output=NULL,*error=NULL; gint status=0; GError *spawn_error=NULL;
+              gboolean ok = g_spawn_command_line_sync(command,&output,&error,&status,&spawn_error);
+              g_free(quoted);g_free(command);g_free(program);
+              gdouble lat=0.0,lon=0.0;
+              gboolean parsed = ok && status==0 && output &&
+                  (routervpn_parse_location_line_v1(output,"Latitude",&lat) || routervpn_parse_location_line_v1(output,"latitude",&lat)) &&
+                  (routervpn_parse_location_line_v1(output,"Longitude",&lon) || routervpn_parse_location_line_v1(output,"longitude",&lon));
+              if (parsed && lat>=-90.0 && lat<=90.0 && lon>=-180.0 && lon<=180.0) {
+                  routervpn_user_latitude_v1=lat;routervpn_user_longitude_v1=lon;routervpn_user_location_valid_v1=TRUE;routervpn_user_location_map_v1=map;
+                  if(map) gtk_widget_queue_draw(map);
+              } else {
+                  const gchar *message=spawn_error?spawn_error->message:(error&&*error?error:"GeoClue did not return a usable permission-approved location fix.");
+                  GtkWidget *dialog=gtk_message_dialog_new(parent,GTK_DIALOG_MODAL,GTK_MESSAGE_INFO,GTK_BUTTONS_CLOSE,"%s",message);gtk_dialog_run(GTK_DIALOG(dialog));gtk_widget_destroy(dialog);
+              }
+              if(spawn_error)g_error_free(spawn_error);g_free(output);g_free(error);
+          }
+
+          static void routervpn_draw_user_location_v1(cairo_t *cr, gdouble width, gdouble height) {
+              if(!routervpn_user_location_valid_v1||!cr||width<=1||height<=1)return;
+              gdouble x=((routervpn_user_longitude_v1+180.0)/360.0)*width;
+              gdouble y=((90.0-routervpn_user_latitude_v1)/180.0)*height;
+              cairo_save(cr);cairo_set_source_rgb(cr,0.2,0.95,0.35);cairo_arc(cr,x,y,7,0,2*G_PI);cairo_fill_preserve(cr);cairo_set_source_rgb(cr,1,1,1);cairo_set_line_width(cr,2);cairo_stroke(cr);cairo_move_to(cr,x+10,y+4);cairo_show_text(cr,"YOU");cairo_restore(cr);
+          }
+          #endif
+          C
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root=Path('.')
+
+          # Windows: load helper, add LOCATE ME button, and draw on the actual
+          # WPF map Canvas using permission-approved Windows Geolocator output.
+          launcher=root/'client/RouterVPN-Windows-App.ps1'; text=launcher.read_text(encoding='utf-8')
+          if 'RouterVPN-Windows-Location.ps1' not in text:
+              anchor='. $RouterVPNUnifiedControlCenterModule\n'
+              if anchor not in text: raise SystemExit('Windows unified module load anchor drifted')
+              block="$RouterVPNLocationModule = Join-Path $PSScriptRoot 'RouterVPN-Windows-Location.ps1'\nif (Test-Path -LiteralPath $RouterVPNLocationModule -PathType Leaf) { . $RouterVPNLocationModule }\n"
+              text=text.replace(anchor,anchor+block,1);launcher.write_text(text,encoding='utf-8')
+          shell=root/'client/RouterVPN-Windows-UnifiedShell.ps1'; text=shell.read_text(encoding='utf-8')
+          if 'UnifiedLocateButton' not in text:
+              match=re.search(r'<Button\s+Name="UnifiedNodesButton"[^>]*/>',text)
+              if not match: raise SystemExit('Windows Nodes button XAML anchor drifted')
+              locate='<Button Name="UnifiedLocateButton" Content="LOCATE ME" Margin="8,0,0,0" Padding="10,5" ToolTip="Use permission-approved Windows location; no IP-derived fallback"/>'
+              text=text[:match.end()]+locate+text[match.end():]
+              show=text.rfind('.ShowDialog(')
+              if show<0: show=text.rfind('ShowDialog()')
+              if show<0: raise SystemExit('Windows window show anchor drifted')
+              line_start=text.rfind('\n',0,show)+1
+              handler='''$UnifiedLocateButton = $Window.FindName('UnifiedLocateButton')\nif ($UnifiedLocateButton) {\n    $UnifiedLocateButton.Add_Click({\n        try {\n            $location = Get-RouterVPNWindowsUserLocation\n            Set-RouterVPNWindowsUserLocationMarker -Window $Window -Location $location\n        } catch { [System.Windows.MessageBox]::Show($_.Exception.Message,'LOCATE ME') | Out-Null }\n    })\n}\n'''
+              text=text[:line_start]+handler+text[line_start:]
+              shell.write_text(text,encoding='utf-8')
+
+          # macOS: compile helper, add button next to node management, and pass
+          # the real MKMapView into the permission-aware location controller.
+          builder=root/'client/macos/build-native-app.sh'; text=builder.read_text(encoding='utf-8')
+          if 'RouterVPNMacUserLocation.swift' not in text:
+              if 'UnifiedControlCenterPolicy.swift' not in text: raise SystemExit('macOS policy source anchor drifted')
+              text=text.replace('UnifiedControlCenterPolicy.swift','UnifiedControlCenterPolicy.swift RouterVPNMacUserLocation.swift',1);builder.write_text(text,encoding='utf-8')
+          mac=root/'client/macos/RouterVPNMacUnifiedShell.swift'; text=mac.read_text(encoding='utf-8')
+          if 'routerVPNUserLocationController' not in text:
+              imports=list(re.finditer(r'(?m)^import [^\n]+\n',text));pos=imports[-1].end()
+              text=text[:pos]+'\nprivate let routerVPNUserLocationController = RouterVPNMacUserLocationController()\n'+text[pos:]
+              button=re.search(r'let\s+manageNode\s*=\s*NSButton\([^\n]+',text)
+              if not button: raise SystemExit('macOS node button anchor drifted')
+              addition='\n        let locateMe = NSButton(title: "LOCATE ME", target: self, action: #selector(locateUnifiedUser))\n        locateMe.toolTip = "Use permission-approved macOS location; no IP-derived fallback"'
+              text=text[:button.end()]+addition+text[button.end():]
+              # Add button to the same arranged-subviews list containing manageNode.
+              lists=list(re.finditer(r'\[[^\]]*manageNode[^\]]*\]',text,re.S))
+              if not lists: raise SystemExit('macOS node controls stack anchor drifted')
+              m=lists[0]; value=m.group(0)
+              if 'locateMe' not in value: value=value[:-1]+', locateMe]'
+              text=text[:m.start()]+value+text[m.end():]
+              method_anchor='@objc func openUnifiedNodes'
+              index=text.find(method_anchor)
+              if index<0: raise SystemExit('macOS open nodes action anchor drifted')
+              method='''@objc private func locateUnifiedUser() {\n        routerVPNUserLocationController.request(on: mapView, presentingView: view)\n    }\n\n    '''
+              text=text[:index]+method+text[index:]
+              mac.write_text(text,encoding='utf-8')
+
+          # Linux: include helper, add a real GeoClue-only button, and draw its
+          # marker at the end of the Cairo map renderer.
+          linux=root/'client/linux/routervpn-unified-shell-v8.inc'; text=linux.read_text(encoding='utf-8')
+          if '#include "routervpn-user-location-v1.inc"' not in text:
+              text='#include "routervpn-user-location-v1.inc"\n'+text
+          if 'linux_unified_locate_user_v8' not in text:
+              callback='''\nstatic void linux_unified_locate_user_v8(GtkButton *button, gpointer user_data) {\n    (void)button;\n    GtkWidget *map = routervpn_user_location_map_v1;\n    GtkWindow *parent = NULL;\n    if (GTK_IS_WIDGET(user_data)) parent = GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(user_data)));\n    routervpn_locate_user_v1(map, parent);\n}\n'''
+              # Insert before first v8 UI function.
+              match=re.search(r'(?m)^(?:static\s+)?(?:void|GtkWidget\s*\*|gboolean|int)\s+[A-Za-z0-9_]*unified[A-Za-z0-9_]*v8',text)
+              if not match: raise SystemExit('Linux unified callback anchor drifted')
+              text=text[:match.start()]+callback+'\n'+text[match.start():]
+              button_anchor='make_button("Add / manage nodes"'
+              index=text.find(button_anchor)
+              if index<0: button_anchor='make_button("Nodes"'; index=text.find(button_anchor)
+              if index<0: raise SystemExit('Linux node button anchor drifted')
+              line_end=text.find('\n',index)
+              line=text[index:line_end]
+              indent=' '*(len(line)-len(line.lstrip()))
+              text=text[:line_end+1]+indent+'make_button("LOCATE ME",G_CALLBACK(linux_unified_locate_user_v8),state);\n'+text[line_end+1:]
+          # Add marker call to a Cairo map callback with width/height variables.
+          if 'routervpn_draw_user_location_v1(cr' not in text:
+              candidates=list(re.finditer(r'(?s)(?:static\s+)?gboolean\s+[A-Za-z0-9_]*(?:map|globe)[A-Za-z0-9_]*\s*\([^)]*\)\s*\{.*?\n\}',text,re.I))
+              target=next((m for m in candidates if 'cairo_t *cr' in m.group(0) or 'cairo_create' in m.group(0)),None)
+              if not target: raise SystemExit('Linux Cairo map renderer anchor drifted')
+              body=target.group(0); close=body.rfind('\n}')
+              # derive common width/height identifiers used by existing renderer
+              width='width' if re.search(r'\bwidth\b',body) else ('w' if re.search(r'\bw\b',body) else None)
+              height='height' if re.search(r'\bheight\b',body) else ('h' if re.search(r'\bh\b',body) else None)
+              if not width or not height: raise SystemExit('Linux Cairo renderer width/height variables not found')
+              body=body[:close]+f'\n    routervpn_user_location_map_v1 = widget;\n    routervpn_draw_user_location_v1(cr, {width}, {height});'+body[close:]
+              text=text[:target.start()]+body+text[target.end():]
+          linux.write_text(text,encoding='utf-8')
+          builder=root/'client/linux/build-native-app.sh'; source=builder.read_text(encoding='utf-8')
+          if 'routervpn-user-location-v1.inc' not in source:
+              anchor='UNIFIED_CONTROL_CENTER_V2='
+              index=source.find(anchor)
+              if index<0: raise SystemExit('Linux unified include builder anchor drifted')
+              line_end=source.find('\n',index)
+              source=source[:line_end+1]+'USER_LOCATION_V1="$SCRIPT_DIR/routervpn-user-location-v1.inc"\n[ -f "$USER_LOCATION_V1" ] || { echo "missing user-location include" >&2; exit 1; }\n'+source[line_end+1:]
+              builder.write_text(source,encoding='utf-8')
+
+          audit=root/'deploy/real-user-location-audit.py'
+          audit.write_text(r'''#!/usr/bin/env python3
+          from pathlib import Path
+          ROOT=Path(__file__).resolve().parents[1];errors=[]
+          def need(path,*markers):
+              p=ROOT/path
+              if not p.is_file():errors.append(f"missing {path}");return
+              text=p.read_text(encoding="utf-8",errors="replace")
+              for marker in markers:
+                  if marker not in text:errors.append(f"{path}: missing {marker!r}")
+          need("client/RouterVPN-Windows-Location.ps1","RequestAccessAsync","GetGeopositionAsync","routervpn-user-location","YOU")
+          need("client/RouterVPN-Windows-UnifiedShell.ps1","UnifiedLocateButton","Get-RouterVPNWindowsUserLocation","Set-RouterVPNWindowsUserLocationMarker")
+          need("client/macos/RouterVPNMacUserLocation.swift","requestWhenInUseAuthorization","requestLocation()","Permission-approved macOS location","YOU")
+          need("client/macos/RouterVPNMacUnifiedShell.swift","LOCATE ME","locateUnifiedUser","routerVPNUserLocationController")
+          need("client/linux/routervpn-user-location-v1.inc","where-am-i","No IP-derived location","routervpn_draw_user_location_v1","YOU")
+          need("client/linux/routervpn-unified-shell-v8.inc","LOCATE ME","linux_unified_locate_user_v8","routervpn_draw_user_location_v1")
+          need("android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java","location")
+          need("ios/RouterVPN/App/IOSUserLocationControl.swift","CLLocation")
+          all_text="\n".join((ROOT/p).read_text(encoding="utf-8",errors="replace") for p in ["client/RouterVPN-Windows-Location.ps1","client/macos/RouterVPNMacUserLocation.swift","client/linux/routervpn-user-location-v1.inc"])
+          for bad in ("ipinfo","ip-api","geolocation-db","maxmind"):
+              if bad in all_text.lower():errors.append(f"desktop user location contains IP-derived provider {bad}")
+          if errors:
+              print("REAL USER LOCATION AUDIT: FAIL")
+              for e in errors:print(" - "+e)
+              raise SystemExit(1)
+          print("REAL USER LOCATION AUDIT: PASS")
+          ''',encoding='utf-8')
+          shipping=root/'deploy/unified-map-shipping-audit.py';source=shipping.read_text(encoding='utf-8')
+          if 'real-user-location-audit.py' not in source:
+              anchor='print("UNIFIED MAP SHIPPING AUDIT: PASS")'
+              if anchor not in source:raise SystemExit('unified shipping audit anchor drifted')
+              source=source.replace(anchor,'subprocess.run([sys.executable, str(ROOT/"deploy/real-user-location-audit.py")], check=True)\n'+anchor,1);shipping.write_text(source,encoding='utf-8')
+          PY
+
+          chmod +x client/RouterVPN-Windows-Location.ps1 deploy/real-user-location-audit.py
+          python3 -m py_compile deploy/real-user-location-audit.py
+          python3 deploy/real-user-location-audit.py
+          python3 deploy/unified-map-shipping-audit.py
+          git diff --check
+          git add client deploy
+          git rm .github/workflows/direct-main-desktop-user-location.yml
+          git commit -m "Add permission-based desktop user-location markers [skip ci]"
+          git push origin HEAD:main
