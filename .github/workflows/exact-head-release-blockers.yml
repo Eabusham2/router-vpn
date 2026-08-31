@@ -1,0 +1,33 @@
+name: Exact-head native release blockers
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-head-release-blockers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-head-release-blockers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Verify exact-head native release blocker regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/exact-head-release-blockers-audit.py
+      - name: Preserve source and orchestration contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/profile-schema-shipping-audit.py
+          python3 deploy/release-orchestration-audit.py
+          python3 deploy/durable-state-transaction-audit.py
