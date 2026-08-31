@@ -295,9 +295,18 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	setActiveMultihopGraph(a, sel)
 
-	if err := a.proveMultihopExit(sel.Exit); err != nil {
+	proofErr := a.proveMultihopExit(sel.Exit)
+	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
+		a.stopOwnedConnectionRuntime(cmd)
+		clearActiveMultihopGraph(a)
+		sessionTrackerFor(a).markRequestFailure(cancelErr.Error())
+		http.Error(w, cancelErr.Error(), http.StatusConflict)
+		return
+	}
+	if proofErr != nil {
 		_ = a.stopMode()
 		clearActiveMultihopGraph(a)
+		msg := "multihop exit proof failed: " + proofErr.Error()
 		a.mu.Lock()
 		a.state.Mode = "multihop"
 		a.state.LogicalMode = "multihop"
@@ -305,25 +314,19 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 		a.state.Base = sel.Base
 		a.state.RouterID = sel.Exit.ID
 		a.state.Phase = "failed"
-		a.state.LastError = "multihop exit proof failed: " + err.Error()
+		a.state.LastError = msg
 		a.state.Connected = false
 		a.mu.Unlock()
-		sessionTrackerFor(a).markRequestFailure("multihop exit proof failed: " + err.Error())
-		http.Error(w, "multihop exit proof failed: "+err.Error(), http.StatusBadGateway)
+		sessionTrackerFor(a).markRequestFailure(msg)
+		http.Error(w, msg, http.StatusBadGateway)
 		return
 	}
 
-	if err := a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		clearActiveMultihopGraph(a)
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
 	a.mu.Lock()
 	if a.cmd != cmd {
 		a.mu.Unlock()
 		clearActiveMultihopGraph(a)
+		sessionTrackerFor(a).markRequestFailure("multihop runtime changed during exit proof")
 		http.Error(w, "multihop runtime changed during exit proof", http.StatusConflict)
 		return
 	}
@@ -378,13 +381,14 @@ func (a *app) proveMultihopExit(exit common.RouterProfile) error {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyURL(proxyURL)
 	transport.ForceAttemptHTTP2 = false
+	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 1200 * time.Millisecond}
 	ctx := a.connectionOperationContextOrBackground()
 	var last error
 	deadline := time.Now().Add(9 * time.Second)
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
-			return errors.New("connection request was cancelled during multihop exit proof")
+			return errConnectionOperationCancelled
 		}
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, proofURL, nil)
 		if reqErr != nil {
@@ -407,13 +411,13 @@ func (a *app) proveMultihopExit(exit common.RouterProfile) error {
 			}
 		} else {
 			if ctx.Err() != nil {
-				return errors.New("connection request was cancelled during multihop exit proof")
+				return errConnectionOperationCancelled
 			}
 			last = requestErr
 		}
 		select {
 		case <-ctx.Done():
-			return errors.New("connection request was cancelled during multihop exit proof")
+			return errConnectionOperationCancelled
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
