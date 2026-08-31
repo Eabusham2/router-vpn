@@ -1,0 +1,83 @@
+name: Direct main current source report
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-current-source-report.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: direct-main-current-source-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Run, report, and close the source gate
+        shell: bash
+        run: |
+          set -u
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          report=.github/current-source-gate-failures.txt
+          : > "$report"
+          failed=0
+          names=()
+          run_check() {
+            name="$1"; shift
+            log="/tmp/${name}.log"
+            "$@" >"$log" 2>&1
+            rc=$?
+            if [[ $rc -ne 0 ]]; then
+              failed=1
+              names+=("$name")
+              {
+                echo "===== ${name} rc=${rc} ====="
+                tail -n 160 "$log"
+                echo
+              } >> "$report"
+            fi
+          }
+          run_check current-requirements python3 deploy/current-requirements-audit.py
+          run_check production-compose python3 deploy/test-production-release-compose.py
+          run_check source-provenance python3 deploy/test_source_provenance.py
+          run_check source-provenance-adoption python3 deploy/test_source_provenance_adoption_identity.py
+          run_check download-jobs python3 server/scripts/test_download_jobs.py
+          run_check download-retention python3 deploy/setup-center-download-retention-audit.py
+          run_check linux-session python3 deploy/linux-session-mutation-audit.py
+          run_check unified-map-shipping python3 deploy/unified-map-shipping-audit.py
+          run_check native-map python3 deploy/native-map-first-ui-audit.py
+          run_check product-parity python3 deploy/product-parity-audit.py
+          run_check profile-settings python3 deploy/profile-settings-audit.py
+          run_check native-session python3 deploy/native-session-mutation-audit.py
+          run_check durable-state python3 deploy/durable-state-transaction-audit.py
+          run_check validate-repo python3 deploy/validate-repo.py
+          run_check go-client go test ./cmd/client -count=1
+          run_check go-updater go test ./cmd/update-controller -count=1
+          run_check diff-check git diff --check
+          if [[ $failed -ne 0 ]]; then
+            git add "$report"
+            git commit -m "Record current source gate failures: ${names[*]} [skip ci]"
+            git push origin HEAD:main
+            exit 1
+          fi
+          rm -f "$report"
+          rm -f .github/workflows/direct-main-current-source-gate.yml
+          rm -f .github/workflows/direct-main-current-source-report.yml
+          git add -A
+          git commit -m 'Close reconciled current source gate [skip ci]'
+          git push origin HEAD:main
