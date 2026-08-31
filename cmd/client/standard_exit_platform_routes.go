@@ -195,9 +195,9 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 	}
 
 	if exit.Protocol == "openvpn" {
-		err = proveOpenVPNStandardExit(exit.ExpectedPublicIP)
+		err = a.proveOpenVPNStandardExitForOperation(exit.ExpectedPublicIP)
 	} else {
-		err = proveStandardExit(exit.ExpectedPublicIP)
+		err = a.proveStandardExitForOperation(exit.ExpectedPublicIP)
 	}
 	if err != nil {
 		_ = a.stopMode()
