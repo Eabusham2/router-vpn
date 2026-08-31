@@ -132,13 +132,22 @@
     "hop_lines": true
   },
   "multihop": {
+    "topology": "entry-exit",
     "minimum_hops": 2,
-    "maximum_hops": 5,
+    "maximum_hops": 2,
+    "candidate_measurement": "entry-to-candidate-exit",
     "live_pairwise_rtt": true,
     "live_per_hop_rtt": true,
     "live_total_rtt": true,
     "per_hop_speed_tests": true,
-    "end_to_end_speed_test": true
+    "end_to_end_speed_test": true,
+    "platforms": {
+      "windows": "native-entry-exit",
+      "macos": "native-entry-exit",
+      "linux": "native-entry-exit",
+      "android": "bounded-entry-exit",
+      "ios": "unavailable"
+    }
   },
   "mode_picker": {
     "items": [
