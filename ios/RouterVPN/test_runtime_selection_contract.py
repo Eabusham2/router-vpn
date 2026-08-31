@@ -77,7 +77,19 @@ for marker in [
     'IOSHomeSummaryView', 'Require encrypted', 'Require obfuscation',
     'static func dismantleUIView(_ uiView: MKMapView, coordinator: Coordinator)',
     'coordinator.stopPacketAnimation()', 'func stopPacketAnimation()', 'timer = nil', 'map = nil',
+    'Button { Task { await selectFastest() } }', 'Test & select fastest',
+    'Button { selectSpecific(profile) } label:', 'private func selectSpecific',
+    'private func selectFastest() async', 'Press Connect when ready.',
+    'VPN state changed while Fastest was measuring; the result was not selected.',
 ]:
     assert marker in unified, marker
+for forbidden in [
+    'Button { Task { await connectFastest() } }', 'Test & connect fastest',
+    'Button { connectSpecific(profile) } label:', 'private func connectSpecific',
+    'private func connectFastest() async',
+]:
+    assert forbidden not in unified, forbidden
+selection=unified.split('private func selectSpecific', 1)[1].split('private func connectOrDisconnect', 1)[0]
+assert 'connectOrDisconnect()' not in selection, 'iOS node selection must never implicitly connect'
 assert 'deinit { timer?.invalidate() }' not in unified, 'Swift 6 nonisolated deinit must not touch non-Sendable Timer'
-print('iOS runtime + helper-chain fail-closed + unified AUTO/SMART/CUSTOM strategy contract OK')
+print('iOS runtime + helper-chain fail-closed + selection/Connect separation + unified AUTO/SMART/CUSTOM strategy contract OK')
