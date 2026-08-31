@@ -9,7 +9,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: source-snapshot-${{ github.ref }}-${{ github.sha }}
+  group: source-snapshot-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}
   cancel-in-progress: true
 
 jobs:
