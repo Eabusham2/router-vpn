@@ -1,8 +1,9 @@
 name: One-shot iOS node-selection source fix
 
 on:
-  issue_comment:
-    types: [created]
+  workflow_run:
+    workflows: ["Build all Router VPN release gates"]
+    types: [completed]
 
 permissions:
   contents: write
@@ -13,10 +14,7 @@ concurrency:
 
 jobs:
   patch:
-    if: >-
-      github.event.issue.pull_request &&
-      github.event.comment.user.login == github.repository_owner &&
-      github.event.comment.body == '/apply-ios-node-selection-fix'
+    if: github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
