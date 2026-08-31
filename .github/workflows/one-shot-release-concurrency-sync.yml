@@ -73,7 +73,8 @@ jobs:
 
           git rm --ignore-unmatch \
             .github/workflows/one-shot-release-concurrency-repair.yml \
-            .github/workflows/one-shot-release-concurrency-sync.yml
+            .github/workflows/one-shot-release-concurrency-sync.yml \
+            .github/workflows/one-shot-release-concurrency-sync-v2.yml
 
           python3 deploy/workflow-structure-audit.py
           python3 deploy/workflow-evidence-pipeline-audit.py
