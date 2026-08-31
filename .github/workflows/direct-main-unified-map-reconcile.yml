@@ -57,6 +57,15 @@ jobs:
           # store instead of requiring those symbols inside the map shell.
           python3 - <<'PY'
           from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str, label: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one source match, found {count}')
+              target.write_text(text.replace(old, new, 1), encoding='utf-8')
+
           path = Path('deploy/unified-map-control-center-audit.py')
           text = path.read_text(encoding='utf-8')
           old_linux = '    "linux": list((ROOT / "client").glob("*Linux*.py")) + list((ROOT / "client").glob("*linux*.py")),\n'
@@ -83,6 +92,39 @@ jobs:
           if anchor not in text:
               raise SystemExit('iOS profile audit insertion anchor drifted')
           path.write_text(text.replace(anchor, block + anchor, 1), encoding='utf-8')
+
+          # Add the actual node-management entry to every shipping native UI.
+          # These are real existing node-manager actions, not audit-only strings.
+          replace_once(
+              'client/RouterVPN-Windows-UnifiedShell.ps1',
+              '<Button Name="UnifiedNodesButton" Content="Nodes" Margin="8,0,0,0" Padding="10,5"/>',
+              '<Button Name="UnifiedNodesButton" Content="Add / manage nodes" Margin="8,0,0,0" Padding="10,5"/>',
+              'Windows node manager label',
+          )
+          replace_once(
+              'client/macos/RouterVPNMacUnifiedShell.swift',
+              'let manageNode = NSButton(title: "Nodes", target: self, action: #selector(openUnifiedNodes))',
+              'let manageNode = NSButton(title: "Add / manage nodes", target: self, action: #selector(openUnifiedNodes))',
+              'macOS node manager label',
+          )
+          replace_once(
+              'client/linux/routervpn-unified-shell-v8.inc',
+              'make_button("Nodes",G_CALLBACK(linux_unified_nodes_v8),state)',
+              'make_button("Add / manage nodes",G_CALLBACK(linux_unified_nodes_v8),state)',
+              'Linux node manager label',
+          )
+          replace_once(
+              'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java',
+              'Button nodes=smallButton("Nodes");nodes.setOnClickListener(v->showNodes());footer.addView(nodes);',
+              'Button nodes=smallButton("Nodes");nodes.setContentDescription("Add / manage nodes");nodes.setOnClickListener(v->showNodes());footer.addView(nodes);',
+              'Android node manager accessibility action',
+          )
+          replace_once(
+              'ios/RouterVPN/App/IOSUnifiedProductView.swift',
+              '                    unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: iosMultihopSummary) { showingNodes = true }',
+              '                    unifiedRow(icon: "plus.circle.fill", title: "Add / manage nodes", value: "Router / Custom") { showingNodes = true }\n                    unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: iosMultihopSummary) { showingNodes = true }',
+              'iOS node manager row',
+          )
           PY
 
           echo '=== CHECK 1: canonical contract/default/security ==='
@@ -108,6 +150,7 @@ jobs:
           if command -v swiftc >/dev/null 2>&1; then
             swiftc -frontend -parse ios/RouterVPN/App/IOSUnifiedSecureTransport.swift
             swiftc -frontend -parse ios/RouterVPN/App/IOSUnifiedProductView.swift
+            swiftc -frontend -parse client/macos/RouterVPNMacUnifiedShell.swift
           fi
 
           echo '=== CHECK 4: existing native/recovered map-first contracts ==='
