@@ -3,7 +3,31 @@ name: Recovered native UI exact-head gate
 on:
   push:
     branches: [main]
+    paths:
+      - "client/**"
+      - "android/**"
+      - "ios/RouterVPN/**"
+      - "cmd/client/**"
+      - "deploy/recovered-native-ui-*.py"
+      - "deploy/*session-mutation-audit.py"
+      - "deploy/product-parity-audit.py"
+      - "deploy/profile-settings-audit.py"
+      - "deploy/backend-session-transaction-audit.py"
+      - "deploy/durable-state-transaction-audit.py"
+      - ".github/workflows/recovered-native-ui-gate.yml"
   pull_request:
+    paths:
+      - "client/**"
+      - "android/**"
+      - "ios/RouterVPN/**"
+      - "cmd/client/**"
+      - "deploy/recovered-native-ui-*.py"
+      - "deploy/*session-mutation-audit.py"
+      - "deploy/product-parity-audit.py"
+      - "deploy/profile-settings-audit.py"
+      - "deploy/backend-session-transaction-audit.py"
+      - "deploy/durable-state-transaction-audit.py"
+      - ".github/workflows/recovered-native-ui-gate.yml"
   workflow_dispatch:
 
 permissions:
