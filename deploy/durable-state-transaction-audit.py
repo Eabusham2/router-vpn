@@ -75,6 +75,32 @@ require("cmd/client/standard_exits_test.go", "TestStandardExitStoreRejectsSymlin
 require("cmd/client/router_profile_transaction_test.go", "RollsRAMBackWhenPersistenceFails", "CompetingMutation")
 require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSymlinkParent", "RejectsOversizedRead", "TargetReplacementBeforeAdoption")
 
+# Android linked-node and custom-exit stores contain private profile/credential
+# data and therefore share one verified-inode, bounded, 0600, same-directory
+# atomic publication primitive. They may never delete the authoritative target
+# before adopting its replacement.
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidPrivateFileStore.java",
+    "Os.fstat",
+    "st_dev",
+    "st_ino",
+    "out.getFD().sync()",
+    "requireTargetUnchanged",
+    "Os.rename(temporary.getAbsolutePath(), target.getAbsolutePath())",
+    "perform a fallible chmod/stat after commit",
+)
+forbid(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java",
+    "target.delete()",
+    "renameTo(target)",
+)
+forbid(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
+    "storeFile.delete()",
+    "renameTo(storeFile)",
+)
+run_test("android/test_android_private_file_store_contract.py")
+
 # iOS whole-connection/profile metadata is app-private authoritative state.
 # The verified temporary file is flushed and atomically adopted; the operation
 # must not throw after replacement merely to reapply metadata already owned by

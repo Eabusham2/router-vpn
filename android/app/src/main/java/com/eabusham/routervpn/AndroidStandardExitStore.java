@@ -6,10 +6,7 @@ import android.util.Base64;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -109,11 +106,7 @@ final class AndroidStandardExitStore {
         JSONArray array=new JSONArray(); for(Entry e:rows){validate(e);array.put(toJson(e));}
         byte[] raw=(new JSONObject().put("schema_version",SCHEMA_VERSION).put("exits",array).toString(2)+"\n").getBytes(StandardCharsets.UTF_8);
         if(raw.length>MAX_STORE)throw new IllegalStateException("Custom exit store exceeds safety limit.");
-        File tmp=new File(storeFile.getParentFile(),".standard-exits-"+randomHex(8)+".tmp");
-        try(FileOutputStream out=new FileOutputStream(tmp,false)){out.write(raw);out.flush();out.getFD().sync();}
-        tmp.setReadable(false,false);tmp.setReadable(true,true);tmp.setWritable(false,false);tmp.setWritable(true,true);
-        if(storeFile.exists()&&!storeFile.delete())throw new IllegalStateException("Cannot replace custom exit store.");
-        if(!tmp.renameTo(storeFile))throw new IllegalStateException("Cannot commit custom exit store atomically.");
+        AndroidPrivateFileStore.write(storeFile, raw, MAX_STORE);
     }
 
     static void validate(Entry e) throws Exception {
@@ -141,7 +134,7 @@ final class AndroidStandardExitStore {
     private static void validateKey(String value,String label,boolean optional){if(value.isEmpty()&&optional)return;byte[]raw;try{raw=Base64.decode(value,Base64.DEFAULT);}catch(Exception e){throw new IllegalArgumentException(label+" is not base64.");}if(raw.length!=32)throw new IllegalArgumentException(label+" must decode to 32 bytes.");}
     private static void validateCidrs(List<String> values,String label)throws Exception{if(values==null||values.isEmpty())throw new IllegalArgumentException(label+" are required.");if(values.size()>32)throw new IllegalArgumentException(label+" has too many entries.");for(String v:values){String[]p=v.trim().split("/",-1);if(p.length!=2)throw new IllegalArgumentException("Invalid "+label+": "+v);InetAddress ip=literalIp(p[0],label);int prefix=Integer.parseInt(p[1]);int max=ip.getAddress().length==4?32:128;if(prefix<0||prefix>max)throw new IllegalArgumentException("Invalid "+label+" prefix: "+v);}}
     private static String randomHex(int n){byte[]b=new byte[n];RANDOM.nextBytes(b);StringBuilder s=new StringBuilder();for(byte x:b)s.append(String.format(Locale.ROOT,"%02x",x&255));return s.toString();}
-    private static byte[] readLimited(File f,int max)throws Exception{try(FileInputStream in=new FileInputStream(f);ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[8192];int total=0,n;while((n=in.read(b))!=-1){total+=n;if(total>max)throw new IllegalStateException("Custom exit store exceeds safety limit.");out.write(b,0,n);}return out.toByteArray();}}
+    private static byte[] readLimited(File f,int max)throws Exception{return AndroidPrivateFileStore.read(f,max);}
     private static JSONObject toJson(Entry e)throws Exception{JSONObject o=new JSONObject().put("id",e.id).put("name",e.name).put("protocol",e.protocol).put("server",e.server).put("server_port",e.serverPort).put("expected_public_ip",e.expectedPublicIp).put("username",e.username).put("password",e.password).put("method",e.method).put("secret",e.secret).put("tls_server_name",e.tlsServerName).put("wg_addresses",new JSONArray(e.wgAddresses)).put("wg_private_key",e.wgPrivateKey).put("wg_peer_public_key",e.wgPeerPublicKey).put("wg_pre_shared_key",e.wgPreSharedKey).put("wg_allowed_ips",new JSONArray(e.wgAllowedIps)).put("wg_mtu",e.wgMtu);return o;}
     private static Entry fromJson(JSONObject o)throws Exception{Entry e=new Entry();e.id=o.optString("id","");e.name=o.optString("name","");e.protocol=o.optString("protocol","");e.server=o.optString("server","");e.serverPort=o.optInt("server_port",0);e.expectedPublicIp=o.optString("expected_public_ip","");e.username=o.optString("username","");e.password=o.optString("password","");e.method=o.optString("method","");e.secret=o.optString("secret","");e.tlsServerName=o.optString("tls_server_name","");e.wgPrivateKey=o.optString("wg_private_key","");e.wgPeerPublicKey=o.optString("wg_peer_public_key","");e.wgPreSharedKey=o.optString("wg_pre_shared_key","");e.wgMtu=o.optInt("wg_mtu",0);JSONArray a=o.optJSONArray("wg_addresses"),b=o.optJSONArray("wg_allowed_ips");if(a!=null)for(int i=0;i<a.length();i++)e.wgAddresses.add(a.getString(i));if(b!=null)for(int i=0;i<b.length();i++)e.wgAllowedIps.add(b.getString(i));return e;}
 }

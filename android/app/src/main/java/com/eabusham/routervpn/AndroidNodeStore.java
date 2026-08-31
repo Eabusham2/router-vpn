@@ -6,10 +6,7 @@ import android.util.Base64;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -89,7 +86,7 @@ final class AndroidNodeStore {
         requireMutable("deleting a Router VPN node");
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
         File file = nodeFile(id);
-        if (file.exists() && !file.delete()) throw new IllegalStateException("Could not remove stored node.");
+        if (file.exists()) AndroidPrivateFileStore.remove(file, MAX_BUNDLE);
         String active = activeId();
         if (id.equals(active)) context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(ACTIVE_ID).apply();
     }
@@ -140,7 +137,7 @@ final class AndroidNodeStore {
     }
 
     private void ensureRoot() throws Exception {
-        if (!root.isDirectory() && !root.mkdirs()) throw new IllegalStateException("Cannot create private node store.");
+        AndroidPrivateFileStore.ensurePrivateDirectory(root);
     }
 
     private File nodeFile(String id) {
@@ -236,23 +233,11 @@ final class AndroidNodeStore {
     private static JSONObject load(File file) throws Exception { return new JSONObject(new String(readLimited(file, MAX_BUNDLE), StandardCharsets.UTF_8)); }
 
     private static byte[] readLimited(File file, int max) throws Exception {
-        if (file == null || !file.isFile() || file.length() <= 0 || file.length() > max) throw new IllegalStateException("Stored node bundle size is invalid.");
-        try (FileInputStream in = new FileInputStream(file); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192]; int total = 0, n;
-            while ((n = in.read(buffer)) != -1) { total += n; if (total > max) throw new IllegalStateException("Stored node bundle exceeds safety limit."); out.write(buffer, 0, n); }
-            return out.toByteArray();
-        }
+        return AndroidPrivateFileStore.read(file, max);
     }
 
     private static void atomicWrite(File target, byte[] bytes) throws Exception {
-        File parent = target.getParentFile();
-        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) throw new IllegalStateException("Cannot create private storage directory.");
-        File temp = new File(parent, "." + target.getName() + ".tmp");
-        try {
-            try (FileOutputStream out = new FileOutputStream(temp, false)) { out.write(bytes); out.flush(); out.getFD().sync(); }
-            if (target.exists() && !target.delete()) throw new IllegalStateException("Cannot replace stored node.");
-            if (!temp.renameTo(target)) throw new IllegalStateException("Cannot commit stored node.");
-        } finally { if (temp.exists()) temp.delete(); }
+        AndroidPrivateFileStore.write(target, bytes, MAX_BUNDLE);
     }
 
     private static boolean safeId(String value) { return value != null && value.matches("[0-9a-f]{32}"); }
