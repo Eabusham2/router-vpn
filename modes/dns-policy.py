@@ -18,6 +18,7 @@ if PROFILE_ID:
     PROFILE_ID = validate_profile_id(PROFILE_ID, default="")
 
 MAX_RUNTIME_CONFIG_BYTES = 8 << 20
+PRIVATE_MODE = 0o600
 
 KNOWN_TLS_NAMES = {
     "1.1.1.1": "cloudflare-dns.com",
@@ -155,12 +156,23 @@ def sing_server(s: dict, detour: str) -> dict:
     return out
 
 
-def _read_runtime_json_snapshot(path: Path) -> tuple[dict, os.stat_result]:
+def _runtime_parent_snapshot(path: Path) -> os.stat_result:
+    parent = path.parent
+    info = parent.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing unsafe runtime DNS config parent: {parent}")
+    return info
+
+
+def _read_runtime_json_snapshot(path: Path) -> tuple[dict, os.stat_result, os.stat_result]:
+    parent_before = _runtime_parent_snapshot(path)
     before = path.lstat()
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink runtime DNS config: {path}")
     if before.st_size < 0 or before.st_size > MAX_RUNTIME_CONFIG_BYTES:
         raise RuntimeError(f"runtime DNS config exceeds safety limit: {path}")
+    if os.name != "nt" and stat.S_IMODE(before.st_mode) != PRIVATE_MODE:
+        raise RuntimeError(f"runtime DNS config must be private 0600: {path}")
     with path.open("rb") as stream:
         opened = os.fstat(stream.fileno())
         current = path.lstat()
@@ -168,10 +180,12 @@ def _read_runtime_json_snapshot(path: Path) -> tuple[dict, os.stat_result]:
             raise RuntimeError(f"runtime DNS config changed during open: {path}")
         body = stream.read(MAX_RUNTIME_CONFIG_BYTES + 1)
         after = path.lstat()
+        parent_after = _runtime_parent_snapshot(path)
         if (
             stat.S_ISLNK(after.st_mode)
             or not stat.S_ISREG(after.st_mode)
             or not os.path.samestat(opened, after)
+            or not os.path.samestat(parent_before, parent_after)
         ):
             raise RuntimeError(f"runtime DNS config changed during read: {path}")
     if len(body) > MAX_RUNTIME_CONFIG_BYTES:
@@ -179,33 +193,46 @@ def _read_runtime_json_snapshot(path: Path) -> tuple[dict, os.stat_result]:
     value = json.loads(body)
     if not isinstance(value, dict):
         raise RuntimeError("runtime DNS config must be a JSON object")
-    return value, after
+    return value, after, parent_after
 
 
 def _read_runtime_json(path: Path) -> dict:
-    value, _ = _read_runtime_json_snapshot(path)
+    value, _, _ = _read_runtime_json_snapshot(path)
     return value
 
 
-def _atomic_private_runtime_json(path: Path, cfg: dict, expected: os.stat_result) -> None:
+def _atomic_private_runtime_json(
+    path: Path,
+    cfg: dict,
+    expected: os.stat_result,
+    expected_parent: os.stat_result,
+) -> None:
     body = (json.dumps(cfg, indent=2) + "\n").encode("utf-8")
     if not body or len(body) > MAX_RUNTIME_CONFIG_BYTES:
         raise RuntimeError(f"patched runtime DNS config is empty or oversized: {path}")
     parent = path.parent
-    parent_before = parent.lstat()
-    if stat.S_ISLNK(parent_before.st_mode) or not stat.S_ISDIR(parent_before.st_mode):
-        raise RuntimeError(f"refusing unsafe runtime DNS config parent: {parent}")
+    parent_before = _runtime_parent_snapshot(path)
+    if not os.path.samestat(expected_parent, parent_before):
+        raise RuntimeError(f"runtime DNS config parent changed before staging: {parent}")
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.dns-", dir=parent)
     tmp = Path(name)
     committed = False
     try:
-        os.fchmod(fd, 0o600)
+        os.fchmod(fd, PRIVATE_MODE)
         with os.fdopen(fd, "wb", closefd=True) as stream:
             stream.write(body)
             stream.flush()
             os.fsync(stream.fileno())
-        parent_current = parent.lstat()
-        if stat.S_ISLNK(parent_current.st_mode) or not stat.S_ISDIR(parent_current.st_mode) or not os.path.samestat(parent_before, parent_current):
+        staged = tmp.lstat()
+        if (
+            stat.S_ISLNK(staged.st_mode)
+            or not stat.S_ISREG(staged.st_mode)
+            or (os.name != "nt" and stat.S_IMODE(staged.st_mode) != PRIVATE_MODE)
+        ):
+            raise RuntimeError(f"staged runtime DNS config is unsafe: {tmp}")
+
+        parent_current = _runtime_parent_snapshot(path)
+        if not os.path.samestat(parent_before, parent_current):
             raise RuntimeError(f"runtime DNS config parent changed during patch: {parent}")
         current = path.lstat()
         if (
@@ -216,6 +243,17 @@ def _atomic_private_runtime_json(path: Path, cfg: dict, expected: os.stat_result
             raise RuntimeError(f"runtime DNS config target identity changed before adoption: {path}")
         os.replace(tmp, path)
         committed = True
+
+        parent_after = _runtime_parent_snapshot(path)
+        adopted = path.lstat()
+        if (
+            not os.path.samestat(parent_before, parent_after)
+            or stat.S_ISLNK(adopted.st_mode)
+            or not stat.S_ISREG(adopted.st_mode)
+            or (os.name != "nt" and stat.S_IMODE(adopted.st_mode) != PRIVATE_MODE)
+            or not os.path.samestat(staged, adopted)
+        ):
+            raise RuntimeError(f"adopted runtime DNS config identity changed before verification: {path}")
         try:
             dir_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
@@ -230,14 +268,14 @@ def _atomic_private_runtime_json(path: Path, cfg: dict, expected: os.stat_result
 
 
 def patch_sing(path: Path, s: dict) -> None:
-    cfg, expected = _read_runtime_json_snapshot(path)
+    cfg, expected, expected_parent = _read_runtime_json_snapshot(path)
     detour = choose_detour(cfg)
     cfg["dns"] = {"servers": [sing_server(s, detour)], "final": "selected-dns"}
     route = cfg.setdefault("route", {})
     rules = route.setdefault("rules", [])
     if not any(isinstance(r, dict) and r.get("protocol") == "dns" for r in rules):
         rules.insert(0, {"protocol": "dns", "action": "hijack-dns"})
-    _atomic_private_runtime_json(path, cfg, expected)
+    _atomic_private_runtime_json(path, cfg, expected, expected_parent)
 
 
 def main() -> None:
