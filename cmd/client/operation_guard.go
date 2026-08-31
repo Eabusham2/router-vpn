@@ -13,6 +13,8 @@ import (
 
 type internalMutationContextKey struct{}
 
+var errConnectionOperationCancelled = errors.New("connection request was cancelled before it could adopt a runtime")
+
 func withInternalMutationContext(r *http.Request) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), internalMutationContextKey{}, true))
 }
@@ -122,7 +124,7 @@ func (a *app) connectionOperationContextOrBackground() context.Context {
 
 func (a *app) checkConnectionOperation() error {
 	if err := a.connectionOperationContextOrBackground().Err(); err != nil {
-		return errors.New("connection request was cancelled before it could adopt a runtime")
+		return errConnectionOperationCancelled
 	}
 	return nil
 }
