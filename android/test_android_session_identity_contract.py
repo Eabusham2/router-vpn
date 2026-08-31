@@ -94,8 +94,10 @@ for marker in (
     "engines.wireGuard.getState()!=com.wireguard.android.backend.Tunnel.State.DOWN",
     "engines.amneziaWG.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN",
     "runtimeBusy(engines.xray.getState())",
+    "exit.protocol",
 ):
     assert marker in standard_runtime, f"Android standard-exit ownership lost marker: {marker}"
+assert "protocl" not in standard_runtime, "Android standard-exit source contains a misspelled protocol field"
 assert "boolean isActiveOrTransitioning() { return AndroidVpnMutationGuard.isBusy(activity); }" in unified
 
 # Node and external-profile identity cannot mutate underneath a live/transitioning
@@ -225,7 +227,7 @@ assert "prefs().getString(MULTI_ENTRY" not in run_speed
 assert "prefs().getString(MULTI_EXIT" not in run_speed
 picker = product.split("private void showViaEntryExitPicker", 1)[1].split("private void clearPendingProbe", 1)[0]
 assert "cachedMedian" not in picker, "via-entry picker must not substitute direct cached RTT"
-assert "medianMs" in picker and "unavailble" in picker
+assert "medianMs" in picker and "unavailable" in picker
 
 # Custom-exit UI/runtime ownership and permission metadata survive recreation.
 for marker in (
