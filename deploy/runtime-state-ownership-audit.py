@@ -215,7 +215,10 @@ require(
     "ALLOWED =",
     "tempfile.mkstemp",
     "os.fsync(stream.fileno())",
-    "os.path.samestat(parent_before, parent_now)",
+    "def require_parent_state",
+    "target_now, parent_now = trusted_target(root, target_text)",
+    "not os.path.samestat(expected, parent_now)",
+    'require_parent_state(root, target_text, target, parent_before, "ALL result")',
     "os.replace(tmp, target)",
 )
 require(
