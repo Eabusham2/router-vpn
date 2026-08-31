@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ SPEC = importlib.util.spec_from_file_location("recovered_map_first_ui_contract_a
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"cannot load {AUDIT_PATH}")
 AUDIT = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = AUDIT
 SPEC.loader.exec_module(AUDIT)
 
 
@@ -71,6 +73,22 @@ class RecoveredMapFirstAuditTests(unittest.TestCase):
         )
         for _, pattern in AUDIT.RETIRED_SHIPPING_PATTERNS:
             self.assertIsNone(pattern.search("browserless native implementation"))
+
+    def test_mobile_platform_roots_reference_native_projects(self) -> None:
+        platforms = {platform.name: platform for platform in AUDIT.PLATFORMS}
+        self.assertEqual(("android",), platforms["Android"].roots)
+        self.assertEqual(("ios/RouterVPN",), platforms["iOS/iPadOS"].roots)
+
+    def test_mobile_entrypoints_are_real_native_sources(self) -> None:
+        platforms = {platform.name: platform for platform in AUDIT.PLATFORMS}
+        self.assertEqual(
+            ("productactivity.java", "androidmanifest.xml"),
+            platforms["Android"].shipping_names,
+        )
+        self.assertEqual(
+            ("iosunifiedproductview.swift", "packettunnelprovider.swift"),
+            platforms["iOS/iPadOS"].shipping_names,
+        )
 
 
 if __name__ == "__main__":
