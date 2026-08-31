@@ -260,6 +260,11 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cmd := multihopCommand(a, sel)
+	if err := a.checkConnectionOperation(); err != nil {
+		sessionTrackerFor(a).markRequestFailure(err.Error())
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err := cmd.Start(); err != nil {
 		a.mu.Lock()
 		a.state.Phase = "failed"
@@ -281,10 +286,18 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.state.Phase = "multihop:proving-exit"
 	a.state.LastError = ""
 	a.mu.Unlock()
+	if err := a.checkConnectionOperation(); err != nil {
+		a.stopOwnedConnectionRuntime(cmd)
+		clearActiveMultihopGraph(a)
+		sessionTrackerFor(a).markRequestFailure(err.Error())
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	setActiveMultihopGraph(a, sel)
 
 	if err := a.proveMultihopExit(sel.Exit); err != nil {
 		_ = a.stopMode()
+		clearActiveMultihopGraph(a)
 		a.mu.Lock()
 		a.state.Mode = "multihop"
 		a.state.LogicalMode = "multihop"
@@ -366,19 +379,26 @@ func (a *app) proveMultihopExit(exit common.RouterProfile) error {
 	transport.Proxy = http.ProxyURL(proxyURL)
 	transport.ForceAttemptHTTP2 = false
 	client := &http.Client{Transport: transport, Timeout: 1200 * time.Millisecond}
+	ctx := a.connectionOperationContextOrBackground()
 	var last error
 	deadline := time.Now().Add(9 * time.Second)
 	for time.Now().Before(deadline) {
-		req, _ := http.NewRequest(http.MethodGet, proofURL, nil)
-		resp, err := client.Do(req)
-		if err == nil {
+		if ctx.Err() != nil {
+			return errors.New("connection request was cancelled during multihop exit proof")
+		}
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, proofURL, nil)
+		if reqErr != nil {
+			return reqErr
+		}
+		resp, requestErr := client.Do(req)
+		if requestErr == nil {
 			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			_ = resp.Body.Close()
 			if readErr == nil && resp.StatusCode/100 == 2 {
-				if err := validateSelectedNodeProof(exit, body); err == nil {
+				if proofErr := validateSelectedNodeProof(exit, body); proofErr == nil {
 					return nil
 				} else {
-					last = err
+					last = proofErr
 				}
 			} else if readErr != nil {
 				last = readErr
@@ -386,9 +406,16 @@ func (a *app) proveMultihopExit(exit common.RouterProfile) error {
 				last = fmt.Errorf("exit proof returned HTTP %d", resp.StatusCode)
 			}
 		} else {
-			last = err
+			if ctx.Err() != nil {
+				return errors.New("connection request was cancelled during multihop exit proof")
+			}
+			last = requestErr
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return errors.New("connection request was cancelled during multihop exit proof")
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 	if last == nil {
 		last = errors.New("exit proof timed out")
