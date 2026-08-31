@@ -1,0 +1,87 @@
+name: One-shot iOS node-selection source fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-ios-node-selection-fix.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-ios-node-selection-fix
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch iOS selection semantics and remove this one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('ios/RouterVPN/App/IOSUnifiedProductView.swift')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              'Button { Task { await connectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing…" : "Test & connect fastest", systemImage: "bolt.fill") }':
+              'Button { Task { await selectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing…" : "Test & select fastest", systemImage: "bolt.fill") }',
+              'Button { connectSpecific(profile) } label: {':
+              'Button { selectSpecific(profile) } label: {',
+              '''    private func connectSpecific(_ profile: RouterProfile) {
+        guard !model.profileMutationBlocked else { return }
+        model.selectNode(profile.id)
+        connectOrDisconnect()
+    }
+    private func connectFastest() async {
+        guard !model.profileMutationBlocked else { return }
+        let results = await telemetry.measureAll(routerProfiles, samples: 4)
+        guard let winner = results.first else { model.message = telemetry.lastError; return }
+        model.selectNode(winner.id)
+        model.message = "Fastest live node: \\(winner.name) • \\(winner.shortLabel) • connecting with \\(selectedModeTitle)…"
+        connectOrDisconnect()
+    }
+''':
+              '''    private func selectSpecific(_ profile: RouterProfile) {
+        guard !model.profileMutationBlocked else { return }
+        model.selectNode(profile.id)
+        model.message = "Selected \\(profile.name.isEmpty ? profile.id : profile.name). Press Connect when ready."
+    }
+    private func selectFastest() async {
+        guard !model.profileMutationBlocked else { return }
+        let results = await telemetry.measureAll(routerProfiles, samples: 4)
+        guard !model.profileMutationBlocked else {
+            model.message = "VPN state changed while Fastest was measuring; the result was not selected."
+            return
+        }
+        guard let winner = results.first else { model.message = telemetry.lastError; return }
+        model.selectNode(winner.id)
+        model.message = "Selected fastest live node: \\(winner.name) • \\(winner.shortLabel). Press Connect when ready with \\(selectedModeTitle)."
+    }
+''',
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'iOS node-selection source drift: expected one match, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+          if 'private func connectSpecific' in text or 'private func connectFastest' in text:
+              raise SystemExit('old iOS auto-connect selectors remain')
+          selection = text.split('private func selectSpecific', 1)[1].split('private func connectOrDisconnect', 1)[0]
+          if 'connectOrDisconnect()' in selection:
+              raise SystemExit('iOS node selection still triggers Connect')
+          path.write_text(text, encoding='utf-8')
+          PY
+          git rm .github/workflows/one-shot-ios-node-selection-fix.yml
+          git diff --check
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          git add ios/RouterVPN/App/IOSUnifiedProductView.swift
+          git commit -m 'Separate iOS node selection from Connect'
+          git push origin HEAD:main
