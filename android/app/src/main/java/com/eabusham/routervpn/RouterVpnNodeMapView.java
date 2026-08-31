@@ -28,7 +28,8 @@ final class RouterVpnNodeMapView extends View {
     interface OnMarkerClickListener { void onMarkerClick(Marker marker); }
     static final String ROLE_NORMAL="normal", ROLE_SELECTED="selected", ROLE_ENTRY="entry", ROLE_EXIT="exit", ROLE_EXTERNAL="external";
     private static final int LOCATION_PERMISSION_REQUEST=6403;
-    private static final long MAX_LAST_LOCATION_AGE_MS=5*60*1000L;
+    private static final long MAX_LAST_LOCATION_AGE_MS=30*1000L;
+    private static final float MAX_LOCATION_ACCURACY_METERS=10_000f;
 
     static final class Marker {
         final String id, name, role;
@@ -108,13 +109,13 @@ final class RouterVpnNodeMapView extends View {
     }
 
     private void drawLocationButton(Canvas canvas,RectF world){
-        RectF button=locationButtonRect(world);canvas.drawRoundRect(button,dp(12),dp(12),locationButton);secondary.setTextAlign(Paint.Align.CENTER);String label=validUserLocation()?"YOU • REFRESH":locationState;canvas.drawText(label,button.centerX(),button.centerY()+dp(3.5f),secondary);secondary.setTextAlign(Paint.Align.LEFT);
+        RectF button=locationButtonRect(world);canvas.drawRoundRect(button,dp(12),dp(12),locationButton);secondary.setTextAlign(Paint.Align.CENTER);String label=validUserLocation()?"YOU • HIDE":locationState;canvas.drawText(label,button.centerX(),button.centerY()+dp(3.5f),secondary);secondary.setTextAlign(Paint.Align.LEFT);
     }
 
     @Override public boolean onTouchEvent(MotionEvent event){
         if(event.getAction()!=MotionEvent.ACTION_UP)return true;
         RectF world=worldRect();
-        if(locationButtonRect(world).contains(event.getX(),event.getY())){enableRealUserLocation();performClick();return true;}
+        if(locationButtonRect(world).contains(event.getX(),event.getY())){if(validUserLocation())hideRealUserLocation();else enableRealUserLocation();performClick();return true;}
         if(markerClickListener==null||markers.isEmpty())return performClick();
         Marker best=null;float bestDistance=Float.MAX_VALUE;
         for(Marker marker:markers){if(!valid(marker))continue;float dx=xFor(marker.longitude,world)-event.getX(),dy=yFor(marker.latitude,world)-event.getY(),distance=(float)Math.hypot(dx,dy);if(distance<bestDistance){bestDistance=distance;best=marker;}}
@@ -161,7 +162,15 @@ final class RouterVpnNodeMapView extends View {
 
     private void acceptRealLocation(Location location){
         if(location==null||!Double.isFinite(location.getLatitude())||!Double.isFinite(location.getLongitude())||location.getLatitude()<-90||location.getLatitude()>90||location.getLongitude()<-180||location.getLongitude()>180)return;
-        userLocation=new Location(location);locationState="LOCATE ME";invalidate();
+        long age=Math.abs(System.currentTimeMillis()-location.getTime());
+        if(age>MAX_LAST_LOCATION_AGE_MS||(location.hasAccuracy()&&(location.getAccuracy()<0||location.getAccuracy()>MAX_LOCATION_ACCURACY_METERS)))return;
+        userLocation=new Location(location);locationState="HIDE ME";invalidate();
+    }
+
+    private void hideRealUserLocation(){
+        locationRequestPending=false;
+        try{if(locationManager!=null)locationManager.removeUpdates(locationListener);}catch(SecurityException ignored){}
+        userLocation=null;locationState="LOCATE ME";invalidate();
     }
 
     private boolean hasLocationPermission(){return getContext().checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED||getContext().checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED;}
