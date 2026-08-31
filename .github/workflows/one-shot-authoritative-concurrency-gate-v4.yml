@@ -25,82 +25,68 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cat > "$RUNNER_TEMP/fix-release-concurrency.py" <<'PY'
+          from pathlib import Path
+
+          begin = "$" + "{{ "
+          end = " }}"
+          workflows = {
+              ".github/workflows/source-snapshot.yml": "source-snapshot",
+              ".github/workflows/release-candidate.yml": "release-candidate",
+              ".github/workflows/arm64-portainer-preflight.yml": "arm64-portainer",
+              ".github/workflows/publish-arm64-images.yml": "publish-arm64-portainer",
+              ".github/workflows/production-release-compose.yml": "production-release-compose",
+          }
+
+          audit_pairs = []
+          for filename, prefix in workflows.items():
+              path = Path(filename)
+              text = path.read_text(encoding="utf-8")
+              old = f"group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}"
+              desired = old + f"-{begin}github.run_id{end}"
+              workflow_variant = f"group: {prefix}-{begin}github.workflow{end}-{begin}github.ref{end}-{begin}github.sha{end}"
+              workflow_run_variant = workflow_variant + f"-{begin}github.run_id{end}"
+              if desired not in text:
+                  matches = [value for value in (old, workflow_variant, workflow_run_variant) if value in text]
+                  if len(matches) != 1:
+                      raise SystemExit(f"unexpected concurrency contract in {filename}: {matches}")
+                  path.write_text(text.replace(matches[0], desired, 1), encoding="utf-8")
+              audit_pairs.append((prefix, desired))
+
+          release = Path(".github/workflows/release-candidate.yml")
+          text = release.read_text(encoding="utf-8")
+          release.write_text(text.replace("          python3 deploy/reusable-workflow-concurrency-audit.py\n", ""), encoding="utf-8")
+
+          audit = Path("deploy/release-orchestration-audit.py")
+          text = audit.read_text(encoding="utf-8")
+          for prefix, desired in audit_pairs:
+              candidates = (
+                  f"group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}",
+                  f"group: {prefix}-{begin}github.workflow{end}-{begin}github.ref{end}-{begin}github.sha{end}",
+                  f"group: {prefix}-{begin}github.workflow{end}-{begin}github.ref{end}-{begin}github.sha{end}-{begin}github.run_id{end}",
+              )
+              if desired not in text:
+                  found = [value for value in candidates if value in text]
+                  if len(found) != 1:
+                      raise SystemExit(f"unexpected orchestration audit contract for {prefix}: {found}")
+                  text = text.replace(found[0], desired, 1)
+          for old, new in (
+              ('f"{rel} can be canceled by a different release SHA"', 'f"{rel} must isolate each authoritative top-level release run"'),
+              ('f"{rel} must isolate the authoritative caller from standalone same-SHA diagnostics"', 'f"{rel} must isolate each authoritative top-level release run"'),
+              ('f"{rel} does not collapse duplicate same-SHA runs"', 'f"{rel} does not retain explicit cancellation semantics"'),
+              ('f"{rel} does not collapse duplicates from the same caller"', 'f"{rel} does not retain explicit cancellation semantics"'),
+          ):
+              if old in text:
+                  text = text.replace(old, new, 1)
+          audit.write_text(text, encoding="utf-8")
+          PY
+
           sleep 20
           for attempt in 1 2 3 4 5 6; do
             git fetch origin main
             git reset --hard origin/main
             base="$(git rev-parse HEAD)"
-
-            python3 - <<'PY'
-            from pathlib import Path
-
-            begin = "$" + "{{ "
-            end = " }}"
-            workflows = {
-                ".github/workflows/source-snapshot.yml": "source-snapshot",
-                ".github/workflows/release-candidate.yml": "release-candidate",
-                ".github/workflows/arm64-portainer-preflight.yml": "arm64-portainer",
-                ".github/workflows/publish-arm64-images.yml": "publish-arm64-portainer",
-                ".github/workflows/production-release-compose.yml": "production-release-compose",
-            }
-
-            audit_pairs = []
-            for filename, prefix in workflows.items():
-                path = Path(filename)
-                text = path.read_text(encoding="utf-8")
-                old = f"group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}"
-                desired = f"group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}-{begin}github.run_id{end}"
-                workflow_variant = f"group: {prefix}-{begin}github.workflow{end}-{begin}github.ref{end}-{begin}github.sha{end}"
-                workflow_run_variant = workflow_variant + f"-{begin}github.run_id{end}"
-                matches = [value for value in (old, workflow_variant, workflow_run_variant) if value in text]
-                if desired not in text:
-                    if len(matches) != 1:
-                        raise SystemExit(f"unexpected concurrency contract in {filename}: {matches}")
-                    text = text.replace(matches[0], desired, 1)
-                    path.write_text(text, encoding="utf-8")
-                audit_pairs.append((prefix, desired))
-
-            release = Path(".github/workflows/release-candidate.yml")
-            release_text = release.read_text(encoding="utf-8")
-            release_text = release_text.replace("          python3 deploy/reusable-workflow-concurrency-audit.py\n", "")
-            release.write_text(release_text, encoding="utf-8")
-
-            audit = Path("deploy/release-orchestration-audit.py")
-            text = audit.read_text(encoding="utf-8")
-            for prefix, desired in audit_pairs:
-                candidates = (
-                    f"group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}",
-                    f"group: {prefix}-{begin}github.workflow{end}-{begin}github.ref{end}-{begin}github.sha{end}",
-                    f"group: {prefix}-{begin}github.workflow{end}-{begin}github.ref{end}-{begin}github.sha{end}-{begin}github.run_id{end}",
-                )
-                if desired not in text:
-                    found = [value for value in candidates if value in text]
-                    if len(found) != 1:
-                        raise SystemExit(f"unexpected orchestration audit contract for {prefix}: {found}")
-                    text = text.replace(found[0], desired, 1)
-            for old, new in (
-                (
-                    'f"{rel} can be canceled by a different release SHA"',
-                    'f"{rel} must isolate each authoritative top-level release run"',
-                ),
-                (
-                    'f"{rel} must isolate the authoritative caller from standalone same-SHA diagnostics"',
-                    'f"{rel} must isolate each authoritative top-level release run"',
-                ),
-                (
-                    'f"{rel} does not collapse duplicate same-SHA runs"',
-                    'f"{rel} does not retain explicit cancellation semantics"',
-                ),
-                (
-                    'f"{rel} does not collapse duplicates from the same caller"',
-                    'f"{rel} does not retain explicit cancellation semantics"',
-                ),
-            ):
-                if old in text:
-                    text = text.replace(old, new, 1)
-            audit.write_text(text, encoding="utf-8")
-            PY
-
+            python3 "$RUNNER_TEMP/fix-release-concurrency.py"
             rm -f .github/workflows/one-shot-*.yml
             rm -f deploy/reusable-workflow-concurrency-audit.py
             rm -f deploy/.one-shot-authoritative-concurrency-trigger
