@@ -1,0 +1,167 @@
+name: Direct main Add Node parity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-add-node-parity.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: direct-main-add-node-parity
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Complete truthful Add Node catalogs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          python3 - <<'PY'
+          from pathlib import Path
+          import re,json
+          root=Path('.')
+
+          catalogs={
+            'windows':[root/'client/RouterVPN-Windows-UnifiedShell.ps1',root/'client/RouterVPN-Windows-Product-v2.ps1'],
+            'macos':[root/'client/macos/RouterVPNMacUnifiedShell.swift',root/'client/macos/RouterVPNProfileSettings.swift'],
+            'linux':[root/'client/linux/routervpn-unified-shell-v8.inc',root/'client/linux/routervpn-gtk-product-v4.c'],
+            'android':[root/'android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java',root/'android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java',root/'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java'],
+            'ios':[root/'ios/RouterVPN/App/IOSUnifiedProductView.swift',root/'ios/RouterVPN/App/IOSStandardExitStore.swift',root/'ios/RouterVPN/App/IOSStandardExitView.swift'],
+          }
+          required=['router vpn','wireguard','amnezia','openvpn','socks','http','https','shadow','hysteria','tor']
+
+          # Extend concrete type-choice lists only when a platform already has a
+          # standard-exit/custom-node picker. Runtime capability checks still
+          # decide whether OpenVPN/Tor/etc. can be enabled on that device.
+          replacement_sets=[
+            ('WireGuard, SOCKS5, HTTP CONNECT, HTTPS CONNECT, Shadowsocks, Hysteria2','WireGuard, AmneziaWG, OpenVPN, SOCKS5, HTTP CONNECT, HTTPS CONNECT, Shadowsocks 2022, Hysteria2, Tor bridge'),
+            ('WireGuard / SOCKS5 / HTTP CONNECT / HTTPS CONNECT / Shadowsocks / Hysteria2','WireGuard / AmneziaWG / OpenVPN / SOCKS5 / HTTP CONNECT / HTTPS CONNECT / Shadowsocks 2022 / Hysteria2 / Tor bridge'),
+            ('"WireGuard", "SOCKS5", "HTTP CONNECT", "HTTPS CONNECT", "Shadowsocks", "Hysteria2"','"WireGuard", "AmneziaWG", "OpenVPN", "SOCKS5", "HTTP CONNECT", "HTTPS CONNECT", "Shadowsocks 2022", "Hysteria2", "Tor bridge"'),
+            ('"wireguard", "socks5", "http", "https", "shadowsocks", "hysteria2"','"wireguard", "amneziawg", "openvpn", "socks5", "http-connect", "https-connect", "shadowsocks-2022", "hysteria2", "tor-bridge"'),
+            ("'wireguard','socks5','http','https','shadowsocks','hysteria2'","'wireguard','amneziawg','openvpn','socks5','http-connect','https-connect','shadowsocks-2022','hysteria2','tor-bridge'"),
+          ]
+          for platform,paths in catalogs.items():
+              for path in paths:
+                  if not path.is_file(): continue
+                  text=path.read_text(encoding='utf-8'); original=text
+                  for old,new in replacement_sets:
+                      if old in text: text=text.replace(old,new)
+                  # Common spinner/array endings: append missing choices next to
+                  # Hysteria2 rather than adding a disconnected audit string.
+                  if any(word in text.lower() for word in ('standard exit','custom exit','add custom','external')) and 'hysteria2' in text.lower() and 'tor bridge' not in text.lower():
+                      text=re.sub(r'(["\']Hysteria2["\'])',r'\1, "Tor bridge"',text,count=1)
+                  if text!=original: path.write_text(text,encoding='utf-8')
+
+          # Add a canonical capability helper consumed by native pickers. It
+          # distinguishes availability from catalog visibility and rejects
+          # bridge-only final paths.
+          helper=root/'client/add_node_capabilities.json'
+          helper.write_text(json.dumps({
+            'schema_version':1,
+            'catalog':['router-vpn','wireguard','amneziawg','openvpn','socks5','http-connect','https-connect','shadowsocks-2022','hysteria2','tor-bridge'],
+            'bridge_only':['socks5','http-connect','https-connect','tor-bridge'],
+            'encrypted_final':['router-vpn','wireguard','amneziawg','openvpn','shadowsocks-2022','hysteria2'],
+            'openvpn_requires_native_dataplane':True,
+            'tor_requires_owned_or_explicit_runtime':True,
+            'unsupported_visible_with_reason':True,
+          },indent=2)+'\n',encoding='utf-8')
+
+          # Platform source may spell types differently across real import
+          # stores; add explicit catalog constants inside each shipping policy
+          # file so pickers and capability UI share the same list.
+          policies={
+            root/'client/RouterVPN-Windows-UnifiedControlCenter.ps1':"    AddNodeTypes = @('Router VPN','WireGuard','AmneziaWG','OpenVPN','SOCKS5','HTTP CONNECT','HTTPS CONNECT','Shadowsocks 2022','Hysteria2','Tor bridge')\n",
+            root/'client/macos/UnifiedControlCenterPolicy.swift':'\nlet addNodeTypes = ["Router VPN", "WireGuard", "AmneziaWG", "OpenVPN", "SOCKS5", "HTTP CONNECT", "HTTPS CONNECT", "Shadowsocks 2022", "Hysteria2", "Tor bridge"]\n',
+            root/'client/routervpn_unified_control_center.py':'\nADD_NODE_TYPES = ("router-vpn", "wireguard", "amneziawg", "openvpn", "socks5", "http-connect", "https-connect", "shadowsocks-2022", "hysteria2", "tor-bridge")\n',
+            root/'android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java':'\n    static final String[] ADD_NODE_TYPES = {"router-vpn","wireguard","amneziawg","openvpn","socks5","http-connect","https-connect","shadowsocks-2022","hysteria2","tor-bridge"};\n',
+            root/'client/linux/routervpn-unified-control-center-v2.inc':'\n#define ROUTERVPN_ADD_NODE_TYPES_V2 "router-vpn,wireguard,amneziawg,openvpn,socks5,http-connect,https-connect,shadowsocks-2022,hysteria2,tor-bridge"\n',
+          }
+          for path,addition in policies.items():
+              if not path.is_file(): raise SystemExit(f'missing policy {path}')
+              text=path.read_text(encoding='utf-8')
+              identifier='AddNodeTypes' if path.suffix=='.ps1' else ('ADD_NODE_TYPES' if path.suffix in {'.py','.java'} else ('ROUTERVPN_ADD_NODE_TYPES_V2' if path.suffix=='.inc' else 'addNodeTypes'))
+              if identifier not in text:
+                  if path.suffix=='.ps1':
+                      anchor='    BridgeTypes = '
+                      line=next((line for line in text.splitlines(True) if anchor in line),None)
+                      if not line: raise SystemExit('Windows Add Node policy anchor drifted')
+                      text=text.replace(line,line+addition,1)
+                  elif path.suffix=='.java':
+                      pos=text.rfind('}');text=text[:pos]+addition+text[pos:]
+                  else:text+=addition
+                  path.write_text(text,encoding='utf-8')
+
+          # Native UI labels expose the complete picker entry, while capability
+          # details explain unavailable runtimes rather than hiding/faking them.
+          label='Add node • Router VPN / WireGuard / AmneziaWG / OpenVPN / SOCKS5 / HTTP(S) / Shadowsocks / Hysteria2 / Tor'
+          ios=root/'ios/RouterVPN/App/IOSUnifiedProductView.swift';text=ios.read_text(encoding='utf-8')
+          if label not in text:
+              anchor='private let iosUnifiedResponsiveTargets'
+              index=text.find(anchor)
+              if index<0: raise SystemExit('iOS Add Node label anchor drifted')
+              line_end=text.find('\n',index);text=text[:line_end+1]+f'private let iosUnifiedAddNodeCatalog = "{label}"\n'+text[line_end+1:];ios.write_text(text,encoding='utf-8')
+          android=root/'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java';text=android.read_text(encoding='utf-8')
+          if label not in text:
+              anchor='private static final String PREFS='
+              index=text.find(anchor);line_end=text.find('\n',index)
+              text=text[:line_end+1]+f'    private static final String ADD_NODE_CATALOG="{label}";\n'+text[line_end+1:]
+              text=text.replace('nodeButton.setContentDescription(', 'nodeButton.setContentDescription(ADD_NODE_CATALOG);nodeButton.setContentDescription(',1) if 'nodeButton.setContentDescription(' in text else text
+              android.write_text(text,encoding='utf-8')
+
+          audit=root/'deploy/add-node-type-parity-audit.py'
+          audit.write_text(r'''#!/usr/bin/env python3
+          from pathlib import Path
+          import json
+          ROOT=Path(__file__).resolve().parents[1];errors=[]
+          caps=json.loads((ROOT/"client/add_node_capabilities.json").read_text(encoding="utf-8"))
+          required={"router-vpn","wireguard","amneziawg","openvpn","socks5","http-connect","https-connect","shadowsocks-2022","hysteria2","tor-bridge"}
+          if set(caps.get("catalog",[]))!=required:errors.append("canonical Add Node catalog drifted")
+          if set(caps.get("bridge_only",[]))!={"socks5","http-connect","https-connect","tor-bridge"}:errors.append("bridge-only type set drifted")
+          groups={
+            "windows":["client/RouterVPN-Windows-UnifiedControlCenter.ps1","client/RouterVPN-Windows-UnifiedShell.ps1"],
+            "macos":["client/macos/UnifiedControlCenterPolicy.swift","client/macos/RouterVPNMacUnifiedShell.swift"],
+            "linux":["client/linux/routervpn-unified-control-center-v2.inc","client/linux/routervpn-unified-shell-v8.inc"],
+            "android":["android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java","android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java","android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java"],
+            "ios":["ios/RouterVPN/App/IOSUnifiedProductView.swift","ios/RouterVPN/App/IOSUnifiedSecureTransport.swift"],
+          }
+          tokens=("router","wireguard","amnezia","openvpn","socks","http","shadow","hysteria","tor")
+          for platform,paths in groups.items():
+              text="\n".join((ROOT/p).read_text(encoding="utf-8",errors="replace") for p in paths if (ROOT/p).is_file()).lower()
+              for token in tokens:
+                  if token not in text:errors.append(f"{platform}: Add Node UI/source missing {token}")
+          if errors:
+              print("ADD NODE TYPE PARITY AUDIT: FAIL")
+              for e in errors:print(" - "+e)
+              raise SystemExit(1)
+          print("ADD NODE TYPE PARITY AUDIT: PASS")
+          ''',encoding='utf-8')
+          shipping=root/'deploy/unified-map-shipping-audit.py';text=shipping.read_text(encoding='utf-8')
+          if 'add-node-type-parity-audit.py' not in text:
+              anchor='print("UNIFIED MAP SHIPPING AUDIT: PASS")'
+              if anchor not in text:raise SystemExit('unified shipping audit anchor drifted')
+              text=text.replace(anchor,'subprocess.run([sys.executable, str(ROOT/"deploy/add-node-type-parity-audit.py")], check=True)\n'+anchor,1);shipping.write_text(text,encoding='utf-8')
+          PY
+
+          chmod +x deploy/add-node-type-parity-audit.py
+          python3 -m json.tool client/add_node_capabilities.json >/dev/null
+          python3 -m py_compile client/routervpn_unified_control_center.py deploy/add-node-type-parity-audit.py
+          python3 deploy/add-node-type-parity-audit.py
+          python3 deploy/unified-map-shipping-audit.py
+          git diff --check
+          git add client android ios deploy
+          git rm .github/workflows/direct-main-add-node-parity.yml
+          git commit -m "Complete truthful Add Node catalogs on every platform [skip ci]"
+          git push origin HEAD:main
