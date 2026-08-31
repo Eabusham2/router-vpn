@@ -1,0 +1,98 @@
+name: One-shot authoritative Router VPN reconciliation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-authoritative-reconciliation.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-authoritative-router-vpn-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Reconcile current source and run authoritative source matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+
+          # Keep the two known post-redesign compatibility repairs idempotent.
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import re
+
+          provenance = Path('deploy/source_provenance.py')
+          text = provenance.read_text(encoding='utf-8')
+          old = 'raise RuntimeError(f"provenance parent changed before adoption: {path.parent}")'
+          new = 'raise RuntimeError(f"source provenance root changed before adoption: {path.parent}")'
+          if old in text:
+              text = text.replace(old, new, 1)
+          provenance.write_text(text, encoding='utf-8')
+
+          source = Path('client/linux/routervpn-unified-shell-v8.inc')
+          actual = hashlib.sha256(source.read_bytes()).hexdigest()
+          reviewed = 'b2d82155dce50cca68d74cd51a55c527f67438b2a21f871be945ea092f5c5a9e'
+          if actual != reviewed:
+              raise SystemExit(f'unreviewed Linux unified source hash: {actual}')
+          transform = Path('client/linux/apply-session-mutation.py')
+          body = transform.read_text(encoding='utf-8')
+          pattern = r"('routervpn-unified-shell-v8\.inc': \(')([0-9a-f]{64})(', \[)"
+          match = re.search(pattern, body)
+          if not match:
+              raise SystemExit('Linux unified transform entry is missing')
+          body = body[:match.start(2)] + actual + body[match.end(2):]
+          transform.write_text(body, encoding='utf-8')
+          PY
+
+          python3 deploy/test_source_provenance.py
+          python3 deploy/test_source_provenance_adoption_identity.py
+          python3 deploy/test-production-release-compose.py
+          python3 deploy/setup-center-download-retention-audit.py
+          python3 deploy/unified-map-shipping-audit.py
+          python3 deploy/native-map-first-ui-audit.py
+          python3 deploy/native-session-mutation-audit.py
+          python3 deploy/profile-settings-audit.py
+          python3 deploy/product-parity-audit.py
+          python3 deploy/durable-state-transaction-audit.py
+          python3 deploy/router-forwarding-audit.py
+          python3 deploy/test_router_forwarding_fail_open.py
+          python3 deploy/release-orchestration-audit.py
+          python3 deploy/full-audit-v4.py
+          python3 deploy/recovered-requirements-1-264-audit.py
+          python3 deploy/recovered-requirements-265-311-audit.py
+          python3 deploy/recovered-addendum-312-356-audit.py
+          python3 deploy/recovered-corrections-audit.py
+          python3 deploy/validate-repo.py
+          go test ./cmd/client ./cmd/update-controller ./cmd/router-agent -count=1
+          find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
+          find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          git diff --check
+
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          git rm -f .github/workflows/one-shot-authoritative-reconciliation.yml
+          for stale in \
+            .github/workflows/one-shot-linux-transform-sync.yml \
+            .github/workflows/one-shot-release-contract-reconcile.yml
+          do
+            if test -e "$stale"; then git rm -f "$stale"; fi
+          done
+          git add deploy/source_provenance.py client/linux/apply-session-mutation.py
+          git commit -m 'Certify reconciled Router VPN source requirements'
+          git push origin HEAD:main
