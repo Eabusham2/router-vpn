@@ -2,6 +2,8 @@
 """Binding chat-history corrections C1-C7."""
 from pathlib import Path
 import json
+import subprocess
+import sys
 ROOT=Path(__file__).resolve().parents[1]
 def text(rel): return (ROOT/rel).read_text(encoding='utf-8')
 def need(rel,*markers):
@@ -37,4 +39,9 @@ for rel in ('README.md','docs/CURRENT-GUIDE.md','docs/INSTALL-PORTAINER.md','doc
     body=text(rel)
     assert '45999' in body, f'C4/security: {rel} lost private DAITA-like 45999 boundary'
     assert ('8786-8793' in body or '8786–8793' in body), f'C4/security: {rel} lost private Setup Center/control 8786-8793 boundary'
+for audit in (
+    'deploy/recovered-map-first-ui-contract-audit.py',
+    'deploy/recovered-map-first-ui-contract-audit-test.py',
+):
+    subprocess.run([sys.executable, str(ROOT/audit)], cwd=ROOT, check=True)
 print('Recovered chat-history corrections C1-C7: PASS')
