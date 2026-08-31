@@ -64,13 +64,13 @@ PLATFORMS: tuple[Platform, ...] = (
     ),
     Platform(
         "Android",
-        ("client/android",),
+        ("android",),
         ("productactivity.java", "androidmanifest.xml"),
         ("activity", "vpnservice", "view"),
     ),
     Platform(
         "iOS/iPadOS",
-        ("client/ios", "client/iOS"),
+        ("ios/RouterVPN",),
         ("iosunifiedproductview.swift", "packettunnelprovider.swift"),
         ("swiftui", "mapkit", "networkextension"),
     ),
