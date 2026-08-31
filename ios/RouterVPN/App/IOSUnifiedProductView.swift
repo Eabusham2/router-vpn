@@ -346,11 +346,11 @@ struct IOSUnifiedProductView: View {
                 VStack(spacing: 10) {
                     HStack(spacing: 7) {
                         Menu {
-                            Button { Task { await connectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing…" : "Test & connect fastest", systemImage: "bolt.fill") }
+                            Button { Task { await selectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing…" : "Test & select fastest", systemImage: "bolt.fill") }
                                 .disabled(telemetry.isTestingFastest || model.profileMutationBlocked)
                             Divider()
                             ForEach(routerProfiles) { profile in
-                                Button { connectSpecific(profile) } label: {
+                                Button { selectSpecific(profile) } label: {
                                     let ms = telemetry.cached(profile.id) ?? profile.latencyMedianMs ?? 0
                                     Text(ms > 0 ? String(format: "%@ • %.1f ms", profile.name, ms) : profile.name)
                                 }.disabled(model.profileMutationBlocked)
@@ -438,18 +438,21 @@ struct IOSUnifiedProductView: View {
         }.buttonStyle(.plain).disabled(disabled)
     }
 
-    private func connectSpecific(_ profile: RouterProfile) {
+    private func selectSpecific(_ profile: RouterProfile) {
         guard !model.profileMutationBlocked else { return }
         model.selectNode(profile.id)
-        connectOrDisconnect()
+        model.message = "Selected \(profile.name.isEmpty ? profile.id : profile.name). Press Connect when ready."
     }
-    private func connectFastest() async {
+    private func selectFastest() async {
         guard !model.profileMutationBlocked else { return }
         let results = await telemetry.measureAll(routerProfiles, samples: 4)
+        guard !model.profileMutationBlocked else {
+            model.message = "VPN state changed while Fastest was measuring; the result was not selected."
+            return
+        }
         guard let winner = results.first else { model.message = telemetry.lastError; return }
         model.selectNode(winner.id)
-        model.message = "Fastest live node: \(winner.name) • \(winner.shortLabel) • connecting with \(selectedModeTitle)…"
-        connectOrDisconnect()
+        model.message = "Selected fastest live node: \(winner.name) • \(winner.shortLabel). Press Connect when ready with \(selectedModeTitle)."
     }
     private func connectOrDisconnect() {
         guard !model.tunnelTransitioning else { return }
