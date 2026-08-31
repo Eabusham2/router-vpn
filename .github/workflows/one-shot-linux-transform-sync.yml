@@ -1,0 +1,48 @@
+name: One-shot Linux shipping transform sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-linux-transform-sync.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-linux-transform-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Synchronize audited Linux transform and remove this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          actual="$(sha256sum client/linux/routervpn-unified-shell-v8.inc | awk '{print $1}')"
+          expected='b2d82155dce50cca68d74cd51a55c527f67438b2a21f871be945ea092f5c5a9e'
+          test "$actual" = "$expected"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('client/linux/apply-session-mutation.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'e267f8366df2f8d727013625ef5efbdc9959c2868eb3cad3c04c57d930accfa2'
+          new = 'b2d82155dce50cca68d74cd51a55c527f67438b2a21f871be945ea092f5c5a9e'
+          if text.count(old) != 1:
+              raise SystemExit(f'unexpected Linux unified baseline marker count: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          python3 deploy/linux-session-mutation-audit.py
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          git rm .github/workflows/one-shot-linux-transform-sync.yml
+          git add client/linux/apply-session-mutation.py
+          git commit -m 'Sync Linux shipping transform to unified map source [skip ci]'
+          git push origin HEAD:main
