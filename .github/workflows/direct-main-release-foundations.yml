@@ -1,0 +1,50 @@
+name: Direct main release foundations
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/scripts/fix-release-foundations.py
+      - .github/workflows/direct-main-release-foundations.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: direct-main-release-foundations
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply and verify release foundation repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          python3 .github/scripts/fix-release-foundations.py
+          python3 deploy/test-production-release-compose.py
+          python3 server/scripts/test_source_provenance.py
+          python3 deploy/test_source_provenance.py
+          python3 deploy/test_source_provenance_adoption_identity.py
+          python3 deploy/validate-repo.py
+          python3 deploy/linux-session-mutation-audit.py
+          bash -n deploy/package-macos-native.sh
+          bash -n deploy/package-linux-native.sh
+          git diff --check
+          git rm .github/scripts/fix-release-foundations.py .github/workflows/direct-main-release-foundations.yml
+          git add \
+            deploy/package-macos-native.sh \
+            deploy/package-linux-native.sh \
+            deploy/materialize-production-compose.py \
+            deploy/test-production-release-compose.py \
+            client/linux/apply-session-mutation.py
+          git commit -m "Fix exact-SHA native packaging and compose materialization [skip ci]"
+          git push origin HEAD:main
