@@ -49,7 +49,7 @@ UX_PATCH = r'''
  function labelPhase(p){return String(p||'queued').split('-').map(x=>x?x[0].toUpperCase()+x.slice(1):x).join(' ')}
  function terminal(j){return ['failed','cancelled','delivered','delivery-interrupted','expired'].includes(j.status)}
  function safeSameOriginPath(value,prefix){try{const u=new URL(String(value||''),location.href);return u.origin===location.origin&&u.pathname.startsWith(prefix)?u.pathname+u.search:''}catch(_){return''}}
- function persistActive(){try{if(!active||terminal(active)){sessionStorage.removeItem(persistedJobKey);return}const status=safeSameOriginPath(active.status_url,'/api/download-jobs/');if(!status){sessionStorage.removeItem(persistedJobKey);return}sessionStorage.setItem(persistedJobKey,JSON.stringify({status_url:status,name:active.name||'',saved_at:Date.now()}))}catch(_){}}
+ function persistActive(){try{if(!active||terminal(active)){sessionStorage.removeItem(persistedJobKey);return}const status=safeSameOriginPath(active.status_url,'/api/download-jobs/');if(!status){sessionStorage.removeItem(persistedJobKey);return}sessionStorage.setItem(persistedJobKey,JSON.stringify({status_url:status,name:active.name||'',direct_href:safeSameOriginPath(lastRequest&&lastRequest.directHref,'/'),saved_at:Date.now()}))}catch(_){}}
  function clearPersisted(){try{sessionStorage.removeItem(persistedJobKey)}catch(_){}}
  function render(j){
    active=j;panel.style.display='block';title.textContent=j.name||'Router VPN package';phase.textContent=`${labelPhase(j.phase)} • ${Math.max(0,Math.min(100,Number(j.progress||0)))}%`;fill.style.width=`${Math.max(0,Math.min(100,Number(j.progress||0)))}%`;
@@ -95,7 +95,7 @@ UX_PATCH = r'''
  document.addEventListener('visibilitychange',()=>{if(active&&!terminal(active)&&!document.hidden)schedulePoll(0)});
  window.addEventListener('online',()=>{if(active&&!terminal(active)){phase.textContent='Back online; resuming authenticated download progress…';schedulePoll(0)}});
  window.addEventListener('offline',()=>{if(active&&!terminal(active)){stopPoll();phase.textContent='Offline. The authenticated download job is preserved for this tab.';persistActive()}});
- try{const saved=JSON.parse(sessionStorage.getItem(persistedJobKey)||'null');const status=safeSameOriginPath(saved&&saved.status_url,'/api/download-jobs/');if(status&&Date.now()-Number(saved.saved_at||0)<6*60*60*1000){active={status_url:status,name:String(saved.name||'Router VPN package')};panel.style.display='block';title.textContent=active.name;phase.textContent='Resuming authenticated download job…';poll()}else clearPersisted()}catch(_){clearPersisted()}
+ try{const saved=JSON.parse(sessionStorage.getItem(persistedJobKey)||'null');const status=safeSameOriginPath(saved&&saved.status_url,'/api/download-jobs/');if(status&&Date.now()-Number(saved.saved_at||0)<6*60*60*1000){active={status_url:status,name:String(saved.name||'Router VPN package')};const direct=safeSameOriginPath(saved&&saved.direct_href,'/');lastRequest={name:active.name,directHref:direct||''};panel.style.display='block';title.textContent=active.name;phase.textContent='Resuming authenticated download job…';poll()}else clearPersisted()}catch(_){clearPersisted()}
 
  // A method with a missing prerequisite is still a method, not a reason to hide
  // the entire lane. Keep SOCKS5, OverTLS and Shadowsocks cards/details expanded

@@ -178,8 +178,10 @@ final class AndroidConnectionProfileStore {
             // Never delete the authoritative store before the replacement exists.
             Os.rename(tmp.getAbsolutePath(), file.getAbsolutePath());
             adopted = true;
-            Os.chmod(file.getAbsolutePath(), 0600);
-            requirePrivateRegularFile(file);
+            // The verified same-directory temporary file already owns mode 0600.
+            // Rename preserves that inode and mode. Do not add a fallible
+            // post-commit chmod/lstat that could report failure after disk has
+            // already adopted the new authoritative profile store.
         } finally {
             if (!adopted && tmp.exists() && !tmp.delete()) tmp.deleteOnExit();
         }

@@ -75,6 +75,22 @@ require("cmd/client/standard_exits_test.go", "TestStandardExitStoreRejectsSymlin
 require("cmd/client/router_profile_transaction_test.go", "RollsRAMBackWhenPersistenceFails", "CompetingMutation")
 require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSymlinkParent", "RejectsOversizedRead", "TargetReplacementBeforeAdoption")
 
+# Android whole-connection profiles are app-private authoritative state. The
+# verified 0600 temporary inode is fsynced and atomically adopted; no fallible
+# post-rename operation may make callers report failure after disk committed.
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "Os.chmod(tmp.getAbsolutePath(), 0600)",
+    "out.getFD().sync()",
+    "Os.rename(tmp.getAbsolutePath(), file.getAbsolutePath())",
+    "Rename preserves that inode and mode",
+)
+forbid(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
+    "Os.chmod(file.getAbsolutePath(), 0600)",
+)
+run_test("android/test_android_connection_profile_store_contract.py")
+
 # MTU adoption remains a two-phase live/session transaction and persistence
 # failure must restore the live interface/in-memory state. Runtime-profile MTU
 # edits are disposable pre-connect state, but still reject path redirection and

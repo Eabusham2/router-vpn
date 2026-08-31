@@ -26,7 +26,8 @@ def need(path: str, *markers: str) -> None:
 # requested, remain keyboard visible, and collapse cleanly on narrow screens.
 need(
     "server/scripts/generate-setup-assets.py",
-    "background:#15213a;color:var(--text);cursor:pointer",
+    "background-color:#15213a;background-image:none",
+    "color:var(--text);cursor:pointer",
     ".overlay[hidden]{display:none}",
     "max-height:92vh;overflow:auto",
     "@media(max-width:820px)",
@@ -82,6 +83,8 @@ need(
     "window.addEventListener('offline'",
     "Resuming authenticated download job",
     "Date.now()-Number(saved.saved_at||0)<6*60*60*1000",
+    "direct_href:safeSameOriginPath(lastRequest&&lastRequest.directHref,'/')",
+    "lastRequest={name:active.name,directHref:direct||''}",
 )
 
 # Setup Center remains deployment/admin/recovery. It must not claim to be the
