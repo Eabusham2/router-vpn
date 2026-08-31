@@ -5,12 +5,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 errors: list[str] = []
 
+
 def read(rel: str) -> str:
     path = ROOT / rel
     if not path.is_file():
         errors.append(f"missing {rel}")
         return ""
     return path.read_text(encoding="utf-8")
+
 
 def require(rel: str, *markers: str) -> str:
     body = read(rel)
@@ -19,12 +21,21 @@ def require(rel: str, *markers: str) -> str:
             errors.append(f"{rel}: missing {marker!r}")
     return body
 
+
+def function_block(body: str, signature: str) -> str:
+    start = body.find(signature)
+    if start < 0:
+        return ""
+    end = body.find("\nfunc ", start + len(signature))
+    return body[start:] if end < 0 else body[start:end]
+
+
 guard = require(
     "cmd/client/operation_guard.go",
     "beginNodeBoundOperation", "beginMutationOperation", "beginConnectionOperation", "operationMu.TryLock()",
     "profileSettingsBusy(a.state.Connected, a.state.Phase)",
     "connection request was cancelled before it could adopt a runtime",
-    "stopOwnedConnectionRuntime", "cloneRouterProfileStore",
+    "cancelPendingStartupPolicy(a)", "stopOwnedConnectionRuntime", "cloneRouterProfileStore",
 )
 require(
     "cmd/client/profile_settings.go",
@@ -35,13 +46,19 @@ main = require(
     "cmd/client/main.go",
     "beginMutationOperation(r)", "beginConnectionOperation()", "cancelConnectionOperation()",
     "a.operationMu.Lock()", "checkConnectionOperation()", "a.ownsConnectionRuntime(cmd)",
+    "errConnectionOperationCancelled", "connectionOperationContextOrBackground()",
     "oldStore := a.profiles", "a.profiles = oldStore",
 )
 for handler in ("saveProfile", "selectProfile", "deleteProfile", "importProfileBundle", "options"):
     if f"func (a *app) {handler}" not in main:
         errors.append(f"cmd/client/main.go: missing handler {handler}")
 
-strategy = require("cmd/client/strategy_modes.go", "func (a *app) strategyAuto", "func (a *app) strategySmartAuto", "func (a *app) strategyCustom")
+strategy = require(
+    "cmd/client/strategy_modes.go",
+    "func (a *app) strategyAuto", "func (a *app) strategySmartAuto", "func (a *app) strategyCustom",
+    "scheduleStartupPolicy(a)", "cancelPendingStartupPolicy", "applyStartupPolicyWithContext",
+    "errors.Is(err, errConnectionOperationCancelled)", "finalizeCancelledFallback",
+)
 for name, next_name in (("strategyAuto", "strategySmartAuto"), ("strategySmartAuto", "strategyCustom"), ("strategyCustom", "writeStrategyResult")):
     start = strategy.find(f"func (a *app) {name}")
     end = strategy.find(f"func ", start + 1) if next_name == "writeStrategyResult" else strategy.find(f"func (a *app) {next_name}", start + 1)
@@ -53,30 +70,29 @@ for rel, markers in {
         "func (a *app) strategyAuto", "func (a *app) strategySmartAuto", "func (a *app) strategyCustom",
         "beginConnectionOperation()", "a.operationMu.Lock()", "current.RouterID == st.RouterID",
         "func (a *app) applyStartupPolicy()", "startup auto-connect skipped while another transaction is active",
+        "errors.Is(restoreErr, errConnectionOperationCancelled)", "http.StatusConflict",
     ),
     "cmd/client/logical_modes.go": (
         "func (a *app) connectLogical", "beginConnectionOperation()",
         "previous := a.profiles.Profiles[i].BaseTunnel", "a.profiles.Profiles[i].BaseTunnel = previous",
+        "connectionOperationContextOrBackground()", "finalizeCancelledFallback", "http.StatusConflict",
     ),
     "cmd/client/multihop.go": (
         "beginConnectionOperation()", "checkConnectionOperation()", "previousStore := cloneRouterProfileStore(a.profiles)",
-        "a.rollbackProfilesLocked(previousStore)",
+        "a.rollbackProfilesLocked(previousStore)", "errConnectionOperationCancelled", "clearActiveMultihopGraph(a)",
     ),
     "cmd/client/multihop_native_routes.go": (
         "beginConnectionOperation()", "checkConnectionOperation()", "previousStore := cloneRouterProfileStore(a.profiles)",
-        "a.rollbackProfilesLocked(previousStore)",
+        "a.rollbackProfilesLocked(previousStore)", "proofErr := a.proveMultihopExit", "http.StatusConflict",
     ),
     "cmd/client/external_profile_connect.go": (
         "beginConnectionOperation()", "startedCmd", "checkConnectionOperation()",
         "previousStore := cloneRouterProfileStore(a.profiles)", "a.rollbackProfilesLocked(previousStore)",
+        "proveOpenVPNStandardExitForOperation", "proveStandardExitForOperation",
     ),
     "cmd/client/standard_exit_platform_routes.go": (
         "beginConnectionOperation()", "checkConnectionOperation()", "previousStore := cloneRouterProfileStore(a.profiles)",
-        "a.rollbackProfilesLocked(previousStore)",
-    ),
-    "cmd/client/openvpn_standard_exit_runtime.go": (
-        "func (a *app) standardExitConnectDispatch", "beginConnectionOperation()", "checkConnectionOperation()",
-        "previousStore := cloneRouterProfileStore(a.profiles)", "a.rollbackProfilesLocked(previousStore)",
+        "a.rollbackProfilesLocked(previousStore)", "proofErr", "http.StatusConflict",
     ),
     "cmd/client/connection_profiles.go": (
         "func (a *app) saveConnectionProfile", "func (a *app) updateConnectionProfile",
@@ -112,6 +128,39 @@ for rel, markers in {
 }.items():
     require(rel, *markers)
 
+legacy_openvpn = require(
+    "cmd/client/openvpn_standard_exit_runtime.go",
+    "func (a *app) standardExitConnectDispatch", "a.platformStandardExitConnect(w, r)",
+    "openVPNStandardExitCommand", "prepareOpenVPNRuntime",
+)
+dispatch = function_block(legacy_openvpn, "func (a *app) standardExitConnectDispatch")
+if "beginConnectionOperation()" in dispatch:
+    errors.append("cmd/client/openvpn_standard_exit_runtime.go: compatibility dispatcher still acquires a nested connection transaction")
+for retired in ("func proveOpenVPNStandardExit(", "func (a *app) openVPNStandardExitConnect"):
+    if retired in legacy_openvpn:
+        errors.append(f"cmd/client/openvpn_standard_exit_runtime.go: retired duplicate path remains: {retired}")
+
+require(
+    "cmd/client/connection_exit_proof.go",
+    "proveExpectedPublicExit", "NewRequestWithContext", "connectionOperationContextOrBackground",
+    "stopTimerWithoutBlocking", "CloseIdleConnections",
+)
+require(
+    "cmd/client/connection_cancellation.go",
+    "finalizeCancelledFallback", "releaseTransitionKillSwitch", "errConnectionOperationCancelled",
+)
+require(
+    "cmd/client/connection_launch_order_test.go",
+    "TestEveryShippingConnectionStartIsGuardedBeforeAndAfterLaunch",
+    "TestFallbackLoopsRecognizeStableCancellationSentinel",
+    "TestLegacyStandardExitDispatcherDelegatesWithoutNestedTransaction",
+)
+require(
+    "cmd/client/connection_exit_proof_test.go",
+    "TestProveExpectedPublicExitCancellationInterruptsRequest",
+    "TestStopTimerWithoutBlockingAfterDelivery",
+)
+
 require("cmd/client/forwarding_master.go", "beginNodeBoundOperation()", "active Router VPN graph changed while forwarding master was being verified")
 require("cmd/client/main.go", "func proxyJSON", "beginNodeBoundOperation()")
 require("cmd/client/operation_guard_test.go", "TestNodeBoundOperationSerializesWithoutRequiringDisconnect")
@@ -127,6 +176,7 @@ require(
     "TestProfileSettingsBusyFailsClosedForUnknownAndTransitionPhases",
     "TestOperationGuardSerializesConnectionAndMutationTransactions",
     "TestConnectionOperationCancellationBlocksAdoption",
+    "TestCancelConnectionOperationSuppressesPendingStartupPolicy",
 )
 require(
     "cmd/client/connection_profiles_test.go",
