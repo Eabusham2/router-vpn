@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
 store = (PKG / "AndroidNodeStore.java").read_text()
+private_store = (PKG / "AndroidPrivateFileStore.java").read_text()
 builder = (PKG / "AndroidMultihopController.java").read_text()
 runtime = (PKG / "AndroidMultihopRuntime.java").read_text()
 probe = (PKG / "AndroidPathProbe.java").read_text()
@@ -22,12 +23,19 @@ required_store = [
     "!supplied.equals(derived)",
     "return stable.substring(0, 32)",
     'matches("[0-9a-f]{32}")',
-    "atomicWrite",
-    "getFD().sync()",
+    "AndroidPrivateFileStore.write",
+    "AndroidPrivateFileStore.read",
     "ACTIVE_BUNDLE",
 ]
 for token in required_store:
     assert token in store, f"node store lost contract: {token}"
+for token in (
+    "Os.chmod(temporary.getAbsolutePath(), 0600)",
+    "out.getFD().sync()",
+    "requireTargetUnchanged",
+    "Os.rename(temporary.getAbsolutePath(), target.getAbsolutePath())",
+):
+    assert token in private_store, f"shared Android private store lost durable publication: {token}"
 assert 'profile.optString("id"' not in store.split("deriveId", 1)[1].split("private static String wireGuardPeerPublicKey", 1)[0], "local node identity must not trust repeated server profile id"
 
 required_builder = [
