@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,10 +43,35 @@ type startupSelection struct {
 }
 
 var strategyLocks sync.Map
+var startupPolicyCancels sync.Map // map[*app]context.CancelFunc
 
 func strategyLockFor(a *app) *sync.Mutex {
 	lock, _ := strategyLocks.LoadOrStore(a, &sync.Mutex{})
 	return lock.(*sync.Mutex)
+}
+
+func scheduleStartupPolicy(a *app) {
+	ctx, cancel := context.WithCancel(context.Background())
+	if previous, loaded := startupPolicyCancels.Swap(a, context.CancelFunc(cancel)); loaded {
+		previous.(context.CancelFunc)()
+	}
+	go func() {
+		defer startupPolicyCancels.CompareAndDelete(a, context.CancelFunc(cancel))
+		timer := time.NewTimer(1200 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		a.applyStartupPolicyWithContext(ctx)
+	}()
+}
+
+func cancelPendingStartupPolicy(a *app) {
+	if value, loaded := startupPolicyCancels.LoadAndDelete(a); loaded {
+		value.(context.CancelFunc)()
+	}
 }
 
 func registerStrategyRoutes(h *http.ServeMux, a *app) {
@@ -53,10 +79,7 @@ func registerStrategyRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/strategy/smart-auto", a.strategySmartAuto)
 	h.HandleFunc("/api/strategy/custom", a.strategyCustom)
 	go a.recordLastSuccessfulRuntime()
-	go func() {
-		time.Sleep(1200 * time.Millisecond)
-		a.applyStartupPolicy()
-	}()
+	scheduleStartupPolicy(a)
 }
 
 func (t *sessionTracker) strategyEvent(kind, message string) {
@@ -127,7 +150,11 @@ func writeStrategyResult(w http.ResponseWriter, result strategyResult, err error
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	if err != nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
+		status := http.StatusServiceUnavailable
+		if errors.Is(err, errConnectionOperationCancelled) {
+			status = http.StatusConflict
+		}
+		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error(), "strategy": result.Strategy, "requested_layers": result.Requested, "attempts": result.Attempts, "restored_mode": result.RestoredMode})
 		return
 	}
@@ -150,7 +177,11 @@ func (a *app) declareStrategy(strategy string, p common.RouterProfile) {
 	sessionTrackerFor(a).strategyEvent("strategy-start", strings.ToUpper(strategy)+" requested")
 }
 
-func (a *app) setStrategyWinner(strategy string, mode common.Mode) {
+func (a *app) setStrategyWinner(strategy string, mode common.Mode) error {
+	if err := a.checkConnectionOperation(); err != nil {
+		_ = a.stopMode()
+		return a.finalizeCancelledFallback(strings.ToUpper(strategy))
+	}
 	a.mu.Lock()
 	a.state.Mode = mode.ID
 	a.state.LogicalMode = strategy
@@ -159,9 +190,13 @@ func (a *app) setStrategyWinner(strategy string, mode common.Mode) {
 	a.state.LastError = ""
 	a.mu.Unlock()
 	sessionTrackerFor(a).strategyEvent("strategy-winner", fmt.Sprintf("%s selected proven runtime %s", strings.ToUpper(strategy), mode.ID))
+	return nil
 }
 
 func (a *app) failStrategy(strategy string, failures []string) error {
+	if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
+		return a.finalizeCancelledFallback(strings.ToUpper(strategy))
+	}
 	if err := a.releaseTransitionKillSwitch(); err != nil {
 		failures = append(failures, "kill-switch transition release: "+err.Error())
 	}
@@ -182,6 +217,9 @@ func (a *app) failStrategy(strategy string, failures []string) error {
 func (a *app) firstWorkingAuto(strategy string, p common.RouterProfile, result *strategyResult) (common.Mode, error) {
 	var failures []string
 	for _, mode := range a.modes {
+		if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
+			return common.Mode{}, a.finalizeCancelledFallback(strings.ToUpper(strategy))
+		}
 		if !mode.AutoEligible {
 			continue
 		}
@@ -198,8 +236,11 @@ func (a *app) firstWorkingAuto(strategy string, p common.RouterProfile, result *
 		attempt := strategyAttempt{Mode: mode.ID, Action: "candidate", Success: err == nil}
 		if err != nil {
 			attempt.Error = err.Error()
-			failures = append(failures, mode.ID+": "+err.Error())
 			result.Attempts = append(result.Attempts, attempt)
+			if errors.Is(err, errConnectionOperationCancelled) {
+				return common.Mode{}, a.finalizeCancelledFallback(strings.ToUpper(strategy))
+			}
+			failures = append(failures, mode.ID+": "+err.Error())
 			continue
 		}
 		result.Attempts = append(result.Attempts, attempt)
@@ -225,7 +266,9 @@ func (a *app) runAutoStrategy(strategy string) (strategyResult, error) {
 	if err != nil {
 		return result, err
 	}
-	a.setStrategyWinner(strategy, winner)
+	if err = a.setStrategyWinner(strategy, winner); err != nil {
+		return result, err
+	}
 	result.OK = true
 	result.RuntimeMode = winner.ID
 	return result, nil
@@ -250,6 +293,9 @@ func (a *app) runSmartStrategy() (strategyResult, error) {
 	for {
 		changed := false
 		for _, candidateID := range best.SmartSimplify {
+			if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
+				return result, a.finalizeCancelledFallback("SMART AUTO")
+			}
 			candidateID = strings.TrimSpace(candidateID)
 			if candidateID == "" || visited[candidateID] {
 				continue
@@ -269,6 +315,9 @@ func (a *app) runSmartStrategy() (strategyResult, error) {
 				result.Attempts = append(result.Attempts, strategyAttempt{Mode: candidateID, Action: "simplify", Success: false, Error: reason})
 				continue
 			}
+			if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
+				return result, a.finalizeCancelledFallback("SMART AUTO")
+			}
 			lastGood := best
 			sessionTrackerFor(a).strategyEvent("strategy-simplify", fmt.Sprintf("SMART trying %s -> %s", lastGood.ID, candidate.ID))
 			a.mu.Lock()
@@ -285,11 +334,17 @@ func (a *app) runSmartStrategy() (strategyResult, error) {
 			}
 			attempt.Error = tryErr.Error()
 			result.Attempts = append(result.Attempts, attempt)
+			if errors.Is(tryErr, errConnectionOperationCancelled) {
+				return result, a.finalizeCancelledFallback("SMART AUTO")
+			}
 			sessionTrackerFor(a).strategyEvent("strategy-restore", fmt.Sprintf("SMART simplification %s failed; restoring %s", candidate.ID, lastGood.ID))
 			restoreErr := a.startModeAttempt(lastGood.ID, true)
 			if restoreErr != nil {
-				message := fmt.Sprintf("SMART could not restore last-known-good runtime %s after %s failed: %v", lastGood.ID, candidate.ID, restoreErr)
 				result.Attempts = append(result.Attempts, strategyAttempt{Mode: lastGood.ID, Action: "restore", Success: false, Error: restoreErr.Error()})
+				if errors.Is(restoreErr, errConnectionOperationCancelled) {
+					return result, a.finalizeCancelledFallback("SMART AUTO")
+				}
+				message := fmt.Sprintf("SMART could not restore last-known-good runtime %s after %s failed: %v", lastGood.ID, candidate.ID, restoreErr)
 				return result, a.failStrategy(strategy, []string{message})
 			}
 			result.Attempts = append(result.Attempts, strategyAttempt{Mode: lastGood.ID, Action: "restore", Success: true})
@@ -300,7 +355,9 @@ func (a *app) runSmartStrategy() (strategyResult, error) {
 			break
 		}
 	}
-	a.setStrategyWinner(strategy, best)
+	if err = a.setStrategyWinner(strategy, best); err != nil {
+		return result, err
+	}
 	result.OK = true
 	result.RuntimeMode = best.ID
 	return result, nil
@@ -370,9 +427,12 @@ func customBasePenalty(mode common.Mode, preferred string) int {
 	return 0
 }
 
-func (a *app) rankCustomModes(requested []string, preferred string) []rankedCustomMode {
+func (a *app) rankCustomModes(requested []string, preferred string) ([]rankedCustomMode, error) {
 	candidates := []rankedCustomMode{}
 	for _, mode := range a.modes {
+		if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
+			return nil, errConnectionOperationCancelled
+		}
 		if mode.ID == "smart-auto" || mode.ID == "custom" || mode.ID == "all" {
 			continue
 		}
@@ -381,6 +441,9 @@ func (a *app) rankCustomModes(requested []string, preferred string) []rankedCust
 		}
 		if ok, _ := a.checkMode(mode); !ok {
 			continue
+		}
+		if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
+			return nil, errConnectionOperationCancelled
 		}
 		candidates = append(candidates, rankedCustomMode{Mode: mode, ExtraLayers: len(mode.Layers) - len(requested), BasePenalty: customBasePenalty(mode, preferred)})
 	}
@@ -400,7 +463,7 @@ func (a *app) rankCustomModes(requested []string, preferred string) []rankedCust
 		}
 		return a.Mode.ID < b.Mode.ID
 	})
-	return candidates
+	return candidates, nil
 }
 
 func (a *app) runCustomStrategy(requested []string) (strategyResult, error) {
@@ -422,13 +485,22 @@ func (a *app) runCustomStrategy(requested []string) (strategyResult, error) {
 		return result, errors.New("CUSTOM requires at least one requested layer")
 	}
 	a.declareStrategy(strategy, p)
-	candidates := a.rankCustomModes(requested, p.BaseTunnel)
+	candidates, rankErr := a.rankCustomModes(requested, p.BaseTunnel)
+	if errors.Is(rankErr, errConnectionOperationCancelled) {
+		return result, a.finalizeCancelledFallback("CUSTOM")
+	}
+	if rankErr != nil {
+		return result, rankErr
+	}
 	if len(candidates) == 0 {
 		message := "CUSTOM found no validated compatible stack containing every requested layer: " + strings.Join(requested, ", ")
 		return result, a.failStrategy(strategy, []string{message})
 	}
 	failures := []string{}
 	for _, ranked := range candidates {
+		if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
+			return result, a.finalizeCancelledFallback("CUSTOM")
+		}
 		mode := ranked.Mode
 		sessionTrackerFor(a).strategyEvent("strategy-attempt", fmt.Sprintf("CUSTOM trying %s for layers %s", mode.ID, strings.Join(requested, ", ")))
 		a.mu.Lock()
@@ -438,12 +510,17 @@ func (a *app) runCustomStrategy(requested []string) (strategyResult, error) {
 		attempt := strategyAttempt{Mode: mode.ID, Action: "compatible-stack", Success: tryErr == nil}
 		if tryErr != nil {
 			attempt.Error = tryErr.Error()
-			failures = append(failures, mode.ID+": "+tryErr.Error())
 			result.Attempts = append(result.Attempts, attempt)
+			if errors.Is(tryErr, errConnectionOperationCancelled) {
+				return result, a.finalizeCancelledFallback("CUSTOM")
+			}
+			failures = append(failures, mode.ID+": "+tryErr.Error())
 			continue
 		}
 		result.Attempts = append(result.Attempts, attempt)
-		a.setStrategyWinner(strategy, mode)
+		if err = a.setStrategyWinner(strategy, mode); err != nil {
+			return result, err
+		}
 		result.OK = true
 		result.RuntimeMode = mode.ID
 		return result, nil
@@ -537,12 +614,25 @@ func (a *app) recordLastSuccessfulRuntime() {
 }
 
 func (a *app) applyStartupPolicy() {
+	a.applyStartupPolicyWithContext(context.Background())
+}
+
+func (a *app) applyStartupPolicyWithContext(scheduleCtx context.Context) {
+	if scheduleCtx == nil {
+		scheduleCtx = context.Background()
+	}
+	if scheduleCtx.Err() != nil {
+		return
+	}
 	_, finish, guardErr := a.beginConnectionOperation()
 	if guardErr != nil {
 		log.Printf("Router VPN startup auto-connect skipped while another transaction is active: %v", guardErr)
 		return
 	}
 	defer finish()
+	if scheduleCtx.Err() != nil {
+		return
+	}
 	a.mu.Lock()
 	selectedID := a.profiles.SelectedID
 	profile, ok := a.profileByIDLocked(selectedID)
@@ -566,7 +656,12 @@ func (a *app) applyStartupPolicy() {
 		if loadErr == nil && selection.RouterID == profile.ID && selection.RuntimeMode != "" {
 			sessionTrackerFor(a).declareRequest("last", selection.Base)
 			sessionTrackerFor(a).strategyEvent("startup-last", "restoring last proven runtime "+selection.RuntimeMode)
-			if startErr := a.startModeAttempt(selection.RuntimeMode, false); startErr == nil {
+			startErr := a.startModeAttempt(selection.RuntimeMode, false)
+			if startErr == nil {
+				if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
+					_ = a.stopMode()
+					return
+				}
 				a.mu.Lock()
 				a.state.LogicalMode = selection.LogicalMode
 				a.state.RuntimeMode = selection.RuntimeMode
@@ -574,6 +669,12 @@ func (a *app) applyStartupPolicy() {
 				a.mu.Unlock()
 				return
 			}
+			if errors.Is(startErr, errConnectionOperationCancelled) {
+				return
+			}
+		}
+		if scheduleCtx.Err() != nil || errors.Is(a.checkConnectionOperation(), errConnectionOperationCancelled) {
+			return
 		}
 		log.Printf("Router VPN last-mode auto-connect had no restorable proven runtime; falling back to AUTO")
 		_, err = a.runAutoStrategy("auto")
