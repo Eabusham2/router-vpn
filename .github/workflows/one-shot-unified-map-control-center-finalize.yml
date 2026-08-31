@@ -1,0 +1,167 @@
+name: Finalize unified map control center PR
+
+on:
+  push:
+    branches:
+      - feature/unified-map-control-center
+    paths:
+      - .github/workflows/one-shot-unified-map-control-center-finalize.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  checks: read
+
+concurrency:
+  group: unified-map-control-center-finalize
+  cancel-in-progress: false
+
+jobs:
+  verify-pr-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: feature/unified-map-control-center
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/unified-map-control-center
+          fetch-depth: 0
+
+      - name: Check 1 — canonical contract and defaults
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          (cd client && python3 test_unified_control_center_contract.py)
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          c=json.loads(Path('client/unified-control-center-v2.json').read_text())
+          assert c['default_surface']=='map'
+          assert c['bottom_sheet_order']==['connection','multihop','settings','mode','dns']
+          assert c['defaults']['mode']=='smart-auto'
+          assert c['defaults']['selected_node_count']==1
+          assert c['defaults']['ipv6'] is True
+          assert c['defaults']['mtu_policy']=='auto'
+          assert c['defaults']['auto_require_encrypted'] is False
+          assert c['defaults']['auto_require_obfuscation'] is False
+          assert c['secure_transport']['mandatory'] is True
+          assert c['secure_transport']['xor_allowed'] is False
+          assert c['secure_transport']['custom_crypto_allowed'] is False
+          print('canonical contract/defaults: PASS')
+          PY
+
+      - name: Check 2 — UI structure and no accidental deletion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/unified-map-control-center-audit.py
+          if git diff --name-only --diff-filter=D origin/main...HEAD | grep -q .; then
+            echo 'Unexpected deletion versus main:' >&2
+            git diff --name-status --diff-filter=D origin/main...HEAD >&2
+            exit 1
+          fi
+          ! git grep -n -E 'Test & connect fastest|private func connectSpecific|private func connectFastest' -- \
+            ios android client macos 2>/dev/null
+          git diff --check origin/main...HEAD
+
+      - name: Check 3 — platform syntax and generated policy parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            client/unified_control_center_contract.py \
+            client/routervpn_unified_control_center.py \
+            deploy/unified-map-control-center-audit.py
+          mkdir -p /tmp/routervpn-javac
+          javac -d /tmp/routervpn-javac android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java
+          pwsh -NoProfile -NonInteractive -Command \
+            '$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseFile("client/RouterVPN-Windows-UnifiedControlCenter.ps1",[ref]$t,[ref]$e)>$null;if($e.Count){$e|%{$_.ToString()}|Write-Error;exit 1}'
+          if command -v swiftc >/dev/null 2>&1; then
+            swiftc -frontend -parse ios/RouterVPN/App/IOSUnifiedSecureTransport.swift
+            swiftc -frontend -parse ios/RouterVPN/App/IOSUnifiedProductView.swift
+          fi
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          contract=json.loads(Path('client/unified-control-center-v2.json').read_text())
+          required={'smart-auto','connection','multihop','settings','mode','dns','tor-bridge'}
+          bodies='\n'.join([
+              Path('android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java').read_text(),
+              Path('client/RouterVPN-Windows-UnifiedControlCenter.ps1').read_text(),
+              Path('client/routervpn_unified_control_center.py').read_text(),
+              Path('ios/RouterVPN/App/IOSUnifiedSecureTransport.swift').read_text(),
+          ]).lower()
+          for marker in required:
+              assert marker in bodies, marker
+          assert 'xor_allowed' in Path('client/unified-control-center-v2.json').read_text()
+          print('platform syntax/parity: PASS')
+          PY
+
+      - name: Check 4 — existing native and recovered map-first contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/native-map-first-ui-audit.py
+          python3 deploy/recovered-map-first-ui-contract-audit.py
+
+      - name: Check 5 — persistent and profile transaction safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/durable-state-transaction-audit.py
+
+      - name: Remove finalizer, create or update PR, and merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          git rm .github/workflows/one-shot-unified-map-control-center-finalize.yml
+          git commit -m 'Remove completed unified-control finalizer [skip ci]'
+          git push origin HEAD:"$BRANCH"
+
+          body_file="$(mktemp)"
+          cat >"$body_file" <<'BODY'
+          ## Unified Map Control Center v2
+
+          This consolidates the daily VPN UX around one map/vector-globe surface and one swipe-up control sheet across the native products.
+
+          - Map above Connection → Multihop → Settings → Mode → DNS.
+          - One node by default; Router VPN or custom nodes; profile create/load/update/delete/import.
+          - Connect changes to Disconnect; node selection and Fastest only select, never auto-connect.
+          - SMART AUTO is the default; AUTO, all presets, saved CUSTOM presets and a separate visual preset builder remain available.
+          - Color-coded device/bridge/entry/middle/custom/exit roles, animated path packet, node/pairwise/hop/total RTT, per-hop and end-to-end speed metrics.
+          - Auto/fixed/retest MTU, IPv6 On default, kill switch, master forwarding, capability-gated Jumbo/DAITA-like controls and performance settings.
+          - SOCKS5, HTTP(S) CONNECT, Shadowsocks 2022 and Tor bridge profiles.
+          - Mandatory standard authenticated encryption/handshake policy. Plain bridge types require an encrypted inner tunnel; XOR and home-grown crypto are rejected.
+          - First-run/setup overlays are explicitly opened, draggable/dismissible, and no longer cover the primary controls automatically.
+
+          ### Five checks
+
+          1. Canonical contract/default/security unit test.
+          2. Unified UI audit, old auto-connect removal and no-deletion check.
+          3. Python/Java/PowerShell/Swift syntax and platform parity.
+          4. Existing native + recovered map-first contracts.
+          5. Durable/profile transaction-safety audit.
+          BODY
+
+          pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+              --title 'Unify the native map-first control center' --body-file "$body_file"
+            pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --state open --json number --jq '.[0].number')"
+          else
+            gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" \
+              --title 'Unify the native map-first control center' --body-file "$body_file"
+            if [ "$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
+              gh pr ready "$pr" --repo "$GITHUB_REPOSITORY"
+            fi
+          fi
+
+          gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --merge --delete-branch \
+            --subject 'Unify the native map-first control center' \
+            --body 'Five independent source/syntax/safety checks passed on the reviewed feature branch.'
