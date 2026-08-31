@@ -1,0 +1,82 @@
+name: Build unified map control center branch
+
+on:
+  push:
+    branches:
+      - feature/unified-map-control-center
+    paths:
+      - .github/workflows/one-shot-unified-map-control-center.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unified-map-control-center-branch
+  cancel-in-progress: false
+
+jobs:
+  implement-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/unified-map-control-center
+          fetch-depth: 0
+      - name: Apply the unified map-first implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin feature/unified-map-control-center
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          python3 .github/scripts/apply-unified-map-control-center.py
+
+          # Profile CRUD lives in the dedicated iOS profile store rather than
+          # the map shell; make the cross-platform audit prove it there.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('deploy/unified-map-control-center-audit.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('    "IOSConnectionProfileStore",\n', '')
+          anchor = 'forbid(\n    "ios/RouterVPN/App/IOSUnifiedProductView.swift",\n'
+          block = '''ios_profile_sources = "\\n".join(
+              p.read_text(encoding="utf-8", errors="replace")
+              for p in (ROOT / "ios/RouterVPN/App").glob("*.swift")
+          )
+          for marker in ("IOSConnectionProfileStore", "static func add", "static func update", "static func delete", "static func load"):
+              if marker not in ios_profile_sources:
+                  errors.append(f"iOS profile CRUD source missing {marker!r}")
+
+          '''
+          if anchor not in text:
+              raise SystemExit('iOS profile audit insertion anchor drifted')
+          path.write_text(text.replace(anchor, block + anchor, 1), encoding='utf-8')
+          PY
+
+          # Check 1: canonical behavior/default/security unit contract.
+          (cd client && python3 test_unified_control_center_contract.py)
+
+          # Check 2: new unified UI and secure-bridge source audit.
+          python3 deploy/unified-map-control-center-audit.py
+
+          # Check 3: existing native map-first parity contract.
+          python3 deploy/native-map-first-ui-audit.py
+
+          # Check 4: recovered map-first requirements closure.
+          python3 deploy/recovered-map-first-ui-contract-audit.py
+
+          # Check 5: persistent/profile transaction safety remains intact.
+          python3 deploy/durable-state-transaction-audit.py
+
+          python3 -m py_compile \
+            client/unified_control_center_contract.py \
+            client/routervpn_unified_control_center.py \
+            deploy/unified-map-control-center-audit.py
+          git diff --check
+
+          # Remove feature transport automation before the branch is reviewed.
+          git rm .github/workflows/one-shot-unified-map-control-center.yml
+          git rm .github/scripts/apply-unified-map-control-center.py
+          git add -A
+          git commit -m "Unify the native map-first control center"
+          git push origin HEAD:feature/unified-map-control-center
