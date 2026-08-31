@@ -96,6 +96,16 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
 	state := a.state
 	a.mu.Unlock()
+
+	graph, graphOK := getActiveMultihopGraph(a)
+	entryID, exitID := control.MultihopEntryID, control.MultihopExitID
+	actualEntry, actualExit, actualBase, actualMode := "", "", "", ""
+	if state.Mode == "multihop" && graphOK {
+		entryID, exitID = graph.EntryID, graph.ExitID
+		actualEntry, actualExit = graph.EntryID, graph.ExitID
+		actualBase, actualMode = graph.Base, graph.ExitMode
+	}
+
 	store, storeErr := loadStandardExitStore()
 	standard := []standardExitSummary{}
 	if storeErr == nil {
@@ -113,8 +123,12 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"platform":                   runtime.GOOS,
 		"platform_supported":         nativeMultihopPlatformSupported(),
-		"entry_id":                   control.MultihopEntryID,
-		"exit_id":                    control.MultihopExitID,
+		"entry_id":                   entryID,
+		"exit_id":                    exitID,
+		"configured_entry_id":        control.MultihopEntryID,
+		"configured_exit_id":         control.MultihopExitID,
+		"actual_entry_id":            actualEntry,
+		"actual_exit_id":             actualExit,
 		"enabled":                    control.MultihopEnabled,
 		"supported_entry_bases":      []string{"wg"},
 		"supported_exit_modes":       []string{"shadowsocks", "hysteria2"},
@@ -127,20 +141,10 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 			}
 			return ""
 		}(),
-		"connected": state.Connected && (state.Mode == "multihop" || state.Mode == "external-node" || state.Mode == "standard-exit"),
-		"actual_exit_id": func() string {
-			if state.Mode == "multihop" || state.Mode == "external-node" || state.Mode == "standard-exit" {
-				return state.RouterID
-			}
-			return ""
-		}(),
-		"runtime_exit_mode": func() string {
-			if state.Mode == "multihop" || state.Mode == "external-node" || state.Mode == "standard-exit" {
-				return state.RuntimeMode
-			}
-			return ""
-		}(),
-		"nodes": multihopNodeSummaries(profiles),
+		"connected":          state.Connected && state.Mode == "multihop" && graphOK,
+		"runtime_entry_base": actualBase,
+		"runtime_exit_mode":  actualMode,
+		"nodes":              multihopNodeSummaries(profiles),
 	})
 }
 
@@ -192,6 +196,11 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// The actual graph is separate from mutable saved preferences. Clear any
+	// prior graph before teardown and publish this graph only after the exact new
+	// runtime is owned by the controller.
+	clearActiveMultihopGraph(a)
 	sessionTrackerFor(a).declareRequest("multihop", sel.Base)
 	if err = a.stopMode(); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
@@ -232,19 +241,24 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	if err = a.checkConnectionOperation(); err != nil {
 		a.stopOwnedConnectionRuntime(cmd)
+		clearActiveMultihopGraph(a)
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	setActiveMultihopGraph(a, sel)
+
 	proofErr := a.proveMultihopExit(sel.Exit)
 	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
 		a.stopOwnedConnectionRuntime(cmd)
+		clearActiveMultihopGraph(a)
 		sessionTrackerFor(a).markRequestFailure(cancelErr.Error())
 		http.Error(w, cancelErr.Error(), http.StatusConflict)
 		return
 	}
 	if proofErr != nil {
 		_ = a.stopMode()
+		clearActiveMultihopGraph(a)
 		msg := "multihop exit proof failed: " + proofErr.Error()
 		a.mu.Lock()
 		a.state.Mode = "multihop"
@@ -263,6 +277,7 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	if a.cmd != cmd {
 		a.mu.Unlock()
+		clearActiveMultihopGraph(a)
 		sessionTrackerFor(a).markRequestFailure("multihop runtime changed during exit proof")
 		http.Error(w, "multihop runtime changed during exit proof", http.StatusConflict)
 		return
@@ -285,6 +300,7 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	if persistErr != nil {
 		_ = a.stopMode()
+		clearActiveMultihopGraph(a)
 		sessionTrackerFor(a).markRequestFailure(persistErr.Error())
 		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
 		return
