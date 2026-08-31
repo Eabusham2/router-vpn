@@ -8,6 +8,7 @@ import sys
 import tempfile
 
 MAX_BYTES = 32 << 20
+PRIVATE_MODE = 0o600
 
 
 def _validate_existing_ancestors(parent: pathlib.Path) -> None:
@@ -64,17 +65,38 @@ def atomic_private_write(path: pathlib.Path, body: bytes) -> None:
 
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.tmp-", dir=path.parent)
     tmp = pathlib.Path(name)
-    committed = False
+    adopted = False
     try:
-        os.fchmod(fd, 0o600)
+        os.fchmod(fd, PRIVATE_MODE)
         with os.fdopen(fd, "wb", closefd=True) as stream:
             stream.write(body)
             stream.flush()
             os.fsync(stream.fileno())
+        staged_stat = tmp.lstat()
+        if (
+            stat.S_ISLNK(staged_stat.st_mode)
+            or not stat.S_ISREG(staged_stat.st_mode)
+            or staged_stat.st_mode & 0o777 != PRIVATE_MODE
+        ):
+            raise RuntimeError(f"staged private target is unsafe: {tmp}")
+
         path = ensure_private_parent(path)
         require_target_unchanged(path, info)
         os.replace(tmp, path)
-        committed = True
+        adopted = True
+
+        # Success belongs only to the exact inode staged by this transaction.
+        # A foreign process can replace the destination immediately after the
+        # rename; without this check the caller would be told its private bytes
+        # were durable even though a different file already owns the path.
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or current.st_mode & 0o777 != PRIVATE_MODE
+            or not os.path.samestat(staged_stat, current)
+        ):
+            raise RuntimeError(f"adopted private target identity changed before verification: {path}")
         try:
             dir_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
@@ -82,9 +104,12 @@ def atomic_private_write(path: pathlib.Path, body: bytes) -> None:
             finally:
                 os.close(dir_fd)
         except OSError:
+            # The exact staged inode was verified at the target. Some filesystems
+            # do not support directory fsync; returning an error now would be a
+            # false post-rename transaction failure.
             pass
     finally:
-        if not committed:
+        if not adopted:
             tmp.unlink(missing_ok=True)
 
 
