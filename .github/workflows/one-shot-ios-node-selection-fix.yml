@@ -1,4 +1,4 @@
-name: One-shot ordered source corrections
+name: One-shot iOS unified source composition
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: one-shot-ordered-source-corrections
+  group: one-shot-ios-unified-source-composition
   cancel-in-progress: false
 
 jobs:
@@ -21,38 +21,13 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Apply, commit, publish, then report aggregate failures
+      - name: Compose shipping iOS UI and remove transport automation
         shell: bash
         run: |
           set -euo pipefail
           git pull --ff-only origin main
           git config user.name Eabusham2
           git config user.email eabusham2@gmail.com
-
-          set +e
-          python3 .github/scripts/apply-ordered-source-corrections.py >"$RUNNER_TEMP/ordered-corrections.log" 2>&1
-          rc=$?
-          set -e
-          cat "$RUNNER_TEMP/ordered-corrections.log"
-
-          # Completed source commits are valuable independently. Publish them
-          # before inspecting aggregate contract failures at the end.
+          python3 .github/scripts/apply-ios-unified-composition.py
           git push origin HEAD:main
-
-          if [ "$rc" -ne 0 ]; then
-            git fetch origin automation/ios-source-fix
-            diag="$(mktemp -d)"
-            git worktree add --detach "$diag" origin/automation/ios-source-fix
-            mkdir -p "$diag/.github/automation"
-            cp "$RUNNER_TEMP/ordered-corrections.log" "$diag/.github/automation/ordered-corrections.log"
-            cd "$diag"
-            git checkout -b ordered-correction-diagnostic
-            git config user.name Eabusham2
-            git config user.email eabusham2@gmail.com
-            git add .github/automation/ordered-corrections.log
-            git commit -m 'Capture ordered correction failure [skip ci]'
-            git push --force-with-lease origin HEAD:automation/ios-source-fix
-            exit "$rc"
-          fi
-
           git push origin --delete automation/ios-source-fix || true
