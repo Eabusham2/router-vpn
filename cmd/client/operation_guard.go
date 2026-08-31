@@ -130,6 +130,10 @@ func (a *app) checkConnectionOperation() error {
 }
 
 func (a *app) cancelConnectionOperation() {
+	// Disconnect also means “do not auto-connect a moment later.” Cancel the
+	// delayed startup policy before cancelling any transaction that has already
+	// begun, closing both sides of the startup-timer race.
+	cancelPendingStartupPolicy(a)
 	a.mu.Lock()
 	cancel := a.connectionCancel
 	a.mu.Unlock()
