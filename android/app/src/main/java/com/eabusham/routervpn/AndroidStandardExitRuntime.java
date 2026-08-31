@@ -52,7 +52,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             String before=singBox.getState();
             if("UP".equals(before)||"STARTING".equals(before)||"STOPPING".equals(before))throw new IllegalStateException("Disconnect the current embedded VPN before custom exit.");
             AndroidHomeStateStore.beginExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg");sessionStarted=true;
-            cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing WireGuard entry → "+exit.protocl+" custom exit…");
+            cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing WireGuard entry → "+exit.protocol+" custom exit…");
             NativeSingBoxController.SessionInfo session=direct?directBuilder.prepare(exit):builder.prepare(entry,exit);
             if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
             cb.progress("Starting one Android VpnService custom-exit graph…");
@@ -69,7 +69,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             cb.progress("Tunnel is UP; proving the exact public custom exit before Connected…");
             String observed=proveExpectedPublicIp(exit.expectedPublicIp);
             AndroidHomeStateStore.connectedExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg",observed);
-            cb.finished(true,direct?"Connected: direct "+exit.protocl+" custom exit. Public exit proof passed: "+observed:"Connected: WireGuard entry → "+exit.protocl+" custom exit. Public exit proof passed: "+observed);
+            cb.finished(true,direct?"Connected: direct "+exit.protocol+" custom exit. Public exit proof passed: "+observed:"Connected: WireGuard entry → "+exit.protocol+" custom exit. Public exit proof passed: "+observed);
         } catch(InterruptedException e){
             Thread.currentThread().interrupt();if(started)singBox.stop();if(sessionStarted)AndroidHomeStateStore.disconnected(context);cb.finished(false,"Android custom exit cancelled and disconnected.");
         } catch(Exception e){
