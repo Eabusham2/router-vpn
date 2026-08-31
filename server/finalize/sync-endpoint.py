@@ -60,17 +60,18 @@ def _validate_owned_ancestors(parent: pathlib.Path) -> None:
             raise RuntimeError(f"refusing non-directory/symlink owned path component: {current}")
 
 
-def ensure_owned_parent(path: pathlib.Path) -> None:
+def ensure_owned_parent(path: pathlib.Path) -> os.stat_result:
     parent = path.parent
     _validate_owned_ancestors(parent)
     info = parent.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise RuntimeError(f"refusing non-directory/symlink owned parent: {parent}")
     _validate_owned_ancestors(parent)
+    return info
 
 
 def read_owned_file_snapshot(path: pathlib.Path) -> tuple[bytes, os.stat_result]:
-    ensure_owned_parent(path)
+    parent_before = ensure_owned_parent(path)
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink owned file: {path}")
@@ -102,9 +103,14 @@ def read_owned_file_snapshot(path: pathlib.Path) -> tuple[bytes, os.stat_result]
             total += len(chunk)
             if total > MAX_OWNED_FILE:
                 raise RuntimeError(f"owned file exceeds safety limit: {path}")
-        ensure_owned_parent(path)
+        parent_after = ensure_owned_parent(path)
         current = path.lstat()
-        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+        if (
+            not os.path.samestat(parent_before, parent_after)
+            or stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(opened, current)
+        ):
             raise RuntimeError(f"owned file changed during read: {path}")
         return b"".join(chunks), current
     finally:
@@ -208,6 +214,13 @@ def stage_private(path: pathlib.Path, data: bytes) -> pathlib.Path:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
+        staged = tmp.lstat()
+        if (
+            stat.S_ISLNK(staged.st_mode)
+            or not stat.S_ISREG(staged.st_mode)
+            or stat.S_IMODE(staged.st_mode) != PRIVATE_MODE
+        ):
+            raise RuntimeError(f"staged endpoint file is unsafe: {tmp}")
         return tmp
     except BaseException:
         try:
@@ -241,9 +254,18 @@ def restore_changes(changes: Iterable[tuple[Change, os.stat_result]]) -> list[st
             # state and report incomplete recovery instead of clobbering it.
             require_owned_state(change.path, adopted_stat, "adopted endpoint file")
             tmp = stage_private(change.path, change.before)
+            staged_stat = tmp.lstat()
             require_owned_state(change.path, adopted_stat, "adopted endpoint file")
             os.replace(tmp, change.path)
             tmp = None
+            restored = change.path.lstat()
+            if (
+                stat.S_ISLNK(restored.st_mode)
+                or not stat.S_ISREG(restored.st_mode)
+                or stat.S_IMODE(restored.st_mode) != PRIVATE_MODE
+                or not os.path.samestat(staged_stat, restored)
+            ):
+                raise RuntimeError(f"restored endpoint file identity changed before verification: {change.path}")
             fsync_directory(change.path.parent)
         except Exception as exc:
             errors.append(f"{change.path}: {exc}")
@@ -265,12 +287,23 @@ def apply_transaction(changes: list[Change]) -> None:
         for change in changes:
             require_owned_state(change.path, change.before_stat, "owned endpoint file")
             tmp = staged[change.path]
+            staged_stat = tmp.lstat()
             os.replace(tmp, change.path)
             staged.pop(change.path, None)
+
+            # Register the exact expected staged identity before the destination
+            # is re-read. If a foreign actor replaces the path immediately after
+            # rename, rollback refuses to overwrite that foreign inode.
+            adopted.append((change, staged_stat))
             adopted_stat = change.path.lstat()
-            if stat.S_ISLNK(adopted_stat.st_mode) or not stat.S_ISREG(adopted_stat.st_mode):
-                raise RuntimeError(f"adopted endpoint file is unsafe: {change.path}")
-            adopted.append((change, adopted_stat))
+            if (
+                stat.S_ISLNK(adopted_stat.st_mode)
+                or not stat.S_ISREG(adopted_stat.st_mode)
+                or stat.S_IMODE(adopted_stat.st_mode) != PRIVATE_MODE
+                or not os.path.samestat(staged_stat, adopted_stat)
+            ):
+                raise RuntimeError(f"adopted endpoint file identity changed before verification: {change.path}")
+            adopted[-1] = (change, adopted_stat)
             fsync_directory(change.path.parent)
     except Exception as exc:
         rollback_errors = restore_changes(reversed(adopted))
