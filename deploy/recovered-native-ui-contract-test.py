@@ -12,6 +12,7 @@ AUDIT = runpy.run_path(str(Path(__file__).with_name("recovered-native-ui-contrac
 contains_any = AUDIT["contains_any"]
 entrypoints = AUDIT["entrypoints"]
 require_group = AUDIT["require_group"]
+platforms = AUDIT["PLATFORMS"]
 
 
 class RecoveredNativeUiContractTests(unittest.TestCase):
@@ -48,6 +49,20 @@ class RecoveredNativeUiContractTests(unittest.TestCase):
             ("latency", "rtt"),
         )
         self.assertEqual([], failures)
+
+    def test_mobile_platform_roots_are_native_projects(self) -> None:
+        self.assertEqual(("android",), platforms["Android"][0])
+        self.assertEqual(("ios/RouterVPN",), platforms["iOS/iPadOS"][0])
+
+    def test_mobile_entrypoints_are_real_native_sources(self) -> None:
+        self.assertEqual(
+            ("productactivity.java", "androidmanifest.xml"),
+            platforms["Android"][1],
+        )
+        self.assertEqual(
+            ("iosunifiedproductview.swift", "packettunnelprovider.swift"),
+            platforms["iOS/iPadOS"][1],
+        )
 
 
 if __name__ == "__main__":
