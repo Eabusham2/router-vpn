@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import CoreLocation
 import Foundation
 import MapKit
 import ObjectiveC
@@ -6,12 +7,14 @@ import ObjectiveC
 private var unifiedMapChromeViewKey: UInt8 = 0
 private var unifiedMapChromeAnimationTimerKey: UInt8 = 0
 private var unifiedMapChromeRefreshTimerKey: UInt8 = 0
+private var unifiedMapLocationControllerKey: UInt8 = 0
 
 private final class RouterVPNMacRouteChromeView: NSView {
     weak var mapView: MKMapView?
     private var entry: CLLocationCoordinate2D?
     private var exit: CLLocationCoordinate2D?
     private var pathMs: Double = 0
+    private var userLocation: CLLocationCoordinate2D?
     private var phase: CGFloat = 0
     private var routeConnected = false
 
@@ -31,6 +34,11 @@ private final class RouterVPNMacRouteChromeView: NSView {
         self.exit = exit
         self.pathMs = max(0, pathMs)
         routeConnected = connected && entry != nil && exit != nil
+        needsDisplay = true
+    }
+
+    func updateUserLocation(_ coordinate: CLLocationCoordinate2D?) {
+        userLocation = coordinate
         needsDisplay = true
     }
 
@@ -62,6 +70,25 @@ private final class RouterVPNMacRouteChromeView: NSView {
             .font: NSFont.systemFont(ofSize: 9, weight: .regular),
             .foregroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.78)
         ])
+
+        if let userLocation {
+            let point = mapView.convert(userLocation, toPointTo: self)
+            if point.x.isFinite, point.y.isFinite {
+                let halo = NSBezierPath(ovalIn: NSRect(x: point.x - 9, y: point.y - 9, width: 18, height: 18))
+                NSColor.systemGreen.withAlphaComponent(0.22).setFill(); halo.fill()
+                let marker = NSBezierPath(ovalIn: NSRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
+                NSColor.systemGreen.setFill(); marker.fill()
+                NSColor.white.setStroke(); marker.lineWidth = 1.5; marker.stroke()
+                ("YOU" as NSString).draw(
+                    at: NSPoint(x: point.x + 8, y: point.y - 6),
+                    withAttributes: [
+                        .font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                        .foregroundColor: NSColor.systemGreen,
+                        .backgroundColor: NSColor.windowBackgroundColor.withAlphaComponent(0.78),
+                    ]
+                )
+            }
+        }
 
         guard routeConnected, let entry, let exit else { return }
         let a = mapView.convert(entry, toPointTo: self)
@@ -106,6 +133,91 @@ private final class RouterVPNMacRouteChromeView: NSView {
     }
 }
 
+
+@MainActor
+private final class RouterVPNMacUserLocationController: NSObject, CLLocationManagerDelegate {
+    private weak var chrome: RouterVPNMacRouteChromeView?
+    private weak var button: NSButton?
+    private let manager = CLLocationManager()
+    private var shown = false
+    private var requestedByUser = false
+
+    init(chrome: RouterVPNMacRouteChromeView, button: NSButton) {
+        self.chrome = chrome
+        self.button = button
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+    }
+
+    @objc func toggle(_ sender: NSButton) {
+        if shown {
+            requestedByUser = false
+            manager.stopUpdatingLocation()
+            chrome?.updateUserLocation(nil)
+            shown = false
+            sender.title = "Show my location"
+            sender.toolTip = "Show a fresh real macOS location fix. Router VPN never infers a device pin from IP."
+            return
+        }
+        requestedByUser = true
+        switch manager.authorizationStatus {
+        case .notDetermined:
+            sender.title = "Location permission…"
+            manager.requestWhenInUseAuthorization()
+        case .authorizedAlways, .authorizedWhenInUse:
+            requestFix()
+        case .denied, .restricted:
+            sender.title = "Location unavailable"
+        @unknown default:
+            sender.title = "Location unavailable"
+        }
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let authorization = manager.authorizationStatus
+        Task { @MainActor [weak self] in
+            guard let self, self.requestedByUser else { return }
+            switch authorization {
+            case .authorizedAlways, .authorizedWhenInUse: self.requestFix()
+            case .denied, .restricted: self.button?.title = "Location unavailable"
+            case .notDetermined: break
+            @unknown default: self.button?.title = "Location unavailable"
+            }
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        let sample = locations.last.map { location in
+            (location.coordinate, location.horizontalAccuracy, abs(location.timestamp.timeIntervalSinceNow))
+        }
+        Task { @MainActor [weak self] in
+            guard let self, self.requestedByUser, let sample else { return }
+            guard sample.1 >= 0, sample.1 <= 10_000, sample.2 <= 30,
+                  CLLocationCoordinate2DIsValid(sample.0) else {
+                self.button?.title = "No fresh location fix"
+                return
+            }
+            self.chrome?.updateUserLocation(sample.0)
+            self.shown = true
+            self.button?.title = "Hide my location"
+            self.button?.toolTip = "Hide the real device marker from the Router VPN map."
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Task { @MainActor [weak self] in
+            guard let self, self.requestedByUser else { return }
+            self.button?.title = "Location fix unavailable"
+        }
+    }
+
+    private func requestFix() {
+        button?.title = "Locating…"
+        manager.requestLocation()
+    }
+}
+
 extension ProductWindowController {
     private var unifiedMapChromeView: RouterVPNMacRouteChromeView? {
         get { objc_getAssociatedObject(self, &unifiedMapChromeViewKey) as? RouterVPNMacRouteChromeView }
@@ -131,6 +243,21 @@ extension ProductWindowController {
             chrome.bottomAnchor.constraint(equalTo: map.bottomAnchor)
         ])
         unifiedMapChromeView = chrome
+
+        let locationButton = NSButton(title: "Show my location", target: nil, action: nil)
+        locationButton.bezelStyle = .rounded
+        locationButton.controlSize = .small
+        locationButton.toolTip = "Show a fresh real macOS location fix. Router VPN never infers a device pin from IP."
+        locationButton.translatesAutoresizingMaskIntoConstraints = false
+        map.addSubview(locationButton, positioned: .above, relativeTo: chrome)
+        NSLayoutConstraint.activate([
+            locationButton.trailingAnchor.constraint(equalTo: map.trailingAnchor, constant: -18),
+            locationButton.topAnchor.constraint(equalTo: map.topAnchor, constant: 16),
+        ])
+        let locationController = RouterVPNMacUserLocationController(chrome: chrome, button: locationButton)
+        locationButton.target = locationController
+        locationButton.action = #selector(RouterVPNMacUserLocationController.toggle(_:))
+        objc_setAssociatedObject(self, &unifiedMapLocationControllerKey, locationController, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
         let animation = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self, weak chrome] timer in
             guard self != nil, let chrome else { timer.invalidate(); return }
