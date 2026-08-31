@@ -1,11 +1,8 @@
-# Triggered once after the workflow exists on main; the job deletes this file.
 name: One-shot iOS node-selection source fix
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/one-shot-ios-node-selection-fix.yml
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
@@ -16,15 +13,23 @@ concurrency:
 
 jobs:
   patch:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.body == '/apply-ios-node-selection-fix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
+
       - name: Patch iOS selection semantics and remove this one-shot workflow
         shell: bash
         run: |
           set -euo pipefail
+          git pull --ff-only origin main
+
           python3 - <<'PY'
           from pathlib import Path
 
@@ -67,22 +72,28 @@ jobs:
     }
 ''',
           }
+
           for old, new in replacements.items():
               count = text.count(old)
               if count != 1:
                   raise SystemExit(f'iOS node-selection source drift: expected one match, found {count}: {old[:100]!r}')
               text = text.replace(old, new, 1)
+
           if 'private func connectSpecific' in text or 'private func connectFastest' in text:
               raise SystemExit('old iOS auto-connect selectors remain')
           selection = text.split('private func selectSpecific', 1)[1].split('private func connectOrDisconnect', 1)[0]
           if 'connectOrDisconnect()' in selection:
               raise SystemExit('iOS node selection still triggers Connect')
+          if 'Test & connect fastest' in text:
+              raise SystemExit('old iOS Fastest label remains')
+
           path.write_text(text, encoding='utf-8')
           PY
+
           git rm .github/workflows/one-shot-ios-node-selection-fix.yml
           git diff --check
           git config user.name Eabusham2
           git config user.email eabusham2@gmail.com
           git add ios/RouterVPN/App/IOSUnifiedProductView.swift
-          git commit -m 'Separate iOS node selection from Connect'
+          git commit -m 'Separate iOS node selection from Connect [skip ci]'
           git push origin HEAD:main
