@@ -2,14 +2,34 @@
 """Exact artifact routing for authenticated Router VPN downloads.
 
 Public Setup Center request names stay stable and generic/node-secret-free. Each
-request prefers a same-SHA release-candidate artifact, then a same-SHA dedicated
-native CI artifact when one exists. Desktop requests may fall back to the
-bounded router-local generic builder only after these GitHub sources fail.
+request prefers the immutable exact-SHA GitHub Release asset produced by
+build-all, then a same-SHA release-candidate Actions artifact, then a same-SHA
+dedicated native CI artifact when one exists. Desktop requests may fall back to
+the bounded router-local generic builder only after all GitHub sources fail.
 Mobile requests never use a Linux-host fake build fallback.
 """
 from __future__ import annotations
 
-# request name -> ordered (GitHub artifact name, member filename)
+EXACT_SHA_RELEASE_TAG_PREFIX = "router-vpn-sha-"
+
+# Public authenticated Setup Center request name -> immutable asset name inside
+# the exact-SHA GitHub Release. The release tag itself contains the full source
+# SHA, so stable member names do not create a moving-main trust boundary.
+EXACT_SHA_RELEASE_ASSETS: dict[str, str] = {
+    "router-vpn-windows-amd64.zip": "RouterVPN-Windows-amd64.zip",
+    "router-vpn-windows-arm64.zip": "RouterVPN-Windows-arm64.zip",
+    "router-vpn-windows-portable-amd64.zip": "RouterVPN-Portable-Windows-amd64.zip",
+    "router-vpn-windows-portable-arm64.zip": "RouterVPN-Portable-Windows-arm64.zip",
+    "router-vpn-macos-amd64.zip": "RouterVPN-darwin-amd64.tar.gz",
+    "router-vpn-macos-arm64.zip": "RouterVPN-darwin-arm64.tar.gz",
+    "router-vpn-linux-amd64.zip": "RouterVPN-linux-amd64.tar.gz",
+    "router-vpn-linux-arm64.zip": "RouterVPN-linux-arm64.tar.gz",
+    "router-vpn-android.apk": "app-debug.apk",
+    "router-vpn-ios.ipa": "RouterVPN-native-unsigned-resignable.ipa",
+    "router-vpn-ios-preview.ipa": "RouterVPN-native-unsigned-resignable.ipa",
+}
+
+# request name -> ordered (GitHub Actions artifact name, member filename)
 NATIVE_PACKAGE_ARTIFACTS: dict[str, tuple[tuple[str, str], ...]] = {
     "router-vpn-windows-amd64.zip": (
         ("RouterVPN-generic-release-candidate", "RouterVPN-Windows-amd64.zip"),
