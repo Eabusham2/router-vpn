@@ -2,7 +2,8 @@ name: One-shot ordered source corrections
 
 on:
   push:
-    branches: [automation/ios-source-fix]
+    branches:
+      - automation/ios-source-fix
 
 permissions:
   contents: write
@@ -20,162 +21,13 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Commit ordered source corrections and remove this workflow
+      - name: Apply, validate, commit, and clean up
         shell: bash
         run: |
           set -euo pipefail
           git pull --ff-only origin main
           git config user.name Eabusham2
           git config user.email eabusham2@gmail.com
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('ios/RouterVPN/App/IOSUnifiedProductView.swift')
-          text = path.read_text(encoding='utf-8')
-          replacements = {
-              'Button { Task { await connectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing…" : "Test & connect fastest", systemImage: "bolt.fill") }':
-              'Button { Task { await selectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing…" : "Test & select fastest", systemImage: "bolt.fill") }',
-              'Button { connectSpecific(profile) } label: {':
-              'Button { selectSpecific(profile) } label: {',
-              '''    private func connectSpecific(_ profile: RouterProfile) {
-        guard !model.profileMutationBlocked else { return }
-        model.selectNode(profile.id)
-        connectOrDisconnect()
-    }
-    private func connectFastest() async {
-        guard !model.profileMutationBlocked else { return }
-        let results = await telemetry.measureAll(routerProfiles, samples: 4)
-        guard let winner = results.first else { model.message = telemetry.lastError; return }
-        model.selectNode(winner.id)
-        model.message = "Fastest live node: \\(winner.name) • \\(winner.shortLabel) • connecting with \\(selectedModeTitle)…"
-        connectOrDisconnect()
-    }
-''':
-              '''    private func selectSpecific(_ profile: RouterProfile) {
-        guard !model.profileMutationBlocked else { return }
-        model.selectNode(profile.id)
-        model.message = "Selected \\(profile.name.isEmpty ? profile.id : profile.name). Press Connect when ready."
-    }
-    private func selectFastest() async {
-        guard !model.profileMutationBlocked else { return }
-        let results = await telemetry.measureAll(routerProfiles, samples: 4)
-        guard !model.profileMutationBlocked else {
-            model.message = "VPN state changed while Fastest was measuring; the result was not selected."
-            return
-        }
-        guard let winner = results.first else { model.message = telemetry.lastError; return }
-        model.selectNode(winner.id)
-        model.message = "Selected fastest live node: \\(winner.name) • \\(winner.shortLabel). Press Connect when ready with \\(selectedModeTitle)."
-    }
-''',
-          }
-          for old, new in replacements.items():
-              old_count = text.count(old)
-              new_count = text.count(new)
-              if old_count == 1 and new_count == 0:
-                  text = text.replace(old, new, 1)
-              elif old_count == 0 and new_count == 1:
-                  pass
-              else:
-                  raise SystemExit(
-                      f'iOS node-selection source drift: old={old_count} new={new_count}: {old[:100]!r}'
-                  )
-          if 'private func connectSpecific' in text or 'private func connectFastest' in text:
-              raise SystemExit('old iOS auto-connect selectors remain')
-          selection = text.split('private func selectSpecific', 1)[1].split('private func connectOrDisconnect', 1)[0]
-          if 'connectOrDisconnect()' in selection:
-              raise SystemExit('iOS node selection still triggers Connect')
-          if 'Test & connect fastest' in text:
-              raise SystemExit('old iOS Fastest label remains')
-          path.write_text(text, encoding='utf-8')
-          PY
-          git add ios/RouterVPN/App/IOSUnifiedProductView.swift
-          if ! git diff --cached --quiet; then
-            git commit -m 'Separate iOS node selection from Connect [skip ci]'
-          fi
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('deploy/recovered-map-first-ui-contract-audit.py')
-          text = path.read_text(encoding='utf-8')
-          replacements = {
-              '("client/android",),': '("android",),',
-              '("client/ios", "client/iOS"),': '("ios/RouterVPN",),',
-          }
-          for old, new in replacements.items():
-              if old in text and new not in text:
-                  text = text.replace(old, new, 1)
-              elif old not in text and new in text:
-                  pass
-              else:
-                  raise SystemExit(f'map-first mobile source-root drift: {old!r} -> {new!r}')
-          path.write_text(text, encoding='utf-8')
-          PY
-          git add deploy/recovered-map-first-ui-contract-audit.py
-          if ! git diff --cached --quiet; then
-            git commit -m 'Point map-first audit at native mobile sources [skip ci]'
-          fi
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('deploy/recovered-map-first-ui-contract-audit-test.py')
-          text = path.read_text(encoding='utf-8')
-          if 'import sys\n' not in text:
-              text = text.replace('import importlib.util\n', 'import importlib.util\nimport sys\n', 1)
-          registration = 'sys.modules[SPEC.name] = AUDIT\nSPEC.loader.exec_module(AUDIT)'
-          if registration not in text:
-              text = text.replace(
-                  'AUDIT = importlib.util.module_from_spec(SPEC)\nSPEC.loader.exec_module(AUDIT)',
-                  'AUDIT = importlib.util.module_from_spec(SPEC)\nsys.modules[SPEC.name] = AUDIT\nSPEC.loader.exec_module(AUDIT)',
-                  1,
-              )
-          method = '''
-    def test_mobile_platform_roots_reference_native_projects(self) -> None:
-        platforms = {platform.name: platform for platform in AUDIT.PLATFORMS}
-        self.assertEqual(("android",), platforms["Android"].roots)
-        self.assertEqual(("ios/RouterVPN",), platforms["iOS/iPadOS"].roots)
-'''
-          anchor = '\n\nif __name__ == "__main__":\n'
-          if 'test_mobile_platform_roots_reference_native_projects' not in text:
-              if anchor not in text:
-                  raise SystemExit('map-first test insertion anchor missing')
-              text = text.replace(anchor, '\n' + method + anchor, 1)
-          path.write_text(text, encoding='utf-8')
-          PY
-          git add deploy/recovered-map-first-ui-contract-audit-test.py
-          if ! git diff --cached --quiet; then
-            git commit -m 'Test native mobile shipping roots [skip ci]'
-          fi
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('deploy/recovered-corrections-audit.py')
-          text = path.read_text(encoding='utf-8')
-          if 'import subprocess\n' not in text:
-              text = text.replace('import json\n', 'import json\nimport subprocess\nimport sys\n', 1)
-          block = '''for audit in (
-    'deploy/recovered-map-first-ui-contract-audit.py',
-    'deploy/recovered-map-first-ui-contract-audit-test.py',
-):
-    subprocess.run([sys.executable, str(ROOT/audit)], cwd=ROOT, check=True)
-'''
-          anchor = "print('Recovered chat-history corrections C1-C7: PASS')"
-          if block not in text:
-              if anchor not in text:
-                  raise SystemExit('recovered-corrections audit insertion anchor missing')
-              text = text.replace(anchor, block + anchor, 1)
-          path.write_text(text, encoding='utf-8')
-          PY
-          git add deploy/recovered-corrections-audit.py
-          if ! git diff --cached --quiet; then
-            git commit -m 'Gate recovered map-first native shipping [skip ci]'
-          fi
-
-          git rm .github/workflows/one-shot-ios-node-selection-fix.yml
-          git commit -m 'Remove completed source-correction workflow [skip ci]'
+          python3 .github/scripts/apply-ordered-source-corrections.py
           git push origin HEAD:main
           git push origin --delete automation/ios-source-fix || true
