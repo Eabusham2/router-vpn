@@ -1,0 +1,69 @@
+name: One-shot release concurrency sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-release-concurrency-sync.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-release-concurrency-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.actor == 'Eabusham2'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Patch reusable release workflow concurrency and fast-forward main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflows = {
+              ".github/workflows/source-snapshot.yml": "source-snapshot",
+              ".github/workflows/release-candidate.yml": "release-candidate",
+              ".github/workflows/arm64-portainer-preflight.yml": "arm64-portainer",
+              ".github/workflows/publish-arm64-images.yml": "publish-arm64-portainer",
+              ".github/workflows/production-release-compose.yml": "production-release-compose",
+          }
+          begin = "$" + "{{ "
+          end = " }}"
+          for filename, prefix in workflows.items():
+              path = Path(filename)
+              lines = path.read_text(encoding="utf-8").splitlines()
+              old = f"  group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}"
+              new = f"{old}-{begin}github.run_id{end}"
+              if new in lines:
+                  continue
+              if lines.count(old) != 1:
+                  raise SystemExit(f"unexpected concurrency contract in {filename}")
+              lines[lines.index(old)] = new
+              path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          python3 deploy/workflow-structure-audit.py
+          python3 deploy/workflow-evidence-pipeline-audit.py
+          python3 deploy/release-orchestration-audit.py
+          git diff --check
+          git rm .github/workflows/one-shot-release-concurrency-sync.yml
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          git add .github/workflows/source-snapshot.yml \
+                  .github/workflows/release-candidate.yml \
+                  .github/workflows/arm64-portainer-preflight.yml \
+                  .github/workflows/publish-arm64-images.yml \
+                  .github/workflows/production-release-compose.yml
+          git diff --cached --check
+          git commit -m "Isolate authoritative release workflow concurrency"
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          git push origin HEAD:main
