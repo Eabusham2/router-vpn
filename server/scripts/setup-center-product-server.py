@@ -122,7 +122,7 @@ class Handler(_ai.Handler):
         return enriched
 
     def _job_file(self, job_id: str) -> None:
-        """Stream a ready package while honoring authenticated DELETE cancellation."""
+        """Stream a retained package while honoring authenticated DELETE cancellation."""
         try:
             package, meta = self.server.jobs.begin_delivery(job_id)
         except KeyError:
@@ -141,6 +141,7 @@ class Handler(_ai.Handler):
             self.send_header("Content-Length", str(size))
             self.send_header("X-Router-VPN-Source", str(meta.get("source") or ""))
             self.send_header("X-Router-VPN-Job", job_id)
+            self.send_header("X-Router-VPN-Retained-Until", str(meta.get("retained_until") or ""))
             self.end_headers()
             sent = 0
             with package.open("rb") as f:
@@ -159,7 +160,44 @@ class Handler(_ai.Handler):
         except Exception as exc:
             print(f"setup center: delivery failed {job_id}: {type(exc).__name__}: {exc}", flush=True)
         finally:
+            # Success and client disconnect retain the exact generated package
+            # and its owned workspace until the original READY+30m deadline.
+            # Explicit DELETE cancellation still removes it immediately.
             self.server.jobs.finish_delivery(job_id, success)
+
+    def _dynamic(self, name: str) -> None:
+        """Route direct package links through the same retained async job."""
+        try:
+            job = self.server.jobs.create(name)
+        except ValueError:
+            self.send_error(404, "unsupported package")
+            return
+        except RuntimeError:
+            self.send_error(503, "download queue is full; retry shortly")
+            return
+
+        job_id = str(job["id"])
+        deadline = time.monotonic() + _ai._core._broker.PACKAGE_TIMEOUT + 35
+        while time.monotonic() < deadline:
+            try:
+                state = self.server.jobs.status(job_id)
+            except KeyError:
+                self.send_error(404, "download job disappeared")
+                return
+            status = str(state.get("status") or "")
+            if status in {"ready", "delivered", "delivery-interrupted"}:
+                self._job_file(job_id)
+                return
+            if status in {"failed", "cancelled", "expired"}:
+                self.send_error(503, "requested package could not be generated")
+                return
+            time.sleep(0.10)
+
+        try:
+            self.server.jobs.cancel(job_id)
+        except KeyError:
+            pass
+        self.send_error(504, "package generation timed out")
 
     def _proxy_forwarding_extension(self, method: str) -> bool:
         path = urlparse(self.path).path
@@ -241,7 +279,7 @@ def main() -> int:
     _ai._core._broker.cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
     print(
-        f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + exact-SHA Release-first delivery + one-package local fallback + Full Guide + verified onboarding + device UX + Stop/Emergency/Resume server control + exact-SHA Portainer update + forwarding ownership/Protected DMZ + release/recovery status + server-side AI Help",
+        f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + exact-SHA Release-first delivery + one-package local fallback + 30-minute retained package retry + Full Guide + verified onboarding + device UX + Stop/Emergency/Resume server control + exact-SHA Portainer update + forwarding ownership/Protected DMZ + release/recovery status + server-side AI Help",
         flush=True,
     )
     try:
