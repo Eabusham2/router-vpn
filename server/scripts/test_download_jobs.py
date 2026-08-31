@@ -124,10 +124,13 @@ def main() -> int:
     patch = ux.UX_PATCH
     for required in (
         "/api/download-jobs", "rvpn-download-job", "rvpn-job-cancel", "phase_history",
-        "download_url", "Cancellation requested", "Starting browser download", "Retry",
+        "download_url", "Cancellation requested", "Browser download requested", "Retry",
+        "Setup Center will not claim delivery until the server confirms it.",
     ):
         assert required in patch, required
     assert "location.href=directHref" in patch
+    assert "sessionStorage.setItem(persistedJobKey" in patch
+    assert "window.addEventListener('online'" in patch
     print("download job lifecycle/progress/build-cancel/stream-cancel/browser wiring tests: OK")
     return 0
 
