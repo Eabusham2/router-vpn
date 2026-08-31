@@ -62,6 +62,28 @@ need(
     "Retry",
 )
 
+# A browser/network interruption must not orphan an authenticated package job
+# or make the UI claim delivery merely because an iframe loaded. Persist only a
+# bounded same-origin job-status path in tab-local sessionStorage, reject
+# redirects/non-local job URLs, pause while offline, and resume on visibility or
+# connectivity restoration.
+need(
+    "server/scripts/setup_center_ux_patch.py",
+    "const persistedJobKey='routervpn.setup.download-job.v2'",
+    "function safeSameOriginPath(value,prefix)",
+    "sessionStorage.setItem(persistedJobKey",
+    "sessionStorage.removeItem(persistedJobKey)",
+    "redirect:'error'",
+    "Refused a non-local Setup Center job URL",
+    "The job returned an unsafe download URL and was not opened.",
+    "Setup Center will not claim delivery until the server confirms it.",
+    "document.addEventListener('visibilitychange'",
+    "window.addEventListener('online'",
+    "window.addEventListener('offline'",
+    "Resuming authenticated download job",
+    "Date.now()-Number(saved.saved_at||0)<6*60*60*1000",
+)
+
 # Setup Center remains deployment/admin/recovery. It must not claim to be the
 # native daily VPN app or expose itself on WAN as part of UI convenience.
 need(
