@@ -128,6 +128,38 @@ require_order(
     'Text="Mode"',
     'Text="DNS"',
 )
+windows_telemetry = read("client/RouterVPN-Windows-Telemetry.ps1")
+try:
+    windows_choices = windows_telemetry.split(
+        "function RefreshUnifiedFastestChoices", 1
+    )[1].split("function RefreshUnifiedForwardingMaster", 1)[0]
+    windows_selector = windows_telemetry.split(
+        "(Control 'UnifiedFastestNode').Add_SelectionChanged", 1
+    )[1].split("(Control 'UnifiedForwardButton').Add_Click", 1)[0]
+except IndexError:
+    ERRORS.append("Windows node selector: shipping event/function seam is missing")
+else:
+    for marker in ("$Store.selected_id", "SelectedValue=$Preferred"):
+        if marker not in windows_choices:
+            ERRORS.append(
+                f"Windows node selector: refresh must preserve selected node ({marker!r})"
+            )
+    if "UnifiedConnect" in windows_selector:
+        ERRORS.append(
+            "Windows node selector: choosing Fastest/a node must not auto-connect; Connect is a separate control"
+        )
+    if "SelectedValue='fastest'" in windows_selector:
+        ERRORS.append(
+            "Windows node selector: selection event must not reset the visible target to Fastest"
+        )
+    for marker in (
+        "Assert-RouterVPNMutationIdle 'selecting a Router VPN node'",
+        "'/api/profile/fastest'",
+        "'/api/profile/select'",
+        "RefreshUnifiedTelemetry",
+    ):
+        if marker not in windows_selector:
+            ERRORS.append(f"Windows node selector: missing {marker!r}")
 forbid(
     "Windows native shell",
     windows,
