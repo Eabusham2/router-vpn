@@ -153,9 +153,8 @@ jobs:
             swiftc -frontend -parse client/macos/RouterVPNMacUnifiedShell.swift
           fi
 
-          echo '=== CHECK 4: existing native/recovered map-first contracts ==='
+          echo '=== CHECK 4: current native map-first contract ==='
           python3 deploy/native-map-first-ui-audit.py
-          python3 deploy/recovered-map-first-ui-contract-audit.py
 
           echo '=== CHECK 5: durable/profile transaction safety ==='
           python3 deploy/durable-state-transaction-audit.py
