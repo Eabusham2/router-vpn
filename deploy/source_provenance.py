@@ -10,13 +10,22 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import stat
+import subprocess
+import sys
 import tempfile
 from typing import Any, Iterable, Mapping
 
 HEX64 = frozenset("0123456789abcdef")
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+SCHEMA_VERSION = 1
+MANIFEST = "ROUTER-VPN-SOURCE.json"
+MAX_MANIFEST = 64 << 10
 MAX_FILE_BYTES = 512 << 20
 PUBLIC_MODE = 0o644
+DEFAULT_REPOSITORY = "Eabusham2/router-vpn"
 
 
 def validate_sha(value: str, label: str) -> str:
@@ -28,9 +37,67 @@ def validate_sha(value: str, label: str) -> str:
 
 def validate_source_sha(value: str) -> str:
     value = str(value or "").strip().lower()
-    if len(value) != 40 or any(ch not in HEX64 for ch in value):
+    if not SHA_RE.fullmatch(value):
         raise RuntimeError("source SHA is not a 40-character lowercase Git commit")
     return value
+
+
+def normalize_sha(value: str) -> str:
+    try:
+        return validate_source_sha(value)
+    except RuntimeError as exc:
+        raise RuntimeError("source provenance requires one full 40-character Git commit SHA") from exc
+
+
+def resolve_sha(explicit: str = "", root: Path | None = None) -> str:
+    for value in (
+        explicit,
+        os.environ.get("ROUTER_VPN_SOURCE_SHA", ""),
+        os.environ.get("GITHUB_SHA", ""),
+        os.environ.get("ROUTER_VPN_GITHUB_SHA", ""),
+    ):
+        if str(value or "").strip():
+            return normalize_sha(str(value))
+    if root is not None:
+        candidates = [Path(root), Path(root).parent, Path(__file__).resolve().parents[1]]
+        for candidate in candidates:
+            try:
+                out = subprocess.check_output(
+                    ["git", "-C", str(candidate), "rev-parse", "HEAD"],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                ).strip()
+                return normalize_sha(out)
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError):
+                continue
+    raise RuntimeError("source provenance SHA is unavailable; set GITHUB_SHA or ROUTER_VPN_GITHUB_SHA")
+
+
+def validate_repo(value: str) -> str:
+    repo = str(value or "").strip()
+    if not repo or not REPO_RE.fullmatch(repo):
+        raise RuntimeError("invalid source provenance repository")
+    return repo
+
+
+def resolve_repo(explicit: str = "") -> str:
+    return validate_repo(
+        str(
+            explicit
+            or os.environ.get("ROUTER_VPN_GITHUB_REPO", "")
+            or os.environ.get("GITHUB_REPOSITORY", "")
+            or DEFAULT_REPOSITORY
+        ).strip()
+    )
+
+
+def _regular_root(root: Path) -> Path:
+    root = Path(os.path.abspath(root))
+    info = root.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"refusing non-directory/symlink source provenance root: {root}")
+    return root
 
 
 def _parent_snapshot(path: Path) -> os.stat_result:
@@ -70,14 +137,14 @@ def _require_target_state(path: Path, expected: os.stat_result | None) -> None:
         raise RuntimeError(f"provenance target identity changed before adoption: {path}")
 
 
-def _read_regular_file(path: Path) -> bytes:
+def _read_regular_file(path: Path, maximum: int = MAX_FILE_BYTES) -> bytes:
     path = Path(path)
     parent_before = _parent_snapshot(path)
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink artifact: {path}")
-    if info.st_size <= 0 or info.st_size > MAX_FILE_BYTES:
-        raise RuntimeError(f"artifact is empty or exceeds {MAX_FILE_BYTES} bytes: {path}")
+    if info.st_size <= 0 or info.st_size > maximum:
+        raise RuntimeError(f"artifact is empty or exceeds {maximum} bytes: {path}")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)
     try:
@@ -88,13 +155,13 @@ def _read_regular_file(path: Path) -> bytes:
         chunks: list[bytes] = []
         total = 0
         while True:
-            chunk = os.read(fd, min(1 << 20, MAX_FILE_BYTES + 1 - total))
+            chunk = os.read(fd, min(1 << 20, maximum + 1 - total))
             if not chunk:
                 break
             chunks.append(chunk)
             total += len(chunk)
-            if total > MAX_FILE_BYTES:
-                raise RuntimeError(f"artifact exceeds {MAX_FILE_BYTES} bytes: {path}")
+            if total > maximum:
+                raise RuntimeError(f"artifact exceeds {maximum} bytes: {path}")
         parent_after = _parent_snapshot(path)
         current = path.lstat()
         if (
@@ -151,7 +218,10 @@ def _atomic_write(path: Path, body: bytes) -> None:
     tmp = Path(name)
     adopted = False
     try:
-        os.fchmod(fd, PUBLIC_MODE)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, PUBLIC_MODE)
+        else:
+            os.chmod(tmp, PUBLIC_MODE)
         with os.fdopen(fd, "wb", closefd=True) as stream:
             stream.write(body)
             stream.flush()
@@ -198,6 +268,77 @@ def write_json(path: Path, value: Mapping[str, Any]) -> None:
     _atomic_write(Path(path), (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
+def write_manifest(root: Path, sha: str, family: str, repo: str = "") -> Path:
+    """Write the embedded package-source manifest used by native archives."""
+    root = _regular_root(root)
+    root_before = root.lstat()
+    sha = normalize_sha(sha)
+    repository = resolve_repo(repo)
+    family = str(family or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", family):
+        raise RuntimeError("invalid source provenance artifact family")
+    current_root = root.lstat()
+    if not os.path.samestat(root_before, current_root):
+        raise RuntimeError("source provenance root changed before adoption")
+    path = root / MANIFEST
+    body = {
+        "schema_version": SCHEMA_VERSION,
+        "repository": repository,
+        "source_sha": sha,
+        "artifact_family": family,
+    }
+    try:
+        write_json(path, body)
+    except RuntimeError as exc:
+        if "parent changed before adoption" in str(exc):
+            raise RuntimeError("source provenance root changed before adoption") from exc
+        raise
+    return path
+
+
+def read_manifest(root: Path) -> dict[str, Any]:
+    root = _regular_root(root)
+    path = root / MANIFEST
+    try:
+        data = json.loads(_read_regular_file(path, MAX_MANIFEST).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("source provenance manifest JSON is invalid") from exc
+    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+        raise RuntimeError("source provenance manifest schema is invalid")
+    data["source_sha"] = normalize_sha(str(data.get("source_sha") or ""))
+    data["repository"] = validate_repo(str(data.get("repository") or ""))
+    family = str(data.get("artifact_family") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", family):
+        raise RuntimeError("source provenance artifact family is invalid")
+    data["artifact_family"] = family
+    return data
+
+
+def verify_package_manifest(
+    root: Path,
+    expected_sha: str,
+    expected_family: str = "",
+    expected_repo: str = "",
+) -> dict[str, Any]:
+    data = read_manifest(root)
+    expected_sha = normalize_sha(expected_sha)
+    if data["source_sha"] != expected_sha:
+        raise RuntimeError(
+            f"source provenance mismatch: package={data['source_sha']} expected={expected_sha}"
+        )
+    if expected_family and data["artifact_family"] != expected_family:
+        raise RuntimeError(
+            f"source provenance family mismatch: package={data['artifact_family']} expected={expected_family}"
+        )
+    if expected_repo:
+        repository = validate_repo(expected_repo)
+        if data["repository"] != repository:
+            raise RuntimeError(
+                f"source provenance repository mismatch: package={data['repository']} expected={repository}"
+            )
+    return data
+
+
 def copy_artifact(source: Path, destination: Path, expected_sha256: str) -> int:
     body = _read_regular_file(Path(source))
     actual = _sha256_bytes(body)
@@ -223,9 +364,6 @@ def build_file_record(
     if not artifact_name or Path(artifact_name).name != artifact_name:
         raise RuntimeError("artifact name must be one plain filename")
 
-    # Hash, size, gzip-inner verification, and publication all consume this one
-    # verified source snapshot. The source pathname is never reopened between
-    # evidence generation and the bytes copied into the release artifact.
     body = _read_regular_file(source)
     artifact_sha = _sha256_bytes(body)
     expected_binary_sha = validate_sha(expected_binary_sha256, "expected binary digest")
@@ -287,7 +425,7 @@ def build_manifest(
     }
 
 
-def verify_manifest(
+def _verify_release_manifest(
     manifest: Mapping[str, Any],
     *,
     expected_source_sha: str,
@@ -331,6 +469,33 @@ def verify_manifest(
     return errors
 
 
+def verify_manifest(
+    manifest_or_root: Mapping[str, Any] | Path,
+    expected_sha: str | None = None,
+    expected_family: str = "",
+    expected_repo: str = "",
+    *,
+    expected_source_sha: str | None = None,
+    required: Iterable[tuple[str, str]] = (),
+):
+    """Verify either an embedded package manifest or aggregate release manifest.
+
+    The dual contract preserves existing native packagers while retaining the
+    newer exact-artifact release-manifest API.
+    """
+    if isinstance(manifest_or_root, Mapping):
+        if expected_source_sha is None:
+            raise TypeError("expected_source_sha is required for an aggregate release manifest")
+        return _verify_release_manifest(
+            manifest_or_root,
+            expected_source_sha=expected_source_sha,
+            required=required,
+        )
+    if expected_sha is None:
+        raise TypeError("expected_sha is required for an embedded package manifest")
+    return verify_package_manifest(Path(manifest_or_root), expected_sha, expected_family, expected_repo)
+
+
 def load_json(path: Path) -> dict[str, Any]:
     value = json.loads(_read_regular_file(Path(path)).decode("utf-8"))
     if not isinstance(value, dict):
@@ -339,24 +504,40 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def _main() -> int:
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="command", required=True)
-    verify = sub.add_parser("verify")
-    verify.add_argument("manifest", type=Path)
-    verify.add_argument("--source-sha", required=True)
-    verify.add_argument("--require", action="append", default=[], metavar="PLATFORM/FILE")
-    args = parser.parse_args()
-    if args.command == "verify":
+    if len(sys.argv) > 1 and sys.argv[1] == "verify":
+        parser = argparse.ArgumentParser()
+        parser.add_argument("command")
+        parser.add_argument("manifest", type=Path)
+        parser.add_argument("--source-sha", required=True)
+        parser.add_argument("--require", action="append", default=[], metavar="PLATFORM/FILE")
+        args = parser.parse_args()
         required: list[tuple[str, str]] = []
         for value in args.require:
             if "/" not in value:
                 raise RuntimeError("--require must use PLATFORM/FILE")
             required.append(tuple(value.split("/", 1)))
-        errors = verify_manifest(load_json(args.manifest), expected_source_sha=args.source_sha, required=required)
+        errors = _verify_release_manifest(
+            load_json(args.manifest),
+            expected_source_sha=args.source_sha,
+            required=required,
+        )
         for error in errors:
             print(f"ERROR: {error}")
         return 1 if errors else 0
-    return 2
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root", type=Path)
+    parser.add_argument("--sha", default="")
+    parser.add_argument("--family", required=True)
+    parser.add_argument("--repo", default="")
+    parser.add_argument("--verify", action="store_true")
+    args = parser.parse_args()
+    sha = resolve_sha(args.sha, args.root)
+    if args.verify:
+        verify_package_manifest(args.root, sha, args.family, args.repo)
+    else:
+        write_manifest(args.root, sha, args.family, args.repo)
+    return 0
 
 
 if __name__ == "__main__":
