@@ -35,6 +35,7 @@ _release = _load("routervpn_setup_center_release_status", "setup_center_release_
 _verified = _load("routervpn_setup_center_verified_onboarding", "setup_center_verified_onboarding.py")
 _server_control = _load("routervpn_setup_center_server_control", "setup_center_server_control.py")
 _update = _load("routervpn_setup_center_update", "setup_center_update.py")
+_exact_release = _load("routervpn_exact_sha_release_download", "exact_sha_release_download.py")
 
 
 def _terminate_builder(proc: subprocess.Popen) -> None:
@@ -92,10 +93,11 @@ def _cancellable_run_builder(base: Path, name: str, temp: Path, source: Path | N
     return output
 
 
-# build_package resolves _run_builder through the broker module globals, so this
-# replaces only the final authenticated product's local fallback runner. GitHub
-# same-SHA artifact selection/validation remains unchanged.
+# Product delivery uses a cancellable local builder and the exact source order:
+# immutable exact-SHA GitHub Release asset, exact-SHA Actions artifact, then one
+# bounded router-local desktop/Portable build. Mobile stays GitHub-only.
 _ai._core._broker._run_builder = _cancellable_run_builder
+_exact_release.install(_ai._core._broker)
 
 
 class Handler(_ai.Handler):
@@ -239,7 +241,7 @@ def main() -> int:
     _ai._core._broker.cleanup_stale_temp()
     server = Server((args.bind, args.port), Handler, base, static)
     print(
-        f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + Full Guide + verified onboarding + device UX + Stop/Emergency/Resume server control + exact-SHA Portainer update + forwarding ownership/Protected DMZ + release/recovery status + server-side AI Help",
+        f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + exact-SHA Release-first delivery + one-package local fallback + Full Guide + verified onboarding + device UX + Stop/Emergency/Resume server control + exact-SHA Portainer update + forwarding ownership/Protected DMZ + release/recovery status + server-side AI Help",
         flush=True,
     )
     try:
