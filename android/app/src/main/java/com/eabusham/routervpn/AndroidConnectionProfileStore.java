@@ -60,10 +60,11 @@ final class AndroidConnectionProfileStore {
             if(entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null||findNode(exit)==null)throw new IllegalStateException("Saved multihop references missing/invalid Router nodes.");
         }else{entry="";exit="";multiMode="shadowsocks";}
         String preparedCustom=prepareCustomPresetJSON(mode,layers);
-        byte[] updatedBundle=null;
+        byte[] originalBundle=null,updatedBundle=null;
         if("router-vpn".equals(kind)){
             AndroidNodeStore.Node selected=findNode(nodeId);if(selected==null)throw new IllegalStateException("Saved Router node is no longer linked.");
-            JSONObject bundle=readBundle(selected.file),profile=selectedProfile(bundle);if(profile==null)throw new IllegalStateException("Saved Router node bundle has no selected profile.");
+            originalBundle=readLimited(selected.file,AndroidNodeStore.MAX_BUNDLE);
+            JSONObject bundle=new JSONObject(new String(originalBundle,StandardCharsets.UTF_8)),profile=selectedProfile(bundle);if(profile==null)throw new IllegalStateException("Saved Router node bundle has no selected profile.");
             JSONObject policy=row.optJSONObject("policy");if(policy!=null)for(String key:POLICY_KEYS){if(policy.has(key))profile.put(key,policy.get(key));}
             updatedBundle=bundle.toString().getBytes(StandardCharsets.UTF_8);
             String updatedId=AndroidNodeStore.deriveId(bundle,updatedBundle);
@@ -75,7 +76,14 @@ final class AndroidConnectionProfileStore {
         SharedPreferences.Editor edit=prefs().edit().putString(SELECTED_KIND,kind).putString(SELECTED_ID,nodeId).putString(MODE_KEY,mode)
                 .putBoolean(MULTI_ON,multi).putString(MULTI_ENTRY,entry).putString(MULTI_EXIT,exit).putString(MULTI_MODE,multiMode);
         if(preparedCustom!=null)edit.putString(CUSTOM_KEY,preparedCustom);
-        edit.apply();
+        if(!edit.commit()){
+            String rollbackDetail="";
+            if(originalBundle!=null){
+                try{AndroidNodeStore.Node restored=nodes.importBundle(originalBundle);if(!nodeId.equals(restored.id))throw new IllegalStateException("restored node identity changed");}
+                catch(Exception rollbackError){rollbackDetail=" Rollback also failed: "+rollbackError.getMessage();}
+            }
+            throw new IllegalStateException("Could not persist the loaded connection profile; prior Router node state was restored."+rollbackDetail);
+        }
         return toRecord(row);
     }
 
