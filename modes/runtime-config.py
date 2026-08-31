@@ -10,6 +10,7 @@ import sys
 import tempfile
 
 MAX_BYTES = 16 << 20
+PRIVATE_MODE = 0o600
 
 
 def trusted_path(root_text: str, path_text: str, *, must_exist: bool = False) -> tuple[Path, os.stat_result]:
@@ -43,11 +44,13 @@ def validate_target(path: Path) -> os.stat_result:
         raise RuntimeError(f"refusing non-regular/symlink runtime config target: {path}")
     if info.st_size < 0 or info.st_size > MAX_BYTES:
         raise RuntimeError(f"runtime config exceeds safety limit: {path}")
+    if os.name != "nt" and stat.S_IMODE(info.st_mode) != PRIVATE_MODE:
+        raise RuntimeError(f"runtime config must be private 0600: {path}")
     return info
 
 
 def read_bytes(root: str, path_text: str) -> tuple[Path, bytes]:
-    path, _ = trusted_path(root, path_text, must_exist=True)
+    path, parent_before = trusted_path(root, path_text, must_exist=True)
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)
     try:
@@ -65,6 +68,16 @@ def read_bytes(root: str, path_text: str) -> tuple[Path, bytes]:
             total += len(chunk)
             if total > MAX_BYTES:
                 raise RuntimeError(f"runtime config exceeds safety limit: {path}")
+        path_now, parent_now = trusted_path(root, path_text, must_exist=True)
+        adopted = path_now.lstat()
+        if (
+            path_now != path
+            or not os.path.samestat(parent_before, parent_now)
+            or stat.S_ISLNK(adopted.st_mode)
+            or not stat.S_ISREG(adopted.st_mode)
+            or not os.path.samestat(opened, adopted)
+        ):
+            raise RuntimeError(f"runtime config changed during read: {path}")
         return path, b"".join(chunks)
     finally:
         os.close(fd)
@@ -84,11 +97,19 @@ def atomic_write(root: str, path_text: str, body: bytes) -> Path:
     tmp = Path(name)
     committed = False
     try:
-        os.fchmod(fd, 0o600)
+        os.fchmod(fd, PRIVATE_MODE)
         with os.fdopen(fd, "wb", closefd=True) as stream:
             stream.write(body)
             stream.flush()
             os.fsync(stream.fileno())
+        staged = tmp.lstat()
+        if (
+            stat.S_ISLNK(staged.st_mode)
+            or not stat.S_ISREG(staged.st_mode)
+            or (os.name != "nt" and stat.S_IMODE(staged.st_mode) != PRIVATE_MODE)
+        ):
+            raise RuntimeError(f"staged runtime config is unsafe: {tmp}")
+
         path_now, parent_now = trusted_path(root, path_text)
         if path_now != path or not os.path.samestat(parent_before, parent_now):
             raise RuntimeError("runtime config parent changed before adoption")
@@ -105,6 +126,18 @@ def atomic_write(root: str, path_text: str, body: bytes) -> Path:
             raise RuntimeError("runtime config target identity changed before adoption")
         os.replace(tmp, path)
         committed = True
+
+        path_after, parent_after = trusted_path(root, path_text, must_exist=True)
+        adopted = path_after.lstat()
+        if (
+            path_after != path
+            or not os.path.samestat(parent_before, parent_after)
+            or stat.S_ISLNK(adopted.st_mode)
+            or not stat.S_ISREG(adopted.st_mode)
+            or (os.name != "nt" and stat.S_IMODE(adopted.st_mode) != PRIVATE_MODE)
+            or not os.path.samestat(staged, adopted)
+        ):
+            raise RuntimeError("adopted runtime config identity changed before verification")
         try:
             dfd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
