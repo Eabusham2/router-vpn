@@ -1,0 +1,32 @@
+name: One-shot Android connection-profile UI
+
+on:
+  push:
+    branches:
+      - automation/android-connection-profile-ui
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-android-connection-profile-ui
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Compose whole-profile CRUD into the Android map-first product
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          python3 .github/scripts/apply-android-connection-profile-ui.py
+          git push origin HEAD:main
+          git push origin --delete automation/android-connection-profile-ui || true
