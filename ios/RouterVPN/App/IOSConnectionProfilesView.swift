@@ -2,6 +2,8 @@ import Foundation
 import SwiftUI
 
 private let iosConnectionProfilesKey = "routervpn.connection-profiles.v1"
+private let iosConnectionProfilesFile = "connection-profiles.json"
+private let iosConnectionProfilesMaximumBytes = 512 * 1024
 private let iosConnectionModeKey = "routervpn.unified.mode.v1"
 private let iosConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
 
@@ -52,9 +54,37 @@ private struct IOSConnectionProfileRecord: Identifiable, Codable, Hashable {
 
 @MainActor
 private enum IOSConnectionProfileStore {
+    private(set) static var lastStoreError = ""
+
     static func all() -> [IOSConnectionProfileRecord] {
-        guard let data = UserDefaults.standard.data(forKey: iosConnectionProfilesKey),
-              let values = try? JSONDecoder().decode([IOSConnectionProfileRecord].self, from: data) else { return [] }
+        do {
+            let values = try loadAll()
+            lastStoreError = ""
+            return values
+        } catch {
+            lastStoreError = error.localizedDescription
+            return []
+        }
+    }
+
+    private static func loadAll() throws -> [IOSConnectionProfileRecord] {
+        if let data = try IOSPrivateJSONStore.read(
+            iosConnectionProfilesFile,
+            maximumBytes: iosConnectionProfilesMaximumBytes
+        ) {
+            let values = try JSONDecoder().decode([IOSConnectionProfileRecord].self, from: data)
+            guard values.count <= 64 else { throw issue("Connection profile limit exceeded.") }
+            return values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        }
+
+        guard let legacy = UserDefaults.standard.data(forKey: iosConnectionProfilesKey) else { return [] }
+        guard !legacy.isEmpty, legacy.count <= iosConnectionProfilesMaximumBytes else {
+            throw issue("Legacy connection profile store has an invalid size.")
+        }
+        let values = try JSONDecoder().decode([IOSConnectionProfileRecord].self, from: legacy)
+        guard values.count <= 64 else { throw issue("Legacy connection profile limit exceeded.") }
+        try persist(values)
+        UserDefaults.standard.removeObject(forKey: iosConnectionProfilesKey)
         return values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
@@ -166,9 +196,13 @@ private enum IOSConnectionProfileStore {
     }
 
     private static func persist(_ values: [IOSConnectionProfileRecord]) throws {
+        guard values.count <= 64 else { throw issue("Connection profile limit exceeded.") }
         let data = try JSONEncoder().encode(values)
-        guard data.count <= 512 * 1024 else { throw issue("Connection profile store is too large.") }
-        UserDefaults.standard.set(data, forKey: iosConnectionProfilesKey)
+        try IOSPrivateJSONStore.write(
+            data,
+            filename: iosConnectionProfilesFile,
+            maximumBytes: iosConnectionProfilesMaximumBytes
+        )
     }
 
     private static func cleanName(_ value: String) throws -> String {
@@ -266,7 +300,15 @@ struct IOSConnectionProfilesView: View {
         }
     }
 
-    private func refresh() { profiles = IOSConnectionProfileStore.all(); if let selectedID, !profiles.contains(where: { $0.id == selectedID }) { self.selectedID = nil } }
+    private func refresh() {
+        profiles = IOSConnectionProfileStore.all()
+        if !IOSConnectionProfileStore.lastStoreError.isEmpty {
+            status = "Connection profile store failed closed: \(IOSConnectionProfileStore.lastStoreError)"
+        }
+        if let selectedID, !profiles.contains(where: { $0.id == selectedID }) {
+            self.selectedID = nil
+        }
+    }
     private func add() { do { let p = try IOSConnectionProfileStore.add(model: model, name: name); status = "Added \(p.name) • \(p.mode) • \(p.autoRequirementsSummary)."; refresh(); selectedID = p.id } catch { status = error.localizedDescription } }
     private func update() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.update(model: model, id: selectedID, name: name); status = "Updated \(p.name) • \(p.mode) • \(p.autoRequirementsSummary)."; refresh() } catch { status = error.localizedDescription } }
     private func load() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.load(model: model, id: selectedID); status = "Loaded \(p.name) • \(p.mode) • \(p.autoRequirementsSummary). Connect separately to prove the path." } catch { status = error.localizedDescription } }
