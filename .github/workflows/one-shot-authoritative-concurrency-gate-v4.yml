@@ -3,102 +3,132 @@ name: One-shot authoritative concurrency gate v4
 on:
   push:
     branches: [main]
+    paths:
+      - .github/workflows/one-shot-authoritative-concurrency-gate-v4.yml
 
 permissions:
   contents: write
 
 concurrency:
   group: one-shot-authoritative-concurrency-gate-v4
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   sync:
+    if: github.repository == 'Eabusham2/router-vpn'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
-      - name: Install permanent concurrency isolation and remove one-shot state
+      - name: Install permanent release concurrency isolation
         shell: bash
         run: |
           set -euo pipefail
-          sleep 10
-          git fetch origin main
-          git reset --hard origin/main
-          base="$(git rev-parse HEAD)"
-          python3 - <<'PY'
-          from pathlib import Path
-          import textwrap
+          sleep 20
+          for attempt in 1 2 3 4 5 6; do
+            git fetch origin main
+            git reset --hard origin/main
+            base="$(git rev-parse HEAD)"
 
-          workflows = {
-              ".github/workflows/source-snapshot.yml": "source-snapshot",
-              ".github/workflows/release-candidate.yml": "release-candidate",
-              ".github/workflows/arm64-portainer-preflight.yml": "arm64-portainer",
-              ".github/workflows/publish-arm64-images.yml": "publish-arm64-portainer",
-              ".github/workflows/production-release-compose.yml": "production-release-compose",
-          }
-          begin = "$" + "{{ "
-          end = " }}"
-          for filename, prefix in workflows.items():
-              path = Path(filename)
-              lines = path.read_text(encoding="utf-8").splitlines()
-              old = f"  group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}"
-              new = f"{old}-{begin}github.run_id{end}"
-              if new not in lines:
-                  if lines.count(old) != 1:
-                      raise SystemExit(f"unexpected concurrency contract in {filename}")
-                  lines[lines.index(old)] = new
-                  path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            python3 - <<'PY'
+            from pathlib import Path
 
-          audit = '''#!/usr/bin/env python3
-          """Require reusable release children to isolate caller-owned exact-SHA evidence."""
-          from pathlib import Path
+            begin = "$" + "{{ "
+            end = " }}"
+            workflows = {
+                ".github/workflows/source-snapshot.yml": "source-snapshot",
+                ".github/workflows/release-candidate.yml": "release-candidate",
+                ".github/workflows/arm64-portainer-preflight.yml": "arm64-portainer",
+                ".github/workflows/publish-arm64-images.yml": "publish-arm64-portainer",
+                ".github/workflows/production-release-compose.yml": "production-release-compose",
+            }
 
-          ROOT = Path(__file__).resolve().parents[1]
-          WORKFLOWS = {
-              ".github/workflows/source-snapshot.yml": "source-snapshot",
-              ".github/workflows/release-candidate.yml": "release-candidate",
-              ".github/workflows/arm64-portainer-preflight.yml": "arm64-portainer",
-              ".github/workflows/publish-arm64-images.yml": "publish-arm64-portainer",
-              ".github/workflows/production-release-compose.yml": "production-release-compose",
-          }
-          begin = "$" + "{{ "
-          end = " }}"
-          for filename, prefix in WORKFLOWS.items():
-              text = (ROOT / filename).read_text(encoding="utf-8")
-              expected = f"group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}-{begin}github.run_id{end}"
-              assert expected in text, f"{filename} can cancel caller-owned exact-SHA evidence"
-              assert "workflow_call:" in text and "workflow_dispatch:" in text, f"{filename} trigger contract drifted"
-          print("Reusable release workflow concurrency audit: PASS")
-          '''
-          Path("deploy/reusable-workflow-concurrency-audit.py").write_text(textwrap.dedent(audit), encoding="utf-8")
+            audit_pairs = []
+            for filename, prefix in workflows.items():
+                path = Path(filename)
+                text = path.read_text(encoding="utf-8")
+                old = f"group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}"
+                desired = f"group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}-{begin}github.run_id{end}"
+                workflow_variant = f"group: {prefix}-{begin}github.workflow{end}-{begin}github.ref{end}-{begin}github.sha{end}"
+                workflow_run_variant = workflow_variant + f"-{begin}github.run_id{end}"
+                matches = [value for value in (old, workflow_variant, workflow_run_variant) if value in text]
+                if desired not in text:
+                    if len(matches) != 1:
+                        raise SystemExit(f"unexpected concurrency contract in {filename}: {matches}")
+                    text = text.replace(matches[0], desired, 1)
+                    path.write_text(text, encoding="utf-8")
+                audit_pairs.append((prefix, desired))
 
-          release = Path(".github/workflows/release-candidate.yml")
-          lines = release.read_text(encoding="utf-8").splitlines()
-          invocation = "          python3 deploy/reusable-workflow-concurrency-audit.py"
-          anchor = "          python3 deploy/workflow-structure-audit.py"
-          if invocation not in lines:
-              if lines.count(anchor) != 1:
-                  raise SystemExit("release candidate workflow-structure audit anchor drifted")
-              lines.insert(lines.index(anchor) + 1, invocation)
-              release.write_text("\n".join(lines) + "\n", encoding="utf-8")
-          PY
-          rm -f .github/workflows/one-shot-*.yml
-          rm -f deploy/.one-shot-authoritative-concurrency-trigger
-          python3 deploy/reusable-workflow-concurrency-audit.py
-          python3 deploy/workflow-structure-audit.py
-          python3 deploy/workflow-evidence-pipeline-audit.py
-          python3 deploy/release-orchestration-audit.py
-          python3 -m py_compile deploy/reusable-workflow-concurrency-audit.py
-          git diff --check
-          git config user.name Eabusham2
-          git config user.email eabusham2@gmail.com
-          git add -A
-          git diff --cached --check
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit -m "Gate reusable release workflow concurrency"
-          git fetch origin main
-          test "$(git rev-parse origin/main)" = "$base"
-          git push origin HEAD:main
+            release = Path(".github/workflows/release-candidate.yml")
+            release_text = release.read_text(encoding="utf-8")
+            release_text = release_text.replace("          python3 deploy/reusable-workflow-concurrency-audit.py\n", "")
+            release.write_text(release_text, encoding="utf-8")
+
+            audit = Path("deploy/release-orchestration-audit.py")
+            text = audit.read_text(encoding="utf-8")
+            for prefix, desired in audit_pairs:
+                candidates = (
+                    f"group: {prefix}-{begin}github.ref{end}-{begin}github.sha{end}",
+                    f"group: {prefix}-{begin}github.workflow{end}-{begin}github.ref{end}-{begin}github.sha{end}",
+                    f"group: {prefix}-{begin}github.workflow{end}-{begin}github.ref{end}-{begin}github.sha{end}-{begin}github.run_id{end}",
+                )
+                if desired not in text:
+                    found = [value for value in candidates if value in text]
+                    if len(found) != 1:
+                        raise SystemExit(f"unexpected orchestration audit contract for {prefix}: {found}")
+                    text = text.replace(found[0], desired, 1)
+            for old, new in (
+                (
+                    'f"{rel} can be canceled by a different release SHA"',
+                    'f"{rel} must isolate each authoritative top-level release run"',
+                ),
+                (
+                    'f"{rel} must isolate the authoritative caller from standalone same-SHA diagnostics"',
+                    'f"{rel} must isolate each authoritative top-level release run"',
+                ),
+                (
+                    'f"{rel} does not collapse duplicate same-SHA runs"',
+                    'f"{rel} does not retain explicit cancellation semantics"',
+                ),
+                (
+                    'f"{rel} does not collapse duplicates from the same caller"',
+                    'f"{rel} does not retain explicit cancellation semantics"',
+                ),
+            ):
+                if old in text:
+                    text = text.replace(old, new, 1)
+            audit.write_text(text, encoding="utf-8")
+            PY
+
+            rm -f .github/workflows/one-shot-*.yml
+            rm -f deploy/reusable-workflow-concurrency-audit.py
+            rm -f deploy/.one-shot-authoritative-concurrency-trigger
+
+            python3 deploy/workflow-structure-audit.py
+            python3 deploy/workflow-evidence-pipeline-audit.py
+            python3 deploy/workflow-source-integrity-audit.py
+            python3 deploy/validate-repo.py
+            python3 deploy/release-orchestration-audit.py
+            git diff --check
+
+            git config user.name Eabusham2
+            git config user.email eabusham2@gmail.com
+            git add -A
+            git diff --cached --check
+            if git diff --cached --quiet; then
+              exit 0
+            fi
+            git commit -m "Isolate reusable release workflow concurrency"
+            git fetch origin main
+            if test "$(git rev-parse origin/main)" != "$base"; then
+              sleep 5
+              continue
+            fi
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "failed to publish deterministic concurrency repair after retries" >&2
+          exit 1
