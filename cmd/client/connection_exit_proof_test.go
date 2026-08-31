@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-	"net/http"
-	"net/http/httptest"
 )
 
 func TestProveExpectedPublicExitMatchesExpectedIP(t *testing.T) {
@@ -67,5 +67,20 @@ func TestProveExpectedPublicExitRejectsInvalidExpectedIPWithoutRequest(t *testin
 	}
 	if called {
 		t.Fatal("invalid expected IP unexpectedly triggered a network request")
+	}
+}
+
+func TestStopTimerWithoutBlockingAfterDelivery(t *testing.T) {
+	timer := time.NewTimer(time.Millisecond)
+	<-timer.C
+	done := make(chan struct{})
+	go func() {
+		stopTimerWithoutBlocking(timer)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timer cleanup blocked after the timer value was already consumed")
 	}
 }
