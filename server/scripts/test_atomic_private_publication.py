@@ -231,6 +231,45 @@ def main() -> int:
         assert d2.read_bytes() == b"old-two\n"
         assert not list(root.glob(".*.batch-*"))
 
+    # The destination must also still be the exact staged inode immediately
+    # after os.replace. Otherwise a foreign replacement in the tiny post-rename
+    # verification window could be recorded as Router VPN-owned state and later
+    # overwritten by rollback.
+    with tempfile.TemporaryDirectory(prefix="router-vpn-private-batch-post-rename-swap-") as td:
+        root = Path(td)
+        dest = root / "owned"
+        source = root / "candidate"
+        foreign = root / "foreign"
+        for path, body in (
+            (dest, b"old\n"),
+            (source, b"new\n"),
+            (foreign, b"foreign\n"),
+        ):
+            path.write_bytes(body)
+            os.chmod(path, 0o600)
+        item = batch.parse_item(f"{dest}={source}")
+        real_replace = batch.os.replace
+        swapped = False
+
+        def replace_and_immediately_swap(src, dst):
+            nonlocal swapped
+            result = real_replace(src, dst)
+            if Path(dst) == dest and not swapped:
+                swapped = True
+                real_replace(foreign, dest)
+            return result
+
+        with mock.patch.object(batch.os, "replace", side_effect=replace_and_immediately_swap):
+            try:
+                batch.adopt([item])
+            except RuntimeError as exc:
+                assert "identity changed before verification" in str(exc)
+                assert "rollback was incomplete" in str(exc)
+            else:
+                raise AssertionError("batch publisher adopted a foreign post-rename replacement")
+        assert dest.read_bytes() == b"foreign\n"
+        assert not list(root.glob(".*.batch-*"))
+
     print("Atomic private single/batch publication tests: OK")
     return 0
 
