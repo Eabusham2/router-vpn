@@ -75,6 +75,24 @@ require("cmd/client/standard_exits_test.go", "TestStandardExitStoreRejectsSymlin
 require("cmd/client/router_profile_transaction_test.go", "RollsRAMBackWhenPersistenceFails", "CompetingMutation")
 require("cmd/client/private_store_test.go", "RejectsSymlinkTargets", "RejectsSymlinkParent", "RejectsOversizedRead", "TargetReplacementBeforeAdoption")
 
+# iOS whole-connection/profile metadata is app-private authoritative state.
+# The verified temporary file is flushed and atomically adopted; the operation
+# must not throw after replacement merely to reapply metadata already owned by
+# the adopted inode.
+require(
+    "ios/RouterVPN/App/IOSPrivateJSONStore.swift",
+    "try handle.synchronize()",
+    "try manager.setAttributes(attributes, ofItemAtPath: temporary.path)",
+    "manager.replaceItemAt(destination, withItemAt: temporary",
+    "manager.moveItem(at: temporary, to: destination)",
+    "The verified temporary file already owns the required protection",
+)
+forbid(
+    "ios/RouterVPN/App/IOSPrivateJSONStore.swift",
+    "try manager.setAttributes(attributes, ofItemAtPath: destination.path)",
+)
+run_test("ios/RouterVPN/test_private_json_store_contract.py")
+
 # Android whole-connection profiles are app-private authoritative state. The
 # verified 0600 temporary inode is fsynced and atomically adopted; no fallible
 # post-rename operation may make callers report failure after disk committed.

@@ -76,7 +76,10 @@ enum IOSPrivateJSONStore {
             try manager.moveItem(at: temporary, to: destination)
         }
         adopted = true
-        try manager.setAttributes(attributes, ofItemAtPath: destination.path)
+        // The verified temporary file already owns the required protection and
+        // POSIX mode. replaceItem/moveItem adopts that file atomically; a
+        // throwing metadata operation here would report failure after the new
+        // authoritative state had already committed.
 
         var directory = destination.deletingLastPathComponent()
         var values = URLResourceValues()
