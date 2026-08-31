@@ -9,7 +9,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: publish-arm64-portainer-${{ github.ref }}-${{ github.sha }}
+  group: publish-arm64-portainer-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -26,6 +26,7 @@ jobs:
           go test ./cmd/update-controller -count=1
           find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
           python3 deploy/validate-repo.py
           python3 deploy/durable-state-syntax-audit.py
           python3 deploy/server-image-dependency-audit.py
