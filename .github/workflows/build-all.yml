@@ -26,13 +26,21 @@ jobs:
           python3 -m py_compile \
             server/scripts/exact_sha_release_download.py \
             server/scripts/native_artifact_policy.py \
+            deploy/source_provenance.py \
+            deploy/materialize-production-compose.py \
             deploy/materialize-exact-sha-release.py \
             deploy/exact-sha-release-pipeline-audit.py \
             deploy/unified-map-shipping-audit.py
           (cd client && python3 test_unified_control_center_contract.py)
           python3 deploy/unified-map-control-center-audit.py
           python3 deploy/unified-map-shipping-audit.py
+          python3 deploy/linux-session-mutation-audit.py
           python3 server/scripts/test_exact_sha_release_download.py
+          python3 server/scripts/test_download_jobs.py
+          python3 server/scripts/test_download_safety.py
+          python3 deploy/test_source_provenance.py
+          python3 deploy/test_source_provenance_adoption_identity.py
+          python3 deploy/test-production-release-compose.py
           python3 deploy/test_exact_sha_release_materialization.py
           python3 deploy/exact-sha-release-pipeline-audit.py
 
