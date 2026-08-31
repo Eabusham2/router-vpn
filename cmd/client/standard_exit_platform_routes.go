@@ -194,14 +194,21 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	var proofErr error
 	if exit.Protocol == "openvpn" {
-		err = a.proveOpenVPNStandardExitForOperation(exit.ExpectedPublicIP)
+		proofErr = a.proveOpenVPNStandardExitForOperation(exit.ExpectedPublicIP)
 	} else {
-		err = a.proveStandardExitForOperation(exit.ExpectedPublicIP)
+		proofErr = a.proveStandardExitForOperation(exit.ExpectedPublicIP)
 	}
-	if err != nil {
+	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
+		a.stopOwnedConnectionRuntime(cmd)
+		sessionTrackerFor(a).markRequestFailure(cancelErr.Error())
+		http.Error(w, cancelErr.Error(), http.StatusConflict)
+		return
+	}
+	if proofErr != nil {
 		_ = a.stopMode()
-		msg := "standard exit proof failed: " + err.Error()
+		msg := "standard exit proof failed: " + proofErr.Error()
 		a.mu.Lock()
 		a.state.Mode = "standard-exit"
 		a.state.LogicalMode = "standard-exit"
@@ -217,15 +224,10 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
 	a.mu.Lock()
 	if a.cmd != cmd {
 		a.mu.Unlock()
+		sessionTrackerFor(a).markRequestFailure("standard exit runtime changed during proof")
 		http.Error(w, "standard exit runtime changed during proof", http.StatusConflict)
 		return
 	}
