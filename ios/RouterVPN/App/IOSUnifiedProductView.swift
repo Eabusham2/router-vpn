@@ -264,6 +264,7 @@ struct IOSUnifiedProductView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.profileMutationBlocked)
+                        IOSUserLocationControl()
                         Spacer()
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(connectionStateTitle).font(.subheadline.bold())
