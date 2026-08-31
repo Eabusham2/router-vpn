@@ -1,0 +1,30 @@
+name: Exact-source evidence durability
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/source-snapshot.yml'
+      - '.github/workflows/source-snapshot-durability.yml'
+      - 'deploy/source-snapshot-durability-audit.py'
+  pull_request:
+    paths:
+      - '.github/workflows/source-snapshot.yml'
+      - '.github/workflows/source-snapshot-durability.yml'
+      - 'deploy/source-snapshot-durability-audit.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-snapshot-durability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove exact-source evidence survives release auditing
+        run: python3 deploy/source-snapshot-durability-audit.py
