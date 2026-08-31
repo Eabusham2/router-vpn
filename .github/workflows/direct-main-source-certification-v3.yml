@@ -1,0 +1,104 @@
+name: Direct main authoritative source certification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-source-certification-v3.yml
+
+permissions:
+  contents: write
+timeout-minutes: 360
+
+concurrency:
+  group: direct-main-authoritative-source-certification
+  cancel-in-progress: false
+
+jobs:
+  certify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+          cache: false
+      - name: Install Linux native dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file binutils
+      - name: Remove all transient direct-main automation before auditing
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          git rm -f --ignore-unmatch \
+            .github/workflows/direct-main-source-certification.yml \
+            .github/workflows/direct-main-source-certification-v2.yml \
+            .github/workflows/direct-main-source-certification-v3.yml \
+            .github/workflows/direct-main-release-foundations.yml \
+            .github/workflows/direct-main-shipping-transform-reconcile.yml \
+            .github/workflows/direct-main-foundation-recovery.yml \
+            .github/scripts/fix-release-foundations.py \
+            .github/scripts/reconcile-shipping-transform-baselines.py
+      - name: Run authoritative reconciled source matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./...
+          find . -type f -name '*.py' -not -path './.git/*' -print0 | xargs -0 python3 -m py_compile
+          find modes server client deploy router -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          required=(
+            deploy/validate-repo.py
+            deploy/product-parity-audit.py
+            deploy/full-audit-v4.py
+            deploy/profile-settings-audit.py
+            deploy/native-session-mutation-audit.py
+            deploy/unified-map-shipping-audit.py
+            deploy/recovered-map-first-ui-contract-audit.py
+            deploy/setup-center-responsive-ui-audit.py
+            deploy/setup-center-download-retention-audit.py
+            deploy/durable-state-transaction-audit.py
+            deploy/backend-session-transaction-audit.py
+            deploy/router-forwarding-audit.py
+            deploy/release-orchestration-audit.py
+            deploy/native-artifact-workflow-parity-audit.py
+            deploy/recovered-requirements-1-264-audit.py
+            deploy/recovered-requirements-265-311-audit.py
+            deploy/recovered-addendum-312-356-audit.py
+            deploy/recovered-corrections-audit.py
+          )
+          for audit in "${required[@]}"; do
+            test -f "$audit" || { echo "missing authoritative audit: $audit" >&2; exit 1; }
+            echo "===== $audit ====="
+            python3 "$audit"
+          done
+          for optional in deploy/endpoint-sync-audit.py deploy/durable-state-audit.py; do
+            test ! -f "$optional" || python3 "$optional"
+          done
+          python3 deploy/test-production-release-compose.py
+          python3 server/scripts/test_download_jobs.py
+          python3 server/scripts/test_setup_center_ux_patch.py
+          python3 server/scripts/test_source_provenance.py
+          python3 deploy/test_source_provenance.py
+          python3 deploy/test_source_provenance_adoption_identity.py
+          for test in \
+            android/test_android_private_file_store_contract.py \
+            android/test_android_connection_profile_store_contract.py \
+            android/test_android_node_store_transaction_contract.py \
+            ios/RouterVPN/test_private_json_store_contract.py \
+            ios/RouterVPN/test_connection_profile_store_fail_closed.py; do
+            test ! -f "$test" || python3 "$test"
+          done
+          bash deploy/package-linux-native.sh amd64
+          git diff --check
+      - name: Commit certified clean tree directly to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          git commit -m "Certify reconciled Router VPN source"
+          git push origin HEAD:main
