@@ -1,3 +1,4 @@
+# Triggered once after the workflow exists on main; the job deletes this file.
 name: One-shot iOS node-selection source fix
 
 on:
