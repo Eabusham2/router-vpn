@@ -155,6 +155,14 @@ def atomic_write(path: Path, records: list[dict]) -> None:
             stream.write(body)
             stream.flush()
             os.fsync(stream.fileno())
+        staged = tmp.lstat()
+        if (
+            stat.S_ISLNK(staged.st_mode)
+            or not stat.S_ISREG(staged.st_mode)
+            or (os.name != "nt" and stat.S_IMODE(staged.st_mode) != 0o600)
+        ):
+            raise RuntimeError(f"staged runtime PID registry is unsafe: {tmp}")
+
         after = run.lstat()
         if stat.S_ISLNK(after.st_mode) or not stat.S_ISDIR(after.st_mode) or not os.path.samestat(before, after):
             raise RuntimeError("runtime PID parent changed before adoption")
@@ -171,6 +179,22 @@ def atomic_write(path: Path, records: list[dict]) -> None:
             raise RuntimeError("runtime PID target identity changed before adoption")
         os.replace(tmp, path)
         committed = True
+
+        parent_after = run.lstat()
+        if (
+            stat.S_ISLNK(parent_after.st_mode)
+            or not stat.S_ISDIR(parent_after.st_mode)
+            or not os.path.samestat(before, parent_after)
+        ):
+            raise RuntimeError("runtime PID parent changed after adoption")
+        adopted = path.lstat()
+        if (
+            stat.S_ISLNK(adopted.st_mode)
+            or not stat.S_ISREG(adopted.st_mode)
+            or (os.name != "nt" and stat.S_IMODE(adopted.st_mode) != 0o600)
+            or not os.path.samestat(staged, adopted)
+        ):
+            raise RuntimeError("adopted runtime PID registry identity changed before verification")
         try:
             dfd = os.open(run, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
