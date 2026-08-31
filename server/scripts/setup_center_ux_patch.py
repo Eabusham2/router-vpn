@@ -3,12 +3,17 @@
 
 UX_PATCH = r'''
 <style>
+/* Shipping Setup Center accessibility/responsive overrides. This patch is inserted after the generated base CSS. */
+.tabs button,.btn,button{appearance:none}
+.tabs button:focus-visible,.btn:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #69d2ff;outline-offset:2px}
+.tabs button:disabled,.btn:disabled,button:disabled{opacity:.55;cursor:not-allowed}
+@media(max-width:820px){.tabs button{flex:1 1 130px}.download .btn{width:100%;text-align:center}.wizard{padding:15px;max-height:calc(100vh - 24px)}}
 #rvpn-device-download{position:fixed;left:128px;bottom:22px;z-index:998;border:1px solid #334155;border-radius:14px;padding:10px 14px;background:#0f766e;color:white;font:700 14px system-ui;cursor:pointer;box-shadow:0 14px 40px #0006}
 #rvpn-device-download[disabled]{opacity:.55;cursor:not-allowed}
 #rvpn-device-download-note{position:fixed;left:22px;bottom:72px;z-index:997;max-width:460px;background:#111827;color:#e2e8f0;border:1px solid #334155;border-radius:12px;padding:9px 12px;font:12px/1.4 system-ui;display:none}
-#rvpn-download-job{position:fixed;left:22px;bottom:22px;z-index:1002;width:min(520px,calc(100vw - 44px));background:#101827;color:#f8fafc;border:1px solid #334155;border-radius:16px;padding:14px;box-shadow:0 20px 70px #0009;font:13px/1.4 system-ui;display:none}
+#rvpn-download-job{position:fixed;left:22px;bottom:22px;z-index:1002;width:min(520px,calc(100vw - 44px));max-height:calc(100vh - 44px);overflow:auto;background:#101827;color:#f8fafc;border:1px solid #334155;border-radius:16px;padding:14px;box-shadow:0 20px 70px #0009;font:13px/1.4 system-ui;display:none}
 #rvpn-download-job .rvpn-job-head{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}#rvpn-download-job .rvpn-job-title{font-weight:800;overflow-wrap:anywhere}#rvpn-download-job .rvpn-job-track{height:9px;border-radius:999px;background:#25334a;overflow:hidden;margin:10px 0}#rvpn-download-job .rvpn-job-fill{height:100%;width:0;background:#22c55e;transition:width .2s ease}#rvpn-download-job .rvpn-job-meta{color:#a9b6cc;font-size:12px;overflow-wrap:anywhere}#rvpn-download-job .rvpn-job-history{margin-top:7px;color:#94a3b8;font-size:11px;overflow-wrap:anywhere}#rvpn-download-job .rvpn-job-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}#rvpn-download-job button{border:1px solid #475569;border-radius:9px;padding:7px 10px;background:#172033;color:#f8fafc;cursor:pointer}#rvpn-download-job button.rvpn-cancel{border-color:#7f1d1d;background:#3f151b}#rvpn-download-job button:disabled{opacity:.5;cursor:not-allowed}
-@media(max-width:560px){#rvpn-device-download{left:12px;bottom:12px;max-width:calc(100vw - 24px)}#rvpn-device-download-note{left:12px;bottom:64px;max-width:calc(100vw - 24px)}#rvpn-download-job{left:12px;bottom:12px;width:calc(100vw - 24px)}}
+@media(max-width:560px){#rvpn-device-download{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));width:auto;max-width:none;text-align:center}#rvpn-device-download-note{left:12px;right:12px;bottom:calc(64px + env(safe-area-inset-bottom));max-width:none}#rvpn-download-job{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));width:auto;max-height:calc(100vh - 24px - env(safe-area-inset-bottom))}}
 </style>
 <button id="rvpn-device-download" type="button">Download for this device</button>
 <div id="rvpn-device-download-note" role="status"></div>
