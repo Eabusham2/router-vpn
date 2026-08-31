@@ -62,7 +62,7 @@ rc_has('python3 deploy/product-parity-audit.py','python3 client/test_native_onbo
 need('cmd/client/home_summary.go','actual_exit_ip','connection_phase','path_proof','logical_mode','actual_runtime','fallback','dns_latency_ms','node_latency_ms','kill_switch','lan_access')
 exists('cmd/client/profile_sort_test.go','cmd/client/telemetry_test.go','cmd/client/multihop_exit_proof_contract_test.go')
 need('client/RouterVPN-Windows-App.ps1','Modes','DNS','Settings')
-need('client/RouterVPN-Windows-UnifiedShell.ps1','Content="Nodes"')
+need('client/RouterVPN-Windows-UnifiedShell.ps1','Content="Add / manage nodes"')
 need('client/RouterVPN-Windows-Telemetry.ps1','UnifiedForwardButton','/api/forwarding/master')
 need('client/macos/RouterVPNMacUnifiedShell.swift','openUnifiedNodes','openUnifiedModes','openUnifiedDNS','openUnifiedSettings','openUnifiedForwarding')
 need('client/linux/routervpn-gtk.c','Nodes','Diagnostics','Emergency stop')
