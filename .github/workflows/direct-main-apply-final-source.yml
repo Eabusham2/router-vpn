@@ -1,0 +1,52 @@
+name: Direct main apply final source fixes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-apply-final-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: direct-main-apply-final-source
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Land the reconciled source on a clean main-only tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          if [[ -f .github/scripts/final-source-fix.py ]]; then
+            python3 .github/scripts/final-source-fix.py
+          fi
+          rm -f .github/scripts/final-source-fix.py
+          rm -f .github/scripts/final-current-reconcile.py
+          rm -f .github/current-source-gate-failures.txt
+          rm -f .github/workflows/direct-main-final-source-fix.yml
+          rm -f .github/workflows/direct-main-apply-final-source.yml
+          rm -f .github/workflows/direct-main-current-source-gate.yml
+          rm -f .github/workflows/direct-main-current-source-report.yml
+          rm -f .github/workflows/direct-main-final-current-reconcile.yml
+          rm -f .github/workflows/direct-main-apply-current-reconcile.yml
+          git add -A
+          git commit -m 'Apply final reconciled shipping and release source'
+          git push origin HEAD:main
+          for ref in $(git ls-remote --heads origin | awk '{sub("refs/heads/","",$2); if($2!="main") print $2}'); do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${ref}" || true
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
