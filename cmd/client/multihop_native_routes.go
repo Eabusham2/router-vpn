@@ -204,6 +204,11 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err = a.checkConnectionOperation(); err != nil {
+		sessionTrackerFor(a).markRequestFailure(err.Error())
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err = cmd.Start(); err != nil {
 		a.mu.Lock()
 		a.state.Phase = "failed"
@@ -225,6 +230,12 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.state.Phase = "multihop:proving-exit"
 	a.state.LastError = ""
 	a.mu.Unlock()
+	if err = a.checkConnectionOperation(); err != nil {
+		a.stopOwnedConnectionRuntime(cmd)
+		sessionTrackerFor(a).markRequestFailure(err.Error())
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err = a.proveMultihopExit(sel.Exit); err != nil {
 		_ = a.stopMode()
 		msg := "multihop exit proof failed: " + err.Error()
