@@ -251,7 +251,7 @@ extension ProductWindowController {
         nodeCard.addSubview(nodeRow)
         routerPopup.target = self; routerPopup.action = #selector(unifiedRouterChanged)
         nodeRow.addArrangedSubview(routerPopup)
-        let manageNode = NSButton(title: "Nodes", target: self, action: #selector(openUnifiedNodes)); manageNode.bezelStyle = .rounded; nodeRow.addArrangedSubview(manageNode)
+        let manageNode = NSButton(title: "Add / manage nodes", target: self, action: #selector(openUnifiedNodes)); manageNode.bezelStyle = .rounded; nodeRow.addArrangedSubview(manageNode)
         NSLayoutConstraint.activate([
             nodeRow.leadingAnchor.constraint(equalTo: nodeCard.leadingAnchor), nodeRow.trailingAnchor.constraint(equalTo: nodeCard.trailingAnchor), nodeRow.topAnchor.constraint(equalTo: nodeCard.topAnchor), nodeRow.bottomAnchor.constraint(equalTo: nodeCard.bottomAnchor),
             nodeCard.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16), nodeCard.topAnchor.constraint(equalTo: root.topAnchor, constant: 16), nodeCard.widthAnchor.constraint(lessThanOrEqualToConstant: 450)

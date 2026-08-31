@@ -3,6 +3,13 @@
 
 UX_PATCH = r'''
 <style>
+/* Unified Map Control Center non-blocking overlay contract. */
+.overlay[hidden],.wizard-overlay[hidden],[data-routervpn-overlay][hidden]{display:none!important;pointer-events:none!important}
+.overlay:not([hidden]),.wizard-overlay:not([hidden]),[data-routervpn-overlay]:not([hidden]){pointer-events:auto}
+@media(max-width:820px){.wizard,.overlay>*,.wizard-overlay>*{max-height:calc(100dvh - 24px);overflow:auto}.rvpn-primary-controls{position:relative;z-index:3}}
+</style>
+
+<style>
 /* Shipping Setup Center accessibility/responsive overrides. This patch is inserted after the generated base CSS. */
 .tabs button,.btn,button{appearance:none}
 .tabs button:focus-visible,.btn:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #69d2ff;outline-offset:2px}

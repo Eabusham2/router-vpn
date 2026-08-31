@@ -18,7 +18,7 @@ function Add-RouterVPNUnifiedWindowsShell {
     <Grid>
       <Canvas Name="UnifiedMapCanvas" ClipToBounds="True"/>
       <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="14" Padding="10,7" CornerRadius="14" Background="#DD17243A">
-        <StackPanel Orientation="Horizontal"><TextBlock Text="Node" FontWeight="SemiBold" Margin="0,0,8,0" VerticalAlignment="Center"/><ComboBox Name="UnifiedNodeCombo" DisplayMemberPath="display_name" SelectedValuePath="id" MinWidth="260"/><Button Name="UnifiedNodesButton" Content="Nodes" Margin="8,0,0,0" Padding="10,5"/></StackPanel>
+        <StackPanel Orientation="Horizontal"><TextBlock Text="Node" FontWeight="SemiBold" Margin="0,0,8,0" VerticalAlignment="Center"/><ComboBox Name="UnifiedNodeCombo" DisplayMemberPath="display_name" SelectedValuePath="id" MinWidth="260"/><Button Name="UnifiedNodesButton" Content="Add / manage nodes" Margin="8,0,0,0" Padding="10,5"/></StackPanel>
       </Border>
       <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="14" Padding="10,7" CornerRadius="14" Background="#DD17243A">
         <StackPanel><StackPanel Orientation="Horizontal"><Ellipse Name="UnifiedStateDot" Width="9" Height="9" Fill="#6B7280" Margin="0,0,7,0"/><TextBlock Name="UnifiedStateText" Text="Checking…" FontWeight="SemiBold"/></StackPanel><TextBlock Name="UnifiedStatusDetail" Text="Selected-path proof pending" FontSize="11" Foreground="#A8B6D5" MaxWidth="420" TextWrapping="Wrap"/></StackPanel>

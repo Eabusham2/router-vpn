@@ -268,6 +268,7 @@ struct IOSUnifiedProductView: View {
                         Spacer()
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(connectionStateTitle).font(.subheadline.bold())
+                            Text(IOSUnifiedSecureTransport.handshakeLabel(connected: model.connected)).font(.caption2).foregroundStyle(model.connected ? .green : .secondary).lineLimit(1)
                             HStack(spacing: 5) {
                                 Text(model.activeRawProfile.isEmpty ? selectedModeTitle : model.activeRawProfile)
                                 if let ms = telemetry.livePathMs, model.connected { Text(String(format: "• %.1f ms", ms)).monospacedDigit() }
@@ -286,13 +287,13 @@ struct IOSUnifiedProductView: View {
         .sheet(isPresented: $showingModes) { IOSUnifiedModePicker(selectedMode: $selectedMode).environmentObject(model) }
         .sheet(isPresented: $showingDNS) { IOSDNSPolicyView().environmentObject(model) }
         .sheet(isPresented: $showingSettings) { IOSUnifiedSettingsView(telemetry: telemetry).environmentObject(model) }
-        .sheet(isPresented: $showingOnboarding) { RouterVPNProductOnboardingView() }
+        .sheet(isPresented: $showingOnboarding) { RouterVPNProductOnboardingView().presentationDetents([.medium, .large]).presentationDragIndicator(.visible).interactiveDismissDisabled(false) }
         .alert("Master port forwarding", isPresented: $showingForwardingInfo) {
             Button("OK", role: .cancel) { }
         } message: {
             Text("Incoming forwarding is owned by the authenticated private Router VPN home node and only exists for routable tunnel modes. iOS PacketTunnel paths that cannot enforce arbitrary DNAT keep this unavailable rather than showing a fake switch. Configure the home-node rule in Setup Center/router-agent and validate it off-LAN.")
         }
-        .onAppear { if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { showingOnboarding = true } }
+        .onAppear { if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { model.message = "Setup is ready. Open Setup guide from the expanded control sheet when needed." } }
         .onChange(of: model.activeRawProfile) { value in if model.connected && !value.isEmpty { model.recordIOSLastRuntime() } }
         .task { guard !startupApplied else { return }; startupApplied = true; await model.applyIOSStartupPolicyIfNeeded(); _ = await telemetry.measureAll(model.allNodeProfiles, samples: 2) }
         .task(id: model.connected) {
@@ -371,7 +372,9 @@ struct IOSUnifiedProductView: View {
                             .buttonStyle(.bordered).accessibilityLabel("Master port forwarding")
                     }
 
+                    unifiedRow(icon: "plus.circle.fill", title: "Add / manage nodes", value: "Router / Custom") { showingNodes = true }
                     unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: iosMultihopSummary) { showingNodes = true }
+                    unifiedRow(icon: "person.crop.rectangle.stack", title: "Profiles & bridges", value: "Router / Custom / Tor") { showingNodes = true }
                     unifiedRow(icon: "slider.horizontal.3", title: "Settings", value: settingsSummary) { showingSettings = true }
                     unifiedRow(icon: "wand.and.stars", title: "Mode", value: selectedModeTitle, disabled: model.profileMutationBlocked) { showingModes = true }
 
@@ -589,6 +592,11 @@ private struct IOSUnifiedSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Secure transport") {
+                    LabeledContent("Authenticated encryption", value: "Always on ✓")
+                    Text("Router VPN uses established Noise/TLS/AEAD or Tor ntor-v3 handshakes. Plain SOCKS5/HTTP/Tor bridge profiles must be followed by an encrypted inner tunnel; XOR and custom ciphers are rejected.").font(.caption).foregroundStyle(.secondary)
+                    LabeledContent("Available bridges", value: "SOCKS5 • HTTP(S) • Shadowsocks • Tor")
+                }
                 Section("Quick settings") {
                     Toggle("Kill switch", isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) }))
                         .disabled(model.profileMutationBlocked)

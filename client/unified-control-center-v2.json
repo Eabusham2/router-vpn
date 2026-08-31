@@ -1,0 +1,226 @@
+{
+  "schema_version": 2,
+  "product_name": "Router VPN",
+  "experience_name": "Unified Map Control Center",
+  "default_surface": "map",
+  "bottom_sheet_order": [
+    "connection",
+    "multihop",
+    "settings",
+    "mode",
+    "dns"
+  ],
+  "defaults": {
+    "mode": "smart-auto",
+    "selected_node_count": 1,
+    "ipv6": true,
+    "mtu_policy": "auto",
+    "kill_switch": false,
+    "master_port_forwarding": false,
+    "auto_require_encrypted": false,
+    "auto_require_obfuscation": false,
+    "authenticated_transport": true
+  },
+  "connection_controls": {
+    "primary_action": [
+      "Connect",
+      "Disconnect"
+    ],
+    "left_accessory": "fastest-node-menu",
+    "right_accessories": [
+      "kill-switch",
+      "master-port-forwarding"
+    ],
+    "live_metric": "end_to_end_rtt_ms",
+    "node_selection_never_auto_connects": true
+  },
+  "node_types": [
+    {
+      "id": "router-vpn",
+      "role": [
+        "node",
+        "hop",
+        "exit"
+      ],
+      "final_transport": true
+    },
+    {
+      "id": "wireguard",
+      "role": [
+        "node",
+        "hop",
+        "exit"
+      ],
+      "final_transport": true
+    },
+    {
+      "id": "amneziawg",
+      "role": [
+        "node",
+        "hop",
+        "exit"
+      ],
+      "final_transport": true
+    },
+    {
+      "id": "openvpn",
+      "role": [
+        "node",
+        "hop",
+        "exit"
+      ],
+      "final_transport": true
+    },
+    {
+      "id": "shadowsocks-2022",
+      "role": [
+        "bridge",
+        "hop",
+        "exit"
+      ],
+      "final_transport": true
+    },
+    {
+      "id": "https-connect",
+      "role": [
+        "bridge",
+        "hop"
+      ],
+      "final_transport": false
+    },
+    {
+      "id": "http-connect",
+      "role": [
+        "bridge",
+        "hop"
+      ],
+      "final_transport": false
+    },
+    {
+      "id": "socks5",
+      "role": [
+        "bridge",
+        "hop"
+      ],
+      "final_transport": false
+    },
+    {
+      "id": "tor-bridge",
+      "role": [
+        "bridge",
+        "hop"
+      ],
+      "final_transport": false
+    }
+  ],
+  "map": {
+    "provider": "routervpn-vector-globe",
+    "uses_google_maps": false,
+    "current_location_role": "device",
+    "roles": [
+      "device",
+      "selected",
+      "entry",
+      "middle",
+      "exit",
+      "custom",
+      "bridge"
+    ],
+    "color_coded_roles": true,
+    "animated_packet": true,
+    "node_rtt_labels": true,
+    "hop_lines": true
+  },
+  "multihop": {
+    "minimum_hops": 2,
+    "maximum_hops": 5,
+    "live_pairwise_rtt": true,
+    "live_per_hop_rtt": true,
+    "live_total_rtt": true,
+    "per_hop_speed_tests": true,
+    "end_to_end_speed_test": true
+  },
+  "mode_picker": {
+    "items": [
+      "smart-auto",
+      "auto",
+      "all-presets",
+      "custom-presets",
+      "new-custom-preset"
+    ],
+    "custom_builder": true,
+    "preset_actions": [
+      "create",
+      "load",
+      "update",
+      "delete"
+    ],
+    "new_preset_opens_separate_page": true
+  },
+  "profiles": {
+    "actions": [
+      "create",
+      "load",
+      "update",
+      "delete",
+      "import-router-bundle"
+    ],
+    "maximum": 64,
+    "whole_connection": true
+  },
+  "settings": {
+    "sections": [
+      "secure-transport",
+      "kill-switch",
+      "port-forwarding",
+      "daita-like-padding",
+      "jumbo-tun",
+      "ipv6",
+      "mtu",
+      "auto-requirements",
+      "performance",
+      "advanced"
+    ],
+    "mtu_actions": [
+      "auto-per-setup",
+      "fixed-all",
+      "retest-current-configuration"
+    ],
+    "performance_metrics": [
+      "node-download",
+      "node-upload",
+      "hop-download",
+      "hop-upload",
+      "end-download",
+      "end-upload",
+      "rtt"
+    ]
+  },
+  "secure_transport": {
+    "mandatory": true,
+    "indicator": "checked-handshake",
+    "custom_crypto_allowed": false,
+    "xor_allowed": false,
+    "inner_suites": [
+      "wireguard-noise-ik-chacha20-poly1305",
+      "amneziawg-noise-ik-chacha20-poly1305",
+      "openvpn-tls13-aead",
+      "shadowsocks-2022-blake3-aead"
+    ],
+    "outer_bridges": [
+      "tls13-aes-256-gcm",
+      "tls13-chacha20-poly1305",
+      "tor-ntor-v3",
+      "shadowsocks-2022-blake3-aead"
+    ],
+    "plaintext_bridge_requires_encrypted_inner_tunnel": true
+  },
+  "capability_gating": {
+    "never_show_fake_enabled_controls": true,
+    "unsupported_controls_are_disabled_with_reason": true,
+    "port_forwarding_requires_router_agent": true,
+    "tor_bridge_requires_local_or_remote_tor_runtime": true,
+    "jumbo_requires_dataplane_support": true,
+    "daita_like_padding_requires_dataplane_support": true
+  }
+}
