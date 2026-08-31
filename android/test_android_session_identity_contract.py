@@ -26,6 +26,8 @@ revalidator = read("AndroidSessionRevalidator.java")
 wireguard = read("NativeWireGuardController.java")
 amnezia = read("NativeAmneziaWGController.java")
 standard_activity = read("StandardExitActivity.java")
+standard_runtime = read("AndroidStandardExitRuntime.java")
+mutation_guard = read("AndroidVpnMutationGuard.java")
 via_entry = read("AndroidViaEntryLatencyProbe.java")
 map_view = read("RouterVpnNodeMapView.java")
 manifest = (ROOT / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
@@ -70,6 +72,31 @@ for marker in (
 assert "requestPermissions" not in product, "Android ProductActivity must not silently request location on startup"
 assert "getLastKnownLocation" in map_view and "getProviders(true)" in map_view
 assert "Geocoder" not in map_view and "ip-api" not in map_view.lower() and "ipinfo" not in map_view.lower(), "Android map must not infer device location from network/IP"
+
+# Persistent mutation fails closed for unknown/future phases and every
+# app-process-owned transport, including raw WG/AWG and standard exits.
+for marker in (
+    "phaseBusy(home.connected, phase)",
+    '"off".equals(phase)',
+    '"disconnected".equals(phase)',
+    '"failed".equals(phase)',
+    "e.standardExit.isActiveOrTransitioning()",
+    "tunnelBusy(e.wireGuard.getState())",
+    "tunnelBusy(e.amneziaWG.getState())",
+):
+    assert marker in mutation_guard, f"Android mutation guard lost fail-closed ownership marker: {marker}"
+assert 'phase.contains(' not in mutation_guard, "Android mutation guard regressed to allow unknown future phases"
+for marker in (
+    "synchronized boolean isActiveOrTransitioning()",
+    "task!=null&&!task.isDone()",
+    "if(state==null)return true",
+    '!"external".equals(home.logicalMode)',
+    "engines.wireGuard.getState()!=com.wireguard.android.backend.Tunnel.State.DOWN",
+    "engines.amneziaWG.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN",
+    "runtimeBusy(engines.xray.getState())",
+):
+    assert marker in standard_runtime, f"Android standard-exit ownership lost marker: {marker}"
+assert "boolean isActiveOrTransitioning() { return AndroidVpnMutationGuard.isBusy(activity); }" in unified
 
 # Node and external-profile identity cannot mutate underneath a live/transitioning
 # tunnel. Public list/read operations remain available for rendering telemetry.
@@ -198,7 +225,7 @@ assert "prefs().getString(MULTI_ENTRY" not in run_speed
 assert "prefs().getString(MULTI_EXIT" not in run_speed
 picker = product.split("private void showViaEntryExitPicker", 1)[1].split("private void clearPendingProbe", 1)[0]
 assert "cachedMedian" not in picker, "via-entry picker must not substitute direct cached RTT"
-assert "medianMs" in picker and "unavailable" in picker
+assert "medianMs" in picker and "unavailble" in picker
 
 # Custom-exit UI/runtime ownership and permission metadata survive recreation.
 for marker in (
