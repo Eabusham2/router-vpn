@@ -90,7 +90,7 @@ need(
     "systemBlue",
     "systemOrange",
     "systemPink",
-    "animated packet",
+    "startPacketAnimation",
 )
 forbid("ios/RouterVPN/App/IOSUnifiedProductView.swift", "Test & connect fastest", "private func connectFastest")
 
@@ -118,7 +118,8 @@ need(
     'smallButton("Connections")',
     'smallButton("Add Router")',
     'smallButton("Add custom")',
-    "showCustomPresetBuilder",
+    "showCustomBuilder",
+    '"custom:new"',
     "showViaEntryExitPicker",
     "live via-entry multihop candidate RTT",
     "currentPathMs",
@@ -229,7 +230,7 @@ need(
     "Unified Map Control Center non-blocking overlay contract",
     "pointer-events:none!important",
     "max-height:calc(100dvh - 24px)",
-    "interactiveDismissDisabled(false)" if False else "aria-label=\"Hide download progress\"",
+    "aria-label=\"Hide download progress\"",
 )
 
 if errors:
