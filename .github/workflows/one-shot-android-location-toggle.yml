@@ -1,0 +1,32 @@
+name: One-shot Android location toggle
+
+on:
+  push:
+    branches:
+      - automation/android-location-toggle
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-android-location-toggle
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Tighten Android location truth and remove transport automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          python3 .github/scripts/apply-android-location-toggle.py
+          git push origin HEAD:main
+          git push origin --delete automation/android-location-toggle || true
