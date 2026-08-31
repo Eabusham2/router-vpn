@@ -54,9 +54,20 @@ with tempfile.TemporaryDirectory() as td:
         for marker in markers:
             if marker not in body: raise SystemExit(f'transformed {name}: missing {marker!r}')
 
-require('client/linux/routervpn-telemetry-v9.inc',
-    'selecting/connecting a fastest Router VPN node',
+telemetry=require('client/linux/routervpn-telemetry-v9.inc',
+    'selecting a Router VPN node',
+    'json_object_has_member(obj,"selected_id")',
+    'gtk_combo_box_set_active_id(GTK_COMBO_BOX(t->fastest),active_id)',
+    'Press Connect when ready.',
     'gtk_widget_set_sensitive(t->fastest,!routervpn_mutation_busy(t->app))')
+try:
+    selector=telemetry.split('static void linux_telemetry_fastest_changed_v9',1)[1].split('static void linux_telemetry_set_forward_label_v9',1)[0]
+except IndexError:
+    raise SystemExit('Linux node selector shipping handler is missing')
+if 'linux_unified_connect_v8' in selector:
+    raise SystemExit('Linux node selector must not auto-connect; Connect is a separate control')
+if 'gtk_combo_box_set_active_id(GTK_COMBO_BOX(t->fastest),"fastest")' in selector:
+    raise SystemExit('Linux node selector must not reset the visible selected node to Fastest')
 require('client/linux/routervpn-globe-v10.inc',
     'selecting a node from the VPN globe',
     'routervpn_require_mutation_idle(app')
