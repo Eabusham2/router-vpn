@@ -1,0 +1,48 @@
+name: Direct main apply current-requirements reconciliation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/direct-main-apply-current-reconcile.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: direct-main-apply-current-reconcile
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply reconciled source directly to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin main
+          git config user.name Eabusham2
+          git config user.email eabusham2@gmail.com
+          if [[ -f .github/scripts/final-current-reconcile.py ]]; then
+            python3 .github/scripts/final-current-reconcile.py
+          fi
+          rm -f .github/scripts/final-current-reconcile.py
+          rm -f .github/workflows/direct-main-final-current-reconcile.yml
+          rm -f .github/workflows/direct-main-apply-current-reconcile.yml
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m 'Apply reconciled current requirements to shipping source'
+            git push origin HEAD:main
+          fi
+          for ref in $(git ls-remote --heads origin | awk '{sub("refs/heads/","",$2); if($2!="main") print $2}'); do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${ref}" || true
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
