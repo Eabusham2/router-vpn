@@ -842,7 +842,11 @@ func (a *app) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.startMode(q.Mode); err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		status := http.StatusServiceUnavailable
+		if errors.Is(err, errConnectionOperationCancelled) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	fmt.Fprint(w, `{"ok":true}`)
@@ -907,6 +911,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	if ok, reason := a.checkMode(m); !ok {
 		return fmt.Errorf("mode unavailable: %s", reason)
 	}
+	if err = a.checkConnectionOperation(); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	daita, jumbo := a.state.DAITA, a.state.Jumbo
 	a.mu.Unlock()
@@ -934,6 +941,12 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	cmd.Dir = a.cfg.ScriptsDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if err = a.checkConnectionOperation(); err != nil {
+		if !holdOnFailure {
+			_ = a.releaseTransitionKillSwitch()
+		}
+		return err
+	}
 	if err = cmd.Start(); err != nil {
 		if !holdOnFailure {
 			_ = a.releaseTransitionKillSwitch()
@@ -952,8 +965,22 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	a.state.Phase = "starting"
 	a.state.LastError = ""
 	a.mu.Unlock()
+	if err = a.checkConnectionOperation(); err != nil {
+		a.stopOwnedConnectionRuntime(cmd)
+		return err
+	}
 
-	time.Sleep(1200 * time.Millisecond)
+	startupCtx := a.connectionOperationContextOrBackground()
+	startupDelay := time.NewTimer(1200 * time.Millisecond)
+	select {
+	case <-startupCtx.Done():
+		if !startupDelay.Stop() {
+			<-startupDelay.C
+		}
+		a.stopOwnedConnectionRuntime(cmd)
+		return errConnectionOperationCancelled
+	case <-startupDelay.C:
+	}
 	if err := a.checkConnectionOperation(); err != nil {
 		a.stopOwnedConnectionRuntime(cmd)
 		return err
@@ -963,6 +990,10 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	a.mu.Unlock()
 	latency, healthErr := a.testHealth(p)
 	if healthErr != nil {
+		if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
+			a.stopOwnedConnectionRuntime(cmd)
+			return cancelErr
+		}
 		failure := fmt.Errorf("%s started but selected-router path proof failed: %w", m.Name, healthErr)
 		_ = a.stopModeWithIntent(holdOnFailure)
 		a.mu.Lock()
@@ -1069,6 +1100,22 @@ func (a *app) auto(w http.ResponseWriter, _ *http.Request) {
 		a.state.Phase = "auto:trying:" + m.ID
 		a.mu.Unlock()
 		if err := a.startModeAttempt(m.ID, true); err != nil {
+			if errors.Is(err, errConnectionOperationCancelled) {
+				if releaseErr := a.releaseTransitionKillSwitch(); releaseErr != nil {
+					a.mu.Lock()
+					a.state.LastError = releaseErr.Error()
+					a.state.Phase = "failed"
+					a.mu.Unlock()
+					http.Error(w, releaseErr.Error(), http.StatusInternalServerError)
+					return
+				}
+				a.mu.Lock()
+				a.state.LastError = err.Error()
+				a.state.Phase = "off"
+				a.mu.Unlock()
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
 			failures = append(failures, m.ID+": "+err.Error())
 			continue
 		}
@@ -1098,7 +1145,7 @@ func (a *app) testHealth(p common.RouterProfile) (time.Duration, error) {
 	if target == "" {
 		return 0, errors.New("selected router has no private path proof URL")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.cfg.AutoTestSeconds)*time.Second)
+	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), time.Duration(a.cfg.AutoTestSeconds)*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -1106,6 +1153,7 @@ func (a *app) testHealth(p common.RouterProfile) (time.Duration, error) {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport}
 	t := time.Now()
 	resp, err := client.Do(req)
