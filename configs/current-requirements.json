@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "precedence": [
+    "verified current main source and exact-head evidence",
+    "latest explicit user correction",
+    "August 25 mega handoff override",
+    "mm.md post-GitHub gates",
+    "older uncancelled requirements"
+  ],
+  "repository_policy": {
+    "branch": "main",
+    "branches_or_prs": false,
+    "direct_commits": true
+  },
+  "product_split": {
+    "setup_center": "deployment-admin-recovery",
+    "native_app": "daily-map-first-vpn"
+  },
+  "defaults": {
+    "surface": "map",
+    "mode": "smart-auto",
+    "selected_node_count": 1,
+    "ipv6": true,
+    "mtu_policy": "auto",
+    "auto_require_encrypted": false,
+    "auto_require_obfuscation": false
+  },
+  "bottom_sheet_order": [
+    "connection",
+    "multihop",
+    "settings",
+    "mode",
+    "dns"
+  ],
+  "download_delivery": {
+    "order": [
+      "exact-sha-release",
+      "exact-sha-actions",
+      "bounded-local-supported-desktop"
+    ],
+    "mobile_local_fallback": false,
+    "retention_seconds_from_ready": 1800,
+    "delivery_does_not_extend_deadline": true,
+    "cancel_or_shutdown_deletes_immediately": true
+  },
+  "truth": {
+    "connected_requires_path_proof": true,
+    "no_fake_coordinates_location_rtt_mbps_forwarding_or_capabilities": true,
+    "unsupported_controls_disabled_with_reason": true,
+    "custom_xor_cipher": false,
+    "authenticated_standard_cryptography_only": true
+  },
+  "cancelled": [
+    "feature branches and pull-request workflow",
+    "browser/PWA daily app",
+    "WSL counted as native Windows VPN",
+    "PortableApps/PAF",
+    "moving latest release/artifact fallback",
+    "custom XOR or homemade packet cipher",
+    "broad ASUS traffic ownership"
+  ]
+}

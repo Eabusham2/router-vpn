@@ -138,7 +138,7 @@ the normal Router VPN Linux runtime setup; unsupported mode checks remain unavai
 than being substituted with a fake compatibility path.
 TXT
 
-python3 "$ROOT/deploy/source_provenance.py" "$dir" --family "linux-$ARCH"
+python3 "$ROOT/server/scripts/source_provenance.py" "$dir" --family "linux-$ARCH"
 tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
 archive_list="$work/archive-members.txt"
 tar -tzf "$OUT/$name.tar.gz" > "$archive_list"

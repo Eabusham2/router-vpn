@@ -99,7 +99,7 @@ TXT
   signature_info="$WORK/$name-codesign.txt"
   codesign -dv --verbose=2 "$dir/RouterVPN.app" >"$signature_info" 2>&1
   grep -Eq 'Signature=adhoc|Authority=Developer ID Application' "$signature_info"
-  python3 "$ROOT/deploy/source_provenance.py" "$dir" --family "macos-$arch"
+  python3 "$ROOT/server/scripts/source_provenance.py" "$dir" --family "macos-$arch"
 
   tar -C "$WORK" -czf "$OUT/$name.tar.gz" "$name"
   archive_list="$WORK/$name-members.txt"

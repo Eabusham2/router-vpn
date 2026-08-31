@@ -32,7 +32,7 @@ import tempfile
 import urllib.parse
 import zipfile
 
-PROVENANCE_PATH = Path(__file__).resolve().parents[2] / "deploy" / "source_provenance.py"
+PROVENANCE_PATH = Path(__file__).with_name("source_provenance.py")
 _prov_spec = __import__("importlib.util").util.spec_from_file_location("router_vpn_source_provenance", PROVENANCE_PATH)
 if _prov_spec is None or _prov_spec.loader is None:
     raise RuntimeError(f"cannot load {PROVENANCE_PATH}")
