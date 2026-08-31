@@ -21,7 +21,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Apply, validate, commit, and clean up
+      - name: Apply, commit, publish, then report aggregate failures
         shell: bash
         run: |
           set -euo pipefail
@@ -34,6 +34,10 @@ jobs:
           rc=$?
           set -e
           cat "$RUNNER_TEMP/ordered-corrections.log"
+
+          # Completed source commits are valuable independently. Publish them
+          # before inspecting aggregate contract failures at the end.
+          git push origin HEAD:main
 
           if [ "$rc" -ne 0 ]; then
             git fetch origin automation/ios-source-fix
@@ -51,5 +55,4 @@ jobs:
             exit "$rc"
           fi
 
-          git push origin HEAD:main
           git push origin --delete automation/ios-source-fix || true
