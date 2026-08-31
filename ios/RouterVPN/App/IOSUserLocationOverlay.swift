@@ -16,6 +16,14 @@ final class IOSUserLocationController: NSObject, ObservableObject, CLLocationMan
         manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
     }
 
+    func toggleFromUserTap() {
+        if state == "shown" {
+            hideRealLocation()
+        } else {
+            requestFromUserTap()
+        }
+    }
+
     func requestFromUserTap() {
         requestedByUser = true
         switch manager.authorizationStatus {
@@ -97,6 +105,17 @@ final class IOSUserLocationController: NSObject, ObservableObject, CLLocationMan
         }
     }
 
+    private func hideRealLocation() {
+        requestedByUser = false
+        manager.stopUpdatingLocation()
+        if let map = activeMapView() {
+            map.showsUserLocation = false
+            map.userTrackingMode = .none
+        }
+        state = "off"
+        detail = "Show my real location"
+    }
+
     private func activeMapView() -> MKMapView? {
         for case let scene as UIWindowScene in UIApplication.shared.connectedScenes where scene.activationState == .foregroundActive {
             for window in scene.windows where !window.isHidden {
@@ -118,7 +137,7 @@ struct IOSUserLocationControl: View {
     @StateObject private var controller = IOSUserLocationController()
 
     var body: some View {
-        Button { controller.requestFromUserTap() } label: {
+        Button { controller.toggleFromUserTap() } label: {
             HStack(spacing: 5) {
                 Image(systemName: controller.state == "shown" ? "location.fill" : "location")
                     .foregroundStyle(controller.state == "shown" ? .green : .primary)
@@ -129,7 +148,7 @@ struct IOSUserLocationControl: View {
             .background(.regularMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Show my real device location on the Router VPN map")
+        .accessibilityLabel(controller.state == "shown" ? "Hide my real device location from the Router VPN map" : "Show my real device location on the Router VPN map")
     }
 }
 
