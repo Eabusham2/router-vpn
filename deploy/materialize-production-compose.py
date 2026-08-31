@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Materialize the production Portainer compose from a strict private env file."""
+"""Materialize server/portainer-current.yaml as one exact-SHA production release.
+
+The tracked compose is a reviewed baseline/template. This writer produces a
+separate generated artifact headed:
+
+    GENERATED exact-SHA Router VPN production compose: <40-hex SHA>
+
+It never overwrites server/portainer-current.yaml, never adds build contexts or
+a Docker socket, and binds every custom image, the updater, and the Setup Center
+broker's ROUTER_VPN_GITHUB_SHA to the same exact source SHA.
+"""
 from __future__ import annotations
 
 import argparse
@@ -7,104 +17,103 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 import tempfile
 
-REQUIRED = (
-    "TZ",
-    "WG_PORT",
-    "AWG2_PORT",
-    "XRAY_PQ_PORT",
-    "XRAY_XHTTP_PORT",
-    "OPENVPN_PORT",
-    "SERVER_INTERNAL_CIDR",
-    "SERVER_INTERNAL_GATEWAY",
-    "ROUTER_LAN_CIDR",
-    "CLIENT_EXTERNAL_PORT",
-    "CLIENT_LISTEN",
-    "SETUP_CENTER_EXTERNAL_PORT",
-    "SETUP_CENTER_LISTEN",
-    "ROUTER_AGENT_EXTERNAL_PORT",
-    "ROUTER_AGENT_LISTEN",
-    "SETUP_BASE_URL",
-    "PUBLIC_ENDPOINT",
-)
-
-PORT_KEYS = {
-    "WG_PORT",
-    "AWG2_PORT",
-    "XRAY_PQ_PORT",
-    "XRAY_XHTTP_PORT",
-    "OPENVPN_PORT",
-    "CLIENT_EXTERNAL_PORT",
-    "SETUP_CENTER_EXTERNAL_PORT",
-    "ROUTER_AGENT_EXTERNAL_PORT",
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+CUSTOM_IMAGES = {
+    "init": 3,
+    "agent": 1,
+    "wireguard": 1,
+    "awg2": 1,
+    "rosenpass": 1,
+    "naive": 1,
+    "ss-v2ray": 1,
+    "aux": 1,
+    "updater": 1,
 }
-
+IMAGE_RE = re.compile(
+    r"(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):)"
+    r"([0-9a-f]{40})"
+)
+BROKER_RE = re.compile(r"(?m)^(\s*ROUTER_VPN_GITHUB_SHA:\s*)([0-9a-f]{40})(\s*)$")
 MAX_SOURCE_BYTES = 4 << 20
 MAX_OUTPUT_BYTES = 8 << 20
 PUBLIC_MODE = 0o644
+TRACKED_TEMPLATE = Path("server/portainer-current.yaml")
 
 
-def load_env(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for lineno, raw in enumerate(path.read_text().splitlines(), 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            raise SystemExit(f"{path}:{lineno}: expected KEY=VALUE")
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
-            raise SystemExit(f"{path}:{lineno}: invalid key {key!r}")
-        if key in values:
-            raise SystemExit(f"{path}:{lineno}: duplicate key {key}")
-        if any(ch in value for ch in "\r\n\x00"):
-            raise SystemExit(f"{path}:{lineno}: unsafe control character")
-        values[key] = value
-    missing = [key for key in REQUIRED if not values.get(key)]
-    if missing:
-        raise SystemExit("missing required production values: " + ", ".join(missing))
-    unknown = sorted(set(values) - set(REQUIRED))
-    if unknown:
-        raise SystemExit("unknown production values: " + ", ".join(unknown))
-    for key in PORT_KEYS:
-        try:
-            port = int(values[key])
-        except ValueError as exc:
-            raise SystemExit(f"{key} must be an integer") from exc
-        if not 1 <= port <= 65535:
-            raise SystemExit(f"{key} must be between 1 and 65535")
-    for key in ("CLIENT_LISTEN", "SETUP_CENTER_LISTEN", "ROUTER_AGENT_LISTEN"):
-        if not re.fullmatch(r"[^\s:]+:\d+", values[key]):
-            raise SystemExit(f"{key} must be host:port")
-    if not values["SETUP_BASE_URL"].startswith(("http://", "https://")):
-        raise SystemExit("SETUP_BASE_URL must be an http(s) URL")
-    if values["PUBLIC_ENDPOINT"] in {"router.invalid", "replace-me"}:
-        raise SystemExit("PUBLIC_ENDPOINT is still a placeholder")
-    return values
+def fail(message: str) -> "NoReturn":
+    raise SystemExit(message)
 
 
-def materialize(template: str, values: dict[str, str]) -> str:
-    output = template
-    for key in REQUIRED:
-        token = "${" + key + "}"
-        output = output.replace(token, values[key])
-    leftovers = sorted(set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)\}", output)))
-    if leftovers:
-        raise SystemExit("unresolved compose variables: " + ", ".join(leftovers))
-    for placeholder in (
-        "router.invalid",
-        "REPLACE_ME",
-        "SET_ME",
-        "TODO",
-        "CHANGEME",
-        "example.invalid",
-    ):
-        if placeholder in output:
-            raise SystemExit(f"materialized compose still contains placeholder {placeholder!r}")
-    return output
+def validate_template(text: str) -> str:
+    if re.search(r"(?m)^\s*build:\s*(?:$|\S)", text):
+        fail("production template must stay image-only")
+    if re.search(r"(?m)^\s*context:\s*https?://", text):
+        fail("production template may not use a remote Git build context")
+    if re.search(r"ghcr\.io/eabusham2/router-vpn-[^\s:]+:(?:latest|main|arm64-main)\b", text):
+        fail("production template may not use moving Router VPN image tags")
+    if "/var/run/docker.sock" in text:
+        fail("production template may not grant Docker socket access")
+    if "router-vpn-updater:" not in text or "ROUTER_VPN_UPDATE_LISTEN: 127.0.0.1:8793" not in text:
+        fail("production template must contain the loopback exact-SHA updater")
+
+    found: list[str] = []
+    for image, expected in CUSTOM_IMAGES.items():
+        matches = re.findall(
+            rf"ghcr\.io/eabusham2/router-vpn-{re.escape(image)}:([0-9a-f]{{40}})",
+            text,
+        )
+        if len(matches) != expected:
+            fail(
+                f"expected {expected} exact-SHA template references for "
+                f"router-vpn-{image}, found {len(matches)}"
+            )
+        found.extend(matches)
+    if not found or len(set(found)) != 1:
+        fail("production template custom images must share one exact baseline SHA")
+
+    broker = BROKER_RE.search(text)
+    if not broker:
+        fail("production template broker provenance is not a full SHA")
+    if broker.group(2) != found[0]:
+        fail("production template broker SHA does not match custom image SHA")
+    return found[0]
+
+
+def materialize(text: str, target_sha: str) -> str:
+    target_sha = str(target_sha or "").strip().lower()
+    if not SHA_RE.fullmatch(target_sha):
+        fail("--sha must be one lowercase 40-character hexadecimal commit SHA")
+    baseline = validate_template(text)
+    out, image_replacements = IMAGE_RE.subn(lambda match: match.group(1) + target_sha, text)
+    out, broker_replacements = BROKER_RE.subn(
+        lambda match: match.group(1) + target_sha + match.group(3), out
+    )
+    expected_image_replacements = sum(CUSTOM_IMAGES.values())
+    if image_replacements != expected_image_replacements:
+        fail(
+            f"expected {expected_image_replacements} custom image replacements, "
+            f"made {image_replacements}"
+        )
+    if broker_replacements != 1:
+        fail(f"expected one broker SHA replacement, made {broker_replacements}")
+
+    validate_template(out)
+    remaining = set(IMAGE_RE.findall(out))
+    if any(sha != target_sha for _, sha in remaining):
+        fail("materialized compose contains a non-target custom image SHA")
+    broker = BROKER_RE.search(out)
+    if not broker or broker.group(2) != target_sha:
+        fail("materialized compose broker provenance does not equal target SHA")
+
+    header = (
+        f"# GENERATED exact-SHA Router VPN production compose: {target_sha}\n"
+        f"# Source template baseline SHA: {baseline}\n"
+        "# Generated from server/portainer-current.yaml; do not commit this artifact over the tracked baseline.\n"
+    )
+    return header + out
 
 
 def _parent_snapshot(path: Path) -> os.stat_result:
@@ -135,27 +144,23 @@ def _require_target_state(path: Path, expected: os.stat_result | None) -> None:
         return
     if current is None:
         raise RuntimeError(f"compose target disappeared before adoption: {path}")
-    if (
-        stat.S_ISLNK(current.st_mode)
-        or not stat.S_ISREG(current.st_mode)
-        or not os.path.samestat(expected, current)
-    ):
+    if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(expected, current):
         raise RuntimeError(f"compose target identity changed before adoption: {path}")
 
 
 def read_regular_text(path: Path) -> str:
     path = Path(path)
     parent_before = _parent_snapshot(path)
-    info = path.lstat()
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
         raise RuntimeError(f"refusing non-regular/symlink compose source: {path}")
-    if info.st_size <= 0 or info.st_size > MAX_SOURCE_BYTES:
+    if before.st_size <= 0 or before.st_size > MAX_SOURCE_BYTES:
         raise RuntimeError(f"compose source is empty or oversized: {path}")
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
         opened = os.fstat(fd)
         current = path.lstat()
-        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(before, opened) or not os.path.samestat(opened, current):
             raise RuntimeError(f"compose source changed during open: {path}")
         chunks: list[bytes] = []
         total = 0
@@ -176,11 +181,11 @@ def read_regular_text(path: Path) -> str:
             or not os.path.samestat(opened, current)
         ):
             raise RuntimeError(f"compose source changed during read: {path}")
-        body = b"".join(chunks)
+        raw = b"".join(chunks)
     finally:
         os.close(fd)
     try:
-        return body.decode("utf-8")
+        return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise RuntimeError(f"compose source is not UTF-8: {path}") from exc
 
@@ -190,10 +195,11 @@ def atomic_write(path: Path, body: str) -> None:
     encoded = body.encode("utf-8")
     if not encoded or len(encoded) > MAX_OUTPUT_BYTES:
         raise RuntimeError(f"materialized compose is empty or oversized: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
     parent_before = _parent_snapshot(path)
     target_before = _target_snapshot(path)
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.compose-", dir=path.parent)
-    tmp = Path(name)
+    temp = Path(name)
     committed = False
     try:
         os.fchmod(fd, PUBLIC_MODE)
@@ -201,21 +207,15 @@ def atomic_write(path: Path, body: str) -> None:
             stream.write(encoded)
             stream.flush()
             os.fsync(stream.fileno())
-        staged = tmp.lstat()
-        if (
-            stat.S_ISLNK(staged.st_mode)
-            or not stat.S_ISREG(staged.st_mode)
-            or (os.name != "nt" and stat.S_IMODE(staged.st_mode) != PUBLIC_MODE)
-        ):
-            raise RuntimeError(f"staged compose target is unsafe: {tmp}")
-
+        staged = temp.lstat()
+        if stat.S_ISLNK(staged.st_mode) or not stat.S_ISREG(staged.st_mode) or (os.name != "nt" and stat.S_IMODE(staged.st_mode) != PUBLIC_MODE):
+            raise RuntimeError(f"staged compose target is unsafe: {temp}")
         parent_current = _parent_snapshot(path)
         if not os.path.samestat(parent_before, parent_current):
             raise RuntimeError(f"compose parent changed before adoption: {path.parent}")
         _require_target_state(path, target_before)
-        os.replace(tmp, path)
+        os.replace(temp, path)
         committed = True
-
         parent_after = _parent_snapshot(path)
         current = path.lstat()
         if (
@@ -236,63 +236,27 @@ def atomic_write(path: Path, body: str) -> None:
             pass
     finally:
         if not committed:
-            tmp.unlink(missing_ok=True)
+            temp.unlink(missing_ok=True)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--template", type=Path, required=True)
-    parser.add_argument("--env", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser = argparse.ArgumentParser(
+        description="Materialize server/portainer-current.yaml for one exact release commit."
+    )
+    parser.add_argument("--sha", required=True)
+    parser.add_argument("--input", default=str(TRACKED_TEMPLATE), dest="input_path")
+    parser.add_argument("--output", required=True, dest="output_path")
     args = parser.parse_args()
-    values = load_env_from_text(args.env, read_regular_text(args.env))
-    rendered = materialize(read_regular_text(args.template), values)
-    atomic_write(args.output, rendered)
+    source = Path(args.input_path)
+    output = Path(args.output_path)
+    source_before = source.read_bytes() if source.resolve() == TRACKED_TEMPLATE.resolve() else None
+    rendered = materialize(read_regular_text(source), args.sha)
+    atomic_write(output, rendered)
+    if source_before is not None and source.read_bytes() != source_before:
+        raise RuntimeError("materializer modified server/portainer-current.yaml")
+    print(f"Materialized {output} for exact release SHA {args.sha}")
     return 0
 
 
-def load_env_from_text(path: Path, text: str) -> dict[str, str]:
-    # Preserve load_env's public contract while allowing main() to consume a
-    # single verified source snapshot instead of reopening the path.
-    values: dict[str, str] = {}
-    for lineno, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            raise SystemExit(f"{path}:{lineno}: expected KEY=VALUE")
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
-            raise SystemExit(f"{path}:{lineno}: invalid key {key!r}")
-        if key in values:
-            raise SystemExit(f"{path}:{lineno}: duplicate key {key}")
-        if any(ch in value for ch in "\r\n\x00"):
-            raise SystemExit(f"{path}:{lineno}: unsafe control character")
-        values[key] = value
-    missing = [key for key in REQUIRED if not values.get(key)]
-    if missing:
-        raise SystemExit("missing required production values: " + ", ".join(missing))
-    unknown = sorted(set(values) - set(REQUIRED))
-    if unknown:
-        raise SystemExit("unknown production values: " + ", ".join(unknown))
-    for key in PORT_KEYS:
-        try:
-            port = int(values[key])
-        except ValueError as exc:
-            raise SystemExit(f"{key} must be an integer") from exc
-        if not 1 <= port <= 65535:
-            raise SystemExit(f"{key} must be between 1 and 65535")
-    for key in ("CLIENT_LISTEN", "SETUP_CENTER_LISTEN", "ROUTER_AGENT_LISTEN"):
-        if not re.fullmatch(r"[^\s:]+:\d+", values[key]):
-            raise SystemExit(f"{key} must be host:port")
-    if not values["SETUP_BASE_URL"].startswith(("http://", "https://")):
-        raise SystemExit("SETUP_BASE_URL must be an http(s) URL")
-    if values["PUBLIC_ENDPOINT"] in {"router.invalid", "replace-me"}:
-        raise SystemExit("PUBLIC_ENDPOINT is still a placeholder")
-    return values
-
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
