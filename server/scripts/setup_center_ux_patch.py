@@ -33,6 +33,7 @@ UX_PATCH = r'''
  let arch=/arm64|aarch64|\barm\b/.test(ua+' '+plat)?'arm64':(/x86_64|amd64|x64|win64/.test(ua+' '+plat)?'amd64':'unknown');
  if(navigator.userAgentData&&navigator.userAgentData.getHighEntropyValues){try{const h=await navigator.userAgentData.getHighEntropyValues(['architecture','bitness']);const a=String(h.architecture||'').toLowerCase();if(/arm/.test(a))arch='arm64';else if(/x86/.test(a)&&String(h.bitness||'')==='64')arch='amd64'}catch(_){}}
  const isArm=arch==='arm64';
+ const persistedJobKey='routervpn.setup.download-job.v2';
  let family='unknown',active=null,pollTimer=0,lastRequest=null,downloadStarted=false;
  if(/android/.test(ua))family='android';
  else if(/iphone|ipad|ipod/.test(ua)||(/mac/.test(plat)&&navigator.maxTouchPoints>1))family='ios';
@@ -47,27 +48,32 @@ UX_PATCH = r'''
  function fmtBytes(n){n=Number(n||0);if(!n)return'0 B';const units=['B','KiB','MiB','GiB'];let i=0;while(n>=1024&&i<units.length-1){n/=1024;i++}return `${n.toFixed(i?1:0)} ${units[i]}`}
  function labelPhase(p){return String(p||'queued').split('-').map(x=>x?x[0].toUpperCase()+x.slice(1):x).join(' ')}
  function terminal(j){return ['failed','cancelled','delivered','delivery-interrupted','expired'].includes(j.status)}
+ function safeSameOriginPath(value,prefix){try{const u=new URL(String(value||''),location.href);return u.origin===location.origin&&u.pathname.startsWith(prefix)?u.pathname+u.search:''}catch(_){return''}}
+ function persistActive(){try{if(!active||terminal(active)){sessionStorage.removeItem(persistedJobKey);return}const status=safeSameOriginPath(active.status_url,'/api/download-jobs/');if(!status){sessionStorage.removeItem(persistedJobKey);return}sessionStorage.setItem(persistedJobKey,JSON.stringify({status_url:status,name:active.name||'',saved_at:Date.now()}))}catch(_){}}
+ function clearPersisted(){try{sessionStorage.removeItem(persistedJobKey)}catch(_){}}
  function render(j){
    active=j;panel.style.display='block';title.textContent=j.name||'Router VPN package';phase.textContent=`${labelPhase(j.phase)} • ${Math.max(0,Math.min(100,Number(j.progress||0)))}%`;fill.style.width=`${Math.max(0,Math.min(100,Number(j.progress||0)))}%`;
    const bytes=Number(j.bytes_total||0)?`${fmtBytes(j.bytes_sent||0)} / ${fmtBytes(j.bytes_total||0)}`:(Number(j.size||0)?fmtBytes(j.size):'size pending');
    meta.textContent=[j.source?`Source: ${j.source}`:'',bytes,j.error?`Error: ${j.error}`:''].filter(Boolean).join(' • ');
    history.textContent=`Lifecycle: ${(j.phase_history||[]).map(labelPhase).join(' → ')||labelPhase(j.phase)}`;
    cancel.disabled=terminal(j)||j.status==='delivered';cancel.style.display=terminal(j)?'none':'';retry.style.display=(j.status==='failed'||j.status==='cancelled'||j.status==='delivery-interrupted'||j.status==='expired')?'':'none';
+   if(terminal(j))clearPersisted();else persistActive();
  }
- async function json(path,opt={}){const r=await fetch(path,{credentials:'same-origin',cache:'no-store',...opt});let d={};try{d=await r.json()}catch{}if(!r.ok||d.ok===false)throw new Error(d.error||`HTTP ${r.status}`);return d}
+ async function json(path,opt={}){const safe=safeSameOriginPath(path,'/api/');if(!safe)throw new Error('Refused a non-local Setup Center job URL');const r=await fetch(safe,{credentials:'same-origin',cache:'no-store',redirect:'error',...opt});let d={};try{d=await r.json()}catch{}if(!r.ok||d.ok===false)throw new Error(d.error||`HTTP ${r.status}`);return d}
  function stopPoll(){if(pollTimer){clearTimeout(pollTimer);pollTimer=0}}
+ function schedulePoll(delay){stopPoll();pollTimer=setTimeout(poll,document.hidden?Math.max(delay,1600):delay)}
  async function poll(){
    if(!active||!active.status_url)return;
    try{
      const d=await json(active.status_url),j=d.job;render(j);
-     if(j.status==='ready'&&!downloadStarted&&j.download_url){downloadStarted=true;frame.src=j.download_url;phase.textContent='Starting browser download…';}
-     if(!terminal(j)){pollTimer=setTimeout(poll,500)}
-   }catch(e){phase.textContent=`Progress check failed: ${e.message}`;pollTimer=setTimeout(poll,1200)}
+     if(j.status==='ready'&&!downloadStarted&&j.download_url){const download=safeSameOriginPath(j.download_url,'/api/download-jobs/');if(!download){phase.textContent='The job returned an unsafe download URL and was not opened.'}else{downloadStarted=true;frame.src=download;phase.textContent='Browser download requested. Setup Center will not claim delivery until the server confirms it.'}}
+     if(!terminal(j))schedulePoll(500)
+   }catch(e){phase.textContent=navigator.onLine?`Progress check failed: ${e.message}`:'Offline. The authenticated download job will resume when this device reconnects.';persistActive();schedulePoll(1200)}
  }
  async function startJob(name,directHref){
    stopPoll();downloadStarted=false;lastRequest={name,directHref};panel.style.display='block';title.textContent=name;phase.textContent='Creating authenticated download job…';fill.style.width='0%';meta.textContent='';history.textContent='';cancel.style.display='';cancel.disabled=true;retry.style.display='none';
    try{
-     const d=await json('/api/download-jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});render(d.job);poll();
+     const d=await json('/api/download-jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});render(d.job);persistActive();poll();
    }catch(e){
      // Static helpers/private profile links are intentionally not async jobs. If
      // a future package link is not in the broker allow-list, preserve its exact
@@ -85,6 +91,11 @@ UX_PATCH = r'''
  cancel.addEventListener('click',async()=>{if(!active||!active.status_url)return;cancel.disabled=true;phase.textContent='Cancellation requested…';try{const d=await json(active.status_url,{method:'DELETE'});render(d.job);if(!terminal(d.job))poll()}catch(e){phase.textContent=`Cancel failed: ${e.message}`;cancel.disabled=false}});
  retry.addEventListener('click',()=>{if(lastRequest)startJob(lastRequest.name,lastRequest.directHref)});
  close.addEventListener('click',()=>{panel.style.display='none'});
+ frame.addEventListener('load',()=>{if(active&&!terminal(active)){phase.textContent='The browser accepted the download request; waiting for server delivery confirmation…';persistActive()}});
+ document.addEventListener('visibilitychange',()=>{if(active&&!terminal(active)&&!document.hidden)schedulePoll(0)});
+ window.addEventListener('online',()=>{if(active&&!terminal(active)){phase.textContent='Back online; resuming authenticated download progress…';schedulePoll(0)}});
+ window.addEventListener('offline',()=>{if(active&&!terminal(active)){stopPoll();phase.textContent='Offline. The authenticated download job is preserved for this tab.';persistActive()}});
+ try{const saved=JSON.parse(sessionStorage.getItem(persistedJobKey)||'null');const status=safeSameOriginPath(saved&&saved.status_url,'/api/download-jobs/');if(status&&Date.now()-Number(saved.saved_at||0)<6*60*60*1000){active={status_url:status,name:String(saved.name||'Router VPN package')};panel.style.display='block';title.textContent=active.name;phase.textContent='Resuming authenticated download job…';poll()}else clearPersisted()}catch(_){clearPersisted()}
 
  // A method with a missing prerequisite is still a method, not a reason to hide
  // the entire lane. Keep SOCKS5, OverTLS and Shadowsocks cards/details expanded
