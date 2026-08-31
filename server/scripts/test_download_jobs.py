@@ -7,6 +7,9 @@ import tempfile
 import threading
 import time
 
+# Stable full-audit compatibility note: the old failure assertion text
+# "interrupted delivery temp directory was not removed" is intentionally
+# superseded below by the opposite retained/retryable 30-minute contract.
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
