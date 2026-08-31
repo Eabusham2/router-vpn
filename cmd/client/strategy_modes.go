@@ -56,7 +56,9 @@ func scheduleStartupPolicy(a *app) {
 		previous.(context.CancelFunc)()
 	}
 	go func() {
-		defer startupPolicyCancels.CompareAndDelete(a, context.CancelFunc(cancel))
+		// A CancelFunc is intentionally retained in the per-app map until an
+		// explicit disconnect or replacement. Function values are not comparable,
+		// so CompareAndDelete would panic while unwinding this goroutine.
 		timer := time.NewTimer(1200 * time.Millisecond)
 		defer timer.Stop()
 		select {
