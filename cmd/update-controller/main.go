@@ -23,24 +23,24 @@ import (
 )
 
 const (
-	defaultListen          = "127.0.0.1:8793"
-	defaultPortainerURL    = "https://127.0.0.1:9443"
-	defaultStackName       = "router-vpn"
-	defaultRepo            = "Eabusham2/router-vpn"
-	defaultBranch          = "main"
-	defaultSetupTokenFile  = "/etc/router-vpn/setup-center.token"
-	defaultPortainerKey    = "/etc/router-vpn/portainer-api.key"
-	defaultPortainerPin    = "/etc/router-vpn/portainer-tls.sha256"
-	defaultStatePath       = "/var/lib/router-vpn/update-controller.json"
-	maxJSON                = 4 << 20
-	maxCompose             = 2 << 20
+	defaultListen         = "127.0.0.1:8793"
+	defaultPortainerURL   = "https://127.0.0.1:9443"
+	defaultStackName      = "router-vpn"
+	defaultRepo           = "Eabusham2/router-vpn"
+	defaultBranch         = "main"
+	defaultSetupTokenFile = "/etc/router-vpn/setup-center.token"
+	defaultPortainerKey   = "/etc/router-vpn/portainer-api.key"
+	defaultPortainerPin   = "/etc/router-vpn/portainer-tls.sha256"
+	defaultStatePath      = "/var/lib/router-vpn/update-controller.json"
+	maxJSON               = 4 << 20
+	maxCompose            = 2 << 20
 )
 
 var (
-	shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	githubRepoComponentRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
-	customImageRE = regexp.MustCompile(`(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):)([0-9a-f]{40})`)
-	brokerSHARe = regexp.MustCompile(`(?m)^(\s*ROUTER_VPN_GITHUB_SHA:\s*)([0-9a-f]{40})(\s*)$`)
+	shaRE                    = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	githubRepoComponentRE    = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+	customImageRE            = regexp.MustCompile(`(ghcr\.io/eabusham2/router-vpn-(?:init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):)([0-9a-f]{40})`)
+	brokerSHARe              = regexp.MustCompile(`(?m)^(\s*ROUTER_VPN_GITHUB_SHA:\s*)([0-9a-f]{40})(\s*)$`)
 	requiredReleaseWorkflows = []string{
 		// Reusable workflow jobs run in the caller's GitHub run context. Build-all
 		// is the single automatic caller and its dependency graph owns source
@@ -49,7 +49,7 @@ var (
 		// proof; source audits separately prevent that graph from being weakened.
 		"build-all.yml",
 	}
-	ownedImageRE = regexp.MustCompile(`ghcr\.io/eabusham2/(router-vpn-[a-z0-9-]+):([^\s]+)`)
+	ownedImageRE             = regexp.MustCompile(`ghcr\.io/eabusham2/(router-vpn-[a-z0-9-]+):([^\s]+)`)
 	requiredCustomImageRepos = []string{
 		"router-vpn-init",
 		"router-vpn-agent",
@@ -64,12 +64,12 @@ var (
 )
 
 type updateState struct {
-	Version       int    `json:"version"`
-	Status        string `json:"status"`
-	FromSHA       string `json:"from_sha,omitempty"`
-	TargetSHA     string `json:"target_sha,omitempty"`
-	Message       string `json:"message,omitempty"`
-	UpdatedAt     int64  `json:"updated_at"`
+	Version   int    `json:"version"`
+	Status    string `json:"status"`
+	FromSHA   string `json:"from_sha,omitempty"`
+	TargetSHA string `json:"target_sha,omitempty"`
+	Message   string `json:"message,omitempty"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 type controller struct {
@@ -95,16 +95,28 @@ type stackInfo struct {
 }
 
 type workflowRun struct {
-	ID           int64  `json:"id"`
-	HeadSHA      string `json:"head_sha"`
-	HeadBranch   string `json:"head_branch"`
-	Status       string `json:"status"`
-	Conclusion   string `json:"conclusion"`
+	ID         int64  `json:"id"`
+	HeadSHA    string `json:"head_sha"`
+	HeadBranch string `json:"head_branch"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
 	CreatedAt  string `json:"created_at"`
 }
 
 type workflowRuns struct {
 	Runs []workflowRun `json:"workflow_runs"`
+}
+
+type githubCompare struct {
+	Status     string `json:"status"`
+	AheadBy    int    `json:"ahead_by"`
+	BehindBy   int    `json:"behind_by"`
+	BaseCommit struct {
+		SHA string `json:"sha"`
+	} `json:"base_commit"`
+	MergeBaseCommit struct {
+		SHA string `json:"sha"`
+	} `json:"merge_base_commit"`
 }
 
 func env(k, fallback string) string {
@@ -497,7 +509,15 @@ func githubJSON(endpoint string, out any) error {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return errors.New("GitHub returned an empty JSON response")
 	}
-	return json.Unmarshal(raw, out)
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("GitHub response contains trailing JSON")
+	}
+	return nil
 }
 
 func githubText(endpoint string, limit int64) (string, error) {
@@ -629,6 +649,36 @@ func (c *controller) workflowSuccess(file, sha string) (bool, error) {
 	return true, nil
 }
 
+func compareProvesStrictUpgrade(current, target string, comparison githubCompare) bool {
+	current = strings.ToLower(strings.TrimSpace(current))
+	target = strings.ToLower(strings.TrimSpace(target))
+	return shaRE.MatchString(current) && shaRE.MatchString(target) && current != target &&
+		strings.EqualFold(strings.TrimSpace(comparison.Status), "ahead") &&
+		comparison.AheadBy > 0 && comparison.BehindBy == 0 &&
+		strings.EqualFold(strings.TrimSpace(comparison.BaseCommit.SHA), current) &&
+		strings.EqualFold(strings.TrimSpace(comparison.MergeBaseCommit.SHA), current)
+}
+
+func (c *controller) verifyStrictUpgrade(current, target string) error {
+	current = strings.ToLower(strings.TrimSpace(current))
+	target = strings.ToLower(strings.TrimSpace(target))
+	if !shaRE.MatchString(current) || !shaRE.MatchString(target) {
+		return errors.New("current and target release identities must be full lowercase SHAs")
+	}
+	if current == target {
+		return nil
+	}
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/compare/%s...%s", c.repo, current, target)
+	var comparison githubCompare
+	if err := githubJSON(endpoint, &comparison); err != nil {
+		return fmt.Errorf("verify release ancestry: %w", err)
+	}
+	if !compareProvesStrictUpgrade(current, target, comparison) {
+		return errors.New("target release is older than or divergent from the deployed exact SHA")
+	}
+	return nil
+}
+
 func (c *controller) verifiedTarget(sha string) error {
 	sha = strings.ToLower(strings.TrimSpace(sha))
 	if !shaRE.MatchString(sha) {
@@ -642,7 +692,11 @@ func (c *controller) verifiedTarget(sha string) error {
 	return nil
 }
 
-func (c *controller) latestVerified() (string, error) {
+func (c *controller) latestVerified(current string) (string, error) {
+	current = strings.ToLower(strings.TrimSpace(current))
+	if !shaRE.MatchString(current) {
+		return "", errors.New("current Portainer stack is not one exact SHA")
+	}
 	// Do not filter the GitHub query to successful runs. A newer failed or
 	// in-progress rerun for the same SHA is meaningful negative/unsettled
 	// evidence and must block resurrection of an older green run.
@@ -653,11 +707,14 @@ func (c *controller) latestVerified() (string, error) {
 		return "", err
 	}
 	for _, sha := range latestSuccessfulWorkflowSHAs(runs.Runs, c.branch) {
-		if err := c.verifiedTarget(sha); err == nil {
+		if err := c.verifiedTarget(sha); err != nil {
+			continue
+		}
+		if sha == current || c.verifyStrictUpgrade(current, sha) == nil {
 			return sha, nil
 		}
 	}
-	return "", errors.New("no recent exact-SHA release has settled current Build-all evidence")
+	return "", errors.New("no current or strict-descendant exact-SHA release has settled Build-all evidence")
 }
 
 func ownedImageSHAs(content string) (map[string]string, error) {
@@ -969,11 +1026,25 @@ func (c *controller) check(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var err error
+	stack, err := c.findStack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	currentCompose, err := c.stackFile(stack)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	current := composeSHA(currentCompose)
+	if !shaRE.MatchString(current) {
+		http.Error(w, "current Portainer stack is not one exact rollback-safe SHA", http.StatusConflict)
+		return
+	}
 	if sha == "" {
-		sha, err = c.latestVerified()
-	} else {
-		err = c.verifiedTarget(sha)
+		sha, err = c.latestVerified(current)
+	} else if err = c.verifiedTarget(sha); err == nil {
+		err = c.verifyStrictUpgrade(current, sha)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -984,7 +1055,7 @@ func (c *controller) check(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "sha": sha, "compose_bytes": len(compose), "verified": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "current_sha": current, "sha": sha, "update_available": sha != current, "compose_bytes": len(compose), "verified": true})
 }
 
 func (c *controller) applyUpdate(w http.ResponseWriter, r *http.Request) {
@@ -1041,6 +1112,22 @@ func (c *controller) applyUpdate(w http.ResponseWriter, r *http.Request) {
 	from := composeSHA(previous)
 	if !shaRE.MatchString(from) {
 		err = c.failState(sha, fmt.Errorf("current Portainer stack is not one exact rollback-safe SHA: %s", from))
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if from == sha {
+		c.mu.Lock()
+		err = c.persistStateLocked("complete", from, sha, "requested exact SHA is already deployed; no Portainer mutation was performed")
+		c.mu.Unlock()
+		if err != nil {
+			http.Error(w, "cannot persist no-op update state: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "from_sha": from, "sha": sha, "no_change": true, "rolled_back": false})
+		return
+	}
+	if err := c.verifyStrictUpgrade(from, sha); err != nil {
+		err = c.failState(sha, err)
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

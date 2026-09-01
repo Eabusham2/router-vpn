@@ -45,55 +45,87 @@ services:
 
 func TestMaterializeExactSHAAndNoFloatingOldImages(t *testing.T) {
 	got, err := validateAndMaterializeTemplate(testTemplate(), testNewSHA)
-	if err != nil { t.Fatal(err) }
-	if strings.Contains(got, testOldSHA) { t.Fatal("old custom image SHA survived materialization") }
-	if strings.Count(got, testNewSHA) < 12 { t.Fatalf("target SHA did not replace complete image/provenance set: %d", strings.Count(got, testNewSHA)) }
-	if composeSHA(got) != testNewSHA { t.Fatalf("composeSHA=%q", composeSHA(got)) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, testOldSHA) {
+		t.Fatal("old custom image SHA survived materialization")
+	}
+	if strings.Count(got, testNewSHA) < 12 {
+		t.Fatalf("target SHA did not replace complete image/provenance set: %d", strings.Count(got, testNewSHA))
+	}
+	if composeSHA(got) != testNewSHA {
+		t.Fatalf("composeSHA=%q", composeSHA(got))
+	}
 }
 
 func TestMaterializeRejectsDockerSocketBuildAndLatest(t *testing.T) {
 	for name, extra := range map[string]string{
 		"socket": "\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n",
-		"build": "\n    build:\n      context: .\n",
+		"build":  "\n    build:\n      context: .\n",
 		"latest": "\n    image: example.invalid/unsafe:latest\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := validateAndMaterializeTemplate(testTemplate()+extra, testNewSHA); err == nil { t.Fatal("unsafe compose was accepted") }
+			if _, err := validateAndMaterializeTemplate(testTemplate()+extra, testNewSHA); err == nil {
+				t.Fatal("unsafe compose was accepted")
+			}
 		})
 	}
 }
 
 func TestMaterializeRequiresUpdaterService(t *testing.T) {
 	bad := strings.ReplaceAll(testTemplate(), "router-vpn-updater:", "router-vpn-upgrade-missing:")
-	if _, err := validateAndMaterializeTemplate(bad, testNewSHA); err == nil { t.Fatal("compose without update controller was accepted") }
+	if _, err := validateAndMaterializeTemplate(bad, testNewSHA); err == nil {
+		t.Fatal("compose without update controller was accepted")
+	}
 }
 
 func TestPreserveUpdaterKeepsOnlyOldUpdaterDuringPhaseOne(t *testing.T) {
 	target, err := validateAndMaterializeTemplate(testTemplate(), testNewSHA)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	phaseOne, err := preserveUpdater(target, testTemplate())
-	if err != nil { t.Fatal(err) }
-	if !strings.Contains(phaseOne, "router-vpn-updater:"+testOldSHA) { t.Fatal("phase one did not preserve old updater") }
-	if !strings.Contains(phaseOne, "router-vpn-agent:"+testNewSHA) { t.Fatal("phase one did not update core services") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(phaseOne, "router-vpn-updater:"+testOldSHA) {
+		t.Fatal("phase one did not preserve old updater")
+	}
+	if !strings.Contains(phaseOne, "router-vpn-agent:"+testNewSHA) {
+		t.Fatal("phase one did not update core services")
+	}
 }
 
 func TestStackEnvironmentFailsClosedWhenMissingOrInvalid(t *testing.T) {
 	for _, raw := range []json.RawMessage{nil, json.RawMessage("null"), json.RawMessage("   "), json.RawMessage(`{}`), json.RawMessage(`"bad"`)} {
-		if _, err := stackEnvironment(raw); err == nil { t.Fatalf("invalid/missing Portainer environment was accepted: %q", string(raw)) }
+		if _, err := stackEnvironment(raw); err == nil {
+			t.Fatalf("invalid/missing Portainer environment was accepted: %q", string(raw))
+		}
 	}
 	for _, raw := range []json.RawMessage{json.RawMessage(`[]`), json.RawMessage(`[ {"name":"WAN_INTERFACE","value":"eth0"} ]`)} {
 		items, err := stackEnvironment(raw)
-		if err != nil { t.Fatalf("valid Portainer environment rejected: %v", err) }
-		if items == nil { t.Fatal("valid Portainer environment became nil") }
+		if err != nil {
+			t.Fatalf("valid Portainer environment rejected: %v", err)
+		}
+		if items == nil {
+			t.Fatal("valid Portainer environment became nil")
+		}
 	}
 }
 
 func TestComposeSHARejectsMixedPhaseOneEvenWithGeneratedHeader(t *testing.T) {
 	target, err := validateAndMaterializeTemplate(testTemplate(), testNewSHA)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	phaseOne, err := preserveUpdater(target, testTemplate())
-	if err != nil { t.Fatal(err) }
-	if got := composeSHA(phaseOne); got != "unknown" { t.Fatalf("mixed image set reported exact SHA %q despite generated target header", got) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := composeSHA(phaseOne); got != "unknown" {
+		t.Fatalf("mixed image set reported exact SHA %q despite generated target header", got)
+	}
 }
 
 func TestComposeSHARequiresMaterializedHeaderAndBrokerProvenance(t *testing.T) {
@@ -101,7 +133,9 @@ func TestComposeSHARequiresMaterializedHeaderAndBrokerProvenance(t *testing.T) {
 		t.Fatalf("raw tracked baseline masqueraded as deployed exact SHA %q", got)
 	}
 	exact, err := validateAndMaterializeTemplate(testTemplate(), testNewSHA)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	header := "# GENERATED exact-SHA Router VPN production compose: " + testNewSHA + "\n"
 	withoutHeader := strings.Replace(exact, header, "", 1)
 	if got := composeSHA(withoutHeader); got != "unknown" {
@@ -120,7 +154,6 @@ func TestComposeSHARequiresMaterializedHeaderAndBrokerProvenance(t *testing.T) {
 		t.Fatalf("duplicate broker provenance resolved to %q", got)
 	}
 }
-
 
 func TestGitHubRepositoryAndBranchValidationRejectsURLAndRefInjection(t *testing.T) {
 	for _, good := range []string{
@@ -362,7 +395,6 @@ func TestNewestMeaningfulWorkflowEvidenceControlsVerification(t *testing.T) {
 	}
 }
 
-
 func TestOwnedImageProofRejectsMissingDuplicatedAndUnknownRepos(t *testing.T) {
 	missingAgent := strings.Replace(testTemplate(), "router-vpn-agent:"+testOldSHA, "router-vpn-init:"+testOldSHA, 1)
 	if _, err := validateAndMaterializeTemplate(missingAgent, testNewSHA); err == nil || !strings.Contains(err.Error(), "router-vpn-agent") {
@@ -408,5 +440,33 @@ func TestRequiredOwnedImageRepositoriesAreClosedAndComplete(t *testing.T) {
 		if requiredCustomImageRepos[i] != want[i] {
 			t.Fatalf("owned image repository[%d]=%q want=%q", i, requiredCustomImageRepos[i], want[i])
 		}
+	}
+}
+
+func TestCompareProvesStrictUpgrade(t *testing.T) {
+	current := testOldSHA
+	target := testNewSHA
+	comparison := githubCompare{Status: "ahead", AheadBy: 7, BehindBy: 0}
+	comparison.BaseCommit.SHA = current
+	comparison.MergeBaseCommit.SHA = current
+	if !compareProvesStrictUpgrade(current, target, comparison) {
+		t.Fatal("strict descendant release was rejected")
+	}
+	for name, mutate := range map[string]func(*githubCompare){
+		"diverged":         func(c *githubCompare) { c.Status = "diverged" },
+		"behind":           func(c *githubCompare) { c.Status, c.AheadBy, c.BehindBy = "behind", 0, 4 },
+		"wrong base":       func(c *githubCompare) { c.BaseCommit.SHA = target },
+		"wrong merge base": func(c *githubCompare) { c.MergeBaseCommit.SHA = target },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := comparison
+			mutate(&candidate)
+			if compareProvesStrictUpgrade(current, target, candidate) {
+				t.Fatal("unsafe Portainer update ancestry was accepted")
+			}
+		})
+	}
+	if compareProvesStrictUpgrade(current, current, comparison) {
+		t.Fatal("same SHA was classified as a strict upgrade")
 	}
 }
