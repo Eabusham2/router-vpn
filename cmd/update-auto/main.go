@@ -57,8 +57,11 @@ func envBool(name string, fallback bool) bool {
 	case "0", "false", "no", "off", "disabled":
 		return false
 	default:
-		log.Printf("invalid %s=%q; using %t", name, raw, fallback)
-		return fallback
+		// An invalid enable switch must never turn unattended production
+		// updates on through the default-true fallback. Empty retains the
+		// documented default; malformed explicit input fails closed.
+		log.Printf("invalid %s=%q; automatic updates disabled", name, raw)
+		return false
 	}
 }
 
@@ -158,7 +161,7 @@ func newUpdater() (*autoUpdater, error) {
 		baseURL: base,
 		token:   token,
 		client: &http.Client{
-			Timeout: 5 * time.Minute,
+			Timeout:   5 * time.Minute,
 			Transport: &http.Transport{Proxy: nil},
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return errors.New("automatic updater redirects are forbidden")
@@ -201,8 +204,13 @@ func (u *autoUpdater) request(method, path string, payload any, out any) error {
 		return fmt.Errorf("update controller HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	if out != nil {
-		if err := json.Unmarshal(raw, out); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		if err := dec.Decode(out); err != nil {
 			return err
+		}
+		var trailing json.RawMessage
+		if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+			return errors.New("update controller response contains trailing JSON")
 		}
 	}
 	return nil

@@ -20,6 +20,17 @@ func TestValidSHA(t *testing.T) {
 	}
 }
 
+func TestEnvBoolInvalidFailsClosed(t *testing.T) {
+	t.Setenv("ROUTER_VPN_TEST_BOOL", "definitely")
+	if envBool("ROUTER_VPN_TEST_BOOL", true) {
+		t.Fatal("malformed explicit auto-update switch enabled unattended updates")
+	}
+	t.Setenv("ROUTER_VPN_TEST_BOOL", "")
+	if !envBool("ROUTER_VPN_TEST_BOOL", true) {
+		t.Fatal("empty switch did not retain documented default")
+	}
+}
+
 func TestEnvDurationBounds(t *testing.T) {
 	t.Setenv("ROUTER_VPN_TEST_DURATION", "10m")
 	if got := envDuration("ROUTER_VPN_TEST_DURATION", time.Hour, 5*time.Minute, 24*time.Hour); got != 10*time.Minute {
