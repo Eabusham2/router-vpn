@@ -58,3 +58,32 @@ with tempfile.TemporaryDirectory() as raw:
         raise AssertionError("duplicate release asset was accepted")
 
 print("Exact-SHA GitHub Release materialization: PASS")
+
+
+with tempfile.TemporaryDirectory() as raw:
+    work = Path(raw)
+    staged = work / "staged"
+    destination = work / "published"
+    staged.write_bytes(b"verified staged release")
+    staged_info = staged.lstat()
+    destination.write_bytes(b"foreign concurrent release")
+    try:
+        module._adopt_no_clobber(staged, destination, staged_info)
+    except RuntimeError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("concurrent release destination was overwritten")
+    assert destination.read_bytes() == b"foreign concurrent release"
+    assert staged.read_bytes() == b"verified staged release"
+
+with tempfile.TemporaryDirectory() as raw:
+    work = Path(raw)
+    destination = work / "metadata.json"
+    destination.write_text("foreign", encoding="utf-8")
+    try:
+        module._atomic_text(destination, "verified\n")
+    except RuntimeError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("existing metadata destination was overwritten")
+    assert destination.read_text(encoding="utf-8") == "foreign"

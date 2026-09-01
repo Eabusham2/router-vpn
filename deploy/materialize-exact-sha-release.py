@@ -31,6 +31,33 @@ def _valid_sha(value: str) -> str:
     return sha
 
 
+def _adopt_no_clobber(temp: Path, destination: Path, staged: os.stat_result) -> None:
+    """Publish the staged inode without replacing another actor's path."""
+    if stat.S_ISLNK(staged.st_mode) or not stat.S_ISREG(staged.st_mode):
+        raise RuntimeError(f"release staging inode is unsafe: {temp}")
+    try:
+        if os.name == "nt":
+            # Windows rename refuses to replace an existing destination.
+            os.rename(temp, destination)
+        else:
+            # Same-directory hard-link creation is atomic and fails with
+            # FileExistsError instead of clobbering a concurrent publisher.
+            os.link(temp, destination, follow_symlinks=False)
+    except FileExistsError as exc:
+        raise RuntimeError(f"release output already exists: {destination}") from exc
+    adopted = destination.lstat()
+    if stat.S_ISLNK(adopted.st_mode) or not stat.S_ISREG(adopted.st_mode) or not os.path.samestat(staged, adopted):
+        raise RuntimeError(f"release output adoption identity changed: {destination}")
+    if os.name != "nt":
+        # The final hard link already names the exact verified inode. A failure
+        # to remove the private staging name must not report a false failed
+        # release after publication has committed.
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _verified_copy(source: Path, destination: Path) -> tuple[int, str]:
     before = source.lstat()
     if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
@@ -66,10 +93,9 @@ def _verified_copy(source: Path, destination: Path) -> tuple[int, str]:
             after = source.lstat()
             if not os.path.samestat(opened, after) or after.st_size != total:
                 raise RuntimeError(f"release input changed during copy: {source}")
-        if destination.exists():
-            raise RuntimeError(f"release output already exists: {destination}")
         os.chmod(temp, 0o644)
-        os.replace(temp, destination)
+        staged = temp.lstat()
+        _adopt_no_clobber(temp, destination, staged)
         adopted = True
         return total, digest.hexdigest()
     finally:
@@ -87,9 +113,8 @@ def _atomic_text(path: Path, text: str) -> None:
             out.flush()
             os.fsync(out.fileno())
         os.chmod(temp, 0o644)
-        if path.exists():
-            raise RuntimeError(f"release metadata output already exists: {path}")
-        os.replace(temp, path)
+        staged = temp.lstat()
+        _adopt_no_clobber(temp, path, staged)
         adopted = True
     finally:
         if not adopted:
