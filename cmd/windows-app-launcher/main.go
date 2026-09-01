@@ -74,12 +74,30 @@ func hiddenCommand(name string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+func startUpdateCheck(root string) {
+	updater := filepath.Join(root, "router-vpn-update.exe")
+	info, err := os.Stat(updater)
+	if err != nil || info.IsDir() {
+		return
+	}
+	cmd := hiddenCommand(updater, "--download", "--json")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "ROUTER_VPN_UPDATE_LAUNCH=windows-installed")
+	// Update checks are deliberately detached from the UI lifecycle. The helper
+	// stages only a hash-verified exact-SHA package and exits; installation is
+	// handed off after Router VPN is no longer running.
+	_ = cmd.Start()
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+}
+
 func requiredFiles(root string) (controller, app, tray, icon string, err error) {
 	controller = filepath.Join(root, "router-vpn-client.exe")
 	app = filepath.Join(root, "client", "RouterVPN-Windows-App.ps1")
 	tray = filepath.Join(root, "client", "RouterVPN-Windows-Tray.ps1")
 	icon = filepath.Join(root, "RouterVPN.ico")
-	for _, path := range []string{controller, app, tray, icon, filepath.Join(root, "client.json"), filepath.Join(root, "modes.json"), filepath.Join(root, "logical-modes.json")} {
+	for _, path := range []string{controller, app, tray, icon, filepath.Join(root, "client.json"), filepath.Join(root, "modes.json"), filepath.Join(root, "logical-modes.json"), filepath.Join(root, "router-vpn-update.exe")} {
 		info, statErr := os.Stat(path)
 		if statErr != nil || info.IsDir() {
 			return "", "", "", "", fmt.Errorf("required Router VPN package file is missing: %s", path)
@@ -150,6 +168,8 @@ func run() error {
 	if !waitReady(time.Now().Add(12 * time.Second)) {
 		return errors.New("local Router VPN controller did not become ready on 127.0.0.1:8788")
 	}
+
+	startUpdateCheck(root)
 
 	ui := hiddenCommand("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", app, "-BaseUrl", localBaseURL)
 	ui.Dir = root
