@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Eabusham2/router-vpn/internal/updatepolicy"
+	"router-vpn/internal/updatepolicy"
 )
 
 // Portainer automatic updates are opt-in. The existing updater remains the

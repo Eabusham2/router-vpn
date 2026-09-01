@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Eabusham2/router-vpn/internal/updatepolicy"
+	"router-vpn/internal/updatepolicy"
 )
 
 func TestRunWritesVerifiableManifest(t *testing.T) {

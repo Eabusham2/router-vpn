@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Eabusham2/router-vpn/internal/updatepolicy"
+	"router-vpn/internal/updatepolicy"
 )
 
 type artifactInventory struct {

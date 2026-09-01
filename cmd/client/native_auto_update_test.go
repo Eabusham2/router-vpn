@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Eabusham2/router-vpn/internal/updatepolicy"
+	"router-vpn/internal/updatepolicy"
 )
 
 func rvNativeSignedManifest(t *testing.T, target, artifactURL string, artifact []byte) ([]byte, ed25519.PublicKey) {
