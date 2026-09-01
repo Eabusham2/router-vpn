@@ -33,7 +33,8 @@ cp "$ROOT/LICENSE" "$dir/LICENSE"
 
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-client" ./cmd/client
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-dns" ./cmd/dnsproxy
-chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/modes/"*.sh
+CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-update" ./cmd/app-update
+chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/router-vpn-update" "$dir/modes/"*.sh
 
 # The current wrapper surgically composes the mature native builder with the
 # schema-v4 AUTO/SMART requirement controls. It executes a temporary copy in
@@ -60,6 +61,7 @@ cat > "$dir/start-router-vpn.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+[[ -x "$ROOT/router-vpn-update" ]] && "$ROOT/router-vpn-update" --download --json >/dev/null 2>&1 &
 exec "$ROOT/router-vpn-app"
 SH
 chmod 755 "$dir/start-router-vpn.sh"
@@ -69,8 +71,8 @@ cat > "$dir/router-vpn.desktop" <<'DESKTOP'
 Type=Application
 Name=Router VPN
 Comment=Native Router VPN client
-TryExec=/opt/router-vpn-client/router-vpn-app
-Exec=/opt/router-vpn-client/router-vpn-app
+TryExec=/usr/local/bin/router-vpn
+Exec=/usr/local/bin/router-vpn
 Icon=router-vpn
 Terminal=false
 Categories=Network;Security;
@@ -92,10 +94,10 @@ for path in modes client; do
   rm -rf "$ROOT/$path"
   cp -a "$SRC/$path" "$ROOT/$path"
 done
-for file in client.json modes.json logical-modes.json router-vpn-client router-vpn-dns router-vpn-app RouterVPN.ico router-vpn.png MODES.md CLIENT.md SECURITY.md LICENSE; do
+for file in client.json modes.json logical-modes.json router-vpn-client router-vpn-dns router-vpn-update router-vpn-app RouterVPN.ico router-vpn.png MODES.md CLIENT.md SECURITY.md LICENSE ROUTER-VPN-SOURCE.json; do
   [[ -e "$SRC/$file" ]] && cp -a "$SRC/$file" "$ROOT/$file"
 done
-chmod 755 "$ROOT/router-vpn-client" "$ROOT/router-vpn-dns" "$ROOT/router-vpn-app" "$ROOT/modes/"*.sh
+chmod 755 "$ROOT/router-vpn-client" "$ROOT/router-vpn-dns" "$ROOT/router-vpn-update" "$ROOT/router-vpn-app" "$ROOT/modes/"*.sh
 if [[ ! -f "$ROOT/routers.json" ]]; then
   install -m 600 "$SRC/routers.json" "$ROOT/routers.json"
 fi
@@ -107,13 +109,16 @@ install -m 644 "$SRC/router-vpn.png" /usr/share/icons/hicolor/256x256/apps/route
 install -m 644 "$SRC/router-vpn.desktop" /usr/share/applications/router-vpn.desktop
 cat >/usr/local/bin/router-vpn <<'LAUNCH'
 #!/usr/bin/env sh
+if [ -x /opt/router-vpn-client/router-vpn-update ]; then
+  /opt/router-vpn-client/router-vpn-update --download --json >/dev/null 2>&1 &
+fi
 exec /opt/router-vpn-client/router-vpn-app "$@"
 LAUNCH
 chmod 755 /usr/local/bin/router-vpn
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true
 printf '%s\n' 'Router VPN installed. Open Router VPN from the desktop application menu or run: router-vpn'
-printf '%s\n' 'Existing linked Router VPN nodes were preserved if already present.'
+printf '%s\n' 'Verified exact-SHA update packages are checked/staged automatically; existing linked nodes are preserved.'
 SH
 chmod 755 "$dir/install-router-vpn.sh"
 
@@ -123,6 +128,11 @@ Router VPN for Linux
 Run sudo ./install-router-vpn.sh for normal desktop application integration, then open Router VPN
 from your application menu. The installer adds the Router VPN icon/desktop entry and preserves any
 existing /opt/router-vpn-client/routers.json + generated node state on upgrades.
+
+The installed launcher starts a short-lived router-vpn-update helper before the native GTK app. It
+accepts only immutable exact-SHA releases whose RouterVPN-RELEASE.json package digest matches, stages
+a newer archive, and never overwrites the currently running installation. Distribution package
+managers remain authoritative when Router VPN is installed through one.
 
 You can also run ./router-vpn-app or ./start-router-vpn.sh directly from the extracted folder. This
 is a native GTK3 application that talks only to the loopback Router VPN controller API. It does not
@@ -143,6 +153,7 @@ tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
 archive_list="$work/archive-members.txt"
 tar -tzf "$OUT/$name.tar.gz" > "$archive_list"
 grep -Fxq "$name/router-vpn-app" "$archive_list"
+grep -Fxq "$name/router-vpn-update" "$archive_list"
 grep -Fxq "$name/router-vpn.png" "$archive_list"
 grep -Fxq "$name/router-vpn.desktop" "$archive_list"
 grep -Fxq "$name/install-router-vpn.sh" "$archive_list"
@@ -152,7 +163,7 @@ if grep -Fq 'router-vpn-bundle.json' "$archive_list"; then
   echo 'Native Linux package unexpectedly contains a private router bundle.' >&2
   exit 1
 fi
-grep -Fq 'Exec=/opt/router-vpn-client/router-vpn-app' "$dir/router-vpn.desktop"
+grep -Fq 'Exec=/usr/local/bin/router-vpn' "$dir/router-vpn.desktop"
 grep -Fq 'Icon=router-vpn' "$dir/router-vpn.desktop"
 grep -Fq 'StartupWMClass=router-vpn-app' "$dir/router-vpn.desktop"
 grep -Fq '[[ ! -f "$ROOT/routers.json" ]]' "$dir/install-router-vpn.sh"
