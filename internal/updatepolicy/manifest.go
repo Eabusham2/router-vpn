@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"path"
@@ -139,8 +140,12 @@ func ParseAndVerify(raw []byte, publicKey ed25519.PublicKey, opts VerifyOptions)
 	if err := dec.Decode(&m); err != nil {
 		return Manifest{}, fmt.Errorf("%w: decode: %v", errInvalidManifest, err)
 	}
-	if dec.More() {
-		return Manifest{}, fmt.Errorf("%w: trailing JSON", errInvalidManifest)
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return Manifest{}, fmt.Errorf("%w: trailing JSON", errInvalidManifest)
+		}
+		return Manifest{}, fmt.Errorf("%w: trailing JSON: %v", errInvalidManifest, err)
 	}
 	if err := m.Validate(opts); err != nil {
 		return Manifest{}, err

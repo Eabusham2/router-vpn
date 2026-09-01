@@ -111,6 +111,17 @@ func TestUnknownFieldsAndUnknownSchemaFailClosed(t *testing.T) {
 	}
 }
 
+func TestTrailingJSONFailsClosed(t *testing.T) {
+	raw, pub := signedFixture(t)
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	for _, suffix := range [][]byte{[]byte(` {}`), []byte(` true`), []byte(` null`)} {
+		candidate := append(append([]byte(nil), raw...), suffix...)
+		if _, err := ParseAndVerify(candidate, pub, VerifyOptions{Now: now}); err == nil {
+			t.Fatalf("trailing JSON %q was accepted", suffix)
+		}
+	}
+}
+
 func TestSelectArtifactNormalizesPlatformAndArchitecture(t *testing.T) {
 	raw, pub := signedFixture(t)
 	m, err := ParseAndVerify(raw, pub, VerifyOptions{Now: time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)})
