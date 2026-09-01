@@ -30,6 +30,11 @@ def forbid(rel: str, *markers: str) -> None:
             errors.append(f"{rel}: forbidden {marker!r}")
 
 
+def absent(rel: str) -> None:
+    if (ROOT / rel).exists():
+        errors.append(f"obsolete duplicate remains: {rel}")
+
+
 need(
     "cmd/update-auto/main.go",
     'defaultControllerURL = "http://127.0.0.1:8793"',
@@ -132,6 +137,61 @@ need(
     "Router VPN update available",
     "Open exact release",
 )
+
+# Signed native-update trust and controller wiring. The legacy packaged helper
+# remains the install/staging compatibility path while these routes provide a
+# bounded signed-manifest API to every native shell.
+need(
+    "internal/updatepolicy/manifest.go",
+    "ed25519.Verify",
+    "DisallowUnknownFields",
+    "trailing JSON",
+    "moving release URL is forbidden",
+    "SelectArtifact",
+)
+need(
+    "internal/updatepolicy/store.go",
+    "SaveState",
+    "LoadState",
+    "InstallPending",
+)
+need(
+    "cmd/client/native_auto_update.go",
+    '"/api/update/native/status"',
+    '"/api/update/native/check"',
+    '"/api/update/native/download"',
+    '"X-Router-VPN-Native-App"',
+    "ParseAndVerify",
+    "DownloadArtifact",
+    'json:"source_sha"',
+    "mobile updates remain under Android or Apple signed install control",
+)
+need(
+    "cmd/client/extras.go",
+    "registerNativeUpdateRoutes(h, a)",
+)
+need(
+    "cmd/client/native_auto_update_test.go",
+    "TestNativeUpdateCheckAndDownloadRemainSeparate",
+    "TestNativeUpdateMutationRequiresLoopbackAppHeader",
+    "TestPackagedSourceSHAReadsCanonicalProvenance",
+)
+need(
+    "internal/updatepolicy/manifest_test.go",
+    "TestTrailingJSONFailsClosed",
+    "TestManifestSignatureCoversArtifacts",
+)
+absent("cmd/updater/auto_update.go")
+absent("cmd/updater/auto_update_test.go")
+
+# Build-all intentionally publishes immutable, fully-gated exact-SHA releases
+# as prereleases; every platform checker must accept that exact identity while
+# continuing to reject drafts and mismatched targets.
+need(".github/workflows/build-all.yml", "--prerelease", 'TAG="router-vpn-sha-${GITHUB_SHA}"')
+need("cmd/app-update/main.go", "exactReleaseIdentity", "RouterVPN-RELEASE.json")
+forbid("cmd/app-update/main.go", "rel.Draft || rel.Prerelease")
+forbid("android/app/src/main/java/com/eabusham/routervpn/RouterVpnUpdateProvider.java", 'release.optBoolean("prerelease")')
+forbid("ios/RouterVPN/App/IOSUpdateChecker.swift", 'release["prerelease"]')
 
 if errors:
     print("AUTO UPDATE AUDIT: FAIL")
