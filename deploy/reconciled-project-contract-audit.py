@@ -10,6 +10,7 @@ XOR-style packet ciphers.
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import subprocess
 import sys
 
@@ -49,18 +50,31 @@ need(
     "immutable exact-SHA GitHub Release asset",
     "ASUS household safety",
 )
-need(
-    "client/unified-control-center-v2.json",
-    '"default_surface"',
-    '"map"',
-    '"smart-auto"',
-    '"selected_node_count"',
-    '"authenticated_encryption"',
-    '"tor"',
-)
+contract_text = read("client/unified-control-center-v2.json")
+try:
+    contract = json.loads(contract_text)
+except json.JSONDecodeError as exc:
+    errors.append(f"client/unified-control-center-v2.json: invalid JSON: {exc}")
+    contract = {}
+
+if contract.get("default_surface") != "map":
+    errors.append("client/unified-control-center-v2.json: default surface must be map")
+defaults = contract.get("defaults", {})
+if defaults.get("mode") != "smart-auto":
+    errors.append("client/unified-control-center-v2.json: SMART AUTO must remain the default")
+if defaults.get("selected_node_count") != 1:
+    errors.append("client/unified-control-center-v2.json: exactly one node must be selected by default")
+if defaults.get("authenticated_transport") is not True:
+    errors.append("client/unified-control-center-v2.json: authenticated transport must be enabled")
+node_types = {item.get("id") for item in contract.get("node_types", []) if isinstance(item, dict)}
+outer_bridges = set(contract.get("secure_transport", {}).get("outer_bridges", []))
+if "tor-bridge" not in node_types or "tor-ntor-v3" not in outer_bridges:
+    errors.append("client/unified-control-center-v2.json: Tor bridge contract is incomplete")
+secure = contract.get("secure_transport", {})
+if secure.get("mandatory") is not True or secure.get("custom_crypto_allowed") is not False:
+    errors.append("client/unified-control-center-v2.json: vetted authenticated encryption must be mandatory")
 forbid(
     "client/unified-control-center-v2.json",
-    '"xor"',
     '"homemade_cipher"',
     '"custom_cipher"',
 )

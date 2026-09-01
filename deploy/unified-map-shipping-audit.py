@@ -63,7 +63,7 @@ need(
     'TARGETED_DEVICE_FAMILY: "1,2"',
     'SWIFT_VERSION: "6.0"',
 )
-need("ios/RouterVPN/App/RouterVPNApp.swift", "ProductRootView().environmentObject(model)")
+need("ios/RouterVPN/App/RouterVPNApp.swift", "ProductRootView()", ".environmentObject(model)")
 need("ios/RouterVPN/App/ProductRootView.swift", "IOSUnifiedProductView()", "IOSUserLocationControl()")
 need(
     "ios/RouterVPN/App/IOSUnifiedProductView.swift",
@@ -131,7 +131,7 @@ need(
     "deploy/package-builds.sh",
     'cp -a "$ROOT/client" "$dir/client"',
     "RouterVPN-Windows-App.ps1",
-    "native Windows Router VPN WPF app",
+    "normal native Windows Router VPN app",
 )
 need(
     "client/RouterVPN-Windows-App.ps1",

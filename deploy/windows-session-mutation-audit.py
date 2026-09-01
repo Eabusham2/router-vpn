@@ -78,9 +78,10 @@ for marker in (
 telemetry=(ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text(encoding='utf-8')
 for marker in (
     "Assert-RouterVPNMutationIdle 'selecting a node from the VPN globe'",
-    "Assert-RouterVPNMutationIdle 'selecting/connecting a fastest Router VPN node'",
+    "Assert-RouterVPNMutationIdle 'selecting a Router VPN node'",
     "UnifiedFastestNode').IsEnabled=-not(Test-RouterVPNMutationBusy)",
 ):
     assert marker in telemetry, f'Windows telemetry session guard missing {marker}'
+assert "selecting/connecting a fastest Router VPN node" not in telemetry, 'Fastest selection must not silently connect'
 
 print('Windows session mutation shipping audit: PASS')

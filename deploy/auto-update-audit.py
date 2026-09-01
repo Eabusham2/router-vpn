@@ -77,7 +77,19 @@ need(
     "deploy/package-builds.sh",
     "router-vpn-update.exe",
     "RouterVPNPortableCore.exe",
+    "server/scripts/source_provenance.py",
+    "write_provenance",
+)
+need(
+    "server/scripts/source_provenance.py",
+    "deploy/source_provenance.py",
+    "_MODULE._main()",
+)
+need(
+    "deploy/source_provenance.py",
     "ROUTER-VPN-SOURCE.json",
+    "source_sha",
+    "artifact_family",
 )
 need(
     "deploy/package-macos-native.sh",

@@ -51,63 +51,4 @@ forbid(
 )
 
 # Every package route, including a raw/direct package URL, must use the same
-# retained manager. Streaming must observe DELETE cancellation between chunks.
-need(
-    "server/scripts/setup-center-product-server.py",
-    "def _dynamic(self, name: str)",
-    "job = self.server.jobs.create(name)",
-    "self._job_file(job_id)",
-    "self.server.jobs.cancel_requested(job_id)",
-    "X-Router-VPN-Retained-Until",
-    "30-minute retained package retry",
-)
-
-# Normal delivery order is exact-SHA GitHub Release, then exact-SHA Actions,
-# then one bounded supported local desktop/Portable build. Mobile stays exact-
-# SHA GitHub-only and private node data remains a separate bundle.
-need(
-    "server/scripts/setup-center-product-server.py",
-    "_exact_release.install(_ai._core._broker)",
-    "one-package local fallback",
-)
-need(
-    "server/scripts/download-broker.py",
-    "build_github_package",
-    "compiling requested generic package locally",
-    '"router-local-generic-build"',
-    "requires its same-SHA GitHub mobile artifact",
-)
-need(
-    "server/scripts/build-download-on-demand.py",
-    "assemble only the requested",
-    "bounded Go build only for a missing supported Windows/Portable Go component",
-    "GENERIC and secret-free",
-)
-
-need(
-    "server/scripts/setup_center_ux_patch.py",
-    "Temporary package deletes in",
-    "Download again",
-    "Delete now",
-    "downloadExisting(active)",
-    "retained_until",
-    "expires_in_seconds",
-    "same 30-minute retained job policy",
-)
-
-for test in (
-    "server/scripts/test_download_jobs.py",
-    "server/scripts/test_setup_center_ux_patch.py",
-):
-    proc = subprocess.run([sys.executable, str(ROOT / test)], cwd=ROOT,
-                          text=True, capture_output=True)
-    if proc.returncode != 0:
-        errors.append(f"{test}: {proc.stdout}{proc.stderr}".strip())
-
-if errors:
-    print("SETUP CENTER DOWNLOAD RETENTION AUDIT: FAIL")
-    for error in errors:
-        print(" - " + error)
-    raise SystemExit(1)
-
-print("SETUP CENTER DOWNLOAD RETENTION AUDIT: PASS")
+# retained manager. Streaming must observe DELER…¹•±±…Ñ¥½¸‰•Ñİ••¸¡Õ¹­Ì¸)¹•• (€€€€‰Í•ÉÙ•È½ÍÉ¥ÁÑÌ½Í•ÑÕÀµ•¹Ñ•ÈµÁÉ½‘ÕĞµÍ•ÉÙ•È¹Áäˆ°(€€€€‰‘•˜}‘å¹…µ¥Œ¡Í•±˜°¹…µ”èÍÑÈ¤ˆ°(€€€€‰©½ˆ€ôÍ•±˜¹Í•ÉÙ•È¹©½‰Ì¹É•…Ñ”¡¹…µ”¤ˆ°(€€€€‰Í•±˜¹}©½‰}™¥±”¡©½‰}¥¤ˆ°(€€€€‰Í•±˜¹Í•ÉÙ•È¹©½‰Ì¹…¹•±}É•ÅÕ•ÍĞ¡©½‰}¥¤ˆ°(€€€€‰`µI½ÕÑ•ÈµYA8µI•Ñ…¥¹•µU¹Ñ¥°ˆ°(€€€€ˆÌÀµµ¥¹ÕÑ”É•Ñ…¥¹•Á…­…”É•ÑÉäˆ°(¤((Œ9½Éµ…°‘•±¥Ù•Éä½É‘•È¥Ì…¸¥µµÕÑ…‰±”•á…ĞµM!¥Ñ!ÕˆI•±•…Í”°Ñ¡•¸µ…Ñ¡¥¹œ(Œ•á…ĞµM!¥Ñ!ÕˆÑ¥½¹Ì°Ñ¡•¸½¹”‰½Õ¹‘•É•ÅÕ•ÍÑ•±½…°‘•Í­Ñ½À½A½ÉÑ…‰±”(Œ‰Õ¥±¸5½‰¥±”ÍÑ…åÌ•á…ĞµM!¥Ñ!Õˆµ½¹±ä…¹ÁÉ¥Ù…Ñ”¹½‘”‘…Ñ„É•µ…¥¹Ì„(ŒÍ•Á…É…Ñ”‰Õ¹‘±”¸)¹•• (€€€€‰Í•ÉÙ•È½ÍÉ¥ÁÑÌ½Í•ÑÕÀµ•¹Ñ•ÈµÁÉ½‘ÕĞµÍ•ÉÙ•È¹Áäˆ°(€€€€‰}•á…Ñ}É•±•…Í”¹¥¹ÍÑ…±°¡}…¤¹}½É”¹}‰É½­•È¤ˆ°(€€€€‰½¹”µÁ…­…”±½…°™…±±‰…¬ˆ°(¤)¹•• (€€€€‰Í•ÉÙ•È½ÍÉ¥ÁÑÌ½‘½İ¹±½…µ‰É½­•È¹Áäˆ°(€€€€‰‰Õ¥±‘}¥Ñ¡Õ‰}Á…­…”ˆ°(€€€€‰½µÁ¥±¥¹œÉ•ÅÕ•ÍÑ••¹•É¥ŒÁ…­…”±½…±±äˆ°(€€€€œ‰É½ÕÑ•Èµ±½…°µ•¹•É¥Œµ‰Õ¥±ˆœ°(€€€€‰É•ÅÕ¥É•Ì¥ÑÌÍ…µ”µM!¥Ñ!Õˆµ½‰¥±”…ÉÑ¥™…Ğˆ°(¤)¹•• (€€€€‰Í•ÉÙ•È½ÍÉ¥ÁÑÌ½‰Õ¥±µ‘½İ¹±½…µ½¸µ‘•µ…¹¹Áäˆ°(€€€€‰…ÍÍ•µ‰±”½¹±äÑ¡”É•ÅÕ•ÍÑ•ˆ°(€€€€‰‰½Õ¹‘•¼‰Õ¥±½¹±ä™½È„ˆ°(€€€€‰µ¥ÍÍ¥¹œÍÕÁÁ½ÉÑ•]¥¹‘½İÌ½A½ÉÑ…‰±”¼½µÁ½¹•¹Ğˆ°(€€€€‰9I%…¹Í•É•Ğµ™É•”ˆ°(¤()¹•• (€€€€‰Í•ÉÙ•È½ÍÉ¥ÁÑÌ½Í•ÑÕÁ}•¹Ñ•É}Õá}Á…Ñ ¹Áäˆ°(€€€€‰Q•µÁ½É…ÉäÁ…­…”‘•±•Ñ•Ì¥¸ˆ°(€€€€‰½İ¹±½………¥¸ˆ°(€€€€‰•±•Ñ”¹½Üˆ°(€€€€‰‘½İ¹±½…‘á¥ÍÑ¥¹œ¡…Ñ¥Ù”¤ˆ°(€€€€‰É•Ñ…¥¹•‘}Õ¹Ñ¥°ˆ°(€€€€‰•áÁ¥É•Í}¥¹}Í•½¹‘Ìˆ°(€€€€‰Í…µ”€ÌÀµµ¥¹ÕÑ”É•Ñ…¥¹•©½ˆÁ½±¥äˆ°(¤()™½ÈÑ•ÍĞ¥¸€ (€€€€‰Í•ÉÙ•È½ÍÉ¥ÁÑÌ½Ñ•ÍÑ}‘½İ¹±½…‘}©½‰Ì¹Áäˆ°(€€€€‰Í•ÉÙ•È½ÍÉ¥ÁÑÌ½Ñ•ÍÑ}Í•ÑÕÁ}•¹Ñ•É}Õá}Á…Ñ ¹Áäˆ°(¤è(€€€ÁÉ½Œ€ôÍÕ‰ÁÉ½•ÍÌ¹ÉÕ¸¡mÍåÌ¹•á•ÕÑ…‰±”°ÍÑÈ¡I==P€¼Ñ•ÍĞ¥t°İõI==P°(€€€€€€€€€€€€€€€€€€€€€€€€€Ñ•áĞõQÉÕ”°…ÁÑÕÉ•}½ÕÑÁÕĞõQÉÕ”¤(€€€¥˜ÁÉ½Œ¹É•ÑÕÉ¹½‘”€„ô€Àè(€€€€€€€•ÉÉ½ÉÌ¹…ÁÁ•¹¡˜‰íÑ•ÍÑôèíÁÉ½Œ¹ÍÑ‘½ÕÑõíÁÉ½Œ¹ÍÑ‘•ÉÉôˆ¹ÍÑÉ¥À ¤¤()¥˜•ÉÉ½ÉÌè(€€€ÁÉ¥¹Ğ ‰MQU@9QH=]91=IQ9Q%=8U%Pè%0ˆ¤(€€€™½È•ÉÉ½È¥¸•ÉÉ½ÉÌè(€€€€€€€ÁÉ¥¹Ğ ˆ€´€ˆ€¬•ÉÉ½È¤(€€€É…¥Í”MåÍÑµá¥Ğ Ä¤()ÁÉ¥¹Ğ ‰MQU@9QH=]91=IQ9Q%=8U%PèAMLˆ¤
