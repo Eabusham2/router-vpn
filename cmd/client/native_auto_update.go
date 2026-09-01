@@ -396,7 +396,10 @@ func rvPackagedSourceSHA(base string) string {
 	paths = append(paths, filepath.Join(base, "ROUTER-VPN-SOURCE.json"))
 	for _, path := range paths {
 		raw := rvReadRegular(filepath.Clean(path), 512<<10)
-		var source struct{ Repository, SourceSHA string }
+		var source struct {
+			Repository string `json:"repository"`
+			SourceSHA  string `json:"source_sha"`
+		}
 		if raw != "" && json.Unmarshal([]byte(raw), &source) == nil && source.Repository == "Eabusham2/router-vpn" && rvExactSHA(source.SourceSHA) {
 			return strings.ToLower(source.SourceSHA)
 		}

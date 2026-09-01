@@ -164,3 +164,21 @@ func TestNativeUpdateStateRejectsStaleOrCorruptState(t *testing.T) {
 		t.Fatal("corrupt/unsupported state did not fail closed")
 	}
 }
+
+func TestPackagedSourceSHAReadsCanonicalProvenance(t *testing.T) {
+	dir := t.TempDir()
+	want := strings.Repeat("d", 40)
+	raw := []byte(`{"repository":"Eabusham2/router-vpn","source_sha":"` + want + `"}`)
+	if err := os.WriteFile(filepath.Join(dir, "ROUTER-VPN-SOURCE.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := rvPackagedSourceSHA(dir); got != want {
+		t.Fatalf("packaged source SHA = %q, want %q", got, want)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ROUTER-VPN-SOURCE.json"), []byte(`{"repository":"other/repo","source_sha":"`+want+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := rvPackagedSourceSHA(dir); got != "" {
+		t.Fatalf("foreign package provenance was accepted: %q", got)
+	}
+}
