@@ -10,7 +10,6 @@ materialize_icons(){ python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "
 write_provenance(){ python3 "$ROOT/server/scripts/source_provenance.py" "$1" --family "$2"; }
 package_zip(){ local name=$1 dir=$2;(cd "$(dirname "$dir")"&&zip -qr "$OUT/$name.zip" "$(basename "$dir")");}
 package_tgz(){ local name=$1 dir=$2;tar -C "$(dirname "$dir")" -czf "$OUT/$name.tar.gz" "$(basename "$dir")";}
-# Product/audit contract: the normal installed package launches the native Windows Router VPN WPF app.
 write_windows_app_launcher(){ local file=$1;cat >"$file" <<'PS1'
 $ErrorActionPreference='Stop'
 $Root=Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -52,16 +51,14 @@ This generic application package contains no linked home/server node; link nodes
 Router VPN is MIT-licensed open-source software; see LICENSE.
 TXT
 write_provenance "$dir" "windows-$arch";package_zip "RouterVPN-Windows-$arch" "$dir";done
-for arch in amd64 arm64;do root="$OUT/work/RouterVPNPortable-$arch";app="$root/App/RouterVPN";data="$root/Data";mkdir -p "$app" "$data/generated";copy_runtime "$app";cp -a "$ROOT/client" "$app/client";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe";cp "$DIST/app-update/router-vpn-update-windows-$arch.exe" "$app/router-vpn-update.exe";cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe";cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1";materialize_icons "$app";cat >"$root/README.txt" <<'TXT'
-Double-click RouterVPNPortable.exe. It starts the local controller, opens the native Windows WPF
-app from App/RouterVPN/client/RouterVPN-Windows-App.ps1, then cleanly stops the controller it owns
-when the native window exits. It does not need Edge/Chrome or an embedded browser/WebView.
+for arch in amd64 arm64;do root="$OUT/work/RouterVPNPortable-$arch";app="$root/App/RouterVPN";data="$root/Data";mkdir -p "$app" "$data/generated";copy_runtime "$app";cp -a "$ROOT/client" "$app/client";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe";cp "$DIST/app-update/router-vpn-update-windows-$arch.exe" "$app/router-vpn-update.exe";cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe";cp "$DIST/client/RouterVPNPortableCore-$arch.exe" "$root/RouterVPNPortableCore.exe";cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1";materialize_icons "$app";cat >"$root/README.txt" <<'TXT'
+Double-click RouterVPNPortable.exe. It supervises a short-lived exact-SHA updater and the mature
+Portable runtime owner in RouterVPNPortableCore.exe. Closing Router VPN always terminates an updater
+that is still running, so no process can keep the Portable folder or USB mounted.
 App/RouterVPN contains immutable binaries/catalogs/scripts and the Router VPN window icon. Data
 contains writable settings, private linked node data, generated profiles and native Windows engines.
-The Portable launcher performs only a bounded one-shot exact-SHA update check; it never leaves a
-background updater holding the folder/USB after Router VPN exits. A verified newer Portable ZIP can
-be staged only after its release manifest/hash is proven and is applied by replacing the whole
-Portable folder while Router VPN is stopped.
+A verified newer Portable ZIP is staged only after immutable release identity + package SHA-256
+verification and is applied by replacing the whole Portable folder while Router VPN is stopped.
 No Router VPN state is written to AppData or the registry by the portable launcher/app; move the
 whole folder. The ZIP is generic and contains no linked node. Add nodes separately by import/pairing.
 Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.
