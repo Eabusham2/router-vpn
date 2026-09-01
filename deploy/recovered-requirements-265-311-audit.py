@@ -48,7 +48,7 @@ need('server/finalize/current-entrypoint.sh','https://icanhazip.com','https://ap
 need('deploy/package-builds.sh','LICENSE')
 for term in ('Portainer','ASUS','Downloads','DNS','forward','Security','license'):
  if term.lower() not in text('README.md').lower(): errors.append(f'README missing product topic {term}')
-need('README.md','## Production environment and images','WAN_INTERFACE=eth0','LAN_CIDR=192.168.50.0/24','ADGUARD4=192.168.50.133','## Update, recovery, and troubleshooting','## License')
+need('README.md','## Production environment and images','WAN_INTERFACE=eth0','LAN_CIDR=192.168.50.0/24','ADGUARD4=192.168.50.133','## Automatic update, recovery, and troubleshooting','## License')
 need('server/scripts/generate-setup-assets.py','20 raw runtimes','16 logical modes','DAITA-like','not claimed to be Mullvad','public exit IP','private SOCKS address')
 need('README.md','Physical release validation still requires','real off-LAN compatible-client interoperability')
 
