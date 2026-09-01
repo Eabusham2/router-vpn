@@ -36,6 +36,20 @@ def absent(rel: str) -> None:
 
 
 need(
+    "cmd/update-controller/main.go",
+    "compareProvesStrictUpgrade",
+    "verifyStrictUpgrade",
+    "no current or strict-descendant exact-SHA release has settled Build-all evidence",
+    '"update_available": sha != current',
+    '"no_change": true',
+    "target release is older than or divergent from the deployed exact SHA",
+)
+need(
+    "cmd/update-controller/main_test.go",
+    "TestCompareProvesStrictUpgrade",
+)
+
+need(
     "cmd/update-auto/main.go",
     'defaultControllerURL = "http://127.0.0.1:8793"',
     '"/api/admin/update/check"',
@@ -206,10 +220,16 @@ need(
     "adoptNoClobber",
     "artifact adoption identity changed",
     "fileMatchesSHA256",
+    "DownloadArtifactDetailed",
+    "RemoveVerifiedArtifact",
+    "restoreArtifactNoClobber",
 )
 need(
     "internal/updatepolicy/store_test.go",
     "TestAdoptNoClobberPreservesConcurrentDestination",
+    "TestDownloadArtifactDetailedReportsOwnership",
+    "TestRemoveVerifiedArtifactPreservesConcurrentReplacement",
+    "TestRemoveVerifiedArtifactRejectsWrongDigestAndSymlink",
 )
 need(
     "cmd/app-update/main.go",
@@ -221,6 +241,19 @@ need(
     "persistUpdateResult",
     "notifyStagedUpdate",
     "ArtifactSHA256",
+)
+need(
+    "cmd/client/native_auto_update.go",
+    "DownloadArtifactDetailed",
+    "RemoveVerifiedArtifact",
+    "rvClearNativeArtifact",
+    "remove superseded staged native update",
+    "cleanup newly staged native update",
+)
+need(
+    "cmd/client/native_auto_update_test.go",
+    "TestClearNativeArtifactRemovesOnlyVerifiedFile",
+    "TestClearNativeArtifactPreservesDigestMismatch",
 )
 need(
     "cmd/app-update/main_test.go",
