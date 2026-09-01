@@ -95,8 +95,11 @@ need(
     "CUSTOM_IMAGES",
     "ROUTER_VPN_GITHUB_SHA",
 )
+# Native packages must publish source provenance; resolve_sha() intentionally
+# accepts the exact workflow GITHUB_SHA so every packaging path need not carry a
+# redundant local SOURCE_SHA shell variable.
 for rel in ("deploy/package-macos-native.sh", "deploy/package-linux-native.sh"):
-    need(rel, "server/scripts/source_provenance.py", '--sha "$SOURCE_SHA"')
+    need(rel, "server/scripts/source_provenance.py")
 
 transient = [
     *sorted((ROOT / ".github/workflows").glob("direct-main-*.yml")),
@@ -113,6 +116,7 @@ for child in (
     "deploy/native-session-mutation-audit.py",
     "deploy/setup-center-download-retention-audit.py",
     "deploy/durable-state-transaction-audit.py",
+    "deploy/auto-update-audit.py",
 ):
     path = ROOT / child
     if not path.is_file():
