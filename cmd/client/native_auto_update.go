@@ -183,6 +183,25 @@ func rvValidateNativeUpdateConfig(cfg rvNativeUpdateConfig) error {
 	return nil
 }
 
+func rvClearNativeArtifact(state *updatepolicy.State) error {
+	if state == nil {
+		return errors.New("native update state is required")
+	}
+	path := strings.TrimSpace(state.ArtifactPath)
+	digest := strings.ToLower(strings.TrimSpace(state.ArtifactSHA256))
+	if path != "" {
+		if digest == "" {
+			return errors.New("staged native update is missing its verified digest")
+		}
+		if err := updatepolicy.RemoveVerifiedArtifact(path, digest); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	state.ArtifactPath, state.ArtifactSHA256 = "", ""
+	state.DownloadedAt, state.InstallPending = time.Time{}, false
+	return nil
+}
+
 func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download bool) (rvNativeUpdateStatus, error) {
 	if err := rvValidateNativeUpdateConfig(cfg); err != nil {
 		return rvStatus(cfg, updatepolicy.State{}), err
@@ -230,8 +249,10 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 	}
 	state.LastManifestSHA = strings.ToLower(manifest.CommitSHA)
 	if strings.EqualFold(manifest.CommitSHA, cfg.InstalledSHA) {
-		state.AvailableSHA, state.ArtifactPath, state.ArtifactSHA256 = "", "", ""
-		state.DownloadedAt, state.InstallPending = time.Time{}, false
+		if err := rvClearNativeArtifact(&state); err != nil {
+			return rvStatus(cfg, state), fmt.Errorf("remove obsolete staged native update: %w", err)
+		}
+		state.AvailableSHA = ""
 		return rvSaveNativeStatus(cfg, state, "persist current native update state")
 	}
 	artifact, err := manifest.SelectArtifact(cfg.Platform, cfg.Arch, cfg.Kind)
@@ -242,19 +263,30 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 	state.AvailableSHA = strings.ToLower(manifest.CommitSHA)
 	if !download {
 		if state.ArtifactPath != "" && !strings.EqualFold(previousTarget, manifest.CommitSHA) {
-			state.ArtifactPath, state.ArtifactSHA256 = "", ""
-			state.DownloadedAt, state.InstallPending = time.Time{}, false
+			if err := rvClearNativeArtifact(&state); err != nil {
+				return rvStatus(cfg, state), fmt.Errorf("remove superseded staged native update: %w", err)
+			}
 		}
 		return rvSaveNativeStatus(cfg, state, "persist native update check")
 	}
 	artifactClient := rvNativeArtifactClient(cfg.RequestTimeout, cfg.AllowedHosts)
-	path, err := updatepolicy.DownloadArtifact(ctx, artifactClient, artifact, cfg.DownloadDir)
+	downloaded, err := updatepolicy.DownloadArtifactDetailed(ctx, artifactClient, artifact, cfg.DownloadDir)
 	if err != nil {
 		return rvStatus(cfg, state), fmt.Errorf("stage verified native update: %w", err)
 	}
-	state.ArtifactPath, state.ArtifactSHA256 = path, strings.ToLower(artifact.SHA256)
+	state.ArtifactPath, state.ArtifactSHA256 = downloaded.Path, strings.ToLower(artifact.SHA256)
 	state.DownloadedAt, state.InstallPending = now, true
-	return rvSaveNativeStatus(cfg, state, "persist staged native update")
+	status, saveErr := rvSaveNativeStatus(cfg, state, "persist staged native update")
+	if saveErr == nil || !downloaded.Created {
+		return status, saveErr
+	}
+	cleanupErr := updatepolicy.RemoveVerifiedArtifact(downloaded.Path, artifact.SHA256)
+	if cleanupErr == nil || os.IsNotExist(cleanupErr) {
+		state.ArtifactPath, state.ArtifactSHA256 = "", ""
+		state.DownloadedAt, state.InstallPending = time.Time{}, false
+		return rvStatus(cfg, state), saveErr
+	}
+	return status, fmt.Errorf("%v; cleanup newly staged native update: %w", saveErr, cleanupErr)
 }
 
 func rvSaveNativeStatus(cfg rvNativeUpdateConfig, state updatepolicy.State, label string) (rvNativeUpdateStatus, error) {

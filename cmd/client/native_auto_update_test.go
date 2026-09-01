@@ -270,3 +270,41 @@ func TestNativeManifestRedirectFailsClosed(t *testing.T) {
 		t.Fatalf("manifest redirect was accepted: %v", err)
 	}
 }
+
+func TestClearNativeArtifactRemovesOnlyVerifiedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "package.bin")
+	payload := []byte("verified native package")
+	digest := sha256.Sum256(payload)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := updatepolicy.State{ArtifactPath: path, ArtifactSHA256: hex.EncodeToString(digest[:]), InstallPending: true, DownloadedAt: time.Now().UTC()}
+	if err := rvClearNativeArtifact(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state.ArtifactPath != "" || state.ArtifactSHA256 != "" || state.InstallPending || !state.DownloadedAt.IsZero() {
+		t.Fatalf("artifact state was not cleared: %#v", state)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("verified staged file remains: %v", err)
+	}
+}
+
+func TestClearNativeArtifactPreservesDigestMismatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "package.bin")
+	if err := os.WriteFile(path, []byte("foreign replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := updatepolicy.State{ArtifactPath: path, ArtifactSHA256: strings.Repeat("0", 64), InstallPending: true}
+	if err := rvClearNativeArtifact(&state); err == nil {
+		t.Fatal("digest-mismatched staged file was accepted for cleanup")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "foreign replacement" {
+		t.Fatalf("foreign replacement was removed or changed: %q err=%v", got, err)
+	}
+	if state.ArtifactPath != path || !state.InstallPending {
+		t.Fatalf("failed cleanup discarded durable ownership state: %#v", state)
+	}
+}
