@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -290,8 +289,3 @@ func main() {
 		updater.cycle()
 	}
 }
-
-// Keep strconv linked into tiny builds only when future policy exposes an
-// integer-based interval compatibility knob. This compile-time assertion also
-// catches accidental shadowing of the standard parser during refactors.
-var _ = strconv.IntSize
