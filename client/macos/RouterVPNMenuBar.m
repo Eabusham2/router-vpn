@@ -21,7 +21,9 @@
 }
 
 + (void)routerVPNDidFinishLaunching:(NSNotification *)note {
-    [[self shared] installMenuBarItem];
+    RouterVPNMenuBarBootstrap *bootstrap = [self shared];
+    [bootstrap installMenuBarItem];
+    [bootstrap startVerifiedUpdateCheck];
 }
 
 - (void)installMenuBarItem {
@@ -38,12 +40,39 @@
     NSMenu *menu = [NSMenu new];
     [menu addItemWithTitle:@"Open Router VPN" action:@selector(showRouterVPN:) keyEquivalent:@""];
     menu.itemArray.lastObject.target = self;
+    [menu addItemWithTitle:@"Check for Updates" action:@selector(checkForUpdates:) keyEquivalent:@""];
+    menu.itemArray.lastObject.target = self;
     [menu addItemWithTitle:@"Emergency Stop" action:@selector(emergencyStop:) keyEquivalent:@""];
     menu.itemArray.lastObject.target = self;
     [menu addItem:[NSMenuItem separatorItem]];
     [menu addItemWithTitle:@"Quit Router VPN" action:@selector(quitRouterVPN:) keyEquivalent:@"q"];
     menu.itemArray.lastObject.target = self;
     self.statusItem.menu = menu;
+}
+
+- (NSURL *)updateHelperURL {
+    NSURL *root = NSBundle.mainBundle.bundleURL.URLByDeletingLastPathComponent;
+    NSURL *candidate = [root URLByAppendingPathComponent:@"router-vpn-update" isDirectory:NO];
+    if (![[NSFileManager defaultManager] isExecutableFileAtPath:candidate.path]) return nil;
+    return candidate;
+}
+
+- (void)startVerifiedUpdateCheck {
+    NSURL *helper = [self updateHelperURL];
+    if (!helper) return;
+    NSTask *task = [NSTask new];
+    task.executableURL = helper;
+    task.arguments = @[@"--download", @"--json"];
+    task.currentDirectoryURL = helper.URLByDeletingLastPathComponent;
+    NSMutableDictionary *environment = [NSProcessInfo.processInfo.environment mutableCopy];
+    environment[@"ROUTER_VPN_UPDATE_LAUNCH"] = @"macos-native";
+    task.environment = environment;
+    task.standardOutput = [NSFileHandle nullDevice];
+    task.standardError = [NSFileHandle nullDevice];
+    NSError *error = nil;
+    if (![task launchAndReturnError:&error]) {
+        NSLog(@"Router VPN update check could not start: %@", error.localizedDescription);
+    }
 }
 
 - (NSWindow *)routerVPNWindow {
@@ -57,6 +86,10 @@
     NSWindow *window = [self routerVPNWindow];
     [window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)checkForUpdates:(id)sender {
+    [self startVerifiedUpdateCheck];
 }
 
 - (void)emergencyStop:(id)sender {
