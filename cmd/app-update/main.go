@@ -46,6 +46,18 @@ type release struct {
 	Assets          []releaseAsset `json:"assets"`
 }
 
+type compareResult struct {
+	Status     string `json:"status"`
+	AheadBy    int    `json:"ahead_by"`
+	BehindBy   int    `json:"behind_by"`
+	BaseCommit struct {
+		SHA string `json:"sha"`
+	} `json:"base_commit"`
+	MergeBaseCommit struct {
+		SHA string `json:"sha"`
+	} `json:"merge_base_commit"`
+}
+
 type releaseManifest struct {
 	SchemaVersion int    `json:"schema_version"`
 	Repository    string `json:"repository"`
@@ -173,7 +185,15 @@ func githubJSON(endpoint string, out any) error {
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("GitHub API HTTP %d", resp.StatusCode)
 	}
-	return json.Unmarshal(body, out)
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("GitHub metadata response contains trailing JSON")
+	}
+	return nil
 }
 
 func exactReleaseIdentity(rel release) (string, bool) {
@@ -204,6 +224,31 @@ func exactRelease() (release, string, error) {
 		}
 	}
 	return release{}, "", errors.New("no immutable exact-SHA Router VPN release is available")
+}
+
+func compareProvesStrictUpgrade(current, target string, comparison compareResult) bool {
+	current = strings.ToLower(strings.TrimSpace(current))
+	target = strings.ToLower(strings.TrimSpace(target))
+	return validSHA(current) && validSHA(target) && current != target &&
+		strings.EqualFold(strings.TrimSpace(comparison.Status), "ahead") &&
+		comparison.AheadBy > 0 && comparison.BehindBy == 0 &&
+		strings.EqualFold(strings.TrimSpace(comparison.BaseCommit.SHA), current) &&
+		strings.EqualFold(strings.TrimSpace(comparison.MergeBaseCommit.SHA), current)
+}
+
+func verifyStrictUpgrade(current, target string) error {
+	if current == target {
+		return nil
+	}
+	var comparison compareResult
+	endpoint := "https://api.github.com/repos/" + repository + "/compare/" + current + "..." + target
+	if err := githubJSON(endpoint, &comparison); err != nil {
+		return fmt.Errorf("verify exact-SHA update ancestry: %w", err)
+	}
+	if !compareProvesStrictUpgrade(current, target, comparison) {
+		return errors.New("verified release is not a strict descendant of the installed exact SHA")
+	}
+	return nil
 }
 
 func findAsset(rel release, name string) (releaseAsset, error) {
@@ -445,6 +490,9 @@ func checkOnce(current string, portable, download bool, directory string) (resul
 	if current == target {
 		out.Message = "Router VPN is already on the newest verified exact-SHA release"
 		return out, nil
+	}
+	if err := verifyStrictUpgrade(current, target); err != nil {
+		return result{}, err
 	}
 	out.Available = true
 	out.Message = "A newer verified exact-SHA Router VPN package is available"
