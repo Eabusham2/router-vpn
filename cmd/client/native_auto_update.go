@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"router-vpn/internal/updatepolicy"
@@ -40,6 +41,8 @@ type rvNativeUpdateConfig struct {
 	RequestTimeout time.Duration
 	AllowedHosts   []string
 }
+
+var rvNativeUpdateMu sync.Mutex
 
 type rvNativeUpdateStatus struct {
 	Configured          bool      `json:"configured"`
@@ -96,6 +99,8 @@ func registerNativeUpdateRoutes(mux *http.ServeMux, a *app) {
 				http.Error(w, err.Error(), http.StatusServiceUnavailable)
 				return
 			}
+			rvNativeUpdateMu.Lock()
+			defer rvNativeUpdateMu.Unlock()
 			ctx, cancel := context.WithTimeout(r.Context(), cfg.RequestTimeout)
 			defer cancel()
 			status, err := rvNativeUpdateOnce(ctx, cfg, download)
@@ -194,8 +199,8 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 	} else if !os.IsNotExist(err) {
 		return rvStatus(cfg, state), fmt.Errorf("load private native update state: %w", err)
 	}
-	client := rvNativeHTTPClient(cfg.RequestTimeout)
-	raw, err := rvFetchManifest(ctx, client, cfg.ManifestURL)
+	manifestClient := rvNativeManifestClient(cfg.RequestTimeout)
+	raw, err := rvFetchManifest(ctx, manifestClient, cfg.ManifestURL)
 	if err != nil {
 		return rvStatus(cfg, state), fmt.Errorf("fetch signed native update manifest: %w", err)
 	}
@@ -208,8 +213,14 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 	if manifest.Sequence < state.LastSequence {
 		return rvStatus(cfg, state), errors.New("signed native update manifest rolled back to an older sequence")
 	}
-	if manifest.Sequence == state.LastSequence && state.AvailableSHA != "" && !strings.EqualFold(state.AvailableSHA, manifest.CommitSHA) {
-		return rvStatus(cfg, state), errors.New("signed native update sequence changed target identity")
+	if manifest.Sequence == state.LastSequence {
+		observed := state.LastManifestSHA
+		if observed == "" {
+			observed = state.AvailableSHA
+		}
+		if observed != "" && !strings.EqualFold(observed, manifest.CommitSHA) {
+			return rvStatus(cfg, state), errors.New("signed native update sequence changed target identity")
+		}
 	}
 	now := time.Now().UTC()
 	state.Schema, state.Channel, state.InstalledSHA = updatepolicy.SchemaV1, cfg.Channel, strings.ToLower(cfg.InstalledSHA)
@@ -217,6 +228,7 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 	if manifest.Sequence > state.LastSequence {
 		state.LastSequence = manifest.Sequence
 	}
+	state.LastManifestSHA = strings.ToLower(manifest.CommitSHA)
 	if strings.EqualFold(manifest.CommitSHA, cfg.InstalledSHA) {
 		state.AvailableSHA, state.ArtifactPath, state.ArtifactSHA256 = "", "", ""
 		state.DownloadedAt, state.InstallPending = time.Time{}, false
@@ -235,7 +247,8 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 		}
 		return rvSaveNativeStatus(cfg, state, "persist native update check")
 	}
-	path, err := updatepolicy.DownloadArtifact(ctx, client, artifact, cfg.DownloadDir)
+	artifactClient := rvNativeArtifactClient(cfg.RequestTimeout, cfg.AllowedHosts)
+	path, err := updatepolicy.DownloadArtifact(ctx, artifactClient, artifact, cfg.DownloadDir)
 	if err != nil {
 		return rvStatus(cfg, state), fmt.Errorf("stage verified native update: %w", err)
 	}
@@ -345,19 +358,50 @@ func rvFetchManifest(ctx context.Context, client *http.Client, rawURL string) ([
 	return raw, nil
 }
 
-func rvNativeHTTPClient(timeout time.Duration) *http.Client {
+func rvNativeUpdateTransport() http.RoundTripper {
 	transport := http.DefaultTransport
 	if base, ok := transport.(*http.Transport); ok {
 		clone := base.Clone()
 		clone.Proxy = nil
 		transport = clone
 	}
-	return &http.Client{Timeout: timeout, Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) > 5 || req.URL == nil || req.URL.User != nil || !strings.EqualFold(req.URL.Scheme, "https") {
-			return errors.New("native update redirect must remain authenticated HTTPS")
-		}
-		return nil
-	}}
+	return transport
+}
+
+func rvNativeManifestClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout, Transport: rvNativeUpdateTransport(),
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("native update manifest redirects are forbidden")
+		},
+	}
+}
+
+func rvNativeArtifactClient(timeout time.Duration, allowedHosts []string) *http.Client {
+	return &http.Client{
+		Timeout: timeout, Transport: rvNativeUpdateTransport(),
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > 8 {
+				return errors.New("too many native update artifact redirects")
+			}
+			if req.URL == nil || req.URL.User != nil || !strings.EqualFold(req.URL.Scheme, "https") {
+				return errors.New("native update artifact redirect must remain authenticated HTTPS")
+			}
+			if len(allowedHosts) > 0 {
+				allowed := false
+				for _, host := range allowedHosts {
+					if strings.EqualFold(strings.TrimSpace(host), req.URL.Hostname()) {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					return errors.New("native update artifact redirect host is not allowlisted")
+				}
+			}
+			return nil
+		},
+	}
 }
 
 func rvValidateManifestURL(raw string) error {

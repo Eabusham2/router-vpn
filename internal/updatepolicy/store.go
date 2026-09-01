@@ -25,6 +25,7 @@ type State struct {
 	Schema          int       `json:"schema"`
 	Channel         string    `json:"channel"`
 	LastSequence    uint64    `json:"last_sequence"`
+	LastManifestSHA string    `json:"last_manifest_sha,omitempty"`
 	InstalledSHA    string    `json:"installed_sha,omitempty"`
 	AvailableSHA    string    `json:"available_sha,omitempty"`
 	ArtifactPath    string    `json:"artifact_path,omitempty"`
@@ -42,7 +43,7 @@ func (s State) Validate() error {
 	if !validChannel(s.Channel, nil) {
 		return errors.New("invalid update channel")
 	}
-	for _, sha := range []string{s.InstalledSHA, s.AvailableSHA} {
+	for _, sha := range []string{s.LastManifestSHA, s.InstalledSHA, s.AvailableSHA} {
 		if sha != "" && !isHex(sha, 40) {
 			return errors.New("invalid exact commit SHA in state")
 		}
@@ -73,15 +74,39 @@ func LoadState(path string) (State, error) {
 	if info.Size() <= 0 || info.Size() > maxStateBytes {
 		return s, errors.New("invalid update state size")
 	}
+	parentBefore, err := os.Lstat(filepath.Dir(path))
+	if err != nil || !parentBefore.IsDir() || parentBefore.Mode()&os.ModeSymlink != 0 {
+		return s, errors.New("update state parent must be a regular directory")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return s, err
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return State{}, err
+	}
+	current, err := os.Lstat(path)
+	if err != nil || current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+		return State{}, errors.New("update state identity changed during open")
+	}
 	dec := json.NewDecoder(io.LimitReader(f, maxStateBytes+1))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&s); err != nil {
 		return State{}, err
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return State{}, errors.New("update state contains trailing data")
+	}
+	parentAfter, err := os.Lstat(filepath.Dir(path))
+	if err != nil || !os.SameFile(parentBefore, parentAfter) {
+		return State{}, errors.New("update state parent identity changed during read")
+	}
+	current, err = os.Lstat(path)
+	if err != nil || current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+		return State{}, errors.New("update state identity changed during read")
 	}
 	if err := s.Validate(); err != nil {
 		return State{}, err

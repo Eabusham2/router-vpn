@@ -154,6 +154,9 @@ need(
     "SaveState",
     "LoadState",
     "InstallPending",
+    "LastManifestSHA",
+    "update state contains trailing data",
+    "update state identity changed during read",
 )
 need(
     "cmd/client/native_auto_update.go",
@@ -165,6 +168,9 @@ need(
     "DownloadArtifact",
     'json:"source_sha"',
     "mobile updates remain under Android or Apple signed install control",
+    "native update manifest redirects are forbidden",
+    "LastManifestSHA",
+    "rvNativeUpdateMu",
 )
 need(
     "cmd/client/extras.go",

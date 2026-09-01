@@ -78,7 +78,12 @@ need(
     "target_commitish",
     "RouterVPN-exact-sha-release-${{ github.sha }}",
 )
-forbid(".github/workflows/build-all.yml", "/releases/latest", "latest.zip", "refs/heads/main")
+forbid(".github/workflows/build-all.yml", "/releases/latest", "latest.zip")
+build_all = text(".github/workflows/build-all.yml")
+allowed_main_ref = "if: github.ref == 'refs/heads/main'"
+for line in build_all.splitlines():
+    if "refs/heads/main" in line and line.strip() != allowed_main_ref:
+        errors.append(f".github/workflows/build-all.yml: moving-main reference outside the publish trigger: {line.strip()!r}")
 need(
     "docs/EXACT-SHA-DOWNLOAD-DELIVERY.md",
     "GitHub Release",

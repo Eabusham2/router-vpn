@@ -80,7 +80,8 @@ need(
 need(
     "server/scripts/build-download-on-demand.py",
     "assemble only the requested",
-    "bounded Go build only for a missing supported Windows/Portable Go component",
+    "bounded Go build only for a",
+    "missing supported Windows/Portable Go component",
     "GENERIC and secret-free",
 )
 

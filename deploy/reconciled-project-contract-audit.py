@@ -13,6 +13,7 @@ from pathlib import Path
 import json
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 errors: list[str] = []
@@ -89,9 +90,9 @@ need(
 need(
     "deploy/setup-center-download-retention-audit.py",
     "GitHub-first and 30-minute Setup Center download contract",
-    "immutable exact-SHA GitHub Release",
-    "matching exact-SHA GitHub Actions",
-    "bounded requested local desktop/Portable build",
+    "_exact_release.install",
+    "build_github_package",
+    '"router-local-generic-build"',
 )
 need(
     "server/scripts/setup_center_ux_patch.py",
@@ -136,12 +137,19 @@ for child in (
     if not path.is_file():
         errors.append(f"missing delegated audit {child}")
         continue
-    result = subprocess.run(
-        [sys.executable, str(path)], cwd=ROOT, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-    )
+    try:
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as output:
+            result = subprocess.run(
+                [sys.executable, str(path)], cwd=ROOT, text=True,
+                stdout=output, stderr=subprocess.STDOUT, timeout=600,
+            )
+            output.seek(0)
+            child_output = output.read().strip()
+    except subprocess.TimeoutExpired:
+        errors.append(f"{child}: timed out after 600 seconds")
+        continue
     if result.returncode != 0:
-        errors.append(f"{child}: {result.stdout.strip()}")
+        errors.append(f"{child}: {child_output}")
 
 if errors:
     print("RECONCILED PROJECT CONTRACT AUDIT: FAIL")

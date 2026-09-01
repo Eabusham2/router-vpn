@@ -19,13 +19,14 @@ func TestStateRoundTripUsesPrivateRegularFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "native-update.json")
 	want := State{
-		Schema:         SchemaV1,
-		Channel:        "stable",
-		LastSequence:   7,
-		InstalledSHA:   strings.Repeat("a", 40),
-		AvailableSHA:   strings.Repeat("b", 40),
-		LastCheckedAt:  time.Now().UTC().Truncate(time.Second),
-		InstallPending: true,
+		Schema:          SchemaV1,
+		Channel:         "stable",
+		LastSequence:    7,
+		LastManifestSHA: strings.Repeat("c", 40),
+		InstalledSHA:    strings.Repeat("a", 40),
+		AvailableSHA:    strings.Repeat("b", 40),
+		LastCheckedAt:   time.Now().UTC().Truncate(time.Second),
+		InstallPending:  true,
 	}
 	if err := SaveState(path, want); err != nil {
 		t.Fatal(err)
@@ -44,7 +45,7 @@ func TestStateRoundTripUsesPrivateRegularFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.AvailableSHA != want.AvailableSHA || got.LastSequence != want.LastSequence || !got.InstallPending {
+	if got.AvailableSHA != want.AvailableSHA || got.LastManifestSHA != want.LastManifestSHA || got.LastSequence != want.LastSequence || !got.InstallPending {
 		t.Fatalf("round trip mismatch: %#v", got)
 	}
 }
@@ -144,5 +145,15 @@ func TestDownloadArtifactRejectsWrongHashAndCleansTemporaryFile(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("temporary artifact was not cleaned: %v", entries)
+	}
+}
+
+func TestLoadStateRejectsTrailingJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"schema":1,"channel":"stable"} {"schema":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadState(path); err == nil {
+		t.Fatal("trailing JSON was accepted")
 	}
 }

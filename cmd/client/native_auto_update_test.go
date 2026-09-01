@@ -25,12 +25,17 @@ func rvNativeSignedManifest(t *testing.T, target, artifactURL string, artifact [
 	if err != nil {
 		t.Fatal(err)
 	}
+	return rvNativeSignedManifestWithKey(t, privateKey, 11, target, artifactURL, artifact), pub
+}
+
+func rvNativeSignedManifestWithKey(t *testing.T, privateKey ed25519.PrivateKey, sequence uint64, target, artifactURL string, artifact []byte) []byte {
+	t.Helper()
 	h := sha256.Sum256(artifact)
 	now := time.Now().UTC()
 	manifest := updatepolicy.Manifest{
 		Schema:      updatepolicy.SchemaV1,
 		Channel:     "stable",
-		Sequence:    11,
+		Sequence:    sequence,
 		CommitSHA:   target,
 		PublishedAt: now.Add(-time.Minute),
 		ExpiresAt:   now.Add(time.Hour),
@@ -51,7 +56,7 @@ func rvNativeSignedManifest(t *testing.T, target, artifactURL string, artifact [
 	if err != nil {
 		t.Fatal(err)
 	}
-	return raw, pub
+	return raw
 }
 
 func TestNativeUpdateCheckAndDownloadRemainSeparate(t *testing.T) {
@@ -180,5 +185,88 @@ func TestPackagedSourceSHAReadsCanonicalProvenance(t *testing.T) {
 	}
 	if got := rvPackagedSourceSHA(dir); got != "" {
 		t.Fatalf("foreign package provenance was accepted: %q", got)
+	}
+}
+
+func TestNativeMobileDownloadOperationFailsClosed(t *testing.T) {
+	cfg := rvNativeUpdateConfig{
+		Mode:           rvNativeUpdateDownload,
+		ManifestURL:    "https://updates.example/sha-" + strings.Repeat("c", 40) + "/manifest.json",
+		PublicKey:      make(ed25519.PublicKey, ed25519.PublicKeySize),
+		Channel:        "stable",
+		Platform:       "android",
+		Arch:           "arm64",
+		Kind:           "installed",
+		InstalledSHA:   strings.Repeat("a", 40),
+		StatePath:      filepath.Join(t.TempDir(), "state.json"),
+		DownloadDir:    filepath.Join(t.TempDir(), "updates"),
+		RequestTimeout: 5 * time.Second,
+	}
+	if _, err := rvNativeUpdateOnce(context.Background(), cfg, true); err == nil || !strings.Contains(err.Error(), "signed install control") {
+		t.Fatalf("mobile staging did not fail closed: %v", err)
+	}
+}
+
+func TestNativeUpdateRejectsSequenceRollbackAndReuse(t *testing.T) {
+	current := strings.Repeat("a", 40)
+	firstTarget := strings.Repeat("b", 40)
+	secondTarget := strings.Repeat("c", 40)
+	payload := []byte("exact package")
+	pub, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifestRaw []byte
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(manifestRaw)
+	}))
+	defer server.Close()
+	cfg := rvNativeUpdateConfig{
+		Mode:           rvNativeUpdateCheck,
+		ManifestURL:    server.URL + "/manifest.json",
+		PublicKey:      pub,
+		Channel:        "stable",
+		Platform:       "linux",
+		Arch:           "amd64",
+		Kind:           "installed",
+		InstalledSHA:   current,
+		StatePath:      filepath.Join(t.TempDir(), "state.json"),
+		DownloadDir:    filepath.Join(t.TempDir(), "updates"),
+		RequestTimeout: 5 * time.Second,
+	}
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = server.Client().Transport
+	defer func() { http.DefaultTransport = oldTransport }()
+	manifestFor := func(sequence uint64, target string) []byte {
+		return rvNativeSignedManifestWithKey(t, privateKey, sequence, target, server.URL+"/sha-"+target+"/router-vpn.tar.gz", payload)
+	}
+	manifestRaw = manifestFor(20, firstTarget)
+	if _, err := rvNativeUpdateOnce(context.Background(), cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	manifestRaw = manifestFor(19, secondTarget)
+	if _, err := rvNativeUpdateOnce(context.Background(), cfg, false); err == nil || !strings.Contains(err.Error(), "older sequence") {
+		t.Fatalf("sequence rollback was accepted: %v", err)
+	}
+	manifestRaw = manifestFor(20, secondTarget)
+	if _, err := rvNativeUpdateOnce(context.Background(), cfg, false); err == nil || !strings.Contains(err.Error(), "target identity") {
+		t.Fatalf("sequence reuse was accepted: %v", err)
+	}
+}
+
+func TestNativeManifestRedirectFailsClosed(t *testing.T) {
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"unexpected":true}`))
+	}))
+	defer target.Close()
+	redirector := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/manifest.json", http.StatusFound)
+	}))
+	defer redirector.Close()
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = redirector.Client().Transport
+	defer func() { http.DefaultTransport = oldTransport }()
+	if _, err := rvFetchManifest(context.Background(), rvNativeManifestClient(5*time.Second), redirector.URL+"/manifest.json"); err == nil || !strings.Contains(err.Error(), "redirect") {
+		t.Fatalf("manifest redirect was accepted: %v", err)
 	}
 }
