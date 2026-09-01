@@ -67,10 +67,12 @@ need(
 # or make the UI claim delivery merely because an iframe loaded. Persist only a
 # bounded same-origin job-status path in tab-local sessionStorage, reject
 # redirects/non-local job URLs, pause while offline, and resume on visibility or
-# connectivity restoration.
+# connectivity restoration. The declaration may share a statement with nearby
+# immutable browser-capability values; audit the durable key itself rather than
+# enforcing one source-formatting layout.
 need(
     "server/scripts/setup_center_ux_patch.py",
-    "const persistedJobKey='routervpn.setup.download-job.v2'",
+    "persistedJobKey='routervpn.setup.download-job.v2'",
     "function safeSameOriginPath(value,prefix)",
     "sessionStorage.setItem(persistedJobKey",
     "sessionStorage.removeItem(persistedJobKey)",
