@@ -157,3 +157,29 @@ func TestLoadStateRejectsTrailingJSON(t *testing.T) {
 		t.Fatal("trailing JSON was accepted")
 	}
 }
+
+func TestAdoptNoClobberPreservesConcurrentDestination(t *testing.T) {
+	dir := t.TempDir()
+	tmp := filepath.Join(dir, "staged")
+	final := filepath.Join(dir, "final")
+	if err := os.WriteFile(tmp, []byte("verified staged package"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := os.Lstat(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(final, []byte("foreign concurrent package"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := adoptNoClobber(tmp, final, staged); err == nil {
+		t.Fatal("concurrent destination was overwritten")
+	}
+	got, err := os.ReadFile(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "foreign concurrent package" {
+		t.Fatalf("foreign destination changed: %q", got)
+	}
+}

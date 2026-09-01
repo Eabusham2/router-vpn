@@ -275,18 +275,52 @@ func DownloadArtifact(ctx context.Context, client *http.Client, artifact Artifac
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-	if err := os.Rename(tmpPath, finalPath); err != nil {
+	if err := adoptNoClobber(tmpPath, finalPath, stagedInfo); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			if info, statErr := os.Lstat(finalPath); statErr == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular() && info.Size() == artifact.Size {
+				if ok, hashErr := fileMatchesSHA256(finalPath, artifact.SHA256); hashErr == nil && ok {
+					return finalPath, nil
+				}
+			}
+		}
 		return "", err
 	}
 	cleanup = false
-	adopted, err := os.Lstat(finalPath)
-	if err != nil || adopted.Mode()&os.ModeSymlink != 0 || !adopted.Mode().IsRegular() || !os.SameFile(stagedInfo, adopted) {
-		return "", errors.New("artifact adoption identity changed")
-	}
 	if err := syncDirectory(dir); err != nil {
 		return "", err
 	}
 	return finalPath, nil
+}
+
+// adoptNoClobber publishes a staged regular file without replacing a path
+// created by another actor after the caller's preflight. Unix uses a hard link
+// in the same directory so EEXIST is atomic; Windows os.Rename already refuses
+// to replace an existing destination. The exact staged inode is re-proved
+// before the temporary name is discarded.
+func adoptNoClobber(tmpPath, finalPath string, stagedInfo os.FileInfo) error {
+	if stagedInfo == nil || !stagedInfo.Mode().IsRegular() || stagedInfo.Mode()&os.ModeSymlink != 0 {
+		return errors.New("artifact staging identity is unsafe")
+	}
+	if runtime.GOOS == "windows" {
+		if err := os.Rename(tmpPath, finalPath); err != nil {
+			return err
+		}
+	} else {
+		if err := os.Link(tmpPath, finalPath); err != nil {
+			return err
+		}
+	}
+	adopted, err := os.Lstat(finalPath)
+	if err != nil || adopted.Mode()&os.ModeSymlink != 0 || !adopted.Mode().IsRegular() || !os.SameFile(stagedInfo, adopted) {
+		return errors.New("artifact adoption identity changed")
+	}
+	if runtime.GOOS != "windows" {
+		// The exact final inode is already committed. Failure to remove the
+		// private temporary hard-link must not make callers roll state back
+		// after disk has committed the verified package.
+		_ = os.Remove(tmpPath)
+	}
+	return nil
 }
 
 func syncDirectory(dir string) error {
@@ -302,14 +336,34 @@ func syncDirectory(dir string) error {
 }
 
 func fileMatchesSHA256(path, want string) (bool, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return false, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Size() < 0 || before.Size() > MaxArtifactBytes {
+		return false, errors.New("artifact path is not one bounded regular file")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return false, err
 	}
 	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	opened, err := f.Stat()
+	if err != nil {
 		return false, err
+	}
+	current, err := os.Lstat(path)
+	if err != nil || current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(before, opened) || !os.SameFile(opened, current) {
+		return false, errors.New("artifact identity changed while opening")
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, MaxArtifactBytes+1))
+	if err != nil || n != opened.Size() || n > MaxArtifactBytes {
+		return false, errors.New("artifact changed or exceeded its bound while hashing")
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(opened, after) || after.Size() != n {
+		return false, errors.New("artifact identity changed while hashing")
 	}
 	return strings.EqualFold(hex.EncodeToString(h.Sum(nil)), want), nil
 }
