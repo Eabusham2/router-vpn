@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -77,14 +78,15 @@ type sourceManifest struct {
 }
 
 type result struct {
-	OK          bool   `json:"ok"`
-	CurrentSHA  string `json:"current_sha"`
-	Available   bool   `json:"available"`
-	TargetSHA   string `json:"target_sha,omitempty"`
-	Asset       string `json:"asset,omitempty"`
-	StagedPath  string `json:"staged_path,omitempty"`
-	InstallMode string `json:"install_mode"`
-	Message     string `json:"message"`
+	OK             bool   `json:"ok"`
+	CurrentSHA     string `json:"current_sha"`
+	Available      bool   `json:"available"`
+	TargetSHA      string `json:"target_sha,omitempty"`
+	Asset          string `json:"asset,omitempty"`
+	ArtifactSHA256 string `json:"artifact_sha256,omitempty"`
+	StagedPath     string `json:"staged_path,omitempty"`
+	InstallMode    string `json:"install_mode"`
+	Message        string `json:"message"`
 }
 
 func validSHA(value string) bool {
@@ -483,10 +485,11 @@ func checkOnce(current string, portable, download bool, directory string) (resul
 	if err != nil {
 		return result{}, err
 	}
-	if _, _, err := expectedAsset(manifest, assetName); err != nil {
+	_, assetDigest, err := expectedAsset(manifest, assetName)
+	if err != nil {
 		return result{}, err
 	}
-	out := result{OK: true, CurrentSHA: current, TargetSHA: target, Asset: assetName, InstallMode: installMode}
+	out := result{OK: true, CurrentSHA: current, TargetSHA: target, Asset: assetName, ArtifactSHA256: assetDigest, InstallMode: installMode}
 	if current == target {
 		out.Message = "Router VPN is already on the newest verified exact-SHA release"
 		return out, nil
@@ -505,6 +508,70 @@ func checkOnce(current string, portable, download bool, directory string) (resul
 		out.Message = "A newer verified exact-SHA Router VPN package was downloaded and staged"
 	}
 	return out, nil
+}
+
+func updateStatePath(directory string) string {
+	return filepath.Join(directory, "app-update-state.json")
+}
+
+func persistUpdateResult(directory, current string, out result, cause error) (bool, error) {
+	statePath := updateStatePath(directory)
+	state := updatepolicy.State{Schema: updatepolicy.SchemaV1, Channel: "stable", InstalledSHA: current}
+	if previous, err := updatepolicy.LoadState(statePath); err == nil {
+		state = previous
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	state.Schema, state.Channel, state.InstalledSHA = updatepolicy.SchemaV1, "stable", current
+	state.LastCheckedAt = time.Now().UTC()
+	notify := false
+	if cause != nil {
+		state.LastError = cause.Error()
+	} else {
+		notify = out.Available && out.StagedPath != "" && (!state.InstallPending || !strings.EqualFold(state.AvailableSHA, out.TargetSHA))
+		state.LastError = ""
+		state.LastManifestSHA = out.TargetSHA
+		if out.Available {
+			state.AvailableSHA = out.TargetSHA
+		} else {
+			state.AvailableSHA = ""
+		}
+		state.ArtifactPath, state.ArtifactSHA256 = out.StagedPath, out.ArtifactSHA256
+		state.InstallPending = out.StagedPath != ""
+		if state.InstallPending {
+			state.DownloadedAt = state.LastCheckedAt
+		} else {
+			state.DownloadedAt = time.Time{}
+		}
+	}
+	if err := updatepolicy.SaveState(statePath, state); err != nil {
+		return false, err
+	}
+	return notify, nil
+}
+
+func notifyStagedUpdate(out result) {
+	if strings.TrimSpace(os.Getenv("ROUTER_VPN_UPDATE_LAUNCH")) == "" || !out.Available || out.StagedPath == "" || len(out.TargetSHA) < 12 {
+		return
+	}
+	title := "Router VPN update ready"
+	message := fmt.Sprintf("Verified exact release %s is staged. Close Router VPN, then use the staged package to update.", out.TargetSHA[:12])
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		script := "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($args[1], $args[0]) | Out-Null"
+		cmd = exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, title, message)
+	case "darwin":
+		script := "on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run"
+		cmd = exec.Command("/usr/bin/osascript", "-e", script, title, message)
+	case "linux":
+		if helper, err := exec.LookPath("notify-send"); err == nil {
+			cmd = exec.Command(helper, title, message)
+		}
+	}
+	if cmd != nil {
+		_ = cmd.Start()
+	}
 }
 
 func emit(out result, asJSON bool) {
@@ -544,10 +611,17 @@ func main() {
 		os.Exit(2)
 	}
 	if !background {
-		out, err := checkOnce(sha, portable, download, dir)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+		out, checkErr := checkOnce(sha, portable, download, dir)
+		notify, persistErr := persistUpdateResult(dir, sha, out, checkErr)
+		if persistErr != nil {
+			fmt.Fprintln(os.Stderr, "persist update status:", persistErr)
+		}
+		if checkErr != nil {
+			fmt.Fprintln(os.Stderr, checkErr)
 			os.Exit(1)
+		}
+		if notify {
+			notifyStagedUpdate(out)
 		}
 		emit(out, jsonOutput)
 		return
@@ -557,10 +631,17 @@ func main() {
 		os.Exit(2)
 	}
 	for {
-		out, err := checkOnce(sha, portable, true, dir)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Router VPN automatic update check:", err)
+		out, checkErr := checkOnce(sha, portable, true, dir)
+		notify, persistErr := persistUpdateResult(dir, sha, out, checkErr)
+		if persistErr != nil {
+			fmt.Fprintln(os.Stderr, "persist automatic update status:", persistErr)
+		}
+		if checkErr != nil {
+			fmt.Fprintln(os.Stderr, "Router VPN automatic update check:", checkErr)
 		} else if out.Available {
+			if notify {
+				notifyStagedUpdate(out)
+			}
 			emit(out, jsonOutput)
 		}
 		time.Sleep(interval)

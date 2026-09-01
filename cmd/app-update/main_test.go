@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"router-vpn/internal/updatepolicy"
 )
 
 func TestPlatformAssets(t *testing.T) {
@@ -147,5 +150,48 @@ func TestCompareProvesStrictUpgrade(t *testing.T) {
 	}
 	if compareProvesStrictUpgrade(current, current, comparison) {
 		t.Fatal("same SHA was treated as an upgrade")
+	}
+}
+
+func TestPersistUpdateResultDeduplicatesNotification(t *testing.T) {
+	dir := t.TempDir()
+	current := strings.Repeat("a", 40)
+	target := strings.Repeat("b", 40)
+	digest := strings.Repeat("c", 64)
+	out := result{OK: true, CurrentSHA: current, Available: true, TargetSHA: target, ArtifactSHA256: digest, StagedPath: filepath.Join(dir, "package.zip"), InstallMode: "stage"}
+	notify, err := persistUpdateResult(dir, current, out, nil)
+	if err != nil || !notify {
+		t.Fatalf("first staged update did not request notification: notify=%t err=%v", notify, err)
+	}
+	notify, err = persistUpdateResult(dir, current, out, nil)
+	if err != nil || notify {
+		t.Fatalf("duplicate staged update notification was not suppressed: notify=%t err=%v", notify, err)
+	}
+	state, err := updatepolicy.LoadState(updateStatePath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.InstallPending || state.AvailableSHA != target || state.ArtifactSHA256 != digest || state.ArtifactPath != out.StagedPath {
+		t.Fatalf("persisted update state mismatch: %#v", state)
+	}
+}
+
+func TestPersistUpdateErrorPreservesPendingPackage(t *testing.T) {
+	dir := t.TempDir()
+	current := strings.Repeat("a", 40)
+	target := strings.Repeat("b", 40)
+	pending := result{OK: true, CurrentSHA: current, Available: true, TargetSHA: target, ArtifactSHA256: strings.Repeat("c", 64), StagedPath: filepath.Join(dir, "package.zip")}
+	if _, err := persistUpdateResult(dir, current, pending, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := persistUpdateResult(dir, current, result{}, errors.New("temporary network failure")); err != nil {
+		t.Fatal(err)
+	}
+	state, err := updatepolicy.LoadState(updateStatePath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.InstallPending || state.ArtifactPath != pending.StagedPath || state.LastError == "" {
+		t.Fatalf("pending package was lost after a later check error: %#v", state)
 	}
 }
