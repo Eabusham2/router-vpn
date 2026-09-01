@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -247,6 +248,19 @@ func downloadBytes(asset releaseAsset, maximum int64) ([]byte, error) {
 	return body, nil
 }
 
+func decodeReleaseManifest(raw []byte) (releaseManifest, error) {
+	var manifest releaseManifest
+	if len(raw) == 0 || len(raw) > maxMetadata { return manifest, errors.New("release manifest is empty or oversized") }
+	dec := json.NewDecoder(bytes.NewReader(raw)); dec.DisallowUnknownFields()
+	if err := dec.Decode(&manifest); err != nil { return releaseManifest{}, fmt.Errorf("decode release manifest: %w", err) }
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil { return releaseManifest{}, errors.New("release manifest contains trailing JSON") }
+		return releaseManifest{}, fmt.Errorf("release manifest trailing data: %w", err)
+	}
+	return manifest, nil
+}
+
 func verifiedManifest(rel release, target string) (releaseManifest, error) {
 	asset, err := findAsset(rel, "RouterVPN-RELEASE.json")
 	if err != nil {
@@ -256,10 +270,8 @@ func verifiedManifest(rel release, target string) (releaseManifest, error) {
 	if err != nil {
 		return releaseManifest{}, err
 	}
-	var manifest releaseManifest
-	if err := json.Unmarshal(body, &manifest); err != nil {
-		return releaseManifest{}, err
-	}
+	manifest, err := decodeReleaseManifest(body)
+	if err != nil { return releaseManifest{}, err }
 	if manifest.SchemaVersion != 1 || manifest.Repository != repository || manifest.SourceSHA != target || manifest.Tag != releaseTagPrefix+target || manifest.Producer != "build-all.yml" {
 		return releaseManifest{}, errors.New("release manifest identity does not match the exact release")
 	}
@@ -284,6 +296,27 @@ func expectedAsset(manifest releaseManifest, name string) (int64, string, error)
 		return 0, "", errors.New("release manifest asset digest is invalid")
 	}
 	return size, digest, nil
+}
+
+func readSourceManifest(path string) (sourceManifest, error) {
+	var manifest sourceManifest
+	before, err := os.Lstat(path); if err != nil { return manifest, err }
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > maxMetadata { return manifest, errors.New("package provenance must be one bounded regular non-symlink file") }
+	f, err := os.Open(path); if err != nil { return manifest, err }; defer f.Close()
+	opened, err := f.Stat(); if err != nil { return manifest, err }
+	current, err := os.Lstat(path)
+	if err != nil || current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(before, opened) || !os.SameFile(opened, current) { return sourceManifest{}, errors.New("package provenance changed while opening") }
+	raw, err := io.ReadAll(io.LimitReader(f, maxMetadata+1))
+	if err != nil || len(raw) == 0 || len(raw) > maxMetadata { return sourceManifest{}, errors.New("package provenance is unreadable or oversized") }
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(opened, after) || after.Size() != int64(len(raw)) { return sourceManifest{}, errors.New("package provenance changed while reading") }
+	dec := json.NewDecoder(bytes.NewReader(raw)); dec.DisallowUnknownFields()
+	if err := dec.Decode(&manifest); err != nil { return sourceManifest{}, fmt.Errorf("decode package provenance: %w", err) }
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) { return sourceManifest{}, errors.New("package provenance contains trailing data") }
+	if manifest.Repository != repository || !validSHA(strings.ToLower(manifest.SourceSHA)) { return sourceManifest{}, errors.New("package provenance identity is invalid") }
+	manifest.SourceSHA = strings.ToLower(manifest.SourceSHA)
+	return manifest, nil
 }
 
 func sourceSHA(explicit string) (string, error) {
