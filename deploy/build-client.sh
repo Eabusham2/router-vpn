@@ -56,9 +56,14 @@ for target in windows/amd64 windows/arm64; do
   env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
     go build -trimpath -ldflags='-s -w -H=windowsgui' \
     -o "dist/client/RouterVPN-${GOARCH}.exe" ./cmd/windows-app-launcher
+  # Keep the mature Portable runtime owner as an internal core and put the
+  # update-aware supervisor at the public RouterVPNPortable.exe boundary.
   env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
     go build -trimpath -ldflags='-s -w -H=windowsgui' \
-    -o "dist/client/RouterVPNPortable-${GOARCH}.exe" ./cmd/portable-launcher
+    -o "dist/client/RouterVPNPortableCore-${GOARCH}.exe" ./cmd/portable-launcher
+  env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
+    go build -trimpath -ldflags='-s -w -H=windowsgui' \
+    -o "dist/client/RouterVPNPortable-${GOARCH}.exe" ./cmd/portable-bootstrap
   env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
     go build -trimpath -ldflags='-s -w -H=windowsgui' \
     -o "dist/client/RouterVPNSetupRuntime-${GOARCH}.exe" ./cmd/portable-runtime-setup
