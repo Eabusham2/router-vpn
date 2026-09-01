@@ -2,7 +2,7 @@
 set -euo pipefail
 
 rm -rf dist
-mkdir -p dist/client dist/dnsproxy dist/router-agent
+mkdir -p dist/client dist/dnsproxy dist/router-agent dist/app-update
 
 client_targets=(
   windows/amd64 windows/arm64
@@ -33,6 +33,20 @@ for target in "${client_targets[@]}"; do
   env GOOS="$GOOS" GOARCH="$GOARCH" GOARM=7 CGO_ENABLED=0 \
     go build -trimpath -ldflags='-s -w' -o "$dns_output" ./cmd/dnsproxy
   cp "$dns_output" "dist/$(basename "$dns_output")"
+done
+
+# The self-update helper is intentionally limited to mainstream desktop
+# platforms whose exact-SHA release assets have a real install/staging path.
+for target in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+  GOOS=${target%/*}
+  GOARCH=${target#*/}
+  ext=''
+  [[ $GOOS == windows ]] && ext='.exe'
+  echo "building exact-SHA app updater $GOOS/$GOARCH"
+  output="dist/app-update/router-vpn-update-${GOOS}-${GOARCH}${ext}"
+  env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
+    go build -trimpath -ldflags='-s -w' -o "$output" ./cmd/app-update
+  cp "$output" "dist/$(basename "$output")"
 done
 
 for target in windows/amd64 windows/arm64; do
