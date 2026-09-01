@@ -39,6 +39,7 @@ func extraRoutes(h *http.ServeMux, a *app) {
 	// to their real native desktop multihop launchers instead of accidentally
 	// exposing the Linux-only handler and returning a false unsupported result.
 	registerDesktopMultihopRoutes(h, a)
+	registerNativeUpdateRoutes(h, a)
 }
 
 type latencyRequest struct {
