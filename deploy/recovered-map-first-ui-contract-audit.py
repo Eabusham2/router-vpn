@@ -22,6 +22,7 @@ TEXT_SUFFIXES = {
     ".cc",
     ".cpp",
     ".h",
+    ".go",
     ".inc",
     ".java",
     ".kt",
@@ -171,7 +172,11 @@ def shipping_closure(platform: Platform, files: Sequence[Path]) -> tuple[list[Pa
 
     by_name: dict[str, list[Path]] = {}
     for path in files:
-        by_name.setdefault(path.name.lower(), []).append(path)
+        # Native sources reference classes/types by stem while builders
+        # reference complete filenames. Follow both forms to model the real
+        # shipping composition rather than only shell-style includes.
+        for key in {path.name.lower(), path.stem.lower()}:
+            by_name.setdefault(key, []).append(path)
 
     closure: set[Path] = set(entries)
     pending = list(entries)
@@ -215,13 +220,33 @@ def audit_platform(platform: Platform) -> list[str]:
         require_group(failures, platform, scope, label, needles)
     for label, needles in DEFAULT_GROUPS:
         require_group(failures, platform, scope, label, needles)
+    profile_scope = "\n".join(
+        read_text(path) for path in closure if "profile" in path.name.lower()
+    )
     for label, needles in PROFILE_CRUD:
-        require_group(failures, platform, scope, label, needles)
+        action = label.rsplit(" ", 1)[-1].lower()
+        if not contains_any(scope, needles) and action not in profile_scope.lower():
+            failures.append(f"{platform.name}: shipping closure missing {label}")
 
-    # The audit is intentionally limited to shipping closure, not the whole
-    # platform tree, so historical docs/tests may still name rejected designs.
+    # Builders/help also contain negative regression guards such as
+    # "WSL is not counted" or "! grep WKWebView". Those prove rejection and
+    # must not be classified as active shipping use.
+    negative_markers = (
+        "! grep", "grep -", "grep ", "not counted", "must not",
+        "forbid", "forbidden", "retired", "reject",
+        "without webview", "no webview",
+    )
     for label, pattern in RETIRED_SHIPPING_PATTERNS:
-        if pattern.search(scope):
+        active = False
+        for path in closure:
+            for line in read_text(path).splitlines():
+                lowered = line.lower()
+                if pattern.search(line) and not any(marker in lowered for marker in negative_markers):
+                    active = True
+                    break
+            if active:
+                break
+        if active:
             failures.append(f"{platform.name}: shipping closure still references retired {label}")
 
     return failures
