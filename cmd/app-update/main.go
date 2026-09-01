@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"router-vpn/internal/updatepolicy"
 )
 
 const (
@@ -45,7 +47,7 @@ type release struct {
 }
 
 type releaseManifest struct {
-	SchemaVersion int `json:"schema_version"`
+	SchemaVersion int    `json:"schema_version"`
 	Repository    string `json:"repository"`
 	SourceSHA     string `json:"source_sha"`
 	Tag           string `json:"tag"`
@@ -112,7 +114,7 @@ func platformAsset(goos, goarch string, portable bool) (string, string, error) {
 
 func apiClient() *http.Client {
 	return &http.Client{
-		Timeout: 20 * time.Second,
+		Timeout:   20 * time.Second,
 		Transport: &http.Transport{Proxy: nil},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > 5 {
@@ -128,7 +130,7 @@ func apiClient() *http.Client {
 
 func assetClient() *http.Client {
 	return &http.Client{
-		Timeout: 5 * time.Minute,
+		Timeout:   5 * time.Minute,
 		Transport: &http.Transport{Proxy: nil},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > 8 {
@@ -250,12 +252,19 @@ func downloadBytes(asset releaseAsset, maximum int64) ([]byte, error) {
 
 func decodeReleaseManifest(raw []byte) (releaseManifest, error) {
 	var manifest releaseManifest
-	if len(raw) == 0 || len(raw) > maxMetadata { return manifest, errors.New("release manifest is empty or oversized") }
-	dec := json.NewDecoder(bytes.NewReader(raw)); dec.DisallowUnknownFields()
-	if err := dec.Decode(&manifest); err != nil { return releaseManifest{}, fmt.Errorf("decode release manifest: %w", err) }
+	if len(raw) == 0 || len(raw) > maxMetadata {
+		return manifest, errors.New("release manifest is empty or oversized")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&manifest); err != nil {
+		return releaseManifest{}, fmt.Errorf("decode release manifest: %w", err)
+	}
 	var trailing json.RawMessage
 	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil { return releaseManifest{}, errors.New("release manifest contains trailing JSON") }
+		if err == nil {
+			return releaseManifest{}, errors.New("release manifest contains trailing JSON")
+		}
 		return releaseManifest{}, fmt.Errorf("release manifest trailing data: %w", err)
 	}
 	return manifest, nil
@@ -271,7 +280,9 @@ func verifiedManifest(rel release, target string) (releaseManifest, error) {
 		return releaseManifest{}, err
 	}
 	manifest, err := decodeReleaseManifest(body)
-	if err != nil { return releaseManifest{}, err }
+	if err != nil {
+		return releaseManifest{}, err
+	}
 	if manifest.SchemaVersion != 1 || manifest.Repository != repository || manifest.SourceSHA != target || manifest.Tag != releaseTagPrefix+target || manifest.Producer != "build-all.yml" {
 		return releaseManifest{}, errors.New("release manifest identity does not match the exact release")
 	}
@@ -300,21 +311,46 @@ func expectedAsset(manifest releaseManifest, name string) (int64, string, error)
 
 func readSourceManifest(path string) (sourceManifest, error) {
 	var manifest sourceManifest
-	before, err := os.Lstat(path); if err != nil { return manifest, err }
-	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > maxMetadata { return manifest, errors.New("package provenance must be one bounded regular non-symlink file") }
-	f, err := os.Open(path); if err != nil { return manifest, err }; defer f.Close()
-	opened, err := f.Stat(); if err != nil { return manifest, err }
+	before, err := os.Lstat(path)
+	if err != nil {
+		return manifest, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > maxMetadata {
+		return manifest, errors.New("package provenance must be one bounded regular non-symlink file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return manifest, err
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return manifest, err
+	}
 	current, err := os.Lstat(path)
-	if err != nil || current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(before, opened) || !os.SameFile(opened, current) { return sourceManifest{}, errors.New("package provenance changed while opening") }
+	if err != nil || current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(before, opened) || !os.SameFile(opened, current) {
+		return sourceManifest{}, errors.New("package provenance changed while opening")
+	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxMetadata+1))
-	if err != nil || len(raw) == 0 || len(raw) > maxMetadata { return sourceManifest{}, errors.New("package provenance is unreadable or oversized") }
+	if err != nil || len(raw) == 0 || len(raw) > maxMetadata {
+		return sourceManifest{}, errors.New("package provenance is unreadable or oversized")
+	}
 	after, err := os.Lstat(path)
-	if err != nil || !os.SameFile(opened, after) || after.Size() != int64(len(raw)) { return sourceManifest{}, errors.New("package provenance changed while reading") }
-	dec := json.NewDecoder(bytes.NewReader(raw)); dec.DisallowUnknownFields()
-	if err := dec.Decode(&manifest); err != nil { return sourceManifest{}, fmt.Errorf("decode package provenance: %w", err) }
+	if err != nil || !os.SameFile(opened, after) || after.Size() != int64(len(raw)) {
+		return sourceManifest{}, errors.New("package provenance changed while reading")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&manifest); err != nil {
+		return sourceManifest{}, fmt.Errorf("decode package provenance: %w", err)
+	}
 	var trailing json.RawMessage
-	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) { return sourceManifest{}, errors.New("package provenance contains trailing data") }
-	if manifest.Repository != repository || !validSHA(strings.ToLower(manifest.SourceSHA)) { return sourceManifest{}, errors.New("package provenance identity is invalid") }
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return sourceManifest{}, errors.New("package provenance contains trailing data")
+	}
+	if manifest.Repository != repository || !validSHA(strings.ToLower(manifest.SourceSHA)) {
+		return sourceManifest{}, errors.New("package provenance identity is invalid")
+	}
 	manifest.SourceSHA = strings.ToLower(manifest.SourceSHA)
 	return manifest, nil
 }
@@ -339,14 +375,15 @@ func sourceSHA(explicit string) (string, error) {
 		filepath.Join(filepath.Dir(exe), "..", "..", "ROUTER-VPN-SOURCE.json"),
 	}
 	for _, path := range candidates {
-		body, err := os.ReadFile(filepath.Clean(path))
-		if err != nil || len(body) == 0 || len(body) > maxMetadata {
-			continue
-		}
-		var manifest sourceManifest
-		if json.Unmarshal(body, &manifest) == nil && manifest.Repository == repository && validSHA(manifest.SourceSHA) {
+		clean := filepath.Clean(path)
+		manifest, err := readSourceManifest(clean)
+		if err == nil {
 			return manifest.SourceSHA, nil
 		}
+		if os.IsNotExist(err) {
+			continue
+		}
+		return "", fmt.Errorf("read package provenance %s: %w", clean, err)
 	}
 	return "", errors.New("current exact source SHA is unavailable; package provenance is required")
 }
@@ -374,80 +411,18 @@ func stageAsset(rel release, manifest releaseManifest, name, target, directory s
 	if asset.Size != expectedSize {
 		return "", errors.New("release API and manifest asset sizes disagree")
 	}
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return "", err
+	if target != manifest.SourceSHA {
+		return "", errors.New("release target and verified manifest identity disagree")
 	}
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(directory, 0o700); err != nil {
-			return "", err
-		}
+	verified := updatepolicy.Artifact{
+		Platform: runtime.GOOS,
+		Arch:     runtime.GOARCH,
+		Kind:     "package",
+		URL:      asset.BrowserDownloadURL,
+		SHA256:   expectedDigest,
+		Size:     expectedSize,
 	}
-	final := filepath.Join(directory, target+"-"+name)
-	if existing, err := os.Open(final); err == nil {
-		digest := sha256.New()
-		n, copyErr := io.Copy(digest, io.LimitReader(existing, maxReleaseAsset+1))
-		closeErr := existing.Close()
-		if copyErr == nil && closeErr == nil && n == expectedSize && hex.EncodeToString(digest.Sum(nil)) == expectedDigest {
-			return final, nil
-		}
-		_ = os.Remove(final)
-	}
-	u, err := url.Parse(asset.BrowserDownloadURL)
-	if err != nil || u.Scheme != "https" || u.Hostname() != "github.com" || u.User != nil {
-		return "", errors.New("release package URL is not trusted GitHub HTTPS")
-	}
-	temp, err := os.CreateTemp(directory, ".router-vpn-update-*.part")
-	if err != nil {
-		return "", err
-	}
-	tempName := temp.Name()
-	if runtime.GOOS != "windows" {
-		_ = temp.Chmod(0o600)
-	}
-	adopted := false
-	defer func() {
-		_ = temp.Close()
-		if !adopted {
-			_ = os.Remove(tempName)
-		}
-	}()
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "router-vpn-app-update/1")
-	resp, err := assetClient().Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return "", fmt.Errorf("release package HTTP %d", resp.StatusCode)
-	}
-	digest := sha256.New()
-	written, err := io.Copy(io.MultiWriter(temp, digest), io.LimitReader(resp.Body, maxReleaseAsset+1))
-	if err != nil {
-		return "", err
-	}
-	if written != expectedSize || written > maxReleaseAsset || hex.EncodeToString(digest.Sum(nil)) != expectedDigest {
-		return "", errors.New("downloaded update package failed exact manifest verification")
-	}
-	if err := temp.Sync(); err != nil {
-		return "", err
-	}
-	if err := temp.Close(); err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(final); err == nil {
-		return "", errors.New("verified update target appeared before adoption")
-	} else if !os.IsNotExist(err) {
-		return "", err
-	}
-	if err := os.Rename(tempName, final); err != nil {
-		return "", err
-	}
-	adopted = true
-	return final, nil
+	return updatepolicy.DownloadArtifact(context.Background(), assetClient(), verified, directory)
 }
 
 func checkOnce(current string, portable, download bool, directory string) (result, error) {
