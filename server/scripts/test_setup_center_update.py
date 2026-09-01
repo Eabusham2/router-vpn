@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -25,9 +26,13 @@ configure = text("server/scripts/configure-portainer-update.sh")
 reserved = text("cmd/router-agent/reserved_dynamic.go")
 router_example = text("configs/router/router-agent.json.example")
 
+for pattern in (
+    r'defaultListen\s*=\s*"127\.0\.0\.1:8793"',
+    r'defaultPortainerURL\s*=\s*"https://127\.0\.0\.1:9443"',
+):
+    assert re.search(pattern, controller), f"update controller missing semantic constant {pattern!r}"
+
 for marker in (
-    'defaultListen          = "127.0.0.1:8793"',
-    'defaultPortainerURL    = "https://127.0.0.1:9443"',
     'Portainer Update is restricted to a loopback Portainer origin',
     'subtle.ConstantTimeCompare',
     'VerifyConnection:',
