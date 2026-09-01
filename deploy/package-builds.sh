@@ -35,6 +35,7 @@ try{
 }
 PS1
 }
+# Package the native Windows Router VPN WPF app and its recovery launcher.
 for arch in amd64 arm64;do dir="$OUT/work/RouterVPN-Windows-$arch";mkdir -p "$dir";copy_runtime "$dir";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$dir/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$dir/router-vpn-dns.exe";cp "$DIST/app-update/router-vpn-update-windows-$arch.exe" "$dir/router-vpn-update.exe";cp "$DIST/client/RouterVPN-$arch.exe" "$dir/RouterVPN.exe";cp -a "$ROOT/client" "$dir/client";cp "$ROOT/client/install-windows.ps1" "$dir/install-windows.ps1";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$dir/Setup-Windows-Runtime.ps1";materialize_icons "$dir";write_windows_app_launcher "$dir/Start-RouterVPN.ps1";cat >"$dir/README-WINDOWS.txt" <<'TXT'
 Double-click RouterVPN.exe for the normal native Windows Router VPN app. install-windows.ps1 can
 install the package and create a Start Menu entry with the Router VPN icon. Start-RouterVPN.ps1
