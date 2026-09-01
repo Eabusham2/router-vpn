@@ -150,7 +150,12 @@ def _read_regular_file(path: Path, maximum: int = MAX_FILE_BYTES) -> bytes:
     try:
         opened = os.fstat(fd)
         current = path.lstat()
-        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(opened, current):
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or not os.path.samestat(info, opened)
+            or not os.path.samestat(opened, current)
+        ):
             raise RuntimeError(f"artifact changed during open: {path}")
         chunks: list[bytes] = []
         total = 0
