@@ -47,3 +47,25 @@ func TestValidSHA(t *testing.T) {
 		}
 	}
 }
+
+func TestExactReleaseIdentityAcceptsAuthoritativePrerelease(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	rel := release{
+		TagName:         releaseTagPrefix + sha,
+		TargetCommitish: sha,
+		Prerelease:      true,
+	}
+	got, ok := exactReleaseIdentity(rel)
+	if !ok || got != sha {
+		t.Fatalf("authoritative exact-SHA prerelease rejected: sha=%q ok=%t", got, ok)
+	}
+	rel.Draft = true
+	if _, ok := exactReleaseIdentity(rel); ok {
+		t.Fatal("draft release was accepted")
+	}
+	rel.Draft = false
+	rel.TargetCommitish = "fedcba9876543210fedcba9876543210fedcba98"
+	if _, ok := exactReleaseIdentity(rel); ok {
+		t.Fatal("mismatched release target was accepted")
+	}
+}

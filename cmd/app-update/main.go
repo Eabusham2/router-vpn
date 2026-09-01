@@ -173,6 +173,21 @@ func githubJSON(endpoint string, out any) error {
 	return json.Unmarshal(body, out)
 }
 
+func exactReleaseIdentity(rel release) (string, bool) {
+	if rel.Draft || !strings.HasPrefix(rel.TagName, releaseTagPrefix) {
+		return "", false
+	}
+	sha := strings.TrimPrefix(rel.TagName, releaseTagPrefix)
+	if !validSHA(sha) || strings.ToLower(strings.TrimSpace(rel.TargetCommitish)) != sha {
+		return "", false
+	}
+	// Build-all publishes exact-SHA native packages as prereleases only after
+	// every authoritative release gate passes. Prerelease status is therefore
+	// not a trust downgrade; exact tag/target identity plus the verified
+	// RouterVPN-RELEASE.json digest manifest remain the acceptance boundary.
+	return sha, true
+}
+
 func exactRelease() (release, string, error) {
 	var releases []release
 	endpoint := "https://api.github.com/repos/" + repository + "/releases?per_page=50"
@@ -181,14 +196,9 @@ func exactRelease() (release, string, error) {
 	}
 	sort.SliceStable(releases, func(i, j int) bool { return releases[i].PublishedAt.After(releases[j].PublishedAt) })
 	for _, rel := range releases {
-		if rel.Draft || rel.Prerelease || !strings.HasPrefix(rel.TagName, releaseTagPrefix) {
-			continue
+		if sha, ok := exactReleaseIdentity(rel); ok {
+			return rel, sha, nil
 		}
-		sha := strings.TrimPrefix(rel.TagName, releaseTagPrefix)
-		if !validSHA(sha) || strings.ToLower(strings.TrimSpace(rel.TargetCommitish)) != sha {
-			continue
-		}
-		return rel, sha, nil
 	}
 	return release{}, "", errors.New("no immutable exact-SHA Router VPN release is available")
 }
