@@ -102,7 +102,10 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
             JSONArray releases = new JSONArray(new String(readLimited(connection.getInputStream()), StandardCharsets.UTF_8));
             for (int i = 0; i < releases.length(); i++) {
                 JSONObject release = releases.optJSONObject(i);
-                if (release == null || release.optBoolean("draft") || release.optBoolean("prerelease")) continue;
+                // Build-all publishes exact-SHA mobile artifacts as prereleases only
+                // after the authoritative release matrix passes. Drafts remain forbidden;
+                // exact tag/target identity is the mobile discovery boundary.
+                if (release == null || release.optBoolean("draft")) continue;
                 String tag = release.optString("tag_name", "").toLowerCase(Locale.ROOT);
                 String sha = tag.startsWith(TAG_PREFIX) ? tag.substring(TAG_PREFIX.length()) : "";
                 if (validSha(sha) && sha.equals(release.optString("target_commitish", "").toLowerCase(Locale.ROOT))) {

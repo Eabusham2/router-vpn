@@ -30,8 +30,9 @@ final class IOSUpdateChecker: ObservableObject {
                   (200..<300).contains(http.statusCode),
                   let releases = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
             for release in releases {
+                // Build-all emits exact-SHA Apple artifacts as prereleases only after
+                // the authoritative native matrix passes. Drafts remain forbidden.
                 guard release["draft"] as? Bool != true,
-                      release["prerelease"] as? Bool != true,
                       let tag = (release["tag_name"] as? String)?.lowercased(),
                       tag.hasPrefix(prefix) else { continue }
                 let target = String(tag.dropFirst(prefix.count))
