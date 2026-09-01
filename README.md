@@ -167,7 +167,9 @@ GitHub Actions is the normal compile/test environment. Source/security/runtime/p
 
 Physical release validation still requires the relevant real-device VPN permission/TUN, route/DNS/IPv4/IPv6 behavior, exact selected node/public exit, reconnect/network-change handling, fail-closed/leak-negative transitions and custom-exit behavior. Simple external Methods require real off-LAN compatible-client interoperability. Apple distribution requires real signing/notarization. Production requires a deliberate exact-SHA Portainer deploy and live smoke test, followed by ASUS forwarding revalidation where needed.
 
-## Update, recovery, and troubleshooting
+## Automatic update, recovery, and troubleshooting
+
+Portainer may apply fully gated exact-SHA updates automatically through the private rollback-safe controller. Desktop apps automatically verify, download and stage a strict-descendant package, persist its digest/status and notify the user; they do not replace a running application. Android and iOS verify exact release-manifest and package-digest metadata before notification, while their operating-system signing/install flows remain authoritative. Full trust, staging, rollback and per-platform behavior are documented in `docs/AUTO-UPDATES.md`.
 
 Use the authenticated Setup Center **Release & recovery** surface for exact-SHA update status/check/apply. An update preserves the existing Portainer environment and generated credentials, revalidates core health, and automatically restores the prior stack when the new exact-SHA deployment fails validation. **Emergency Stop/Resume** is a separate runtime recovery action; it is not the normal update path and is not the strict kill-switch policy.
 
@@ -187,5 +189,6 @@ Router VPN is MIT licensed. Every public generic client package must include the
 - `docs/MODES.md` — raw runtime mode details
 - `docs/AI-HELP.md` — AI Help provider/configuration boundary
 - `docs/PRODUCTION-RELEASE.md` — generated exact-SHA production compose/deploy contract
+- `docs/AUTO-UPDATES.md` — exact-SHA Portainer and native app update trust/ownership
 - `SECURITY.md` — security boundaries
 - `router/asus-merlin-router-vpn-forwards.sh` — persistent ASUS WAN forwarding helper

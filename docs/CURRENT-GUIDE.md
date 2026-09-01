@@ -365,7 +365,15 @@ Setup Center AI Help is server-side. Supported adapters are OpenAI, Gemini, Anth
 
 Use `server/scripts/configure-ai-help.sh` locally on the Router VPN host to configure/disable it. Real-provider/local-endpoint operation remains a live release gate.
 
-## 12. Validation and update
+## 12. Automatic updates
+
+Portainer's private `router-vpn-update-auto` scheduler checks the rollback-safe loopback controller after a bounded startup delay and then hourly by default. Only a fully gated exact-SHA target may be applied. Existing Portainer environment values are preserved, `Prune=false`, core health is proved before updater self-replacement, and failed deployments restore the previous exact compose or remain durably `rolling-back` for restart recovery.
+
+Windows, macOS and Linux automatically check for a strict-descendant exact-SHA package on native app startup. The helper verifies `RouterVPN-RELEASE.json`, package size and SHA-256, stages without clobbering another file, records private durable state and notifies once. It never replaces the running application. Android and iOS/iPadOS verify equivalent release metadata before notification but keep package installation under Android/Apple signing and user-confirmation controls.
+
+See `docs/AUTO-UPDATES.md` for configuration, trust boundaries and failure behavior.
+
+## 13. Validation and update
 
 Browser/source-safe checks include Setup Center load, `/healthz`, syntax/contracts, package generation/checksums, exact-SHA builds and endpoint metadata. Real VPN checks require actual VPN permission/handshake/TUN, route change, tunneled DNS, public-IP proof, IPv6 behavior, fail-closed/leak-negative transitions, off-LAN reachability and forwarding where applicable. A green page or CI job is not a green live VPN path.
 
@@ -385,7 +393,7 @@ running Router VPN custom images/provenance = selected release SHA
 
 Do not reinstall the ASUS helper unless its Router VPN port/helper logic changed or the router lost its hooks; inspect current state first.
 
-## 13. Diagnostics
+## 14. Diagnostics
 
 AI Board/Docker host:
 
@@ -401,4 +409,4 @@ ASUS router:
 
 If a mode is unavailable, inspect the real checker/runtime reason. Never force it green in UI only.
 
-Use `docs/CURRENT-STATUS.md` for the current source-vs-live release boundary, `docs/NATIVE-APPS.md` for native application specifics, `docs/CLIENT.md` for linking/client notes, and `docs/PRODUCTION-RELEASE.md` for exact-SHA production materialization/deployment.
+Use `docs/CURRENT-STATUS.md` for the current source-vs-live release boundary, `docs/NATIVE-APPS.md` for native application specifics, `docs/CLIENT.md` for linking/client notes, `docs/AUTO-UPDATES.md` for update trust/ownership, and `docs/PRODUCTION-RELEASE.md` for exact-SHA production materialization/deployment.

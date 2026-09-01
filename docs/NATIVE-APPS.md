@@ -48,6 +48,12 @@ External OpenVPN, AmneziaWG-only paths and full desktop-equivalent multihop rema
 
 Physical iPhone/iPad permission, route-lockdown, reconnect/network change, DNS/IPv4/IPv6, Libbox/custom-exit traffic, leak-negative behavior and signing validation remain release gates.
 
+## Native application updates
+
+Desktop launchers run a short-lived exact-SHA update helper. It requires a strict-descendant gated release, verifies the release manifest and package digest, stages one package atomically, persists private status and notifies the user. It does not replace a running installed or Portable application.
+
+Android verifies the published APK metadata before opening a trusted GitHub asset; Android's package signature and confirmation remain authoritative. iOS/iPadOS verifies the published IPA metadata before opening the exact release page; Apple/TestFlight/App Store or explicit sideload signing remains authoritative. See `docs/AUTO-UPDATES.md`.
+
 ## Nodes, maps and latency
 
 Native node managers support current/recent, last-used, measured-latency and name ordering. Automatic lowest-latency selection is withheld until at least two usable nodes have real measurements. Missing coordinates remain missing; a node can stay fully usable in the list without an invented map position.

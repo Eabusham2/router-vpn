@@ -199,6 +199,82 @@ forbid("cmd/app-update/main.go", "rel.Draft || rel.Prerelease")
 forbid("android/app/src/main/java/com/eabusham/routervpn/RouterVpnUpdateProvider.java", 'release.optBoolean("prerelease")')
 forbid("ios/RouterVPN/App/IOSUpdateChecker.swift", 'release["prerelease"]')
 
+
+# Current exact-SHA staging and release-materialization hardening.
+need(
+    "internal/updatepolicy/store.go",
+    "adoptNoClobber",
+    "artifact adoption identity changed",
+    "fileMatchesSHA256",
+)
+need(
+    "internal/updatepolicy/store_test.go",
+    "TestAdoptNoClobberPreservesConcurrentDestination",
+)
+need(
+    "cmd/app-update/main.go",
+    "compareProvesStrictUpgrade",
+    "verifyStrictUpgrade",
+    "updatepolicy.DownloadArtifact",
+    "readSourceManifest",
+    "app-update-state.json",
+    "persistUpdateResult",
+    "notifyStagedUpdate",
+    "ArtifactSHA256",
+)
+need(
+    "cmd/app-update/main_test.go",
+    "TestCompareProvesStrictUpgrade",
+    "TestDecodeReleaseManifestFailsClosed",
+    "TestReadSourceManifestRequiresExactRegularFile",
+    "TestPersistUpdateResultDeduplicatesNotification",
+    "TestPersistUpdateErrorPreservesPendingPackage",
+)
+need(
+    "android/app/src/main/java/com/eabusham/routervpn/RouterVpnUpdateProvider.java",
+    "RouterVPN-RELEASE.json",
+    "strictUpgrade",
+    "apk_sha256",
+    "producer_workflow",
+    "trustedReleaseAssetUrl",
+    "Android will confirm installation",
+)
+need(
+    "ios/RouterVPN/App/IOSUpdateChecker.swift",
+    "RouterVPN-RELEASE.json",
+    "strictUpgrade",
+    "validDigest",
+    "trustedReleaseURL",
+    "Apple/TestFlight/sideload signing remains the installation authority",
+)
+need(
+    "cmd/update-auto/main.go",
+    "automatic updates disabled",
+    "response contains trailing JSON",
+)
+need(
+    "deploy/materialize-exact-sha-release.py",
+    "_adopt_no_clobber",
+    "release output adoption identity changed",
+)
+need(
+    "deploy/test_exact_sha_release_materialization.py",
+    "concurrent release destination was overwritten",
+    "existing metadata destination was overwritten",
+)
+need(
+    "docs/AUTO-UPDATES.md",
+    "strict descendant",
+    "atomic no-clobber",
+    "Android package-signature",
+    "never silently replaces its own Apple bundle",
+    "rolling-back",
+)
+need("README.md", "docs/AUTO-UPDATES.md")
+need("docs/CURRENT-GUIDE.md", "docs/AUTO-UPDATES.md")
+need("docs/NATIVE-APPS.md", "docs/AUTO-UPDATES.md")
+need("docs/PRODUCTION-RELEASE.md", "docs/AUTO-UPDATES.md")
+
 if errors:
     print("AUTO UPDATE AUDIT: FAIL")
     for error in errors:

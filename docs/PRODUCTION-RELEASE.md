@@ -37,6 +37,12 @@ ADGUARD4=192.168.50.133
 
 `ENDPOINT` remains optional and should normally be unset so endpoint detection can operate. Do not add a moving image tag or `build:` fallback. Do not WAN-forward private/admin ports (`1080`, `8786-8793`, `9443`, `14444`, `45999`, SSH, Portainer, or AdGuard admin).
 
+## Automatic Portainer updates
+
+The generated production stack includes a loopback-only update controller plus an automatic scheduler. The scheduler is enabled by default, waits two minutes after startup and checks hourly unless bounded environment overrides are supplied. A malformed explicit enable setting disables unattended updates.
+
+The controller requires the same exact-SHA release/image/compose preconditions as a deliberate manual release, preserves the existing Portainer environment, keeps `Prune=false`, stores the previous exact compose before mutation, proves core health, updates itself last and restores the previous healthy stack on failure. Failed rollback remains durable `rolling-back` so restart reconciliation can continue; mixed image generations never count as one exact SHA. See `docs/AUTO-UPDATES.md`.
+
 ## Terminal manager
 
 The terminal install/upgrade path uses the same generated release contract and rejects the tracked baseline. Example:
