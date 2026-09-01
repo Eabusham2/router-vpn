@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -181,5 +182,81 @@ func TestAdoptNoClobberPreservesConcurrentDestination(t *testing.T) {
 	}
 	if string(got) != "foreign concurrent package" {
 		t.Fatalf("foreign destination changed: %q", got)
+	}
+}
+
+func TestDownloadArtifactDetailedReportsOwnership(t *testing.T) {
+	payload := []byte("owned update package")
+	digest := sha256.Sum256(payload)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+	artifact := Artifact{Platform: "linux", Arch: "amd64", Kind: "package", URL: server.URL + "/sha-" + strings.Repeat("a", 40) + "/package.tar.gz", SHA256: hex.EncodeToString(digest[:]), Size: int64(len(payload))}
+	dir := t.TempDir()
+	first, err := DownloadArtifactDetailed(context.Background(), server.Client(), artifact, dir)
+	if err != nil || !first.Created {
+		t.Fatalf("first download ownership = %#v err=%v", first, err)
+	}
+	second, err := DownloadArtifactDetailed(context.Background(), server.Client(), artifact, dir)
+	if err != nil || second.Created || second.Path != first.Path {
+		t.Fatalf("idempotent download ownership = %#v err=%v", second, err)
+	}
+}
+
+func TestRemoveVerifiedArtifactPreservesConcurrentReplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "package.bin")
+	owned := []byte("verified owned package")
+	digest := sha256.Sum256(owned)
+	if err := os.WriteFile(path, owned, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	savedOwned := filepath.Join(dir, "saved-owned.bin")
+	err := removeVerifiedArtifact(path, hex.EncodeToString(digest[:]), func() {
+		if err := os.Rename(path, savedOwned); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("foreign concurrent package"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "identity changed") {
+		t.Fatalf("concurrent replacement cleanup error = %v", err)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil || string(got) != "foreign concurrent package" {
+		t.Fatalf("foreign replacement was not restored: %q err=%v", got, readErr)
+	}
+	if gotOwned, readErr := os.ReadFile(savedOwned); readErr != nil || string(gotOwned) != string(owned) {
+		t.Fatalf("original owned package changed: %q err=%v", gotOwned, readErr)
+	}
+}
+
+func TestRemoveVerifiedArtifactRejectsWrongDigestAndSymlink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "package.bin")
+	if err := os.WriteFile(path, []byte("package"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveVerifiedArtifact(path, strings.Repeat("0", 64)); err == nil {
+		t.Fatal("wrong digest was deleted")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("wrong-digest package disappeared: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		target := filepath.Join(dir, "target.bin")
+		if err := os.Rename(path, target); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256([]byte("package"))
+		if err := RemoveVerifiedArtifact(path, hex.EncodeToString(digest[:])); err == nil {
+			t.Fatal("symlink artifact was deleted")
+		}
 	}
 }

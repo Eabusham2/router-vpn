@@ -187,15 +187,25 @@ func SaveState(path string, s State) error {
 // DownloadArtifact downloads exactly the signed number of bytes, verifies the
 // signed SHA-256, and atomically adopts the staged package. It never executes
 // or installs a package.
+type DownloadResult struct {
+	Path    string
+	Created bool
+}
+
 func DownloadArtifact(ctx context.Context, client *http.Client, artifact Artifact, dir string) (string, error) {
+	result, err := DownloadArtifactDetailed(ctx, client, artifact, dir)
+	return result.Path, err
+}
+
+func DownloadArtifactDetailed(ctx context.Context, client *http.Client, artifact Artifact, dir string) (DownloadResult, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Minute}
 	}
 	if err := artifact.Validate(VerifyOptions{}); err != nil {
-		return "", err
+		return DownloadResult{}, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
+		return DownloadResult{}, err
 	}
 	base := filepath.Base(strings.TrimSpace(mustURLPath(artifact.URL)))
 	if base == "." || base == string(filepath.Separator) || base == "" {
@@ -205,38 +215,38 @@ func DownloadArtifact(ctx context.Context, client *http.Client, artifact Artifac
 	finalPath := filepath.Join(dir, strings.ToLower(artifact.SHA256[:16])+"-"+base)
 	if info, err := os.Lstat(finalPath); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return "", errors.New("unsafe existing artifact path")
+			return DownloadResult{}, errors.New("unsafe existing artifact path")
 		}
 		if info.Size() == artifact.Size {
 			ok, hashErr := fileMatchesSHA256(finalPath, artifact.SHA256)
 			if hashErr == nil && ok {
-				return finalPath, nil
+				return DownloadResult{Path: finalPath}, nil
 			}
 		}
-		return "", errors.New("existing artifact does not match signed metadata")
+		return DownloadResult{}, errors.New("existing artifact does not match signed metadata")
 	} else if !os.IsNotExist(err) {
-		return "", err
+		return DownloadResult{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, artifact.URL, nil)
 	if err != nil {
-		return "", err
+		return DownloadResult{}, err
 	}
 	req.Header.Set("Accept", "application/octet-stream")
 	req.Header.Set("Accept-Encoding", "identity")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return DownloadResult{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("artifact server returned HTTP %d", resp.StatusCode)
+		return DownloadResult{}, fmt.Errorf("artifact server returned HTTP %d", resp.StatusCode)
 	}
 	if resp.ContentLength >= 0 && resp.ContentLength != artifact.Size {
-		return "", errors.New("artifact Content-Length does not match signed size")
+		return DownloadResult{}, errors.New("artifact Content-Length does not match signed size")
 	}
 	tmp, err := os.CreateTemp(dir, ".router-vpn-update-*")
 	if err != nil {
-		return "", err
+		return DownloadResult{}, err
 	}
 	tmpPath := tmp.Name()
 	cleanup := true
@@ -247,49 +257,49 @@ func DownloadArtifact(ctx context.Context, client *http.Client, artifact Artifac
 	}()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return "", err
+		return DownloadResult{}, err
 	}
 	h := sha256.New()
 	written, copyErr := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, artifact.Size+1))
 	if copyErr != nil {
 		_ = tmp.Close()
-		return "", copyErr
+		return DownloadResult{}, copyErr
 	}
 	if written != artifact.Size {
 		_ = tmp.Close()
-		return "", fmt.Errorf("artifact size mismatch: got %d want %d", written, artifact.Size)
+		return DownloadResult{}, fmt.Errorf("artifact size mismatch: got %d want %d", written, artifact.Size)
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); !strings.EqualFold(got, artifact.SHA256) {
 		_ = tmp.Close()
-		return "", errors.New("artifact SHA-256 mismatch")
+		return DownloadResult{}, errors.New("artifact SHA-256 mismatch")
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return "", err
+		return DownloadResult{}, err
 	}
 	stagedInfo, err := tmp.Stat()
 	if err != nil {
 		_ = tmp.Close()
-		return "", err
+		return DownloadResult{}, err
 	}
 	if err := tmp.Close(); err != nil {
-		return "", err
+		return DownloadResult{}, err
 	}
 	if err := adoptNoClobber(tmpPath, finalPath, stagedInfo); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			if info, statErr := os.Lstat(finalPath); statErr == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular() && info.Size() == artifact.Size {
 				if ok, hashErr := fileMatchesSHA256(finalPath, artifact.SHA256); hashErr == nil && ok {
-					return finalPath, nil
+					return DownloadResult{Path: finalPath}, nil
 				}
 			}
 		}
-		return "", err
+		return DownloadResult{}, err
 	}
 	cleanup = false
 	if err := syncDirectory(dir); err != nil {
-		return "", err
+		return DownloadResult{}, err
 	}
-	return finalPath, nil
+	return DownloadResult{Path: finalPath, Created: true}, nil
 }
 
 // adoptNoClobber publishes a staged regular file without replacing a path
@@ -319,6 +329,101 @@ func adoptNoClobber(tmpPath, finalPath string, stagedInfo os.FileInfo) error {
 		// private temporary hard-link must not make callers roll state back
 		// after disk has committed the verified package.
 		_ = os.Remove(tmpPath)
+	}
+	return nil
+}
+
+// RemoveVerifiedArtifact deletes only the exact regular staged package that
+// still matches the signed digest. A same-directory tombstone binds deletion to
+// the verified inode; a concurrent replacement is restored rather than removed.
+func RemoveVerifiedArtifact(path, want string) error {
+	return removeVerifiedArtifact(path, want, nil)
+}
+
+func removeVerifiedArtifact(path, want string, beforeRename func()) error {
+	path = filepath.Clean(path)
+	want = strings.ToLower(strings.TrimSpace(want))
+	if !isHex(want, 64) {
+		return errors.New("verified artifact cleanup requires one SHA-256 digest")
+	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return errors.New("verified artifact cleanup requires a regular non-symlink file")
+	}
+	ok, err := fileMatchesSHA256(path, want)
+	if err != nil || !ok {
+		return errors.New("artifact no longer matches its verified digest")
+	}
+	current, err := os.Lstat(path)
+	if err != nil || !os.SameFile(before, current) {
+		return errors.New("artifact identity changed before cleanup")
+	}
+	tombDir, err := os.MkdirTemp(filepath.Dir(path), ".router-vpn-update-remove-*")
+	if err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(tombDir, 0o700); err != nil {
+			_ = os.Remove(tombDir)
+			return err
+		}
+	}
+	tomb := filepath.Join(tombDir, "artifact")
+	if beforeRename != nil {
+		beforeRename()
+	}
+	if err := os.Rename(path, tomb); err != nil {
+		_ = os.Remove(tombDir)
+		return err
+	}
+	moved, err := os.Lstat(tomb)
+	if err != nil {
+		return fmt.Errorf("read artifact tombstone: %w", err)
+	}
+	restore := func(cause error) error {
+		if restoreErr := restoreArtifactNoClobber(tomb, path, moved); restoreErr != nil {
+			return fmt.Errorf("%v; artifact preserved at %s because restore failed: %w", cause, tomb, restoreErr)
+		}
+		_ = os.Remove(tombDir)
+		return cause
+	}
+	if moved.Mode()&os.ModeSymlink != 0 || !moved.Mode().IsRegular() || !os.SameFile(before, moved) {
+		return restore(errors.New("artifact identity changed during cleanup"))
+	}
+	ok, err = fileMatchesSHA256(tomb, want)
+	if err != nil || !ok {
+		return restore(errors.New("artifact content changed during cleanup"))
+	}
+	if err := os.Remove(tomb); err != nil {
+		return restore(fmt.Errorf("remove verified artifact tombstone: %w", err))
+	}
+	// Deletion already committed. Directory cleanup is best effort so a harmless
+	// empty private directory cannot produce a post-commit false failure.
+	_ = os.Remove(tombDir)
+	return nil
+}
+
+func restoreArtifactNoClobber(tomb, path string, moved os.FileInfo) error {
+	if _, err := os.Lstat(path); err == nil {
+		return errors.New("original artifact path was recreated")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return os.Rename(tomb, path)
+	}
+	if err := os.Link(tomb, path); err != nil {
+		return err
+	}
+	restored, err := os.Lstat(path)
+	if err != nil || !os.SameFile(moved, restored) {
+		return errors.New("restored artifact identity changed")
+	}
+	if err := os.Remove(tomb); err != nil {
+		return err
 	}
 	return nil
 }
