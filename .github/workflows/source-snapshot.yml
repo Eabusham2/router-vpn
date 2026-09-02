@@ -58,7 +58,7 @@ jobs:
             ${{ runner.temp }}/router-vpn-source-${{ github.sha }}.tar.gz.sha256
             ${{ runner.temp }}/router-vpn-source-${{ github.sha }}.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
       - name: Publish artifact pointer on exact commit
         shell: bash
         env:
