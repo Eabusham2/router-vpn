@@ -1,2 +1,0 @@
-Router VPN source reconciliation v4 complete.
-This user-originated commit intentionally triggers the full normal main workflow matrix after Home/onboarding/profile-settings safety reconciliation.

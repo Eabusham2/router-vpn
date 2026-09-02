@@ -1,2 +1,0 @@
-Router VPN source reconciliation v3 complete.
-This commit intentionally triggers the normal full main workflow matrix after Linux warning-clean and macOS omitted-MTU-safe settings reconciliation.

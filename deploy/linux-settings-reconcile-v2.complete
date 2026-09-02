@@ -1,2 +1,0 @@
-routervpn-profile-settings-v1.inc is byte-for-byte reconciled from warning-clean v2 source.
-The shipping build continues to reference v1 so package paths do not fork.

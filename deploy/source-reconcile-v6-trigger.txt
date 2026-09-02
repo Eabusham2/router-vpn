@@ -1,3 +1,0 @@
-Router VPN source reconciliation v6 complete.
-This user-originated commit intentionally triggers the frozen full main workflow matrix after Android fail-closed settings reconciliation.
-No new features should be added after this point unless an exact-head check proves a concrete defect.
