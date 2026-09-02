@@ -146,7 +146,8 @@ def main() -> int:
     for marker in (
         "GENERATED exact-SHA Router VPN production compose",
         "server/portainer-current.yaml",
-        "router-vpn-updater",
+        '"updater": 1',
+        "ROUTER_VPN_UPDATE_LISTEN: 127.0.0.1:8793",
         "ROUTER_VPN_GITHUB_SHA",
         "read_regular_text",
         "tempfile.mkstemp",
