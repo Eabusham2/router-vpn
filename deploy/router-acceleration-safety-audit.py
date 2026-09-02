@@ -32,13 +32,16 @@ FORBIDDEN = {
         r"\bnvram\b[^\n]*\b(?:fc_disable|ctf_disable|ctf_fa_mode)\s*=\s*1\b)",
         re.IGNORECASE,
     ),
+    # Stay inside the iptables command segment.  A read-only command such as
+    # `iptables -S FORWARD | grep -F TAG` must not be mistaken for
+    # `iptables -F FORWARD` merely because a later pipeline stage uses -F.
     "flush a built-in IPv4/IPv6 chain": re.compile(
-        r"\bip6?tables\b[^\n]*(?:\s-F(?:\s|$)|\s--flush(?:\s|$))"
-        r"(?:[^\n]*\b(?:INPUT|OUTPUT|FORWARD|PREROUTING|POSTROUTING)\b|\s*$)",
+        r"\bip6?tables\b[^|;&\n]*(?:\s-F(?:\s|$)|\s--flush(?:\s|$))"
+        r"(?:[^|;&\n]*\b(?:INPUT|OUTPUT|FORWARD|PREROUTING|POSTROUTING)\b|\s*$)",
         re.IGNORECASE,
     ),
     "change a built-in IPv4/IPv6 default policy": re.compile(
-        r"\bip6?tables\b[^\n]*(?:\s-P|\s--policy)\s+"
+        r"\bip6?tables\b[^|;&\n]*(?:\s-P|\s--policy)\s+"
         r"(?:INPUT|OUTPUT|FORWARD)\s+(?:DROP|REJECT)\b",
         re.IGNORECASE,
     ),
