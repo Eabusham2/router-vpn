@@ -67,8 +67,9 @@
     NSMutableDictionary *environment = [NSProcessInfo.processInfo.environment mutableCopy];
     environment[@"ROUTER_VPN_UPDATE_LAUNCH"] = @"macos-native";
     task.environment = environment;
-    task.standardOutput = [NSFileHandle nullDevice];
-    task.standardError = [NSFileHandle nullDevice];
+    NSFileHandle *nullHandle = [NSFileHandle fileHandleWithNullDevice];
+    task.standardOutput = nullHandle;
+    task.standardError = nullHandle;
     NSError *error = nil;
     if (![task launchAndReturnError:&error]) {
         NSLog(@"Router VPN update check could not start: %@", error.localizedDescription);
