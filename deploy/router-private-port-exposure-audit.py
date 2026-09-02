@@ -16,6 +16,7 @@ EXPOSURE = re.compile(
     re.IGNORECASE,
 )
 PORT_TOKEN = re.compile(r"(?<![0-9])([0-9]{1,5})(?![0-9])")
+PROSE_COMMAND = re.compile(r"^(?:echo|printf|say|warn|log|logger)\b", re.IGNORECASE)
 
 
 def runtime_shells() -> list[Path]:
@@ -35,11 +36,11 @@ def runtime_shells() -> list[Path]:
 
 
 def uncommented_shell_line(raw: str) -> str:
-    # Exposure commands are expected to be ordinary shell, not quoted prose.
-    # Remove full-line comments and trailing comments without attempting to
-    # interpret arbitrary shell expansions.
+    # Exposure commands are expected to be executable shell, not quoted status,
+    # warning, or documentation prose.  Ignore user-facing emitters so a line
+    # such as `echo 'Never WAN-forward 8786'` cannot be misread as an exposure.
     stripped = raw.lstrip()
-    if not stripped or stripped.startswith("#"):
+    if not stripped or stripped.startswith("#") or PROSE_COMMAND.match(stripped):
         return ""
     return raw.split(" #", 1)[0]
 
