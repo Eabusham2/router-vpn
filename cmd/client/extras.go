@@ -238,37 +238,72 @@ func sameAsyncMeasurementSession(before, after connectionSession) bool {
 		after.RouterID == before.RouterID && after.ActualMode == before.ActualMode && after.ActualBase == before.ActualBase
 }
 
+func asyncMeasurementProfileToken(p common.RouterProfile) string {
+	// Measurement-owned Latency*, PublicIP, DNSResults and FastestDNS* fields are
+	// intentionally excluded. Everything below is user/path policy or identity
+	// that must remain unchanged while a live result is in flight.
+	return fastestProfileSnapshotToken([]common.RouterProfile{p}) + fmt.Sprintf(
+		"\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t",
+		p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName, p.DNSPath,
+		p.BaseTunnel, p.KillSwitchPolicy, p.AutoRequireEncrypted, p.AutoRequireObfuscation,
+	)
+}
+
+func (a *app) activeAsyncMeasurementProfile() (common.RouterProfile, state, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	st := a.state
+	if !st.Connected || strings.TrimSpace(st.Phase) != "connected" {
+		return common.RouterProfile{}, st, errors.New("connect the VPN first; live proof requires a stable connected path")
+	}
+	target := strings.TrimSpace(st.RouterID)
+	if target == "" {
+		return common.RouterProfile{}, st, errors.New("active VPN node identity is unavailable; refusing to substitute the mutable selected node")
+	}
+	p, ok := a.profileByIDLocked(target)
+	if !ok {
+		return common.RouterProfile{}, st, errors.New("active VPN node disappeared before live proof")
+	}
+	return p, st, nil
+}
+
+func validateAsyncMeasurementProfile(a *app, p common.RouterProfile, st state, session connectionSession, token string) error {
+	if !sameAsyncMeasurementSession(session, sessionTrackerFor(a).snapshot(0)) {
+		return errors.New("VPN session/path changed while live proof was running")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(st) || strings.TrimSpace(a.state.RouterID) != p.ID {
+		return errors.New("active VPN node/mode/base/path changed while live proof was running")
+	}
+	current, ok := a.profileByIDLocked(p.ID)
+	if !ok || asyncMeasurementProfileToken(current) != token {
+		return errors.New("active VPN profile or policy changed while live proof was running")
+	}
+	return nil
+}
+
 func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
-	a.mu.Lock()
-	connected := a.state.Connected
-	selected := a.profiles.SelectedID
-	target := selected
-	if a.state.Mode == "multihop" && a.state.RouterID != "" {
-		target = a.state.RouterID
-	}
-	targetProfile, targetOK := a.profileByIDLocked(target)
-	a.mu.Unlock()
-	if !connected {
-		http.Error(w, "connect the VPN first so the reported address is the VPN exit", http.StatusConflict)
+	targetProfile, stateAtStart, err := a.activeAsyncMeasurementProfile()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if !targetOK {
-		http.Error(w, "active VPN node disappeared before public-exit lookup", http.StatusConflict)
-		return
-	}
-	targetAtStart := fastestProfileSnapshotToken([]common.RouterProfile{targetProfile})
+	target := targetProfile.ID
+	targetAtStart := asyncMeasurementProfileToken(targetProfile)
 	sessionAtStart, sessionErr := captureAsyncMeasurementSession(a)
 	if sessionErr != nil {
 		http.Error(w, sessionErr.Error(), http.StatusConflict)
 		return
 	}
-	a.mu.Lock()
-	stateAtStart := mtuStateSnapshotToken(a.state)
-	a.mu.Unlock()
+	if sessionAtStart.RouterID != "" && sessionAtStart.RouterID != target {
+		http.Error(w, "session tracker node does not match the running VPN node", http.StatusConflict)
+		return
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	providers := []string{"https://api64.ipify.org", "https://api.ipify.org"}
 	var result string
@@ -289,20 +324,16 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not determine public VPN exit address", http.StatusBadGateway)
 		return
 	}
-	if !sameAsyncMeasurementSession(sessionAtStart, sessionTrackerFor(a).snapshot(0)) {
-		http.Error(w, "VPN session/path changed while public-exit lookup was running", http.StatusConflict)
+	if err := validateAsyncMeasurementProfile(a, targetProfile, stateAtStart, sessionAtStart, targetAtStart); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	a.mu.Lock()
 	previousStore := cloneRouterProfileStore(a.profiles)
-	currentTarget := a.profiles.SelectedID
-	if a.state.Mode == "multihop" && a.state.RouterID != "" {
-		currentTarget = a.state.RouterID
-	}
 	currentProfile, currentOK := a.profileByIDLocked(target)
-	if !a.state.Connected || mtuStateSnapshotToken(a.state) != stateAtStart || currentTarget != target || !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{currentProfile}) != targetAtStart {
+	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(stateAtStart) || strings.TrimSpace(a.state.RouterID) != target || !currentOK || asyncMeasurementProfileToken(currentProfile) != targetAtStart {
 		a.mu.Unlock()
-		http.Error(w, "active VPN path changed while public-exit lookup was running", http.StatusConflict)
+		http.Error(w, "active VPN path or policy changed before public-exit persistence", http.StatusConflict)
 		return
 	}
 	for i := range a.profiles.Profiles {
@@ -320,7 +351,7 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"public_ip": result, "router_id": target, "multihop": target != selected})
+	_ = json.NewEncoder(w).Encode(map[string]any{"public_ip": result, "router_id": target, "multihop": stateAtStart.Mode == "multihop"})
 }
 
 type dnsBenchmarkPayload struct {
@@ -333,27 +364,29 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	p, err := a.activeProfile()
+	p, stateAtStart, err := a.activeAsyncMeasurementProfile()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	a.mu.Lock()
-	connected := a.state.Connected
-	a.mu.Unlock()
-	if !connected {
-		http.Error(w, "connect this router first; DNS retest runs from the home node", http.StatusConflict)
+	if strings.EqualFold(strings.TrimSpace(p.NodeKind), "external") || p.External != nil {
+		http.Error(w, "DNS Retest requires the active Router VPN home node", http.StatusConflict)
 		return
 	}
-	profileAtStart := fastestProfileSnapshotToken([]common.RouterProfile{p})
+	if strings.TrimSpace(p.RouterAPI) == "" || strings.TrimSpace(p.APIToken) == "" {
+		http.Error(w, "active Router VPN node has no private DNS benchmark API/token", http.StatusConflict)
+		return
+	}
+	profileAtStart := asyncMeasurementProfileToken(p)
 	sessionAtStart, sessionErr := captureAsyncMeasurementSession(a)
 	if sessionErr != nil {
 		http.Error(w, sessionErr.Error(), http.StatusConflict)
 		return
 	}
-	a.mu.Lock()
-	stateAtStart := mtuStateSnapshotToken(a.state)
-	a.mu.Unlock()
+	if sessionAtStart.RouterID != "" && sessionAtStart.RouterID != p.ID {
+		http.Error(w, "session tracker node does not match the active DNS benchmark node", http.StatusConflict)
+		return
+	}
 
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(p.RouterAPI, "/")+"/api/dns/benchmark", strings.NewReader(`{}`))
 	if err != nil {
@@ -379,17 +412,17 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid DNS benchmark response", http.StatusBadGateway)
 		return
 	}
-
-	if !sameAsyncMeasurementSession(sessionAtStart, sessionTrackerFor(a).snapshot(0)) {
-		http.Error(w, "VPN session/path changed while DNS Retest was running", http.StatusConflict)
+	if err := validateAsyncMeasurementProfile(a, p, stateAtStart, sessionAtStart, profileAtStart); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+
 	a.mu.Lock()
 	previousStore := cloneRouterProfileStore(a.profiles)
 	current, currentOK := a.profileByIDLocked(p.ID)
-	if !a.state.Connected || mtuStateSnapshotToken(a.state) != stateAtStart || a.profiles.SelectedID != p.ID || !currentOK || fastestProfileSnapshotToken([]common.RouterProfile{current}) != profileAtStart {
+	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(stateAtStart) || strings.TrimSpace(a.state.RouterID) != p.ID || !currentOK || asyncMeasurementProfileToken(current) != profileAtStart {
 		a.mu.Unlock()
-		http.Error(w, "selected node or DNS policy changed while DNS Retest was running", http.StatusConflict)
+		http.Error(w, "active node/path or DNS policy changed before DNS Retest persistence", http.StatusConflict)
 		return
 	}
 	for i := range a.profiles.Profiles {
