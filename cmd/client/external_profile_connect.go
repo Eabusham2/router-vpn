@@ -84,11 +84,12 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.mu.Lock()
 	profileID := strings.TrimSpace(q.ProfileID)
-	if profileID == "" {
-		profileID = a.profiles.SelectedID
+	if !validProfileID(profileID) {
+		http.Error(w, "external connect requires an explicit valid profile_id", http.StatusBadRequest)
+		return
 	}
+	a.mu.Lock()
 	externalProfile, ok := a.profileByIDLocked(profileID)
 	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
 	a.mu.Unlock()
