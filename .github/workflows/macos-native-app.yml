@@ -42,6 +42,8 @@ jobs:
   native-macos:
     name: Native AppKit packages amd64 + arm64
     runs-on: macos-15
+    env:
+      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
