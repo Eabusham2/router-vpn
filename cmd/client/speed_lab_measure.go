@@ -65,6 +65,11 @@ type speedLabPatternReader struct {
 	offset  int
 }
 
+type speedLabParallelResult struct {
+	bytes int64
+	err   error
+}
+
 func (r *speedLabPatternReader) Read(p []byte) (int, error) {
 	if len(r.pattern) == 0 {
 		return 0, io.EOF
@@ -101,6 +106,9 @@ func normalizeSpeedLabDuration(mode string, minSeconds, maxSeconds float64) (spe
 func newSpeedLabHTTPClient(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DisableCompression = true
+	transport.MaxIdleConns = 32
+	transport.MaxIdleConnsPerHost = 8
+	transport.MaxConnsPerHost = 8
 	return &http.Client{
 		Transport: transport,
 		Timeout:   timeout,
@@ -246,16 +254,27 @@ func speedLabRoundBytes(previousMbps float64) int64 {
 	if previousMbps <= 0 {
 		return 8 << 20
 	}
-	// Aim for roughly 700 ms per transfer, bounded so fast links get enough data
-	// while slow paths cannot trap one request for the whole configured window.
+	// Aim for roughly 700 ms of aggregate payload. Fast links can use up to
+	// 64 MiB per round so a gigabit-class path is not dominated by setup time.
 	value := int64(previousMbps * 1_000_000 / 8 * 0.70)
 	if value < 1<<20 {
 		value = 1 << 20
 	}
-	if value > 16<<20 {
-		value = 16 << 20
+	if value > 64<<20 {
+		value = 64 << 20
 	}
 	return value
+}
+
+func speedLabStreamCount(previousMbps float64) int {
+	switch {
+	case previousMbps >= 250:
+		return 4
+	case previousMbps >= 80:
+		return 2
+	default:
+		return 1
+	}
 }
 
 func speedLabDownloadRound(ctx context.Context, client *http.Client, bytesCount int64) (int64, time.Duration, error) {
@@ -311,6 +330,60 @@ func speedLabUploadRound(ctx context.Context, client *http.Client, bytesCount in
 	return bytesCount, elapsed, nil
 }
 
+func speedLabParallelRound(ctx context.Context, direction string, client *http.Client, bytesCount int64, streams int, pattern []byte) (int64, time.Duration, error) {
+	if streams < 1 {
+		streams = 1
+	}
+	if streams > 4 {
+		streams = 4
+	}
+	if bytesCount < int64(streams) {
+		bytesCount = int64(streams)
+	}
+	roundCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan speedLabParallelResult, streams)
+	base := bytesCount / int64(streams)
+	remainder := bytesCount % int64(streams)
+	started := time.Now()
+	for i := 0; i < streams; i++ {
+		part := base
+		if int64(i) < remainder {
+			part++
+		}
+		go func(size int64) {
+			var done int64
+			var err error
+			if direction == "download" {
+				done, _, err = speedLabDownloadRound(roundCtx, client, size)
+			} else {
+				done, _, err = speedLabUploadRound(roundCtx, client, size, pattern)
+			}
+			if err != nil {
+				cancel()
+			}
+			results <- speedLabParallelResult{bytes: done, err: err}
+		}(part)
+	}
+	total := int64(0)
+	var firstErr error
+	for i := 0; i < streams; i++ {
+		result := <-results
+		total += result.bytes
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+		}
+	}
+	elapsed := time.Since(started)
+	if firstErr != nil {
+		return total, elapsed, firstErr
+	}
+	if total != bytesCount {
+		return total, elapsed, fmt.Errorf("parallel %s load transferred %d bytes; expected %d", direction, total, bytesCount)
+	}
+	return total, elapsed, nil
+}
+
 func measureSpeedLabDirection(ctx context.Context, direction string, minDuration, maxDuration time.Duration, idleMedian float64) (speedLabDirectionResult, error) {
 	if direction != "download" && direction != "upload" {
 		return speedLabDirectionResult{}, errors.New("speed-test direction must be download or upload")
@@ -337,9 +410,10 @@ func measureSpeedLabDirection(ctx context.Context, direction string, minDuration
 
 	started := time.Now()
 	totalBytes := int64(0)
-	totalTransfer := time.Duration(0)
+	totalWall := time.Duration(0)
 	rates := make([]float64, 0, 16)
 	stoppedStable := false
+	maxStreamsUsed := 1
 	for {
 		elapsed := time.Since(started)
 		if elapsed >= maxDuration {
@@ -350,14 +424,11 @@ func measureSpeedLabDirection(ctx context.Context, direction string, minDuration
 			previous = rates[len(rates)-1]
 		}
 		bytesCount := speedLabRoundBytes(previous)
-		var bytesDone int64
-		var roundElapsed time.Duration
-		var err error
-		if direction == "download" {
-			bytesDone, roundElapsed, err = speedLabDownloadRound(directionCtx, client, bytesCount)
-		} else {
-			bytesDone, roundElapsed, err = speedLabUploadRound(directionCtx, client, bytesCount, pattern)
+		streams := speedLabStreamCount(previous)
+		if streams > maxStreamsUsed {
+			maxStreamsUsed = streams
 		}
+		bytesDone, roundElapsed, err := speedLabParallelRound(directionCtx, direction, client, bytesCount, streams, pattern)
 		if err != nil {
 			cancelLoaded()
 			<-loadedDone
@@ -369,7 +440,7 @@ func measureSpeedLabDirection(ctx context.Context, direction string, minDuration
 			return speedLabDirectionResult{}, errors.New("speed-test load produced no measurable transfer")
 		}
 		totalBytes += bytesDone
-		totalTransfer += roundElapsed
+		totalWall += roundElapsed
 		rates = append(rates, float64(bytesDone*8)/1_000_000/roundElapsed.Seconds())
 		if time.Since(started) >= minDuration && speedLabStable(rates) {
 			stoppedStable = true
@@ -378,18 +449,18 @@ func measureSpeedLabDirection(ctx context.Context, direction string, minDuration
 	}
 	cancelLoaded()
 	loaded := <-loadedDone
-	if totalBytes == 0 || totalTransfer <= 0 {
+	if totalBytes == 0 || totalWall <= 0 {
 		return speedLabDirectionResult{}, errors.New("speed-test completed without transferred bytes")
 	}
 	if loaded.Samples < 2 {
 		return speedLabDirectionResult{}, errors.New("too few loaded-latency samples completed")
 	}
-	seconds := totalTransfer.Seconds()
+	seconds := totalWall.Seconds()
 	mbps := float64(totalBytes*8) / 1_000_000 / seconds
 	return speedLabDirectionResult{
-		Direction: direction, Mbps: round3(mbps), Bytes: totalBytes, Seconds: round3(seconds), Rounds: len(rates),
+		Direction: direction, Mbps: round3(mbps), Bytes: totalBytes, Seconds: round3(time.Since(started).Seconds()), Rounds: len(rates),
 		LoadedLatency: loaded, BufferbloatMs: round3(math.Max(0, loaded.MedianMs-idleMedian)), StoppedStable: stoppedStable,
-		ProviderDetail: "HTTPS transfer against Cloudflare's fixed speed test edge while independent 1-byte probes measure loaded latency",
+		ProviderDetail: fmt.Sprintf("HTTPS transfer against Cloudflare's fixed speed test edge using adaptive 1-%d concurrent streams while independent 1-byte probes measure loaded latency", maxStreamsUsed),
 	}, nil
 }
 
