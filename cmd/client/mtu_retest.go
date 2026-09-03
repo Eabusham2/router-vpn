@@ -75,6 +75,7 @@ func registerMTURetestRoute(h *http.ServeMux, a *app) {
 	registerStrategyRoutes(h, a)
 	registerTelemetryRoutes(h, a)
 	registerHopTelemetryRoutes(h, a)
+	registerSpeedLabRoutes(h, a)
 	registerForwardingMasterRoute(h, a)
 	registerConnectionProfileRoutes(h, a)
 	registerConnectionProfileSetupRoutes(h, a)
@@ -308,8 +309,6 @@ func validateMTURetestSnapshot(a *app, snapshot mtuRetestSnapshot) error {
 }
 
 func mtuProfileSnapshotToken(p common.RouterProfile) string {
-	// Identity/path-policy fields only: measurement-owned EffectiveMTU* fields are
-	// deliberately excluded so the controller can verify its own final write.
 	v := struct {
 		ID, NodeKind, Endpoint, RouterAPI, NodeProofID, PathProbeURL string
 		DAITAHost, MTUPolicy, BaseTunnel                             string
