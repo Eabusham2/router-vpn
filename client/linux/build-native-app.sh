@@ -10,12 +10,13 @@ SETTINGS_INC="$ROOT/client/linux/routervpn-profile-settings-v1.inc"
 AUTO_REQ_INC="$ROOT/client/linux/routervpn-auto-requirements-v11.inc"
 UNIFIED_INC="$ROOT/client/linux/routervpn-unified-shell-v8.inc"
 TELEMETRY_INC="$ROOT/client/linux/routervpn-telemetry-v9.inc"
+SPEED_LAB_INC="$ROOT/client/linux/routervpn-speed-lab-v12.inc"
 GLOBE_INC="$ROOT/client/linux/routervpn-globe-v10.inc"
 V4="$ROOT/client/linux/routervpn-gtk-product-v4.c"
 V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$GLOBE_INC" "$V4" "$V3" "$CORE")
+SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$GLOBE_INC" "$V4" "$V3" "$CORE")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v10.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
 BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v10-shipping.c"
@@ -29,7 +30,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
 done
-for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$GLOBE_INC"; do
+for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$GLOBE_INC"; do
   [[ -s "$source" ]] || { echo "Missing Linux shipping include: $source" >&2; exit 2; }
 done
 mkdir -p "$(dirname "$OUT")"
@@ -175,12 +176,12 @@ if text.count(legacy_builder) != 1: raise SystemExit('Linux unified shell could 
 text = text.replace(legacy_builder, 'static void build_ui_legacy_v5(App *app) {', 1)
 self_test_marker = 'static int self_test_v5(void) {'
 if text.count(self_test_marker) != 1: raise SystemExit('Linux unified shell could not find v5 self-test seam')
-text = text.replace(self_test_marker, '#include "routervpn-unified-shell-v8.inc"\n#include "routervpn-telemetry-v9.inc"\n#include "routervpn-globe-v10.inc"\n\n' + self_test_marker, 1)
+text = text.replace(self_test_marker, '#include "routervpn-unified-shell-v8.inc"\n#include "routervpn-telemetry-v9.inc"\n#include "routervpn-speed-lab-v12.inc"\n#include "routervpn-globe-v10.inc"\n\n' + self_test_marker, 1)
 install_old = '    build_ui_v5(&app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
-install_new = '    build_ui_v5(&app);\n    linux_install_telemetry_v9(&app);\n    linux_install_globe_v10(&app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
+install_new = '    build_ui_v5(&app);\n    linux_install_telemetry_v9(&app);\n    linux_install_speed_lab_v12(&app);\n    linux_install_globe_v10(&app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
 if text.count(install_old) != 1: raise SystemExit('Linux telemetry/globe installer seam drifted')
 text = text.replace(install_old, install_new, 1)
-for marker in ('#include "routervpn-product-onboarding-v6.inc"','#include "routervpn-home-summary-v1.inc"','#include "routervpn-profile-settings-v1.inc"','#include "routervpn-auto-requirements-v11.inc"','#include "routervpn-unified-shell-v8.inc"','#include "routervpn-telemetry-v9.inc"','#include "routervpn-globe-v10.inc"','onboarding_read_step_v6(path)','gtk_assistant_set_current_page','refresh_home_summary_v6(app)','gtk_button_set_label(GTK_BUTTON(home_exit_v6), "Prove actual exit")','G_CALLBACK(on_home_exit_v6)','Edit profile settings','G_CALLBACK(on_profile_settings_v7)','router-vpn-advanced-settings-v7','static void build_ui_legacy_v5(App *app) {','linux_install_telemetry_v9(&app);','linux_install_globe_v10(&app);'):
+for marker in ('#include "routervpn-product-onboarding-v6.inc"','#include "routervpn-home-summary-v1.inc"','#include "routervpn-profile-settings-v1.inc"','#include "routervpn-auto-requirements-v11.inc"','#include "routervpn-unified-shell-v8.inc"','#include "routervpn-telemetry-v9.inc"','#include "routervpn-speed-lab-v12.inc"','#include "routervpn-globe-v10.inc"','onboarding_read_step_v6(path)','gtk_assistant_set_current_page','refresh_home_summary_v6(app)','gtk_button_set_label(GTK_BUTTON(home_exit_v6), "Prove actual exit")','G_CALLBACK(on_home_exit_v6)','Edit profile settings','G_CALLBACK(on_profile_settings_v7)','router-vpn-advanced-settings-v7','static void build_ui_legacy_v5(App *app) {','linux_install_telemetry_v9(&app);','linux_install_speed_lab_v12(&app);','linux_install_globe_v10(&app);'):
     if marker not in text: raise SystemExit(f'missing Linux shipping marker: {marker}')
 out_path.write_text(text, encoding='utf-8')
 PY
@@ -206,15 +207,16 @@ for marker in '/api/home-summary' '/api/home-summary/prove-exit' 'Actual public 
 for marker in '/api/profile/settings' 'Allow home LAN access' 'Always / strict' 'AmneziaWG' 'Auto measured' 'DAITA-like' 'Jumbo TUN' 'SOCKS5' 'startup' 'autoconnect'; do grep -Fiq "$marker" "$SETTINGS_INC"; done
 for marker in '/api/profile/settings' 'Require encrypted AUTO candidates' 'Require obfuscation for AUTO candidates' 'Save requirements' 'Disconnect before saving'; do grep -Fq "$marker" "$AUTO_REQ_INC"; done
 grep -Fq '/api/multihop/connect' "$SETTINGS_INC"
-for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' '#include "routervpn-profile-settings-v1.inc"' '#include "routervpn-auto-requirements-v11.inc"' '#include "routervpn-unified-shell-v8.inc"' '#include "routervpn-telemetry-v9.inc"' '#include "routervpn-globe-v10.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)' 'Edit profile settings' 'G_CALLBACK(on_profile_settings_v7)' 'router-vpn-advanced-settings-v7' 'static void build_ui_legacy_v5(App *app) {' 'linux_install_telemetry_v9(&app);' 'linux_install_globe_v10(&app);'; do grep -Fq "$marker" "$BUILD_SRC"; done
+for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' '#include "routervpn-profile-settings-v1.inc"' '#include "routervpn-auto-requirements-v11.inc"' '#include "routervpn-unified-shell-v8.inc"' '#include "routervpn-telemetry-v9.inc"' '#include "routervpn-speed-lab-v12.inc"' '#include "routervpn-globe-v10.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)' 'Edit profile settings' 'G_CALLBACK(on_profile_settings_v7)' 'router-vpn-advanced-settings-v7' 'static void build_ui_legacy_v5(App *app) {' 'linux_install_telemetry_v9(&app);' 'linux_install_speed_lab_v12(&app);' 'linux_install_globe_v10(&app);'; do grep -Fq "$marker" "$BUILD_SRC"; done
 for marker in 'build_ui_v5(App *app)' 'map-first' 'Connect' 'Disconnect' 'Kill switch' 'Multihop' 'Settings' 'Mode' 'DNS' 'SMART AUTO — recommended' 'AUTO — first proven path' 'New CUSTOM preset…' 'CUSTOM preset builder' '/api/strategy/auto' '/api/strategy/smart-auto' '/api/strategy/custom' '/api/connect-logical' '/api/mtu/retest' 'real stored coordinates'; do grep -Fq "$marker" "$UNIFIED_INC"; done
 for marker in 'LinuxTelemetryV9' '⚡ Fastest' '/api/profile/fastest' '/api/connection/live-latency' '/api/multihop/live-latency' '/api/forwarding/master' 'Forward ON' 'Forward OFF' 'Performance' 'Throughput + Auto MTU'; do grep -Fq "$marker" "$TELEMETRY_INC"; done
+for marker in 'LinuxSpeedLabV12' '/api/speed-lab/options' '/api/speed-lab/run' 'Current path' 'Temporary config' 'System direct' 'External exit / hop' 'Auto timing' 'Custom timing' 'download_loaded_ms' 'upload_loaded_ms' 'bufferbloat' 'linux_install_speed_lab_v12'; do grep -Fq "$marker" "$SPEED_LAB_INC"; done
 for marker in 'LinuxGlobeV10' 'ROUTER VPN GLOBE' 'linux_globe_draw_v10' 'linux_globe_click_v10' 'routervpn_flat_map_v9' 'entry blue' 'exit orange' 'external pink' 'animated packet' 'PATH %.1f ms' 'device location is not fabricated' '/api/multihop/live-latency'; do grep -Fq "$marker" "$GLOBE_INC"; done
 grep -Fq 'Diagnostics' "$SRC"; grep -Fq '/api/session/events?after=0' "$SRC"; grep -Fq 'apply_action_sensitivity_v5' "$SRC"; grep -Fq 'gtk_widget_set_sensitive' "$SRC"; grep -Fq 'truthful-empty-state-actions' "$SRC"; grep -Fq 'gtk_window_set_default_size(GTK_WINDOW(app->window), 960, 680);' "$SRC"
 grep -Fq '/api/mtu/retest' "$SRC"; grep -Fq 'Retest MTU' "$SRC"; grep -Fq '130000' "$SRC"; grep -Fq 'router-vpn-advanced-mtu-v5' "$SRC"
 "$OUT" --self-test
 
-echo "Built native Linux GTK Router VPN product with map-first unified shell, animated VPN globe, fastest-node connect, live path/multihop telemetry, real forwarding master, truthful Home state, editable profile settings and resumable onboarding at $OUT"
+echo "Built native Linux GTK Router VPN product with map-first unified shell, animated VPN globe, fastest-node connect, live path/multihop telemetry, native Speed Lab with loaded latency, real forwarding master, truthful Home state, editable profile settings and resumable onboarding at $OUT"
 
 # Session-mutation hardening is applied only to temporary build copies; source baselines remain reviewable.
 # apply-session-mutation.py baseline-hash checks fail closed before compilation on source drift.
