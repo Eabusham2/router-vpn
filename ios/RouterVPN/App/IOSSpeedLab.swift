@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 struct IOSSpeedLabDuration: Hashable, Sendable {
     enum Mode: String, CaseIterable, Identifiable, Sendable {
@@ -142,7 +143,7 @@ enum IOSSpeedLabEngine {
         let (data, response) = try await session.data(for: request)
         _ = try validatedHTTP(response, expectedBytes: 1)
         guard data.count == 1 else { throw URLError(.cannotParseResponse) }
-        return round3(Double(started.duration(to: .now).components.attoseconds) / 1_000_000_000_000_000 + Double(started.duration(to: .now).components.seconds) * 1000)
+        return round3(elapsedSeconds(since: started) * 1000)
     }
 
     private static func measureIdleLatency() async throws -> IOSSpeedLabLatencyStats {
@@ -247,9 +248,12 @@ enum IOSSpeedLabEngine {
 
     private static func uploadRound(bytes: Int) async throws -> (Int64, Double) {
         var payload = Data(count: bytes)
-        payload.withUnsafeMutableBytes { raw in
-            guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-            for index in 0..<raw.count { base[index] = UInt8.random(in: 0...255) }
+        let randomStatus: Int32 = payload.withUnsafeMutableBytes { raw in
+            guard let address = raw.baseAddress else { return errSecParam }
+            return SecRandomCopyBytes(kSecRandomDefault, raw.count, address)
+        }
+        guard randomStatus == errSecSuccess else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(randomStatus), userInfo: [NSLocalizedDescriptionKey: "Speed Lab could not prepare an incompressible upload payload."])
         }
         var request = URLRequest(url: uploadURL, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 20)
         request.httpMethod = "POST"
