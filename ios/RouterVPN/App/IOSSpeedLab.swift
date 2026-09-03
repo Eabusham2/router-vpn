@@ -193,10 +193,9 @@ enum IOSSpeedLabEngine {
         do {
             while elapsedSeconds(since: started) < maxSeconds {
                 try Task.checkCancellation()
-                let bytes = roundBytes(previousMbps: rates.last ?? 0)
-                let round: (Int64, Double)
-                if direction == "download" { round = try await downloadRound(bytes: bytes) }
-                else { round = try await uploadRound(bytes: bytes) }
+                let previous = rates.last ?? 0
+                let bytes = roundBytes(previousMbps: previous)
+                let round = try await parallelRound(direction: direction, bytes: bytes, streams: streamCount(previousMbps: previous))
                 guard round.0 > 0, round.1 > 0 else { throw URLError(.zeroByteResource) }
                 totalBytes += round.0
                 transferSeconds += round.1
@@ -225,6 +224,39 @@ enum IOSSpeedLabEngine {
             _ = try? await loadedTask.value
             throw error
         }
+    }
+
+    private static func parallelRound(direction: String, bytes: Int, streams requestedStreams: Int) async throws -> (Int64, Double) {
+        let streams = min(max(requestedStreams, 1), 4)
+        let total = max(bytes, streams)
+        let base = total / streams
+        let remainder = total % streams
+        let started = ContinuousClock.now
+        var transferred: Int64 = 0
+        try await withThrowingTaskGroup(of: Int64.self) { group in
+            for index in 0..<streams {
+                let part = base + (index < remainder ? 1 : 0)
+                group.addTask {
+                    try Task.checkCancellation()
+                    if direction == "download" {
+                        let result = try await downloadRound(bytes: part)
+                        return result.0
+                    }
+                    let result = try await uploadRound(bytes: part)
+                    return result.0
+                }
+            }
+            do {
+                for try await value in group { transferred += value }
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
+        guard transferred == Int64(total) else {
+            throw NSError(domain: "RouterVPN.SpeedLab", code: 5, userInfo: [NSLocalizedDescriptionKey: "Parallel \(direction) transfer returned \(transferred) bytes, expected \(total)."])
+        }
+        return (transferred, max(0.000001, elapsedSeconds(since: started)))
     }
 
     private static func downloadRound(bytes: Int) async throws -> (Int64, Double) {
@@ -270,7 +302,13 @@ enum IOSSpeedLabEngine {
     private static func roundBytes(previousMbps: Double) -> Int {
         guard previousMbps > 0 else { return 8 << 20 }
         let target = Int(previousMbps * 1_000_000 / 8 * 0.70)
-        return min(max(target, 1 << 20), 16 << 20)
+        return min(max(target, 1 << 20), 32 << 20)
+    }
+
+    private static func streamCount(previousMbps: Double) -> Int {
+        if previousMbps >= 250 { return 4 }
+        if previousMbps >= 80 { return 2 }
+        return 1
     }
 
     private static func stable(_ rates: [Double]) -> Bool {
