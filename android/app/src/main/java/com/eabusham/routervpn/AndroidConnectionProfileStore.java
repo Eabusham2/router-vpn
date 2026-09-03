@@ -18,8 +18,8 @@ import java.util.Set;
 
 /** App-private connection-choice profiles. Linked node secrets are referenced by ID, never copied. */
 final class AndroidConnectionProfileStore {
-    static final int SCHEMA_VERSION=1, MAX_PROFILES=64, MAX_STORE=512*1024;
-    private static final String FILE_NAME="connection-profiles-v1.json";
+    static final int SCHEMA_VERSION=4, MAX_PROFILES=64, MAX_STORE=512*1024;
+    private static final String FILE_NAME="connection-profiles-v4.json", LEGACY_FILE_NAME="connection-profiles-v1.json";
     private static final String PREFS="router-vpn-unified", MODE_KEY="mode", CUSTOM_KEY="custom_presets", SELECTED_KIND="selected_kind", SELECTED_ID="selected_id";
     private static final String MULTI_ON="multihop_on", MULTI_ENTRY="multihop_entry", MULTI_EXIT="multihop_exit", MULTI_MODE="multihop_exit_mode";
     private static final SecureRandom RANDOM=new SecureRandom();
@@ -37,8 +37,8 @@ final class AndroidConnectionProfileStore {
         @Override public String toString(){return name+" • "+mode+" • "+("external".equals(nodeKind)?"Custom":"Router")+" • "+autoRequirementsSummary();}
     }
 
-    private final Context context; private final AndroidNodeStore nodes; private final AndroidStandardExitStore exits; private final File file;
-    AndroidConnectionProfileStore(Context context,AndroidNodeStore nodes,AndroidStandardExitStore exits){this.context=context.getApplicationContext();this.nodes=nodes;this.exits=exits;this.file=new File(this.context.getFilesDir(),FILE_NAME);}
+    private final Context context; private final AndroidNodeStore nodes; private final AndroidStandardExitStore exits; private final File file, legacyFile;
+    AndroidConnectionProfileStore(Context context,AndroidNodeStore nodes,AndroidStandardExitStore exits){this.context=context.getApplicationContext();this.nodes=nodes;this.exits=exits;this.file=new File(this.context.getFilesDir(),FILE_NAME);this.legacyFile=new File(this.context.getFilesDir(),LEGACY_FILE_NAME);}
 
     synchronized List<Record> list() throws Exception { JSONArray rows=readRows();List<Record> out=new ArrayList<>();for(int i=0;i<rows.length();i++)out.add(toRecord(rows.getJSONObject(i)));return out; }
     synchronized Record add(String name) throws Exception { requireIdle("saving a connection profile");JSONArray rows=readRows();if(rows.length()>=MAX_PROFILES)throw new IllegalStateException("Connection profile limit reached.");JSONObject row=snapshot(cleanName(name),newId());rows.put(row);writeRows(rows);return toRecord(row); }
@@ -100,11 +100,18 @@ final class AndroidConnectionProfileStore {
     private JSONObject find(String id)throws Exception{if(!safeId(id))throw new IllegalArgumentException("Invalid connection profile id.");JSONArray rows=readRows();for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(id.equals(row.optString("id")))return row;}throw new IllegalArgumentException("Connection profile was not found.");}
 
     private JSONArray readRows() throws Exception {
-        if (!file.exists()) return new JSONArray();
-        byte[] stored = AndroidPrivateFileStore.read(file, MAX_STORE);
+        File source = file;
+        boolean legacyPath = false;
+        if (!file.exists()) {
+            if (!legacyFile.exists()) return new JSONArray();
+            source = legacyFile;
+            legacyPath = true;
+        }
+        byte[] stored = AndroidPrivateFileStore.read(source, MAX_STORE);
         JSONObject root = new JSONObject(new String(stored, StandardCharsets.UTF_8));
-        if (root.optInt("schema_version", 0) != SCHEMA_VERSION) {
-            throw new IllegalStateException("Unsupported connection profile store schema.");
+        int schema = root.optInt("schema_version", 0);
+        if (schema < 1 || schema > SCHEMA_VERSION) {
+            throw new IllegalStateException("Unsupported connection profile store schema " + schema + ".");
         }
         JSONArray rows = root.optJSONArray("profiles");
         if (rows == null) rows = new JSONArray();
@@ -137,6 +144,12 @@ final class AndroidConnectionProfileStore {
                     }
                 }
             }
+        }
+        if (legacyPath || schema < SCHEMA_VERSION) {
+            writeRows(rows);
+            AndroidPrivateFileStore.remove(legacyFile, MAX_STORE);
+        } else if (legacyFile.exists()) {
+            AndroidPrivateFileStore.remove(legacyFile, MAX_STORE);
         }
         return rows;
     }
