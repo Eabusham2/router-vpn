@@ -79,7 +79,15 @@ function ShowUnifiedSpeedLab{
    $D.FindName('IdleDetail').Text=('p90 {0:N1} • max {1:N1} • jitter {2:N1} ms'-f[double]$M.idle_latency.p90_ms,[double]$M.idle_latency.max_ms,[double]$M.idle_latency.jitter_ms)
    $D.FindName('DownDetail').Text=('loaded {0:N1} ms • +{1:N1} bufferbloat • p90 {2:N1}'-f[double]$S.download_loaded_ms,[double]$S.download_bufferbloat_ms,[double]$M.download.loaded_latency.p90_ms)
    $D.FindName('UpDetail').Text=('loaded {0:N1} ms • +{1:N1} bufferbloat • p90 {2:N1}'-f[double]$S.upload_loaded_ms,[double]$S.upload_bufferbloat_ms,[double]$M.upload.loaded_latency.p90_ms)
-   $Detail.Text=($R|ConvertTo-Json -Depth 12);$Status.Text=('Finished • {0} / {1} • {2}'-f[string]$R.path.scope,[string]$R.path.topology,[string]$M.provider)
+   $HopLines=New-Object System.Collections.Generic.List[string]
+   foreach($H in @($R.hops)){
+    if($null-eq$H){continue};$role=([string]$H.role).ToUpperInvariant();$name=[string]$H.name;if([string]::IsNullOrWhiteSpace($name)){$name=[string]$H.router_id}
+    $lat='RTT unavailable';$lp=$H.PSObject.Properties['latency'];if($lp-and$null-ne$lp.Value){$lat=('{0:N1} ms'-f[double]$lp.Value.median_ms)}elseif($H.PSObject.Properties['latency_error']){$lat='RTT unavailable: '+[string]$H.latency_error}
+    $spd='speed unavailable';$sp=$H.PSObject.Properties['speed'];if($sp-and$null-ne$sp.Value){$spd=('↓ {0:N1} / ↑ {1:N1} Mbps'-f[double]$sp.Value.download_mbps,[double]$sp.Value.upload_mbps)}elseif($H.PSObject.Properties['speed_error']){$spd='speed unavailable: '+[string]$H.speed_error}
+    [void]$HopLines.Add(('{0} • {1} • {2} • {3}'-f$role,$name,$lat,$spd))
+   }
+   $Json=$R|ConvertTo-Json -Depth 12;if($HopLines.Count){$Detail.Text="PER-HOP — SAME PROVED GRAPH`r`n"+($HopLines-join"`r`n")+"`r`n`r`nFULL RESULT`r`n"+$Json}else{$Detail.Text=$Json}
+   $hopSuffix=if($HopLines.Count){' • '+$HopLines.Count+' hop measurements'}else{''};$Status.Text=('Finished • {0} / {1} • {2}{3}'-f[string]$R.path.scope,[string]$R.path.topology,[string]$M.provider,$hopSuffix)
   }catch{$Detail.Text=$_.Exception.Message;$Status.Text='Speed Lab failed closed; see details.'}finally{$Run.IsEnabled=$true}
  });[void]$D.ShowDialog()
 }
@@ -87,6 +95,6 @@ function ShowUnifiedSpeedLab{
 
     $replacement=$advanced+"`n"+$speedLab+"`n(Control 'UnifiedFastestNode')"
     $ProductSource=$ProductSource.Substring(0,$match.Index)+$replacement+$ProductSource.Substring($match.Index+$match.Length)
-    $ProductSource+="`n# Windows Speed Lab: /api/speed-lab/options + /api/speed-lab/run, real idle/download-loaded/upload-loaded latency, real HTTPS Mbps, bufferbloat/jitter, current or temporary direct/multihop/external graphs, Auto or custom min/max timing.`n"
+    $ProductSource+="`n# Windows Speed Lab: /api/speed-lab/options + /api/speed-lab/run, real idle/download-loaded/upload-loaded latency, real HTTPS Mbps, exact multihop hop RTT/Mbps, bufferbloat/jitter, current or temporary direct/multihop/external graphs, Auto or custom min/max timing.`n"
     return $ProductSource
 }
