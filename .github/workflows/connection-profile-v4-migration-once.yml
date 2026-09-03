@@ -1,3 +1,4 @@
+# External trigger: pushes made by GITHUB_TOKEN do not recursively start workflows.
 name: Finish iOS connection profile v4 migration
 
 on:
