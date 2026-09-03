@@ -88,7 +88,7 @@ final class AndroidPrivateFileStore {
             StructStat before = requirePrivateRegular(target, maximumBytes, true);
             StructStat current = Os.lstat(target.getAbsolutePath());
             requireSameRegularFile(target, before, current);
-            Os.unlink(target.getAbsolutePath());
+            Os.remove(target.getAbsolutePath());
         } catch (ErrnoException error) {
             if (error.errno != OsConstants.ENOENT) throw error;
         }
