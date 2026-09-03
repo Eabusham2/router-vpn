@@ -16,7 +16,7 @@ from typing import Iterable, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 TEXT_SUFFIXES = {
-    ".c", ".cc", ".cpp", ".h", ".inc", ".java", ".kt", ".m", ".mm",
+    ".c", ".cc", ".cpp", ".go", ".h", ".inc", ".java", ".kt", ".m", ".mm",
     ".ps1", ".py", ".sh", ".swift", ".xml",
 }
 
@@ -37,12 +37,12 @@ PLATFORMS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] =
         ("gtk", "cairo"),
     ),
     "Android": (
-        ("client/android",),
+        ("android",),
         ("productactivity.java", "androidmanifest.xml"),
         ("activity", "vpnservice"),
     ),
     "iOS/iPadOS": (
-        ("client/ios", "client/iOS"),
+        ("ios/RouterVPN",),
         ("iosunifiedproductview.swift", "packettunnelprovider.swift"),
         ("swiftui", "mapkit", "networkextension"),
     ),
