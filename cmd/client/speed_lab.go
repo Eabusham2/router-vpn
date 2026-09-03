@@ -103,7 +103,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 			"temporary_external": runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
 			"external_protocols": externalProfileProtocolCapabilities(),
 		},
-		"semantics": "current tests never substitute the mutable selected node; temporary tests hold the connection/settings transaction owner, prove the requested path, restore the prior private profile store, run the measurement, tear the path down, and restore the prior disconnected state",
+		"semantics": "current tests never substitute the mutable selected node; temporary tests hold the connection/settings transaction owner, suppress durable ranking/startup side effects, prove the requested path, restore the prior private profile store before measurement, tear the path down, and restore the prior disconnected state",
 	})
 }
 
@@ -155,6 +155,11 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 		return speedLabPath{}, speedLabMeasurement{}, err
 	}
 	defer finish()
+	endPersistenceGuard, err := beginSpeedLabTemporaryPersistenceGuard(a)
+	if err != nil {
+		return speedLabPath{}, speedLabMeasurement{}, err
+	}
+	defer endPersistenceGuard()
 
 	requestDone := make(chan struct{})
 	go func() {
