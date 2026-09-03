@@ -97,12 +97,12 @@ final class AndroidHomeStateStore {
 
     static String nodeIdFromBundleFile(File file) { if(file==null)return"";String name=file.getName();return name!=null&&name.matches("[0-9a-f]{32}\\.json")?name.substring(0,32):""; }
 
-    private static SharedPreferences.Editor baseSession(Context context,String session,String logical,String runtime,String base){return prefs(context).edit().putString("session_id",session).putString("phase","connecting").putString("logical_mode",clean(logical)).putString("runtime_mode",clean(runtime)).putString("actual_base",clean(base)).putString("fallback","").putString("warning","").putString("path_proof","pending").putBoolean("connected",false).putLong("path_generation",0L).remove("actual_exit_ip").remove("actual_exit_session");}
+    private static SharedPreferences.Editor baseSession(Context context,String session,String logical,String runtime,String base){SharedPreferences p=prefs(context);long generation=p.getLong("path_generation",0L)+1L;return p.edit().putString("session_id",session).putString("phase","connecting").putString("logical_mode",clean(logical)).putString("runtime_mode",clean(runtime)).putString("actual_base",clean(base)).putString("fallback","").putString("warning","").putString("path_proof","pending").putBoolean("connected",false).putLong("path_generation",generation).remove("actual_exit_ip").remove("actual_exit_session");}
     private static String existingOrNewSession(SharedPreferences p){String session=p.getString("session_id","");return session==null||session.isEmpty()?UUID.randomUUID().toString():session;}
     private static SharedPreferences.Editor clearRouterGraph(SharedPreferences.Editor e){return e.remove("active_node_id").remove("active_entry_id").remove("active_exit_id");}
     private static SharedPreferences.Editor clearExternal(SharedPreferences.Editor e){return e.remove("active_external_id").remove("active_external_name").remove("active_external_protocol").remove("expected_external_ip");}
     private static SharedPreferences.Editor clearGraphAndExternal(SharedPreferences.Editor e){return clearExternal(clearRouterGraph(e));}
-    private static SharedPreferences.Editor clearAllIdentity(SharedPreferences.Editor e){return clearGraphAndExternal(e).remove("actual_exit_ip").remove("actual_exit_session").remove("path_generation");}
+    private static SharedPreferences.Editor clearAllIdentity(SharedPreferences.Editor e){return clearGraphAndExternal(e).remove("actual_exit_ip").remove("actual_exit_session");}
     private static String clean(String value){return value==null?"":value.replace('\n',' ').replace('\r',' ').trim();}
     private AndroidHomeStateStore(){}
 }
