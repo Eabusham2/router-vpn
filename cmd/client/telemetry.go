@@ -298,22 +298,53 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 func activeLatencyTarget(a *app) (common.RouterProfile, state, error) {
 	a.mu.Lock()
 	st := a.state
-	target := a.profiles.SelectedID
-	if st.Mode == "multihop" && st.RouterID != "" {
-		target = st.RouterID
+	if !st.Connected {
+		a.mu.Unlock()
+		return common.RouterProfile{}, st, errors.New("VPN is not connected")
+	}
+	target := strings.TrimSpace(st.RouterID)
+	if target == "" {
+		a.mu.Unlock()
+		return common.RouterProfile{}, st, errors.New("active VPN node identity is unavailable; refusing to substitute the mutable selected node")
 	}
 	p, ok := a.profileByIDLocked(target)
 	a.mu.Unlock()
-	if !st.Connected {
-		return common.RouterProfile{}, st, errors.New("VPN is not connected")
-	}
 	if !ok {
 		return common.RouterProfile{}, st, errors.New("active node is missing")
 	}
 	if strings.TrimSpace(p.RouterAPI) == "" {
 		return common.RouterProfile{}, st, errors.New("active node has no private Router API")
 	}
+	session := sessionTrackerFor(a).snapshot(0)
+	if session.ID == "" || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" {
+		return common.RouterProfile{}, st, errors.New("active VPN session has not proved the current path")
+	}
+	if session.RouterID != "" && session.RouterID != p.ID {
+		return common.RouterProfile{}, st, errors.New("active VPN session identity does not match the running node")
+	}
 	return p, st, nil
+}
+
+func activeTelemetryPathToken(st state) string {
+	return fmt.Sprintf("%t\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", st.Connected, st.Phase, st.Mode, st.LogicalMode, st.RuntimeMode, st.Base, st.RouterID)
+}
+
+func validateActiveTelemetryPath(a *app, p common.RouterProfile, st state, sessionID string) error {
+	currentSession := sessionTrackerFor(a).snapshot(0)
+	if sessionID == "" || currentSession.ID != sessionID || !currentSession.Connected || currentSession.Phase != "connected" || currentSession.PathProof != "passed" {
+		return errors.New("VPN session changed while live path telemetry was running; stale result was discarded")
+	}
+	a.mu.Lock()
+	currentState := a.state
+	currentProfile, ok := a.profileByIDLocked(strings.TrimSpace(currentState.RouterID))
+	a.mu.Unlock()
+	if !ok || currentProfile.ID != p.ID || activeTelemetryPathToken(currentState) != activeTelemetryPathToken(st) {
+		return errors.New("active VPN node/mode/base/path changed while live path telemetry was running; stale result was discarded")
+	}
+	if currentSession.RouterID != "" && currentSession.RouterID != p.ID {
+		return errors.New("active VPN session node changed while live path telemetry was running; stale result was discarded")
+	}
+	return nil
 }
 
 func privatePathLatency(p common.RouterProfile, st state, samples int) (connectionLatencyResult, error) {
@@ -370,9 +401,14 @@ func (a *app) connectionLiveLatency(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
 	value, err := privatePathLatency(p, st, samples)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := validateActiveTelemetryPath(a, p, st, sessionAtStart); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	w.Header().Set("content-type", "application/json")
@@ -424,6 +460,7 @@ func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
 	if strings.EqualFold(strings.TrimSpace(p.NodeKind), "external") || p.External != nil {
 		http.Error(w, "private Router VPN throughput benchmark is unavailable for an external-only exit", http.StatusConflict)
 		return
@@ -462,6 +499,10 @@ func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	downloadElapsed := time.Since(downloadStarted)
+	if err := validateActiveTelemetryPath(a, p, st, sessionAtStart); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 
 	uploadPayload := make([]byte, q.Bytes)
 	if _, err := rand.Read(uploadPayload); err != nil {
@@ -504,6 +545,10 @@ func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("upload benchmark accepted %d bytes, expected %d", uploadServer.Bytes, q.Bytes), http.StatusBadGateway)
 		return
 	}
+	if err := validateActiveTelemetryPath(a, p, st, sessionAtStart); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 
 	mbits := float64(q.Bytes*8) / 1_000_000.0
 	result := connectionSpeedResult{
@@ -511,7 +556,7 @@ func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
 		DownloadMbps: round3(mbits / downloadElapsed.Seconds()), UploadMbps: round3(mbits / uploadElapsed.Seconds()),
 		DownloadMs: round3(float64(downloadElapsed.Microseconds()) / 1000.0), UploadMs: round3(float64(uploadElapsed.Microseconds()) / 1000.0),
 		ServerReceiveMs: round3(uploadServer.ServerReceiveMs), MeasuredAt: time.Now().UTC(),
-		Proof: "authenticated bounded upload/download against the active node private router-agent through the current VPN path",
+		Proof: "authenticated bounded upload/download against the actual session-owned node private router-agent through the unchanged current VPN path",
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
@@ -557,8 +602,13 @@ func (a *app) multihopLiveLatency(w http.ResponseWriter, r *http.Request) {
 	}
 	if st.Connected && st.Mode == "multihop" {
 		if p, current, err := activeLatencyTarget(a); err == nil {
+			sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
 			if path, pathErr := privatePathLatency(p, current, 2); pathErr == nil {
-				payload["current_path"] = path
+				if freshnessErr := validateActiveTelemetryPath(a, p, current, sessionAtStart); freshnessErr == nil {
+					payload["current_path"] = path
+				} else {
+					payload["current_path_error"] = freshnessErr.Error()
+				}
 			} else {
 				payload["current_path_error"] = pathErr.Error()
 			}
