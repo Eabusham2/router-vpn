@@ -131,33 +131,45 @@ func (a *app) speedLabSystemDirect(r *http.Request, duration speedLabDuration, m
 	return path, measurement, err
 }
 
-func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, error) {
+func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error) {
 	a.mu.Lock()
 	connected := a.state.Connected
 	a.mu.Unlock()
 	if !connected {
-		return a.speedLabSystemDirect(r, duration, minDuration, maxDuration, "current")
+		path, measurement, err := a.speedLabSystemDirect(r, duration, minDuration, maxDuration, "current")
+		return path, measurement, nil, err
 	}
 	identity, path, err := captureSpeedLabIdentity(a)
 	if err != nil {
-		return speedLabPath{}, speedLabMeasurement{}, err
+		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
 	measurement, err := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
-	return path, measurement, err
+	if err != nil {
+		return path, measurement, nil, err
+	}
+	var hops []speedLabHopMeasurement
+	if path.Topology == "multihop" {
+		hops, err = measureSpeedLabMultihopHops(a, identity)
+		if err != nil {
+			return path, measurement, nil, err
+		}
+	}
+	return path, measurement, hops, nil
 }
 
-func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, error) {
+func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error) {
 	if strings.EqualFold(strings.TrimSpace(q.Topology), "system-direct") {
-		return a.speedLabSystemDirect(r, duration, minDuration, maxDuration, "temporary")
+		path, measurement, err := a.speedLabSystemDirect(r, duration, minDuration, maxDuration, "temporary")
+		return path, measurement, nil, err
 	}
 	_, finish, err := a.beginConnectionOperation()
 	if err != nil {
-		return speedLabPath{}, speedLabMeasurement{}, err
+		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
 	defer finish()
 	endPersistenceGuard, err := beginSpeedLabTemporaryPersistenceGuard(a)
 	if err != nil {
-		return speedLabPath{}, speedLabMeasurement{}, err
+		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
 	defer endPersistenceGuard()
 
@@ -175,29 +187,33 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 	path, startErr := a.startSpeedLabTemporaryPath(q)
 	if startErr != nil {
 		_ = a.speedLabRestoreTemporary(snapshot)
-		return speedLabPath{}, speedLabMeasurement{}, startErr
+		return speedLabPath{}, speedLabMeasurement{}, nil, startErr
 	}
 	if err := a.speedLabWriteStore(snapshot.Profiles); err != nil {
 		_ = a.speedLabRestoreTemporary(snapshot)
-		return speedLabPath{}, speedLabMeasurement{}, errors.New("temporary path was proven but prior durable profile state could not be restored before measurement: " + err.Error())
+		return speedLabPath{}, speedLabMeasurement{}, nil, errors.New("temporary path was proven but prior durable profile state could not be restored before measurement: " + err.Error())
 	}
 	identity, _, err := captureSpeedLabIdentity(a)
 	if err != nil {
 		_ = a.speedLabRestoreTemporary(snapshot)
-		return speedLabPath{}, speedLabMeasurement{}, err
+		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
 	measurement, measureErr := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
+	var hops []speedLabHopMeasurement
+	if measureErr == nil && path.Topology == "multihop" {
+		hops, measureErr = measureSpeedLabMultihopHops(a, identity)
+	}
 	cleanupErr := a.speedLabRestoreTemporary(snapshot)
 	if measureErr != nil {
 		if cleanupErr != nil {
-			return speedLabPath{}, speedLabMeasurement{}, errors.New(measureErr.Error() + "; temporary-path cleanup also failed: " + cleanupErr.Error())
+			return speedLabPath{}, speedLabMeasurement{}, nil, errors.New(measureErr.Error() + "; temporary-path cleanup also failed: " + cleanupErr.Error())
 		}
-		return speedLabPath{}, speedLabMeasurement{}, measureErr
+		return speedLabPath{}, speedLabMeasurement{}, nil, measureErr
 	}
 	if cleanupErr != nil {
-		return speedLabPath{}, speedLabMeasurement{}, errors.New("Speed Lab measurement completed but temporary-path cleanup failed: " + cleanupErr.Error())
+		return speedLabPath{}, speedLabMeasurement{}, nil, errors.New("Speed Lab measurement completed but temporary-path cleanup failed: " + cleanupErr.Error())
 	}
-	return path, measurement, nil
+	return path, measurement, hops, nil
 }
 
 func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
@@ -221,11 +237,12 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 	}
 	var path speedLabPath
 	var measurement speedLabMeasurement
+	var hops []speedLabHopMeasurement
 	switch scope {
 	case "current":
-		path, measurement, err = a.speedLabCurrent(r, duration, minDuration, maxDuration)
+		path, measurement, hops, err = a.speedLabCurrent(r, duration, minDuration, maxDuration)
 	case "temporary":
-		path, measurement, err = a.speedLabTemporary(r, q, duration, minDuration, maxDuration)
+		path, measurement, hops, err = a.speedLabTemporary(r, q, duration, minDuration, maxDuration)
 	default:
 		err = errors.New("Speed Lab scope must be current or temporary")
 	}
@@ -244,6 +261,7 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 		"ok": true,
 		"path": path,
 		"measurement": measurement,
+		"hops": hops,
 		"summary": map[string]any{
 			"idle_ms": measurement.Idle.MedianMs,
 			"download_mbps": measurement.Download.Mbps,
@@ -253,6 +271,6 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 			"upload_loaded_ms": measurement.Upload.LoadedLatency.MedianMs,
 			"upload_bufferbloat_ms": measurement.Upload.BufferbloatMs,
 		},
-		"note": "throughput and loaded latency are measured independently; no Mbps value is derived from RTT, and temporary path choices are restored after the test",
+		"note": "throughput and loaded latency are measured independently; multihop entry/exit RTT and Mbps are independently measured on the same proved graph; no Mbps value is derived from RTT or another hop, and temporary path choices are restored after the test",
 	})
 }
