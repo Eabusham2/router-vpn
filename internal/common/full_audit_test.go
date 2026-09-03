@@ -55,7 +55,7 @@ func TestAuthoritativeRepositoryPythonSafetyContracts(t *testing.T) {
 	for _, path := range paths {
 		path := path
 		t.Run(path, func(t *testing.T) {
-			if runtime.GOOS == "windows" && linuxRuntimeOnly[path] {
+			if runtime.GOOS != "linux" && linuxRuntimeOnly[path] {
 				t.Skip("Linux/server runtime contract is executed by the authoritative Ubuntu release audit")
 			}
 			runRepositoryPythonPath(t, path)
