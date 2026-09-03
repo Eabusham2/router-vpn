@@ -3,6 +3,7 @@ import SwiftUI
 
 private let iosConnectionProfilesKey = "routervpn.connection-profiles.v1"
 private let iosConnectionProfilesFile = "connection-profiles.json"
+private let iosConnectionProfilesSchemaVersion = 4
 private let iosConnectionProfilesMaximumBytes = 512 * 1024
 private let iosConnectionModeKey = "routervpn.unified.mode.v1"
 private let iosConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
@@ -52,6 +53,16 @@ private struct IOSConnectionProfileRecord: Identifiable, Codable, Hashable {
     }
 }
 
+private struct IOSConnectionProfileEnvelope: Codable {
+    var schemaVersion: Int
+    var profiles: [IOSConnectionProfileRecord]
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case profiles
+    }
+}
+
 @MainActor
 private enum IOSConnectionProfileStore {
     private(set) static var lastStoreError = ""
@@ -68,24 +79,34 @@ private enum IOSConnectionProfileStore {
     }
 
     private static func loadAll() throws -> [IOSConnectionProfileRecord] {
+        let decoder = JSONDecoder()
         if let data = try IOSPrivateJSONStore.read(
             iosConnectionProfilesFile,
             maximumBytes: iosConnectionProfilesMaximumBytes
         ) {
-            let values = try JSONDecoder().decode([IOSConnectionProfileRecord].self, from: data)
-            guard values.count <= 64 else { throw issue("Connection profile limit exceeded.") }
-            return values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            if let envelope = try? decoder.decode(IOSConnectionProfileEnvelope.self, from: data) {
+                guard envelope.schemaVersion >= 1, envelope.schemaVersion <= iosConnectionProfilesSchemaVersion else {
+                    throw issue("Unsupported connection profile store schema \(envelope.schemaVersion).")
+                }
+                let values = try validateStoredProfiles(envelope.profiles)
+                if envelope.schemaVersion < iosConnectionProfilesSchemaVersion { try persist(values) }
+                return sorted(values)
+            }
+            // The pre-v4 private store was a raw array. Treat that exact shape as
+            // known schema v1, validate it fully, then atomically rewrite v4.
+            let values = try validateStoredProfiles(decoder.decode([IOSConnectionProfileRecord].self, from: data))
+            try persist(values)
+            return sorted(values)
         }
 
         guard let legacy = UserDefaults.standard.data(forKey: iosConnectionProfilesKey) else { return [] }
         guard !legacy.isEmpty, legacy.count <= iosConnectionProfilesMaximumBytes else {
             throw issue("Legacy connection profile store has an invalid size.")
         }
-        let values = try JSONDecoder().decode([IOSConnectionProfileRecord].self, from: legacy)
-        guard values.count <= 64 else { throw issue("Legacy connection profile limit exceeded.") }
+        let values = try validateStoredProfiles(decoder.decode([IOSConnectionProfileRecord].self, from: legacy))
         try persist(values)
         UserDefaults.standard.removeObject(forKey: iosConnectionProfilesKey)
-        return values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return sorted(values)
     }
 
     static func snapshot(model: RouterVPNModel, name rawName: String, id: String? = nil) throws -> IOSConnectionProfileRecord {
@@ -196,13 +217,38 @@ private enum IOSConnectionProfileStore {
     }
 
     private static func persist(_ values: [IOSConnectionProfileRecord]) throws {
-        guard values.count <= 64 else { throw issue("Connection profile limit exceeded.") }
-        let data = try JSONEncoder().encode(values)
+        let validated = try validateStoredProfiles(values)
+        let envelope = IOSConnectionProfileEnvelope(schemaVersion: iosConnectionProfilesSchemaVersion, profiles: validated)
+        let data = try JSONEncoder().encode(envelope)
         try IOSPrivateJSONStore.write(
             data,
             filename: iosConnectionProfilesFile,
             maximumBytes: iosConnectionProfilesMaximumBytes
         )
+    }
+
+    private static func validateStoredProfiles(_ values: [IOSConnectionProfileRecord]) throws -> [IOSConnectionProfileRecord] {
+        guard values.count <= 64 else { throw issue("Connection profile limit exceeded.") }
+        var ids = Set<String>()
+        for value in values {
+            _ = try cleanName(value.name)
+            guard !value.id.isEmpty, value.id.count <= 128, ids.insert(value.id).inserted else {
+                throw issue("Connection profile store contains an invalid or duplicate id.")
+            }
+            guard (value.nodeKind == "router-vpn" || value.nodeKind == "external"),
+                  !value.nodeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw issue("Connection profile store contains an invalid node reference.")
+            }
+            _ = try normalizeLayers(value.customLayers)
+            if value.nodeKind == "router-vpn", value.preferences == nil {
+                throw issue("Router connection profile is missing its non-secret preference snapshot.")
+            }
+        }
+        return values
+    }
+
+    private static func sorted(_ values: [IOSConnectionProfileRecord]) -> [IOSConnectionProfileRecord] {
+        values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private static func cleanName(_ value: String) throws -> String {
@@ -289,7 +335,7 @@ struct IOSConnectionProfilesView: View {
                     if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary) }
                 }
                 Section("Capability truth") {
-                    Text("Current iOS does not execute full desktop multihop, so an imported Router node carrying desktop-style multihop choices is rejected at Add/Update time rather than creating an iOS profile that cannot be loaded. Connect remains a separate action so PacketTunnel still has to establish and prove the real path.")
+                    Text("Current iOS does not execute full desktop multihop, so an imported Router node carrying desktop-style multihop choices is rejected at Add/Update time rather than creating an iOS profile that cannot be loaded. Disable multihop or save it from a supported desktop/Android path. Connect remains a separate action so PacketTunnel still has to establish and prove the real path.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
