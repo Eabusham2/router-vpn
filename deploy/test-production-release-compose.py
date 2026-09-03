@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import importlib.util
@@ -152,7 +151,7 @@ def main() -> int:
         "read_regular_text",
         "tempfile.mkstemp",
         "os.fsync(stream.fileno())",
-        "os.replace(temp, path)",
+        "os.replace(tmp, path)",
         "os.path.samestat(staged, current)",
     ):
         assert marker in source, marker
