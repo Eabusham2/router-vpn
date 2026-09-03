@@ -6,6 +6,7 @@ SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"
 UNIFIED_SRC="$ROOT/client/macos/RouterVPNMacUnifiedShell.swift"
 SESSION_MUTATION_TRANSFORM="$ROOT/client/macos/macos-session-mutation-transform.py"
 TELEMETRY_SRC="$ROOT/client/macos/RouterVPNMacTelemetry.swift"
+SPEED_LAB_SRC="$ROOT/client/macos/RouterVPNMacSpeedLab.swift"
 GLOBE_SRC="$ROOT/client/macos/RouterVPNMacGlobeChrome.swift"
 PROFILE_SRC="$ROOT/client/macos/RouterVPNConnectionProfiles.swift"
 PROFILE_CHROME_SRC="$ROOT/client/macos/RouterVPNConnectionProfileChrome.swift"
@@ -50,7 +51,7 @@ changes = (
     ('split.setPosition(650, ofDividerAt: 0)', 'split.setPosition(430, ofDividerAt: 0)'),
     (
         'super.init(window: window); buildUI(); refreshAll(); timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshLive() }',
-        'super.init(window: window); buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry(); timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshLive(); self?.refreshUnifiedChrome(); self?.refreshUnifiedTelemetry() }',
+        'super.init(window: window); buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedSpeedLabUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry(); timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshLive(); self?.refreshUnifiedChrome(); self?.refreshUnifiedTelemetry() }',
     ),
     (
         'let r = NSStackView(); r.orientation = .horizontal; r.spacing = 8; r.addArrangedSubview(button("AUTO Connect", #selector(autoConnect))); r.addArrangedSubview(button("Connect Selected", #selector(connectSelected))); r.addArrangedSubview(button("Disconnect", #selector(disconnect))); r.addArrangedSubview(button("Refresh", #selector(refreshAction))); s.addArrangedSubview(r)',
@@ -78,17 +79,10 @@ for old, new in changes:
     if count == 1:
         text = text.replace(old, new, 1)
     elif count == 0 and new in text:
-        # The canonical source may already contain the migrated unified behavior.
-        # Treat that as converged instead of making packaging depend on a stale
-        # one-time source transform.
         pass
     else:
         raise SystemExit(f"macOS adaptive/unified strategy/settings/onboarding contract drifted: {old}")
 
-# Session hardening runs before this adaptive migration. Locate the complete
-# hardened AUTO method structurally, preserve any requireMutationIdle guard, and
-# change only the API endpoint. Then add SMART/CUSTOM actions if the canonical
-# source has not already grown them.
 signature = '@objc func autoConnect() {'
 start = text.find(signature)
 if start < 0:
@@ -139,7 +133,7 @@ if insertions:
     text = text[:end] + '\n' + '\n'.join(insertions) + text[end:]
 for marker in (
     'window.minSize = NSSize(width: 720, height: 520)',
-    'buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry()',
+    'buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedSpeedLabUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry()',
     '/api/strategy/auto', '/api/strategy/smart-auto',
     'customConnect() { openUnifiedCustomBuilder() }',
     'refreshHomeSummary()',
@@ -155,7 +149,7 @@ PY
 xcrun clang -fobjc-arc -fblocks -fmodules -isysroot "$SDK" -mmacosx-version-min=13.0 -arch "$CLANG_ARCH" -c "$MENU_SRC" -o "$MENU_OBJ"
 
 xcrun swiftc -O -sdk "$SDK" -target "$TARGET" -framework AppKit -framework CoreLocation -framework Foundation -framework MapKit \
-  "$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$MENU_OBJ" -o "$BIN"
+  "$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$MENU_OBJ" -o "$BIN"
 chmod 755 "$BIN"
 
 ICON_WORK="$BUILD_WORK/icon"; mkdir -p "$ICON_WORK"
@@ -186,22 +180,21 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 file "$BIN"
 case "$ARCH" in amd64) file "$BIN" | grep -Eq 'x86_64|Mach-O 64-bit executable x86_64';; arm64) file "$BIN" | grep -Eq 'arm64|Mach-O 64-bit executable arm64';; esac
 
-! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC" "$UNIFIED_SRC" "$TELEMETRY_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC"
+! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC" "$UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC"
 for marker in 'NSWindow(' 'import MapKit' 'MKMapView' 'http://127.0.0.1:8788' '/api/connect-logical' '/api/session/events' '/api/multihop/status' '/api/multihop/connect' '/api/external-profile/import' '/api/external-profile/connect' 'entry_id' 'externalEntryPopup' '/api/mtu/retest' 'Retest MTU' 'effective_mtu_mbps' '/api/emergency-stop'; do grep -Fq "$marker" "$SRC"; done
 for marker in 'buildUnifiedUI' 'unified-sheet' 'unified-connect' 'SMART AUTO — recommended' 'AUTO — first proven path' 'New CUSTOM preset…' 'CUSTOM preset builder' 'Kill switch' 'Multihop' 'Open settings' 'Mode' 'DNS' 'systemBlue' 'systemOrange' 'systemPink' 'real coordinates'; do grep -Fq "$marker" "$HARDENED_UNIFIED_SRC"; done
 for marker in 'self.mutationBusy(from: statusObject)' 'Disconnect already in progress.' 'changing the selected mode' 'saving a CUSTOM preset' 'deleting a CUSTOM preset' 'changing persistent kill-switch policy' 'changing DNS policy' 'Disconnecting…' 'Checking…'; do grep -Fq "$marker" "$HARDENED_UNIFIED_SRC"; done
 for marker in 'func mutationBusy(from status:' 'redeeming the one-time pairing code' 'committing the lowest-latency node selection' 'committing linked-node removal' 'saving DNS policy'; do grep -Fq "$marker" "$HARDENED_SRC"; done
 for marker in 'installUnifiedTelemetryUI' 'unified-fastest-node' 'unified-live-latency' 'unified-multihop-latency' '/api/profile/fastest' '/api/connection/live-latency' '/api/multihop/live-latency' '/api/forwarding/master' 'Forward ON' 'Forward OFF' 'toggleUnifiedForwardingMaster' 'Performance' 'Throughput + Auto MTU'; do grep -Fq "$marker" "$TELEMETRY_SRC"; done
+for marker in 'installUnifiedSpeedLabUI' 'unified-speed-lab' '/api/speed-lab/options' '/api/speed-lab/run' 'Current path' 'Temporary config' 'System direct' 'Multihop' 'External exit / hop' 'Auto timing' 'Custom timing' 'download_loaded_ms' 'upload_loaded_ms' 'bufferbloat'; do grep -Fq "$marker" "$SPEED_LAB_SRC"; done
 for marker in 'installUnifiedMapChrome' 'ROUTER VPN • LIVE ROUTE' 'Only linked real coordinates' 'no IP geolocation or fabricated device pin' 'map.mapType = .mutedStandard' 'Timer.scheduledTimer(withTimeInterval: 0.05' '/api/multihop/status' '/api/multihop/live-latency' 'PATH %.1f ms'; do grep -Fq "$marker" "$GLOBE_SRC"; done
 for marker in 'manageConnectionProfiles' '/api/connection-profile/setup/save' '/api/connection-profile/setup/update' '/api/connection-profile/setup/load' '/api/connection-profile/setup/delete' 'multihop_entry_id' 'multihop_exit_id' 'multihop_exit_mode' 'Loading never connects automatically'; do grep -Fq "$marker" "$PROFILE_SRC"; done
 for marker in 'installUnifiedConnectionProfileChrome' 'unified-connection-profiles' 'Profiles' 'complete non-secret connection setups'; do grep -Fq "$marker" "$PROFILE_CHROME_SRC"; done
-for marker in 'buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry()' '/api/strategy/auto' '/api/strategy/smart-auto' 'openUnifiedCustomBuilder()' 'refreshHomeSummary()' 'button("Edit profile settings", #selector(editProfileSettings))' 'button("Run onboarding", #selector(runProductOnboarding))' 'RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)'; do grep -Fq "$marker" "$ADAPTIVE_SRC"; done
+for marker in 'buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedSpeedLabUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome(); refreshAll(); refreshUnifiedModeMenu(); refreshUnifiedChrome(); refreshUnifiedTelemetry()' '/api/strategy/auto' '/api/strategy/smart-auto' 'openUnifiedCustomBuilder()' 'refreshHomeSummary()' 'button("Edit profile settings", #selector(editProfileSettings))' 'button("Run onboarding", #selector(runProductOnboarding))' 'RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)'; do grep -Fq "$marker" "$ADAPTIVE_SRC"; done
 for marker in 'RouterVPNProductOnboardingDoneV2' 'Add or link a node' 'router-vpn-bundle.json' 'AUTO' 'WireGuard' 'AmneziaWG' 'DNS' 'LAN Off' 'MTU/Jumbo' 'kill-switch' 'Multihop' 'forwarding' 'permissions' 'Disconnect' 'private identity/path proof' 'Public exit' 'Diagnostics' 'Emergency stop' 'Setup Center Full Guide' 'Run onboarding'; do grep -Fq "$marker" "$ONBOARDING_SRC"; done
 for marker in '/api/home-summary' '/api/home-summary/prove-exit' 'actualExitStatus == "proved"' 'Node latency' 'LAN access' 'Kill switch' 'Effective MTU' 'Warnings'; do grep -Fq "$marker" "$HOME_SRC"; done
 for marker in '/api/profile/settings' 'Allow home LAN access' 'Always / strict' 'AmneziaWG' 'Auto measured' 'DAITA-like' 'Jumbo TUN' 'SOCKS5' 'startup' 'auto-connect'; do grep -Fiq "$marker" "$SETTINGS_SRC"; done
 grep -Fq 'NSStatusBar' "$MENU_SRC"; grep -Fq 'Open Router VPN' "$MENU_SRC"; grep -Fq 'Emergency Stop' "$MENU_SRC"; grep -Fq 'Quit Router VPN' "$MENU_SRC"
-# Avoid producer | grep -q under pipefail: an early successful grep can
-# SIGPIPE the producer and turn a proven marker into a false build failure.
 strings "$BIN" >"$BUILD_WORK/RouterVPN.strings"
 grep -Fq 'RouterVPNMenuBarBootstrap' "$BUILD_WORK/RouterVPN.strings"
 otool -L "$BIN" >"$BUILD_WORK/RouterVPN.otool"
@@ -209,4 +202,4 @@ otool -L "$BIN" >"$BUILD_WORK/RouterVPN.otool"
 
 if [[ "$(uname -m)" == arm64 && "$ARCH" == arm64 ]] || [[ "$(uname -m)" == x86_64 && "$ARCH" == amd64 ]]; then "$BIN" --self-test; fi
 
-echo "Built native RouterVPN.app with map-first unified shell, animated VPN route chrome, full setup-aware Profiles CRUD, fastest-node connect, live path/multihop telemetry, real forwarding master, truthful SMART/AUTO/CUSTOM, editable profile settings, menu bar and persistent onboarding for $ARCH at $APP"
+echo "Built native RouterVPN.app with map-first unified shell, animated VPN route chrome, full setup-aware Profiles CRUD, fastest-node connect, live path/multihop telemetry, native Speed Lab with loaded latency, real forwarding master, truthful SMART/AUTO/CUSTOM, editable profile settings, menu bar and persistent onboarding for $ARCH at $APP"
