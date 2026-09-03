@@ -153,10 +153,12 @@ final class IOSSpeedLabRunner: ObservableObject {
             let measurement = try await guardedMeasurement(request.duration, model: model, token: token)
             try await restore(snapshot, model: model, stopTunnel: startedTemporaryTunnel)
             return IOSSpeedLabRunResult(path: path, temporary: true, measurement: measurement)
-        } catch {
+        } catch let operationError {
             do { try await restore(snapshot, model: model, stopTunnel: startedTemporaryTunnel || model.connected) }
-            catch { throw self.error("\(error.localizedDescription); temporary-path cleanup also failed: \(error.localizedDescription)") }
-            throw error
+            catch let cleanupError {
+                throw self.error("\(operationError.localizedDescription); temporary-path cleanup also failed: \(cleanupError.localizedDescription)")
+            }
+            throw operationError
         }
     }
 
