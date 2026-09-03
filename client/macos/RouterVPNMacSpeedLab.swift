@@ -164,6 +164,28 @@ private final class RouterVPNMacSpeedLabController: NSWindowController {
         return body
     }
 
+    private func hopSummary(_ root: [String: Any]) -> String {
+        guard let hops = root["hops"] as? [[String: Any]], !hops.isEmpty else { return "" }
+        let lines = hops.map { hop -> String in
+            let role = ((hop["role"] as? String) ?? "hop").uppercased()
+            let name = (hop["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (hop["router_id"] as? String ?? "node")
+            var latency = "RTT unavailable"
+            if let stats = hop["latency"] as? [String: Any], let value = (stats["median_ms"] as? NSNumber)?.doubleValue {
+                latency = String(format: "%.1f ms", value)
+            } else if let reason = hop["latency_error"] as? String, !reason.isEmpty {
+                latency = "RTT unavailable: \(reason)"
+            }
+            var speed = "speed unavailable"
+            if let stats = hop["speed"] as? [String: Any], let down = (stats["download_mbps"] as? NSNumber)?.doubleValue, let up = (stats["upload_mbps"] as? NSNumber)?.doubleValue {
+                speed = String(format: "↓ %.1f / ↑ %.1f Mbps", down, up)
+            } else if let reason = hop["speed_error"] as? String, !reason.isEmpty {
+                speed = "speed unavailable: \(reason)"
+            }
+            return "\(role) • \(name) • \(latency) • \(speed)"
+        }
+        return "PER-HOP — SAME PROVED GRAPH\n" + lines.joined(separator: "\n")
+    }
+
     @objc private func runSpeedLab() {
         let body = requestBody(); let maxSeconds = selected(durationMode) == "custom" ? maxTime.doubleValue : 12
         runButton.isEnabled = false; status.stringValue = "Building/proving path and measuring…"; detail.string = "Speed Lab running. Temporary path state will be restored after completion."
@@ -175,12 +197,16 @@ private final class RouterVPNMacSpeedLabController: NSWindowController {
                 let down = measurement["download"] as? [String: Any] ?? [:], up = measurement["upload"] as? [String: Any] ?? [:], idleStats = measurement["idle_latency"] as? [String: Any] ?? [:]
                 let downLoaded = down["loaded_latency"] as? [String: Any] ?? [:], upLoaded = up["loaded_latency"] as? [String: Any] ?? [:]
                 let pretty = String(data: try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]), encoding: .utf8) ?? ""
+                let hops = self.hopSummary(root)
                 DispatchQueue.main.async {
                     self.idle.stringValue = String(format: "%.1f ms", (summary["idle_ms"] as? NSNumber)?.doubleValue ?? 0); self.download.stringValue = String(format: "%.1f Mbps", (summary["download_mbps"] as? NSNumber)?.doubleValue ?? 0); self.upload.stringValue = String(format: "%.1f Mbps", (summary["upload_mbps"] as? NSNumber)?.doubleValue ?? 0)
                     self.idleDetail.stringValue = String(format: "p90 %.1f • max %.1f • jitter %.1f ms", (idleStats["p90_ms"] as? NSNumber)?.doubleValue ?? 0, (idleStats["max_ms"] as? NSNumber)?.doubleValue ?? 0, (idleStats["jitter_ms"] as? NSNumber)?.doubleValue ?? 0)
                     self.downloadDetail.stringValue = String(format: "loaded %.1f ms • +%.1f bloat • p90 %.1f", (summary["download_loaded_ms"] as? NSNumber)?.doubleValue ?? 0, (summary["download_bufferbloat_ms"] as? NSNumber)?.doubleValue ?? 0, (downLoaded["p90_ms"] as? NSNumber)?.doubleValue ?? 0)
                     self.uploadDetail.stringValue = String(format: "loaded %.1f ms • +%.1f bloat • p90 %.1f", (summary["upload_loaded_ms"] as? NSNumber)?.doubleValue ?? 0, (summary["upload_bufferbloat_ms"] as? NSNumber)?.doubleValue ?? 0, (upLoaded["p90_ms"] as? NSNumber)?.doubleValue ?? 0)
-                    self.detail.string = pretty; self.status.stringValue = "Finished • \((root["path"] as? [String:Any])?["topology"] as? String ?? "path") • \(measurement["provider"] as? String ?? "Speed Lab")"; self.runButton.isEnabled = true
+                    self.detail.string = hops.isEmpty ? pretty : hops + "\n\nFULL RESULT\n" + pretty
+                    let hopCount = (root["hops"] as? [[String: Any]])?.count ?? 0
+                    let hopSuffix = hopCount > 0 ? " • \(hopCount) hop measurements" : ""
+                    self.status.stringValue = "Finished • \((root["path"] as? [String:Any])?["topology"] as? String ?? "path") • \(measurement["provider"] as? String ?? "Speed Lab")\(hopSuffix)"; self.runButton.isEnabled = true
                 }
             } catch { DispatchQueue.main.async { self.detail.string = error.localizedDescription; self.status.stringValue = "Speed Lab failed closed; see details."; self.runButton.isEnabled = true } }
         }
