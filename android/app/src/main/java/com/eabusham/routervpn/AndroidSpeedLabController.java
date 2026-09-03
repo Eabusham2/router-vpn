@@ -24,14 +24,20 @@ final class AndroidSpeedLabController {
     private final Activity activity;
     private final AndroidUnifiedConnectionController connection;
     private final AndroidSpeedLab meter;
+    private final AndroidSpeedLabHopMeter hopMeter;
     private final AtomicBoolean running=new AtomicBoolean(false);
+    private volatile List<AndroidSpeedLabHopMeter.Hop> lastHops=Collections.emptyList();
+    private volatile String lastHopError="";
 
-    AndroidSpeedLabController(Activity activity,AndroidUnifiedConnectionController connection){this.activity=activity;this.connection=connection;this.meter=new AndroidSpeedLab(activity);}
+    AndroidSpeedLabController(Activity activity,AndroidUnifiedConnectionController connection){this.activity=activity;this.connection=connection;this.meter=new AndroidSpeedLab(activity);this.hopMeter=new AndroidSpeedLabHopMeter(activity);}
     boolean isRunning(){return running.get();}
+    List<AndroidSpeedLabHopMeter.Hop> hops(){return new ArrayList<>(lastHops);}
+    String hopError(){return lastHopError;}
 
     void run(Request request,Callback callback){
         if(request==null){callback.finished(null,new IllegalArgumentException("Speed Lab request is required."));return;}
         if(!running.compareAndSet(false,true)){callback.finished(null,new IllegalStateException("Another Speed Lab test is already running."));return;}
+        lastHops=Collections.emptyList();lastHopError="";
         try{
             String scope=normalize(request.scope,"current");
             if("current".equals(scope)){callback.progress("Testing the actual current Android path…");measure(request,callback,false);return;}
@@ -65,19 +71,35 @@ final class AndroidSpeedLabController {
 
     private void measure(Request request,Callback callback,boolean cleanup){
         meter.run(request.durationMode,request.minSeconds,request.maxSeconds,(result,error)->activity.runOnUiThread(()->{
-            if(!cleanup){finish(callback,result,error);return;}
-            callback.progress(error==null?"Measurement complete. Tearing down temporary path…":"Measurement failed. Tearing down temporary path…");
-            connection.disconnect(new AndroidUnifiedConnectionController.Callback(){
-                @Override public void progress(String message){callback.progress(message);}
-                @Override public void finished(boolean ok,String message){
-                    Throwable finalError=error;
-                    if(!ok){IllegalStateException cleanupError=new IllegalStateException("Temporary Android path cleanup failed: "+message);if(finalError!=null)cleanupError.addSuppressed(finalError);finalError=cleanupError;}
-                    finish(callback,result,finalError);
-                }
-            });
+            if(error!=null){complete(callback,cleanup,result,error);return;}
+            AndroidHomeStateStore.Snapshot runtime=AndroidHomeStateStore.snapshot(activity);
+            if(!runtime.connected||!"multihop".equals(runtime.logicalMode)){complete(callback,cleanup,result,null);return;}
+            try{
+                AndroidNodeStore store=new AndroidNodeStore(activity);AndroidNodeStore.Node entry=find(store.list(),runtime.activeEntryId),exit=find(store.list(),runtime.activeExitId);
+                if(entry==null||exit==null)throw new IllegalStateException("Active Android multihop nodes disappeared before Speed Lab hop measurement.");
+                callback.progress("End-to-end test complete. Measuring entry and exit hops on the same graph…");
+                hopMeter.measure(entry,exit,(hops,hopError)->activity.runOnUiThread(()->{
+                    if(hopError==null&&hops!=null){lastHops=Collections.unmodifiableList(new ArrayList<>(hops));lastHopError="";}else{lastHops=Collections.emptyList();lastHopError=hopError==null?"Per-hop Speed Lab metrics were unavailable.":hopError.getMessage();}
+                    complete(callback,cleanup,result,null);
+                }));
+            }catch(Throwable hopSetupError){lastHopError=hopSetupError.getMessage();complete(callback,cleanup,result,null);}
         }));
     }
 
+    private void complete(Callback callback,boolean cleanup,AndroidSpeedLab.Result result,Throwable error){
+        if(!cleanup){finish(callback,result,error);return;}
+        callback.progress(error==null?"Measurement complete. Tearing down temporary path…":"Measurement failed. Tearing down temporary path…");
+        connection.disconnect(new AndroidUnifiedConnectionController.Callback(){
+            @Override public void progress(String message){callback.progress(message);}
+            @Override public void finished(boolean ok,String message){
+                Throwable finalError=error;
+                if(!ok){IllegalStateException cleanupError=new IllegalStateException("Temporary Android path cleanup failed: "+message);if(finalError!=null)cleanupError.addSuppressed(finalError);finalError=cleanupError;}
+                finish(callback,result,finalError);
+            }
+        });
+    }
+
+    private static AndroidNodeStore.Node find(List<AndroidNodeStore.Node>nodes,String id){if(nodes==null||id==null)return null;for(AndroidNodeStore.Node node:nodes)if(node!=null&&id.equals(node.id))return node;return null;}
     private void finish(Callback callback,AndroidSpeedLab.Result result,Throwable error){running.set(false);callback.finished(result,error);}
     private static String normalize(String value,String fallback){String out=value==null?"":value.trim().toLowerCase(Locale.US);return out.isEmpty()?fallback:out;}
 }
