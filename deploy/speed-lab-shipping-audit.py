@@ -43,6 +43,10 @@ need(
     "speedLabStable",
     "speedLabDownloadRound",
     "speedLabUploadRound",
+    "speedLabStreamCount",
+    "speedLabParallelRound",
+    "MaxConnsPerHost = 8",
+    "adaptive 1-%d concurrent streams",
     "no latency probes succeeded",
 )
 need(
@@ -161,6 +165,10 @@ need(
     "activeExternalId",
     "runtimeMode",
     '"passed".equals(now.pathProof)',
+    "ParallelRound",
+    "parallelRound",
+    "streamCount",
+    "Math.min(32<<20,v)",
 )
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidSpeedLabController.java",
@@ -197,6 +205,10 @@ need(
     "bufferbloatMs",
     "speed.cloudflare.com",
     "stable(rates)",
+    "parallelRound",
+    "streamCount",
+    "32 << 20",
+    "withThrowingTaskGroup",
 )
 need(
     "ios/RouterVPN/App/IOSSpeedLabRunner.swift",
