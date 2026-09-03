@@ -88,20 +88,23 @@ jobs:
           test -s "$archive"
           members="$RUNNER_TEMP/linux-native-$arch-members.txt"
           tar -tzf "$archive" > "$members"
-          for member in router-vpn-app router-vpn.png router-vpn.desktop install-router-vpn.sh LICENSE; do
+          for member in router-vpn-app router-vpn-update router-vpn.png router-vpn.desktop install-router-vpn.sh LICENSE; do
             grep -Fxq "RouterVPN-linux-$arch/$member" "$members"
           done
           ! grep -Fq 'router-vpn-bundle.json' "$members"
           test ! -d "dist/linux-native/work-$arch"
+          grep -Fq 'routervpn-unified-shell-v8.inc' client/linux/build-native-app.sh
+          grep -Fq 'gtk_stack_new' client/linux/routervpn-unified-shell-v8.inc
           grep -Fq 'gtk_window_new' client/linux/routervpn-gtk.c
-          grep -Fq 'gtk_notebook_new' client/linux/routervpn-gtk.c
           grep -Fq 'http://127.0.0.1:8788' client/linux/routervpn-gtk.c
           ! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' client/linux/routervpn-gtk.c
           work="$RUNNER_TEMP/linux-native-inspect-$arch"
+          rm -rf "$work"
           mkdir -p "$work"
           tar -xzf "$archive" -C "$work"
           root="$work/RouterVPN-linux-$arch"
-          grep -Fxq 'Exec=/opt/router-vpn-client/router-vpn-app' "$root/router-vpn.desktop"
+          grep -Fxq 'TryExec=/usr/local/bin/router-vpn' "$root/router-vpn.desktop"
+          grep -Fxq 'Exec=/usr/local/bin/router-vpn' "$root/router-vpn.desktop"
           grep -Fxq 'Icon=router-vpn' "$root/router-vpn.desktop"
           grep -Fxq 'StartupWMClass=router-vpn-app' "$root/router-vpn.desktop"
           grep -Fq '[[ ! -f "$ROOT/routers.json" ]]' "$root/install-router-vpn.sh"
