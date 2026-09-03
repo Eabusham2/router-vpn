@@ -1,7 +1,7 @@
 param([string]$Bundle = (Get-Location).Path)
 $ErrorActionPreference = 'Stop'
 $Bundle = [IO.Path]::GetFullPath($Bundle)
-foreach ($required in @('client.json','routers.json','modes.json','logical-modes.json','RouterVPN.exe','RouterVPN.ico','router-vpn-client.exe')) {
+foreach ($required in @('client.json','routers.json','modes.json','logical-modes.json','RouterVPN.exe','RouterVPN.ico','router-vpn-client.exe','router-vpn-update.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $Bundle $required) -PathType Leaf)) {
         throw "Run this from an extracted RouterVPN-Windows package; missing $required"
     }
@@ -22,6 +22,7 @@ Copy-Item (Join-Path $Bundle 'router-vpn-client.exe') (Join-Path $Root 'router-v
 if (Test-Path -LiteralPath (Join-Path $Bundle 'router-vpn-dns.exe') -PathType Leaf) {
     Copy-Item (Join-Path $Bundle 'router-vpn-dns.exe') (Join-Path $Root 'router-vpn-dns.exe') -Force
 }
+Copy-Item (Join-Path $Bundle 'router-vpn-update.exe') (Join-Path $Root 'router-vpn-update.exe') -Force
 Copy-Item (Join-Path $Bundle 'RouterVPN.exe') (Join-Path $Root 'RouterVPN.exe') -Force
 Copy-Item (Join-Path $Bundle 'RouterVPN.ico') (Join-Path $Root 'RouterVPN.ico') -Force
 if (Test-Path -LiteralPath (Join-Path $Bundle 'RouterVPN.png') -PathType Leaf) {
