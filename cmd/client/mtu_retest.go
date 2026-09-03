@@ -32,6 +32,12 @@ type mtuRetestSnapshot struct {
 	Mode         string
 }
 
+type mtuLiveSnapshot struct {
+	Interface   string
+	Family      int
+	OriginalMTU int
+}
+
 type mtuWinner struct {
 	MTU          int     `json:"mtu"`
 	Working      bool    `json:"working"`
@@ -96,25 +102,45 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotImplemented)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), mtuRetestTimeout)
-	defer cancel()
 	baseEnv := mtuRetestEnvironment(root, snapshot.Profile, snapshot.State, snapshot.Mode, snapshot)
-	out, runErr := runMTURetestAction(ctx, a.cfg.ScriptsDir, "measure", baseEnv)
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		http.Error(w, "MTU Retest exceeded its bounded two-minute budget and was stopped", http.StatusGatewayTimeout)
-		return
-	}
-	if runErr != nil {
-		http.Error(w, "MTU Retest failed closed: "+boundedMTUDetail(out), http.StatusBadGateway)
-		return
-	}
-	measurement, rawResult, err := decodeMTUMeasurement(out)
+	liveSnapshot, err := captureMTULiveSnapshot(snapshot.Profile)
 	if err != nil {
-		http.Error(w, "MTU Retest returned an invalid measurement: "+err.Error(), http.StatusBadGateway)
+		http.Error(w, "MTU Retest could not snapshot the live tunnel MTU before measurement: "+err.Error(), http.StatusConflict)
 		return
 	}
 	if err := validateMTURetestSnapshot(a, snapshot); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), mtuRetestTimeout)
+	defer cancel()
+	out, runErr := runMTURetestAction(ctx, a.cfg.ScriptsDir, "measure", baseEnv)
+	if ctx.Err() != nil {
+		status := http.StatusRequestTimeout
+		message := "MTU Retest was canceled before measurement completed"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
+			message = "MTU Retest exceeded its bounded two-minute budget and was stopped"
+		}
+		failMTURetestWithLiveRollback(w, status, message, liveSnapshot)
+		return
+	}
+	if runErr != nil {
+		failMTURetestWithLiveRollback(w, http.StatusBadGateway, "MTU Retest failed closed: "+boundedMTUDetail(out), liveSnapshot)
+		return
+	}
+	measurement, rawResult, err := decodeMTUMeasurement(out)
+	if err != nil {
+		failMTURetestWithLiveRollback(w, http.StatusBadGateway, "MTU Retest returned an invalid measurement: "+err.Error(), liveSnapshot)
+		return
+	}
+	if err := validateMTUMeasurementAgainstLiveSnapshot(measurement, liveSnapshot); err != nil {
+		failMTURetestWithLiveRollback(w, http.StatusConflict, err.Error(), liveSnapshot)
+		return
+	}
+	if err := validateMTURetestSnapshot(a, snapshot); err != nil {
+		failMTURetestWithLiveRollback(w, http.StatusConflict, err.Error(), liveSnapshot)
 		return
 	}
 
@@ -125,30 +151,42 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		"HOMEVPN_MTU_APPLY_VALUE="+strconv.Itoa(measurement.Winner.MTU),
 	)
 	applyOut, applyErr := runMTURetestAction(ctx, a.cfg.ScriptsDir, "apply", applyEnv)
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		http.Error(w, "MTU Retest exceeded its bounded two-minute budget before result adoption", http.StatusGatewayTimeout)
+	if ctx.Err() != nil {
+		status := http.StatusRequestTimeout
+		message := "MTU Retest was canceled before result adoption completed"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
+			message = "MTU Retest exceeded its bounded two-minute budget before result adoption"
+		}
+		failMTURetestWithLiveRollback(w, status, message, liveSnapshot)
 		return
 	}
 	if applyErr != nil {
-		http.Error(w, "MTU Retest measured a winner but refused to adopt it: "+boundedMTUDetail(applyOut), http.StatusConflict)
+		failMTURetestWithLiveRollback(w, http.StatusConflict, "MTU Retest measured a winner but refused to adopt it: "+boundedMTUDetail(applyOut), liveSnapshot)
 		return
 	}
 	if err := validateMTURetestSnapshot(a, snapshot); err != nil {
-		rollbackMTULiveResult(a, root, snapshot, measurement)
-		http.Error(w, err.Error(), http.StatusConflict)
+		failMTURetestWithLiveRollback(w, http.StatusConflict, err.Error(), liveSnapshot)
 		return
 	}
 
 	updated, persistErr := persistMTUMeasurement(a, snapshot, measurement)
 	if persistErr != nil {
-		rollbackMTULiveResult(a, root, snapshot, measurement)
-		http.Error(w, "MTU Retest could not persist the fresh measured result: "+persistErr.Error(), http.StatusInternalServerError)
+		failMTURetestWithLiveRollback(w, http.StatusInternalServerError, "MTU Retest could not persist the fresh measured result: "+persistErr.Error(), liveSnapshot)
 		return
 	}
 	if err := validateMTURetestSnapshot(a, snapshot); err != nil {
-		rollbackMTULiveResult(a, root, snapshot, measurement)
-		if restoreErr := restoreMTUMeasurementFields(a, snapshot); restoreErr != nil {
-			http.Error(w, "MTU result became stale and durable rollback was incomplete: "+err.Error()+"; "+restoreErr.Error(), http.StatusInternalServerError)
+		liveRollbackErr := restoreMTULiveSnapshot(liveSnapshot)
+		durableRollbackErr := restoreMTUMeasurementFields(a, snapshot)
+		if liveRollbackErr != nil || durableRollbackErr != nil {
+			detail := err.Error()
+			if liveRollbackErr != nil {
+				detail += "; live MTU rollback failed: " + liveRollbackErr.Error()
+			}
+			if durableRollbackErr != nil {
+				detail += "; durable MTU rollback failed: " + durableRollbackErr.Error()
+			}
+			http.Error(w, "MTU result became stale and rollback was incomplete: "+detail, http.StatusInternalServerError)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -162,7 +200,7 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		"effective_mtu_source":    updated.EffectiveMTUSource,
 		"effective_mtu_tested_at": updated.EffectiveMTUTestedAt,
 		"result":                  rawResult,
-		"note":                    "bounded private-node loss/RTT/throughput comparison; measurement is restored first, then adopted only after the same session/profile/path is re-proved; the result is cached by network/path context and does not claim MTU caused any earlier cellular regression",
+		"note":                    "bounded private-node loss/RTT/throughput comparison; the exact pre-test live MTU is snapshotted before any mutation, measurement is restored first, and adoption occurs only after the same session/profile/path is re-proved; cancellation, timeout, stale output, malformed output, apply failure, or persistence failure restores that exact live snapshot",
 	})
 }
 
@@ -218,6 +256,33 @@ func captureMTURetestSnapshot(a *app) (mtuRetestSnapshot, error) {
 		ProfileToken: mtuProfileSnapshotToken(p), StateToken: mtuStateSnapshotToken(st),
 		Profile: p, State: st, Mode: mode,
 	}, nil
+}
+
+func captureMTULiveSnapshot(p common.RouterProfile) (mtuLiveSnapshot, error) {
+	host := strings.Trim(strings.TrimSpace(p.DAITAHost), "[]")
+	if host == "" {
+		host = "10.77.0.1"
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !(ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()) {
+		return mtuLiveSnapshot{}, errors.New("MTU live snapshot requires a literal private tunnel benchmark address")
+	}
+	family := 6
+	if ip.To4() != nil {
+		family = 4
+	}
+	iface, err := mtuRouteInterface(host)
+	if err != nil {
+		return mtuLiveSnapshot{}, err
+	}
+	mtu, err := readMTULiveValue(iface, family)
+	if err != nil {
+		return mtuLiveSnapshot{}, err
+	}
+	if mtu < 576 || mtu > 9000 {
+		return mtuLiveSnapshot{}, fmt.Errorf("live tunnel interface returned unsafe MTU %d", mtu)
+	}
+	return mtuLiveSnapshot{Interface: iface, Family: family, OriginalMTU: mtu}, nil
 }
 
 func validateMTURetestSnapshot(a *app, snapshot mtuRetestSnapshot) error {
@@ -292,6 +357,13 @@ func decodeMTUMeasurement(out []byte) (mtuMeasurementResult, map[string]any, err
 	return result, raw, nil
 }
 
+func validateMTUMeasurementAgainstLiveSnapshot(measurement mtuMeasurementResult, live mtuLiveSnapshot) error {
+	if measurement.Interface != live.Interface || measurement.Family != live.Family || measurement.OriginalMTU != live.OriginalMTU {
+		return errors.New("MTU measurement live interface/family/original value changed after the controller snapshot; stale result was not adopted")
+	}
+	return nil
+}
+
 func persistMTUMeasurement(a *app, snapshot mtuRetestSnapshot, measurement mtuMeasurementResult) (common.RouterProfile, error) {
 	if err := validateMTURetestSnapshot(a, snapshot); err != nil {
 		return common.RouterProfile{}, err
@@ -350,16 +422,165 @@ func restoreMTUMeasurementFields(a *app, snapshot mtuRetestSnapshot) error {
 	return nil
 }
 
-func rollbackMTULiveResult(a *app, root string, snapshot mtuRetestSnapshot, measurement mtuMeasurementResult) {
+func failMTURetestWithLiveRollback(w http.ResponseWriter, status int, message string, live mtuLiveSnapshot) {
+	if err := restoreMTULiveSnapshot(live); err != nil {
+		http.Error(w, message+"; live MTU rollback failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Error(w, message, status)
+}
+
+func restoreMTULiveSnapshot(live mtuLiveSnapshot) error {
+	if err := validateMTULiveInterface(live.Interface); err != nil {
+		return err
+	}
+	if (live.Family != 4 && live.Family != 6) || live.OriginalMTU < 576 || live.OriginalMTU > 9000 {
+		return errors.New("refusing invalid MTU rollback snapshot")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	env := mtuRetestEnvironment(root, snapshot.Profile, snapshot.State, snapshot.Mode, snapshot)
-	env = append(env,
-		"HOMEVPN_MTU_APPLY_INTERFACE="+measurement.Interface,
-		"HOMEVPN_MTU_APPLY_FAMILY="+strconv.Itoa(measurement.Family),
-		"HOMEVPN_MTU_APPLY_VALUE="+strconv.Itoa(measurement.OriginalMTU),
-	)
-	_, _ = runMTURetestAction(ctx, a.cfg.ScriptsDir, "restore", env)
+	value := strconv.Itoa(live.OriginalMTU)
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		cmd = exec.CommandContext(ctx, "ip", "link", "set", "dev", live.Interface, "mtu", value)
+	case "darwin":
+		cmd = exec.CommandContext(ctx, "ifconfig", live.Interface, "mtu", value)
+	case "windows":
+		family := "IPv4"
+		if live.Family == 6 {
+			family = "IPv6"
+		}
+		escaped := strings.ReplaceAll(live.Interface, "'", "''")
+		ps := fmt.Sprintf("Set-NetIPInterface -InterfaceAlias '%s' -AddressFamily %s -NlMtuBytes %d -ErrorAction Stop", escaped, family, live.OriginalMTU)
+		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps)
+	default:
+		return errors.New("live MTU rollback is not implemented on this platform")
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("could not restore %s to MTU %d: %s", live.Interface, live.OriginalMTU, boundedMTUDetail(out))
+	}
+	current, err := readMTULiveValue(live.Interface, live.Family)
+	if err != nil {
+		return fmt.Errorf("restored MTU but could not verify it: %w", err)
+	}
+	if current != live.OriginalMTU {
+		return fmt.Errorf("MTU rollback verification read %d instead of %d", current, live.OriginalMTU)
+	}
+	return nil
+}
+
+func mtuRouteInterface(host string) (string, error) {
+	if override := strings.TrimSpace(os.Getenv("HOMEVPN_TUN_IFACE")); override != "" {
+		if err := validateMTULiveInterface(override); err != nil {
+			return "", err
+		}
+		return override, nil
+	}
+	if override := strings.TrimSpace(os.Getenv("HOMEVPN_TUN_ALIAS")); override != "" {
+		if err := validateMTULiveInterface(override); err != nil {
+			return "", err
+		}
+		return override, nil
+	}
+	var iface string
+	switch runtime.GOOS {
+	case "linux":
+		out, err := exec.Command("ip", "route", "get", host).CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("could not resolve MTU route interface: %s", boundedMTUDetail(out))
+		}
+		fields := strings.Fields(string(out))
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "dev" {
+				iface = fields[i+1]
+				break
+			}
+		}
+	case "darwin":
+		out, err := exec.Command("route", "-n", "get", host).CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("could not resolve MTU route interface: %s", boundedMTUDetail(out))
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "interface:") {
+				iface = strings.TrimSpace(strings.TrimPrefix(line, "interface:"))
+				break
+			}
+		}
+	case "windows":
+		escaped := strings.ReplaceAll(host, "'", "''")
+		ps := fmt.Sprintf("$r=Find-NetRoute -RemoteIPAddress '%s' | Sort-Object RouteMetric,InterfaceMetric | Select-Object -First 1; if($r){$r.InterfaceAlias}", escaped)
+		out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps).CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("could not resolve MTU route interface: %s", boundedMTUDetail(out))
+		}
+		iface = strings.TrimSpace(string(out))
+	default:
+		return "", errors.New("live MTU route inspection is not implemented on this platform")
+	}
+	if err := validateMTULiveInterface(iface); err != nil {
+		return "", err
+	}
+	return iface, nil
+}
+
+func validateMTULiveInterface(iface string) error {
+	if iface == "" || len(iface) > 256 || iface != strings.TrimSpace(iface) || strings.ContainsAny(iface, "\r\n\x00") {
+		return errors.New("invalid live MTU interface identity")
+	}
+	if runtime.GOOS == "linux" && (filepath.Base(iface) != iface || iface == "." || iface == "..") {
+		return errors.New("unsafe Linux live MTU interface identity")
+	}
+	return nil
+}
+
+func readMTULiveValue(iface string, family int) (int, error) {
+	if err := validateMTULiveInterface(iface); err != nil {
+		return 0, err
+	}
+	var raw string
+	switch runtime.GOOS {
+	case "linux":
+		data, err := os.ReadFile(filepath.Join("/sys/class/net", iface, "mtu"))
+		if err != nil {
+			return 0, fmt.Errorf("could not read live tunnel MTU: %w", err)
+		}
+		raw = strings.TrimSpace(string(data))
+	case "darwin":
+		out, err := exec.Command("ifconfig", iface).CombinedOutput()
+		if err != nil {
+			return 0, fmt.Errorf("could not read live tunnel MTU: %s", boundedMTUDetail(out))
+		}
+		fields := strings.Fields(string(out))
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "mtu" {
+				raw = fields[i+1]
+				break
+			}
+		}
+	case "windows":
+		familyName := "IPv4"
+		if family == 6 {
+			familyName = "IPv6"
+		}
+		escaped := strings.ReplaceAll(iface, "'", "''")
+		ps := fmt.Sprintf("(Get-NetIPInterface -InterfaceAlias '%s' -AddressFamily %s | Sort-Object InterfaceMetric | Select-Object -First 1).NlMtuBytes", escaped, familyName)
+		out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps).CombinedOutput()
+		if err != nil {
+			return 0, fmt.Errorf("could not read live tunnel MTU: %s", boundedMTUDetail(out))
+		}
+		raw = strings.TrimSpace(string(out))
+	default:
+		return 0, errors.New("live MTU inspection is not implemented on this platform")
+	}
+	mtu, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, errors.New("live tunnel interface returned a non-numeric MTU")
+	}
+	return mtu, nil
 }
 
 func boundedMTUDetail(out []byte) string {
