@@ -10,6 +10,14 @@ import (
 // deliberately does not change connection truth; it restores only the profile
 // metadata mutation and reports the error for bounded logging.
 func (a *app) recordProfileUsageLocked(profileID string, usedAt time.Time) error {
+	// A temporary Speed Lab configuration must leave neither ranking hints nor
+	// its test-only profile/base/AUTO overrides on disk. The Speed Lab transaction
+	// restores the original durable store before measurement; suppressing this
+	// normal connect-success writer also closes the earlier path-proving crash
+	// window before that restore point.
+	if speedLabTemporaryPersistenceSuppressed(a) {
+		return nil
+	}
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID != profileID {
 			continue
