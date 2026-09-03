@@ -3,6 +3,7 @@ import Foundation
 
 private let macConnectionModeKey = "routervpn.unified.selected-mode.v1"
 private let macConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
+private let macConnectionMultihopEnabledKey = "routervpn.unified.multihop-enabled.v1"
 
 private struct RouterVPNProfileSettingsPayloadV2: Codable {
     var homeLANAccess: Bool
@@ -182,41 +183,89 @@ private final class MacConnectionProfileControls: NSObject {
         return id
     }
 
+    private func currentMultihopSnapshot() throws -> (enabled: Bool, entry: String, exit: String, exitMode: String) {
+        let enabled = UserDefaults.standard.bool(forKey: macConnectionMultihopEnabledKey)
+        guard enabled, let owner else { return (false, "", "", "") }
+        let entryIndex = owner.multihopEntryPopup.indexOfSelectedItem
+        let exitIndex = owner.multihopExitPopup.indexOfSelectedItem
+        guard entryIndex >= 0, exitIndex >= 0,
+              entryIndex < owner.multihopNodeIDs.count, exitIndex < owner.multihopNodeIDs.count else {
+            throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 4, userInfo: [NSLocalizedDescriptionKey: "Multihop is enabled but entry/exit selection is incomplete."])
+        }
+        let entry = owner.multihopNodeIDs[entryIndex]
+        let exit = owner.multihopNodeIDs[exitIndex]
+        guard entry != exit else {
+            throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 5, userInfo: [NSLocalizedDescriptionKey: "Multihop entry and exit nodes must be different."])
+        }
+        let exitMode = owner.multihopExitModePopup.indexOfSelectedItem == 1 ? "hysteria2" : "shadowsocks"
+        return (true, entry, exit, exitMode)
+    }
+
+    private func applyLoadedMultihop(_ root: [String: Any]) {
+        let enabled = root["multihop_enabled"] as? Bool ?? false
+        UserDefaults.standard.set(enabled, forKey: macConnectionMultihopEnabledKey)
+        guard let owner else { return }
+        if enabled {
+            let entry = root["multihop_entry_id"] as? String ?? ""
+            let exit = root["multihop_exit_id"] as? String ?? ""
+            let exitMode = (root["multihop_exit_mode"] as? String ?? "shadowsocks").lowercased()
+            if let index = owner.multihopNodeIDs.firstIndex(of: entry) { owner.multihopEntryPopup.selectItem(at: index) }
+            if let index = owner.multihopNodeIDs.firstIndex(of: exit) { owner.multihopExitPopup.selectItem(at: index) }
+            owner.multihopExitModePopup.selectItem(at: exitMode == "hysteria2" ? 1 : 0)
+            owner.refreshAdvanced()
+        }
+        if let content = owner.window?.contentView {
+            func find(_ view: NSView) -> NSButton? {
+                if view.identifier?.rawValue == "unified-multihop-toggle" { return view as? NSButton }
+                for child in view.subviews { if let found = find(child) { return found } }
+                return nil
+            }
+            find(content)?.state = enabled ? .on : .off
+        }
+        owner.refreshUnifiedHopOverlay()
+    }
+
     private func write(path: String, updating: Bool) throws -> [String: Any] {
         try requireIdle(updating ? "updating a connection profile" : "adding a connection profile")
         let clean = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 2, userInfo: [NSLocalizedDescriptionKey: "Enter a profile name."]) }
         let snapshot = macCurrentConnectionModeSnapshot()
-        var body: [String: Any] = ["name": clean, "mode": snapshot.mode, "custom_layers": snapshot.layers]
+        let hops = try currentMultihopSnapshot()
+        var body: [String: Any] = [
+            "name": clean, "mode": snapshot.mode, "custom_layers": snapshot.layers,
+            "multihop_enabled": hops.enabled, "multihop_entry_id": hops.entry,
+            "multihop_exit_id": hops.exit, "multihop_exit_mode": hops.exitMode
+        ]
         if updating { body["id"] = try selectedID() }
         let data = try api.request(path, method: "POST", body: body, timeout: 10)
         return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
     }
 
     @objc private func addProfile() {
-        do { let root = try write(path: "/api/connection-profile/save", updating: false); let p = root["profile"] as? [String: Any]; status.stringValue = "Added \(p?["name"] as? String ?? "profile")."; refresh() }
+        do { let root = try write(path: "/api/connection-profile/setup/save", updating: false); let p = root["profile"] as? [String: Any]; status.stringValue = "Added \(p?["name"] as? String ?? "profile")."; refresh() }
         catch { status.stringValue = "Add failed: \(error.localizedDescription)" }
     }
 
     @objc private func updateProfile() {
-        do { let root = try write(path: "/api/connection-profile/update", updating: true); let p = root["profile"] as? [String: Any]; status.stringValue = "Updated \(p?["name"] as? String ?? "profile")."; refresh() }
+        do { let root = try write(path: "/api/connection-profile/setup/update", updating: true); let p = root["profile"] as? [String: Any]; status.stringValue = "Updated \(p?["name"] as? String ?? "profile")."; refresh() }
         catch { status.stringValue = "Update failed: \(error.localizedDescription)" }
     }
 
     @objc private func loadProfile() {
         do {
             try requireIdle("loading a connection profile")
-            let data = try api.request("/api/connection-profile/load", method: "POST", body: ["id": try selectedID()], timeout: 12)
+            let data = try api.request("/api/connection-profile/setup/load", method: "POST", body: ["id": try selectedID()], timeout: 12)
             let rootJSON = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             macApplyLoadedConnectionMode(rootJSON)
+            applyLoadedMultihop(rootJSON)
             let loaded = rootJSON["profile"] as? [String: Any]
-            status.stringValue = "Loaded \(loaded?["name"] as? String ?? "profile") • node \(rootJSON["selected_node_id"] as? String ?? "") • mode \(rootJSON["mode"] as? String ?? "smart-auto")."
+            status.stringValue = "Loaded \(loaded?["name"] as? String ?? "profile") • node \(rootJSON["selected_node_id"] as? String ?? "") • mode \(rootJSON["mode"] as? String ?? "smart-auto") • exact multihop graph restored."
             owner?.refreshAll(); owner?.refreshUnifiedModeMenu(preferred: rootJSON["mode"] as? String); owner?.refreshUnifiedChrome(); owner?.refreshUnifiedTelemetry()
         } catch { status.stringValue = "Load failed: \(error.localizedDescription)" }
     }
 
     @objc private func deleteProfile() {
-        do { try requireIdle("deleting a connection profile"); _ = try api.request("/api/connection-profile/delete", method: "POST", body: ["id": try selectedID()], timeout: 10); status.stringValue = "Deleted saved connection profile."; refresh() }
+        do { try requireIdle("deleting a connection profile"); _ = try api.request("/api/connection-profile/setup/delete", method: "POST", body: ["id": try selectedID()], timeout: 10); status.stringValue = "Deleted saved connection profile."; refresh() }
         catch { status.stringValue = "Delete failed: \(error.localizedDescription)" }
     }
 }
@@ -333,5 +382,5 @@ extension ProductWindowController {
 // fixed MTU override + Retest, DAITA-like traffic padding, Jumbo TUN, kill switch,
 // AUTO Require encrypted / Require obfuscation, LAN access and forwarding entry point.
 // /api/profile/settings only for Router-node preferences; connection-profile CRUD uses
-// /api/connection-profiles + save/update/load/delete and never duplicates node secrets.
+// /api/connection-profiles + setup save/update/load/delete and never duplicates node secrets.
 // Connection-profile mutation and persistent Settings Save both fail closed while controller status is connected/transitioning or unavailable.
