@@ -163,8 +163,10 @@ elif action in ("apply","restore"):
 else:
     raise SystemExit(2)
 `
-	if err := os.WriteFile(filepath.Join(scripts, "mtu-throughput-tuner.py"), []byte(fake), 0o700); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"mtu-throughput-tuner.py", "mtu-throughput-tuner-platform.py"} {
+		if err := os.WriteFile(filepath.Join(scripts, name), []byte(fake), 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	profile := common.RouterProfile{ID: "node", NodeKind: "router-vpn", Endpoint: "203.0.113.10", MTUPolicy: "auto", EffectiveMTU: 1420}
 	store := common.RouterProfileStore{SchemaVersion: 4, SelectedID: "node", Profiles: []common.RouterProfile{profile}}
