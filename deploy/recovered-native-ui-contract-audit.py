@@ -55,7 +55,7 @@ PRODUCT_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Fastest node", ("fastest",)),
     ("live latency", ("latency", "rtt")),
     ("kill switch", ("kill switch", "killswitch")),
-    ("Forwarding Master", ("forwarding master", "forward master")),
+    ("Forwarding Master", ("forwarding master", "forward master", "master port forwarding")),
     ("Multihop", ("multihop", "multi-hop")),
     ("Settings", ("settings",)),
     ("Mode", ("mode",)),
@@ -77,11 +77,14 @@ SETTINGS_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("AUTO obfuscation requirement", ("require obfuscation", "auto require obfuscation")),
 )
 
+# Mobile shipping UIs intentionally use one compact "Add / Load / Update / Delete"
+# action label instead of repeating "profile" after every verb.  Accept that
+# explicit four-action label while still requiring the profile semantic scope.
 PROFILE_CRUD: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("profile Add", ("add profile", "profile add", "/connection-profile/setup/save")),
-    ("profile Load", ("load profile", "profile load", "/connection-profile/setup/load")),
-    ("profile Update", ("update profile", "profile update", "/connection-profile/setup/update")),
-    ("profile Delete", ("delete profile", "profile delete", "/connection-profile/setup/delete")),
+    ("profile Add", ("add profile", "profile add", "/connection-profile/setup/save", "add / load / update / delete")),
+    ("profile Load", ("load profile", "profile load", "/connection-profile/setup/load", "add / load / update / delete")),
+    ("profile Update", ("update profile", "profile update", "/connection-profile/setup/update", "add / load / update / delete")),
+    ("profile Delete", ("delete profile", "profile delete", "/connection-profile/setup/delete", "add / load / update / delete")),
 )
 
 
