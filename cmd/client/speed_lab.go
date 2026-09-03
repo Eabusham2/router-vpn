@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"runtime"
 	"strings"
 	"time"
+
+	"router-vpn/internal/common"
 )
 
 func registerSpeedLabRoutes(h *http.ServeMux, a *app) {
@@ -152,7 +156,6 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 	}
 	defer finish()
 
-	// A dropped HTTP request should tear down a temporary connection attempt too.
 	requestDone := make(chan struct{})
 	go func() {
 		select {
@@ -169,10 +172,6 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 		_ = a.speedLabRestoreTemporary(snapshot)
 		return speedLabPath{}, speedLabMeasurement{}, startErr
 	}
-	// startModeAttempt and some strategies record usage hints on success. A Speed
-	// Lab graph is intentionally temporary, so immediately restore the original
-	// durable profile store while keeping only the in-RAM path needed to finish
-	// this one measurement. operationMu prevents a competing settings mutation.
 	if err := a.speedLabWriteStore(snapshot.Profiles); err != nil {
 		_ = a.speedLabRestoreTemporary(snapshot)
 		return speedLabPath{}, speedLabMeasurement{}, errors.New("temporary path was proven but prior durable profile state could not be restored before measurement: " + err.Error())
@@ -202,7 +201,7 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var q speedLabRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&q); err != nil && !errors.Is(err, http.ErrBodyReadAfterClose) {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&q); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
@@ -227,7 +226,8 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		status := http.StatusBadGateway
-		if strings.Contains(strings.ToLower(err.Error()), "disconnect") || strings.Contains(strings.ToLower(err.Error()), "changed") || strings.Contains(strings.ToLower(err.Error()), "transaction") || errors.Is(err, context.Canceled) {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "disconnect") || strings.Contains(lower, "changed") || strings.Contains(lower, "transaction") || errors.Is(err, context.Canceled) {
 			status = http.StatusConflict
 		}
 		http.Error(w, err.Error(), status)
