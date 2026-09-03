@@ -14,7 +14,7 @@ import (
 	"router-vpn/internal/common"
 )
 
-const connectionProfileStoreVersion = 1
+const connectionProfileStoreVersion = 4
 const connectionProfileStoreMaxBytes = 1 << 20
 const connectionProfileStoreMaxEntries = 64
 
@@ -97,12 +97,14 @@ func loadConnectionProfileStore(a *app) (connectionProfileStore, error) {
 	if err := json.Unmarshal(raw, &store); err != nil {
 		return connectionProfileStore{}, fmt.Errorf("invalid connection profile store: %w", err)
 	}
-	if store.Version == 0 {
-		store.Version = connectionProfileStoreVersion
+	storedVersion := store.Version
+	if storedVersion == 0 {
+		storedVersion = 1
 	}
-	if store.Version != connectionProfileStoreVersion {
+	if storedVersion < 1 || storedVersion > connectionProfileStoreVersion {
 		return connectionProfileStore{}, fmt.Errorf("unsupported connection profile store version %d", store.Version)
 	}
+	store.Version = connectionProfileStoreVersion
 	if len(store.Profiles) > connectionProfileStoreMaxEntries {
 		return connectionProfileStore{}, errors.New("connection profile store contains too many entries")
 	}
@@ -130,6 +132,11 @@ func loadConnectionProfileStore(a *app) (connectionProfileStore, error) {
 				return connectionProfileStore{}, err
 			}
 			p.Prefs.CustomLayers = layers
+		}
+	}
+	if storedVersion < connectionProfileStoreVersion {
+		if err := persistConnectionProfileStore(a, store); err != nil {
+			return connectionProfileStore{}, fmt.Errorf("migrate connection profile store to schema v%d: %w", connectionProfileStoreVersion, err)
 		}
 	}
 	return store, nil
