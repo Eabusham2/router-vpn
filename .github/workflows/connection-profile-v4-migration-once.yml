@@ -1,4 +1,4 @@
-name: One-shot connection profile v4 migration
+name: Finish iOS connection profile v4 migration
 
 on:
   push:
@@ -9,156 +9,31 @@ permissions:
   contents: write
 
 jobs:
-  migrate:
+  migrate-ios:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Configure commit identity
+      - name: Upgrade iOS store and remove one-shot workflow
         run: |
           git config user.name Eabusham2
           git config user.email eabusham2@gmail.com
-      - name: Upgrade desktop connection profile store to schema v4
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('cmd/client/connection_profiles.go')
-          s = p.read_text()
-          old = 'const connectionProfileStoreVersion = 1'
-          assert s.count(old) == 1, s.count(old)
-          s = s.replace(old, 'const connectionProfileStoreVersion = 4')
-          old = '''\tif store.Version == 0 {
-\t\tstore.Version = connectionProfileStoreVersion
-\t}
-\tif store.Version != connectionProfileStoreVersion {
-\t\treturn connectionProfileStore{}, fmt.Errorf("unsupported connection profile store version %d", store.Version)
-\t}
-'''
-          new = '''\tstoredVersion := store.Version
-\tif storedVersion == 0 {
-\t\tstoredVersion = 1
-\t}
-\tif storedVersion < 1 || storedVersion > connectionProfileStoreVersion {
-\t\treturn connectionProfileStore{}, fmt.Errorf("unsupported connection profile store version %d", store.Version)
-\t}
-\tstore.Version = connectionProfileStoreVersion
-'''
-          assert s.count(old) == 1, s.count(old)
-          s = s.replace(old, new)
-          old = '''\t}
-\treturn store, nil
-}
-
-func persistConnectionProfileStore'''
-          new = '''\t}
-\tif storedVersion < connectionProfileStoreVersion {
-\t\tif err := persistConnectionProfileStore(a, store); err != nil {
-\t\t\treturn connectionProfileStore{}, fmt.Errorf("migrate connection profile store to schema v%d: %w", connectionProfileStoreVersion, err)
-\t\t}
-\t}
-\treturn store, nil
-}
-
-func persistConnectionProfileStore'''
-          assert s.count(old) == 1, s.count(old)
-          s = s.replace(old, new)
-          p.write_text(s)
-          PY
-          gofmt -w cmd/client/connection_profiles.go
-          git add cmd/client/connection_profiles.go
-          git commit -m "Migrate desktop connection profiles to schema v4"
-          git push origin HEAD:main
-      - name: Upgrade Android connection profile store to schema v4
-        run: |
+          git pull --rebase origin main
           python3 - <<'PY'
           from pathlib import Path
           import re
-          p = Path('android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java')
-          s = p.read_text()
-          old = '    static final int SCHEMA_VERSION=1, MAX_PROFILES=64, MAX_STORE=512*1024;\n    private static final String FILE_NAME="connection-profiles-v1.json";'
-          new = '    static final int SCHEMA_VERSION=4, MAX_PROFILES=64, MAX_STORE=512*1024;\n    private static final String FILE_NAME="connection-profiles-v4.json", LEGACY_FILE_NAME="connection-profiles-v1.json";'
-          assert s.count(old) == 1, s.count(old)
-          s = s.replace(old, new)
-          old = '    private final Context context; private final AndroidNodeStore nodes; private final AndroidStandardExitStore exits; private final File file;\n    AndroidConnectionProfileStore(Context context,AndroidNodeStore nodes,AndroidStandardExitStore exits){this.context=context.getApplicationContext();this.nodes=nodes;this.exits=exits;this.file=new File(this.context.getFilesDir(),FILE_NAME);}'
-          new = '    private final Context context; private final AndroidNodeStore nodes; private final AndroidStandardExitStore exits; private final File file, legacyFile;\n    AndroidConnectionProfileStore(Context context,AndroidNodeStore nodes,AndroidStandardExitStore exits){this.context=context.getApplicationContext();this.nodes=nodes;this.exits=exits;this.file=new File(this.context.getFilesDir(),FILE_NAME);this.legacyFile=new File(this.context.getFilesDir(),LEGACY_FILE_NAME);}'
-          assert s.count(old) == 1, s.count(old)
-          s = s.replace(old, new)
-          new_read = r'''    private JSONArray readRows() throws Exception {
-        File source = file;
-        boolean legacyPath = false;
-        if (!file.exists()) {
-            if (!legacyFile.exists()) return new JSONArray();
-            source = legacyFile;
-            legacyPath = true;
-        }
-        byte[] stored = AndroidPrivateFileStore.read(source, MAX_STORE);
-        JSONObject root = new JSONObject(new String(stored, StandardCharsets.UTF_8));
-        int schema = root.optInt("schema_version", 0);
-        if (schema < 1 || schema > SCHEMA_VERSION) {
-            throw new IllegalStateException("Unsupported connection profile store schema " + schema + ".");
-        }
-        JSONArray rows = root.optJSONArray("profiles");
-        if (rows == null) rows = new JSONArray();
-        if (rows.length() > MAX_PROFILES) throw new IllegalStateException("Too many saved connection profiles.");
-        Set<String> ids = new HashSet<>();
-        for (int i = 0; i < rows.length(); i++) {
-            JSONObject row = rows.getJSONObject(i);
-            String id = row.optString("id", "");
-            cleanName(row.optString("name", ""));
-            if (!safeId(id) || !ids.add(id)) {
-                throw new IllegalStateException("Connection profile store contains invalid/duplicate ids.");
-            }
-            String kind = row.optString("node_kind", "");
-            if (!"router-vpn".equals(kind) && !"external".equals(kind)) {
-                throw new IllegalStateException("Connection profile node kind is invalid.");
-            }
-            if (row.optString("node_id", "").isEmpty()) {
-                throw new IllegalStateException("Connection profile node id is missing.");
-            }
-            normalizeMode(row.optString("mode", "smart-auto"));
-            jsonStrings(row.optJSONArray("custom_layers"), 32);
-            normalizeMultiMode(row.optString("multihop_exit_mode", "shadowsocks"));
-            JSONObject policy = row.optJSONObject("policy");
-            if (policy != null) {
-                Iterator<String> keys = policy.keys();
-                while (keys.hasNext()) {
-                    String key = keys.next();
-                    if (!allowedPolicyKey(key)) {
-                        throw new IllegalStateException("Connection profile contains non-whitelisted node data: " + key);
-                    }
-                }
-            }
-        }
-        if (legacyPath || schema < SCHEMA_VERSION) {
-            writeRows(rows);
-            AndroidPrivateFileStore.remove(legacyFile, MAX_STORE);
-        } else if (legacyFile.exists()) {
-            AndroidPrivateFileStore.remove(legacyFile, MAX_STORE);
-        }
-        return rows;
-    }'''
-          pattern = r'    private JSONArray readRows\(\) throws Exception \{.*?\n    \}\n\n    private void writeRows'
-          s, count = re.subn(pattern, new_read + '\n\n    private void writeRows', s, count=1, flags=re.S)
-          assert count == 1, count
-          p.write_text(s)
-          PY
-          git add android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java
-          git commit -m "Migrate Android connection profiles to schema v4"
-          git push origin HEAD:main
-      - name: Upgrade iOS connection profile store to schema v4
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
+
           p = Path('ios/RouterVPN/App/IOSConnectionProfilesView.swift')
           s = p.read_text()
-          old = 'private let iosConnectionProfilesFile = "connection-profiles.json"\nprivate let iosConnectionProfilesMaximumBytes = 512 * 1024'
-          new = 'private let iosConnectionProfilesFile = "connection-profiles.json"\nprivate let iosConnectionProfilesSchemaVersion = 4\nprivate let iosConnectionProfilesMaximumBytes = 512 * 1024'
-          assert s.count(old) == 1, s.count(old)
-          s = s.replace(old, new)
-          marker = '\n@MainActor\nprivate enum IOSConnectionProfileStore {'
-          envelope = '''
+          if 'iosConnectionProfilesSchemaVersion = 4' not in s:
+              old = 'private let iosConnectionProfilesFile = "connection-profiles.json"\nprivate let iosConnectionProfilesMaximumBytes = 512 * 1024'
+              new = 'private let iosConnectionProfilesFile = "connection-profiles.json"\nprivate let iosConnectionProfilesSchemaVersion = 4\nprivate let iosConnectionProfilesMaximumBytes = 512 * 1024'
+              assert s.count(old) == 1
+              s = s.replace(old, new)
+
+              marker = '\n@MainActor\nprivate enum IOSConnectionProfileStore {'
+              envelope = '''
 
 private struct IOSConnectionProfileEnvelope: Codable {
     var schemaVersion: Int
@@ -170,9 +45,10 @@ private struct IOSConnectionProfileEnvelope: Codable {
     }
 }
 '''
-          assert s.count(marker) == 1, s.count(marker)
-          s = s.replace(marker, envelope + marker)
-          new_load = r'''    private static func loadAll() throws -> [IOSConnectionProfileRecord] {
+              assert s.count(marker) == 1
+              s = s.replace(marker, envelope + marker)
+
+              new_load = r'''    private static func loadAll() throws -> [IOSConnectionProfileRecord] {
         let decoder = JSONDecoder()
         if let data = try IOSPrivateJSONStore.read(
             iosConnectionProfilesFile,
@@ -202,10 +78,11 @@ private struct IOSConnectionProfileEnvelope: Codable {
         UserDefaults.standard.removeObject(forKey: iosConnectionProfilesKey)
         return sorted(values)
     }'''
-          pattern = r'    private static func loadAll\(\) throws -> \[IOSConnectionProfileRecord\] \{.*?\n    \}\n\n    static func snapshot'
-          s, count = re.subn(pattern, new_load + '\n\n    static func snapshot', s, count=1, flags=re.S)
-          assert count == 1, count
-          old_persist = '''    private static func persist(_ values: [IOSConnectionProfileRecord]) throws {
+              pattern = r'    private static func loadAll\(\) throws -> \[IOSConnectionProfileRecord\] \{.*?\n    \}\n\n    static func snapshot'
+              s, count = re.subn(pattern, new_load + '\n\n    static func snapshot', s, count=1, flags=re.S)
+              assert count == 1
+
+              old_persist = '''    private static func persist(_ values: [IOSConnectionProfileRecord]) throws {
         guard values.count <= 64 else { throw issue("Connection profile limit exceeded.") }
         let data = try JSONEncoder().encode(values)
         try IOSPrivateJSONStore.write(
@@ -215,7 +92,7 @@ private struct IOSConnectionProfileEnvelope: Codable {
         )
     }
 '''
-          new_persist = '''    private static func persist(_ values: [IOSConnectionProfileRecord]) throws {
+              new_persist = '''    private static func persist(_ values: [IOSConnectionProfileRecord]) throws {
         let validated = try validateStoredProfiles(values)
         let envelope = IOSConnectionProfileEnvelope(schemaVersion: iosConnectionProfilesSchemaVersion, profiles: validated)
         let data = try JSONEncoder().encode(envelope)
@@ -250,10 +127,11 @@ private struct IOSConnectionProfileEnvelope: Codable {
         values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 '''
-          assert s.count(old_persist) == 1, s.count(old_persist)
-          s = s.replace(old_persist, new_persist)
-          p.write_text(s)
+              assert s.count(old_persist) == 1
+              s = s.replace(old_persist, new_persist)
+              p.write_text(s)
           PY
-          git add ios/RouterVPN/App/IOSConnectionProfilesView.swift
+          rm .github/workflows/connection-profile-v4-migration-once.yml
+          git add ios/RouterVPN/App/IOSConnectionProfilesView.swift .github/workflows/connection-profile-v4-migration-once.yml
           git commit -m "Migrate iOS connection profiles to schema v4"
           git push origin HEAD:main
