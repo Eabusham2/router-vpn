@@ -64,13 +64,18 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	switch ext.Protocol {
 	case "http", "http_connect", "http-connect": ext.Protocol = "http-connect"
 	case "https", "https_connect", "https-connect": ext.Protocol = "https-connect"
+	case "tor", "tor_bridge", "tor-bridge": ext.Protocol = "tor-bridge"
 	}
 	ext.ExpectedPublicIP = strings.TrimSpace(ext.ExpectedPublicIP)
-	ip := net.ParseIP(ext.ExpectedPublicIP)
-	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-		return fmt.Errorf("external node expected_public_ip must be the public address expected after traffic really exits through this node")
+	if ext.Protocol == "tor-bridge" {
+		if ext.ExpectedPublicIP != "" { return fmt.Errorf("Tor bridge has a dynamic circuit exit; expected_public_ip must be empty and the runtime must prove/observe the live Tor exit") }
+	} else {
+		ip := net.ParseIP(ext.ExpectedPublicIP)
+		if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			return fmt.Errorf("external node expected_public_ip must be the public address expected after traffic really exits through this node")
+		}
+		ext.ExpectedPublicIP = ip.String()
 	}
-	ext.ExpectedPublicIP = ip.String()
 
 	blocks := 0
 	if ext.WireGuard != nil { blocks++ }
@@ -80,6 +85,7 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	if ext.HTTPConnect != nil { blocks++ }
 	if ext.HTTPSConnect != nil { blocks++ }
 	if ext.Hysteria2 != nil { blocks++ }
+	if ext.TorBridge != nil { blocks++ }
 	if blocks != 1 { return fmt.Errorf("external node requires exactly one protocol block") }
 	noHTTP := ext.HTTPConnect == nil && ext.HTTPSConnect == nil
 	switch ext.Protocol {
@@ -122,6 +128,9 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 		if ext.Hysteria2 == nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil || !noHTTP { return fmt.Errorf("external hysteria2 node requires only the hysteria2 block") }
 		h := ext.Hysteria2; h.Server = strings.TrimSpace(h.Server); h.TLSServerName = strings.TrimSpace(h.TLSServerName)
 		if h.Server == "" || h.Port < 1 || h.Port > 65535 || h.Password == "" || h.TLSServerName == "" || strings.ContainsAny(h.TLSServerName, " /\\?#@") { return fmt.Errorf("external hysteria2 requires server, valid port, password and safe TLS server name") }
+	case "tor-bridge":
+		if ext.TorBridge == nil { return fmt.Errorf("external Tor bridge requires the tor_bridge block") }
+		if _, err := normalizeExternalTorBridge(ext.TorBridge); err != nil { return err }
 	default:
 		return fmt.Errorf("unsupported external protocol %q", ext.Protocol)
 	}
@@ -145,6 +154,8 @@ func externalNodeEndpoint(ext *ExternalNodeConfig) string {
 		if ext.Hysteria2 != nil { return strings.TrimSpace(ext.Hysteria2.Server) }
 	case "openvpn":
 		if ext.OpenVPN != nil { for _, line := range strings.Split(ext.OpenVPN.Config, "\n") { fields := strings.Fields(strings.TrimSpace(line)); if len(fields) >= 2 && strings.EqualFold(fields[0], "remote") { return strings.Trim(fields[1], "[]") } } }
+	case "tor-bridge":
+		if ext.TorBridge != nil { if host, err := normalizeExternalTorBridge(ext.TorBridge); err == nil { return host } }
 	}
 	return ""
 }
