@@ -38,7 +38,7 @@ func windowsOpenVPNRuntimeCapability() standardExitCapability {
 }
 
 func externalProfileProtocolCapabilities() []standardExitCapability {
-	caps := standardExitCapabilities()
+	caps := append(standardExitCapabilities(), torBridgeRuntimeCapability())
 	if runtime.GOOS != "windows" {
 		return caps
 	}
