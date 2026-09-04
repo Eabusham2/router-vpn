@@ -233,7 +233,7 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 		return cleanup(err)
 	}
 
-	dnsServer, err := selectedStandardExitDNS(policy, true)
+	dnsServer, err := selectedTorBridgeDNS(policy)
 	if err != nil {
 		return cleanup(err)
 	}
