@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	nativeMultihopMaxFile  = int64(8 << 20)
-	nativeMultihopMaxTotal = int64(32 << 20)
+	nativeMultihopMaxFile        = int64(8 << 20)
+	nativeMultihopMaxTotal       = int64(32 << 20)
+	nativeMultihopEntryProofPort = 1098
+	nativeMultihopExitProofPort  = 1099
 )
 
 var nativeMultihopID = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
@@ -207,7 +209,33 @@ func nativeWGEndpoint(wg nativeWG) map[string]any {
 	return endpoint
 }
 
-func patchNativeMultihopConfig(path, exitMode string, wg nativeWG) (string, error) {
+func nativeEntryPrivateOutbound(host string, port int, username, password string) (map[string]any, error) {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if net.ParseIP(host) == nil {
+		return nil, errors.New("native multihop entry private SOCKS host must be a literal IP address")
+	}
+	if port == 0 {
+		port = 1080
+	}
+	if port < 1 || port > 65535 {
+		return nil, errors.New("native multihop entry private SOCKS port is invalid")
+	}
+	username = strings.TrimSpace(username)
+	if (username == "") != (password == "") {
+		return nil, errors.New("native multihop entry private SOCKS credentials are incomplete")
+	}
+	out := map[string]any{
+		"type": "socks", "tag": "entry-private", "server": host,
+		"server_port": port, "version": "5", "detour": "entry-wg",
+	}
+	if username != "" {
+		out["username"] = username
+		out["password"] = password
+	}
+	return out, nil
+}
+
+func patchNativeMultihopConfig(path, exitMode string, wg nativeWG, entrySocksHost string, entrySocksPort int, entrySocksUsername, entrySocksPassword string) (string, error) {
 	raw, err := readPrivateRegular(path, 4<<20)
 	if err != nil {
 		return "", err
@@ -228,7 +256,6 @@ func patchNativeMultihopConfig(path, exitMode string, wg nativeWG) (string, erro
 	}
 	fullTun := false
 	tunAlias := "router-vpn-multihop"
-	proofPortUsed := false
 	for _, item := range inbounds {
 		m, _ := item.(map[string]any)
 		if m == nil {
@@ -243,15 +270,15 @@ func patchNativeMultihopConfig(path, exitMode string, wg nativeWG) (string, erro
 				tunAlias = name
 			}
 		}
-		if port, ok := m["listen_port"].(float64); ok && int(port) == 1099 {
-			proofPortUsed = true
+		if port, ok := m["listen_port"].(float64); ok && (int(port) == nativeMultihopEntryProofPort || int(port) == nativeMultihopExitProofPort) {
+			return "", fmt.Errorf("exit profile already consumes multihop proof port %d", int(port))
+		}
+		if tag, _ := m["tag"].(string); tag == "multihop-entry-proof" || tag == "multihop-proof" {
+			return "", errors.New("exit profile already contains a reserved multihop proof inbound")
 		}
 	}
 	if !fullTun {
 		return "", errors.New("exit mode is not a full-device sing-box TUN profile")
-	}
-	if proofPortUsed {
-		return "", errors.New("exit profile already consumes multihop proof port 1099")
 	}
 	route, ok := cfg["route"].(map[string]any)
 	if !ok || route["final"] != "proxy" {
@@ -264,9 +291,14 @@ func patchNativeMultihopConfig(path, exitMode string, wg nativeWG) (string, erro
 	var proxy map[string]any
 	for _, item := range outbounds {
 		m, _ := item.(map[string]any)
-		if m != nil && m["tag"] == "proxy" {
+		if m == nil {
+			continue
+		}
+		if m["tag"] == "entry-private" {
+			return "", errors.New("exit profile already contains reserved entry-private outbound")
+		}
+		if m["tag"] == "proxy" {
 			proxy = m
-			break
 		}
 	}
 	if proxy == nil {
@@ -282,9 +314,23 @@ func patchNativeMultihopConfig(path, exitMode string, wg nativeWG) (string, erro
 	if d, _ := proxy["detour"].(string); strings.TrimSpace(d) != "" {
 		return "", errors.New("exit proxy already has a detour; nested multihop is refused")
 	}
+	entryPrivate, err := nativeEntryPrivateOutbound(entrySocksHost, entrySocksPort, entrySocksUsername, entrySocksPassword)
+	if err != nil {
+		return "", err
+	}
 	proxy["detour"] = "entry-wg"
 	cfg["endpoints"] = []any{nativeWGEndpoint(wg)}
-	cfg["inbounds"] = append(inbounds, map[string]any{"type": "mixed", "tag": "multihop-proof", "listen": "127.0.0.1", "listen_port": 1099})
+	cfg["outbounds"] = append(outbounds, entryPrivate)
+	cfg["inbounds"] = append(inbounds,
+		map[string]any{"type": "mixed", "tag": "multihop-entry-proof", "listen": "127.0.0.1", "listen_port": nativeMultihopEntryProofPort},
+		map[string]any{"type": "mixed", "tag": "multihop-proof", "listen": "127.0.0.1", "listen_port": nativeMultihopExitProofPort},
+	)
+	existingRules, _ := route["rules"].([]any)
+	route["rules"] = append([]any{
+		map[string]any{"inbound": []any{"multihop-entry-proof"}, "outbound": "entry-private"},
+		map[string]any{"inbound": []any{"multihop-proof"}, "outbound": "proxy"},
+	}, existingRules...)
+	cfg["route"] = route
 	patched, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return "", err
@@ -326,7 +372,10 @@ func prepareNativeMultihop(root string, sel multihopSelection) (string, string, 
 		_ = os.RemoveAll(runtimeDir)
 		return "", "", err
 	}
-	tunAlias, err := patchNativeMultihopConfig(filepath.Join(runtimeDir, "sing-box.json"), sel.ExitMode, wg)
+	tunAlias, err := patchNativeMultihopConfig(
+		filepath.Join(runtimeDir, "sing-box.json"), sel.ExitMode, wg,
+		sel.Entry.SocksHost, sel.Entry.SocksPort, sel.Entry.SocksUsername, sel.Entry.SocksPassword,
+	)
 	if err != nil {
 		_ = os.RemoveAll(runtimeDir)
 		return "", "", err
