@@ -126,8 +126,11 @@ need(
 # iOS/iPadOS now owns the same six common external families through pinned
 # Libbox/WireGuardKit PacketTunnel paths. OpenVPN and Tor remain unavailable.
 # External bundles must not inherit home Router/SOCKS defaults merely to satisfy
-# the compatibility envelope. Linked bundles carry private keys/credentials, so
-# their durable store must be ThisDeviceOnly Keychain data, never UserDefaults.
+# the compatibility envelope. The full linked-node store can be much larger than
+# a reasonable Keychain value, so bundles are AES-GCM sealed into a bounded,
+# atomically-written protected file while only the 256-bit key lives in the
+# ThisDeviceOnly Keychain. Legacy whole-bundle Keychain/UserDefaults copies are
+# removed only after the new encrypted store commits.
 need(
     "ios/RouterVPN/App/Models.swift",
     "struct ExternalHTTPConnectConfig",
@@ -191,27 +194,35 @@ need(
 )
 need(
     "ios/RouterVPN/App/IOSNodeBundleStore.swift",
+    "import CryptoKit",
     "import Security",
-    "func link(",
-    "private func store(",
-    "External node id is unsafe",
-    'bundle.apiToken = ""; bundle.routerAPI = ""; bundle.adGuardIPv4 = ""; bundle.adGuardIPv6 = ""',
-    'bundle.socks5Host = ""; bundle.socks5Port = 0',
+    "AES.GCM.seal",
+    "AES.GCM.open",
+    "storeAAD",
+    "maxEncryptedStoreBytes = 192 * 1024 * 1024",
+    ".completeFileProtectionUntilFirstUserAuthentication",
+    ".isSymbolicLinkKey",
+    "legacyBundleKeychainService",
     "legacyDefaultsKey",
     "SecItemCopyMatching",
     "SecItemUpdate",
     "SecItemAdd",
+    "SecItemDelete",
     "kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly",
+    "private func writeEncryptedRecords",
     "private func commitRecords",
-    "try writeKeychain(data)",
+    "try writeEncryptedRecords(next)",
     "records = next",
-    "Adopt RAM only after the durable Keychain write has committed.",
-    "UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)",
+    "Adopt RAM only after authenticated encryption + atomic protected-file commit.",
+    "cleanupLegacyStoresBestEffort()",
+    'bundle.apiToken = ""; bundle.routerAPI = ""; bundle.adGuardIPv4 = ""; bundle.adGuardIPv6 = ""',
+    'bundle.socks5Host = ""; bundle.socks5Port = 0',
 )
 forbid(
     "ios/RouterVPN/App/IOSNodeBundleStore.swift",
     'bundle.socks5Host = ""; bundle.socks5Port = 1080',
     "UserDefaults.standard.set(data, forKey: defaultsKey)",
+    "try writeKeychain(data)\n        records = next",
 )
 need(
     "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
