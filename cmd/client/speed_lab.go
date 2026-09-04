@@ -16,6 +16,7 @@ import (
 func registerSpeedLabRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/speed-lab/options", a.speedLabOptions)
 	h.HandleFunc("/api/speed-lab/run", a.speedLabRun)
+	registerTorBridgeRoutes(h, a)
 }
 
 func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
