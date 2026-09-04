@@ -15,7 +15,7 @@ extension RouterVPNModel {
     var selectedExternalProtocol: String { selectedNodeProfile?.external?.protocolName.lowercased() ?? "" }
 
     var selectedExternalSupportedOnIOS: Bool {
-        selectedNodeIsExternal && ["wireguard", "socks5", "shadowsocks", "hysteria2"].contains(selectedExternalProtocol)
+        selectedNodeIsExternal && ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"].contains(selectedExternalProtocol)
     }
 
     func nodeRuntimeSummary(_ profile: RouterProfile) -> String {
@@ -23,7 +23,7 @@ extension RouterVPNModel {
             let protocolName = profile.external?.protocolName.lowercased() ?? "unknown"
             if protocolName == "openvpn" { return "External OpenVPN — unavailable on iOS until a pinned native Apple OpenVPN dataplane exists" }
             if protocolName == "tor-bridge" { return "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom — unavailable on iOS until Router VPN ships a real native Tor + pluggable-transport PacketTunnel dataplane with dynamic Tor-exit proof" }
-            if ["wireguard", "socks5", "shadowsocks", "hysteria2"].contains(protocolName) { return "External \(protocolName) — native Libbox PacketTunnel + exact public-exit proof" }
+            if ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"].contains(protocolName) { return "External \(protocolName) — native Libbox PacketTunnel + exact public-exit proof" }
             return "External \(protocolName) — unsupported"
         }
         return "Router VPN node — WireGuardKit / Libbox modes + exact private node proof"
