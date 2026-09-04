@@ -51,8 +51,9 @@ func (a *app) torBridgeConnect(w http.ResponseWriter, r *http.Request) {
 // torBridgeConnectOwned assumes the caller already owns beginConnectionOperation.
 // This lets the unified external-profile route dispatch Tor without nested locks.
 func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.RouterProfile) {
-	if _, _, _, err := torBridgeProfile(profile); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	_, torCfg, _, _, profileErr := torBridgeProfile(profile)
+	if profileErr != nil {
+		http.Error(w, profileErr.Error(), http.StatusBadRequest)
 		return
 	}
 	cap := torBridgeRuntimeCapability()
@@ -189,6 +190,10 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 		return
 	}
 
+	transport := strings.TrimSpace(torCfg.Transport)
+	if transport == "" {
+		transport = "custom"
+	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -197,10 +202,11 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 		"profile_id": profile.ID,
 		"profile_name": profile.Name,
 		"protocol": "tor-bridge",
+		"tor_transport": transport,
 		"direct": true,
 		"actual_public_ip": actualIP,
 		"actual_exit_proof": "tor-project-is-tor-passed",
 		"dns_mode": policy.DNSMode,
-		"route": "client full-device TUN -> local Tor SOCKS -> obfs4 bridge -> Tor circuit -> dynamic Tor exit -> Internet",
+		"route": "client full-device TUN -> local Tor SOCKS -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet",
 	})
 }
