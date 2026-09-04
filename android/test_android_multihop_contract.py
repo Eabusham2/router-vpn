@@ -8,6 +8,7 @@ private_store = (PKG / "AndroidPrivateFileStore.java").read_text()
 builder = (PKG / "AndroidMultihopController.java").read_text()
 runtime = (PKG / "AndroidMultihopRuntime.java").read_text()
 probe = (PKG / "AndroidPathProbe.java").read_text()
+hop_meter = (PKG / "AndroidSpeedLabHopMeter.java").read_text()
 main = (PKG / "MainActivity.java").read_text()
 
 required_store = [
@@ -54,6 +55,16 @@ required_builder = [
     'peers > 1',
     'MAX_SESSION_DIRS = 32',
     'MAX_TOTAL = 32 * 1024 * 1024',
+    'ENTRY_PROOF_PORT = 1098',
+    'EXIT_PROOF_PORT = 1099',
+    'put("tag", "entry-private")',
+    'put("detour", "entry-wg")',
+    'put("tag", "multihop-entry-proof")',
+    'put("listen_port", ENTRY_PROOF_PORT)',
+    'put("tag", "multihop-proof")',
+    'put("listen_port", EXIT_PROOF_PORT)',
+    'put("outbound", "entry-private")',
+    'put("outbound", "proxy")',
 ]
 for token in required_builder:
     assert token in builder, f"multihop builder lost contract: {token}"
@@ -101,5 +112,24 @@ for token in [
     'PROOF_KIND.equals(body.optString("proof"',
 ]:
     assert token in probe, f"Android multihop exit proof lost identity marker: {token}"
+
+# Per-hop Speed Lab cannot address entry/exit by their overlapping private IP.
+# It must use the exact local 1098/1099 lanes built above and validate the
+# cryptographic Router VPN node identity before accepting RTT/Mbps.
+for token in [
+    "ENTRY_PROOF_PORT=1098",
+    "EXIT_PROOF_PORT=1099",
+    "Proxy.Type.HTTP",
+    'new InetSocketAddress("127.0.0.1",proofPort)',
+    "AndroidNodeStore.stableNodeIdentity(bundle)",
+    'body.optString("node_id"',
+    'body.optString("proof"',
+    "Hop proof lane reached the wrong Router VPN node identity",
+    "prove(privateNode,proofPort)",
+    "/api/benchmark/download",
+    "/api/benchmark/upload",
+    "stale results were discarded",
+]:
+    assert token in hop_meter, f"Android exact per-hop Speed Lab proof lost marker: {token}"
 
 print("android multihop source contract: OK")
