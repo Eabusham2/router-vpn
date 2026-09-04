@@ -166,13 +166,34 @@ func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
-	value, err := measureRoutedProfileSpeed(p, q.Bytes)
+
+	var value routedSpeedResult
+	var err error
+	if st.Mode == "multihop" {
+		graph, graphOK := getActiveMultihopGraph(a)
+		if !graphOK {
+			http.Error(w, "active multihop graph identity is unavailable; refusing ambiguous routed node speed", http.StatusConflict)
+			return
+		}
+		if id == graph.EntryID {
+			value, err = measureRoutedProfileSpeedViaProxy(p, q.Bytes, multihopEntryProofProxy)
+		} else if id == graph.ExitID {
+			value, err = measureRoutedProfileSpeedViaProxy(p, q.Bytes, multihopProofProxy)
+		} else {
+			http.Error(w, "requested Router VPN node is not part of the active multihop graph", http.StatusConflict)
+			return
+		}
+		if err == nil {
+			err = validateCurrentMultihopSpeedGraph(a, st, graph, sessionAtStart)
+		}
+	} else {
+		value, err = measureRoutedProfileSpeed(p, q.Bytes)
+		if err == nil {
+			err = validateRoutedSpeedSession(a, st, sessionAtStart)
+		}
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	if err := validateRoutedSpeedSession(a, st, sessionAtStart); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	w.Header().Set("content-type", "application/json")
@@ -254,9 +275,9 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 	payload := map[string]any{
 		"connected": true, "mode": st.Mode, "entry_id": graph.EntryID, "exit_id": graph.ExitID, "bytes": clampSpeedBytes(q.Bytes),
 		"measured_at": time.Now().UTC(),
-		"note": "each hop result is an independent authenticated transfer to that hop's private router-agent through one unchanged actually launched routing graph; Router VPN never subtracts or divides another measurement to invent per-hop speed",
+		"note": "each hop result is an independent authenticated transfer through a reserved local proof lane bound to that hop's cryptographic Router VPN node identity; Router VPN never subtracts or divides another measurement to invent per-hop speed",
 	}
-	entryValue, entryErr := measureRoutedProfileSpeed(entry, q.Bytes)
+	entryValue, entryErr := measureRoutedProfileSpeedViaProxy(entry, q.Bytes, multihopEntryProofProxy)
 	if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionAtStart); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -267,7 +288,7 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 		payload["entry_error"] = entryErr.Error()
 	}
 
-	exitValue, exitErr := measureRoutedProfileSpeed(exit, q.Bytes)
+	exitValue, exitErr := measureRoutedProfileSpeedViaProxy(exit, q.Bytes, multihopProofProxy)
 	if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionAtStart); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -279,7 +300,7 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 		payload["exit_error"] = exitErr.Error()
 	}
 	if entryErr != nil && exitErr != nil {
-		http.Error(w, "neither multihop node private benchmark is reachable through the active graph", http.StatusBadGateway)
+		http.Error(w, "neither exact multihop hop proof lane could complete its private benchmark", http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("content-type", "application/json")
