@@ -30,8 +30,19 @@ type adminServerControl struct {
 	token     string
 	cfg       cfg
 	statePath string
+	// opMu serializes Stop/Resume/Emergency and background emergency
+	// reconciliation across their entire live+durable transaction.
+	opMu      sync.Mutex
 	mu        sync.Mutex
 	state     adminServerControlState
+}
+
+type emergencyPeerResult struct {
+	Removed   int
+	Seen      int
+	Remaining int
+	Sources   []string
+	Details   []string
 }
 
 func init() {
@@ -80,9 +91,29 @@ func startAdminServerControlPlane() {
 		log.Printf("router server control disabled: %v", err)
 		return
 	}
+	// Never serve a durable STOPPED/EMERGENCY status unless the persisted live
+	// firewall policy was actually re-established after restart.
 	if err := s.apply(); err != nil {
-		log.Printf("router server control initial policy: %v", err)
+		log.Printf("router server control disabled: persisted policy could not be re-applied: %v", err)
+		return
 	}
+	// Emergency is a durable stronger state than ordinary Stop. Re-prove its
+	// zero-peer invariant after every router-agent restart before serving it as
+	// complete. A failed re-proof downgrades truthfully to paused Stop.
+	s.opMu.Lock()
+	if s.emergencyActive() {
+		if result, reconcileErr := enforceEmergencyPeers(); reconcileErr != nil {
+			log.Printf("router server control startup Emergency Stop re-proof failed: %v details=%v", reconcileErr, result.Details)
+			if downgradeErr := s.setState(true, false); downgradeErr != nil {
+				log.Printf("router server control disabled: could not persist truthful emergency downgrade: %v", downgradeErr)
+				s.opMu.Unlock()
+				return
+			}
+		}
+	}
+	s.opMu.Unlock()
+	go s.emergencyReconcileLoop()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/admin/server-control", s.status)
 	mux.HandleFunc("/api/admin/server-control/stop", s.stop)
@@ -249,10 +280,18 @@ func (s *adminServerControl) setState(paused, emergency bool) error {
 	return nil
 }
 
+func (s *adminServerControl) emergencyActive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.Emergency
+}
+
 func (s *adminServerControl) stop(w http.ResponseWriter, r *http.Request) {
 	if !s.require(w, r, http.MethodPost) {
 		return
 	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	if err := s.setState(true, false); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -264,6 +303,8 @@ func (s *adminServerControl) resume(w http.ResponseWriter, r *http.Request) {
 	if !s.require(w, r, http.MethodPost) {
 		return
 	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	if err := s.setState(false, false); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -294,48 +335,89 @@ func validateEmergencyPeerTeardown(sources, errs []string, remaining int) error 
 	return nil
 }
 
+func enforceEmergencyPeers() (emergencyPeerResult, error) {
+	peers, _, collectErrs := collectWireGuardPeers()
+	result := emergencyPeerResult{Seen: len(peers), Details: make([]string, 0, len(peers)+len(collectErrs)+4)}
+	for _, peer := range peers {
+		ok, detail := removeLivePeer(peer.Interface, peer.PublicKey)
+		if ok {
+			result.Removed++
+		}
+		if detail != "" {
+			result.Details = append(result.Details, peer.Interface+": "+detail)
+		}
+	}
+	result.Details = append(result.Details, collectErrs...)
+	remaining, sources, verifyErrs := collectWireGuardPeers()
+	result.Remaining = len(remaining)
+	result.Sources = append([]string(nil), sources...)
+	if err := validateEmergencyPeerTeardown(sources, verifyErrs, len(remaining)); err != nil {
+		result.Details = append(result.Details, "verification: "+err.Error())
+		return result, err
+	}
+	return result, nil
+}
+
+func (s *adminServerControl) emergencyReconcileLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.opMu.Lock()
+		if !s.emergencyActive() {
+			s.opMu.Unlock()
+			continue
+		}
+		result, err := enforceEmergencyPeers()
+		if err != nil {
+			log.Printf("router Emergency Stop lost zero-peer proof: %v details=%v", err, result.Details)
+			// Truth beats a stale green indicator. Keep transport ingress paused but
+			// downgrade Emergency until a user explicitly retries and re-proves it.
+			if downgradeErr := s.setState(true, false); downgradeErr != nil {
+				log.Printf("router Emergency Stop truthful downgrade failed; reconciliation will retry: %v", downgradeErr)
+			}
+		}
+		s.opMu.Unlock()
+	}
+}
+
 func (s *adminServerControl) emergencyStop(w http.ResponseWriter, r *http.Request) {
 	if !s.require(w, r, http.MethodPost) {
 		return
 	}
-	if err := s.setState(true, true); err != nil {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
+	// Phase one is ordinary Stop. Persist ingress blocking as non-emergency
+	// before touching peers, so a crash can never leave durable emergency=true
+	// without a verified zero-peer state.
+	if err := s.setState(true, false); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	peers, _, collectErrs := collectWireGuardPeers()
-	removed := 0
-	details := make([]string, 0, len(peers)+len(collectErrs)+4)
-	for _, peer := range peers {
-		ok, detail := removeLivePeer(peer.Interface, peer.PublicKey)
-		if ok {
-			removed++
-		}
-		if detail != "" {
-			details = append(details, peer.Interface+": "+detail)
-		}
-	}
-	details = append(details, collectErrs...)
-
-	remaining, sources, verifyErrs := collectWireGuardPeers()
-	if err := validateEmergencyPeerTeardown(sources, verifyErrs, len(remaining)); err != nil {
-		details = append(details, "verification: "+err.Error())
-		emergencyState := false
-		if resetErr := s.setState(true, false); resetErr != nil {
-			emergencyState = true
-			details = append(details, "state downgrade failed: "+resetErr.Error())
-		}
+	result, err := enforceEmergencyPeers()
+	if err != nil {
 		message := "Emergency Stop incomplete; transport/service ingress remains paused: " + err.Error()
 		writeAdminJSON(w, http.StatusInternalServerError, map[string]any{
-			"ok": false, "error": message, "paused": true, "emergency": emergencyState,
-			"live_peers_removed": removed, "peer_rows_seen": len(peers),
-			"remaining_peer_rows": len(remaining), "coverage_sources": sources, "details": details,
+			"ok": false, "error": message, "paused": true, "emergency": false,
+			"live_peers_removed": result.Removed, "peer_rows_seen": result.Seen,
+			"remaining_peer_rows": result.Remaining, "coverage_sources": result.Sources, "details": result.Details,
 		})
 		return
 	}
-
+	// Phase two publishes Emergency only after both control sources re-enumerate
+	// with zero remaining peers. Failure keeps the already-persisted paused Stop.
+	if err := s.setState(true, true); err != nil {
+		message := "peer teardown was proved, but Emergency state could not be durably adopted; transport/service ingress remains paused: " + err.Error()
+		writeAdminJSON(w, http.StatusInternalServerError, map[string]any{
+			"ok": false, "error": message, "paused": true, "emergency": false,
+			"live_peers_removed": result.Removed, "peer_rows_seen": result.Seen,
+			"remaining_peer_rows": 0, "coverage_sources": result.Sources, "details": result.Details,
+		})
+		return
+	}
 	writeAdminJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "paused": true, "emergency": true,
-		"live_peers_removed": removed, "peer_rows_seen": len(peers),
-		"remaining_peer_rows": 0, "coverage_sources": sources, "details": details,
+		"live_peers_removed": result.Removed, "peer_rows_seen": result.Seen,
+		"remaining_peer_rows": 0, "coverage_sources": result.Sources, "details": result.Details,
 	})
 }
