@@ -163,6 +163,21 @@ final class IOSNodeBundleStore {
                     throw NSError(domain: "RouterVPN.NodeStore", code: 3, userInfo: [NSLocalizedDescriptionKey: "External node id is unsafe"])
                 }
                 profile.id = trimmed
+                profile.nodeProofID = nil
+                profile.routerAPI = ""
+                profile.apiToken = ""
+                profile.adGuardIPv4 = ""
+                profile.adGuardIPv6 = ""
+                profile.socksHost = ""
+                profile.socksPort = 0
+                profile.socksUsername = ""
+                profile.socksPassword = ""
+                profile.daitaHost = nil
+                profile.daitaPort = nil
+                profile.daitaRateKbps = nil
+                profile.baseTunnel = nil
+                profile.baseFallback = nil
+                profile.pathProbeURL = nil
             }
             guard localIDs.insert(profile.id).inserted else {
                 throw NSError(domain: "RouterVPN.NodeStore", code: 4, userInfo: [NSLocalizedDescriptionKey: "Node bundle contains duplicate node ids"])
@@ -175,6 +190,7 @@ final class IOSNodeBundleStore {
         if let selected = bundle.routerProfiles.first(where: { $0.id == selectedID }) {
             bundle.endpoint = selected.endpoint
             if selected.normalizedNodeKind == "router-vpn" {
+                bundle.nodeProofID = selected.nodeProofID ?? bundle.nodeProofID
                 bundle.apiToken = selected.apiToken
                 bundle.routerAPI = selected.routerAPI
                 bundle.adGuardIPv4 = selected.adGuardIPv4
@@ -182,6 +198,7 @@ final class IOSNodeBundleStore {
                 bundle.socks5Host = selected.socksHost
                 bundle.socks5Port = selected.socksPort
             } else {
+                bundle.nodeProofID = ""
                 bundle.apiToken = ""; bundle.routerAPI = ""; bundle.adGuardIPv4 = ""; bundle.adGuardIPv6 = ""
                 bundle.socks5Host = ""; bundle.socks5Port = 0
             }
