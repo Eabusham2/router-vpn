@@ -36,15 +36,19 @@ $SpeedLabHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-SpeedLab.ps1'
 if(-not(Test-Path -LiteralPath $SpeedLabHelpers)){throw "Router VPN Speed Lab helpers are missing: $SpeedLabHelpers"}
 $SpeedLabSource=Get-Content -LiteralPath $SpeedLabHelpers -Raw -Encoding UTF8
 . ([ScriptBlock]::Create($SpeedLabSource))
+$TorBridgeHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-TorBridge.ps1'
+if(-not(Test-Path -LiteralPath $TorBridgeHelpers)){throw "Router VPN Tor bridge UI helpers are missing: $TorBridgeHelpers"}
+$TorBridgeSource=Get-Content -LiteralPath $TorBridgeHelpers -Raw -Encoding UTF8
+. ([ScriptBlock]::Create($TorBridgeSource))
 
 # The shipping Windows product is composed from this launcher + the unified shell
-# + telemetry + Speed Lab transforms + Product-v2. Keep the controller contract
-# declared here and verify the actual implementation is present during -SelfTest.
+# + telemetry + Speed Lab + Tor bridge transforms + Product-v2. Keep the controller
+# contract declared here and verify the actual implementation during -SelfTest.
 $UnifiedControllerContract=@(
     '/api/status','/api/profiles','/api/logical-modes','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom',
     '/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/profile/fastest',
     '/api/connection/live-latency','/api/connection/speed-test','/api/multihop/live-latency','/api/multihop/speed-test','/api/public-ip','/api/dns/retest','/api/emergency-stop',
-    '/api/speed-lab/options','/api/speed-lab/run'
+    '/api/speed-lab/options','/api/speed-lab/run','/api/tor-bridge/capabilities','/api/tor-bridge/import','/api/tor-bridge/connect'
 )
 $LegacyAutoAuditMarker='/api/auto'
 
@@ -57,6 +61,7 @@ $OnboardingSteps=@(
     @{Title='Modes';Body='SMART AUTO is the default mode. AUTO is a first-class mode. All logical presets remain discoverable and unavailable ones keep their exact readiness reason. CUSTOM uses saved visual presets containing exact required layers and fails closed if no validated compatible stack works.'},
     @{Title='DNS and Settings';Body='DNS is changed from the control dock and detailed resolver setup/retest drills in. Settings contains kill switch, IPv6 On default, LAN policy, WireGuard / AmneziaWG base preference, Auto measured/fixed MTU, DAITA-like traffic padding, Jumbo TUN, AUTO encryption/obfuscation filters, forwarding ownership and Speed Lab with real throughput plus idle/download-loaded/upload-loaded latency.'},
     @{Title='Multihop';Body='Multihop is entry -> exit -> Internet. Entry and exit must be different and the graph must be supported by the real Windows dataplane. The main sheet shows live entry/exit direct RTT and, when connected, current multihop private-path RTT. Speed Lab can test the current graph or build a temporary direct/multihop/external graph without saving it.'},
+    @{Title='Tor censorship bridges';Body='Tor bridge profiles can use obfs4, meek, Snowflake, WebTunnel, or validated Auto / Custom bridge-line sets. Windows can create and manage those profiles today, but Tor Connect stays unavailable until Router VPN ships a real Windows Tor/Lyrebird full-device runtime. Unsupported controls must show that reason instead of pretending to connect.'},
     @{Title='Windows permissions and recovery';Body='Full-device Wintun/TUN, routes, DNS and strict firewall enforcement can require Windows administrator/network-driver permission. WSL is not counted as the native dataplane. Use normal Disconnect for intentional exit and Emergency stop only for a stuck runtime.'},
     @{Title='Final checks';Body='After the first real connection, verify selected-node proof, selected DNS, actual public exit, IPv4/IPv6 leak behavior, kill switch, reconnect, network change, sleep/wake, live RTT, Speed Lab loaded latency, routed hop speed where multihop is active, and the current display scaling. Setup Center Full Guide remains the server/router administration source of truth.'}
 )
@@ -103,6 +108,7 @@ $ProductSource=$ProductSource.Replace($SelfTestSourceRead,$SelfTestSourceReadFix
 $ProductSource=Add-RouterVPNUnifiedWindowsShell -ProductSource $ProductSource
 $ProductSource=Add-RouterVPNTelemetryWindowsShell -ProductSource $ProductSource
 $ProductSource=Add-RouterVPNSpeedLabWindowsShell -ProductSource $ProductSource
+$ProductSource=Add-RouterVPNTorBridgeWindowsShell -ProductSource $ProductSource
 $TutorialPattern="(?s)\(Control 'TutorialButton'\)\.Add_Click\(\{.*?\}\)\r?\n\`$BaseCombo\.SelectedIndex=0"
 $TutorialMatch=[regex]::Match($ProductSource,$TutorialPattern)
 if(-not$TutorialMatch.Success){throw 'Router VPN Windows full-onboarding Help seam drifted.'}
@@ -114,9 +120,9 @@ $PreviousProductSource=$env:ROUTER_VPN_PRODUCT_SOURCE;$env:ROUTER_VPN_PRODUCT_SO
 try{
     if($SelfTest){
         $self=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8
-        foreach($marker in @('RouterVPN-Windows-SessionMutation.ps1','Convert-RouterVPNWindowsProductSessionMutation','Convert-RouterVPNWindowsUnifiedSessionMutation','RouterVPN-Windows-Telemetry.ps1','RouterVPN-Windows-SpeedLab.ps1','Add-RouterVPNUnifiedWindowsShell','Add-RouterVPNTelemetryWindowsShell','Add-RouterVPNSpeedLabWindowsShell','windows-onboarding-v3.json','Show-RouterVPNProductOnboarding -Force','SMART AUTO is the default mode','IPv6 On default','Auto measured/fixed MTU','DAITA-like traffic padding','AUTO encryption/obfuscation filters')){if(-not$self.Contains($marker)){throw "Windows unified launcher self-test missing $marker"}}
-        foreach($marker in $UnifiedControllerContract){if(-not$UnifiedShellSource.Contains($marker)-and-not$TelemetrySource.Contains($marker)-and-not$SpeedLabSource.Contains($marker)-and-not$ProductSource.Contains($marker)){throw "Windows composed controller contract missing $marker"}}
-        foreach($marker in @('UnifiedShell','UnifiedMapCanvas','UnifiedConnectButton','UnifiedFastestNode','UnifiedLiveLatency','UnifiedForwardButton','UnifiedKillSwitch','UnifiedMultihop','UnifiedMultihopLatency','UnifiedPerformanceButton','UnifiedModeCombo','UnifiedDnsCombo','SMART AUTO','New CUSTOM preset','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom','/api/connect-logical','/api/profile/fastest','/api/connection/live-latency','/api/connection/speed-test','/api/multihop/live-latency','/api/multihop/speed-test','/api/speed-lab/options','/api/speed-lab/run','download_loaded_ms','upload_loaded_ms','bufferbloat','Auto timing','Custom timing','/api/mtu/retest','System.Collections.Generic.HashSet','real stored coordinates')){if(-not$ProductSource.Contains($marker)){throw "Windows unified product self-test missing $marker"}}
+        foreach($marker in @('RouterVPN-Windows-SessionMutation.ps1','Convert-RouterVPNWindowsProductSessionMutation','Convert-RouterVPNWindowsUnifiedSessionMutation','RouterVPN-Windows-Telemetry.ps1','RouterVPN-Windows-SpeedLab.ps1','RouterVPN-Windows-TorBridge.ps1','Add-RouterVPNUnifiedWindowsShell','Add-RouterVPNTelemetryWindowsShell','Add-RouterVPNSpeedLabWindowsShell','Add-RouterVPNTorBridgeWindowsShell','windows-onboarding-v3.json','Show-RouterVPNProductOnboarding -Force','SMART AUTO is the default mode','IPv6 On default','Auto measured/fixed MTU','DAITA-like traffic padding','AUTO encryption/obfuscation filters','Tor censorship bridges')){if(-not$self.Contains($marker)){throw "Windows unified launcher self-test missing $marker"}}
+        foreach($marker in $UnifiedControllerContract){if(-not$UnifiedShellSource.Contains($marker)-and-not$TelemetrySource.Contains($marker)-and-not$SpeedLabSource.Contains($marker)-and-not$TorBridgeSource.Contains($marker)-and-not$ProductSource.Contains($marker)){throw "Windows composed controller contract missing $marker"}}
+        foreach($marker in @('UnifiedShell','UnifiedMapCanvas','UnifiedConnectButton','UnifiedFastestNode','UnifiedLiveLatency','UnifiedForwardButton','UnifiedKillSwitch','UnifiedMultihop','UnifiedMultihopLatency','UnifiedPerformanceButton','UnifiedModeCombo','UnifiedDnsCombo','UnifiedTorButton','Tor bridges…','ShowUnifiedTorBridgeBuilder','SMART AUTO','New CUSTOM preset','/api/strategy/auto','/api/strategy/smart-auto','/api/strategy/custom','/api/connect-logical','/api/profile/fastest','/api/connection/live-latency','/api/connection/speed-test','/api/multihop/live-latency','/api/multihop/speed-test','/api/speed-lab/options','/api/speed-lab/run','/api/tor-bridge/capabilities','/api/tor-bridge/import','download_loaded_ms','upload_loaded_ms','bufferbloat','Auto timing','Custom timing','Snowflake','WebTunnel','Auto / Custom','/api/mtu/retest','System.Collections.Generic.HashSet','real stored coordinates')){if(-not$ProductSource.Contains($marker)){throw "Windows unified product self-test missing $marker"}}
         & $ProductScript -BaseUrl $BaseUrl -SelfTest
     }else{Show-RouterVPNProductOnboarding;& $ProductScript -BaseUrl $BaseUrl}
     if(-not$?){throw 'Router VPN native Windows product shell failed.'}
@@ -126,5 +132,6 @@ try{
 # normal startup never blocks the map with onboarding; Help force-opens the full saved native onboarding wizard;
 # fastest-node side dropdown; live path RTT; quick kill switch; Forward shortcut;
 # real multihop with live IN/OUT/PATH RTT; Settings->Mode->DNS; native Speed Lab with current/temporary direct/multihop/external paths, real HTTPS Mbps, idle/download-loaded/upload-loaded latency and Auto/Custom min/max timing;
+# Tor bridge profile builder for obfs4/meek/Snowflake/WebTunnel/Custom with truthful Windows runtime unavailability;
 # SMART AUTO default; AUTO first-class; visible readiness; GUI CUSTOM presets;
 # real-coordinate map with measured node ms; fixed local controller only; no browser/PWA final shell.
