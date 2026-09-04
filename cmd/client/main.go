@@ -1043,6 +1043,7 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 	a.state.Base = ""
 	a.state.Phase = "stopping"
 	a.mu.Unlock()
+	clearActiveMultihopGraph(a)
 	if coverCancel != nil {
 		coverCancel()
 	}
