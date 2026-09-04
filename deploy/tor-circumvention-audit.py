@@ -221,8 +221,19 @@ need(
     "gcc -O2 -Wall -Wextra -Werror",
 )
 
-# iOS remains explicit/unavailable rather than pretending the desktop
-# Tor/Lyrebird graph exists in PacketTunnel.
+# Mobile clients remain explicit about the full PT family instead of exposing a
+# cosmetic desktop-equivalent path. Android and iOS only become connect-capable
+# after they own real native Tor/PT tunnel lifecycles and dynamic-exit proof.
+need(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
+    "Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on Android",
+    "real native Tor + pluggable-transport VpnService dataplane",
+    "must not be approximated as SOCKS5",
+)
+forbid(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
+    "Tor obfs4 bridge is unavailable on Android",
+)
 need(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
     "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom",
