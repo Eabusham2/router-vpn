@@ -141,7 +141,7 @@ func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDur
 	}
 	identity, path, err := captureSpeedLabIdentity(a)
 	if err != nil {
-		return speedLabPath{}, speedLabMeasurement{}, nil, err
+		return speedLabPathIdentity{}, speedLabMeasurement{}, nil, err
 	}
 	measurement, err := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
 	if err != nil {
@@ -155,6 +155,17 @@ func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDur
 		}
 	}
 	return path, measurement, hops, nil
+}
+
+func speedLabRestoreAfterFailure(a *app, snapshot speedLabTemporarySnapshot, cause error) error {
+	cleanupErr := a.speedLabRestoreTemporary(snapshot)
+	if cleanupErr == nil {
+		return cause
+	}
+	if cause == nil {
+		return errors.New("temporary Speed Lab rollback failed: " + cleanupErr.Error())
+	}
+	return errors.New(cause.Error() + "; temporary-path rollback also failed: " + cleanupErr.Error())
 }
 
 func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error) {
@@ -186,17 +197,15 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 	snapshot := a.speedLabSnapshotTemporary()
 	path, startErr := a.startSpeedLabTemporaryPath(q)
 	if startErr != nil {
-		_ = a.speedLabRestoreTemporary(snapshot)
-		return speedLabPath{}, speedLabMeasurement{}, nil, startErr
+		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, startErr)
 	}
 	if err := a.speedLabWriteStore(snapshot.Profiles); err != nil {
-		_ = a.speedLabRestoreTemporary(snapshot)
-		return speedLabPath{}, speedLabMeasurement{}, nil, errors.New("temporary path was proven but prior durable profile state could not be restored before measurement: " + err.Error())
+		cause := errors.New("temporary path was proven but prior durable profile state could not be restored before measurement: " + err.Error())
+		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, cause)
 	}
 	identity, _, err := captureSpeedLabIdentity(a)
 	if err != nil {
-		_ = a.speedLabRestoreTemporary(snapshot)
-		return speedLabPath{}, speedLabMeasurement{}, nil, err
+		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
 	}
 	measurement, measureErr := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
 	var hops []speedLabHopMeasurement
