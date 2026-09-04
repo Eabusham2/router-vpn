@@ -168,33 +168,40 @@ func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {
 	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
 
 	var value routedSpeedResult
-	var err error
 	if st.Mode == "multihop" {
 		graph, graphOK := getActiveMultihopGraph(a)
 		if !graphOK {
 			http.Error(w, "active multihop graph identity is unavailable; refusing ambiguous routed node speed", http.StatusConflict)
 			return
 		}
+		var measureErr error
 		if id == graph.EntryID {
-			value, err = measureRoutedProfileSpeedViaProxy(p, q.Bytes, multihopEntryProofProxy)
+			value, measureErr = measureRoutedProfileSpeedViaProxy(p, q.Bytes, multihopEntryProofProxy)
 		} else if id == graph.ExitID {
-			value, err = measureRoutedProfileSpeedViaProxy(p, q.Bytes, multihopProofProxy)
+			value, measureErr = measureRoutedProfileSpeedViaProxy(p, q.Bytes, multihopProofProxy)
 		} else {
 			http.Error(w, "requested Router VPN node is not part of the active multihop graph", http.StatusConflict)
 			return
 		}
-		if err == nil {
-			err = validateCurrentMultihopSpeedGraph(a, st, graph, sessionAtStart)
+		if measureErr != nil {
+			http.Error(w, measureErr.Error(), http.StatusBadGateway)
+			return
+		}
+		if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionAtStart); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
 		}
 	} else {
-		value, err = measureRoutedProfileSpeed(p, q.Bytes)
-		if err == nil {
-			err = validateRoutedSpeedSession(a, st, sessionAtStart)
+		var measureErr error
+		value, measureErr = measureRoutedProfileSpeed(p, q.Bytes)
+		if measureErr != nil {
+			http.Error(w, measureErr.Error(), http.StatusBadGateway)
+			return
 		}
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		if err := validateRoutedSpeedSession(a, st, sessionAtStart); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
