@@ -126,7 +126,8 @@ need(
 # iOS/iPadOS now owns the same six common external families through pinned
 # Libbox/WireGuardKit PacketTunnel paths. OpenVPN and Tor remain unavailable.
 # External bundles must not inherit home Router/SOCKS defaults merely to satisfy
-# the compatibility envelope.
+# the compatibility envelope. Linked bundles carry private keys/credentials, so
+# their durable store must be ThisDeviceOnly Keychain data, never UserDefaults.
 need(
     "ios/RouterVPN/App/Models.swift",
     "struct ExternalHTTPConnectConfig",
@@ -185,17 +186,27 @@ need(
 )
 need(
     "ios/RouterVPN/App/IOSNodeBundleStore.swift",
+    "import Security",
     "func link(",
     "private func store(",
     "External node id is unsafe",
-    "records[key] = normalized",
-    "try persist()",
     'bundle.apiToken = ""; bundle.routerAPI = ""; bundle.adGuardIPv4 = ""; bundle.adGuardIPv6 = ""',
     'bundle.socks5Host = ""; bundle.socks5Port = 0',
+    "legacyDefaultsKey",
+    "SecItemCopyMatching",
+    "SecItemUpdate",
+    "SecItemAdd",
+    "kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly",
+    "private func commitRecords",
+    "try writeKeychain(data)",
+    "records = next",
+    "Adopt RAM only after the durable Keychain write has committed.",
+    "UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)",
 )
 forbid(
     "ios/RouterVPN/App/IOSNodeBundleStore.swift",
     'bundle.socks5Host = ""; bundle.socks5Port = 1080',
+    "UserDefaults.standard.set(data, forKey: defaultsKey)",
 )
 need(
     "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
