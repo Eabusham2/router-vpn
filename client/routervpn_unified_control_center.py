@@ -22,13 +22,16 @@ class UnifiedControlCenterPolicy:
 
 
 POLICY = UnifiedControlCenterPolicy()
-FINAL_ENCRYPTED_TYPES = {"router-vpn", "wireguard", "amneziawg", "openvpn", "shadowsocks-2022"}
+# A tor-bridge node means Router VPN's complete owned PT -> Tor circuit runtime,
+# not the raw PT by itself. The PT is circumvention; Tor's proven circuit is the
+# confidentiality/anonymity layer. Plain bridge/proxy types remain bridge-only.
+FINAL_ENCRYPTED_TYPES = {"router-vpn", "wireguard", "amneziawg", "openvpn", "shadowsocks-2022", "tor-bridge"}
 SECURE_SUITES = (
     "WireGuard Noise_IK + ChaCha20-Poly1305",
     "AmneziaWG Noise_IK + ChaCha20-Poly1305",
     "OpenVPN TLS 1.3 + AEAD",
     "Shadowsocks 2022 BLAKE3 + AEAD",
-    "Tor ntor-v3 outer bridge",
+    "Tor pluggable transport + proven ntor-v3 circuit",
 )
 
 
