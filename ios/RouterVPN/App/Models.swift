@@ -88,6 +88,19 @@ struct ExternalSOCKS5Config: Codable, Hashable {
     var password: String?
 }
 
+struct ExternalHTTPConnectConfig: Codable, Hashable {
+    var host: String
+    var port: Int
+    var username: String?
+    var password: String?
+    var tlsServerName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case host, port, username, password
+        case tlsServerName = "tls_server_name"
+    }
+}
+
 struct ExternalHysteria2Config: Codable, Hashable {
     var server: String
     var port: Int
@@ -107,11 +120,15 @@ struct ExternalNodeConfig: Codable, Hashable {
     var openVPN: ExternalOpenVPNConfig?
     var shadowsocks: ExternalShadowsocksConfig?
     var socks5: ExternalSOCKS5Config?
+    var httpConnect: ExternalHTTPConnectConfig?
+    var httpsConnect: ExternalHTTPConnectConfig?
     var hysteria2: ExternalHysteria2Config?
 
     enum CodingKeys: String, CodingKey {
         case wireGuard = "wireguard"
         case openVPN = "openvpn"
+        case httpConnect = "http_connect"
+        case httpsConnect = "https_connect"
         case shadowsocks, socks5, hysteria2
         case protocolName = "protocol"
         case expectedPublicIP = "expected_public_ip"
