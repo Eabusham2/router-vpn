@@ -108,9 +108,17 @@
       "id": "tor-bridge",
       "role": [
         "bridge",
-        "hop"
+        "exit"
       ],
-      "final_transport": false
+      "final_transport": true,
+      "circumvention_transports": [
+        "obfs4",
+        "meek_lite",
+        "snowflake",
+        "webtunnel",
+        "custom"
+      ],
+      "upstream_hop": false
     }
   ],
   "map": {
@@ -214,12 +222,16 @@
       "wireguard-noise-ik-chacha20-poly1305",
       "amneziawg-noise-ik-chacha20-poly1305",
       "openvpn-tls13-aead",
-      "shadowsocks-2022-blake3-aead"
+      "shadowsocks-2022-blake3-aead",
+      "tor-ntor-v3-circuit"
     ],
     "outer_bridges": [
       "tls13-aes-256-gcm",
       "tls13-chacha20-poly1305",
-      "tor-ntor-v3",
+      "tor-obfs4",
+      "tor-meek-lite",
+      "tor-snowflake",
+      "tor-webtunnel",
       "shadowsocks-2022-blake3-aead"
     ],
     "plaintext_bridge_requires_encrypted_inner_tunnel": true
@@ -229,6 +241,7 @@
     "unsupported_controls_are_disabled_with_reason": true,
     "port_forwarding_requires_router_agent": true,
     "tor_bridge_requires_local_or_remote_tor_runtime": true,
+    "tor_dynamic_pt_strict_kill_switch_requires_process_scoped_egress": true,
     "jumbo_requires_dataplane_support": true,
     "daita_like_padding_requires_dataplane_support": true
   }
