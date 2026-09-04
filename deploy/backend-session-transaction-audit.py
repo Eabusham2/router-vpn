@@ -48,6 +48,7 @@ main = require(
     "a.operationMu.Lock()", "checkConnectionOperation()", "a.ownsConnectionRuntime(cmd)",
     "errConnectionOperationCancelled", "connectionOperationContextOrBackground()",
     "oldStore := a.profiles", "a.profiles = oldStore",
+    "func (a *app) stopModeWithIntent(holdKillSwitch bool) error", "clearActiveMultihopGraph(a)",
 )
 for handler in ("saveProfile", "selectProfile", "deleteProfile", "importProfileBundle", "options"):
     if f"func (a *app) {handler}" not in main:
