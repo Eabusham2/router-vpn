@@ -108,6 +108,8 @@ final class IOSSpeedLabRunner: ObservableObject {
             message: model.message
         )
 
+        try IOSSpeedLabPersistenceJournal.begin()
+        var journalOwned = true
         var path = ""
         var startedTemporaryTunnel = false
         do {
@@ -119,16 +121,19 @@ final class IOSSpeedLabRunner: ObservableObject {
             case .router:
                 guard !request.nodeID.isEmpty else { throw error("Choose a Router VPN node for the temporary test.") }
                 model.selectNode(request.nodeID)
+                try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
                 guard let selected = model.selectedNodeProfile, selected.id == request.nodeID, selected.normalizedNodeKind == "router-vpn" else {
                     throw error("The requested temporary Router VPN node could not be selected.")
                 }
                 progress = "Starting temporary Router VPN path…"
                 try await connectTemporaryRouter(request, model: model)
+                try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
                 startedTemporaryTunnel = true
                 path = "Temporary Router VPN • \(selected.name) • \(request.mode) • \(model.activeEngine) / \(model.activeRawProfile)"
             case .external:
                 guard !request.nodeID.isEmpty else { throw error("Choose an external node for the temporary test.") }
                 model.selectNode(request.nodeID)
+                try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
                 guard let selected = model.selectedNodeProfile, selected.id == request.nodeID, selected.normalizedNodeKind == "external" else {
                     throw error("The requested temporary external node could not be selected.")
                 }
@@ -137,6 +142,7 @@ final class IOSSpeedLabRunner: ObservableObject {
                 }
                 progress = "Starting temporary external \(model.selectedExternalProtocol) exit…"
                 await model.connectSelectedExternal()
+                try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
                 guard model.connected else { throw error("Temporary external path failed selected exit proof: \(model.message)") }
                 startedTemporaryTunnel = true
                 path = "Temporary external direct • \(selected.name) • \(model.selectedExternalProtocol)"
@@ -152,11 +158,19 @@ final class IOSSpeedLabRunner: ObservableObject {
             progress = "Running idle, download-loaded and upload-loaded measurements…"
             let measurement = try await guardedMeasurement(request.duration, model: model, token: token)
             try await restore(snapshot, model: model, stopTunnel: startedTemporaryTunnel)
+            try IOSSpeedLabPersistenceJournal.finish()
+            journalOwned = false
             return IOSSpeedLabRunResult(path: path, temporary: true, measurement: measurement)
         } catch let operationError {
+            var cleanupFailure: Error?
             do { try await restore(snapshot, model: model, stopTunnel: startedTemporaryTunnel || model.connected) }
-            catch let cleanupError {
-                throw self.error("\(operationError.localizedDescription); temporary-path cleanup also failed: \(cleanupError.localizedDescription)")
+            catch { cleanupFailure = error }
+            if journalOwned && cleanupFailure == nil {
+                do { try IOSSpeedLabPersistenceJournal.finish(); journalOwned = false }
+                catch { cleanupFailure = error }
+            }
+            if let cleanupFailure {
+                throw self.error("\(operationError.localizedDescription); temporary-path cleanup also failed: \(cleanupFailure.localizedDescription). Recovery journal retained for next launch.")
             }
             throw operationError
         }
@@ -226,6 +240,9 @@ final class IOSSpeedLabRunner: ObservableObject {
         model.selectedMode = snapshot.selectedMode
         model.auto = snapshot.auto
         model.message = snapshot.message
+        if IOSSpeedLabPersistenceJournal.active {
+            try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
+        }
     }
 
     private func pathToken(_ model: RouterVPNModel) -> PathToken {
