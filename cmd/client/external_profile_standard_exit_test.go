@@ -8,6 +8,7 @@ import (
 )
 
 const externalTestWGKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+const externalTestTorBridge = "obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=abcdefghijklmnopqrstuvwxyz iat-mode=0"
 
 func externalProfileBase(id, protocol string) common.RouterProfile {
 	return common.RouterProfile{ID:id,Name:id,NodeKind:"external",External:&common.ExternalNodeConfig{Protocol:protocol,ExpectedPublicIP:"203.0.113.90"}}
@@ -29,6 +30,15 @@ func TestExternalProxyProfilesBecomeStandardExits(t *testing.T) {
 		e,err:=standardExitFromExternalProfile(p);if err!=nil{t.Fatalf("%s: %v",p.ID,err)}
 		if e.ID!=p.ID||e.ExpectedPublicIP!="203.0.113.90"{t.Fatalf("identity/proof lost: %+v",e)}
 	}
+}
+
+func TestExternalTorBridgeBecomesDynamicExitAdapter(t *testing.T) {
+	p:=common.RouterProfile{ID:"ext-tor",Name:"Tor Bridge",NodeKind:"external",External:&common.ExternalNodeConfig{Protocol:"tor-bridge",TorBridge:&common.ExternalTorBridgeConfig{Bridges:[]string{externalTestTorBridge}}}}
+	e,err:=standardExitFromExternalProfile(p);if err!=nil{t.Fatal(err)}
+	if e.ID!="ext-tor"||e.Protocol!="tor-bridge"||e.Server!="203.0.113.44"||e.ExpectedPublicIP!=""{t.Fatalf("Tor adapter lost dynamic-exit semantics: %+v",e)}
+
+	p.External.ExpectedPublicIP="198.51.100.90"
+	if _,err=standardExitFromExternalProfile(p);err==nil||!strings.Contains(err.Error(),"dynamic circuit exit"){t.Fatalf("Tor fixed exit was accepted: %v",err)}
 }
 
 func TestExternalOpenVPNUsesExistingSanitizer(t *testing.T) {
