@@ -178,6 +178,11 @@ need(
     '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]',
     "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom",
     "IOSNodeBundleStore.shared.link",
+    'value.socks5Host = ""; value.socks5Port = 0',
+)
+forbid(
+    "ios/RouterVPN/App/RouterVPNModelExternal.swift",
+    'value.socks5Host = ""; value.socks5Port = 1080',
 )
 need(
     "ios/RouterVPN/App/NodeManagerSheet.swift",
