@@ -172,18 +172,29 @@ func probePublicExitIP() (string, error) {
 }
 
 func (a *app) homeSummaryValue() (homeSummaryResponse, error) {
+	session := sessionTrackerFor(a).snapshot(0)
 	a.mu.Lock()
 	selectedID := a.profiles.SelectedID
-	profile, ok := a.profileByIDLocked(selectedID)
-	if ok && !a.state.Connected && a.state.Phase != "starting" && a.state.Phase != "checking" && !strings.HasPrefix(a.state.Phase, "auto:") {
+	targetID := selectedID
+	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
+	if busy {
+		if liveID := strings.TrimSpace(a.state.RouterID); liveID != "" {
+			targetID = liveID
+		}
+	}
+	profile, ok := a.profileByIDLocked(targetID)
+	if ok && !busy && targetID == selectedID {
 		a.syncProfileOptionStateLocked(profile)
 	}
 	lastError := a.state.LastError
 	a.mu.Unlock()
 	if !ok {
+		if busy && targetID != selectedID {
+			return homeSummaryResponse{}, errors.New("active Router VPN node disappeared from the linked profile store")
+		}
 		return homeSummaryResponse{}, errors.New("add and select a Router VPN node first")
 	}
-	return buildHomeSummary(a, profile, sessionTrackerFor(a).snapshot(0), lastError), nil
+	return buildHomeSummary(a, profile, session, lastError), nil
 }
 
 func buildHomeSummary(a *app, profile common.RouterProfile, session connectionSession, lastError string) homeSummaryResponse {
