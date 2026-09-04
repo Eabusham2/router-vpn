@@ -37,6 +37,8 @@ need(
     'case "https-connect"', 'case "shadowsocks"', 'case "hysteria2"',
     "OpenVPN uses the hardened config import path",
     "Tor bridges use the dedicated censorship-circumvention builder",
+    "externalRuntimePolicy(p)",
+    "standardExitFromExternalProfile(policy)",
     "beginMutationOperation",
     "previousStore := cloneRouterProfileStore(a.profiles)",
     "a.rollbackProfilesLocked(previousStore)",
@@ -49,6 +51,12 @@ need(
     "http-connect",
     "https-connect",
     "persistence",
+)
+need(
+    "cmd/client/external_profile_create_policy_test.go",
+    "TestTypedExternalBuilderAdoptsRuntimeDNSPolicyBeforePersistence",
+    'p.DNSMode != "rescue"',
+    'p.RouterAPI != ""',
 )
 # Raw/bundle imports must persist the same normalized external DNS/runtime policy
 # Connect will actually use, rather than saving an inherited Home/blank policy and
