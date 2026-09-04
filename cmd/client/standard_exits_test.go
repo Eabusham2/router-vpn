@@ -19,6 +19,10 @@ func validTestStandardExit(protocol string) standardExit {
 	switch protocol {
 	case "socks5":
 		e.Username = "u"; e.Password = "p"
+	case "http-connect":
+		e.ServerPort = 8080; e.Username = "u"; e.Password = "p"
+	case "https-connect":
+		e.Username = "u"; e.Password = "p"; e.TLSServerName = "proxy.example.com"
 	case "shadowsocks":
 		e.Method = "2022-blake3-aes-256-gcm"; e.Secret = "secret"
 	case "hysteria2":
@@ -34,7 +38,7 @@ func validTestStandardExit(protocol string) standardExit {
 func TestStandardExitCapabilitiesAreTruthful(t *testing.T) {
 	caps := standardExitCapabilities(); got := map[string]standardExitCapability{}
 	for _, c := range caps { got[c.Protocol] = c }
-	for _, p := range []string{"wireguard", "socks5", "shadowsocks", "hysteria2"} {
+	for _, p := range []string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"} {
 		c := got[p]; if !c.Implemented || !c.Supported { t.Fatalf("%s should be implemented/supported: %#v", p, c) }
 	}
 	ovpn, ok := got["openvpn"]
@@ -46,6 +50,23 @@ func TestStandardExitCapabilitiesAreTruthful(t *testing.T) {
 func TestStandardExitValidationRequiresPublicProof(t *testing.T) {
 	e := validTestStandardExit("socks5"); e.ExpectedPublicIP = ""
 	if err := validateStandardExit(&e); err == nil || !strings.Contains(err.Error(), "expected_public_ip") { t.Fatalf("unexpected: %v", err) }
+}
+
+func TestHTTPConnectStandardExitValidation(t *testing.T) {
+	for alias, want := range map[string]string{"http":"http-connect", "http_connect":"http-connect", "https":"https-connect", "https_connect":"https-connect"} {
+		if got := normalizeStandardExitProtocol(alias); got != want { t.Fatalf("%s normalized to %q", alias, got) }
+	}
+	httpExit := validTestStandardExit("http-connect")
+	if err := validateStandardExit(&httpExit); err != nil { t.Fatal(err) }
+	httpExit.TLSServerName = "proxy.example.com"
+	if err := validateStandardExit(&httpExit); err == nil || !strings.Contains(err.Error(), "plain HTTP CONNECT") { t.Fatalf("plain HTTP accepted TLS metadata: %v", err) }
+
+	httpsExit := validTestStandardExit("https-connect")
+	if err := validateStandardExit(&httpsExit); err != nil { t.Fatal(err) }
+	httpsExit.TLSServerName = ""
+	if err := validateStandardExit(&httpsExit); err == nil || !strings.Contains(err.Error(), "TLS server name") { t.Fatalf("HTTPS CONNECT accepted missing SNI: %v", err) }
+	httpsExit = validTestStandardExit("https-connect"); httpsExit.Password = ""
+	if err := validateStandardExit(&httpsExit); err == nil || !strings.Contains(err.Error(), "username/password") { t.Fatalf("HTTPS CONNECT accepted half credentials: %v", err) }
 }
 
 func TestOpenVPNStandardExitSanitizesAndDerivesEndpoint(t *testing.T) {
@@ -79,10 +100,16 @@ func TestOpenVPNUsesNativeAdapterNotSingBoxCompiler(t *testing.T) {
 }
 
 func TestStandardExitCompilerOwnsDetour(t *testing.T) {
-	for _, protocol := range []string{"socks5", "shadowsocks", "hysteria2"} {
+	for _, protocol := range []string{"socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"} {
 		e := validTestStandardExit(protocol); endpoint, out, err := standardExitRuntimeParts(e, "entry-wg")
 		if err != nil { t.Fatal(err) }; if endpoint != nil { t.Fatalf("%s unexpectedly endpoint", protocol) }
 		if out["tag"] != "custom-exit" || out["detour"] != "entry-wg" { t.Fatalf("unsafe outbound: %#v", out) }
+		if protocol == "http-connect" || protocol == "https-connect" {
+			if out["type"] != "http" || out["username"] != "u" || out["password"] != "p" { t.Fatalf("%s HTTP CONNECT outbound wrong: %#v", protocol, out) }
+			_, hasTLS := out["tls"]
+			if protocol == "https-connect" && !hasTLS { t.Fatalf("HTTPS CONNECT lost TLS: %#v", out) }
+			if protocol == "http-connect" && hasTLS { t.Fatalf("plain HTTP CONNECT gained TLS: %#v", out) }
+		}
 	}
 	e := validTestStandardExit("wireguard"); endpoint, out, err := standardExitRuntimeParts(e, "entry-wg")
 	if err != nil { t.Fatal(err) }
@@ -118,7 +145,6 @@ func TestStandardExitStoreRefusesSymlink(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(root, "standard-exits.json")); err != nil { t.Fatal(err) }
 	if _, err := loadStandardExitStore(); err == nil || !strings.Contains(err.Error(), "symlink") { t.Fatalf("unexpected %v", err) }
 }
-
 
 func TestStandardExitStoreRejectsSymlinkParent(t *testing.T) {
 	if runtime.GOOS == "windows" {
