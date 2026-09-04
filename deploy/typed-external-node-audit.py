@@ -138,7 +138,6 @@ need(
     "IOSExternalNodeProtocol",
     "case wireguard, socks5, shadowsocks, hysteria2",
     "createIOSExternalNode",
-    "IOSNodeBundleStore",
     "linkNodeBundle(data)",
     "profileMutationBlocked",
     "literal IP so setup cannot leak pre-tunnel DNS",
@@ -155,6 +154,15 @@ need(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
     '["wireguard", "socks5", "shadowsocks", "hysteria2"]',
     "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom",
+    "IOSNodeBundleStore.shared.link",
+)
+need(
+    "ios/RouterVPN/App/IOSNodeBundleStore.swift",
+    "func link(",
+    "private func store(",
+    "External node id is unsafe",
+    "records[key] = normalized",
+    "try persist()",
 )
 need(
     "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
