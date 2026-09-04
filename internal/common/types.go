@@ -20,6 +20,7 @@ type ExternalShadowsocksConfig struct { Server string `json:"server"`; Port int 
 type ExternalSOCKS5Config struct { Host string `json:"host"`; Port int `json:"port"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"` }
 type ExternalHTTPConnectConfig struct { Host string `json:"host"`; Port int `json:"port"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"`; TLSServerName string `json:"tls_server_name,omitempty"` }
 type ExternalHysteria2Config struct { Server string `json:"server"`; Port int `json:"port"`; Password string `json:"password"`; TLSServerName string `json:"tls_server_name"` }
+type ExternalTorBridgeConfig struct { Bridges []string `json:"bridges"`; SocksPort int `json:"socks_port,omitempty"` }
 
 type ExternalNodeConfig struct {
 	Protocol string `json:"protocol"`
@@ -31,6 +32,7 @@ type ExternalNodeConfig struct {
 	HTTPConnect *ExternalHTTPConnectConfig `json:"http_connect,omitempty"`
 	HTTPSConnect *ExternalHTTPConnectConfig `json:"https_connect,omitempty"`
 	Hysteria2 *ExternalHysteria2Config `json:"hysteria2,omitempty"`
+	TorBridge *ExternalTorBridgeConfig `json:"tor_bridge,omitempty"`
 }
 
 type RouterProfile struct {
