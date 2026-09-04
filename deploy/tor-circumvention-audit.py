@@ -168,8 +168,7 @@ need("client/routervpn_unified_control_center.py", '"tor-bridge"', "proven ntor-
 need("client/RouterVPN-Windows-UnifiedControlCenter.ps1", "Tor pluggable transport + proven ntor-v3 circuit")
 need("client/macos/UnifiedControlCenterPolicy.swift", "Tor pluggable transport + proven ntor-v3 circuit")
 
-# macOS has a shipping native form today. iOS remains explicit/unavailable
-# rather than pretending the desktop Tor/Lyrebird graph exists in PacketTunnel.
+# Native desktop forms must actually ship, not merely exist as orphan sources.
 need(
     "client/macos/RouterVPNMenuBar.m",
     "Tor Bridges…",
@@ -183,6 +182,47 @@ need(
     "short-lived volunteer WebRTC proxies",
     "profile data cannot inject ClientTransportPlugin commands",
 )
+need(
+    "client/RouterVPN-Windows-TorBridge.ps1",
+    "UnifiedTorButton",
+    "Tor bridges…",
+    "/api/tor-bridge/capabilities",
+    "/api/tor-bridge/import",
+    "Snowflake",
+    "WebTunnel",
+    "Auto / Custom",
+)
+need(
+    "client/RouterVPN-Windows-App.ps1",
+    "RouterVPN-Windows-TorBridge.ps1",
+    "Add-RouterVPNTorBridgeUI",
+)
+need(
+    "client/linux/routervpn-tor-bridge-v13.inc",
+    "LinuxTorBridgeV13",
+    "/api/tor-bridge/capabilities",
+    "/api/tor-bridge/import",
+    "obfs4",
+    "meek / meek_lite",
+    "Snowflake",
+    "WebTunnel",
+    "Auto / Custom",
+    "profile data cannot inject ClientTransportPlugin commands",
+)
+need(
+    "client/linux/routervpn-unified-shell-v8.inc",
+    '#include "routervpn-tor-bridge-v13.inc"',
+    "linux_unified_tor_v13",
+    "Tor bridges…",
+)
+need(
+    "client/linux/build-native-app.sh",
+    "routervpn-unified-shell-v8.inc",
+    "gcc -O2 -Wall -Wextra -Werror",
+)
+
+# iOS remains explicit/unavailable rather than pretending the desktop
+# Tor/Lyrebird graph exists in PacketTunnel.
 need(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
     "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom",
