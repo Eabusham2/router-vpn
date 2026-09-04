@@ -38,7 +38,7 @@ func (a *app) externalProfileCapabilities(w http.ResponseWriter, r *http.Request
 		"direct":                   true,
 		"router_vpn_entry_hop":     true,
 		"external_entry_hop":       true,
-		"external_entry_protocols": []string{"wireguard", "socks5", "shadowsocks", "hysteria2"},
+		"external_entry_protocols": []string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"},
 		"entry_requirement":        "Router VPN WireGuard or supported external standard entry; OpenVPN and Tor bridge remain fail-closed as upstream entry hops",
 	})
 }
