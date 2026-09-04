@@ -153,7 +153,8 @@ need(
 # a reasonable Keychain value, so bundles are AES-GCM sealed into a bounded,
 # atomically-written protected file while only the 256-bit key lives in the
 # ThisDeviceOnly Keychain. Legacy whole-bundle Keychain/UserDefaults copies are
-# removed only after the new encrypted store commits.
+# removed only after the new encrypted store commits. External PacketTunnel
+# preferences receive only the selected scrubbed profile, never the entire store.
 need(
     "ios/RouterVPN/App/Models.swift",
     "struct ExternalHTTPConnectConfig",
@@ -205,10 +206,23 @@ need(
     "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom",
     "IOSNodeBundleStore.shared.link",
     'value.socks5Host = ""; value.socks5Port = 0',
+    "externalRuntimeBundleData",
+    "runtime.routerProfiles = [runtimeProfile]",
+    "runtime.logicalModes = []",
+    "runtime.modes = []",
+    "runtime.profiles = [:]",
+    "data.count <= 4 * 1024 * 1024",
+    "runtimeProfile.nodeProofID = nil",
+    'runtimeProfile.routerAPI = ""',
+    'runtimeProfile.socksPort = 0',
+    "runtimeProfile.daitaHost = nil",
+    "runtimeProfile.baseTunnel = nil",
+    "runtimeProfile.pathProbeURL = nil",
 )
 forbid(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
     'value.socks5Host = ""; value.socks5Port = 1080',
+    '"bundle": try JSONEncoder().encode(bundle)',
 )
 need(
     "ios/RouterVPN/App/NodeManagerSheet.swift",
@@ -238,7 +252,15 @@ need(
     "records = next",
     "Adopt RAM only after authenticated encryption + atomic protected-file commit.",
     "cleanupLegacyStoresBestEffort()",
-    'bundle.apiToken = ""; bundle.routerAPI = ""; bundle.adGuardIPv4 = ""; bundle.adGuardIPv6 = ""',
+    "profile.nodeProofID = nil",
+    'profile.routerAPI = ""',
+    'profile.apiToken = ""',
+    'profile.adGuardIPv4 = ""',
+    'profile.socksHost = ""',
+    "profile.daitaHost = nil",
+    "profile.baseTunnel = nil",
+    "profile.pathProbeURL = nil",
+    'bundle.nodeProofID = ""',
     'bundle.socks5Host = ""; bundle.socks5Port = 0',
 )
 forbid(
