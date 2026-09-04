@@ -10,6 +10,8 @@ struct IOSSpeedLabView: View {
     @State private var nodeID = ""
     @State private var mode = "smart-auto"
     @State private var customLayers: Set<String> = []
+    @State private var requireEncrypted = false
+    @State private var requireObfuscation = false
     @State private var durationMode = IOSSpeedLabDuration.Mode.auto
     @State private var minSeconds = 4.0
     @State private var maxSeconds = 12.0
@@ -36,6 +38,7 @@ struct IOSSpeedLabView: View {
         }
         .onAppear { initializeSelection() }
         .onChange(of: topology) { _ in initializeNodeForTopology() }
+        .onChange(of: nodeID) { _ in loadAutoRequirementsFromNode() }
         .onChange(of: minSeconds) { value in if maxSeconds < value { maxSeconds = value } }
         .onChange(of: maxSeconds) { value in if minSeconds > value { minSeconds = value } }
     }
@@ -95,6 +98,12 @@ struct IOSSpeedLabView: View {
                             Text(logical.name).tag(logical.id)
                         }
                     }
+                    if mode == "smart-auto" || mode == "auto" {
+                        Toggle("Require encrypted AUTO candidates", isOn: $requireEncrypted)
+                        Toggle("Require obfuscation for AUTO candidates", isOn: $requireObfuscation)
+                        Text("These are temporary Speed Lab filters only. They do not change the saved node profile.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     if mode == "custom" { customLayerPicker }
                 } else if topology == .external {
                     nodePicker(nodes: externalNodes, title: "External exit")
@@ -107,7 +116,7 @@ struct IOSSpeedLabView: View {
                         .font(.caption).foregroundStyle(.orange)
                 }
 
-                Text("Temporary tests require Router VPN to be disconnected. The chosen path is proven, measured, torn fully down, and your previous node/mode selection is restored afterward.")
+                Text("Temporary tests require Router VPN to be disconnected. The chosen path is proven, measured, torn fully down, and your previous node/mode selection is restored afterward. A recovery journal restores the original saved state after an interrupted test.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -267,12 +276,15 @@ struct IOSSpeedLabView: View {
             nodeID: nodeID,
             mode: mode,
             customLayers: Array(customLayers).sorted(),
+            requireEncrypted: requireEncrypted,
+            requireObfuscation: requireObfuscation,
             duration: duration
         )
     }
 
     private func initializeSelection() {
         if nodeID.isEmpty { nodeID = model.selectedNodeProfile?.id ?? routerNodes.first?.id ?? externalNodes.first?.id ?? "" }
+        loadAutoRequirementsFromNode()
     }
 
     private func initializeNodeForTopology() {
@@ -281,6 +293,17 @@ struct IOSSpeedLabView: View {
         case .external: nodeID = externalNodes.first?.id ?? ""
         default: break
         }
+        loadAutoRequirementsFromNode()
+    }
+
+    private func loadAutoRequirementsFromNode() {
+        guard topology == .router, let profile = routerNodes.first(where: { $0.id == nodeID }) else {
+            requireEncrypted = false
+            requireObfuscation = false
+            return
+        }
+        requireEncrypted = profile.autoRequireEncrypted ?? false
+        requireObfuscation = profile.autoRequireObfuscation ?? false
     }
 }
 
