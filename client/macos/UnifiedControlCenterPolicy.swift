@@ -17,6 +17,12 @@ enum UnifiedControlCenterPolicy {
         "AmneziaWG Noise_IK + ChaCha20-Poly1305",
         "OpenVPN TLS 1.3 + AEAD",
         "Shadowsocks 2022 BLAKE3 + AEAD",
-        "Tor ntor-v3 outer bridge",
+        "Tor pluggable transport + proven ntor-v3 circuit",
     ]
+
+    // A tor-bridge profile represents Router VPN's complete owned PT -> Tor
+    // circuit runtime. The PT provides censorship circumvention; the proved Tor
+    // circuit is the encrypted final path. Raw proxy/bridge types remain outer
+    // transports unless followed by an authenticated encrypted tunnel.
+    static let finalEncryptedTypes = Set(["router-vpn", "wireguard", "amneziawg", "openvpn", "shadowsocks-2022", "tor-bridge"])
 }
