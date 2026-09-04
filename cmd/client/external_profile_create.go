@@ -72,6 +72,9 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	case "socks5":
 		p.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: q.Server, Port: q.Port, Username: q.Username, Password: q.Password}
 	case "http-connect":
+		if strings.TrimSpace(q.TLSServerName) != "" {
+			return common.RouterProfile{}, errors.New("plain HTTP CONNECT cannot specify a TLS server name; choose https-connect instead")
+		}
 		p.External.HTTPConnect = &common.ExternalHTTPConnectConfig{Host: q.Server, Port: q.Port, Username: q.Username, Password: q.Password}
 	case "https-connect":
 		p.External.HTTPSConnect = &common.ExternalHTTPConnectConfig{Host: q.Server, Port: q.Port, Username: q.Username, Password: q.Password, TLSServerName: q.TLSServerName}
