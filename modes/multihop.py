@@ -30,6 +30,7 @@ from profile_id import validate_profile_id
 from private_profile_store import private_root, read_profile_store
 
 SUPPORTED_EXIT = {"shadowsocks": "shadowsocks", "hysteria2": "hysteria2"}
+ENTRY_PROOF_PORT = 1098
 PROOF_PORT = 1099
 MAX_RUNTIME_FILE_BYTES = 8 << 20
 
@@ -165,7 +166,8 @@ def patch_exit_config(config: dict[str, Any], exit_mode: str, exit_endpoint: str
     outbounds.append(hop)
     config["outbounds"] = outbounds
 
-    inbounds = [x for x in config.get("inbounds", []) if isinstance(x, dict) and x.get("tag") != "multihop-proof"]
+    proof_tags = {"multihop-entry-proof", "multihop-proof"}
+    inbounds = [x for x in config.get("inbounds", []) if isinstance(x, dict) and x.get("tag") not in proof_tags]
     tun_found = False
     for inbound in inbounds:
         if inbound.get("type") == "tun":
@@ -176,6 +178,7 @@ def patch_exit_config(config: dict[str, Any], exit_mode: str, exit_endpoint: str
             tun_found = True
     if not tun_found:
         raise RuntimeError("exit profile has no full-device TUN inbound")
+    inbounds.append({"type": "mixed", "tag": "multihop-entry-proof", "listen": "127.0.0.1", "listen_port": ENTRY_PROOF_PORT, "users": []})
     inbounds.append({"type": "mixed", "tag": "multihop-proof", "listen": "127.0.0.1", "listen_port": PROOF_PORT, "users": []})
     config["inbounds"] = inbounds
 
@@ -185,6 +188,12 @@ def patch_exit_config(config: dict[str, Any], exit_mode: str, exit_endpoint: str
             server["detour"] = "proxy"
     config["dns"] = dns
     route = config.get("route") if isinstance(config.get("route"), dict) else {}
+    existing_rules = route.get("rules") if isinstance(route.get("rules"), list) else []
+    route["rules"] = [
+        {"inbound": ["multihop-entry-proof"], "outbound": "entry-hop"},
+        {"inbound": ["multihop-proof"], "outbound": "proxy"},
+        *existing_rules,
+    ]
     route["final"] = "proxy"
     route["auto_detect_interface"] = True
     config["route"] = route
@@ -320,6 +329,7 @@ def build(entry_id: str, exit_id: str, base: str, exit_mode: str, outdir: Path) 
         "exit_mode": exit_mode,
         "entry_socks_host": socks_host,
         "entry_socks_port": int(entry.get("socks_port") or 1080),
+        "entry_proof_proxy": f"http://127.0.0.1:{ENTRY_PROOF_PORT}",
         "proof_proxy": f"http://127.0.0.1:{PROOF_PORT}",
         "exit_path_probe_url": proof_url,
         "route": "client -> entry tunnel -> entry private SOCKS5 -> exit transport -> exit node -> Internet",
@@ -340,6 +350,7 @@ def build(entry_id: str, exit_id: str, base: str, exit_mode: str, outdir: Path) 
             "EXIT_DIR": str(exit_dir),
             "EXIT_CONFIG": str(exit_config),
             "EXIT_PROOF_URL": proof_url,
+            "ENTRY_PROOF_PROXY": str(manifest["entry_proof_proxy"]),
             "PROOF_PROXY": str(manifest["proof_proxy"]),
         },
     )
