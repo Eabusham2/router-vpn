@@ -141,7 +141,7 @@ func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDur
 	}
 	identity, path, err := captureSpeedLabIdentity(a)
 	if err != nil {
-		return speedLabPathIdentity{}, speedLabMeasurement{}, nil, err
+		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
 	measurement, err := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
 	if err != nil {
