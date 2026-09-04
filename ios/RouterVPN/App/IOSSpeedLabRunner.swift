@@ -20,6 +20,8 @@ struct IOSSpeedLabRunRequest: Hashable {
     var nodeID: String = ""
     var mode: String = "smart-auto"
     var customLayers: [String] = []
+    var requireEncrypted = false
+    var requireObfuscation = false
     var duration: IOSSpeedLabDuration = .automatic
 }
 
@@ -122,6 +124,7 @@ final class IOSSpeedLabRunner: ObservableObject {
                 guard !request.nodeID.isEmpty else { throw error("Choose a Router VPN node for the temporary test.") }
                 model.selectNode(request.nodeID)
                 try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
+                try applyTemporaryAutoRequirements(request, model: model)
                 guard let selected = model.selectedNodeProfile, selected.id == request.nodeID, selected.normalizedNodeKind == "router-vpn" else {
                     throw error("The requested temporary Router VPN node could not be selected.")
                 }
@@ -129,7 +132,8 @@ final class IOSSpeedLabRunner: ObservableObject {
                 try await connectTemporaryRouter(request, model: model)
                 try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
                 startedTemporaryTunnel = true
-                path = "Temporary Router VPN • \(selected.name) • \(request.mode) • \(model.activeEngine) / \(model.activeRawProfile)"
+                let filters = "encrypted=\(request.requireEncrypted ? "required" : "off") • obfuscation=\(request.requireObfuscation ? "required" : "off")"
+                path = "Temporary Router VPN • \(selected.name) • \(request.mode) • \(filters) • \(model.activeEngine) / \(model.activeRawProfile)"
             case .external:
                 guard !request.nodeID.isEmpty else { throw error("Choose an external node for the temporary test.") }
                 model.selectNode(request.nodeID)
@@ -174,6 +178,20 @@ final class IOSSpeedLabRunner: ObservableObject {
             }
             throw operationError
         }
+    }
+
+    private func applyTemporaryAutoRequirements(_ request: IOSSpeedLabRunRequest, model: RouterVPNModel) throws {
+        guard var current = model.bundle,
+              let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) ?? current.routerProfiles.indices.first else {
+            throw error("Temporary Speed Lab Router node has no mutable profile.")
+        }
+        guard current.routerProfiles[index].normalizedNodeKind == "router-vpn" else {
+            throw error("AUTO requirement overrides apply only to Router VPN nodes.")
+        }
+        current.routerProfiles[index].autoRequireEncrypted = request.requireEncrypted
+        current.routerProfiles[index].autoRequireObfuscation = request.requireObfuscation
+        try model.importBundle(JSONEncoder().encode(current))
+        try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
     }
 
     private func connectTemporaryRouter(_ request: IOSSpeedLabRunRequest, model: RouterVPNModel) async throws {
