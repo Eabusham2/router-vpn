@@ -43,9 +43,9 @@ ios_unified = read("ios/RouterVPN/App/IOSUnifiedProductView.swift")
 ios_location = read("ios/RouterVPN/App/IOSUserLocationOverlay.swift")
 ios_project = read("ios/RouterVPN/project.yml")
 
-# Windows v3 owns first-launch/resume in the launcher and the map-first daily
-# controls in the unified shell. Require the real current lifecycle rather than
-# dead v2 function names or duplicated endpoint strings in the wrapper.
+# Windows v3 keeps the full wizard, but latest product policy starts the shipping
+# map immediately. Normal startup reaches the onboarding entry point only as a
+# deliberate no-op; Help force-opens the real persisted wizard on demand.
 require("Windows onboarding v3", win, (
     "windows-onboarding-v3.json", ".routervpn-state", "Get-OnboardingState",
     "Save-OnboardingState", "Show-RouterVPNProductOnboarding",
@@ -54,6 +54,7 @@ require("Windows onboarding v3", win, (
     "DNS", "LAN", "MTU", "Jumbo", "Multihop", "forwarding", "permissions",
     "Disconnect", "selected-node private path proof", "public exit",
     "Setup Center Full Guide", "Emergency stop",
+    "normal startup must never open a modal", "Show-RouterVPNProductOnboarding -Force",
 ))
 require_any("Windows onboarding v3", win, "kill switch", ("kill switch", "kill-switch"))
 require("Windows unified shipping shell", win_unified + win_product + win_telemetry, (
@@ -73,7 +74,9 @@ require("Windows globe + forwarding", win_telemetry, (
 assert "OpenUnifiedDetail 5" not in win_telemetry, "Windows Forward side control regressed to a detail-page shortcut"
 assert "device location is never fabricated" in win_telemetry
 assert "if($SelfTest)" in win
-assert re.search(r"else\s*\{\s*Show-RouterVPNProductOnboarding\s*;\s*&\s*\$ProductScript\b", win), "Windows first-run onboarding is not wired before the shipping product"
+assert "if(-not$Force){return}" in win, "Windows normal launch can still enter blocking onboarding"
+assert re.search(r"Show-RouterVPNProductOnboarding\s+-Force", win), "Windows Help does not force-open the real full onboarding wizard"
+assert re.search(r"else\s*\{\s*Show-RouterVPNProductOnboarding\s*;\s*&\s*\$ProductScript\b", win), "Windows map-first product launch seam disappeared"
 
 # macOS shipping build compiles the onboarding source into RouterVPN.app and
 # exact-wires both first launch and rerun into the AppKit product.
@@ -142,18 +145,19 @@ assert "routervpn-globe-v10.inc" in linux_build
 assert "linux_install_globe_v10(&app);" in linux_build
 assert "#define draw_map routervpn_flat_map_v9" in linux_build
 
-# Android ProductActivity is the actual map-first dashboard. First launch and
-# Help both route to the persisted SharedPreferences onboarding flow.
+# Android ProductActivity is the actual map-first dashboard. First launch may
+# show one non-blocking hint, but the full AlertDialog is opt-in from Help.
 require("Android", android_onboarding, shared_topics + (
     "AmneziaWG", "Emergency stop", "VpnService", "Always-on VPN",
     "Block connections without VPN", "routervpn_product_onboarding_v2",
-    "Close & resume later", "showIfNeeded",
-    "app onboarding is separate from Setup Center onboarding",
+    "Close & resume later", "showIfNeeded", "map_first_hint_shown",
+    "Toast.makeText", "app onboarding is separate from Setup Center onboarding",
 ))
 require_any("Android", android_onboarding, "kill switch", ("kill switch", "kill-switch"))
 require("Android product", android_product, (
     "AndroidProductOnboarding.showIfNeeded(this)", "Run onboarding again",
 ))
+assert "show(activity, false)" not in android_onboarding, "Android first launch still opens a blocking onboarding AlertDialog"
 assert re.search(r"AndroidProductOnboarding\.show\(this\s*,\s*true\)", android_product), "Android Help is not wired to force-rerun product onboarding"
 
 # iOS/iPadOS now delegates the daily surface from ProductRootView into the
