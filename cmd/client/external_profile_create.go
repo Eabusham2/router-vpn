@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -33,6 +34,9 @@ type externalProfileCreateRequest struct {
 	WGAllowedIPs     []string `json:"wg_allowed_ips,omitempty"`
 	WGDNS            []string `json:"wg_dns,omitempty"`
 	WGMTU            int      `json:"wg_mtu,omitempty"`
+	Location         string   `json:"location,omitempty"`
+	Latitude         *float64 `json:"latitude,omitempty"`
+	Longitude        *float64 `json:"longitude,omitempty"`
 }
 
 func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.RouterProfile, error) {
@@ -43,19 +47,36 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	if len(q.Name) > 120 || strings.ContainsAny(q.Name, "\r\n\x00") {
 		return common.RouterProfile{}, errors.New("external node name is unsafe or too long")
 	}
-	protocol := normalizeStandardExitProtocol(q.Protocol)
-	p := common.RouterProfile{
-		ID:       newID(),
-		Name:     q.Name,
-		NodeKind: "external",
-		External: &common.ExternalNodeConfig{Protocol: protocol, ExpectedPublicIP: strings.TrimSpace(q.ExpectedPublicIP)},
+	q.Location = strings.TrimSpace(q.Location)
+	if len(q.Location) > 160 || strings.ContainsAny(q.Location, "\r\n\x00") {
+		return common.RouterProfile{}, errors.New("external node location label is unsafe or too long")
+	}
+	if (q.Latitude == nil) != (q.Longitude == nil) {
+		return common.RouterProfile{}, errors.New("external node latitude and longitude must be supplied together")
+	}
+	var latitude, longitude float64
+	if q.Latitude != nil {
+		latitude, longitude = *q.Latitude, *q.Longitude
+		if math.IsNaN(latitude) || math.IsInf(latitude, 0) || math.IsNaN(longitude) || math.IsInf(longitude, 0) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 {
+			return common.RouterProfile{}, errors.New("external node coordinates are outside valid latitude/longitude bounds")
+		}
 	}
 
-	// The typed maker promises that a saved profile is runnable, not merely
-	// syntactically representable. Normalize the server before persistence using
-	// the same direct-IP/hostname contract used by the standard-exit runtime.
-	// This rejects URL/path/query/userinfo/whitespace injection early instead of
-	// storing a node that will only fail later at Connect.
+	protocol := normalizeStandardExitProtocol(q.Protocol)
+	p := common.RouterProfile{
+		ID:        newID(),
+		Name:      q.Name,
+		NodeKind:  "external",
+		External:  &common.ExternalNodeConfig{Protocol: protocol, ExpectedPublicIP: strings.TrimSpace(q.ExpectedPublicIP)},
+		Location:  q.Location,
+		Latitude:  latitude,
+		Longitude: longitude,
+	}
+
+	// A typed node is persisted only after its endpoint is normalized through
+	// the same direct-IP/hostname grammar used by the standard-exit runtime.
+	// URL-shaped input contributes only its hostname; malformed bare host/path/
+	// query/userinfo text fails before the profile store is changed.
 	var host string
 	if protocol != "openvpn" && protocol != "tor-bridge" {
 		var err error
