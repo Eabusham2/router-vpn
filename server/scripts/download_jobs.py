@@ -188,12 +188,42 @@ class DownloadJobManager:
             job["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
             self._trim_history_locked()
 
+    def _adopt_ready(self, job_id: str, package: Path, source: str, size: int) -> bool:
+        """Atomically publish READY only if cancellation still does not own the job."""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job or job.get("cancel_requested") or self.closed.is_set():
+                return False
+            now = time.time()
+            if not job.get("phase_history") or job["phase_history"][-1] != "ready":
+                job.setdefault("phase_history", []).append("ready")
+            job.update(status="ready", phase="ready", progress=100,
+                       source=source, size=size, bytes_total=size, path=str(package),
+                       retention_deadline_epoch=now + PACKAGE_RETENTION_SECONDS,
+                       updated_epoch=now,
+                       updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)))
+            return True
+
     def _run(self, job_id: str) -> None:
-        work = str(create_owned_temp("router-vpn-job-"))
-        self._update(job_id, work_dir=work)
+        work = ""
         acquired = False
         retained = False
+        terminal_status = "failed"
+        terminal_code = "cleanup_without_result"
+        terminal_message = "download job ended without a deliverable package"
         try:
+            # Register the owned workspace while holding the job lock. A queued
+            # cancellation therefore either wins before any workspace exists or
+            # sees the exact workspace and drives it through cleanup-pending.
+            with self.lock:
+                job = self.jobs.get(job_id)
+                if not job or job.get("cancel_requested") or self.closed.is_set():
+                    return
+                work = str(create_owned_temp("router-vpn-job-"))
+                job["work_dir"] = work
+                now = time.time()
+                job["updated_epoch"] = now
+                job["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
             if self._cancelled(job_id):
                 raise DownloadCancelled("download job cancelled")
             self._update(job_id, status="queued", phase="waiting-for-build-slot", progress=10)
@@ -220,32 +250,23 @@ class DownloadJobManager:
             if not package.is_file() or package.stat().st_size <= 0:
                 raise RuntimeError("package creation returned an empty file")
             size = package.stat().st_size
-            self._update(job_id, status="ready", phase="ready", progress=100,
-                source=source, size=size, bytes_total=size, path=str(package),
-                retention_deadline_epoch=time.time() + PACKAGE_RETENTION_SECONDS)
+            if not self._adopt_ready(job_id, package, source, size):
+                raise DownloadCancelled("download job cancelled before READY adoption")
             retained = True
         except DownloadCancelled:
-            self._update(job_id, status="cancelled", phase="cancelled", progress=0,
-                         error_code="cancelled", error="download job cancelled")
+            terminal_status, terminal_code, terminal_message = "cancelled", "cancelled", "download job cancelled"
         except TimeoutError:
-            self._update(job_id, status="failed", phase="failed", progress=0,
-                         error_code="timeout", error="package generation timed out")
+            terminal_status, terminal_code, terminal_message = "failed", "timeout", "package generation timed out"
         except Exception as exc:
-            code = "builder_busy" if "builder is busy" in str(exc).lower() else "build_failed"
-            self._update(job_id, status="failed", phase="failed", progress=0,
-                         error_code=code, error=str(exc)[:500])
+            terminal_status = "failed"
+            terminal_code = "builder_busy" if "builder is busy" in str(exc).lower() else "build_failed"
+            terminal_message = str(exc)[:500]
         finally:
             if acquired:
                 self.build_slots.release()
             if not retained:
-                with self.lock:
-                    job = self.jobs.get(job_id)
-                    status = str(job.get("status") or "") if job else "failed"
-                    code = str(job.get("error_code") or "") if job else "build_failed"
-                    message = str(job.get("error") or "") if job else "download failed"
-                if status not in {"cancelled", "failed"}:
-                    status, code, message = "failed", "cleanup_without_result", "download job ended without a deliverable package"
-                self._finish_cleanup(job_id, work, status, status, code, message)
+                self._finish_cleanup(job_id, work, terminal_status, terminal_status,
+                                     terminal_code, terminal_message)
 
     def status(self, job_id: str) -> dict:
         self.reap_expired()
