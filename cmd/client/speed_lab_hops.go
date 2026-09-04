@@ -39,38 +39,41 @@ func measureSpeedLabMultihopHops(a *app, identity speedLabPathIdentity) ([]speed
 	}
 
 	measure := func(role string, profileID string, pName string) (speedLabHopMeasurement, error) {
+		proxy := multihopProofProxy
+		if role == "entry" {
+			proxy = multihopEntryProofProxy
+		} else if role != "exit" {
+			return speedLabHopMeasurement{}, errors.New("unknown Speed Lab multihop role")
+		}
 		a.mu.Lock()
 		p, ok := a.profileByIDLocked(profileID)
-		current := a.state
 		a.mu.Unlock()
 		if !ok {
 			return speedLabHopMeasurement{}, errors.New("Speed Lab hop disappeared during measurement")
 		}
 		hop := speedLabHopMeasurement{Role: role, RouterID: p.ID, Name: pName}
 
-		latency, latencyErr := privatePathLatency(p, current, 4)
+		latency, latencyErr := measureRoutedProfileLatencyViaProxy(p, 4, proxy)
 		if err := validateSpeedLabIdentity(a, identity); err != nil {
 			return speedLabHopMeasurement{}, err
 		}
 		if latencyErr != nil {
 			hop.LatencyError = latencyErr.Error()
 		} else {
-			latency.Proof = "authenticated HTTP RTT to this hop private Router API through the unchanged actually launched multihop graph"
 			hop.Latency = &latency
 		}
 
-		speed, speedErr := measureRoutedProfileSpeed(p, 8<<20)
+		speed, speedErr := measureRoutedProfileSpeedViaProxy(p, 8<<20, proxy)
 		if err := validateSpeedLabIdentity(a, identity); err != nil {
 			return speedLabHopMeasurement{}, err
 		}
 		if speedErr != nil {
 			hop.SpeedError = speedErr.Error()
 		} else {
-			speed.Proof = "independent authenticated transfer to this hop private router-agent through the unchanged actually launched multihop graph; not derived from RTT, end-to-end Mbps, or another hop"
 			hop.Speed = &speed
 		}
 		if hop.Latency == nil && hop.Speed == nil {
-			return hop, errors.New("Speed Lab could not measure latency or throughput for the " + role + " hop")
+			return hop, errors.New("Speed Lab could not prove and measure latency or throughput for the " + role + " hop")
 		}
 		return hop, nil
 	}
