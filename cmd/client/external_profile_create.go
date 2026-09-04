@@ -124,7 +124,17 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	if err := common.NormalizeRouterProfile(&p); err != nil {
 		return common.RouterProfile{}, err
 	}
-	return p, nil
+	// Adopt the same external-only DNS/runtime policy that Connect will use so a
+	// newly-created node cannot be saved with blank/Home policy and silently
+	// change behavior only after the user presses Connect.
+	policy, err := externalRuntimePolicy(p)
+	if err != nil {
+		return common.RouterProfile{}, err
+	}
+	if _, err := standardExitFromExternalProfile(policy); err != nil {
+		return common.RouterProfile{}, err
+	}
+	return policy, nil
 }
 
 func registerExternalProfileCreateRoute(h *http.ServeMux, a *app) {
