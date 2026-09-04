@@ -29,15 +29,67 @@ def forbid(rel: str, *markers: str) -> None:
 
 
 require(
+    "cmd/client/standard_exits.go",
+    'Protocol: "http-connect", Implemented: true, Supported: true',
+    'Protocol: "https-connect", Implemented: true, Supported: true',
+    'case "http-connect", "https-connect":',
+    'out["type"] = "http"',
+    'out["tls"] = map[string]any{"enabled": true, "server_name": e.TLSServerName}',
+    "plain HTTP CONNECT cannot specify a TLS server name",
+    "HTTPS CONNECT requires a valid TLS server name for SNI and certificate verification",
+)
+require(
     "cmd/client/standard_exit_runtime.go",
     'newPrivateRuntimeDir(root, "native-standard-exit")',
     'writePrivateRuntimeFile(filepath.Join(runtimeDir, "sing-box.json")',
+    'case "http-connect", "https-connect":',
+    'out["type"] = "http"',
+    'out["tls"] = map[string]any{"enabled": true, "server_name": e.TLSServerName}',
 )
 forbid(
     "cmd/client/standard_exit_runtime.go",
     'os.MkdirAll(base, 0o700)',
     'os.WriteFile(filepath.Join(runtimeDir, "sing-box.json")',
     'rand.Read(random)',
+)
+require(
+    "cmd/client/external_profile_standard_exit.go",
+    'case "http-connect":',
+    'case "https-connect":',
+    "h.Host, h.Port, h.Username, h.Password",
+    "h.TLSServerName",
+)
+require(
+    "cmd/client/external_profile_connect.go",
+    '[]string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}',
+)
+require(
+    "cmd/client/standard_exit_platform_routes.go",
+    '[]string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}',
+)
+require(
+    "cmd/client/standard_exits_test.go",
+    "TestHTTPConnectStandardExitValidation",
+    '"http-connect", "https-connect"',
+    "HTTPS CONNECT lost TLS",
+)
+require(
+    "cmd/client/standard_exit_runtime_test.go",
+    '"http-connect","https-connect"',
+    "HTTPS CONNECT direct path lost TLS",
+    "HTTPS CONNECT TLS/SNI wrong",
+)
+require(
+    "cmd/client/external_profile_standard_exit_test.go",
+    "ext-http",
+    "ext-https",
+    "HTTP CONNECT adapter wrong",
+    "HTTPS CONNECT adapter wrong",
+)
+require(
+    "cmd/client/external_entry_chain_test.go",
+    '"http-connect", "https-connect"',
+    "HTTPS entry lost TLS/SNI",
 )
 
 require(
