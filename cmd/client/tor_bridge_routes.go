@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -197,5 +196,3 @@ func (a *app) torBridgeConnect(w http.ResponseWriter, r *http.Request) {
 		"route": "client full-device TUN -> local Tor SOCKS -> obfs4 bridge -> Tor circuit -> dynamic Tor exit -> Internet",
 	})
 }
-
-var _ = errors.Is
