@@ -119,6 +119,33 @@ static char *linux_speed_lab_request_body_v12(LinuxSpeedLabV12 *s) {
 
 static double linux_speed_lab_number_v12(JsonObject *obj,const char *key){return obj!=NULL&&json_object_has_member(obj,key)?json_object_get_double_member(obj,key):0.0;}
 
+static char *linux_speed_lab_hops_v12(JsonObject *obj, guint *count_out) {
+    if (count_out != NULL) *count_out = 0;
+    if (obj == NULL || !json_object_has_member(obj, "hops")) return NULL;
+    JsonArray *hops = json_object_get_array_member(obj, "hops");
+    if (hops == NULL || json_array_get_length(hops) == 0) return NULL;
+    GString *text = g_string_new("PER-HOP — SAME PROVED GRAPH\n");
+    guint count = 0;
+    for (guint i = 0; i < json_array_get_length(hops); i++) {
+        JsonObject *hop = json_array_get_object_element(hops, i); if (hop == NULL) continue;
+        const char *role = obj_string(hop, "role"), *name = obj_string(hop, "name"), *id = obj_string(hop, "router_id");
+        if (name[0] == '\0') name = id;
+        char *latency = NULL, *speed = NULL;
+        if (json_object_has_member(hop, "latency")) {
+            JsonObject *stats = json_object_get_object_member(hop, "latency"); latency = g_strdup_printf("%.1f ms", linux_speed_lab_number_v12(stats, "median_ms"));
+        } else if (json_object_has_member(hop, "latency_error")) latency = g_strdup_printf("RTT unavailable: %s", obj_string(hop, "latency_error"));
+        else latency = g_strdup("RTT unavailable");
+        if (json_object_has_member(hop, "speed")) {
+            JsonObject *stats = json_object_get_object_member(hop, "speed"); speed = g_strdup_printf("↓ %.1f / ↑ %.1f Mbps", linux_speed_lab_number_v12(stats, "download_mbps"), linux_speed_lab_number_v12(stats, "upload_mbps"));
+        } else if (json_object_has_member(hop, "speed_error")) speed = g_strdup_printf("speed unavailable: %s", obj_string(hop, "speed_error"));
+        else speed = g_strdup("speed unavailable");
+        g_string_append_printf(text, "%s • %s • %s • %s\n", role[0] ? role : "hop", name[0] ? name : "node", latency, speed); g_free(latency); g_free(speed); count++;
+    }
+    if (count == 0) { g_string_free(text, TRUE); return NULL; }
+    if (count_out != NULL) *count_out = count;
+    return g_string_free(text, FALSE);
+}
+
 static void linux_speed_lab_run_v12(GtkButton *button,gpointer data){
     LinuxSpeedLabV12*s=data;if(s==NULL)return;gtk_widget_set_sensitive(GTK_WIDGET(button),FALSE);gtk_label_set_text(GTK_LABEL(s->status),"Building/proving path and running download + upload…");gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),"Speed Lab running. Temporary paths are transactional and restored afterward.",-1);
     char*body=linux_speed_lab_request_body_v12(s);int timeout=110000;if(strcmp(linux_speed_lab_active_id_v12(s->duration_mode),"custom")==0){timeout=(int)(gtk_range_get_value(GTK_RANGE(s->max_time))*2000.0+80000.0);if(timeout<90000)timeout=90000;}
@@ -132,7 +159,8 @@ static void linux_speed_lab_run_v12(GtkButton *button,gpointer data){
     x=g_strdup_printf("p90 %.1f • max %.1f • jitter %.1f ms",linux_speed_lab_number_v12(idle_stats,"p90_ms"),linux_speed_lab_number_v12(idle_stats,"max_ms"),linux_speed_lab_number_v12(idle_stats,"jitter_ms"));gtk_label_set_text(GTK_LABEL(s->idle_detail),x);g_free(x);
     x=g_strdup_printf("loaded %.1f ms • +%.1f bloat • p90 %.1f",linux_speed_lab_number_v12(summary,"download_loaded_ms"),linux_speed_lab_number_v12(summary,"download_bufferbloat_ms"),linux_speed_lab_number_v12(down_loaded,"p90_ms"));gtk_label_set_text(GTK_LABEL(s->download_detail),x);g_free(x);
     x=g_strdup_printf("loaded %.1f ms • +%.1f bloat • p90 %.1f",linux_speed_lab_number_v12(summary,"upload_loaded_ms"),linux_speed_lab_number_v12(summary,"upload_bufferbloat_ms"),linux_speed_lab_number_v12(up_loaded,"p90_ms"));gtk_label_set_text(GTK_LABEL(s->upload_detail),x);g_free(x);
-    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),out.data?out.data:"{}",-1);gtk_label_set_text(GTK_LABEL(s->status),"Finished • real HTTPS throughput + loaded latency");json_node_free(root);free(out.data);g_free(err);gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);
+    guint hop_count=0;char*hop_text=linux_speed_lab_hops_v12(obj,&hop_count);if(hop_text!=NULL){char*combined=g_strdup_printf("%s\nFULL RESULT\n%s",hop_text,out.data?out.data:"{}");gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),combined,-1);g_free(combined);g_free(hop_text);}else gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),out.data?out.data:"{}",-1);
+    if(hop_count>0){x=g_strdup_printf("Finished • real HTTPS throughput + loaded latency • %u hop measurements",hop_count);gtk_label_set_text(GTK_LABEL(s->status),x);g_free(x);}else gtk_label_set_text(GTK_LABEL(s->status),"Finished • real HTTPS throughput + loaded latency");json_node_free(root);free(out.data);g_free(err);gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);
 }
 
 static GtkWidget *linux_speed_lab_grid_label_v12(const char*text){GtkWidget*w=gtk_label_new(text);gtk_label_set_xalign(GTK_LABEL(w),0.0f);return w;}
@@ -155,4 +183,4 @@ static void linux_install_speed_lab_v12(App *app){
     if(app==NULL||app->window==NULL)return;LinuxUnifiedV8*base=g_object_get_data(G_OBJECT(app->window),"linux-unified-v8");if(base==NULL)return;GtkWidget*settings=linux_telemetry_find_button_v9(base->stack,"Open settings");if(settings==NULL||!GTK_IS_BOX(gtk_widget_get_parent(settings)))return;GtkWidget*button=linux_telemetry_button_v9("Speed Lab",G_CALLBACK(linux_speed_lab_open_v12),app);gtk_widget_set_tooltip_text(button,"Ookla-style Router VPN test: real HTTPS throughput plus idle/download-loaded/upload-loaded latency, current or temporary direct/multihop/external paths, Auto or custom min/max time.");gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),button,FALSE,FALSE,0);gtk_widget_show_all(app->window);
 }
 
-/* Linux Speed Lab v12: /api/speed-lab/options + /api/speed-lab/run; current path or temporary System direct, Router VPN, Multihop, External exit/hop; SMART/AUTO/CUSTOM/logical modes; WireGuard/AmneziaWG; real download/upload Mbps; idle/download-loaded/upload-loaded ms, p90/max/jitter/bufferbloat; Auto timing or 1–60 second custom min/max sliders. */
+/* Linux Speed Lab v12: /api/speed-lab/options + /api/speed-lab/run; current path or temporary System direct, Router VPN, Multihop, External exit/hop; SMART/AUTO/CUSTOM/logical modes; WireGuard/AmneziaWG; real download/upload Mbps; idle/download-loaded/upload-loaded ms, exact per-hop RTT/Mbps on the same proved multihop graph, p90/max/jitter/bufferbloat; Auto timing or 1–60 second custom min/max sliders. */
