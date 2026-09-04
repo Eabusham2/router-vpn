@@ -276,6 +276,10 @@ need(
     "IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState",
     "IOSSpeedLabPersistenceJournal.finish",
     "Recovery journal retained for next launch",
+    "requireEncrypted",
+    "requireObfuscation",
+    "autoRequireEncrypted",
+    "autoRequireObfuscation",
 )
 need(
     "ios/RouterVPN/App/IOSSpeedLabView.swift",
@@ -291,6 +295,8 @@ need(
     "Upload",
     "Loaded Δ",
     "bufferbloat",
+    "Require encrypted AUTO candidates",
+    "Require obfuscation for AUTO candidates",
     "Multihop — unavailable on iOS",
     "Speed Lab will not fake it",
 )
