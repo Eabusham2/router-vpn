@@ -25,14 +25,16 @@ func validTorFingerprint(value string) bool {
 
 func normalizeTorTransport(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "obfs4":
+	case "obfs", "obfs4":
 		return "obfs4", nil
 	case "meek", "meek-azure", "meek_lite", "meek-lite":
 		return "meek_lite", nil
 	case "snowflake":
 		return "snowflake", nil
-	case "webtunnel", "web-tunnel":
+	case "webtunnel", "web-tunnel", "web_tunnel":
 		return "webtunnel", nil
+	case "auto", "custom":
+		return "custom", nil
 	default:
 		return "", fmt.Errorf("unsupported Tor pluggable transport %q", value)
 	}
@@ -75,6 +77,10 @@ func validTorICEList(value string) bool {
 	return true
 }
 
+func validTorUTLS(value string) bool {
+	return value != "" && len(value) <= 128 && !strings.ContainsAny(value, "\r\n\x00 /\\?#@\"'`;$|&<>")
+}
+
 func normalizeTorBridgeLine(value string) (string, string, string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" || len(value) > 8192 || strings.ContainsAny(value, "\r\n\x00") {
@@ -88,8 +94,8 @@ func normalizeTorBridgeLine(value string) (string, string, string, error) {
 		return "", "", "", fmt.Errorf("Tor bridge line is incomplete")
 	}
 	transport, err := normalizeTorTransport(fields[0])
-	if err != nil {
-		return "", "", "", err
+	if err != nil || transport == "custom" {
+		return "", "", "", fmt.Errorf("Tor bridge line uses an unsupported pluggable transport %q", fields[0])
 	}
 	host, portText, err := net.SplitHostPort(fields[1])
 	if err != nil {
@@ -107,13 +113,24 @@ func normalizeTorBridgeLine(value string) (string, string, string, error) {
 	if err != nil || port < 1 || port > 65535 {
 		return "", "", "", fmt.Errorf("Tor %s bridge endpoint has an invalid port", transport)
 	}
-	if !validTorFingerprint(fields[2]) {
-		return "", "", "", fmt.Errorf("Tor %s bridge fingerprint must be exactly 40 hexadecimal characters", transport)
+
+	fingerprint := ""
+	optionStart := 2
+	if transport != "meek_lite" || !strings.Contains(fields[2], "=") {
+		if !validTorFingerprint(fields[2]) {
+			return "", "", "", fmt.Errorf("Tor %s bridge fingerprint must be exactly 40 hexadecimal characters", transport)
+		}
+		fingerprint = strings.ToUpper(fields[2])
+		fields[2] = fingerprint
+		optionStart = 3
+	}
+	if transport != "meek_lite" && fingerprint == "" {
+		return "", "", "", fmt.Errorf("Tor %s bridge requires a relay fingerprint", transport)
 	}
 
 	options := map[string]string{}
-	for _, option := range fields[3:] {
-		key, val, ok := strings.Cut(option, "=")
+	for i := optionStart; i < len(fields); i++ {
+		key, val, ok := strings.Cut(fields[i], "=")
 		key = strings.ToLower(strings.TrimSpace(key))
 		if !ok || key == "" || val == "" || strings.ContainsAny(key+val, "\r\n\x00") {
 			return "", "", "", fmt.Errorf("Tor %s bridge option is malformed", transport)
@@ -122,6 +139,7 @@ func normalizeTorBridgeLine(value string) (string, string, string, error) {
 			return "", "", "", fmt.Errorf("Tor %s bridge option %q is duplicated", transport, key)
 		}
 		options[key] = val
+		fields[i] = key + "=" + val
 	}
 
 	switch transport {
@@ -142,19 +160,25 @@ func normalizeTorBridgeLine(value string) (string, string, string, error) {
 		if !validTorHTTPSURL(options["url"]) || !validTorFrontList(options["front"]) {
 			return "", "", "", fmt.Errorf("Tor meek_lite requires safe url=https://… and front=… options")
 		}
+		if val := options["utls"]; val != "" && !validTorUTLS(val) {
+			return "", "", "", fmt.Errorf("Tor meek_lite utls option is unsafe")
+		}
+		if val := options["utls-imitate"]; val != "" && !validTorUTLS(val) {
+			return "", "", "", fmt.Errorf("Tor meek_lite utls-imitate option is unsafe")
+		}
 		for key := range options {
-			if key != "url" && key != "front" {
+			if key != "url" && key != "front" && key != "utls" && key != "utls-imitate" {
 				return "", "", "", fmt.Errorf("unsupported Tor meek_lite bridge option %q", key)
 			}
 		}
 	case "snowflake":
-		if fp := options["fingerprint"]; !validTorFingerprint(fp) || !strings.EqualFold(fp, fields[2]) {
+		if fp := options["fingerprint"]; !validTorFingerprint(fp) || !strings.EqualFold(fp, fingerprint) {
 			return "", "", "", fmt.Errorf("Tor Snowflake requires fingerprint= matching the bridge fingerprint")
 		}
 		if !validTorHTTPSURL(options["url"]) || !validTorFrontList(options["front"]) || !validTorICEList(options["ice"]) {
 			return "", "", "", fmt.Errorf("Tor Snowflake requires safe url=https://…, front=…, and ice=stun:… options")
 		}
-		if val := options["utls-imitate"]; val != "" && (len(val) > 128 || strings.ContainsAny(val, " /\\?#@")) {
+		if val := options["utls-imitate"]; val != "" && !validTorUTLS(val) {
 			return "", "", "", fmt.Errorf("Tor Snowflake utls-imitate option is unsafe")
 		}
 		for key := range options {
@@ -177,13 +201,22 @@ func normalizeTorBridgeLine(value string) (string, string, string, error) {
 	}
 
 	normalizedEndpoint := net.JoinHostPort(ip.String(), strconv.Itoa(port))
-	fields[0], fields[1], fields[2] = transport, normalizedEndpoint, strings.ToUpper(fields[2])
+	fields[0], fields[1] = transport, normalizedEndpoint
 	return strings.Join(fields, " "), ip.String(), transport, nil
 }
 
 func TorBridgeTransport(c *ExternalTorBridgeConfig) (string, error) {
 	if c == nil || len(c.Bridges) == 0 {
 		return "", fmt.Errorf("external Tor bridge configuration is missing")
+	}
+	if strings.TrimSpace(c.Transport) != "" {
+		transport, err := normalizeTorTransport(c.Transport)
+		if err != nil {
+			return "", err
+		}
+		if transport == "custom" {
+			return "custom", nil
+		}
 	}
 	fields := strings.Fields(strings.TrimSpace(c.Bridges[0]))
 	if len(fields) > 0 && strings.EqualFold(fields[0], "Bridge") {
@@ -213,18 +246,22 @@ func normalizeExternalTorBridge(c *ExternalTorBridgeConfig) (string, error) {
 	firstHost := ""
 	lineTransport := ""
 	seen := map[string]bool{}
+	seenTransports := map[string]bool{}
 	for i := range c.Bridges {
 		line, host, transport, err := normalizeTorBridgeLine(c.Bridges[i])
 		if err != nil {
 			return "", fmt.Errorf("Tor bridge %d: %w", i+1, err)
 		}
-		if configuredTransport != "" && configuredTransport != transport {
+		if configuredTransport != "" && configuredTransport != "custom" && configuredTransport != transport {
 			return "", fmt.Errorf("Tor bridge %d transport %q does not match configured transport %q", i+1, transport, configuredTransport)
 		}
-		if lineTransport != "" && lineTransport != transport {
-			return "", fmt.Errorf("Tor profile cannot mix pluggable transports %q and %q", lineTransport, transport)
+		if configuredTransport != "custom" && lineTransport != "" && lineTransport != transport {
+			return "", fmt.Errorf("Tor profile cannot mix pluggable transports %q and %q unless transport=custom", lineTransport, transport)
 		}
-		lineTransport = transport
+		if lineTransport == "" {
+			lineTransport = transport
+		}
+		seenTransports[transport] = true
 		if seen[line] {
 			return "", fmt.Errorf("duplicate Tor %s bridge line", transport)
 		}
@@ -234,7 +271,15 @@ func normalizeExternalTorBridge(c *ExternalTorBridgeConfig) (string, error) {
 			firstHost = host
 		}
 	}
-	c.Transport = lineTransport
+	if configuredTransport == "custom" {
+		c.Transport = "custom"
+	} else if configuredTransport != "" {
+		c.Transport = configuredTransport
+	} else if len(seenTransports) == 1 {
+		c.Transport = lineTransport
+	} else {
+		return "", fmt.Errorf("mixed Tor pluggable transports require transport=custom")
+	}
 	if c.SocksPort == 0 {
 		c.SocksPort = ExternalTorDefaultSocksPort
 	}
