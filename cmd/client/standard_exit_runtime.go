@@ -269,6 +269,12 @@ func writeStandardExitRuntime(root string, cfg map[string]any) (string, string, 
 }
 
 func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit, direct bool) (*exec.Cmd, error) {
+	if exit.Protocol == "tor-bridge" {
+		if !direct {
+			return nil, errors.New("Tor bridge is currently a direct full-device external path only; hopped Tor remains unavailable until that graph is implemented and proved")
+		}
+		return torBridgeCommand(a, control, control)
+	}
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	var runtimeDir, tunAlias, endpoint, runtimeProfileID string
 	var err error
