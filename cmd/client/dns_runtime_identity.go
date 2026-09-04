@@ -126,6 +126,37 @@ func deterministicLinuxMultihopDNSRuntime(a *app, profileID, runtimeID string) (
 	return activeDNSRuntimeIdentity{ProfileID: profileID, RuntimeID: runtimeID, Config: configPath}, true, nil
 }
 
+func deterministicExternalDNSRuntime(a *app, profileID, runtimeID string) (activeDNSRuntimeIdentity, bool, error) {
+	if a == nil {
+		return activeDNSRuntimeIdentity{}, false, nil
+	}
+	profileID = strings.TrimSpace(profileID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	if !strings.HasPrefix(runtimeID, "external-") || runtimeID == "external-openvpn" {
+		return activeDNSRuntimeIdentity{}, false, nil
+	}
+	a.mu.Lock()
+	st := a.state
+	cmd := a.cmd
+	profile, profileOK := a.profileByIDLocked(profileID)
+	a.mu.Unlock()
+	if !st.Connected || st.Phase != "connected" || st.Mode != "external-node" || st.RouterID != profileID || st.RuntimeMode != runtimeID || cmd == nil {
+		return activeDNSRuntimeIdentity{}, false, nil
+	}
+	if !profileOK || profile.NodeKind != "external" || profile.External == nil {
+		return activeDNSRuntimeIdentity{}, false, nil
+	}
+	runtimeDir, err := nativeMultihopRuntimeDirFromCommand(cmd)
+	if err != nil {
+		return activeDNSRuntimeIdentity{}, true, fmt.Errorf("active external runtime does not expose an owned RuntimeDir: %w", err)
+	}
+	configPath, err := runtimeConfigUnderPrivateRun(a, filepath.Join(runtimeDir, "sing-box.json"))
+	if err != nil {
+		return activeDNSRuntimeIdentity{}, true, err
+	}
+	return activeDNSRuntimeIdentity{ProfileID: profileID, RuntimeID: runtimeID, Config: configPath}, true, nil
+}
+
 func activeDNSRuntimeConfigFor(a *app, profileID, runtimeID string) (string, bool, error) {
 	profileID = strings.TrimSpace(profileID)
 	runtimeID = strings.TrimSpace(runtimeID)
@@ -146,11 +177,20 @@ func activeDNSRuntimeConfigFor(a *app, profileID, runtimeID string) (string, boo
 		if err != nil {
 			return "", owned, err
 		}
-		if !owned {
-			return "", false, nil
+		if owned {
+			identity = deterministic
+			matched = true
 		}
-		identity = deterministic
-		matched = true
+	}
+	if !matched {
+		deterministic, owned, err := deterministicExternalDNSRuntime(a, profileID, runtimeID)
+		if err != nil {
+			return "", owned, err
+		}
+		if owned {
+			identity = deterministic
+			matched = true
+		}
 	}
 	if !matched {
 		return "", false, nil
