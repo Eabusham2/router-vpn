@@ -19,7 +19,7 @@ func taggedRuntimeItem(items []any, tag string) map[string]any {
 
 func TestExternalEntryChainsToEverySingBoxStandardExit(t *testing.T) {
 	control := common.RouterProfile{DNSMode: "fastest", FastestDNSHost: "1.1.1.1", EffectiveMTU: 1320}
-	protocols := []string{"wireguard", "socks5", "shadowsocks", "hysteria2"}
+	protocols := []string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}
 	for _, entryProtocol := range protocols {
 		for _, exitProtocol := range protocols {
 			t.Run(entryProtocol+"-to-"+exitProtocol, func(t *testing.T) {
@@ -35,6 +35,12 @@ func TestExternalEntryChainsToEverySingBoxStandardExit(t *testing.T) {
 				entryItem := taggedRuntimeItem(endpoints, "external-entry")
 				if entryItem == nil { entryItem = taggedRuntimeItem(outbounds, "external-entry") }
 				if entryItem == nil { t.Fatalf("external entry tag missing: endpoints=%#v outbounds=%#v", endpoints, outbounds) }
+				if entryProtocol == "http-connect" || entryProtocol == "https-connect" {
+					if entryItem["type"] != "http" { t.Fatalf("%s entry is not HTTP CONNECT: %#v", entryProtocol, entryItem) }
+					_, hasTLS := entryItem["tls"]
+					if entryProtocol == "https-connect" && !hasTLS { t.Fatalf("HTTPS entry lost TLS/SNI: %#v", entryItem) }
+					if entryProtocol == "http-connect" && hasTLS { t.Fatalf("plain HTTP entry gained TLS: %#v", entryItem) }
+				}
 				exitItem := taggedRuntimeItem(endpoints, "custom-exit")
 				if exitItem == nil { exitItem = taggedRuntimeItem(outbounds, "custom-exit") }
 				if exitItem == nil || exitItem["detour"] != "external-entry" { t.Fatalf("final exit does not detour through external entry: %#v", exitItem) }
@@ -53,7 +59,7 @@ func TestExternalOpenVPNEntryFailsClosed(t *testing.T) {
 }
 
 func TestOpenVPNBridgeCanUseExternalStandardEntries(t *testing.T) {
-	for _, protocol := range []string{"wireguard", "socks5", "shadowsocks", "hysteria2"} {
+	for _, protocol := range []string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"} {
 		t.Run(protocol, func(t *testing.T) {
 			entry := validTestStandardExit(protocol)
 			cfg, err := externalEntryBridgeConfig(entry, openVPNEntrySOCKSPort)
