@@ -211,6 +211,15 @@ need(
     "withThrowingTaskGroup",
 )
 need(
+    "ios/RouterVPN/App/IOSSpeedLabPersistenceJournal.swift",
+    "router-vpn.speed-lab-journal-v1",
+    "originalBundle",
+    "originalLastRuntime",
+    "reassertOriginalPersistentState",
+    "recoverIfNeeded",
+    "Temporary Speed Lab tunnel",
+)
+need(
     "ios/RouterVPN/App/IOSSpeedLabRunner.swift",
     "case current",
     "case temporary",
@@ -221,7 +230,10 @@ need(
     "Desktop-style multihop is intentionally unavailable on iOS/iPadOS",
     "guardedMeasurement",
     "Temporary Speed Lab tunnel did not fully stop",
-    "try model.importBundle(data)",
+    "IOSSpeedLabPersistenceJournal.begin",
+    "IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState",
+    "IOSSpeedLabPersistenceJournal.finish",
+    "Recovery journal retained for next launch",
 )
 need(
     "ios/RouterVPN/App/IOSSpeedLabView.swift",
@@ -238,7 +250,7 @@ need(
     "Loaded Δ",
     "bufferbloat",
 )
-need("ios/RouterVPN/App/ProductRootView.swift", "Open Router VPN Speed Lab", "IOSSpeedLabView()")
+need("ios/RouterVPN/App/ProductRootView.swift", "Open Router VPN Speed Lab", "IOSSpeedLabView()", "IOSSpeedLabPersistenceJournal.recoverIfNeeded")
 forbid("ios/RouterVPN/App/IOSSpeedLabRunner.swift", "fake multihop", "pretend multihop")
 
 if errors:
