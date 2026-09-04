@@ -8,7 +8,6 @@ import (
 func TestTypedExternalProfileBuilderRejectsUnsafeServerTextBeforePersistence(t *testing.T) {
 	protocols := []string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}
 	badServers := []string{
-		"https://proxy.example.com",
 		"proxy.example.com/path",
 		"proxy.example.com?query=1",
 		"user@proxy.example.com",
@@ -28,14 +27,16 @@ func TestTypedExternalProfileBuilderRejectsUnsafeServerTextBeforePersistence(t *
 
 func TestTypedExternalProfileBuilderNormalizesHostnameBeforePersistence(t *testing.T) {
 	for _, protocol := range []string{"socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"} {
-		q := createRequestFor(protocol)
-		q.Server = "Vpn.Example.COM"
-		p, err := externalProfileFromCreateRequest(q)
-		if err != nil {
-			t.Fatalf("%s hostname rejected: %v", protocol, err)
-		}
-		if p.Endpoint != "vpn.example.com" {
-			t.Fatalf("%s persisted non-normalized endpoint %q", protocol, p.Endpoint)
+		for _, server := range []string{"Vpn.Example.COM", "https://Vpn.Example.COM/supplied/path?ignored=1"} {
+			q := createRequestFor(protocol)
+			q.Server = server
+			p, err := externalProfileFromCreateRequest(q)
+			if err != nil {
+				t.Fatalf("%s hostname %q rejected: %v", protocol, server, err)
+			}
+			if p.Endpoint != "vpn.example.com" {
+				t.Fatalf("%s persisted non-normalized endpoint %q from %q", protocol, p.Endpoint, server)
+			}
 		}
 	}
 }
