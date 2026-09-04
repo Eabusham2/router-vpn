@@ -208,6 +208,7 @@ class DownloadJobManager:
         work = ""
         acquired = False
         retained = False
+        should_finalize = False
         terminal_status = "failed"
         terminal_code = "cleanup_without_result"
         terminal_message = "download job ended without a deliverable package"
@@ -219,6 +220,7 @@ class DownloadJobManager:
                 job = self.jobs.get(job_id)
                 if not job or job.get("cancel_requested") or self.closed.is_set():
                     return
+                should_finalize = True
                 work = str(create_owned_temp("router-vpn-job-"))
                 job["work_dir"] = work
                 now = time.time()
@@ -264,7 +266,7 @@ class DownloadJobManager:
         finally:
             if acquired:
                 self.build_slots.release()
-            if not retained:
+            if should_finalize and not retained:
                 self._finish_cleanup(job_id, work, terminal_status, terminal_status,
                                      terminal_code, terminal_message)
 
