@@ -76,6 +76,7 @@ for rel, markers in {
         "func (a *app) connectLogical", "beginConnectionOperation()",
         "previous := a.profiles.Profiles[i].BaseTunnel", "a.profiles.Profiles[i].BaseTunnel = previous",
         "connectionOperationContextOrBackground()", "finalizeCancelledFallback", "http.StatusConflict",
+        "logical path was proven but preferred-base persistence failed; the path was stopped",
     ),
     "cmd/client/multihop.go": (
         "beginConnectionOperation()", "checkConnectionOperation()", "previousStore := cloneRouterProfileStore(a.profiles)",
@@ -127,6 +128,18 @@ for rel, markers in {
     ),
 }.items():
     require(rel, *markers)
+
+logical_source = read("cmd/client/logical_modes.go")
+logical_connect = function_block(logical_source, "func (a *app) connectLogical")
+launch_at = logical_connect.find("used, err := a.startLogicalMode")
+proof_at = logical_connect.find("if err := a.checkConnectionOperation()")
+persist_at = logical_connect.find("if err := a.persistBasePreference(q.Base)")
+if min(launch_at, proof_at, persist_at) < 0 or not (launch_at < proof_at < persist_at):
+    errors.append("cmd/client/logical_modes.go: explicit base preference must persist only after logical path launch and final cancellation/path proof")
+if persist_at >= 0:
+    tail = logical_connect[persist_at:]
+    if "_ = a.stopMode()" not in tail or "http.StatusInternalServerError" not in tail:
+        errors.append("cmd/client/logical_modes.go: failed post-proof base persistence must tear down the newly started path and surface a hard failure")
 
 legacy_openvpn = require(
     "cmd/client/openvpn_standard_exit_runtime.go",
