@@ -1,25 +1,45 @@
 import Foundation
+import Security
 
 @MainActor
 final class IOSNodeBundleStore {
     static let shared = IOSNodeBundleStore()
-    private let defaultsKey = "router-vpn.ios.node-bundles.v1"
+    private let legacyDefaultsKey = "router-vpn.ios.node-bundles.v1"
+    private let keychainService = "com.eabusham.routervpn.private-node-bundles"
+    private let keychainAccount = "linked-bundles-v1"
     private var records: [String: Data] = [:]
+    private var storageError: Error?
 
     private init() {
-        if let raw = UserDefaults.standard.data(forKey: defaultsKey),
-           let decoded = try? JSONDecoder().decode([String: Data].self, from: raw) {
-            records = decoded
+        do {
+            if let raw = try keychainData() {
+                guard let decoded = try? JSONDecoder().decode([String: Data].self, from: raw) else {
+                    throw NSError(domain: "RouterVPN.NodeStore", code: 90, userInfo: [NSLocalizedDescriptionKey: "Private linked-node Keychain data is corrupt; refusing to replace it with weaker fallback storage"])
+                }
+                records = decoded
+                UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
+                return
+            }
+            if let legacy = UserDefaults.standard.data(forKey: legacyDefaultsKey),
+               let decoded = try? JSONDecoder().decode([String: Data].self, from: legacy) {
+                records = decoded
+                try persist()
+            }
+        } catch {
+            records = [:]
+            storageError = error
         }
     }
 
     func link(_ incomingData: Data, preserving current: ClientBundle?) throws -> Data {
+        try ensureStorageReady()
         if let current { _ = try store(current, replaceExistingRecord: true) }
         let incoming = try JSONDecoder().decode(ClientBundle.self, from: incomingData)
         return try store(incoming, replaceExistingRecord: true)
     }
 
     func profiles(current: ClientBundle?) -> [RouterProfile] {
+        guard storageError == nil else { return [] }
         if let current { _ = try? store(current, replaceExistingRecord: true) }
         var result: [RouterProfile] = []
         var seen = Set<String>()
@@ -37,6 +57,7 @@ final class IOSNodeBundleStore {
     }
 
     func bundleData(containing profileID: String, current: ClientBundle?) -> Data? {
+        guard storageError == nil else { return nil }
         if let current { _ = try? store(current, replaceExistingRecord: true) }
         let wanted = canonicalProfileID(profileID, current: current)
         for key in records.keys.sorted() {
@@ -49,6 +70,7 @@ final class IOSNodeBundleStore {
     }
 
     func remove(profileID: String, current: ClientBundle?) throws -> Data? {
+        try ensureStorageReady()
         if let current { _ = try store(current, replaceExistingRecord: true) }
         let wanted = canonicalProfileID(profileID, current: current)
         for key in records.keys.sorted() {
@@ -78,6 +100,7 @@ final class IOSNodeBundleStore {
         latitude: Double?,
         longitude: Double?
     ) throws -> Data {
+        try ensureStorageReady()
         if let current { _ = try store(current, replaceExistingRecord: true) }
         let wanted = canonicalProfileID(profileID, current: current)
         for key in records.keys.sorted() {
@@ -97,6 +120,7 @@ final class IOSNodeBundleStore {
     }
 
     private func store(_ source: ClientBundle, replaceExistingRecord: Bool) throws -> Data {
+        try ensureStorageReady()
         var bundle = source
         guard !bundle.routerProfiles.isEmpty else {
             throw NSError(domain: "RouterVPN.NodeStore", code: 1, userInfo: [NSLocalizedDescriptionKey: "Node bundle contains no Router VPN or external profiles"])
@@ -192,8 +216,57 @@ final class IOSNodeBundleStore {
         records.keys.sorted().compactMap { records[$0] }.first
     }
 
+    private func ensureStorageReady() throws {
+        if let storageError { throw storageError }
+    }
+
+    private func keychainQuery() -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+        ]
+    }
+
+    private func keychainData() throws -> Data? {
+        var query = keychainQuery()
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = item as? Data else {
+            throw keychainError(status, action: "read private linked-node bundles")
+        }
+        return data
+    }
+
+    private func writeKeychain(_ data: Data) throws {
+        let query = keychainQuery()
+        let update: [String: Any] = [kSecValueData as String: data]
+        let updateStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+        if updateStatus != errSecItemNotFound {
+            throw keychainError(updateStatus, action: "update private linked-node bundles")
+        }
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw keychainError(addStatus, action: "create private linked-node bundles")
+        }
+    }
+
+    private func keychainError(_ status: OSStatus, action: String) -> NSError {
+        let detail = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+        return NSError(domain: "RouterVPN.NodeStore", code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Could not \(action): \(detail)"])
+    }
+
     private func persist() throws {
         let data = try JSONEncoder().encode(records)
-        UserDefaults.standard.set(data, forKey: defaultsKey)
+        try writeKeychain(data)
+        // Remove the legacy copy only after the stronger Keychain commit succeeds.
+        UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
     }
 }
