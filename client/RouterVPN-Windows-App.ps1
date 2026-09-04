@@ -68,7 +68,11 @@ function Get-OnboardingState{
 function Save-OnboardingState([int]$Step,[bool]$Done){[void](New-Item -ItemType Directory -Force -Path $OnboardingStateDir);@{version=3;done=$Done;step=$Step}|ConvertTo-Json -Compress|Set-Content -LiteralPath $OnboardingStateFile -Encoding UTF8}
 function global:Show-RouterVPNProductOnboarding{
     param([switch]$Force)
-    $state=Get-OnboardingState;if(-not$Force-and$state.done){return};$step=if($Force){0}else{[int]$state.step};$keepDone=[bool]$state.done
+    # Latest map-first contract: normal startup must never open a modal in front
+    # of Connect/Multihop/Settings/Mode/DNS. The full wizard remains available
+    # explicitly from Help and can still preserve/rerun its persistent steps.
+    if(-not$Force){return}
+    $state=Get-OnboardingState;$step=0;$keepDone=[bool]$state.done
     while($true){
         [xml]$X=@'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN setup" Width="700" Height="470" MinWidth="540" MinHeight="400" WindowStartupLocation="CenterScreen" ResizeMode="CanResize" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="24"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Name="Progress" Foreground="#93A4C7"/><TextBlock Name="Title" Grid.Row="1" FontSize="26" FontWeight="Bold" Margin="0,8,0,14" TextWrapping="Wrap"/><ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><TextBlock Name="Body" FontSize="15" LineHeight="24" TextWrapping="Wrap" Foreground="#E8ECF8"/></ScrollViewer><Grid Grid.Row="3" Margin="0,18,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Name="Back" Content="Back" Padding="14,8" Margin="0,0,8,0"/><Button Name="Close" Grid.Column="1" Content="Close and resume later" Padding="14,8"/><Button Name="Next" Grid.Column="3" Content="Next" Padding="18,8" IsDefault="True"/></Grid></Grid></Window>
@@ -114,6 +118,7 @@ try{
 }finally{if($null-eq$PreviousProductSource){Remove-Item Env:ROUTER_VPN_PRODUCT_SOURCE -ErrorAction SilentlyContinue}else{$env:ROUTER_VPN_PRODUCT_SOURCE=$PreviousProductSource}}
 
 # Native shipping contract: map-first WPF daily app; one Connect/Disconnect action;
+# normal startup never blocks the map with onboarding; full onboarding is explicit/rerunnable from Help;
 # fastest-node side dropdown; live path RTT; quick kill switch; Forward shortcut;
 # real multihop with live IN/OUT/PATH RTT; Settings->Mode->DNS; native Speed Lab with current/temporary direct/multihop/external paths, real HTTPS Mbps, idle/download-loaded/upload-loaded latency and Auto/Custom min/max timing;
 # SMART AUTO default; AUTO first-class; visible readiness; GUI CUSTOM presets;
