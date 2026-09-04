@@ -58,7 +58,7 @@ final class AndroidStandardExitStore {
         r.add(new Capability("http",true,"")); r.add(new Capability("https",true,""));
         r.add(new Capability("shadowsocks",true,"")); r.add(new Capability("hysteria2",true,""));
         r.add(new Capability("openvpn",false,"Pinned sing-box 1.13.x has no OpenVPN endpoint; keep unavailable until a stable pinned dataplane is validated."));
-        r.add(new Capability("tor-bridge",false,"Tor obfs4 bridge is unavailable on Android until Router VPN ships a real native Tor/obfs4 VpnService dataplane with dynamic Tor-exit proof; it must not be approximated as SOCKS5."));
+        r.add(new Capability("tor-bridge",false,"Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on Android until Router VPN ships a real native Tor + pluggable-transport VpnService dataplane with dynamic Tor-exit proof; they must not be approximated as SOCKS5."));
         return r;
     }
 
@@ -115,7 +115,7 @@ final class AndroidStandardExitStore {
         e.id=e.id==null?"":e.id.trim(); if(e.id.isEmpty())e.id="exit-"+randomHex(6); if(!safeId(e.id))throw new IllegalArgumentException("Invalid custom exit id.");
         e.name=e.name==null?"":e.name.trim();if(e.name.isEmpty())e.name="Custom Exit";if(e.name.length()>120)throw new IllegalArgumentException("Custom exit name is too long.");
         e.protocol=normalizeProtocol(e.protocol); if("openvpn".equals(e.protocol))throw new IllegalArgumentException("OpenVPN custom exit is unavailable on pinned sing-box 1.13.x; no fake OpenVPN mode is exposed.");
-        if("tor-bridge".equals(e.protocol))throw new IllegalArgumentException("Tor obfs4 bridge is unavailable on Android until Router VPN ships a real native Tor/obfs4 VpnService dataplane with dynamic Tor-exit proof; it must not be approximated as SOCKS5.");
+        if("tor-bridge".equals(e.protocol))throw new IllegalArgumentException("Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on Android until Router VPN ships a real native Tor + pluggable-transport VpnService dataplane with dynamic Tor-exit proof; they must not be approximated as SOCKS5.");
         if(!Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2").contains(e.protocol))throw new IllegalArgumentException("Unsupported custom exit protocol: "+e.protocol);
         e.server=literalIp(e.server,"Custom exit server").getHostAddress(); if(e.serverPort<1||e.serverPort>65535)throw new IllegalArgumentException("Custom exit port must be 1..65535.");
         InetAddress expected=literalIp(e.expectedPublicIp,"Expected public exit IP"); if(isPrivate(expected))throw new IllegalArgumentException("Expected public exit IP must be public.");e.expectedPublicIp=expected.getHostAddress();
