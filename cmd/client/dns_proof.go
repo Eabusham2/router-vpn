@@ -237,6 +237,19 @@ func verifySingBoxDNSRuntime(root, profileID, mode string, selected dnsSelection
 	return errors.New("active sing-box DNS config was not found")
 }
 
+func verifySingBoxDNSRuntimeForApp(a *app, root, profileID, mode string, selected dnsSelection) error {
+	if path, owned, err := activeDNSRuntimeConfigFor(a, profileID, mode); owned {
+		if err != nil {
+			return fmt.Errorf("active owned DNS runtime config is unsafe or unavailable: %w", err)
+		}
+		if err := verifySingBoxDNSConfig(path, selected); err != nil {
+			return fmt.Errorf("active owned DNS runtime policy mismatch: %w", err)
+		}
+		return nil
+	}
+	return verifySingBoxDNSRuntime(root, profileID, mode, selected)
+}
+
 func verifySingBoxDNSConfig(path string, selected dnsSelection) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -325,7 +338,7 @@ func proveSelectedDNS(a *app, s observedConnection, runtimeID string) dnsProofSt
 	if kernelDNSMode(runtimeID) {
 		err = verifyKernelDNSRuntime(root, s.RouterID, runtimeID, selected)
 	} else {
-		err = verifySingBoxDNSRuntime(root, s.RouterID, runtimeID, selected)
+		err = verifySingBoxDNSRuntimeForApp(a, root, s.RouterID, runtimeID, selected)
 	}
 	if err != nil {
 		result.Reason = err.Error()
