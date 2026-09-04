@@ -142,7 +142,7 @@ final class IOSNodeBundleStore {
                 bundle.socks5Port = selected.socksPort
             } else {
                 bundle.apiToken = ""; bundle.routerAPI = ""; bundle.adGuardIPv4 = ""; bundle.adGuardIPv6 = ""
-                bundle.socks5Host = ""; bundle.socks5Port = 1080
+                bundle.socks5Host = ""; bundle.socks5Port = 0
             }
         }
         let key = recordKey(bundle)
