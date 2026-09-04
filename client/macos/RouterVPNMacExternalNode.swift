@@ -42,6 +42,9 @@ extension ProductWindowController {
         let server = externalField("Server IP/hostname")
         let port = externalField("Port")
         let expectedIP = externalField("Expected public exit IP")
+        let location = externalField("Location label (optional)")
+        let latitude = externalField("Latitude -90..90 (optional)")
+        let longitude = externalField("Longitude -180..180 (optional)")
         let username = externalField("Username (proxy only)")
         let password = externalField("Password / proxy credential", secure: true)
         let method = externalField("Shadowsocks method")
@@ -55,7 +58,7 @@ extension ProductWindowController {
         let wgDNS = externalField("WG DNS IPs, comma separated")
         let wgMTU = externalField("WG MTU (optional)")
 
-        let note = NSTextField(wrappingLabelWithString: "Relevant fields depend on the protocol. HTTPS CONNECT and Hysteria2 require TLS/SNI. Plain HTTP CONNECT rejects TLS metadata. WireGuard requires keys, interface address and AllowedIPs. The controller re-validates everything before persistence.")
+        let note = NSTextField(wrappingLabelWithString: "Relevant fields depend on the protocol. Optional coordinates are real values you provide; Router VPN never fabricates a custom-node pin from IP geolocation. HTTPS CONNECT and Hysteria2 require TLS/SNI. Plain HTTP CONNECT rejects TLS metadata. WireGuard requires keys, interface address and AllowedIPs. The controller re-validates everything before persistence.")
         note.textColor = .secondaryLabelColor
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Protocol"), protocolPopup],
@@ -63,6 +66,9 @@ extension ProductWindowController {
             [NSTextField(labelWithString: "Server"), server],
             [NSTextField(labelWithString: "Port"), port],
             [NSTextField(labelWithString: "Expected exit IP"), expectedIP],
+            [NSTextField(labelWithString: "Location"), location],
+            [NSTextField(labelWithString: "Latitude"), latitude],
+            [NSTextField(labelWithString: "Longitude"), longitude],
             [NSTextField(labelWithString: "Username"), username],
             [NSTextField(labelWithString: "Password"), password],
             [NSTextField(labelWithString: "SS method"), method],
@@ -83,7 +89,7 @@ extension ProductWindowController {
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 8
-        content.setFrameSize(NSSize(width: 660, height: 560))
+        content.setFrameSize(NSSize(width: 680, height: 640))
         grid.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
         panel.accessoryView = content
 
@@ -103,6 +109,23 @@ extension ProductWindowController {
             "server": server.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
             "port": Int(port.stringValue) ?? 0,
         ]
+        let locationValue = location.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !locationValue.isEmpty { body["location"] = locationValue }
+        let latitudeText = latitude.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let longitudeText = longitude.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if latitudeText.isEmpty != longitudeText.isEmpty {
+            appendHelp("Latitude and longitude must both be supplied or both left blank. Nothing was saved.")
+            return
+        }
+        if !latitudeText.isEmpty {
+            guard let lat = Double(latitudeText), let lon = Double(longitudeText), lat.isFinite, lon.isFinite,
+                  (-90.0...90.0).contains(lat), (-180.0...180.0).contains(lon) else {
+                appendHelp("Coordinates must be finite latitude -90..90 and longitude -180..180. Nothing was saved.")
+                return
+            }
+            body["latitude"] = lat
+            body["longitude"] = lon
+        }
         let user = username.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if !user.isEmpty || !password.stringValue.isEmpty {
             body["username"] = user
