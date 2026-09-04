@@ -77,9 +77,18 @@ Longer windows are useful when testing unstable high-speed paths, long multihop 
 
 ## Multihop per-hop proof
 
-On desktop controller paths, per-hop measurements are made against each hop's authenticated private Router API/benchmark service through the **same actually launched graph**. Android performs the equivalent measurement using its process-owned active VpnService graph.
+Router VPN nodes normally reuse private addresses such as `10.77.0.1`, so an ordinary request to an entry node's `10.77.0.1` and an exit node's `10.77.0.1` is **not enough to prove which hop answered**. Speed Lab therefore uses two loopback-only proof lanes inside the already-running multihop dataplane:
 
-For every hop Router VPN re-checks the live session/graph identity. Entry and exit values are independent observations:
+```text
+127.0.0.1:1098  -> entry-only lane
+127.0.0.1:1099  -> exit-only lane
+```
+
+These are local runtime inbounds, not WAN services and not user-facing forwarding ports. On Linux, the entry lane is routed through the existing private entry SOCKS hop while the exit lane is routed through the final exit proxy. On Windows/macOS and Android, the entry lane uses a dedicated private SOCKS outbound whose dial is detoured through the `entry-wg` endpoint; the exit lane uses the final `proxy` outbound. Normal TUN traffic keeps its existing route behavior.
+
+Before accepting RTT or Mbps, Router VPN requests that hop's private `/health` endpoint through the corresponding lane and validates the exact cryptographic Router VPN node identity (`node_id` + proof kind derived from the saved WireGuard server identity). Throughput is then measured against the same hop's authenticated private benchmark service through that same lane, and the node is proved again after loaded transfer. This prevents two nodes with identical private IPs from being mislabeled as separate hop measurements.
+
+For every hop Router VPN also re-checks the live session/graph identity. Entry and exit values are independent observations:
 
 ```text
 ENTRY • private RTT • real down Mbps • real up Mbps
@@ -90,6 +99,7 @@ Router VPN does **not**:
 
 - subtract pings to invent hop latency;
 - copy exit Mbps to the entry;
+- identify a hop merely because its private IP/token happened to answer;
 - use configured/saved preferences as proof of the running graph;
 - preserve a result after session/path identity changes.
 
@@ -102,7 +112,7 @@ Keep these separate:
 - **live RTT** — lightweight current-path telemetry;
 - **durable node latency** — larger saved node benchmark;
 - **Speed Lab** — dedicated public throughput + idle/loaded latency test;
-- **per-hop Speed Lab metrics** — authenticated private transfer/RTT through the active multihop graph;
+- **per-hop Speed Lab metrics** — authenticated private transfer/RTT through the exact hop-specific lane of the active multihop graph;
 - **Auto-MTU optimizer throughput** — bounded candidate comparison used only for MTU selection.
 
 None of those measurements is relabeled as another.
@@ -116,5 +126,5 @@ Speed Lab must always preserve these invariants:
 3. Temporary path cleanup is mandatory and cleanup failures are visible.
 4. In-flight results are rejected if session/profile/graph identity changes.
 5. Throughput is measured from real bytes/time, never inferred from latency.
-6. Per-hop measurements are independent and graph-bound.
+6. Per-hop measurements use distinct local hop lanes, exact node proof and independent transfers.
 7. Unsupported platform graphs stay unavailable rather than showing cosmetic success.
