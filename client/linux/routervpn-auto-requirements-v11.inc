@@ -74,8 +74,3 @@ static void on_linux_auto_requirements_v11(GtkButton *button, gpointer data) {
     json_node_free(root); g_free(err); free(out.data);
     refresh_home_summary_v6(app);
 }
-
-/* The canonical builder composes this include before routervpn-unified-shell-v8.inc.
- * Keep typed external-node creation on that real shipping path without forking
- * the mature unified shell source. */
-#include "routervpn-external-node-wire-v14.inc"
