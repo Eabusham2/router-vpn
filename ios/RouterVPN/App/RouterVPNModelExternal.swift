@@ -52,7 +52,7 @@ extension RouterVPNModel {
             value.socks5Password = ""
         } else {
             value.apiToken = ""; value.routerAPI = ""; value.adGuardIPv4 = ""; value.adGuardIPv6 = ""
-            value.socks5Host = ""; value.socks5Port = 1080; value.socks5Username = ""; value.socks5Password = ""
+            value.socks5Host = ""; value.socks5Port = 0; value.socks5Username = ""; value.socks5Password = ""
         }
         do {
             let selectedData = try JSONEncoder().encode(value)
@@ -93,6 +93,9 @@ extension RouterVPNModel {
         guard let expected = profile.external?.expectedPublicIP, !expected.isEmpty else {
             connected = false; message = "External node is missing its expected public exit IP."; return
         }
+        guard let encodedBundle = try? JSONEncoder().encode(bundle) else {
+            connected = false; message = "Could not encode the selected external node bundle."; return
+        }
         tunnelTransitioning = true
         defer { tunnelTransitioning = false }
         do {
@@ -106,7 +109,7 @@ extension RouterVPNModel {
                 "mode": "external-\(selectedExternalProtocol)",
                 "modeCandidates": ["external-\(selectedExternalProtocol)"],
                 "logicalMode": "external-node",
-                "bundle": try JSONEncoder().encode(bundle)
+                "bundle": encodedBundle
             ]
             let strict = externalStrict(profile)
             proto.includeAllNetworks = strict
