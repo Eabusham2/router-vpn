@@ -461,12 +461,6 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	preferred := a.preferredBase(q.Base)
-	if normalizeBase(q.Base) != "auto" {
-		if err := a.persistBasePreference(q.Base); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
-	}
 	used, err := a.startLogicalMode(q.Mode, q.Base)
 	if err != nil {
 		status := http.StatusServiceUnavailable
@@ -480,6 +474,13 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 		_ = a.stopMode()
 		http.Error(w, a.finalizeCancelledFallback("LOGICAL "+q.Mode).Error(), http.StatusConflict)
 		return
+	}
+	if normalizeBase(q.Base) != "auto" {
+		if err := a.persistBasePreference(q.Base); err != nil {
+			_ = a.stopMode()
+			http.Error(w, "logical path was proven but preferred-base persistence failed; the path was stopped: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	fallbackUsed := used.Base != "native" && used.Base != "auto" && used.Base != preferred
 	a.mu.Lock()
