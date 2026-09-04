@@ -36,18 +36,24 @@ need(
     "server/scripts/download_jobs.py",
     "JOB_TTL_SECONDS = 30 * 60",
     'RETAINED = {"ready", "delivered", "delivery-interrupted"}',
-    "retention_deadline_epoch=time.time() + PACKAGE_RETENTION_SECONDS",
+    "retention_deadline_epoch=now + PACKAGE_RETENTION_SECONDS",
     'status not in RETAINED',
     "delivery_attempts",
     "temporary package retained for repeat download until its 30-minute deadline",
     "temporary package and build workspace deleted after 30 minutes",
     'job.update(status="cleaning", phase="cleanup", progress=100)',
     'status="cleanup-pending"',
+    "def _adopt_ready",
+    "if not self._adopt_ready(job_id, package, source, size)",
+    'terminal_status = "failed"',
+    "create_owned_temp(\"router-vpn-job-\")",
 )
 forbid(
     "server/scripts/download_jobs.py",
     "JOB_TTL_SECONDS = 15 * 60",
     "download delivery was interrupted; temporary output was deleted",
+    'self._update(job_id, status="cancelled", phase="cancelled"',
+    'self._update(job_id, status="failed", phase="failed"',
 )
 
 # Every package route, including a raw/direct package URL, must use the same
@@ -95,9 +101,17 @@ need(
     "expires_in_seconds",
     "same 30-minute retained job policy",
 )
+need(
+    "server/scripts/test_download_job_cleanup_transactions.py",
+    "pre-cancelled worker created a workspace after terminal cancellation",
+    "_adopt_ready",
+    "cleanup-pending",
+    "CLEAN_TERMINAL",
+)
 
 for test in (
     "server/scripts/test_download_jobs.py",
+    "server/scripts/test_download_job_cleanup_transactions.py",
     "server/scripts/test_setup_center_ux_patch.py",
 ):
     proc = subprocess.run([sys.executable, str(ROOT / test)], cwd=ROOT,
