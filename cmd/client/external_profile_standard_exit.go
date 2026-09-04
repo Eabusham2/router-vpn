@@ -13,6 +13,9 @@ import (
 // the unified node/profile model and the existing standard-exit dataplane. It
 // intentionally re-runs both profile normalization and standard-exit runtime
 // validation so imported external-node data cannot bypass either contract.
+// Tor is the only dynamic-exit exception: its profile is fully normalized here,
+// but fixed expected-public-IP validation is intentionally replaced later by
+// Tor Project IsTor + observed-exit proof on the running circuit.
 func standardExitFromExternalProfile(profile common.RouterProfile) (standardExit, error) {
 	if err := common.NormalizeRouterProfile(&profile); err != nil { return standardExit{}, err }
 	if profile.NodeKind != "external" || profile.External == nil { return standardExit{}, errors.New("profile is not an external custom node") }
@@ -49,6 +52,12 @@ func standardExitFromExternalProfile(profile common.RouterProfile) (standardExit
 		h := ext.Hysteria2
 		if h == nil { return standardExit{}, errors.New("external Hysteria2 block is missing") }
 		exit.Server, exit.ServerPort, exit.Secret, exit.TLSServerName = h.Server, h.Port, h.Password, h.TLSServerName
+	case "tor-bridge":
+		if ext.TorBridge == nil { return standardExit{}, errors.New("external Tor bridge block is missing") }
+		if ext.ExpectedPublicIP != "" { return standardExit{}, errors.New("Tor bridge cannot carry a fixed expected public exit IP") }
+		if strings.TrimSpace(profile.Endpoint) == "" { return standardExit{}, errors.New("Tor bridge profile has no validated physical bridge relay endpoint") }
+		exit.Server = profile.Endpoint
+		return exit, nil
 	default:
 		return standardExit{}, errors.New("external profile protocol has no standard-exit adapter")
 	}
