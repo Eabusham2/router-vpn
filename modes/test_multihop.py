@@ -53,7 +53,14 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-multihop-') as td:
         assert hop['server']=='192.168.250.10' and hop['server_port']==1080 and hop['username']=='u' and hop['password']=='p'
         assert not any(x.get('tag')=='direct' for x in cfg['outbounds'])
         assert cfg['route']['final']=='proxy'
-        assert any(x.get('tag')=='multihop-proof' and x.get('type')=='mixed' for x in cfg['inbounds'])
+        entry_proof=next(x for x in cfg['inbounds'] if x.get('tag')=='multihop-entry-proof')
+        exit_proof=next(x for x in cfg['inbounds'] if x.get('tag')=='multihop-proof')
+        assert entry_proof.get('type')=='mixed' and entry_proof.get('listen')=='127.0.0.1' and entry_proof.get('listen_port')==1098
+        assert exit_proof.get('type')=='mixed' and exit_proof.get('listen')=='127.0.0.1' and exit_proof.get('listen_port')==1099
+        rules=cfg['route']['rules']
+        assert rules[0].get('inbound')==['multihop-entry-proof'] and rules[0].get('outbound')=='entry-hop'
+        assert rules[1].get('inbound')==['multihop-proof'] and rules[1].get('outbound')=='proxy'
+        assert any(rule.get('protocol')=='dns' and rule.get('action')=='hijack-dns' for rule in rules[2:])
         tun=next(x for x in cfg['inbounds'] if x.get('type')=='tun');assert tun['strict_route'] is True and tun['mtu']<=1280
         assert all(s.get('detour')=='proxy' for s in cfg['dns']['servers'])
         env=(out/'runtime.env').read_text();assert 'EXIT_ENDPOINT=203.0.113.12' in env and 'ENTRY_ENDPOINT=203.0.113.11' in env
