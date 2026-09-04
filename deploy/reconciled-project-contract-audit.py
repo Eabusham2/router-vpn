@@ -157,6 +157,7 @@ for child in (
     "deploy/durable-state-transaction-audit.py",
     "deploy/auto-update-audit.py",
     "deploy/tor-circumvention-audit.py",
+    "deploy/typed-external-node-audit.py",
 ):
     path = ROOT / child
     if not path.is_file():
