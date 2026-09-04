@@ -48,6 +48,14 @@ func standardExitFromExternalProfile(profile common.RouterProfile) (standardExit
 		s := ext.SOCKS5
 		if s == nil { return standardExit{}, errors.New("external SOCKS5 block is missing") }
 		exit.Server, exit.ServerPort, exit.Username, exit.Password = s.Host, s.Port, s.Username, s.Password
+	case "http-connect":
+		h := ext.HTTPConnect
+		if h == nil { return standardExit{}, errors.New("external HTTP CONNECT block is missing") }
+		exit.Server, exit.ServerPort, exit.Username, exit.Password = h.Host, h.Port, h.Username, h.Password
+	case "https-connect":
+		h := ext.HTTPSConnect
+		if h == nil { return standardExit{}, errors.New("external HTTPS CONNECT block is missing") }
+		exit.Server, exit.ServerPort, exit.Username, exit.Password, exit.TLSServerName = h.Host, h.Port, h.Username, h.Password, h.TLSServerName
 	case "hysteria2":
 		h := ext.Hysteria2
 		if h == nil { return standardExit{}, errors.New("external Hysteria2 block is missing") }
