@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,11 +36,12 @@ type strategyResult struct {
 }
 
 type startupSelection struct {
-	RouterID    string    `json:"router_id"`
-	RuntimeMode string    `json:"runtime_mode"`
-	LogicalMode string    `json:"logical_mode,omitempty"`
-	Base        string    `json:"base,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	RouterID     string    `json:"router_id"`
+	RuntimeMode  string    `json:"runtime_mode"`
+	LogicalMode  string    `json:"logical_mode,omitempty"`
+	Base         string    `json:"base,omitempty"`
+	ProfileToken string    `json:"profile_token"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 var strategyLocks sync.Map
@@ -538,10 +540,30 @@ func (a *app) startupStatePath() string {
 	return filepath.Clean(path)
 }
 
+func startupProfileToken(p common.RouterProfile) string {
+	sum := sha256.Sum256([]byte(asyncMeasurementProfileToken(p)))
+	return fmt.Sprintf("%x", sum)
+}
+
+func validStartupProfileToken(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *app) saveStartupSelection(selection startupSelection) error {
 	path := a.startupStatePath()
 	if path == "" {
 		return nil
+	}
+	if !validStartupProfileToken(selection.ProfileToken) {
+		return errors.New("last-good startup state requires one exact profile/path-policy token")
 	}
 	body, err := json.MarshalIndent(selection, "", "  ")
 	if err != nil {
@@ -569,6 +591,9 @@ func (a *app) loadStartupSelection() (startupSelection, error) {
 	if strings.TrimSpace(selection.RuntimeMode) == "" {
 		return startupSelection{}, errors.New("startup state contains no runtime mode")
 	}
+	if !validStartupProfileToken(selection.ProfileToken) {
+		return startupSelection{}, errors.New("startup state predates exact profile/path-policy proof; AUTO must re-prove the current node")
+	}
 	return selection, nil
 }
 
@@ -579,32 +604,47 @@ func (a *app) recordLastSuccessfulRuntime() {
 	for range ticker.C {
 		a.mu.Lock()
 		st := a.state
+		profile, profileOK := a.profileByIDLocked(st.RouterID)
+		profileToken := ""
+		if profileOK {
+			profileToken = startupProfileToken(profile)
+		}
 		a.mu.Unlock()
-		if !st.Connected || st.Phase != "connected" || strings.TrimSpace(st.RuntimeMode) == "" || strings.TrimSpace(st.RouterID) == "" {
+		if !st.Connected || st.Phase != "connected" || strings.TrimSpace(st.RuntimeMode) == "" || strings.TrimSpace(st.RouterID) == "" || !profileOK {
 			continue
 		}
 		if _, err := a.mode(st.RuntimeMode); err != nil {
 			continue
 		}
-		key := st.RouterID + "\x00" + st.RuntimeMode + "\x00" + st.LogicalMode + "\x00" + st.Base
+		session := sessionTrackerFor(a).snapshot(0)
+		if session.ID == "" || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" ||
+			session.RouterID != st.RouterID || session.ActualMode != st.RuntimeMode || session.ActualBase != st.Base {
+			continue
+		}
+		key := st.RouterID + "\x00" + st.RuntimeMode + "\x00" + st.LogicalMode + "\x00" + st.Base + "\x00" + profileToken
 		if key == lastKey {
 			continue
 		}
 
 		// Serialize the durable last-good write against connection/disconnect and
-		// settings transactions, then re-prove the exact state sampled above.
+		// settings transactions, then re-prove both the exact typed session and the
+		// non-secret profile/path-policy identity sampled above.
 		a.operationMu.Lock()
+		currentSession := sessionTrackerFor(a).snapshot(0)
 		a.mu.Lock()
 		current := a.state
+		currentProfile, currentProfileOK := a.profileByIDLocked(st.RouterID)
 		fresh := current.Connected && current.Phase == "connected" &&
 			current.RouterID == st.RouterID && current.RuntimeMode == st.RuntimeMode &&
-			current.LogicalMode == st.LogicalMode && current.Base == st.Base
+			current.LogicalMode == st.LogicalMode && current.Base == st.Base &&
+			currentProfileOK && startupProfileToken(currentProfile) == profileToken &&
+			sameAsyncMeasurementSession(session, currentSession)
 		a.mu.Unlock()
 		if !fresh {
 			a.operationMu.Unlock()
 			continue
 		}
-		selection := startupSelection{RouterID: st.RouterID, RuntimeMode: st.RuntimeMode, LogicalMode: st.LogicalMode, Base: st.Base, UpdatedAt: time.Now().UTC()}
+		selection := startupSelection{RouterID: st.RouterID, RuntimeMode: st.RuntimeMode, LogicalMode: st.LogicalMode, Base: st.Base, ProfileToken: profileToken, UpdatedAt: time.Now().UTC()}
 		err := a.saveStartupSelection(selection)
 		a.operationMu.Unlock()
 		if err != nil {
@@ -655,7 +695,7 @@ func (a *app) applyStartupPolicyWithContext(scheduleCtx context.Context) {
 		_, err = a.runSmartStrategy()
 	case "last":
 		selection, loadErr := a.loadStartupSelection()
-		if loadErr == nil && selection.RouterID == profile.ID && selection.RuntimeMode != "" {
+		if loadErr == nil && selection.RouterID == profile.ID && selection.RuntimeMode != "" && selection.ProfileToken == startupProfileToken(profile) {
 			sessionTrackerFor(a).declareRequest("last", selection.Base)
 			sessionTrackerFor(a).strategyEvent("startup-last", "restoring last proven runtime "+selection.RuntimeMode)
 			startErr := a.startModeAttempt(selection.RuntimeMode, false)
@@ -678,7 +718,7 @@ func (a *app) applyStartupPolicyWithContext(scheduleCtx context.Context) {
 		if scheduleCtx.Err() != nil || errors.Is(a.checkConnectionOperation(), errConnectionOperationCancelled) {
 			return
 		}
-		log.Printf("Router VPN last-mode auto-connect had no restorable proven runtime; falling back to AUTO")
+		log.Printf("Router VPN last-mode auto-connect had no restorable proven runtime for the current profile/path policy; falling back to AUTO")
 		_, err = a.runAutoStrategy("auto")
 	default:
 		err = fmt.Errorf("unsupported startup mode %q", mode)
