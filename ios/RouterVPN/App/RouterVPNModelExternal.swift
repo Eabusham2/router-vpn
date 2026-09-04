@@ -22,6 +22,7 @@ extension RouterVPNModel {
         if profile.normalizedNodeKind == "external" {
             let protocolName = profile.external?.protocolName.lowercased() ?? "unknown"
             if protocolName == "openvpn" { return "External OpenVPN — unavailable on iOS until a pinned native Apple OpenVPN dataplane exists" }
+            if protocolName == "tor-bridge" { return "Tor obfs4 bridge — unavailable on iOS until Router VPN ships a real native Tor/obfs4 PacketTunnel dataplane with dynamic Tor-exit proof" }
             if ["wireguard", "socks5", "shadowsocks", "hysteria2"].contains(protocolName) { return "External \(protocolName) — native Libbox PacketTunnel + exact public-exit proof" }
             return "External \(protocolName) — unsupported"
         }
@@ -80,9 +81,13 @@ extension RouterVPNModel {
         }
         guard selectedExternalSupportedOnIOS else {
             connected = false
-            message = selectedExternalProtocol == "openvpn"
-                ? "OpenVPN external exits are unavailable on iOS until Router VPN ships a pinned native Apple OpenVPN dataplane."
-                : "This external protocol is unavailable on iOS."
+            if selectedExternalProtocol == "openvpn" {
+                message = "OpenVPN external exits are unavailable on iOS until Router VPN ships a pinned native Apple OpenVPN dataplane."
+            } else if selectedExternalProtocol == "tor-bridge" {
+                message = "Tor obfs4 bridges are unavailable on iOS until Router VPN ships a real native Tor/obfs4 PacketTunnel dataplane. A fixed expected-exit IP cannot substitute for Tor's dynamic circuit-exit proof."
+            } else {
+                message = "This external protocol is unavailable on iOS."
+            }
             return
         }
         guard let expected = profile.external?.expectedPublicIP, !expected.isEmpty else {
