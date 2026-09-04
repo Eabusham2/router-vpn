@@ -51,6 +51,7 @@ func registerPairingRoute(h *http.ServeMux, a *app) {
 	// Router VPN bundle import remains /api/profile/import; external schema-v3
 	// profiles use the separate validated path so no WG identity file is faked.
 	h.HandleFunc("/api/external-profile/import", a.externalProfileImport)
+	registerExternalProfileCreateRoute(h, a)
 }
 
 // pairProfileBundle redeems the Setup Center's short-lived LAN code and then
