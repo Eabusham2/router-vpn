@@ -1,4 +1,5 @@
 #include <sys/stat.h>
+#include "routervpn-tor-bridge-v13.inc"
 
 typedef struct {
     App *app;
@@ -78,6 +79,7 @@ static void linux_unified_back_v8(GtkButton *button, gpointer data) {
     gtk_stack_set_visible_child_name(GTK_STACK(state->stack), "map");
 }
 static void linux_unified_nodes_v8(GtkButton *button, gpointer data) { (void)button; linux_unified_show_detail_v8(data, 1); }
+static void linux_unified_tor_v13(GtkButton *button, gpointer data) { LinuxUnifiedV8 *state = data; if (state != NULL) on_linux_tor_bridge_v13(button, state->app); }
 static void linux_unified_modes_v8(GtkButton *button, gpointer data) { (void)button; linux_unified_show_detail_v8(data, 2); }
 static void linux_unified_dns_detail_v8(GtkButton *button, gpointer data) { (void)button; linux_unified_show_detail_v8(data, 3); }
 static void linux_unified_settings_v8(GtkButton *button, gpointer data) { on_profile_settings_v7(button, ((LinuxUnifiedV8 *)data)->app); }
@@ -209,7 +211,7 @@ static void build_ui_v5(App *app) {
     if(app->map!=NULL&&gtk_widget_get_parent(app->map)!=NULL){g_object_ref(app->map);GtkWidget *parent=gtk_widget_get_parent(app->map);gtk_container_remove(GTK_CONTAINER(parent),app->map);}
     LinuxUnifiedV8 *state=g_new0(LinuxUnifiedV8,1);state->app=app;state->legacy_notebook=notebook;state->stack=gtk_stack_new();gtk_stack_set_transition_type(GTK_STACK(state->stack),GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT_RIGHT);
     GtkWidget *main=gtk_box_new(GTK_ORIENTATION_VERTICAL,8);gtk_container_set_border_width(GTK_CONTAINER(main),10);
-    GtkWidget *top=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);state->node=gtk_combo_box_text_new();gtk_widget_set_hexpand(state->node,TRUE);gtk_box_pack_start(GTK_BOX(top),state->node,TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(top),make_button("Add / manage nodes",G_CALLBACK(linux_unified_nodes_v8),state),FALSE,FALSE,0);state->status=gtk_label_new("Disconnected • selected-path proof pending");gtk_label_set_xalign(GTK_LABEL(state->status),1.0f);gtk_box_pack_end(GTK_BOX(top),state->status,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(main),top,FALSE,FALSE,0);
+    GtkWidget *top=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);state->node=gtk_combo_box_text_new();gtk_widget_set_hexpand(state->node,TRUE);gtk_box_pack_start(GTK_BOX(top),state->node,TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(top),make_button("Add / manage nodes",G_CALLBACK(linux_unified_nodes_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(top),make_button("Tor bridges…",G_CALLBACK(linux_unified_tor_v13),state),FALSE,FALSE,0);state->status=gtk_label_new("Disconnected • selected-path proof pending");gtk_label_set_xalign(GTK_LABEL(state->status),1.0f);gtk_box_pack_end(GTK_BOX(top),state->status,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(main),top,FALSE,FALSE,0);
     GtkWidget *map_frame=gtk_frame_new(NULL);if(app->map!=NULL){gtk_widget_set_size_request(app->map,-1,280);gtk_container_add(GTK_CONTAINER(map_frame),app->map);g_object_unref(app->map);}else gtk_container_add(GTK_CONTAINER(map_frame),gtk_label_new("No map widget available."));gtk_box_pack_start(GTK_BOX(main),map_frame,TRUE,TRUE,0);
     GtkWidget *dock=gtk_frame_new(NULL);GtkWidget *dock_box=gtk_box_new(GTK_ORIENTATION_VERTICAL,7);gtk_container_set_border_width(GTK_CONTAINER(dock_box),12);gtk_container_add(GTK_CONTAINER(dock),dock_box);
     GtkWidget *connect_row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);state->connect=make_button("Connect",G_CALLBACK(linux_unified_connect_v8),state);gtk_widget_set_hexpand(state->connect,TRUE);gtk_box_pack_start(GTK_BOX(connect_row),state->connect,TRUE,TRUE,0);state->kill_switch=gtk_check_button_new_with_label("Kill switch");g_signal_connect(state->kill_switch,"toggled",G_CALLBACK(linux_unified_kill_changed_v8),state);gtk_box_pack_start(GTK_BOX(connect_row),state->kill_switch,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(dock_box),connect_row,FALSE,FALSE,0);
