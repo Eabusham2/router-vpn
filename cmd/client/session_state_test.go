@@ -51,3 +51,36 @@ func TestTypedSessionPathFailureMarksRollback(t *testing.T) {
 		t.Fatalf("rollback/failure state missing: %+v", s)
 	}
 }
+
+func TestSessionCaptureUsesLiveProfileWhileActiveAndSelectedProfileWhenIdle(t *testing.T) {
+	a := &app{
+		profiles: common.RouterProfileStore{
+			SelectedID: "control",
+			Profiles: []common.RouterProfile{
+				{ID: "control", Name: "Control", BaseTunnel: "awg", DNSMode: "doh", DNSHost: "1.1.1.1", PublicIP: "198.51.100.10"},
+				{ID: "exit", Name: "Exit", BaseTunnel: "wg", DNSMode: "dot", DNSHost: "9.9.9.9", PublicIP: "203.0.113.20"},
+			},
+		},
+		state: state{Connected: true, Phase: "connected", RouterID: "exit", Mode: "multihop", LogicalMode: "multihop", RuntimeMode: "shadowsocks", Base: "wg"},
+	}
+	tracker := &sessionTracker{a: a}
+
+	active := tracker.capture()
+	if active.RouterID != "exit" || active.Profile.ID != "exit" {
+		t.Fatalf("active capture did not bind profile to live RouterID: %+v", active)
+	}
+	if active.Profile.DNSMode != "dot" || active.Profile.DNSHost != "9.9.9.9" || active.Profile.PublicIP != "203.0.113.20" {
+		t.Fatalf("active capture inherited selected/control-node policy instead of exit policy: %+v", active.Profile)
+	}
+
+	a.mu.Lock()
+	a.state = state{Connected: false, Phase: "off", RouterID: "exit"}
+	a.mu.Unlock()
+	idle := tracker.capture()
+	if idle.Profile.ID != "control" {
+		t.Fatalf("idle capture did not fall back to selected profile: %+v", idle)
+	}
+	if idle.Profile.DNSMode != "doh" || idle.Profile.DNSHost != "1.1.1.1" || idle.Profile.PublicIP != "198.51.100.10" {
+		t.Fatalf("idle capture lost selected profile policy: %+v", idle.Profile)
+	}
+}
