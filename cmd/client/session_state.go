@@ -117,7 +117,17 @@ func (t *sessionTracker) capture() observedConnection {
 	t.a.mu.Lock()
 	defer t.a.mu.Unlock()
 	s := t.a.state
-	p, _ := t.a.profileByIDLocked(t.a.profiles.SelectedID)
+	profileID := t.a.profiles.SelectedID
+	// Once a connection is active or transitioning, node-specific session
+	// metadata must follow the runtime-owned identity. SelectedID remains only
+	// the disconnected/default choice and may differ from a multihop/external
+	// exit that actually owns DNS, public-exit metadata, and path proof.
+	if profileSettingsBusy(s.Connected, s.Phase) {
+		if liveID := strings.TrimSpace(s.RouterID); liveID != "" {
+			profileID = liveID
+		}
+	}
+	p, _ := t.a.profileByIDLocked(profileID)
 	return observedConnection{
 		Connected: s.Connected, Mode: s.Mode, LogicalMode: s.LogicalMode,
 		RuntimeMode: s.RuntimeMode, Base: s.Base, RouterID: s.RouterID,
