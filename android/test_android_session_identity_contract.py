@@ -22,6 +22,7 @@ telemetry = read("AndroidTelemetry.java")
 unified = read("AndroidUnifiedConnectionController.java")
 product = read("ProductActivity.java")
 forwarding = read("AndroidForwardingMaster.java")
+numeric_address = read("AndroidNumericAddress.java")
 revalidator = read("AndroidSessionRevalidator.java")
 wireguard = read("NativeWireGuardController.java")
 amnezia = read("NativeAmneziaWGController.java")
@@ -242,20 +243,36 @@ assert "runtime.close()" not in standard_activity
 
 # Forwarding side control is a real authenticated tunnel operation, not local
 # preference theater. It must be bound to the app-owned VPN Network, refuse
-# public Router API hosts, and reject hostnames before any system DNS lookup.
+# public Router API hosts, use a minSdk-24-compatible resolver-free literal-IP
+# parser, and reject unspecified addresses before any token-bearing request.
 for marker in (
     'new URL(base+"/api/forwarding/master")',
     "vpn.openConnection",
     "getOwnerUid()==Process.myUid()",
-    "InetAddresses.isNumericAddress(host)",
-    "InetAddresses.parseNumericAddress(host)",
+    "AndroidNumericAddress.parse(host)",
     "literal private Router API address",
     "isPrivate(address)",
+    "isAnyLocalAddress())return false",
     "state.sessionId.equals(after.sessionId)",
     "after.pathGeneration!=state.pathGeneration",
 ):
     assert marker in forwarding, f"Android forwarding-master safety marker missing: {marker}"
-assert "InetAddress.getByName(uri.getHost())" not in forwarding, "Android forwarding master must not resolve Router API hostnames before VPN-network binding"
+for marker in (
+    "InetAddress.getByAddress(raw)",
+    "parseIPv4",
+    "parseIPv6",
+    "embedded IPv4 IPv6 literals are not accepted",
+    "host.indexOf('%')>=0",
+):
+    assert marker in numeric_address, f"Android numeric-address parser lost marker: {marker}"
+for forbidden in (
+    "android.net.InetAddresses",
+    "InetAddresses.isNumericAddress",
+    "InetAddresses.parseNumericAddress",
+    "InetAddress.getByName(uri.getHost())",
+    "InetAddress.getByName(host)",
+):
+    assert forbidden not in forwarding + numeric_address, f"Android forwarding must not use resolver/API-29-only address path: {forbidden}"
 for marker in (
     "AndroidForwardingMaster forwardingMaster",
     "Forward ON",
