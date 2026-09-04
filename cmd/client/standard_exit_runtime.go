@@ -168,6 +168,15 @@ func directStandardExitRuntimeParts(e standardExit) (map[string]any, map[string]
 			out["username"] = e.Username
 			out["password"] = e.Password
 		}
+	case "http-connect", "https-connect":
+		out["type"] = "http"
+		if e.Username != "" {
+			out["username"] = e.Username
+			out["password"] = e.Password
+		}
+		if e.Protocol == "https-connect" {
+			out["tls"] = map[string]any{"enabled": true, "server_name": e.TLSServerName}
+		}
 	case "shadowsocks":
 		out["type"] = "shadowsocks"
 		out["method"] = e.Method
