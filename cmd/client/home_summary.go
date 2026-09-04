@@ -83,11 +83,12 @@ func (a *app) proveHomeExit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "connect and pass selected-path proof before proving the public VPN exit", http.StatusConflict)
 		return
 	}
-	a.mu.Lock()
-	targetID := before.RouterID
+	targetID := strings.TrimSpace(before.RouterID)
 	if targetID == "" {
-		targetID = a.profiles.SelectedID
+		http.Error(w, "active Router VPN session has no node identity; refusing to substitute the mutable selected node", http.StatusConflict)
+		return
 	}
+	a.mu.Lock()
 	profile, ok := a.profileByIDLocked(targetID)
 	stateToken := mtuStateSnapshotToken(a.state)
 	profileToken := ""
