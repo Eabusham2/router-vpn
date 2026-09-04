@@ -5,6 +5,7 @@
  * import/builders; arbitrary runtime JSON, executable paths and directives are
  * never accepted here.
  */
+#include <math.h>
 
 typedef struct {
     App *app;
@@ -14,6 +15,9 @@ typedef struct {
     GtkWidget *server;
     GtkWidget *port;
     GtkWidget *expected;
+    GtkWidget *location;
+    GtkWidget *latitude;
+    GtkWidget *longitude;
     GtkWidget *username;
     GtkWidget *password;
     GtkWidget *method;
@@ -59,6 +63,23 @@ static void linux_external_csv_v14(JsonBuilder *builder, const char *name, const
     g_strfreev(parts); json_builder_end_array(builder);
 }
 
+static gboolean linux_external_coordinates_v14(LinuxExternalNodeV14 *state, JsonBuilder *builder, char **validation_error) {
+    char *lat_text=g_strdup(gtk_entry_get_text(GTK_ENTRY(state->latitude)));
+    char *lon_text=g_strdup(gtk_entry_get_text(GTK_ENTRY(state->longitude)));
+    g_strstrip(lat_text); g_strstrip(lon_text);
+    gboolean has_lat=lat_text[0]!='\0',has_lon=lon_text[0]!='\0';
+    if(has_lat!=has_lon){if(validation_error!=NULL)*validation_error=g_strdup("Latitude and longitude must both be supplied or both left blank.");g_free(lat_text);g_free(lon_text);return FALSE;}
+    const char *location=gtk_entry_get_text(GTK_ENTRY(state->location));
+    if(location!=NULL&&location[0]){json_builder_set_member_name(builder,"location");json_builder_add_string_value(builder,location);}
+    if(has_lat){
+        char *lat_end=NULL,*lon_end=NULL;double lat=g_ascii_strtod(lat_text,&lat_end),lon=g_ascii_strtod(lon_text,&lon_end);
+        if(lat_end==lat_text||lon_end==lon_text||(lat_end!=NULL&&*lat_end!='\0')||(lon_end!=NULL&&*lon_end!='\0')||!isfinite(lat)||!isfinite(lon)||lat < -90.0||lat > 90.0||lon < -180.0||lon > 180.0){if(validation_error!=NULL)*validation_error=g_strdup("Coordinates must be finite latitude -90..90 and longitude -180..180.");g_free(lat_text);g_free(lon_text);return FALSE;}
+        json_builder_set_member_name(builder,"latitude");json_builder_add_double_value(builder,lat);
+        json_builder_set_member_name(builder,"longitude");json_builder_add_double_value(builder,lon);
+    }
+    g_free(lat_text);g_free(lon_text);return TRUE;
+}
+
 static char *linux_external_payload_v14(LinuxExternalNodeV14 *state, char **validation_error) {
     if(validation_error!=NULL)*validation_error=NULL;
     const char *protocol=gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->protocol));
@@ -73,6 +94,7 @@ static char *linux_external_payload_v14(LinuxExternalNodeV14 *state, char **vali
     json_builder_set_member_name(builder,"server");json_builder_add_string_value(builder,gtk_entry_get_text(GTK_ENTRY(state->server)));
     json_builder_set_member_name(builder,"port");json_builder_add_int_value(builder,port);
     json_builder_set_member_name(builder,"expected_public_ip");json_builder_add_string_value(builder,gtk_entry_get_text(GTK_ENTRY(state->expected)));
+    if(!linux_external_coordinates_v14(state,builder,validation_error)){g_object_unref(builder);return NULL;}
     if(g_strcmp0(protocol,"socks5")==0 || g_strcmp0(protocol,"http-connect")==0 || g_strcmp0(protocol,"https-connect")==0){
         json_builder_set_member_name(builder,"username");json_builder_add_string_value(builder,gtk_entry_get_text(GTK_ENTRY(state->username)));
         json_builder_set_member_name(builder,"password");json_builder_add_string_value(builder,gtk_entry_get_text(GTK_ENTRY(state->password)));
@@ -98,20 +120,20 @@ static gboolean linux_external_save_v14(LinuxExternalNodeV14 *state) {
     if(payload==NULL){gtk_label_set_text(GTK_LABEL(state->status),validation!=NULL?validation:"Invalid external-node form.");g_free(validation);return FALSE;}
     Buffer out={0};char *err=NULL;gboolean ok=api_request("/api/external-profile/create","POST",payload,25000,&out,&err);g_free(payload);
     if(!ok){char *message=g_strdup_printf("External node rejected: %s",err!=NULL?err:"unknown error");gtk_label_set_text(GTK_LABEL(state->status),message);g_free(message);g_free(err);free(out.data);return FALSE;}
-    gtk_label_set_text(GTK_LABEL(state->status),"External node saved and selected.");append_diag(state->app,"Saved validated typed external node (WG/SOCKS5/HTTP/HTTPS/Shadowsocks/Hysteria2).");refresh_all(state->app);g_free(err);free(out.data);return TRUE;
+    gtk_label_set_text(GTK_LABEL(state->status),"External node saved and selected.");append_diag(state->app,"Saved validated typed external node (WG/SOCKS5/HTTP/HTTPS/Shadowsocks/Hysteria2) with real coordinates only when explicitly supplied.");refresh_all(state->app);g_free(err);free(out.data);return TRUE;
 }
 
 static void on_linux_external_node_v14(GtkButton *button, gpointer data) {
     (void)button;App *app=data;if(app==NULL)return;
     if(!linux_external_mutation_idle_v14(app)){append_diag(app,"Disconnect or let the active VPN transition finish before adding an external node. Unknown controller state fails closed.");return;}
     LinuxExternalNodeV14 state={0};state.app=app;
-    state.dialog=gtk_dialog_new_with_buttons("Add external node",GTK_WINDOW(app->window),GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,"Cancel",GTK_RESPONSE_CANCEL,"Save node",GTK_RESPONSE_ACCEPT,NULL);gtk_window_set_default_size(GTK_WINDOW(state.dialog),760,760);
+    state.dialog=gtk_dialog_new_with_buttons("Add external node",GTK_WINDOW(app->window),GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,"Cancel",GTK_RESPONSE_CANCEL,"Save node",GTK_RESPONSE_ACCEPT,NULL);gtk_window_set_default_size(GTK_WINDOW(state.dialog),780,820);
     GtkWidget *content=gtk_dialog_get_content_area(GTK_DIALOG(state.dialog));GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,6);gtk_container_set_border_width(GTK_CONTAINER(box),14);
     GtkWidget *intro=gtk_label_new("Create a validated full-device external node. OpenVPN uses Import; Tor uses Tor bridges. Relevant fields depend on protocol; the controller re-validates the complete profile before persistence.");gtk_label_set_line_wrap(GTK_LABEL(intro),TRUE);gtk_label_set_xalign(GTK_LABEL(intro),0.0f);gtk_box_pack_start(GTK_BOX(box),intro,FALSE,FALSE,0);
     state.protocol=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"wireguard","WireGuard");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"socks5","SOCKS5");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"http-connect","HTTP CONNECT");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"https-connect","HTTPS CONNECT");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"shadowsocks","Shadowsocks");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"hysteria2","Hysteria2");gtk_combo_box_set_active_id(GTK_COMBO_BOX(state.protocol),"wireguard");gtk_box_pack_start(GTK_BOX(box),state.protocol,FALSE,FALSE,0);
-    state.name=linux_external_field_v14("Display name",FALSE);state.server=linux_external_field_v14("Server IP / hostname",FALSE);state.port=linux_external_field_v14("Port",FALSE);state.expected=linux_external_field_v14("Expected public exit IP",FALSE);state.username=linux_external_field_v14("Username (proxy only)",FALSE);state.password=linux_external_field_v14("Password / proxy credential",TRUE);state.method=linux_external_field_v14("Shadowsocks method",FALSE);state.secret=linux_external_field_v14("Shadowsocks / Hysteria2 secret",TRUE);state.tls_name=linux_external_field_v14("TLS server name / SNI",FALSE);state.wg_private=linux_external_field_v14("WG private key",TRUE);state.wg_peer=linux_external_field_v14("WG peer public key",FALSE);state.wg_psk=linux_external_field_v14("WG preshared key (optional)",TRUE);state.wg_addresses=linux_external_field_v14("WG addresses, comma-separated CIDRs",FALSE);state.wg_allowed=linux_external_field_v14("WG AllowedIPs, comma-separated CIDRs",FALSE);state.wg_dns=linux_external_field_v14("WG DNS IPs, comma-separated",FALSE);state.wg_mtu=linux_external_field_v14("WG MTU (optional)",FALSE);
-    GtkWidget *fields[]={state.name,state.server,state.port,state.expected,state.username,state.password,state.method,state.secret,state.tls_name,state.wg_private,state.wg_peer,state.wg_psk,state.wg_addresses,state.wg_allowed,state.wg_dns,state.wg_mtu};for(guint i=0;i<G_N_ELEMENTS(fields);i++)gtk_box_pack_start(GTK_BOX(box),fields[i],FALSE,FALSE,0);
-    GtkWidget *note=gtk_label_new("Plain HTTP CONNECT never accepts TLS metadata. HTTPS CONNECT and Hysteria2 require TLS/SNI. The typed maker cannot inject executable paths, arbitrary sing-box JSON, Tor directives, or raw OpenVPN configuration.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_xalign(GTK_LABEL(note),0.0f);gtk_box_pack_start(GTK_BOX(box),note,FALSE,FALSE,0);
+    state.name=linux_external_field_v14("Display name",FALSE);state.server=linux_external_field_v14("Server IP / hostname",FALSE);state.port=linux_external_field_v14("Port",FALSE);state.expected=linux_external_field_v14("Expected public exit IP",FALSE);state.location=linux_external_field_v14("Location label (optional, e.g. Austin, TX)",FALSE);state.latitude=linux_external_field_v14("Latitude -90..90 (optional)",FALSE);state.longitude=linux_external_field_v14("Longitude -180..180 (optional)",FALSE);state.username=linux_external_field_v14("Username (proxy only)",FALSE);state.password=linux_external_field_v14("Password / proxy credential",TRUE);state.method=linux_external_field_v14("Shadowsocks method",FALSE);state.secret=linux_external_field_v14("Shadowsocks / Hysteria2 secret",TRUE);state.tls_name=linux_external_field_v14("TLS server name / SNI",FALSE);state.wg_private=linux_external_field_v14("WG private key",TRUE);state.wg_peer=linux_external_field_v14("WG peer public key",FALSE);state.wg_psk=linux_external_field_v14("WG preshared key (optional)",TRUE);state.wg_addresses=linux_external_field_v14("WG addresses, comma-separated CIDRs",FALSE);state.wg_allowed=linux_external_field_v14("WG AllowedIPs, comma-separated CIDRs",FALSE);state.wg_dns=linux_external_field_v14("WG DNS IPs, comma-separated",FALSE);state.wg_mtu=linux_external_field_v14("WG MTU (optional)",FALSE);
+    GtkWidget *fields[]={state.name,state.server,state.port,state.expected,state.location,state.latitude,state.longitude,state.username,state.password,state.method,state.secret,state.tls_name,state.wg_private,state.wg_peer,state.wg_psk,state.wg_addresses,state.wg_allowed,state.wg_dns,state.wg_mtu};for(guint i=0;i<G_N_ELEMENTS(fields);i++)gtk_box_pack_start(GTK_BOX(box),fields[i],FALSE,FALSE,0);
+    GtkWidget *note=gtk_label_new("Optional coordinates must be real values you provide; Router VPN never fabricates a custom-node pin from IP geolocation. Plain HTTP CONNECT never accepts TLS metadata. HTTPS CONNECT and Hysteria2 require TLS/SNI. The typed maker cannot inject executable paths, arbitrary sing-box JSON, Tor directives, or raw OpenVPN configuration.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_xalign(GTK_LABEL(note),0.0f);gtk_box_pack_start(GTK_BOX(box),note,FALSE,FALSE,0);
     state.status=gtk_label_new("");gtk_label_set_line_wrap(GTK_LABEL(state.status),TRUE);gtk_label_set_xalign(GTK_LABEL(state.status),0.0f);gtk_box_pack_start(GTK_BOX(box),state.status,FALSE,FALSE,0);
     GtkWidget *scroll=gtk_scrolled_window_new(NULL,NULL);gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);gtk_container_add(GTK_CONTAINER(scroll),box);gtk_box_pack_start(GTK_BOX(content),scroll,TRUE,TRUE,0);gtk_widget_show_all(state.dialog);
     while(TRUE){int response=gtk_dialog_run(GTK_DIALOG(state.dialog));if(response==GTK_RESPONSE_ACCEPT){if(linux_external_save_v14(&state))break;continue;}break;}gtk_widget_destroy(state.dialog);
