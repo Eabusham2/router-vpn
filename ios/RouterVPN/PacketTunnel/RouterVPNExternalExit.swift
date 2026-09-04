@@ -14,9 +14,12 @@ enum RouterVPNExternalExitBuilder {
             throw error("Selected profile is not an external custom node.")
         }
         let protocolName = string(external["protocol"]).lowercased()
-        guard ["wireguard", "socks5", "shadowsocks", "hysteria2"].contains(protocolName) else {
+        guard ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"].contains(protocolName) else {
             if protocolName == "openvpn" {
                 throw error("OpenVPN external exits are unavailable on iOS until Router VPN ships a pinned native Apple OpenVPN dataplane; this build will not fake support through Libbox 1.13.12.")
+            }
+            if protocolName == "tor-bridge" {
+                throw error("Tor bridges are unavailable on iOS until Router VPN ships a native Tor + pluggable-transport PacketTunnel dataplane with dynamic Tor-exit proof.")
             }
             throw error("Unsupported iOS external protocol \(protocolName).")
         }
@@ -69,6 +72,23 @@ enum RouterVPNExternalExitBuilder {
             let user = string(socks["username"]), pass = string(socks["password"])
             guard user.isEmpty == pass.isEmpty else { throw error("External SOCKS5 username/password must be supplied together.") }
             if !user.isEmpty { value["username"] = user; value["password"] = pass }
+            return value
+        case "http-connect", "https-connect":
+            let secure = protocolName == "https-connect"
+            let key = secure ? "https_connect" : "http_connect"
+            guard let proxy = external[key] as? [String: Any] else { throw error("External \(secure ? "HTTPS" : "HTTP") CONNECT block is missing.") }
+            let server = try literalServer(string(proxy["host"]), label: "\(secure ? "HTTPS" : "HTTP") CONNECT server"), p = try port(proxy["port"])
+            let user = string(proxy["username"]), pass = string(proxy["password"])
+            guard user.isEmpty == pass.isEmpty else { throw error("External CONNECT username/password must be supplied together.") }
+            var value: [String: Any] = ["type": "http", "tag": "custom-exit", "server": server, "server_port": p]
+            if !user.isEmpty { value["username"] = user; value["password"] = pass }
+            let sni = string(proxy["tls_server_name"])
+            if secure {
+                guard safeHostname(sni) else { throw error("External HTTPS CONNECT requires a safe TLS server name for certificate verification.") }
+                value["tls"] = ["enabled": true, "server_name": sni]
+            } else if !sni.isEmpty {
+                throw error("Plain HTTP CONNECT cannot carry TLS metadata; use HTTPS CONNECT instead.")
+            }
             return value
         case "shadowsocks":
             guard let ss = external["shadowsocks"] as? [String: Any] else { throw error("External Shadowsocks block is missing.") }
