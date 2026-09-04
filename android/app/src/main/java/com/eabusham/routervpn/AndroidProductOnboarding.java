@@ -4,12 +4,14 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.widget.Toast;
 
-/** Persistent first-run native app onboarding. Separate from Setup Center onboarding. */
+/** Persistent native app onboarding. First launch never blocks the map-first controls. */
 final class AndroidProductOnboarding {
     private static final String PREFS = "routervpn_product_onboarding_v2";
     private static final String DONE = "done";
     private static final String STEP = "step";
+    private static final String HINTED = "map_first_hint_shown";
 
     private static final class OnboardingStep {
         final String title;
@@ -32,9 +34,18 @@ final class AndroidProductOnboarding {
             new OnboardingStep("Full guide and rerun", "Setup Center Full Guide remains the home server/router administration source of truth. Open Help → Run onboarding again whenever you need these steps. Final release proof still includes off-LAN, leak/DNS/IP, reconnect, visual/orientation and physical-device tests; source readiness is not a substitute.")
     };
 
+    /**
+     * First-run entry point used by the map-first ProductActivity.
+     *
+     * Older builds opened the full AlertDialog automatically here, which covered
+     * Connect/Multihop/Settings/Mode/DNS before the user could use the app. The
+     * newest product contract starts on the map and keeps onboarding opt-in.
+     */
     static void showIfNeeded(Activity activity) {
         SharedPreferences prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        if (!prefs.getBoolean(DONE, false)) show(activity, false);
+        if (prefs.getBoolean(DONE, false) || prefs.getBoolean(HINTED, false)) return;
+        prefs.edit().putBoolean(HINTED, true).apply();
+        Toast.makeText(activity, "Router VPN opens on the map. Full setup guide is available from Help whenever you want it.", Toast.LENGTH_LONG).show();
     }
 
     static void show(Activity activity, boolean force) {
@@ -76,6 +87,7 @@ final class AndroidProductOnboarding {
     private AndroidProductOnboarding() {}
 
     // Shipping onboarding contract markers:
+    // map first / non-blocking first-run hint / Help → Run onboarding again /
     // router-vpn-bundle.json / pairing / AUTO / WireGuard / AmneziaWG / DNS /
     // LAN Off / MTU/Jumbo / kill-switch / Multihop / forwarding / permissions /
     // Disconnect / private identity/path proof / Public exit / Diagnostics /
