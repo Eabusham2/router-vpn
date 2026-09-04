@@ -171,6 +171,10 @@ func torBridgeCommand(a *app, policy, profile common.RouterProfile) (*exec.Cmd, 
 		_ = os.RemoveAll(prepared.RuntimeDir)
 		return nil, errors.New("native Tor bridge helper is missing")
 	}
+	if err := registerActiveDNSRuntimeConfig(a, profile.ID, "external-tor-bridge", filepath.Join(prepared.RuntimeDir, "sing-box.json")); err != nil {
+		_ = os.RemoveAll(prepared.RuntimeDir)
+		return nil, fmt.Errorf("register Tor DNS runtime identity: %w", err)
+	}
 	cmd := exec.Command("bash", helper, "up", prepared.RuntimeDir, prepared.BridgeEndpoint, strconv.Itoa(prepared.SocksPort), prepared.TorBinary, prepared.SingBoxBinary)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(),
