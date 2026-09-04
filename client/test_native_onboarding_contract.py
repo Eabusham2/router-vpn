@@ -20,6 +20,13 @@ def require_any(name: str, source: str, label: str, variants: tuple[str, ...]) -
     assert any(value.lower() in lower for value in variants), f"{name} shipping onboarding missing semantic {label!r}: {variants!r}"
 
 
+def block(source: str, start: str, end: str) -> str:
+    a = source.find(start)
+    b = source.find(end, a + len(start)) if a >= 0 else -1
+    assert a >= 0 and b > a, f"cannot isolate source block {start!r} -> {end!r}"
+    return source[a:b]
+
+
 # Watch the sources/package seams that the current product actually ships.
 # Unified map-first shells may own drill-in controls while onboarding remains a
 # separate persisted lifecycle. Legacy prototype files are never used as proof.
@@ -78,8 +85,9 @@ assert "if(-not$Force){return}" in win, "Windows normal launch can still enter b
 assert re.search(r"Show-RouterVPNProductOnboarding\s+-Force", win), "Windows Help does not force-open the real full onboarding wizard"
 assert re.search(r"else\s*\{\s*Show-RouterVPNProductOnboarding\s*;\s*&\s*\$ProductScript\b", win), "Windows map-first product launch seam disappeared"
 
-# macOS shipping build compiles the onboarding source into RouterVPN.app and
-# exact-wires both first launch and rerun into the AppKit product.
+# macOS keeps the full modal wizard only for explicit Help/rerun. The automatic
+# first-launch entry point records a map-first hint state and must never call
+# runModal before the daily AppKit map is usable.
 shared_topics = (
     "pairing", "router-vpn-bundle.json", "AUTO", "WireGuard", "DNS",
     "LAN Off", "MTU", "Jumbo", "Multihop", "forwarding",
@@ -89,10 +97,13 @@ shared_topics = (
 require("macOS", mac_onboarding, shared_topics + (
     "AmneziaWG", "Emergency stop", "RouterVPNProductOnboardingDoneV2",
     "RouterVPNProductOnboardingStepV2", "Close & resume later",
-    "presentIfNeeded", "runProductOnboarding",
+    "presentIfNeeded", "runProductOnboarding", "mapFirstHintKey",
+    "first launch never blocks", "Help → Run onboarding",
     "app onboarding is separate from Setup Center onboarding",
 ))
 require_any("macOS", mac_onboarding, "kill switch", ("kill switch", "kill-switch"))
+mac_auto = block(mac_onboarding, "func presentIfNeeded(parent: NSWindow?)", "func present(force: Bool")
+assert "runModal" not in mac_auto and "NSAlert" not in mac_auto, "macOS automatic first launch still opens modal onboarding over the map"
 require("macOS build", mac_build, (
     "RouterVPNProductOnboarding.swift", "Run onboarding",
     "RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)",
@@ -115,8 +126,9 @@ assert "RouterVPNMacGlobeChrome.swift" in mac_build
 assert '"$GLOBE_SRC"' in mac_build
 assert "installUnifiedMapChrome()" in mac_build
 
-# Linux retains the native GTK assistant but ships the complete v6 content and
-# a guarded build seam that persists/resumes its current page.
+# Linux keeps the complete native GTK assistant for explicit Help → Run Tutorial,
+# but the canonical builder removes the legacy automatic call after showing the
+# map-first window and fails closed if that source seam drifts.
 require("Linux", linux_onboarding, shared_topics + (
     "AmneziaWG", "Emergency stop", "Run Tutorial",
     "app onboarding is separate from Setup Center onboarding",
@@ -126,7 +138,11 @@ require("Linux build", linux_build, (
     "routervpn-product-onboarding-v6.inc", "onboarding_read_step_v6",
     "onboarding_write_step_v6", "gtk_assistant_set_current_page",
     "gtk_assistant_get_current_page", "Run Tutorial",
+    "Map-first startup: onboarding is explicit from Help -> Run Tutorial.",
+    "Linux shipping build still auto-opens blocking onboarding over the map",
 ))
+assert 'show_onboarding_v5(&app, FALSE);' in linux_build, "Linux builder no longer checks/removes the legacy automatic onboarding seam"
+assert "text.replace(auto_onboarding" in linux_build, "Linux builder does not remove automatic modal onboarding from the shipping source"
 assert 'gcc -O2 -Wall -Wextra -Werror' in linux_build
 require("Linux forwarding master", linux_telemetry, (
     "/api/forwarding/master", "Forward ON", "Forward OFF", "linux_telemetry_forward_v9",
@@ -161,8 +177,8 @@ assert "show(activity, false)" not in android_onboarding, "Android first launch 
 assert re.search(r"AndroidProductOnboarding\.show\(this\s*,\s*true\)", android_product), "Android Help is not wired to force-rerun product onboarding"
 
 # iOS/iPadOS now delegates the daily surface from ProductRootView into the
-# unified map-first view. Audit that composed shipping seam instead of requiring
-# old floating-button labels to remain duplicated in ProductRootView.
+# unified map-first view. Automatic first launch only leaves a non-blocking
+# message; Setup Guide explicitly presents RouterVPNProductOnboardingView.
 require("iOS/iPadOS", ios_onboarding, (
     "pairing", "router-vpn-bundle.json", "AUTO", "WireGuard", "DNS",
     "LAN Off", "MTU/Jumbo", "Multihop", "forwarding",
@@ -178,6 +194,7 @@ require("iOS/iPadOS unified product", ios_root + ios_unified, (
     "IOSUnifiedProductView", "RouterVPNProductOnboardingView",
     "RouterVPNProductOnboardingDoneV2", "Setup Guide", "SMART AUTO",
     "CUSTOM", "Connect", "Disconnect", "DNS", "Kill switch", "Multihop",
+    "Setup is ready. Open Setup guide from the expanded control sheet when needed.",
 ))
 require("iOS opt-in real user location", ios_root + ios_location + ios_project, (
     "IOSUserLocationControl", "requestFromUserTap", "requestedByUser",
