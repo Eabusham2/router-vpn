@@ -48,7 +48,12 @@ function Read-TorrcPlugin {
   if([string]::IsNullOrWhiteSpace($line)){throw 'Prepared Tor runtime has no ClientTransportPlugin line.'}
   $m=[regex]::Match($line,'^ClientTransportPlugin\s+([a-z0-9_,]+)\s+exec\s+"(.+)"$')
   if(-not$m.Success){throw 'Prepared Tor ClientTransportPlugin line is invalid.'}
-  return @($m.Groups[1].Value,$m.Groups[2].Value.Replace('\\','\').Replace('\"','"'))
+  $slash=[string][char]92
+  $escapedSlash=$slash+$slash
+  $quote=[string][char]34
+  $escapedQuote=$slash+$quote
+  $decoded=$m.Groups[2].Value.Replace($escapedSlash,$slash).Replace($escapedQuote,$quote)
+  return @($m.Groups[1].Value,$decoded)
 }
 function Test-TorBootstrap([Diagnostics.Process]$Process,[int]$Seconds=90) {
   $deadline=[DateTime]::UtcNow.AddSeconds($Seconds)
@@ -88,11 +93,11 @@ $PolicyProfileId=[string]$env:HOMEVPN_POLICY_PROFILE_ID
 $Transport=[string]$env:HOMEVPN_TOR_TRANSPORT
 $PluginTransports=[string]$env:HOMEVPN_TOR_PLUGIN_TRANSPORTS
 if([string]::IsNullOrWhiteSpace($PolicyProfileId)){$PolicyProfileId=$ProfileId}
-if([string]::IsNullOrWhiteSpace($ProfileId)-or[string]::IsNullOrWhiteSpace($BridgeEndpoint)){throw 'Tor bridge runtime/profile/bridge endpoint are required.'}
-if($PluginTransports-notmatch'^(obfs4|meek_lite|snowflake|webtunnel)(,(obfs4|meek_lite|snowflake|webtunnel))*$'){throw 'Invalid Tor pluggable-transport set.'}
-if($Transport-notin@('obfs4','meek_lite','snowflake','webtunnel','custom')){throw 'Invalid Tor transport identity.'}
+if([string]::IsNullOrWhiteSpace($ProfileId) -or [string]::IsNullOrWhiteSpace($BridgeEndpoint)){throw 'Tor bridge runtime/profile/bridge endpoint are required.'}
+if($PluginTransports -notmatch '^(obfs4|meek_lite|snowflake|webtunnel)(,(obfs4|meek_lite|snowflake|webtunnel))*$'){throw 'Invalid Tor pluggable-transport set.'}
+if($Transport -notin @('obfs4','meek_lite','snowflake','webtunnel','custom')){throw 'Invalid Tor transport identity.'}
 
-if($Action-eq'down'){
+if($Action -eq 'down'){
   Stop-Owned
   try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
   Remove-PrivateRuntime
@@ -104,19 +109,19 @@ $TorBinary=Exact-Executable $TorBinary 'Tor binary'
 $PTBinary=Exact-Executable $PTBinary 'Tor PT binary'
 $SingBoxBinary=Exact-Executable $SingBoxBinary 'sing-box binary'
 $ptName=[IO.Path]::GetFileName($PTBinary).ToLowerInvariant()
-if($ptName-notin@('lyrebird.exe','obfs4proxy.exe')){throw 'Tor PT binary is not an approved Router VPN transport helper.'}
-if($ptName-eq'obfs4proxy.exe'-and$PluginTransports-match'(^|,)(snowflake|webtunnel)(,|$)'){throw 'Legacy obfs4proxy cannot provide Snowflake or WebTunnel; Lyrebird is required.'}
+if($ptName -notin @('lyrebird.exe','obfs4proxy.exe')){throw 'Tor PT binary is not an approved Router VPN transport helper.'}
+if($ptName -eq 'obfs4proxy.exe' -and $PluginTransports -match '(^|,)(snowflake|webtunnel)(,|$)'){throw 'Legacy obfs4proxy cannot provide Snowflake or WebTunnel; Lyrebird is required.'}
 $plugin=Read-TorrcPlugin
-if($plugin[0]-ne$PluginTransports){throw 'Tor runtime PT set does not match the validated torrc.'}
+if($plugin[0] -ne $PluginTransports){throw 'Tor runtime PT set does not match the validated torrc.'}
 $torrcPT=(Resolve-Path -LiteralPath $plugin[1] -ErrorAction Stop).Path
-if(-not$torrcPT.Equals($PTBinary,[StringComparison]::OrdinalIgnoreCase)){throw 'Tor PT binary changed after capability proof.'}
+if(-not $torrcPT.Equals($PTBinary,[StringComparison]::OrdinalIgnoreCase)){throw 'Tor PT binary changed after capability proof.'}
 
 & $TorBinary --version | Out-Null
 if($LASTEXITCODE-ne 0){throw 'Tor binary verification failed.'}
 & $SingBoxBinary check -D $RuntimeDir -c $Config | Out-Null
 if($LASTEXITCODE-ne 0){throw 'Pinned sing-box rejected the prepared Windows Tor graph.'}
 Kill 'check'
-if($Action-eq'check'){Write-Output "native Windows Tor $Transport bridge graph ready ($PluginTransports)";exit 0}
+if($Action -eq 'check'){Write-Output "native Windows Tor $Transport bridge graph ready ($PluginTransports)";exit 0}
 
 Stop-Owned
 Kill 'prepare'
