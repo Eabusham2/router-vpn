@@ -50,14 +50,25 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 		NodeKind: "external",
 		External: &common.ExternalNodeConfig{Protocol: protocol, ExpectedPublicIP: strings.TrimSpace(q.ExpectedPublicIP)},
 	}
+
+	// The typed maker promises that a saved profile is runnable, not merely
+	// syntactically representable. Normalize the server before persistence using
+	// the same direct-IP/hostname contract used by the standard-exit runtime.
+	// This rejects URL/path/query/userinfo/whitespace injection early instead of
+	// storing a node that will only fail later at Connect.
+	var host string
+	if protocol != "openvpn" && protocol != "tor-bridge" {
+		var err error
+		host, err = normalizeEndpoint(q.Server)
+		if err != nil {
+			return common.RouterProfile{}, errors.New(protocol + " node server: " + err.Error())
+		}
+	}
+
 	switch protocol {
 	case "wireguard":
 		if q.Port < 1 || q.Port > 65535 {
 			return common.RouterProfile{}, errors.New("WireGuard node requires a valid port")
-		}
-		host, err := normalizeEndpoint(q.Server)
-		if err != nil {
-			return common.RouterProfile{}, errors.New("WireGuard node server: " + err.Error())
 		}
 		p.External.WireGuard = &common.ExternalWireGuardConfig{
 			PrivateKey:    q.WGPrivateKey,
@@ -70,18 +81,18 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 			MTU:           q.WGMTU,
 		}
 	case "socks5":
-		p.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: q.Server, Port: q.Port, Username: q.Username, Password: q.Password}
+		p.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: host, Port: q.Port, Username: q.Username, Password: q.Password}
 	case "http-connect":
 		if strings.TrimSpace(q.TLSServerName) != "" {
 			return common.RouterProfile{}, errors.New("plain HTTP CONNECT cannot specify a TLS server name; choose https-connect instead")
 		}
-		p.External.HTTPConnect = &common.ExternalHTTPConnectConfig{Host: q.Server, Port: q.Port, Username: q.Username, Password: q.Password}
+		p.External.HTTPConnect = &common.ExternalHTTPConnectConfig{Host: host, Port: q.Port, Username: q.Username, Password: q.Password}
 	case "https-connect":
-		p.External.HTTPSConnect = &common.ExternalHTTPConnectConfig{Host: q.Server, Port: q.Port, Username: q.Username, Password: q.Password, TLSServerName: q.TLSServerName}
+		p.External.HTTPSConnect = &common.ExternalHTTPConnectConfig{Host: host, Port: q.Port, Username: q.Username, Password: q.Password, TLSServerName: q.TLSServerName}
 	case "shadowsocks":
-		p.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: q.Server, Port: q.Port, Method: q.Method, Password: q.Secret}
+		p.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: host, Port: q.Port, Method: q.Method, Password: q.Secret}
 	case "hysteria2":
-		p.External.Hysteria2 = &common.ExternalHysteria2Config{Server: q.Server, Port: q.Port, Password: q.Secret, TLSServerName: q.TLSServerName}
+		p.External.Hysteria2 = &common.ExternalHysteria2Config{Server: host, Port: q.Port, Password: q.Secret, TLSServerName: q.TLSServerName}
 	case "openvpn":
 		return common.RouterProfile{}, errors.New("OpenVPN uses the hardened config import path; the typed node maker does not accept raw OpenVPN text")
 	case "tor-bridge":
