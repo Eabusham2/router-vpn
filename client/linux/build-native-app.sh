@@ -138,6 +138,12 @@ signal_new = '''    if (!force) {
     gtk_widget_show_all(assistant);'''
 if text.count(signal_old) != 1: raise SystemExit('Linux onboarding signal contract drifted')
 text = text.replace(signal_old, signal_new, 1)
+# Latest map-first product contract: do not automatically open the modal
+# GtkAssistant after showing the daily app. Help -> Run Tutorial still invokes
+# show_onboarding_v5(app, TRUE) and retains the full persisted wizard.
+auto_onboarding = '    show_onboarding_v5(&app, FALSE);\n'
+if text.count(auto_onboarding) != 1: raise SystemExit('Linux first-run onboarding call seam drifted')
+text = text.replace(auto_onboarding, '    /* Map-first startup: onboarding is explicit from Help -> Run Tutorial. */\n', 1)
 sensitivity_old = '    set_remembered_sensitive_v5(app, "router-vpn-advanced-mtu-v5", connected);'
 sensitivity_new = '    set_remembered_sensitive_v5(app, "router-vpn-advanced-settings-v7", has_node && !connected);\n    set_remembered_sensitive_v5(app, "router-vpn-advanced-mtu-v5", connected);'
 if text.count(sensitivity_old) != 1: raise SystemExit('Linux profile settings sensitivity seam drifted')
@@ -181,8 +187,9 @@ install_old = '    build_ui_v5(&app);\n    g_signal_connect(app.window, "destroy
 install_new = '    build_ui_v5(&app);\n    linux_install_telemetry_v9(&app);\n    linux_install_speed_lab_v12(&app);\n    linux_install_globe_v10(&app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
 if text.count(install_old) != 1: raise SystemExit('Linux telemetry/globe installer seam drifted')
 text = text.replace(install_old, install_new, 1)
-for marker in ('#include "routervpn-product-onboarding-v6.inc"','#include "routervpn-home-summary-v1.inc"','#include "routervpn-profile-settings-v1.inc"','#include "routervpn-auto-requirements-v11.inc"','#include "routervpn-unified-shell-v8.inc"','#include "routervpn-telemetry-v9.inc"','#include "routervpn-speed-lab-v12.inc"','#include "routervpn-globe-v10.inc"','onboarding_read_step_v6(path)','gtk_assistant_set_current_page','refresh_home_summary_v6(app)','gtk_button_set_label(GTK_BUTTON(home_exit_v6), "Prove actual exit")','G_CALLBACK(on_home_exit_v6)','Edit profile settings','G_CALLBACK(on_profile_settings_v7)','router-vpn-advanced-settings-v7','static void build_ui_legacy_v5(App *app) {','linux_install_telemetry_v9(&app);','linux_install_speed_lab_v12(&app);','linux_install_globe_v10(&app);'):
+for marker in ('#include "routervpn-product-onboarding-v6.inc"','#include "routervpn-home-summary-v1.inc"','#include "routervpn-profile-settings-v1.inc"','#include "routervpn-auto-requirements-v11.inc"','#include "routervpn-unified-shell-v8.inc"','#include "routervpn-telemetry-v9.inc"','#include "routervpn-speed-lab-v12.inc"','#include "routervpn-globe-v10.inc"','onboarding_read_step_v6(path)','gtk_assistant_set_current_page','refresh_home_summary_v6(app)','Prove actual exit','G_CALLBACK(on_home_exit_v6)','Edit profile settings','G_CALLBACK(on_profile_settings_v7)','router-vpn-advanced-settings-v7','static void build_ui_legacy_v5(App *app) {','linux_install_telemetry_v9(&app);','linux_install_speed_lab_v12(&app);','linux_install_globe_v10(&app);','Map-first startup: onboarding is explicit from Help -> Run Tutorial.'):
     if marker not in text: raise SystemExit(f'missing Linux shipping marker: {marker}')
+if 'show_onboarding_v5(&app, FALSE);' in text: raise SystemExit('Linux shipping build still auto-opens blocking onboarding over the map')
 out_path.write_text(text, encoding='utf-8')
 PY
 
@@ -207,7 +214,8 @@ for marker in '/api/home-summary' '/api/home-summary/prove-exit' 'Actual public 
 for marker in '/api/profile/settings' 'Allow home LAN access' 'Always / strict' 'AmneziaWG' 'Auto measured' 'DAITA-like' 'Jumbo TUN' 'SOCKS5' 'startup' 'autoconnect'; do grep -Fiq "$marker" "$SETTINGS_INC"; done
 for marker in '/api/profile/settings' 'Require encrypted AUTO candidates' 'Require obfuscation for AUTO candidates' 'Save requirements' 'Disconnect before saving'; do grep -Fq "$marker" "$AUTO_REQ_INC"; done
 grep -Fq '/api/multihop/connect' "$SETTINGS_INC"
-for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' '#include "routervpn-profile-settings-v1.inc"' '#include "routervpn-auto-requirements-v11.inc"' '#include "routervpn-unified-shell-v8.inc"' '#include "routervpn-telemetry-v9.inc"' '#include "routervpn-speed-lab-v12.inc"' '#include "routervpn-globe-v10.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)' 'Edit profile settings' 'G_CALLBACK(on_profile_settings_v7)' 'router-vpn-advanced-settings-v7' 'static void build_ui_legacy_v5(App *app) {' 'linux_install_telemetry_v9(&app);' 'linux_install_speed_lab_v12(&app);' 'linux_install_globe_v10(&app);'; do grep -Fq "$marker" "$BUILD_SRC"; done
+for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' '#include "routervpn-profile-settings-v1.inc"' '#include "routervpn-auto-requirements-v11.inc"' '#include "routervpn-unified-shell-v8.inc"' '#include "routervpn-telemetry-v9.inc"' '#include "routervpn-speed-lab-v12.inc"' '#include "routervpn-globe-v10.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)' 'Edit profile settings' 'G_CALLBACK(on_profile_settings_v7)' 'router-vpn-advanced-settings-v7' 'static void build_ui_legacy_v5(App *app) {' 'linux_install_telemetry_v9(&app);' 'linux_install_speed_lab_v12(&app);' 'linux_install_globe_v10(&app);' 'Map-first startup: onboarding is explicit from Help -> Run Tutorial.'; do grep -Fq "$marker" "$BUILD_SRC"; done
+! grep -Fq 'show_onboarding_v5(&app, FALSE);' "$BUILD_SRC"
 for marker in 'build_ui_v5(App *app)' 'map-first' 'Connect' 'Disconnect' 'Kill switch' 'Multihop' 'Settings' 'Mode' 'DNS' 'SMART AUTO — recommended' 'AUTO — first proven path' 'New CUSTOM preset…' 'CUSTOM preset builder' '/api/strategy/auto' '/api/strategy/smart-auto' '/api/strategy/custom' '/api/connect-logical' '/api/mtu/retest' 'real stored coordinates'; do grep -Fq "$marker" "$UNIFIED_INC"; done
 for marker in 'LinuxTelemetryV9' '⚡ Fastest' '/api/profile/fastest' '/api/connection/live-latency' '/api/multihop/live-latency' '/api/forwarding/master' 'Forward ON' 'Forward OFF' 'Performance' 'Throughput + Auto MTU'; do grep -Fq "$marker" "$TELEMETRY_INC"; done
 for marker in 'LinuxSpeedLabV12' '/api/speed-lab/options' '/api/speed-lab/run' 'Current path' 'Temporary config' 'System direct' 'External exit / hop' 'Auto timing' 'Custom timing' 'download_loaded_ms' 'upload_loaded_ms' 'bufferbloat' 'linux_install_speed_lab_v12'; do grep -Fq "$marker" "$SPEED_LAB_INC"; done
@@ -216,7 +224,7 @@ grep -Fq 'Diagnostics' "$SRC"; grep -Fq '/api/session/events?after=0' "$SRC"; gr
 grep -Fq '/api/mtu/retest' "$SRC"; grep -Fq 'Retest MTU' "$SRC"; grep -Fq '130000' "$SRC"; grep -Fq 'router-vpn-advanced-mtu-v5' "$SRC"
 "$OUT" --self-test
 
-echo "Built native Linux GTK Router VPN product with map-first unified shell, animated VPN globe, fastest-node connect, live path/multihop telemetry, native Speed Lab with loaded latency, real forwarding master, truthful Home state, editable profile settings and resumable onboarding at $OUT"
+echo "Built native Linux GTK Router VPN product with map-first unified shell, animated VPN globe, fastest-node connect, live path/multihop telemetry, native Speed Lab with loaded latency, real forwarding master, truthful Home state, editable profile settings and explicit rerunnable onboarding at $OUT"
 
 # Session-mutation hardening is applied only to temporary build copies; source baselines remain reviewable.
 # apply-session-mutation.py baseline-hash checks fail closed before compilation on source drift.
