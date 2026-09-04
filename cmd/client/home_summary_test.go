@@ -80,3 +80,35 @@ func TestHomeSummaryReportsFallbackDNSAndSharedState(t *testing.T) {
 		t.Fatalf("shared state summary wrong: %+v", value)
 	}
 }
+
+func TestHomeSummaryUsesLiveRouterIDInsteadOfMutableSelection(t *testing.T) {
+	a := &app{}
+	a.profiles = common.RouterProfileStore{
+		SelectedID: "selected",
+		Profiles: []common.RouterProfile{
+			{ID: "selected", Name: "Selected Node", Endpoint: "selected.example.test", Location: "Selected", LatencyMedianMs: 80, LatencySamples: 50, KillSwitchPolicy: "off", EffectiveMTU: 1280},
+			{ID: "live", Name: "Live Exit", Endpoint: "live.example.test", Location: "Live", LatencyMedianMs: 9, LatencySamples: 50, KillSwitchPolicy: "strict", EffectiveMTU: 1420},
+		},
+	}
+	a.state = state{Connected: true, Phase: "connected", RouterID: "live", Mode: "multihop", LogicalMode: "multihop", RuntimeMode: "shadowsocks", Base: "wg"}
+	tracker := sessionTrackerFor(a)
+	tracker.mu.Lock()
+	tracker.session = &connectionSession{
+		ID: "session-live", RouterID: "live", Connected: true, Phase: "connected", PathProof: "passed",
+		RequestedMode: "multihop", RequestedBase: "wg", ActualMode: "shadowsocks", ActualBase: "wg",
+		DNSProof: dnsProofState{Status: "passed"},
+	}
+	tracker.mu.Unlock()
+	defer sessionTrackers.Delete(a)
+
+	value, err := a.homeSummaryValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.NodeID != "live" || value.NodeName != "Live Exit" || value.PublicEndpoint != "live.example.test" || value.Location != "Live" {
+		t.Fatalf("Home summary used mutable selected node instead of live RouterID: %+v", value)
+	}
+	if value.NodeLatencyMs != 9 || value.KillSwitch != "strict" || value.EffectiveMTU != 1420 {
+		t.Fatalf("Home summary mixed selected-node metadata into live session: %+v", value)
+	}
+}
