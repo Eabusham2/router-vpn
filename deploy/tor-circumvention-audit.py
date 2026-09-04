@@ -121,8 +121,9 @@ need(
 )
 
 # Capability and native profile-builder APIs are the one UI-facing source of
-# truth. PT descriptions explain censorship behavior while unsupported platform
-# dataplanes remain unavailable with reasons.
+# truth. The shipping /api/tor-bridge/import boundary owns all Tor profile
+# construction and delegates only final transactional persistence to the shared
+# private external-profile store. A second unregistered Tor builder is forbidden.
 need(
     "cmd/client/tor_bridge_capabilities.go",
     "obfs4",
@@ -141,14 +142,14 @@ need(
     "torBridgeImportRequest",
     "/api/external-profile/import",
     "common.NormalizeRouterProfile",
+    'profile.DNSMode = "rescue"',
+    "strictLiteralObfs4",
+    "dynamic bootstrap egress can be scoped safely",
+    "standardExitFromExternalProfile(profile)",
+    "externalRuntimePolicy(profile)",
 )
-need(
-    "cmd/client/tor_bridge_profile.go",
-    "torBridgeProfileCreateRequest",
-    "beginMutationOperation",
-    "a.persistProfilesLocked()",
-    "a.rollbackProfilesLocked(previousStore)",
-)
+if (ROOT / "cmd/client/tor_bridge_profile.go").exists():
+    errors.append("cmd/client/tor_bridge_profile.go: duplicate/unregistered Tor profile builder must remain removed")
 
 # Product semantics: PT is circumvention; the proved Tor circuit is the
 # encrypted final path. Tor-as-upstream-hop remains unavailable.
