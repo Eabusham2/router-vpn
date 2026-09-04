@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -140,5 +142,13 @@ for path in [
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
 ]:
     require(path, "AndroidVpnMutationGuard.isBusy")
+
+# The private-control numeric parser is deliberately plain Java so this focused
+# behavior test can run on the same JDK used for Android builds without an
+# emulator. It proves IPv4/IPv6 parsing remains resolver-free on minSdk 24.
+numeric_contract = ROOT / "android" / "test_android_numeric_address.py"
+if not numeric_contract.is_file():
+    raise SystemExit("missing Android resolver-free numeric-address contract")
+subprocess.run([sys.executable, str(numeric_contract)], cwd=ROOT, check=True)
 
 print("Android session mutation truth audit: PASS")
