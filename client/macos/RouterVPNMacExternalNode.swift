@@ -78,7 +78,6 @@ extension ProductWindowController {
         ])
         grid.rowSpacing = 5
         grid.columnSpacing = 10
-        for row in 0..<grid.numberOfRows { grid.row(at: row).xPlacement = .fill }
 
         let content = NSStackView(views: [note, grid])
         content.orientation = .vertical
