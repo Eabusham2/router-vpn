@@ -78,15 +78,16 @@ final class IOSNodeBundleStore {
                   var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
                   bundle.routerProfiles.contains(where: { $0.id == wanted }) else { continue }
             bundle.routerProfiles.removeAll(where: { $0.id == wanted })
+            var next = records
             if bundle.routerProfiles.isEmpty {
-                records.removeValue(forKey: key)
-                try persist()
+                next.removeValue(forKey: key)
+                try commitRecords(next)
                 return firstBundleData()
             }
             if bundle.selectedRouterID == wanted { bundle.selectedRouterID = bundle.routerProfiles[0].id }
             let replacement = try JSONEncoder().encode(bundle)
-            records[key] = replacement
-            try persist()
+            next[key] = replacement
+            try commitRecords(next)
             return replacement
         }
         throw NSError(domain: "RouterVPN.NodeStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "Linked node was not found in the iOS node store"])
@@ -112,8 +113,9 @@ final class IOSNodeBundleStore {
             bundle.routerProfiles[index].latitude = latitude
             bundle.routerProfiles[index].longitude = longitude
             let replacement = try JSONEncoder().encode(bundle)
-            records[key] = replacement
-            try persist()
+            var next = records
+            next[key] = replacement
+            try commitRecords(next)
             return replacement
         }
         throw NSError(domain: "RouterVPN.NodeStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "Linked node was not found in the iOS node store"])
@@ -175,8 +177,9 @@ final class IOSNodeBundleStore {
             throw NSError(domain: "RouterVPN.NodeStore", code: 5, userInfo: [NSLocalizedDescriptionKey: "A different linked bundle already uses node id \(profile.id)"])
         }
         let normalized = try JSONEncoder().encode(bundle)
-        records[key] = normalized
-        try persist()
+        var next = records
+        next[key] = normalized
+        try commitRecords(next)
         return normalized
     }
 
@@ -263,10 +266,15 @@ final class IOSNodeBundleStore {
         return NSError(domain: "RouterVPN.NodeStore", code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Could not \(action): \(detail)"])
     }
 
-    private func persist() throws {
-        let data = try JSONEncoder().encode(records)
+    private func commitRecords(_ next: [String: Data]) throws {
+        let data = try JSONEncoder().encode(next)
         try writeKeychain(data)
-        // Remove the legacy copy only after the stronger Keychain commit succeeds.
+        // Adopt RAM only after the durable Keychain write has committed.
+        records = next
         UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
+    }
+
+    private func persist() throws {
+        try commitRecords(records)
     }
 }
