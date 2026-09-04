@@ -1,5 +1,6 @@
 #include <sys/stat.h>
 #include "routervpn-tor-bridge-v13.inc"
+#include "routervpn-external-node-wire-v14.inc"
 
 typedef struct {
     App *app;
@@ -148,7 +149,7 @@ static void linux_unified_custom_builder_v8(LinuxUnifiedV8 *state) {
     GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL); gtk_widget_set_size_request(scroll, -1, 390); GtkWidget *flow = gtk_flow_box_new(); gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow), GTK_SELECTION_NONE); gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(flow), 3); gtk_container_add(GTK_CONTAINER(scroll), flow);
     GPtrArray *checks = g_ptr_array_new();
     for (int i=0; linux_custom_layers_v8[i] != NULL; i++) { GtkWidget *check = gtk_check_button_new_with_label(linux_custom_layers_v8[i]); if (g_hash_table_contains(old, linux_custom_layers_v8[i])) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(check), TRUE); g_object_set_data(G_OBJECT(check), "layer", (gpointer)linux_custom_layers_v8[i]); g_ptr_array_add(checks, check); gtk_container_add(GTK_CONTAINER(flow), check); }
-    gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0); gtk_box_pack_start(GTK_BOX(content), box, TRUE, TRUE, 0); gtk_widget_show_all(dialog);
+    gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0); gtk_box_pack_start(GTK_BOX(content), box, TRUE,TRUE,0); gtk_widget_show_all(dialog);
     int response = gtk_dialog_run(GTK_DIALOG(dialog));
     if (response == GTK_RESPONSE_REJECT && editing != NULL) {
         GKeyFile *key = linux_unified_load_keyfile_v8(); char *group = g_strdup_printf("preset:%s", editing); g_key_file_remove_group(key, group, NULL); g_free(group); g_key_file_set_string(key, "state", "selected_mode", "smart-auto"); linux_unified_save_keyfile_v8(key); g_key_file_unref(key);
