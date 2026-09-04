@@ -84,3 +84,57 @@ func TestSessionCaptureUsesLiveProfileWhileActiveAndSelectedProfileWhenIdle(t *t
 		t.Fatalf("idle capture lost selected profile policy: %+v", idle.Profile)
 	}
 }
+
+func TestDNSProofObservationFreshnessRejectsSameSessionPathChanges(t *testing.T) {
+	profile := common.RouterProfile{ID: "exit", Endpoint: "exit.example.test", BaseTunnel: "wg", DNSMode: "dot", DNSHost: "9.9.9.9", DNSPort: 853}
+	a := &app{
+		profiles: common.RouterProfileStore{SelectedID: "control", Profiles: []common.RouterProfile{{ID: "control", Endpoint: "control.example.test"}, profile}},
+		state: state{Connected: true, Phase: "connected", RouterID: "exit", Mode: "multihop", LogicalMode: "multihop", RuntimeMode: "shadowsocks", Base: "wg"},
+	}
+	tracker := &sessionTracker{a: a}
+	snapshot := observedConnection{Connected: true, Phase: "connected", RouterID: "exit", Mode: "multihop", LogicalMode: "multihop", RuntimeMode: "shadowsocks", Base: "wg", Profile: profile}
+
+	tracker.mu.Lock()
+	if !tracker.dnsProofObservationStillCurrentLocked(snapshot, "shadowsocks") {
+		tracker.mu.Unlock()
+		t.Fatal("unchanged live DNS proof snapshot was rejected")
+	}
+	tracker.mu.Unlock()
+
+	a.mu.Lock()
+	a.state.RuntimeMode = "hysteria2"
+	a.mu.Unlock()
+	tracker.mu.Lock()
+	if tracker.dnsProofObservationStillCurrentLocked(snapshot, "shadowsocks") {
+		tracker.mu.Unlock()
+		t.Fatal("runtime change did not stale DNS proof snapshot")
+	}
+	tracker.mu.Unlock()
+
+	a.mu.Lock()
+	a.state.RuntimeMode = "shadowsocks"
+	a.state.Base = "awg"
+	a.mu.Unlock()
+	tracker.mu.Lock()
+	if tracker.dnsProofObservationStillCurrentLocked(snapshot, "shadowsocks") {
+		tracker.mu.Unlock()
+		t.Fatal("base change did not stale DNS proof snapshot")
+	}
+	tracker.mu.Unlock()
+
+	a.mu.Lock()
+	a.state.Base = "wg"
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == "exit" {
+			a.profiles.Profiles[i].DNSHost = "1.1.1.1"
+			break
+		}
+	}
+	a.mu.Unlock()
+	tracker.mu.Lock()
+	if tracker.dnsProofObservationStillCurrentLocked(snapshot, "shadowsocks") {
+		tracker.mu.Unlock()
+		t.Fatal("live profile/DNS policy change did not stale DNS proof snapshot")
+	}
+	tracker.mu.Unlock()
+}
