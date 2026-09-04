@@ -149,13 +149,23 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func nativeMultihopPlatformCommand(a *app, sel multihopSelection) (*exec.Cmd, error) {
-	if runtime.GOOS == "windows" {
-		return nativeWindowsMultihopCommand(a, sel)
+	var cmd *exec.Cmd
+	var err error
+	switch runtime.GOOS {
+	case "windows":
+		cmd, err = nativeWindowsMultihopCommand(a, sel)
+	case "darwin":
+		cmd, err = nativeDarwinMultihopCommand(a, sel)
+	default:
+		return nil, errors.New("real native multihop is not implemented on this desktop platform")
 	}
-	if runtime.GOOS == "darwin" {
-		return nativeDarwinMultihopCommand(a, sel)
+	if err != nil {
+		return nil, err
 	}
-	return nil, errors.New("real native multihop is not implemented on this desktop platform")
+	if err := registerNativeMultihopDNSRuntime(a, sel, cmd); err != nil {
+		return nil, fmt.Errorf("register native multihop DNS runtime identity: %w", err)
+	}
+	return cmd, nil
 }
 
 func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
