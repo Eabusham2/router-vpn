@@ -135,6 +135,31 @@ func (t *sessionTracker) capture() observedConnection {
 	}
 }
 
+// dnsProofObservationStillCurrentLocked is called with tracker.mu held. The
+// existing tracker lock order is tracker -> app (declareRequest -> capture), so
+// taking app.mu here preserves that order while making proof adoption atomic
+// against a same-session SMART/AUTO/runtime transition.
+func (t *sessionTracker) dnsProofObservationStillCurrentLocked(s observedConnection, runtimeID string) bool {
+	t.a.mu.Lock()
+	defer t.a.mu.Unlock()
+	current := t.a.state
+	if !current.Connected || strings.TrimSpace(current.Phase) != "connected" || strings.TrimSpace(current.RouterID) == "" || current.RouterID != s.RouterID || current.Base != s.Base {
+		return false
+	}
+	currentRuntime := strings.TrimSpace(current.RuntimeMode)
+	if currentRuntime == "" && current.Mode != "off" {
+		currentRuntime = strings.TrimSpace(current.Mode)
+	}
+	if currentRuntime != runtimeID {
+		return false
+	}
+	profile, ok := t.a.profileByIDLocked(current.RouterID)
+	if !ok || profile.ID != s.Profile.ID {
+		return false
+	}
+	return asyncMeasurementProfileToken(profile) == asyncMeasurementProfileToken(s.Profile)
+}
+
 func sessionEngine(a *app, runtimeID string) string {
 	for _, m := range a.modes {
 		if m.ID == runtimeID {
@@ -311,6 +336,13 @@ func (t *sessionTracker) proveDNSAsync(sessionID string, s observedConnection, r
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.session == nil || t.session.ID != sessionID {
+		return
+	}
+	if !t.session.Connected || t.session.PathProof != "passed" || t.session.RouterID != s.RouterID || t.session.ActualMode != runtimeID || t.session.ActualBase != s.Base || !t.dnsProofObservationStillCurrentLocked(s, runtimeID) {
+		t.dnsProofRunning = false
+		t.dnsProofLastAttempt = time.Time{}
+		t.session.DNSProof = dnsProofState{Status: "not-proven", Reason: "active VPN node/runtime/base or DNS policy changed while DNS proof was running; stale result discarded"}
+		t.eventLocked("dns-proof-stale", t.session.Phase, t.session.DNSProof.Reason, t.session.Connected, t.session.ActualMode, t.session.ActualBase)
 		return
 	}
 	t.dnsProofRunning = false
