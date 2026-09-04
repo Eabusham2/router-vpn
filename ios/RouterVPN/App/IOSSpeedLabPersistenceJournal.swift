@@ -64,7 +64,20 @@ enum IOSSpeedLabPersistenceJournal {
     }
 
     static func recoverIfNeeded(model: RouterVPNModel) async {
-        guard let journal = try? load() else { return }
+        let defaults = UserDefaults.standard
+        guard defaults.data(forKey: journalKey) != nil else { return }
+
+        let journal: Journal
+        do {
+            journal = try load()
+        } catch {
+            // Presence of an unreadable journal is recovery evidence, not an
+            // absence of work. Keep it intact and fail visibly so a malformed or
+            // future schema can never be silently cleared/replaced by a new test.
+            model.message = "Speed Lab recovery journal is corrupt or unsupported; refusing to clear it or start another temporary test: \(error.localizedDescription)"
+            return
+        }
+
         await model.refreshTunnelStatus()
         if model.connected || model.tunnelTransitioning {
             if !model.tunnelTransitioning { model.disconnect() }
@@ -81,7 +94,6 @@ enum IOSSpeedLabPersistenceJournal {
         }
 
         do {
-            let defaults = UserDefaults.standard
             restore(journal.originalBundle, key: bundleKey, defaults: defaults)
             restore(journal.originalLastRuntime, key: lastRuntimeKey, defaults: defaults)
             guard defaults.synchronize() else {
