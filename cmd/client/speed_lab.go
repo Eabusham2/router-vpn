@@ -40,9 +40,13 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 		if p.External != nil {
 			protocol = p.External.Protocol
 		}
+		endpoint := p.Endpoint
+		if kind == "external" && strings.EqualFold(strings.TrimSpace(protocol), "tor-bridge") {
+			endpoint = ""
+		}
 		nodes = append(nodes, map[string]any{
 			"id": p.ID, "name": p.Name, "node_kind": kind, "external_protocol": protocol,
-			"endpoint": p.Endpoint, "location": p.Location, "base_tunnel": p.BaseTunnel,
+			"endpoint": endpoint, "location": p.Location, "base_tunnel": p.BaseTunnel,
 			"latitude": p.Latitude, "longitude": p.Longitude,
 			"latency_median_ms": p.LatencyMedianMs, "latency_trimmed_mean_ms": p.LatencyTrimmedMeanMs,
 			"selected": p.ID == selectedID,
