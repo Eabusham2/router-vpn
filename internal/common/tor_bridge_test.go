@@ -7,6 +7,7 @@ import (
 
 const validObfs4Bridge = "Bridge obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=abcdefghijklmnopqrstuvwxyz012345 iat-mode=0"
 const validMeekBridge = "Bridge meek_lite 0.0.2.0:2 97700DFE9F483596DDA6264C4D7DF7641E1E39CE url=https://meek.azureedge.net/ front=ajax.aspnetcdn.com"
+const validModernMeekBridge = "Bridge meek_lite 192.0.2.20:80 url=https://meek.azureedge.net/ front=ajax.aspnetcdn.com utls=HelloRandomizedALPN"
 const validSnowflakeBridge = "Bridge snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 fingerprint=2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://snowflake-broker.example.net/ front=cdn.example.net ice=stun:stun.example.net:3478 utls-imitate=hellorandomizedalpn"
 const validWebTunnelBridge = "Bridge webtunnel 10.0.0.2:443 89ABCDEF0123456789ABCDEF0123456789ABCDEF url=https://bridge.example.net/secret ver=0.0.1"
 
@@ -50,6 +51,7 @@ func TestTorBridgeSupportsCircumventionTransportFamilies(t *testing.T) {
 	}{
 		{"obfs4", validObfs4Bridge, "obfs4", "203.0.113.44"},
 		{"meek alias", strings.Replace(validMeekBridge, "meek_lite", "meek", 1), "meek_lite", "0.0.2.0"},
+		{"modern meek no fingerprint", validModernMeekBridge, "meek_lite", "192.0.2.20"},
 		{"snowflake", validSnowflakeBridge, "snowflake", "192.0.2.3"},
 		{"webtunnel", validWebTunnelBridge, "webtunnel", "10.0.0.2"},
 	}
@@ -72,15 +74,48 @@ func TestTorBridgeSupportsCircumventionTransportFamilies(t *testing.T) {
 	}
 }
 
-func TestTorBridgeTransportSelectorRejectsMismatchAndMixedProfiles(t *testing.T) {
+func TestTorBridgeCustomAndAutoAllowRecognizedMixedPTSets(t *testing.T) {
+	for _, selector := range []string{"custom", "auto"} {
+		p := torProfile("tor-bridge", validObfs4Bridge, validWebTunnelBridge, validModernMeekBridge)
+		p.External.TorBridge.Transport = selector
+		if err := NormalizeRouterProfile(&p); err != nil {
+			t.Fatalf("%s mixed recognized PT set rejected: %v", selector, err)
+		}
+		if p.External.TorBridge.Transport != "custom" {
+			t.Fatalf("%s normalized transport=%q, want custom", selector, p.External.TorBridge.Transport)
+		}
+		if got, err := TorBridgeTransport(p.External.TorBridge); err != nil || got != "custom" {
+			t.Fatalf("%s TorBridgeTransport=%q err=%v", selector, got, err)
+		}
+		if len(p.External.TorBridge.Bridges) != 3 || !strings.HasPrefix(p.External.TorBridge.Bridges[1], "webtunnel ") || !strings.HasPrefix(p.External.TorBridge.Bridges[2], "meek_lite ") {
+			t.Fatalf("custom PT lines changed unexpectedly: %#v", p.External.TorBridge.Bridges)
+		}
+	}
+}
+
+func TestTorBridgeTransportSelectorRejectsMismatchAndUnmarkedMixedProfiles(t *testing.T) {
 	p := torProfile("tor-bridge", validObfs4Bridge)
 	p.External.TorBridge.Transport = "snowflake"
 	if err := NormalizeRouterProfile(&p); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("transport mismatch accepted: %v", err)
 	}
 	p = torProfile("tor-bridge", validObfs4Bridge, validWebTunnelBridge)
-	if err := NormalizeRouterProfile(&p); err == nil || !strings.Contains(err.Error(), "cannot mix") {
-		t.Fatalf("mixed PT profile accepted: %v", err)
+	if err := NormalizeRouterProfile(&p); err == nil || !strings.Contains(err.Error(), "unless transport=custom") {
+		t.Fatalf("unmarked mixed PT profile accepted: %v", err)
+	}
+}
+
+func TestTorBridgeRejectsCustomTransportInjection(t *testing.T) {
+	for _, line := range []string{
+		"Bridge custom 203.0.113.9:443 0123456789ABCDEF0123456789ABCDEF01234567 command=/tmp/evil",
+		"ClientTransportPlugin snowflake exec /tmp/evil",
+		"Bridge obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=x\nClientTransportPlugin obfs4 exec /tmp/evil",
+	} {
+		p := torProfile("tor-bridge", line)
+		p.External.TorBridge.Transport = "custom"
+		if err := NormalizeRouterProfile(&p); err == nil {
+			t.Fatalf("Tor custom injection line was accepted: %q", line)
+		}
 	}
 }
 
@@ -100,7 +135,7 @@ func TestTorBridgeRejectsUnsafeOrUnsupportedBridgeLines(t *testing.T) {
 		{"obfs4 10.0.0.1:443 " + fp + " cert=x", "public literal"},
 		{"obfs4 203.0.113.44:443 BADFINGERPRINT cert=x", "40 hexadecimal"},
 		{"obfs4 203.0.113.44:443 " + fp + " iat-mode=0", "requires a bounded cert"},
-		{"meek_lite 0.0.2.0:2 " + fp + " url=http://blocked.example/ front=front.example", "safe url"},
+		{"meek_lite 0.0.2.0:2 url=http://blocked.example/ front=front.example", "safe url"},
 		{"snowflake 192.0.2.3:80 " + fp + " fingerprint=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA url=https://broker.example/ front=front.example ice=stun:stun.example:3478", "matching"},
 		{"webtunnel 10.0.0.2:443 " + fp + " url=http://bridge.example/path", "safe url"},
 		{"snowflake 192.0.2.3:80 " + fp + " fingerprint=" + fp + " url=https://broker.example/ front=front.example ice=stun:stun.example:3478 exec=/tmp/evil", "unsupported"},
