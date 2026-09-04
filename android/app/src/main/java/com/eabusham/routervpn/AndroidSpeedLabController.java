@@ -38,6 +38,7 @@ final class AndroidSpeedLabController {
         if(request==null){callback.finished(null,new IllegalArgumentException("Speed Lab request is required."));return;}
         if(!running.compareAndSet(false,true)){callback.finished(null,new IllegalStateException("Another Speed Lab test is already running."));return;}
         lastHops=Collections.emptyList();lastHopError="";
+        boolean temporaryRuntimeRequested=false;
         try{
             String scope=normalize(request.scope,"current");
             if("current".equals(scope)){callback.progress("Testing the actual current Android path…");measure(request,callback,false);return;}
@@ -45,10 +46,11 @@ final class AndroidSpeedLabController {
             if(connection.isActiveOrTransitioning()){finish(callback,null,new IllegalStateException("Disconnect Router VPN before a temporary Android Speed Lab configuration."));return;}
             String topology=normalize(request.topology,"router");
             if("system-direct".equals(topology)){callback.progress("Testing raw Android system Internet with Router VPN disconnected…");measure(request,callback,false);return;}
+            temporaryRuntimeRequested=true;
             AndroidUnifiedConnectionController.Callback bridge=new AndroidUnifiedConnectionController.Callback(){
                 @Override public void progress(String message){callback.progress(message);}
                 @Override public void finished(boolean ok,String message){
-                    if(!ok){finish(callback,null,new IllegalStateException(message));return;}
+                    if(!ok){complete(callback,true,null,new IllegalStateException(message));return;}
                     callback.progress("Temporary path is proven. Running Speed Lab without saving this graph…");
                     measure(request,callback,true);
                 }
@@ -64,9 +66,9 @@ final class AndroidSpeedLabController {
                 case "external":
                     if(request.standardExit==null){finish(callback,null,new IllegalArgumentException("Choose a stored custom exit."));return;}
                     connection.connectExternal(request.entry,request.standardExit,request.externalDirect,bridge);break;
-                default: finish(callback,null,new IllegalArgumentException("Unsupported Android Speed Lab topology: "+topology));
+                default: temporaryRuntimeRequested=false;finish(callback,null,new IllegalArgumentException("Unsupported Android Speed Lab topology: "+topology));
             }
-        }catch(Throwable error){finish(callback,null,error);}
+        }catch(Throwable error){if(temporaryRuntimeRequested)complete(callback,true,null,error);else finish(callback,null,error);}
     }
 
     private void measure(Request request,Callback callback,boolean cleanup){
@@ -88,7 +90,7 @@ final class AndroidSpeedLabController {
 
     private void complete(Callback callback,boolean cleanup,AndroidSpeedLab.Result result,Throwable error){
         if(!cleanup){finish(callback,result,error);return;}
-        callback.progress(error==null?"Measurement complete. Tearing down temporary path…":"Measurement failed. Tearing down temporary path…");
+        callback.progress(error==null?"Measurement complete. Tearing down temporary path…":"Temporary setup/measurement failed. Restoring the disconnected state…");
         connection.disconnect(new AndroidUnifiedConnectionController.Callback(){
             @Override public void progress(String message){callback.progress(message);}
             @Override public void finished(boolean ok,String message){
