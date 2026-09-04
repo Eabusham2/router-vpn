@@ -6,7 +6,7 @@ command -v brew >/dev/null || { echo 'Install Homebrew first from brew.sh, then 
 
 # Keep the normal install small. Heavy Rust/LLVM build dependencies are only
 # installed when this Mac actually needs a local Rosenpass build.
-brew install wireguard-tools go make git python sing-box shadowsocks-rust || true
+brew install wireguard-tools go make git python sing-box shadowsocks-rust tor || true
 "$BUNDLE/client/install-xray.sh"
 
 ROOT=/opt/router-vpn-client
@@ -28,6 +28,24 @@ esac
 [[ -x "$BIN" && -x "$DNS_BIN" ]] || { echo 'This platform bundle is missing the matching macOS binaries.' >&2; exit 1; }
 sudo install -m 755 "$BIN" /usr/local/bin/router-vpn-client
 sudo install -m 755 "$DNS_BIN" /usr/local/bin/router-vpn-dns
+
+# Tor Browser's reproducible build currently pins Lyrebird 0.8.1. Build that
+# exact Tor Project tag locally only when the modern PT helper is absent.
+if ! command -v lyrebird >/dev/null; then
+  echo 'Building pinned Lyrebird 0.8.1 for Tor obfs4/meek/Snowflake/WebTunnel...'
+  TMP_LYREBIRD=$(mktemp -d)
+  if git init "$TMP_LYREBIRD/lyrebird" \
+    && git -C "$TMP_LYREBIRD/lyrebird" remote add origin https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird.git \
+    && git -C "$TMP_LYREBIRD/lyrebird" fetch --depth=1 origin refs/tags/lyrebird-0.8.1 \
+    && git -C "$TMP_LYREBIRD/lyrebird" checkout --detach FETCH_HEAD \
+    && (cd "$TMP_LYREBIRD/lyrebird" && GOTOOLCHAIN=auto go mod download && GOTOOLCHAIN=auto go mod verify && GOTOOLCHAIN=auto go build -trimpath -ldflags='-s -w' -o lyrebird ./cmd/lyrebird) \
+    && [[ -x "$TMP_LYREBIRD/lyrebird/lyrebird" ]]; then
+    sudo install -m 755 "$TMP_LYREBIRD/lyrebird/lyrebird" /usr/local/bin/lyrebird
+  else
+    echo 'Warning: pinned Lyrebird build failed. Tor obfs4 may still use obfs4proxy if installed; Snowflake/WebTunnel remain unavailable rather than using an unpinned helper.' >&2
+  fi
+  rm -rf "$TMP_LYREBIRD"
+fi
 
 if ! command -v rosenpass >/dev/null; then
   echo 'Installing build dependencies for Rosenpass PQ support...'
@@ -76,5 +94,6 @@ sudo chmod +x "$ROOT/modes/"*.sh 2>/dev/null || true
 cat <<TXT
 Installed Router VPN client engines.
 The service installer starts the local controller automatically at http://127.0.0.1:8788.
+Tor bridge profiles use the pinned Tor runtime plus Lyrebird where available; unsupported PTs stay unavailable rather than falling back to an unrelated transport.
 If macOS quarantines a locally-built Router VPN binary, first verify its checksum, then use System Settings > Privacy & Security > Open Anyway. The Setup Center also includes the exact quarantine-removal command for trusted files.
 TXT
