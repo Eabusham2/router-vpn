@@ -16,13 +16,14 @@ import (
 )
 
 type torBridgeRuntime struct {
-	RuntimeDir     string
-	TorBinary      string
-	PTBinary       string
-	SingBoxBinary  string
-	Transport      string
-	BridgeEndpoint string
-	SocksPort      int
+	RuntimeDir       string
+	TorBinary        string
+	PTBinary         string
+	SingBoxBinary    string
+	Transport        string
+	PluginTransports []string
+	BridgeEndpoint   string
+	SocksPort        int
 }
 
 func safeExecutable(name string) (string, error) {
@@ -36,17 +37,22 @@ func safeExecutable(name string) (string, error) {
 	return path, nil
 }
 
-func torBridgeTransportBinary(transport string) (string, error) {
+func torBridgeTransportBinary(transports []string) (string, error) {
+	if len(transports) == 0 {
+		return "", errors.New("Tor profile has no pluggable transports")
+	}
 	if path, err := safeExecutable("lyrebird"); err == nil {
 		return path, nil
 	}
-	if transport == "obfs4" || transport == "meek_lite" {
-		if path, err := safeExecutable("obfs4proxy"); err == nil {
-			return path, nil
+	for _, transport := range transports {
+		if transport != "obfs4" && transport != "meek_lite" {
+			return "", fmt.Errorf("Tor %s requires lyrebird; legacy obfs4proxy cannot provide this transport", transport)
 		}
-		return "", fmt.Errorf("Tor %s requires lyrebird (preferred) or obfs4proxy", transport)
 	}
-	return "", fmt.Errorf("Tor %s requires lyrebird; legacy obfs4proxy cannot provide this transport", transport)
+	if path, err := safeExecutable("obfs4proxy"); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("Tor %s requires lyrebird (preferred) or obfs4proxy", strings.Join(transports, ","))
 }
 
 func torBridgeRuntimeCapability() standardExitCapability {
@@ -71,45 +77,69 @@ func torBridgeRuntimeCapability() standardExitCapability {
 	return cap
 }
 
-func torBridgeProfile(profile common.RouterProfile) (common.RouterProfile, common.ExternalTorBridgeConfig, string, error) {
+func torRuntimeBridgeTransports(cfg common.ExternalTorBridgeConfig) ([]string, string, error) {
+	if len(cfg.Bridges) < 1 || len(cfg.Bridges) > 8 {
+		return nil, "", errors.New("Tor runtime requires between one and eight normalized bridge lines")
+	}
+	transports := make([]string, 0, len(cfg.Bridges))
+	seen := map[string]bool{}
+	firstHost := ""
+	for i, line := range cfg.Bridges {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			return nil, "", fmt.Errorf("Tor bridge %d is not normalized", i+1)
+		}
+		transport := fields[0]
+		switch transport {
+		case "obfs4", "meek_lite", "snowflake", "webtunnel":
+		default:
+			return nil, "", fmt.Errorf("Tor bridge %d has unsupported runtime transport %q", i+1, transport)
+		}
+		host, port, err := net.SplitHostPort(fields[1])
+		if err != nil {
+			return nil, "", fmt.Errorf("Tor bridge %d endpoint is invalid", i+1)
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			return nil, "", fmt.Errorf("Tor bridge %d endpoint must remain a safe literal IP", i+1)
+		}
+		if transport == "obfs4" && ip.IsPrivate() {
+			return nil, "", fmt.Errorf("Tor obfs4 bridge %d endpoint must remain a public literal IP", i+1)
+		}
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			return nil, "", fmt.Errorf("Tor bridge %d endpoint port is invalid", i+1)
+		}
+		if firstHost == "" {
+			firstHost = ip.String()
+		}
+		if !seen[transport] {
+			seen[transport] = true
+			transports = append(transports, transport)
+		}
+	}
+	return transports, firstHost, nil
+}
+
+func torBridgeProfile(profile common.RouterProfile) (common.RouterProfile, common.ExternalTorBridgeConfig, []string, string, error) {
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", err
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, nil, "", err
 	}
 	if profile.NodeKind != "external" || profile.External == nil || profile.External.Protocol != "tor-bridge" || profile.External.TorBridge == nil {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("profile is not a Tor bridge node")
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, nil, "", errors.New("profile is not a Tor bridge node")
 	}
 	cfg := *profile.External.TorBridge
 	cfg.Bridges = append([]string(nil), profile.External.TorBridge.Bridges...)
-	if len(cfg.Bridges) != 1 {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("current strict Tor runtime requires exactly one bridge line per profile; create separate profiles for additional bridges")
-	}
-	transport, err := common.TorBridgeTransport(&cfg)
+	transports, firstHost, err := torRuntimeBridgeTransports(cfg)
 	if err != nil {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", err
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, nil, "", err
 	}
-	if cfg.Transport != transport {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("normalized Tor transport identity is inconsistent")
+	if cfg.Transport != "custom" {
+		if len(transports) != 1 || cfg.Transport != transports[0] {
+			return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, nil, "", errors.New("normalized Tor transport identity is inconsistent")
+		}
 	}
-	fields := strings.Fields(cfg.Bridges[0])
-	if len(fields) < 3 || fields[0] != transport {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("normalized Tor bridge line is invalid")
-	}
-	host, port, err := net.SplitHostPort(fields[1])
-	if err != nil {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("normalized Tor bridge endpoint is invalid")
-	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("Tor bridge endpoint must remain a safe literal IP")
-	}
-	if transport == "obfs4" && ip.IsPrivate() {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("Tor obfs4 physical endpoint must remain a public literal IP")
-	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("Tor bridge endpoint port is invalid")
-	}
-	return profile, cfg, ip.String(), nil
+	return profile, cfg, transports, firstHost, nil
 }
 
 func torrcQuote(value string) (string, error) {
@@ -125,11 +155,10 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	if !cap.Supported {
 		return torBridgeRuntime{}, errors.New(cap.Reason)
 	}
-	profile, cfg, bridgeHost, err := torBridgeProfile(profile)
+	profile, cfg, transports, bridgeHost, err := torBridgeProfile(profile)
 	if err != nil {
 		return torBridgeRuntime{}, err
 	}
-	transport := cfg.Transport
 	killPolicy := strings.ToLower(strings.TrimSpace(policy.KillSwitchPolicy))
 	if killPolicy == "" {
 		if policy.KillSwitch {
@@ -138,8 +167,9 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 			killPolicy = "off"
 		}
 	}
-	if transport != "obfs4" && killPolicy != "off" {
-		return torBridgeRuntime{}, fmt.Errorf("Tor %s uses dynamic/CDN/WebRTC bootstrap egress that Router VPN cannot safely pre-whitelist yet; set this profile kill switch Off or use obfs4 so strict pre-tunnel leak protection remains truthful", transport)
+	strictLiteralObfs4 := cfg.Transport == "obfs4" && len(cfg.Bridges) == 1 && len(transports) == 1 && transports[0] == "obfs4"
+	if !strictLiteralObfs4 && killPolicy != "off" {
+		return torBridgeRuntime{}, fmt.Errorf("Tor %s bridge set uses multiple or dynamic/CDN/WebRTC bootstrap egress that Router VPN cannot safely pre-whitelist yet; set this profile kill switch Off or use one obfs4 bridge so strict pre-tunnel leak protection remains truthful", cfg.Transport)
 	}
 	bridgeFields := strings.Fields(cfg.Bridges[0])
 	_, bridgePort, err := net.SplitHostPort(bridgeFields[1])
@@ -152,7 +182,7 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	if err != nil {
 		return torBridgeRuntime{}, err
 	}
-	ptBinary, err := torBridgeTransportBinary(transport)
+	ptBinary, err := torBridgeTransportBinary(transports)
 	if err != nil {
 		return torBridgeRuntime{}, err
 	}
@@ -185,17 +215,20 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	if err != nil {
 		return cleanup(err)
 	}
-	torrc := strings.Join([]string{
+	torrcLines := []string{
 		"ClientOnly 1",
 		"AvoidDiskWrites 1",
 		"SafeLogging 1",
 		fmt.Sprintf("SocksPort 127.0.0.1:%d", cfg.SocksPort),
 		"DataDirectory " + quotedData,
 		"UseBridges 1",
-		"ClientTransportPlugin " + transport + " exec " + quotedPT,
-		"Bridge " + cfg.Bridges[0],
-		"Log notice file " + quotedLog,
-	}, "\n") + "\n"
+		"ClientTransportPlugin " + strings.Join(transports, ",") + " exec " + quotedPT,
+	}
+	for _, bridge := range cfg.Bridges {
+		torrcLines = append(torrcLines, "Bridge "+bridge)
+	}
+	torrcLines = append(torrcLines, "Log notice file "+quotedLog)
+	torrc := strings.Join(torrcLines, "\n") + "\n"
 	if err := writePrivateRuntimeFile(filepath.Join(runtimeDir, "torrc"), []byte(torrc)); err != nil {
 		return cleanup(err)
 	}
@@ -220,7 +253,7 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	}
 	return torBridgeRuntime{
 		RuntimeDir: runtimeDir, TorBinary: torBinary, PTBinary: ptBinary, SingBoxBinary: singBoxBinary,
-		Transport: transport, BridgeEndpoint: bridgeHost, SocksPort: cfg.SocksPort,
+		Transport: cfg.Transport, PluginTransports: append([]string(nil), transports...), BridgeEndpoint: bridgeHost, SocksPort: cfg.SocksPort,
 	}, nil
 }
 
@@ -250,6 +283,7 @@ func torBridgeCommand(a *app, policy, profile common.RouterProfile) (*exec.Cmd, 
 		"HOMEVPN_POLICY_PROFILE_ID="+profile.ID,
 		"HOMEVPN_ENDPOINT="+prepared.BridgeEndpoint,
 		"HOMEVPN_TOR_TRANSPORT="+prepared.Transport,
+		"HOMEVPN_TOR_PLUGIN_TRANSPORTS="+strings.Join(prepared.PluginTransports, ","),
 		"HOMEVPN_TOR_PT_BINARY="+prepared.PTBinary,
 	)
 	cmd.Stdout = os.Stdout
