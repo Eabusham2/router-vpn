@@ -76,15 +76,69 @@ need(
     "multihop entry/exit RTT and Mbps are independently measured on the same proved graph",
     "temporary path choices are restored after the test",
 )
+
+# Router VPN nodes commonly share the same private 10.77.0.1 API address. Per-hop
+# telemetry must therefore use local routing lanes that bind the request to the
+# entry or exit graph, then cryptographically prove which node answered. A plain
+# request to entry.RouterAPI/exit.RouterAPI is not sufficient hop ownership proof.
+need(
+    "cmd/client/multihop_lane_telemetry.go",
+    'const multihopEntryProofProxy = "http://127.0.0.1:1098"',
+    'proxyURL.Port() != "1098" && proxyURL.Port() != "1099"',
+    "proveMultihopLaneNode",
+    "validateSelectedNodeProof(p, body)",
+    "measureRoutedProfileLatencyViaProxy",
+    "measureRoutedProfileSpeedViaProxy",
+    "node identity proved before and after load",
+    "reserved local multihop hop lane",
+)
 need(
     "cmd/client/speed_lab_hops.go",
     "speedLabHopMeasurement",
     "measureSpeedLabMultihopHops",
-    "privatePathLatency",
-    "measureRoutedProfileSpeed",
+    "multihopEntryProofProxy",
+    "multihopProofProxy",
+    "measureRoutedProfileLatencyViaProxy",
+    "measureRoutedProfileSpeedViaProxy",
     "validateSpeedLabIdentity",
     "validateActiveMultihopSpeedGraph",
-    "not derived from RTT, end-to-end Mbps, or another hop",
+    "could not prove and measure latency or throughput",
+)
+need(
+    "cmd/client/telemetry_hops.go",
+    "/api/profile/speed-test",
+    "/api/multihop/speed-test",
+    "measureRoutedProfileSpeedViaProxy",
+    "multihopEntryProofProxy",
+    "multihopProofProxy",
+    "requested Router VPN node is not part of the active multihop graph",
+    "reserved local proof lane bound to that hop's cryptographic Router VPN node identity",
+    "http.StatusConflict",
+)
+need(
+    "modes/multihop.py",
+    "ENTRY_PROOF_PORT = 1098",
+    "PROOF_PORT = 1099",
+    '"tag": "entry-private"',
+    '"tag": "multihop-entry-proof"',
+    '"tag": "multihop-proof"',
+    '"inbound": ["multihop-entry-proof"]',
+    '"outbound": "entry-private"',
+    '"inbound": ["multihop-proof"]',
+    '"outbound": "proxy"',
+)
+need(
+    "cmd/client/multihop_native.go",
+    '"tag": "entry-private"',
+    '"detour": "entry-wg"',
+    '"tag": "multihop-entry-proof"',
+    '"listen_port": 1098',
+    '"tag": "multihop-proof"',
+    '"listen_port": 1099',
+    '"inbound": []any{"multihop-entry-proof"}',
+    '"outbound": "entry-private"',
+    '"inbound": []any{"multihop-proof"}',
+    '"outbound": "proxy"',
 )
 need(
     "cmd/client/speed_lab_persistence_guard.go",
@@ -209,12 +263,30 @@ need(
     "connection.disconnect",
 )
 need(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java",
+    "ENTRY_PROOF_PORT=1098",
+    "EXIT_PROOF_PORT=1099",
+    'put("tag", "entry-private")',
+    'put("detour", "entry-wg")',
+    'put("tag", "multihop-entry-proof")',
+    'put("tag", "multihop-proof")',
+    'put("outbound", "entry-private")',
+    'put("outbound", "proxy")',
+)
+need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidSpeedLabHopMeter.java",
     "sessionId",
     "pathGeneration",
     "activeEntryId",
     "activeExitId",
     '"passed".equals(s.pathProof)',
+    "ENTRY_PROOF_PORT=1098",
+    "EXIT_PROOF_PORT=1099",
+    "Proxy.Type.HTTP",
+    "AndroidNodeStore.stableNodeIdentity(bundle)",
+    'body.optString("node_id"',
+    'body.optString("proof"',
+    "Hop proof lane reached the wrong Router VPN node identity",
     "/api/benchmark/download",
     "/api/benchmark/upload",
     "/health",
