@@ -16,7 +16,7 @@ type externalProfileImportEnvelope struct {
 
 // externalProfileImport keeps external credentials in the private profile
 // store while returning only the secret-free public node view. It accepts a
-// single schema-v3 external RouterProfile or a bundle envelope containing one
+// single canonical schema-v4 external RouterProfile or a bundle envelope containing one
 // selected external profile; Router VPN bundles remain on /api/profile/import
 // because they require staged raw WG/sing-box identity assets.
 func (a *app) externalProfileImport(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +109,7 @@ func decodeExternalImport(raw []byte) (common.RouterProfile, error) {
 			return common.RouterProfile{}, err
 		}
 		if direct.NodeKind != "external" || direct.External == nil {
-			return common.RouterProfile{}, errors.New("direct import is not a schema-v3 external node profile")
+			return common.RouterProfile{}, errors.New("direct import is not a canonical schema-v4 external node profile")
 		}
 		return direct, nil
 	}
