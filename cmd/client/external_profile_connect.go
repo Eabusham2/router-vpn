@@ -39,7 +39,7 @@ func (a *app) externalProfileCapabilities(w http.ResponseWriter, r *http.Request
 		"router_vpn_entry_hop":     true,
 		"external_entry_hop":       true,
 		"external_entry_protocols": []string{"wireguard", "socks5", "shadowsocks", "hysteria2"},
-		"entry_requirement":        "Router VPN WireGuard or supported external standard entry; external OpenVPN entry remains fail-closed",
+		"entry_requirement":        "Router VPN WireGuard or supported external standard entry; OpenVPN and Tor bridge remain fail-closed as upstream entry hops",
 	})
 }
 
@@ -102,6 +102,15 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if externalProfile.External.Protocol == "tor-bridge" {
+		if strings.TrimSpace(q.EntryID) != "" || (q.Direct != nil && !*q.Direct) {
+			http.Error(w, "Tor bridge is currently a direct full-device external path only; Tor-as-entry hopping remains unavailable until that graph is implemented and proved", http.StatusNotImplemented)
+			return
+		}
+		a.torBridgeConnectOwned(w, externalProfile)
+		return
+	}
+
 	policy, err := externalRuntimePolicy(externalProfile)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -155,6 +164,10 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case "external":
+			if entry.External != nil && entry.External.Protocol == "tor-bridge" {
+				http.Error(w, "Tor bridge is not yet supported as an upstream external entry hop; refusing an unproved nested Tor graph", http.StatusNotImplemented)
+				return
+			}
 			entryExit, entryErr := standardExitFromExternalProfile(entry)
 			if entryErr != nil {
 				http.Error(w, "invalid external entry: "+entryErr.Error(), http.StatusBadRequest)
