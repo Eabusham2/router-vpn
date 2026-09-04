@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"router-vpn/internal/common"
@@ -50,29 +52,23 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	}
 	switch protocol {
 	case "wireguard":
-		if q.Server == "" || q.Port < 1 || q.Port > 65535 {
-			return common.RouterProfile{}, errors.New("WireGuard node requires server and port")
+		if q.Port < 1 || q.Port > 65535 {
+			return common.RouterProfile{}, errors.New("WireGuard node requires a valid port")
+		}
+		host, err := normalizeEndpoint(q.Server)
+		if err != nil {
+			return common.RouterProfile{}, errors.New("WireGuard node server: " + err.Error())
 		}
 		p.External.WireGuard = &common.ExternalWireGuardConfig{
 			PrivateKey:    q.WGPrivateKey,
 			Addresses:     append([]string(nil), q.WGAddresses...),
 			PeerPublicKey: q.WGPeerPublicKey,
 			PresharedKey:  q.WGPresharedKey,
-			Endpoint:      strings.TrimSpace(q.Server) + ":" + strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(rune(0))), string(rune(0)))),
+			Endpoint:      net.JoinHostPort(host, strconv.Itoa(q.Port)),
 			AllowedIPs:    append([]string(nil), q.WGAllowedIPs...),
 			DNS:           append([]string(nil), q.WGDNS...),
 			MTU:           q.WGMTU,
 		}
-		// Build the endpoint with net.JoinHostPort semantics in the validated
-		// standard-exit bridge below; keep this typed API free of ambiguous raw
-		// URI/config input.
-		exit := standardExit{Server: q.Server, ServerPort: q.Port}
-		host, port, err := splitExternalEndpoint(strings.TrimSpace(q.Server), q.Port)
-		if err != nil {
-			return common.RouterProfile{}, err
-		}
-		exit.Server, exit.ServerPort = host, port
-		p.External.WireGuard.Endpoint = joinExternalHostPort(exit.Server, q.Port)
 	case "socks5":
 		p.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: q.Server, Port: q.Port, Username: q.Username, Password: q.Password}
 	case "http-connect":
@@ -94,16 +90,6 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 		return common.RouterProfile{}, err
 	}
 	return p, nil
-}
-
-func joinExternalHostPort(host string, port int) string {
-	// Reuse net.SplitHostPort-compatible syntax without introducing DNS or URL
-	// parsing. IPv6 literals are bracketed; hostnames/IPv4 remain unchanged.
-	host = strings.Trim(strings.TrimSpace(host), "[]")
-	if strings.Contains(host, ":") {
-		return "[" + host + "]:" + strconv.Itoa(port)
-	}
-	return host + ":" + strconv.Itoa(port)
 }
 
 func registerExternalProfileCreateRoute(h *http.ServeMux, a *app) {
