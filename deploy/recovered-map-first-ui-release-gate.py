@@ -16,6 +16,8 @@ GATES = (
     "native-map-first-ui-audit.py",
     "speed-lab-shipping-audit.py",
     "setup-center-responsive-ui-audit.py",
+    "tor-circumvention-audit.py",
+    "typed-external-node-audit.py",
     "recovered-native-ui-contract-test.py",
     "recovered-native-ui-contract-audit.py",
     "native-session-mutation-audit.py",
