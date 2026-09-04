@@ -72,6 +72,8 @@ func standardExitCapabilities() []standardExitCapability {
 	return []standardExitCapability{
 		{Protocol: "wireguard", Implemented: true, Supported: true},
 		{Protocol: "socks5", Implemented: true, Supported: true},
+		{Protocol: "http-connect", Implemented: true, Supported: true},
+		{Protocol: "https-connect", Implemented: true, Supported: true},
 		{Protocol: "shadowsocks", Implemented: true, Supported: true},
 		{Protocol: "hysteria2", Implemented: true, Supported: true},
 		openvpn,
@@ -84,6 +86,10 @@ func normalizeStandardExitProtocol(value string) string {
 		return "wireguard"
 	case "socks", "socks5":
 		return "socks5"
+	case "http", "http_connect", "http-connect":
+		return "http-connect"
+	case "https", "https_connect", "https-connect":
+		return "https-connect"
 	case "ss", "shadowsocks":
 		return "shadowsocks"
 	case "hy2", "hysteria2":
@@ -155,7 +161,7 @@ func validateStandardExit(e *standardExit) error {
 	}
 	e.Protocol = normalizeStandardExitProtocol(e.Protocol)
 	switch e.Protocol {
-	case "wireguard", "socks5", "shadowsocks", "hysteria2", "openvpn":
+	case "wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn":
 	default:
 		return fmt.Errorf("unsupported standard exit protocol %q", e.Protocol)
 	}
@@ -183,9 +189,17 @@ func validateStandardExit(e *standardExit) error {
 		}
 	}
 	switch e.Protocol {
-	case "socks5":
+	case "socks5", "http-connect", "https-connect":
 		if (e.Username == "") != (e.Password == "") {
-			return errors.New("SOCKS5 username/password must either both be set or both be empty")
+			return fmt.Errorf("%s username/password must either both be set or both be empty", strings.ToUpper(e.Protocol))
+		}
+		if e.Protocol == "https-connect" {
+			e.TLSServerName = strings.TrimSpace(e.TLSServerName)
+			if e.TLSServerName == "" || strings.ContainsAny(e.TLSServerName, " /\\?#@") {
+				return errors.New("HTTPS CONNECT requires a valid TLS server name for SNI and certificate verification")
+			}
+		} else if strings.TrimSpace(e.TLSServerName) != "" {
+			return errors.New("plain HTTP CONNECT cannot specify a TLS server name; choose https-connect instead")
 		}
 	case "shadowsocks":
 		allowed := map[string]bool{"2022-blake3-aes-128-gcm": true, "2022-blake3-aes-256-gcm": true, "2022-blake3-chacha20-poly1305": true, "aes-128-gcm": true, "aes-256-gcm": true, "chacha20-ietf-poly1305": true}
@@ -327,6 +341,15 @@ func standardExitRuntimeParts(e standardExit, detour string) (map[string]any, ma
 		if e.Username != "" {
 			out["username"] = e.Username
 			out["password"] = e.Password
+		}
+	case "http-connect", "https-connect":
+		out["type"] = "http"
+		if e.Username != "" {
+			out["username"] = e.Username
+			out["password"] = e.Password
+		}
+		if e.Protocol == "https-connect" {
+			out["tls"] = map[string]any{"enabled": true, "server_name": e.TLSServerName}
 		}
 	case "shadowsocks":
 		out["type"] = "shadowsocks"
