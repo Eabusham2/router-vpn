@@ -77,8 +77,8 @@ need(
 )
 
 # Linux must physically compose the creator before the map-first unified shell is
-# compiled under -Werror. The wiring wrapper only changes the exact Add/manage
-# node button and preserves every other make_button() call.
+# compiled under -Werror. The current shipping composition must preserve a typed
+# six-family creator without aliasing Linux unified state as an App pointer.
 need(
     "client/linux/routervpn-external-node-v14.inc",
     "LinuxExternalNodeV14",
@@ -88,15 +88,8 @@ need(
     "VPN state changed while the external-node dialog was open",
 )
 need(
-    "client/linux/routervpn-external-node-wire-v14.inc",
-    '#include "routervpn-external-node-v14.inc"',
-    'g_strcmp0(label, "Add / manage nodes") != 0',
-    'make_button("Add external node…"',
-    "#define make_button routervpn_make_button_external_v14",
-)
-need(
     "client/linux/routervpn-auto-requirements-v11.inc",
-    '#include "routervpn-external-node-wire-v14.inc"',
+    "routervpn-external-node",
 )
 need(
     "client/linux/build-native-app.sh",
@@ -110,8 +103,8 @@ need(
 )
 
 # Android has its own process-owned VpnService/custom-exit store rather than the
-# desktop local-controller API. It still exposes the same six real typed families
-# and rejects OpenVPN/Tor instead of manufacturing support.
+# desktop local-controller API. It exposes the same six real typed families and
+# rejects OpenVPN/Tor instead of manufacturing support.
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
     'new Capability("wireguard",true', 'new Capability("socks5",true',
@@ -130,19 +123,31 @@ need(
     "activeOrTransitioning()",
 )
 
-# iOS/iPadOS must only offer protocols its pinned PacketTunnel actually runs.
-# HTTP/HTTPS CONNECT, OpenVPN and Tor stay absent from the creator until their
-# Apple dataplanes are real; external bundles must not inherit home Router/SOCKS
-# defaults merely to satisfy the compatibility envelope.
+# iOS/iPadOS now owns the same six common external families through pinned
+# Libbox/WireGuardKit PacketTunnel paths. OpenVPN and Tor remain unavailable.
+# External bundles must not inherit home Router/SOCKS defaults merely to satisfy
+# the compatibility envelope.
+need(
+    "ios/RouterVPN/App/Models.swift",
+    "struct ExternalHTTPConnectConfig",
+    'case httpConnect = "http_connect"',
+    'case httpsConnect = "https_connect"',
+)
 need(
     "ios/RouterVPN/App/IOSExternalNodeBuilderView.swift",
     "IOSExternalNodeProtocol",
-    "case wireguard, socks5, shadowsocks, hysteria2",
+    'case httpConnect = "http-connect"',
+    'case httpsConnect = "https-connect"',
+    'Set(["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"])',
+    'external["http_connect"] = block',
+    'external["https_connect"] = block',
+    "HTTPS CONNECT requires a safe TLS server name/SNI",
+    "Plain HTTP CONNECT cannot carry TLS metadata",
     "createIOSExternalNode",
     "linkNodeBundle(data)",
     "profileMutationBlocked",
     "literal IP so setup cannot leak pre-tunnel DNS",
-    "HTTP/HTTPS CONNECT, OpenVPN and Tor are not presented here",
+    "OpenVPN and Tor are not presented here",
     '"router_api": ""',
     '"adguard_ipv4": ""',
     '"adguard_ipv6": ""',
@@ -156,6 +161,8 @@ forbid(
     "ios/RouterVPN/App/IOSExternalNodeBuilderView.swift",
     '"socks_port": 1080',
     '"socks5Port": 1080',
+    'case openvpn',
+    'case tor',
 )
 need(
     "ios/RouterVPN/App/ProductRootView.swift",
@@ -163,12 +170,18 @@ need(
     "IOSExternalNodeBuilderView",
     "Add external VPN node",
     ".disabled(model.profileMutationBlocked)",
+    "HTTP CONNECT HTTPS CONNECT",
 )
 need(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
-    '["wireguard", "socks5", "shadowsocks", "hysteria2"]',
+    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]',
     "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom",
     "IOSNodeBundleStore.shared.link",
+)
+need(
+    "ios/RouterVPN/App/NodeManagerSheet.swift",
+    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]',
+    "Connect external",
 )
 need(
     "ios/RouterVPN/App/IOSNodeBundleStore.swift",
@@ -186,13 +199,14 @@ forbid(
 )
 need(
     "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
-    '["wireguard", "socks5", "shadowsocks", "hysteria2"]',
-    'case "wireguard"', 'case "socks5"', 'case "shadowsocks"', 'case "hysteria2"',
+    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]',
+    'case "http-connect", "https-connect"',
+    'let key = secure ? "https_connect" : "http_connect"',
+    '"type": "http"',
+    "External HTTPS CONNECT requires a safe TLS server name",
+    "Plain HTTP CONNECT cannot carry TLS metadata",
     "OpenVPN external exits are unavailable on iOS",
-)
-forbid(
-    "ios/RouterVPN/App/IOSExternalNodeBuilderView.swift",
-    'case http', 'case https', 'case openvpn', 'case tor',
+    "Tor bridges are unavailable on iOS",
 )
 
 if errors:
