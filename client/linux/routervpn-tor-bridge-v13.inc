@@ -28,6 +28,39 @@ static void linux_tor_status_v13(LinuxTorBridgeV13 *state, const char *text) {
     gtk_label_set_text(GTK_LABEL(state->status), text != NULL ? text : "");
 }
 
+static gboolean linux_tor_mutation_idle_v13(App *app, char **reason) {
+    if (reason != NULL) *reason = NULL;
+    if (app == NULL) {
+        if (reason != NULL) *reason = g_strdup("Tor profile mutation is unavailable.");
+        return FALSE;
+    }
+    Buffer out = {0};
+    char *err = NULL;
+    if (!api_request("/api/status", "GET", NULL, 4000, &out, &err)) {
+        if (reason != NULL) *reason = g_strdup_printf("Controller/status unavailable • Tor profile mutation locked%s%s", err != NULL && err[0] ? ": " : "", err != NULL ? err : "");
+        g_free(err);
+        free(out.data);
+        return FALSE;
+    }
+    JsonNode *root = parse_json(out.data);
+    gboolean idle = FALSE;
+    const char *phase = "";
+    gboolean connected = FALSE;
+    if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
+        JsonObject *obj = json_node_get_object(root);
+        connected = json_object_has_member(obj, "connected") && json_object_get_boolean_member(obj, "connected");
+        phase = obj_string(obj, "phase");
+        idle = !connected && (phase[0] == '\0' || g_ascii_strcasecmp(phase, "off") == 0 || g_ascii_strcasecmp(phase, "failed") == 0);
+    }
+    if (!idle && reason != NULL) {
+        *reason = g_strdup_printf("Disconnect or let the active VPN transition finish before adding a Tor bridge. Current phase: %s", phase[0] ? phase : "unknown");
+    }
+    if (root != NULL) json_node_free(root);
+    g_free(err);
+    free(out.data);
+    return idle;
+}
+
 static void linux_tor_refresh_caps_v13(LinuxTorBridgeV13 *state) {
     if (state == NULL) return;
     Buffer out = {0};
@@ -146,6 +179,13 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     (void)button;
     App *app = data;
     if (app == NULL) return;
+    char *blocked_reason = NULL;
+    if (!linux_tor_mutation_idle_v13(app, &blocked_reason)) {
+        append_diag(app, blocked_reason != NULL ? blocked_reason : "Tor profile mutation is locked while Router VPN is connected or transitioning.");
+        g_free(blocked_reason);
+        return;
+    }
+    g_free(blocked_reason);
 
     LinuxTorBridgeV13 state = {0};
     state.app = app;
