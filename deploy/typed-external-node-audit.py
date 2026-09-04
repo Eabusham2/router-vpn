@@ -50,6 +50,21 @@ need(
     "https-connect",
     "persistence",
 )
+# Raw/bundle imports must persist the same normalized external DNS/runtime policy
+# Connect will actually use, rather than saving an inherited Home/blank policy and
+# substituting Rescue DNS only at runtime.
+need(
+    "cmd/client/external_profile_import.go",
+    "policy, policyErr := externalRuntimePolicy(p)",
+    "p = policy",
+    "standardExitFromExternalProfile(p)",
+)
+need(
+    "cmd/client/external_profile_import_policy_test.go",
+    "TestExternalProfileImportPersistsRuntimeDNSPolicy",
+    'p.DNSMode != "rescue"',
+    'p.RouterAPI != ""',
+)
 
 # Windows composes the typed form through the already-shipping deterministic Tor
 # transform, so the large WPF product does not need a second parallel source.
