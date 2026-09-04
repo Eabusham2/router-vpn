@@ -42,6 +42,7 @@ extension RouterVPNModel {
         value.selectedRouterID = selected.id
         value.endpoint = selected.endpoint
         if selected.normalizedNodeKind == "router-vpn" {
+            value.nodeProofID = selected.nodeProofID ?? value.nodeProofID
             value.apiToken = selected.apiToken
             value.routerAPI = selected.routerAPI
             value.adGuardIPv4 = selected.adGuardIPv4
@@ -51,6 +52,7 @@ extension RouterVPNModel {
             value.socks5Username = ""
             value.socks5Password = ""
         } else {
+            value.nodeProofID = ""
             value.apiToken = ""; value.routerAPI = ""; value.adGuardIPv4 = ""; value.adGuardIPv6 = ""
             value.socks5Host = ""; value.socks5Port = 0; value.socks5Username = ""; value.socks5Password = ""
         }
@@ -93,8 +95,11 @@ extension RouterVPNModel {
         guard let expected = profile.external?.expectedPublicIP, !expected.isEmpty else {
             connected = false; message = "External node is missing its expected public exit IP."; return
         }
-        guard let encodedBundle = try? JSONEncoder().encode(bundle) else {
-            connected = false; message = "Could not encode the selected external node bundle."; return
+        let encodedBundle: Data
+        do {
+            encodedBundle = try externalRuntimeBundleData(source: bundle, profile: profile)
+        } catch {
+            connected = false; message = "Could not prepare the selected external runtime bundle: \(error.localizedDescription)"; return
         }
         tunnelTransitioning = true
         defer { tunnelTransitioning = false }
@@ -137,6 +142,50 @@ extension RouterVPNModel {
         } catch {
             connected = false; activeEngine = "none"; activeRawProfile = ""; message = error.localizedDescription
         }
+    }
+
+    private func externalRuntimeBundleData(source: ClientBundle, profile: RouterProfile) throws -> Data {
+        var runtimeProfile = profile
+        guard runtimeProfile.normalizedNodeKind == "external" else {
+            throw NSError(domain: "RouterVPN.ExternalNode", code: 40, userInfo: [NSLocalizedDescriptionKey: "External runtime handoff requires an external profile"])
+        }
+        runtimeProfile.nodeProofID = nil
+        runtimeProfile.routerAPI = ""
+        runtimeProfile.apiToken = ""
+        runtimeProfile.adGuardIPv4 = ""
+        runtimeProfile.adGuardIPv6 = ""
+        runtimeProfile.socksHost = ""
+        runtimeProfile.socksPort = 0
+        runtimeProfile.socksUsername = ""
+        runtimeProfile.socksPassword = ""
+        runtimeProfile.daitaHost = nil
+        runtimeProfile.daitaPort = nil
+        runtimeProfile.daitaRateKbps = nil
+        runtimeProfile.baseTunnel = nil
+        runtimeProfile.baseFallback = nil
+        runtimeProfile.pathProbeURL = nil
+
+        var runtime = source
+        runtime.nodeProofID = ""
+        runtime.endpoint = runtimeProfile.endpoint
+        runtime.apiToken = ""
+        runtime.routerAPI = ""
+        runtime.adGuardIPv4 = ""
+        runtime.adGuardIPv6 = ""
+        runtime.socks5Host = ""
+        runtime.socks5Port = 0
+        runtime.socks5Username = ""
+        runtime.socks5Password = ""
+        runtime.routerProfiles = [runtimeProfile]
+        runtime.selectedRouterID = runtimeProfile.id
+        runtime.logicalModes = []
+        runtime.modes = []
+        runtime.profiles = [:]
+        let data = try JSONEncoder().encode(runtime)
+        guard data.count <= 4 * 1024 * 1024 else {
+            throw NSError(domain: "RouterVPN.ExternalNode", code: 41, userInfo: [NSLocalizedDescriptionKey: "Selected external runtime profile exceeds the 4 MiB PacketTunnel handoff limit"])
+        }
+        return data
     }
 
     private func externalStrict(_ profile: RouterProfile) -> Bool {
