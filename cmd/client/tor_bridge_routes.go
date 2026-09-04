@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"router-vpn/internal/common"
 )
 
 type torBridgeConnectRequest struct {
@@ -43,6 +45,12 @@ func (a *app) torBridgeConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Tor bridge profile not found", http.StatusNotFound)
 		return
 	}
+	a.torBridgeConnectOwned(w, profile)
+}
+
+// torBridgeConnectOwned assumes the caller already owns beginConnectionOperation.
+// This lets the unified external-profile route dispatch Tor without nested locks.
+func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.RouterProfile) {
 	if _, _, _, err := torBridgeProfile(profile); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
