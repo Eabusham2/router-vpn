@@ -2,12 +2,19 @@ import Network
 import SwiftUI
 
 private enum IOSExternalNodeProtocol: String, CaseIterable, Identifiable {
-    case wireguard, socks5, shadowsocks, hysteria2
+    case wireguard
+    case socks5
+    case httpConnect = "http-connect"
+    case httpsConnect = "https-connect"
+    case shadowsocks
+    case hysteria2
     var id: String { rawValue }
     var title: String {
         switch self {
         case .wireguard: return "WireGuard"
         case .socks5: return "SOCKS5"
+        case .httpConnect: return "HTTP CONNECT"
+        case .httpsConnect: return "HTTPS CONNECT"
         case .shadowsocks: return "Shadowsocks"
         case .hysteria2: return "Hysteria2"
         }
@@ -38,7 +45,7 @@ extension RouterVPNModel {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
         }
-        let supported = Set(["wireguard", "socks5", "shadowsocks", "hysteria2"])
+        let supported = Set(["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"])
         guard supported.contains(protocolName) else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 2, userInfo: [NSLocalizedDescriptionKey: "This external protocol has no proven iOS PacketTunnel dataplane."])
         }
@@ -85,17 +92,38 @@ extension RouterVPNModel {
             var block: [String: Any] = ["host": server, "port": port]
             if !user.isEmpty { block["username"] = user; block["password"] = password }
             external["socks5"] = block
+        case "http-connect", "https-connect":
+            let secure = protocolName == "https-connect"
+            let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard user.isEmpty == password.isEmpty else {
+                throw NSError(domain: "RouterVPN.ExternalNode", code: 8, userInfo: [NSLocalizedDescriptionKey: "CONNECT proxy username/password must both be set or both be empty."])
+            }
+            var block: [String: Any] = ["host": server, "port": port]
+            if !user.isEmpty { block["username"] = user; block["password"] = password }
+            let sni = tlsServerName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if secure {
+                guard iosExternalSafeHostname(sni) else {
+                    throw NSError(domain: "RouterVPN.ExternalNode", code: 9, userInfo: [NSLocalizedDescriptionKey: "HTTPS CONNECT requires a safe TLS server name/SNI for certificate verification."])
+                }
+                block["tls_server_name"] = sni
+                external["https_connect"] = block
+            } else {
+                guard sni.isEmpty else {
+                    throw NSError(domain: "RouterVPN.ExternalNode", code: 10, userInfo: [NSLocalizedDescriptionKey: "Plain HTTP CONNECT cannot carry TLS metadata; choose HTTPS CONNECT instead."])
+                }
+                external["http_connect"] = block
+            }
         case "shadowsocks":
             let normalizedMethod = method.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let allowed = Set(["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305", "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"])
             guard allowed.contains(normalizedMethod), !secret.isEmpty else {
-                throw NSError(domain: "RouterVPN.ExternalNode", code: 8, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Shadowsocks method and password/PSK."])
+                throw NSError(domain: "RouterVPN.ExternalNode", code: 11, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Shadowsocks method and password/PSK."])
             }
             external["shadowsocks"] = ["server": server, "port": port, "method": normalizedMethod, "password": secret]
         case "hysteria2":
             let sni = tlsServerName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !secret.isEmpty, iosExternalSafeHostname(sni) else {
-                throw NSError(domain: "RouterVPN.ExternalNode", code: 9, userInfo: [NSLocalizedDescriptionKey: "Hysteria2 requires a password and safe TLS server name/SNI."])
+                throw NSError(domain: "RouterVPN.ExternalNode", code: 12, userInfo: [NSLocalizedDescriptionKey: "Hysteria2 requires a password and safe TLS server name/SNI."])
             }
             external["hysteria2"] = ["server": server, "port": port, "password": secret, "tls_server_name": sni]
         default: fatalError("guarded protocol")
@@ -212,7 +240,7 @@ struct IOSExternalNodeBuilderView: View {
                     Picker("External node type", selection: $selected) {
                         ForEach(IOSExternalNodeProtocol.allCases) { item in Text(item.title).tag(item) }
                     }
-                    Text("iOS exposes only external protocols with a real pinned PacketTunnel dataplane. HTTP/HTTPS CONNECT, OpenVPN and Tor are not presented here until their Apple runtime paths are proven.")
+                    Text("iOS exposes only external protocols with a real pinned PacketTunnel dataplane. OpenVPN and Tor are not presented here until their Apple runtime paths are proven.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Identity") {
@@ -221,8 +249,16 @@ struct IOSExternalNodeBuilderView: View {
                     TextField("Port", text: $port).keyboardType(.numberPad)
                     TextField("Expected public exit IP", text: $expectedPublicIP).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
-                if selected == .socks5 {
-                    Section("SOCKS5") { TextField("Username (optional)", text: $username); SecureField("Password (optional)", text: $password) }
+                if selected == .socks5 || selected == .httpConnect || selected == .httpsConnect {
+                    Section(selected == .socks5 ? "SOCKS5" : (selected == .httpsConnect ? "HTTPS CONNECT" : "HTTP CONNECT")) {
+                        TextField("Username (optional)", text: $username)
+                        SecureField("Password (optional)", text: $password)
+                        if selected == .httpsConnect {
+                            TextField("TLS server name / SNI", text: $tlsName).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            Text("HTTPS CONNECT verifies the proxy certificate against this SNI. Plain HTTP CONNECT intentionally has no TLS field.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 if selected == .shadowsocks {
                     Section("Shadowsocks") { TextField("Method", text: $method).textInputAutocapitalization(.never); SecureField("Password / PSK", text: $secret) }
