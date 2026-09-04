@@ -25,9 +25,14 @@ for marker in (
     'serverControlInfrastructurePorts',
     '8793: true',
     'validateEmergencyPeerTeardown',
+    'enforceEmergencyPeers',
+    'emergencyReconcileLoop',
+    'opMu      sync.Mutex',
     'remaining_peer_rows',
     'coverage_sources',
     's.setState(true, false)',
+    's.setState(true, true)',
+    'persisted policy could not be re-applied',
     'router-vpn server paused',
     'removeLivePeer(peer.Interface, peer.PublicKey)',
     'Resume restores ingress without rotating keys or deleting configuration',
@@ -42,6 +47,19 @@ for forbidden in (
     '0.0.0.0:8792', 'policy drop', 'flush ruleset',
 ):
     assert forbidden not in control, f"server control contains unsafe marker {forbidden!r}"
+
+# Emergency is a two-phase durable transaction: ordinary Stop must commit
+# first, then both WG/AWG peer sources must prove zero peers, and only then may
+# emergency=true be persisted. A restart must re-prove that stronger state.
+emergency = control.split('func (s *adminServerControl) emergencyStop', 1)[1]
+pause_at = emergency.find('s.setState(true, false)')
+prove_at = emergency.find('enforceEmergencyPeers()')
+emergency_at = emergency.find('s.setState(true, true)')
+assert 0 <= pause_at < prove_at < emergency_at, 'Emergency Stop state/proof ordering regressed'
+startup = control.split('func startAdminServerControlPlane()', 1)[1].split('func defaultServerControlState()', 1)[0]
+for marker in ('if err := s.apply(); err != nil', 'if s.emergencyActive()', 'enforceEmergencyPeers()', 'go s.emergencyReconcileLoop()'):
+    assert marker in startup, f"startup Emergency re-proof missing {marker!r}"
+assert startup.find('if err := s.apply(); err != nil') < startup.find('http.NewServeMux()'), 'admin plane must not serve before persisted firewall state is re-applied'
 
 for marker in (
     'Stop VPN', 'Emergency Stop', 'Resume VPN',
