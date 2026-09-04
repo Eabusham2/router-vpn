@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"router-vpn/internal/common"
 )
 
 const (
@@ -178,11 +180,11 @@ func validateStandardExit(e *standardExit) error {
 	if e.ServerPort < 1 || e.ServerPort > 65535 {
 		return errors.New("standard exit server port must be 1..65535")
 	}
-	ip := net.ParseIP(strings.TrimSpace(e.ExpectedPublicIP))
-	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-		return errors.New("expected_public_ip must be the public address expected after traffic really exits through this custom exit")
+	normalizedExit, err := common.NormalizeExpectedPublicIP(e.ExpectedPublicIP)
+	if err != nil {
+		return fmt.Errorf("expected_public_ip must be the public address expected after traffic really exits through this custom exit: %w", err)
 	}
-	e.ExpectedPublicIP = ip.String()
+	e.ExpectedPublicIP = normalizedExit
 	for label, value := range map[string]string{"username": e.Username, "password": e.Password, "secret": e.Secret, "tls_server_name": e.TLSServerName, "wg_private_key": e.WGPrivateKey, "wg_peer_public_key": e.WGPeerPublicKey, "wg_pre_shared_key": e.WGPreSharedKey} {
 		if len(value) > 4096 {
 			return fmt.Errorf("%s is too long", label)
