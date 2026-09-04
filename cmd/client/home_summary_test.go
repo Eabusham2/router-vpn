@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -110,5 +112,26 @@ func TestHomeSummaryUsesLiveRouterIDInsteadOfMutableSelection(t *testing.T) {
 	}
 	if value.NodeLatencyMs != 9 || value.KillSwitch != "strict" || value.EffectiveMTU != 1420 {
 		t.Fatalf("Home summary mixed selected-node metadata into live session: %+v", value)
+	}
+}
+
+func TestHomeExitProofRejectsMissingLiveRouterIdentity(t *testing.T) {
+	a := &app{}
+	tracker := sessionTrackerFor(a)
+	tracker.mu.Lock()
+	tracker.session = &connectionSession{
+		ID: "session-no-router", Connected: true, Phase: "connected", PathProof: "passed",
+		ActualMode: "wg", ActualBase: "wg", DNSProof: dnsProofState{Status: "passed"},
+	}
+	tracker.mu.Unlock()
+	defer sessionTrackers.Delete(a)
+
+	rr := httptest.NewRecorder()
+	a.proveHomeExit(rr, httptest.NewRequest(http.MethodPost, "/api/home-summary/prove-exit", nil))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("missing live RouterID status = %d, want %d: %s", rr.Code, http.StatusConflict, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "no node identity") || !strings.Contains(rr.Body.String(), "refusing to substitute") {
+		t.Fatalf("missing-identity failure was not explicit/fail-closed: %q", rr.Body.String())
 	}
 }
