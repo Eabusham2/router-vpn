@@ -156,6 +156,7 @@ for child in (
     "deploy/setup-center-download-retention-audit.py",
     "deploy/durable-state-transaction-audit.py",
     "deploy/auto-update-audit.py",
+    "deploy/tor-circumvention-audit.py",
 ):
     path = ROOT / child
     if not path.is_file():
