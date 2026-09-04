@@ -41,6 +41,21 @@ func validExternalCIDRs(values []string, label string, required bool) error {
 	return nil
 }
 
+// NormalizeExpectedPublicIP accepts only an address that can truthfully identify
+// an Internet exit. Documentation/test unicast ranges remain valid test fixtures,
+// while private, loopback, link-local, multicast, unspecified, and CGNAT space do
+// not qualify as a public VPN exit proof target.
+func NormalizeExpectedPublicIP(value string) (string, error) {
+	ip := net.ParseIP(strings.TrimSpace(value))
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return "", fmt.Errorf("expected public exit IP must be a public unicast address")
+	}
+	if v4 := ip.To4(); v4 != nil && v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
+		return "", fmt.Errorf("expected public exit IP cannot use carrier-grade NAT space")
+	}
+	return ip.String(), nil
+}
+
 func normalizeExternalHTTPConnect(c *ExternalHTTPConnectConfig, tls bool) error {
 	if c == nil { return fmt.Errorf("external CONNECT proxy configuration is missing") }
 	c.Host = strings.Trim(strings.TrimSpace(c.Host), "[]")
@@ -70,11 +85,11 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	if ext.Protocol == "tor-bridge" {
 		if ext.ExpectedPublicIP != "" { return fmt.Errorf("Tor bridge has a dynamic circuit exit; expected_public_ip must be empty and the runtime must prove/observe the live Tor exit") }
 	} else {
-		ip := net.ParseIP(ext.ExpectedPublicIP)
-		if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-			return fmt.Errorf("external node expected_public_ip must be the public address expected after traffic really exits through this node")
+		normalized, err := NormalizeExpectedPublicIP(ext.ExpectedPublicIP)
+		if err != nil {
+			return fmt.Errorf("external node expected_public_ip must be the public address expected after traffic really exits through this node: %w", err)
 		}
-		ext.ExpectedPublicIP = ip.String()
+		ext.ExpectedPublicIP = normalized
 	}
 
 	blocks := 0
