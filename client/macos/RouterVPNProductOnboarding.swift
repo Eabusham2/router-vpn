@@ -11,6 +11,7 @@ final class RouterVPNProductOnboarding: NSObject {
 
     private let doneKey = "RouterVPNProductOnboardingDoneV2"
     private let stepKey = "RouterVPNProductOnboardingStepV2"
+    private let mapFirstHintKey = "RouterVPNProductOnboardingMapFirstHintV1"
 
     private let steps: [Step] = [
         .init(title: "Welcome to Router VPN", body: "This is the daily native macOS VPN app. Setup Center deploys and administers the home node; app onboarding is separate from Setup Center onboarding. Install Router VPN once, then link one or many Router VPN or validated external nodes without reinstalling."),
@@ -27,9 +28,16 @@ final class RouterVPNProductOnboarding: NSObject {
         .init(title: "Full guide and rerun", body: "Setup Center Full Guide remains the home server/router administration source of truth. Use Help → Run onboarding to reopen these steps at any time. The final release also requires off-LAN, leak, DNS/IP, reconnect, visual/DPI and signed Apple-device proof; source readiness is not a substitute for those tests.")
     ]
 
+    /// Latest map-first contract: first launch never blocks Connect/Multihop/
+    /// Settings/Mode/DNS with a modal wizard. The full guide remains explicit
+    /// from Help and can still be rerun at any time.
     func presentIfNeeded(parent: NSWindow?) {
-        guard !UserDefaults.standard.bool(forKey: doneKey) else { return }
-        present(force: false, parent: parent)
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: doneKey), !defaults.bool(forKey: mapFirstHintKey) else { return }
+        defaults.set(true, forKey: mapFirstHintKey)
+        // No NSAlert here. Shipping UI is already visible and usable; Help owns
+        // the explicit full onboarding entry point.
+        _ = parent
     }
 
     func present(force: Bool, parent: NSWindow?) {
@@ -80,6 +88,7 @@ extension ProductWindowController {
 }
 
 // Shipping onboarding contract markers:
+// map first • first launch does not block controls • Help → Run onboarding •
 // Add or link a node • pairing • router-vpn-bundle.json • AUTO • WireGuard •
 // AmneziaWG • DNS • LAN Off • MTU/Jumbo • kill-switch • Multihop • forwarding •
 // permissions • Disconnect • private identity/path proof • Public exit •
