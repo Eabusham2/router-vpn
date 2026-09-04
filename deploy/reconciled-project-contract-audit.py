@@ -67,13 +67,37 @@ if defaults.get("selected_node_count") != 1:
     errors.append("client/unified-control-center-v2.json: exactly one node must be selected by default")
 if defaults.get("authenticated_transport") is not True:
     errors.append("client/unified-control-center-v2.json: authenticated transport must be enabled")
-node_types = {item.get("id") for item in contract.get("node_types", []) if isinstance(item, dict)}
-outer_bridges = set(contract.get("secure_transport", {}).get("outer_bridges", []))
-if "tor-bridge" not in node_types or "tor-ntor-v3" not in outer_bridges:
-    errors.append("client/unified-control-center-v2.json: Tor bridge contract is incomplete")
+
+node_rows = [item for item in contract.get("node_types", []) if isinstance(item, dict)]
+node_types = {item.get("id") for item in node_rows}
+tor_rows = [item for item in node_rows if item.get("id") == "tor-bridge"]
+if "tor-bridge" not in node_types or len(tor_rows) != 1:
+    errors.append("client/unified-control-center-v2.json: exactly one Tor bridge node contract is required")
+else:
+    tor = tor_rows[0]
+    roles = set(tor.get("role", []))
+    transports = set(tor.get("circumvention_transports", []))
+    if tor.get("final_transport") is not True or not {"bridge", "exit"}.issubset(roles) or "hop" in roles:
+        errors.append("client/unified-control-center-v2.json: Tor must be a bridge+circuit final exit, not an upstream hop")
+    if tor.get("upstream_hop") is not False:
+        errors.append("client/unified-control-center-v2.json: Tor upstream hopping must remain unavailable until implemented/proved")
+    required_pt = {"obfs4", "meek_lite", "snowflake", "webtunnel", "custom"}
+    if not required_pt.issubset(transports):
+        errors.append("client/unified-control-center-v2.json: Tor circumvention transport set is incomplete")
+
 secure = contract.get("secure_transport", {})
+inner = set(secure.get("inner_suites", []))
+outer = set(secure.get("outer_bridges", []))
+if "tor-ntor-v3-circuit" not in inner:
+    errors.append("client/unified-control-center-v2.json: proven Tor circuit is missing from encrypted final suites")
+for required in ("tor-obfs4", "tor-meek-lite", "tor-snowflake", "tor-webtunnel"):
+    if required not in outer:
+        errors.append(f"client/unified-control-center-v2.json: missing Tor censorship transport {required}")
 if secure.get("mandatory") is not True or secure.get("custom_crypto_allowed") is not False:
     errors.append("client/unified-control-center-v2.json: vetted authenticated encryption must be mandatory")
+capability = contract.get("capability_gating", {})
+if capability.get("tor_dynamic_pt_strict_kill_switch_requires_process_scoped_egress") is not True:
+    errors.append("client/unified-control-center-v2.json: dynamic Tor PT strict-kill-switch boundary is missing")
 forbid(
     "client/unified-control-center-v2.json",
     '"homemade_cipher"',
