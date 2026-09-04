@@ -241,17 +241,21 @@ for marker in (
 assert "runtime.close()" not in standard_activity
 
 # Forwarding side control is a real authenticated tunnel operation, not local
-# preference theater. It must be bound to the app-owned VPN Network and refuse
-# public Router API hosts.
+# preference theater. It must be bound to the app-owned VPN Network, refuse
+# public Router API hosts, and reject hostnames before any system DNS lookup.
 for marker in (
     'new URL(base+"/api/forwarding/master")',
     "vpn.openConnection",
     "getOwnerUid()==Process.myUid()",
+    "InetAddresses.isNumericAddress(host)",
+    "InetAddresses.parseNumericAddress(host)",
+    "literal private Router API address",
     "isPrivate(address)",
     "state.sessionId.equals(after.sessionId)",
     "after.pathGeneration!=state.pathGeneration",
 ):
     assert marker in forwarding, f"Android forwarding-master safety marker missing: {marker}"
+assert "InetAddress.getByName(uri.getHost())" not in forwarding, "Android forwarding master must not resolve Router API hostnames before VPN-network binding"
 for marker in (
     "AndroidForwardingMaster forwardingMaster",
     "Forward ON",
