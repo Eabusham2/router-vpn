@@ -54,6 +54,7 @@ func preflightPrivateConnectionRuntime() error {
 		"native-standard-exit",
 		"native-multihop",
 		"openvpn-standard-exit",
+		"tor-bridge",
 	} {
 		if _, err := privateRuntimeBase(root, category); err != nil {
 			return fmt.Errorf("private connection runtime %s is unsafe: %w", category, err)
