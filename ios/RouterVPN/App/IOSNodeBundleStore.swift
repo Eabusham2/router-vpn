@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -5,25 +6,39 @@ import Security
 final class IOSNodeBundleStore {
     static let shared = IOSNodeBundleStore()
     private let legacyDefaultsKey = "router-vpn.ios.node-bundles.v1"
-    private let keychainService = "com.eabusham.routervpn.private-node-bundles"
-    private let keychainAccount = "linked-bundles-v1"
+    private let legacyBundleKeychainService = "com.eabusham.routervpn.private-node-bundles"
+    private let legacyBundleKeychainAccount = "linked-bundles-v1"
+    private let keychainService = "com.eabusham.routervpn.private-node-key"
+    private let keychainAccount = "bundle-encryption-key-v1"
+    private let encryptedStoreName = "private-node-bundles-v2.sealed"
+    private let maxEncryptedStoreBytes = 192 * 1024 * 1024
+    private let storeAAD = Data("router-vpn-ios-private-node-store-v2".utf8)
     private var records: [String: Data] = [:]
     private var storageError: Error?
 
     private init() {
         do {
-            if let raw = try keychainData() {
-                guard let decoded = try? JSONDecoder().decode([String: Data].self, from: raw) else {
-                    throw NSError(domain: "RouterVPN.NodeStore", code: 90, userInfo: [NSLocalizedDescriptionKey: "Private linked-node Keychain data is corrupt; refusing to replace it with weaker fallback storage"])
-                }
-                records = decoded
-                UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
+            if try encryptedStoreExists() {
+                records = try readEncryptedRecords()
+                cleanupLegacyStoresBestEffort()
                 return
             }
-            if let legacy = UserDefaults.standard.data(forKey: legacyDefaultsKey),
-               let decoded = try? JSONDecoder().decode([String: Data].self, from: legacy) {
+            if let legacy = try keychainData(service: legacyBundleKeychainService, account: legacyBundleKeychainAccount) {
+                guard let decoded = try? JSONDecoder().decode([String: Data].self, from: legacy) else {
+                    throw NSError(domain: "RouterVPN.NodeStore", code: 90, userInfo: [NSLocalizedDescriptionKey: "Legacy private linked-node Keychain data is corrupt; refusing to replace it with weaker fallback storage"])
+                }
                 records = decoded
                 try persist()
+                cleanupLegacyStoresBestEffort()
+                return
+            }
+            if let legacy = UserDefaults.standard.data(forKey: legacyDefaultsKey) {
+                guard let decoded = try? JSONDecoder().decode([String: Data].self, from: legacy) else {
+                    throw NSError(domain: "RouterVPN.NodeStore", code: 91, userInfo: [NSLocalizedDescriptionKey: "Legacy linked-node data is corrupt; refusing automatic migration"])
+                }
+                records = decoded
+                try persist()
+                cleanupLegacyStoresBestEffort()
             }
         } catch {
             records = [:]
@@ -223,41 +238,138 @@ final class IOSNodeBundleStore {
         if let storageError { throw storageError }
     }
 
-    private func keychainQuery() -> [String: Any] {
+    private func storeDirectory() throws -> URL {
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 92, userInfo: [NSLocalizedDescriptionKey: "Application Support storage is unavailable"])
+        }
+        let directory = base.appendingPathComponent("RouterVPN", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        )
+        let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 93, userInfo: [NSLocalizedDescriptionKey: "Private node storage directory is unsafe"])
+        }
+        return directory
+    }
+
+    private func encryptedStoreURL() throws -> URL {
+        try storeDirectory().appendingPathComponent(encryptedStoreName, isDirectory: false)
+    }
+
+    private func encryptedStoreExists() throws -> Bool {
+        let url = try encryptedStoreURL()
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 94, userInfo: [NSLocalizedDescriptionKey: "Private linked-node store is not a regular file"])
+        }
+        let size = values.fileSize ?? 0
+        guard size > 0, size <= maxEncryptedStoreBytes else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 95, userInfo: [NSLocalizedDescriptionKey: "Private linked-node store is empty or exceeds its safety limit"])
+        }
+        return true
+    }
+
+    private func readEncryptedRecords() throws -> [String: Data] {
+        guard let key = try encryptionKey(createIfMissing: false) else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 96, userInfo: [NSLocalizedDescriptionKey: "Encrypted linked-node store exists but its ThisDeviceOnly Keychain key is missing"])
+        }
+        let url = try encryptedStoreURL()
+        guard try encryptedStoreExists() else { return [:] }
+        let encrypted = try Data(contentsOf: url, options: [.mappedIfSafe])
+        let box = try AES.GCM.SealedBox(combined: encrypted)
+        let clear = try AES.GCM.open(box, using: key, authenticating: storeAAD)
+        guard let decoded = try? JSONDecoder().decode([String: Data].self, from: clear) else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 97, userInfo: [NSLocalizedDescriptionKey: "Encrypted linked-node store plaintext is corrupt"])
+        }
+        return decoded
+    }
+
+    private func writeEncryptedRecords(_ next: [String: Data]) throws {
+        let clear = try JSONEncoder().encode(next)
+        guard clear.count <= maxEncryptedStoreBytes else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 98, userInfo: [NSLocalizedDescriptionKey: "Linked-node store exceeds its bounded private-storage limit"])
+        }
+        guard let key = try encryptionKey(createIfMissing: true) else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 99, userInfo: [NSLocalizedDescriptionKey: "Could not create the private linked-node encryption key"])
+        }
+        let sealed = try AES.GCM.seal(clear, using: key, authenticating: storeAAD)
+        guard let combined = sealed.combined, combined.count <= maxEncryptedStoreBytes else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 100, userInfo: [NSLocalizedDescriptionKey: "Encrypted linked-node store exceeds its safety limit"])
+        }
+        let url = try encryptedStoreURL()
+        if FileManager.default.fileExists(atPath: url.path) {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                throw NSError(domain: "RouterVPN.NodeStore", code: 101, userInfo: [NSLocalizedDescriptionKey: "Refusing to replace an unsafe private linked-node store path"])
+            }
+        }
+        try combined.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        let committed = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard committed.isRegularFile == true, committed.isSymbolicLink != true, (committed.fileSize ?? 0) == combined.count else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 102, userInfo: [NSLocalizedDescriptionKey: "Private linked-node store commit could not be verified"])
+        }
+    }
+
+    private func encryptionKey(createIfMissing: Bool) throws -> SymmetricKey? {
+        if let raw = try keychainData(service: keychainService, account: keychainAccount) {
+            guard raw.count == 32 else {
+                throw NSError(domain: "RouterVPN.NodeStore", code: 103, userInfo: [NSLocalizedDescriptionKey: "Private linked-node encryption key has invalid length"])
+            }
+            return SymmetricKey(data: raw)
+        }
+        guard createIfMissing else { return nil }
+        let key = SymmetricKey(size: .bits256)
+        let raw = key.withUnsafeBytes { Data($0) }
+        try writeKeychain(raw, service: keychainService, account: keychainAccount)
+        return key
+    }
+
+    private func keychainQuery(service: String, account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
         ]
     }
 
-    private func keychainData() throws -> Data? {
-        var query = keychainQuery()
+    private func keychainData(service: String, account: String) throws -> Data? {
+        var query = keychainQuery(service: service, account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = item as? Data else {
-            throw keychainError(status, action: "read private linked-node bundles")
+            throw keychainError(status, action: "read private Keychain item")
         }
         return data
     }
 
-    private func writeKeychain(_ data: Data) throws {
-        let query = keychainQuery()
+    private func writeKeychain(_ data: Data, service: String, account: String) throws {
+        let query = keychainQuery(service: service, account: account)
         let update: [String: Any] = [kSecValueData as String: data]
         let updateStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
         if updateStatus == errSecSuccess { return }
         if updateStatus != errSecItemNotFound {
-            throw keychainError(updateStatus, action: "update private linked-node bundles")
+            throw keychainError(updateStatus, action: "update private Keychain item")
         }
         var add = query
         add[kSecValueData as String] = data
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let addStatus = SecItemAdd(add as CFDictionary, nil)
         guard addStatus == errSecSuccess else {
-            throw keychainError(addStatus, action: "create private linked-node bundles")
+            throw keychainError(addStatus, action: "create private Keychain item")
+        }
+    }
+
+    private func deleteKeychain(service: String, account: String) throws {
+        let status = SecItemDelete(keychainQuery(service: service, account: account) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw keychainError(status, action: "delete legacy private Keychain item")
         }
     }
 
@@ -266,12 +378,16 @@ final class IOSNodeBundleStore {
         return NSError(domain: "RouterVPN.NodeStore", code: Int(status), userInfo: [NSLocalizedDescriptionKey: "Could not \(action): \(detail)"])
     }
 
-    private func commitRecords(_ next: [String: Data]) throws {
-        let data = try JSONEncoder().encode(next)
-        try writeKeychain(data)
-        // Adopt RAM only after the durable Keychain write has committed.
-        records = next
+    private func cleanupLegacyStoresBestEffort() {
+        try? deleteKeychain(service: legacyBundleKeychainService, account: legacyBundleKeychainAccount)
         UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
+    }
+
+    private func commitRecords(_ next: [String: Data]) throws {
+        try writeEncryptedRecords(next)
+        // Adopt RAM only after authenticated encryption + atomic protected-file commit.
+        records = next
+        cleanupLegacyStoresBestEffort()
     }
 
     private func persist() throws {
