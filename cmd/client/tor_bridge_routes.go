@@ -14,6 +14,7 @@ type torBridgeConnectRequest struct {
 }
 
 func registerTorBridgeRoutes(h *http.ServeMux, a *app) {
+	h.HandleFunc("/api/tor-bridge/capabilities", a.torBridgeCapabilities)
 	h.HandleFunc("/api/tor-bridge/connect", a.torBridgeConnect)
 }
 
