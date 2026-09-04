@@ -25,11 +25,17 @@ func TestExternalWireGuardProfileBecomesStandardExit(t *testing.T) {
 func TestExternalProxyProfilesBecomeStandardExits(t *testing.T) {
 	ss:=externalProfileBase("ext-ss","shadowsocks");ss.External.Shadowsocks=&common.ExternalShadowsocksConfig{Server:"198.51.100.11",Port:8388,Method:"aes-256-gcm",Password:"secret"}
 	socks:=externalProfileBase("ext-socks","socks5");socks.External.SOCKS5=&common.ExternalSOCKS5Config{Host:"198.51.100.12",Port:1080,Username:"u",Password:"p"}
+	httpExit:=externalProfileBase("ext-http","http-connect");httpExit.External.HTTPConnect=&common.ExternalHTTPConnectConfig{Host:"198.51.100.15",Port:8080,Username:"hu",Password:"hp"}
+	httpsExit:=externalProfileBase("ext-https","https-connect");httpsExit.External.HTTPSConnect=&common.ExternalHTTPConnectConfig{Host:"198.51.100.16",Port:443,Username:"su",Password:"sp",TLSServerName:"proxy.example.com"}
 	hy:=externalProfileBase("ext-hy","hysteria2");hy.External.Hysteria2=&common.ExternalHysteria2Config{Server:"198.51.100.13",Port:8443,Password:"pw",TLSServerName:"hy.example.com"}
-	for _,p:=range []common.RouterProfile{ss,socks,hy}{
+	for _,p:=range []common.RouterProfile{ss,socks,httpExit,httpsExit,hy}{
 		e,err:=standardExitFromExternalProfile(p);if err!=nil{t.Fatalf("%s: %v",p.ID,err)}
 		if e.ID!=p.ID||e.ExpectedPublicIP!="203.0.113.90"{t.Fatalf("identity/proof lost: %+v",e)}
 	}
+	httpRuntime,err:=standardExitFromExternalProfile(httpExit);if err!=nil{t.Fatal(err)}
+	if httpRuntime.Protocol!="http-connect"||httpRuntime.Server!="198.51.100.15"||httpRuntime.ServerPort!=8080||httpRuntime.Username!="hu"||httpRuntime.Password!="hp"||httpRuntime.TLSServerName!=""{t.Fatalf("HTTP CONNECT adapter wrong: %+v",httpRuntime)}
+	httpsRuntime,err:=standardExitFromExternalProfile(httpsExit);if err!=nil{t.Fatal(err)}
+	if httpsRuntime.Protocol!="https-connect"||httpsRuntime.Server!="198.51.100.16"||httpsRuntime.ServerPort!=443||httpsRuntime.Username!="su"||httpsRuntime.Password!="sp"||httpsRuntime.TLSServerName!="proxy.example.com"{t.Fatalf("HTTPS CONNECT adapter wrong: %+v",httpsRuntime)}
 }
 
 func TestExternalTorBridgeBecomesDynamicExitAdapter(t *testing.T) {
