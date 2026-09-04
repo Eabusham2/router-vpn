@@ -177,6 +177,12 @@ need(
     "External node id is unsafe",
     "records[key] = normalized",
     "try persist()",
+    'bundle.apiToken = ""; bundle.routerAPI = ""; bundle.adGuardIPv4 = ""; bundle.adGuardIPv6 = ""',
+    'bundle.socks5Host = ""; bundle.socks5Port = 0',
+)
+forbid(
+    "ios/RouterVPN/App/IOSNodeBundleStore.swift",
+    'bundle.socks5Host = ""; bundle.socks5Port = 1080',
 )
 need(
     "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
