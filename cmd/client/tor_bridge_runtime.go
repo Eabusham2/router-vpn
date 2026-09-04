@@ -18,26 +18,52 @@ import (
 type torBridgeRuntime struct {
 	RuntimeDir     string
 	TorBinary      string
-	Obfs4Binary    string
+	PTBinary       string
 	SingBoxBinary  string
+	Transport      string
 	BridgeEndpoint string
 	SocksPort      int
+}
+
+func safeExecutable(name string) (string, error) {
+	path, err := exec.LookPath(name)
+	if err != nil || strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("%s is unavailable", name)
+	}
+	if strings.ContainsAny(path, "\r\n\x00") {
+		return "", fmt.Errorf("%s resolved to an unsafe executable path", name)
+	}
+	return path, nil
+}
+
+func torBridgeTransportBinary(transport string) (string, error) {
+	if path, err := safeExecutable("lyrebird"); err == nil {
+		return path, nil
+	}
+	if transport == "obfs4" || transport == "meek_lite" {
+		if path, err := safeExecutable("obfs4proxy"); err == nil {
+			return path, nil
+		}
+		return "", fmt.Errorf("Tor %s requires lyrebird (preferred) or obfs4proxy", transport)
+	}
+	return "", fmt.Errorf("Tor %s requires lyrebird; legacy obfs4proxy cannot provide this transport", transport)
 }
 
 func torBridgeRuntimeCapability() standardExitCapability {
 	cap := standardExitCapability{Protocol: "tor-bridge", Implemented: true}
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		cap.Reason = "Tor obfs4 bridge full-device runtime is currently implemented on Linux/macOS only; this platform remains unavailable instead of faking Tor"
+		cap.Reason = "Tor pluggable-transport full-device runtime is currently implemented on Linux/macOS only; this platform remains unavailable instead of faking Tor"
 		return cap
 	}
-	for _, binary := range []string{"tor", "obfs4proxy", "sing-box"} {
-		path, err := exec.LookPath(binary)
-		if err != nil || strings.TrimSpace(path) == "" {
-			cap.Reason = binary + " is required for the real Tor obfs4 bridge runtime"
+	for _, binary := range []string{"tor", "sing-box"} {
+		if _, err := safeExecutable(binary); err != nil {
+			cap.Reason = binary + " is required for the real Tor bridge runtime"
 			return cap
 		}
-		if strings.ContainsAny(path, "\r\n\x00") {
-			cap.Reason = binary + " resolved to an unsafe executable path"
+	}
+	if _, err := safeExecutable("lyrebird"); err != nil {
+		if _, legacyErr := safeExecutable("obfs4proxy"); legacyErr != nil {
+			cap.Reason = "lyrebird is required for modern Tor circumvention transports (obfs4proxy remains an obfs4/meek_lite compatibility fallback)"
 			return cap
 		}
 	}
@@ -50,15 +76,22 @@ func torBridgeProfile(profile common.RouterProfile) (common.RouterProfile, commo
 		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", err
 	}
 	if profile.NodeKind != "external" || profile.External == nil || profile.External.Protocol != "tor-bridge" || profile.External.TorBridge == nil {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("profile is not a Tor obfs4 bridge node")
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("profile is not a Tor bridge node")
 	}
 	cfg := *profile.External.TorBridge
 	cfg.Bridges = append([]string(nil), profile.External.TorBridge.Bridges...)
 	if len(cfg.Bridges) != 1 {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("current strict Tor runtime requires exactly one obfs4 bridge per profile so the kill switch owns exactly that physical public endpoint; create separate Tor profiles for additional bridges")
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("current strict Tor runtime requires exactly one bridge line per profile; create separate profiles for additional bridges")
+	}
+	transport, err := common.TorBridgeTransport(&cfg)
+	if err != nil {
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", err
+	}
+	if cfg.Transport != transport {
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("normalized Tor transport identity is inconsistent")
 	}
 	fields := strings.Fields(cfg.Bridges[0])
-	if len(fields) < 3 || fields[0] != "obfs4" {
+	if len(fields) < 3 || fields[0] != transport {
 		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("normalized Tor bridge line is invalid")
 	}
 	host, port, err := net.SplitHostPort(fields[1])
@@ -66,12 +99,15 @@ func torBridgeProfile(profile common.RouterProfile) (common.RouterProfile, commo
 		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("normalized Tor bridge endpoint is invalid")
 	}
 	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("Tor bridge physical endpoint must remain a public literal IP")
+	if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("Tor bridge endpoint must remain a safe literal IP")
+	}
+	if transport == "obfs4" && ip.IsPrivate() {
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("Tor obfs4 physical endpoint must remain a public literal IP")
 	}
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("Tor bridge physical endpoint port is invalid")
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, "", errors.New("Tor bridge endpoint port is invalid")
 	}
 	return profile, cfg, ip.String(), nil
 }
@@ -93,6 +129,18 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	if err != nil {
 		return torBridgeRuntime{}, err
 	}
+	transport := cfg.Transport
+	killPolicy := strings.ToLower(strings.TrimSpace(policy.KillSwitchPolicy))
+	if killPolicy == "" {
+		if policy.KillSwitch {
+			killPolicy = "on-connect"
+		} else {
+			killPolicy = "off"
+		}
+	}
+	if transport != "obfs4" && killPolicy != "off" {
+		return torBridgeRuntime{}, fmt.Errorf("Tor %s uses dynamic/CDN/WebRTC bootstrap egress that Router VPN cannot safely pre-whitelist yet; set this profile kill switch Off or use obfs4 so strict pre-tunnel leak protection remains truthful", transport)
+	}
 	bridgeFields := strings.Fields(cfg.Bridges[0])
 	_, bridgePort, err := net.SplitHostPort(bridgeFields[1])
 	if err != nil {
@@ -100,9 +148,18 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	}
 	bridgeEndpoint := net.JoinHostPort(bridgeHost, bridgePort)
 
-	torBinary, _ := exec.LookPath("tor")
-	obfs4Binary, _ := exec.LookPath("obfs4proxy")
-	singBoxBinary, _ := exec.LookPath("sing-box")
+	torBinary, err := safeExecutable("tor")
+	if err != nil {
+		return torBridgeRuntime{}, err
+	}
+	ptBinary, err := torBridgeTransportBinary(transport)
+	if err != nil {
+		return torBridgeRuntime{}, err
+	}
+	singBoxBinary, err := safeExecutable("sing-box")
+	if err != nil {
+		return torBridgeRuntime{}, err
+	}
 	runtimeDir, err := newPrivateRuntimeDir(root, "tor-bridge")
 	if err != nil {
 		return torBridgeRuntime{}, err
@@ -117,11 +174,17 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	}
 	logPath := filepath.Join(runtimeDir, "tor.log")
 	quotedData, err := torrcQuote(dataDir)
-	if err != nil { return cleanup(err) }
-	quotedObfs4, err := torrcQuote(obfs4Binary)
-	if err != nil { return cleanup(err) }
+	if err != nil {
+		return cleanup(err)
+	}
+	quotedPT, err := torrcQuote(ptBinary)
+	if err != nil {
+		return cleanup(err)
+	}
 	quotedLog, err := torrcQuote(logPath)
-	if err != nil { return cleanup(err) }
+	if err != nil {
+		return cleanup(err)
+	}
 	torrc := strings.Join([]string{
 		"ClientOnly 1",
 		"AvoidDiskWrites 1",
@@ -129,7 +192,7 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 		fmt.Sprintf("SocksPort 127.0.0.1:%d", cfg.SocksPort),
 		"DataDirectory " + quotedData,
 		"UseBridges 1",
-		"ClientTransportPlugin obfs4 exec " + quotedObfs4,
+		"ClientTransportPlugin " + transport + " exec " + quotedPT,
 		"Bridge " + cfg.Bridges[0],
 		"Log notice file " + quotedLog,
 	}, "\n") + "\n"
@@ -146,14 +209,18 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	}
 	singConfig := standardExitConfig(policy, dnsServer, nil, []any{outbound})
 	raw, err := json.MarshalIndent(singConfig, "", "  ")
-	if err != nil { return cleanup(err) }
-	if len(raw) > 4<<20 { return cleanup(errors.New("Tor bridge sing-box config exceeds safety limit")) }
+	if err != nil {
+		return cleanup(err)
+	}
+	if len(raw) > 4<<20 {
+		return cleanup(errors.New("Tor bridge sing-box config exceeds safety limit"))
+	}
 	if err := writePrivateRuntimeFile(filepath.Join(runtimeDir, "sing-box.json"), append(raw, '\n')); err != nil {
 		return cleanup(err)
 	}
 	return torBridgeRuntime{
-		RuntimeDir: runtimeDir, TorBinary: torBinary, Obfs4Binary: obfs4Binary, SingBoxBinary: singBoxBinary,
-		BridgeEndpoint: bridgeHost, SocksPort: cfg.SocksPort,
+		RuntimeDir: runtimeDir, TorBinary: torBinary, PTBinary: ptBinary, SingBoxBinary: singBoxBinary,
+		Transport: transport, BridgeEndpoint: bridgeHost, SocksPort: cfg.SocksPort,
 	}, nil
 }
 
@@ -182,6 +249,8 @@ func torBridgeCommand(a *app, policy, profile common.RouterProfile) (*exec.Cmd, 
 		"HOMEVPN_PROFILE_ID="+profile.ID,
 		"HOMEVPN_POLICY_PROFILE_ID="+profile.ID,
 		"HOMEVPN_ENDPOINT="+prepared.BridgeEndpoint,
+		"HOMEVPN_TOR_TRANSPORT="+prepared.Transport,
+		"HOMEVPN_TOR_PT_BINARY="+prepared.PTBinary,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
