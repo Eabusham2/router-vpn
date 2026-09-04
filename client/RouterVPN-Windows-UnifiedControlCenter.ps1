@@ -21,7 +21,7 @@ $script:RouterVPNUnifiedControlCenter = [ordered]@{
         'AmneziaWG Noise_IK + ChaCha20-Poly1305',
         'OpenVPN TLS 1.3 + AEAD',
         'Shadowsocks 2022 BLAKE3 + AEAD',
-        'Tor ntor-v3 outer bridge'
+        'Tor pluggable transport + proven ntor-v3 circuit'
     )
 }
 
@@ -29,7 +29,9 @@ function Test-RouterVPNSecureNodeChain {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string[]]$NodeTypes)
     $final = $NodeTypes[-1].ToLowerInvariant()
-    $allowed = @('router-vpn','wireguard','amneziawg','openvpn','shadowsocks-2022')
+    # tor-bridge is the complete owned PT -> Tor circuit runtime. The PT is
+    # circumvention, while the proved Tor circuit supplies the encrypted path.
+    $allowed = @('router-vpn','wireguard','amneziawg','openvpn','shadowsocks-2022','tor-bridge')
     if ($allowed -notcontains $final) {
         throw "$final is a bridge only. Add an authenticated encrypted tunnel after it."
     }
