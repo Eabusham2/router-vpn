@@ -111,7 +111,13 @@ for rel, markers in {
     "cmd/client/home_summary.go": (
         "stateToken := mtuStateSnapshotToken(a.state)", "after.ActualMode != before.ActualMode",
         "previousStore := cloneRouterProfileStore(a.profiles)", "a.rollbackProfilesLocked(previousStore)",
-        "homeExitProofs.Store",
+        "homeExitProofs.Store", "profileSettingsBusy(a.state.Connected, a.state.Phase)", "targetID = liveID",
+        "active Router VPN session has no node identity; refusing to substitute the mutable selected node",
+    ),
+    "cmd/client/session_state.go": (
+        "profileSettingsBusy(s.Connected, s.Phase)", "profileID = liveID",
+        "dnsProofObservationStillCurrentLocked", "dns-proof-stale", "stale result discarded",
+        "t.dnsProofLastAttempt = time.Time{}", "asyncMeasurementProfileToken(profile) == asyncMeasurementProfileToken(s.Profile)",
     ),
     "cmd/client/extras.go": (
         "captureAsyncMeasurementSession", "sameAsyncMeasurementSession", "stateAtStart := mtuStateSnapshotToken(a.state)",
@@ -205,6 +211,16 @@ require(
     "cmd/client/mtu_retest_test.go",
     "TestMTURetestPersistenceFailureRollsBackLiveAndInMemoryResult",
     "did not roll back the live interface",
+)
+require(
+    "cmd/client/home_summary_test.go",
+    "TestHomeSummaryUsesLiveRouterIDInsteadOfMutableSelection",
+    "TestHomeExitProofRejectsMissingLiveRouterIdentity",
+)
+require(
+    "cmd/client/session_state_test.go",
+    "TestSessionCaptureUsesLiveProfileWhileActiveAndSelectedProfileWhenIdle",
+    "TestDNSProofObservationFreshnessRejectsSameSessionPathChanges",
 )
 
 if errors:
