@@ -2,7 +2,6 @@ package com.eabusham.routervpn;
 
 import android.content.Context;
 import android.net.ConnectivityManager;
-import android.net.InetAddresses;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.os.Build;
@@ -52,11 +51,11 @@ final class AndroidForwardingMaster {
         URI uri=URI.create(api);
         String host=uri.getHost();
         if(host==null||host.isEmpty()||!("http".equalsIgnoreCase(uri.getScheme())||"https".equalsIgnoreCase(uri.getScheme())))throw new IllegalStateException("Private Router API URL is invalid.");
-        // Never resolve a Router API hostname through the system resolver before
-        // the request is bound to Router VPN's VPN Network. The private control
-        // plane is required to use a literal private/local address.
-        if(Build.VERSION.SDK_INT<Build.VERSION_CODES.Q||!InetAddresses.isNumericAddress(host))throw new IllegalStateException("Forwarding master requires a literal private Router API address; hostnames are refused before any DNS lookup.");
-        InetAddress address=InetAddresses.parseNumericAddress(host);
+        // Parse the literal address locally on every supported Android API level.
+        // AndroidNumericAddress never invokes DNS, unlike hostname resolution,
+        // and avoids the API-29-only android.net.InetAddresses dependency.
+        InetAddress address;
+        try{address=AndroidNumericAddress.parse(host);}catch(Exception e){throw new IllegalStateException("Forwarding master requires a literal private Router API address; hostnames are refused before any DNS lookup.",e);}
         if(!isPrivate(address))throw new IllegalStateException("Forwarding master refuses to send the node token to a non-private Router API host.");
         String base=api.endsWith("/")?api.substring(0,api.length()-1):api;
         Network vpn=ownedVpnNetwork();
