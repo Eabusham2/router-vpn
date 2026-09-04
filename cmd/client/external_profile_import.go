@@ -42,6 +42,15 @@ func (a *app) externalProfileImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "profile is not an external custom node", http.StatusBadRequest)
 		return
 	}
+	// Persist the same normalized DNS/kill-switch/runtime policy that Connect
+	// will use. Otherwise an imported node could appear saved with blank/home
+	// policy while the live runtime silently substitutes Rescue DNS later.
+	policy, policyErr := externalRuntimePolicy(p)
+	if policyErr != nil {
+		http.Error(w, "external profile policy is not runnable: "+policyErr.Error(), http.StatusBadRequest)
+		return
+	}
+	p = policy
 	// Re-run the exact dataplane adapter validation before persisting secrets so
 	// an imported profile cannot be stored as 'ready' if the native runtime would
 	// reject it at connect time.
