@@ -71,7 +71,20 @@ need(
     "upload_bufferbloat_ms",
     "beginSpeedLabTemporaryPersistenceGuard",
     "speedLabWriteStore(snapshot.Profiles)",
+    "measureSpeedLabMultihopHops",
+    '"hops": hops',
+    "multihop entry/exit RTT and Mbps are independently measured on the same proved graph",
     "temporary path choices are restored after the test",
+)
+need(
+    "cmd/client/speed_lab_hops.go",
+    "speedLabHopMeasurement",
+    "measureSpeedLabMultihopHops",
+    "privatePathLatency",
+    "measureRoutedProfileSpeed",
+    "validateSpeedLabIdentity",
+    "validateActiveMultihopSpeedGraph",
+    "not derived from RTT, end-to-end Mbps, or another hop",
 )
 need(
     "cmd/client/speed_lab_persistence_guard.go",
@@ -104,6 +117,10 @@ need(
     "Jumbo",
     "Require encrypted AUTO",
     "Require obfuscation AUTO",
+    "PER-HOP — SAME PROVED GRAPH",
+    "$R.hops",
+    "download_mbps",
+    "upload_mbps",
 )
 need("client/RouterVPN-Windows-App.ps1", "RouterVPN-Windows-SpeedLab.ps1", "Add-RouterVPNSpeedLabWindowsShell")
 
@@ -124,6 +141,10 @@ need(
     "jumbo",
     "require_encrypted",
     "require_obfuscation",
+    "hopSummary",
+    "PER-HOP — SAME PROVED GRAPH",
+    "download_mbps",
+    "upload_mbps",
 )
 need("client/macos/build-native-app.sh", "RouterVPNMacSpeedLab.swift")
 
@@ -142,6 +163,10 @@ need(
     "bufferbloat",
     "require_encrypted",
     "require_obfuscation",
+    "linux_speed_lab_hops_v12",
+    "PER-HOP — SAME PROVED GRAPH",
+    "download_mbps",
+    "upload_mbps",
 )
 need("client/linux/build-native-app.sh", "routervpn-speed-lab-v12.inc")
 
@@ -179,7 +204,21 @@ need(
     "connectNode",
     "connectMultihop",
     "connectExternal",
+    "AndroidSpeedLabHopMeter",
+    "lastHops",
     "connection.disconnect",
+)
+need(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidSpeedLabHopMeter.java",
+    "sessionId",
+    "pathGeneration",
+    "activeEntryId",
+    "activeExitId",
+    '"passed".equals(s.pathProof)',
+    "/api/benchmark/download",
+    "/api/benchmark/upload",
+    "/health",
+    "stale results were discarded",
 )
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidSpeedLabDialog.java",
@@ -190,6 +229,9 @@ need(
     "Max 12 s",
     "loaded",
     "bufferbloat",
+    "PER-HOP — SAME PROVED GRAPH",
+    "controller.hops()",
+    "controller.hopError()",
 )
 need("android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java", "AndroidSpeedLabDialog")
 
@@ -249,6 +291,8 @@ need(
     "Upload",
     "Loaded Δ",
     "bufferbloat",
+    "Multihop — unavailable on iOS",
+    "Speed Lab will not fake it",
 )
 need("ios/RouterVPN/App/ProductRootView.swift", "Open Router VPN Speed Lab", "IOSSpeedLabView()", "IOSSpeedLabPersistenceJournal.recoverIfNeeded")
 forbid("ios/RouterVPN/App/IOSSpeedLabRunner.swift", "fake multihop", "pretend multihop")
