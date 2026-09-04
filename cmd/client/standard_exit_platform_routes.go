@@ -33,7 +33,7 @@ func platformStandardExitCapabilitiesHandler(w http.ResponseWriter, r *http.Requ
 		"schema_version":           standardExitStoreVersion,
 		"capabilities":             externalProfileProtocolCapabilities(),
 		"external_entry_hop":       true,
-		"external_entry_protocols": []string{"wireguard", "socks5", "shadowsocks", "hysteria2"},
+		"external_entry_protocols": []string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"},
 		"openvpn_entry_hop":        false,
 	})
 }
@@ -240,7 +240,6 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 			if a.profiles.Profiles[i].ID == entry.ID {
 				a.profiles.Profiles[i].UseCount++
 			}
-		}
 	}
 	persistErr := a.persistProfilesLocked()
 	if persistErr != nil {
