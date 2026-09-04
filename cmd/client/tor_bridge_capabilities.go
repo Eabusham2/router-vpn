@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
 	"runtime"
 	"strings"
 )
@@ -60,4 +62,23 @@ func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 		rows[i].Helper = strings.TrimSpace(rows[i].Helper)
 	}
 	return rows
+}
+
+func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	w.Header().Set("cache-control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok": true,
+		"protocol": "tor-bridge",
+		"platform": runtime.GOOS,
+		"direct_full_device": true,
+		"upstream_hop": false,
+		"dynamic_exit": true,
+		"transports": torBridgeTransportCapabilities(),
+		"truth": "the pluggable transport evades censorship; Tor's proved ntor-v3 circuit is the encrypted final path",
+	})
 }
