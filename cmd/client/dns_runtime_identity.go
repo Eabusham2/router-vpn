@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -101,16 +102,57 @@ func validateExistingRuntimeAncestors(runRoot, configPath string) error {
 	return nil
 }
 
+func deterministicLinuxMultihopDNSRuntime(a *app, profileID, runtimeID string) (activeDNSRuntimeIdentity, bool, error) {
+	if runtime.GOOS != "linux" || a == nil {
+		return activeDNSRuntimeIdentity{}, false, nil
+	}
+	profileID = strings.TrimSpace(profileID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	a.mu.Lock()
+	st := a.state
+	a.mu.Unlock()
+	if !st.Connected || st.Phase != "connected" || st.Mode != "multihop" || st.RouterID != profileID || st.RuntimeMode != runtimeID {
+		return activeDNSRuntimeIdentity{}, false, nil
+	}
+	graph, ok := getActiveMultihopGraph(a)
+	if !ok || graph.ExitID != profileID || graph.ExitMode != runtimeID {
+		return activeDNSRuntimeIdentity{}, false, nil
+	}
+	configPath := filepath.Join(clientRoot(a), "run", "multihop", "exit", "sing-box.json")
+	configPath, err := runtimeConfigUnderPrivateRun(a, configPath)
+	if err != nil {
+		return activeDNSRuntimeIdentity{}, true, err
+	}
+	return activeDNSRuntimeIdentity{ProfileID: profileID, RuntimeID: runtimeID, Config: configPath}, true, nil
+}
+
 func activeDNSRuntimeConfigFor(a *app, profileID, runtimeID string) (string, bool, error) {
-	raw, ok := activeDNSRuntimeIdentities.Load(a)
-	if !ok {
-		return "", false, nil
+	profileID = strings.TrimSpace(profileID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	var identity activeDNSRuntimeIdentity
+	matched := false
+	if raw, ok := activeDNSRuntimeIdentities.Load(a); ok {
+		registered, typeOK := raw.(activeDNSRuntimeIdentity)
+		if !typeOK {
+			return "", true, errors.New("active DNS runtime identity has invalid type")
+		}
+		if registered.ProfileID == profileID && registered.RuntimeID == runtimeID {
+			identity = registered
+			matched = true
+		}
 	}
-	identity, ok := raw.(activeDNSRuntimeIdentity)
-	if !ok {
-		return "", false, errors.New("active DNS runtime identity has invalid type")
+	if !matched {
+		deterministic, owned, err := deterministicLinuxMultihopDNSRuntime(a, profileID, runtimeID)
+		if err != nil {
+			return "", owned, err
+		}
+		if !owned {
+			return "", false, nil
+		}
+		identity = deterministic
+		matched = true
 	}
-	if identity.ProfileID != strings.TrimSpace(profileID) || identity.RuntimeID != strings.TrimSpace(runtimeID) {
+	if !matched {
 		return "", false, nil
 	}
 	configPath, err := runtimeConfigUnderPrivateRun(a, identity.Config)
