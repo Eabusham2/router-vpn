@@ -4,7 +4,7 @@ set -euo pipefail
 BUNDLE=${1:-$(pwd)}
 [[ -f "$BUNDLE/client.json" && -f "$BUNDLE/routers.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf nftables git make gcc libc6-dev golang-go curl python3 tar cmake clang pkg-config libsodium-dev cargo rustc
+DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf nftables git make gcc libc6-dev golang-go curl python3 tar cmake clang pkg-config libsodium-dev cargo rustc tor
 "$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
 mkdir -p "$ROOT" /usr/local/bin /usr/local/lib /usr/local/sbin
@@ -25,6 +25,24 @@ case "$ARCH" in
 esac
 install -m 755 "$BIN" /usr/local/bin/router-vpn-client
 install -m 755 "$DNS_BIN" /usr/local/bin/router-vpn-dns
+
+# Tor Browser's reproducible build currently pins Lyrebird 0.8.1. Build that
+# exact Tor Project tag locally only when the modern PT helper is absent.
+if ! command -v lyrebird >/dev/null; then
+  echo 'Building pinned Lyrebird 0.8.1 for Tor obfs4/meek/Snowflake/WebTunnel...'
+  TMP_LYREBIRD=$(mktemp -d)
+  if git init "$TMP_LYREBIRD/lyrebird" \
+    && git -C "$TMP_LYREBIRD/lyrebird" remote add origin https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird.git \
+    && git -C "$TMP_LYREBIRD/lyrebird" fetch --depth=1 origin refs/tags/lyrebird-0.8.1 \
+    && git -C "$TMP_LYREBIRD/lyrebird" checkout --detach FETCH_HEAD \
+    && (cd "$TMP_LYREBIRD/lyrebird" && GOTOOLCHAIN=auto go mod download && GOTOOLCHAIN=auto go mod verify && GOTOOLCHAIN=auto go build -trimpath -ldflags='-s -w' -o lyrebird ./cmd/lyrebird) \
+    && [[ -x "$TMP_LYREBIRD/lyrebird/lyrebird" ]]; then
+    install -m 755 "$TMP_LYREBIRD/lyrebird/lyrebird" /usr/local/bin/lyrebird
+  else
+    echo 'Warning: pinned Lyrebird build failed. Tor obfs4 may still use obfs4proxy if installed; Snowflake/WebTunnel remain unavailable rather than using an unpinned helper.' >&2
+  fi
+  rm -rf "$TMP_LYREBIRD"
+fi
 
 # Official no-suffix Linux sing-box releases include libcronet.so, which Naive H2/H3
 # needs at runtime. Refresh both pieces when either is missing.
