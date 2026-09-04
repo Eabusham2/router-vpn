@@ -132,7 +132,8 @@ need(
 
 # iOS/iPadOS must only offer protocols its pinned PacketTunnel actually runs.
 # HTTP/HTTPS CONNECT, OpenVPN and Tor stay absent from the creator until their
-# Apple dataplanes are real; the external runtime remains the source of truth.
+# Apple dataplanes are real; external bundles must not inherit home Router/SOCKS
+# defaults merely to satisfy the compatibility envelope.
 need(
     "ios/RouterVPN/App/IOSExternalNodeBuilderView.swift",
     "IOSExternalNodeProtocol",
@@ -142,6 +143,19 @@ need(
     "profileMutationBlocked",
     "literal IP so setup cannot leak pre-tunnel DNS",
     "HTTP/HTTPS CONNECT, OpenVPN and Tor are not presented here",
+    '"router_api": ""',
+    '"adguard_ipv4": ""',
+    '"adguard_ipv6": ""',
+    '"socks_host": ""',
+    '"socks_port": 0',
+    '"routerAPI": ""',
+    '"socks5Host": ""',
+    '"socks5Port": 0',
+)
+forbid(
+    "ios/RouterVPN/App/IOSExternalNodeBuilderView.swift",
+    '"socks_port": 1080',
+    '"socks5Port": 1080',
 )
 need(
     "ios/RouterVPN/App/ProductRootView.swift",
