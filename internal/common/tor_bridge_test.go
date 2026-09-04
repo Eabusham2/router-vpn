@@ -6,6 +6,9 @@ import (
 )
 
 const validObfs4Bridge = "Bridge obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=abcdefghijklmnopqrstuvwxyz012345 iat-mode=0"
+const validMeekBridge = "Bridge meek_lite 0.0.2.0:2 97700DFE9F483596DDA6264C4D7DF7641E1E39CE url=https://meek.azureedge.net/ front=ajax.aspnetcdn.com"
+const validSnowflakeBridge = "Bridge snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 fingerprint=2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://snowflake-broker.example.net/ front=cdn.example.net ice=stun:stun.example.net:3478 utls-imitate=hellorandomizedalpn"
+const validWebTunnelBridge = "Bridge webtunnel 10.0.0.2:443 89ABCDEF0123456789ABCDEF0123456789ABCDEF url=https://bridge.example.net/secret ver=0.0.1"
 
 func torProfile(protocol string, bridges ...string) RouterProfile {
 	return RouterProfile{ID: "tor", Name: "Tor Bridge", NodeKind: "external", External: &ExternalNodeConfig{
@@ -32,9 +35,52 @@ func TestTorBridgeProfileNormalizesAliasWithoutFixedExit(t *testing.T) {
 		if p.External.TorBridge.SocksPort != ExternalTorDefaultSocksPort {
 			t.Fatalf("Tor SOCKS default = %d", p.External.TorBridge.SocksPort)
 		}
+		if p.External.TorBridge.Transport != "obfs4" {
+			t.Fatalf("Tor transport = %q", p.External.TorBridge.Transport)
+		}
 		if got := p.External.TorBridge.Bridges[0]; strings.HasPrefix(got, "Bridge ") || !strings.HasPrefix(got, "obfs4 203.0.113.44:443 ") {
 			t.Fatalf("Tor bridge line was not normalized: %q", got)
 		}
+	}
+}
+
+func TestTorBridgeSupportsCircumventionTransportFamilies(t *testing.T) {
+	cases := []struct {
+		name, line, transport, endpoint string
+	}{
+		{"obfs4", validObfs4Bridge, "obfs4", "203.0.113.44"},
+		{"meek alias", strings.Replace(validMeekBridge, "meek_lite", "meek", 1), "meek_lite", "0.0.2.0"},
+		{"snowflake", validSnowflakeBridge, "snowflake", "192.0.2.3"},
+		{"webtunnel", validWebTunnelBridge, "webtunnel", "10.0.0.2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := torProfile("tor-bridge", tc.line)
+			if err := NormalizeRouterProfile(&p); err != nil {
+				t.Fatalf("normalize %s: %v", tc.name, err)
+			}
+			if p.External.TorBridge.Transport != tc.transport {
+				t.Fatalf("transport=%q want %q", p.External.TorBridge.Transport, tc.transport)
+			}
+			if p.Endpoint != tc.endpoint {
+				t.Fatalf("endpoint=%q want %q", p.Endpoint, tc.endpoint)
+			}
+			if !strings.HasPrefix(p.External.TorBridge.Bridges[0], tc.transport+" ") {
+				t.Fatalf("normalized line=%q", p.External.TorBridge.Bridges[0])
+			}
+		})
+	}
+}
+
+func TestTorBridgeTransportSelectorRejectsMismatchAndMixedProfiles(t *testing.T) {
+	p := torProfile("tor-bridge", validObfs4Bridge)
+	p.External.TorBridge.Transport = "snowflake"
+	if err := NormalizeRouterProfile(&p); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("transport mismatch accepted: %v", err)
+	}
+	p = torProfile("tor-bridge", validObfs4Bridge, validWebTunnelBridge)
+	if err := NormalizeRouterProfile(&p); err == nil || !strings.Contains(err.Error(), "cannot mix") {
+		t.Fatalf("mixed PT profile accepted: %v", err)
 	}
 }
 
@@ -47,15 +93,18 @@ func TestTorBridgeRejectsFixedExpectedExit(t *testing.T) {
 }
 
 func TestTorBridgeRejectsUnsafeOrUnsupportedBridgeLines(t *testing.T) {
+	fp := "0123456789ABCDEF0123456789ABCDEF01234567"
 	bad := []struct {
 		line, want string
 	}{
-		{"obfs4 10.0.0.1:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=x", "public literal"},
+		{"obfs4 10.0.0.1:443 " + fp + " cert=x", "public literal"},
 		{"obfs4 203.0.113.44:443 BADFINGERPRINT cert=x", "40 hexadecimal"},
-		{"obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 iat-mode=0", "requires cert"},
-		{"snowflake 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=x", "requires an obfs4"},
-		{"obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=x exec=/tmp/evil", "unsupported"},
-		{"obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=x\nSocksPort 0.0.0.0:9999", "control character"},
+		{"obfs4 203.0.113.44:443 " + fp + " iat-mode=0", "requires a bounded cert"},
+		{"meek_lite 0.0.2.0:2 " + fp + " url=http://blocked.example/ front=front.example", "safe url"},
+		{"snowflake 192.0.2.3:80 " + fp + " fingerprint=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA url=https://broker.example/ front=front.example ice=stun:stun.example:3478", "matching"},
+		{"webtunnel 10.0.0.2:443 " + fp + " url=http://bridge.example/path", "safe url"},
+		{"snowflake 192.0.2.3:80 " + fp + " fingerprint=" + fp + " url=https://broker.example/ front=front.example ice=stun:stun.example:3478 exec=/tmp/evil", "unsupported"},
+		{"obfs4 203.0.113.44:443 " + fp + " cert=x\nSocksPort 0.0.0.0:9999", "control character"},
 	}
 	for _, tc := range bad {
 		p := torProfile("tor-bridge", tc.line)
