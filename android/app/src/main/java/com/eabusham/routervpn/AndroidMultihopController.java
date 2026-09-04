@@ -32,6 +32,8 @@ final class AndroidMultihopController {
     private static final int MAX_FILE = 8 * 1024 * 1024;
     private static final int MAX_TOTAL = 32 * 1024 * 1024;
     private static final int MAX_SESSION_DIRS = 32;
+    static final int ENTRY_PROOF_PORT = 1098;
+    static final int EXIT_PROOF_PORT = 1099;
     private static final SecureRandom RANDOM = new SecureRandom();
     private final Context context;
     private final NativeSingBoxController singBox;
@@ -42,6 +44,25 @@ final class AndroidMultihopController {
         final String exitMode;
         Prepared(NativeSingBoxController.SessionInfo session, File exitBundle, String exitMode) {
             this.session = session; this.exitBundle = exitBundle; this.exitMode = exitMode;
+        }
+    }
+
+    private static final class EntryPrivate {
+        final String host, username, password;
+        final int port;
+        EntryPrivate(String host, int port, String username, String password) {
+            this.host = host; this.port = port; this.username = username; this.password = password;
+        }
+        JSONObject toOutboundJson() throws Exception {
+            JSONObject out = new JSONObject()
+                    .put("type", "socks")
+                    .put("tag", "entry-private")
+                    .put("server", host)
+                    .put("server_port", port)
+                    .put("version", "5")
+                    .put("detour", "entry-wg");
+            if (!username.isEmpty()) out.put("username", username).put("password", password);
+            return out;
         }
     }
 
@@ -69,13 +90,14 @@ final class AndroidMultihopController {
         String exitIdentity = AndroidNodeStore.stableNodeIdentity(exit);
         if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
         WgConfig wg = parseWireGuard(entry);
+        EntryPrivate entryPrivate = parseEntryPrivate(entry);
         JSONObject exitProfile = requiredProfile(exit, exitMode);
         String encodedConfig = exitProfile.optString("sing-box.json", "").trim();
         if (encodedConfig.isEmpty()) throw new IllegalStateException("Exit mode has no embedded sing-box config.");
         byte[] rawConfig = Base64.decode(encodedConfig, Base64.DEFAULT);
         if (rawConfig.length == 0 || rawConfig.length > MAX_CONFIG) throw new IllegalStateException("Exit sing-box config size is invalid.");
         JSONObject config = new JSONObject(new String(rawConfig, StandardCharsets.UTF_8));
-        makeMultihopConfig(config, wg, exitMode);
+        makeMultihopConfig(config, wg, entryPrivate, exitMode);
         byte[] patched = (config.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
         if (patched.length > MAX_CONFIG) throw new IllegalStateException("Multihop sing-box config exceeds safety limit.");
 
@@ -115,14 +137,19 @@ final class AndroidMultihopController {
         }
     }
 
-    private static void makeMultihopConfig(JSONObject config, WgConfig wg, String exitMode) throws Exception {
+    private static void makeMultihopConfig(JSONObject config, WgConfig wg, EntryPrivate entryPrivate, String exitMode) throws Exception {
         JSONArray existingEndpoints = config.optJSONArray("endpoints");
         if (existingEndpoints != null && existingEndpoints.length() != 0) throw new IllegalStateException("Exit config already contains endpoints; mixed endpoint graphs are not accepted for Android multihop.");
         JSONArray inbounds = config.optJSONArray("inbounds");
         boolean fullDeviceTun = false;
         if (inbounds != null) for (int i = 0; i < inbounds.length(); i++) {
             JSONObject inbound = inbounds.optJSONObject(i);
-            if (inbound != null && "tun".equals(inbound.optString("type")) && inbound.optBoolean("auto_route", false)) fullDeviceTun = true;
+            if (inbound == null) continue;
+            if ("tun".equals(inbound.optString("type")) && inbound.optBoolean("auto_route", false)) fullDeviceTun = true;
+            int port = inbound.optInt("listen_port", 0);
+            String tag = inbound.optString("tag", "");
+            if (port == ENTRY_PROOF_PORT || port == EXIT_PROOF_PORT) throw new IllegalStateException("Exit profile already consumes a reserved multihop proof port.");
+            if ("multihop-entry-proof".equals(tag) || "multihop-proof".equals(tag)) throw new IllegalStateException("Exit profile already contains a reserved multihop proof inbound.");
         }
         if (!fullDeviceTun) throw new IllegalStateException("Exit mode is not a full-device libbox profile.");
 
@@ -134,15 +161,79 @@ final class AndroidMultihopController {
         JSONObject proxy = null;
         for (int i = 0; i < outbounds.length(); i++) {
             JSONObject outbound = outbounds.optJSONObject(i);
-            if (outbound != null && "proxy".equals(outbound.optString("tag", ""))) { proxy = outbound; break; }
+            if (outbound == null) continue;
+            String tag = outbound.optString("tag", "");
+            if ("entry-private".equals(tag)) throw new IllegalStateException("Exit profile already contains reserved entry-private outbound.");
+            if ("proxy".equals(tag)) proxy = outbound;
         }
         if (proxy == null) throw new IllegalStateException("Exit profile has no proxy outbound.");
         String type = proxy.optString("type", "").toLowerCase(Locale.ROOT);
         String expected = "shadowsocks".equals(exitMode) ? "shadowsocks" : "hysteria2";
         if (!expected.equals(type)) throw new IllegalStateException("Exit mode engine does not match its generated profile.");
         if (proxy.has("detour") && !proxy.optString("detour", "").trim().isEmpty()) throw new IllegalStateException("Exit proxy already has a detour; nested/mixed multihop is not accepted.");
+
         proxy.put("detour", "entry-wg");
+        outbounds.put(entryPrivate.toOutboundJson());
+        config.put("outbounds", outbounds);
         config.put("endpoints", new JSONArray().put(wg.toEndpointJson()));
+        inbounds.put(new JSONObject().put("type", "mixed").put("tag", "multihop-entry-proof").put("listen", "127.0.0.1").put("listen_port", ENTRY_PROOF_PORT));
+        inbounds.put(new JSONObject().put("type", "mixed").put("tag", "multihop-proof").put("listen", "127.0.0.1").put("listen_port", EXIT_PROOF_PORT));
+        config.put("inbounds", inbounds);
+
+        JSONArray oldRules = route.optJSONArray("rules");
+        JSONArray rules = new JSONArray();
+        rules.put(new JSONObject().put("inbound", new JSONArray().put("multihop-entry-proof")).put("outbound", "entry-private"));
+        rules.put(new JSONObject().put("inbound", new JSONArray().put("multihop-proof")).put("outbound", "proxy"));
+        if (oldRules != null) for (int i = 0; i < oldRules.length(); i++) rules.put(oldRules.get(i));
+        route.put("rules", rules);
+        config.put("route", route);
+    }
+
+    private static JSONObject selectedRouterProfile(JSONObject bundle) {
+        JSONArray profiles = bundle.optJSONArray("routerProfiles");
+        if (profiles == null || profiles.length() == 0) return null;
+        String wanted = bundle.optString("selectedRouterID", "").trim();
+        for (int i = 0; i < profiles.length(); i++) {
+            JSONObject profile = profiles.optJSONObject(i);
+            if (profile != null && wanted.equals(profile.optString("id", ""))) return profile;
+        }
+        return profiles.optJSONObject(0);
+    }
+
+    private static EntryPrivate parseEntryPrivate(JSONObject bundle) {
+        JSONObject profile = selectedRouterProfile(bundle);
+        String host = profile == null ? "" : profile.optString("socks_host", "").trim();
+        if (host.isEmpty()) host = bundle.optString("socks5Host", "").trim();
+        host = stripBrackets(host);
+        if (!literalIP(host)) throw new IllegalStateException("Android multihop entry private SOCKS host must be a literal IP address.");
+        int port = profile == null ? 0 : profile.optInt("socks_port", 0);
+        if (port == 0) port = bundle.optInt("socks5Port", 1080);
+        if (port < 1 || port > 65535) throw new IllegalStateException("Android multihop entry private SOCKS port is invalid.");
+        String username = profile == null ? "" : profile.optString("socks_username", "").trim();
+        if (username.isEmpty()) username = bundle.optString("socks5Username", "").trim();
+        String password = profile == null ? "" : profile.optString("socks_password", "");
+        if (password.isEmpty()) password = bundle.optString("socks5Password", "");
+        if (username.isEmpty() != password.isEmpty()) throw new IllegalStateException("Android multihop entry private SOCKS credentials are incomplete.");
+        return new EntryPrivate(host, port, username, password);
+    }
+
+    private static boolean literalIP(String value) {
+        if (value == null || value.isEmpty()) return false;
+        if (value.indexOf(':') >= 0) return value.matches("(?i)[0-9a-f:]+") && value.contains(":");
+        String[] parts = value.split("\\.", -1);
+        if (parts.length != 4) return false;
+        for (String part : parts) {
+            if (part.isEmpty() || part.length() > 3 || !part.matches("[0-9]+")) return false;
+            try { int x = Integer.parseInt(part); if (x < 0 || x > 255) return false; }
+            catch (NumberFormatException error) { return false; }
+        }
+        return true;
+    }
+
+    private static String stripBrackets(String value) {
+        String out = value == null ? "" : value.trim();
+        if (out.startsWith("[") && out.endsWith("]") && out.length() > 2) return out.substring(1, out.length() - 1);
+        return out;
     }
 
     private static JSONObject requiredProfile(JSONObject bundle, String mode) {
