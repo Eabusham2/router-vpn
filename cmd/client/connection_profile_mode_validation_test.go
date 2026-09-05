@@ -52,6 +52,56 @@ func TestPersistedConnectionProfileModeSetMatchesCanonicalCatalogs(t *testing.T)
 	}
 }
 
+func TestConnectionProfileSaveModeSetMatchesLogicalCatalog(t *testing.T) {
+	expected := readModeIDsForProfileTest(t, filepath.Join("..", "..", "configs", "client", "logical-modes.json"))
+	if len(expected) != len(connectionProfileSaveLogicalModeIDs) {
+		t.Fatalf("save-mode set size=%d logical catalog=%d", len(connectionProfileSaveLogicalModeIDs), len(expected))
+	}
+	for id := range expected {
+		if _, ok := connectionProfileSaveLogicalModeIDs[id]; !ok {
+			t.Fatalf("logical mode %q is missing from new-save mode set", id)
+		}
+	}
+	for id := range connectionProfileSaveLogicalModeIDs {
+		if _, ok := expected[id]; !ok {
+			t.Fatalf("stale new-save mode %q is not in the logical catalog", id)
+		}
+	}
+}
+
+func TestConnectionProfileSaveRequestRejectsRawAndUnknownModes(t *testing.T) {
+	for name, raw := range map[string]string{
+		"raw-runtime": `{"name":"Raw","mode":"wg"}`,
+		"unknown": `{"name":"Unknown","mode":"totally-fake-mode"}`,
+		"empty-custom": `{"name":"Custom","mode":"custom","custom_layers":[]}`,
+		"unknown-field": `{"name":"Hidden","mode":"base-raw","hidden":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var request connectionProfileSaveRequest
+			if err := json.Unmarshal([]byte(raw), &request); err == nil {
+				t.Fatalf("invalid new connection-profile request %s was accepted", name)
+			}
+		})
+	}
+}
+
+func TestConnectionProfileSaveRequestAcceptsLogicalStrategyCustomAndExternal(t *testing.T) {
+	for name, raw := range map[string]string{
+		"logical": `{"name":"Logical","mode":"base-raw"}`,
+		"smart": `{"name":"Smart","mode":"smart-auto"}`,
+		"auto": `{"name":"Auto","mode":"auto"}`,
+		"custom": `{"name":"Custom","mode":"custom:privacy","custom_layers":["wireguard"]}`,
+		"external-compat": `{"name":"External","mode":"external"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var request connectionProfileSaveRequest
+			if err := json.Unmarshal([]byte(raw), &request); err != nil {
+				t.Fatalf("valid new connection-profile request %s rejected: %v", name, err)
+			}
+		})
+	}
+}
+
 func TestConnectionProfileRecordRejectsUnknownAndContextWrongModes(t *testing.T) {
 	prefs := &connectionProfilePreferences{HomeLANAccess: true, KillSwitchPolicy: "off", IPv6Mode: "on", BaseTunnel: "auto", MTUPolicy: "auto"}
 	for name, record := range map[string]connectionProfileRecord{
