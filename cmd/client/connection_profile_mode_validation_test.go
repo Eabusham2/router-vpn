@@ -102,6 +102,14 @@ func TestConnectionProfileRecordRejectsKindModeMismatchOnRead(t *testing.T) {
 	}
 }
 
+func TestConnectionProfileRecordRejectsUnknownFieldsOnRead(t *testing.T) {
+	var record connectionProfileRecord
+	raw := `{"id":"one","name":"One","node_id":"ext","mode":"external","unexpected":"hidden-state"}`
+	if err := json.Unmarshal([]byte(raw), &record); err == nil {
+		t.Fatal("unknown persisted connection profile record field was silently accepted")
+	}
+}
+
 func TestLiveConnectionProfileSaveValidatorUsesLogicalCatalog(t *testing.T) {
 	a := &app{cfg: common.ClientConfig{ModesFile: filepath.Join("..", "..", "configs", "client", "modes.json")}}
 	if err := a.validateConnectionProfileModeForSave("base-raw", nil); err != nil {
