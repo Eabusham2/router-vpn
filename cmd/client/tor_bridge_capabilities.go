@@ -39,7 +39,9 @@ func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 	if runtime.GOOS == "windows" {
 		lyrebird, err := windowsTorRuntimeExecutable(root, "lyrebird.exe")
 		if err != nil {
-			for i := range rows { rows[i].Reason = err.Error() }
+			for i := range rows {
+				rows[i].Reason = err.Error()
+			}
 			return rows
 		}
 		for i := range rows {
@@ -78,13 +80,18 @@ func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
+	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	cap := torBridgeRuntimeCapabilityForRoot(root)
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok": true,
 		"protocol": "tor-bridge",
 		"platform": runtime.GOOS,
-		"direct_full_device": true,
+		"implemented": cap.Implemented,
+		"supported": cap.Supported,
+		"reason": cap.Reason,
+		"direct_full_device": cap.Supported,
 		"upstream_hop": false,
 		"dynamic_exit": true,
 		"transports": torBridgeTransportCapabilities(),
