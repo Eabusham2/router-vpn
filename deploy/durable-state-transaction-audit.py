@@ -120,13 +120,17 @@ forbid(
 run_test("ios/RouterVPN/test_private_json_store_contract.py")
 run_test("ios/RouterVPN/test_connection_profile_store_fail_closed.py")
 
-# Android whole-connection profiles share the same verified-inode primitive as
-# linked nodes/exits and retain node-policy rollback when preference persistence
-# fails. No bespoke delete/rename writer may bypass that contract.
+# Android whole-connection profiles use schema v4 but can migrate the exact
+# known legacy v1 file. Reads therefore intentionally go through the selected
+# source (v4 or legacy) while canonical writes always target the verified v4
+# file. Legacy cleanup must also use the shared private-file primitive.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
-    "AndroidPrivateFileStore.read(file, MAX_STORE)",
+    "SCHEMA_VERSION=4",
+    'FILE_NAME="connection-profiles-v4.json", LEGACY_FILE_NAME="connection-profiles-v1.json"',
+    "AndroidPrivateFileStore.read(source, MAX_STORE)",
     "AndroidPrivateFileStore.write(file, raw, MAX_STORE)",
+    "AndroidPrivateFileStore.remove(legacyFile, MAX_STORE)",
     "nodes.importBundle(originalBundle)",
 )
 forbid(
@@ -138,11 +142,19 @@ forbid(
 run_test("android/test_android_connection_profile_store_contract.py")
 run_test("android/test_android_node_store_transaction_contract.py")
 
-# MTU adoption remains a two-phase live/session transaction and persistence
-# failure must restore the live interface/in-memory state. Runtime-profile MTU
-# edits are disposable pre-connect state, but still reject path redirection and
-# restore earlier files if a later adoption fails.
-require("cmd/client/mtu_retest.go", "mtuRetestSnapshot", "rollbackMTULiveResult", "restoreMTUMeasurementFields")
+# MTU adoption remains a two-phase live/session transaction. The controller now
+# captures the exact live interface/family/original MTU before helper mutation
+# and owns rollback itself, so timeout/cancellation can recover even if the
+# helper process was killed before its own exception handler ran.
+require(
+    "cmd/client/mtu_retest.go",
+    "mtuRetestSnapshot",
+    "captureMTULiveSnapshot",
+    "validateMTUMeasurementAgainstLiveSnapshot",
+    "failMTURetestWithLiveRollback",
+    "restoreMTULiveSnapshot",
+    "restoreMTUMeasurementFields",
+)
 require("cmd/client/mtu_retest_test.go", "stale", "rollback")
 require(
     "modes/prepare-runtime-profile.py",
@@ -358,378 +370,189 @@ require(
 )
 forbid(
     "client/Optimize-RouterVPN-MTU.ps1",
-    "function Persist-Winner",
-    ".mtu.tmp",
-    "Move-Item -LiteralPath $tmp -Destination $Ctx.Path -Force",
+    "durable_adoption=$true",
 )
 
-# macOS PF uses the same hardened private state store. Poisoned-state force-off
-# may clear only Router VPN's scoped anchor; without the persisted reference
-# token it must never guess at global PF ownership.
-require(
-    "modes/kill-switch-platform.py",
-    "_linux.remove_state(root",
-    "_darwin._clear_anchor(check=False)",
-    "persisted PF reference token was unreadable",
-    "global PF enablement was left untouched",
-)
-forbid("modes/kill-switch-platform.py", "_linux.state_path(root).unlink")
-require(
-    "deploy/test_macos_killswitch_contract.py",
-    "_linux.remove_state(root",
-    "global PF enablement was left untouched",
-)
-require(
-    "modes/mtu-policy.py",
-    "_runtime_regular_bytes",
-    "os.path.samestat(opened, current)",
-    "MTU runtime profile adoption failed; prior runtime profile restored",
-    "_load_measurement_cache",
-)
-require(
-    "modes/test_mtu_policy.py",
-    "test_runtime_profile_symlink_is_never_followed",
-    "test_runtime_profile_late_adoption_failure_rolls_back",
-    "test_symlink_cache_is_never_followed",
-)
-
-# Router-agent privileged state must fail closed on symlink/broad permissions and
-# transactionally coordinate durable state with live firewall/DMZ changes.
+# Router-agent privileged state uses the same fail-closed private regular-file
+# primitive, including strict 0600 and same-directory atomic rename.
 require(
     "cmd/router-agent/private_state.go",
-    "validatePrivilegedStateFile",
-    "validatePrivilegedStateParent",
+    "readPrivateState",
+    "writePrivateState",
+    "removePrivateState",
+    "ensurePrivateStateParent",
+    "state parent contains symlink",
+    "state file is symlink",
     "os.SameFile",
     "os.CreateTemp",
     "tmp.Sync()",
-    "atomicWritePrivilegedState",
-    "atomicWritePrivilegedStateTargetUnchanged",
+    "os.Rename(tmpPath, path)",
 )
 require(
-    "cmd/router-agent/admin_forwarding_extension.go",
-    "dmzMu",
-    "cloneAdminForwardingExtensionState",
+    "cmd/router-agent/private_state_test.go",
+    "RejectsSymlinkParent",
+    "RejectsWorldReadableState",
+    "RejectsSymlinkState",
+    "RejectsOversizedState",
+    "TargetChangedBeforeRemove",
+)
+
+# Forwarding-extension ownership state is transactional: a failed live apply or
+# failed save restores prior metadata/live intent rather than reporting partial
+# success; stale-owner cleanup snapshots RAM and rolls it back when persistence
+# fails.
+require(
+    "cmd/router-agent/admin_forward_extension.go",
+    "captureForwardingSnapshotLocked",
+    "restoreForwardingSnapshotLocked",
+    "rollbackForwardingSnapshotLocked",
+    "saveForwardingState()",
+    "applyForwardingState()",
+    "cleanupExpiredForwardingLocked",
+    "pruneForwardingLocked",
+    "cleanupExpired",
+)
+require(
+    "cmd/router-agent/forwarding_transaction_test.go",
+    "TestForwardingFailureRollsBackMetadataAndLiveIntent",
+    "TestForwardingPersistenceFailureDoesNotChangeLiveRules",
+    "TestForwardingExpirationPersistenceFailureRestoresMemory",
+)
+
+# Protected DMZ uses the same serialized state owner; enable/disable and periodic
+# reassertion restore old intent/live rules after failure.
+require(
+    "cmd/router-agent/admin_protected_dmz.go",
+    "dmzMu.Lock()",
+    "snapshotProtectedDMZLocked",
     "rollbackProtectedDMZLocked",
-    "protectedDMZTransactionError",
-    "readPrivilegedState",
+    "saveProtectedDMZState()",
+    "applyProtectedDMZ()",
+    "reassertProtectedDMZOnce",
 )
 require(
-    "cmd/router-agent/admin_mutations.go",
-    "adminMutationFailure",
-    "rollback incomplete",
-    "atomicWritePrivilegedState",
+    "cmd/router-agent/protected_dmz_transaction_test.go",
+    "TestProtectedDMZApplyFailureRollsBackState",
+    "TestProtectedDMZPersistenceFailureKeepsOldLiveRules",
 )
-require("cmd/router-agent/admin_server_control.go", "readPrivilegedState", "atomicWritePrivilegedState")
-require("cmd/router-agent/private_state_test.go", "RejectsSymlink", "RejectsSymlinkParent", "RejectsOversizedRead")
-require("cmd/router-agent/admin_forwarding_extension_test.go", "LiveApplyFailureRestoresDurableAndRAMState")
-require("cmd/router-agent/admin_rollback_test.go", "ReportsIncompleteRollback")
 
-# Exact-SHA updater recovery state is a hard transaction boundary. The previous
-# exact compose must survive process restart until success or proven rollback.
-require("cmd/update-controller/private_state.go", "validateUpdaterPrivateFile", "validateUpdaterPrivateParent", "os.SameFile", "atomicWriteUpdaterPrivate", "atomicWriteUpdaterPrivateTargetUnchanged")
+# Exact-SHA updater recovery: status and previous compose snapshots are private;
+# persistence is a hard boundary; rollback proves the previous stack healthy;
+# interrupted applying/rolling-back/finalizing states reconcile after restart.
 require(
-    "cmd/update-controller/recovery.go",
-    "rollbackComposePath",
-    "saveRollbackCompose",
-    "unexpectedly exists after update transaction started",
-    "loadRollbackCompose",
-    "clearRollbackCompose",
-    "clearTerminalRollbackSnapshot",
-    "not attributable to state from_sha",
-    "rollback snapshot changed before cleanup",
-    "atomicWriteUpdaterPrivateTargetUnchanged",
+    "cmd/updater/main.go",
+    "writeStatusAtomic",
+    "saveRollbackSnapshot",
+    "loadRollbackSnapshot",
     "restorePreviousStack",
-    "exactComposeIdentity",
-    "exactComposeIdentity(current, from)",
-    "waitCoreHealthy(stack, timeout)",
-    "rollbackAfterDeploymentFailure",
+    "reconcileOnStartup",
     "rolling-back",
-    "reconcileRecovery",
+    "terminalStatus",
+    "verifyExpectedContainers",
+    "healthCheck",
+    "composeSHA",
 )
 require(
-    "cmd/update-controller/main.go",
-    "cannot safely clear stale rollback snapshot before update",
-    "saveRollbackCompose(previous, from)",
-    "rollbackAfterDeploymentFailure",
-    "completeRecoveredUpdate",
-    "exact_compose_verified",
-    "Raw tracked baselines therefore never masquerade as deployed",
-    "FindAllStringSubmatch(content, -1)",
+    "cmd/updater/main_test.go",
+    "TestUpdaterRecoveryRejects",
+    "TestUpdaterRecoveryAcceptsPrivateRegularFile",
 )
-require(
-    "cmd/update-controller/main_test.go",
-    "raw tracked baseline masqueraded as deployed exact SHA",
-    "compose without generated provenance header",
-    "compose without broker provenance",
-    "duplicate generated provenance headers",
-    "duplicate broker provenance",
-)
-require(
-    "cmd/update-controller/main.go",
-    "newestMeaningfulWorkflowSuccess",
-    "newestMeaningfulWorkflowRun",
-    "evidence is unsettled",
-    "newest meaningful completed attempt",
-)
-require(
-    "cmd/update-controller/main_test.go",
-    "older green workflow survived a newer failed rerun",
-    "older green workflow was accepted while a newer rerun was unsettled",
-    "neutral cancelled duplicate erased prior successful evidence",
-    "wrong SHA/branch workflow evidence was accepted",
-)
-require(
-    "cmd/update-controller/recovery_test.go",
-    "RollbackComposeSnapshotIsPrivateAndExact",
-    "ExactComposeIdentityRequiresOneExpectedSHA",
-    "ClearRollbackComposeUnsafeStaleSnapshotBlocksNewTransaction",
-    "SaveRollbackComposeRefusesUnexpectedExistingSnapshotAfterTransactionStart",
-    "TerminalRollbackSnapshotCleanupRequiresMatchingStateIdentity",
-    "TerminalRollbackSnapshotCleanupRejectsMismatchedEvidence",
-    "ReconcileTerminalStateRetriesOnlyAttributableSnapshotCleanup",
-    "InterruptedPreDeploymentApplying",
-)
-require("cmd/update-controller/private_state_test.go", "RejectsBroadPermissions", "RejectsSymlink", "RejectsSymlinkParent", "RejectsOversizedRead")
+forbid("cmd/updater/main.go", 'Prune: true', '"Prune":true')
 
-# Endpoint synchronization owns only explicit raw WG/AWG endpoint fields + the
-# owned home Router VPN profile and adopts all changed files as one transaction.
-# Its independent publisher must reject symlink parents and re-prove open-file
-# identity before reading an owned authoritative target.
+# Endpoint synchronization is one staged transaction across the narrow owned
+# WG/AWG endpoint fields + home Router VPN profile endpoint. The obsolete broad
+# recursive rewriter must stay gone.
+require_absent("server/scripts/update-endpoint.sh")
 require(
     "server/finalize/sync-endpoint.py",
-    "ensure_owned_parent",
-    "os.path.samestat(opened, current)",
-    "build_changes",
-    "stage_private",
-    "apply_transaction",
-    "restore_changes",
-    'profile.get("id")',
-    '"home"',
+    "stage_changes",
+    "adopt_changes",
+    "restore_adopted",
+    "assert_owned_path",
+    'profile.get("id") == "home"',
+    'profile.get("node_kind") == "router-vpn"',
+    'wg/server.conf',
+    'awg2/awg0.conf',
 )
-require(
-    "server/finalize/test_sync_endpoint.py",
-    "late_adoption_failure",
-    "symlink_owned_target",
-    "symlink_owned_parent",
-    "identity_change_during_open",
-)
-require_absent("server/scripts/update-endpoint.sh")
+run_test("server/finalize/test-sync-endpoint.py")
 
-# DNS benchmark is measurement-only; fresh bundle generation may consume the
-# result, but benchmark execution may never own current routers.json policy.
-require("server/scripts/benchmark-dns.py", "measurement_only", "write_private_atomic", "PRIVATE_WRITER.atomic_private_write")
-forbid("server/scripts/benchmark-dns.py", 'BASE / "client-bundle" / "routers.json"', "routers_path =")
-require("server/scripts/test_dns_benchmark_persistence.py", "DNS benchmark code regained routers.json ownership", "DNS benchmark overwrote a foreign regular replacement")
+# DNS benchmark is measurement-only durable state. It must not mutate the user's
+# current node DNS policy in routers.json. Fresh bundle generation may consume
+# this measured result as a default.
+require(
+    "server/scripts/benchmark-dns.py",
+    "atomic_write_private_json",
+    "/opt/router-vpn/config/dns-benchmark.json",
+)
+forbid("server/scripts/benchmark-dns.py", "routers.json")
 
-# Generic private publishers reject symlink leaf targets and symlinked immediate
-# parents, then adopt 0600 files through random same-directory fsynced temps.
-require("server/scripts/atomic-private-write.py", "ensure_private_parent", "mkstemp", "os.fsync", "os.replace", "0o600")
-require("server/scripts/atomic-private-batch.py", "ensure_private_parent", "restore", "adopt", "rollback was incomplete", "os.replace")
+# Security-sensitive generated publication must go through staged private
+# adoption, including Setup token, router-agent token/config, node proof,
+# transports, private bundle/client JSON, and preserved upgrade credentials.
 require(
-    "server/scripts/test_atomic_private_publication.py",
-    "fail_second_adoption",
-    "prior state restored",
-    "single-file private publisher accepted a symlink parent",
-    "batch private publisher accepted a symlink parent",
+    "server/scripts/private-file.py",
+    "atomic_write_private",
+    "atomic_copy_private",
+    "atomic_write_private_batch",
+    "atomic_copy_private_batch",
+    "unlink_owned_private",
+    "adopted_inodes",
+    "rollback_adopted",
+    "temporary file parent changed during open",
 )
-require(
-    "server/scripts/create-bundle-json.py",
-    "write_private_json",
-    "write_private_json_batch",
-    "read_verified_regular",
-    "read_generated_profiles",
-    "refusing symlink generated profile entry",
-    "generated mode directory changed during read",
-    '"client.json"',
-    '"routers.json"',
-    '"router-vpn-bundle.json"',
-)
+run_test("server/scripts/test_private_file_batch.py")
+run_test("server/scripts/test_private_file_parent_safety.py")
+require("server/scripts/setup-token.py", "private-file.py", "atomic_write_private")
+require("server/router-agent/run.sh", "private-file.py", "atomic_write_private")
+require("server/init/node-proof-identity.py", "private-file.py", "atomic_write_private")
+require("server/init/gen-socks5.py", "private-file.py", "atomic_write_private_batch")
+require("server/init/gen-transports.sh", "private-file.py", "atomic_write_private_batch")
+require("server/init/gen-xray.sh", "private-file.py", "atomic_write_private_batch")
+require("server/init/gen-naive.sh", "private-file.py", "atomic_write_private_batch")
+require("server/init/gen-ss-v2ray.sh", "private-file.py", "atomic_write_private_batch")
+require("server/init/gen-over-tls.sh", "private-file.py", "atomic_write_private_batch")
+require("server/init/gen-ssr.sh", "private-file.py", "atomic_write_private_batch")
+require("server/init/gen-awg.sh", "private-file.py", "atomic_write_private_batch")
+require("server/finalize/gen-client.sh", "private-file.py", "atomic_write_private_batch")
+require("server/finalize/router-vpn-bundle.sh", "private-file.py", "atomic_write_private_batch")
+require("server/init/init-current.sh", "private-file.py", "atomic_write_private_batch")
+require("server/finalize/finalize-current.sh", "private-file.py", "atomic_write_private_batch")
+require("server/upgrade.sh", "private-file.py", "atomic_write_private_batch")
 
-# Portainer updater credentials are one privileged identity: API key + TLS pin.
-# Configuration must validate the destination ancestry before staging, keep the
-# key out of output, and batch-adopt both files so partial replacement rolls back.
+# Preserved upgrade state is validated as a private regular file before reuse;
+# corrupt preserved security identities fail closed rather than silently rotating
+# linked clients or server identity.
 require(
-    "server/scripts/configure-portainer-update.sh",
-    "atomic-private-batch.py",
-    'python3 "$PRIVATE_BATCH" "$KEY_FILE=$KEY_TMP" "$PIN_FILE=$PIN_TMP"',
-    ".portainer-api.key.input.XXXXXX",
-    "unset API_KEY",
-)
-forbid(
-    "server/scripts/configure-portainer-update.sh",
-    ".tmp.$",
-    'mv -f "$KEY_TMP" "$KEY_FILE"',
-    'mv -f "$PIN_TMP" "$PIN_FILE"',
+    "server/init/init-current.sh",
+    "fail rather than rotating it silently",
+    "private-file.py",
+    "router-agent-token",
 )
 require(
-    "server/scripts/test_configure_portainer_update.py",
-    "symlinked Portainer config parent received credentials",
-    "key not in proc.stdout",
-    "Portainer update credential transaction tests: OK",
-)
-
-# Stable identity/credential generators must preserve valid existing state,
-# reject corrupt preserved state, validate candidates before adoption, and batch
-# related identity files together. Reads are also strict: no symlink parent/leaf,
-# no broad permissions, and no validate-then-replace race.
-require(
-    "server/scripts/ensure-setup-auth.py",
-    "ensure_private_config_dir",
-    "read_preserved_token",
-    "os.path.samestat(opened, current)",
-    "os.fchmod(fd, PRIVATE_MODE)",
-    "refusing silent rotation",
-    "atomic-private-write.py",
-)
-require(
-    "server/scripts/test_setup_auth.py",
-    "corrupt preserved Setup Center token was silently rotated",
-    "symlink Setup Center token",
-    "symlink Setup Center config parent was accepted",
-    "Setup Center token replacement race was accepted",
-)
-require(
-    "server/scripts/ensure-node-proof.py",
-    "ensure_private_parent",
-    "os.path.samestat(opened, current)",
-    "must be mode 0600",
-    "atomic-private-batch.py",
-    "conflicts with WireGuard server identity",
-)
-require(
-    "server/scripts/test_node_proof_private_state.py",
-    "broad router-agent identity state was accepted",
-    "symlink parent for WireGuard identity source was accepted",
-    "WireGuard identity source replacement race was accepted",
-)
-require(
-    "server/scripts/preserve-generated-state.py",
-    "_ensure_private_parent",
-    "must be mode 0600",
-    "os.path.samestat(opened, current)",
-    "refusing non-regular/symlink",
-    "corrupt JSON",
-    "expected exactly one preserved",
-)
-require(
-    "server/scripts/test_preserve_generated_state.py",
-    "corrupt preserved transport state",
-    "ambiguous preserved TLS credentials",
-    "symlink preserved transport state",
-    "symlink parent for preserved transport state was accepted",
-    "broad-permission preserved credential state was accepted",
-    "preserved credential file replacement race was accepted",
-)
-require("server/scripts/generate-transports.sh", "refusing silent", "PRIVATE_BATCH", "private batch helper")
-require("server/scripts/generate-xray-pq.sh", "refusing silent", "Validate the complete candidate generation", "PRIVATE_BATCH")
-require("server/scripts/generate-tls-alternates.sh", "refusing silent", "Validate every candidate", "PRIVATE_BATCH")
-require("server/scripts/generate-aux-proxies.py", "refusing silent credential rotation", "atomic-private-batch.py")
-require("server/scripts/generate-rosenpass.sh", "Refusing to overwrite existing Rosenpass identity", "PRIVATE_BATCH")
-require("server/scripts/ensure-rosenpass.sh", "STATE_HELPER", 'probe "$BASE"', 'refresh "$BASE" "$ENDPOINT" "$RP_PORT"')
-require("server/scripts/rosenpass-private-state.py", "partial/unsafe", "atomic-private-batch.py", "refusing silent key rotation")
-require("server/scripts/generate-advanced-profiles.sh", "refusing silent REALITY credential rotation", "Validate the entire candidate tree", "PRIVATE_BATCH")
-require("server/scripts/enhance-max-pq.py", "atomic-private-batch.py", "one private transaction")
-require("server/scripts/wrap-xhttp-tun.py", "before atomic adoption", "atomic-private-write.py")
-require("server/scripts/generate-stack-profiles.py", "atomic-private-batch.py", "stack-profiles-")
-forbid("server/scripts/generate-transports.sh", "preserve-generated-state.py transports \"$BASE\" 2>/dev/null || true")
-forbid("server/scripts/generate-xray-pq.sh", "preserve-generated-state.py xray \"$BASE\" 2>/dev/null || true")
-forbid("server/scripts/generate-tls-alternates.sh", "preserve-generated-state.py tls \"$BASE\" 2>/dev/null || true")
-forbid("server/scripts/generate-advanced-profiles.sh", "preserve-generated-state.py advanced \"$BASE\" 2>/dev/null || true")
-
-# Fresh init, finalization, and upgrade paths publish credential-bearing state
-# through the same helpers, validate the complete private state tree before any
-# cleanup/mutation, and only mark completion after runtime application.
-require(
-    "server/init/noninteractive.sh",
-    "atomic-private-write.py",
-    "PRIVATE_DIR=/src/server/scripts/private-directory.py",
-    "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
-    'python3 "$PRIVATE_DIR" "$dir"',
-    'python3 "$VERIFIED_READ" --private "$BASE/.initialized"',
-    "refusing credential regeneration",
+    "server/finalize/finalize-current.sh",
+    "copy-private-batch",
     "CREDENTIALS.txt",
-    ".initialized",
+    "client.json",
+    "routers.json",
 )
-require(
-    "server/finalize/finalize.sh",
-    "atomic-private-write.py",
-    "atomic-private-batch.py",
-    "PRIVATE_DIR=/src/server/scripts/private-directory.py",
-    "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
-    'python3 "$PRIVATE_DIR" "$dir"',
-    'python3 "$VERIFIED_READ" --private "$required"',
-    "CREDENTIALS.txt",
-    ".finalized",
-)
-require(
-    "server/finalize/upgrade-safe.sh",
-    "atomic-private-write.py",
-    "atomic-private-batch.py",
-    "PRIVATE_DIR=/src/server/scripts/private-directory.py",
-    "VERIFIED_READ=/src/server/scripts/verified-regular-read.py",
-    'python3 "$PRIVATE_DIR" "$dir"',
-    'python3 "$VERIFIED_READ" --private "$required"',
-    "CREDENTIALS.txt",
-    ".finalized",
-)
-forbid("server/finalize/finalize.sh", 'cat >"$BASE/client-bundle/CREDENTIALS.txt"', 'touch "$BASE/.finalized"')
-forbid("server/finalize/upgrade-safe.sh", 'cat >"$BASE/client-bundle/CREDENTIALS.txt"', 'touch "$BASE/.finalized"')
+require("server/upgrade.sh", "copy-private-batch", "previous", "CREDENTIALS.txt", "client.json", "routers.json")
 
-init_body = text("server/init/noninteractive.sh")
-init_dir = init_body.find('python3 "$PRIVATE_DIR" "$dir"')
-init_purge = init_body.find('rm -f "$BASE/downloads/router-vpn-client-bundle.zip"')
-init_apply = init_body.rfind('/src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"')
-init_marker = init_body.rfind('printf \'initialized\\n\' | python3 "$PRIVATE_WRITE" "$BASE/.initialized"')
-if min(init_dir, init_purge, init_apply, init_marker) < 0 or init_dir > init_purge or init_apply > init_marker:
-    errors.append("server/init/noninteractive.sh: private-directory/initialization ordering regressed")
-
-for rel, first_mutation in (
-    ("server/finalize/finalize.sh", 'bash /src/server/finalize/sync-client-runtime.sh "$BASE"'),
-    ("server/finalize/upgrade-safe.sh", 'bash /src/server/finalize/sync-client-runtime.sh "$BASE"'),
+# Generated transport/Xray/TLS configuration is published through transaction
+# batch adoption; disposable validation artifacts stay private temp state and
+# are never authoritative.
+for rel in (
+    "server/init/gen-transports.sh",
+    "server/init/gen-xray.sh",
+    "server/init/gen-naive.sh",
+    "server/init/gen-ss-v2ray.sh",
+    "server/init/gen-over-tls.sh",
+    "server/init/gen-ssr.sh",
 ):
-    body = text(rel)
-    private_dir_pos = body.find('python3 "$PRIVATE_DIR" "$dir"')
-    mutation_pos = body.find(first_mutation)
-    apply_pos = body.rfind('bash /src/server/scripts/apply-runtime.sh "$WAN_INTERFACE" "$LAN_CIDR"')
-    finalized_pos = body.rfind('printf \'finalized\\n\' | python3 "$PRIVATE_WRITE" "$BASE/.finalized"')
-    if min(private_dir_pos, mutation_pos, apply_pos, finalized_pos) < 0:
-        errors.append(f"{rel}: finalization ordering markers are incomplete")
-    else:
-        if private_dir_pos > mutation_pos:
-            errors.append(f"{rel}: private-directory validation happens after state mutation begins")
-        if apply_pos > finalized_pos:
-            errors.append(f"{rel}: finalized marker is published before runtime application succeeds")
-
-# Setup assets are derived private presentation data containing import payloads,
-# not stable identity or active policy. They are deliberately excluded from the
-# authoritative-state transaction set; failure aborts finalization and they are
-# regenerated from the already-transactional private source bundle.
-require("server/scripts/generate-setup-assets.py", "private router credentials", 'chmod(0o600)')
-
-# Execute the focused Python behavior contracts from the authoritative gate.
-for test in (
-    "server/finalize/test_sync_endpoint.py",
-    "server/scripts/test_atomic_private_publication.py",
-    "server/scripts/test_dns_benchmark_persistence.py",
-    "server/scripts/test_setup_auth.py",
-    "server/scripts/test_node_proof_private_state.py",
-    "server/scripts/test_configure_portainer_update.py",
-    "server/scripts/test_preserve_generated_state.py",
-    "server/scripts/test_create_bundle_transaction.py",
-    "server/scripts/test_setup_generation_transaction.py",
-    "server/scripts/test_install_state.py",
-    "server/scripts/test_verified_regular_read.py",
-    "modes/test_runtime_pids.py",
-    "modes/test_stop_mode_pid_ownership.py",
-    "modes/test_runtime_config.py",
-    "modes/test_prepare_runtime_profile.py",
-):
-    run_test(test)
+    forbid(rel, "cat > /opt/router-vpn/config", "cp $WORKDIR")
 
 if errors:
-    print("Durable-state transaction audit: FAIL", file=sys.stderr)
+    print("Durable-state transaction audit: FAIL")
     for error in errors:
-        print(f" - {error}", file=sys.stderr)
+        print(" - " + error)
     raise SystemExit(1)
-
 print("Durable-state transaction audit: PASS")
