@@ -49,8 +49,44 @@ final class AndroidSessionRevalidator {
             requireSameRevalidation(token);
             if(!AndroidHomeStateStore.completePathRevalidation(context,token))throw new IllegalStateException("Router VPN path proof completed for a stale Android session/generation.");
         }catch(Throwable error){
-            try{if("xray".equals(before.actualBase))engines.xray.stop();else engines.singBox.stop();}catch(Throwable ignored){}
-            if(isSameRevalidation(token))AndroidHomeStateStore.failed(context,"Network-change revalidation failed closed: "+safe(error));
+            failClosedOwnedRuntime(before,token,error);
+        }
+    }
+
+    private void failClosedOwnedRuntime(AndroidHomeStateStore.Snapshot before,AndroidHomeStateStore.Snapshot token,Throwable error){
+        // A stale revalidation worker has lost ownership. It must never stop a
+        // newer tunnel/session merely because the old proof finished late.
+        if(!isSameRevalidation(token))return;
+        final String message="Network-change revalidation failed closed: "+safe(error);
+        try{
+            if("multihop".equals(before.logicalMode)){
+                engines.multihop.failClosedForRevalidation();
+                if(isSameRevalidation(token))AndroidHomeStateStore.failed(context,message);
+                return;
+            }
+            if("external".equals(before.logicalMode)){
+                engines.standardExit.failClosedForRevalidation();
+                if(isSameRevalidation(token))AndroidHomeStateStore.failed(context,message);
+                return;
+            }
+            // AUTO/SMART/CUSTOM/logical paths are owned by the orchestrator.
+            // Its normal disconnect path clears the current managed child. The
+            // callback runs while orchestrator.running is still true, so a new
+            // orchestrated session cannot slip between cleanup and failed state.
+            engines.orchestrator.disconnect(new AndroidModeOrchestrator.Callback(){
+                @Override public void progress(String ignored){}
+                @Override public void finished(boolean ok,String ignoredMode,String cleanupMessage){
+                    if(ok||isSameRevalidation(token)){
+                        String suffix=ok?"":"; owner cleanup reported: "+safeMessage(cleanupMessage);
+                        AndroidHomeStateStore.failed(context,message+suffix);
+                    }
+                }
+            });
+        }catch(Throwable cleanupError){
+            // The token is still ours here; make the failed proof visible even
+            // when owner teardown itself reports an error instead of leaving a
+            // stale Connected/connecting state behind.
+            if(isSameRevalidation(token))AndroidHomeStateStore.failed(context,message+"; owner cleanup failed: "+safe(cleanupError));
         }
     }
 
@@ -72,4 +108,5 @@ final class AndroidSessionRevalidator {
     }
 
     private static String safe(Throwable e){String value=e==null?"":e.getMessage();return value==null||value.trim().isEmpty()?"session proof failed":value.replace('\n',' ').replace('\r',' ').trim();}
+    private static String safeMessage(String value){return value==null||value.trim().isEmpty()?"runtime cleanup failed":value.replace('\n',' ').replace('\r',' ').trim();}
 }
