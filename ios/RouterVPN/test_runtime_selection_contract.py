@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import runpy
 from pathlib import Path
 
 root=Path(__file__).resolve().parents[2]
@@ -92,4 +93,5 @@ for forbidden in [
 selection=unified.split('private func selectSpecific', 1)[1].split('private func connectOrDisconnect', 1)[0]
 assert 'connectOrDisconnect()' not in selection, 'iOS node selection must never implicitly connect'
 assert 'deinit { timer?.invalidate() }' not in unified, 'Swift 6 nonisolated deinit must not touch non-Sendable Timer'
+runpy.run_path(str(Path(__file__).with_name('test_connection_profiles_contract.py')), run_name='__main__')
 print('iOS runtime + helper-chain fail-closed + selection/Connect separation + unified AUTO/SMART/CUSTOM strategy contract OK')
