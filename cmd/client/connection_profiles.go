@@ -463,12 +463,14 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "saved connection preferences are no longer valid: "+err.Error(), http.StatusConflict)
 			return
 		}
-		updated.DNSMode = p.DNSMode
-		updated.DNSProtocol = p.DNSProtocol
-		updated.DNSHost = p.DNSHost
-		updated.DNSPort = p.DNSPort
-		updated.DNSServerName = p.DNSServerName
-		updated.DNSPath = p.DNSPath
+		if strings.TrimSpace(p.DNSMode) != "" {
+			updated.DNSMode = p.DNSMode
+			updated.DNSProtocol = p.DNSProtocol
+			updated.DNSHost = p.DNSHost
+			updated.DNSPort = p.DNSPort
+			updated.DNSServerName = p.DNSServerName
+			updated.DNSPath = p.DNSPath
+		}
 		updated.MultihopEnabled = p.MultihopEnabled
 		updated.MultihopEntryID = p.MultihopEntryID
 		updated.MultihopExitID = p.MultihopExitID
