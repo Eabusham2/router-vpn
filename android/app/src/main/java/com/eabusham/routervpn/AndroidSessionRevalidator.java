@@ -32,7 +32,7 @@ final class AndroidSessionRevalidator {
                 "Underlying network changed; re-proving the frozen Router VPN session before keeping Connected.");
         if(token==null)return;
         try{
-            try{Thread.sleep(650L);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();return;}
+            try{Thread.sleep(650L);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new IllegalStateException("Android network-change revalidation was interrupted; refusing to keep stale Connected proof.",interrupted);}
             AndroidHomeStateStore.Snapshot current=requireSameRevalidation(token);
             if("external".equals(current.logicalMode)){
                 if(current.expectedExternalIp==null||current.expectedExternalIp.isEmpty())throw new IllegalStateException("External session has no expected public-exit proof target.");
