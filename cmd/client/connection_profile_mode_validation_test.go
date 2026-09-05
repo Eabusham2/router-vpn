@@ -57,6 +57,7 @@ func TestConnectionProfileRecordRejectsUnknownAndContextWrongModes(t *testing.T)
 	for name, record := range map[string]connectionProfileRecord{
 		"unknown": {ID: "one", Name: "One", NodeID: "home", Mode: "totally-fake-mode", Prefs: prefs},
 		"router-as-external": {ID: "one", Name: "One", NodeID: "home", Mode: "external", Prefs: prefs},
+		"external-as-router": {ID: "one", Name: "One", NodeID: "ext", Mode: "smart-auto", Prefs: nil},
 		"custom-without-layers": {ID: "one", Name: "One", NodeID: "home", Mode: "custom", Prefs: prefs},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -84,6 +85,20 @@ func TestConnectionProfileRecordRejectsUnknownModeOnRead(t *testing.T) {
 	var record connectionProfileRecord
 	if err := json.Unmarshal([]byte(`{"id":"one","name":"One","node_id":"home","mode":"totally-fake-mode","preferences":{"home_lan_access":true}}`), &record); err == nil {
 		t.Fatal("unknown persisted connection profile mode was accepted on read")
+	}
+}
+
+func TestConnectionProfileRecordRejectsKindModeMismatchOnRead(t *testing.T) {
+	for name, raw := range map[string]string{
+		"router-as-external": `{"id":"one","name":"One","node_id":"home","mode":"external","preferences":{"home_lan_access":true}}`,
+		"external-as-router": `{"id":"one","name":"One","node_id":"ext","mode":"smart-auto"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var record connectionProfileRecord
+			if err := json.Unmarshal([]byte(raw), &record); err == nil {
+				t.Fatalf("persisted connection profile kind/mode mismatch %s was accepted", name)
+			}
+		})
 	}
 }
 
