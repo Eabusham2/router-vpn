@@ -204,7 +204,7 @@ require("iOS opt-in real user location", ios_root + ios_location + ios_project, 
     "no IP geolocation", "INFOPLIST_KEY_NSLocationWhenInUseUsageDescription",
     "when you explicitly tap the location button", "never inferred from your IP address",
 ))
-assert "IOSUserLocationControl()" in ios_root, "iOS real-location control exists but is not wired into ProductRootView"
+assert "IOSUnifiedProductView()" in ios_root and "IOSUserLocationControl()" in ios_unified, "iOS real-location control is not wired through the shipping unified product view"
 assert "startUpdatingLocation" not in ios_location, "iOS location must remain a user-triggered one-shot rather than automatic background tracking"
 assert "CLGeocoder" not in ios_location and "ipify" not in ios_location.lower(), "iOS user location must not use geocoding/IP-derived placement"
 
