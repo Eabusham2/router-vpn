@@ -17,7 +17,7 @@ $script:RouterVPNUnifiedControlCenter = [ordered]@{
     AuthenticatedTransport = $true
     BottomSheetOrder = @('connection','multihop','settings','mode','dns')
     ProfileActions = @('create','load','update','delete','import-router-bundle')
-    BridgeTypes = @('SOCKS5','HTTP CONNECT','HTTPS CONNECT','Shadowsocks 2022','Tor bridge (runtime capability-gated)')
+    BridgeTypes = @('SOCKS5','HTTP CONNECT','HTTPS CONNECT','Shadowsocks 2022','Hysteria2','Tor bridge (runtime capability-gated)')
     UnavailableTypes = @{}
     SecureSuites = @(
         'WireGuard Noise_IK + ChaCha20-Poly1305',
