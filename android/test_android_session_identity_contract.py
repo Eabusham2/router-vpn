@@ -103,6 +103,8 @@ for marker in (
     '"off".equals(phase)',
     '"disconnected".equals(phase)',
     '"failed".equals(phase)',
+    "e.orchestrator.isRunning()",
+    "e.multihop.isActiveOrTransitioning()",
     "e.standardExit.isActiveOrTransitioning()",
     "tunnelBusy(e.wireGuard.getState())",
     "tunnelBusy(e.amneziaWG.getState())",
@@ -130,8 +132,7 @@ for marker in (
     "requireSelectable(id)",
     "requireMutable(\"deleting a Router VPN node\")",
     "live session identity is frozen until disconnect",
-    "engines.orchestrator.isRunning()",
-    "engines.multihop.isActiveOrTransitioning()",
+    "AndroidVpnMutationGuard.isBusy(context)",
 ):
     assert marker in store, f"node mutation guard missing: {marker}"
 for marker in (
