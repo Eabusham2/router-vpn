@@ -17,13 +17,15 @@ enum IOSUnifiedSecureTransport {
         "hysteria2",
     ])
 
-    // These proxy families have real Libbox adapters on iOS, but plain SOCKS5 /
-    // HTTP CONNECT are not advertised as authenticated secure final transports.
+    // Node-builder/bridge catalog. Hysteria2 and Shadowsocks are also valid
+    // encrypted final transports. Plain SOCKS5 / HTTP(S) CONNECT remain outer
+    // bridge/proxy choices and are not relabeled as authenticated secure finals.
     static let bridgeTypes = [
         "socks5",
         "http-connect",
         "https-connect",
         "shadowsocks-2022",
+        "hysteria2",
     ]
 
     // Keep unsupported shared-product families visible as explicit unavailable
