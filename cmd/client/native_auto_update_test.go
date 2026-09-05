@@ -94,8 +94,6 @@ func TestNativeUpdateCheckAndDownloadRemainSeparate(t *testing.T) {
 		DownloadDir:    filepath.Join(t.TempDir(), "updates"),
 		RequestTimeout: 5 * time.Second,
 	}
-	// Use the TLS test client's trusted transport through a temporary default
-	// transport because rvNativeUpdateOnce intentionally creates its own client.
 	oldTransport := http.DefaultTransport
 	http.DefaultTransport = server.Client().Transport
 	defer func() { http.DefaultTransport = oldTransport }()
@@ -273,14 +271,18 @@ func TestNativeManifestRedirectFailsClosed(t *testing.T) {
 
 func TestClearNativeArtifactRemovesOnlyVerifiedFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "package.bin")
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	payload := []byte("verified native package")
 	digest := sha256.Sum256(payload)
+	digestHex := hex.EncodeToString(digest[:])
+	path := filepath.Join(dir, digestHex[:16]+"-package.bin")
 	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	state := updatepolicy.State{ArtifactPath: path, ArtifactSHA256: hex.EncodeToString(digest[:]), InstallPending: true, DownloadedAt: time.Now().UTC()}
-	if err := rvClearNativeArtifact(&state); err != nil {
+	state := updatepolicy.State{ArtifactPath: path, ArtifactSHA256: digestHex, InstallPending: true, DownloadedAt: time.Now().UTC()}
+	if err := rvClearNativeArtifact(rvNativeUpdateConfig{DownloadDir: dir}, &state); err != nil {
 		t.Fatal(err)
 	}
 	if state.ArtifactPath != "" || state.ArtifactSHA256 != "" || state.InstallPending || !state.DownloadedAt.IsZero() {
@@ -293,12 +295,16 @@ func TestClearNativeArtifactRemovesOnlyVerifiedFile(t *testing.T) {
 
 func TestClearNativeArtifactPreservesDigestMismatch(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "package.bin")
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	claimedDigest := strings.Repeat("0", 64)
+	path := filepath.Join(dir, claimedDigest[:16]+"-package.bin")
 	if err := os.WriteFile(path, []byte("foreign replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	state := updatepolicy.State{ArtifactPath: path, ArtifactSHA256: strings.Repeat("0", 64), InstallPending: true}
-	if err := rvClearNativeArtifact(&state); err == nil {
+	state := updatepolicy.State{ArtifactPath: path, ArtifactSHA256: claimedDigest, InstallPending: true}
+	if err := rvClearNativeArtifact(rvNativeUpdateConfig{DownloadDir: dir}, &state); err == nil {
 		t.Fatal("digest-mismatched staged file was accepted for cleanup")
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != "foreign replacement" {
