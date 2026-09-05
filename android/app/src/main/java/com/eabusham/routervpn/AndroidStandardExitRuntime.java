@@ -81,7 +81,8 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
         if(home.connected)return "Disconnect the current Router VPN or custom-exit session before starting another custom exit.";
         AndroidRuntimeRegistry engines=AndroidRuntimeRegistry.get(context);
-        if(engines.orchestrator.isRunning()||engines.orchestrator.isActive()||engines.multihop.isActiveOrTransitioning()
+        boolean failedMarkerOnly=AndroidVpnMutationGuard.failedSessionHasNoLiveEngine(context,engines);
+        if(engines.orchestrator.isRunning()||(!failedMarkerOnly&&engines.orchestrator.isActive())||engines.multihop.isActiveOrTransitioning()
                 ||engines.wireGuard.getState()!=com.wireguard.android.backend.Tunnel.State.DOWN
                 ||engines.amneziaWG.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN
                 ||runtimeBusy(engines.xray.getState()))return "Wait for the current Router VPN transition to finish or disconnect before starting a custom exit.";
