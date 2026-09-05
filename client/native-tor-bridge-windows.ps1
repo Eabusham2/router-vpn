@@ -181,6 +181,7 @@ $ProfileId=[string]$env:HOMEVPN_PROFILE_ID
 $PolicyProfileId=[string]$env:HOMEVPN_POLICY_PROFILE_ID
 $Transport=[string]$env:HOMEVPN_TOR_TRANSPORT
 $PluginTransports=[string]$env:HOMEVPN_TOR_PLUGIN_TRANSPORTS
+$HoldKillSwitch=([string]$env:HOMEVPN_KILLSWITCH_HOLD -eq '1')
 if([string]::IsNullOrWhiteSpace($PolicyProfileId)){$PolicyProfileId=$ProfileId}
 if([string]::IsNullOrWhiteSpace($ProfileId) -or [string]::IsNullOrWhiteSpace($BridgeEndpoint)){throw 'Tor bridge runtime/profile/bridge endpoint are required.'}
 if($PluginTransports -notmatch '^(obfs4|meek_lite|snowflake|webtunnel)(,(obfs4|meek_lite|snowflake|webtunnel))*$'){throw 'Invalid Tor pluggable-transport set.'}
@@ -188,7 +189,8 @@ if($Transport -notin @('obfs4','meek_lite','snowflake','webtunnel','custom')){th
 
 if($Action -eq 'down'){
   Stop-Owned
-  try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
+  if(-not$HoldKillSwitch){try{Kill 'release'}catch{Write-Warning $_.Exception.Message}}
+  else{Write-Output 'Windows Tor teardown is holding kill-switch ownership for a fail-closed transition.'}
   try{[RouterVpnTorJob]::Close()}catch{Write-Warning $_.Exception.Message}
   Remove-PrivateRuntime
   exit 0
@@ -242,10 +244,7 @@ try {
 } finally {
   Stop-Owned
   try{[RouterVpnTorJob]::Close()}catch{Write-Warning $_.Exception.Message}
-  if($controllerStopping){
-    try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
-  }else{
-    Write-Warning 'Windows Tor runtime ended unexpectedly; preserving kill-switch ownership until controller recovery/disconnect.'
-  }
+  if(-not$controllerStopping){Write-Warning 'Windows Tor runtime ended unexpectedly; preserving kill-switch ownership until controller recovery/disconnect.'}
+  # Firewall rollback belongs to the Go controller after owned teardown.
   Remove-PrivateRuntime
 }
