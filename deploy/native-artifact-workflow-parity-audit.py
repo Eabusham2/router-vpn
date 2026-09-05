@@ -287,10 +287,16 @@ require(broker_exact_sha_test, broker_exact_sha_test_rel,
 
 
 # Release-candidate and dedicated fallback artifacts must use the names/members
-# that the authenticated download broker actually asks GitHub for.
+# that the authenticated download broker actually asks GitHub for. The one-SHA
+# reusable candidate uploads only Windows/Portable from the generic producer;
+# native macOS/Linux jobs own their canonical archives so aggregation cannot
+# contain duplicate platform filenames.
 require(rc, rc_rel,
         "name: RouterVPN-generic-release-candidate",
-        "path: |\n            dist/packages/*",
+        "dist/packages/RouterVPN-Windows-amd64.zip",
+        "dist/packages/RouterVPN-Windows-arm64.zip",
+        "dist/packages/RouterVPN-Portable-Windows-amd64.zip",
+        "dist/packages/RouterVPN-Portable-Windows-arm64.zip",
         "name: RouterVPN-Android-release-candidate",
         "path: android/app/build/outputs/apk/debug/app-debug.apk",
         "name: RouterVPN-iOS-release-candidate",
@@ -301,6 +307,9 @@ require(rc, rc_rel,
         "name: RouterVPN-Linux-${{ matrix.arch }}-release-candidate",
         "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz",
         "name: RouterVPN-release-candidate-${{ github.sha }}")
+assert "dist/packages/*" not in rc, (
+    "release candidate generic producer must not re-upload native macOS/Linux archives"
+)
 require(client, client_rel,
         "name: RouterVPN-client-desktop-unix-ci",
         "dist/packages/*",
@@ -317,14 +326,18 @@ require(linux, linux_rel,
         "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz")
 
 # Validate every concrete desktop policy source against its real producer. The
-# generic Windows artifact uploads a directory glob, so concrete ZIP membership
-# is proven by package-builds.sh rather than by pretending the YAML lists files.
+# one-SHA release generic artifact enumerates Windows/Portable explicitly;
+# the broader desktop CI generic artifact keeps its directory glob, so concrete
+# membership there is proven by package-builds.sh.
 for request, sources in policy.NATIVE_PACKAGE_ARTIFACTS.items():
     assert len(sources) >= 2, f"{request}: missing two-source native artifact policy"
     for artifact, member in sources[:2]:
-        if artifact in ("RouterVPN-generic-release-candidate", "RouterVPN-client-desktop-unix-ci"):
-            workflow = rc if artifact == "RouterVPN-generic-release-candidate" else client
-            assert artifact in workflow, f"{request}: producer workflow does not upload artifact {artifact}"
+        if artifact == "RouterVPN-generic-release-candidate":
+            assert artifact in rc, f"{request}: producer workflow does not upload artifact {artifact}"
+            assert f"dist/packages/{member}" in rc, f"{request}: release candidate does not upload member {member}"
+            continue
+        if artifact == "RouterVPN-client-desktop-unix-ci":
+            assert artifact in client, f"{request}: producer workflow does not upload artifact {artifact}"
             arch = "arm64" if "arm64" in member else "amd64"
             rendered = package_builds.replace("$arch", arch)
             base = member[:-4] if member.endswith(".zip") else member
