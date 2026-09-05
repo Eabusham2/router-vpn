@@ -33,6 +33,16 @@ func (s *connectionProfileStore) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
+	if len(decoded.Profiles) > connectionProfileStoreMaxEntries {
+		return fmt.Errorf("connection profile store contains too many profiles")
+	}
+	seen := make(map[string]struct{}, len(decoded.Profiles))
+	for _, profile := range decoded.Profiles {
+		if _, exists := seen[profile.ID]; exists {
+			return fmt.Errorf("connection profile store contains duplicate id %q", profile.ID)
+		}
+		seen[profile.ID] = struct{}{}
+	}
 	*s = connectionProfileStore(decoded)
 	return nil
 }
