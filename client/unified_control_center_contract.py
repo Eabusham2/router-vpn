@@ -61,6 +61,13 @@ def validate_secure_path(node_types: Iterable[str], *, authenticated_transport: 
         raise UnifiedControlCenterError("Unsupported node type: " + ", ".join(unknown))
     if not authenticated_transport:
         raise UnifiedControlCenterError("Authenticated transport cannot be disabled.")
+    for value in values[:-1]:
+        node = known[value]
+        roles = set(node.get("role", []))
+        if "hop" not in roles or node.get("upstream_hop") is False:
+            raise UnifiedControlCenterError(
+                f"{value} cannot be used as an upstream hop; place it only where its node contract allows."
+            )
     final = known[values[-1]]
     if not final.get("final_transport"):
         raise UnifiedControlCenterError(
