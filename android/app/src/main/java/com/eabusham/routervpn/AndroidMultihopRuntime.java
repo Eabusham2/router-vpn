@@ -155,6 +155,16 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         AndroidHomeStateStore.disconnected(context);
     }
 
+    /** Tear down this owner's runtime without changing Home state; the revalidation transaction owns the final state write. */
+    synchronized void failClosedForRevalidation() {
+        disconnectRequested = true;
+        transitioning = false;
+        connected = false;
+        clearActiveGraphLocked();
+        if (active != null && !active.isDone()) active.cancel(true);
+        singBox.stop();
+    }
+
     @Override public synchronized void close() {
         if (!closed.compareAndSet(false, true)) return;
         disconnectRequested = true;
