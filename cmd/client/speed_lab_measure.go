@@ -146,7 +146,7 @@ func speedLabProbeOnce(ctx context.Context, client *http.Client) (float64, error
 	return float64(time.Since(started).Microseconds()) / 1000.0, nil
 }
 
-func speedLabLatencyStats(values []float64, failed int) (speedLabLatencyStats, error) {
+func computeSpeedLabLatencyStats(values []float64, failed int) (speedLabLatencyStats, error) {
 	if len(values) == 0 {
 		return speedLabLatencyStats{}, errors.New("no latency probes succeeded")
 	}
@@ -192,7 +192,7 @@ func measureSpeedLabIdleLatency(ctx context.Context) (speedLabLatencyStats, erro
 	if len(values) < 3 {
 		return speedLabLatencyStats{}, errors.New("too few successful idle latency samples")
 	}
-	return speedLabLatencyStats(values, failed)
+	return computeSpeedLabLatencyStats(values, failed)
 }
 
 func speedLabLoadedLatencySampler(ctx context.Context) <-chan speedLabLatencyStats {
@@ -208,7 +208,7 @@ func speedLabLoadedLatencySampler(ctx context.Context) <-chan speedLabLatencySta
 		for {
 			select {
 			case <-ctx.Done():
-				stats, _ := speedLabLatencyStats(values, failed)
+				stats, _ := computeSpeedLabLatencyStats(values, failed)
 				result <- stats
 				return
 			default:
@@ -221,7 +221,7 @@ func speedLabLoadedLatencySampler(ctx context.Context) <-chan speedLabLatencySta
 			}
 			select {
 			case <-ctx.Done():
-				stats, _ := speedLabLatencyStats(values, failed)
+				stats, _ := computeSpeedLabLatencyStats(values, failed)
 				result <- stats
 				return
 			case <-time.After(110 * time.Millisecond):
