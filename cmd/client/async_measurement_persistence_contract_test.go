@@ -14,14 +14,20 @@ func TestAsyncMeasurementPersistenceRequiresFreshIdentityAndSession(t *testing.T
 	text := string(raw)
 	for _, marker := range []string{
 		"router profile identity changed while durable latency measurement was running",
-		"VPN session/path changed while public-exit lookup was running",
-		"active VPN path changed while public-exit lookup was running",
-		"VPN session/path changed while DNS Retest was running",
-		"selected node or DNS policy changed while DNS Retest was running",
-		"profileAtStart := fastestProfileSnapshotToken([]common.RouterProfile{p})",
-		"sessionAtStart, sessionErr := captureAsyncMeasurementSession(a)",
-		"stateAtStart := mtuStateSnapshotToken(a.state)",
-		"sameAsyncMeasurementSession(sessionAtStart, sessionTrackerFor(a).snapshot(0))",
+		"captureAsyncMeasurementSession",
+		"sameAsyncMeasurementSession",
+		"activeAsyncMeasurementProfile",
+		"validateAsyncMeasurementProfile",
+		"asyncMeasurementProfileToken",
+		"VPN session/path changed while live proof was running",
+		"active VPN node/mode/base/path changed while live proof was running",
+		"active VPN profile or policy changed while live proof was running",
+		"targetProfile, stateAtStart, err := a.activeAsyncMeasurementProfile()",
+		"active VPN path or policy changed before public-exit persistence",
+		"p, stateAtStart, err := a.activeAsyncMeasurementProfile()",
+		"active node/path or DNS policy changed before DNS Retest persistence",
+		"previousStore := cloneRouterProfileStore(a.profiles)",
+		"a.rollbackProfilesLocked(previousStore)",
 	} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("async measurement persistence contract missing %q", marker)
