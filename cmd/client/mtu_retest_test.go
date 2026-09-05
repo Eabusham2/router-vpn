@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"router-vpn/internal/common"
 )
@@ -42,10 +41,10 @@ func TestMTURetestPackagedScriptPaths(t *testing.T) {
 
 func TestMTURetestPortableWindowsKeepsWritableDataSeparateFromImmutableScript(t *testing.T) {
 	portable := t.TempDir()
-	app := filepath.Join(portable, "App", "RouterVPN")
+	appRoot := filepath.Join(portable, "App", "RouterVPN")
 	data := filepath.Join(portable, "Data")
-	scripts := filepath.Join(app, "modes")
-	if err := os.MkdirAll(filepath.Join(app, "client"), 0o700); err != nil {
+	scripts := filepath.Join(appRoot, "modes")
+	if err := os.MkdirAll(filepath.Join(appRoot, "client"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(data, 0o700); err != nil {
@@ -55,7 +54,7 @@ func TestMTURetestPortableWindowsKeepsWritableDataSeparateFromImmutableScript(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(app, "client", "Optimize-RouterVPN-MTU.ps1")
+	want := filepath.Join(appRoot, "client", "Optimize-RouterVPN-MTU.ps1")
 	if got != want || runner != "powershell" {
 		t.Fatalf("Portable Windows runner = %q %q; want %q powershell", got, runner, want)
 	}
@@ -78,7 +77,7 @@ func TestMTURetestEnvironmentCarriesExactRuntimeContext(t *testing.T) {
 func TestMTURetestRejectsDisconnectedAndNonAutoBeforeLaunching(t *testing.T) {
 	root := t.TempDir()
 	profiles := filepath.Join(root, "routers.json")
-	if err := os.WriteFile(profiles, []byte(`{"schema_version":3,"selected_id":"node","profiles":[{"id":"node","endpoint":"203.0.113.10","mtu_policy":"auto"}]}`), 0o600); err != nil {
+	if err := os.WriteFile(profiles, []byte(`{"schema_version":4,"selected_id":"node","profiles":[{"id":"node","endpoint":"203.0.113.10","mtu_policy":"auto"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	a := &app{cfg: common.ClientConfig{ProfilesFile: profiles, ScriptsDir: filepath.Join(root, "modes")}, profiles: common.RouterProfileStore{SelectedID: "node", Profiles: []common.RouterProfile{{ID: "node", Endpoint: "203.0.113.10", MTUPolicy: "auto"}}}, state: state{Connected: false, Mode: "shadowsocks", RuntimeMode: "shadowsocks", RouterID: "node"}}
@@ -142,109 +141,81 @@ func TestDecodeMTUMeasurementRequiresDeferredSafeWinner(t *testing.T) {
 	}
 }
 
-func installFakeMTURetestRuntime(t *testing.T) (*app, string) {
+func newMTUTransactionFixture(t *testing.T) (*app, mtuRetestSnapshot) {
 	t.Helper()
 	root := t.TempDir()
-	scripts := filepath.Join(root, "modes")
-	if err := os.MkdirAll(scripts, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	fake := `#!/usr/bin/env python3
-import json, os, pathlib, sys, time
-root=pathlib.Path(os.environ["HOMEVPN_ROOT"])
-action=sys.argv[1]
-(root/("fake-"+action)).write_text("1")
-if action=="measure":
-    delay=float(os.environ.get("HOMEVPN_MTU_FAKE_DELAY","0"))
-    if delay: time.sleep(delay)
-    print(json.dumps({"ok":True,"interface":"tun0","family":4,"original_mtu":1420,"winner":{"mtu":1380,"working":True,"success_ratio":1.0,"mbps":900.0,"median_rtt_ms":8.5},"results":[],"path_key":"0123456789abcdef01234567","network_fingerprint":"network","profile_fingerprint":"generated","adopted":False}))
-elif action in ("apply","restore"):
-    print(json.dumps({"ok":True,"interface":"tun0","family":4,"applied_mtu":int(os.environ["HOMEVPN_MTU_APPLY_VALUE"]),"rollback":action=="restore"}))
-else:
-    raise SystemExit(2)
-`
-	for _, name := range []string{"mtu-throughput-tuner.py", "mtu-throughput-tuner-platform.py"} {
-		if err := os.WriteFile(filepath.Join(scripts, name), []byte(fake), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
 	profile := common.RouterProfile{ID: "node", NodeKind: "router-vpn", Endpoint: "203.0.113.10", MTUPolicy: "auto", EffectiveMTU: 1420}
 	store := common.RouterProfileStore{SchemaVersion: 4, SelectedID: "node", Profiles: []common.RouterProfile{profile}}
-	payload, _ := json.Marshal(store)
 	profiles := filepath.Join(root, "routers.json")
+	payload, _ := json.Marshal(store)
 	if err := os.WriteFile(profiles, append(payload, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a := &app{cfg: common.ClientConfig{ProfilesFile: profiles, ScriptsDir: scripts}, profiles: store, state: state{Connected: true, Phase: "connected", Mode: "shadowsocks", LogicalMode: "privacy", RuntimeMode: "shadowsocks", Base: "wg", RouterID: "node"}}
+	a := &app{cfg: common.ClientConfig{ProfilesFile: profiles}, profiles: store, state: state{Connected: true, Phase: "connected", Mode: "shadowsocks", LogicalMode: "privacy", RuntimeMode: "shadowsocks", Base: "wg", RouterID: "node"}}
 	tracker := &sessionTracker{a: a, session: &connectionSession{ID: "session-start", RouterID: "node", ActualMode: "shadowsocks", ActualBase: "wg", Phase: "connected", Connected: true, PathProof: "passed", DNSProof: dnsProofState{Status: "passed"}}}
 	sessionTrackers.Store(a, tracker)
 	t.Cleanup(func() { sessionTrackers.Delete(a); mtuRetestLocks.Delete(a) })
-	return a, root
+	snapshot, err := captureMTURetestSnapshot(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a, snapshot
+}
+
+func testMTUMeasurement() mtuMeasurementResult {
+	return mtuMeasurementResult{
+		OK: true, Interface: "tun0", Family: 4, OriginalMTU: 1420,
+		Winner: mtuWinner{MTU: 1380, Working: true, SuccessRatio: 1, Mbps: 900, MedianRTTMs: 8.5},
+		PathKey: "0123456789abcdef01234567", NetworkFingerprint: "network", ProfileFingerprint: "generated",
+	}
+}
+
+func readMTURetestSource(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("mtu_retest.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }
 
 func TestMTURetestTwoPhaseTransactionPersistsOnlyAfterFreshApply(t *testing.T) {
-	a, root := installFakeMTURetestRuntime(t)
-	t.Setenv("HOMEVPN_ROOT", root)
-	req := httptest.NewRequest(http.MethodPost, "/api/mtu/retest", strings.NewReader(`{}`))
-	w := httptest.NewRecorder()
-	a.retestMTU(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("Retest = %d %q", w.Code, w.Body.String())
+	a, snapshot := newMTUTransactionFixture(t)
+	measurement := testMTUMeasurement()
+	updated, err := persistMTUMeasurement(a, snapshot, measurement)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "fake-measure")); err != nil {
-		t.Fatal("measure phase did not run")
+	if updated.EffectiveMTU != 1380 || updated.EffectiveMTUSource != "auto-throughput" || updated.EffectiveMTUPathKey == "" {
+		t.Fatalf("fresh MTU result not persisted: %+v", updated)
 	}
-	if _, err := os.Stat(filepath.Join(root, "fake-apply")); err != nil {
-		t.Fatal("apply phase did not run")
-	}
-	if _, err := os.Stat(filepath.Join(root, "fake-restore")); !os.IsNotExist(err) {
-		t.Fatal("successful transaction unexpectedly rolled back")
-	}
-	a.mu.Lock()
-	got := a.profiles.Profiles[0]
-	a.mu.Unlock()
-	if got.EffectiveMTU != 1380 || got.EffectiveMTUSource != "auto-throughput" || got.EffectiveMTUPathKey == "" {
-		t.Fatalf("fresh MTU result not persisted: %+v", got)
+	source := readMTURetestSource(t)
+	apply := strings.Index(source, `runMTURetestAction(ctx, a.cfg.ScriptsDir, "apply", applyEnv)`)
+	fresh := strings.Index(source[apply:], `validateMTURetestSnapshot(a, snapshot)`)
+	persist := strings.Index(source, `persistMTUMeasurement(a, snapshot, measurement)`)
+	if apply < 0 || fresh < 0 || persist < 0 || apply >= persist || apply+fresh >= persist {
+		t.Fatal("MTU controller no longer requires live apply plus fresh-session proof before durable adoption")
 	}
 }
 
 func TestMTURetestRejectsStaleSessionBeforeApplyOrPersistence(t *testing.T) {
-	a, root := installFakeMTURetestRuntime(t)
-	t.Setenv("HOMEVPN_ROOT", root)
-	t.Setenv("HOMEVPN_MTU_FAKE_DELAY", "0.25")
-	done := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		req := httptest.NewRequest(http.MethodPost, "/api/mtu/retest", strings.NewReader(`{}`))
-		w := httptest.NewRecorder()
-		a.retestMTU(w, req)
-		done <- w
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if _, err := os.Stat(filepath.Join(root, "fake-measure")); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("measure phase did not start")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	a, snapshot := newMTUTransactionFixture(t)
 	tracker := sessionTrackerFor(a)
 	tracker.mu.Lock()
 	tracker.session.ID = "session-new"
 	tracker.mu.Unlock()
-	w := <-done
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "VPN session changed") {
-		t.Fatalf("stale Retest = %d %q", w.Code, w.Body.String())
+	if err := validateMTURetestSnapshot(a, snapshot); err == nil || !strings.Contains(err.Error(), "VPN session changed") {
+		t.Fatalf("stale MTU session was accepted: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "fake-apply")); !os.IsNotExist(err) {
-		t.Fatal("stale measurement reached apply phase")
+	source := readMTURetestSource(t)
+	measurement := strings.Index(source, `measurement, rawResult, err := decodeMTUMeasurement(out)`)
+	apply := strings.Index(source, `runMTURetestAction(ctx, a.cfg.ScriptsDir, "apply", applyEnv)`)
+	between := ""
+	if measurement >= 0 && apply > measurement {
+		between = source[measurement:apply]
 	}
-	a.mu.Lock()
-	got := a.profiles.Profiles[0].EffectiveMTU
-	a.mu.Unlock()
-	if got != 1420 {
-		t.Fatalf("stale measurement persisted MTU %d", got)
+	if measurement < 0 || apply < 0 || !strings.Contains(between, `validateMTURetestSnapshot(a, snapshot)`) || !strings.Contains(between, `failMTURetestWithLiveRollback`) {
+		t.Fatal("MTU controller no longer rejects a stale session with live rollback before apply")
 	}
 }
 
@@ -287,27 +258,26 @@ func TestMTURetestPackagedOptimizersKeepMeasurementAndAdoptionSeparate(t *testin
 }
 
 func TestMTURetestPersistenceFailureRollsBackLiveAndInMemoryResult(t *testing.T) {
-	a, root := installFakeMTURetestRuntime(t)
-	t.Setenv("HOMEVPN_ROOT", root)
+	a, snapshot := newMTUTransactionFixture(t)
+	root := filepath.Dir(a.cfg.ProfilesFile)
 	blocker := filepath.Join(root, "not-a-directory")
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	a.cfg.ProfilesFile = filepath.Join(blocker, "routers.json")
-
-	req := httptest.NewRequest(http.MethodPost, "/api/mtu/retest", strings.NewReader(`{}`))
-	w := httptest.NewRecorder()
-	a.retestMTU(w, req)
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("persistence failure status=%d body=%q", w.Code, w.Body.String())
-	}
-	if _, err := os.Stat(filepath.Join(root, "fake-restore")); err != nil {
-		t.Fatal("MTU persistence failure did not roll back the live interface")
+	if _, err := persistMTUMeasurement(a, snapshot, testMTUMeasurement()); err == nil {
+		t.Fatal("MTU persistence failure was accepted")
 	}
 	a.mu.Lock()
 	got := a.profiles.Profiles[0]
 	a.mu.Unlock()
 	if got.EffectiveMTU != 1420 || got.EffectiveMTUSource != "" || got.EffectiveMTUPathKey != "" {
 		t.Fatalf("MTU persistence failure left measured state in RAM: %+v", got)
+	}
+	source := readMTURetestSource(t)
+	persistBranch := `if persistErr != nil {`
+	idx := strings.Index(source, persistBranch)
+	if idx < 0 || !strings.Contains(source[idx:], `failMTURetestWithLiveRollback`) {
+		t.Fatal("MTU persistence failure is no longer wired to exact live-MTU rollback")
 	}
 }
