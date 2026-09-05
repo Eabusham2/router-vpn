@@ -161,6 +161,10 @@ func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "active VPN node identity is unavailable; refusing to substitute the mutable selected node", http.StatusConflict)
 		return
 	}
+	if st.Mode != "multihop" && id != strings.TrimSpace(st.RouterID) {
+		http.Error(w, "requested Router VPN node does not match the active single-hop session; refusing to mislabel routed throughput", http.StatusConflict)
+		return
+	}
 	if !ok {
 		http.Error(w, "unknown Router VPN profile", http.StatusNotFound)
 		return
