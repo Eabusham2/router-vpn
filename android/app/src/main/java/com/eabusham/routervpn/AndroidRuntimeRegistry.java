@@ -17,6 +17,10 @@ final class AndroidRuntimeRegistry {
 
     private AndroidRuntimeRegistry(Context context) {
         Context app = context.getApplicationContext();
+        // Every tunnel engine below is owned by this Android app process and the
+        // VpnService implementations are START_NOT_STICKY. Invalidate previous-
+        // process Connected/UP evidence before any controller can restore it.
+        AndroidProcessStateReconciler.reconcile(app);
         wireGuard = new NativeWireGuardController(app);
         amneziaWG = new NativeAmneziaWGController(app);
         singBox = new NativeSingBoxController(app);
