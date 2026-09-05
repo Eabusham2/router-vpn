@@ -7,7 +7,7 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf nftables git make gcc libc6-dev golang-go curl python3 tar cmake clang pkg-config libsodium-dev cargo rustc tor
 "$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
-mkdir -p "$ROOT" /usr/local/bin /usr/local/lib /usr/local/sbin
+mkdir -p "$ROOT" "$ROOT/bin" /usr/local/bin /usr/local/lib /usr/local/sbin
 cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -26,13 +26,22 @@ esac
 install -m 755 "$BIN" /usr/local/bin/router-vpn-client
 install -m 755 "$DNS_BIN" /usr/local/bin/router-vpn-dns
 
-# Tor Browser's reproducible build currently pins Lyrebird 0.8.1. Build that
-# exact Tor Project tag locally only when the modern PT helper is absent. The
-# commit-prefix check prevents a moved/reissued tag from silently changing the
-# executable Router VPN installs.
+# Tor Browser's reproducible build currently pins Lyrebird 0.8.1. Router VPN
+# owns its PT helper under ROOT/bin rather than trusting an arbitrary PATH copy.
+# Repeat installs reuse only an executable paired with the exact root-owned
+# source identity marker; otherwise the private helper is rebuilt from the
+# verified Tor Project tag and Go module graph.
 LYREBIRD_COMMIT_PREFIX=0b10edbb61e0
-if ! command -v lyrebird >/dev/null; then
-  echo 'Building pinned Lyrebird 0.8.1 for Tor obfs4/meek/Snowflake/WebTunnel...'
+LYREBIRD_TARGET="$ROOT/bin/lyrebird"
+LYREBIRD_SOURCE="$ROOT/bin/lyrebird.source"
+LYREBIRD_ID="lyrebird-0.8.1 $LYREBIRD_COMMIT_PREFIX"
+LYREBIRD_READY=0
+if [[ -x "$LYREBIRD_TARGET" && "$(cat "$LYREBIRD_SOURCE" 2>/dev/null || true)" == "$LYREBIRD_ID" ]]; then
+  LYREBIRD_READY=1
+fi
+if [[ $LYREBIRD_READY -ne 1 ]]; then
+  echo 'Building Router VPN-owned Lyrebird 0.8.1 for Tor obfs4/meek/Snowflake/WebTunnel...'
+  rm -f "$LYREBIRD_TARGET" "$LYREBIRD_SOURCE"
   TMP_LYREBIRD=$(mktemp -d)
   if git init "$TMP_LYREBIRD/lyrebird" \
     && git -C "$TMP_LYREBIRD/lyrebird" remote add origin https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird.git \
@@ -41,8 +50,11 @@ if ! command -v lyrebird >/dev/null; then
     && test "$(git -C "$TMP_LYREBIRD/lyrebird" rev-parse HEAD | cut -c1-12)" = "$LYREBIRD_COMMIT_PREFIX" \
     && (cd "$TMP_LYREBIRD/lyrebird" && GOTOOLCHAIN=auto go mod download && GOTOOLCHAIN=auto go mod verify && GOTOOLCHAIN=auto go build -trimpath -ldflags='-s -w' -o lyrebird ./cmd/lyrebird) \
     && [[ -x "$TMP_LYREBIRD/lyrebird/lyrebird" ]]; then
-    install -m 755 "$TMP_LYREBIRD/lyrebird/lyrebird" /usr/local/bin/lyrebird
+    install -m 755 "$TMP_LYREBIRD/lyrebird/lyrebird" "$LYREBIRD_TARGET"
+    printf '%s\n' "$LYREBIRD_ID" >"$LYREBIRD_SOURCE"
+    chmod 644 "$LYREBIRD_SOURCE"
   else
+    rm -f "$LYREBIRD_TARGET" "$LYREBIRD_SOURCE"
     echo 'Warning: pinned Lyrebird build/source-identity check failed. Tor obfs4 may still use obfs4proxy if installed; Snowflake/WebTunnel remain unavailable rather than using an unpinned helper.' >&2
   fi
   rm -rf "$TMP_LYREBIRD"
@@ -174,6 +186,7 @@ Type=simple
 Environment=HOMEVPN_ROOT=$ROOT
 Environment=HOMEVPN_CLIENT_CONFIG=$ROOT/client.json
 Environment=LD_LIBRARY_PATH=/usr/local/lib
+Environment=PATH=$ROOT/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=$ROOT
 ExecStart=/usr/local/bin/router-vpn-client
 Restart=on-failure
