@@ -9,6 +9,7 @@ typedef struct {
     App *app;
     GtkWidget *dialog;
     GtkWidget *name;
+    GtkWidget *update_selected;
     GtkWidget *transport;
     GtkWidget *kill;
     GtkWidget *lines;
@@ -53,7 +54,7 @@ static gboolean linux_tor_mutation_idle_v13(App *app, char **reason) {
         idle = !connected && (phase[0] == '\0' || g_ascii_strcasecmp(phase, "off") == 0 || g_ascii_strcasecmp(phase, "failed") == 0);
     }
     if (!idle && reason != NULL) {
-        *reason = g_strdup_printf("Disconnect or let the active VPN transition finish before adding a Tor bridge. Current phase: %s", phase[0] ? phase : "unknown");
+        *reason = g_strdup_printf("Disconnect or let the active VPN transition finish before adding or updating a Tor bridge. Current phase: %s", phase[0] ? phase : "unknown");
     }
     if (root != NULL) json_node_free(root);
     g_free(err);
@@ -102,6 +103,14 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, char **validation_e
     const char *name = gtk_entry_get_text(GTK_ENTRY(state->name));
     const char *transport = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->transport));
     const char *kill = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->kill));
+    const char *update_id = NULL;
+    if (state->update_selected != NULL && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->update_selected))) {
+        update_id = active_router_id(state->app);
+        if (update_id == NULL || update_id[0] == '\0') {
+            if (validation_error != NULL) *validation_error = g_strdup("Select the Tor node you want to update before opening this dialog.");
+            return NULL;
+        }
+    }
     char *raw = linux_tor_text_v13(state->lines);
     gchar **rows = g_strsplit(raw != NULL ? raw : "", "\n", -1);
     GPtrArray *bridges = g_ptr_array_new_with_free_func(g_free);
@@ -125,6 +134,10 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, char **validation_e
 
     JsonBuilder *builder = json_builder_new();
     json_builder_begin_object(builder);
+    if (update_id != NULL) {
+        json_builder_set_member_name(builder, "id");
+        json_builder_add_string_value(builder, update_id);
+    }
     json_builder_set_member_name(builder, "name");
     json_builder_add_string_value(builder, name != NULL ? name : "");
     json_builder_set_member_name(builder, "transport");
@@ -167,8 +180,9 @@ static gboolean linux_tor_save_v13(LinuxTorBridgeV13 *state) {
         free(out.data);
         return FALSE;
     }
-    linux_tor_status_v13(state, "Tor bridge node saved. Connect remains governed by the live platform/runtime capability result.");
-    append_diag(state->app, "Saved validated Tor censorship bridge profile (obfs4/meek/Snowflake/WebTunnel/Custom).");
+    gboolean updating = state->update_selected != NULL && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->update_selected));
+    linux_tor_status_v13(state, updating ? "Selected Tor bridge node updated. Replacement bridge lines remain private." : "Tor bridge node saved. Connect remains governed by the live platform/runtime capability result.");
+    append_diag(state->app, updating ? "Updated selected Tor censorship bridge profile without exposing prior private relay lines." : "Saved validated Tor censorship bridge profile (obfs4/meek/Snowflake/WebTunnel/Custom).");
     refresh_all(state->app);
     g_free(err);
     free(out.data);
@@ -196,7 +210,7 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
         "Refresh support", 1001,
         "Save Tor node", GTK_RESPONSE_ACCEPT,
         NULL);
-    gtk_window_set_default_size(GTK_WINDOW(state.dialog), 760, 700);
+    gtk_window_set_default_size(GTK_WINDOW(state.dialog), 760, 730);
     GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(state.dialog));
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_container_set_border_width(GTK_CONTAINER(box), 16);
@@ -213,6 +227,9 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     state.name = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(state.name), "Node name (optional)");
     gtk_box_pack_start(GTK_BOX(box), state.name, FALSE, FALSE, 0);
+    state.update_selected = gtk_check_button_new_with_label("Update currently selected Tor node (paste replacement bridge lines below)");
+    gtk_widget_set_tooltip_text(state.update_selected, "The selected node ID is sent only when checked. The controller refuses to replace a non-Tor node. Existing private bridge lines are never read back into this form.");
+    gtk_box_pack_start(GTK_BOX(box), state.update_selected, FALSE, FALSE, 0);
 
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     state.transport = gtk_combo_box_text_new();
