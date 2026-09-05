@@ -70,13 +70,16 @@ final class AndroidSessionRevalidator {
                 return;
             }
             // AUTO/SMART/CUSTOM/logical paths are owned by the orchestrator.
-            // Its normal disconnect path clears the current managed child. The
-            // callback may complete asynchronously, so it must still own this
-            // exact revalidation token before it can touch Home state.
+            // Its normal disconnect path clears the current managed child and
+            // may clear Home state before the callback. The callback may adopt
+            // this failure only if the exact pending token still exists OR the
+            // exact next generation is now the empty/off state produced by that
+            // teardown. A newer non-empty session is never touched.
             engines.orchestrator.disconnect(new AndroidModeOrchestrator.Callback(){
                 @Override public void progress(String ignored){}
                 @Override public void finished(boolean ok,String ignoredMode,String cleanupMessage){
-                    if(!isSameRevalidation(token))return;
+                    AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(context);
+                    if(!sameRevalidation(token,now)&&!sameCleanedRevalidation(token,now))return;
                     String suffix=ok?"":"; owner cleanup reported: "+safeMessage(cleanupMessage);
                     AndroidHomeStateStore.failed(context,message+suffix);
                 }
@@ -104,6 +107,18 @@ final class AndroidSessionRevalidator {
                 &&"connecting".equals(now.phase)
                 &&!now.connected
                 &&"pending".equals(now.pathProof);
+    }
+
+    private static boolean sameCleanedRevalidation(AndroidHomeStateStore.Snapshot token,AndroidHomeStateStore.Snapshot now){
+        if(token==null||now==null||token.sessionId==null||token.sessionId.isEmpty())return false;
+        String session=now.sessionId==null?"":now.sessionId;
+        String phase=now.phase==null?"":now.phase.trim().toLowerCase(java.util.Locale.ROOT);
+        String proof=now.pathProof==null?"":now.pathProof.trim().toLowerCase(java.util.Locale.ROOT);
+        return session.isEmpty()
+                &&now.pathGeneration==token.pathGeneration+1L
+                &&("off".equals(phase)||"disconnected".equals(phase))
+                &&!now.connected
+                &&("not-run".equals(proof)||proof.isEmpty());
     }
 
     private static String safe(Throwable e){String value=e==null?"":e.getMessage();return value==null||value.trim().isEmpty()?"session proof failed":value.replace('\n',' ').replace('\r',' ').trim();}
