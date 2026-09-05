@@ -107,7 +107,7 @@ need(
     "server/scripts/download_jobs.py",
     "JOB_TTL_SECONDS = 30 * 60",
     'RETAINED = {"ready", "delivered", "delivery-interrupted"}',
-    "retention_deadline_epoch=time.time() + PACKAGE_RETENTION_SECONDS",
+    "retention_deadline_epoch=now + PACKAGE_RETENTION_SECONDS",
     "temporary package retained for repeat download until its 30-minute deadline",
     "cleanup-pending",
 )
