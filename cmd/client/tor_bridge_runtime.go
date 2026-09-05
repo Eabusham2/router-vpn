@@ -191,13 +191,6 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	if !strictLiteralObfs4 && killPolicy != "off" {
 		return torBridgeRuntime{}, fmt.Errorf("Tor %s bridge set uses multiple or dynamic/CDN/WebRTC bootstrap egress that Router VPN cannot safely pre-whitelist yet; set this profile kill switch Off or use one obfs4 bridge so strict pre-tunnel leak protection remains truthful", cfg.Transport)
 	}
-	bridgeFields := strings.Fields(cfg.Bridges[0])
-	_, bridgePort, err := net.SplitHostPort(bridgeFields[1])
-	if err != nil {
-		return torBridgeRuntime{}, err
-	}
-	bridgeEndpoint := net.JoinHostPort(bridgeHost, bridgePort)
-
 	var torBinary, ptBinary, singBoxBinary string
 	if runtime.GOOS == "windows" {
 		torBinary, err = windowsTorRuntimeExecutable(root, "tor.exe")
