@@ -27,6 +27,7 @@ final class NativeAmneziaWGController implements Tunnel {
     private volatile Config activeConfig;
     private volatile File activeBundle;
     private volatile String lastError = "";
+    private volatile boolean homeStateOwner;
 
     NativeAmneziaWGController(Context context) {
         appContext = context.getApplicationContext();
@@ -38,63 +39,110 @@ final class NativeAmneziaWGController implements Tunnel {
     State getState() { return state; }
     String getError() { return lastError; }
 
-    void connect(File privateBundle, Callback callback) {
+    /** Direct raw-tunnel use owns the shared Home/session state. */
+    void connect(File privateBundle, Callback callback) { connectInternal(privateBundle, true, callback); }
+
+    /** AUTO/SMART/CUSTOM child transport: the outer orchestrator owns Home/session state. */
+    void connectManaged(File privateBundle, Callback callback) { connectInternal(privateBundle, false, callback); }
+
+    private void connectInternal(File privateBundle, boolean publishHomeState, Callback callback) {
         String activeNodeId = AndroidHomeStateStore.nodeIdFromBundleFile(privateBundle);
-        AndroidHomeStateStore.begin(appContext, "raw-tunnel", "awg2-fast", "awg", activeNodeId);
+        homeStateOwner = publishHomeState;
+        if (publishHomeState) AndroidHomeStateStore.begin(appContext, "raw-tunnel", "awg2-fast", "awg", activeNodeId);
         executor.execute(() -> {
             try {
-                networkMonitor.stop(); clearActive();
+                networkMonitor.stop();
+                clearActive();
                 if (AndroidKillSwitchPolicy.strictRequested(privateBundle)) throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
                 Config config = loadConfig(privateBundle);
-                State result = backend.setState(this, State.UP, config); state = result;
+                State result = backend.setState(this, State.UP, config);
+                state = result;
                 if (result != State.UP) throw new IllegalStateException("AmneziaWG backend did not enter UP state.");
-                if (!AndroidPathProbe.prove(privateBundle, 8000)) { backend.setState(this, State.DOWN, null); state = State.DOWN; throw new IllegalStateException("Native AmneziaWG failed selected-node private path proof."); }
-                activeConfig = config; activeBundle = privateBundle; lastError = "";
-                AndroidHomeStateStore.connected(appContext, "raw-tunnel", "awg2-fast", "awg", "", activeNodeId);
+                if (!AndroidPathProbe.prove(privateBundle, 8000)) {
+                    backend.setState(this, State.DOWN, null);
+                    state = State.DOWN;
+                    throw new IllegalStateException("Native AmneziaWG failed selected-node private path proof.");
+                }
+                activeConfig = config;
+                activeBundle = privateBundle;
+                lastError = "";
+                if (publishHomeState) AndroidHomeStateStore.connected(appContext, "raw-tunnel", "awg2-fast", "awg", "", activeNodeId);
                 networkMonitor.start(() -> executor.execute(this::recoverAfterNetworkChange));
                 callback.done(State.UP, "Native Android AmneziaWG 2 is active with selected DNS/MTU and selected-node private path proof.", null);
-            } catch (Throwable error) { failClosed(error); callback.done(State.DOWN, "Native AmneziaWG failed: " + safeMessage(error), error); }
+            } catch (Throwable error) {
+                failClosed(error, publishHomeState);
+                callback.done(State.DOWN, "Native AmneziaWG failed: " + safeMessage(error), error);
+            }
         });
     }
 
     private void recoverAfterNetworkChange() {
-        Config config = activeConfig; File bundle = activeBundle;
+        Config config = activeConfig;
+        File bundle = activeBundle;
         if (state != State.UP || config == null || bundle == null) return;
+        String reason = "Underlying network changed; AmneziaWG is re-establishing and revalidating the selected node.";
+        AndroidHomeStateStore.Snapshot revalidation = AndroidHomeStateStore.beginPathRevalidation(appContext, reason);
+        boolean failSharedState = homeStateOwner || revalidation != null;
         try {
-            // The logical session survives an underlay handoff, but any actual
-            // public-exit proof belongs to the old route. Invalidate it before
-            // rebuilding/re-proving AmneziaWG on the new network generation.
-            AndroidHomeStateStore.advancePathGeneration(appContext);
-            lastError = "Underlying network changed; AmneziaWG is re-establishing and revalidating the selected node.";
-            AndroidHomeStateStore.warning(appContext, lastError);
+            lastError = reason;
             backend.setState(this, State.DOWN, null);
-            State result = backend.setState(this, State.UP, config); state = result;
-            if (result != State.UP || !AndroidPathProbe.prove(bundle, 10000)) throw new IllegalStateException("AmneziaWG did not recover a proven selected-node path after the underlying network changed.");
+            State result = backend.setState(this, State.UP, config);
+            state = result;
+            if (result != State.UP || !AndroidPathProbe.prove(bundle, 10000)) {
+                throw new IllegalStateException("AmneziaWG did not recover a proven selected-node path after the underlying network changed.");
+            }
+            if (revalidation != null && !AndroidHomeStateStore.completePathRevalidation(appContext, revalidation)) {
+                throw new IllegalStateException("AmneziaWG path proof completed for a stale Android session/generation; refusing to re-adopt Connected.");
+            }
             lastError = "";
-            AndroidHomeStateStore.connected(appContext, "raw-tunnel", "awg2-fast", "awg", "", AndroidHomeStateStore.nodeIdFromBundleFile(bundle));
-        } catch (Throwable error) { failClosed(new IllegalStateException("AmneziaWG network-transition recovery failed closed: " + safeMessage(error), error)); }
+        } catch (Throwable error) {
+            failClosed(new IllegalStateException("AmneziaWG network-transition recovery failed closed: " + safeMessage(error), error), failSharedState);
+        }
     }
 
-    void disconnect(Callback callback) {
+    /** Normal/raw disconnect owns and clears Home state. */
+    void disconnect(Callback callback) { disconnectInternal(true, callback); }
+
+    /** Orchestrator candidate teardown must not clear the outer logical session. */
+    void disconnectManaged(Callback callback) { disconnectInternal(false, callback); }
+
+    private void disconnectInternal(boolean publishHomeState, Callback callback) {
         executor.execute(() -> {
-            networkMonitor.stop(); clearActive();
+            networkMonitor.stop();
+            clearActive();
             try {
-                State result = backend.setState(this, State.DOWN, null); state = result; lastError = "";
-                AndroidHomeStateStore.disconnected(appContext);
+                State result = backend.setState(this, State.DOWN, null);
+                state = result;
+                lastError = "";
+                if (publishHomeState) AndroidHomeStateStore.disconnected(appContext);
+                homeStateOwner = false;
                 callback.done(result, "Native Android AmneziaWG disconnected.", null);
             } catch (Throwable error) {
-                lastError = safeMessage(error); AndroidHomeStateStore.failed(appContext, "AmneziaWG disconnect failed: " + lastError);
+                lastError = safeMessage(error);
+                if (publishHomeState) AndroidHomeStateStore.failed(appContext, "AmneziaWG disconnect failed: " + lastError);
+                homeStateOwner = false;
                 callback.done(state, "AmneziaWG disconnect failed: " + lastError, error);
             }
         });
     }
 
-    void close() { networkMonitor.stop(); clearActive(); executor.shutdown(); }
-
-    private void failClosed(Throwable error) {
-        networkMonitor.stop(); try { backend.setState(this, State.DOWN, null); } catch (Throwable ignored) { }
-        state = State.DOWN; lastError = safeMessage(error); AndroidHomeStateStore.failed(appContext, lastError); clearActive();
+    void close() {
+        networkMonitor.stop();
+        clearActive();
+        homeStateOwner = false;
+        executor.shutdown();
     }
+
+    private void failClosed(Throwable error, boolean publishHomeFailure) {
+        networkMonitor.stop();
+        try { backend.setState(this, State.DOWN, null); } catch (Throwable ignored) { }
+        state = State.DOWN;
+        lastError = safeMessage(error);
+        if (publishHomeFailure) AndroidHomeStateStore.failed(appContext, lastError);
+        clearActive();
+        homeStateOwner = false;
+    }
+
     private void clearActive() { activeConfig = null; activeBundle = null; }
 
     private static Config loadConfig(File privateBundle) throws Exception {
