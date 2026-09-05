@@ -35,7 +35,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             invalidated = true
             lock.unlock()
-            owner?.invalidateSelectedPathProof()
+            owner?.invalidateSelectedPathProof(self)
         }
     }
 
@@ -45,6 +45,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var proofSession: URLSession?
     private var pathMonitor: NWPathMonitor?
     private var pathProofGuard: NetworkProofGuard?
+    private let proofOwnerLock = NSLock()
+    private let pathProofOwnerLock = NSLock()
     private let pathMonitorQueue = DispatchQueue(label: "com.eabusham.routervpn.path-proof", qos: .utility)
 
     override func startTunnel(options: [String: NSObject]? = nil, completionHandler: @escaping (Error?) -> Void) {
@@ -84,9 +86,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         wireGuardAdapter = adapter
         adapter.start(tunnelConfiguration: tunnelConfiguration) { [weak self] adapterError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 11, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during startup."])); return }
+            guard self.wireGuardAdapter === adapter else { adapter.stop { _ in completionHandler(self.tunnelError(40, "A newer iOS WireGuard runtime replaced this startup attempt.")) }; return }
             if let adapterError { self.wireGuardAdapter = nil; completionHandler(self.tunnelError(12, "WireGuard engine failed to start: \(adapterError.localizedDescription)")); return }
             self.proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID, proxyPort: nil) { proofError in
-                if let proofError { adapter.stop { _ in self.wireGuardAdapter = nil; completionHandler(proofError) }; return }
+                guard self.wireGuardAdapter === adapter else { adapter.stop { _ in completionHandler(self.tunnelError(41, "A newer iOS WireGuard runtime replaced this proof attempt.")) }; return }
+                if let proofError { adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(proofError) }; return }
                 self.armNetworkProofGuard()
                 completionHandler(nil)
             }
@@ -104,7 +108,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         do { try engine.start(files: files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(15, "Libbox engine failed to start: \(error.localizedDescription)") }
         proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 16, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during Libbox proof."])); return }
-            if let proofError { engine.stop(); self.libboxEngine = nil; completionHandler(proofError); return }
+            guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(42, "A newer iOS Libbox runtime replaced this proof attempt.")); return }
+            if let proofError { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(proofError); return }
             self.armNetworkProofGuard()
             completionHandler(nil)
         }
@@ -116,50 +121,100 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         do { try engine.start(files: runtime.files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
         proveExternalExit(expectedPublicIP: runtime.expectedPublicIP, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 18, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during external-exit proof."])); return }
-            if let proofError { engine.stop(); self.libboxEngine = nil; completionHandler(proofError); return }
+            guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(43, "A newer iOS external runtime replaced this proof attempt.")); return }
+            if let proofError { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(proofError); return }
             self.armNetworkProofGuard()
             completionHandler(nil)
         }
     }
 
     private func armNetworkProofGuard() {
-        pathMonitor?.cancel()
         let monitor = NWPathMonitor()
         let guardState = NetworkProofGuard(owner: self)
+        pathProofOwnerLock.lock()
+        let previous = pathMonitor
         pathProofGuard = guardState
         pathMonitor = monitor
+        pathProofOwnerLock.unlock()
+        previous?.cancel()
         monitor.pathUpdateHandler = { path in guardState.handle(path) }
         monitor.start(queue: pathMonitorQueue)
     }
 
-    private func invalidateSelectedPathProof() {
-        pathMonitor?.cancel()
+    private func invalidateSelectedPathProof(_ guardState: NetworkProofGuard) {
+        pathProofOwnerLock.lock()
+        guard pathProofGuard === guardState else { pathProofOwnerLock.unlock(); return }
+        let monitor = pathMonitor
         pathMonitor = nil
         pathProofGuard = nil
+        pathProofOwnerLock.unlock()
+        monitor?.cancel()
         cancelTunnelWithError(tunnelError(19, "Underlying network changed; selected-node/public-exit proof was invalidated. Reconnect must establish and prove the selected path again."))
     }
 
+    private func clearPathProofGuard() {
+        pathProofOwnerLock.lock()
+        let monitor = pathMonitor
+        pathMonitor = nil
+        pathProofGuard = nil
+        pathProofOwnerLock.unlock()
+        monitor?.cancel()
+    }
+
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        pathMonitor?.cancel(); pathMonitor = nil; pathProofGuard = nil
-        proofTask?.cancel(); proofTask = nil; proofSession?.invalidateAndCancel(); proofSession = nil
-        if let engine = libboxEngine { engine.stop(); libboxEngine = nil }
+        clearPathProofGuard()
+        cancelActiveProof()
+        if let engine = libboxEngine { libboxEngine = nil; engine.stop() }
         guard let adapter = wireGuardAdapter else { completionHandler(); return }
-        adapter.stop { [weak self] _ in self?.wireGuardAdapter = nil; completionHandler() }
+        wireGuardAdapter = nil
+        adapter.stop { _ in completionHandler() }
     }
 
     override func sleep(completionHandler: @escaping () -> Void) { libboxEngine?.pause(); completionHandler() }
     override func wake() { libboxEngine?.wake() }
     func writeLibboxLog(_ message: String) { if !message.isEmpty { NSLog("RouterVPN Libbox: %@", message) } }
 
+    private func installProof(session: URLSession, task: URLSessionDataTask) {
+        proofOwnerLock.lock()
+        let previousTask = proofTask
+        let previousSession = proofSession
+        proofTask = task
+        proofSession = session
+        proofOwnerLock.unlock()
+        previousTask?.cancel()
+        previousSession?.invalidateAndCancel()
+    }
+
+    private func finishProof(session: URLSession) {
+        proofOwnerLock.lock()
+        if proofSession === session {
+            proofTask = nil
+            proofSession = nil
+        }
+        proofOwnerLock.unlock()
+        session.finishTasksAndInvalidate()
+    }
+
+    private func cancelActiveProof() {
+        proofOwnerLock.lock()
+        let task = proofTask
+        let session = proofSession
+        proofTask = nil
+        proofSession = nil
+        proofOwnerLock.unlock()
+        task?.cancel()
+        session?.invalidateAndCancel()
+    }
+
     private func proveSelectedNode(url: URL, expectedNodeID: String, proxyPort: Int?, completion: @escaping (Error?) -> Void) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 5; configuration.timeoutIntervalForResource = 6; configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         if let proxyPort { configuration.connectionProxyDictionary = [kCFNetworkProxiesHTTPEnable as String: 1, kCFNetworkProxiesHTTPProxy as String: "127.0.0.1", kCFNetworkProxiesHTTPPort as String: proxyPort] }
-        let session = URLSession(configuration: configuration); proofSession = session
+        let session = URLSession(configuration: configuration)
         var request = URLRequest(url: url); request.timeoutInterval = 5; request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData; request.setValue("application/json", forHTTPHeaderField: "Accept")
-        proofTask = session.dataTask(with: request) { [weak self] data, response, error in
-            guard let self else { return }
-            defer { self.proofTask = nil; self.proofSession?.finishTasksAndInvalidate(); self.proofSession = nil }
+        let task = session.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { session.finishTasksAndInvalidate(); return }
+            defer { self.finishProof(session: session) }
             if let error { completion(self.tunnelError(20, "Selected-node private path proof failed: \(error.localizedDescription)")); return }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data, !data.isEmpty, data.count <= Self.maxProofBytes else { completion(self.tunnelError(21, "Selected-node private path proof returned an invalid response.")); return }
             do {
@@ -167,19 +222,20 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 completion(nil)
             } catch { completion(error) }
         }
-        proofTask?.resume()
+        installProof(session: session, task: task)
+        task.resume()
     }
 
     private func proveExternalExit(expectedPublicIP: String, proxyPort: Int, completion: @escaping (Error?) -> Void) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 5; configuration.timeoutIntervalForResource = 6; configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         configuration.connectionProxyDictionary = [kCFNetworkProxiesHTTPEnable as String: 1, kCFNetworkProxiesHTTPProxy as String: "127.0.0.1", kCFNetworkProxiesHTTPPort as String: proxyPort]
-        let session = URLSession(configuration: configuration); proofSession = session
+        let session = URLSession(configuration: configuration)
         let endpoint = expectedPublicIP.contains(":") ? "https://api64.ipify.org" : "https://api.ipify.org"
         var request = URLRequest(url: URL(string: endpoint)!); request.timeoutInterval = 5; request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData; request.setValue("text/plain", forHTTPHeaderField: "Accept")
-        proofTask = session.dataTask(with: request) { [weak self] data, response, error in
-            guard let self else { return }
-            defer { self.proofTask = nil; self.proofSession?.finishTasksAndInvalidate(); self.proofSession = nil }
+        let task = session.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { session.finishTasksAndInvalidate(); return }
+            defer { self.finishProof(session: session) }
             if let error { completion(self.tunnelError(23, "External public-exit proof failed: \(error.localizedDescription)")); return }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data, !data.isEmpty, data.count <= 256, let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) else { completion(self.tunnelError(24, "External public-exit proof returned an invalid response.")); return }
             let matches: Bool
@@ -189,7 +245,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard matches else { completion(self.tunnelError(25, "External exit reached \(text), expected \(expectedPublicIP).")); return }
             completion(nil)
         }
-        proofTask?.resume()
+        installProof(session: session, task: task)
+        task.resume()
     }
 
     private func selectedRouterProfile(_ root: [String: Any]) throws -> [String: Any] {
