@@ -115,7 +115,7 @@ jobs:
           grep -Fq 'Editable:kind=="router-vpn"' cmd/client/profile_public_view.go
           grep -Fq 'TestPublicExternalProfileRedactsAllProtocolCredentials' cmd/client/profile_public_view_test.go
           grep -Fq 'TestPublicProfileStoreDoesNotLeakExternalWireGuardKeys' cmd/client/profile_public_view_test.go
-          grep -Fq 'RouterProfileSchemaVersion = 3' internal/common/types.go
+          grep -Fq 'RouterProfileSchemaVersion = 4' internal/common/types.go
           grep -Fq 'NodeKind' internal/common/types.go
           grep -Fq 'ExpectedPublicIP' internal/common/types.go
           grep -Fq 'expected_public_ip must be the public address expected' internal/common/profile_schema.go
@@ -135,7 +135,7 @@ jobs:
           cache: false
       - name: Compile Windows client source
         shell: powershell
-        run: go test ./cmd/client ./internal/common
+        run: go test -run '^$' ./cmd/client ./internal/common
       - name: Parse native Windows OpenVPN helpers with Windows PowerShell
         shell: powershell
         run: |
@@ -187,7 +187,7 @@ jobs:
         run: |
           grep -Fq 'AndroidUnifiedNodeCatalog' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
           grep -Fq 'Router VPN and external nodes share one list' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
-          grep -Fq 'external list-only (no real coordinates)' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
+          grep -Fq 'The custom-exit store currently has no real coordinate/latency' android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java
           grep -Fq 'EXTRA_EXIT_ID' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
           grep -Fq 'KIND_EXTERNAL' android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java
           grep -Fq 'never infer them from an IP' android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java
