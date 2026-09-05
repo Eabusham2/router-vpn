@@ -65,7 +65,7 @@ jobs:
           python3 deploy/daita-safety-audit.py
           python3 modes/test_smart_auto_rollback.py
           python3 deploy/test-killswitch-transition-contract.py
-          python3 deploy/test_macos_killswitch_contract.py
+          python3 deploy/test_macos_killswitch-contract.py
           python3 modes/test_kill_switch.py
           python3 modes/test_mtu_policy.py
           python3 modes/test_multihop.py
@@ -131,14 +131,12 @@ jobs:
           ./deploy/build-client.sh
           ./deploy/package-builds.sh
           (cd dist/packages && sha256sum -c SHA256SUMS)
+          bash deploy/scope-windows-release-candidate.sh
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-generic-release-candidate
           path: |
-            dist/packages/RouterVPN-Windows-amd64.zip
-            dist/packages/RouterVPN-Windows-arm64.zip
-            dist/packages/RouterVPN-Portable-Windows-amd64.zip
-            dist/packages/RouterVPN-Portable-Windows-arm64.zip
+            dist/packages/*
           if-no-files-found: error
           retention-days: 1
 
