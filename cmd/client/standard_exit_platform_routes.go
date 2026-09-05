@@ -240,6 +240,7 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 			if a.profiles.Profiles[i].ID == entry.ID {
 				a.profiles.Profiles[i].UseCount++
 			}
+		}
 	}
 	persistErr := a.persistProfilesLocked()
 	if persistErr != nil {
