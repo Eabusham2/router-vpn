@@ -28,7 +28,7 @@ for rel in("cmd/client/main.go","cmd/portable-launcher/main.go","modes/orchestra
 need("modes/orchestrate.py","DEFAULT_PATH_PROBE_URL","path_probe_url","selected router path proof URL must be private/local")
 need("modes/run-all.sh","http://10.77.0.1:8787/health","ipaddress.ip_address","b'\"ok\"'")
 need("cmd/client/session_state.go","connectionSession","typedSessionError","PathProof","RollbackState","DNSProof","sessionStatus","sessionEvents")
-need("cmd/client/extras.go",'"/api/session"','"/api/session/events"','a.state.Mode == "multihop"','target = a.state.RouterID')
+need("cmd/client/extras.go",'"/api/session"','"/api/session/events"',"activeAsyncMeasurementProfile","target := strings.TrimSpace(st.RouterID)","refusing to substitute the mutable selected node","validateAsyncMeasurementProfile")
 need("cmd/client/session_state_test.go","path_proof_failed","DNS must not be fabricated as proven")
 
 # Versioned profile/onboarding state.
