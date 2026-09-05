@@ -26,22 +26,29 @@ func normalizePersistedConnectionProfileMode(mode string, prefs *connectionProfi
 	if err != nil {
 		return "", err
 	}
+	// Since schema v1, Router VPN records carry a non-secret preferences
+	// snapshot while external-node records intentionally omit it. Keep that
+	// representation bound to the persisted mode so a hand-edited/corrupt store
+	// cannot cross-wire an external node into a Router mode (or vice versa).
+	if prefs == nil && mode != "external" {
+		return "", errors.New("external connection profile must use external mode")
+	}
+	if prefs != nil && mode == "external" {
+		return "", errors.New("Router VPN connection profile cannot use external mode")
+	}
 	switch mode {
 	case "smart-auto", "auto":
 		return mode, nil
 	case "external":
-		if prefs != nil {
-			return "", errors.New("Router VPN connection profile cannot use external mode")
-		}
 		return mode, nil
 	case "custom":
-		if prefs == nil || len(prefs.CustomLayers) == 0 {
+		if len(prefs.CustomLayers) == 0 {
 			return "", errors.New("CUSTOM connection profile requires at least one validated layer")
 		}
 		return mode, nil
 	}
 	if strings.HasPrefix(mode, "custom:") {
-		if prefs == nil || len(prefs.CustomLayers) == 0 {
+		if len(prefs.CustomLayers) == 0 {
 			return "", errors.New("saved CUSTOM preset requires its validated layer set")
 		}
 		return mode, nil
