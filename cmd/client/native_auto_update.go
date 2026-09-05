@@ -183,7 +183,7 @@ func rvValidateNativeUpdateConfig(cfg rvNativeUpdateConfig) error {
 	return nil
 }
 
-func rvClearNativeArtifact(state *updatepolicy.State) error {
+func rvClearNativeArtifact(cfg rvNativeUpdateConfig, state *updatepolicy.State) error {
 	if state == nil {
 		return errors.New("native update state is required")
 	}
@@ -192,6 +192,9 @@ func rvClearNativeArtifact(state *updatepolicy.State) error {
 	if path != "" {
 		if digest == "" {
 			return errors.New("staged native update is missing its verified digest")
+		}
+		if err := updatepolicy.ValidateOwnedArtifactPath(cfg.DownloadDir, path, digest); err != nil {
+			return fmt.Errorf("saved native update artifact ownership is invalid: %w", err)
 		}
 		if err := updatepolicy.RemoveVerifiedArtifact(path, digest); err != nil && !os.IsNotExist(err) {
 			return err
@@ -214,6 +217,11 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 		state = old
 		if !strings.EqualFold(state.Channel, cfg.Channel) {
 			return rvStatus(cfg, state), errors.New("saved native update channel does not match configured channel")
+		}
+		if strings.TrimSpace(state.ArtifactPath) != "" {
+			if err := updatepolicy.ValidateOwnedArtifactPath(cfg.DownloadDir, state.ArtifactPath, state.ArtifactSHA256); err != nil {
+				return rvStatus(cfg, state), fmt.Errorf("saved native update artifact ownership is invalid: %w", err)
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		return rvStatus(cfg, state), fmt.Errorf("load private native update state: %w", err)
@@ -249,7 +257,7 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 	}
 	state.LastManifestSHA = strings.ToLower(manifest.CommitSHA)
 	if strings.EqualFold(manifest.CommitSHA, cfg.InstalledSHA) {
-		if err := rvClearNativeArtifact(&state); err != nil {
+		if err := rvClearNativeArtifact(cfg, &state); err != nil {
 			return rvStatus(cfg, state), fmt.Errorf("remove obsolete staged native update: %w", err)
 		}
 		state.AvailableSHA = ""
@@ -263,7 +271,7 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 	state.AvailableSHA = strings.ToLower(manifest.CommitSHA)
 	superseded := state.ArtifactPath != "" && !strings.EqualFold(previousTarget, manifest.CommitSHA)
 	if superseded {
-		if err := rvClearNativeArtifact(&state); err != nil {
+		if err := rvClearNativeArtifact(cfg, &state); err != nil {
 			return rvStatus(cfg, state), fmt.Errorf("remove superseded staged native update: %w", err)
 		}
 	}
@@ -275,10 +283,19 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 			return rvStatus(cfg, state), err
 		}
 	}
+	if err := updatepolicy.EnsurePrivateArtifactDirectory(cfg.DownloadDir); err != nil {
+		return rvStatus(cfg, state), fmt.Errorf("validate private native update staging directory: %w", err)
+	}
 	artifactClient := rvNativeArtifactClient(cfg.RequestTimeout, cfg.AllowedHosts)
 	downloaded, err := updatepolicy.DownloadArtifactDetailed(ctx, artifactClient, artifact, cfg.DownloadDir)
 	if err != nil {
 		return rvStatus(cfg, state), fmt.Errorf("stage verified native update: %w", err)
+	}
+	if err := updatepolicy.ValidateOwnedArtifactPath(cfg.DownloadDir, downloaded.Path, artifact.SHA256); err != nil {
+		if downloaded.Created {
+			_ = updatepolicy.RemoveVerifiedArtifact(downloaded.Path, artifact.SHA256)
+		}
+		return rvStatus(cfg, state), fmt.Errorf("staged native update escaped private ownership: %w", err)
 	}
 	state.ArtifactPath, state.ArtifactSHA256 = downloaded.Path, strings.ToLower(artifact.SHA256)
 	state.DownloadedAt, state.InstallPending = now, true
@@ -306,6 +323,13 @@ func rvReadNativeUpdateStatus(cfg rvNativeUpdateConfig) rvNativeUpdateStatus {
 	fallback := updatepolicy.State{Schema: updatepolicy.SchemaV1, Channel: cfg.Channel, InstalledSHA: strings.ToLower(cfg.InstalledSHA)}
 	state, err := updatepolicy.LoadState(cfg.StatePath)
 	if err == nil {
+		if strings.TrimSpace(state.ArtifactPath) != "" {
+			if ownErr := updatepolicy.ValidateOwnedArtifactPath(cfg.DownloadDir, state.ArtifactPath, state.ArtifactSHA256); ownErr != nil {
+				state.ArtifactPath, state.ArtifactSHA256 = "", ""
+				state.DownloadedAt, state.InstallPending = time.Time{}, false
+				state.LastError = rvNativeErrorText(fmt.Errorf("saved native update artifact ownership is invalid: %w", ownErr))
+			}
+		}
 		return rvStatus(cfg, state)
 	}
 	status := rvStatus(cfg, fallback)
@@ -323,10 +347,14 @@ func rvPersistNativeUpdateError(cfg rvNativeUpdateConfig, cause error) {
 	if old, err := updatepolicy.LoadState(cfg.StatePath); err == nil {
 		state = old
 	}
-	// If a superseded verified artifact was already removed but a later state
-	// write/download failed, never re-persist the old path as install-pending.
+	// If the stored artifact path is not owned by this updater, clear the pointer
+	// without touching that foreign path. If an owned superseded artifact was
+	// already removed but a later state write/download failed, also clear it.
 	if strings.TrimSpace(state.ArtifactPath) != "" {
-		if _, err := os.Lstat(state.ArtifactPath); os.IsNotExist(err) {
+		if ownErr := updatepolicy.ValidateOwnedArtifactPath(cfg.DownloadDir, state.ArtifactPath, state.ArtifactSHA256); ownErr != nil {
+			state.ArtifactPath, state.ArtifactSHA256 = "", ""
+			state.DownloadedAt, state.InstallPending = time.Time{}, false
+		} else if _, err := os.Lstat(state.ArtifactPath); os.IsNotExist(err) {
 			state.ArtifactPath, state.ArtifactSHA256 = "", ""
 			state.DownloadedAt, state.InstallPending = time.Time{}, false
 		}
