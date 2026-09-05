@@ -10,7 +10,7 @@ brew install wireguard-tools go make git python sing-box shadowsocks-rust tor ||
 "$BUNDLE/client/install-xray.sh"
 
 ROOT=/opt/router-vpn-client
-sudo mkdir -p "$ROOT" "$ROOT/client" /usr/local/bin
+sudo mkdir -p "$ROOT" "$ROOT/client" "$ROOT/bin" /usr/local/bin
 [[ -f "$BUNDLE/modes/native-multihop-darwin.sh" ]] || { echo 'This bundle is missing the canonical native macOS multihop helper.' >&2; exit 1; }
 sudo cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
 ARCH=$(uname -m)
@@ -29,13 +29,22 @@ esac
 sudo install -m 755 "$BIN" /usr/local/bin/router-vpn-client
 sudo install -m 755 "$DNS_BIN" /usr/local/bin/router-vpn-dns
 
-# Tor Browser's reproducible build currently pins Lyrebird 0.8.1. Build that
-# exact Tor Project tag locally only when the modern PT helper is absent. The
-# commit-prefix check prevents a moved/reissued tag from silently changing the
-# executable Router VPN installs.
+# Tor Browser's reproducible build currently pins Lyrebird 0.8.1. Router VPN
+# owns its PT helper under ROOT/bin rather than trusting an arbitrary PATH copy.
+# A root-owned source marker lets repeat installs reuse only the exact source
+# identity we already verified; an identity/build failure removes the private
+# helper so modern PTs fail closed.
 LYREBIRD_COMMIT_PREFIX=0b10edbb61e0
-if ! command -v lyrebird >/dev/null; then
-  echo 'Building pinned Lyrebird 0.8.1 for Tor obfs4/meek/Snowflake/WebTunnel...'
+LYREBIRD_TARGET="$ROOT/bin/lyrebird"
+LYREBIRD_SOURCE="$ROOT/bin/lyrebird.source"
+LYREBIRD_ID="lyrebird-0.8.1 $LYREBIRD_COMMIT_PREFIX"
+LYREBIRD_READY=0
+if sudo test -x "$LYREBIRD_TARGET" && [[ "$(sudo cat "$LYREBIRD_SOURCE" 2>/dev/null || true)" == "$LYREBIRD_ID" ]]; then
+  LYREBIRD_READY=1
+fi
+if [[ $LYREBIRD_READY -ne 1 ]]; then
+  echo 'Building Router VPN-owned Lyrebird 0.8.1 for Tor obfs4/meek/Snowflake/WebTunnel...'
+  sudo rm -f "$LYREBIRD_TARGET" "$LYREBIRD_SOURCE"
   TMP_LYREBIRD=$(mktemp -d)
   if git init "$TMP_LYREBIRD/lyrebird" \
     && git -C "$TMP_LYREBIRD/lyrebird" remote add origin https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird.git \
@@ -44,8 +53,11 @@ if ! command -v lyrebird >/dev/null; then
     && test "$(git -C "$TMP_LYREBIRD/lyrebird" rev-parse HEAD | cut -c1-12)" = "$LYREBIRD_COMMIT_PREFIX" \
     && (cd "$TMP_LYREBIRD/lyrebird" && GOTOOLCHAIN=auto go mod download && GOTOOLCHAIN=auto go mod verify && GOTOOLCHAIN=auto go build -trimpath -ldflags='-s -w' -o lyrebird ./cmd/lyrebird) \
     && [[ -x "$TMP_LYREBIRD/lyrebird/lyrebird" ]]; then
-    sudo install -m 755 "$TMP_LYREBIRD/lyrebird/lyrebird" /usr/local/bin/lyrebird
+    sudo install -m 755 "$TMP_LYREBIRD/lyrebird/lyrebird" "$LYREBIRD_TARGET"
+    printf '%s\n' "$LYREBIRD_ID" | sudo tee "$LYREBIRD_SOURCE" >/dev/null
+    sudo chmod 644 "$LYREBIRD_SOURCE"
   else
+    sudo rm -f "$LYREBIRD_TARGET" "$LYREBIRD_SOURCE"
     echo 'Warning: pinned Lyrebird build/source-identity check failed. Tor obfs4 may still use obfs4proxy if installed; Snowflake/WebTunnel remain unavailable rather than using an unpinned helper.' >&2
   fi
   rm -rf "$TMP_LYREBIRD"
@@ -98,6 +110,6 @@ sudo chmod +x "$ROOT/modes/"*.sh 2>/dev/null || true
 cat <<TXT
 Installed Router VPN client engines.
 The service installer starts the local controller automatically at http://127.0.0.1:8788.
-Tor bridge profiles use the pinned Tor runtime plus Lyrebird where available; unsupported PTs stay unavailable rather than falling back to an unrelated transport.
+Tor bridge profiles use Router VPN's private pinned Lyrebird where available; unsupported PTs stay unavailable rather than falling back to an unrelated transport.
 If macOS quarantines a locally-built Router VPN binary, first verify its checksum, then use System Settings > Privacy & Security > Open Anyway. The Setup Center also includes the exact quarantine-removal command for trusted files.
 TXT
