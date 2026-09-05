@@ -99,9 +99,9 @@ need(
     "VPN state changed while the external-node dialog was open",
 )
 
-# Linux must physically compose the creator before the map-first unified shell is
-# compiled under -Werror. The current shipping composition must preserve a typed
-# six-family creator without aliasing Linux unified state as an App pointer.
+# Linux composes the creator through a narrow wrapper included by the shipping
+# unified map shell. AUTO/SMART requirements remain a separate Router-VPN policy
+# panel and must not be overloaded with external-node wiring.
 need(
     "client/linux/routervpn-external-node-v14.inc",
     "LinuxExternalNodeV14",
@@ -111,18 +111,23 @@ need(
     "VPN state changed while the external-node dialog was open",
 )
 need(
-    "client/linux/routervpn-auto-requirements-v11.inc",
-    "routervpn-external-node",
+    "client/linux/routervpn-external-node-wire-v14.inc",
+    '#include "routervpn-external-node-v14.inc"',
+    "routervpn_make_button_external_v14",
+    'make_button("Add external node…"',
+    "on_linux_external_node_v14",
+)
+need(
+    "client/linux/routervpn-unified-shell-v8.inc",
+    '#include "routervpn-external-node-wire-v14.inc"',
+    "typedef struct {\n    App *app;",
+    'make_button("Add / manage nodes"',
 )
 need(
     "client/linux/build-native-app.sh",
     "routervpn-auto-requirements-v11.inc",
+    "routervpn-unified-shell-v8.inc",
     "gcc -O2 -Wall -Wextra -Werror",
-)
-need(
-    "client/linux/routervpn-unified-shell-v8.inc",
-    "typedef struct {\n    App *app;",
-    'make_button("Add / manage nodes"',
 )
 
 # Android has its own process-owned VpnService/custom-exit store rather than the
