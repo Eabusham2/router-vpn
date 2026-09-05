@@ -130,7 +130,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 	if kind == "external" && p.External != nil {
 		out.External=&publicExternalNode{Protocol:p.External.Protocol,ExpectedPublicIP:p.External.ExpectedPublicIP}
 		out.RouterAPI="";out.AdGuardIPv4="";out.AdGuardIPv6="";out.SocksHost="";out.SocksPort=0;out.BaseTunnel="";out.BaseFallback=false;out.CustomLayers=nil
-		cap, ok := publicCapabilityForProtocol(caps, p.External.Protocol)
+		cap, ok := publicCapabilityForProfile(p, caps)
 		if !ok {
 			out.RuntimeImplemented=false
 			out.RuntimeSupported=false
