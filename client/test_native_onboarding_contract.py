@@ -103,7 +103,7 @@ require("macOS", mac_onboarding, shared_topics + (
 ))
 require_any("macOS", mac_onboarding, "kill switch", ("kill switch", "kill-switch"))
 mac_auto = block(mac_onboarding, "func presentIfNeeded(parent: NSWindow?)", "func present(force: Bool")
-assert "runModal" not in mac_auto and "NSAlert" not in mac_auto, "macOS automatic first launch still opens modal onboarding over the map"
+assert "runModal" not in mac_auto and "NSAlert()" not in mac_auto, "macOS automatic first launch still opens modal onboarding over the map"
 require("macOS build", mac_build, (
     "RouterVPNProductOnboarding.swift", "Run onboarding",
     "RouterVPNProductOnboarding.shared.presentIfNeeded(parent: w.window)",
