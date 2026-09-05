@@ -115,8 +115,8 @@ mac_settings = require(
     "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
     "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "Connection profiles", "MacConnectionProfileControls", "Add", "Load", "Update", "Delete",
-    "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
-    "/api/connection-profile/load", "/api/connection-profile/delete",
+    "/api/connection-profiles", "/api/connection-profile/setup/save", "/api/connection-profile/setup/update",
+    "/api/connection-profile/setup/load", "/api/connection-profile/setup/delete",
     "routervpn.unified.selected-mode.v1", "routervpn.unified.custom-presets.v1", "never duplicates node secrets",
 )
 for forbidden in ("apiToken", "privateKey", "presharedKey", "socksPassword"):
@@ -128,7 +128,7 @@ require_combined(
     "SETTINGS_SRC", "UNIFIED_SRC", '"$SETTINGS_SRC"', '"$UNIFIED_SRC"',
     "editProfileSettings", "/api/profile/settings", "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
     "unified-auto-requirements", "AUTO requirements: Off", "auto_require_encrypted", "auto_require_obfuscation",
-    "/api/connection-profile/load",
+    "/api/connection-profile/setup/load", "exact multihop graph restored",
 )
 
 require(
@@ -175,7 +175,7 @@ android_settings = require(
 )
 android_store = require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
-    "connection-profiles-v1.json", "MAX_PROFILES=64", "POLICY_KEYS", "requireIdle",
+    "SCHEMA_VERSION=4", "connection-profiles-v4.json", "connection-profiles-v1.json", "MAX_PROFILES=64", "POLICY_KEYS", "requireIdle",
     "home_lan_access", "kill_switch_policy", "ipv6_mode", "auto_require_encrypted", "auto_require_obfuscation",
     "mtu_policy", "dns_mode", "dns_protocol", "multihop_enabled", "multihop_entry_id", "multihop_exit_id",
     "node_kind", "node_id", "custom_layers", "Connection profile contains non-whitelisted node data",
@@ -219,7 +219,7 @@ ios_settings = require(
 )
 ios_profiles = require(
     "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
-    "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "Add", "Load", "Update", "Delete",
+    "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "iosConnectionProfilesSchemaVersion = 4", "IOSConnectionProfileEnvelope", "Add", "Load", "Update", "Delete",
     "routervpn.connection-profiles.v1", "routervpn.unified.mode.v1", "routervpn.unified.custom-presets.v1",
     "dnsMode", "dnsProtocol", "multihopEnabled", "multihopEntryID", "multihopExitID",
     "Current iOS does not execute full desktop multihop", "rejected at Add/Update time",
