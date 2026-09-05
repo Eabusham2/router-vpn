@@ -26,6 +26,11 @@ func (m *connectionProfileSetupMeta) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
+	mode, err := normalizeConnectionProfileExitMode(decoded.MultihopExitMode)
+	if err != nil {
+		return err
+	}
+	decoded.MultihopExitMode = mode
 	*m = connectionProfileSetupMeta(decoded)
 	return nil
 }
