@@ -20,4 +20,10 @@ static GtkWidget *routervpn_make_button_external_v14(const char *label, GCallbac
     return row;
 }
 
+/* The mature shell may already publish make_button as a macro. Its definition
+ * above intentionally resolves through that existing implementation; only
+ * downstream calls should be intercepted by this external-node row wrapper. */
+#ifdef make_button
+#undef make_button
+#endif
 #define make_button routervpn_make_button_external_v14
