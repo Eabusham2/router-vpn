@@ -104,7 +104,7 @@ function Profile-Int($Profile,[string]$Name,[int]$Default=0){if($Profile-and(Has
 function Infer-DnsServerName([string]$DnsHost,[string]$Explicit=''){
   if(-not[string]::IsNullOrWhiteSpace($Explicit)){return $Explicit}
   switch($DnsHost.Trim('[]')){'1.1.1.1'{return'cloudflare-dns.com'}'1.0.0.1'{return'cloudflare-dns.com'}'2606:4700:4700::1111'{return'cloudflare-dns.com'}'2606:4700:4700::1001'{return'cloudflare-dns.com'}'8.8.8.8'{return'dns.google'}'8.8.4.4'{return'dns.google'}'2001:4860:4860::8888'{return'dns.google'}'2001:4860:4860::8844'{return'dns.google'}'9.9.9.9'{return'dns.quad9.net'}'149.112.112.112'{return'dns.quad9.net'}'2620:fe::fe'{return'dns.quad9.net'}}
-  if($DnsHost-match'[A-Za-z]'-and$DnsHost-notmatch':'){return $DnsHost};return''
+  if($DnsHost-match'[A-Za-z]'-and$DnsHost-notmatch':'){return$DnsHost};return''
 }
 function Get-DnsSelection {
   $p=Get-SelectedProfile;$mode=(Profile-String $p 'dns_mode' 'fastest').ToLowerInvariant();$fastest=Profile-String $p 'fastest_dns_host' '1.1.1.1';$protocol=(Profile-String $p 'dns_protocol' 'udp').ToLowerInvariant();$dnsHost=Profile-String $p 'dns_host' $fastest;$port=Profile-Int $p 'dns_port' 0;$serverName=Profile-String $p 'dns_server_name' '';$path=Profile-String $p 'dns_path' '/dns-query'
@@ -167,7 +167,11 @@ switch($Action){
   }finally{
     Stop-ChildrenOwned
     Remove-WrapperRecord
-    try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message}
+    if($controllerStopping){
+      try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message}
+    }else{
+      Write-Warning 'Windows native mode ended unexpectedly; preserving kill-switch ownership until controller recovery/disconnect.'
+    }
   }
  }
 }
