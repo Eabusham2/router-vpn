@@ -11,13 +11,22 @@ import android.os.Process;
 final class AndroidVpnMutationGuard {
     static boolean isBusy(Context context) {
         if (context == null) return true;
-        if (hasOwnedVpnTransport(context)) return true;
+        boolean ownedVpn = hasOwnedVpnTransport(context);
         try {
             AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(context);
             AndroidRuntimeRegistry e = AndroidRuntimeRegistry.get(context);
             String phase = home.phase == null ? "" : home.phase.trim().toLowerCase(java.util.Locale.ROOT);
-            return phaseBusy(home.connected, phase)
+            // A managed child can fail closed and clear its real engine before the
+            // outer orchestrator has had a chance to discard its cached current
+            // candidate marker. Do not let that bookkeeping-only marker trap the
+            // UI forever. Recovery is allowed only when Home is explicitly failed,
+            // no app-owned VPN transport remains, no transition is running, and
+            // every actual engine is provably idle/terminal.
+            if (!ownedVpn && failedSessionHasNoLiveEngine(home, e)) return false;
+            return ownedVpn
+                    || phaseBusy(home.connected, phase)
                     || e.orchestrator.isRunning()
+                    || e.orchestrator.isActive()
                     || e.multihop.isActiveOrTransitioning()
                     || e.standardExit.isActiveOrTransitioning()
                     || tunnelBusy(e.wireGuard.getState())
@@ -27,6 +36,23 @@ final class AndroidVpnMutationGuard {
         } catch (Throwable ignored) {
             return true;
         }
+    }
+
+    static boolean failedSessionHasNoLiveEngine(Context context, AndroidRuntimeRegistry e) {
+        if (context == null || e == null) return false;
+        AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(context);
+        return failedSessionHasNoLiveEngine(home, e) && !hasOwnedVpnTransport(context);
+    }
+
+    private static boolean failedSessionHasNoLiveEngine(AndroidHomeStateStore.Snapshot home, AndroidRuntimeRegistry e) {
+        if (home == null || e == null || home.connected) return false;
+        String phase = home.phase == null ? "" : home.phase.trim().toLowerCase(java.util.Locale.ROOT);
+        return "failed".equals(phase)
+                && !e.orchestrator.isRunning()
+                && e.wireGuard.getState() == com.wireguard.android.backend.Tunnel.State.DOWN
+                && e.amneziaWG.getState() == org.amnezia.awg.backend.Tunnel.State.DOWN
+                && !runtimeBusy(e.singBox.getState())
+                && !runtimeBusy(e.xray.getState());
     }
 
     private static boolean phaseBusy(boolean connected, String phase) {
