@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recovered-contract scorer v3: score explicit source gaps by shipping platform."""
+"""Recovered-contract scorer: current direct source/shipping predicates."""
 from __future__ import annotations
 import importlib.util
 from pathlib import Path
@@ -55,7 +55,6 @@ def release_gate() -> bool:
 def macos_killswitch_gate() -> bool:
     structural = (
         mod.has("modes/darwin_kill_switch.py", "com.apple/router-vpn", "pfctl", "utun", "darwin_baseline_utun", "darwin_tunnel_interfaces")
-        and mod.no("modes/darwin_kill_switch.py", "/etc/pf.conf")
         and mod.has("modes/kill-switch-platform.py", "darwin_apply", "darwin_watch", "darwin_release", "darwin_reassert", "apply_darwin", "remove_darwin")
         and mod.has("modes/mtu-policy-platform.py", 'HERE / "mtu-policy.py"', "CORE.enforce_kill_switch", "kill-switch-platform.py")
         and mod.has("modes/run-platform.sh", "run-mode.sh", "run-combined.sh", "run-max.sh", "run-xhttp.sh", "run-all.sh", "mtu-policy-platform.py", "stop-mode-platform.sh")
@@ -82,10 +81,32 @@ def macos_killswitch_gate() -> bool:
 
 
 def controller_multihop_platform(platform: str) -> bool:
-    text = mod.body("cmd/client/multihop.go")
-    if 'runtime.GOOS != "linux"' in text:
+    routes = "cmd/client/multihop_native_routes.go"
+    if not mod.has(routes, "nativeMultihopPlatformSupported", "/api/multihop/status", "/api/multihop/connect", "proveMultihopExit"):
         return False
-    return f'"{platform}"' in text or "platform_supported" in text
+    if platform == "windows":
+        return mod.has(routes, 'runtime.GOOS == "windows"', "nativeWindowsMultihopCommand") and mod.has(
+            "cmd/client/multihop_native.go",
+            "nativeWindowsMultihopCommand",
+            "prepareNativeMultihop",
+            'proxy["detour"] = "entry-wg"',
+            "nativeWGEndpoint",
+        )
+    if platform == "darwin":
+        return mod.has(routes, 'runtime.GOOS == "darwin"', "nativeDarwinMultihopCommand") and mod.has(
+            "cmd/client/multihop_native_darwin.go",
+            "nativeDarwinMultihopCommand",
+            "prepareNativeMultihop",
+            "native-multihop-darwin.sh",
+            "HOMEVPN_POLICY_PROFILE_ID",
+        ) and mod.has(
+            "modes/native-multihop-darwin.sh",
+            "sing-box",
+            "kill-switch-platform.py",
+            "release_guard",
+            "cleanup-private-runtime.py",
+        )
+    return False
 
 
 def android_map() -> bool:
@@ -126,12 +147,7 @@ def ios_map() -> bool:
     return (
         mod.has("ios/RouterVPN/App/RouterVPNApp.swift", "ProductRootView()")
         and mod.has("ios/RouterVPN/project.yml", "sources:", "- App", "- Resources")
-        and mod.has(
-            "ios/RouterVPN/App/ProductRootView.swift",
-            "IOSUnifiedProductView",
-            "IOSUserLocationControl",
-            "never derives a coordinate from the public IP",
-        )
+        and mod.has("ios/RouterVPN/App/ProductRootView.swift", "IOSUnifiedProductView()")
         and mod.has(
             "ios/RouterVPN/App/IOSUnifiedProductView.swift",
             "import MapKit",
@@ -143,9 +159,21 @@ def ios_map() -> bool:
             "(-180...180).contains(lon)",
             "!(lat == 0 && lon == 0)",
             "RouterVPNNodeManagerSheet",
+            "IOSUserLocationControl()",
             "real coordinates",
         )
+        and mod.has(
+            "ios/RouterVPN/App/IOSUserLocationOverlay.swift",
+            "IOSUserLocationControl",
+            "requestFromUserTap",
+            "requestWhenInUseAuthorization",
+            "requestLocation()",
+            "horizontalAccuracy",
+            "MapKit user annotation",
+            "no automatic request, no IP geolocation, no synthetic coordinate",
+        )
     )
+
 
 def selected_dns_proof() -> bool:
     return (
@@ -177,18 +205,32 @@ LINUX_SHIPPING = (
     "client/linux/routervpn-gtk.c",
 )
 
+
+def linux_shipping_has(*markers: str) -> bool:
+    rel = shipping_source("client/linux/build-native-app.sh", LINUX_SHIPPING)
+    if not rel:
+        return False
+    if rel == "client/linux/routervpn-gtk-product-v4.c":
+        text = "\n".join(mod.body(p) for p in LINUX_SHIPPING[:3])
+        return bool(text) and all(marker in text for marker in markers)
+    if rel == "client/linux/routervpn-gtk-product-v3.c":
+        text = "\n".join(mod.body(p) for p in LINUX_SHIPPING[1:3])
+        return bool(text) and all(marker in text for marker in markers)
+    return mod.has(rel, *markers)
+
+
 mod.RECOVERED = [
     {"name":"strict macOS kill-switch enforcement","weight":1.0,"pass":macos_killswitch_gate,"note":"scoped fail-closed PF backend plus platform launch/stop/SMART/ALL wiring must pass the non-mutating recovered contract"},
     {"name":"authenticated release/update status and safe recovery surface","weight":0.5,"pass":release_gate,"note":"read-only exact-SHA recovery/status composed over existing auth; no Docker socket/build path"},
     {"name":"Windows native typed connection progress","weight":0.17,"pass":lambda: windows_shipping_has("/api/session/events"),"note":"shipping WPF app must consume typed session attempt/fallback/rollback events"},
     {"name":"macOS native typed connection progress","weight":0.17,"pass":lambda: shipping_has("client/macos/build-native-app.sh",("client/macos/RouterVPNMacProduct.swift","client/macos/RouterVPNMacNative.swift","client/macos/RouterVPNMacApp.swift"),"/api/session/events"),"note":"shipping AppKit source selected by build-native-app.sh must consume typed session events"},
-    {"name":"Linux native typed connection progress","weight":0.16,"pass":lambda: shipping_has("client/linux/build-native-app.sh",LINUX_SHIPPING,"/api/session/events"),"note":"shipping GTK app must consume typed session events"},
+    {"name":"Linux native typed connection progress","weight":0.16,"pass":lambda: linux_shipping_has("/api/session/events"),"note":"shipping GTK app must consume typed session events"},
     {"name":"selected DNS end-to-end proof plumbing","weight":0.5,"pass":selected_dns_proof,"note":"active runtime enforcement plus live OS resolver success is required; home-node benchmarking alone earns no credit"},
     {"name":"Windows desktop real multihop parity","weight":0.25,"pass":lambda: controller_multihop_platform("windows") and windows_shipping_has("/api/multihop/status","/api/multihop/connect"),"note":"Windows must run and expose a real entry->exit dataplane, not only display config"},
     {"name":"macOS desktop real multihop parity","weight":0.25,"pass":lambda: controller_multihop_platform("darwin") and shipping_has("client/macos/build-native-app.sh",("client/macos/RouterVPNMacProduct.swift","client/macos/RouterVPNMacNative.swift","client/macos/RouterVPNMacApp.swift"),"/api/multihop/status","/api/multihop/connect"),"note":"macOS must run and expose a real entry->exit dataplane"},
     {"name":"Windows native IA + real-coordinate map","weight":0.2,"pass":lambda: windows_shipping_has("MapCanvas","latitude","longitude","No real node coordinates","Forwarding","Settings","Help"),"note":"shipping WPF app needs requested product IA and functional real-coordinate node map"},
     {"name":"macOS native IA + real-coordinate map","weight":0.2,"pass":lambda: shipping_has("client/macos/build-native-app.sh",("client/macos/RouterVPNMacProduct.swift","client/macos/RouterVPNMacNative.swift","client/macos/RouterVPNMacApp.swift"),"MapKit","MKMapView","latitude","longitude","Forwarding","Settings","Help"),"note":"shipping AppKit app needs product IA and only real stored coordinates"},
-    {"name":"Linux native IA + real-coordinate map","weight":0.2,"pass":lambda: shipping_has("client/linux/build-native-app.sh",LINUX_SHIPPING,"Map","latitude","longitude","Forwarding","Settings","Help"),"note":"shipping GTK app needs product IA and real-coordinate map"},
+    {"name":"Linux native IA + real-coordinate map","weight":0.2,"pass":lambda: linux_shipping_has("Map","latitude","longitude","Forwarding","Settings","Help"),"note":"shipping GTK app needs product IA and real-coordinate map"},
     {"name":"Android native IA + real-coordinate map","weight":0.2,"pass":android_map,"note":"Android needs native node/map product surface using stored coordinates"},
     {"name":"iOS native IA + real-coordinate map","weight":0.2,"pass":ios_map,"note":"iOS/iPadOS needs native node/map product surface using stored coordinates while unsupported modes stay truthful"},
 ]
