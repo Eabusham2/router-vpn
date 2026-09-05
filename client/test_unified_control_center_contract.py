@@ -27,15 +27,14 @@ assert {"bridge", "exit"}.issubset(set(tor["role"]))
 
 validate_secure_path(["wireguard"])
 validate_secure_path(["tor-bridge"])
-validate_secure_path(["tor-bridge", "openvpn"])
 validate_secure_path(["socks5", "amneziawg"])
-for invalid in (["socks5"], ["http-connect"], ["https-connect"]):
+for invalid in (["socks5"], ["http-connect"], ["https-connect"], ["tor-bridge", "openvpn"]):
     try:
         validate_secure_path(invalid)
     except UnifiedControlCenterError:
         pass
     else:
-        raise AssertionError(f"plaintext/bridge-only final path was accepted: {invalid}")
+        raise AssertionError(f"invalid unified path was accepted: {invalid}")
 
 profile = ConnectionProfile(profile_id="home", name="Home SMART", node_ids=["router-vpn"])
 validate_profile(profile)
