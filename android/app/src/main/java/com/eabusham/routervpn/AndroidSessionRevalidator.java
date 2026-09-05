@@ -71,15 +71,14 @@ final class AndroidSessionRevalidator {
             }
             // AUTO/SMART/CUSTOM/logical paths are owned by the orchestrator.
             // Its normal disconnect path clears the current managed child. The
-            // callback runs while orchestrator.running is still true, so a new
-            // orchestrated session cannot slip between cleanup and failed state.
+            // callback may complete asynchronously, so it must still own this
+            // exact revalidation token before it can touch Home state.
             engines.orchestrator.disconnect(new AndroidModeOrchestrator.Callback(){
                 @Override public void progress(String ignored){}
                 @Override public void finished(boolean ok,String ignoredMode,String cleanupMessage){
-                    if(ok||isSameRevalidation(token)){
-                        String suffix=ok?"":"; owner cleanup reported: "+safeMessage(cleanupMessage);
-                        AndroidHomeStateStore.failed(context,message+suffix);
-                    }
+                    if(!isSameRevalidation(token))return;
+                    String suffix=ok?"":"; owner cleanup reported: "+safeMessage(cleanupMessage);
+                    AndroidHomeStateStore.failed(context,message+suffix);
                 }
             });
         }catch(Throwable cleanupError){
