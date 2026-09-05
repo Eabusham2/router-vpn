@@ -76,3 +76,23 @@ func TestConnectionProfilePreferencesLegacyUnspecifiedDNSStaysUnspecified(t *tes
 		t.Fatalf("legacy unspecified DNS was invented: %+v", p)
 	}
 }
+
+func TestConnectionProfilePreferencesDisabledMultihopDropsStaleIDs(t *testing.T) {
+	p, err := decodeSavedPreferences(t, `{"multihop_enabled":false,"multihop_entry_id":"stale-entry","multihop_exit_id":"stale-exit"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.MultihopEnabled || p.MultihopEntryID != "" || p.MultihopExitID != "" {
+		t.Fatalf("disabled multihop retained stale hop identity: %+v", p)
+	}
+}
+
+func TestConnectionProfilePreferencesEnabledMultihopNormalizesIDs(t *testing.T) {
+	p, err := decodeSavedPreferences(t, `{"multihop_enabled":true,"multihop_entry_id":"  entry-one  ","multihop_exit_id":"  exit-one  "}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.MultihopEnabled || p.MultihopEntryID != "entry-one" || p.MultihopExitID != "exit-one" {
+		t.Fatalf("enabled multihop IDs were not canonicalized: %+v", p)
+	}
+}
