@@ -66,6 +66,17 @@ GUIDE_PANEL = r'''
       <div class="method"><b>2 — Router VPN app</b><br>Best for Router VPN AUTO/SMART/CUSTOM behavior, node selection, path proof, app-native diagnostics, supported kill-switch behavior, and supported multihop.</div>
       <div class="method"><b>3 — Universal third-party</b><br>Use only when the generated format is verified with the named external app. A config merely existing is not proof of interoperability.</div>
       <div class="method"><b>4 — Manual / custom</b><br>For advanced troubleshooting and custom protocol configuration. Manual Connect still requires health proof and rollback on failure.</div>
+      <h4>Tor censorship bridges in the Router VPN app</h4>
+      <p>On platforms where the native Tor dataplane is actually installed, <b>Add Node → Tor censorship bridge</b> can create a private bridge profile without hand-editing JSON. Paste Tor-issued bridge lines in the app; Setup Center never needs to publish or retain those lines.</p>
+      <ul>
+        <li><b>obfs4</b> makes bridge traffic look random and resists active probing. A single literal obfs4 bridge is the only Tor PT configuration that can currently use Router VPN's strict endpoint-scoped pre-tunnel kill switch.</li>
+        <li><b>meek / meek_lite</b> carries Tor through HTTPS/domain-fronting style infrastructure so blocking the path can create collateral damage for the censor.</li>
+        <li><b>Snowflake</b> uses a broker plus short-lived volunteer WebRTC proxies, so there is no single stable bridge address for a censor to block.</li>
+        <li><b>WebTunnel</b> makes bridge traffic resemble ordinary HTTPS web traffic.</li>
+        <li><b>Auto / Custom</b> accepts a validated set of Tor-issued obfs4, meek, Snowflake, or WebTunnel lines; unknown pluggable transports, arbitrary torrc directives, and executable paths are rejected.</li>
+      </ul>
+      <div class="rg-note">The pluggable transport is the censorship-evasion outer layer. Tor's proved circuit remains the encrypted final path; Router VPN does not substitute homemade XOR/custom cryptography for Tor's protocol.</div>
+      <div class="rg-warn">meek, Snowflake, WebTunnel, mixed custom sets, or multi-bridge profiles have dynamic CDN/WebRTC/bootstrap egress. Router VPN therefore requires Kill Switch Off for those profiles until that bootstrap traffic can be owned without broad firewall exceptions. Unsupported platforms stay unavailable instead of pretending the bridge works.</div>
       <div class="rg-note">Unavailable or unproven lanes must stay grey/unavailable. Setup Center should never present an external app as supported only because the protocol name looks compatible.</div>
     </section>
     <section class="rg-step" data-step="4">
