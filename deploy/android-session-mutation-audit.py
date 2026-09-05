@@ -104,14 +104,37 @@ require(
     'putBoolean("connected", false)',
     "currentGeneration != before.pathGeneration + 1L",
 )
+revalidator_path = "android/app/src/main/java/com/eabusham/routervpn/AndroidSessionRevalidator.java"
 require(
-    "android/app/src/main/java/com/eabusham/routervpn/AndroidSessionRevalidator.java",
+    revalidator_path,
     "AndroidHomeStateStore.beginPathRevalidation",
     "requireSameRevalidation(token)",
     "AndroidHomeStateStore.completePathRevalidation(context,token)",
     '"pending".equals(now.pathProof)',
     "refusing to keep stale Connected proof",
+    "failClosedOwnedRuntime(before,token,error)",
+    "if(!isSameRevalidation(token))return;",
+    "engines.multihop.failClosedForRevalidation()",
+    "engines.standardExit.failClosedForRevalidation()",
+    "engines.orchestrator.disconnect",
 )
+revalidator = (ROOT / revalidator_path).read_text(encoding="utf-8")
+owned_cleanup = revalidator.split("private void failClosedOwnedRuntime", 1)[1].split(
+    "private AndroidHomeStateStore.Snapshot requireSameRevalidation", 1
+)[0]
+if owned_cleanup.index("if(!isSameRevalidation(token))return;") > owned_cleanup.index("engines.multihop.failClosedForRevalidation()"):
+    raise SystemExit("Android stale revalidation token is checked only after multihop teardown")
+if owned_cleanup.index("if(!isSameRevalidation(token))return;") > owned_cleanup.index("engines.standardExit.failClosedForRevalidation()"):
+    raise SystemExit("Android stale revalidation token is checked only after external-exit teardown")
+for path in (
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java",
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitRuntime.java",
+):
+    require(path, "failClosedForRevalidation()")
+    body = (ROOT / path).read_text(encoding="utf-8")
+    section = body.split("failClosedForRevalidation()", 1)[1].split("@Override", 1)[0]
+    if "AndroidHomeStateStore." in section:
+        raise SystemExit(f"{path}: revalidation teardown must not overwrite the transaction-owned Home state")
 
 # Temporary pre-connect via-entry RTT owns only a short-lived managed WG child;
 # it cannot create/overwrite a normal Home session and must be DOWN before the
