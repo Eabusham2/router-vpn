@@ -28,6 +28,24 @@ type torBridgeImportRequest struct {
 	Longitude        float64  `json:"longitude,omitempty"`
 }
 
+type torBridgeUpdateIntent struct {
+	Name      bool
+	Transport bool
+	SocksPort bool
+	DNS       bool
+	Location  bool
+}
+
+func torBridgeUpdateIntentFor(q torBridgeImportRequest) torBridgeUpdateIntent {
+	return torBridgeUpdateIntent{
+		Name:      strings.TrimSpace(q.Name) != "",
+		Transport: strings.TrimSpace(q.Transport) != "",
+		SocksPort: q.SocksPort != 0,
+		DNS: strings.TrimSpace(q.DNSMode) != "" || strings.TrimSpace(q.DNSProtocol) != "" || strings.TrimSpace(q.DNSHost) != "" || q.DNSPort != 0 || strings.TrimSpace(q.DNSServerName) != "" || strings.TrimSpace(q.DNSPath) != "",
+		Location: strings.TrimSpace(q.Location) != "" || q.Latitude != 0 || q.Longitude != 0,
+	}
+}
+
 func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -38,6 +56,7 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid Tor bridge form", http.StatusBadRequest)
 		return
 	}
+	updateIntent := torBridgeUpdateIntentFor(q)
 	q.Transport = strings.TrimSpace(q.Transport)
 	if q.Transport == "" {
 		q.Transport = "obfs4"
@@ -137,7 +156,7 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.TrimSpace(profile.ID) != "" {
-		handled, err := a.updateExistingTorBridgeProfile(r, profile)
+		handled, err := a.updateExistingTorBridgeProfile(r, &profile, updateIntent)
 		if err != nil {
 			status := http.StatusConflict
 			if errors.Is(err, errInvalidTorBridgeUpdateID) {
@@ -190,12 +209,62 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 
 var errInvalidTorBridgeUpdateID = errors.New("Tor bridge update requires a valid profile id")
 
+func preserveTorBridgeEditSettings(existing common.RouterProfile, next common.RouterProfile, intent torBridgeUpdateIntent) common.RouterProfile {
+	if !intent.Name {
+		next.Name = existing.Name
+	}
+	if next.External != nil && next.External.TorBridge != nil && existing.External != nil && existing.External.TorBridge != nil {
+		if !intent.Transport {
+			next.External.TorBridge.Transport = existing.External.TorBridge.Transport
+		}
+		if !intent.SocksPort {
+			next.External.TorBridge.SocksPort = existing.External.TorBridge.SocksPort
+		}
+	}
+	if !intent.DNS {
+		next.DNSMode = existing.DNSMode
+		next.DNSProtocol = existing.DNSProtocol
+		next.DNSHost = existing.DNSHost
+		next.DNSPort = existing.DNSPort
+		next.DNSServerName = existing.DNSServerName
+		next.DNSPath = existing.DNSPath
+	}
+	if !intent.Location {
+		next.Location = existing.Location
+		next.Latitude = existing.Latitude
+		next.Longitude = existing.Longitude
+	}
+	// These are ordinary user preferences outside the Tor bridge/PT form. A
+	// bridge edit must not silently reset them to builder defaults.
+	next.HomeLANAccess = existing.HomeLANAccess
+	next.HomeLANCIDRs = append([]string(nil), existing.HomeLANCIDRs...)
+	next.IPv6Mode = existing.IPv6Mode
+	next.StartupMode = existing.StartupMode
+	next.AutoConnect = existing.AutoConnect
+	next.AutoRequireEncrypted = existing.AutoRequireEncrypted
+	next.AutoRequireObfuscation = existing.AutoRequireObfuscation
+	next.DAITAEnabled = existing.DAITAEnabled
+	next.JumboTUN = existing.JumboTUN
+	next.SocksEnabled = existing.SocksEnabled
+	next.MTUPolicy = existing.MTUPolicy
+	next.ManualMTU = existing.ManualMTU
+	next.DiagnosticsEnabled = existing.DiagnosticsEnabled
+	next.DiagnosticsRetentionDays = existing.DiagnosticsRetentionDays
+	next.ShareDiagnostics = existing.ShareDiagnostics
+	next.TelemetryEnabled = existing.TelemetryEnabled
+	next.PathProbeURL = existing.PathProbeURL
+	return next
+}
+
 // updateExistingTorBridgeProfile handles only an explicit update of an already
 // stored Tor node. The generic external importer remains append-only: it must
 // never silently replace another external node merely because an ID collided.
 // A safe ID that is not present returns handled=false so the historical import
 // behavior (create while retaining that stable ID) is preserved.
-func (a *app) updateExistingTorBridgeProfile(r *http.Request, profile common.RouterProfile) (bool, error) {
+func (a *app) updateExistingTorBridgeProfile(r *http.Request, profile *common.RouterProfile, intent torBridgeUpdateIntent) (bool, error) {
+	if profile == nil {
+		return false, errInvalidTorBridgeUpdateID
+	}
 	profile.ID = strings.TrimSpace(profile.ID)
 	if !validProfileID(profile.ID) {
 		return false, errInvalidTorBridgeUpdateID
@@ -226,16 +295,30 @@ func (a *app) updateExistingTorBridgeProfile(r *http.Request, profile common.Rou
 		return false, errors.New("profile id belongs to a non-Tor node; refusing replacement")
 	}
 
+	merged := preserveTorBridgeEditSettings(existing, *profile, intent)
+	if err := common.NormalizeRouterProfile(&merged); err != nil {
+		return false, errors.New("updated Tor bridge profile is invalid: " + err.Error())
+	}
+	if _, err := standardExitFromExternalProfile(merged); err != nil {
+		return false, errors.New("updated Tor bridge profile is not runnable: " + err.Error())
+	}
+	policy, err := externalRuntimePolicy(merged)
+	if err != nil {
+		return false, errors.New("updated Tor bridge policy is not runnable: " + err.Error())
+	}
+	merged = policy
+
 	previousStore := cloneRouterProfileStore(a.profiles)
 	// Usage metadata describes this stable node identity and is safe to retain.
-	// PublicIP and latency/throughput observations are deliberately not copied:
-	// changing bridge/PT policy invalidates prior path measurements and exits.
-	profile.UseCount = existing.UseCount
-	profile.LastUsedAt = existing.LastUsedAt
-	a.profiles.Profiles[index] = profile
+	// Public exit, durable latency/DNS benchmarks, and effective-MTU measurement
+	// deliberately stay cleared: changing bridge/PT policy invalidates them.
+	merged.UseCount = existing.UseCount
+	merged.LastUsedAt = existing.LastUsedAt
+	a.profiles.Profiles[index] = merged
 	if err := a.persistProfilesLocked(); err != nil {
 		a.rollbackProfilesLocked(previousStore)
 		return false, err
 	}
+	*profile = merged
 	return true, nil
 }
