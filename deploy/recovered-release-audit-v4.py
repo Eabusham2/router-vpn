@@ -17,6 +17,17 @@ if old_multihop not in source:
     raise SystemExit("v4 patch failed: v3 multihop predicate changed")
 source = source.replace(old_multihop, new_multihop, 1)
 
+# v3 predates the unified iOS map header move. The real-location control now
+# lives inside IOSUnifiedProductView beside the map, while its one-shot
+# CoreLocation implementation is isolated in IOSUserLocationOverlay.swift.
+# Audit the source graph that actually ships instead of requiring stale marker
+# text in ProductRootView.
+old_ios_map = '''def ios_map() -> bool:\n    return (\n        mod.has("ios/RouterVPN/App/RouterVPNApp.swift", "ProductRootView()")\n        and mod.has("ios/RouterVPN/project.yml", "sources:", "- App", "- Resources")\n        and mod.has(\n            "ios/RouterVPN/App/ProductRootView.swift",\n            "IOSUnifiedProductView",\n            "IOSUserLocationControl",\n            "never derives a coordinate from the public IP",\n        )\n        and mod.has(\n            "ios/RouterVPN/App/IOSUnifiedProductView.swift",\n            "import MapKit",\n            "IOSUnifiedMap",\n            "MKMapView",\n            "latitude",\n            "longitude",\n            "(-90...90).contains(lat)",\n            "(-180...180).contains(lon)",\n            "!(lat == 0 && lon == 0)",\n            "RouterVPNNodeManagerSheet",\n            "real coordinates",\n        )\n    )\n'''
+new_ios_map = '''def ios_map() -> bool:\n    return (\n        mod.has("ios/RouterVPN/App/RouterVPNApp.swift", "ProductRootView()")\n        and mod.has("ios/RouterVPN/project.yml", "sources:", "- App", "- Resources")\n        and mod.has("ios/RouterVPN/App/ProductRootView.swift", "IOSUnifiedProductView()")\n        and mod.has(\n            "ios/RouterVPN/App/IOSUnifiedProductView.swift",\n            "import MapKit",\n            "IOSUnifiedMap",\n            "MKMapView",\n            "latitude",\n            "longitude",\n            "(-90...90).contains(lat)",\n            "(-180...180).contains(lon)",\n            "!(lat == 0 && lon == 0)",\n            "RouterVPNNodeManagerSheet",\n            "IOSUserLocationControl()",\n            "real coordinates",\n        )\n        and mod.has(\n            "ios/RouterVPN/App/IOSUserLocationOverlay.swift",\n            "IOSUserLocationControl",\n            "requestFromUserTap",\n            "requestWhenInUseAuthorization",\n            "requestLocation()",\n            "horizontalAccuracy",\n            "MapKit user annotation",\n            "no automatic request, no IP geolocation, no synthetic coordinate",\n        )\n    )\n'''
+if old_ios_map not in source:
+    raise SystemExit("v4 patch failed: v3 iOS map predicate changed")
+source = source.replace(old_ios_map, new_ios_map, 1)
+
 # The shipping Linux v4 translation unit composes v3, which composes the core
 # product source. Audit the same source graph the compiler sees rather than
 # treating inherited native features as absent merely because their marker is
