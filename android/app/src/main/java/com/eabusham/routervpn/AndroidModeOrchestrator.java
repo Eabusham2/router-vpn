@@ -54,7 +54,7 @@ final class AndroidModeOrchestrator {
     void disconnect(Callback cb){
         if(running){cb.finished(false,"","A Router VPN transition is still running.");return;}
         running=true;
-        executor.execute(()->{try{stopCurrent();cb.finished(true,"","Disconnected Router VPN native transports.");}catch(Throwable error){cb.finished(false,"",safe(error));}finally{running=false;}});
+        executor.execute(()->{try{stopCurrent(true);cb.finished(true,"","Disconnected Router VPN native transports.");}catch(Throwable error){cb.finished(false,"",safe(error));}finally{running=false;}});
     }
 
     private void run(File bundle,boolean smart,List<String>custom,Callback cb){
@@ -86,7 +86,7 @@ final class AndroidModeOrchestrator {
                 String transition=smart&&!initial.id.equals(best.id)?initial.id+" -> "+best.id:"";
                 AndroidHomeStateStore.connected(context,requested,best.id,baseFor(best),transition,activeNodeId);
                 cb.finished(true,best.id,requested+" selected "+best.name+" after real selected-node path proof.");
-            }catch(Throwable error){try{stopCurrent();}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
+            }catch(Throwable error){try{stopCurrent(false);}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
         });
     }
 
@@ -119,7 +119,7 @@ final class AndroidModeOrchestrator {
                 if(winner==null)throw new IllegalStateException("Logical mode "+logical.optString("name",logicalId)+" failed closed: "+String.join(" • ",failures));
                 current=winner;AndroidHomeStateStore.connected(context,logicalId,winner.id,baseFor(winner),"",activeNodeId);
                 cb.finished(true,winner.id,logical.optString("name",logicalId)+" connected with runtime "+winner.id+" after selected-node proof.");
-            }catch(Throwable error){try{stopCurrent();}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
+            }catch(Throwable error){try{stopCurrent(false);}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
         });
     }
 
@@ -135,7 +135,7 @@ final class AndroidModeOrchestrator {
                 if(best==null)throw new IllegalStateException("ALL failed closed because no Android-native branch passed selected-node path proof.");
                 current=best;AndroidHomeStateStore.connected(context,"ALL",best.id,baseFor(best),"",activeNodeId);
                 cb.finished(true,best.id,"ALL selected the strongest available Android-native branch that passed selected-node path proof: "+best.name+". Composite desktop MAX chains remain separate and are never faked on Android.");
-            }catch(Throwable error){try{stopCurrent();}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
+            }catch(Throwable error){try{stopCurrent(false);}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
         });
     }
 
@@ -145,28 +145,37 @@ final class AndroidModeOrchestrator {
 
     private Candidate smartReduce(File bundle,Candidate best,List<Candidate>all,Callback cb)throws Exception{
         Map<String,Candidate>byId=new HashMap<>();for(Candidate c:all)byId.put(c.id,c);Set<String>visited=new HashSet<>();visited.add(best.id);
-        while(true){boolean changed=false;for(String id:best.simplify){if(!visited.add(id))continue;Candidate candidate=byId.get(id);if(candidate==null)continue;Candidate last=best;cb.progress("SMART testing simplification "+last.id+" → "+candidate.id+"…");stopCurrent();if(startAndProve(bundle,candidate,cb)){best=candidate;changed=true;break;}cb.progress("SMART restoring last-known-good "+last.name+"…");if(!startAndProve(bundle,last,cb))throw new IllegalStateException("SMART AUTO could not restore its last-known-good mode.");best=last;}if(!changed)return best;}
+        while(true){boolean changed=false;for(String id:best.simplify){if(!visited.add(id))continue;Candidate candidate=byId.get(id);if(candidate==null)continue;Candidate last=best;cb.progress("SMART testing simplification "+last.id+" → "+candidate.id+"…");stopCurrent(false);if(startAndProve(bundle,candidate,cb)){best=candidate;changed=true;break;}cb.progress("SMART restoring last-known-good "+last.name+"…");if(!startAndProve(bundle,last,cb))throw new IllegalStateException("SMART AUTO could not restore its last-known-good mode.");best=last;}if(!changed)return best;}
     }
 
     private boolean startAndProve(File bundle,Candidate c,Callback cb)throws Exception{
-        stopCurrent();boolean up;
+        stopCurrent(false);boolean up;
         if(c.kind==Kind.WG)up=startWg(bundle);else if(c.kind==Kind.AWG)up=startAwg(bundle);else if(c.kind==Kind.XRAY)up=startXray(bundle,c.id);else up=startLibbox(bundle,c.id);
-        if(!up){cb.progress(c.name+" failed to establish a native VPN TUN.");stopCurrent();return false;}
+        if(!up){cb.progress(c.name+" failed to establish a native VPN TUN.");stopCurrent(false);return false;}
         boolean proof;try{proof=AndroidPathProbe.prove(bundle,8000);}catch(Exception error){cb.progress(c.name+" path proof error: "+safe(error));proof=false;}
-        if(!proof){cb.progress(c.name+" did not reach the selected Router VPN health path; rejecting it.");stopCurrent();return false;}current=c;return true;
+        if(!proof){cb.progress(c.name+" did not reach the selected Router VPN health path; rejecting it.");stopCurrent(false);return false;}current=c;return true;
     }
-    private boolean startWg(File bundle)throws Exception{CountDownLatch latch=new CountDownLatch(1);final Tunnel.State[]state={Tunnel.State.DOWN};wg.connect(bundle,(s,m,e)->{state[0]=s;latch.countDown();});return latch.await(20,TimeUnit.SECONDS)&&state[0]==Tunnel.State.UP;}
-    private boolean startAwg(File bundle)throws Exception{CountDownLatch latch=new CountDownLatch(1);final org.amnezia.awg.backend.Tunnel.State[]state={org.amnezia.awg.backend.Tunnel.State.DOWN};awg.connect(bundle,(s,m,e)->{state[0]=s;latch.countDown();});return latch.await(20,TimeUnit.SECONDS)&&state[0]==org.amnezia.awg.backend.Tunnel.State.UP;}
+    private boolean startWg(File bundle)throws Exception{CountDownLatch latch=new CountDownLatch(1);final Tunnel.State[]state={Tunnel.State.DOWN};wg.connectManaged(bundle,(s,m,e)->{state[0]=s;latch.countDown();});return latch.await(20,TimeUnit.SECONDS)&&state[0]==Tunnel.State.UP;}
+    private boolean startAwg(File bundle)throws Exception{CountDownLatch latch=new CountDownLatch(1);final org.amnezia.awg.backend.Tunnel.State[]state={org.amnezia.awg.backend.Tunnel.State.DOWN};awg.connectManaged(bundle,(s,m,e)->{state[0]=s;latch.countDown();});return latch.await(20,TimeUnit.SECONDS)&&state[0]==org.amnezia.awg.backend.Tunnel.State.UP;}
     private boolean startLibbox(File bundle,String id)throws Exception{NativeSingBoxController.SessionInfo session=sing.prepareSession(bundle,id);sing.start(session);long end=System.currentTimeMillis()+20000L;while(System.currentTimeMillis()<end){String s=sing.getState();if("UP".equals(s))return true;if("FAILED".equals(s)||"REVOKED".equals(s))return false;Thread.sleep(200);}return false;}
     private boolean startXray(File bundle,String id)throws Exception{NativeXrayController.SessionInfo session=xray.prepareSession(bundle,id);xray.start(session);long end=System.currentTimeMillis()+25000L;while(System.currentTimeMillis()<end){String s=xray.getState();if("UP".equals(s))return true;if("FAILED".equals(s)||"REVOKED".equals(s))return false;Thread.sleep(200);}return false;}
 
-    private void stopCurrent()throws Exception{
+    private void stopCurrent(boolean clearHomeState)throws Exception{
         Candidate c=current;
-        if(c==null){if(wg.getState()==Tunnel.State.UP)stopWg();if(awg.getState()==org.amnezia.awg.backend.Tunnel.State.UP)stopAwg();String ls=sing.getState();if("UP".equals(ls)||"STARTING".equals(ls))stopLibbox();String xs=xray.getState();if("UP".equals(xs)||"STARTING".equals(xs))stopXray();AndroidHomeStateStore.disconnected(context);return;}
-        if(c.kind==Kind.WG)stopWg();else if(c.kind==Kind.AWG)stopAwg();else if(c.kind==Kind.XRAY)stopXray();else stopLibbox();current=null;AndroidHomeStateStore.disconnected(context);
+        if(c==null){
+            if(wg.getState()==Tunnel.State.UP)stopWg();
+            if(awg.getState()==org.amnezia.awg.backend.Tunnel.State.UP)stopAwg();
+            String ls=sing.getState();if("UP".equals(ls)||"STARTING".equals(ls))stopLibbox();
+            String xs=xray.getState();if("UP".equals(xs)||"STARTING".equals(xs))stopXray();
+            if(clearHomeState)AndroidHomeStateStore.disconnected(context);
+            return;
+        }
+        if(c.kind==Kind.WG)stopWg();else if(c.kind==Kind.AWG)stopAwg();else if(c.kind==Kind.XRAY)stopXray();else stopLibbox();
+        current=null;
+        if(clearHomeState)AndroidHomeStateStore.disconnected(context);
     }
-    private void stopWg()throws Exception{CountDownLatch l=new CountDownLatch(1);wg.disconnect((s,m,e)->l.countDown());l.await(8,TimeUnit.SECONDS);}
-    private void stopAwg()throws Exception{CountDownLatch l=new CountDownLatch(1);awg.disconnect((s,m,e)->l.countDown());l.await(8,TimeUnit.SECONDS);}
+    private void stopWg()throws Exception{CountDownLatch l=new CountDownLatch(1);wg.disconnectManaged((s,m,e)->l.countDown());l.await(8,TimeUnit.SECONDS);}
+    private void stopAwg()throws Exception{CountDownLatch l=new CountDownLatch(1);awg.disconnectManaged((s,m,e)->l.countDown());l.await(8,TimeUnit.SECONDS);}
     private void stopLibbox()throws Exception{sing.stop();long end=System.currentTimeMillis()+8000;while(System.currentTimeMillis()<end){String s=sing.getState();if("DOWN".equals(s)||"FAILED".equals(s)||"REVOKED".equals(s))return;Thread.sleep(150);}}
     private void stopXray()throws Exception{xray.stop();long end=System.currentTimeMillis()+8000;while(System.currentTimeMillis()<end){String s=xray.getState();if("DOWN".equals(s)||"FAILED".equals(s)||"REVOKED".equals(s))return;Thread.sleep(150);}}
 
