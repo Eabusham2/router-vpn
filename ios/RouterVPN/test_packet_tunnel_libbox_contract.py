@@ -21,6 +21,11 @@ for marker in [
     'if proofSession === session',
     'cancelActiveProof()',
     'clearPathProofGuard()',
+    'currentPathProofGuard()',
+    'override func wake()',
+    'if let guardState = currentPathProofGuard() { invalidateSelectedPathProof(guardState) }',
+    'Sleep is a path-proof lifetime boundary',
+    'every reconnect must',
     'Underlying network changed; selected-node/public-exit proof was invalidated',
     'cancelTunnelWithError',
 ]:
@@ -33,4 +38,4 @@ for marker in ['"routervpn-proof"','"type": "mixed"','"listen": "127.0.0.1"','pr
 for marker in ['LibboxPlatformInterfaceProtocol','LibboxCommandServerHandlerProtocol','options.getAutoRoute()','options.getDNSServerAddress()','NEIPv4Route.default()','NEIPv6Route.default()','LibboxGetTunnelFileDescriptor()','NWPathMonitor()','includeAllNetworksRequested']:
     assert marker in platform, marker
 assert 'fake Connected' not in provider
-print('iOS PacketTunnel Libbox + async ownership/network-change proof contract OK')
+print('iOS PacketTunnel Libbox + async ownership/network-change/wake proof contract OK')
