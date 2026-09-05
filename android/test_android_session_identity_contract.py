@@ -345,11 +345,10 @@ for marker in (
 ):
     assert marker in numeric_address, f"Android numeric-address parser lost marker: {marker}"
 for forbidden in (
-    "android.net.InetAddresses",
-    "InetAddresses.isNumericAddress",
-    "InetAddresses.parseNumericAddress",
-    "InetAddress.getByName(uri.getHost())",
-    "InetAddress.getByName(host)",
+    "import android.net.InetAddresses;",
+    "InetAddresses.isNumericAddress(",
+    "InetAddresses.parseNumericAddress(",
+    "InetAddress.getByName(",
 ):
     assert forbidden not in forwarding + numeric_address, f"Android forwarding must not use resolver/API-29-only address path: {forbidden}"
 for marker in (
