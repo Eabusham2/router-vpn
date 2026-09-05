@@ -1,4 +1,7 @@
 Set-StrictMode -Version Latest
+# Direct controller endpoint: /api/tor-bridge/connect. The unified Windows UI
+# connects a selected Tor node through /api/external-profile/connect so the
+# shared connection-operation owner can dispatch to torBridgeConnectOwned.
 
 function Add-RouterVPNExternalNodeWindowsShell {
     param([Parameter(Mandatory=$true)][string]$ProductSource)
