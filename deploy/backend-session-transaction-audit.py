@@ -18,4 +18,10 @@ if source.count(old_mtu) != 1:
     raise SystemExit("backend transaction overlay failed: v1 MTU predicate changed")
 source = source.replace(old_mtu, new_mtu, 1)
 
+old_mtu_test = '''require(\n    "cmd/client/mtu_retest_test.go",\n    "TestMTURetestPersistenceFailureRollsBackLiveAndInMemoryResult",\n    "did not roll back the live interface",\n)'''
+new_mtu_test = '''require(\n    "cmd/client/mtu_retest_test.go",\n    "TestMTURetestPersistenceFailureRollsBackLiveAndInMemoryResult",\n    "MTU persistence failure is no longer wired to exact live-MTU rollback",\n)'''
+if source.count(old_mtu_test) != 1:
+    raise SystemExit("backend transaction overlay failed: v1 MTU rollback-test predicate changed")
+source = source.replace(old_mtu_test, new_mtu_test, 1)
+
 exec(compile(source, str(V1), "exec"), {"__name__": "__main__", "__file__": str(V1)})
