@@ -21,16 +21,26 @@ for marker in (
     'schema < 1 || schema > SCHEMA_VERSION',
     'legacyPath || schema < SCHEMA_VERSION',
     'MAX_PROFILES=64', 'MAX_STORE=512*1024',
+    'AndroidPrivateFileStore.read(source, MAX_STORE)',
+    'AndroidPrivateFileStore.write(file, raw, MAX_STORE)',
+    'AndroidPrivateFileStore.remove(legacyFile, MAX_STORE)',
     '"multihop_enabled"', '"multihop_entry_id"', '"multihop_exit_id"', '"multihop_exit_mode"',
     'normalizeMultiMode', '"shadowsocks"', '"hysteria2"',
     'AndroidNodeStore.deriveId(bundle,updatedBundle)',
     'legacy Router node has no stable proof-bound identity',
     'All validation above is complete before any selection, node-file, preset or preference mutation.',
     'nodes.importBundle(updatedBundle)', 'putString(MULTI_MODE,multiMode)',
+    'Could not persist the loaded connection profile; prior Router node state was restored.',
+    'nodes.importBundle(originalBundle)',
     'requireIdle("saving a connection profile")', 'requireIdle("loading a connection profile")',
     'requireIdle("updating a connection profile")', 'requireIdle("deleting a connection profile")',
 ):
     assert marker in store, f"Android connection-profile store missing {marker!r}"
+
+# All connection-profile durable writes/removals must stay on the shared private
+# publication primitive; old direct filesystem paths cannot become authoritative.
+for forbidden in ('Os.rename(', 'FileOutputStream', 'requirePrivateRegularFile', '.delete()'):
+    assert forbidden not in store, f"Android connection-profile store retains private-write bypass: {forbidden}"
 
 # The exact saved graph, transport and custom data must be validated before the
 # first node mutation in load().
