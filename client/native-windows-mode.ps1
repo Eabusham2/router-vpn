@@ -51,6 +51,7 @@ $Runtime=Safe-Under $Root (Join-Path $Root 'runtime\windows');$SingBox=Join-Path
 $RunBase=Safe-Under $Root (Join-Path $Root 'run\windows');$RunDir=Safe-Under $RunBase (Join-Path $RunBase (Join-Path $ProfileId $Mode))
 $WrapperProcessFile=Join-Path $RunDir 'native-windows-mode.process.json';$SingBoxProcessFile=Join-Path $RunDir 'sing-box.process.json';$XrayProcessFile=Join-Path $RunDir 'xray.process.json';$SingConfig=Join-Path $RunDir 'sing-box.json';$XrayConfig=Join-Path $RunDir 'xray.json'
 $KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
+$HoldKillSwitch=([string]$env:HOMEVPN_KILLSWITCH_HOLD -eq '1')
 
 function Invoke-KillSwitch([string]$KillAction,[string]$EndpointValue='',[string]$Alias='') {
   if (-not (Test-Path -LiteralPath $KillSwitch -PathType Leaf)) { throw "Windows kill-switch helper is missing: $KillSwitch" }
@@ -132,7 +133,12 @@ switch($Action){
   if($wrapperAlive-and$singAlive-and$xrayAlive){Write-Output'up';exit 0}
   Write-Output'down';exit 1
  }
- 'down'{Stop-AllOwned;try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message};exit 0}
+ 'down'{
+  Stop-AllOwned
+  if(-not$HoldKillSwitch){try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message}}
+  else{Write-Output 'Windows native teardown is holding kill-switch ownership for a fail-closed transition.'}
+  exit 0
+ }
  'up'{
   Assert-Ready;$Endpoint=[string]$env:HOMEVPN_ENDPOINT;if([string]::IsNullOrWhiteSpace($Endpoint)){throw 'Choose a router backend in the app first.'};$Endpoint=$Endpoint.Trim().Trim('[]');Stop-AllOwned;if(Test-Path -LiteralPath $RunDir){Remove-Item -LiteralPath $RunDir -Recurse -Force};New-Item -ItemType Directory -Force -Path $RunDir|Out-Null;Copy-Item -Path(Join-Path $Source '*')-Destination $RunDir -Recurse -Force;Patch-SingBox $SingConfig $Endpoint;if($NeedsXray-contains$Mode){Patch-Xray $XrayConfig $Endpoint};&$SingBox check -D $RunDir -c $SingConfig|Out-Null;if($LASTEXITCODE-ne0){throw 'Patched native Windows sing-box config failed validation.'}
   $tunAlias=Get-TunAlias $SingConfig
@@ -167,11 +173,8 @@ switch($Action){
   }finally{
     Stop-ChildrenOwned
     Remove-WrapperRecord
-    if($controllerStopping){
-      try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message}
-    }else{
-      Write-Warning 'Windows native mode ended unexpectedly; preserving kill-switch ownership until controller recovery/disconnect.'
-    }
+    if(-not$controllerStopping){Write-Warning 'Windows native mode ended unexpectedly; preserving kill-switch ownership until controller recovery/disconnect.'}
+    # Firewall rollback belongs to the Go controller after owned teardown.
   }
  }
 }
