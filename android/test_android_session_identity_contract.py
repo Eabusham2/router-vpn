@@ -247,16 +247,44 @@ assert "cache(" not in via_meter
 assert "telemetry.measureNodesViaCurrentPath" not in via_entry
 
 # Android VPN consent can outlive an Activity instance. Persist only non-secret
-# requested mode/layers/node IDs and rebind a new UI callback.
+# requested mode/layers/node IDs and rebind a new UI callback. Activity teardown
+# may release only Activity-owned pending/UI state; app-process VPN engines remain
+# owned by AndroidRuntimeRegistry across recreation.
 for marker in (
     "void savePending(Bundle out)",
     "void restorePending(Bundle in, Callback callback)",
     "STATE_ENTRY",
     "STATE_EXIT",
     "STATE_EXIT_MODE",
-    "Activity destruction must not destroy app-process VPN engines",
 ):
     assert marker in unified, f"unified consent lifecycle missing: {marker}"
+for marker in (
+    "runtime = AndroidRuntimeRegistry.get(activity);",
+    "wireGuard = runtime.wireGuard;",
+    "amneziaWG = runtime.amneziaWG;",
+    "singBox = runtime.singBox;",
+    "xray = runtime.xray;",
+    "orchestrator = runtime.orchestrator;",
+    "multihop = runtime.multihop;",
+):
+    assert marker in unified, f"Activity bridge lost process-owned runtime binding: {marker}"
+for constructor in (
+    "new NativeWireGuardController(",
+    "new NativeAmneziaWGController(",
+    "new NativeSingBoxController(",
+    "new NativeXrayController(",
+    "new AndroidModeOrchestrator(",
+    "new AndroidMultihopRuntime(",
+):
+    assert constructor not in unified, f"Activity bridge must not construct process-owned VPN engine: {constructor}"
+close_body = unified.split("@Override public void close()", 1)[1].split("}", 1)[0]
+assert "clearPending();" in close_body
+for forbidden in ("disconnect", "runtime.", "wireGuard", "amneziaWG", "orchestrator", "multihop", "standardExit"):
+    assert forbidden not in close_body, f"Activity close() must not tear down process-owned runtime: {forbidden}"
+on_destroy = product.split("@Override protected void onDestroy()", 1)[1].split("@Override protected void onActivityResult", 1)[0]
+assert "connection.close()" in on_destroy, "ProductActivity must release only its Activity-owned bridge state"
+for forbidden in ("disconnect(", "AndroidRuntimeRegistry", "wireGuard", "amneziaWG", "orchestrator", "multihop", "standardExit"):
+    assert forbidden not in on_destroy, f"ProductActivity.onDestroy must not tear down process-owned runtime: {forbidden}"
 for marker in (
     "connection.restorePending(state,callback())",
     "connection.savePending(out)",
