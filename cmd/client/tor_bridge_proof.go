@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,20 +21,32 @@ func publicTorExit(value string) (string, error) {
 	return ip.String(), nil
 }
 
-func (a *app) proveTorBridgeExit() (string, error) {
-	ctx := a.connectionOperationContextOrBackground()
+func proveTorBridgeExitWithContext(ctx context.Context, window time.Duration) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if window <= 0 {
+		return "", errors.New("Tor dynamic public-exit proof window must be positive")
+	}
+	proofCtx, cancel := context.WithTimeout(ctx, window)
+	defer cancel()
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.ForceAttemptHTTP2 = false
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 8 * time.Second}
-	deadline := time.Now().Add(100 * time.Second)
 	var last error
-	for time.Now().Before(deadline) {
-		if ctx.Err() != nil {
-			return "", errConnectionOperationCancelled
+	for {
+		if err := proofCtx.Err(); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			if last != nil {
+				return "", errors.New("Tor dynamic public-exit proof timed out: " + last.Error())
+			}
+			return "", errors.New("Tor dynamic public-exit proof timed out")
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, torCheckURL, nil)
+		req, err := http.NewRequestWithContext(proofCtx, http.MethodGet, torCheckURL, nil)
 		if err != nil {
 			return "", err
 		}
@@ -69,14 +82,21 @@ func (a *app) proveTorBridgeExit() (string, error) {
 		} else {
 			last = err
 		}
+		timer := time.NewTimer(300 * time.Millisecond)
 		select {
-		case <-ctx.Done():
-			return "", errConnectionOperationCancelled
-		case <-time.After(300 * time.Millisecond):
+		case <-proofCtx.Done():
+			stopTimerWithoutBlocking(timer)
+			continue
+		case <-timer.C:
 		}
 	}
-	if last == nil {
-		last = errors.New("Tor dynamic public-exit proof timed out")
+}
+
+func (a *app) proveTorBridgeExit() (string, error) {
+	ctx := a.connectionOperationContextOrBackground()
+	ip, err := proveTorBridgeExitWithContext(ctx, 100*time.Second)
+	if err != nil && ctx.Err() != nil {
+		return "", errConnectionOperationCancelled
 	}
-	return "", last
+	return ip, err
 }
