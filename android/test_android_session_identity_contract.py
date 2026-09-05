@@ -14,6 +14,7 @@ def read(name: str) -> str:
 
 
 registry = read("AndroidRuntimeRegistry.java")
+process_reconciler = read("AndroidProcessStateReconciler.java")
 store = read("AndroidNodeStore.java")
 exit_store = read("AndroidStandardExitStore.java")
 home_state = read("AndroidHomeStateStore.java")
@@ -26,11 +27,15 @@ numeric_address = read("AndroidNumericAddress.java")
 revalidator = read("AndroidSessionRevalidator.java")
 wireguard = read("NativeWireGuardController.java")
 amnezia = read("NativeAmneziaWGController.java")
+orchestrator = read("AndroidModeOrchestrator.java")
 standard_activity = read("StandardExitActivity.java")
 standard_runtime = read("AndroidStandardExitRuntime.java")
 mutation_guard = read("AndroidVpnMutationGuard.java")
 via_entry = read("AndroidViaEntryLatencyProbe.java")
+via_meter = read("AndroidViaEntryPathMeter.java")
 map_view = read("RouterVpnNodeMapView.java")
+layered_service = read("LayeredVpnService.java")
+xray_service = read("XrayVpnService.java")
 manifest = (ROOT / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
 
 # One app-process engine owner. Activity recreation must not replace GoBackend,
@@ -45,10 +50,27 @@ for marker in (
     "final AndroidMultihopRuntime multihop",
     "final AndroidStandardExitRuntime standardExit",
     "final AndroidSessionRevalidator revalidator",
+    "AndroidProcessStateReconciler.reconcile(app)",
     "revalidator.start()",
 ):
     assert marker in registry, f"runtime registry lost ownership marker: {marker}"
+assert registry.index("AndroidProcessStateReconciler.reconcile(app)") < registry.index("new NativeWireGuardController(app)")
 assert 'android:name=".MainActivity" android:exported="false" android:enabled="false"' in manifest
+
+# Process-owned VpnServices are START_NOT_STICKY, so a new app process must
+# invalidate stale persisted Connected/UP evidence before runtime restoration.
+for marker in (
+    "previous process-owned VPN/path proof was invalidated",
+    '"UP".equals(state)',
+    '"STARTING".equals(state)',
+    '"STOPPING".equals(state)',
+    'putString(stateKey, "FAILED")',
+    "AndroidHomeStateStore.advancePathGeneration(app)",
+    "AndroidHomeStateStore.failed(app, RESTART_REASON)",
+):
+    assert marker in process_reconciler, f"cold-process reconciler missing: {marker}"
+assert layered_service.count("Service.START_NOT_STICKY") >= 2
+assert xray_service.count("Service.START_NOT_STICKY") >= 2
 
 # Location is an explicit map action only. Permission declarations may exist,
 # but no first-launch/runtime owner may silently request them. The globe accepts
@@ -119,12 +141,17 @@ for marker in (
 ):
     assert marker in exit_store, f"external-store mutation guard missing: {marker}"
 
-# Session and underlying-path generation are both proof identity. A path change
-# must invalidate persisted proof before revalidation begins.
+# Session and underlying-path generation are both proof identity. Underlay
+# changes atomically move a proven session to connecting/pending and only the
+# same session + exact next generation may become Connected again.
 for marker in (
     "final String sessionId",
     "final long pathGeneration",
-    "advancePathGeneration",
+    "beginPathRevalidation",
+    "completePathRevalidation",
+    'putString("path_proof", "pending")',
+    'putBoolean("connected", false)',
+    "currentGeneration != before.pathGeneration + 1L",
     'remove("actual_exit_ip")',
     'remove("actual_exit_session")',
 ):
@@ -138,28 +165,52 @@ for marker in (
 ):
     assert marker in home, f"Home proof signature lost marker: {marker}"
 for marker in (
-    "AndroidHomeStateStore.advancePathGeneration(context)",
-    "re-proving the frozen Router VPN session",
+    "AndroidHomeStateStore.beginPathRevalidation",
+    "requireSameRevalidation(token)",
+    "AndroidHomeStateStore.completePathRevalidation(context,token)",
     "AndroidPathProbe.prove(bundle,10000)",
     "AndroidStandardExitRuntime.proveExpectedPublicIp",
+    "AndroidHomeStateStore.saveActualExit(context,token.sessionId,observed)",
+    '"pending".equals(now.pathProof)',
+    "refusing to keep stale Connected proof",
 ):
     assert marker in revalidator, f"network-change revalidation lost marker: {marker}"
+assert "AndroidHomeStateStore.advancePathGeneration(context)" not in revalidator
 
-# Native WG/AWG own their own handoff recovery, so they must independently
-# invalidate public-exit proof/path generation before rebuilding the tunnel.
+# Native WG/AWG are child transports when AUTO/SMART/CUSTOM/logical mode owns the
+# transaction. Direct raw-tunnel use may own Home state; managed child use may
+# never begin/complete/fail/disconnect the outer session. Their network recovery
+# uses the same session+generation revalidation transaction.
 for name, source in (("WireGuard", wireguard), ("AmneziaWG", amnezia)):
-    recovery = source.split("private void recoverAfterNetworkChange()", 1)
-    assert len(recovery) == 2, f"{name} lost network-change recovery"
-    recovery = recovery[1].split("void disconnect", 1)[0]
-    invalidate = recovery.find("AndroidHomeStateStore.advancePathGeneration(appContext)")
-    teardown = recovery.find("backend.setState(this, State.DOWN, null)")
-    proof = recovery.find("AndroidPathProbe.prove(bundle, 10000)")
-    assert invalidate >= 0, f"{name} must invalidate the old path/public-exit proof on underlay change"
-    assert teardown >= 0 and invalidate < teardown, f"{name} must invalidate proof before tunnel rebuild"
-    assert proof > teardown, f"{name} must re-prove selected node after tunnel rebuild"
+    for marker in (
+        "void connectManaged(File privateBundle, Callback callback)",
+        "connectInternal(privateBundle, false, callback)",
+        "if (publishHomeState) AndroidHomeStateStore.begin",
+        "if (publishHomeState) AndroidHomeStateStore.connected",
+        "void disconnectManaged(Callback callback)",
+        "disconnectInternal(false, callback)",
+        "if (publishHomeState) AndroidHomeStateStore.disconnected",
+        "AndroidHomeStateStore.beginPathRevalidation",
+        "AndroidHomeStateStore.completePathRevalidation",
+        "stale Android session/generation",
+    ):
+        assert marker in source, f"{name} managed/session ownership missing {marker!r}"
 
-# Telemetry binds to frozen session IDs, never mutable selection or saved
-# multihop preferences while a graph is actually running.
+for marker in (
+    "wg.connectManaged(bundle",
+    "awg.connectManaged(bundle",
+    "wg.disconnectManaged",
+    "awg.disconnectManaged",
+    "stopCurrent(false)",
+    "stopCurrent(true)",
+    "if(clearHomeState)AndroidHomeStateStore.disconnected(context)",
+):
+    assert marker in orchestrator, f"logical orchestrator lost sole-session-owner marker: {marker}"
+assert "wg.connect(bundle" not in orchestrator
+assert "awg.connect(bundle" not in orchestrator
+
+# Telemetry binds normal live measurements to frozen session IDs, never mutable
+# selection or saved multihop preferences while a graph is actually running.
 for marker in (
     "state.activeExitId",
     "state.activeNodeId",
@@ -168,32 +219,31 @@ for marker in (
 ):
     assert marker in telemetry, f"telemetry session identity missing: {marker}"
 
-# Pre-connect X→Y/X→Z latency is a real temporary-entry routed measurement.
-# The temporary WG entry must be proven, session/path identity must remain
-# stable, results must never pollute direct RTT cache, and the entry must be
-# fully DOWN before the picker sees any result.
+# Pre-connect X→Y/X→Z latency is a real temporary-entry routed measurement, but
+# it is not a user connection/session. The temporary WG child must be proved,
+# remain UP, never touch Home state/direct cache, and be fully DOWN before the
+# picker can receive any values.
 for marker in (
-    "wireGuard.connect(entry.file",
+    "wireGuard.connectManaged(entry.file",
     "state != Tunnel.State.UP",
-    "telemetry.measureNodesViaCurrentPath(entry.id",
-    "wireGuard.disconnect",
+    "AndroidViaEntryPathMeter.measure(entry, wireGuard",
+    "wireGuard.disconnectManaged",
     "Temporary entry did not fully disconnect; candidate results discarded.",
     "AtomicBoolean",
 ):
     assert marker in via_entry, f"via-entry probe missing: {marker}"
 for marker in (
-    "measureNodesViaCurrentPath",
-    '"raw-tunnel".equals(before.logicalMode)',
-    '"wg".equals(before.actualBase)',
-    "String session=before.sessionId",
-    "long generation=before.pathGeneration",
-    "session.equals(now.sessionId)",
-    "now.pathGeneration!=generation",
+    "AndroidPathProbe.prove(entry.file, 8000)",
+    "wireGuard.getState() != Tunnel.State.UP",
+    "before candidate RTT measurement",
+    "after candidate RTT measurement",
     "all results discarded",
+    "probeNode(node, count)",
 ):
-    assert marker in telemetry, f"via-entry telemetry proof missing: {marker}"
-via_method = telemetry.split("void measureNodesViaCurrentPath", 1)[1].split("void currentPath", 1)[0]
-assert "cache(" not in via_method, "via-entry RTT must never overwrite direct-node RTT cache"
+    assert marker in via_meter, f"via-entry path meter proof missing: {marker}"
+assert "AndroidHomeStateStore" not in via_meter
+assert "cache(" not in via_meter
+assert "telemetry.measureNodesViaCurrentPath" not in via_entry
 
 # Android VPN consent can outlive an Activity instance. Persist only non-secret
 # requested mode/layers/node IDs and rebind a new UI callback.
@@ -285,6 +335,8 @@ for marker in (
 # Keep the standalone focused contract executable for local/CI use too.
 standalone = ROOT / "test_android_via_entry_latency_contract.py"
 assert standalone.is_file() and standalone.read_text(encoding="utf-8").strip()
+restart_contract = ROOT / "test_android_process_restart_state_contract.py"
+assert restart_contract.is_file() and restart_contract.read_text(encoding="utf-8").strip()
 
 mutation_audit = ROOT.parent / "deploy" / "android-session-mutation-audit.py"
 subprocess.run([sys.executable, str(mutation_audit)], cwd=ROOT.parent, check=True)
