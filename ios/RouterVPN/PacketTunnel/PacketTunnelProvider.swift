@@ -161,6 +161,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         monitor?.cancel()
     }
 
+    private func currentPathProofGuard() -> NetworkProofGuard? {
+        pathProofOwnerLock.lock()
+        let guardState = pathProofGuard
+        pathProofOwnerLock.unlock()
+        return guardState
+    }
+
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         clearPathProofGuard()
         cancelActiveProof()
@@ -171,7 +178,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func sleep(completionHandler: @escaping () -> Void) { libboxEngine?.pause(); completionHandler() }
-    override func wake() { libboxEngine?.wake() }
+    override func wake() {
+        libboxEngine?.wake()
+        // Sleep is a path-proof lifetime boundary even when iOS resumes onto a
+        // cached NWPath that does not emit a second update. Force this proved
+        // tunnel down; strict on-demand may reconnect, but every reconnect must
+        // start a new PacketTunnel and re-prove the selected node/public exit.
+        if let guardState = currentPathProofGuard() { invalidateSelectedPathProof(guardState) }
+    }
     func writeLibboxLog(_ message: String) { if !message.isEmpty { NSLog("RouterVPN Libbox: %@", message) } }
 
     private func installProof(session: URLSession, task: URLSessionDataTask) {
