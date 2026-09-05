@@ -25,17 +25,15 @@ final class AndroidViaEntryLatencyProbe {
 
     private final Context context;
     private final NativeWireGuardController wireGuard;
-    private final AndroidRuntimeRegistry runtime;
     private final AtomicBoolean busy = new AtomicBoolean(false);
 
     AndroidViaEntryLatencyProbe(Context context, AndroidRuntimeRegistry runtime, AndroidTelemetry telemetry) {
         this.context = context.getApplicationContext();
-        this.runtime = runtime;
+        if (runtime == null || telemetry == null) throw new IllegalArgumentException("Android runtime/telemetry owners are required.");
         this.wireGuard = runtime.wireGuard;
         // Keep the constructor shape stable for the shipping ProductActivity.
         // Via-entry measurements deliberately bypass AndroidTelemetry's direct
         // RTT cache and use AndroidViaEntryPathMeter instead.
-        if (telemetry == null) throw new IllegalArgumentException("Android telemetry owner is required.");
     }
 
     boolean isBusy() { return busy.get(); }
@@ -44,11 +42,7 @@ final class AndroidViaEntryLatencyProbe {
         if (entry == null) { callback.finished(null, null, new IllegalArgumentException("Choose a multihop entry first.")); return; }
         if (candidates == null || candidates.isEmpty()) { callback.finished(entry, null, new IllegalArgumentException("No candidate exits are available.")); return; }
         if (!busy.compareAndSet(false, true)) { callback.finished(entry, null, new IllegalStateException("A via-entry latency measurement is already running.")); return; }
-        AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(context);
-        if (home.connected || "connecting".equals(home.phase) || runtime.orchestrator.isRunning() || runtime.multihop.isActiveOrTransitioning()
-                || "UP".equals(runtime.singBox.getState()) || "STARTING".equals(runtime.singBox.getState())
-                || "UP".equals(runtime.xray.getState()) || "STARTING".equals(runtime.xray.getState())
-                || wireGuard.getState() != Tunnel.State.DOWN) {
+        if (AndroidVpnMutationGuard.isBusy(context)) {
             busy.set(false);
             callback.finished(entry, null, new IllegalStateException("Disconnect the current Router VPN session before measuring via-entry candidate latency."));
             return;
