@@ -141,26 +141,15 @@ final class AndroidNodeStore {
 
     private void requireSelectable(String id) {
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
-        AndroidHomeStateStore.Snapshot runtime = AndroidHomeStateStore.snapshot(context);
-        AndroidRuntimeRegistry engines = AndroidRuntimeRegistry.get(context);
-        boolean transitioning = "connecting".equals(runtime.phase) || engines.orchestrator.isRunning() || engines.multihop.isActiveOrTransitioning()
-                || "STARTING".equals(engines.singBox.getState()) || "STOPPING".equals(engines.singBox.getState())
-                || "STARTING".equals(engines.xray.getState()) || "STOPPING".equals(engines.xray.getState());
-        if (transitioning) throw new IllegalStateException("Wait for the current Router VPN transition to finish or disconnect before selecting a node.");
-        if (runtime.connected) {
-            String live = "multihop".equals(runtime.logicalMode) ? runtime.activeExitId : runtime.activeNodeId;
-            if (live == null || live.isEmpty() || !id.equals(live)) throw new IllegalStateException("Disconnect Router VPN before selecting a different node; the live session identity is frozen until disconnect.");
+        if (AndroidVpnMutationGuard.isBusy(context)) {
+            throw new IllegalStateException("Disconnect Router VPN or let the active transition/temporary VPN operation finish before selecting another node; live path identity is frozen.");
         }
     }
 
     private void requireMutable(String action) {
-        AndroidHomeStateStore.Snapshot runtime = AndroidHomeStateStore.snapshot(context);
-        AndroidRuntimeRegistry engines = AndroidRuntimeRegistry.get(context);
-        boolean activeOrTransitioning = runtime.connected || "connecting".equals(runtime.phase)
-                || engines.orchestrator.isRunning() || engines.multihop.isActiveOrTransitioning()
-                || "UP".equals(engines.singBox.getState()) || "STARTING".equals(engines.singBox.getState()) || "STOPPING".equals(engines.singBox.getState())
-                || "UP".equals(engines.xray.getState()) || "STARTING".equals(engines.xray.getState()) || "STOPPING".equals(engines.xray.getState());
-        if (activeOrTransitioning) throw new IllegalStateException("Disconnect Router VPN before " + action + "; live node identity and proof must remain immutable for the session.");
+        if (AndroidVpnMutationGuard.isBusy(context)) {
+            throw new IllegalStateException("Disconnect Router VPN or let the active transition/temporary VPN operation finish before " + action + "; live node identity and proof must remain immutable for the session.");
+        }
     }
 
     private void selectInternal(String id) throws Exception {
