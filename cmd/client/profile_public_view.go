@@ -17,6 +17,7 @@ type publicProfile struct {
 	SchemaVersion int    `json:"schema_version"`
 	ID            string `json:"id"`
 	Name          string `json:"name"`
+	DisplayName   string `json:"display_name"`
 	NodeKind      string `json:"node_kind"`
 	External      *publicExternalNode `json:"external,omitempty"`
 	Endpoint      string `json:"endpoint,omitempty"`
@@ -97,11 +98,19 @@ func publicCapabilityForProtocol(caps []standardExitCapability, protocol string)
 	return standardExitCapability{}, false
 }
 
+func publicNodeBaseName(p common.RouterProfile) string {
+	name := strings.TrimSpace(p.Name)
+	if name != "" { return name }
+	if id := strings.TrimSpace(p.ID); id != "" { return id }
+	return "Router VPN node"
+}
+
 func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile {
 	kind := strings.ToLower(strings.TrimSpace(p.NodeKind))
 	if kind == "" { kind = "router-vpn" }
+	baseName := publicNodeBaseName(p)
 	out := publicProfile{
-		SchemaVersion:p.SchemaVersion, ID:p.ID, Name:p.Name, NodeKind:kind,
+		SchemaVersion:p.SchemaVersion, ID:p.ID, Name:p.Name, DisplayName:baseName, NodeKind:kind,
 		Endpoint:p.Endpoint, RouterAPI:p.RouterAPI, AdGuardIPv4:p.AdGuardIPv4, AdGuardIPv6:p.AdGuardIPv6,
 		SocksHost:p.SocksHost, SocksPort:p.SocksPort, BaseTunnel:p.BaseTunnel, BaseFallback:p.BaseFallback,
 		CustomLayers:append([]string(nil),p.CustomLayers...), HomeLANAccess:p.HomeLANAccess, HomeLANCIDRs:append([]string(nil),p.HomeLANCIDRs...),
@@ -133,6 +142,9 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 			if !out.RuntimeSupported && out.RuntimeReason == "" {
 				out.RuntimeReason="this external protocol is unavailable on the current platform/runtime"
 			}
+		}
+		if !out.RuntimeSupported {
+			out.DisplayName = baseName + " — unavailable: " + out.RuntimeReason
 		}
 		if strings.EqualFold(strings.TrimSpace(p.External.Protocol), "tor-bridge") {
 			out.Endpoint = ""
