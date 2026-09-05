@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"router-vpn/internal/common"
 )
 
 type torBridgeTransportCapability struct {
@@ -73,6 +75,34 @@ func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 		rows[i].Helper = strings.TrimSpace(rows[i].Helper)
 	}
 	return rows
+}
+
+// torBridgeProfileRuntimeCapability answers the narrower question the node list
+// needs: can this exact saved Tor PT set run here? A broad "Tor is supported"
+// capability is insufficient when only legacy obfs4proxy is installed because
+// Snowflake/WebTunnel require Lyrebird.
+func torBridgeProfileRuntimeCapability(profile common.RouterProfile) standardExitCapability {
+	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	cap := torBridgeRuntimeCapabilityForRoot(root)
+	if !cap.Supported {
+		return cap
+	}
+	_, _, transports, _, err := torBridgeProfile(profile)
+	if err != nil {
+		cap.Supported = false
+		cap.Reason = "saved Tor bridge profile is invalid: " + err.Error()
+		return cap
+	}
+	if runtime.GOOS == "windows" {
+		// Windows support already requires the pinned Tor Expert Bundle's exact
+		// Lyrebird executable, which implements every accepted PT family.
+		return cap
+	}
+	if _, err := torBridgeTransportBinary(transports); err != nil {
+		cap.Supported = false
+		cap.Reason = err.Error()
+	}
+	return cap
 }
 
 func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
