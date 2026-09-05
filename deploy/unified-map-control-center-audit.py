@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -80,14 +79,42 @@ forbid(
     "private func connectSpecific",
     "private func connectFastest",
 )
+
+# iOS policy must be an intersection of the shared product catalog and the real
+# Apple PacketTunnel, not a copy of desktop/cross-platform capability. The
+# PacketTunnel currently owns WG + the bounded Libbox external families; AWG,
+# OpenVPN and Tor remain explicit unavailable truths.
 need(
     "ios/RouterVPN/App/IOSUnifiedSecureTransport.swift",
     "alwaysOn = true",
-    "tor-bridge",
+    '"router-vpn"',
+    '"wireguard"',
+    '"shadowsocks-2022"',
+    '"hysteria2"',
+    '"socks5"',
+    '"http-connect"',
+    '"https-connect"',
+    '"amneziawg": "AmneziaWG is unavailable on iOS',
+    '"openvpn": "OpenVPN is unavailable on iOS',
+    '"tor-bridge": "Tor bridges are unavailable on iOS',
     "Noise_IK",
     "TLS 1.3",
-    "ntor-v3",
 )
+forbid(
+    "ios/RouterVPN/App/IOSUnifiedSecureTransport.swift",
+    'Set(["router-vpn", "wireguard", "amneziawg", "openvpn", "shadowsocks-2022"])',
+    "AmneziaWG Noise_IK + ChaCha20-Poly1305",
+    "OpenVPN TLS 1.3 + AEAD",
+    "Tor ntor-v3 outer bridge",
+)
+need(
+    "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
+    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]',
+    "OpenVPN external exits are unavailable on iOS",
+    "Tor bridges are unavailable on iOS",
+    "must be a literal IP so setup cannot leak pre-tunnel DNS",
+)
+
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java",
     'DEFAULT_MODE = "smart-auto"',
