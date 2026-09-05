@@ -56,7 +56,7 @@ if contract.get("capability_gating", {}).get("unsupported_controls_are_disabled_
     errors.append("unsupported platform controls are no longer required to fail closed with a reason")
 
 # iPhone/iPad: Xcode compiles the complete App directory, ProductRootView opens
-# the unified map directly, and the real screen owns all requested controls.
+# the unified map directly, and the real unified screen owns all requested controls.
 need(
     "ios/RouterVPN/project.yml",
     "sources:\n      - App",
@@ -64,10 +64,11 @@ need(
     'SWIFT_VERSION: "6.0"',
 )
 need("ios/RouterVPN/App/RouterVPNApp.swift", "ProductRootView()", ".environmentObject(model)")
-need("ios/RouterVPN/App/ProductRootView.swift", "IOSUnifiedProductView()", "IOSUserLocationControl()")
+need("ios/RouterVPN/App/ProductRootView.swift", "IOSUnifiedProductView()")
 need(
     "ios/RouterVPN/App/IOSUnifiedProductView.swift",
     "IOSUnifiedMap",
+    "IOSUserLocationControl()",
     "controlSheet(height:",
     "Test & select fastest",
     "connectionButtonTitle",
@@ -127,7 +128,7 @@ need(
 )
 
 # Windows: the packaged launcher copies the native client tree, starts the WPF
-# app, and that app composes the unified shell and telemetry into Product-v2.
+# app, then composes unified-shell and telemetry transforms into Product-v2.
 need(
     "deploy/package-builds.sh",
     'cp -a "$ROOT/client" "$dir/client"',
@@ -148,8 +149,13 @@ need(
     "UnifiedMultihopLatency",
     "UnifiedPerformanceButton",
     "New CUSTOM preset",
+)
+need(
+    "client/RouterVPN-Windows-Telemetry.ps1",
     "Real path speed",
     "Routed hop speeds",
+    "/api/multihop/speed-test",
+    "UnifiedPerformanceButton",
 )
 need(
     "client/RouterVPN-Windows-UnifiedShell.ps1",
@@ -166,18 +172,19 @@ need(
 )
 forbid("client/RouterVPN-Windows-App.ps1", "msedge.exe", "chrome.exe", "--app=")
 
-# macOS: the native compiler command includes unified map, telemetry, globe,
-# whole-profile CRUD, onboarding and settings sources in the shipping binary.
+# macOS: the native compiler command includes hardened unified UI, telemetry,
+# Speed Lab, globe, whole-profile CRUD, onboarding and settings sources.
 need(
     "client/macos/build-native-app.sh",
     "RouterVPNMacUnifiedShell.swift",
     "RouterVPNMacTelemetry.swift",
+    "RouterVPNMacSpeedLab.swift",
     "RouterVPNMacGlobeChrome.swift",
     "RouterVPNConnectionProfiles.swift",
     "RouterVPNConnectionProfileChrome.swift",
     "RouterVPNProfileSettings.swift",
-    '"$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$GLOBE_SRC" "$PROFILE_SRC"',
-    "buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome()",
+    '"$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$GLOBE_SRC" "$PROFILE_SRC"',
+    "buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedSpeedLabUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome()",
 )
 need(
     "client/macos/RouterVPNMacUnifiedShell.swift",
