@@ -9,7 +9,15 @@ def require(path,*markers):
     if missing: raise SystemExit(f'{path}: missing Linux session-mutation marker(s): {missing}')
     return body
 
-transform=require('client/linux/apply-session-mutation.py',
+# The active transformer is a thin compatibility layer over the frozen v1
+# mutation table. Audit the composed source graph instead of requiring all
+# baseline markers to be duplicated into the wrapper.
+wrapper=require('client/linux/apply-session-mutation.py',
+    'apply-session-mutation-v1.py',
+    'routervpn-unified-shell-v8.inc',
+    'i1 + 3, i2 + 3',
+    'base.main()')
+baseline=require('client/linux/apply-session-mutation-v1.py',
     'Linux session mutation baseline drifted',
     'routervpn-gtk-product.c','routervpn-gtk-product-v3.c','routervpn-gtk-product-v4.c',
     'routervpn-profile-settings-v1.inc','routervpn-unified-shell-v8.inc',
@@ -34,8 +42,8 @@ build=require('client/linux/build-native-app.sh',
     '-I"$BUILD_DIR" -I"$ROOT/client/linux"')
 assert 'routervpn-profile-settings-v2.inc' not in build, 'canonical Linux builder switched to un-audited settings include'
 
-# Execute the transformer against the canonical shipping baselines and verify
-# the hardened output contains the exact session guards used by the build.
+# Execute the real layered transformer against the canonical shipping baselines
+# and verify the hardened output contains the exact guards used by the build.
 spec=importlib.util.spec_from_file_location('linux_session_transform',ROOT/'client/linux/apply-session-mutation.py')
 mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 with tempfile.TemporaryDirectory() as td:
