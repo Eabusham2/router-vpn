@@ -161,7 +161,7 @@ final class AndroidNodeStore {
     private void requireSelectable(String id) {
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
         if (AndroidVpnMutationGuard.isBusy(context)) {
-            throw new IllegalStateException("Disconnect Router VPN or let the active transition/temporary VPN operation finish before selecting another node; live path identity is frozen.");
+            throw new IllegalStateException("Disconnect Router VPN or let the active transition/temporary VPN operation finish before selecting another node; live session identity is frozen until disconnect, while temporary path ownership remains frozen until that operation finishes.");
         }
     }
 
