@@ -8,9 +8,9 @@ import (
 )
 
 // This list is the persisted compatibility surface, not a second UI catalog.
-// It includes the current logical mode IDs plus known raw runtime IDs so older
-// connection-profile stores can migrate without becoming un-loadable. Tests
-// lock this set to configs/client/logical-modes.json and modes.json.
+// It includes the current logical mode IDs plus all known runtime/strategy IDs
+// from modes.json so older connection-profile stores can migrate without
+// becoming un-loadable. Tests lock it to both canonical JSON catalogs.
 var connectionProfilePersistedModeIDs = map[string]struct{}{
 	"base-raw": {}, "base-pq": {}, "awg-strong": {}, "shadowsocks": {},
 	"reality-vision": {}, "hysteria2": {}, "reality-pq-vision": {}, "ss-v2ray": {},
@@ -18,6 +18,7 @@ var connectionProfilePersistedModeIDs = map[string]struct{}{
 	"max-quic": {}, "max-tls": {}, "all": {},
 	"wg": {}, "awg2-fast": {}, "wg-pq": {}, "awg2-strong": {}, "awg2-pq": {},
 	"max-quic-wg": {}, "max-quic-awg": {}, "max-tls-wg": {}, "max-tls-awg": {},
+	"smart-auto": {}, "custom": {},
 }
 
 func normalizePersistedConnectionProfileMode(mode string, prefs *connectionProfilePreferences) (string, error) {
