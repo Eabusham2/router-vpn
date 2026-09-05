@@ -26,6 +26,7 @@ $OpenVPNPid=Join-Path $RuntimeDir 'openvpn-windows.process.json'
 $BridgePid=Join-Path $RuntimeDir 'openvpn-entry-bridge.process.json'
 $KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 $SingBox=Join-Path $Root 'runtime\windows\sing-box.exe'
+$HoldKillSwitch=([string]$env:HOMEVPN_KILLSWITCH_HOLD -eq '1')
 
 function Stop-Owned {
   [void](Stop-RouterVPNRecordedProcess $OpenVPNPid)
@@ -72,7 +73,8 @@ function Find-OpenVPNTunnelAlias([int]$Attempts=120) {
 
 if($Action-eq'down'){
   Stop-Owned
-  try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
+  if(-not$HoldKillSwitch){try{Kill 'release'}catch{Write-Warning $_.Exception.Message}}
+  else{Write-Output 'Windows OpenVPN teardown is holding kill-switch ownership for a fail-closed transition.'}
   Remove-PrivateRuntime
   exit 0
 }
@@ -133,10 +135,7 @@ try{
   if($controllerStopping){Write-Output 'Router VPN controller requested graceful Windows OpenVPN shutdown.'}
 }finally{
   Stop-Owned
-  if($controllerStopping){
-    try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
-  }else{
-    Write-Warning 'Windows OpenVPN runtime ended unexpectedly; preserving kill-switch ownership until controller recovery/disconnect.'
-  }
+  if(-not$controllerStopping){Write-Warning 'Windows OpenVPN runtime ended unexpectedly; preserving kill-switch ownership until controller recovery/disconnect.'}
+  # Firewall rollback belongs to the Go controller after owned teardown.
   Remove-PrivateRuntime
 }
