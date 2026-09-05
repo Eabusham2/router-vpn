@@ -56,12 +56,14 @@ release_guard() {
 cleanup() {
   trap - EXIT INT TERM HUP
   stop_owned
-  release_guard
+  # Unexpected runtime exit remains fail-closed. Normal app Disconnect releases
+  # centrally after teardown; AUTO/SMART/watchdog failure can hold protection.
   HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM HUP
 
 if [[ "$ACTION" == "down" ]]; then
+  release_guard
   cleanup
   exit 0
 fi
