@@ -115,14 +115,39 @@ need(
     "must be a literal IP so setup cannot leak pre-tunnel DNS",
 )
 
+# Android has a separate VpnService/runtime capability boundary. OpenVPN and Tor
+# are deliberately unavailable there; the unified control policy must not accept
+# either merely because the cross-platform catalog contains those node families.
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java",
     'DEFAULT_MODE = "smart-auto"',
-    "DEFAULT_NODE_COUNT" if False else "BOTTOM_SHEET_ORDER",
-    "tor-bridge",
+    "BOTTOM_SHEET_ORDER",
     "AUTHENTICATED_TRANSPORT_ALWAYS_ON = true",
-    "bridge only",
+    '"router-vpn", "wireguard", "amneziawg", "shadowsocks", "shadowsocks-2022", "hysteria2"',
+    'unavailable.put("openvpn", "OpenVPN is unavailable on Android',
+    'unavailable.put("tor-bridge", "Tor bridges are unavailable on Android',
+    "String unavailable = UNAVAILABLE_TYPES.get(last)",
+    "is a bridge only. Add an authenticated encrypted tunnel after it.",
+    "Noise_IK",
+    "TLS 1.3",
 )
+forbid(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java",
+    '"router-vpn", "wireguard", "amneziawg", "openvpn", "shadowsocks-2022"',
+    '"socks5", "http-connect", "https-connect", "shadowsocks-2022", "tor-bridge"',
+    "OpenVPN TLS 1.3 + AEAD",
+    "Tor ntor-v3 outer bridge",
+)
+need(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
+    'new Capability("openvpn",false',
+    'new Capability("tor-bridge",false',
+    "OpenVPN custom exit is unavailable on pinned sing-box 1.13.x",
+    "Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on Android",
+    'Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2")',
+    "must be a literal IP to avoid pre-tunnel DNS",
+)
+
 need(
     "client/RouterVPN-Windows-UnifiedControlCenter.ps1",
     "DefaultMode = 'smart-auto'",
