@@ -148,22 +148,54 @@ need(
     "must be a literal IP to avoid pre-tunnel DNS",
 )
 
+# Windows owns native WG/AWG/layered/TUN paths and can enable OpenVPN only when
+# its native runtime capability check passes. Tor does not have a Windows
+# full-device Tor/PT runtime yet, so the WPF secure-path validator must reject it.
 need(
     "client/RouterVPN-Windows-UnifiedControlCenter.ps1",
     "DefaultMode = 'smart-auto'",
     "BottomSheetOrder",
-    "Tor bridge",
     "Test-RouterVPNSecureNodeChain",
     "Authenticated handshake",
+    "UnavailableTypes",
+    "Tor bridges are unavailable on Windows",
+    "Hysteria2 QUIC + TLS 1.3",
+    "String" if False else "shadowsocks-2022",
+)
+forbid(
+    "client/RouterVPN-Windows-UnifiedControlCenter.ps1",
+    "Tor pluggable transport + proven ntor-v3 circuit",
+    "'tor-bridge')\n    if ($allowed",
+)
+need(
+    "cmd/client/windows_openvpn_external.go",
+    "windowsOpenVPNRuntimeCapability",
+    "findOpenVPNBinary",
+    "checkOpenVPN27",
+    "cap.Supported = true",
+)
+
+# macOS/Linux really own desktop Tor/OpenVPN and Hysteria2 dataplanes. Their
+# secure-policy layer must therefore include Hysteria2 instead of misclassifying
+# a real encrypted final exit as bridge-only.
+need(
+    "client/macos/UnifiedControlCenterPolicy.swift",
+    "authenticatedTransportAlwaysOn = true",
+    "Hysteria2 QUIC + TLS 1.3",
+    '"shadowsocks", "shadowsocks-2022", "hysteria2", "tor-bridge"',
+    "Tor pluggable transport + proven ntor-v3 circuit",
 )
 need(
     "client/routervpn_unified_control_center.py",
     'default_mode: str = "smart-auto"',
     "bottom_sheet_order",
-    "tor-bridge",
     "validate_secure_node_chain",
     "Authenticated handshake",
+    '"shadowsocks", "shadowsocks-2022", "hysteria2", "tor-bridge"',
+    "Hysteria2 QUIC + TLS 1.3",
+    "Tor pluggable transport + proven ntor-v3 circuit",
 )
+
 need(
     "server/scripts/setup_center_ux_patch.py",
     "Unified Map Control Center non-blocking overlay contract",
