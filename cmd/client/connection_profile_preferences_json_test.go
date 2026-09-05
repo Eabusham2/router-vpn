@@ -53,6 +53,20 @@ func TestConnectionProfilePreferencesNormalizeSavedDNSAndLayers(t *testing.T) {
 	}
 }
 
+func TestConnectionProfilePreferencesNodeDerivedDNSDropsStaleConcreteResolver(t *testing.T) {
+	for _, mode := range []string{"home", "fastest"} {
+		t.Run(mode, func(t *testing.T) {
+			p, err := decodeSavedPreferences(t, `{"dns_mode":"`+mode+`","dns_protocol":"doh","dns_host":"203.0.113.77","dns_port":8443,"dns_server_name":"stale.example","dns_path":"/stale"}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.DNSMode != mode || p.DNSProtocol != "udp" || p.DNSHost != "" || p.DNSPort != 53 || p.DNSServerName != "" || p.DNSPath != "" {
+				t.Fatalf("node-derived DNS retained stale concrete resolver data: %+v", p)
+			}
+		})
+	}
+}
+
 func TestConnectionProfilePreferencesLegacyUnspecifiedDNSStaysUnspecified(t *testing.T) {
 	p, err := decodeSavedPreferences(t, `{"ipv6_mode":"on"}`)
 	if err != nil {
