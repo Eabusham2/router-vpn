@@ -136,6 +136,24 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.TrimSpace(profile.ID) != "" {
+		handled, err := a.updateExistingTorBridgeProfile(r, profile)
+		if err != nil {
+			status := http.StatusConflict
+			if errors.Is(err, errInvalidTorBridgeUpdateID) {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		if handled {
+			w.Header().Set("content-type", "application/json")
+			w.Header().Set("cache-control", "no-store")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "updated": true, "profile": publicProfileFor(profile)})
+			return
+		}
+	}
+
 	body, err := json.Marshal(profile)
 	if err != nil {
 		http.Error(w, "could not encode Tor bridge profile", http.StatusInternalServerError)
@@ -168,4 +186,56 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("cache-control", "no-store")
 	w.WriteHeader(status)
 	_, _ = w.Write(capture.body.Bytes())
+}
+
+var errInvalidTorBridgeUpdateID = errors.New("Tor bridge update requires a valid profile id")
+
+// updateExistingTorBridgeProfile handles only an explicit update of an already
+// stored Tor node. The generic external importer remains append-only: it must
+// never silently replace another external node merely because an ID collided.
+// A safe ID that is not present returns handled=false so the historical import
+// behavior (create while retaining that stable ID) is preserved.
+func (a *app) updateExistingTorBridgeProfile(r *http.Request, profile common.RouterProfile) (bool, error) {
+	profile.ID = strings.TrimSpace(profile.ID)
+	if !validProfileID(profile.ID) {
+		return false, errInvalidTorBridgeUpdateID
+	}
+	release, guardErr := a.beginMutationOperation(r)
+	if guardErr != nil {
+		return false, guardErr
+	}
+	defer release()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
+		return false, errors.New("disconnect before updating a Tor bridge node")
+	}
+	index := -1
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == profile.ID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return false, nil
+	}
+	existing := a.profiles.Profiles[index]
+	if existing.NodeKind != "external" || existing.External == nil || strings.ToLower(strings.TrimSpace(existing.External.Protocol)) != "tor-bridge" {
+		return false, errors.New("profile id belongs to a non-Tor node; refusing replacement")
+	}
+
+	previousStore := cloneRouterProfileStore(a.profiles)
+	// Usage metadata describes this stable node identity and is safe to retain.
+	// PublicIP and latency/throughput observations are deliberately not copied:
+	// changing bridge/PT policy invalidates prior path measurements and exits.
+	profile.UseCount = existing.UseCount
+	profile.LastUsedAt = existing.LastUsedAt
+	a.profiles.Profiles[index] = profile
+	if err := a.persistProfilesLocked(); err != nil {
+		a.rollbackProfilesLocked(previousStore)
+		return false, err
+	}
+	return true, nil
 }
