@@ -37,6 +37,16 @@ final class AndroidNodeStore {
         @Override public String toString() { return name + (endpoint.isEmpty() ? "" : " — " + endpoint); }
     }
 
+    /** Exact active-node identity + compatibility bundle used only for transaction rollback. */
+    static final class SelectionSnapshot {
+        final String id;
+        final byte[] activeBundle;
+        SelectionSnapshot(String id, byte[] activeBundle) {
+            this.id = id == null ? "" : id;
+            this.activeBundle = activeBundle == null ? null : activeBundle.clone();
+        }
+    }
+
     private final Context context;
     private final File root;
 
@@ -131,6 +141,15 @@ final class AndroidNodeStore {
     }
 
     String activeId() { return preferences().getString(ACTIVE_ID, ""); }
+
+    synchronized SelectionSnapshot snapshotSelection() throws Exception {
+        return new SelectionSnapshot(activeId(), snapshotOptional(activeBundleFile()));
+    }
+
+    synchronized void restoreSelection(SelectionSnapshot snapshot) throws Exception {
+        if (snapshot == null) throw new IllegalArgumentException("Node selection rollback snapshot is missing.");
+        rollbackSelection(activeBundleFile(), snapshot.activeBundle, snapshot.id);
+    }
 
     File file(String id) {
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
