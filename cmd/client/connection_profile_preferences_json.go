@@ -125,8 +125,10 @@ func normalizeSavedConnectionDNS(p *connectionProfilePreferences) error {
 	p.DNSMode = mode
 	switch mode {
 	case "home", "fastest":
-		// These modes derive the concrete resolver from the linked node at runtime.
-		p.DNSProtocol, p.DNSPort, p.DNSServerName, p.DNSPath = "udp", 53, "", ""
+		// These modes derive the concrete resolver from the linked node at runtime;
+		// never carry a concrete host/SNI/path from an older saved snapshot into
+		// the newly linked node.
+		p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName, p.DNSPath = "udp", "", 53, "", ""
 	default:
 		p.DNSProtocol, p.DNSHost, p.DNSPort = validated.DNSProtocol, validated.DNSHost, validated.DNSPort
 		p.DNSServerName, p.DNSPath = validated.DNSServerName, validated.DNSPath
