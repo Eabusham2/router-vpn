@@ -18,6 +18,14 @@ function Test-Administrator {
   return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Get-TrustedPowerShell {
+  $candidate=Join-Path $PSHOME 'powershell.exe'
+  if(-not(Test-Path -LiteralPath $candidate -PathType Leaf)){throw 'Trusted Windows PowerShell executable is unavailable.'}
+  $item=Get-Item -LiteralPath $candidate -Force
+  if(($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){throw 'Refusing reparse-point Windows PowerShell executable for privileged recovery.'}
+  return [IO.Path]::GetFullPath($candidate)
+}
+
 function Find-WireGuard {
   $candidates=@()
   if(-not[string]::IsNullOrWhiteSpace([string]$env:ProgramFiles)){$candidates+=Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'}
@@ -90,12 +98,12 @@ function Invoke-ElevatedSelf([string]$ResolvedRoot) {
   $escapedRoot=$ResolvedRoot.Replace("'","''")
   $command="& '$escapedScript' -Root '$escapedRoot' -Elevated"
   $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-  $process=Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) -Wait -PassThru
+  $process=Start-Process -FilePath (Get-TrustedPowerShell) -Verb RunAs -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) -Wait -PassThru
   if($null-eq$process-or$process.ExitCode-ne0){throw 'Elevated Router VPN crash recovery did not complete.'}
 }
 
 function Invoke-KillSwitchRelease([string]$ResolvedRoot) {
-  $process=Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"'+$KillSwitch+'"'),'-Action','release','-Root',('"'+$ResolvedRoot+'"')) -Wait -PassThru -WindowStyle Hidden
+  $process=Start-Process -FilePath (Get-TrustedPowerShell) -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"'+$KillSwitch+'"'),'-Action','release','-Root',('"'+$ResolvedRoot+'"')) -Wait -PassThru -WindowStyle Hidden
   if($process.ExitCode-ne0){throw "Windows kill-switch release/reassert transaction failed with exit code $($process.ExitCode)."}
 }
 
