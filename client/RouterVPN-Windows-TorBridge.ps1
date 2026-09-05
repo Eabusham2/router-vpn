@@ -23,7 +23,7 @@ function SplitUnifiedExternalCsv([string]$Text){
 }
 function ShowUnifiedExternalNodeBuilder{
     if(-not(TestUnifiedExternalMutationIdle)){Log 'Disconnect or let the active VPN transition finish before adding an external node. Unknown controller state fails closed.';return}
-    [xml]$X=@'
+    [xml]$X=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Add external node" Width="820" Height="760" MinWidth="680" MinHeight="600" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF">
   <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="22">
     <TextBlock Text="Add external node" FontSize="26" FontWeight="Bold"/>
@@ -48,7 +48,7 @@ function ShowUnifiedExternalNodeBuilder{
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="ExtSave" Content="Save node" Padding="14,8"/><Button Name="ExtClose" Content="Close" Margin="8,0,0,0" Padding="14,8"/></StackPanel>
   </StackPanel></ScrollViewer>
 </Window>
-'@
+"@
     $reader=New-Object System.Xml.XmlNodeReader $X;$D=[Windows.Markup.XamlReader]::Load($reader);$D.Owner=$W
     $Protocol=$D.FindName('ExtProtocol');$Protocol.SelectedIndex=0;$Status=$D.FindName('ExtStatus')
     $D.FindName('ExtClose').Add_Click({$D.Close()})
@@ -97,7 +97,7 @@ function Add-RouterVPNTorBridgeWindowsShell {
     if(-not $ProductSource.Contains($stateMarker)){throw 'Windows Tor bridge UI: product state marker drifted.'}
     $functions=@'
 function ShowUnifiedTorBridgeBuilder{
-    [xml]$X=@'
+    [xml]$X=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Tor censorship circumvention" Width="760" Height="690" MinWidth="620" MinHeight="560" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF">
   <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="22">
     <TextBlock Text="Tor bridges" FontSize="26" FontWeight="Bold"/>
@@ -115,20 +115,36 @@ function ShowUnifiedTorBridgeBuilder{
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="TorRefresh" Content="Refresh support" Padding="12,7"/><Button Name="TorSave" Content="Save Tor node" Margin="8,0,0,0" Padding="12,7"/><Button Name="TorClose" Content="Close" Margin="8,0,0,0" Padding="12,7"/></StackPanel>
   </StackPanel></ScrollViewer>
 </Window>
-'@
+"@
     $reader=New-Object System.Xml.XmlNodeReader $X;$D=[Windows.Markup.XamlReader]::Load($reader);$D.Owner=$W
     $Name=$D.FindName('TorName');$Transport=$D.FindName('TorTransport');$Kill=$D.FindName('TorKill');$Lines=$D.FindName('TorLines');$Capability=$D.FindName('TorCapability');$Status=$D.FindName('TorStatus');$Transport.SelectedIndex=0;$Kill.SelectedIndex=0
     $Caps=@{}
     $Refresh={
-        try{$R=Api '/api/tor-bridge/capabilities' -Timeout 8;$Caps=@{};foreach($C in @($R.transports)){$Caps[[string]$C.id]=$C};$ID=[string](($Transport.SelectedItem).Tag);$C=$Caps[$ID];if($C){$Strict=if([bool]$C.strict_kill_switch){'supported'}else{'not currently safe'};$Why=[string]$C.reason;$Capability.Text=(if([bool]$C.supported){'Available'}else{'Unavailable'})+" • strict kill switch $Strict`n"+[string]$C.description+$(if($Why){"`nReason: $Why"}else{''})}else{$Capability.Text="Support details unavailable for $ID."}}
-        catch{$Capability.Text='Tor support check failed: '+$_.Exception.Message}
+        try{
+            $R=Api '/api/tor-bridge/capabilities' -Timeout 8
+            $Caps=@{};foreach($C in @($R.transports)){$Caps[[string]$C.id]=$C}
+            $ID=[string](($Transport.SelectedItem).Tag);$C=$Caps[$ID]
+            if($C){
+                $Availability=if([bool]$C.supported){'Available'}else{'Unavailable'}
+                $Strict=if([bool]$C.strict_kill_switch){'supported'}else{'not currently safe'}
+                $Capability.Text=$Availability+" • strict kill switch "+$Strict+"`n"+[string]$C.description
+                $Why=[string]$C.reason;if($Why){$Capability.Text+="`nReason: "+$Why}
+            }else{$Capability.Text="Support details unavailable for $ID."}
+        }catch{$Capability.Text='Tor support check failed: '+$_.Exception.Message}
     }
     $Transport.Add_SelectionChanged({&$Refresh})
     $Kill.Add_SelectionChanged({$ID=[string](($Transport.SelectedItem).Tag);$C=$Caps[$ID];if($C -and -not[bool]$C.strict_kill_switch -and [string](($Kill.SelectedItem).Tag) -ne 'off'){$Status.Text='Dynamic CDN/STUN/WebRTC/bootstrap transports require Kill switch Off until process-scoped PT egress filtering exists.'}else{$Status.Text=''}})
     $D.FindName('TorRefresh').Add_Click({&$Refresh})
     $D.FindName('TorClose').Add_Click({$D.Close()})
     $D.FindName('TorSave').Add_Click({
-        try{$Rows=@($Lines.Text -split "`r?`n"|ForEach-Object{$_.Trim()}|Where-Object{$_});if(-not$Rows){throw 'Paste at least one Tor bridge line.'};$ID=[string](($Transport.SelectedItem).Tag);$KillID=[string](($Kill.SelectedItem).Tag);$C=$Caps[$ID];if($C -and -not[bool]$C.strict_kill_switch -and $KillID -ne 'off'){throw 'This dynamic Tor transport requires Kill switch Off until Router VPN owns process-scoped PT egress.'};$R=Api '/api/tor-bridge/import' 'POST' @{name=[string]$Name.Text;transport=$ID;bridges=$Rows;kill_switch_policy=$KillID} 25;$Status.Text='Tor node saved and selected. Connect availability follows the live Tor capability result shown above; Windows x64 can connect when the pinned Tor/Lyrebird runtime is present, while unsupported platforms stay unavailable with their exact reason.';Log ('Tor bridge profile saved: '+[string]$R.profile.name);RefreshProduct}catch{$Status.Text='Tor node rejected: '+$_.Exception.Message}
+        try{
+            $Rows=@($Lines.Text -split "`r?`n"|ForEach-Object{$_.Trim()}|Where-Object{$_});if(-not$Rows){throw 'Paste at least one Tor bridge line.'}
+            $ID=[string](($Transport.SelectedItem).Tag);$KillID=[string](($Kill.SelectedItem).Tag);$C=$Caps[$ID]
+            if($C -and -not[bool]$C.strict_kill_switch -and $KillID -ne 'off'){throw 'This dynamic Tor transport requires Kill switch Off until Router VPN owns process-scoped PT egress.'}
+            $R=Api '/api/tor-bridge/import' 'POST' @{name=[string]$Name.Text;transport=$ID;bridges=$Rows;kill_switch_policy=$KillID} 25
+            $Status.Text='Tor node saved and selected. Connect availability follows the live Tor capability result shown above; Windows x64 can connect when the pinned Tor/Lyrebird runtime is present, while unsupported platforms stay unavailable with their exact reason.'
+            Log ('Tor bridge profile saved: '+[string]$R.profile.name);RefreshProduct
+        }catch{$Status.Text='Tor node rejected: '+$_.Exception.Message}
     })
     &$Refresh;[void]$D.ShowDialog()
 }
