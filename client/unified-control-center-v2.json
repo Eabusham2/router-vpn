@@ -81,6 +81,15 @@
       "final_transport": true
     },
     {
+      "id": "hysteria2",
+      "role": [
+        "bridge",
+        "hop",
+        "exit"
+      ],
+      "final_transport": true
+    },
+    {
       "id": "https-connect",
       "role": [
         "bridge",
@@ -223,6 +232,7 @@
       "amneziawg-noise-ik-chacha20-poly1305",
       "openvpn-tls13-aead",
       "shadowsocks-2022-blake3-aead",
+      "hysteria2-quic-tls13",
       "tor-ntor-v3-circuit"
     ],
     "outer_bridges": [
