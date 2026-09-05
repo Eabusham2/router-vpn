@@ -37,6 +37,7 @@ linux_rel = ".github/workflows/linux-native-app.yml"
 diag_rel = ".github/workflows/android-diagnostic.yml"
 combined_rel = ".github/workflows/android-combined-runtime.yml"
 package_rel = "deploy/package-builds.sh"
+scope_rel = "deploy/scope-windows-release-candidate.sh"
 mac_package_rel = "deploy/package-macos-native.sh"
 linux_package_rel = "deploy/package-linux-native.sh"
 broker_builder_rel = "server/scripts/build-download-on-demand.py"
@@ -61,6 +62,7 @@ linux = read(linux_rel)
 diag = read(diag_rel)
 combined = read(combined_rel)
 package_builds = read(package_rel)
+scope = read(scope_rel)
 mac_package = read(mac_package_rel)
 linux_package = read(linux_package_rel)
 broker_builder = read(broker_builder_rel)
@@ -98,6 +100,14 @@ require(package_builds, package_rel,
         "write_provenance",
         "windows-$arch",
         "windows-portable-$arch")
+require(scope, scope_rel,
+        "RouterVPN-Windows-amd64.zip",
+        "RouterVPN-Windows-arm64.zip",
+        "RouterVPN-Portable-Windows-amd64.zip",
+        "RouterVPN-Portable-Windows-arm64.zip",
+        "sha256sum \"${required[@]}\" > SHA256SUMS",
+        "sha256sum -c SHA256SUMS",
+        "unexpected scoped release files")
 require(mac_package, mac_package_rel,
         "source_provenance.py",
         'macos-$arch',
@@ -288,15 +298,13 @@ require(broker_exact_sha_test, broker_exact_sha_test_rel,
 
 # Release-candidate and dedicated fallback artifacts must use the names/members
 # that the authenticated download broker actually asks GitHub for. The one-SHA
-# reusable candidate uploads only Windows/Portable from the generic producer;
-# native macOS/Linux jobs own their canonical archives so aggregation cannot
-# contain duplicate platform filenames.
+# generic producer first builds/verifies the complete generic matrix, then scopes
+# dist/packages to Windows/Portable and regenerates SHA256SUMS. Native macOS and
+# Linux jobs remain the sole canonical producers of their release archives.
 require(rc, rc_rel,
         "name: RouterVPN-generic-release-candidate",
-        "dist/packages/RouterVPN-Windows-amd64.zip",
-        "dist/packages/RouterVPN-Windows-arm64.zip",
-        "dist/packages/RouterVPN-Portable-Windows-amd64.zip",
-        "dist/packages/RouterVPN-Portable-Windows-arm64.zip",
+        "bash deploy/scope-windows-release-candidate.sh",
+        "path: |\n            dist/packages/*",
         "name: RouterVPN-Android-release-candidate",
         "path: android/app/build/outputs/apk/debug/app-debug.apk",
         "name: RouterVPN-iOS-release-candidate",
@@ -307,9 +315,6 @@ require(rc, rc_rel,
         "name: RouterVPN-Linux-${{ matrix.arch }}-release-candidate",
         "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz",
         "name: RouterVPN-release-candidate-${{ github.sha }}")
-assert "dist/packages/*" not in rc, (
-    "release candidate generic producer must not re-upload native macOS/Linux archives"
-)
 require(client, client_rel,
         "name: RouterVPN-client-desktop-unix-ci",
         "dist/packages/*",
@@ -326,15 +331,18 @@ require(linux, linux_rel,
         "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz")
 
 # Validate every concrete desktop policy source against its real producer. The
-# one-SHA release generic artifact enumerates Windows/Portable explicitly;
-# the broader desktop CI generic artifact keeps its directory glob, so concrete
-# membership there is proven by package-builds.sh.
+# release generic artifact's membership is proved by the scoping script; the
+# broader desktop CI generic artifact's membership is proved by package-builds.sh.
 for request, sources in policy.NATIVE_PACKAGE_ARTIFACTS.items():
     assert len(sources) >= 2, f"{request}: missing two-source native artifact policy"
     for artifact, member in sources[:2]:
         if artifact == "RouterVPN-generic-release-candidate":
             assert artifact in rc, f"{request}: producer workflow does not upload artifact {artifact}"
-            assert f"dist/packages/{member}" in rc, f"{request}: release candidate does not upload member {member}"
+            assert member in scope, f"{request}: scoped release producer does not preserve member {member}"
+            arch = "arm64" if "arm64" in member else "amd64"
+            rendered = package_builds.replace("$arch", arch)
+            base = member[:-4] if member.endswith(".zip") else member
+            assert base in rendered, f"{request}: package builder does not produce {member}"
             continue
         if artifact == "RouterVPN-client-desktop-unix-ci":
             assert artifact in client, f"{request}: producer workflow does not upload artifact {artifact}"
