@@ -32,7 +32,8 @@ def forbid(path: str, *markers: str) -> None:
 
 # Canonical external profile model: PT family is explicit, dynamic Tor exit is
 # never replaced with a user-supplied fixed public IP, and imported data cannot
-# supply executable paths or torrc directives.
+# supply executable paths or torrc directives. ClientTransportPlugin generation
+# belongs to the trusted runtime layer below, never to untrusted profile parsing.
 need(
     "internal/common/types.go",
     "ExternalTorBridgeConfig",
@@ -48,13 +49,12 @@ need(
     'return "custom", nil',
     "TorBridgeTransport",
     "mixed Tor pluggable transports require transport=custom",
-    "ClientTransportPlugin",
 )
 need(
     "internal/common/profile_schema.go",
     'case "tor", "tor_bridge", "tor-bridge"',
     'ext.Protocol = "tor-bridge"',
-    "Tor bridge uses a dynamic circuit exit",
+    "Tor bridge has a dynamic circuit exit",
     "normalizeExternalTorBridge",
 )
 need(
@@ -287,7 +287,7 @@ need(
 need(
     "client/RouterVPN-Windows-App.ps1",
     "RouterVPN-Windows-TorBridge.ps1",
-    "Add-RouterVPNTorBridgeUI",
+    "Add-RouterVPNTorBridgeWindowsShell -ProductSource",
 )
 need(
     "client/linux/routervpn-tor-bridge-v13.inc",
@@ -299,7 +299,7 @@ need(
     "Snowflake",
     "WebTunnel",
     "Auto / Custom",
-    "profile data cannot inject ClientTransportPlugin commands",
+    "It never accepts executable paths or raw torrc directives.",
     "Update currently selected Tor node",
     "active_router_id(state->app)",
     'json_builder_set_member_name(builder, "id")',
