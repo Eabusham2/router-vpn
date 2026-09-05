@@ -22,6 +22,34 @@ func torImportTestApp(t *testing.T, profilesFile string) *app {
 	}
 }
 
+func existingTorImportProfile(id string) common.RouterProfile {
+	return common.RouterProfile{
+		SchemaVersion: common.RouterProfileSchemaVersion,
+		ID:            id,
+		Name:          "Old Tor",
+		NodeKind:      "external",
+		External: &common.ExternalNodeConfig{Protocol: "tor-bridge", TorBridge: &common.ExternalTorBridgeConfig{
+			Transport: "obfs4",
+			Bridges:   []string{torImportObfs4Bridge},
+			SocksPort: 19050,
+		}},
+		DNSMode:          "rescue",
+		DNSProtocol:      "https",
+		DNSHost:          "1.1.1.1",
+		DNSPort:          443,
+		DNSServerName:    "cloudflare-dns.com",
+		DNSPath:          "/dns-query",
+		KillSwitchPolicy: "on-connect",
+		KillSwitch:       true,
+		IPv6Mode:         "on",
+		MTUPolicy:        "auto",
+		StartupMode:      "manual",
+		PublicIP:         "198.51.100.70",
+		UseCount:         9,
+		LastUsedAt:       "2026-09-01T01:02:03Z",
+	}
+}
+
 func TestTorBridgeImportDefaultsSingleObfs4Safely(t *testing.T) {
 	a := torImportTestApp(t, filepath.Join(t.TempDir(), "routers.json"))
 	body := `{"name":"Tor obfs4","transport":"obfs4","bridges":["` + torImportObfs4Bridge + `"]}`
@@ -96,5 +124,88 @@ func TestTorBridgeImportPersistenceFailureRollsBackSelection(t *testing.T) {
 	defer a.mu.Unlock()
 	if len(a.profiles.Profiles) != 0 || a.profiles.SelectedID != "previous" || a.state.RouterID != "previous" {
 		t.Fatalf("failed Tor import did not roll back identity/store: profiles=%+v selected=%q router=%q", a.profiles.Profiles, a.profiles.SelectedID, a.state.RouterID)
+	}
+}
+
+func TestTorBridgeImportExistingIDUpdatesInPlace(t *testing.T) {
+	a := torImportTestApp(t, filepath.Join(t.TempDir(), "routers.json"))
+	old := existingTorImportProfile("tor-edit")
+	a.profiles.Profiles = []common.RouterProfile{old}
+	a.profiles.SelectedID = old.ID
+	a.state.RouterID = old.ID
+	if err := a.persistProfilesLocked(); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"id":"tor-edit","name":"Tor Snowflake","transport":"snowflake","bridges":["` + torImportSnowflakeBridge + `"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/tor-bridge/import", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	a.torBridgeImport(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"updated":true`) {
+		t.Fatalf("Tor update status=%d body=%q", rr.Code, rr.Body.String())
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.profiles.Profiles) != 1 {
+		t.Fatalf("Tor update duplicated node: %+v", a.profiles.Profiles)
+	}
+	p := a.profiles.Profiles[0]
+	if p.ID != old.ID || p.Name != "Tor Snowflake" || p.External == nil || p.External.TorBridge == nil || p.External.TorBridge.Transport != "snowflake" {
+		t.Fatalf("Tor update did not replace exact node: %+v", p)
+	}
+	if p.UseCount != old.UseCount || p.LastUsedAt != old.LastUsedAt {
+		t.Fatalf("Tor update lost usage metadata: %+v", p)
+	}
+	if p.PublicIP != "" {
+		t.Fatalf("Tor update retained stale observed public exit %q", p.PublicIP)
+	}
+	if a.profiles.SelectedID != old.ID || a.state.RouterID != old.ID {
+		t.Fatalf("Tor update changed stable identity: selected=%q router=%q", a.profiles.SelectedID, a.state.RouterID)
+	}
+}
+
+func TestTorBridgeImportExistingNonTorIDRefusesReplacement(t *testing.T) {
+	a := torImportTestApp(t, filepath.Join(t.TempDir(), "routers.json"))
+	existing := common.RouterProfile{
+		SchemaVersion: common.RouterProfileSchemaVersion,
+		ID:            "not-tor",
+		Name:          "SOCKS node",
+		NodeKind:      "external",
+		External:      &common.ExternalNodeConfig{Protocol: "socks5"},
+	}
+	a.profiles.Profiles = []common.RouterProfile{existing}
+	body := `{"id":"not-tor","name":"Tor obfs4","transport":"obfs4","bridges":["` + torImportObfs4Bridge + `"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/tor-bridge/import", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	a.torBridgeImport(rr, req)
+	if rr.Code != http.StatusConflict || !strings.Contains(rr.Body.String(), "non-Tor node") {
+		t.Fatalf("non-Tor ID collision = %d %q", rr.Code, rr.Body.String())
+	}
+	if len(a.profiles.Profiles) != 1 || a.profiles.Profiles[0].External.Protocol != "socks5" {
+		t.Fatalf("non-Tor profile was replaced: %+v", a.profiles.Profiles)
+	}
+}
+
+func TestTorBridgeImportUpdatePersistenceFailureRollsBackExistingNode(t *testing.T) {
+	blockedPath := t.TempDir()
+	a := torImportTestApp(t, blockedPath)
+	old := existingTorImportProfile("tor-edit")
+	a.profiles.Profiles = []common.RouterProfile{old}
+	a.profiles.SelectedID = old.ID
+	a.state.RouterID = old.ID
+	body := `{"id":"tor-edit","name":"Tor Snowflake","transport":"snowflake","bridges":["` + torImportSnowflakeBridge + `"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/tor-bridge/import", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	a.torBridgeImport(rr, req)
+	if rr.Code < 400 {
+		t.Fatalf("expected update persistence failure, got %d body=%q", rr.Code, rr.Body.String())
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.profiles.Profiles) != 1 {
+		t.Fatalf("failed Tor update changed store size: %+v", a.profiles.Profiles)
+	}
+	p := a.profiles.Profiles[0]
+	if p.ID != old.ID || p.Name != old.Name || p.External == nil || p.External.TorBridge == nil || p.External.TorBridge.Transport != "obfs4" || p.PublicIP != old.PublicIP || p.UseCount != old.UseCount || p.LastUsedAt != old.LastUsedAt {
+		t.Fatalf("failed Tor update did not restore previous node: got=%+v old=%+v", p, old)
 	}
 }
