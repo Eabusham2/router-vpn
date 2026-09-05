@@ -261,13 +261,19 @@ func rvNativeUpdateOnce(ctx context.Context, cfg rvNativeUpdateConfig, download 
 	}
 	previousTarget := state.AvailableSHA
 	state.AvailableSHA = strings.ToLower(manifest.CommitSHA)
-	if !download {
-		if state.ArtifactPath != "" && !strings.EqualFold(previousTarget, manifest.CommitSHA) {
-			if err := rvClearNativeArtifact(&state); err != nil {
-				return rvStatus(cfg, state), fmt.Errorf("remove superseded staged native update: %w", err)
-			}
+	superseded := state.ArtifactPath != "" && !strings.EqualFold(previousTarget, manifest.CommitSHA)
+	if superseded {
+		if err := rvClearNativeArtifact(&state); err != nil {
+			return rvStatus(cfg, state), fmt.Errorf("remove superseded staged native update: %w", err)
 		}
+	}
+	if !download {
 		return rvSaveNativeStatus(cfg, state, "persist native update check")
+	}
+	if superseded {
+		if _, err := rvSaveNativeStatus(cfg, state, "persist superseded native update cleanup"); err != nil {
+			return rvStatus(cfg, state), err
+		}
 	}
 	artifactClient := rvNativeArtifactClient(cfg.RequestTimeout, cfg.AllowedHosts)
 	downloaded, err := updatepolicy.DownloadArtifactDetailed(ctx, artifactClient, artifact, cfg.DownloadDir)
@@ -316,6 +322,14 @@ func rvPersistNativeUpdateError(cfg rvNativeUpdateConfig, cause error) {
 	state := updatepolicy.State{Schema: updatepolicy.SchemaV1, Channel: cfg.Channel, InstalledSHA: strings.ToLower(cfg.InstalledSHA)}
 	if old, err := updatepolicy.LoadState(cfg.StatePath); err == nil {
 		state = old
+	}
+	// If a superseded verified artifact was already removed but a later state
+	// write/download failed, never re-persist the old path as install-pending.
+	if strings.TrimSpace(state.ArtifactPath) != "" {
+		if _, err := os.Lstat(state.ArtifactPath); os.IsNotExist(err) {
+			state.ArtifactPath, state.ArtifactSHA256 = "", ""
+			state.DownloadedAt, state.InstallPending = time.Time{}, false
+		}
 	}
 	state.Schema, state.InstalledSHA, state.LastCheckedAt = updatepolicy.SchemaV1, strings.ToLower(cfg.InstalledSHA), time.Now().UTC()
 	if state.Channel == "" {
