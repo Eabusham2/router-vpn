@@ -34,7 +34,7 @@ final class AndroidSpeedLabHopMeter {
         String summary(){return String.format(Locale.US,"%s • %s • %.1f ms • ↓ %.1f / ↑ %.1f Mbps",role.toUpperCase(Locale.US),name==null||name.isEmpty()?id:name,medianMs,downloadMbps,uploadMbps);}
     }
 
-    private static final int BYTES=8<<20;
+    private static final int DEFAULT_BYTES=8<<20,MIN_BYTES=1<<20,MAX_BYTES=16<<20;
     private static final int ENTRY_PROOF_PORT=1098;
     private static final int EXIT_PROOF_PORT=1099;
     private static final int MAX_PROOF=16<<10;
@@ -43,22 +43,25 @@ final class AndroidSpeedLabHopMeter {
 
     AndroidSpeedLabHopMeter(Context context){this.context=context.getApplicationContext();}
 
-    void measure(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,Callback callback){
+    void measure(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,Callback callback){measure(entry,exit,DEFAULT_BYTES,callback);}
+
+    void measure(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,int requestedBytes,Callback callback){
+        final int bytes=Math.max(MIN_BYTES,Math.min(MAX_BYTES,requestedBytes<=0?DEFAULT_BYTES:requestedBytes));
         new Thread(()->{
             try{
                 if(entry==null||exit==null||entry.id.equals(exit.id))throw new IllegalArgumentException("Choose different Router VPN entry and exit nodes for per-hop Speed Lab metrics.");
                 AndroidHomeStateStore.Snapshot identity=requireGraph(entry.id,exit.id,null);
                 List<Hop>out=new ArrayList<>(2);
-                out.add(measureHop("entry",entry,identity,ENTRY_PROOF_PORT));
+                out.add(measureHop("entry",entry,identity,ENTRY_PROOF_PORT,bytes));
                 requireGraph(entry.id,exit.id,identity);
-                out.add(measureHop("exit",exit,identity,EXIT_PROOF_PORT));
+                out.add(measureHop("exit",exit,identity,EXIT_PROOF_PORT,bytes));
                 requireGraph(entry.id,exit.id,identity);
                 callback.finished(out,null);
             }catch(Throwable error){callback.finished(null,error);}
         },"routervpn-speedlab-hops").start();
     }
 
-    private Hop measureHop(String role,AndroidNodeStore.Node node,AndroidHomeStateStore.Snapshot identity,int proofPort)throws Exception{
+    private Hop measureHop(String role,AndroidNodeStore.Node node,AndroidHomeStateStore.Snapshot identity,int proofPort,int bytes)throws Exception{
         PrivateNode privateNode=privateNode(node);
         prove(privateNode,proofPort);
         requireGraph(identity.activeEntryId,identity.activeExitId,identity);
@@ -77,13 +80,13 @@ final class AndroidSpeedLabHopMeter {
         requireGraph(identity.activeEntryId,identity.activeExitId,identity);
         double median=percentile(latencies,.5);
 
-        double down=download(privateNode,proofPort);
+        double down=download(privateNode,proofPort,bytes);
         requireGraph(identity.activeEntryId,identity.activeExitId,identity);
-        double up=upload(privateNode,proofPort);
+        double up=upload(privateNode,proofPort,bytes);
         requireGraph(identity.activeEntryId,identity.activeExitId,identity);
         prove(privateNode,proofPort);
         requireGraph(identity.activeEntryId,identity.activeExitId,identity);
-        return new Hop(role,node.id,node.name,round(median),round(down),round(up),latencies.size(),failed,BYTES);
+        return new Hop(role,node.id,node.name,round(median),round(down),round(up),latencies.size(),failed,bytes);
     }
 
     private void prove(PrivateNode node,int proofPort)throws Exception{
@@ -97,16 +100,16 @@ final class AndroidSpeedLabHopMeter {
         }finally{c.disconnect();}
     }
 
-    private double download(PrivateNode node,int proofPort)throws Exception{
-        HttpURLConnection c=open(node.base+"/api/benchmark/download?bytes="+BYTES,node.token,"GET",30000,proofPort);c.setRequestProperty("Accept-Encoding","identity");long started=System.nanoTime();long total=0;
-        try{int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Hop download benchmark returned HTTP "+code);try(InputStream in=c.getInputStream()){byte[]b=new byte[64<<10];for(int n;(n=in.read(b))!=-1;){total+=n;if(total>BYTES)throw new IllegalStateException("Hop download exceeded requested size.");}}}finally{c.disconnect();}
-        if(total!=BYTES)throw new IllegalStateException("Hop download returned "+total+" bytes, expected "+BYTES+".");double seconds=(System.nanoTime()-started)/1_000_000_000d;return BYTES*8d/1_000_000d/Math.max(seconds,.000001);
+    private double download(PrivateNode node,int proofPort,int bytes)throws Exception{
+        HttpURLConnection c=open(node.base+"/api/benchmark/download?bytes="+bytes,node.token,"GET",30000,proofPort);c.setRequestProperty("Accept-Encoding","identity");long started=System.nanoTime();long total=0;
+        try{int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Hop download benchmark returned HTTP "+code);try(InputStream in=c.getInputStream()){byte[]b=new byte[64<<10];for(int n;(n=in.read(b))!=-1;){total+=n;if(total>bytes)throw new IllegalStateException("Hop download exceeded requested size.");}}}finally{c.disconnect();}
+        if(total!=bytes)throw new IllegalStateException("Hop download returned "+total+" bytes, expected "+bytes+".");double seconds=(System.nanoTime()-started)/1_000_000_000d;return bytes*8d/1_000_000d/Math.max(seconds,.000001);
     }
 
-    private double upload(PrivateNode node,int proofPort)throws Exception{
-        HttpURLConnection c=open(node.base+"/api/benchmark/upload",node.token,"POST",30000,proofPort);c.setDoOutput(true);c.setFixedLengthStreamingMode(BYTES);c.setRequestProperty("Content-Type","application/octet-stream");SecureRandom random=new SecureRandom();byte[]chunk=new byte[64<<10];int remaining=BYTES;long started=System.nanoTime();
-        try{try(OutputStream out=c.getOutputStream()){while(remaining>0){int n=Math.min(chunk.length,remaining);random.nextBytes(chunk);out.write(chunk,0,n);remaining-=n;}out.flush();}int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Hop upload benchmark returned HTTP "+code);byte[]reply=readLimited(c.getInputStream(),65536,"Hop upload proof is too large.");JSONObject ack=new JSONObject(new String(reply,StandardCharsets.UTF_8));if(ack.optLong("bytes",-1)!=BYTES)throw new IllegalStateException("Hop upload byte proof mismatch.");}finally{c.disconnect();}
-        double seconds=(System.nanoTime()-started)/1_000_000_000d;return BYTES*8d/1_000_000d/Math.max(seconds,.000001);
+    private double upload(PrivateNode node,int proofPort,int bytes)throws Exception{
+        HttpURLConnection c=open(node.base+"/api/benchmark/upload",node.token,"POST",30000,proofPort);c.setDoOutput(true);c.setFixedLengthStreamingMode(bytes);c.setRequestProperty("Content-Type","application/octet-stream");SecureRandom random=new SecureRandom();byte[]chunk=new byte[64<<10];int remaining=bytes;long started=System.nanoTime();
+        try{try(OutputStream out=c.getOutputStream()){while(remaining>0){int n=Math.min(chunk.length,remaining);random.nextBytes(chunk);out.write(chunk,0,n);remaining-=n;}out.flush();}int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Hop upload benchmark returned HTTP "+code);byte[]reply=readLimited(c.getInputStream(),65536,"Hop upload proof is too large.");JSONObject ack=new JSONObject(new String(reply,StandardCharsets.UTF_8));if(ack.optLong("bytes",-1)!=bytes)throw new IllegalStateException("Hop upload byte proof mismatch.");}finally{c.disconnect();}
+        double seconds=(System.nanoTime()-started)/1_000_000_000d;return bytes*8d/1_000_000d/Math.max(seconds,.000001);
     }
 
     private HttpURLConnection open(String value,String token,String method,int timeout,int proofPort)throws Exception{
