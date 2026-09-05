@@ -216,6 +216,7 @@ if($Action -eq 'check'){Write-Output "native Windows Tor $Transport bridge graph
 Stop-Owned
 [RouterVpnTorJob]::Ensure()
 Kill 'prepare'
+$controllerStopping=$false
 try {
   Set-Content -LiteralPath $TorLog -Value '' -Encoding ascii
   $tor=Start-Process -FilePath $TorBinary -ArgumentList @('-f',$Torrc,'--RunAsDaemon','0') -WorkingDirectory $RuntimeDir -PassThru -WindowStyle Hidden
@@ -230,7 +231,6 @@ try {
   Start-Sleep -Milliseconds 500
   $sing.Refresh();if($sing.HasExited){throw 'Tor full-device sing-box exited during startup.'}
 
-  $controllerStopping=$false
   while($true){
     if(Test-RouterVPNControllerStopping){$controllerStopping=$true;break}
     $tor.Refresh();$sing.Refresh()
@@ -242,6 +242,10 @@ try {
 } finally {
   Stop-Owned
   try{[RouterVpnTorJob]::Close()}catch{Write-Warning $_.Exception.Message}
-  try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
+  if($controllerStopping){
+    try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
+  }else{
+    Write-Warning 'Windows Tor runtime ended unexpectedly; preserving kill-switch ownership until controller recovery/disconnect.'
+  }
   Remove-PrivateRuntime
 }
