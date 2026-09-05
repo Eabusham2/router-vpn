@@ -19,15 +19,17 @@ function Test-Administrator {
 }
 
 function Find-WireGuard {
-  $candidates=@(
-    (Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'),
-    (Join-Path ${env:ProgramFiles(x86)} 'WireGuard\wireguard.exe')
-  )
+  $candidates=@()
+  if(-not[string]::IsNullOrWhiteSpace([string]$env:ProgramFiles)){$candidates+=Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'}
+  if(-not[string]::IsNullOrWhiteSpace([string]${env:ProgramFiles(x86)})){$candidates+=Join-Path ${env:ProgramFiles(x86)} 'WireGuard\wireguard.exe'}
   foreach($candidate in $candidates){
-    if($candidate-and(Test-Path -LiteralPath $candidate -PathType Leaf)){return $candidate}
+    if(-not(Test-Path -LiteralPath $candidate -PathType Leaf)){continue}
+    $item=Get-Item -LiteralPath $candidate -Force
+    if(($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){continue}
+    return [IO.Path]::GetFullPath($candidate)
   }
-  $cmd=Get-Command wireguard.exe -ErrorAction SilentlyContinue
-  if($cmd){return [string]$cmd.Source}
+  # Crash recovery runs elevated. Never resolve wireguard.exe from PATH: a
+  # user-writable same-name executable must not become a privileged teardown tool.
   return ''
 }
 
@@ -126,7 +128,7 @@ foreach($record in $Records){
 $service=Get-Service -Name 'WireGuardTunnel$wg' -ErrorAction SilentlyContinue
 if($service){
   $wireguard=Find-WireGuard
-  if([string]::IsNullOrWhiteSpace($wireguard)){throw 'Stale Router VPN WireGuard service exists but wireguard.exe is unavailable for exact teardown.'}
+  if([string]::IsNullOrWhiteSpace($wireguard)){throw 'Stale Router VPN WireGuard service exists but the trusted Program Files wireguard.exe is unavailable for exact teardown.'}
   $process=Start-Process -FilePath $wireguard -ArgumentList @('/uninstalltunnelservice','wg') -Wait -PassThru -NoNewWindow
   if($process.ExitCode-ne0-and(Get-Service -Name 'WireGuardTunnel$wg' -ErrorAction SilentlyContinue)){
     throw "Could not remove stale Router VPN WireGuard service (exit $($process.ExitCode))."
