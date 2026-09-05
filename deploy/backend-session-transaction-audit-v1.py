@@ -121,8 +121,13 @@ for rel, markers in {
         "t.dnsProofLastAttempt = time.Time{}", "asyncMeasurementProfileToken(profile) == asyncMeasurementProfileToken(s.Profile)",
     ),
     "cmd/client/extras.go": (
-        "captureAsyncMeasurementSession", "sameAsyncMeasurementSession", "stateAtStart := mtuStateSnapshotToken(a.state)",
-        "VPN session/path changed while public-exit lookup was running", "VPN session/path changed while DNS Retest was running",
+        "captureAsyncMeasurementSession", "sameAsyncMeasurementSession", "activeAsyncMeasurementProfile",
+        "validateAsyncMeasurementProfile", "asyncMeasurementProfileToken",
+        "VPN session/path changed while live proof was running",
+        "active VPN node/mode/base/path changed while live proof was running",
+        "active VPN profile or policy changed while live proof was running",
+        "active VPN path or policy changed before public-exit persistence",
+        "active node/path or DNS policy changed before DNS Retest persistence",
         "previousStore := cloneRouterProfileStore(a.profiles)", "a.rollbackProfilesLocked(previousStore)",
     ),
     "cmd/client/telemetry.go": (
@@ -130,8 +135,9 @@ for rel, markers in {
         "a.rollbackProfilesLocked(previousStore)",
     ),
     "cmd/client/mtu_retest.go": (
-        "previous := *x", "*x = previous", "durable rollback was incomplete",
-        "restoreMTUMeasurementFields", "rollbackMTULiveResult",
+        "captureMTULiveSnapshot", "validateMTUMeasurementAgainstLiveSnapshot",
+        "failMTURetestWithLiveRollback", "restoreMTULiveSnapshot",
+        "restoreMTUMeasurementFields", "rollback was incomplete",
     ),
 }.items():
     require(rel, *markers)
@@ -211,7 +217,7 @@ require(
 require(
     "cmd/client/mtu_retest_test.go",
     "TestMTURetestPersistenceFailureRollsBackLiveAndInMemoryResult",
-    "did not roll back the live interface",
+    "MTU persistence failure is no longer wired to exact live-MTU rollback",
 )
 require(
     "cmd/client/home_summary_test.go",
