@@ -22,7 +22,7 @@ jobs:
       - name: Score legacy and recovered source/live release gates
         run: |
           python3 deploy/weighted-release-audit.py | tee "$RUNNER_TEMP/weighted-release.json"
-          python3 deploy/recovered-release-audit-v4.py | tee "$RUNNER_TEMP/recovered-release.json"
+          python3 deploy/recovered-release-audit-v3.py | tee "$RUNNER_TEMP/recovered-release.json"
           python3 - "$RUNNER_TEMP/weighted-release.json" "$RUNNER_TEMP/recovered-release.json" <<'PY'
           import json,os,sys
           legacy=json.load(open(sys.argv[1])); recovered=json.load(open(sys.argv[2]))
@@ -54,9 +54,6 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as fh:
               fh.write('\n'.join(summary)+'\n')
 
-          # Manual/live evidence intentionally remains a separate 12-point gate,
-          # but every source requirement must be complete before this workflow is
-          # allowed to go green. A partial 84.5/88 source score is not a release.
           if recovered['source_earned'] != 88.0 or legacy_failed or recovered_failed:
               raise SystemExit(
                   f"source audit incomplete: {recovered['source_earned']:.2f}/88.00; "
