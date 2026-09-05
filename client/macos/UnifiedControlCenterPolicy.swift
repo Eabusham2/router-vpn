@@ -11,7 +11,7 @@ enum UnifiedControlCenterPolicy {
     static let authenticatedTransportAlwaysOn = true
     static let bottomSheetOrder = ["connection", "multihop", "settings", "mode", "dns"]
     static let profileActions = ["create", "load", "update", "delete", "import-router-bundle"]
-    static let bridgeTypes = ["socks5", "http-connect", "https-connect", "shadowsocks-2022", "tor-bridge"]
+    static let bridgeTypes = ["socks5", "http-connect", "https-connect", "shadowsocks-2022", "hysteria2", "tor-bridge"]
     static let secureSuites = [
         "WireGuard Noise_IK + ChaCha20-Poly1305",
         "AmneziaWG Noise_IK + ChaCha20-Poly1305",
