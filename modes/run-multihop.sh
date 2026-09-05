@@ -21,8 +21,9 @@ cleanup(){
   trap - EXIT INT TERM HUP
   if [[ -n ${EXIT_PID:-} ]]; then sudo kill "$EXIT_PID" >/dev/null 2>&1 || true; wait "$EXIT_PID" >/dev/null 2>&1 || true; fi
   if (( ENTRY_UP )); then sudo "$QUICK_TOOL" down "$ENTRY_CONF" >/dev/null 2>&1 || true; fi
-  HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$ENTRY_ID" HOMEVPN_POLICY_PROFILE_ID="$POLICY_ID" HOMEVPN_ENDPOINT="$ENTRY_ENDPOINT" \
-    python3 "$SCRIPT_DIR/kill-switch.py" release >/dev/null 2>&1 || true
+  # Do not release strict policy from an EXIT trap. Unexpected entry/exit
+  # failure must remain fail-closed; normal controller Disconnect performs the
+  # authoritative release only after both owned hops are down.
   HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUN" >/dev/null 2>&1 || true
   exit "$status"
 }
