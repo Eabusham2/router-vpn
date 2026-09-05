@@ -98,7 +98,8 @@ jobs:
           grep -Fq 'externalRuntimePolicy(externalProfile)' cmd/client/external_profile_connect.go
           grep -Fq 'external_entry_hop' cmd/client/external_profile_connect.go
           grep -Fq 'RouterProfileSchemaVersion = 4' internal/common/types.go
-          grep -Fq 'standard-exits.json permissions are too broad; expected 0600' cmd/client/standard_exits.go
+          grep -Fq 'readPrivateRegular(path, standardExitMaxStore)' cmd/client/standard_exits.go
+          grep -Fq 'atomicWritePrivate(standardExitStorePath()' cmd/client/standard_exits.go
 
   windows-openvpn:
     runs-on: windows-latest
