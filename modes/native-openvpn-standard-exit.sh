@@ -79,13 +79,14 @@ cleanup() {
   status=$?
   trap - EXIT INT TERM HUP
   stop_owned
-  release_guard
+  # Runtime failure remains protected. Normal controller Disconnect releases
+  # after teardown; transitions/watchdog failure may intentionally hold policy.
   HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
   exit "$status"
 }
 trap cleanup EXIT INT TERM HUP
 
-if [[ "$ACTION" == "down" ]]; then cleanup; fi
+if [[ "$ACTION" == "down" ]]; then release_guard; cleanup; fi
 
 # Apply strict policy before either the Router VPN entry bridge or final
 # OpenVPN TUN can emit traffic. For a hop, ENDPOINT is the physical Router VPN
