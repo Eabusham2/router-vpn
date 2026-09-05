@@ -28,7 +28,7 @@ need(".github/workflows/production-release-compose.yml","materialize-production-
 need("deploy/package-macos-native.sh","server/scripts/source_provenance.py")
 need("deploy/package-linux-native.sh","server/scripts/source_provenance.py")
 need("server/scripts/build-download-on-demand.py",'Path(__file__).with_name("source_provenance.py")')
-need("server/scripts/download_jobs.py","JOB_TTL_SECONDS = 30 * 60","retention_deadline_epoch=time.time() + PACKAGE_RETENTION_SECONDS")
+need("server/scripts/download_jobs.py","JOB_TTL_SECONDS = 30 * 60","retention_deadline_epoch=now + PACKAGE_RETENTION_SECONDS")
 need("deploy/setup-center-download-retention-audit.py","30-minute Setup Center download contract")
 need("deploy/unified-map-shipping-audit.py","Prove the unified map control center is in each real shipping entrypoint")
 for rel in ("deploy/package-macos-native.sh","deploy/package-linux-native.sh"): forbid(rel,"$ROOT/deploy/source_provenance.py")
