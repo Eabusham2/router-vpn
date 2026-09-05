@@ -50,13 +50,15 @@ cleanup() {
   status=$?
   trap - EXIT INT TERM HUP
   stop_owned
-  release_guard
+  # Unexpected child/wrapper failure must not release on-connect/always policy.
+  # The Go controller owns normal Disconnect and releases only after teardown;
+  # AUTO/SMART/watchdog failure can therefore hold protection without a gap.
   HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
   exit "$status"
 }
 trap cleanup EXIT INT TERM HUP
 
-if [[ "$ACTION" == "down" ]]; then cleanup; fi
+if [[ "$ACTION" == "down" ]]; then release_guard; cleanup; fi
 "$SING_BOX" check -D "$RUNTIME_DIR" -c "$CONFIG" >/dev/null
 if [[ "$ACTION" == "check" ]]; then echo 'native Linux standard exit graph ready'; trap - EXIT INT TERM HUP; exit 0; fi
 
