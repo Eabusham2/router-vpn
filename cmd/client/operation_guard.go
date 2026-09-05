@@ -143,9 +143,73 @@ func (a *app) cancelConnectionOperation() {
 	}
 }
 
+func cloneStrings(values []string) []string {
+	return append([]string(nil), values...)
+}
+
+func cloneExternalNodeConfig(source *common.ExternalNodeConfig) *common.ExternalNodeConfig {
+	if source == nil {
+		return nil
+	}
+	cloned := *source
+	if source.WireGuard != nil {
+		value := *source.WireGuard
+		value.Addresses = cloneStrings(source.WireGuard.Addresses)
+		value.AllowedIPs = cloneStrings(source.WireGuard.AllowedIPs)
+		value.DNS = cloneStrings(source.WireGuard.DNS)
+		cloned.WireGuard = &value
+	}
+	if source.OpenVPN != nil {
+		value := *source.OpenVPN
+		cloned.OpenVPN = &value
+	}
+	if source.Shadowsocks != nil {
+		value := *source.Shadowsocks
+		cloned.Shadowsocks = &value
+	}
+	if source.SOCKS5 != nil {
+		value := *source.SOCKS5
+		cloned.SOCKS5 = &value
+	}
+	if source.HTTPConnect != nil {
+		value := *source.HTTPConnect
+		cloned.HTTPConnect = &value
+	}
+	if source.HTTPSConnect != nil {
+		value := *source.HTTPSConnect
+		cloned.HTTPSConnect = &value
+	}
+	if source.Hysteria2 != nil {
+		value := *source.Hysteria2
+		cloned.Hysteria2 = &value
+	}
+	if source.TorBridge != nil {
+		value := *source.TorBridge
+		value.Bridges = cloneStrings(source.TorBridge.Bridges)
+		cloned.TorBridge = &value
+	}
+	return &cloned
+}
+
+func cloneRouterProfile(source common.RouterProfile) common.RouterProfile {
+	cloned := source
+	cloned.External = cloneExternalNodeConfig(source.External)
+	cloned.CustomLayers = cloneStrings(source.CustomLayers)
+	cloned.HomeLANCIDRs = cloneStrings(source.HomeLANCIDRs)
+	cloned.DNSResults = append([]common.DNSBenchmarkResult(nil), source.DNSResults...)
+	return cloned
+}
+
 func cloneRouterProfileStore(store common.RouterProfileStore) common.RouterProfileStore {
 	cloned := store
-	cloned.Profiles = append([]common.RouterProfile(nil), store.Profiles...)
+	if store.Profiles == nil {
+		cloned.Profiles = nil
+		return cloned
+	}
+	cloned.Profiles = make([]common.RouterProfile, len(store.Profiles))
+	for i := range store.Profiles {
+		cloned.Profiles[i] = cloneRouterProfile(store.Profiles[i])
+	}
 	return cloned
 }
 
