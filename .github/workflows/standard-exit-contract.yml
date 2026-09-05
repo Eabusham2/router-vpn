@@ -17,6 +17,8 @@ on:
       - 'client/Install-RouterVPN-OpenVPN.ps1'
       - 'client/Setup-Windows-Runtime.ps1'
       - 'deploy/package-builds.sh'
+      - 'deploy/standard-exit-private-runtime-audit.py'
+      - 'deploy/typed-external-node-audit.py'
       - 'internal/common/types.go'
       - 'internal/common/profile_schema.go'
       - 'internal/common/external_profile_test.go'
@@ -44,6 +46,8 @@ on:
       - 'client/Install-RouterVPN-OpenVPN.ps1'
       - 'client/Setup-Windows-Runtime.ps1'
       - 'deploy/package-builds.sh'
+      - 'deploy/standard-exit-private-runtime-audit.py'
+      - 'deploy/typed-external-node-audit.py'
       - 'internal/common/types.go'
       - 'internal/common/profile_schema.go'
       - 'internal/common/external_profile_test.go'
@@ -76,53 +80,24 @@ jobs:
         run: |
           bash -n modes/native-standard-exit-linux.sh
           bash -n modes/native-openvpn-standard-exit.sh
-      - name: Fail-closed proof unified-node API and chain markers
+      - name: Structured standard-exit shipping audits
+        run: |
+          python3 deploy/standard-exit-private-runtime-audit.py
+          python3 deploy/typed-external-node-audit.py
+      - name: Critical fail-closed route and proof wiring
         run: |
           grep -Fq 'python3 "$KILL_SWITCH" apply' modes/native-standard-exit-linux.sh
           grep -Fq 'TUNNEL_ALIAS" == "router-vpn"' modes/native-standard-exit-linux.sh
           grep -Fq 'proveStandardExit(exit.ExpectedPublicIP)' cmd/client/standard_exit_runtime.go
-          grep -Fq '127.0.0.1", "listen_port":1099' cmd/client/standard_exit_runtime.go
-          grep -Fq 'OpenVPNConfig' cmd/client/standard_exits.go
-          grep -Fq 'sanitizeOpenVPNConfig' cmd/client/openvpn_standard_exit_profile.go
-          grep -Fq 'OpenVPN custom exit currently requires a literal remote' cmd/client/openvpn_standard_exit_profile.go
-          grep -Fq 'redirect-gateway def1' cmd/client/openvpn_standard_exit_runtime.go
-          grep -Fq 'redirect-gateway ipv6' cmd/client/openvpn_standard_exit_runtime.go
-          grep -Fq 'proveOpenVPNStandardExit(exit.ExpectedPublicIP)' cmd/client/openvpn_standard_exit_runtime.go
+          grep -Fq '127.0.0.1", "listen_port": 1099' cmd/client/standard_exit_runtime.go
           grep -Fq 'registerPlatformStandardExitRoutes(h, a)' cmd/client/multihop_native_routes.go
           grep -Fq 'registerExternalProfileRoutes(h, a)' cmd/client/multihop_native_routes.go
           ! grep -Fq 'registerStandardExitDispatchRoutes(h, a)' cmd/client/multihop_native_routes.go
           grep -Fq 'externalProfileProtocolCapabilities()' cmd/client/multihop_native_routes.go
-          grep -Fq 'registerPlatformStandardExitRoutes' cmd/client/standard_exit_platform_routes.go
-          grep -Fq 'platformStandardExitCapabilitiesHandler' cmd/client/standard_exit_platform_routes.go
-          grep -Fq 'windowsOpenVPNStandardExitCommand' cmd/client/standard_exit_platform_routes.go
-          grep -Fq 'nativeExternalEntryStandardExitCommand' cmd/client/standard_exit_platform_routes.go
-          grep -Fq 'external OpenVPN is supported as a direct/final exit but not yet as an upstream hop' cmd/client/standard_exit_platform_routes.go
           grep -Fq 'standardExitFromExternalProfile' cmd/client/external_profile_standard_exit.go
-          grep -Fq 'validateStandardExit(&exit)' cmd/client/external_profile_standard_exit.go
-          grep -Fq '/api/nodes' cmd/client/external_profile_connect.go
-          grep -Fq '/api/external-profile/connect' cmd/client/external_profile_connect.go
           grep -Fq 'externalRuntimePolicy(externalProfile)' cmd/client/external_profile_connect.go
           grep -Fq 'external_entry_hop' cmd/client/external_profile_connect.go
-          grep -Fq 'nativeExternalEntryStandardExitCommand' cmd/client/external_profile_connect.go
-          grep -Fq 'proveStandardExit(exit.ExpectedPublicIP)' cmd/client/external_profile_connect.go
-          grep -Fq 'proveOpenVPNStandardExit(exit.ExpectedPublicIP)' cmd/client/external_profile_connect.go
-          grep -Fq 'externalEntryGraph' cmd/client/external_entry_chain.go
-          grep -Fq 'buildExternalEntryStandardExitConfig' cmd/client/external_entry_chain.go
-          grep -Fq 'external OpenVPN is supported as a direct/final exit' cmd/client/external_entry_chain.go
-          grep -Fq 'TestExternalEntryChainsToEverySingBoxStandardExit' cmd/client/external_entry_chain_test.go
-          grep -Fq 'TestOpenVPNBridgeCanUseExternalStandardEntries' cmd/client/external_entry_chain_test.go
-          grep -Fq 'publicProfileStoreFor' cmd/client/profile_public_view.go
-          grep -Fq 'Editable:kind=="router-vpn"' cmd/client/profile_public_view.go
-          grep -Fq 'TestPublicExternalProfileRedactsAllProtocolCredentials' cmd/client/profile_public_view_test.go
-          grep -Fq 'TestPublicProfileStoreDoesNotLeakExternalWireGuardKeys' cmd/client/profile_public_view_test.go
           grep -Fq 'RouterProfileSchemaVersion = 4' internal/common/types.go
-          grep -Fq 'NodeKind' internal/common/types.go
-          grep -Fq 'ExpectedPublicIP' internal/common/types.go
-          grep -Fq 'expected_public_ip must be the public address expected' internal/common/profile_schema.go
-          grep -Fq 'TestExternalOpenVPNProfileAcceptedAsDataOnly' internal/common/external_profile_test.go
-          grep -Fq 'native OpenVPN adapter' cmd/client/standard_exits_test.go
-          grep -Fq 'endpoint["detour"] != "entry-wg"' cmd/client/standard_exits_test.go
-          grep -Fq 'out["detour"] != "entry-wg"' cmd/client/standard_exits_test.go
           grep -Fq 'standard-exits.json permissions are too broad; expected 0600' cmd/client/standard_exits.go
 
   windows-openvpn:
@@ -183,17 +158,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Android custom-exit source contract
         run: python3 android/test_android_standard_exit_contract.py
+      - name: Cross-platform typed external-node audit
+        run: python3 deploy/typed-external-node-audit.py
       - name: Native unified-node product contract
         run: |
-          grep -Fq 'AndroidUnifiedNodeCatalog' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
-          grep -Fq 'Router VPN and external nodes share one list' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
-          grep -Fq 'The custom-exit store currently has no real coordinate/latency' android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java
-          grep -Fq 'EXTRA_EXIT_ID' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
+          grep -Fq 'catalog=new AndroidUnifiedNodeCatalog(nodeStore,exitStore)' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
+          grep -Fq 'if(!selected.isRouterVpn())' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
+          grep -Fq 'new Intent(this,StandardExitActivity.class)' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
+          grep -Fq 'intent.putExtra(StandardExitActivity.EXTRA_EXIT_ID,selected.id)' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
           grep -Fq 'KIND_EXTERNAL' android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java
           grep -Fq 'never infer them from an IP' android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java
           grep -Fq 'Connect direct external exit' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
           grep -Fq 'Router VPN WireGuard entry → external exit' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
-          grep -Fq 'EXTRA_EXIT_ID' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
           grep -Fq 'VpnService.prepare(this)' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
           grep -Fq 'OpenVPN unavailable' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
           grep -Fq 'StandardExitActivity' android/app/src/main/AndroidManifest.xml
