@@ -65,7 +65,7 @@ jobs:
           python3 deploy/daita-safety-audit.py
           python3 modes/test_smart_auto_rollback.py
           python3 deploy/test-killswitch-transition-contract.py
-          python3 deploy/test_macos_killswitch-contract.py
+          python3 deploy/test_macos_killswitch_contract.py
           python3 modes/test_kill_switch.py
           python3 modes/test_mtu_policy.py
           python3 modes/test_multihop.py
