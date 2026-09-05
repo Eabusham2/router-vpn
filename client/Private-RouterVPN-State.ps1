@@ -258,3 +258,36 @@ function Stop-RouterVPNRecordedProcess([string]$Path) {
   try{Remove-RouterVPNProcessRecord $Path}catch{}
   return $null-ne$process
 }
+
+# Long-running Windows PowerShell dataplane owners cannot receive Go's
+# os.Interrupt signal. The controller publishes phase=stopping before waiting up
+# to three seconds and force-killing a wrapper. Poll only the loopback controller
+# and let helpers return normally when that owned stop transaction is visible, so
+# their existing finally/down paths restore firewall/DNS/routes and remove private
+# runtime state before the hard-kill fallback can fire.
+function Test-RouterVPNControllerStopping([int]$TimeoutMilliseconds=400) {
+  if($TimeoutMilliseconds-lt50-or$TimeoutMilliseconds-gt2000){$TimeoutMilliseconds=400}
+  $request=$null
+  $response=$null
+  $reader=$null
+  try {
+    $request=[Net.HttpWebRequest]::Create('http://127.0.0.1:8788/api/status')
+    $request.Proxy=$null
+    $request.Method='GET'
+    $request.Timeout=$TimeoutMilliseconds
+    $request.ReadWriteTimeout=$TimeoutMilliseconds
+    $response=$request.GetResponse()
+    if([int]$response.StatusCode-ne200){return $false}
+    $stream=$response.GetResponseStream()
+    $reader=New-Object IO.StreamReader($stream,(New-Object Text.UTF8Encoding($false)),$true,1024,$false)
+    $text=$reader.ReadToEnd()
+    if($text.Length-gt65536){return $false}
+    $status=$text|ConvertFrom-Json
+    return ([string]$status.phase-eq'stopping')
+  } catch {
+    return $false
+  } finally {
+    if($null-ne$reader){$reader.Dispose()}
+    if($null-ne$response){$response.Close()}
+  }
+}
