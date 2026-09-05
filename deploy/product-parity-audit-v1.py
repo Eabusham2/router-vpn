@@ -71,7 +71,7 @@ require(
 require(
     "cmd/client/telemetry_hops.go",
     "/api/profile/speed-test", "/api/multihop/speed-test", "measureRoutedProfileSpeed",
-    "entry_error", "exit_error", "not derived from RTT", "active routing graph",
+    "entry_error", "exit_error", "not derived from RTT", "unchanged current client routing graph",
 )
 require(
     "cmd/router-agent/benchmark.go",
@@ -98,7 +98,7 @@ require(
     'MaxWidth="760"', 'MinHeight="180"',
     "Add-RouterVPNUnifiedWindowsShell", "Add-RouterVPNTelemetryWindowsShell",
     "SMART AUTO is the default mode", "WireGuard / AmneziaWG",
-    "/api/connection/speed-test", "/api/multihop/speed-test", "Routed hop speeds",
+    "/api/connection/speed-test", "/api/multihop/speed-test",
 )
 require(
     "client/RouterVPN-Windows-UnifiedShell.ps1",
