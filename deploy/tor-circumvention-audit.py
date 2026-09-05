@@ -120,7 +120,14 @@ need(
     "LYREBIRD_COMMIT_PREFIX=0b10edbb61e0",
     'rev-parse HEAD | cut -c1-12',
     "go mod verify",
+    'LYREBIRD_TARGET="$ROOT/bin/lyrebird"',
+    'LYREBIRD_SOURCE="$ROOT/bin/lyrebird.source"',
+    "Router VPN-owned Lyrebird 0.8.1",
     "source-identity check failed",
+)
+need(
+    "client/install-macos-current.sh",
+    "/opt/router-vpn-client/bin:/usr/local/bin:/opt/homebrew/bin",
 )
 need(
     "client/install-linux.sh",
@@ -128,6 +135,10 @@ need(
     "LYREBIRD_COMMIT_PREFIX=0b10edbb61e0",
     'rev-parse HEAD | cut -c1-12',
     "go mod verify",
+    'LYREBIRD_TARGET="$ROOT/bin/lyrebird"',
+    'LYREBIRD_SOURCE="$ROOT/bin/lyrebird.source"',
+    "Router VPN-owned Lyrebird 0.8.1",
+    'Environment=PATH=$ROOT/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
     "source-identity check failed",
 )
 need(
@@ -217,12 +228,14 @@ need(
     "standardExitFromExternalProfile(profile)",
     "externalRuntimePolicy(profile)",
     "updateExistingTorBridgeProfile",
+    "preserveTorBridgeEditSettings",
     "profile id belongs to a non-Tor node; refusing replacement",
-    "PublicIP and latency/throughput observations are deliberately not copied",
+    "Public exit, durable latency/DNS benchmarks, and effective-MTU measurement",
 )
 need(
     "cmd/client/tor_bridge_import_test.go",
     "TestTorBridgeImportExistingIDUpdatesInPlace",
+    "TestTorBridgeImportUpdatePreservesUnrelatedSettingsAndClearsPathMeasurements",
     "TestTorBridgeImportExistingNonTorIDRefusesReplacement",
     "TestTorBridgeImportUpdatePersistenceFailureRollsBackExistingNode",
 )
