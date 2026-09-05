@@ -12,10 +12,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Temporary, fail-closed pre-connect multihop measurement.
  *
  * It establishes the selected Router VPN entry with the real native WireGuard
- * backend, waits for the normal selected-node private proof, measures candidate
- * public endpoints through that live full-device route, and disconnects the
- * temporary entry before returning any values to the picker. Results are never
- * written into the direct-node RTT cache.
+ * backend in managed-child mode, proves that entry without publishing a normal
+ * Home Connected session, measures candidate public endpoints through the live
+ * full-device route, and fully disconnects the temporary entry before returning
+ * any values to the picker. Results never enter the direct-node RTT cache.
  */
 final class AndroidViaEntryLatencyProbe {
     interface Callback {
@@ -25,7 +25,6 @@ final class AndroidViaEntryLatencyProbe {
 
     private final Context context;
     private final NativeWireGuardController wireGuard;
-    private final AndroidTelemetry telemetry;
     private final AndroidRuntimeRegistry runtime;
     private final AtomicBoolean busy = new AtomicBoolean(false);
 
@@ -33,7 +32,10 @@ final class AndroidViaEntryLatencyProbe {
         this.context = context.getApplicationContext();
         this.runtime = runtime;
         this.wireGuard = runtime.wireGuard;
-        this.telemetry = telemetry;
+        // Keep the constructor shape stable for the shipping ProductActivity.
+        // Via-entry measurements deliberately bypass AndroidTelemetry's direct
+        // RTT cache and use AndroidViaEntryPathMeter instead.
+        if (telemetry == null) throw new IllegalArgumentException("Android telemetry owner is required.");
     }
 
     boolean isBusy() { return busy.get(); }
@@ -59,27 +61,36 @@ final class AndroidViaEntryLatencyProbe {
             return;
         }
         callback.progress("Connecting temporary proven WireGuard entry " + entry.name + " for live via-entry RTT…");
-        wireGuard.connect(entry.file, (state, message, error) -> {
+        wireGuard.connectManaged(entry.file, (state, message, error) -> {
             if (error != null || state != Tunnel.State.UP) {
                 busy.set(false);
                 callback.finished(entry, null, error != null ? error : new IllegalStateException(message));
                 return;
             }
-            callback.progress("Entry proof passed; measuring " + safeCandidates.size() + " candidate exit(s) through " + entry.name + "…");
-            telemetry.measureNodesViaCurrentPath(entry.id, safeCandidates, samples, (values, measureError) -> {
-                callback.progress("Candidate RTT measurement complete; disconnecting temporary entry before showing results…");
-                wireGuard.disconnect((downState, downMessage, downError) -> {
-                    busy.set(false);
-                    if (downError != null || downState != Tunnel.State.DOWN) {
-                        callback.finished(entry, null, downError != null ? downError : new IllegalStateException("Temporary entry did not fully disconnect; candidate results discarded."));
-                        return;
-                    }
-                    if (measureError != null) {
-                        callback.finished(entry, null, measureError);
-                        return;
-                    }
-                    callback.finished(entry, values, null);
-                });
+
+            List<AndroidTelemetry.Result> values = null;
+            Throwable measureError = null;
+            try {
+                callback.progress("Entry proof passed; measuring " + safeCandidates.size() + " candidate exit(s) through " + entry.name + "…");
+                values = AndroidViaEntryPathMeter.measure(entry, wireGuard, safeCandidates, samples);
+            } catch (Throwable failure) {
+                measureError = failure;
+            }
+
+            final List<AndroidTelemetry.Result> measured = values;
+            final Throwable measurementFailure = measureError;
+            callback.progress("Candidate RTT measurement complete; disconnecting temporary entry before showing results…");
+            wireGuard.disconnectManaged((downState, downMessage, downError) -> {
+                busy.set(false);
+                if (downError != null || downState != Tunnel.State.DOWN) {
+                    callback.finished(entry, null, downError != null ? downError : new IllegalStateException("Temporary entry did not fully disconnect; candidate results discarded."));
+                    return;
+                }
+                if (measurementFailure != null) {
+                    callback.finished(entry, null, measurementFailure);
+                    return;
+                }
+                callback.finished(entry, measured, null);
             });
         });
     }
