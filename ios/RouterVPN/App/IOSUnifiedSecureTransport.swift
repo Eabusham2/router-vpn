@@ -41,7 +41,11 @@ enum IOSUnifiedSecureTransport {
         "Hysteria2 QUIC + TLS 1.3",
     ]
 
+    // `connected` means PacketTunnel startup returned only after exact private
+    // node proof or exact external public-exit proof. Do not call that generic
+    // proof an "authenticated handshake": plain SOCKS5/HTTP CONNECT can be real
+    // full-device external paths while providing no transport encryption.
     static func handshakeLabel(connected: Bool) -> String {
-        connected ? "Authenticated handshake ✓" : "Authenticated handshake required"
+        connected ? "Selected-path proof ✓" : "Selected-path proof required"
     }
 }
