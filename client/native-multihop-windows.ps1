@@ -31,14 +31,20 @@ Kill 'check'
 if($Action-eq'check'){Write-Output 'native Windows multihop graph ready';exit 0}
 Stop-Owned
 Kill 'prepare'
+$controllerStopping=$false
 try{
   $quoted='"'+$Config+'"'
   $p=Start-Process -FilePath $SingBox -ArgumentList @('run','-D',$RuntimeDir,'-c',$quoted)-WorkingDirectory $RuntimeDir -PassThru -WindowStyle Hidden
   Write-RouterVPNProcessRecord $PidFile $p
   Start-Sleep -Milliseconds 500
   if($p.HasExited){throw 'sing-box exited during native Windows multihop startup.'}
-  $p.WaitForExit()
-  if($p.ExitCode-ne 0){throw "sing-box multihop exited with code $($p.ExitCode)"}
+  while(-not$p.HasExited){
+    if(Test-RouterVPNControllerStopping){$controllerStopping=$true;break}
+    Start-Sleep -Milliseconds 200
+    try{$p.Refresh()}catch{}
+  }
+  if(-not$controllerStopping-and$p.HasExited-and$p.ExitCode-ne0){throw "sing-box multihop exited with code $($p.ExitCode)"}
+  if($controllerStopping){Write-Output 'Router VPN controller requested graceful Windows multihop shutdown.'}
 }finally{
   Stop-Owned
   try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
