@@ -75,6 +75,9 @@ type publicProfile struct {
 	FastestDNSName string `json:"fastest_dns_name,omitempty"`
 	FastestDNSLatencyMs float64 `json:"fastest_dns_latency_ms,omitempty"`
 	DNSResults []common.DNSBenchmarkResult `json:"dns_results,omitempty"`
+	RuntimeImplemented bool `json:"runtime_implemented"`
+	RuntimeSupported bool `json:"runtime_supported"`
+	RuntimeReason string `json:"runtime_reason,omitempty"`
 	Editable bool `json:"editable"`
 }
 
@@ -84,7 +87,17 @@ type publicProfileStore struct {
 	Profiles      []publicProfile `json:"profiles"`
 }
 
-func publicProfileFor(p common.RouterProfile) publicProfile {
+func publicCapabilityForProtocol(caps []standardExitCapability, protocol string) (standardExitCapability, bool) {
+	protocol = normalizeStandardExitProtocol(protocol)
+	for _, cap := range caps {
+		if normalizeStandardExitProtocol(cap.Protocol) == protocol {
+			return cap, true
+		}
+	}
+	return standardExitCapability{}, false
+}
+
+func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile {
 	kind := strings.ToLower(strings.TrimSpace(p.NodeKind))
 	if kind == "" { kind = "router-vpn" }
 	out := publicProfile{
@@ -103,11 +116,24 @@ func publicProfileFor(p common.RouterProfile) publicProfile {
 		LatencyTrimmedMeanMs:p.LatencyTrimmedMeanMs, LatencyAverageMs:p.LatencyAverageMs, LatencyP90Ms:p.LatencyP90Ms, LatencyMaxMs:p.LatencyMaxMs, LatencyLastTest:p.LatencyLastTest,
 		PublicIP:p.PublicIP, DNSMode:p.DNSMode, DNSProtocol:p.DNSProtocol, DNSHost:p.DNSHost, DNSPort:p.DNSPort, DNSServerName:p.DNSServerName, DNSPath:p.DNSPath,
 		FastestDNSHost:p.FastestDNSHost, FastestDNSName:p.FastestDNSName, FastestDNSLatencyMs:p.FastestDNSLatencyMs, DNSResults:append([]common.DNSBenchmarkResult(nil),p.DNSResults...),
-		Editable:kind=="router-vpn",
+		RuntimeImplemented:true, RuntimeSupported:true, Editable:kind=="router-vpn",
 	}
 	if kind == "external" && p.External != nil {
 		out.External=&publicExternalNode{Protocol:p.External.Protocol,ExpectedPublicIP:p.External.ExpectedPublicIP}
 		out.RouterAPI="";out.AdGuardIPv4="";out.AdGuardIPv6="";out.SocksHost="";out.SocksPort=0;out.BaseTunnel="";out.BaseFallback=false;out.CustomLayers=nil
+		cap, ok := publicCapabilityForProtocol(caps, p.External.Protocol)
+		if !ok {
+			out.RuntimeImplemented=false
+			out.RuntimeSupported=false
+			out.RuntimeReason="this external protocol has no registered native runtime capability"
+		} else {
+			out.RuntimeImplemented=cap.Implemented
+			out.RuntimeSupported=cap.Supported
+			out.RuntimeReason=strings.TrimSpace(cap.Reason)
+			if !out.RuntimeSupported && out.RuntimeReason == "" {
+				out.RuntimeReason="this external protocol is unavailable on the current platform/runtime"
+			}
+		}
 		if strings.EqualFold(strings.TrimSpace(p.External.Protocol), "tor-bridge") {
 			out.Endpoint = ""
 		}
@@ -115,10 +141,15 @@ func publicProfileFor(p common.RouterProfile) publicProfile {
 	return out
 }
 
+func publicProfileFor(p common.RouterProfile) publicProfile {
+	return publicProfileForCapabilities(p, externalProfileProtocolCapabilities())
+}
+
 func publicProfileStoreForOrder(store common.RouterProfileStore, order string) publicProfileStore {
 	store=sortPublicProfileStore(store,order)
+	caps:=externalProfileProtocolCapabilities()
 	out:=publicProfileStore{SchemaVersion:store.SchemaVersion,SelectedID:store.SelectedID,Profiles:make([]publicProfile,0,len(store.Profiles))}
-	for _,p:=range store.Profiles{out.Profiles=append(out.Profiles,publicProfileFor(p))}
+	for _,p:=range store.Profiles{out.Profiles=append(out.Profiles,publicProfileForCapabilities(p,caps))}
 	return out
 }
 
