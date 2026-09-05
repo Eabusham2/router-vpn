@@ -21,6 +21,11 @@ var connectionProfilePersistedModeIDs = map[string]struct{}{
 	"smart-auto": {}, "custom": {},
 }
 
+var connectionProfileRecordKeys = map[string]struct{}{
+	"id": {}, "name": {}, "node_id": {}, "mode": {}, "preferences": {},
+	"created_at": {}, "updated_at": {},
+}
+
 func normalizePersistedConnectionProfileMode(mode string, prefs *connectionProfilePreferences) (string, error) {
 	mode, err := normalizeConnectionProfileMode(mode)
 	if err != nil {
@@ -90,6 +95,15 @@ type connectionProfileRecordWire connectionProfileRecord
 func (p *connectionProfileRecord) UnmarshalJSON(data []byte) error {
 	if p == nil {
 		return errors.New("connection profile record target is nil")
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for key := range raw {
+		if _, ok := connectionProfileRecordKeys[key]; !ok {
+			return fmt.Errorf("connection profile record contains unsupported field %q", key)
+		}
 	}
 	var decoded connectionProfileRecordWire
 	if err := json.Unmarshal(data, &decoded); err != nil {
