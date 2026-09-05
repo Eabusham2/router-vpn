@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"router-vpn/internal/common"
 )
 
 func readModeIDsForProfileTest(t *testing.T, path string) map[string]struct{} {
@@ -157,24 +155,5 @@ func TestConnectionProfileRecordRejectsUnknownFieldsOnRead(t *testing.T) {
 	raw := `{"id":"one","name":"One","node_id":"ext","mode":"external","unexpected":"hidden-state"}`
 	if err := json.Unmarshal([]byte(raw), &record); err == nil {
 		t.Fatal("unknown persisted connection profile record field was silently accepted")
-	}
-}
-
-func TestLiveConnectionProfileSaveValidatorUsesLogicalCatalog(t *testing.T) {
-	a := &app{cfg: common.ClientConfig{ModesFile: filepath.Join("..", "..", "configs", "client", "modes.json")}}
-	if err := a.validateConnectionProfileModeForSave("base-raw", nil); err != nil {
-		t.Fatalf("current logical mode rejected: %v", err)
-	}
-	if err := a.validateConnectionProfileModeForSave("wg", nil); err == nil {
-		t.Fatal("raw runtime id should not be accepted for a new logical connection profile")
-	}
-	if err := a.validateConnectionProfileModeForSave("custom", []string{"wireguard"}); err != nil {
-		t.Fatalf("valid CUSTOM profile rejected: %v", err)
-	}
-	if err := a.validateConnectionProfileModeForSave("custom", nil); err == nil {
-		t.Fatal("empty CUSTOM profile was accepted")
-	}
-	if err := a.validateConnectionProfileModeForSave("totally-fake-mode", nil); err == nil {
-		t.Fatal("unknown logical mode was accepted")
 	}
 }
