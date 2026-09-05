@@ -13,25 +13,35 @@ function Fail([string]$Message) {
 }
 
 function Find-WireGuard {
-  $candidates = @(
-    (Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'),
-    (Join-Path ${env:ProgramFiles(x86)} 'WireGuard\wireguard.exe')
-  )
-  foreach ($candidate in $candidates) {
-    if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $candidate }
+  $candidates = @()
+  if (-not [string]::IsNullOrWhiteSpace([string]$env:ProgramFiles)) {
+    $candidates += Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'
   }
-  $cmd = Get-Command wireguard.exe -ErrorAction SilentlyContinue
-  if ($cmd) { return $cmd.Source }
+  if (-not [string]::IsNullOrWhiteSpace([string]${env:ProgramFiles(x86)})) {
+    $candidates += Join-Path ${env:ProgramFiles(x86)} 'WireGuard\wireguard.exe'
+  }
+  foreach ($candidate in $candidates) {
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+    $item = Get-Item -LiteralPath $candidate -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+    return [IO.Path]::GetFullPath($candidate)
+  }
+  # This helper manages a privileged tunnel service. Never resolve a same-name
+  # executable from PATH; a user-writable shim must not become the VPN runtime.
   return $null
 }
 
 function Find-DnsProxy {
   $candidate = Join-Path $root 'router-vpn-dns.exe'
   Assert-RouterVPNNoReparseAncestors $candidate
-  if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
-  $cmd = Get-Command router-vpn-dns.exe -ErrorAction SilentlyContinue
-  if ($cmd) { return $cmd.Source }
-  return $null
+  if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $null }
+  $item = Get-Item -LiteralPath $candidate -Force
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'Refusing reparse-point Router VPN DNS enforcement binary.'
+  }
+  # The installer makes this package-owned binary mandatory. Do not fall back to
+  # PATH because DNS enforcement is part of the exact raw-WireGuard dataplane.
+  return [IO.Path]::GetFullPath($candidate)
 }
 
 function Is-Administrator {
@@ -214,7 +224,7 @@ function Start-DnsProxy($Dns) {
 
 $wireguard = Find-WireGuard
 if (-not $wireguard) {
-  Fail 'Native Windows WireGuard is unavailable. Install the official WireGuard for Windows package; Router VPN will not fake native readiness through WSL.'
+  Fail 'Native Windows WireGuard is unavailable. Install the official WireGuard for Windows package; Router VPN will not fake native readiness through WSL or a PATH executable.'
 }
 
 $rootText = [string]$env:HOMEVPN_ROOT
