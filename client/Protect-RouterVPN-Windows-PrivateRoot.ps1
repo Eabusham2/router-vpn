@@ -7,21 +7,23 @@ function New-RouterVPNPrivateAcl([bool]$Directory) {
   $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
   if($null-eq$identity.User){throw 'Current Windows user SID is unavailable.'}
   $user=$identity.User
-  $system=New-Object Security.Principal.SecurityIdentifier('S-1-5-18')
-  $administrators=New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+  $system=New-Object -TypeName Security.Principal.SecurityIdentifier -ArgumentList @('S-1-5-18')
+  $administrators=New-Object -TypeName Security.Principal.SecurityIdentifier -ArgumentList @('S-1-5-32-544')
   $rights=[Security.AccessControl.FileSystemRights]::FullControl
   $allow=[Security.AccessControl.AccessControlType]::Allow
   if($Directory){
-    $acl=New-Object Security.AccessControl.DirectorySecurity
+    $acl=New-Object -TypeName Security.AccessControl.DirectorySecurity
     $inherit=[Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
     $prop=[Security.AccessControl.PropagationFlags]::None
     foreach($sid in @($user,$system,$administrators)){
-      $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,$rights,$inherit,$prop,$allow)))
+      $rule=New-Object -TypeName Security.AccessControl.FileSystemAccessRule -ArgumentList @($sid,$rights,$inherit,$prop,$allow)
+      [void]$acl.AddAccessRule($rule)
     }
   } else {
-    $acl=New-Object Security.AccessControl.FileSecurity
+    $acl=New-Object -TypeName Security.AccessControl.FileSecurity
     foreach($sid in @($user,$system,$administrators)){
-      $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,$rights,$allow)))
+      $rule=New-Object -TypeName Security.AccessControl.FileSystemAccessRule -ArgumentList @($sid,$rights,$allow)
+      [void]$acl.AddAccessRule($rule)
     }
   }
   # Remove inherited grants instead of copying them. Router VPN private state is
@@ -50,7 +52,7 @@ Protect-RouterVPNPrivateItem $Root
 # Do not use Get-ChildItem -Recurse: explicitly refuse junctions/reparse points
 # before descending so an installed-tree mutation cannot redirect ACL changes to
 # unrelated files. Bound the walk to avoid attacker-controlled resource abuse.
-$stack=New-Object 'System.Collections.Generic.Stack[string]'
+$stack=New-Object -TypeName 'System.Collections.Generic.Stack[string]'
 $stack.Push($Root)
 $visited=0
 while($stack.Count-gt0){
