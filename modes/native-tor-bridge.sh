@@ -70,13 +70,14 @@ cleanup() {
   status=$?
   trap - EXIT INT TERM HUP
   stop_owned
-  release_guard
+  # Unexpected Tor/PT/TUN failure must not release on-connect/always policy.
+  # Normal controller Disconnect releases after teardown; failure stays closed.
   HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
   exit "$status"
 }
 trap cleanup EXIT INT TERM HUP
 
-if [[ "$ACTION" == "down" ]]; then cleanup; fi
+if [[ "$ACTION" == "down" ]]; then release_guard; cleanup; fi
 "$TOR_BIN" --version >/dev/null
 "$SING_BOX_BIN" check -D "$RUNTIME_DIR" -c "$CONFIG" >/dev/null
 if [[ "$ACTION" == "check" ]]; then
@@ -136,8 +137,8 @@ sleep 0.5
 kill -0 "$sing_pid" 2>/dev/null || { wait "$sing_pid" || true; echo 'Tor full-device sing-box exited during startup' >&2; exit 1; }
 
 # Keep the wrapper alive only while both owned children remain alive. Losing Tor
-# or the TUN is a hard runtime failure; cleanup tears down the other child and
-# releases/reasserts kill-switch policy through the normal ownership path.
+# or the TUN is a hard runtime failure; cleanup tears down the other child while
+# leaving strict failure protection owned by the controller/kill-switch state.
 while :; do
   if ! kill -0 "$tor_pid" 2>/dev/null; then
     wait "$tor_pid" || true
