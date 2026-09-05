@@ -51,7 +51,7 @@ need('cmd/client/telemetry.go','/api/connection/speed-test','/api/multihop/live-
 need('cmd/client/telemetry_hops.go','/api/profile/speed-test','/api/multihop/speed-test','not derived from RTT or another hop','active multihop graph identity is unavailable')
 
 # A20-8: Android via-entry candidate measurement owns a temporary proven path and tears it down.
-need('android/test_android_via_entry_latency_contract.py','session','generation','unavailable')
+need('android/test_android_via_entry_latency_contract.py','AndroidVpnMutationGuard.isBusy(context)','Temporary entry did not fully disconnect; candidate results discarded.','before candidate RTT measurement','after candidate RTT measurement','unavailable')
 
 # A20-9: forwarding master is narrow/private and does not export Setup Center admin credentials.
 need('cmd/router-agent/client_forwarding_master.go','/api/forwarding/master','Setup Center admin token never','authenticated tunnel peers','loopback-only')
