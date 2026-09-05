@@ -64,32 +64,6 @@ func normalizePersistedConnectionProfileMode(mode string, prefs *connectionProfi
 	return "", fmt.Errorf("connection profile mode %q is not a current logical or compatible runtime mode", mode)
 }
 
-// validateConnectionProfileModeForSave keeps a Router VPN profile on the live
-// logical-mode surface before persistence. Raw runtime IDs are accepted only by
-// the persisted compatibility validator above for migration of older stores.
-func (a *app) validateConnectionProfileModeForSave(mode string, customLayers []string) error {
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	switch mode {
-	case "smart-auto", "auto":
-		return nil
-	case "custom":
-		if len(customLayers) == 0 {
-			return errors.New("CUSTOM connection profile requires at least one validated layer")
-		}
-		return nil
-	}
-	if strings.HasPrefix(mode, "custom:") {
-		if len(customLayers) == 0 {
-			return errors.New("saved CUSTOM preset requires its validated layer set")
-		}
-		return nil
-	}
-	if _, ok := a.logicalModeByID(mode); ok {
-		return nil
-	}
-	return fmt.Errorf("connection profile mode %q is not a current logical mode", mode)
-}
-
 type connectionProfileRecordWire connectionProfileRecord
 
 func (p *connectionProfileRecord) UnmarshalJSON(data []byte) error {
