@@ -60,10 +60,12 @@ struct RouterVPNNodeMapSheet: View {
 func routerVPNMapPoints(model: RouterVPNModel) -> [RouterVPNMapPoint] {
     let profiles = model.bundle?.routerProfiles ?? []
     let selectedID = model.bundle?.selectedRouterID ?? ""
-    let control = profiles.first(where: { $0.id == selectedID }) ?? profiles.first
-    let entryID = control?.multihopEnabled == true ? (control?.multihopEntryID ?? "") : ""
-    let exitID = control?.multihopEnabled == true ? (control?.multihopExitID ?? "") : ""
 
+    // iOS/iPadOS currently has no native multihop dataplane. Saved multihop
+    // preferences can arrive in a cross-platform profile, but they are not a
+    // running graph and must never be painted as live Entry/Exit roles here.
+    // A future Apple multihop implementation must source these roles from its
+    // actual launched PacketTunnel graph identity, not from saved preferences.
     return profiles.compactMap { profile in
         guard let latitude = profile.latitude,
               let longitude = profile.longitude,
@@ -72,8 +74,6 @@ func routerVPNMapPoints(model: RouterVPNModel) -> [RouterVPNMapPoint] {
               !(latitude == 0 && longitude == 0) else { return nil }
         let role: RouterVPNMapRole
         if profile.id == selectedID { role = .selected }
-        else if profile.id == entryID { role = .entry }
-        else if profile.id == exitID { role = .exit }
         else if profile.normalizedNodeKind == "external" { role = .external }
         else { role = .normal }
         return RouterVPNMapPoint(
