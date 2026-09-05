@@ -109,7 +109,7 @@ function ShowUnifiedTorBridgeBuilder{
     </Grid>
     <TextBlock Text="Tor bridge lines — one per line" FontWeight="SemiBold"/>
     <TextBox Name="TorLines" Height="230" Margin="0,4,0,8" Padding="8" AcceptsReturn="True" AcceptsTab="False" VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap" FontFamily="Consolas"/>
-    <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Text="Paste current lines from Tor or a trusted bridge source. Router VPN accepts only obfs4, meek_lite, Snowflake, and WebTunnel syntax. Profile data cannot inject ClientTransportPlugin commands, executable paths, or arbitrary torrc directives."/>
+    <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Text="Paste current lines from Tor or a trusted bridge source. Router VPN accepts only obfs4, meek_lite, Snowflake, and WebTunnel syntax. Bridge profile data cannot inject ClientTransportPlugin commands, executable paths, or arbitrary torrc directives."/>
     <TextBlock Name="TorCapability" Margin="0,10,0,4" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Checking Tor transport support…"/>
     <TextBlock Name="TorStatus" Foreground="#FFCC8A" TextWrapping="Wrap" Margin="0,0,0,10"/>
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="TorRefresh" Content="Refresh support" Padding="12,7"/><Button Name="TorSave" Content="Save Tor node" Margin="8,0,0,0" Padding="12,7"/><Button Name="TorClose" Content="Close" Margin="8,0,0,0" Padding="12,7"/></StackPanel>
