@@ -135,7 +135,10 @@ jobs:
         with:
           name: RouterVPN-generic-release-candidate
           path: |
-            dist/packages/*
+            dist/packages/RouterVPN-Windows-amd64.zip
+            dist/packages/RouterVPN-Windows-arm64.zip
+            dist/packages/RouterVPN-Portable-Windows-amd64.zip
+            dist/packages/RouterVPN-Portable-Windows-arm64.zip
           if-no-files-found: error
           retention-days: 1
 
