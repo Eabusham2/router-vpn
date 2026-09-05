@@ -89,6 +89,48 @@ final class AndroidHomeStateStore {
         p.edit().putLong("path_generation", next).remove("actual_exit_ip").remove("actual_exit_session").apply();
         return next;
     }
+
+    /**
+     * Atomically invalidates Connected proof for a live session while preserving
+     * its frozen logical/runtime/node identity. The returned snapshot is the
+     * transaction token used by completePathRevalidation.
+     */
+    static Snapshot beginPathRevalidation(Context context, String reason) {
+        SharedPreferences p = prefs(context);
+        Snapshot before = new Snapshot(p);
+        if (!before.connected || before.sessionId == null || before.sessionId.isEmpty()) return null;
+        long next = before.pathGeneration + 1L;
+        p.edit()
+                .putString("phase", "connecting")
+                .putString("warning", clean(reason))
+                .putString("path_proof", "pending")
+                .putBoolean("connected", false)
+                .putLong("path_generation", next)
+                .remove("actual_exit_ip")
+                .remove("actual_exit_session")
+                .apply();
+        return before;
+    }
+
+    /** Re-adopts proof only if the same session and exact next path generation still own the state. */
+    static boolean completePathRevalidation(Context context, Snapshot before) {
+        if (before == null || before.sessionId == null || before.sessionId.isEmpty()) return false;
+        SharedPreferences p = prefs(context);
+        String currentSession = p.getString("session_id", "");
+        long currentGeneration = p.getLong("path_generation", -1L);
+        String currentPhase = p.getString("phase", "");
+        if (!before.sessionId.equals(currentSession)
+                || currentGeneration != before.pathGeneration + 1L
+                || !"connecting".equals(currentPhase)) return false;
+        p.edit()
+                .putString("phase", "connected")
+                .putString("warning", "")
+                .putString("path_proof", "passed")
+                .putBoolean("connected", true)
+                .apply();
+        return true;
+    }
+
     static void failed(Context context, String warning) { SharedPreferences.Editor e=prefs(context).edit().putString("phase","failed").putString("warning",clean(warning)).putString("path_proof","failed").putBoolean("connected",false);clearAllIdentity(e).apply(); }
     static void disconnected(Context context) { SharedPreferences.Editor e=prefs(context).edit().putString("session_id","").putString("phase","off").putString("logical_mode","").putString("runtime_mode","").putString("actual_base","").putString("fallback","").putString("warning","").putString("path_proof","not-run").putBoolean("connected",false);clearAllIdentity(e).apply(); }
 
