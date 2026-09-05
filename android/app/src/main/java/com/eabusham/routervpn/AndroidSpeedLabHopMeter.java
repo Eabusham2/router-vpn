@@ -23,6 +23,7 @@ import java.util.Locale;
 /** Independent per-hop RTT/Mbps for Speed Lab on one unchanged proven Android multihop graph. */
 final class AndroidSpeedLabHopMeter {
     interface Callback { void finished(List<Hop> value, Throwable error); }
+    interface SingleCallback { void finished(Hop value, Throwable error); }
 
     static final class Hop {
         final String role,id,name;
@@ -46,7 +47,7 @@ final class AndroidSpeedLabHopMeter {
     void measure(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,Callback callback){measure(entry,exit,DEFAULT_BYTES,callback);}
 
     void measure(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,int requestedBytes,Callback callback){
-        final int bytes=Math.max(MIN_BYTES,Math.min(MAX_BYTES,requestedBytes<=0?DEFAULT_BYTES:requestedBytes));
+        final int bytes=boundedBytes(requestedBytes);
         new Thread(()->{
             try{
                 if(entry==null||exit==null||entry.id.equals(exit.id))throw new IllegalArgumentException("Choose different Router VPN entry and exit nodes for per-hop Speed Lab metrics.");
@@ -60,6 +61,26 @@ final class AndroidSpeedLabHopMeter {
             }catch(Throwable error){callback.finished(null,error);}
         },"routervpn-speedlab-hops").start();
     }
+
+    void measureOne(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,AndroidNodeStore.Node requested,int requestedBytes,SingleCallback callback){
+        final int bytes=boundedBytes(requestedBytes);
+        new Thread(()->{
+            try{
+                if(entry==null||exit==null||requested==null||entry.id.equals(exit.id))throw new IllegalArgumentException("Active Router VPN entry/exit nodes are required for routed hop metrics.");
+                final String role;
+                final int proofPort;
+                if(requested.id.equals(entry.id)){role="entry";proofPort=ENTRY_PROOF_PORT;}
+                else if(requested.id.equals(exit.id)){role="exit";proofPort=EXIT_PROOF_PORT;}
+                else throw new IllegalArgumentException("Requested hop is not part of the active Android multihop graph.");
+                AndroidHomeStateStore.Snapshot identity=requireGraph(entry.id,exit.id,null);
+                Hop value=measureHop(role,requested,identity,proofPort,bytes);
+                requireGraph(entry.id,exit.id,identity);
+                callback.finished(value,null);
+            }catch(Throwable error){callback.finished(null,error);}
+        },"routervpn-one-hop-speed").start();
+    }
+
+    private static int boundedBytes(int requestedBytes){return Math.max(MIN_BYTES,Math.min(MAX_BYTES,requestedBytes<=0?DEFAULT_BYTES:requestedBytes));}
 
     private Hop measureHop(String role,AndroidNodeStore.Node node,AndroidHomeStateStore.Snapshot identity,int proofPort,int bytes)throws Exception{
         PrivateNode privateNode=privateNode(node);
