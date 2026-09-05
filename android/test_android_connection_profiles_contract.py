@@ -15,7 +15,11 @@ settings = read("AndroidProfileSettingsDialog.java")
 node_store = read("AndroidNodeStore.java")
 
 for marker in (
-    'FILE_NAME="connection-profiles-v1.json"',
+    'SCHEMA_VERSION=4',
+    'FILE_NAME="connection-profiles-v4.json"',
+    'LEGACY_FILE_NAME="connection-profiles-v1.json"',
+    'schema < 1 || schema > SCHEMA_VERSION',
+    'legacyPath || schema < SCHEMA_VERSION',
     'MAX_PROFILES=64', 'MAX_STORE=512*1024',
     '"multihop_enabled"', '"multihop_entry_id"', '"multihop_exit_id"', '"multihop_exit_mode"',
     'normalizeMultiMode', '"shadowsocks"', '"hysteria2"',
