@@ -163,6 +163,79 @@ func TestTorBridgeImportExistingIDUpdatesInPlace(t *testing.T) {
 	}
 }
 
+func TestTorBridgeImportUpdatePreservesUnrelatedSettingsAndClearsPathMeasurements(t *testing.T) {
+	a := torImportTestApp(t, filepath.Join(t.TempDir(), "routers.json"))
+	old := existingTorImportProfile("tor-policy")
+	old.HomeLANAccess = true
+	old.HomeLANCIDRs = []string{"192.168.50.0/24"}
+	old.IPv6Mode = "off"
+	old.StartupMode = "smart-auto"
+	old.AutoConnect = true
+	old.AutoRequireEncrypted = true
+	old.AutoRequireObfuscation = true
+	old.MTUPolicy = "manual"
+	old.ManualMTU = 1280
+	old.DiagnosticsEnabled = true
+	old.DiagnosticsRetentionDays = 21
+	old.ShareDiagnostics = true
+	old.TelemetryEnabled = true
+	old.Location = "Austin"
+	old.Latitude = 30.2672
+	old.Longitude = -97.7431
+	old.DNSMode = "custom"
+	old.DNSProtocol = "https"
+	old.DNSHost = "9.9.9.9"
+	old.DNSPort = 443
+	old.DNSServerName = "dns.quad9.net"
+	old.DNSPath = "/dns-query"
+	old.PublicIP = "198.51.100.70"
+	old.LatencySamples = 50
+	old.LatencyMedianMs = 13.25
+	old.EffectiveMTU = 1280
+	old.EffectiveMTUSource = "retest"
+	old.EffectiveMTUPathKey = "stale-path"
+	old.EffectiveMTUNetworkFingerprint = "stale-network"
+	old.EffectiveMTUProfileFingerprint = "stale-profile"
+	old.EffectiveMTUMbps = 777
+	old.FastestDNSHost = "9.9.9.9"
+	old.FastestDNSName = "Quad9"
+	old.FastestDNSLatencyMs = 9.5
+	old.DNSResults = []common.DNSBenchmarkResult{{Name: "Quad9", Address: "9.9.9.9", LatencyMs: 9.5, Working: true}}
+	a.profiles.Profiles = []common.RouterProfile{old}
+	a.profiles.SelectedID = old.ID
+	a.state.RouterID = old.ID
+	if err := a.persistProfilesLocked(); err != nil {
+		t.Fatal(err)
+	}
+	// Name/DNS/location are deliberately omitted. They are not part of the
+	// bridge-line replacement, so updating the PT must preserve them.
+	body := `{"id":"tor-policy","transport":"snowflake","bridges":["` + torImportSnowflakeBridge + `"]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/tor-bridge/import", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	a.torBridgeImport(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Tor policy-preserving update status=%d body=%q", rr.Code, rr.Body.String())
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p := a.profiles.Profiles[0]
+	if p.Name != old.Name || !p.HomeLANAccess || len(p.HomeLANCIDRs) != 1 || p.HomeLANCIDRs[0] != old.HomeLANCIDRs[0] || p.IPv6Mode != "off" || p.StartupMode != "smart-auto" || !p.AutoConnect || !p.AutoRequireEncrypted || !p.AutoRequireObfuscation {
+		t.Fatalf("Tor update reset ordinary connection preferences: %+v", p)
+	}
+	if p.MTUPolicy != "manual" || p.ManualMTU != 1280 || !p.DiagnosticsEnabled || p.DiagnosticsRetentionDays != 21 || !p.ShareDiagnostics || !p.TelemetryEnabled {
+		t.Fatalf("Tor update reset MTU/diagnostic preferences: %+v", p)
+	}
+	if p.Location != old.Location || p.Latitude != old.Latitude || p.Longitude != old.Longitude || p.DNSMode != old.DNSMode || p.DNSProtocol != old.DNSProtocol || p.DNSHost != old.DNSHost || p.DNSPort != old.DNSPort || p.DNSServerName != old.DNSServerName || p.DNSPath != old.DNSPath {
+		t.Fatalf("Tor update reset location/DNS policy: %+v", p)
+	}
+	if p.External == nil || p.External.TorBridge == nil || p.External.TorBridge.Transport != "snowflake" || p.KillSwitchPolicy != "off" {
+		t.Fatalf("Tor bridge/PT change was not adopted safely: %+v", p)
+	}
+	if p.PublicIP != "" || p.LatencySamples != 0 || p.LatencyMedianMs != 0 || p.EffectiveMTU != 0 || p.EffectiveMTUSource != "" || p.EffectiveMTUPathKey != "" || p.EffectiveMTUNetworkFingerprint != "" || p.EffectiveMTUProfileFingerprint != "" || p.EffectiveMTUMbps != 0 || p.FastestDNSHost != "" || p.FastestDNSName != "" || p.FastestDNSLatencyMs != 0 || len(p.DNSResults) != 0 {
+		t.Fatalf("Tor update retained stale path-dependent measurements: %+v", p)
+	}
+}
+
 func TestTorBridgeImportExistingNonTorIDRefusesReplacement(t *testing.T) {
 	a := torImportTestApp(t, filepath.Join(t.TempDir(), "routers.json"))
 	existing := common.RouterProfile{
