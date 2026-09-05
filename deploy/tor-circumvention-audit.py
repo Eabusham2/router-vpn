@@ -115,6 +115,22 @@ need(
     "Tor unavailable on Windows ARM64",
 )
 need(
+    "client/install-macos.sh",
+    "refs/tags/lyrebird-0.8.1",
+    "LYREBIRD_COMMIT_PREFIX=0b10edbb61e0",
+    'rev-parse HEAD | cut -c1-12',
+    "go mod verify",
+    "source-identity check failed",
+)
+need(
+    "client/install-linux.sh",
+    "refs/tags/lyrebird-0.8.1",
+    "LYREBIRD_COMMIT_PREFIX=0b10edbb61e0",
+    'rev-parse HEAD | cut -c1-12',
+    "go mod verify",
+    "source-identity check failed",
+)
+need(
     "client/native-tor-bridge-windows.ps1",
     "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
     "AssignProcessToJobObject",
@@ -200,6 +216,15 @@ need(
     "dynamic bootstrap egress can be scoped safely",
     "standardExitFromExternalProfile(profile)",
     "externalRuntimePolicy(profile)",
+    "updateExistingTorBridgeProfile",
+    "profile id belongs to a non-Tor node; refusing replacement",
+    "PublicIP and latency/throughput observations are deliberately not copied",
+)
+need(
+    "cmd/client/tor_bridge_import_test.go",
+    "TestTorBridgeImportExistingIDUpdatesInPlace",
+    "TestTorBridgeImportExistingNonTorIDRefusesReplacement",
+    "TestTorBridgeImportUpdatePersistenceFailureRollsBackExistingNode",
 )
 if (ROOT / "cmd/client/tor_bridge_profile.go").exists():
     errors.append("cmd/client/tor_bridge_profile.go: duplicate/unregistered Tor profile builder must remain removed")
@@ -262,6 +287,10 @@ need(
     "WebTunnel",
     "Auto / Custom",
     "profile data cannot inject ClientTransportPlugin commands",
+    "Update currently selected Tor node",
+    "active_router_id(state->app)",
+    'json_builder_set_member_name(builder, "id")',
+    "Existing private bridge lines are never read back into this form",
 )
 need(
     "client/linux/routervpn-unified-shell-v8.inc",
