@@ -17,7 +17,7 @@ class UnifiedControlCenterPolicy:
     authenticated_transport: bool = True
     bottom_sheet_order: tuple[str, ...] = ("connection", "multihop", "settings", "mode", "dns")
     profile_actions: tuple[str, ...] = ("create", "load", "update", "delete", "import-router-bundle")
-    bridge_types: tuple[str, ...] = ("socks5", "http-connect", "https-connect", "shadowsocks-2022", "tor-bridge")
+    bridge_types: tuple[str, ...] = ("socks5", "http-connect", "https-connect", "shadowsocks-2022", "hysteria2", "tor-bridge")
 
 
 POLICY = UnifiedControlCenterPolicy()
