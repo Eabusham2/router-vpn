@@ -30,7 +30,10 @@ sudo install -m 755 "$BIN" /usr/local/bin/router-vpn-client
 sudo install -m 755 "$DNS_BIN" /usr/local/bin/router-vpn-dns
 
 # Tor Browser's reproducible build currently pins Lyrebird 0.8.1. Build that
-# exact Tor Project tag locally only when the modern PT helper is absent.
+# exact Tor Project tag locally only when the modern PT helper is absent. The
+# commit-prefix check prevents a moved/reissued tag from silently changing the
+# executable Router VPN installs.
+LYREBIRD_COMMIT_PREFIX=0b10edbb61e0
 if ! command -v lyrebird >/dev/null; then
   echo 'Building pinned Lyrebird 0.8.1 for Tor obfs4/meek/Snowflake/WebTunnel...'
   TMP_LYREBIRD=$(mktemp -d)
@@ -38,11 +41,12 @@ if ! command -v lyrebird >/dev/null; then
     && git -C "$TMP_LYREBIRD/lyrebird" remote add origin https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird.git \
     && git -C "$TMP_LYREBIRD/lyrebird" fetch --depth=1 origin refs/tags/lyrebird-0.8.1 \
     && git -C "$TMP_LYREBIRD/lyrebird" checkout --detach FETCH_HEAD \
+    && test "$(git -C "$TMP_LYREBIRD/lyrebird" rev-parse HEAD | cut -c1-12)" = "$LYREBIRD_COMMIT_PREFIX" \
     && (cd "$TMP_LYREBIRD/lyrebird" && GOTOOLCHAIN=auto go mod download && GOTOOLCHAIN=auto go mod verify && GOTOOLCHAIN=auto go build -trimpath -ldflags='-s -w' -o lyrebird ./cmd/lyrebird) \
     && [[ -x "$TMP_LYREBIRD/lyrebird/lyrebird" ]]; then
     sudo install -m 755 "$TMP_LYREBIRD/lyrebird/lyrebird" /usr/local/bin/lyrebird
   else
-    echo 'Warning: pinned Lyrebird build failed. Tor obfs4 may still use obfs4proxy if installed; Snowflake/WebTunnel remain unavailable rather than using an unpinned helper.' >&2
+    echo 'Warning: pinned Lyrebird build/source-identity check failed. Tor obfs4 may still use obfs4proxy if installed; Snowflake/WebTunnel remain unavailable rather than using an unpinned helper.' >&2
   fi
   rm -rf "$TMP_LYREBIRD"
 fi
