@@ -333,7 +333,8 @@ need(
     "originalLastRuntime",
     "reassertOriginalPersistentState",
     "recoverIfNeeded",
-    "Temporary Speed Lab tunnel",
+    "Speed Lab recovery is waiting for the temporary VPN tunnel to stop",
+    "Recovered your original Router VPN state after an interrupted Speed Lab test",
 )
 need(
     "ios/RouterVPN/App/IOSSpeedLabRunner.swift",
@@ -343,7 +344,7 @@ need(
     "case router",
     "case external",
     "case multihop",
-    "Desktop-style multihop is intentionally unavailable on iOS/iPadOS",
+    "iOS/iPadOS Speed Lab does not fake desktop-equivalent multihop",
     "guardedMeasurement",
     "Temporary Speed Lab tunnel did not fully stop",
     "IOSSpeedLabPersistenceJournal.begin",
