@@ -96,6 +96,57 @@ func TestConnectionProfileInputNormalization(t *testing.T) {
 	}
 }
 
+func TestConnectionProfileLoadLegacyDNSInheritancePreservesLinkedNodePolicy(t *testing.T) {
+	dir := t.TempDir()
+	profilesPath := filepath.Join(dir, "routers.json")
+	node := common.RouterProfile{
+		ID: "home", NodeKind: "router-vpn", Endpoint: "203.0.113.10",
+		HomeLANAccess: true, KillSwitchPolicy: "off", IPv6Mode: "on", BaseTunnel: "auto", MTUPolicy: "auto",
+		DNSMode: "doh", DNSProtocol: "https", DNSHost: "1.1.1.1", DNSPort: 443,
+		DNSServerName: "cloudflare-dns.com", DNSPath: "/dns-query",
+	}
+	a := &app{
+		cfg:      common.ClientConfig{ProfilesFile: profilesPath},
+		profiles: common.RouterProfileStore{SchemaVersion: 4, SelectedID: "home", Profiles: []common.RouterProfile{node}},
+		state:    state{Phase: "off", Mode: "off", RouterID: "home"},
+	}
+	legacyPrefs := &connectionProfilePreferences{
+		HomeLANAccess: true, KillSwitchPolicy: "off", IPv6Mode: "on", BaseTunnel: "auto", MTUPolicy: "auto",
+		DNSMode: "",
+	}
+	store := connectionProfileStore{Version: 1, Profiles: []connectionProfileRecord{{
+		ID: "legacy-one", Name: "Legacy", NodeID: "home", Mode: "smart-auto", Prefs: legacyPrefs,
+		CreatedAt: "2026-08-20T00:00:00Z", UpdatedAt: "2026-08-20T00:00:00Z",
+	}}}
+	if err := persistConnectionProfileStore(a, store); err != nil {
+		t.Fatal(err)
+	}
+	// Rewrite the store version to legacy v1 after the canonical writer has
+	// produced a valid private file, so Load exercises the real migration path.
+	path := connectionProfileStorePath(a)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = []byte(strings.Replace(string(raw), `"version": 4`, `"version": 1`, 1))
+	if err := atomicWritePrivate(path, raw); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/connection-profile/load", strings.NewReader(`{"id":"legacy-one"}`))
+	rr := httptest.NewRecorder()
+	a.loadConnectionProfile(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("legacy profile load status=%d body=%q", rr.Code, rr.Body.String())
+	}
+	a.mu.Lock()
+	got := a.profiles.Profiles[0]
+	a.mu.Unlock()
+	if got.DNSMode != node.DNSMode || got.DNSProtocol != node.DNSProtocol || got.DNSHost != node.DNSHost || got.DNSPort != node.DNSPort || got.DNSServerName != node.DNSServerName || got.DNSPath != node.DNSPath {
+		t.Fatalf("legacy profile load overwrote linked-node DNS policy: got=%+v want=%+v", got, node)
+	}
+}
+
 func TestConnectionProfileLoadPersistenceFailureRestoresRuntimeOptionState(t *testing.T) {
 	dir := t.TempDir()
 	profilesPath := filepath.Join(dir, "routers.json")
