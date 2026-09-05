@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import SwiftUI
 
 private let iosConnectionProfilesKey = "routervpn.connection-profiles.v1"
@@ -32,6 +33,36 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var dnsPort: Int
     var dnsServerName: String
     var dnsPath: String
+
+    enum CodingKeys: String, CodingKey {
+        case homeLANAccess, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback
+        case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect
+        case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath
+    }
+}
+
+private extension IOSConnectionSafePreferences {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        homeLANAccess = try c.decodeIfPresent(Bool.self, forKey: .homeLANAccess) ?? true
+        killSwitch = try c.decodeIfPresent(Bool.self, forKey: .killSwitch) ?? false
+        killSwitchPolicy = try c.decodeIfPresent(String.self, forKey: .killSwitchPolicy) ?? (killSwitch ? "always" : "off")
+        ipv6Mode = try c.decodeIfPresent(String.self, forKey: .ipv6Mode) ?? "on"
+        baseTunnel = try c.decodeIfPresent(String.self, forKey: .baseTunnel) ?? "auto"
+        baseFallback = try c.decodeIfPresent(Bool.self, forKey: .baseFallback) ?? false
+        autoRequireEncrypted = try c.decodeIfPresent(Bool.self, forKey: .autoRequireEncrypted) ?? false
+        autoRequireObfuscation = try c.decodeIfPresent(Bool.self, forKey: .autoRequireObfuscation) ?? false
+        mtuPolicy = try c.decodeIfPresent(String.self, forKey: .mtuPolicy) ?? "auto"
+        manualMTU = try c.decodeIfPresent(Int.self, forKey: .manualMTU) ?? 0
+        startupMode = try c.decodeIfPresent(String.self, forKey: .startupMode) ?? "smart-auto"
+        autoConnect = try c.decodeIfPresent(Bool.self, forKey: .autoConnect) ?? false
+        dnsMode = try c.decodeIfPresent(String.self, forKey: .dnsMode) ?? "home"
+        dnsProtocol = try c.decodeIfPresent(String.self, forKey: .dnsProtocol) ?? "udp"
+        dnsHost = try c.decodeIfPresent(String.self, forKey: .dnsHost) ?? ""
+        dnsPort = try c.decodeIfPresent(Int.self, forKey: .dnsPort) ?? 0
+        dnsServerName = try c.decodeIfPresent(String.self, forKey: .dnsServerName) ?? ""
+        dnsPath = try c.decodeIfPresent(String.self, forKey: .dnsPath) ?? ""
+    }
 }
 
 private struct IOSConnectionProfileRecord: Identifiable, Codable, Hashable {
@@ -113,7 +144,7 @@ private enum IOSConnectionProfileStore {
         guard !model.profileMutationBlocked else { throw issue("Disconnect or let the active VPN transition finish before saving or updating a connection profile.") }
         let name = try cleanName(rawName)
         guard let selected = model.selectedNodeProfile else { throw issue("Select a linked Router or Custom node first.") }
-        let mode = normalizeMode(UserDefaults.standard.string(forKey: iosConnectionModeKey) ?? "smart-auto")
+        let mode = try normalizeMode(UserDefaults.standard.string(forKey: iosConnectionModeKey) ?? "smart-auto")
         let layers = try customLayers(for: mode)
         let prefs: IOSConnectionSafePreferences?
         if selected.normalizedNodeKind == "router-vpn" {
@@ -181,7 +212,7 @@ private enum IOSConnectionProfileStore {
         }
 
         guard let prefs = saved.preferences else { throw issue("Router connection profile is missing its non-secret preference snapshot.") }
-        let effectiveMode = normalizeMode(saved.mode)
+        let effectiveMode = try normalizeMode(saved.mode)
         let preparedPreset = try preparedCustomPresetData(mode: effectiveMode, layers: saved.customLayers)
         var profile = bundle.routerProfiles[index]
         profile.homeLANAccess = prefs.homeLANAccess
@@ -230,21 +261,105 @@ private enum IOSConnectionProfileStore {
     private static func validateStoredProfiles(_ values: [IOSConnectionProfileRecord]) throws -> [IOSConnectionProfileRecord] {
         guard values.count <= 64 else { throw issue("Connection profile limit exceeded.") }
         var ids = Set<String>()
+        var validated: [IOSConnectionProfileRecord] = []
+        validated.reserveCapacity(values.count)
         for value in values {
-            _ = try cleanName(value.name)
+            var record = value
+            record.name = try cleanName(value.name)
             guard !value.id.isEmpty, value.id.count <= 128, ids.insert(value.id).inserted else {
                 throw issue("Connection profile store contains an invalid or duplicate id.")
             }
+            let nodeID = value.nodeID.trimmingCharacters(in: .whitespacesAndNewlines)
             guard (value.nodeKind == "router-vpn" || value.nodeKind == "external"),
-                  !value.nodeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                  !nodeID.isEmpty, nodeID.count <= 128,
+                  nodeID.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-").contains($0) }) else {
                 throw issue("Connection profile store contains an invalid node reference.")
             }
-            _ = try normalizeLayers(value.customLayers)
-            if value.nodeKind == "router-vpn", value.preferences == nil {
-                throw issue("Router connection profile is missing its non-secret preference snapshot.")
+            record.nodeID = nodeID
+            record.mode = try normalizeMode(value.mode)
+            record.customLayers = try normalizeLayers(value.customLayers)
+            if value.nodeKind == "router-vpn" {
+                guard let preferences = value.preferences else {
+                    throw issue("Router connection profile is missing its non-secret preference snapshot.")
+                }
+                record.preferences = try validatePreferences(preferences)
+                if record.mode == "external" { throw issue("Router connection profile cannot use external mode.") }
+            } else {
+                guard value.preferences == nil, record.customLayers.isEmpty, record.mode == "external" else {
+                    throw issue("External connection profile contains Router-only saved policy.")
+                }
             }
+            validated.append(record)
         }
-        return values
+        return validated
+    }
+
+    private static func validatePreferences(_ value: IOSConnectionSafePreferences) throws -> IOSConnectionSafePreferences {
+        var p = value
+        p.killSwitchPolicy = p.killSwitchPolicy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["off", "on-connect", "always"].contains(p.killSwitchPolicy) else { throw issue("Connection profile contains an invalid kill-switch policy.") }
+        p.killSwitch = p.killSwitchPolicy != "off"
+
+        p.ipv6Mode = p.ipv6Mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["on", "auto", "off"].contains(p.ipv6Mode) else { throw issue("Connection profile contains an invalid IPv6 policy.") }
+        p.baseTunnel = p.baseTunnel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["auto", "wg", "awg"].contains(p.baseTunnel) else { throw issue("Connection profile contains an invalid WG/AWG base.") }
+        p.mtuPolicy = p.mtuPolicy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["auto", "manual", "default"].contains(p.mtuPolicy) else { throw issue("Connection profile contains an invalid MTU policy.") }
+        if p.mtuPolicy == "manual" {
+            guard (576...9000).contains(p.manualMTU) else { throw issue("Connection profile manual MTU must be 576–9000.") }
+        } else {
+            p.manualMTU = 0
+        }
+        p.startupMode = p.startupMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["smart-auto", "auto", "last", "manual"].contains(p.startupMode) else { throw issue("Connection profile contains an invalid startup policy.") }
+
+        p.dnsMode = p.dnsMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        p.dnsProtocol = p.dnsProtocol.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        p.dnsHost = p.dnsHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        p.dnsServerName = p.dnsServerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        p.dnsPath = p.dnsPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard IOSDNSRuntimePolicy.modeIDs.contains(p.dnsMode) else { throw issue("Connection profile contains an invalid DNS mode.") }
+        guard p.dnsHost.count <= 253, p.dnsServerName.count <= 253, p.dnsPath.count <= 2048 else { throw issue("Connection profile DNS fields are oversized.") }
+        let invalidDNSScalar: (Unicode.Scalar) -> Bool = { $0.value < 0x21 || $0.value == 0x7f }
+        guard !p.dnsHost.unicodeScalars.contains(where: invalidDNSScalar), !p.dnsServerName.unicodeScalars.contains(where: invalidDNSScalar) else {
+            throw issue("Connection profile DNS host/server name contains invalid characters.")
+        }
+        switch p.dnsMode {
+        case "home", "fastest", "rescue":
+            p.dnsProtocol = "udp"; p.dnsHost = ""; p.dnsPort = 53; p.dnsServerName = ""; p.dnsPath = ""
+        case "custom":
+            if p.dnsProtocol.isEmpty { p.dnsProtocol = "udp" }
+            guard ["udp", "tcp"].contains(p.dnsProtocol) else { throw issue("Custom DNS in a connection profile must use UDP or TCP.") }
+            guard !p.dnsHost.isEmpty else { throw issue("Custom DNS in a connection profile requires a resolver host.") }
+            if p.dnsPort == 0 { p.dnsPort = 53 }
+            p.dnsServerName = ""; p.dnsPath = ""
+        case "dot":
+            p.dnsProtocol = "tls"
+            guard !p.dnsHost.isEmpty else { throw issue("DoT connection profile requires a resolver host.") }
+            if p.dnsPort == 0 { p.dnsPort = 853 }
+            p.dnsPath = ""
+        case "doh":
+            p.dnsProtocol = "https"
+            guard !p.dnsHost.isEmpty else { throw issue("DoH connection profile requires a resolver host.") }
+            if p.dnsPort == 0 { p.dnsPort = 443 }
+            if p.dnsPath.isEmpty { p.dnsPath = "/dns-query" }
+            guard p.dnsPath.hasPrefix("/") else { throw issue("DoH connection profile path must begin with /.") }
+        case "doh3":
+            p.dnsProtocol = "h3"
+            guard !p.dnsHost.isEmpty else { throw issue("DoH3 connection profile requires a resolver host.") }
+            if p.dnsPort == 0 { p.dnsPort = 443 }
+            if p.dnsPath.isEmpty { p.dnsPath = "/dns-query" }
+            guard p.dnsPath.hasPrefix("/") else { throw issue("DoH3 connection profile path must begin with /.") }
+        default: break
+        }
+        guard (1...65535).contains(p.dnsPort) else { throw issue("Connection profile contains an invalid DNS port.") }
+        if ["dot", "doh", "doh3"].contains(p.dnsMode) {
+            let literal = IPv4Address(p.dnsHost) != nil || IPv6Address(p.dnsHost) != nil
+            if p.dnsServerName.isEmpty, !literal { p.dnsServerName = p.dnsHost }
+            if literal && p.dnsServerName.isEmpty { throw issue("Encrypted DNS to a literal IP requires a TLS server name.") }
+        }
+        return p
     }
 
     private static func sorted(_ values: [IOSConnectionProfileRecord]) -> [IOSConnectionProfileRecord] {
@@ -257,12 +372,19 @@ private enum IOSConnectionProfileStore {
         return clean
     }
 
-    private static func normalizeMode(_ value: String) -> String {
+    private static func normalizeMode(_ value: String) throws -> String {
         let clean = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let allowed = clean.count <= 80 && !clean.isEmpty && clean.unicodeScalars.allSatisfy { scalar in
             CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._:-").contains(scalar)
         }
-        return allowed ? clean : "smart-auto"
+        guard allowed else { throw issue("Connection profile contains an invalid saved mode.") }
+        if clean.hasPrefix("custom:") {
+            let name = String(clean.dropFirst("custom:".count))
+            guard !name.isEmpty, name.count <= 64, !name.contains(":") else { throw issue("Connection profile contains an invalid CUSTOM mode reference.") }
+            return clean
+        }
+        guard !clean.contains(":") else { throw issue("Connection profile contains an invalid saved mode reference.") }
+        return clean
     }
 
     private static func customLayers(for mode: String) throws -> [String] {
