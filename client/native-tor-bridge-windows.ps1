@@ -230,12 +230,15 @@ try {
   Start-Sleep -Milliseconds 500
   $sing.Refresh();if($sing.HasExited){throw 'Tor full-device sing-box exited during startup.'}
 
+  $controllerStopping=$false
   while($true){
+    if(Test-RouterVPNControllerStopping){$controllerStopping=$true;break}
     $tor.Refresh();$sing.Refresh()
     if($tor.HasExited){throw 'Tor circumvention process exited; tearing down full-device path.'}
     if($sing.HasExited){throw 'Tor full-device sing-box process exited.'}
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 250
   }
+  if($controllerStopping){Write-Output 'Router VPN controller requested graceful Windows Tor shutdown.'}
 } finally {
   Stop-Owned
   try{[RouterVpnTorJob]::Close()}catch{Write-Warning $_.Exception.Message}
