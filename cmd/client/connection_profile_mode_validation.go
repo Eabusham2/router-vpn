@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // This list is the persisted compatibility surface, not a second UI catalog.
@@ -64,6 +65,30 @@ func normalizePersistedConnectionProfileMode(mode string, prefs *connectionProfi
 	return "", fmt.Errorf("connection profile mode %q is not a current logical or compatible runtime mode", mode)
 }
 
+func validateConnectionProfileRecordMetadata(record connectionProfileRecord) error {
+	if !validProfileID(record.ID) {
+		return errors.New("connection profile record contains an invalid id")
+	}
+	if err := validateConnectionProfileName(record.Name); err != nil {
+		return err
+	}
+	if !validProfileID(record.NodeID) {
+		return errors.New("connection profile record references an invalid node id")
+	}
+	created, err := time.Parse(time.RFC3339, strings.TrimSpace(record.CreatedAt))
+	if err != nil {
+		return errors.New("connection profile record has an invalid created_at timestamp")
+	}
+	updated, err := time.Parse(time.RFC3339, strings.TrimSpace(record.UpdatedAt))
+	if err != nil {
+		return errors.New("connection profile record has an invalid updated_at timestamp")
+	}
+	if updated.Before(created) {
+		return errors.New("connection profile record updated_at precedes created_at")
+	}
+	return nil
+}
+
 type connectionProfileRecordWire connectionProfileRecord
 
 func (p *connectionProfileRecord) UnmarshalJSON(data []byte) error {
@@ -84,6 +109,9 @@ func (p *connectionProfileRecord) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	record := connectionProfileRecord(decoded)
+	if err := validateConnectionProfileRecordMetadata(record); err != nil {
+		return err
+	}
 	mode, err := normalizePersistedConnectionProfileMode(record.Mode, record.Prefs)
 	if err != nil {
 		return err
@@ -94,6 +122,9 @@ func (p *connectionProfileRecord) UnmarshalJSON(data []byte) error {
 }
 
 func (p connectionProfileRecord) MarshalJSON() ([]byte, error) {
+	if err := validateConnectionProfileRecordMetadata(p); err != nil {
+		return nil, err
+	}
 	mode, err := normalizePersistedConnectionProfileMode(p.Mode, p.Prefs)
 	if err != nil {
 		return nil, err
