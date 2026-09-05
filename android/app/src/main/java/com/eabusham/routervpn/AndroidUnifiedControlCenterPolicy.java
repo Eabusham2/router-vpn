@@ -27,10 +27,11 @@ final class AndroidUnifiedControlCenterPolicy {
     static final Set<String> FINAL_ENCRYPTED_TYPES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
             "router-vpn", "wireguard", "amneziawg", "shadowsocks", "shadowsocks-2022", "hysteria2")));
 
-    // Plain proxy transports may participate in a graph but are not themselves
-    // advertised as authenticated encrypted final transports.
+    // Node-builder/bridge catalog. Hysteria2 and Shadowsocks are also valid
+    // encrypted final transports; SOCKS/HTTP(S) remain bridge-only unless an
+    // authenticated encrypted inner tunnel follows them.
     static final Set<String> BRIDGE_TYPES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
-            "socks5", "http-connect", "https-connect", "shadowsocks-2022")));
+            "socks5", "http-connect", "https-connect", "shadowsocks-2022", "hysteria2")));
 
     static final Map<String,String> UNAVAILABLE_TYPES;
     static {
