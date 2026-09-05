@@ -89,7 +89,7 @@ jobs:
           grep -Fq 'python3 "$KILL_SWITCH" apply' modes/native-standard-exit-linux.sh
           grep -Fq 'TUNNEL_ALIAS" == "router-vpn"' modes/native-standard-exit-linux.sh
           grep -Fq 'proveStandardExit(exit.ExpectedPublicIP)' cmd/client/standard_exit_runtime.go
-          grep -Fq '127.0.0.1", "listen_port":1099' cmd/client/standard_exit_runtime.go
+          grep -Fq '"listen": "127.0.0.1", "listen_port": 1099' cmd/client/standard_exit_runtime.go
           grep -Fq 'registerPlatformStandardExitRoutes(h, a)' cmd/client/multihop_native_routes.go
           grep -Fq 'registerExternalProfileRoutes(h, a)' cmd/client/multihop_native_routes.go
           ! grep -Fq 'registerStandardExitDispatchRoutes(h, a)' cmd/client/multihop_native_routes.go
