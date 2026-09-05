@@ -128,6 +128,13 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         if(!owns)return;
         if(active!=null&&!active.isDone())active.cancel(true);singBox.stop();AndroidHomeStateStore.disconnected(context);
     }
+
+    /** Tear down this owner's runtime without changing Home state; revalidation owns the failed-state adoption. */
+    synchronized void failClosedForRevalidation(){
+        if(active!=null&&!active.isDone())active.cancel(true);
+        singBox.stop();
+    }
+
     @Override public synchronized void close(){if(!closed.compareAndSet(false,true))return;if(active!=null&&!active.isDone())active.cancel(true);executor.shutdownNow();}
     private static boolean runtimeBusy(String state){if(state==null)return true;String normalized=state.trim().toUpperCase(java.util.Locale.ROOT);return !("DOWN".equals(normalized)||"FAILED".equals(normalized)||"REVOKED".equals(normalized));}
     private static byte[] readLimited(InputStream in,int max)throws Exception{try(InputStream input=in;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[256];int total=0,n;while((n=input.read(b))!=-1){total+=n;if(total>max)throw new IllegalStateException("Custom exit proof response too large.");out.write(b,0,n);}return out.toByteArray();}}
