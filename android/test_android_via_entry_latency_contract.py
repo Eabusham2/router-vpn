@@ -9,14 +9,15 @@ def read(path: str) -> str:
 
 
 probe = read("android/app/src/main/java/com/eabusham/routervpn/AndroidViaEntryLatencyProbe.java")
+meter = read("android/app/src/main/java/com/eabusham/routervpn/AndroidViaEntryPathMeter.java")
 telemetry = read("android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetry.java")
 product = read("android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java")
 
 for marker in (
-    "wireGuard.connect(entry.file",
+    "wireGuard.connectManaged(entry.file",
     "state != Tunnel.State.UP",
-    "telemetry.measureNodesViaCurrentPath(entry.id",
-    "wireGuard.disconnect",
+    "AndroidViaEntryPathMeter.measure(entry, wireGuard",
+    "wireGuard.disconnectManaged",
     "Temporary entry did not fully disconnect; candidate results discarded.",
     "AtomicBoolean",
     "runtime.multihop.isActiveOrTransitioning()",
@@ -24,20 +25,23 @@ for marker in (
     assert marker in probe, f"probe missing {marker!r}"
 
 for marker in (
-    "measureNodesViaCurrentPath",
-    '"raw-tunnel".equals(before.logicalMode)',
-    '"wg".equals(before.actualBase)',
-    "String session=before.sessionId",
-    "long generation=before.pathGeneration",
-    "session.equals(now.sessionId)",
-    "now.pathGeneration!=generation",
+    "AndroidPathProbe.prove(entry.file, 8000)",
+    "wireGuard.getState() != Tunnel.State.UP",
+    "before candidate RTT measurement",
+    "after candidate RTT measurement",
     "all results discarded",
+    "Collections.sort(out",
+    "probeNode(node, count)",
 ):
-    assert marker in telemetry, f"telemetry missing {marker!r}"
+    assert marker in meter, f"managed via-entry meter missing {marker!r}"
 
-# Via-entry measurements must not pollute the normal direct-node cache.
-method = telemetry.split("void measureNodesViaCurrentPath", 1)[1].split("void currentPath", 1)[0]
-assert "cache(" not in method, "via-entry RTT must never overwrite direct-node RTT cache"
+# Temporary X→Y/X→Z results never enter the direct-node telemetry cache and do
+# not rely on a spoofed Home raw-tunnel session.
+assert "cache(" not in meter, "via-entry RTT must never overwrite direct-node RTT cache"
+assert "AndroidHomeStateStore" not in meter, "temporary via-entry meter must not publish/read normal Home session state"
+assert "telemetry.measureNodesViaCurrentPath" not in probe, "probe still relies on old Home-state via-entry telemetry"
+assert "wireGuard.connect(entry.file" not in probe
+assert "wireGuard.disconnect(" not in probe
 
 for marker in (
     "PREPARE_VIA_ENTRY_RTT",
@@ -58,4 +62,8 @@ picker = product.split("private void showViaEntryExitPicker", 1)[1].split("priva
 assert "cachedMedian" not in picker, "via-entry picker must not substitute direct cached RTT"
 assert "medianMs" in picker, "via-entry picker must display measured via-entry median"
 
-print("Android via-entry multihop latency source contract OK")
+# The old telemetry method may remain temporarily for source compatibility, but
+# the shipping via-entry flow is forbidden from calling it.
+assert "measureNodesViaCurrentPath" in telemetry
+
+print("Android managed via-entry multihop latency source contract OK")
