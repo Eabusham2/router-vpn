@@ -275,6 +275,23 @@ need(
     "gcc -O2 -Wall -Wextra -Werror",
 )
 
+# Setup Center must explain the same real censorship-evasion family without
+# publishing private bridge lines or pretending dynamic PT bootstrap is covered
+# by the endpoint-only strict kill switch.
+need(
+    "server/scripts/setup_center_guide.py",
+    "Tor censorship bridges in the Router VPN app",
+    "obfs4",
+    "meek / meek_lite",
+    "Snowflake",
+    "WebTunnel",
+    "Auto / Custom",
+    "short-lived volunteer WebRTC proxies",
+    "dynamic CDN/WebRTC/bootstrap egress",
+    "Tor's proved circuit remains the encrypted final path",
+    "does not substitute homemade XOR/custom cryptography",
+)
+
 # Mobile clients remain explicit about the full PT family instead of exposing a
 # cosmetic desktop-equivalent path. Android and iOS only become connect-capable
 # after they own real native Tor/PT tunnel lifecycles and dynamic-exit proof.
