@@ -34,6 +34,107 @@ require(
     "return true;",
 )
 
+# A new process cannot inherit yesterday's process-owned Connected/UP proof.
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidRuntimeRegistry.java",
+    "AndroidProcessStateReconciler.reconcile(app)",
+    "new NativeWireGuardController(app)",
+)
+registry = (ROOT / "android/app/src/main/java/com/eabusham/routervpn/AndroidRuntimeRegistry.java").read_text(encoding="utf-8")
+if registry.index("AndroidProcessStateReconciler.reconcile(app)") > registry.index("new NativeWireGuardController(app)"):
+    raise SystemExit("Android runtime registry restores engines before cold-process state invalidation")
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidProcessStateReconciler.java",
+    "previous process-owned VPN/path proof was invalidated",
+    '"UP".equals(state)',
+    '"STARTING".equals(state)',
+    '"STOPPING".equals(state)',
+    'putString(stateKey, "FAILED")',
+    "AndroidHomeStateStore.advancePathGeneration(app)",
+    "AndroidHomeStateStore.failed(app, RESTART_REASON)",
+)
+for service in (
+    "android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java",
+    "android/app/src/main/java/com/eabusham/routervpn/XrayVpnService.java",
+):
+    body=(ROOT/service).read_text(encoding="utf-8")
+    if body.count("Service.START_NOT_STICKY") < 2:
+        raise SystemExit(f"{service}: became sticky; cold-process reconciliation contract must be revisited")
+
+# One logical/session owner: raw WG/AWG may own Home state when launched directly,
+# but AUTO/SMART/CUSTOM/logical candidate transports must be managed children.
+for path in (
+    "android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java",
+    "android/app/src/main/java/com/eabusham/routervpn/NativeAmneziaWGController.java",
+):
+    require(
+        path,
+        "void connectManaged(File privateBundle, Callback callback)",
+        "connectInternal(privateBundle, false, callback)",
+        "if (publishHomeState) AndroidHomeStateStore.begin",
+        "if (publishHomeState) AndroidHomeStateStore.connected",
+        "void disconnectManaged(Callback callback)",
+        "disconnectInternal(false, callback)",
+        "if (publishHomeState) AndroidHomeStateStore.disconnected",
+        "AndroidHomeStateStore.beginPathRevalidation",
+        "AndroidHomeStateStore.completePathRevalidation",
+    )
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java",
+    "wg.connectManaged(bundle",
+    "awg.connectManaged(bundle",
+    "wg.disconnectManaged",
+    "awg.disconnectManaged",
+    "stopCurrent(false)",
+    "stopCurrent(true)",
+    "if(clearHomeState)AndroidHomeStateStore.disconnected(context)",
+)
+orchestrator=(ROOT/"android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java").read_text(encoding="utf-8")
+for forbidden in ("wg.connect(bundle", "awg.connect(bundle"):
+    if forbidden in orchestrator:
+        raise SystemExit(f"Android logical orchestrator revived child Home-state ownership: {forbidden}")
+
+# Every non-native underlay revalidation must visibly invalidate Connected proof
+# and may re-adopt only the same session + exact next path generation.
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidHomeStateStore.java",
+    "beginPathRevalidation",
+    "completePathRevalidation",
+    'putString("path_proof", "pending")',
+    'putBoolean("connected", false)',
+    "currentGeneration != before.pathGeneration + 1L",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidSessionRevalidator.java",
+    "AndroidHomeStateStore.beginPathRevalidation",
+    "requireSameRevalidation(token)",
+    "AndroidHomeStateStore.completePathRevalidation(context,token)",
+    '"pending".equals(now.pathProof)',
+    "refusing to keep stale Connected proof",
+)
+
+# Temporary pre-connect via-entry RTT owns only a short-lived managed WG child;
+# it cannot create/overwrite a normal Home session and must be DOWN before the
+# picker sees any routed values.
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidViaEntryLatencyProbe.java",
+    "wireGuard.connectManaged(entry.file",
+    "AndroidViaEntryPathMeter.measure(entry, wireGuard",
+    "wireGuard.disconnectManaged",
+    "Temporary entry did not fully disconnect; candidate results discarded.",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidViaEntryPathMeter.java",
+    "AndroidPathProbe.prove(entry.file, 8000)",
+    "wireGuard.getState() != Tunnel.State.UP",
+    "before candidate RTT measurement",
+    "after candidate RTT measurement",
+    "all results discarded",
+)
+via_meter=(ROOT/"android/app/src/main/java/com/eabusham/routervpn/AndroidViaEntryPathMeter.java").read_text(encoding="utf-8")
+if "AndroidHomeStateStore" in via_meter or "cache(" in via_meter:
+    raise SystemExit("Android temporary via-entry RTT must not depend on Home state or direct RTT cache")
+
 standard_runtime_path = "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitRuntime.java"
 require(
     standard_runtime_path,
