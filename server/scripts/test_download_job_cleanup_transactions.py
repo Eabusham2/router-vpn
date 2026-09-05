@@ -79,8 +79,9 @@ def main() -> int:
 
             # READY adoption is one atomic lock-owned decision. A cancellation
             # that wins first must prevent the package from becoming retained.
-            ready_work = base / "ready-race"
-            ready_work.mkdir()
+            # Use the same marked/0700 ownership primitive as the real worker;
+            # hardened cleanup must refuse an arbitrary plain directory.
+            ready_work = m.create_owned_temp("router-vpn-job-")
             package = ready_work / "router-vpn-test.zip"
             package.write_bytes(b"race")
             seed(manager, "ready-race", status="building", phase="packaging",
