@@ -55,26 +55,46 @@ func torBridgeTransportBinary(transports []string) (string, error) {
 	return "", fmt.Errorf("Tor %s requires lyrebird (preferred) or obfs4proxy", strings.Join(transports, ","))
 }
 
-func torBridgeRuntimeCapability() standardExitCapability {
+func torBridgeRuntimeCapabilityForRoot(root string) standardExitCapability {
 	cap := standardExitCapability{Protocol: "tor-bridge", Implemented: true}
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		cap.Reason = "Tor pluggable-transport full-device runtime is currently implemented on Linux/macOS only; this platform remains unavailable instead of faking Tor"
+	switch runtime.GOOS {
+	case "windows":
+		if runtime.GOARCH != "amd64" {
+			cap.Reason = "native Tor bridge runtime is unavailable on Windows ARM64 because the pinned Tor Project Expert Bundle has no Windows ARM64 build"
+			return cap
+		}
+		for _, binary := range []string{"tor.exe", "lyrebird.exe", "sing-box.exe"} {
+			if _, err := windowsTorRuntimeExecutable(root, binary); err != nil {
+				cap.Reason = err.Error()
+				return cap
+			}
+		}
+		cap.Supported = true
+		return cap
+	case "linux", "darwin":
+		for _, binary := range []string{"tor", "sing-box"} {
+			if _, err := safeExecutable(binary); err != nil {
+				cap.Reason = binary + " is required for the real Tor bridge runtime"
+				return cap
+			}
+		}
+		if _, err := safeExecutable("lyrebird"); err != nil {
+			if _, legacyErr := safeExecutable("obfs4proxy"); legacyErr != nil {
+				cap.Reason = "lyrebird is required for modern Tor circumvention transports (obfs4proxy remains an obfs4/meek_lite compatibility fallback)"
+				return cap
+			}
+		}
+		cap.Supported = true
+		return cap
+	default:
+		cap.Reason = "Tor pluggable-transport full-device runtime is currently implemented on Windows x64, Linux and macOS only; this platform remains unavailable instead of faking Tor"
 		return cap
 	}
-	for _, binary := range []string{"tor", "sing-box"} {
-		if _, err := safeExecutable(binary); err != nil {
-			cap.Reason = binary + " is required for the real Tor bridge runtime"
-			return cap
-		}
-	}
-	if _, err := safeExecutable("lyrebird"); err != nil {
-		if _, legacyErr := safeExecutable("obfs4proxy"); legacyErr != nil {
-			cap.Reason = "lyrebird is required for modern Tor circumvention transports (obfs4proxy remains an obfs4/meek_lite compatibility fallback)"
-			return cap
-		}
-	}
-	cap.Supported = true
-	return cap
+}
+
+func torBridgeRuntimeCapability() standardExitCapability {
+	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	return torBridgeRuntimeCapabilityForRoot(root)
 }
 
 func torRuntimeBridgeTransports(cfg common.ExternalTorBridgeConfig) ([]string, string, error) {
@@ -151,7 +171,7 @@ func torrcQuote(value string) (string, error) {
 }
 
 func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) (torBridgeRuntime, error) {
-	cap := torBridgeRuntimeCapability()
+	cap := torBridgeRuntimeCapabilityForRoot(root)
 	if !cap.Supported {
 		return torBridgeRuntime{}, errors.New(cap.Reason)
 	}
@@ -178,18 +198,28 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	}
 	bridgeEndpoint := net.JoinHostPort(bridgeHost, bridgePort)
 
-	torBinary, err := safeExecutable("tor")
+	var torBinary, ptBinary, singBoxBinary string
+	if runtime.GOOS == "windows" {
+		torBinary, err = windowsTorRuntimeExecutable(root, "tor.exe")
+		if err == nil {
+			ptBinary, err = windowsTorRuntimeExecutable(root, "lyrebird.exe")
+		}
+		if err == nil {
+			singBoxBinary, err = windowsTorRuntimeExecutable(root, "sing-box.exe")
+		}
+	} else {
+		torBinary, err = safeExecutable("tor")
+		if err == nil {
+			ptBinary, err = torBridgeTransportBinary(transports)
+		}
+		if err == nil {
+			singBoxBinary, err = safeExecutable("sing-box")
+		}
+	}
 	if err != nil {
 		return torBridgeRuntime{}, err
 	}
-	ptBinary, err := torBridgeTransportBinary(transports)
-	if err != nil {
-		return torBridgeRuntime{}, err
-	}
-	singBoxBinary, err := safeExecutable("sing-box")
-	if err != nil {
-		return torBridgeRuntime{}, err
-	}
+
 	runtimeDir, err := newPrivateRuntimeDir(root, "tor-bridge")
 	if err != nil {
 		return torBridgeRuntime{}, err
@@ -263,19 +293,46 @@ func torBridgeCommand(a *app, policy, profile common.RouterProfile) (*exec.Cmd, 
 	if err != nil {
 		return nil, err
 	}
-	helper := filepath.Join(root, "modes", "native-tor-bridge.sh")
-	if _, err = os.Stat(helper); err != nil {
-		helper = filepath.Join(a.cfg.ScriptsDir, "native-tor-bridge.sh")
-	}
-	if st, statErr := os.Stat(helper); statErr != nil || st.IsDir() {
-		_ = os.RemoveAll(prepared.RuntimeDir)
-		return nil, errors.New("native Tor bridge helper is missing")
-	}
 	if err := registerActiveDNSRuntimeConfig(a, profile.ID, "external-tor-bridge", filepath.Join(prepared.RuntimeDir, "sing-box.json")); err != nil {
 		_ = os.RemoveAll(prepared.RuntimeDir)
 		return nil, fmt.Errorf("register Tor DNS runtime identity: %w", err)
 	}
-	cmd := exec.Command("bash", helper, "up", prepared.RuntimeDir, prepared.BridgeEndpoint, strconv.Itoa(prepared.SocksPort), prepared.TorBinary, prepared.SingBoxBinary)
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		helper := filepath.Join(root, "client", "native-tor-bridge-windows.ps1")
+		if _, statErr := os.Stat(helper); statErr != nil {
+			helper = filepath.Join(filepath.Dir(a.cfg.ScriptsDir), "client", "native-tor-bridge-windows.ps1")
+		}
+		if st, statErr := os.Lstat(helper); statErr != nil || st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular() {
+			_ = os.RemoveAll(prepared.RuntimeDir)
+			return nil, errors.New("native Windows Tor bridge helper is missing or unsafe")
+		}
+		powershell, lookupErr := safeExecutable("powershell.exe")
+		if lookupErr != nil {
+			_ = os.RemoveAll(prepared.RuntimeDir)
+			return nil, lookupErr
+		}
+		cmd = exec.Command(powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper,
+			"-Action", "up",
+			"-RuntimeDir", prepared.RuntimeDir,
+			"-BridgeEndpoint", prepared.BridgeEndpoint,
+			"-SocksPort", strconv.Itoa(prepared.SocksPort),
+			"-TorBinary", prepared.TorBinary,
+			"-PTBinary", prepared.PTBinary,
+			"-SingBoxBinary", prepared.SingBoxBinary,
+			"-TunnelAlias", "router-vpn-tor")
+	} else {
+		helper := filepath.Join(root, "modes", "native-tor-bridge.sh")
+		if _, statErr := os.Stat(helper); statErr != nil {
+			helper = filepath.Join(a.cfg.ScriptsDir, "native-tor-bridge.sh")
+		}
+		if st, statErr := os.Lstat(helper); statErr != nil || st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular() {
+			_ = os.RemoveAll(prepared.RuntimeDir)
+			return nil, errors.New("native Tor bridge helper is missing or unsafe")
+		}
+		cmd = exec.Command("bash", helper, "up", prepared.RuntimeDir, prepared.BridgeEndpoint, strconv.Itoa(prepared.SocksPort), prepared.TorBinary, prepared.SingBoxBinary)
+	}
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(),
 		"HOMEVPN_ROOT="+root,
