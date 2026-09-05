@@ -100,6 +100,7 @@ Stop-Owned
 Kill 'prepare'
 $bridge=$null
 $openvpn=$null
+$controllerStopping=$false
 try{
   if(Test-Path -LiteralPath $BridgeConfig -PathType Leaf){
     $quotedBridge='"'+$BridgeConfig+'"'
@@ -122,12 +123,14 @@ try{
   }
 
   while(-not$openvpn.HasExited){
+    if(Test-RouterVPNControllerStopping){$controllerStopping=$true;break}
     if($bridge-and$bridge.HasExited){throw 'External-entry bridge exited while Windows OpenVPN was active.'}
-    Start-Sleep -Milliseconds 250
+    Start-Sleep -Milliseconds 200
     try{$openvpn.Refresh()}catch{}
     if($bridge){try{$bridge.Refresh()}catch{}}
   }
-  if($openvpn.ExitCode-ne 0){throw "OpenVPN exited with code $($openvpn.ExitCode)."}
+  if(-not$controllerStopping-and$openvpn.HasExited-and$openvpn.ExitCode-ne0){throw "OpenVPN exited with code $($openvpn.ExitCode)."}
+  if($controllerStopping){Write-Output 'Router VPN controller requested graceful Windows OpenVPN shutdown.'}
 }finally{
   Stop-Owned
   try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
