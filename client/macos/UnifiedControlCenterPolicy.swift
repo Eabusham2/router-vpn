@@ -17,6 +17,7 @@ enum UnifiedControlCenterPolicy {
         "AmneziaWG Noise_IK + ChaCha20-Poly1305",
         "OpenVPN TLS 1.3 + AEAD",
         "Shadowsocks 2022 BLAKE3 + AEAD",
+        "Hysteria2 QUIC + TLS 1.3",
         "Tor pluggable transport + proven ntor-v3 circuit",
     ]
 
@@ -24,5 +25,8 @@ enum UnifiedControlCenterPolicy {
     // circuit runtime. The PT provides censorship circumvention; the proved Tor
     // circuit is the encrypted final path. Raw proxy/bridge types remain outer
     // transports unless followed by an authenticated encrypted tunnel.
-    static let finalEncryptedTypes = Set(["router-vpn", "wireguard", "amneziawg", "openvpn", "shadowsocks-2022", "tor-bridge"])
+    static let finalEncryptedTypes = Set([
+        "router-vpn", "wireguard", "amneziawg", "openvpn",
+        "shadowsocks", "shadowsocks-2022", "hysteria2", "tor-bridge",
+    ])
 }
