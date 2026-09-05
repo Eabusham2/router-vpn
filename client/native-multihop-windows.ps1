@@ -47,10 +47,10 @@ try{
   if($controllerStopping){Write-Output 'Router VPN controller requested graceful Windows multihop shutdown.'}
 }finally{
   Stop-Owned
-  if($controllerStopping){
-    try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
-  }else{
+  if(-not$controllerStopping){
     Write-Warning 'Windows multihop runtime ended unexpectedly; preserving kill-switch ownership until controller recovery/disconnect.'
   }
+  # Firewall rollback belongs to the Go controller after owned teardown. This
+  # wrapper never releases from finally, so HOMEVPN_KILLSWITCH_HOLD remains real.
   Remove-PrivateRuntime
 }
