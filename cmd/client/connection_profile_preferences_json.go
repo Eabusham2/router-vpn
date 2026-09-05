@@ -103,6 +103,11 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 			return errors.New("saved multihop profile has invalid entry/exit node ids")
 		}
 		p.MultihopEntryID, p.MultihopExitID = entryID, exitID
+	} else {
+		// Disabled multihop owns no hop identity. Clear stale IDs from old or
+		// hand-edited snapshots so a later load/toggle cannot revive a graph that
+		// was not explicitly saved as enabled.
+		p.MultihopEntryID, p.MultihopExitID = "", ""
 	}
 	return nil
 }
