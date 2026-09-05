@@ -19,10 +19,17 @@ assert contract["secure_transport"]["xor_allowed"] is False
 assert contract["secure_transport"]["custom_crypto_allowed"] is False
 assert contract["connection_controls"]["node_selection_never_auto_connects"] is True
 
+node_types = {item["id"]: item for item in contract["node_types"]}
+tor = node_types["tor-bridge"]
+assert tor["final_transport"] is True
+assert tor["upstream_hop"] is False
+assert {"bridge", "exit"}.issubset(set(tor["role"]))
+
 validate_secure_path(["wireguard"])
+validate_secure_path(["tor-bridge"])
 validate_secure_path(["tor-bridge", "openvpn"])
 validate_secure_path(["socks5", "amneziawg"])
-for invalid in (["socks5"], ["http-connect"], ["tor-bridge"]):
+for invalid in (["socks5"], ["http-connect"], ["https-connect"]):
     try:
         validate_secure_path(invalid)
     except UnifiedControlCenterError:
