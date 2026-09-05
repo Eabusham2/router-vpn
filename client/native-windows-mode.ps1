@@ -29,9 +29,12 @@ function Safe-Under([string]$Parent,[string]$Child) {
   return $c
 }
 function Write-Utf8NoBom([string]$Path,[string]$Text) { [IO.File]::WriteAllText($Path,$Text,(New-Object Text.UTF8Encoding($false))) }
-function Stop-XrayOwned { [void](Stop-RouterVPNRecordedProcess $XrayProcessFile) }
-function Stop-AllOwned {
+function Stop-ChildrenOwned {
   [void](Stop-RouterVPNRecordedProcess $XrayProcessFile)
+  [void](Stop-RouterVPNRecordedProcess $SingBoxProcessFile)
+}
+function Stop-AllOwned {
+  Stop-ChildrenOwned
   [void](Stop-RouterVPNRecordedProcess $WrapperProcessFile)
 }
 function Remove-WrapperRecord {
@@ -46,7 +49,7 @@ $Source=Safe-Under $GeneratedRoot (Join-Path $GeneratedRoot (Join-Path $ProfileI
 if(-not(Test-Path -LiteralPath $Source -PathType Container)){$legacy=Safe-Under $GeneratedRoot (Join-Path $GeneratedRoot $Mode);if(Test-Path -LiteralPath $legacy -PathType Container){$Source=$legacy}}
 $Runtime=Safe-Under $Root (Join-Path $Root 'runtime\windows');$SingBox=Join-Path $Runtime 'sing-box.exe';$Xray=Join-Path $Runtime 'xray.exe'
 $RunBase=Safe-Under $Root (Join-Path $Root 'run\windows');$RunDir=Safe-Under $RunBase (Join-Path $RunBase (Join-Path $ProfileId $Mode))
-$WrapperProcessFile=Join-Path $RunDir 'native-windows-mode.process.json';$XrayProcessFile=Join-Path $RunDir 'xray.process.json';$SingConfig=Join-Path $RunDir 'sing-box.json';$XrayConfig=Join-Path $RunDir 'xray.json'
+$WrapperProcessFile=Join-Path $RunDir 'native-windows-mode.process.json';$SingBoxProcessFile=Join-Path $RunDir 'sing-box.process.json';$XrayProcessFile=Join-Path $RunDir 'xray.process.json';$SingConfig=Join-Path $RunDir 'sing-box.json';$XrayConfig=Join-Path $RunDir 'xray.json'
 $KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 
 function Invoke-KillSwitch([string]$KillAction,[string]$EndpointValue='',[string]$Alias='') {
@@ -124,8 +127,9 @@ switch($Action){
  'check'{Assert-Ready;Write-Output "native Windows $Mode ready";exit 0}
  'status'{
   $wrapperAlive=Test-RouterVPNRecordedProcess $WrapperProcessFile
+  $singAlive=Test-RouterVPNRecordedProcess $SingBoxProcessFile
   $xrayAlive=if($NeedsXray-contains$Mode){Test-RouterVPNRecordedProcess $XrayProcessFile}else{$true}
-  if($wrapperAlive-and$xrayAlive){Write-Output'up';exit 0}
+  if($wrapperAlive-and$singAlive-and$xrayAlive){Write-Output'up';exit 0}
   Write-Output'down';exit 1
  }
  'down'{Stop-AllOwned;try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message};exit 0}
@@ -135,6 +139,7 @@ switch($Action){
   Invoke-KillSwitch 'prepare' $Endpoint $tunAlias
   $self=Get-Process -Id $PID -ErrorAction Stop
   Write-RouterVPNProcessRecord $WrapperProcessFile $self
+  $xp=$null;$sing=$null;$controllerStopping=$false
   try{
     if($NeedsXray-contains$Mode){
       &$Xray run -test -c $XrayConfig|Out-Null
@@ -145,11 +150,22 @@ switch($Action){
       Start-Sleep -Milliseconds 350
       if($xp.HasExited){throw 'Xray exited during native Windows startup.'}
     }
-    &$SingBox run -D $RunDir -c $SingConfig
-    $exitCode=$LASTEXITCODE
-    if($exitCode-ne0){throw "sing-box exited with code $exitCode"}
+    $quotedSing='"'+$SingConfig+'"'
+    $sing=Start-Process -FilePath $SingBox -ArgumentList @('run','-D',$RunDir,'-c',$quotedSing)-WorkingDirectory $RunDir -PassThru -WindowStyle Hidden
+    Write-RouterVPNProcessRecord $SingBoxProcessFile $sing
+    Start-Sleep -Milliseconds 350
+    if($sing.HasExited){throw 'sing-box exited during native Windows startup.'}
+    while(-not$sing.HasExited){
+      if(Test-RouterVPNControllerStopping){$controllerStopping=$true;break}
+      if($xp-and$xp.HasExited){throw 'Xray exited while the native Windows mode was active.'}
+      Start-Sleep -Milliseconds 200
+      try{$sing.Refresh()}catch{}
+      if($xp){try{$xp.Refresh()}catch{}}
+    }
+    if(-not$controllerStopping-and$sing.HasExited-and$sing.ExitCode-ne0){throw "sing-box exited with code $($sing.ExitCode)"}
+    if($controllerStopping){Write-Output 'Router VPN controller requested graceful native Windows mode shutdown.'}
   }finally{
-    Stop-XrayOwned
+    Stop-ChildrenOwned
     Remove-WrapperRecord
     try{Invoke-KillSwitch 'release'}catch{Write-Warning $_.Exception.Message}
   }
