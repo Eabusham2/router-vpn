@@ -7,6 +7,7 @@ set -euo pipefail
 # Only these exact obsolete publisher/trigger refs may be removed automatically.
 # If any branch name exists at a different SHA, fail closed for manual review.
 declare -A STALE=(
+  [__never__]=997399f255dbb5acacb7b7c98e93b9421b0586f5
   [publish-android-auto-badges]=7c4949a7c4a7f151786e56546e9f23f9f6192ccc
   [publish-auto-summary-ui]=d03e82e7938256d2cd2a5c273fdf8843a5125e36
   [publish-desktop-auto-badges]=fba7b457fa33067b154ba6a45b53655c098d9ffb
