@@ -67,11 +67,24 @@ need(
 
 # Desktop runtime: trusted Tor/PT helpers, private torrc, exact transport set,
 # bootstrap=100%, full-device TUN, owned children, and dynamic Tor exit proof.
+# Windows x64 uses the pinned Tor Expert Bundle + native PowerShell lifecycle;
+# Windows ARM64 remains unavailable until Tor Project publishes a pinned native
+# Expert Bundle for that architecture.
 need(
     "cmd/client/tor_bridge_runtime.go",
     'safeExecutable("lyrebird")',
     'safeExecutable("obfs4proxy")',
     "torBridgeTransportBinary",
+    "torBridgeRuntimeCapabilityForRoot",
+    'case "windows":',
+    'runtime.GOARCH != "amd64"',
+    'windowsTorRuntimeExecutable(root, "tor.exe")',
+    'windowsTorRuntimeExecutable(root, "lyrebird.exe")',
+    'windowsTorRuntimeExecutable(root, "sing-box.exe")',
+    "native-tor-bridge-windows.ps1",
+    'safeExecutable("powershell.exe")',
+    '"-Action", "up"',
+    '"-TunnelAlias", "router-vpn-tor"',
     "ClientTransportPlugin ",
     "strings.Join(transports, \",\")",
     "strictLiteralObfs4",
@@ -79,6 +92,43 @@ need(
     "selectedTorBridgeDNS",
     "HOMEVPN_TOR_PLUGIN_TRANSPORTS=",
     "HOMEVPN_TOR_PT_BINARY=",
+)
+need(
+    "cmd/client/tor_bridge_windows_runtime.go",
+    "torWindowsRuntimeWalkLimit",
+    "safePinnedRuntimeExecutable",
+    "findUniquePinnedRuntimeExecutable",
+    "windowsTorRuntimeExecutable",
+    'filepath.Join(windowsRoot, "tor-expert")',
+    "must contain exactly one",
+    "runtime.GOARCH != \"amd64\"",
+    "has no Windows ARM64 build",
+)
+need(
+    "client/Setup-Windows-Runtime.ps1",
+    "TorExpertVersion = '15.0.21'",
+    "TorExpertWindowsX64Sha256",
+    "Install-PinnedTorExpertBundle",
+    "tor.exe",
+    "lyrebird.exe",
+    "TorNativeAvailable = $true",
+    "Tor unavailable on Windows ARM64",
+)
+need(
+    "client/native-tor-bridge-windows.ps1",
+    "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
+    "AssignProcessToJobObject",
+    "windows-kill-switch.ps1",
+    "Bootstrapped 100%",
+    "Tor SOCKS listener is unavailable after bootstrap",
+    "Tor PT binary changed after capability proof",
+    "Tor circumvention process exited; tearing down full-device path",
+)
+need(
+    "cmd/client/tor_bridge_windows_runtime_test.go",
+    "TestPinnedWindowsTorRuntimeResolverRequiresOneRegularExecutable",
+    "TestPinnedWindowsTorRuntimeResolverRejectsSymlink",
+    "TestWindowsTorControllerUsesPinnedNativeLifecycle",
 )
 need(
     "modes/native-tor-bridge.sh",
@@ -136,6 +186,9 @@ need(
     "HTTPS/domain-fronting",
     "strict_kill_switch",
     "upstream_hop",
+    "torBridgeRuntimeCapabilityForRoot",
+    'runtime.GOOS == "windows"',
+    'windowsTorRuntimeExecutable(root, "lyrebird.exe")',
 )
 need(
     "cmd/client/tor_bridge_import.go",
