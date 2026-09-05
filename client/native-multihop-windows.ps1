@@ -17,10 +17,17 @@ $Config=Join-Path $RuntimeDir 'sing-box.json'
 $SingBox=Join-Path $Root 'runtime\windows\sing-box.exe'
 $KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 $PidFile=Join-Path $RuntimeDir 'native-multihop.process.json'
+$HoldKillSwitch=([string]$env:HOMEVPN_KILLSWITCH_HOLD -eq '1')
 function Kill([string]$Kind){& $KillSwitch -Action $Kind -Root $Root -Endpoint $Endpoint -TunnelAlias $TunnelAlias;if($LASTEXITCODE-ne 0){throw "Windows kill-switch $Kind failed."}}
 function Stop-Owned{[void](Stop-RouterVPNRecordedProcess $PidFile)}
 function Remove-PrivateRuntime{if(Test-Path -LiteralPath $RuntimeDir){[IO.Directory]::Delete($RuntimeDir,$true)}}
-if($Action-eq'down'){Stop-Owned;try{Kill 'release'}catch{Write-Warning $_.Exception.Message};Remove-PrivateRuntime;exit 0}
+if($Action-eq'down'){
+  Stop-Owned
+  if(-not$HoldKillSwitch){try{Kill 'release'}catch{Write-Warning $_.Exception.Message}}
+  else{Write-Output 'Windows multihop teardown is holding kill-switch ownership for a fail-closed transition.'}
+  Remove-PrivateRuntime
+  exit 0
+}
 if(-not(Test-Administrator)){throw 'Native Windows multihop requires an elevated Router VPN process.'}
 if(-not(Test-Path -LiteralPath $Config -PathType Leaf)){throw 'Prepared multihop sing-box.json is missing.'}
 if(-not(Test-Path -LiteralPath $SingBox -PathType Leaf)){throw 'Pinned native sing-box.exe is missing. Run Setup-Windows-Runtime.ps1.'}
