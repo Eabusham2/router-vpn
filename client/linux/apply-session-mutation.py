@@ -27,5 +27,10 @@ base.SPECS[name] = (
     [(i1 + 3, i2 + 3, old, new) for i1, i2, old, new in changes],
 )
 
+# The wrapper is both the shipping CLI and the importable compatibility API used
+# by the authoritative session-mutation audit. Keep one mutation implementation:
+# the frozen v1 apply() operates on the adjusted SPECS table above.
+apply = base.apply
+
 if __name__ == "__main__":
     base.main()
