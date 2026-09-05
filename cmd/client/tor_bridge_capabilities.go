@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -26,20 +27,28 @@ func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 		{ID: "webtunnel", Name: "WebTunnel", Implemented: true, Description: "Makes Tor bridge traffic resemble ordinary HTTPS web traffic; Router VPN keeps strict kill switch unavailable because the PT's web bootstrap can differ from one static endpoint exception."},
 		{ID: "custom", Name: "Auto / Custom Tor bridges", Implemented: true, Description: "Accepts one or more validated Tor-issued obfs4, meek, Snowflake, or WebTunnel bridge lines and can mix recognized families; arbitrary torrc directives, executable paths, and unknown PTs are rejected."},
 	}
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+
+	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	cap := torBridgeRuntimeCapabilityForRoot(root)
+	if !cap.Supported {
 		for i := range rows {
-			rows[i].Reason = "full-device Tor pluggable-transport runtime is currently implemented on Linux/macOS only"
+			rows[i].Reason = cap.Reason
 		}
 		return rows
 	}
-	if _, err := safeExecutable("tor"); err != nil {
-		for i := range rows { rows[i].Reason = "tor is required for the real Tor circuit runtime" }
+	if runtime.GOOS == "windows" {
+		lyrebird, err := windowsTorRuntimeExecutable(root, "lyrebird.exe")
+		if err != nil {
+			for i := range rows { rows[i].Reason = err.Error() }
+			return rows
+		}
+		for i := range rows {
+			rows[i].Supported = true
+			rows[i].Helper = strings.TrimSpace(lyrebird)
+		}
 		return rows
 	}
-	if _, err := safeExecutable("sing-box"); err != nil {
-		for i := range rows { rows[i].Reason = "sing-box is required for the full-device Tor TUN" }
-		return rows
-	}
+
 	lyrebird, lyrebirdErr := safeExecutable("lyrebird")
 	legacy, legacyErr := safeExecutable("obfs4proxy")
 	for i := range rows {
