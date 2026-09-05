@@ -180,7 +180,15 @@ static void linux_speed_lab_open_v12(GtkButton *button,gpointer data){
 }
 
 static void linux_install_speed_lab_v12(App *app){
-    if(app==NULL||app->window==NULL)return;LinuxUnifiedV8*base=g_object_get_data(G_OBJECT(app->window),"linux-unified-v8");if(base==NULL)return;GtkWidget*settings=linux_telemetry_find_button_v9(base->stack,"Open settings");if(settings==NULL||!GTK_IS_BOX(gtk_widget_get_parent(settings)))return;GtkWidget*button=linux_telemetry_button_v9("Speed Lab",G_CALLBACK(linux_speed_lab_open_v12),app);gtk_widget_set_tooltip_text(button,"Ookla-style Router VPN test: real HTTPS throughput plus idle/download-loaded/upload-loaded latency, current or temporary direct/multihop/external paths, Auto or custom min/max time.");gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),button,FALSE,FALSE,0);gtk_widget_show_all(app->window);
+    if (app == NULL || app->window == NULL) return;
+    LinuxUnifiedV8 *base = g_object_get_data(G_OBJECT(app->window), "linux-unified-v8");
+    if (base == NULL) return;
+    GtkWidget *settings = linux_telemetry_find_button_v9(base->stack, "Open settings");
+    if (settings == NULL || !GTK_IS_BOX(gtk_widget_get_parent(settings))) return;
+    GtkWidget *button = linux_telemetry_button_v9("Speed Lab", G_CALLBACK(linux_speed_lab_open_v12), app);
+    gtk_widget_set_tooltip_text(button, "Ookla-style Router VPN test: real HTTPS throughput plus idle/download-loaded/upload-loaded latency, current or temporary direct/multihop/external paths, Auto or custom min/max time.");
+    gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)), button, FALSE, FALSE, 0);
+    gtk_widget_show_all(app->window);
 }
 
 /* Linux Speed Lab v12: /api/speed-lab/options + /api/speed-lab/run; current path or temporary System direct, Router VPN, Multihop, External exit/hop; SMART/AUTO/CUSTOM/logical modes; WireGuard/AmneziaWG; real download/upload Mbps; idle/download-loaded/upload-loaded ms, exact per-hop RTT/Mbps on the same proved multihop graph, p90/max/jitter/bufferbloat; Auto timing or 1–60 second custom min/max sliders. */
