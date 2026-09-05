@@ -47,6 +47,10 @@ try{
   if($controllerStopping){Write-Output 'Router VPN controller requested graceful Windows multihop shutdown.'}
 }finally{
   Stop-Owned
-  try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
+  if($controllerStopping){
+    try{Kill 'release'}catch{Write-Warning $_.Exception.Message}
+  }else{
+    Write-Warning 'Windows multihop runtime ended unexpectedly; preserving kill-switch ownership until controller recovery/disconnect.'
+  }
   Remove-PrivateRuntime
 }
