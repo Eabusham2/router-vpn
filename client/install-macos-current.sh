@@ -18,7 +18,7 @@ cat >"$TMP" <<'PLIST'
   <key>EnvironmentVariables</key><dict>
     <key>HOMEVPN_ROOT</key><string>/opt/router-vpn-client</string>
     <key>HOMEVPN_CLIENT_CONFIG</key><string>/opt/router-vpn-client/client.json</string>
-    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>/opt/router-vpn-client/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
