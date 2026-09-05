@@ -1,5 +1,15 @@
 param([string]$Bundle = (Get-Location).Path)
 $ErrorActionPreference = 'Stop'
+
+function Test-Administrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+if (-not (Test-Administrator)) {
+    throw 'Router VPN Windows installation must run as Administrator so private ProgramData ACLs can be enforced.'
+}
+
 $Bundle = [IO.Path]::GetFullPath($Bundle)
 foreach ($required in @('client.json','routers.json','modes.json','logical-modes.json','RouterVPN.exe','RouterVPN.ico','router-vpn-client.exe','router-vpn-update.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $Bundle $required) -PathType Leaf)) {
@@ -11,9 +21,21 @@ foreach ($requiredDir in @('modes','generated','client')) {
         throw "Router VPN package is missing $requiredDir/"
     }
 }
+$AclHelper = Join-Path $Bundle 'client\Protect-RouterVPN-Windows-PrivateRoot.ps1'
+if (-not (Test-Path -LiteralPath $AclHelper -PathType Leaf)) {
+    throw 'Router VPN package is missing the Windows private-root ACL hardener.'
+}
+$AclHelperItem = Get-Item -LiteralPath $AclHelper -Force
+if (($AclHelperItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'Refusing a reparse-point Windows private-root ACL hardener.'
+}
 
 $Root = Join-Path $env:ProgramData 'RouterVPN'
 New-Item -Force -ItemType Directory $Root | Out-Null
+# Harden the destination before any private node/store bytes are copied. This
+# deliberately removes inherited grants; only the installing user, SYSTEM and
+# Administrators retain access to Router VPN's private per-machine tree.
+& $AclHelper -Root $Root | Out-Host
 
 # Immutable application/runtime material may be refreshed on upgrade.
 Copy-Item (Join-Path $Bundle 'client.json'),(Join-Path $Bundle 'modes.json'),(Join-Path $Bundle 'logical-modes.json') $Root -Force
@@ -40,6 +62,15 @@ if (-not (Test-Path -LiteralPath $InstalledGenerated -PathType Container)) {
     Copy-Item (Join-Path $Bundle 'generated') $InstalledGenerated -Recurse -Force
 }
 
+# Upgrade packages can carry explicit source ACLs. Normalize every existing child
+# after copy without following junctions so no private state/process record is
+# left broadly readable or writable by another local user.
+$InstalledAclHelper = Join-Path $Root 'client\Protect-RouterVPN-Windows-PrivateRoot.ps1'
+if (-not (Test-Path -LiteralPath $InstalledAclHelper -PathType Leaf)) {
+    throw 'Installed Windows private-root ACL hardener is missing.'
+}
+& $InstalledAclHelper -Root $Root | Out-Host
+
 # Normal Windows application integration: Start Menu launches the native GUI
 # launcher and uses the Router VPN icon. No browser/PWA/WSL shortcut is created.
 $Programs = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
@@ -58,6 +89,7 @@ $env:HOMEVPN_CLIENT_CONFIG = Join-Path $Root 'client.json'
 Write-Host 'Router VPN installed in' $Root
 Write-Host 'Start it from the Windows Start Menu: Router VPN'
 Write-Host 'Existing linked Router VPN nodes were preserved if already present.'
+Write-Host 'Windows private node/runtime state ACLs are restricted to this user, SYSTEM, and Administrators.'
 Write-Host 'Raw WireGuard uses the official WireGuard for Windows tunnel service.'
 Write-Host 'For native layered TUN modes, run client\Setup-Windows-Runtime.ps1 -PackageRoot' $Root
 Write-Host 'Unsupported engines stay unavailable with an exact readiness reason; Router VPN does not use WSL as a substitute.'
