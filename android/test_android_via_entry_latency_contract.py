@@ -20,7 +20,7 @@ for marker in (
     "wireGuard.disconnectManaged",
     "Temporary entry did not fully disconnect; candidate results discarded.",
     "AtomicBoolean",
-    "runtime.multihop.isActiveOrTransitioning()",
+    "AndroidVpnMutationGuard.isBusy(context)",
 ):
     assert marker in probe, f"probe missing {marker!r}"
 
