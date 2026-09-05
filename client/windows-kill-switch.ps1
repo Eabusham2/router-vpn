@@ -223,7 +223,10 @@ function Assert-Blocked {
   }
 }
 
-$settings = Resolve-Settings
+# Rollback/recovery actions are owned by the persisted firewall state itself and
+# must not depend on whichever Router VPN profile happens to be selected now.
+$settings = $null
+if ($Action -in @('plan','check','prepare')) { $settings = Resolve-Settings }
 
 switch ($Action) {
   'plan' {
