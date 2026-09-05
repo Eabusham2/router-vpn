@@ -47,6 +47,28 @@ for key, expected in {
 secure = contract.get("secure_transport", {})
 if secure.get("mandatory") is not True or secure.get("xor_allowed") is not False or secure.get("custom_crypto_allowed") is not False:
     errors.append("secure transport must be mandatory and reject XOR/custom ciphers")
+node_types = {
+    str(row.get("id", "")): row
+    for row in contract.get("node_types", [])
+    if isinstance(row, dict) and row.get("id")
+}
+for node_id in (
+    "router-vpn", "wireguard", "amneziawg", "openvpn",
+    "shadowsocks-2022", "hysteria2", "https-connect", "http-connect",
+    "socks5", "tor-bridge",
+):
+    if node_id not in node_types:
+        errors.append(f"canonical node type {node_id!r} disappeared")
+hy2 = node_types.get("hysteria2", {})
+if hy2.get("final_transport") is not True or not {"bridge", "hop", "exit"}.issubset(set(hy2.get("role", []))):
+    errors.append("canonical Hysteria2 node must remain a real bridge/hop/exit final transport")
+tor = node_types.get("tor-bridge", {})
+if tor.get("final_transport") is not True or tor.get("upstream_hop") is not False:
+    errors.append("canonical Tor bridge must remain a proved encrypted final path, not a fake upstream-hop graph")
+if set(tor.get("circumvention_transports", [])) != {"obfs4", "meek_lite", "snowflake", "webtunnel", "custom"}:
+    errors.append("canonical Tor circumvention transport set drifted")
+if "hysteria2-quic-tls13" not in secure.get("inner_suites", []):
+    errors.append("canonical secure transport suites lost Hysteria2 QUIC/TLS 1.3")
 
 need(
     "ios/RouterVPN/App/IOSUnifiedProductView.swift",
@@ -91,9 +113,11 @@ need(
     '"wireguard"',
     '"shadowsocks-2022"',
     '"hysteria2"',
-    '"socks5"',
-    '"http-connect"',
-    '"https-connect"',
+    'static let bridgeTypes = [',
+    '"socks5",',
+    '"http-connect",',
+    '"https-connect",',
+    '"hysteria2",',
     '"amneziawg": "AmneziaWG is unavailable on iOS',
     '"openvpn": "OpenVPN is unavailable on iOS',
     '"tor-bridge": "Tor bridges are unavailable on iOS',
@@ -124,6 +148,7 @@ need(
     "BOTTOM_SHEET_ORDER",
     "AUTHENTICATED_TRANSPORT_ALWAYS_ON = true",
     '"router-vpn", "wireguard", "amneziawg", "shadowsocks", "shadowsocks-2022", "hysteria2"',
+    '"socks5", "http-connect", "https-connect", "shadowsocks-2022", "hysteria2"',
     'unavailable.put("openvpn", "OpenVPN is unavailable on Android',
     'unavailable.put("tor-bridge", "Tor bridges are unavailable on Android',
     "String unavailable = UNAVAILABLE_TYPES.get(last)",
@@ -148,9 +173,10 @@ need(
     "must be a literal IP to avoid pre-tunnel DNS",
 )
 
-# Windows owns native WG/AWG/layered/TUN paths and can enable OpenVPN only when
-# its native runtime capability check passes. Tor does not have a Windows
-# full-device Tor/PT runtime yet, so the WPF secure-path validator must reject it.
+# Windows x64 owns a real pinned Tor + PT + full-device wrapper and the WPF form
+# is capability-gated through the controller. Windows ARM64/missing-runtime cases
+# remain unavailable through /api/tor-bridge/capabilities rather than a static
+# platform-wide lie. OpenVPN likewise stays live-capability-gated.
 need(
     "client/RouterVPN-Windows-UnifiedControlCenter.ps1",
     "DefaultMode = 'smart-auto'",
@@ -158,14 +184,15 @@ need(
     "Test-RouterVPNSecureNodeChain",
     "Authenticated handshake",
     "UnavailableTypes",
-    "Tor bridges are unavailable on Windows",
-    "Hysteria2 QUIC + TLS 1.3",
-    "String" if False else "shadowsocks-2022",
+    "Hysteria2",
+    "Tor bridge (runtime capability-gated)",
+    "Tor pluggable transport + proven ntor-v3 circuit",
+    "'hysteria2','tor-bridge'",
 )
 forbid(
     "client/RouterVPN-Windows-UnifiedControlCenter.ps1",
-    "Tor pluggable transport + proven ntor-v3 circuit",
-    "'tor-bridge')\n    if ($allowed",
+    "Tor bridges are unavailable on Windows until",
+    "Tor ntor-v3 outer bridge",
 )
 need(
     "cmd/client/windows_openvpn_external.go",
@@ -174,13 +201,21 @@ need(
     "checkOpenVPN27",
     "cap.Supported = true",
 )
+need(
+    "client/RouterVPN-Windows-TorBridge.ps1",
+    "/api/tor-bridge/capabilities",
+    "/api/tor-bridge/import",
+    "Snowflake",
+    "WebTunnel",
+    "Auto / Custom",
+)
 
 # macOS/Linux really own desktop Tor/OpenVPN and Hysteria2 dataplanes. Their
-# secure-policy layer must therefore include Hysteria2 instead of misclassifying
-# a real encrypted final exit as bridge-only.
+# secure-policy layer and node-builder catalog must therefore include Hysteria2.
 need(
     "client/macos/UnifiedControlCenterPolicy.swift",
     "authenticatedTransportAlwaysOn = true",
+    'static let bridgeTypes = ["socks5", "http-connect", "https-connect", "shadowsocks-2022", "hysteria2", "tor-bridge"]',
     "Hysteria2 QUIC + TLS 1.3",
     '"shadowsocks", "shadowsocks-2022", "hysteria2", "tor-bridge"',
     "Tor pluggable transport + proven ntor-v3 circuit",
@@ -191,6 +226,7 @@ need(
     "bottom_sheet_order",
     "validate_secure_node_chain",
     "Authenticated handshake",
+    'bridge_types: tuple[str, ...] = ("socks5", "http-connect", "https-connect", "shadowsocks-2022", "hysteria2", "tor-bridge")',
     '"shadowsocks", "shadowsocks-2022", "hysteria2", "tor-bridge"',
     "Hysteria2 QUIC + TLS 1.3",
     "Tor pluggable transport + proven ntor-v3 circuit",
