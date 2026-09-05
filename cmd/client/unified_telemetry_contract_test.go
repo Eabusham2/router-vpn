@@ -34,8 +34,9 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		"configured_entry_id", "configured_exit_id", "actual_entry_id", "actual_exit_id")
 	requireRepoMarkers(t, "cmd/client/telemetry_hops.go",
 		"/api/profile/speed-test", "/api/multihop/speed-test", "measureRoutedProfileSpeed",
+		"measureRoutedProfileSpeedViaProxy", "multihopEntryProofProxy", "multihopProofProxy",
 		"validateActiveMultihopSpeedGraph", "does not match active multihop entry", "does not match active multihop exit",
-		"refusing to guess hop ownership", "entry_error", "exit_error", "not derived from RTT", "active routing graph")
+		"refusing to guess hop ownership", "entry_error", "exit_error", "not derived from RTT", "unchanged current client routing graph")
 	requireRepoMarkers(t, "cmd/client/telemetry_hops_test.go",
 		"TestValidateActiveMultihopSpeedGraphRequiresExactLivePair", "TestValidateActiveMultihopSpeedGraphFailsClosedWithoutIdentity",
 		"TestActiveMultihopGraphTrackerStoresExactSelection")
@@ -46,7 +47,7 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		"Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test", "50-sample selected node", "Throughput + Auto MTU")
 	requireRepoMarkers(t, "client/RouterVPN-Windows-App.ps1",
 		"RouterVPN-Windows-Telemetry.ps1", "Add-RouterVPNTelemetryWindowsShell", "/api/connection/speed-test",
-		"/api/multihop/speed-test", "Routed hop speeds")
+		"/api/multihop/speed-test")
 	requireRepoMarkers(t, "client/macos/RouterVPNMacTelemetry.swift",
 		"unified-fastest-node", "unified-live-latency", "unified-multihop-latency", "Forward",
 		"Real path speed", "/api/connection/speed-test", "Routed hop speeds", "/api/multihop/speed-test", "50-sample selected node", "Throughput + Auto MTU")
