@@ -92,7 +92,24 @@ final class AndroidTelemetry {
 
     void speedTest(int bytes,Callback<SpeedResult> callback){new Thread(()->{try{callback.finished(probeSpeed(activeBundle(),bytes<=0?SPEED_DEFAULT_BYTES:bytes),null);}catch(Throwable e){callback.finished(null,e);}},"routervpn-private-speed").start();}
 
-    void speedTest(AndroidNodeStore.Node node,int bytes,Callback<SpeedResult> callback){new Thread(()->{try{if(node==null)throw new IllegalArgumentException("Choose a Router VPN hop first.");validateRoutedHopIdentity(node);callback.finished(probeSpeed(readBundle(node.file),bytes<=0?SPEED_DEFAULT_BYTES:bytes),null);}catch(Throwable e){callback.finished(null,e);}},"routervpn-hop-speed").start();}
+    void speedTest(AndroidNodeStore.Node node,int bytes,Callback<SpeedResult> callback){
+        try{
+            if(node==null)throw new IllegalArgumentException("Choose a Router VPN hop first.");
+            validateRoutedHopIdentity(node);
+            AndroidHomeStateStore.Snapshot state=AndroidHomeStateStore.snapshot(context);
+            AndroidNodeStore.Node entry=storedNode(state.activeEntryId),exit=storedNode(state.activeExitId);
+            if(entry==null||exit==null||entry.id.equals(exit.id))throw new IllegalStateException("Active multihop entry/exit records are unavailable; refusing ambiguous hop speed.");
+            int requested=bytes<=0?SPEED_DEFAULT_BYTES:Math.max(SPEED_MIN_BYTES,Math.min(SPEED_MAX_BYTES,bytes));
+            new AndroidSpeedLabHopMeter(context).measure(entry,exit,requested,(hops,error)->{
+                if(error!=null){callback.finished(null,error);return;}
+                AndroidSpeedLabHopMeter.Hop match=null;
+                if(hops!=null)for(AndroidSpeedLabHopMeter.Hop hop:hops)if(node.id.equals(hop.id)){match=hop;break;}
+                if(match==null){callback.finished(null,new IllegalStateException("Exact multihop proof lanes returned no result for the requested hop."));return;}
+                double downMs=transferDurationMs(match.bytes,match.downloadMbps),upMs=transferDurationMs(match.bytes,match.uploadMbps);
+                callback.finished(new SpeedResult(match.downloadMbps,match.uploadMbps,downMs,upMs,0,match.bytes),null);
+            });
+        }catch(Throwable e){callback.finished(null,e);}
+    }
 
     private Result probeNode(AndroidNodeStore.Node node,int samples)throws Exception{
         if(node==null||node.endpoint==null||node.endpoint.trim().isEmpty())throw new IllegalArgumentException("Node has no public endpoint.");String host=endpointHost(node.endpoint);int port=discoverPort(host);List<Double>values=new ArrayList<>();int failed=0;
@@ -132,8 +149,10 @@ final class AndroidTelemetry {
         }else{id=store.activeId();}
         if(id==null||id.isEmpty())throw new IllegalStateException("Select a Router VPN node first.");return readBundle(store.file(id));
     }
-    private void validateRoutedHopIdentity(AndroidNodeStore.Node node){AndroidHomeStateStore.Snapshot state=AndroidHomeStateStore.snapshot(context);if(!state.connected||!"multihop".equals(state.logicalMode))throw new IllegalStateException("Connect the actual Android multihop graph before testing routed hop speed.");requireMultihopEngineUp();if(state.activeEntryId==null||state.activeEntryId.isEmpty()||state.activeExitId==null||state.activeExitId.isEmpty())throw new IllegalStateException("Active multihop graph identity is unavailable; refusing to label a hop speed.");if(!node.id.equals(state.activeEntryId)&&!node.id.equals(state.activeExitId))throw new IllegalStateException("Requested hop is not part of the active Android multihop graph.");}
+    private AndroidNodeStore.Node storedNode(String id)throws Exception{if(id==null||id.isEmpty())return null;for(AndroidNodeStore.Node node:store.list())if(id.equals(node.id))return node;return null;}
+    private void validateRoutedHopIdentity(AndroidNodeStore.Node node){AndroidHomeStateStore.Snapshot state=AndroidHomeStateStore.snapshot(context);if(!state.connected||!"connected".equals(state.phase)||!"passed".equals(state.pathProof)||!"multihop".equals(state.logicalMode))throw new IllegalStateException("Connect the actual proved Android multihop graph before testing routed hop speed.");requireMultihopEngineUp();if(state.activeEntryId==null||state.activeEntryId.isEmpty()||state.activeExitId==null||state.activeExitId.isEmpty())throw new IllegalStateException("Active multihop graph identity is unavailable; refusing to label a hop speed.");if(!node.id.equals(state.activeEntryId)&&!node.id.equals(state.activeExitId))throw new IllegalStateException("Requested hop is not part of the active Android multihop graph.");}
     private void requireMultihopEngineUp(){String state=context.getSharedPreferences(NativeSingBoxController.PREFS,Context.MODE_PRIVATE).getString(NativeSingBoxController.STATE_KEY,"DOWN");if(!"UP".equals(state))throw new IllegalStateException("Android multihop engine is not UP; refusing routed telemetry.");}
+    private static double transferDurationMs(int bytes,double mbps){if(bytes<=0||mbps<=0)return 0;return round((bytes*8d/1_000_000d)/mbps*1000d);}
     private static JSONObject readBundle(File file)throws Exception{if(file==null||!file.isFile()||file.length()<=0||file.length()>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Stored node bundle size is invalid.");try(FileInputStream in=new FileInputStream(file);ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[8192];int n,total=0;while((n=in.read(b))!=-1){total+=n;if(total>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Bundle exceeds safety limit.");out.write(b,0,n);}return new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));}}
     private static JSONObject selectedProfile(JSONObject bundle){JSONArray a=bundle.optJSONArray("routerProfiles");String id=bundle.optString("selectedRouterID","");if(a==null)return null;for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p!=null&&id.equals(p.optString("id","")))return p;}return a.length()>0?a.optJSONObject(0):null;}
     private static String endpointHost(String value){String raw=value.trim();try{URI uri=raw.contains("://")?URI.create(raw):URI.create("tcp://"+raw);if(uri.getHost()!=null&&!uri.getHost().isEmpty())return uri.getHost();}catch(Exception ignored){}if(raw.startsWith("[")&&raw.contains("]"))return raw.substring(1,raw.indexOf(']'));int colon=raw.lastIndexOf(':');if(colon>0&&raw.indexOf(':')==colon)return raw.substring(0,colon);return raw;}
