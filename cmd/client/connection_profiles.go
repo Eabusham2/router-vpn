@@ -26,6 +26,7 @@ type connectionProfilePreferences struct {
 	AutoRequireObfuscation bool     `json:"auto_require_obfuscation"`
 	BaseTunnel             string   `json:"base_tunnel"`
 	BaseFallback           bool     `json:"base_fallback"`
+	StartLayer             string   `json:"start_layer"`
 	MTUPolicy              string   `json:"mtu_policy"`
 	ManualMTU              int      `json:"manual_mtu,omitempty"`
 	DAITAEnabled           bool     `json:"daita_enabled"`
@@ -223,10 +224,14 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 	if err != nil {
 		return nil, err
 	}
+	startLayer, err := common.NormalizeStartLayerMode(p.StartLayer)
+	if err != nil {
+		return nil, err
+	}
 	return &connectionProfilePreferences{
 		HomeLANAccess: p.HomeLANAccess, KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode,
 		AutoRequireEncrypted: p.AutoRequireEncrypted, AutoRequireObfuscation: p.AutoRequireObfuscation,
-		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
+		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback, StartLayer: startLayer, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
 		DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled,
 		DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort,
 		DNSServerName: p.DNSServerName, DNSPath: p.DNSPath,
@@ -455,7 +460,7 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		req := profileSettingsRequest{
 			HomeLANAccess: &p.HomeLANAccess, KillSwitchPolicy: &p.KillSwitchPolicy, IPv6Mode: &p.IPv6Mode,
 			AutoRequireEncrypted: &p.AutoRequireEncrypted, AutoRequireObfuscation: &p.AutoRequireObfuscation,
-			BaseTunnel: &p.BaseTunnel, BaseFallback: &p.BaseFallback, MTUPolicy: &p.MTUPolicy,
+			BaseTunnel: &p.BaseTunnel, BaseFallback: &p.BaseFallback, StartLayer: &p.StartLayer, MTUPolicy: &p.MTUPolicy,
 			ManualMTU: &p.ManualMTU, DAITAEnabled: &p.DAITAEnabled, JumboTUN: &p.JumboTUN, SocksEnabled: &p.SocksEnabled,
 		}
 		updated, err = applyProfileSettings(node, req)
