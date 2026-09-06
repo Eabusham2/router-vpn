@@ -9,6 +9,7 @@ struct IOSProfileSettingsView: View {
     @State private var ipv6Mode = "on"
     @State private var baseTunnel = "auto"
     @State private var baseFallback = false
+    @State private var startLayer = "off"
     @State private var autoRequireEncrypted = false
     @State private var autoRequireObfuscation = false
     @State private var mtuPolicy = "auto"
@@ -21,6 +22,7 @@ struct IOSProfileSettingsView: View {
     private let killValues = [("Off","off"),("On connect","on-connect"),("Always / strict","always")]
     private let ipv6Values = [("On — default","on"),("Auto","auto"),("Off","off")]
     private let baseValues = [("Auto","auto"),("WireGuard","wg"),("AmneziaWG","awg")]
+    private let startLayerValues = [("Off — default","off"),("AES-256-GCM — authenticated Libbox modes","aes-256-gcm"),("AES-256-GCM + XOR whitening — unavailable on iOS","aes-256-gcm+xor-whitening")]
     private let mtuValues = [("Auto measured — default","auto"),("Fixed / manual","manual"),("Runtime default","default")]
     private let startupValues = [("SMART AUTO — recommended","smart-auto"),("AUTO","auto"),("Last proven mode","last"),("Manual / stay disconnected","manual")]
 
@@ -42,6 +44,15 @@ struct IOSProfileSettingsView: View {
                         Text("AmneziaWG stays unavailable on iOS until the native PacketTunnel engine exists; saving this preference does not make it runnable.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                }
+                Section("Start encryption / obfuscation layer") {
+                    Picker("Start Layer", selection: $startLayer) {
+                        ForEach(startLayerValues, id: \.1) { item in
+                            Text(item.0).tag(item.1).disabled(item.1 == "aes-256-gcm+xor-whitening")
+                        }
+                    }
+                    Text("AES uses vetted Shadowsocks 2022 BLAKE3 AES-256-GCM and is composed only into proved iOS Libbox raw modes: Shadowsocks, Hysteria2, Naive H2 and Naive H3. WireGuard and other unsupported modes fail closed instead of ignoring the preference. AES+XOR remains unavailable on iOS until PacketTunnel owns a protected local whitening relay; XOR is obfuscation only and is never counted as encryption.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("AUTO / SMART AUTO requirements") {
                     Toggle("Require encrypted AUTO candidates", isOn: $autoRequireEncrypted)
@@ -70,14 +81,15 @@ struct IOSProfileSettingsView: View {
                 Section("Connection profiles") {
                     Button("Add / Load / Update / Delete connection profiles") { showingConnectionProfiles = true }
                         .disabled(model.profileMutationBlocked)
-                    Text("Profiles reference linked Router/Custom nodes and save only non-secret Mode/CUSTOM, DNS, kill-switch, IPv6, AUTO encryption/obfuscation requirements and MTU choices. Node keys, API tokens and external credentials stay in the private node store.")
+                    Text("Profiles reference linked Router/Custom nodes and save only non-secret Mode/CUSTOM, DNS, kill-switch, IPv6, Start Layer, AUTO encryption/obfuscation requirements and MTU choices. Node keys, API tokens and external credentials stay in the private node store.")
                         .font(.caption).foregroundStyle(.secondary)
                     if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before changing saved connection-profile choices.").font(.caption).foregroundStyle(.orange) }
                 }
                 Section {
                     Button("Save for next supported connection") { save() }
-                        .disabled(model.profileMutationBlocked)
+                        .disabled(model.profileMutationBlocked || startLayer == "aes-256-gcm+xor-whitening")
                     if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before editing persistent tunnel policy.").font(.caption).foregroundStyle(.orange) }
+                    if startLayer == "aes-256-gcm+xor-whitening" { Text("This stored AES+XOR preference cannot be newly saved on iOS until PacketTunnel owns the protected whitening relay. Choose Off or AES-256-GCM.").font(.caption).foregroundStyle(.orange) }
                     if !status.isEmpty { Text(status).font(.caption) }
                 }
             }
@@ -101,6 +113,7 @@ struct IOSProfileSettingsView: View {
         ipv6Mode = (p.ipv6Mode ?? "on").lowercased()
         baseTunnel = (p.baseTunnel ?? "auto").lowercased()
         baseFallback = p.baseFallback ?? false
+        startLayer = (p.startLayer ?? "off").lowercased()
         autoRequireEncrypted = p.autoRequireEncrypted ?? false
         autoRequireObfuscation = p.autoRequireObfuscation ?? false
         mtuPolicy = (p.mtuPolicy ?? "auto").lowercased()
@@ -111,6 +124,7 @@ struct IOSProfileSettingsView: View {
 
     private func save() {
         guard !model.profileMutationBlocked else { status = "Disconnect or let the active VPN transition finish before changing profile settings."; return }
+        guard startLayer != "aes-256-gcm+xor-whitening" else { status = "AES+XOR cannot be saved as iOS-runnable until PacketTunnel owns the protected whitening relay."; return }
         guard var bundle = model.bundle,
               let index = bundle.routerProfiles.firstIndex(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.indices.first else {
             status = "Pair/import and select a Router VPN node first."; return
@@ -126,6 +140,7 @@ struct IOSProfileSettingsView: View {
         p.ipv6Mode = ipv6Mode
         p.baseTunnel = baseTunnel
         p.baseFallback = baseFallback
+        p.startLayer = startLayer
         p.autoRequireEncrypted = autoRequireEncrypted
         p.autoRequireObfuscation = autoRequireObfuscation
         p.mtuPolicy = mtuPolicy
@@ -144,6 +159,7 @@ struct IOSProfileSettingsView: View {
 }
 
 // iOS settings contract: LAN Off / kill switch / IPv6 On default / WG-AWG base+fallback /
+// Start Layer Off or authenticated AES-256-GCM (AES+XOR truthfully unavailable pending protected relay) /
 // Require encrypted + Require obfuscation AUTO filters / Auto measured-fixed-runtime MTU /
 // SMART AUTO startup default / secret-free connection-profile Add-Load-Update-Delete including AUTO requirements.
 // Persistent settings/profile mutation stays disabled through connected/connecting/reasserting/disconnecting state.
