@@ -11,7 +11,7 @@ if (-not (Test-Administrator)) {
 }
 
 $Bundle = [IO.Path]::GetFullPath($Bundle)
-foreach ($required in @('client.json','routers.json','modes.json','logical-modes.json','RouterVPN.exe','RouterVPN.ico','router-vpn-client.exe','router-vpn-dns.exe','router-vpn-update.exe')) {
+foreach ($required in @('client.json','routers.json','modes.json','logical-modes.json','RouterVPN.exe','RouterVPN.ico','router-vpn-client.exe','router-vpn-dns.exe','router-vpn-start-layer-relay.exe','router-vpn-update.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $Bundle $required) -PathType Leaf)) {
         throw "Run this from an extracted RouterVPN-Windows package; missing $required"
     }
@@ -45,6 +45,10 @@ Copy-Item (Join-Path $Bundle 'router-vpn-client.exe') (Join-Path $Root 'router-v
 # package-owned loopback DNS engine. Missing it is an installation failure, not
 # a condition to hide behind a PATH lookup later.
 Copy-Item (Join-Path $Bundle 'router-vpn-dns.exe') (Join-Path $Root 'router-vpn-dns.exe') -Force
+# AES+XOR start-layer mode owns this bounded local relay. XOR is only whitening
+# of already-authenticated AES-256-GCM ciphertext; missing relay is a hard
+# installation failure rather than a silent downgrade.
+Copy-Item (Join-Path $Bundle 'router-vpn-start-layer-relay.exe') (Join-Path $Root 'router-vpn-start-layer-relay.exe') -Force
 Copy-Item (Join-Path $Bundle 'router-vpn-update.exe') (Join-Path $Root 'router-vpn-update.exe') -Force
 Copy-Item (Join-Path $Bundle 'RouterVPN.exe') (Join-Path $Root 'RouterVPN.exe') -Force
 Copy-Item (Join-Path $Bundle 'RouterVPN.ico') (Join-Path $Root 'RouterVPN.ico') -Force
@@ -92,5 +96,6 @@ Write-Host 'Start it from the Windows Start Menu: Router VPN'
 Write-Host 'Existing linked Router VPN nodes were preserved if already present.'
 Write-Host 'Windows private node/runtime state ACLs are restricted to this user, SYSTEM, and Administrators.'
 Write-Host 'Raw WireGuard uses the official WireGuard for Windows tunnel service plus the package-owned DNS enforcement binary.'
+Write-Host 'AES+XOR mode uses the package-owned start-layer relay; XOR is obfuscation only over authenticated AES-256-GCM.'
 Write-Host 'For native layered TUN modes, run client\Setup-Windows-Runtime.ps1 -PackageRoot' $Root
 Write-Host 'Unsupported engines stay unavailable with an exact readiness reason; Router VPN does not use WSL as a substitute.'
