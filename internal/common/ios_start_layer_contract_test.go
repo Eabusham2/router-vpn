@@ -57,6 +57,36 @@ func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) 
 		}
 	}
 
+	settings := repoFile(t, "ios/RouterVPN/App/IOSProfileSettingsView.swift")
+	for _, required := range []string{
+		`@State private var startLayer = "off"`,
+		"AES-256-GCM — authenticated Libbox modes",
+		"AES-256-GCM + XOR whitening — unavailable on iOS",
+		"protected local whitening relay",
+		"XOR is obfuscation only and is never counted as encryption",
+		`startLayer = (p.startLayer ?? "off").lowercased()`,
+		"p.startLayer = startLayer",
+		`startLayer == "aes-256-gcm+xor-whitening"`,
+		"AES+XOR cannot be saved as iOS-runnable",
+	} {
+		if !strings.Contains(settings, required) {
+			t.Fatalf("iOS native Settings can no longer configure Start Layer truthfully: missing %q", required)
+		}
+	}
+
+	profiles := repoFile(t, "ios/RouterVPN/App/IOSConnectionProfilesView.swift")
+	for _, required := range []string{
+		"var startLayer: String",
+		`startLayer = try c.decodeIfPresent(String.self, forKey: .startLayer) ?? "off"`,
+		`startLayer: (selected.startLayer ?? "off").lowercased()`,
+		"profile.startLayer = prefs.startLayer",
+		"iosConnectionProfilesSchemaVersion = 4",
+	} {
+		if !strings.Contains(profiles, required) {
+			t.Fatalf("iOS whole connection profiles no longer preserve Start Layer: missing %q", required)
+		}
+	}
+
 	project := repoFile(t, "ios/RouterVPN/project.yml")
 	if !strings.Contains(project, "sources: [PacketTunnel]") {
 		t.Fatal("PacketTunnel target no longer composes the PacketTunnel source directory containing IOSStartLayer.swift")
