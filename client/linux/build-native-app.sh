@@ -16,13 +16,15 @@ V4="$ROOT/client/linux/routervpn-gtk-product-v4.c"
 V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$GLOBE_INC" "$V4" "$V3" "$CORE")
+START_LAYER_SETTINGS="$ROOT/client/linux/apply-start-layer-settings.py"
+SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$GLOBE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v10.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
 BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v10-shipping.c"
 HARDENED_V4="$BUILD_DIR/routervpn-gtk-product-v4.c"
 HARDENED_V3="$BUILD_DIR/routervpn-gtk-product-v3.c"
 HARDENED_CORE="$BUILD_DIR/routervpn-gtk-product.c"
+MUTATION_SETTINGS="$BUILD_DIR/routervpn-profile-settings-session.inc"
 HARDENED_SETTINGS="$BUILD_DIR/routervpn-profile-settings-v1.inc"
 HARDENED_UNIFIED="$BUILD_DIR/routervpn-unified-shell-v8.inc"
 trap 'rm -rf "$BUILD_DIR"' EXIT
@@ -35,12 +37,14 @@ for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UN
 done
 mkdir -p "$(dirname "$OUT")"
 [[ -s "$SESSION_MUTATION" ]] || { echo "Missing Linux session-mutation transformer: $SESSION_MUTATION" >&2; exit 2; }
+[[ -s "$START_LAYER_SETTINGS" ]] || { echo "Missing Linux Start Layer settings transformer: $START_LAYER_SETTINGS" >&2; exit 2; }
 python3 "$SESSION_MUTATION" \
   "$V4" "$HARDENED_V4" \
   "$V3" "$HARDENED_V3" \
   "$CORE" "$HARDENED_CORE" \
-  "$SETTINGS_INC" "$HARDENED_SETTINGS" \
+  "$SETTINGS_INC" "$MUTATION_SETTINGS" \
   "$UNIFIED_INC" "$HARDENED_UNIFIED"
+python3 "$START_LAYER_SETTINGS" "$MUTATION_SETTINGS" "$HARDENED_SETTINGS"
 
 python3 - "$HARDENED_V4" "$EMBEDDED_V4" <<'PY'
 from pathlib import Path
@@ -212,6 +216,7 @@ for marker in 'gtk_window_new' 'gtk_notebook_new' 'http://127.0.0.1:8788' '/api/
 for marker in 'pairing' 'router-vpn-bundle.json' 'AUTO' 'WireGuard' 'AmneziaWG' 'DNS' 'LAN Off' 'MTU/Jumbo' 'kill-switch' 'Multihop' 'forwarding' 'permissions' 'Disconnect' 'private identity/path proof' 'Public exit' 'Diagnostics' 'Emergency stop' 'Setup Center Full Guide' 'Run Tutorial'; do grep -Fq "$marker" "$ONBOARDING_INC"; done
 for marker in '/api/home-summary' '/api/home-summary/prove-exit' 'Actual public VPN exit' 'Node measured latency' 'LAN access' 'Kill switch' 'Effective MTU' 'Warnings'; do grep -Fq "$marker" "$HOME_INC"; done
 for marker in '/api/profile/settings' 'Allow home LAN access' 'Always / strict' 'AmneziaWG' 'Auto measured' 'DAITA-like' 'Jumbo TUN' 'SOCKS5' 'startup' 'autoconnect'; do grep -Fiq "$marker" "$SETTINGS_INC"; done
+for marker in '/api/profile/settings' 'Start Layer' 'start_layer' 'aes-256-gcm' 'aes-256-gcm+xor-whitening' 'XOR is never counted as encryption' 'Unsupported direct/multihop graphs fail closed'; do grep -Fq "$marker" "$HARDENED_SETTINGS"; done
 for marker in '/api/profile/settings' 'Require encrypted AUTO candidates' 'Require obfuscation for AUTO candidates' 'Save requirements' 'Disconnect before saving'; do grep -Fq "$marker" "$AUTO_REQ_INC"; done
 grep -Fq '/api/multihop/connect' "$SETTINGS_INC"
 for marker in '#include "routervpn-product-onboarding-v6.inc"' '#include "routervpn-home-summary-v1.inc"' '#include "routervpn-profile-settings-v1.inc"' '#include "routervpn-auto-requirements-v11.inc"' '#include "routervpn-unified-shell-v8.inc"' '#include "routervpn-telemetry-v9.inc"' '#include "routervpn-speed-lab-v12.inc"' '#include "routervpn-globe-v10.inc"' 'gtk_assistant_set_current_page' 'onboarding_write_step_v6' 'refresh_home_summary_v6' 'Prove actual exit' 'G_CALLBACK(on_home_exit_v6)' 'Edit profile settings' 'G_CALLBACK(on_profile_settings_v7)' 'router-vpn-advanced-settings-v7' 'static void build_ui_legacy_v5(App *app) {' 'linux_install_telemetry_v9(&app);' 'linux_install_speed_lab_v12(&app);' 'linux_install_globe_v10(&app);' 'Map-first startup: onboarding is explicit from Help -> Run Tutorial.'; do grep -Fq "$marker" "$BUILD_SRC"; done
@@ -227,4 +232,5 @@ grep -Fq '/api/mtu/retest' "$SRC"; grep -Fq 'Retest MTU' "$SRC"; grep -Fq '13000
 echo "Built native Linux GTK Router VPN product with map-first unified shell, animated VPN globe, fastest-node connect, live path/multihop telemetry, native Speed Lab with loaded latency, real forwarding master, truthful Home state, editable profile settings and explicit rerunnable onboarding at $OUT"
 
 # Session-mutation hardening is applied only to temporary build copies; source baselines remain reviewable.
-# apply-session-mutation.py baseline-hash checks fail closed before compilation on source drift.
+# Start Layer settings are injected after session-mutation hardening through an exact-anchor transform.
+# Both transforms fail closed on source drift before compilation.
