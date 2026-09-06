@@ -64,7 +64,7 @@ C=${ROUTER_VPN_TEST_HEALTH_COUNT:-}; if [ -n "$C" ]; then N=0; [ ! -f "$C" ] || 
         assert rt.stat().st_mode & 0o777 == 0o755 and cfg.stat().st_mode & 0o777 == 0o600
         assert nat.stat().st_mode & 0o777 == 0o755 and fw.stat().st_mode & 0o777 == 0o755
     assert not list(jffs.glob('.*.router-vpn.*')), 'atomic JFFS staging files survived install'
-    assert not (state/'nat.ROUTER_VPN_DNAT').exists() and not (state/'filter.ROUTER_VPN_FWD').exists(); assert tuple(map(len,owned(state)))==(16,16)
+    assert not (state/'nat.ROUTER_VPN_DNAT').exists() and not (state/'filter.ROUTER_VPN_FWD').exists(); assert tuple(map(len,owned(state)))==(18,18)
     run(['/bin/sh',str(rt),'verify'],env)
 
     hc=Path(env['ROUTER_VPN_TEST_HEALTH_COUNT']); hc.write_text('0\n'); run(['/bin/sh',str(rt),'apply'],env); assert hc.read_text().strip()=='1'
