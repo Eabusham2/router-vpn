@@ -142,7 +142,8 @@ require(
 )
 
 # Linux must ship the composed v5 -> v4 -> v3 -> core native GTK product on
-# actual amd64 and ARM runners. Do not score an obsolete standalone GTK source.
+# actual amd64 and ARM runners. The Start Layer settings transformer is now an
+# explicit shipping input after the session-mutation settings transform.
 require(
     "client/linux/routervpn-gtk-product-v5.c",
     "gtk_window_new",
@@ -165,8 +166,11 @@ for rel in (
 require(
     "client/linux/build-native-app.sh",
     'SRC="$ROOT/client/linux/routervpn-gtk-product-v5.c"',
+    'START_LAYER_SETTINGS="$ROOT/client/linux/apply-start-layer-settings.py"',
     'SHIPPED=("$SRC"',
-    '"$V4" "$V3" "$CORE")',
+    '"$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")',
+    '"$SETTINGS_INC" "$MUTATION_SETTINGS"',
+    'python3 "$START_LAYER_SETTINGS" "$MUTATION_SETTINGS" "$HARDENED_SETTINGS"',
     "gtk+-3.0",
     "libcurl",
     "json-glib-1.0",
