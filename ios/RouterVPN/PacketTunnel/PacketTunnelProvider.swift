@@ -75,6 +75,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startWireGuard(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], completionHandler: @escaping (Error?) -> Void) throws {
         let requestedMode = (provider["mode"] as? String ?? "wg").lowercased(), requestedCandidates = (provider["modeCandidates"] as? [String] ?? []).map { $0.lowercased() }
         if requestedMode != "auto" && requestedMode != "wg" && !requestedCandidates.contains("wg") { throw tunnelError(7, "WireGuard engine received a non-WireGuard mode request.") }
+        try IOSStartLayer.validateWireGuard(profile: selectedProfile)
         let wgText = try wireGuardProfile(root), tunnelConfiguration = try RouterVPNWireGuardConfig.parse(wgText, name: "Router VPN")
         guard tunnelConfiguration.peers.count == 1 else { throw tunnelError(8, "Router VPN iOS node proof requires exactly one generated WireGuard server peer.") }
         let derivedNodeID = deriveNodeProof(from: tunnelConfiguration.peers[0].publicKey.base64Key), suppliedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
@@ -100,7 +101,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startLibbox(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
         let rawProfileID = (provider["rawProfileID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard rawProfileID.range(of: "^[A-Za-z0-9._-]{1,96}$", options: .regularExpression) != nil, !rawProfileID.contains("..") else { throw tunnelError(13, "iOS Libbox raw profile id is invalid.") }
-        let files = try layeredProfile(root, rawProfileID: rawProfileID)
+        let rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)
+        let files = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
         let expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         guard expectedNodeID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw tunnelError(14, "Layered iOS modes require the imported node's exact node proof id.") }
         let proofURL = try selectedProofURL(selectedProfile)
@@ -116,6 +118,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func startExternalLibbox(selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
+        try IOSStartLayer.validateExternal(profile: selectedProfile)
         let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
         do { try engine.start(files: runtime.files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
