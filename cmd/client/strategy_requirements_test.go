@@ -14,6 +14,29 @@ func TestAutoRequirementsDefaultOffAllowsPlainEligibleCandidate(t *testing.T) {
 	if !ok || reason != "" { t.Fatalf("default-off requirements unexpectedly filtered candidate: ok=%v reason=%q", ok, reason) }
 }
 
+func TestStartLayerFiltersAUTOToProvedCompositionPaths(t *testing.T) {
+	for _, startLayer := range []string{common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {
+		p := common.RouterProfile{StartLayer: startLayer}
+		for _, id := range []string{"shadowsocks", "hysteria2", "naive-h2", "naive-h3"} {
+			if ok, reason := modeMeetsAutoRequirements(testMode(id, "tls"), p); !ok {
+				t.Fatalf("%s with %s should remain eligible: %s", id, startLayer, reason)
+			}
+		}
+		for _, id := range []string{"wg", "awg2-fast", "reality-vision", "max"} {
+			if ok, reason := modeMeetsAutoRequirements(testMode(id, "wireguard"), p); ok || !strings.Contains(reason, "Start Layer") {
+				t.Fatalf("%s with %s should be start-layer filtered: ok=%v reason=%q", id, startLayer, ok, reason)
+			}
+		}
+	}
+}
+
+func TestStartLayerRejectsInvalidPreferenceBeforeAUTO(t *testing.T) {
+	ok, reason := modeMeetsAutoRequirements(testMode("shadowsocks", "shadowsocks2022"), common.RouterProfile{StartLayer: "xor"})
+	if ok || !strings.Contains(reason, "invalid Start Layer preference") {
+		t.Fatalf("invalid standalone XOR preference was not rejected: ok=%v reason=%q", ok, reason)
+	}
+}
+
 func TestRequireEncryptedAllowsEncryptedTunnelLayers(t *testing.T) {
 	p := common.RouterProfile{AutoRequireEncrypted: true}
 	for _, mode := range []common.Mode{
