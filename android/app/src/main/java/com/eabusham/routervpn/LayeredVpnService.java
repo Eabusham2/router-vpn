@@ -74,6 +74,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private final Object lock = new Object();
     private CommandServer commandServer;
     private ParcelFileDescriptor tunDescriptor;
+    private AndroidStartLayerRelay startLayerRelay;
     private File activeSession;
     private String activeMode = "";
     private String activeConfig = "";
@@ -112,6 +113,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if ("STARTING".equals(state) || "UP".equals(state)) return;
             publish("STARTING", modeId, "");
         }
+        AndroidStartLayerRelay pendingRelay = null;
         try {
             if (VpnService.prepare(this) != null) throw new RevokedException("Android VPN permission is missing or was revoked.");
             if (!safeToken(sessionId) || !safeToken(modeId)) throw new IllegalArgumentException("Invalid layered session metadata.");
@@ -144,8 +146,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             Libbox.setup(setup);
             Libbox.checkConfig(config);
 
+            pendingRelay = AndroidStartLayerRelay.startIfConfigured(this, session, message -> executor.execute(() -> {
+                if (!explicitStop) shutdown("FAILED", message);
+            }));
             synchronized (lock) {
                 closeCoreLocked();
+                startLayerRelay = pendingRelay;
+                pendingRelay = null;
                 activeSession = session;
                 activeMode = modeId;
                 activeConfig = config;
@@ -164,6 +171,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         } catch (Throwable error) {
             Log.e(TAG, "Layered VPN start failed", error);
             shutdown("FAILED", safeMessage(error));
+        } finally {
+            if (pendingRelay != null) pendingRelay.close();
         }
     }
 
@@ -215,6 +224,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             try { commandServer.closeService(); } catch (Throwable ignored) { }
             try { commandServer.close(); } catch (Throwable ignored) { }
             commandServer = null;
+        }
+        if (startLayerRelay != null) {
+            try { startLayerRelay.close(); } catch (Throwable ignored) { }
+            startLayerRelay = null;
         }
         if (tunDescriptor != null) {
             try { tunDescriptor.close(); } catch (Throwable ignored) { }
