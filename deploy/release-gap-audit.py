@@ -141,18 +141,32 @@ require(
     "retention-days: 1",
 )
 
-# Linux must ship native GTK builds on actual amd64 and ARM runners.
+# Linux must ship the composed v5 -> v4 -> v3 -> core native GTK product on
+# actual amd64 and ARM runners. Do not score an obsolete standalone GTK source.
 require(
-    "client/linux/routervpn-gtk.c",
+    "client/linux/routervpn-gtk-product-v5.c",
     "gtk_window_new",
     "gtk_notebook_new",
+    "--self-test",
+)
+require(
+    "client/linux/routervpn-gtk-product.c",
     "http://127.0.0.1:8788",
     "/api/connect-logical",
     "/api/emergency-stop",
 )
-forbid("client/linux/routervpn-gtk.c", "WebKit", "WebView", "xdg-open", "sensible-browser")
+for rel in (
+    "client/linux/routervpn-gtk-product-v5.c",
+    "client/linux/routervpn-gtk-product-v4.c",
+    "client/linux/routervpn-gtk-product-v3.c",
+    "client/linux/routervpn-gtk-product.c",
+):
+    forbid(rel, "WebKit", "WebView", "xdg-open", "sensible-browser")
 require(
     "client/linux/build-native-app.sh",
+    'SRC="$ROOT/client/linux/routervpn-gtk-product-v5.c"',
+    'SHIPPED=("$SRC"',
+    '"$V4" "$V3" "$CORE")',
     "gtk+-3.0",
     "libcurl",
     "json-glib-1.0",
