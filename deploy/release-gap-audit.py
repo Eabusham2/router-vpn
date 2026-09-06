@@ -61,6 +61,65 @@ require(
     "startLibbox",
 )
 
+# Native Start Layer is a release boundary, not a settings-only feature.
+# Android owns AES+XOR through a VpnService-protected relay and must not release
+# engine ownership until teardown is proved. Apple deliberately supports only
+# the authenticated AES layer until PacketTunnel owns an equivalent protected
+# whitening relay; AES+XOR must remain explicitly fail-closed there.
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidStartLayer.java",
+    'AES_XOR = "aes-256-gcm+xor-whitening"',
+    'AES_METHOD = "2022-blake3-aes-256-gcm"',
+    "AndroidStartLayerRelay.LISTEN_PORT",
+    "XOR whitening is obfuscation only and requires authenticated AES-256-GCM",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java",
+    "AndroidStartLayer.nativeCapabilityReason(currentBundle,c.id)",
+    "startAndProve(bundle,c,cb)",
+    "WireGuard teardown did not prove DOWN before timeout.",
+    "AmneziaWG teardown did not prove DOWN before timeout.",
+    "Libbox teardown did not reach DOWN/FAILED/REVOKED before timeout.",
+    "Xray teardown did not reach DOWN/FAILED/REVOKED before timeout.",
+)
+forbid(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java",
+    "if(AndroidStartLayer.AES_XOR.equals(startLayer))continue;",
+    "l.await(8,TimeUnit.SECONDS);}",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java",
+    "private AndroidStartLayerRelay startLayerRelay",
+    "AndroidStartLayerRelay.startIfConfigured(this, session",
+    "startLayerRelay.close()",
+    "startLayerRelay = null",
+)
+require(
+    "ios/RouterVPN/PacketTunnel/IOSStartLayer.swift",
+    'static let aes = "aes-256-gcm"',
+    'static let aesXOR = "aes-256-gcm+xor-whitening"',
+    'static let aesMethod = "2022-blake3-aes-256-gcm"',
+    "AES-256-GCM + XOR whitening is not available on iOS until PacketTunnel owns a protected local whitening relay",
+    "XOR is never counted as encryption or silently ignored",
+    'outbounds[proxyIndex]["detour"] = aesTag',
+)
+require(
+    "ios/RouterVPN/App/IOSRuntimeSelection.swift",
+    "try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)",
+    "AES-256-GCM + XOR whitening is unavailable on iOS until PacketTunnel owns a protected local whitening relay",
+)
+require(
+    "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
+    "var startLayer: String",
+    "profile.startLayer = prefs.startLayer",
+    "iosConnectionProfilesSchemaVersion = 4",
+)
+forbid(
+    "ios/RouterVPN/PacketTunnel/IOSStartLayer.swift",
+    "XORWhitening = true",
+    "xor_counts_as_encryption",
+)
+
 # Desktop private bundle import must use bounded atomic staging, not write directly
 # into generated/<profile> before the entire bundle and identity proof validate.
 require(
