@@ -44,6 +44,10 @@ final class AndroidProfileSettingsDialog {
             CheckBox requireObfuscation=check(activity,"Require obfuscation for AUTO candidates",profile.optBoolean("auto_require_obfuscation",false)); body.addView(requireObfuscation);
             TextView filterNote=label(activity,"Both filters are Off by default. Enabled filters remove non-matching candidates before AUTO tries them; SMART cannot simplify below the selected requirements."); body.addView(filterNote);
 
+            String[] startLayerValues={AndroidStartLayer.OFF,AndroidStartLayer.AES,AndroidStartLayer.AES_XOR};
+            Spinner startLayer=spinner(activity,new String[]{"Off — default","AES-256-GCM — authenticated Android Libbox modes","AES-256-GCM + XOR whitening — unavailable on this Android build"},index(startLayerValues,profile.optString("start_layer",AndroidStartLayer.OFF))); body.addView(label(activity,"Start encryption / obfuscation layer")); body.addView(startLayer);
+            TextView startLayerNote=label(activity,"AES uses vetted Shadowsocks 2022 BLAKE3 AES-256-GCM and is composed only into proved Android Libbox raw modes (Shadowsocks, Hysteria2, Naive H2/H3). XOR is reversible whitening of already-authenticated ciphertext only. Android refuses AES+XOR until VpnService owns a protected local whitening relay; unsupported modes fail closed."); body.addView(startLayerNote);
+
             Spinner mtu=spinner(activity,new String[]{"Auto measured — default","Fixed / manual","Runtime default"},index(new String[]{"auto","manual","default"},profile.optString("mtu_policy","auto"))); body.addView(label(activity,"MTU policy")); body.addView(mtu);
             EditText manual=new EditText(activity); manual.setHint("Fixed MTU 576–9000"); manual.setInputType(InputType.TYPE_CLASS_NUMBER); int m=profile.optInt("manual_mtu",0); if(m>0)manual.setText(String.valueOf(m)); body.addView(manual);
             CheckBox daita=check(activity,"DAITA-like traffic padding (bounded; supported modes only)",profile.optBoolean("daita_enabled",false)); body.addView(daita);
@@ -54,7 +58,7 @@ final class AndroidProfileSettingsDialog {
             Button forwarding=new Button(activity); forwarding.setAllCaps(false); forwarding.setText("Port forwarding / Protected DMZ"); forwarding.setOnClickListener(v->new AlertDialog.Builder(activity).setTitle("Port forwarding / Protected DMZ").setMessage("Incoming forwarding is owned by the authenticated private home-node Setup Center/router-agent. It is available only to routable tunnel modes; proxy-only paths never claim arbitrary DNAT. Configure it there, then validate it off-LAN.").setPositiveButton("OK",null).show()); body.addView(forwarding);
             Button mtuRetest=new Button(activity); mtuRetest.setAllCaps(false); mtuRetest.setText("MTU / Retest current path…"); mtuRetest.setOnClickListener(v->new AlertDialog.Builder(activity).setTitle("MTU Retest").setMessage("A real MTU Retest is meaningful only on the current selected node/config/path. Keep Auto measured for normal use. If no live path-specific tester is available on this Android runtime, Router VPN must not invent a result; the next proven connection keeps the last valid measurement or runtime default truthfully.").setPositiveButton("OK",null).show()); body.addView(mtuRetest);
             Button connectionProfiles=new Button(activity);connectionProfiles.setAllCaps(false);connectionProfiles.setText("Connection profiles — Add / Load / Update / Delete");connectionProfiles.setOnClickListener(v->AndroidConnectionProfilesDialog.show(activity,store,new AndroidStandardExitStore(activity),onSaved));body.addView(connectionProfiles);
-            TextView profileNote=label(activity,"Connection profiles reference the selected Router/Custom node and copy only non-secret Mode/CUSTOM, DNS, kill-switch, IPv6, WG/AWG base/fallback, AUTO encryption/obfuscation requirements, MTU, DAITA/Jumbo/SOCKS policy where supported, and multihop choices. Node keys, API tokens and external credentials stay in their private node stores. Loading a profile never counts as runtime proof.");body.addView(profileNote);
+            TextView profileNote=label(activity,"Connection profiles reference the selected Router/Custom node and copy only non-secret Mode/CUSTOM, DNS, kill-switch, IPv6, WG/AWG base/fallback, Start Layer, AUTO encryption/obfuscation requirements, MTU, DAITA/Jumbo/SOCKS policy where supported, and multihop choices. Node keys, API tokens and external credentials stay in their private node stores. Loading a profile never counts as runtime proof.");body.addView(profileNote);
 
             ScrollView scroll=new ScrollView(activity);scroll.addView(body);
             AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("Settings").setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
@@ -62,6 +66,8 @@ final class AndroidProfileSettingsDialog {
                 try {
                     if (AndroidVpnMutationGuard.isBusy(activity)) throw new IllegalStateException("VPN became active or began transitioning while settings were open; disconnect and try again.");
                     String[] killValues={"off","on-connect","always"}, ipv6Values={"on","auto","off"}, baseValues={"auto","wg","awg"}, mtuValues={"auto","manual","default"};
+                    String startLayerValue=startLayerValues[startLayer.getSelectedItemPosition()];
+                    if(AndroidStartLayer.AES_XOR.equals(startLayerValue))throw new IllegalStateException("AES-256-GCM + XOR whitening is visible for product parity but unavailable on this Android build until VpnService owns a protected local whitening relay. XOR is obfuscation only; Router VPN will not silently ignore it.");
                     int manualValue=manual.getText().toString().trim().isEmpty()?0:Integer.parseInt(manual.getText().toString().trim()); String mtuPolicy=mtuValues[mtu.getSelectedItemPosition()];
                     if("manual".equals(mtuPolicy)&&(manualValue<576||manualValue>9000))throw new IllegalArgumentException("Fixed MTU must be 576–9000."); if(!"manual".equals(mtuPolicy))manualValue=0;
                     profile.put("home_lan_access",lan.isChecked());
@@ -69,6 +75,7 @@ final class AndroidProfileSettingsDialog {
                     profile.put("ipv6_mode",ipv6Values[ipv6.getSelectedItemPosition()]);
                     profile.put("base_tunnel",baseValues[base.getSelectedItemPosition()]); profile.put("base_fallback",fallback.isChecked());
                     profile.put("auto_require_encrypted",requireEncrypted.isChecked()); profile.put("auto_require_obfuscation",requireObfuscation.isChecked());
+                    profile.put("start_layer",startLayerValue);
                     profile.put("mtu_policy",mtuPolicy); profile.put("manual_mtu",manualValue);
                     profile.put("daita_enabled",daita.isChecked()); profile.put("jumbo_tun",jumbo.isChecked()); profile.put("socks_enabled",socks.isChecked());
                     if(!profile.has("startup_mode")||profile.optString("startup_mode","").trim().isEmpty())profile.put("startup_mode","smart-auto");
