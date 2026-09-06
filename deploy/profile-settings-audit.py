@@ -221,8 +221,8 @@ ios_profiles = require(
     "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "iosConnectionProfilesSchemaVersion = 4", "IOSConnectionProfileEnvelope", "Add", "Load", "Update", "Delete",
     "routervpn.connection-profiles.v1", "routervpn.unified.mode.v1", "routervpn.unified.custom-presets.v1",
     "dnsMode", "dnsProtocol", "multihopEnabled", "multihopEntryID", "multihopExitID",
-    "Current iOS does not execute full desktop multihop", "rejected at Add/Update time",
-    "Connect remains a separate action", "No RouterProfile/API token/private key/external secret payload",
+    "Current iOS also does not execute full desktop multihop", "this setup is not saved as a misleading iOS connection profile",
+    "Connect separately to prove the path", "No RouterProfile/API token/private key/external secret payload",
 )
 for forbidden in ("apiToken", "privateKey", "presharedKey", "socksPassword", "ExternalNodeConfig"):
     if forbidden in ios_profiles:
