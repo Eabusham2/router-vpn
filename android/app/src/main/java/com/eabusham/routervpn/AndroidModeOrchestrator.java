@@ -75,7 +75,9 @@ final class AndroidModeOrchestrator {
                 if(candidates.isEmpty()){
                     JSONObject profile=selectedProfile(load(bundle));
                     String requirement=autoRequirementLabel(profile);
-                    throw new IllegalStateException(custom==null?"No compliant native Android AUTO candidate is available"+(requirement.isEmpty()?".":" after "+requirement+" filtering."):"No compliant native Android candidate contains every requested CUSTOM layer.");
+                    String start=profile==null?AndroidStartLayer.OFF:AndroidStartLayer.selectedMode(load(bundle));
+                    String startSuffix=AndroidStartLayer.OFF.equals(start)?"":" with Start Layer "+start;
+                    throw new IllegalStateException(custom==null?"No compliant native Android AUTO candidate is available"+(requirement.isEmpty()?"":" after "+requirement+" filtering")+startSuffix+".":"No compliant native Android candidate contains every requested CUSTOM layer"+startSuffix+".");
                 }
                 Candidate best=null;
                 for(Candidate c:candidates){cb.progress(requested+" trying "+c.name+"…");if(startAndProve(bundle,c,cb)){best=c;break;}}
@@ -115,7 +117,7 @@ final class AndroidModeOrchestrator {
                 String firstId=variants.optString(first,"");if(!firstId.isEmpty()&&!candidateIds.contains(firstId))candidateIds.add(firstId);
                 if(("auto".equals(pref)||(profileFallback&&logicalFallback))){String secondId=variants.optString(second,"");if(!secondId.isEmpty()&&!candidateIds.contains(secondId))candidateIds.add(secondId);}
                 Candidate winner=null;List<String> failures=new ArrayList<>();
-                for(String rawId:candidateIds){Candidate c=byId.get(rawId);if(c==null){failures.add(rawId+": unavailable on Android");continue;}cb.progress(logical.optString("name",logicalId)+" trying "+c.name+"…");if(startAndProve(bundle,c,cb)){winner=c;break;}failures.add(rawId+": selected-node proof failed");}
+                for(String rawId:candidateIds){Candidate c=byId.get(rawId);if(c==null){failures.add(rawId+": unavailable on Android under current node/Start Layer policy");continue;}cb.progress(logical.optString("name",logicalId)+" trying "+c.name+"…");if(startAndProve(bundle,c,cb)){winner=c;break;}failures.add(rawId+": selected-node proof or Start Layer requirement failed");}
                 if(winner==null)throw new IllegalStateException("Logical mode "+logical.optString("name",logicalId)+" failed closed: "+String.join(" • ",failures));
                 current=winner;AndroidHomeStateStore.connected(context,logicalId,winner.id,baseFor(winner),"",activeNodeId);
                 cb.finished(true,winner.id,logical.optString("name",logicalId)+" connected with runtime "+winner.id+" after selected-node proof.");
@@ -130,9 +132,9 @@ final class AndroidModeOrchestrator {
         executor.execute(()->{
             try{
                 List<Candidate> candidates=collect(bundle,false,false);candidates.sort(Comparator.<Candidate>comparingInt(AndroidModeOrchestrator::protectionRank).reversed().thenComparingInt(c->c.order));
-                if(candidates.isEmpty())throw new IllegalStateException("ALL found no truthful Android-native branch. Composite desktop MAX sidecar chains are not silently downgraded.");
+                if(candidates.isEmpty())throw new IllegalStateException("ALL found no truthful Android-native branch under the current Start Layer policy. Composite desktop MAX sidecar chains are not silently downgraded.");
                 Candidate best=null;for(Candidate c:candidates){cb.progress("ALL testing protected Android-native branch "+c.name+"…");if(startAndProve(bundle,c,cb)){best=c;break;}}
-                if(best==null)throw new IllegalStateException("ALL failed closed because no Android-native branch passed selected-node path proof.");
+                if(best==null)throw new IllegalStateException("ALL failed closed because no Android-native branch passed Start Layer requirements and selected-node path proof.");
                 current=best;AndroidHomeStateStore.connected(context,"ALL",best.id,baseFor(best),"",activeNodeId);
                 cb.finished(true,best.id,"ALL selected the strongest available Android-native branch that passed selected-node path proof: "+best.name+". Composite desktop MAX chains remain separate and are never faked on Android.");
             }catch(Throwable error){try{stopCurrent(false);}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
@@ -149,6 +151,9 @@ final class AndroidModeOrchestrator {
     }
 
     private boolean startAndProve(File bundle,Candidate c,Callback cb)throws Exception{
+        JSONObject currentBundle=load(bundle);
+        String startReason=AndroidStartLayer.nativeCapabilityReason(currentBundle,c.id);
+        if(!startReason.isEmpty()){cb.progress(c.name+" rejected before launch: "+startReason);return false;}
         stopCurrent(false);boolean up;
         if(c.kind==Kind.WG)up=startWg(bundle);else if(c.kind==Kind.AWG)up=startAwg(bundle);else if(c.kind==Kind.XRAY)up=startXray(bundle,c.id);else up=startLibbox(bundle,c.id);
         if(!up){cb.progress(c.name+" failed to establish a native VPN TUN.");stopCurrent(false);return false;}
@@ -183,12 +188,18 @@ final class AndroidModeOrchestrator {
         JSONObject root=load(bundle);JSONObject profiles=root.optJSONObject("profiles");JSONArray catalog=root.optJSONArray("modes");boolean strict=AndroidKillSwitchPolicy.strictRequested(root);JSONObject profile=selectedProfile(root);
         boolean requireEncrypted=applyAutoRequirements&&profile!=null&&profile.optBoolean("auto_require_encrypted",false);
         boolean requireObfuscation=applyAutoRequirements&&profile!=null&&profile.optBoolean("auto_require_obfuscation",false);
+        String startLayer=profile==null?AndroidStartLayer.OFF:AndroidStartLayer.selectedMode(root);
+        boolean startLayerEnabled=!AndroidStartLayer.OFF.equals(startLayer);
         Set<String>direct=new HashSet<>();for(NativeSingBoxController.ModeInfo m:sing.listDirectLibboxModes(bundle))direct.add(m.id);Set<String>directXray=new HashSet<>();for(NativeXrayController.ModeInfo m:xray.listDirectXrayModes(bundle))directXray.add(m.id);
         List<Candidate>out=new ArrayList<>();if(catalog==null)return out;
         for(int i=0;i<catalog.length();i++){
             JSONObject m=catalog.optJSONObject(i);if(m==null||(autoOnly&&!m.optBoolean("auto_eligible",false)))continue;String id=m.optString("id","");List<String>layers=strings(m.optJSONArray("layers"));
             if(requireEncrypted&&!hasEncrypted(layers))continue;if(requireObfuscation&&!hasObfuscation(layers))continue;
             Kind kind=null;if(!strict&&"wg".equals(id)&&has(profiles,"wg","wg.conf"))kind=Kind.WG;else if(!strict&&"awg2-fast".equals(id)&&has(profiles,"awg2-fast","awg.conf"))kind=Kind.AWG;else if(direct.contains(id))kind=Kind.LIBBOX;else if(directXray.contains(id))kind=Kind.XRAY;if(kind==null)continue;
+            if(startLayerEnabled){
+                if(kind!=Kind.LIBBOX||!AndroidStartLayer.supportsRawMode(id))continue;
+                if(AndroidStartLayer.AES_XOR.equals(startLayer))continue;
+            }
             out.add(new Candidate(kind,id,m.optString("name",id),layers,strings(m.optJSONArray("smart_simplify")),i));
         }
         return out;
