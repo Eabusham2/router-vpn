@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Truthful Android Home state. Cached profile public_ip is never treated as a live exit proof. */
 final class AndroidHomeSummary {
@@ -145,17 +147,22 @@ final class AndroidHomeSummary {
         try { activity.startService(new Intent(activity, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_STOP)); } catch (Throwable ignored) {}
         try { activity.startService(new Intent(activity, XrayVpnService.class).setAction(XrayVpnService.ACTION_STOP)); } catch (Throwable ignored) {}
         CountDownLatch rawStops=new CountDownLatch(2);
-        runtime.wireGuard.disconnect((state,message,error)->rawStops.countDown());
-        runtime.amneziaWG.disconnect((state,message,error)->rawStops.countDown());
+        AtomicBoolean wgDown=new AtomicBoolean(false),awgDown=new AtomicBoolean(false);
+        AtomicReference<String> rawFailure=new AtomicReference<>("");
+        runtime.wireGuard.disconnect((state,message,error)->{if(error==null&&state==com.wireguard.android.backend.Tunnel.State.DOWN)wgDown.set(true);else rawFailure.compareAndSet("","WireGuard: "+(error==null?message:safe(error)));rawStops.countDown();});
+        runtime.amneziaWG.disconnect((state,message,error)->{if(error==null&&state==org.amnezia.awg.backend.Tunnel.State.DOWN)awgDown.set(true);else rawFailure.compareAndSet("","AmneziaWG: "+(error==null?message:safe(error)));rawStops.countDown();});
         provedSignature=""; provedExit="";
         new Thread(() -> {
             try {
-                rawStops.await(4, TimeUnit.SECONDS);
+                if(!rawStops.await(4, TimeUnit.SECONDS))throw new IllegalStateException("Raw WireGuard/AmneziaWG teardown timed out; session ownership retained.");
+                if(!rawFailure.get().isEmpty())throw new IllegalStateException("Raw tunnel teardown failed: "+rawFailure.get());
+                if(!wgDown.get()||runtime.wireGuard.getState()!=com.wireguard.android.backend.Tunnel.State.DOWN)throw new IllegalStateException("WireGuard did not prove DOWN during Emergency Disconnect.");
+                if(!awgDown.get()||runtime.amneziaWG.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN)throw new IllegalStateException("AmneziaWG did not prove DOWN during Emergency Disconnect.");
                 long deadline=System.currentTimeMillis()+5000L;
                 while(System.currentTimeMillis()<deadline&&ownedVpnNetwork(activity)!=null)Thread.sleep(150L);
                 if (ownedVpnNetwork(activity) != null) throw new IllegalStateException("A Router VPN-owned Android VPN network is still active after emergency-stop requests.");
                 AndroidHomeStateStore.disconnected(activity);
-                callback.done("Emergency Disconnect completed; no Router VPN-owned VPN network remains.", null);
+                callback.done("Emergency Disconnect completed; all raw tunnels proved DOWN and no Router VPN-owned VPN network remains.", null);
             } catch(Throwable error) { AndroidHomeStateStore.failed(activity, safe(error)); callback.done("Emergency Disconnect incomplete: "+safe(error), error); }
         }, "routervpn-emergency-verify").start();
     }
