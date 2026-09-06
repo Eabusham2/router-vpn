@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -56,7 +57,8 @@ func writeKeyConfig(t *testing.T, method, password string, second bool) string {
 }
 
 func TestDeriveKeyUsesOnlyAES256GCMShadowsocks2022(t *testing.T) {
-	path := writeKeyConfig(t, "2022-blake3-aes-256-gcm", "0123456789abcdef0123456789abcdef", false)
+	password := "0123456789abcdef0123456789abcdef"
+	path := writeKeyConfig(t, "2022-blake3-aes-256-gcm", password, false)
 	first, err := deriveKey(path)
 	if err != nil {
 		t.Fatal(err)
@@ -67,6 +69,10 @@ func TestDeriveKeyUsesOnlyAES256GCMShadowsocks2022(t *testing.T) {
 	}
 	if first != second {
 		t.Fatal("same private SS2022 secret produced different whitening keys")
+	}
+	want := sha256.Sum256([]byte(whiteningLabel + password))
+	if first != want {
+		t.Fatal("whitening key is not bound to the canonical label plus authenticated AES credential")
 	}
 	if first == ([32]byte{}) {
 		t.Fatal("derived whitening key is all zero")
@@ -137,5 +143,17 @@ func TestXORWhiteningRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(decoded, plain) {
 		t.Fatalf("round trip mismatch: got %q want %q", decoded, plain)
+	}
+}
+
+func TestRelayResourceLimitsStayBounded(t *testing.T) {
+	if maxTCPConnections <= 0 || maxTCPConnections > 1024 {
+		t.Fatalf("unsafe TCP relay connection limit: %d", maxTCPConnections)
+	}
+	if maxUDPSessions <= 0 || maxUDPSessions > 1024 {
+		t.Fatalf("unsafe UDP relay session limit: %d", maxUDPSessions)
+	}
+	if idleTimeout <= 0 {
+		t.Fatal("relay idle timeout must be positive")
 	}
 }
