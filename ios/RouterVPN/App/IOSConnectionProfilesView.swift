@@ -21,6 +21,7 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var ipv6Mode: String
     var baseTunnel: String
     var baseFallback: Bool
+    var startLayer: String
     var autoRequireEncrypted: Bool
     var autoRequireObfuscation: Bool
     var mtuPolicy: String
@@ -35,7 +36,7 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var dnsPath: String
 
     enum CodingKeys: String, CodingKey {
-        case homeLANAccess, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback
+        case homeLANAccess, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback, startLayer
         case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect
         case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath
     }
@@ -50,6 +51,7 @@ private extension IOSConnectionSafePreferences {
         ipv6Mode = try c.decodeIfPresent(String.self, forKey: .ipv6Mode) ?? "on"
         baseTunnel = try c.decodeIfPresent(String.self, forKey: .baseTunnel) ?? "auto"
         baseFallback = try c.decodeIfPresent(Bool.self, forKey: .baseFallback) ?? false
+        startLayer = try c.decodeIfPresent(String.self, forKey: .startLayer) ?? "off"
         autoRequireEncrypted = try c.decodeIfPresent(Bool.self, forKey: .autoRequireEncrypted) ?? false
         autoRequireObfuscation = try c.decodeIfPresent(Bool.self, forKey: .autoRequireObfuscation) ?? false
         mtuPolicy = try c.decodeIfPresent(String.self, forKey: .mtuPolicy) ?? "auto"
@@ -158,6 +160,7 @@ private enum IOSConnectionProfileStore {
                 ipv6Mode: (selected.ipv6Mode ?? "on").lowercased(),
                 baseTunnel: (selected.baseTunnel ?? "auto").lowercased(),
                 baseFallback: selected.baseFallback ?? false,
+                startLayer: (selected.startLayer ?? "off").lowercased(),
                 autoRequireEncrypted: selected.autoRequireEncrypted ?? false,
                 autoRequireObfuscation: selected.autoRequireObfuscation ?? false,
                 mtuPolicy: (selected.mtuPolicy ?? "auto").lowercased(),
@@ -221,6 +224,7 @@ private enum IOSConnectionProfileStore {
         profile.ipv6Mode = prefs.ipv6Mode
         profile.baseTunnel = prefs.baseTunnel
         profile.baseFallback = prefs.baseFallback
+        profile.startLayer = prefs.startLayer
         profile.autoRequireEncrypted = prefs.autoRequireEncrypted
         profile.autoRequireObfuscation = prefs.autoRequireObfuscation
         profile.mtuPolicy = prefs.mtuPolicy
@@ -304,6 +308,8 @@ private enum IOSConnectionProfileStore {
         guard ["on", "auto", "off"].contains(p.ipv6Mode) else { throw issue("Connection profile contains an invalid IPv6 policy.") }
         p.baseTunnel = p.baseTunnel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard ["auto", "wg", "awg"].contains(p.baseTunnel) else { throw issue("Connection profile contains an invalid WG/AWG base.") }
+        p.startLayer = p.startLayer.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(p.startLayer) else { throw issue("Connection profile contains an invalid Start Layer preference.") }
         p.mtuPolicy = p.mtuPolicy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard ["auto", "manual", "default"].contains(p.mtuPolicy) else { throw issue("Connection profile contains an invalid MTU policy.") }
         if p.mtuPolicy == "manual" {
@@ -437,7 +443,7 @@ struct IOSConnectionProfilesView: View {
         NavigationStack {
             Form {
                 Section("Connection profile") {
-                    Text("A connection profile stores the selected node ID plus non-secret Mode/CUSTOM layers, home-LAN policy, DNS, kill switch, IPv6, WG/AWG base/fallback, AUTO encryption/obfuscation requirements, MTU, and startup/autoconnect choices. Router keys, API tokens, SOCKS credentials and external protocol secrets stay only in the linked node bundle/store.")
+                    Text("A connection profile stores the selected node ID plus non-secret Mode/CUSTOM layers, home-LAN policy, DNS, kill switch, IPv6, WG/AWG base/fallback, Start Layer, AUTO encryption/obfuscation requirements, MTU, and startup/autoconnect choices. Router keys, API tokens, SOCKS credentials and external protocol secrets stay only in the linked node bundle/store.")
                         .font(.caption).foregroundStyle(.secondary)
                     TextField("Profile name", text: $name)
                     Picker("Saved profile", selection: $selectedID) {
@@ -457,7 +463,7 @@ struct IOSConnectionProfilesView: View {
                     if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary) }
                 }
                 Section("Capability truth") {
-                    Text("Current iOS does not execute full desktop multihop, so an imported Router node carrying desktop-style multihop choices is rejected at Add/Update time rather than creating an iOS profile that cannot be loaded. Disable multihop or save it from a supported desktop/Android path. Connect remains a separate action so PacketTunnel still has to establish and prove the real path.")
+                    Text("Current iOS preserves the Router node Start Layer choice in imported/saved profiles but does not execute the desktop Start-Layer relay itself. Current iOS also does not execute full desktop multihop. Unsupported runtime choices are preserved as profile metadata rather than falsely advertised as an active iOS dataplane feature.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -483,7 +489,7 @@ struct IOSConnectionProfilesView: View {
     private func delete() { guard let selectedID else { return }; do { try IOSConnectionProfileStore.delete(model: model, id: selectedID); status = "Deleted saved connection profile."; self.selectedID = nil; refresh() } catch { status = error.localizedDescription } }
 }
 
-// iOS connection-profile contract: Add / Load / Update / Delete complete non-secret choices supported by the current iOS dataplane, including visible AUTO encryption/obfuscation requirements.
-// Unsupported desktop multihop is rejected before save; load validates everything and applies one bundle update before selection changes.
+// iOS connection-profile contract: Add / Load / Update / Delete complete non-secret choices supported by the current iOS profile model, including Start Layer preservation and visible AUTO encryption/obfuscation requirements.
+// Unsupported desktop Start-Layer runtime/multihop are not falsely advertised as native iOS dataplane capabilities; metadata remains round-trip safe.
 // Profile mutation is blocked while connected or while NetworkExtension is connecting/reasserting/disconnecting.
 // No RouterProfile/API token/private key/external secret payload is encoded into this store.
