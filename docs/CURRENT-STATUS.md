@@ -124,6 +124,29 @@ Router VPN supports catalog/default MTU, manual MTU, safe PMTU-based auto select
 
 The current source also implements a bounded **throughput-aware MTU optimizer** after the selected private Router VPN path is proven. It tests safe candidate MTUs with bidirectional packet success, RTT and private-tunnel transfer-rate measurements, persists the winner by path context, and restores the original MTU if optimization fails. Windows has a native PowerShell implementation and Unix-like platforms use the shared optimizer contract. This remains subject to physical performance/path-change validation; it is not evidence that Jumbo or any specific MTU works Internet-wide.
 
+## Speed Lab
+
+Router VPN has a dedicated native **Speed Lab** separate from lightweight live telemetry. By default it tests the exact current path; where the platform owns the required dataplane it can also build a temporary test configuration without overwriting the saved connection profile, run the test, and restore the prior runtime afterward.
+
+The result contract includes real download/upload Mbps, idle latency distribution (including min/median/average/P90/max and jitter), download-loaded latency, upload-loaded latency, bufferbloat deltas, transfer rounds/duration, and Auto/custom minimum/maximum test-time controls. The tester uses bounded multi-stream transfers rather than deriving Mbps from RTT.
+
+For real multihop implementations, entry and exit measurements are independently attributed to the exact launched graph. Desktop/Android hop measurements use dedicated proof lanes and revalidate the graph/session so an entry value cannot be copied from or confused with the exit. iOS does not expose desktop-equivalent temporary multihop testing because full Router VPN multihop is not implemented there. In-flight results are rejected if the session/graph/config changes before adoption.
+
+See `docs/SPEED-LAB.md` for the detailed measurement and temporary-transaction contract.
+
+## Tor censorship circumvention
+
+Router VPN's Tor support is a censorship-evasion path, not homemade packet encryption. The supported transport family is **obfs4, meek/meek_lite, Snowflake, WebTunnel, and validated Auto/Custom bridge sets**. Profile input cannot inject `ClientTransportPlugin` commands or arbitrary torrc execution; the trusted runtime owns pluggable-transport registration and Tor bootstrap.
+
+- **Windows x64** uses the pinned native Tor Expert Bundle/Lyrebird lifecycle.
+- **macOS and Linux** use Router VPN-owned pinned Lyrebird/Tor runtime paths.
+- **Windows ARM64** stays unavailable until Tor Project provides a pinned native Expert Bundle for that architecture.
+- **Android and iOS/iPadOS** stay unavailable for Tor bridges until Router VPN ships a real native Tor + pluggable-transport `VpnService`/PacketTunnel dataplane; they are never approximated as plain SOCKS5.
+
+A single literal obfs4 bridge can use the stricter endpoint-owned pre-tunnel policy. Dynamic/CDN/WebRTC transports such as Snowflake, meek and WebTunnel do **not** pretend the existing endpoint-only strict kill switch can safely pre-whitelist their changing bootstrap egress; those combinations fail closed unless the requested policy is compatible. After bootstrap, the proved Tor circuit remains the encrypted final path and Tor is not advertised as a fake upstream-hop graph.
+
+The project deliberately supersedes earlier XOR/homebrew-cipher ideas with Tor's vetted circuit cryptography and real pluggable transports.
+
 ## Setup Center Methods
 
 Setup Center Methods is for simple, interoperable external/native-compatible configurations. Complex Router VPN stacks remain in the Router VPN app. Current method metadata explicitly distinguishes public direct tunnels/proxies from private/tunnel-only SOCKS5 and records whether an import/QR contract is actually supported.
