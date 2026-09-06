@@ -86,7 +86,7 @@ func TestAndroidNativeWireGuardAmneziaWGLayeredAndNarrowMultihopAreReal(t *testi
 		t.Fatal("Android Gradle must package one combined libbox Go runtime and no standalone libXray AAR")
 	}
 	orchestrator := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java")
-	for _, required := range []string{"AndroidPathProbe.prove(bundle", "No candidate passed selected-node path proof", "SMART AUTO could not restore its last-known-good mode", "void all(File bundle,Callback cb)", "protectionRank", "ALL failed closed because no Android-native branch passed selected-node path proof"} {
+	for _, required := range []string{"AndroidPathProbe.prove(bundle", "No candidate passed selected-node path proof", "SMART AUTO could not restore its last-known-good mode", "void all(File bundle,Callback cb)", "protectionRank", "ALL failed closed because no Android-native branch passed Start Layer requirements and selected-node path proof"} {
 		if !strings.Contains(orchestrator, required) {
 			t.Fatalf("Android AUTO/SMART truth boundary missing %q", required)
 		}
