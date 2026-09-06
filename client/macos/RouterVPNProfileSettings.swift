@@ -15,6 +15,7 @@ private struct RouterVPNProfileSettingsPayloadV2: Codable {
     var autoRequireObfuscation: Bool
     var baseTunnel: String
     var baseFallback: Bool
+    var startLayer: String
     var mtuPolicy: String
     var manualMTU: Int?
     var effectiveMTU: Int?
@@ -26,7 +27,7 @@ private struct RouterVPNProfileSettingsPayloadV2: Codable {
     static let unavailableDefaults = RouterVPNProfileSettingsPayloadV2(
         homeLANAccess: false, killSwitchPolicy: "off", ipv6Mode: "on", startupMode: "smart-auto",
         autoConnect: false, autoRequireEncrypted: false, autoRequireObfuscation: false,
-        baseTunnel: "auto", baseFallback: true, mtuPolicy: "auto", manualMTU: nil,
+        baseTunnel: "auto", baseFallback: true, startLayer: "off", mtuPolicy: "auto", manualMTU: nil,
         effectiveMTU: nil, effectiveMTUSource: nil, daitaEnabled: false, jumboTUN: false, socksEnabled: false
     )
 
@@ -40,6 +41,7 @@ private struct RouterVPNProfileSettingsPayloadV2: Codable {
         case autoRequireObfuscation = "auto_require_obfuscation"
         case baseTunnel = "base_tunnel"
         case baseFallback = "base_fallback"
+        case startLayer = "start_layer"
         case mtuPolicy = "mtu_policy"
         case manualMTU = "manual_mtu"
         case effectiveMTU = "effective_mtu"
@@ -114,7 +116,7 @@ private final class MacConnectionProfileControls: NSObject {
         root.orientation = .vertical; root.spacing = 6
         let separator = NSBox(); separator.boxType = .separator; root.addArrangedSubview(separator)
         let title = NSTextField(labelWithString: "Connection profiles"); title.font = .systemFont(ofSize: 15, weight: .semibold); root.addArrangedSubview(title)
-        let note = NSTextField(wrappingLabelWithString: "Save/load the selected node plus current Mode/CUSTOM layers, DNS, kill switch, IPv6, WG/AWG base/fallback, AUTO encryption/obfuscation requirements, MTU and multihop choices. Node keys, API tokens and external credentials stay only in the linked node store and are never duplicated here.")
+        let note = NSTextField(wrappingLabelWithString: "Save/load the selected node plus current Mode/CUSTOM layers, DNS, kill switch, IPv6, WG/AWG base/fallback, authenticated Start Layer, AUTO encryption/obfuscation requirements, MTU and multihop choices. Node keys, API tokens and external credentials stay only in the linked node store and are never duplicated here.")
         note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; root.addArrangedSubview(note)
         name.placeholderString = "Profile name"; root.addArrangedSubview(name); root.addArrangedSubview(popup)
         let row = NSStackView(); row.orientation = .horizontal; row.spacing = 6
@@ -298,7 +300,7 @@ extension ProductWindowController {
                 let form = NSStackView()
                 form.orientation = .vertical
                 form.spacing = 8
-                form.frame = NSRect(x: 0, y: 0, width: 570, height: 760)
+                form.frame = NSRect(x: 0, y: 0, width: 570, height: 800)
 
                 func popup(_ title: String, values: [(String,String)], selected: String) -> NSPopUpButton {
                     let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8
@@ -321,6 +323,9 @@ extension ProductWindowController {
                 let autoObfuscated = check("Require obfuscation for AUTO candidates", value: settings.autoRequireObfuscation)
                 let autoNote = NSTextField(wrappingLabelWithString: "Both AUTO requirements are Off by default. When enabled, candidates are filtered before connection attempts; SMART simplification cannot drop below the requirement.")
                 autoNote.textColor = .secondaryLabelColor; autoNote.font = .systemFont(ofSize: 11); form.addArrangedSubview(autoNote)
+                let startLayer = popup("Start layer", values: [("Off — default","off"),("AES-256-GCM — authenticated","aes-256-gcm"),("AES-256-GCM + XOR whitening","aes-256-gcm+xor-whitening")], selected: settings.startLayer)
+                let startLayerNote = NSTextField(wrappingLabelWithString: "AES uses vetted Shadowsocks 2022 AES-256-GCM. XOR only whitens already-authenticated ciphertext and is never counted as encryption. Unsupported graphs fail closed.")
+                startLayerNote.textColor = .secondaryLabelColor; startLayerNote.font = .systemFont(ofSize: 11); form.addArrangedSubview(startLayerNote)
                 let mtu = popup("MTU", values: [("Auto measured — default","auto"),("Fixed / manual","manual"),("Runtime default","default")], selected: settings.mtuPolicy)
                 let mtuRow = NSStackView(); mtuRow.orientation = .horizontal; mtuRow.spacing = 8; mtuRow.addArrangedSubview(NSTextField(labelWithString: "Fixed MTU 576–9000"))
                 let manual = NSTextField(string: (settings.manualMTU ?? 0) > 0 ? String(settings.manualMTU!) : ""); mtuRow.addArrangedSubview(manual); form.addArrangedSubview(mtuRow)
@@ -336,7 +341,7 @@ extension ProductWindowController {
 
                 let connectionProfiles = MacConnectionProfileControls(api: self.api, owner: self)
                 form.addArrangedSubview(connectionProfiles.root)
-                let nodePreferenceViews: [NSControl] = [lan, kill, ipv6, base, fallback, autoEncrypted, autoObfuscated, mtu, manual, daita, jumbo, socks, startup, auto, forwarding, retest]
+                let nodePreferenceViews: [NSControl] = [lan, kill, ipv6, base, fallback, autoEncrypted, autoObfuscated, startLayer, mtu, manual, daita, jumbo, socks, startup, auto, forwarding, retest]
                 if !supportsNodeSettings || settingsMutationBusy {
                     nodePreferenceViews.forEach { $0.isEnabled = false }
                 }
@@ -351,6 +356,7 @@ extension ProductWindowController {
                     settings.baseFallback = fallback.state == .on
                     settings.autoRequireEncrypted = autoEncrypted.state == .on
                     settings.autoRequireObfuscation = autoObfuscated.state == .on
+                    settings.startLayer = (startLayer.selectedItem?.representedObject as? String) ?? "off"
                     settings.mtuPolicy = (mtu.selectedItem?.representedObject as? String) ?? "auto"
                     let manualValue = Int(manual.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
                     if settings.mtuPolicy == "manual" && !(576...9000).contains(manualValue) { validationError = "Fixed MTU must be 576–9000." }
@@ -378,7 +384,7 @@ extension ProductWindowController {
     }
 }
 
-// Unified settings contract: SMART AUTO default, IPv6 On default, Auto measured MTU,
+// Unified settings contract: SMART AUTO default, IPv6 On default, authenticated AES/XOR-whitening Start Layer, Auto measured MTU,
 // fixed MTU override + Retest, DAITA-like traffic padding, Jumbo TUN, kill switch,
 // AUTO Require encrypted / Require obfuscation, LAN access and forwarding entry point.
 // /api/profile/settings only for Router-node preferences; connection-profile CRUD uses
