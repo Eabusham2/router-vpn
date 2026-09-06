@@ -63,6 +63,20 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 		}
 	}
 
+	orchestrator := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java")
+	for _, required := range []string{
+		"AndroidStartLayer.nativeCapabilityReason(currentBundle,c.id)",
+		"if(kind!=Kind.LIBBOX||!AndroidStartLayer.supportsRawMode(id))continue;",
+		"startAndProve(bundle,c,cb)",
+	} {
+		if !strings.Contains(orchestrator, required) {
+			t.Fatalf("Android AUTO/SMART/ALL no longer delegates Start Layer eligibility to the real runtime capability: missing %q", required)
+		}
+	}
+	if strings.Contains(orchestrator, "if(AndroidStartLayer.AES_XOR.equals(startLayer))continue;") {
+		t.Fatal("Android AUTO/SMART/ALL still filters AES+XOR even though the VpnService-owned protected relay is implemented")
+	}
+
 	service := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java")
 	for _, required := range []string{
 		"private AndroidStartLayerRelay startLayerRelay",
