@@ -88,6 +88,7 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 			runtimeReason = runtimeMode + " has no proved Start Layer composition path yet."
 		}
 	}
+	provedConnected := st.Connected && strings.EqualFold(strings.TrimSpace(st.Phase), "connected")
 
 	modes := []startLayerModeCapability{
 		{
@@ -124,7 +125,7 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 		"current_runtime_mode":            runtimeMode,
 		"current_runtime_supported":       runtimeSupported,
 		"current_runtime_reason":          runtimeReason,
-		"current_runtime_layer_active":    effectiveNodeSupported && effectiveLayer != common.StartLayerOff && runtimeSupported,
+		"current_runtime_layer_active":    provedConnected && effectiveNodeSupported && effectiveLayer != common.StartLayerOff && runtimeSupported,
 		"xor_counts_as_encryption":        false,
 		"xor_without_aead_allowed":        false,
 		"authenticated_aead_required":     true,
