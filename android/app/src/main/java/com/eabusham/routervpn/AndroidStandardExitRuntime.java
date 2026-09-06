@@ -11,6 +11,7 @@ import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -20,6 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class AndroidStandardExitRuntime implements AutoCloseable {
     interface Callback{void progress(String message);void finished(boolean ok,String message);}
     private static final long START_TIMEOUT_MS=20000L;
+    private static final long STOP_TIMEOUT_MS=8000L;
     private final Context context;
     private final NativeSingBoxController singBox;
     private final AndroidStandardExitController builder;
@@ -70,10 +72,20 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             String observed=proveExpectedPublicIp(exit.expectedPublicIp);
             AndroidHomeStateStore.connectedExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg",observed);
             cb.finished(true,direct?"Connected: direct "+exit.protocol+" custom exit. Public exit proof passed: "+observed:"Connected: WireGuard entry → "+exit.protocol+" custom exit. Public exit proof passed: "+observed);
-        } catch(InterruptedException e){
-            Thread.currentThread().interrupt();if(started)singBox.stop();if(sessionStarted)AndroidHomeStateStore.disconnected(context);cb.finished(false,"Android custom exit cancelled and disconnected.");
-        } catch(Exception e){
-            if(started)singBox.stop();if(sessionStarted)AndroidHomeStateStore.failed(context,nonEmpty(e.getMessage(),"Android custom exit failed closed."));cb.finished(false,nonEmpty(e.getMessage(),"Android custom exit failed closed."));
+        } catch(InterruptedException error){
+            boolean stopped=!started||stopEmbeddedAndProve();
+            Thread.currentThread().interrupt();
+            if(sessionStarted){
+                if(stopped)AndroidHomeStateStore.disconnected(context);
+                else AndroidHomeStateStore.failed(context,"Android custom-exit cancellation could not prove embedded engine teardown; runtime ownership retained.");
+            }
+            cb.finished(false,stopped?"Android custom exit cancelled and disconnected.":"Android custom exit cancellation incomplete; embedded engine did not prove teardown.");
+        } catch(Exception error){
+            boolean stopped=!started||stopEmbeddedAndProve();
+            String message=nonEmpty(error.getMessage(),"Android custom exit failed closed.");
+            if(!stopped)message+=" Embedded engine teardown was not proved; runtime ownership retained.";
+            if(sessionStarted)AndroidHomeStateStore.failed(context,message);
+            cb.finished(false,message);
         }
     }
 
@@ -103,7 +115,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                     byte[]raw=readLimited(c.getInputStream(),256);String text=new String(raw,StandardCharsets.US_ASCII).trim();InetAddress seen=InetAddress.getByName(text);
                     if(seen.equals(wanted))return seen.getHostAddress();
                     last=new IllegalStateException("Custom exit reached "+seen.getHostAddress()+", expected "+wanted.getHostAddress()+".");
-                }catch(Exception e){last=e;}finally{if(c!=null)c.disconnect();}
+                }catch(Exception error){last=error;}finally{if(c!=null)c.disconnect();}
             }
             Thread.sleep(250L);
         }
@@ -115,11 +127,11 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         if(task!=null&&!task.isDone())return true;
         String state=singBox.getState();
         if(state==null)return true;
-        String normalized=state.trim().toUpperCase(java.util.Locale.ROOT);
-        if(!("DOWN".equals(normalized)||"FAILED".equals(normalized)||"REVOKED".equals(normalized)))return true;
+        String normalized=state.trim().toUpperCase(Locale.ROOT);
+        if(!terminal(normalized))return true;
         AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
         if(!"external".equals(home.logicalMode))return false;
-        String phase=home.phase==null?"":home.phase.trim().toLowerCase(java.util.Locale.ROOT);
+        String phase=home.phase==null?"":home.phase.trim().toLowerCase(Locale.ROOT);
         return home.connected||!("off".equals(phase)||"disconnected".equals(phase)||"failed".equals(phase));
     }
 
@@ -127,17 +139,48 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
         boolean owns="external".equals(home.logicalMode)||singBox.getMode().startsWith("standard-");
         if(!owns)return;
-        if(active!=null&&!active.isDone())active.cancel(true);singBox.stop();AndroidHomeStateStore.disconnected(context);
+        if(active!=null&&!active.isDone())active.cancel(true);
+        if(!stopEmbeddedAndProve()){
+            AndroidHomeStateStore.failed(context,"Android custom-exit disconnect did not prove embedded engine teardown; runtime ownership retained.");
+            throw new IllegalStateException("Android custom-exit teardown did not reach DOWN/FAILED/REVOKED before timeout.");
+        }
+        AndroidHomeStateStore.disconnected(context);
     }
 
     /** Tear down this owner's runtime without changing Home state; revalidation owns the failed-state adoption. */
     synchronized void failClosedForRevalidation(){
         if(active!=null&&!active.isDone())active.cancel(true);
-        singBox.stop();
+        if(!stopEmbeddedAndProve())throw new IllegalStateException("Android custom-exit revalidation teardown did not reach a terminal state.");
     }
 
-    @Override public synchronized void close(){if(!closed.compareAndSet(false,true))return;if(active!=null&&!active.isDone())active.cancel(true);executor.shutdownNow();}
-    private static boolean runtimeBusy(String state){if(state==null)return true;String normalized=state.trim().toUpperCase(java.util.Locale.ROOT);return !("DOWN".equals(normalized)||"FAILED".equals(normalized)||"REVOKED".equals(normalized));}
+    @Override public synchronized void close(){
+        if(!closed.compareAndSet(false,true))return;
+        if(active!=null&&!active.isDone())active.cancel(true);
+        AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+        boolean owns="external".equals(home.logicalMode)||singBox.getMode().startsWith("standard-");
+        if(owns&&runtimeBusy(singBox.getState()))stopEmbeddedAndProve();
+        executor.shutdownNow();
+    }
+
+    private boolean stopEmbeddedAndProve(){
+        boolean interrupted=Thread.interrupted();
+        try{
+            singBox.stop();
+            long deadline=System.currentTimeMillis()+STOP_TIMEOUT_MS;
+            while(System.currentTimeMillis()<deadline){
+                if(terminal(singBox.getState()))return true;
+                try{Thread.sleep(150L);}catch(InterruptedException error){interrupted=true;}
+            }
+            return terminal(singBox.getState());
+        }finally{if(interrupted)Thread.currentThread().interrupt();}
+    }
+
+    private static boolean terminal(String state){
+        if(state==null)return false;
+        String normalized=state.trim().toUpperCase(Locale.ROOT);
+        return "DOWN".equals(normalized)||"FAILED".equals(normalized)||"REVOKED".equals(normalized);
+    }
+    private static boolean runtimeBusy(String state){return !terminal(state);}
     private static byte[] readLimited(InputStream in,int max)throws Exception{try(InputStream input=in;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[256];int total=0,n;while((n=input.read(b))!=-1){total+=n;if(total>max)throw new IllegalStateException("Custom exit proof response too large.");out.write(b,0,n);}return out.toByteArray();}}
-    private static String nonEmpty(String v,String fallback){return v==null||v.trim().isEmpty()?fallback:v.trim();}
+    private static String nonEmpty(String value,String fallback){return value==null||value.trim().isEmpty()?fallback:value.trim();}
 }
