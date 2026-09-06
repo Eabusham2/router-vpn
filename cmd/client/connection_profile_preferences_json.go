@@ -18,7 +18,7 @@ type connectionProfilePreferencesWire connectionProfilePreferences
 var connectionProfilePreferenceKeys = map[string]struct{}{
 	"home_lan_access": {}, "kill_switch_policy": {}, "ipv6_mode": {},
 	"auto_require_encrypted": {}, "auto_require_obfuscation": {},
-	"base_tunnel": {}, "base_fallback": {}, "mtu_policy": {}, "manual_mtu": {},
+	"base_tunnel": {}, "base_fallback": {}, "start_layer": {}, "mtu_policy": {}, "manual_mtu": {},
 	"daita_enabled": {}, "jumbo_tun": {}, "socks_enabled": {},
 	"dns_mode": {}, "dns_protocol": {}, "dns_host": {}, "dns_port": {},
 	"dns_server_name": {}, "dns_path": {}, "multihop_enabled": {},
@@ -58,6 +58,9 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 	if _, ok := raw["base_tunnel"]; !ok {
 		p.BaseTunnel = "auto"
 	}
+	if _, ok := raw["start_layer"]; !ok {
+		p.StartLayer = common.StartLayerOff
+	}
 	if _, ok := raw["mtu_policy"]; !ok {
 		p.MTUPolicy = "auto"
 	}
@@ -74,13 +77,15 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 		ID: "connection-profile-validation", NodeKind: "router-vpn", StartupMode: "smart-auto",
 		HomeLANAccess: p.HomeLANAccess, KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode,
 		AutoRequireEncrypted: p.AutoRequireEncrypted, AutoRequireObfuscation: p.AutoRequireObfuscation,
-		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
+		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback, StartLayer: p.StartLayer,
+		MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
 		DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled,
 	}
 	settings := profileSettingsRequest{
 		HomeLANAccess: &p.HomeLANAccess, KillSwitchPolicy: &p.KillSwitchPolicy, IPv6Mode: &p.IPv6Mode,
 		AutoRequireEncrypted: &p.AutoRequireEncrypted, AutoRequireObfuscation: &p.AutoRequireObfuscation,
-		BaseTunnel: &p.BaseTunnel, BaseFallback: &p.BaseFallback, MTUPolicy: &p.MTUPolicy, ManualMTU: &p.ManualMTU,
+		BaseTunnel: &p.BaseTunnel, BaseFallback: &p.BaseFallback, StartLayer: &p.StartLayer,
+		MTUPolicy: &p.MTUPolicy, ManualMTU: &p.ManualMTU,
 		DAITAEnabled: &p.DAITAEnabled, JumboTUN: &p.JumboTUN, SocksEnabled: &p.SocksEnabled,
 	}
 	normalized, err := applyProfileSettings(seed, settings)
@@ -90,6 +95,7 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 	p.KillSwitchPolicy = normalized.KillSwitchPolicy
 	p.IPv6Mode = normalized.IPv6Mode
 	p.BaseTunnel = normalized.BaseTunnel
+	p.StartLayer = normalized.StartLayer
 	p.MTUPolicy = normalized.MTUPolicy
 	p.ManualMTU = normalized.ManualMTU
 
