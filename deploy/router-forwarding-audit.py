@@ -16,6 +16,8 @@ expected_nat = [
     ("udp", "$AWG_PORT", "$AWG_PORT"),
     ("tcp", "$SS_PORT", "$SS_PORT"),
     ("udp", "$SS_PORT", "$SS_PORT"),
+    ("tcp", "$START_LAYER_XOR_PORT", "$START_LAYER_XOR_PORT"),
+    ("udp", "$START_LAYER_XOR_PORT", "$START_LAYER_XOR_PORT"),
     ("udp", "$HY2_PORT", "$HY2_PORT"),
     ("tcp", "$XRAY_PQ_PORT", "$XRAY_PQ_PORT"),
     ("tcp", "$XHTTP_PORT", "$XHTTP_PORT"),
