@@ -15,16 +15,6 @@ func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) 
 		"Start Layer requires authenticated Shadowsocks 2022 BLAKE3 AES-256-GCM",
 		"AES-256-GCM + XOR whitening is not available on iOS until PacketTunnel owns a protected local whitening relay",
 		"XOR is never counted as encryption or silently ignored",
-		`inner.put`, // deliberate impossible marker guard below
-	} {
-		if required == "inner.put" {
-			continue
-		}
-		if !strings.Contains(composer, required) {
-			t.Fatalf("iOS Start Layer composer missing %q", required)
-		}
-	}
-	for _, required := range []string{
 		`outbounds[proxyIndex]["server"] = "127.0.0.1"`,
 		`outbounds[proxyIndex]["detour"] = aesTag`,
 		`result["sing-box.json"] = composed`,
@@ -50,6 +40,20 @@ func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) 
 	} {
 		if !strings.Contains(provider, required) {
 			t.Fatalf("PacketTunnel does not enforce iOS Start Layer runtime truth: missing %q", required)
+		}
+	}
+
+	selector := repoFile(t, "ios/RouterVPN/App/IOSRuntimeSelection.swift")
+	for _, required := range []string{
+		`private static let startLayerRawModes: Set<String> = ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"]`,
+		"try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)",
+		"try validateStartLayer(bundle: bundle, rawProfileID: \"wg\")",
+		"Start Layer AES-256-GCM requires an iOS Libbox raw mode",
+		"AES-256-GCM + XOR whitening is unavailable on iOS until PacketTunnel owns a protected local whitening relay",
+		"XOR is never counted as encryption or silently ignored",
+	} {
+		if !strings.Contains(selector, required) {
+			t.Fatalf("iOS runtime selector can choose an engine that cannot honor Start Layer: missing %q", required)
 		}
 	}
 
