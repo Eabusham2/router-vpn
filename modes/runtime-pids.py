@@ -68,6 +68,28 @@ def process_start(pid: int) -> str:
     return "ps:" + out
 
 
+def process_is_zombie(pid: int) -> bool:
+    proc = Path(f"/proc/{pid}/stat")
+    if proc.is_file():
+        try:
+            text = proc.read_text(encoding="utf-8", errors="strict")
+            close = text.rfind(")")
+            fields = text[close + 2 :].split() if close >= 0 else []
+            return bool(fields) and fields[0] == "Z"
+        except OSError:
+            return False
+    try:
+        out = subprocess.check_output(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+    return out.startswith("Z")
+
+
 def process_command_hash(pid: int) -> str:
     proc = Path(f"/proc/{pid}/cmdline")
     try:
@@ -296,7 +318,11 @@ def verified_records_strict(records: list[dict], path: Path) -> list[int]:
         if first_start != expected_start:
             # The numeric PID was reused by a different process. Never kill it.
             continue
-        if not current_command or current_command != expected_command:
+        if not current_command:
+            if process_is_zombie(pid):
+                continue
+            raise RuntimeError(f"runtime PID command identity became unreadable while ownership start token still matches: {path}")
+        if current_command != expected_command:
             raise RuntimeError(f"runtime PID command identity changed while ownership start token still matches: {path}")
         out.append(pid)
     return sorted(set(out))
