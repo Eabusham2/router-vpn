@@ -2,7 +2,6 @@ package com.eabusham.routervpn;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -140,20 +139,19 @@ final class AndroidHomeSummary {
     static void emergencyDisconnect(Activity activity, Callback callback) {
         AndroidHomeStateStore.warning(activity, "Emergency Disconnect requested; verifying every Router VPN transport stops.");
         AndroidRuntimeRegistry runtime=AndroidRuntimeRegistry.get(activity);
-        try{runtime.multihop.disconnect();}catch(Throwable ignored){}
-        try{runtime.standardExit.disconnect();}catch(Throwable ignored){}
-        try{runtime.singBox.stop();}catch(Throwable ignored){}
-        try{runtime.xray.stop();}catch(Throwable ignored){}
-        try { activity.startService(new Intent(activity, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_STOP)); } catch (Throwable ignored) {}
-        try { activity.startService(new Intent(activity, XrayVpnService.class).setAction(XrayVpnService.ACTION_STOP)); } catch (Throwable ignored) {}
-        CountDownLatch rawStops=new CountDownLatch(2);
-        AtomicBoolean wgDown=new AtomicBoolean(false),awgDown=new AtomicBoolean(false);
-        AtomicReference<String> rawFailure=new AtomicReference<>("");
-        runtime.wireGuard.disconnect((state,message,error)->{if(error==null&&state==com.wireguard.android.backend.Tunnel.State.DOWN)wgDown.set(true);else rawFailure.compareAndSet("","WireGuard: "+(error==null?message:safe(error)));rawStops.countDown();});
-        runtime.amneziaWG.disconnect((state,message,error)->{if(error==null&&state==org.amnezia.awg.backend.Tunnel.State.DOWN)awgDown.set(true);else rawFailure.compareAndSet("","AmneziaWG: "+(error==null?message:safe(error)));rawStops.countDown();});
         provedSignature=""; provedExit="";
         new Thread(() -> {
             try {
+                CountDownLatch rawStops=new CountDownLatch(2);
+                AtomicBoolean wgDown=new AtomicBoolean(false),awgDown=new AtomicBoolean(false);
+                AtomicReference<String> rawFailure=new AtomicReference<>("");
+                runtime.wireGuard.disconnectManaged((state,message,error)->{if(error==null&&state==com.wireguard.android.backend.Tunnel.State.DOWN)wgDown.set(true);else rawFailure.compareAndSet("","WireGuard: "+(error==null?message:safe(error)));rawStops.countDown();});
+                runtime.amneziaWG.disconnectManaged((state,message,error)->{if(error==null&&state==org.amnezia.awg.backend.Tunnel.State.DOWN)awgDown.set(true);else rawFailure.compareAndSet("","AmneziaWG: "+(error==null?message:safe(error)));rawStops.countDown();});
+                runtime.multihop.failClosedForRevalidation();
+                runtime.standardExit.failClosedForRevalidation();
+                if(!terminalEngineState(runtime.singBox.getState()))runtime.singBox.stop();
+                if(!terminalEngineState(runtime.xray.getState()))runtime.xray.stop();
+
                 if(!rawStops.await(4, TimeUnit.SECONDS))throw new IllegalStateException("Raw WireGuard/AmneziaWG teardown timed out; session ownership retained.");
                 if(!rawFailure.get().isEmpty())throw new IllegalStateException("Raw tunnel teardown failed: "+rawFailure.get());
                 if(!wgDown.get()||runtime.wireGuard.getState()!=com.wireguard.android.backend.Tunnel.State.DOWN)throw new IllegalStateException("WireGuard did not prove DOWN during Emergency Disconnect.");
