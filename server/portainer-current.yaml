@@ -248,7 +248,7 @@ services:
       start_period: 10s
 
   socks5:
-    image: ghcr.io/sagernetwork/sing-box:v1.13.12
+    image: ghcr.io/sagernet/sing-box:v1.13.12
     container_name: router-vpn-socks5
     network_mode: host
     restart: unless-stopped
