@@ -156,6 +156,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var daitaRateKbps: Int?
     var baseTunnel: String?
     var baseFallback: Bool?
+    var startLayer: String?
     var customLayers: [String]?
     var homeLANAccess: Bool?
     var homeLANCIDRs: [String]?
@@ -234,6 +235,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case daitaRateKbps = "daita_rate_kbps"
         case baseTunnel = "base_tunnel"
         case baseFallback = "base_fallback"
+        case startLayer = "start_layer"
         case customLayers = "custom_layers"
         case homeLANAccess = "home_lan_access"
         case homeLANCIDRs = "home_lan_cidrs"
