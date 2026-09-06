@@ -26,6 +26,7 @@ def main() -> int:
             assert path.stat().st_mode & 0o777 == 0o600
         PIDS.record(str(root), mode, str(os.getpid()))
         assert os.getpid() in PIDS.verified(str(root))
+        assert os.getpid() in PIDS.verified_strict(str(root))
         assert os.getpid() in PIDS.verified_mode(str(root), mode)
         PIDS.init(str(root), "other-mode")
         assert PIDS.verified_mode(str(root), "other-mode") == []
@@ -76,10 +77,29 @@ def main() -> int:
         PIDS.atomic_write(path, [wrong_command])
         assert os.getpid() not in PIDS.verified(str(root))
 
-        # Legacy plain numeric PID files are intentionally untrusted.
+        # Legacy plain numeric PID files are intentionally untrusted. The broad
+        # `verified` view skips them so they can never become kill input, while
+        # teardown's strict view fails closed so ownership metadata is retained.
         path.write_text(f"{os.getpid()}\n", encoding="utf-8")
         os.chmod(path, 0o600)
         assert os.getpid() not in PIDS.verified(str(root))
+        try:
+            PIDS.verified_strict(str(root))
+        except RuntimeError as exc:
+            assert "legacy/untrusted" in str(exc) or "unsupported record" in str(exc)
+        else:
+            raise AssertionError("strict runtime PID verification accepted a legacy registry")
+
+        # Syntactically valid JSON with incomplete ownership identity is equally
+        # unsafe to erase during teardown.
+        path.write_text('{"version":1,"pid":123,"start":"x","command_sha256":"deadbeef"}\n', encoding="utf-8")
+        os.chmod(path, 0o600)
+        try:
+            PIDS.verified_strict(str(root))
+        except RuntimeError as exc:
+            assert "incomplete ownership identity" in str(exc)
+        else:
+            raise AssertionError("strict runtime PID verification accepted incomplete identity")
 
         # A failed atomic replacement preserves the prior complete registry.
         PIDS.init(str(root), mode)
