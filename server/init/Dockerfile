@@ -6,6 +6,7 @@ RUN mkdir -p dist \
       GOOS=${target%/*}; GOARCH=${target#*/}; ext=''; [ "$GOOS" = windows ] && ext='.exe'; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-client-${GOOS}-${GOARCH}${ext}" ./cmd/client; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-dns-${GOOS}-${GOARCH}${ext}" ./cmd/dnsproxy; \
+      CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-start-layer-relay-${GOOS}-${GOARCH}${ext}" ./cmd/start-layer-relay; \
     done \
  && for arch in amd64 arm64; do \
       CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPN-${arch}.exe" ./cmd/windows-app-launcher; \
@@ -63,6 +64,12 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && test -x /src/server/scripts/apply-runtime.sh \
  && test -x /src/server/scripts/build-download-on-demand.py \
  && test -x /src/server/scripts/download-broker.py \
+ && test -f /src/dist/router-vpn-start-layer-relay-linux-amd64 \
+ && test -f /src/dist/router-vpn-start-layer-relay-linux-arm64 \
+ && test -f /src/dist/router-vpn-start-layer-relay-darwin-amd64 \
+ && test -f /src/dist/router-vpn-start-layer-relay-darwin-arm64 \
+ && test -f /src/dist/router-vpn-start-layer-relay-windows-amd64.exe \
+ && test -f /src/dist/router-vpn-start-layer-relay-windows-arm64.exe \
  && test -f /src/dist/RouterVPN-amd64.exe \
  && test -f /src/dist/RouterVPN-arm64.exe \
  && test -f /src/dist/RouterVPNPortable-amd64.exe \
