@@ -6,11 +6,18 @@ import (
 )
 
 const (
-	StartLayerOff               = "off"
-	StartLayerAES256GCM         = "aes-256-gcm"
-	StartLayerAES256GCMXOR      = "aes-256-gcm+xor-whitening"
+	StartLayerOff                = "off"
+	StartLayerAES256GCM          = "aes-256-gcm"
+	StartLayerAES256GCMXOR       = "aes-256-gcm+xor-whitening"
 	StartLayerAES256GCMTransport = "2022-blake3-aes-256-gcm"
 )
+
+var StartLayerSupportedRawModes = []string{
+	"shadowsocks",
+	"hysteria2",
+	"naive-h2",
+	"naive-h3",
+}
 
 // NormalizeStartLayerMode canonicalizes the optional pre-tunnel start layer.
 //
@@ -34,6 +41,16 @@ func NormalizeStartLayerMode(value string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported start layer %q", value)
 	}
+}
+
+func StartLayerSupportsRawMode(modeID string) bool {
+	modeID = strings.ToLower(strings.TrimSpace(modeID))
+	for _, candidate := range StartLayerSupportedRawModes {
+		if modeID == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func StartLayerHasAuthenticatedEncryption(mode string) bool {
