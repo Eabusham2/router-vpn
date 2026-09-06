@@ -1033,17 +1033,20 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 	a.mu.Lock()
 	cmd := a.cmd
 	modeID := a.state.Mode
+	logicalMode := a.state.LogicalMode
+	runtimeMode := a.state.RuntimeMode
+	base := a.state.Base
+	routerID := a.state.RouterID
 	coverCancel := a.daitaCancel
 	a.daitaCancel = nil
 	a.cmd = nil
 	a.state.Connected = false
-	a.state.Mode = "off"
-	a.state.LogicalMode = ""
-	a.state.RuntimeMode = ""
-	a.state.Base = ""
+	// Teardown is transactional: retain the runtime identity until every owned
+	// cleanup step has succeeded so a failed stop can be diagnosed and retried
+	// without guessing which mode/path still owns private state or protection.
 	a.state.Phase = "stopping"
 	a.mu.Unlock()
-	clearActiveMultihopGraph(a)
+
 	if coverCancel != nil {
 		coverCancel()
 	}
@@ -1058,27 +1061,58 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 			<-done
 		}
 	}
+
 	if modeID != "off" {
-		if m, err := a.mode(modeID); err == nil && len(m.StopCommand) > 0 {
+		m, err := a.mode(modeID)
+		if err != nil {
+			failure := fmt.Errorf("mode cleanup failed for %s: %w", modeID, err)
+			a.failStopTransaction(modeID, logicalMode, runtimeMode, base, routerID, failure)
+			return failure
+		}
+		if len(m.StopCommand) > 0 {
 			c := exec.Command(m.StopCommand[0], m.StopCommand[1:]...)
 			c.Dir = a.cfg.ScriptsDir
 			c.Env = a.stopCommandEnv(holdKillSwitch)
-			_ = c.Run()
+			if err := c.Run(); err != nil {
+				failure := fmt.Errorf("mode cleanup failed for %s: %w", modeID, err)
+				a.failStopTransaction(modeID, logicalMode, runtimeMode, base, routerID, failure)
+				return failure
+			}
 		}
 	}
+
 	if !holdKillSwitch {
 		if err := a.releaseTransitionKillSwitch(); err != nil {
-			a.mu.Lock()
-			a.state.Phase = "failed"
-			a.state.LastError = err.Error()
-			a.mu.Unlock()
+			a.failStopTransaction(modeID, logicalMode, runtimeMode, base, routerID, err)
 			return err
 		}
 	}
+
+	clearActiveMultihopGraph(a)
 	a.mu.Lock()
+	a.state.Connected = false
+	a.state.Mode = "off"
+	a.state.LogicalMode = ""
+	a.state.RuntimeMode = ""
+	a.state.Base = ""
+	a.state.RouterID = routerID
 	a.state.Phase = "off"
+	a.state.LastError = ""
 	a.mu.Unlock()
 	return nil
+}
+
+func (a *app) failStopTransaction(modeID, logicalMode, runtimeMode, base, routerID string, failure error) {
+	a.mu.Lock()
+	a.state.Connected = false
+	a.state.Mode = modeID
+	a.state.LogicalMode = logicalMode
+	a.state.RuntimeMode = runtimeMode
+	a.state.Base = base
+	a.state.RouterID = routerID
+	a.state.Phase = "failed"
+	a.state.LastError = failure.Error()
+	a.mu.Unlock()
 }
 
 func (a *app) auto(w http.ResponseWriter, _ *http.Request) {
