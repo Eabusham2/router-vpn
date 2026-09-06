@@ -16,9 +16,11 @@ import (
 )
 
 const (
-	whiteningLabel   = "router-vpn-xor-whitening-v1\x00"
-	idleTimeout      = 2 * time.Minute
-	maxKeyConfigSize = 4 << 20
+	whiteningLabel     = "router-vpn-xor-whitening-v1\x00"
+	idleTimeout        = 2 * time.Minute
+	maxKeyConfigSize   = 4 << 20
+	maxTCPConnections  = 256
+	maxUDPSessions     = 256
 )
 
 type singBoxConfig struct {
@@ -72,6 +74,25 @@ func (x *xorWriter) Write(p []byte) (int, error) {
 	n, err := x.w.Write(buf)
 	x.off += uint64(n)
 	return n, err
+}
+
+type idleConn struct{ net.Conn }
+
+func (c *idleConn) Read(p []byte) (int, error) {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(idleTimeout))
+	return c.Conn.Read(p)
+}
+
+func (c *idleConn) Write(p []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(idleTimeout))
+	return c.Conn.Write(p)
+}
+
+func (c *idleConn) CloseWrite() error {
+	if tcp, ok := c.Conn.(*net.TCPConn); ok {
+		return tcp.CloseWrite()
+	}
+	return c.Conn.SetDeadline(time.Now())
 }
 
 func readPrivateKeyConfig(path string) (singBoxConfig, error) {
@@ -166,8 +187,8 @@ func abortPair(a, b net.Conn) {
 }
 
 func closeWrite(conn net.Conn) {
-	if tcp, ok := conn.(*net.TCPConn); ok {
-		_ = tcp.CloseWrite()
+	if writer, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = writer.CloseWrite()
 		return
 	}
 	_ = conn.SetDeadline(time.Now())
@@ -179,17 +200,27 @@ func relayTCP(listen, target string, key [32]byte) error {
 		return err
 	}
 	defer ln.Close()
+	slots := make(chan struct{}, maxTCPConnections)
 	for {
-		conn, err := ln.Accept()
+		raw, err := ln.Accept()
 		if err != nil {
 			return err
 		}
-		go func(in net.Conn) {
+		select {
+		case slots <- struct{}{}:
+		default:
+			_ = raw.Close()
+			continue
+		}
+		go func(rawIn net.Conn) {
+			defer func() { <-slots }()
+			in := &idleConn{Conn: rawIn}
 			defer in.Close()
-			out, err := net.DialTimeout("tcp", target, 10*time.Second)
+			rawOut, err := net.DialTimeout("tcp", target, 10*time.Second)
 			if err != nil {
 				return
 			}
+			out := &idleConn{Conn: rawOut}
 			defer out.Close()
 			var wg sync.WaitGroup
 			wg.Add(2)
@@ -210,7 +241,7 @@ func relayTCP(listen, target string, key [32]byte) error {
 				closeWrite(in)
 			}()
 			wg.Wait()
-		}(conn)
+		}(raw)
 	}
 }
 
@@ -254,6 +285,10 @@ func relayUDP(listen, target string, key [32]byte) error {
 			mu.Unlock()
 			return session, nil
 		}
+		if len(sessions) >= maxUDPSessions {
+			mu.Unlock()
+			return nil, errors.New("UDP relay session limit reached")
+		}
 		mu.Unlock()
 		conn, err := net.DialUDP("udp", nil, targetAddr)
 		if err != nil {
@@ -265,6 +300,11 @@ func relayUDP(listen, target string, key [32]byte) error {
 			mu.Unlock()
 			_ = conn.Close()
 			return existing, nil
+		}
+		if len(sessions) >= maxUDPSessions {
+			mu.Unlock()
+			_ = conn.Close()
+			return nil, errors.New("UDP relay session limit reached")
 		}
 		sessions[id] = session
 		mu.Unlock()
@@ -326,6 +366,11 @@ func run(cfg relayConfig) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		for i := range key {
+			key[i] = 0
+		}
+	}()
 	errCh := make(chan error, 2)
 	go func() { errCh <- relayTCP(cfg.listen, cfg.target, key) }()
 	go func() { errCh <- relayUDP(cfg.listen, cfg.target, key) }()
