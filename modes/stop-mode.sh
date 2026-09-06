@@ -74,14 +74,25 @@ else
   CLEANUP_RC=1
 fi
 
-# Manual/final disconnect releases on-connect protection only after all owned
-# tunnel processes/interfaces are asked to stop. During AUTO/SMART/fallback
-# recovery the caller sets HOMEVPN_KILLSWITCH_HOLD=1 so the fail-closed firewall
-# remains installed between candidates. 'always' policy intentionally remains
-# active either way.
+# Never remove leak protection when owned runtime cleanup is incomplete. The
+# retained PID registry plus the still-held kill switch are the recovery state.
+if (( CLEANUP_RC != 0 )); then
+  echo 'Router VPN runtime teardown is incomplete; strict kill switch remains held for recovery.' >&2
+  exit "$CLEANUP_RC"
+fi
+
+# Manual/final Linux disconnect releases on-connect protection only after owned
+# tunnel cleanup is proved. During AUTO/SMART/fallback the caller sets
+# HOMEVPN_KILLSWITCH_HOLD=1 so the fail-closed firewall remains between
+# candidates. macOS PF ownership is released by stop-mode-platform.sh.
 if [[ ${HOMEVPN_KILLSWITCH_HOLD:-0} != 1 ]]; then
-  python3 "$SCRIPT_DIR/kill-switch.py" release >/dev/null 2>&1 || true
+  if [[ $(uname -s 2>/dev/null || true) == Linux* ]]; then
+    if ! python3 "$SCRIPT_DIR/kill-switch.py" release >/dev/null 2>&1; then
+      echo 'Router VPN runtime stopped but Linux kill-switch release failed; protection remains fail-closed.' >&2
+      exit 1
+    fi
+  fi
 else
   echo 'Router VPN transition cleanup complete; strict kill switch remains held.' >&2
 fi
-exit "$CLEANUP_RC"
+exit 0
