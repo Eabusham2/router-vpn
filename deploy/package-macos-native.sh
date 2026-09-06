@@ -52,8 +52,9 @@ for arch in amd64 arm64; do
 
   CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-client" ./cmd/client
   CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-dns" ./cmd/dnsproxy
+  CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-start-layer-relay" ./cmd/start-layer-relay
   CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-update" ./cmd/app-update
-  chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/router-vpn-update" "$dir/modes/"*.sh
+  chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/router-vpn-start-layer-relay" "$dir/router-vpn-update" "$dir/modes/"*.sh
 
   "$ROOT/client/macos/build-native-app.sh" "$dir" "$arch"
 
@@ -64,6 +65,7 @@ for arch in amd64 arm64; do
   # hardened runtime and secure timestamp required by Apple's notarization flow.
   sign_macho "$dir/router-vpn-client"
   sign_macho "$dir/router-vpn-dns"
+  sign_macho "$dir/router-vpn-start-layer-relay"
   sign_macho "$dir/router-vpn-update"
   sign_macho "$dir/RouterVPN.app"
 
@@ -87,14 +89,18 @@ owns the local controller lifecycle when it starts it, and talks only to http://
 does not open or embed a website/WebView. The archive is generic and contains no linked home node.
 Add/import your router separately.
 
+The package includes router-vpn-start-layer-relay for the optional authenticated AES-256-GCM start
+layer's XOR whitening mode. XOR is obfuscation only; authenticated encryption remains Shadowsocks
+2022 AES-256-GCM. Unsupported graphs fail closed instead of silently weakening the selected path.
+
 The native menu bar performs a short-lived exact-SHA update check at launch and offers Check for
 Updates. router-vpn-update verifies immutable release identity plus RouterVPN-RELEASE.json SHA-256
 before staging a newer package beside the normal user cache. It never overwrites the running app.
 Public production updates still require Developer ID signing and notarization before installation.
 
 start-router-vpn.sh is a convenience launcher for the same native app. Keep RouterVPN.app beside
-router-vpn-client, router-vpn-update, client.json, routers.json, modes/, generated/, and the rest of
-this folder.
+router-vpn-client, router-vpn-dns, router-vpn-start-layer-relay, router-vpn-update, client.json,
+routers.json, modes/, generated/, and the rest of this folder.
 
 Release-candidate packages are cryptographically sealed with an ad-hoc code signature so macOS can
 verify bundle integrity after download. A public production build must additionally be signed with a
@@ -115,6 +121,7 @@ TXT
   tar -tzf "$OUT/$name.tar.gz" > "$archive_list"
   grep -Fxq "$name/RouterVPN.app/Contents/MacOS/RouterVPN" "$archive_list"
   grep -Fxq "$name/RouterVPN.app/Contents/Resources/RouterVPN.icns" "$archive_list"
+  grep -Fxq "$name/router-vpn-start-layer-relay" "$archive_list"
   grep -Fxq "$name/router-vpn-update" "$archive_list"
   grep -Fxq "$name/ROUTER-VPN-SOURCE.json" "$archive_list"
   [[ "$(plutil -extract CFBundleIconFile raw -o - "$dir/RouterVPN.app/Contents/Info.plist")" == "RouterVPN" ]]
