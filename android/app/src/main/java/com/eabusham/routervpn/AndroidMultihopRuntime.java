@@ -3,6 +3,7 @@ package com.eabusham.routervpn;
 import android.content.Context;
 
 import java.io.File;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -16,6 +17,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     }
 
     private static final long START_TIMEOUT_MS = 20000L;
+    private static final long STOP_TIMEOUT_MS = 8000L;
     private static final int PROBE_TIMEOUT_MS = 5000;
     private final Context context;
     private final NativeSingBoxController singBox;
@@ -43,7 +45,9 @@ final class AndroidMultihopRuntime implements AutoCloseable {
 
     synchronized boolean isActiveOrTransitioning() {
         reconcileRuntimeLocked();
-        return transitioning || connected;
+        if (transitioning || connected) return true;
+        AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(context);
+        return "multihop".equals(home.logicalMode) && runtimeBusy(singBox.getState());
     }
 
     synchronized boolean isConnected() {
@@ -120,26 +124,36 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             AndroidHomeStateStore.connectedMultihop(context, entry.id, exit.id, prepared.exitMode);
             callback.finished(true, "Connected: " + entry.name + " → " + exit.name + " via WireGuard entry + " + prepared.exitMode + " exit. Exit-node private path proof passed.");
         } catch (InterruptedException interrupted) {
+            boolean stopped = !started || stopEmbeddedAndProve();
             Thread.currentThread().interrupt();
-            if (started) singBox.stop();
             boolean userCancelled;
             synchronized (this) {
                 userCancelled = disconnectRequested || closed.get();
                 transitioning = false;
-                connected = false;
-                clearActiveGraphLocked();
+                if (stopped) {
+                    connected = false;
+                    clearActiveGraphLocked();
+                }
             }
-            if (userCancelled) AndroidHomeStateStore.disconnected(context);
-            else AndroidHomeStateStore.failed(context, "Android multihop start was interrupted and disconnected.");
-            callback.finished(false, userCancelled ? "Android multihop cancelled and disconnected." : "Android multihop start was interrupted and disconnected.");
+            if (!stopped) {
+                AndroidHomeStateStore.failed(context, "Android multihop cancellation could not prove embedded engine teardown; runtime ownership retained.");
+                callback.finished(false, "Android multihop cancellation incomplete; embedded engine did not prove teardown.");
+            } else {
+                if (userCancelled) AndroidHomeStateStore.disconnected(context);
+                else AndroidHomeStateStore.failed(context, "Android multihop start was interrupted and disconnected.");
+                callback.finished(false, userCancelled ? "Android multihop cancelled and disconnected." : "Android multihop start was interrupted and disconnected.");
+            }
         } catch (Exception error) {
-            if (started) singBox.stop();
+            boolean stopped = !started || stopEmbeddedAndProve();
             synchronized (this) {
                 transitioning = false;
-                connected = false;
-                clearActiveGraphLocked();
+                if (stopped) {
+                    connected = false;
+                    clearActiveGraphLocked();
+                }
             }
             String message = nonEmpty(error.getMessage(), "Android multihop failed closed.");
+            if (!stopped) message += " Embedded engine teardown was not proved; runtime ownership retained.";
             AndroidHomeStateStore.failed(context, message);
             callback.finished(false, message);
         }
@@ -147,31 +161,37 @@ final class AndroidMultihopRuntime implements AutoCloseable {
 
     synchronized void disconnect() {
         disconnectRequested = true;
+        if (active != null && !active.isDone()) active.cancel(true);
+        if (!stopEmbeddedAndProve()) {
+            AndroidHomeStateStore.failed(context, "Android multihop disconnect did not prove embedded engine teardown; runtime ownership retained.");
+            throw new IllegalStateException("Android multihop teardown did not reach DOWN/FAILED/REVOKED before timeout.");
+        }
         transitioning = false;
         connected = false;
         clearActiveGraphLocked();
-        if (active != null && !active.isDone()) active.cancel(true);
-        singBox.stop();
         AndroidHomeStateStore.disconnected(context);
     }
 
     /** Tear down this owner's runtime without changing Home state; the revalidation transaction owns the final state write. */
     synchronized void failClosedForRevalidation() {
         disconnectRequested = true;
+        if (active != null && !active.isDone()) active.cancel(true);
+        if (!stopEmbeddedAndProve()) throw new IllegalStateException("Android multihop revalidation teardown did not reach a terminal state.");
         transitioning = false;
         connected = false;
         clearActiveGraphLocked();
-        if (active != null && !active.isDone()) active.cancel(true);
-        singBox.stop();
     }
 
     @Override public synchronized void close() {
         if (!closed.compareAndSet(false, true)) return;
         disconnectRequested = true;
-        transitioning = false;
-        connected = false;
-        clearActiveGraphLocked();
         if (active != null && !active.isDone()) active.cancel(true);
+        if (runtimeBusy(singBox.getState())) stopEmbeddedAndProve();
+        transitioning = false;
+        if (!runtimeBusy(singBox.getState())) {
+            connected = false;
+            clearActiveGraphLocked();
+        }
         executor.shutdownNow();
     }
 
@@ -189,13 +209,38 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     }
 
     private void reconcileRuntimeLocked() {
-        if (connected && !"UP".equals(singBox.getState())) {
+        String state = singBox.getState();
+        if (connected && terminal(state)) {
             connected = false;
             transitioning = false;
             clearActiveGraphLocked();
             AndroidHomeStateStore.failed(context, "Android multihop engine is no longer UP; Connected state was cleared.");
         }
     }
+
+    private boolean stopEmbeddedAndProve() {
+        boolean interrupted = Thread.interrupted();
+        try {
+            singBox.stop();
+            long deadline = System.currentTimeMillis() + STOP_TIMEOUT_MS;
+            while (System.currentTimeMillis() < deadline) {
+                if (terminal(singBox.getState())) return true;
+                try { Thread.sleep(150L); }
+                catch (InterruptedException error) { interrupted = true; }
+            }
+            return terminal(singBox.getState());
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt();
+        }
+    }
+
+    private static boolean terminal(String state) {
+        if (state == null) return false;
+        String normalized = state.trim().toUpperCase(Locale.ROOT);
+        return "DOWN".equals(normalized) || "FAILED".equals(normalized) || "REVOKED".equals(normalized);
+    }
+
+    private static boolean runtimeBusy(String state) { return !terminal(state); }
 
     private void clearActiveGraphLocked() {
         activeEntryId = "";
