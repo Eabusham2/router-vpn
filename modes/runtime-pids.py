@@ -263,6 +263,54 @@ def verified_records(records: list[dict]) -> list[int]:
     return sorted(set(out))
 
 
+def _strict_record_identity(item: dict, path: Path) -> tuple[int, str, str]:
+    try:
+        pid = int(item.get("pid") or 0)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"runtime PID registry contains an invalid PID: {path}") from exc
+    expected_start = str(item.get("start") or "")
+    expected_command = str(item.get("command_sha256") or "")
+    if pid <= 1 or not expected_start or not re.fullmatch(r"[0-9a-f]{64}", expected_command):
+        raise RuntimeError(f"runtime PID registry contains incomplete ownership identity: {path}")
+    return pid, expected_start, expected_command
+
+
+def verified_records_strict(records: list[dict], path: Path) -> list[int]:
+    out: list[int] = []
+    for item in records:
+        pid, expected_start, expected_command = _strict_record_identity(item, path)
+        try:
+            first_start = process_start(pid)
+        except RuntimeError:
+            # The recorded process is already gone. The stale numeric PID is not
+            # kill input and the registry may be cleared after all records agree.
+            continue
+        current_command = process_command_hash(pid)
+        try:
+            second_start = process_start(pid)
+        except RuntimeError:
+            # It exited while identity was being re-proved.
+            continue
+        if first_start != second_start:
+            raise RuntimeError(f"runtime PID changed identity during verification: {path}")
+        if first_start != expected_start:
+            # The numeric PID was reused by a different process. Never kill it.
+            continue
+        if not current_command or current_command != expected_command:
+            raise RuntimeError(f"runtime PID command identity changed while ownership start token still matches: {path}")
+        out.append(pid)
+    return sorted(set(out))
+
+
+def verified_strict(root: str) -> list[int]:
+    run = run_dir(root)
+    out: list[int] = []
+    for path in sorted(run.glob("*.pids")):
+        records = read_registry(path)
+        out.extend(verified_records_strict(records, path))
+    return sorted(set(out))
+
+
 def verified_mode(root: str, mode: str) -> list[int]:
     # Mode-scoped consumers (native platform launchers) must never receive
     # another Router VPN mode's PIDs as kill input.
@@ -302,6 +350,10 @@ def main(argv: list[str]) -> int:
             for pid in verified(argv[2]):
                 print(pid)
             return 0
+        if len(argv) == 3 and argv[1] == "verified-strict":
+            for pid in verified_strict(argv[2]):
+                print(pid)
+            return 0
         if len(argv) == 4 and argv[1] == "verified-mode":
             for pid in verified_mode(argv[2], argv[3]):
                 print(pid)
@@ -311,7 +363,7 @@ def main(argv: list[str]) -> int:
             return 0
         if len(argv) == 3 and argv[1] == "clear":
             clear(argv[2]); return 0
-        raise RuntimeError("usage: runtime-pids.py init ROOT MODE | record ROOT MODE PID | verified ROOT | verified-mode ROOT MODE | run-dir ROOT | clear ROOT")
+        raise RuntimeError("usage: runtime-pids.py init ROOT MODE | record ROOT MODE PID | verified ROOT | verified-strict ROOT | verified-mode ROOT MODE | run-dir ROOT | clear ROOT")
     except (OSError, RuntimeError) as exc:
         print(f"runtime PID error: {exc}", file=sys.stderr)
         return 1
