@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -68,6 +69,24 @@ def atomic_json(path: Path, value: dict) -> None:
             tmp.unlink(missing_ok=True)
 
 
+def endpoint_host(value: str) -> str:
+    host = value.strip().strip("[]")
+    if not host or any(ch in host for ch in "\r\n\x00"):
+        raise RuntimeError("start-layer endpoint is invalid")
+    return host
+
+
+def endpoint_hostport(value: str, port: int) -> str:
+    host = endpoint_host(value)
+    try:
+        if ipaddress.ip_address(host).version == 6:
+            return f"[{host}]:{port}"
+    except ValueError:
+        if any(ch in host for ch in " /\\?#@"):
+            raise RuntimeError("start-layer endpoint host is unsafe")
+    return f"{host}:{port}"
+
+
 def ss_source(root: Path, profile_id: str) -> Path:
     for path in (root / "generated" / profile_id / "shadowsocks" / "sing-box.json",
                  root / "generated" / "shadowsocks" / "sing-box.json"):
@@ -105,6 +124,7 @@ def prepare(root_text: str, profile_id: str, mode: str, conf_text: str, endpoint
     if mode not in SUPPORTED:
         raise RuntimeError(f"{mode} does not yet have a proved start-layer composition path")
 
+    remote_host = endpoint_host(endpoint)
     cfg_path = conf / "sing-box.json"
     target = read_json(cfg_path)
     outbounds = target.get("outbounds")
@@ -122,7 +142,7 @@ def prepare(root_text: str, profile_id: str, mode: str, conf_text: str, endpoint
     else:
         aes = aes_outbound(key_path)
         aes["tag"] = START_TAG
-        aes["server"] = "127.0.0.1" if xor else endpoint.strip().strip("[]")
+        aes["server"] = "127.0.0.1" if xor else remote_host
         aes["server_port"] = 18389 if xor else SS_PORT
         candidates = [r for r in outbounds if isinstance(r, dict) and r.get("tag") == "proxy"]
         if len(candidates) != 1 or candidates[0].get("detour") not in (None, ""):
@@ -138,7 +158,7 @@ def prepare(root_text: str, profile_id: str, mode: str, conf_text: str, endpoint
         "xor": xor,
         "key_config": str(key_path),
         "relay_listen": XOR_LISTEN if xor else "",
-        "relay_target": f"{endpoint.strip().strip('[]')}:{XOR_PORT}" if xor else "",
+        "relay_target": endpoint_hostport(endpoint, XOR_PORT) if xor else "",
     })
     atomic_json(conf / "start-layer.json", state)
     return state
