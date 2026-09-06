@@ -183,7 +183,7 @@ for marker in (
     "void all(File bundle,Callback cb)",
     "protectionRank",
     "vless-pq",
-    "ALL failed closed because no Android-native branch passed selected-node path proof",
+    "ALL failed closed because no Android-native branch passed Start Layer requirements and selected-node path proof",
     "Composite desktop MAX chains remain separate and are never faked on Android",
 ):
     assert marker in orch, f"AndroidModeOrchestrator missing truth marker: {marker}"
