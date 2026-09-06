@@ -33,8 +33,9 @@ cp "$ROOT/LICENSE" "$dir/LICENSE"
 
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-client" ./cmd/client
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-dns" ./cmd/dnsproxy
+CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-start-layer-relay" ./cmd/start-layer-relay
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-update" ./cmd/app-update
-chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/router-vpn-update" "$dir/modes/"*.sh
+chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/router-vpn-start-layer-relay" "$dir/router-vpn-update" "$dir/modes/"*.sh
 
 # The current wrapper surgically composes the mature native builder with the
 # schema-v4 AUTO/SMART requirement controls. It executes a temporary copy in
@@ -94,10 +95,10 @@ for path in modes client; do
   rm -rf "$ROOT/$path"
   cp -a "$SRC/$path" "$ROOT/$path"
 done
-for file in client.json modes.json logical-modes.json router-vpn-client router-vpn-dns router-vpn-update router-vpn-app RouterVPN.ico router-vpn.png MODES.md CLIENT.md SECURITY.md LICENSE ROUTER-VPN-SOURCE.json; do
+for file in client.json modes.json logical-modes.json router-vpn-client router-vpn-dns router-vpn-start-layer-relay router-vpn-update router-vpn-app RouterVPN.ico router-vpn.png MODES.md CLIENT.md SECURITY.md LICENSE ROUTER-VPN-SOURCE.json; do
   [[ -e "$SRC/$file" ]] && cp -a "$SRC/$file" "$ROOT/$file"
 done
-chmod 755 "$ROOT/router-vpn-client" "$ROOT/router-vpn-dns" "$ROOT/router-vpn-update" "$ROOT/router-vpn-app" "$ROOT/modes/"*.sh
+chmod 755 "$ROOT/router-vpn-client" "$ROOT/router-vpn-dns" "$ROOT/router-vpn-start-layer-relay" "$ROOT/router-vpn-update" "$ROOT/router-vpn-app" "$ROOT/modes/"*.sh
 if [[ ! -f "$ROOT/routers.json" ]]; then
   install -m 600 "$SRC/routers.json" "$ROOT/routers.json"
 fi
@@ -129,6 +130,10 @@ Run sudo ./install-router-vpn.sh for normal desktop application integration, the
 from your application menu. The installer adds the Router VPN icon/desktop entry and preserves any
 existing /opt/router-vpn-client/routers.json + generated node state on upgrades.
 
+The package includes router-vpn-start-layer-relay for the optional authenticated AES-256-GCM start
+layer's XOR whitening mode. XOR is obfuscation only; authenticated encryption remains Shadowsocks
+2022 AES-256-GCM. Unsupported graphs fail closed instead of silently weakening the selected path.
+
 The installed launcher starts a short-lived router-vpn-update helper before the native GTK app. It
 accepts only immutable exact-SHA releases whose RouterVPN-RELEASE.json package digest matches, stages
 a newer archive, and never overwrites the currently running installation. Distribution package
@@ -153,6 +158,7 @@ tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
 archive_list="$work/archive-members.txt"
 tar -tzf "$OUT/$name.tar.gz" > "$archive_list"
 grep -Fxq "$name/router-vpn-app" "$archive_list"
+grep -Fxq "$name/router-vpn-start-layer-relay" "$archive_list"
 grep -Fxq "$name/router-vpn-update" "$archive_list"
 grep -Fxq "$name/router-vpn.png" "$archive_list"
 grep -Fxq "$name/router-vpn.desktop" "$archive_list"
