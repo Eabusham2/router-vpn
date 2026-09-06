@@ -178,7 +178,7 @@ func externalNodeEndpoint(ext *ExternalNodeConfig) string {
 func stripInjectedRouterDefaultsFromExternal(p *RouterProfile) error {
 	if strings.TrimSpace(p.NodeProofID) != "" || strings.TrimSpace(p.APIToken) != "" { return fmt.Errorf("external node cannot contain Router VPN proof/admin credentials") }
 	if v := strings.TrimSpace(p.RouterAPI); v != "" && v != "http://10.77.0.1:8787" { return fmt.Errorf("external node cannot contain Router VPN proof/admin credentials") }
-	p.RouterAPI = ""; p.NodeProofID = ""; p.APIToken = ""; p.AdGuardIPv4 = ""; p.AdGuardIPv6 = ""; p.SocksHost = ""; p.SocksPort = 0; p.SocksUsername = ""; p.SocksPassword = ""; p.DAITAHost = ""; p.DAITAPort = 0; p.DAITARateKbps = 0; p.BaseTunnel = ""; p.BaseFallback = false; p.CustomLayers = nil
+	p.RouterAPI = ""; p.NodeProofID = ""; p.APIToken = ""; p.AdGuardIPv4 = ""; p.AdGuardIPv6 = ""; p.SocksHost = ""; p.SocksPort = 0; p.SocksUsername = ""; p.SocksPassword = ""; p.DAITAHost = ""; p.DAITAPort = 0; p.DAITARateKbps = 0; p.BaseTunnel = ""; p.BaseFallback = false; p.CustomLayers = nil; p.StartLayer = ""
 	if p.PathProbeURL == "http://10.77.0.1:8787/health" { p.PathProbeURL = "" }
 	if p.DNSMode == "home" { p.DNSMode = ""; if p.DNSHost == "10.77.0.1" { p.DNSHost = "" } }
 	if p.DNSMode == "" { p.DNSProtocol = ""; p.DNSPort = 0; p.DNSServerName = ""; p.DNSPath = "" }
@@ -196,6 +196,7 @@ func NormalizeRouterProfile(p *RouterProfile) error {
 		if err := stripInjectedRouterDefaultsFromExternal(p); err != nil { return err }
 	default: return fmt.Errorf("invalid node kind %q", p.NodeKind)
 	}
+	startLayer, err := NormalizeStartLayerMode(p.StartLayer); if err != nil { return err }; p.StartLayer = startLayer
 	p.NodeProofID = strings.TrimSpace(p.NodeProofID); if p.NodeProofID != "" && !ValidNodeProofID(p.NodeProofID) { return fmt.Errorf("invalid node proof id") }
 	p.KillSwitchPolicy = strings.ToLower(strings.TrimSpace(p.KillSwitchPolicy)); if p.KillSwitchPolicy == "" { if p.KillSwitch { p.KillSwitchPolicy = "on-connect" } else { p.KillSwitchPolicy = "off" } }; switch p.KillSwitchPolicy { case "off", "on-connect", "always": default: return fmt.Errorf("invalid kill switch policy %q", p.KillSwitchPolicy) }; p.KillSwitch = p.KillSwitchPolicy != "off"
 	p.StartupMode = strings.ToLower(strings.TrimSpace(p.StartupMode)); if p.StartupMode == "" { p.StartupMode = "smart-auto" }; switch p.StartupMode { case "manual", "auto", "smart-auto", "last": default: return fmt.Errorf("invalid startup mode %q", p.StartupMode) }
