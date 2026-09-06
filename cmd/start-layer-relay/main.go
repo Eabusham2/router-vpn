@@ -81,7 +81,6 @@ func deriveKey(path string) ([32]byte, error) {
 	}
 	defer f.Close()
 	dec := json.NewDecoder(bufio.NewReader(io.LimitReader(f, 4<<20)))
-	dec.DisallowUnknownFields()
 	var cfg singBoxConfig
 	if err := dec.Decode(&cfg); err != nil {
 		return zero, fmt.Errorf("parse Shadowsocks config: %w", err)
