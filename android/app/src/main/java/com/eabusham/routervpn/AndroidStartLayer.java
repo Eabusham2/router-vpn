@@ -6,6 +6,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Locale;
@@ -13,9 +14,9 @@ import java.util.Set;
 
 /**
  * Composes the optional authenticated Router VPN Start Layer into Android's
- * native Libbox raw-mode graph. AES is real Shadowsocks 2022 AES-256-GCM.
- * XOR whitening is not implemented here and must fail closed rather than being
- * treated as encryption or silently ignored.
+ * native Libbox raw-mode graph. Security is real Shadowsocks 2022 AES-256-GCM.
+ * Optional XOR only whitens the already-authenticated ciphertext through the
+ * VpnService-owned protected local relay; it is never counted as encryption.
  */
 final class AndroidStartLayer {
     static final String OFF = "off";
@@ -23,6 +24,22 @@ final class AndroidStartLayer {
     static final String AES_XOR = "aes-256-gcm+xor-whitening";
     static final String AES_METHOD = "2022-blake3-aes-256-gcm";
     static final String AES_TAG = "start-layer-aes";
+    private static final String WHITENING_LABEL = "router-vpn-xor-whitening-v1\u0000";
+
+    static final class RelayPlan {
+        final String targetHost;
+        private final byte[] key;
+        RelayPlan(String targetHost, byte[] key) { this.targetHost = targetHost; this.key = Arrays.copyOf(key, key.length); }
+        JSONObject metadata() throws Exception {
+            return new JSONObject()
+                    .put("version", 1)
+                    .put("listen_port", AndroidStartLayerRelay.LISTEN_PORT)
+                    .put("target_host", targetHost)
+                    .put("target_port", AndroidStartLayerRelay.SERVER_PORT)
+                    .put("key_b64", Base64.encodeToString(key, Base64.NO_WRAP));
+        }
+        void clear() { Arrays.fill(key, (byte) 0); }
+    }
 
     private static final Set<String> SUPPORTED = new HashSet<>(Arrays.asList(
             "shadowsocks", "hysteria2", "naive-h2", "naive-h3"));
@@ -41,9 +58,6 @@ final class AndroidStartLayer {
             String start = selectedMode(bundle);
             if (OFF.equals(start)) return "";
             if (!supportsRawMode(modeId)) return modeId + " has no proved Android Start Layer composition path.";
-            if (AES_XOR.equals(start)) {
-                return "AES-256-GCM + XOR whitening is not available on Android until the VpnService owns a protected local whitening relay; XOR is never counted as encryption.";
-            }
             return "";
         } catch (Exception error) {
             String message = error.getMessage();
@@ -51,24 +65,26 @@ final class AndroidStartLayer {
         }
     }
 
-    static void apply(JSONObject bundle, JSONObject targetConfig, String modeId) throws Exception {
+    static RelayPlan apply(JSONObject bundle, JSONObject targetConfig, String modeId) throws Exception {
         String start = selectedMode(bundle);
-        if (OFF.equals(start)) return;
+        if (OFF.equals(start)) return null;
         String mode = modeId == null ? "" : modeId.trim().toLowerCase(Locale.ROOT);
         if (!SUPPORTED.contains(mode)) {
             throw new IllegalStateException(mode + " does not have a proved Android Start Layer composition path.");
         }
-        if (AES_XOR.equals(start)) {
-            throw new IllegalStateException("AES-256-GCM + XOR whitening requires a protected Android local whitening relay; this build refuses to silently ignore or downgrade it.");
-        }
-        if (!AES.equals(start)) throw new IllegalStateException("Unsupported Android Start Layer: " + start);
+        if (!AES.equals(start) && !AES_XOR.equals(start)) throw new IllegalStateException("Unsupported Android Start Layer: " + start);
+        boolean xor = AES_XOR.equals(start);
 
         JSONArray outbounds = targetConfig.optJSONArray("outbounds");
         if (outbounds == null) throw new IllegalStateException(mode + " has no Libbox outbounds.");
         if ("shadowsocks".equals(mode)) {
             JSONObject ss = exactlyOneType(outbounds, "shadowsocks", "selected Shadowsocks mode");
             requireAESOutbound(ss);
-            return;
+            if (!xor) return null;
+            RelayPlan plan = relayPlan(ss);
+            ss.put("server", "127.0.0.1");
+            ss.put("server_port", AndroidStartLayerRelay.LISTEN_PORT);
+            return plan;
         }
 
         JSONObject profiles = bundle.optJSONObject("profiles");
@@ -85,7 +101,12 @@ final class AndroidStartLayer {
         if (ssOutbounds == null) throw new IllegalStateException("Generated Shadowsocks 2022 config has no outbounds.");
         JSONObject aes = new JSONObject(exactlyOneType(ssOutbounds, "shadowsocks", "generated Shadowsocks profile").toString());
         requireAESOutbound(aes);
+        RelayPlan relay = xor ? relayPlan(aes) : null;
         aes.put("tag", AES_TAG);
+        if (xor) {
+            aes.put("server", "127.0.0.1");
+            aes.put("server_port", AndroidStartLayerRelay.LISTEN_PORT);
+        }
 
         JSONObject inner = exactlyOneTag(outbounds, "proxy", mode);
         String detour = inner.optString("detour", "").trim();
@@ -93,6 +114,23 @@ final class AndroidStartLayer {
         inner.put("server", "127.0.0.1");
         inner.put("detour", AES_TAG);
         outbounds.put(aes);
+        return relay;
+    }
+
+    private static RelayPlan relayPlan(JSONObject outbound) throws Exception {
+        String host = outbound.optString("server", "").trim();
+        if (host.isEmpty() || host.length() > 253 || host.contains("\n") || host.contains("\r") || host.indexOf('\u0000') >= 0 || host.contains("/") || host.contains("@")) {
+            throw new IllegalStateException("Android Start Layer relay target host is unsafe.");
+        }
+        if ("127.0.0.1".equals(host) || "::1".equals(host) || "localhost".equalsIgnoreCase(host)) {
+            throw new IllegalStateException("Android Start Layer relay target cannot already be loopback.");
+        }
+        String password = outbound.optString("password", "");
+        if (password.length() < 16 || password.indexOf('\u0000') >= 0) throw new IllegalStateException("Android Start Layer AES password is missing or too short.");
+        MessageDigest sha = MessageDigest.getInstance("SHA-256");
+        byte[] key = sha.digest((WHITENING_LABEL + password).getBytes(StandardCharsets.UTF_8));
+        try { return new RelayPlan(host, key); }
+        finally { Arrays.fill(key, (byte) 0); }
     }
 
     private static JSONObject selectedRouterProfile(JSONObject bundle) throws Exception {
