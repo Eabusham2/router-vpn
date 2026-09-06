@@ -159,10 +159,18 @@ final class AndroidHomeSummary {
                 if(!wgDown.get()||runtime.wireGuard.getState()!=com.wireguard.android.backend.Tunnel.State.DOWN)throw new IllegalStateException("WireGuard did not prove DOWN during Emergency Disconnect.");
                 if(!awgDown.get()||runtime.amneziaWG.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN)throw new IllegalStateException("AmneziaWG did not prove DOWN during Emergency Disconnect.");
                 long deadline=System.currentTimeMillis()+5000L;
-                while(System.currentTimeMillis()<deadline&&ownedVpnNetwork(activity)!=null)Thread.sleep(150L);
-                if (ownedVpnNetwork(activity) != null) throw new IllegalStateException("A Router VPN-owned Android VPN network is still active after emergency-stop requests.");
+                while(System.currentTimeMillis()<deadline){
+                    boolean clean=ownedVpnNetwork(activity)==null&&terminalEngineState(runtime.singBox.getState())&&terminalEngineState(runtime.xray.getState())&&!runtime.multihop.isActiveOrTransitioning()&&!runtime.standardExit.isActiveOrTransitioning();
+                    if(clean)break;
+                    Thread.sleep(150L);
+                }
+                if(ownedVpnNetwork(activity)!=null)throw new IllegalStateException("A Router VPN-owned Android VPN network is still active after emergency-stop requests.");
+                if(!terminalEngineState(runtime.singBox.getState()))throw new IllegalStateException("Libbox did not reach DOWN/FAILED/REVOKED during Emergency Disconnect.");
+                if(!terminalEngineState(runtime.xray.getState()))throw new IllegalStateException("Xray did not reach DOWN/FAILED/REVOKED during Emergency Disconnect.");
+                if(runtime.multihop.isActiveOrTransitioning())throw new IllegalStateException("Multihop runtime still owns an active/transitioning graph after Emergency Disconnect.");
+                if(runtime.standardExit.isActiveOrTransitioning())throw new IllegalStateException("Custom-exit runtime still owns an active/transitioning graph after Emergency Disconnect.");
                 AndroidHomeStateStore.disconnected(activity);
-                callback.done("Emergency Disconnect completed; all raw tunnels proved DOWN and no Router VPN-owned VPN network remains.", null);
+                callback.done("Emergency Disconnect completed; all Router VPN engines proved terminal and no Router VPN-owned VPN network remains.", null);
             } catch(Throwable error) { AndroidHomeStateStore.failed(activity, safe(error)); callback.done("Emergency Disconnect incomplete: "+safe(error), error); }
         }, "routervpn-emergency-verify").start();
     }
@@ -190,6 +198,7 @@ final class AndroidHomeSummary {
         String xray=p.getString(NativeXrayController.STATE_KEY,"DOWN");if("UP".equals(xray)){out.connected=false;out.phase="engine-up-unproven";out.logical=home.logicalMode.isEmpty()?p.getString(NativeXrayController.MODE_KEY,""):home.logicalMode;out.runtime=p.getString(NativeXrayController.MODE_KEY,"");out.base="xray";out.fallback=home.fallback;out.warning=combineWarnings(home.warning,p.getString(NativeXrayController.ERROR_KEY,""),"Xray engine is UP but no current selected-path proof is passed; Router VPN refuses to call this Connected.");return out;}out.phase=home.phase;out.logical=home.logicalMode;out.runtime=home.runtimeMode;out.base=home.actualBase;out.fallback=home.fallback;out.warning=home.connected?combineWarnings(home.warning,"Stored Connected state has no current passed path proof; Router VPN refuses to adopt it."):home.warning;return out;
     }
 
+    private static boolean terminalEngineState(String state){if(state==null)return false;String normalized=state.trim().toUpperCase(Locale.ROOT);return "DOWN".equals(normalized)||"FAILED".equals(normalized)||"REVOKED".equals(normalized);}
     private static String combineWarnings(String... values){List<String>parts=new ArrayList<>();if(values!=null)for(String value:values){String cleaned=value==null?"":value.replace('\n',' ').replace('\r',' ').trim();if(!cleaned.isEmpty())parts.add(cleaned);}return String.join(" | ",parts);}
     private static String signature(Network network,RuntimeState runtime){return network==null?"":network.getNetworkHandle()+"|session="+runtime.sessionId+"|"+runtime.logical+"|"+runtime.runtime+"|"+runtime.base+"|"+runtime.activeNodeId+"|"+runtime.activeEntryId+"|"+runtime.activeExitId+"|"+runtime.activeExternalId+"|"+runtime.expectedExternalIp+"|path="+runtime.pathGeneration;}
     private static String fetchIP(Network network)throws Exception{for(String raw:new String[]{"https://api64.ipify.org","https://api.ipify.org"}){HttpURLConnection c=null;try{c=(HttpURLConnection)network.openConnection(new URL(raw));c.setConnectTimeout(6000);c.setReadTimeout(6000);c.setUseCaches(false);if(c.getResponseCode()/100!=2)continue;byte[]data=readLimited(c.getInputStream(),128);String value=new String(data,StandardCharsets.UTF_8).trim();if(value.matches("[0-9A-Fa-f:.]+")){InetAddress.getByName(value);return value;}}catch(Throwable ignored){}finally{if(c!=null)c.disconnect();}}throw new IllegalStateException("Could not determine public VPN exit through the active Router VPN network.");}
