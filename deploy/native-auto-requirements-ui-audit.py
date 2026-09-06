@@ -81,7 +81,11 @@ require(
     "client/linux/build-native-app.sh",
     'SETTINGS_INC="$ROOT/client/linux/routervpn-profile-settings-v1.inc"',
     'SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"',
-    '"$SETTINGS_INC" "$HARDENED_SETTINGS"',
+    'START_LAYER_SETTINGS="$ROOT/client/linux/apply-start-layer-settings.py"',
+    'MUTATION_SETTINGS="$BUILD_DIR/routervpn-profile-settings-session.inc"',
+    'HARDENED_SETTINGS="$BUILD_DIR/routervpn-profile-settings-v1.inc"',
+    '"$SETTINGS_INC" "$MUTATION_SETTINGS"',
+    'python3 "$START_LAYER_SETTINGS" "$MUTATION_SETTINGS" "$HARDENED_SETTINGS"',
 )
 if "routervpn-profile-settings-v2.inc" in (ROOT / "client/linux/build-native-app.sh").read_text(encoding="utf-8"):
     raise SystemExit("Linux shipping builder must not compose the superseded profile-settings-v2 source")
