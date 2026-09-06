@@ -8,7 +8,14 @@ typedef struct {
     gboolean syncing;
 } LinuxTelemetryV9;
 
-#include "routervpn-connection-profiles-v10.inc"
+#include "routervpn-connection-profiles-v11.inc"
+
+static void linux_telemetry_profiles_v9(GtkButton *button, gpointer data) {
+    (void)button;
+    LinuxTelemetryV9 *telemetry = (LinuxTelemetryV9 *)data;
+    if (telemetry == NULL || telemetry->base == NULL) return;
+    linux_profile_manager_v11(NULL, telemetry->base);
+}
 
 static GtkWidget *linux_telemetry_button_v9(const char *label,GCallback callback,gpointer data){GtkWidget *button=gtk_button_new_with_label(label);g_signal_connect(button,"clicked",callback,data);return button;}
 
@@ -122,7 +129,7 @@ static void linux_install_telemetry_v9(App *app){
     LinuxUnifiedV8*base=g_object_get_data(G_OBJECT(app->window),"linux-unified-v8");if(base==NULL)return;LinuxTelemetryV9*t=g_new0(LinuxTelemetryV9,1);t->app=app;t->base=base;
     GtkWidget*connect_row=gtk_widget_get_parent(base->connect);if(GTK_IS_BOX(connect_row)){t->fastest=gtk_combo_box_text_new();gtk_widget_set_size_request(t->fastest,155,-1);gtk_widget_set_tooltip_text(t->fastest,"Select the fastest measured Router VPN node or a specific node. Use Connect separately.");gtk_box_pack_start(GTK_BOX(connect_row),t->fastest,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->fastest,1);t->live=gtk_label_new("-- ms");gtk_box_pack_start(GTK_BOX(connect_row),t->live,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->live,2);t->forward=linux_telemetry_button_v9("Forward ?",G_CALLBACK(linux_telemetry_forward_v9),t);gtk_widget_set_tooltip_text(t->forward,"Real server forwarding master on the active Router VPN home node.");gtk_box_pack_end(GTK_BOX(connect_row),t->forward,FALSE,FALSE,0);g_signal_connect(t->fastest,"changed",G_CALLBACK(linux_telemetry_fastest_changed_v9),t);}
     GtkWidget*multi_row=gtk_widget_get_parent(base->multihop);t->hop=gtk_label_new("");if(GTK_IS_BOX(multi_row)){gtk_box_pack_start(GTK_BOX(multi_row),t->hop,FALSE,FALSE,0);}
-    GtkWidget*settings=linux_telemetry_find_button_v9(base->stack,"Open settings");if(settings!=NULL&&GTK_IS_BOX(gtk_widget_get_parent(settings))){GtkWidget*profiles=linux_telemetry_button_v9("Profiles",G_CALLBACK(linux_connection_profiles_v10),t);GtkWidget*performance=linux_telemetry_button_v9("Performance",G_CALLBACK(linux_telemetry_performance_v9),t);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),profiles,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),performance,FALSE,FALSE,0);}
+    GtkWidget*settings=linux_telemetry_find_button_v9(base->stack,"Open settings");if(settings!=NULL&&GTK_IS_BOX(gtk_widget_get_parent(settings))){GtkWidget*profiles=linux_telemetry_button_v9("Profiles",G_CALLBACK(linux_telemetry_profiles_v9),t);GtkWidget*performance=linux_telemetry_button_v9("Performance",G_CALLBACK(linux_telemetry_performance_v9),t);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),profiles,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),performance,FALSE,FALSE,0);}
     g_object_set_data_full(G_OBJECT(app->window),"linux-telemetry-v9",t,g_free);linux_telemetry_refresh_fastest_v9(t);linux_telemetry_refresh_v9(t);g_timeout_add(3000,linux_telemetry_refresh_v9,t);gtk_widget_show_all(app->window);
 }
 
