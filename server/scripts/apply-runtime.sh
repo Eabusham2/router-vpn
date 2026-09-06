@@ -9,6 +9,7 @@ ROSENPASS_PORT=${ROSENPASS_PORT:-51822}
 REALITY_PORT=${REALITY_PORT:-443}
 HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
+START_LAYER_XOR_PORT=${START_LAYER_XOR_PORT:-8389}
 XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 XHTTP_PORT=${XHTTP_PORT:-11443}
 SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
@@ -76,10 +77,10 @@ install_iptables_guard(){
   "$ipt4" -A ROUTER_VPN_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
     "$ipt4" -A ROUTER_VPN_GUARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
   "$ipt4" -A ROUTER_VPN_GUARD -s "$LAN" -j ACCEPT
-  for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT" "$SSR_PORT"; do
+  for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$START_LAYER_XOR_PORT" "$NAIVE_PORT" "$SSR_PORT"; do
     "$ipt4" -A ROUTER_VPN_GUARD -p udp --dport "$port" -j ACCEPT
   done
-  for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT" "$OVERTLS_PORT" "$SSR_PORT"; do
+  for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$START_LAYER_XOR_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT" "$OVERTLS_PORT" "$SSR_PORT"; do
     "$ipt4" -A ROUTER_VPN_GUARD -p tcp --dport "$port" -j ACCEPT
   done
   "$ipt4" -A ROUTER_VPN_GUARD -j DROP
@@ -93,10 +94,10 @@ install_iptables_guard(){
     "$ipt6" -A ROUTER_VPN_GUARD -s fe80::/10 -j ACCEPT
     "$ipt6" -A ROUTER_VPN_GUARD -s "$LAN6" -j ACCEPT
     "$ipt6" -A ROUTER_VPN_GUARD -p ipv6-icmp -j ACCEPT
-    for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$NAIVE_PORT" "$SSR_PORT"; do
+    for port in "$WG_PORT" "$AWG_PORT" "$ROSENPASS_PORT" "$HY2_PORT" "$SS_PORT" "$START_LAYER_XOR_PORT" "$NAIVE_PORT" "$SSR_PORT"; do
       "$ipt6" -A ROUTER_VPN_GUARD -p udp --dport "$port" -j ACCEPT
     done
-    for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT" "$OVERTLS_PORT" "$SSR_PORT"; do
+    for port in "$ACME_HTTP_PORT" "$REALITY_PORT" "$SS_PORT" "$START_LAYER_XOR_PORT" "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT" "$OVERTLS_PORT" "$SSR_PORT"; do
       "$ipt6" -A ROUTER_VPN_GUARD -p tcp --dport "$port" -j ACCEPT
     done
     "$ipt6" -A ROUTER_VPN_GUARD -j DROP
@@ -118,8 +119,8 @@ add rule inet router_vpn_guard input iifname "$WAN" ip saddr $LAN accept
 add rule inet router_vpn_guard input iifname "$WAN" ip6 saddr fe80::/10 accept
 add rule inet router_vpn_guard input iifname "$WAN" ip6 saddr $LAN6 accept
 add rule inet router_vpn_guard input iifname "$WAN" meta l4proto 58 accept
-add rule inet router_vpn_guard input iifname "$WAN" udp dport { $WG_PORT, $AWG_PORT, $ROSENPASS_PORT, $HY2_PORT, $SS_PORT, $NAIVE_PORT, $SSR_PORT } accept
-add rule inet router_vpn_guard input iifname "$WAN" tcp dport { $ACME_HTTP_PORT, $REALITY_PORT, $SS_PORT, $XRAY_PQ_PORT, $XHTTP_PORT, $SS_V2RAY_PORT, $NAIVE_PORT, $OVERTLS_PORT, $SSR_PORT } accept
+add rule inet router_vpn_guard input iifname "$WAN" udp dport { $WG_PORT, $AWG_PORT, $ROSENPASS_PORT, $HY2_PORT, $SS_PORT, $START_LAYER_XOR_PORT, $NAIVE_PORT, $SSR_PORT } accept
+add rule inet router_vpn_guard input iifname "$WAN" tcp dport { $ACME_HTTP_PORT, $REALITY_PORT, $SS_PORT, $START_LAYER_XOR_PORT, $XRAY_PQ_PORT, $XHTTP_PORT, $SS_V2RAY_PORT, $NAIVE_PORT, $OVERTLS_PORT, $SSR_PORT } accept
 add rule inet router_vpn_guard input iifname "$WAN" drop
 NFT
   then
