@@ -3,11 +3,19 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
 	"router-vpn/internal/common"
 )
+
+func (a *app) torBridgeStopFailure(cmd *exec.Cmd, cause string) (string, bool) {
+	if cleanupErr := a.stopOwnedConnectionRuntime(cmd); cleanupErr != nil {
+		return cause + "; runtime cleanup failed: " + cleanupErr.Error(), true
+	}
+	return cause, false
+}
 
 type torBridgeConnectRequest struct {
 	ProfileID string `json:"profile_id"`
@@ -103,9 +111,13 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 	a.state.LastError = ""
 	a.mu.Unlock()
 	if err = a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusConflict)
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, err.Error())
+		sessionTrackerFor(a).markRequestFailure(message)
+		status := http.StatusConflict
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
 		return
 	}
 
@@ -116,14 +128,17 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 	a.mu.Unlock()
 	actualIP, proofErr := a.proveTorBridgeExit()
 	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		sessionTrackerFor(a).markRequestFailure(cancelErr.Error())
-		http.Error(w, cancelErr.Error(), http.StatusConflict)
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, cancelErr.Error())
+		sessionTrackerFor(a).markRequestFailure(message)
+		status := http.StatusConflict
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
 		return
 	}
 	if proofErr != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		message := "Tor bridge public-exit proof failed: " + proofErr.Error()
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge public-exit proof failed: "+proofErr.Error())
 		a.mu.Lock()
 		a.state.Mode = "external-node"
 		a.state.LogicalMode = "external-node"
@@ -135,7 +150,11 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 		a.state.LastError = message
 		a.mu.Unlock()
 		sessionTrackerFor(a).markRequestFailure(message)
-		http.Error(w, message, http.StatusBadGateway)
+		status := http.StatusBadGateway
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
 		return
 	}
 
@@ -143,10 +162,13 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 	a.mu.Lock()
 	if a.cmd != cmd {
 		a.mu.Unlock()
-		a.stopOwnedConnectionRuntime(cmd)
-		message := "Tor bridge runtime changed before dynamic exit proof could be adopted"
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge runtime changed before dynamic exit proof could be adopted")
 		sessionTrackerFor(a).markRequestFailure(message)
-		http.Error(w, message, http.StatusConflict)
+		status := http.StatusConflict
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
 		return
 	}
 	previousStore := cloneRouterProfileStore(a.profiles)
@@ -162,10 +184,13 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 	}
 	if !found {
 		a.mu.Unlock()
-		a.stopOwnedConnectionRuntime(cmd)
-		message := "Tor bridge profile disappeared before result adoption"
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge profile disappeared before result adoption")
 		sessionTrackerFor(a).markRequestFailure(message)
-		http.Error(w, message, http.StatusConflict)
+		status := http.StatusConflict
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
 		return
 	}
 	a.state.Connected = true
@@ -180,15 +205,22 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 	}
 	a.mu.Unlock()
 	if persistErr != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		sessionTrackerFor(a).markRequestFailure(persistErr.Error())
-		http.Error(w, "Tor bridge path was proved but observed-exit/usage persistence failed; runtime was torn down: "+persistErr.Error(), http.StatusInternalServerError)
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge path was proved but observed-exit/usage persistence failed: "+persistErr.Error())
+		if !cleanupFailed {
+			message += "; runtime was torn down"
+		}
+		sessionTrackerFor(a).markRequestFailure(message)
+		http.Error(w, message, http.StatusInternalServerError)
 		return
 	}
 	if err := a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusConflict)
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, err.Error())
+		sessionTrackerFor(a).markRequestFailure(message)
+		status := http.StatusConflict
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
 		return
 	}
 
@@ -199,16 +231,16 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": true,
-		"mode": "external-node",
-		"profile_id": profile.ID,
-		"profile_name": profile.Name,
-		"protocol": "tor-bridge",
-		"tor_transport": transport,
-		"direct": true,
-		"actual_public_ip": actualIP,
+		"ok":                true,
+		"mode":              "external-node",
+		"profile_id":        profile.ID,
+		"profile_name":      profile.Name,
+		"protocol":          "tor-bridge",
+		"tor_transport":     transport,
+		"direct":            true,
+		"actual_public_ip":  actualIP,
 		"actual_exit_proof": "tor-project-is-tor-passed",
-		"dns_mode": policy.DNSMode,
-		"route": "client full-device TUN -> local Tor SOCKS -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet",
+		"dns_mode":          policy.DNSMode,
+		"route":             "client full-device TUN -> local Tor SOCKS -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet",
 	})
 }
