@@ -109,7 +109,21 @@ func multihopNodeSummaries(profiles []common.RouterProfile) []multihopNodeSummar
 	return out
 }
 
+func validateMultihopStartLayer(control common.RouterProfile) error {
+	mode, err := common.NormalizeStartLayerMode(control.StartLayer)
+	if err != nil {
+		return fmt.Errorf("multihop control profile has an invalid Start Layer preference: %w", err)
+	}
+	if mode == common.StartLayerOff {
+		return nil
+	}
+	return fmt.Errorf("multihop refuses Start Layer %s because the current node-to-node graph has no proved entry-side Start Layer composition path; disable Start Layer or use a direct compatible mode rather than silently weakening the requested layer", mode)
+}
+
 func resolveMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
+	if err := validateMultihopStartLayer(control); err != nil {
+		return multihopSelection{}, err
+	}
 	entryID := strings.TrimSpace(q.EntryID)
 	exitID := strings.TrimSpace(q.ExitID)
 	if entryID == "" {
