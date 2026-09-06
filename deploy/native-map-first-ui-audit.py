@@ -238,7 +238,6 @@ linux = (
     "client/linux/routervpn-globe-v10.inc",
     "client/linux/routervpn-profile-settings-v1.inc",
     "client/linux/routervpn-auto-requirements-v11.inc",
-    "client/linux/routervpn-connection-profiles-v10.inc",
     "client/linux/routervpn-connection-profiles-v11.inc",
 )
 require(
