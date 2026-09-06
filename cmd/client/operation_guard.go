@@ -224,8 +224,9 @@ func (a *app) ownsConnectionRuntime(cmd *exec.Cmd) bool {
 	return owned
 }
 
-func (a *app) stopOwnedConnectionRuntime(cmd *exec.Cmd) {
+func (a *app) stopOwnedConnectionRuntime(cmd *exec.Cmd) error {
 	if a.ownsConnectionRuntime(cmd) {
-		_ = a.stopMode()
+		return a.stopMode()
 	}
+	return nil
 }
