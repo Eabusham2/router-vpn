@@ -27,7 +27,7 @@ def rc_has(*cmds):
 
 # 312-319: distinct app + Setup Center onboarding, truthful lanes, persistent rerun,
 # direct packages, and safe ASUS onboarding.
-need('client/macos/RouterVPNMacApp.swift','Install once; add routers as data','Setup Center Full Guide')
+need('client/macos/RouterVPNProductOnboarding.swift','Add or link a node','router-vpn-bundle.json','Setup Center Full Guide','Run onboarding')
 need('client/linux/build-native-app.sh','router-vpn-bundle.json','AUTO','AmneziaWG','kill-switch','Run Tutorial')
 need('server/scripts/setup_center_verified_onboarding.py','Simple / native','full VPN or proxy-only')
 need('server/scripts/generate-setup-assets.py','WIZKEY','localStorage.setItem(WIZKEY','router-vpn-ios.ipa','router-vpn-android.apk')
