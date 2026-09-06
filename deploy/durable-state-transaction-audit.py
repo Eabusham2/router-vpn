@@ -51,4 +51,26 @@ elif all(marker in source for marker in (
 else:
     raise SystemExit("durable audit overlay failed: MTU predicate is unknown")
 
+# Central stop-mode ownership was strengthened from the old non-strict
+# `verified` command to verified-strict plus fail-closed registry retention.
+# Keep the broad v1 matrix, but account for the current stronger vocabulary
+# rather than weakening runtime/test code to satisfy stale literal markers.
+old_stop_verified = '    \'verified "$ROOT"\',\n'
+new_stop_verified = '    \'verified-strict "$ROOT"\',\n'
+if source.count(old_stop_verified) == 1:
+    source = source.replace(old_stop_verified, new_stop_verified, 1)
+elif source.count(new_stop_verified) == 1:
+    pass
+else:
+    raise SystemExit("durable audit overlay failed: stop-mode PID verification predicate is unknown")
+
+old_stop_test = '    "legacy/raw PID registry",\n'
+new_stop_test = '    "strict failure must not guess at process ownership",\n'
+if source.count(old_stop_test) == 1:
+    source = source.replace(old_stop_test, new_stop_test, 1)
+elif source.count(new_stop_test) == 1:
+    pass
+else:
+    raise SystemExit("durable audit overlay failed: stop-mode PID ownership test predicate is unknown")
+
 exec(compile(source, str(V1), "exec"), {"__name__": "__main__", "__file__": str(V1)})
