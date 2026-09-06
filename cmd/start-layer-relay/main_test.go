@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +47,11 @@ func writeKeyConfig(t *testing.T, method, password string, second bool) string {
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return path
 }
 
@@ -74,6 +81,32 @@ func TestDeriveKeyRejectsNonAESOrAmbiguousConfig(t *testing.T) {
 	ambiguous := writeKeyConfig(t, "2022-blake3-aes-256-gcm", "0123456789abcdef0123456789abcdef", true)
 	if _, err := deriveKey(ambiguous); err == nil {
 		t.Fatal("ambiguous multi-Shadowsocks key config was accepted")
+	}
+}
+
+func TestDeriveKeyRejectsUnsafePrivateFile(t *testing.T) {
+	path := writeKeyConfig(t, "2022-blake3-aes-256-gcm", "0123456789abcdef0123456789abcdef", false)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := deriveKey(path); err == nil || !strings.Contains(err.Error(), "permissions") {
+			t.Fatalf("weak private-file permissions were not rejected: %v", err)
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	link := filepath.Join(filepath.Dir(path), "key-link.json")
+	if err := os.Symlink(path, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink unavailable on this Windows runner: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if _, err := deriveKey(link); err == nil || !strings.Contains(err.Error(), "non-symlink") {
+		t.Fatalf("symlink key config was not rejected: %v", err)
 	}
 }
 
