@@ -42,6 +42,33 @@ func TestResolveMultihopSelectionDefaultsAndRejectsUnsafeSelections(t *testing.T
 	}
 }
 
+func TestMultihopStartLayerNeverSilentlyDropsRequestedLayer(t *testing.T) {
+	control := mhProfile("control", "198.51.100.10")
+	control.MultihopEntryID = "entry"
+	control.MultihopExitID = "exit"
+	entry := mhProfile("entry", "203.0.113.11")
+	entry.BaseTunnel = "wg"
+	exit := mhProfile("exit", "203.0.113.12")
+	profiles := []common.RouterProfile{control, entry, exit}
+
+	for _, mode := range []string{common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {
+		blocked := control
+		blocked.StartLayer = mode
+		if _, err := resolveMultihopSelection(blocked, profiles, multihopConnectRequest{}); err == nil || !strings.Contains(err.Error(), "no proved entry-side Start Layer composition path") {
+			t.Fatalf("Linux/shared multihop silently accepted Start Layer %q: %v", mode, err)
+		}
+		if _, err := resolveNativeMultihopSelection(blocked, profiles, multihopConnectRequest{}); err == nil || !strings.Contains(err.Error(), "no proved entry-side Start Layer composition path") {
+			t.Fatalf("native multihop silently accepted Start Layer %q: %v", mode, err)
+		}
+	}
+
+	invalid := control
+	invalid.StartLayer = "xor-only"
+	if _, err := resolveMultihopSelection(invalid, profiles, multihopConnectRequest{}); err == nil || !strings.Contains(err.Error(), "invalid Start Layer preference") {
+		t.Fatalf("invalid multihop Start Layer did not fail closed: %v", err)
+	}
+}
+
 func TestMultihopCommandUsesConfiguredRuntimeRootNotScriptsDirectory(t *testing.T) {
 	t.Setenv("HOMEVPN_ROOT", "/tmp/router-vpn-data")
 	a := &app{cfg: common.ClientConfig{ScriptsDir: "/tmp/router-vpn-data/modes"}}
