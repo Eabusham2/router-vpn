@@ -88,7 +88,7 @@ final class AndroidModeOrchestrator {
                 String transition=smart&&!initial.id.equals(best.id)?initial.id+" -> "+best.id:"";
                 AndroidHomeStateStore.connected(context,requested,best.id,baseFor(best),transition,activeNodeId);
                 cb.finished(true,best.id,requested+" selected "+best.name+" after real selected-node path proof.");
-            }catch(Throwable error){try{stopCurrent(false);}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
+            }catch(Throwable error){String message=failClosedAfterError(error);cb.finished(false,"",message);}finally{running=false;}
         });
     }
 
@@ -121,7 +121,7 @@ final class AndroidModeOrchestrator {
                 if(winner==null)throw new IllegalStateException("Logical mode "+logical.optString("name",logicalId)+" failed closed: "+String.join(" • ",failures));
                 current=winner;AndroidHomeStateStore.connected(context,logicalId,winner.id,baseFor(winner),"",activeNodeId);
                 cb.finished(true,winner.id,logical.optString("name",logicalId)+" connected with runtime "+winner.id+" after selected-node proof.");
-            }catch(Throwable error){try{stopCurrent(false);}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
+            }catch(Throwable error){String message=failClosedAfterError(error);cb.finished(false,"",message);}finally{running=false;}
         });
     }
 
@@ -137,7 +137,7 @@ final class AndroidModeOrchestrator {
                 if(best==null)throw new IllegalStateException("ALL failed closed because no Android-native branch passed Start Layer requirements and selected-node path proof.");
                 current=best;AndroidHomeStateStore.connected(context,"ALL",best.id,baseFor(best),"",activeNodeId);
                 cb.finished(true,best.id,"ALL selected the strongest available Android-native branch that passed selected-node path proof: "+best.name+". Composite desktop MAX chains remain separate and are never faked on Android.");
-            }catch(Throwable error){try{stopCurrent(false);}catch(Throwable ignored){}AndroidHomeStateStore.failed(context,safe(error));cb.finished(false,"",safe(error));}finally{running=false;}
+            }catch(Throwable error){String message=failClosedAfterError(error);cb.finished(false,"",message);}finally{running=false;}
         });
     }
 
@@ -164,6 +164,13 @@ final class AndroidModeOrchestrator {
     private boolean startAwg(File bundle)throws Exception{CountDownLatch latch=new CountDownLatch(1);final org.amnezia.awg.backend.Tunnel.State[]state={org.amnezia.awg.backend.Tunnel.State.DOWN};awg.connectManaged(bundle,(s,m,e)->{state[0]=s;latch.countDown();});return latch.await(20,TimeUnit.SECONDS)&&state[0]==org.amnezia.awg.backend.Tunnel.State.UP;}
     private boolean startLibbox(File bundle,String id)throws Exception{NativeSingBoxController.SessionInfo session=sing.prepareSession(bundle,id);sing.start(session);long end=System.currentTimeMillis()+20000L;while(System.currentTimeMillis()<end){String s=sing.getState();if("UP".equals(s))return true;if("FAILED".equals(s)||"REVOKED".equals(s))return false;Thread.sleep(200);}return false;}
     private boolean startXray(File bundle,String id)throws Exception{NativeXrayController.SessionInfo session=xray.prepareSession(bundle,id);xray.start(session);long end=System.currentTimeMillis()+25000L;while(System.currentTimeMillis()<end){String s=xray.getState();if("UP".equals(s))return true;if("FAILED".equals(s)||"REVOKED".equals(s))return false;Thread.sleep(200);}return false;}
+
+    private String failClosedAfterError(Throwable error){
+        String message=safe(error);
+        try{stopCurrent(false);}catch(Throwable cleanup){message += "; runtime cleanup failed: "+safe(cleanup);}
+        AndroidHomeStateStore.failed(context,message);
+        return message;
+    }
 
     private void stopCurrent(boolean clearHomeState)throws Exception{
         Candidate c=current;
