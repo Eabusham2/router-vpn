@@ -14,17 +14,22 @@ func TestAndroidHomeConnectedRequiresCurrentPathProof(t *testing.T) {
 		`Xray engine is UP but no current selected-path proof is passed; Router VPN refuses to call this Connected.`,
 		`Stored Connected state has no current passed path proof; Router VPN refuses to adopt it.`,
 		`if(!runtime.connected)throw new IllegalStateException("Router VPN runtime is not in a proven connected state.")`,
+		`if(!rawStops.await(4, TimeUnit.SECONDS))throw new IllegalStateException("Raw WireGuard/AmneziaWG teardown timed out; session ownership retained.")`,
+		`if(!wgDown.get()||runtime.wireGuard.getState()!=com.wireguard.android.backend.Tunnel.State.DOWN)throw new IllegalStateException("WireGuard did not prove DOWN during Emergency Disconnect.")`,
+		`if(!awgDown.get()||runtime.amneziaWG.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN)throw new IllegalStateException("AmneziaWG did not prove DOWN during Emergency Disconnect.")`,
+		`Emergency Disconnect completed; all raw tunnels proved DOWN and no Router VPN-owned VPN network remains.`,
 	} {
 		if !strings.Contains(home, required) {
-			t.Fatalf("Android Home Connected truth missing %q", required)
+			t.Fatalf("Android Home Connected/emergency truth missing %q", required)
 		}
 	}
 	for _, forbidden := range []string{
 		`if("UP".equals(layered)){out.connected=true`,
 		`if("UP".equals(xray)){out.connected=true`,
+		`rawStops.await(4, TimeUnit.SECONDS);`,
 	} {
 		if strings.Contains(home, forbidden) {
-			t.Fatalf("Android Home regressed to treating raw engine UP as Connected: %q", forbidden)
+			t.Fatalf("Android Home regressed to unproved Connected/teardown state: %q", forbidden)
 		}
 	}
 
