@@ -14,12 +14,7 @@ import (
 )
 
 func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
-	// Pairing belongs to the shared local controller so every native desktop UI
-	// gets the same private-address checks and hardened bundle import path.
 	registerPairingRoute(h, a)
-	// Legacy standard-exits.json remains readable for compatibility while new
-	// custom nodes live in the unified profile store. The platform wrapper keeps
-	// both APIs on the same Windows/OpenVPN and external-entry dataplanes.
 	registerPlatformStandardExitRoutes(h, a)
 	registerExternalProfileRoutes(h, a)
 	if runtime.GOOS == "linux" {
@@ -96,7 +91,6 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
 	state := a.state
 	a.mu.Unlock()
-
 	graph, graphOK := getActiveMultihopGraph(a)
 	entryID, exitID := control.MultihopEntryID, control.MultihopExitID
 	actualEntry, actualExit, actualBase, actualMode := "", "", "", ""
@@ -105,7 +99,6 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		actualEntry, actualExit = graph.EntryID, graph.ExitID
 		actualBase, actualMode = graph.Base, graph.ExitMode
 	}
-
 	store, storeErr := loadStandardExitStore()
 	standard := []standardExitSummary{}
 	if storeErr == nil {
@@ -175,7 +168,6 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finish()
-
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -206,11 +198,8 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	// The actual graph is separate from mutable saved preferences. Clear any
-	// prior graph before teardown and publish this graph only after the exact new
-	// runtime is owned by the controller.
-	clearActiveMultihopGraph(a)
+	// Preserve any existing graph until its owning runtime has actually stopped.
+	// Failed teardown must keep exact entry/exit identity available for recovery.
 	sessionTrackerFor(a).declareRequest("multihop", sel.Base)
 	if err = a.stopMode(); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
@@ -249,27 +238,30 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.state.Phase = "multihop:proving-exit"
 	a.state.LastError = ""
 	a.mu.Unlock()
+	setActiveMultihopGraph(a, sel)
 	if err = a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		clearActiveMultihopGraph(a)
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusConflict)
+		message, cleanupFailed := a.multihopStopFailure(cmd, err.Error())
+		sessionTrackerFor(a).markRequestFailure(message)
+		status := http.StatusConflict
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
 		return
 	}
-	setActiveMultihopGraph(a, sel)
-
 	proofErr := a.proveMultihopExit(sel.Exit)
 	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		clearActiveMultihopGraph(a)
-		sessionTrackerFor(a).markRequestFailure(cancelErr.Error())
-		http.Error(w, cancelErr.Error(), http.StatusConflict)
+		message, cleanupFailed := a.multihopStopFailure(cmd, cancelErr.Error())
+		sessionTrackerFor(a).markRequestFailure(message)
+		status := http.StatusConflict
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
 		return
 	}
 	if proofErr != nil {
-		_ = a.stopMode()
-		clearActiveMultihopGraph(a)
-		msg := "multihop exit proof failed: " + proofErr.Error()
+		msg, cleanupFailed := a.multihopStopFailure(cmd, "multihop exit proof failed: "+proofErr.Error())
 		a.mu.Lock()
 		a.state.Mode = "multihop"
 		a.state.LogicalMode = "multihop"
@@ -281,7 +273,11 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		a.state.Connected = false
 		a.mu.Unlock()
 		sessionTrackerFor(a).markRequestFailure(msg)
-		http.Error(w, msg, http.StatusBadGateway)
+		status := http.StatusBadGateway
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, msg, status)
 		return
 	}
 	a.mu.Lock()
@@ -309,10 +305,12 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	if persistErr != nil {
-		_ = a.stopMode()
-		clearActiveMultihopGraph(a)
-		sessionTrackerFor(a).markRequestFailure(persistErr.Error())
-		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
+		message, cleanupFailed := a.multihopStopFailure(cmd, "native multihop usage persistence failed: "+persistErr.Error())
+		if !cleanupFailed {
+			message += "; runtime was torn down"
+		}
+		sessionTrackerFor(a).markRequestFailure(message)
+		http.Error(w, message, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("content-type", "application/json")
