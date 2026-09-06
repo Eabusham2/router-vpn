@@ -30,6 +30,9 @@ func nativeMultihopPlatformSupported() bool {
 }
 
 func resolveNativeMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
+	if err := validateMultihopStartLayer(control); err != nil {
+		return multihopSelection{}, err
+	}
 	entryID := strings.TrimSpace(q.EntryID)
 	exitID := strings.TrimSpace(q.ExitID)
 	if entryID == "" {
