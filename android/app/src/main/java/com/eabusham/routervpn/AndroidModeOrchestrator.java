@@ -198,7 +198,6 @@ final class AndroidModeOrchestrator {
             Kind kind=null;if(!strict&&"wg".equals(id)&&has(profiles,"wg","wg.conf"))kind=Kind.WG;else if(!strict&&"awg2-fast".equals(id)&&has(profiles,"awg2-fast","awg.conf"))kind=Kind.AWG;else if(direct.contains(id))kind=Kind.LIBBOX;else if(directXray.contains(id))kind=Kind.XRAY;if(kind==null)continue;
             if(startLayerEnabled){
                 if(kind!=Kind.LIBBOX||!AndroidStartLayer.supportsRawMode(id))continue;
-                if(AndroidStartLayer.AES_XOR.equals(startLayer))continue;
             }
             out.add(new Candidate(kind,id,m.optString("name",id),layers,strings(m.optJSONArray("smart_simplify")),i));
         }
