@@ -65,12 +65,26 @@ require(
     "auto_require_obfuscation",
 )
 require(
-    "client/linux/routervpn-profile-settings-v2.inc",
-    "profile_settings_mutation_busy_v7",
-    "gtk_dialog_get_widget_for_response",
+    "client/linux/routervpn-profile-settings-v1.inc",
+    "/api/profile/settings",
     "Save for next connection",
-    "VPN became active or began transitioning before POST",
+    "on_profile_settings_v7",
 )
+require(
+    "client/linux/apply-session-mutation-v1.py",
+    "routervpn-profile-settings-v1.inc",
+    "gtk_dialog_get_widget_for_response",
+    "Connected/transitioning: settings are read-only.",
+    'routervpn_require_mutation_idle(app, "saving persistent node settings")',
+)
+require(
+    "client/linux/build-native-app.sh",
+    'SETTINGS_INC="$ROOT/client/linux/routervpn-profile-settings-v1.inc"',
+    'SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"',
+    '"$SETTINGS_INC" "$HARDENED_SETTINGS"',
+)
+if "routervpn-profile-settings-v2.inc" in (ROOT / "client/linux/build-native-app.sh").read_text(encoding="utf-8"):
+    raise SystemExit("Linux shipping builder must not compose the superseded profile-settings-v2 source")
 require(
     "client/linux/routervpn-unified-shell-v8.inc",
     "linux_unified_auto_requirements_v8",
