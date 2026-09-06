@@ -39,16 +39,18 @@ func init() {
 			}
 		}
 	}
-	// These fixed/default management and private-control ports are protected on
-	// every startup even when the persisted router-agent.json came from an older
-	// release that did not list them yet. Custom listener ports are added below
-	// from their live generated configuration files.
+	// These fixed/default management, transport, and private-control ports are
+	// protected on every startup even when the persisted router-agent.json came
+	// from an older release that did not list them yet. Public transport ports
+	// are reserved from broad Protected DMZ so only their explicit owner can use
+	// them. Custom listener ports are added below from generated configuration.
 	for _, p := range []int{
 		22,    // SSH
 		53,    // DNS / AdGuard service
 		80,    // ACME external control
 		1080,  // private SOCKS5
 		3000,  // AdGuard admin UI
+		8389,  // AES-256-GCM ciphertext XOR-whitening public transport
 		8786,  // authenticated Setup Center
 		8787,  // private router-agent API
 		8789,  // loopback read-only admin plane
