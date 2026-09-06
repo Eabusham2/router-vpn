@@ -28,6 +28,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     private boolean transitioning;
     private boolean connected;
     private boolean disconnectRequested;
+    private boolean revalidationTeardown;
     private String activeEntryId = "";
     private String activeExitId = "";
     private String activeExitMode = "";
@@ -78,6 +79,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         if (exitMode == null || exitMode.trim().isEmpty()) { callback.finished(false, "Choose a supported multihop exit transport."); return; }
         transitioning = true;
         disconnectRequested = false;
+        revalidationTeardown = false;
         clearActiveGraphLocked();
         AndroidHomeStateStore.beginMultihop(context, entry.id, exit.id, exitMode.trim());
         try {
@@ -127,26 +129,32 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             boolean stopped = !started || stopEmbeddedAndProve();
             Thread.currentThread().interrupt();
             boolean userCancelled;
+            boolean suppressHome;
             synchronized (this) {
                 userCancelled = disconnectRequested || closed.get();
-                transitioning = false;
+                suppressHome = revalidationTeardown;
+                transitioning = !stopped;
                 if (stopped) {
                     connected = false;
                     clearActiveGraphLocked();
                 }
             }
             if (!stopped) {
-                AndroidHomeStateStore.failed(context, "Android multihop cancellation could not prove embedded engine teardown; runtime ownership retained.");
+                if (!suppressHome) AndroidHomeStateStore.failed(context, "Android multihop cancellation could not prove embedded engine teardown; runtime ownership retained.");
                 callback.finished(false, "Android multihop cancellation incomplete; embedded engine did not prove teardown.");
             } else {
-                if (userCancelled) AndroidHomeStateStore.disconnected(context);
-                else AndroidHomeStateStore.failed(context, "Android multihop start was interrupted and disconnected.");
+                if (!suppressHome) {
+                    if (userCancelled) AndroidHomeStateStore.disconnected(context);
+                    else AndroidHomeStateStore.failed(context, "Android multihop start was interrupted and disconnected.");
+                }
                 callback.finished(false, userCancelled ? "Android multihop cancelled and disconnected." : "Android multihop start was interrupted and disconnected.");
             }
         } catch (Exception error) {
             boolean stopped = !started || stopEmbeddedAndProve();
+            boolean suppressHome;
             synchronized (this) {
-                transitioning = false;
+                suppressHome = revalidationTeardown;
+                transitioning = !stopped;
                 if (stopped) {
                     connected = false;
                     clearActiveGraphLocked();
@@ -154,43 +162,67 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             }
             String message = nonEmpty(error.getMessage(), "Android multihop failed closed.");
             if (!stopped) message += " Embedded engine teardown was not proved; runtime ownership retained.";
-            AndroidHomeStateStore.failed(context, message);
+            if (!suppressHome) AndroidHomeStateStore.failed(context, message);
             callback.finished(false, message);
         }
     }
 
-    synchronized void disconnect() {
-        disconnectRequested = true;
-        if (active != null && !active.isDone()) active.cancel(true);
-        if (!stopEmbeddedAndProve()) {
+    void disconnect() {
+        synchronized (this) {
+            disconnectRequested = true;
+            revalidationTeardown = false;
+            transitioning = true;
+            if (active != null && !active.isDone()) active.cancel(true);
+        }
+        boolean stopped = stopEmbeddedAndProve();
+        synchronized (this) {
+            transitioning = !stopped;
+            if (stopped) {
+                connected = false;
+                clearActiveGraphLocked();
+            }
+        }
+        if (!stopped) {
             AndroidHomeStateStore.failed(context, "Android multihop disconnect did not prove embedded engine teardown; runtime ownership retained.");
             throw new IllegalStateException("Android multihop teardown did not reach DOWN/FAILED/REVOKED before timeout.");
         }
-        transitioning = false;
-        connected = false;
-        clearActiveGraphLocked();
         AndroidHomeStateStore.disconnected(context);
     }
 
     /** Tear down this owner's runtime without changing Home state; the revalidation transaction owns the final state write. */
-    synchronized void failClosedForRevalidation() {
-        disconnectRequested = true;
-        if (active != null && !active.isDone()) active.cancel(true);
-        if (!stopEmbeddedAndProve()) throw new IllegalStateException("Android multihop revalidation teardown did not reach a terminal state.");
-        transitioning = false;
-        connected = false;
-        clearActiveGraphLocked();
+    void failClosedForRevalidation() {
+        synchronized (this) {
+            disconnectRequested = true;
+            revalidationTeardown = true;
+            transitioning = true;
+            if (active != null && !active.isDone()) active.cancel(true);
+        }
+        boolean stopped = stopEmbeddedAndProve();
+        synchronized (this) {
+            transitioning = !stopped;
+            if (stopped) {
+                connected = false;
+                clearActiveGraphLocked();
+            }
+        }
+        if (!stopped) throw new IllegalStateException("Android multihop revalidation teardown did not reach a terminal state.");
     }
 
-    @Override public synchronized void close() {
-        if (!closed.compareAndSet(false, true)) return;
-        disconnectRequested = true;
-        if (active != null && !active.isDone()) active.cancel(true);
+    @Override public void close() {
+        synchronized (this) {
+            if (!closed.compareAndSet(false, true)) return;
+            disconnectRequested = true;
+            revalidationTeardown = true;
+            transitioning = true;
+            if (active != null && !active.isDone()) active.cancel(true);
+        }
         if (runtimeBusy(singBox.getState())) stopEmbeddedAndProve();
-        transitioning = false;
-        if (!runtimeBusy(singBox.getState())) {
-            connected = false;
-            clearActiveGraphLocked();
+        synchronized (this) {
+            transitioning = runtimeBusy(singBox.getState());
+            if (!transitioning) {
+                connected = false;
+                clearActiveGraphLocked();
+            }
         }
         executor.shutdownNow();
     }
