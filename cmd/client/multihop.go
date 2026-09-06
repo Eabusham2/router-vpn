@@ -48,9 +48,6 @@ type multihopNodeSummary struct {
 	LatencyP90Ms    float64 `json:"latency_p90_ms,omitempty"`
 }
 
-// activeMultihopGraph records the graph that was actually launched.  The profile
-// fields remain configuration/defaults; they are not used as proof of the live
-// graph because callers may supply an explicit entry/exit to /api/multihop/connect.
 type activeMultihopGraph struct {
 	EntryID  string
 	ExitID   string
@@ -59,7 +56,7 @@ type activeMultihopGraph struct {
 	Started  time.Time
 }
 
-var activeMultihopGraphs sync.Map // map[*app]activeMultihopGraph
+var activeMultihopGraphs sync.Map
 
 func setActiveMultihopGraph(a *app, sel multihopSelection) {
 	activeMultihopGraphs.Store(a, activeMultihopGraph{
@@ -76,6 +73,13 @@ func getActiveMultihopGraph(a *app) (activeMultihopGraph, bool) {
 	}
 	graph, ok := value.(activeMultihopGraph)
 	return graph, ok && graph.EntryID != "" && graph.ExitID != "" && graph.EntryID != graph.ExitID
+}
+
+func (a *app) multihopStopFailure(cmd *exec.Cmd, cause string) (string, bool) {
+	if cleanupErr := a.stopOwnedConnectionRuntime(cmd); cleanupErr != nil {
+		return cause + "; runtime cleanup failed: " + cleanupErr.Error(), true
+	}
+	return cause, false
 }
 
 func registerMultihopRoutes(h *http.ServeMux, a *app) {
@@ -134,7 +138,6 @@ func resolveMultihopSelection(control common.RouterProfile, profiles []common.Ro
 	if strings.TrimSpace(entry.SocksHost) == "" || entry.SocksPort <= 0 {
 		return multihopSelection{}, errors.New("entry node is missing its private SOCKS5 endpoint")
 	}
-
 	base := normalizeBase(q.Base)
 	if base == "" || base == "auto" {
 		base = normalizeBase(entry.BaseTunnel)
@@ -222,7 +225,6 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finish()
-
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -250,9 +252,8 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A new request invalidates any earlier graph identity before the old mode is
-	// stopped. The graph is published only after the exact new process starts.
-	clearActiveMultihopGraph(a)
+	// Preserve any existing active graph until its owning runtime has actually
+	// stopped. A failed teardown must retain exact graph identity for retry.
 	sessionTrackerFor(a).declareRequest("multihop", sel.Base)
 	if err := a.stopMode(); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
@@ -286,27 +287,31 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.state.Phase = "multihop:proving-exit"
 	a.state.LastError = ""
 	a.mu.Unlock()
+	setActiveMultihopGraph(a, sel)
 	if err := a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		clearActiveMultihopGraph(a)
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusConflict)
+		message, cleanupFailed := a.multihopStopFailure(cmd, err.Error())
+		sessionTrackerFor(a).markRequestFailure(message)
+		status := http.StatusConflict
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
 		return
 	}
-	setActiveMultihopGraph(a, sel)
 
 	proofErr := a.proveMultihopExit(sel.Exit)
 	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		clearActiveMultihopGraph(a)
-		sessionTrackerFor(a).markRequestFailure(cancelErr.Error())
-		http.Error(w, cancelErr.Error(), http.StatusConflict)
+		message, cleanupFailed := a.multihopStopFailure(cmd, cancelErr.Error())
+		sessionTrackerFor(a).markRequestFailure(message)
+		status := http.StatusConflict
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
 		return
 	}
 	if proofErr != nil {
-		_ = a.stopMode()
-		clearActiveMultihopGraph(a)
-		msg := "multihop exit proof failed: " + proofErr.Error()
+		msg, cleanupFailed := a.multihopStopFailure(cmd, "multihop exit proof failed: "+proofErr.Error())
 		a.mu.Lock()
 		a.state.Mode = "multihop"
 		a.state.LogicalMode = "multihop"
@@ -318,7 +323,11 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 		a.state.Connected = false
 		a.mu.Unlock()
 		sessionTrackerFor(a).markRequestFailure(msg)
-		http.Error(w, msg, http.StatusBadGateway)
+		status := http.StatusBadGateway
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, msg, status)
 		return
 	}
 
@@ -345,10 +354,12 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	if persistErr != nil {
-		_ = a.stopMode()
-		clearActiveMultihopGraph(a)
-		sessionTrackerFor(a).markRequestFailure(persistErr.Error())
-		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
+		message, cleanupFailed := a.multihopStopFailure(cmd, "multihop usage persistence failed: "+persistErr.Error())
+		if !cleanupFailed {
+			message += "; runtime was torn down"
+		}
+		sessionTrackerFor(a).markRequestFailure(message)
+		http.Error(w, message, http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("content-type", "application/json")
