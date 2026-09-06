@@ -12,6 +12,13 @@ import (
 	"router-vpn/internal/common"
 )
 
+func (a *app) externalProfileStopFailure(cmd *exec.Cmd, cause string) (string, bool) {
+	if cleanupErr := a.stopOwnedConnectionRuntime(cmd); cleanupErr != nil {
+		return cause + "; runtime cleanup failed: " + cleanupErr.Error(), true
+	}
+	return cause, false
+}
+
 type externalProfileConnectRequest struct {
 	ProfileID string `json:"profile_id"`
 	EntryID   string `json:"entry_id"`
@@ -247,9 +254,13 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		a.state.LastError = ""
 		a.mu.Unlock()
 		if err = a.checkConnectionOperation(); err != nil {
-			a.stopOwnedConnectionRuntime(cmd)
-			sessionTrackerFor(a).markRequestFailure(err.Error())
-			http.Error(w, err.Error(), http.StatusConflict)
+			message, cleanupFailed := a.externalProfileStopFailure(cmd, err.Error())
+			sessionTrackerFor(a).markRequestFailure(message)
+			status := http.StatusConflict
+			if cleanupFailed {
+				status = http.StatusInternalServerError
+			}
+			http.Error(w, message, status)
 			return
 		}
 		proofErr = a.proveOpenVPNStandardExitForOperation(exit.ExpectedPublicIP)
@@ -296,9 +307,13 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		a.state.LastError = ""
 		a.mu.Unlock()
 		if err = a.checkConnectionOperation(); err != nil {
-			a.stopOwnedConnectionRuntime(realCmd)
-			sessionTrackerFor(a).markRequestFailure(err.Error())
-			http.Error(w, err.Error(), http.StatusConflict)
+			message, cleanupFailed := a.externalProfileStopFailure(realCmd, err.Error())
+			sessionTrackerFor(a).markRequestFailure(message)
+			status := http.StatusConflict
+			if cleanupFailed {
+				status = http.StatusInternalServerError
+			}
+			http.Error(w, message, status)
 			return
 		}
 		proofErr = a.proveStandardExitForOperation(exit.ExpectedPublicIP)
@@ -321,8 +336,12 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 			failure = proofErr
 			status = http.StatusBadGateway
 		}
-		a.stopOwnedConnectionRuntime(startedCmd)
 		msg := "external node exit proof failed: " + failure.Error()
+		var cleanupFailed bool
+		msg, cleanupFailed = a.externalProfileStopFailure(startedCmd, msg)
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
 		a.mu.Lock()
 		a.state.Mode = "external-node"
 		a.state.LogicalMode = "external-node"
@@ -367,9 +386,12 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	if persistErr != nil {
-		_ = a.stopMode()
-		sessionTrackerFor(a).markRequestFailure(persistErr.Error())
-		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
+		message, cleanupFailed := a.externalProfileStopFailure(startedCmd, "external-node usage/public-exit persistence failed: "+persistErr.Error())
+		if !cleanupFailed {
+			message += "; runtime was torn down"
+		}
+		sessionTrackerFor(a).markRequestFailure(message)
+		http.Error(w, message, http.StatusInternalServerError)
 		return
 	}
 
