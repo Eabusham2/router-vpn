@@ -93,11 +93,15 @@ jobs:
           done
           ! grep -Fq 'router-vpn-bundle.json' "$members"
           test ! -d "dist/linux-native/work-$arch"
+          grep -Fq 'SRC="$ROOT/client/linux/routervpn-gtk-product-v5.c"' client/linux/build-native-app.sh
+          grep -Fq 'SHIPPED=("$SRC"' client/linux/build-native-app.sh
           grep -Fq 'routervpn-unified-shell-v8.inc' client/linux/build-native-app.sh
           grep -Fq 'gtk_stack_new' client/linux/routervpn-unified-shell-v8.inc
-          grep -Fq 'gtk_window_new' client/linux/routervpn-gtk.c
-          grep -Fq 'http://127.0.0.1:8788' client/linux/routervpn-gtk.c
-          ! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' client/linux/routervpn-gtk.c
+          grep -Fq 'gtk_window_new' client/linux/routervpn-gtk-product-v5.c
+          grep -Fq -- '--self-test' client/linux/routervpn-gtk-product-v5.c
+          grep -Fq 'http://127.0.0.1:8788' client/linux/routervpn-gtk-product.c
+          grep -Fq '/api/connect-logical' client/linux/routervpn-gtk-product.c
+          ! grep -Eqi 'WebKit|WebView|chromium|electron|xdg-open|sensible-browser' client/linux/routervpn-gtk-product-v5.c client/linux/routervpn-gtk-product-v4.c client/linux/routervpn-gtk-product-v3.c client/linux/routervpn-gtk-product.c
           work="$RUNNER_TEMP/linux-native-inspect-$arch"
           rm -rf "$work"
           mkdir -p "$work"
