@@ -30,7 +30,9 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 	multihop := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java")
 	for _, marker := range []string{
 		"STOP_TIMEOUT_MS = 8000L",
-		"stopEmbeddedAndProve()",
+		"boolean revalidationTeardown",
+		"boolean stopped = stopEmbeddedAndProve();",
+		"suppressHome = revalidationTeardown",
 		"Android multihop teardown did not reach DOWN/FAILED/REVOKED before timeout.",
 		"Android multihop disconnect did not prove embedded engine teardown; runtime ownership retained.",
 		"return \"multihop\".equals(home.logicalMode) && runtimeBusy(singBox.getState());",
@@ -39,14 +41,25 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 			t.Fatalf("Android multihop teardown ownership missing %q", marker)
 		}
 	}
-	if strings.Contains(multihop, "singBox.stop();\n        AndroidHomeStateStore.disconnected(context);") {
-		t.Fatal("Android multihop still publishes disconnected immediately after an asynchronous stop request")
+	for _, forbidden := range []string{
+		"synchronized void disconnect()",
+		"synchronized void failClosedForRevalidation()",
+		"singBox.stop();\n        AndroidHomeStateStore.disconnected(context);",
+	} {
+		if strings.Contains(multihop, forbidden) {
+			t.Fatalf("Android multihop teardown still blocks its monitor or publishes stale Home state: %q", forbidden)
+		}
 	}
 
 	external := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitRuntime.java")
 	for _, marker := range []string{
 		"STOP_TIMEOUT_MS=8000L",
-		"stopEmbeddedAndProve()",
+		"boolean disconnectRequested",
+		"boolean revalidationTeardown",
+		"boolean teardownInProgress",
+		"Custom exit cancelled before Connected adoption.",
+		"boolean stopped=stopEmbeddedAndProve();",
+		"suppressHome=revalidationTeardown",
 		"Android custom-exit teardown did not reach DOWN/FAILED/REVOKED before timeout.",
 		"Android custom-exit disconnect did not prove embedded engine teardown; runtime ownership retained.",
 		"Embedded engine teardown was not proved; runtime ownership retained.",
@@ -55,8 +68,14 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 			t.Fatalf("Android custom-exit teardown ownership missing %q", marker)
 		}
 	}
-	if strings.Contains(external, "singBox.stop();AndroidHomeStateStore.disconnected(context);") {
-		t.Fatal("Android custom exit still publishes disconnected immediately after an asynchronous stop request")
+	for _, forbidden := range []string{
+		"synchronized void disconnect()",
+		"synchronized void failClosedForRevalidation()",
+		"singBox.stop();AndroidHomeStateStore.disconnected(context);",
+	} {
+		if strings.Contains(external, forbidden) {
+			t.Fatalf("Android custom-exit teardown still blocks its monitor or publishes stale Home state: %q", forbidden)
+		}
 	}
 
 	unified := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedConnectionController.java")
@@ -77,8 +96,8 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 		"routervpn-emergency-verify",
 		"runtime.wireGuard.disconnectManaged",
 		"runtime.amneziaWG.disconnectManaged",
-		"runtime.multihop.failClosedForRevalidation();",
-		"runtime.standardExit.failClosedForRevalidation();",
+		"try{runtime.multihop.failClosedForRevalidation();}catch(Throwable ignored){}",
+		"try{runtime.standardExit.failClosedForRevalidation();}catch(Throwable ignored){}",
 		"Raw WireGuard/AmneziaWG teardown timed out; session ownership retained.",
 		"WireGuard did not prove DOWN during Emergency Disconnect.",
 		"AmneziaWG did not prove DOWN during Emergency Disconnect.",
