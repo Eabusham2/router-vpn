@@ -21,6 +21,13 @@ enum IOSStartLayer {
         }
     }
 
+    static func validateExternal(profile: [String: Any]) throws {
+        let mode = try selectedMode(profile: profile)
+        guard mode == off else {
+            throw error("External nodes own their own transport security; iOS refuses to apply or silently ignore Router VPN Start Layer \(mode).")
+        }
+    }
+
     static func apply(
         root: [String: Any],
         selectedProfile: [String: Any],
