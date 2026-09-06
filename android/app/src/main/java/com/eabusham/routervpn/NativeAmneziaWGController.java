@@ -109,19 +109,19 @@ final class NativeAmneziaWGController implements Tunnel {
     private void disconnectInternal(boolean publishHomeState, Callback callback) {
         executor.execute(() -> {
             networkMonitor.stop();
-            clearActive();
             try {
                 State result = backend.setState(this, State.DOWN, null);
                 state = result;
+                if (result != State.DOWN) throw new IllegalStateException("AmneziaWG teardown did not prove DOWN.");
+                clearActive();
                 lastError = "";
                 if (publishHomeState) AndroidHomeStateStore.disconnected(appContext);
                 homeStateOwner = false;
-                callback.done(result, "Native Android AmneziaWG disconnected.", null);
+                callback.done(State.DOWN, "Native Android AmneziaWG disconnected.", null);
             } catch (Throwable error) {
                 lastError = safeMessage(error);
-                if (publishHomeState) AndroidHomeStateStore.failed(appContext, "AmneziaWG disconnect failed: " + lastError);
-                homeStateOwner = false;
-                callback.done(state, "AmneziaWG disconnect failed: " + lastError, error);
+                if (publishHomeState) AndroidHomeStateStore.failed(appContext, "AmneziaWG disconnect incomplete: " + lastError);
+                callback.done(state, "AmneziaWG disconnect incomplete: " + lastError, error);
             }
         });
     }
