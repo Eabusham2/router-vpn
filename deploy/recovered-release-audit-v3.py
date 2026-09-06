@@ -199,24 +199,27 @@ def selected_dns_proof() -> bool:
 
 
 LINUX_SHIPPING = (
+    "client/linux/routervpn-gtk-product-v5.c",
+    "client/linux/routervpn-product-onboarding-v6.inc",
+    "client/linux/routervpn-home-summary-v1.inc",
+    "client/linux/routervpn-profile-settings-v1.inc",
+    "client/linux/routervpn-auto-requirements-v11.inc",
+    "client/linux/routervpn-unified-shell-v8.inc",
+    "client/linux/routervpn-telemetry-v9.inc",
+    "client/linux/routervpn-speed-lab-v12.inc",
+    "client/linux/routervpn-globe-v10.inc",
     "client/linux/routervpn-gtk-product-v4.c",
     "client/linux/routervpn-gtk-product-v3.c",
     "client/linux/routervpn-gtk-product.c",
-    "client/linux/routervpn-gtk.c",
 )
 
 
 def linux_shipping_has(*markers: str) -> bool:
-    rel = shipping_source("client/linux/build-native-app.sh", LINUX_SHIPPING)
-    if not rel:
+    build = mod.body("client/linux/build-native-app.sh")
+    if not build or not all(Path(rel).name in build for rel in LINUX_SHIPPING):
         return False
-    if rel == "client/linux/routervpn-gtk-product-v4.c":
-        text = "\n".join(mod.body(p) for p in LINUX_SHIPPING[:3])
-        return bool(text) and all(marker in text for marker in markers)
-    if rel == "client/linux/routervpn-gtk-product-v3.c":
-        text = "\n".join(mod.body(p) for p in LINUX_SHIPPING[1:3])
-        return bool(text) and all(marker in text for marker in markers)
-    return mod.has(rel, *markers)
+    text = "\n".join(mod.body(rel) for rel in LINUX_SHIPPING)
+    return bool(text) and all(marker in text for marker in markers)
 
 
 mod.RECOVERED = [
