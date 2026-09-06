@@ -59,15 +59,39 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 		t.Fatal("Android custom exit still publishes disconnected immediately after an asynchronous stop request")
 	}
 
+	unified := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedConnectionController.java")
+	for _, marker := range []string{
+		"new AtomicBoolean(false)",
+		"routervpn-unified-disconnect",
+		"if(wasMultihop)multihop.disconnect();",
+		"if(wasExternal)runtime.standardExit.disconnect();",
+		"Disconnect incomplete:",
+	} {
+		if !strings.Contains(unified, marker) {
+			t.Fatalf("Android unified disconnect nonblocking ownership proof missing %q", marker)
+		}
+	}
+
 	home := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidHomeSummary.java")
 	for _, marker := range []string{
+		"routervpn-emergency-verify",
+		"runtime.wireGuard.disconnectManaged",
+		"runtime.amneziaWG.disconnectManaged",
+		"runtime.multihop.failClosedForRevalidation();",
+		"runtime.standardExit.failClosedForRevalidation();",
 		"Raw WireGuard/AmneziaWG teardown timed out; session ownership retained.",
 		"WireGuard did not prove DOWN during Emergency Disconnect.",
 		"AmneziaWG did not prove DOWN during Emergency Disconnect.",
-		"all raw tunnels proved DOWN and no Router VPN-owned VPN network remains",
+		"Libbox did not reach DOWN/FAILED/REVOKED during Emergency Disconnect.",
+		"Xray did not reach DOWN/FAILED/REVOKED during Emergency Disconnect.",
+		"all Router VPN engines proved terminal and no Router VPN-owned VPN network remains",
 	} {
 		if !strings.Contains(home, marker) {
 			t.Fatalf("Android Emergency Disconnect teardown proof missing %q", marker)
 		}
+	}
+	beforeThread := strings.Split(home, "new Thread(() -> {")[0]
+	if strings.Contains(beforeThread, "runtime.multihop.disconnect()") || strings.Contains(beforeThread, "runtime.standardExit.disconnect()") {
+		t.Fatal("Android Emergency Disconnect performs blocking runtime teardown on the caller/UI thread")
 	}
 }
