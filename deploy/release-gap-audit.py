@@ -114,7 +114,7 @@ for rel in ("client/RouterVPN-Windows-App.ps1", "cmd/portable-launcher/main.go",
 
 # macOS must ship a native AppKit .app and not a hidden WebKit wrapper.
 require(
-    "client/macos/RouterVPNMacNative.swift",
+    "client/macos/RouterVPNMacProduct.swift",
     "NSWindow(",
     "NSTabViewController",
     "http://127.0.0.1:8788",
@@ -122,7 +122,12 @@ require(
     "/api/emergency-stop",
     "--self-test",
 )
-forbid("client/macos/RouterVPNMacNative.swift", "import WebKit", "WKWebView")
+require(
+    "client/macos/build-native-app.sh",
+    'SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"',
+    '"$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC"',
+)
+forbid("client/macos/RouterVPNMacProduct.swift", "import WebKit", "WKWebView")
 require(
     "deploy/package-macos-native.sh",
     "RouterVPN.app",
