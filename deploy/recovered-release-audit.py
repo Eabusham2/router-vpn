@@ -40,6 +40,30 @@ def no(rel: str, *parts: str) -> bool:
     return bool(text) and all(part not in text for part in parts)
 
 
+LINUX_SHIPPING = (
+    "client/linux/routervpn-gtk-product-v5.c",
+    "client/linux/routervpn-product-onboarding-v6.inc",
+    "client/linux/routervpn-home-summary-v1.inc",
+    "client/linux/routervpn-profile-settings-v1.inc",
+    "client/linux/routervpn-auto-requirements-v11.inc",
+    "client/linux/routervpn-unified-shell-v8.inc",
+    "client/linux/routervpn-telemetry-v9.inc",
+    "client/linux/routervpn-speed-lab-v12.inc",
+    "client/linux/routervpn-globe-v10.inc",
+    "client/linux/routervpn-gtk-product-v4.c",
+    "client/linux/routervpn-gtk-product-v3.c",
+    "client/linux/routervpn-gtk-product.c",
+)
+
+
+def linux_shipping_has(*parts: str) -> bool:
+    build = body("client/linux/build-native-app.sh")
+    if not build or not all(Path(rel).name in build for rel in LINUX_SHIPPING):
+        return False
+    text = "\n".join(body(rel) for rel in LINUX_SHIPPING)
+    return bool(text) and all(part in text for part in parts)
+
+
 def modern_ios_engine_truth() -> bool:
     """Supersede the legacy WireGuard-only iOS predicate after real Libbox landed."""
     return (
@@ -110,13 +134,10 @@ RECOVERED = [
     {
         "name": "native connection-attempt progress consumes typed session events",
         "weight": 0.5,
-        "pass": lambda: all(
-            "/api/session/events" in body(rel)
-            for rel in (
-                "client/RouterVPN-Windows-App.ps1",
-                "client/macos/RouterVPNMacProduct.swift",
-                "client/linux/routervpn-gtk.c",
-            )
+        "pass": lambda: (
+            "/api/session/events" in body("client/RouterVPN-Windows-App.ps1")
+            and "/api/session/events" in body("client/macos/RouterVPNMacProduct.swift")
+            and linux_shipping_has("/api/session/events")
         ),
         "note": "native apps must surface attempt/fallback/rollback progress rather than polling only coarse status",
     },
@@ -134,11 +155,9 @@ RECOVERED = [
         "weight": 0.5,
         "pass": lambda: (
             no("cmd/client/multihop.go", 'runtime.GOOS != "linux"')
-            and all("/api/multihop" in body(rel) for rel in (
-                "client/RouterVPN-Windows-App.ps1",
-                "client/macos/RouterVPNMacProduct.swift",
-                "client/linux/routervpn-gtk.c",
-            ))
+            and "/api/multihop" in body("client/RouterVPN-Windows-App.ps1")
+            and "/api/multihop" in body("client/macos/RouterVPNMacProduct.swift")
+            and linux_shipping_has("/api/multihop")
         ),
         "note": "Linux-only desktop controller multihop does not satisfy Windows/macOS parity",
     },
@@ -147,13 +166,11 @@ RECOVERED = [
         "weight": 1.0,
         "pass": lambda: (
             has("internal/common/types.go", "Latitude", "Longitude", "LatencyMedianMs")
-            and all("Map" in body(rel) for rel in (
-                "client/RouterVPN-Windows-App.ps1",
-                "client/macos/RouterVPNMacProduct.swift",
-                "client/linux/routervpn-gtk.c",
-                "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
-                "ios/RouterVPN/App/IOSUnifiedProductView.swift",
-            ))
+            and "Map" in body("client/RouterVPN-Windows-App.ps1")
+            and "Map" in body("client/macos/RouterVPNMacProduct.swift")
+            and linux_shipping_has("Map")
+            and "Map" in body("android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java")
+            and "Map" in body("ios/RouterVPN/App/IOSUnifiedProductView.swift")
         ),
         "note": "native window existence is not the requested Home/Nodes+Map/Modes/DNS/Advanced/Forwarding/Settings/Help product parity",
     },
