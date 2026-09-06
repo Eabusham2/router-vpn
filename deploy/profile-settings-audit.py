@@ -137,21 +137,20 @@ require(
     "never redacted full-profile POST",
 )
 linux_profiles = require(
-    "client/linux/routervpn-connection-profiles-v10.inc",
-    "LinuxConnectionProfilesV10", "Add profile", "Load", "Update", "Delete", "Refresh",
-    "/api/connection-profiles", "/api/connection-profile/save", "/api/connection-profile/update",
-    "/api/connection-profile/load", "/api/connection-profile/delete",
-    "linux_unified_selected_mode_v8", "linux_unified_custom_layers_for_mode_v8",
-    "linux_unified_store_mode_v8", "never duplicate node secrets or credentials",
-    "linux_connection_profiles_button_v10",
+    "client/linux/routervpn-connection-profiles-v11.inc",
+    "Linux v11 Profiles contract", "Add/Load/Update/Delete exact non-secret setup", "Choose Add/Load/Update/Delete",
+    "/api/connection-profiles", "/api/connection-profile/setup/save", "/api/connection-profile/setup/update",
+    "/api/connection-profile/setup/load", "/api/connection-profile/setup/delete",
+    "linux_unified_custom_layers_for_mode_v8", "linux_unified_store_mode_v8",
+    "Load never connects automatically", "linux_profile_manager_v11", "linux_unified_refresh_v8",
 )
 for forbidden in ("api_token", "private_key", "preshared_key", "socks_password"):
     if forbidden in linux_profiles:
         errors.append(f"Linux connection profile UI should not serialize private node field marker: {forbidden}")
 require(
-    "client/linux/routervpn-telemetry-v9.inc", '#include "routervpn-connection-profiles-v10.inc"',
-    'linux_telemetry_button_v9("Profiles",G_CALLBACK(linux_connection_profiles_v10),t)',
-    "linux_telemetry_button_v9",
+    "client/linux/routervpn-telemetry-v9.inc", '#include "routervpn-connection-profiles-v11.inc"',
+    'linux_telemetry_button_v9("Profiles",G_CALLBACK(linux_telemetry_profiles_v9),t)',
+    "linux_profile_manager_v11(NULL, telemetry->base)", "linux_telemetry_button_v9",
 )
 require(
     "client/linux/build-native-app.sh", "SETTINGS_INC", '#include \"routervpn-profile-settings-v1.inc\"',
@@ -159,10 +158,10 @@ require(
 )
 require_combined(
     "Linux unified product",
-    ("client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-home-summary-v1.inc", "client/linux/routervpn-telemetry-v9.inc", "client/linux/routervpn-connection-profiles-v10.inc"),
+    ("client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-home-summary-v1.inc", "client/linux/routervpn-telemetry-v9.inc", "client/linux/routervpn-connection-profiles-v11.inc"),
     "/api/profile/settings", "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
     "linux_unified_settings_v8", "linux_unified_auto_requirements_v8", "AUTO requirements", "on_linux_auto_requirements_v11",
-    "Kill switch", "MTU Retest", "/api/connection-profile/load",
+    "Kill switch", "MTU Retest", "/api/connection-profile/setup/load",
 )
 
 android_settings = require(
