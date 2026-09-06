@@ -114,7 +114,7 @@ RECOVERED = [
             "/api/session/events" in body(rel)
             for rel in (
                 "client/RouterVPN-Windows-App.ps1",
-                "client/macos/RouterVPNMacApp.swift",
+                "client/macos/RouterVPNMacProduct.swift",
                 "client/linux/routervpn-gtk.c",
             )
         ),
@@ -136,7 +136,7 @@ RECOVERED = [
             no("cmd/client/multihop.go", 'runtime.GOOS != "linux"')
             and all("/api/multihop" in body(rel) for rel in (
                 "client/RouterVPN-Windows-App.ps1",
-                "client/macos/RouterVPNMacApp.swift",
+                "client/macos/RouterVPNMacProduct.swift",
                 "client/linux/routervpn-gtk.c",
             ))
         ),
@@ -149,10 +149,10 @@ RECOVERED = [
             has("internal/common/types.go", "Latitude", "Longitude", "LatencyMedianMs")
             and all("Map" in body(rel) for rel in (
                 "client/RouterVPN-Windows-App.ps1",
-                "client/macos/RouterVPNMacApp.swift",
+                "client/macos/RouterVPNMacProduct.swift",
                 "client/linux/routervpn-gtk.c",
-                "android/app/src/main/java/com/eabusham/routervpn/MainActivity.java",
-                "ios/RouterVPN/App/ContentView.swift",
+                "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
+                "ios/RouterVPN/App/IOSUnifiedProductView.swift",
             ))
         ),
         "note": "native window existence is not the requested Home/Nodes+Map/Modes/DNS/Advanced/Forwarding/Settings/Help product parity",
