@@ -147,10 +147,10 @@ final class AndroidHomeSummary {
                 AtomicReference<String> rawFailure=new AtomicReference<>("");
                 runtime.wireGuard.disconnectManaged((state,message,error)->{if(error==null&&state==com.wireguard.android.backend.Tunnel.State.DOWN)wgDown.set(true);else rawFailure.compareAndSet("","WireGuard: "+(error==null?message:safe(error)));rawStops.countDown();});
                 runtime.amneziaWG.disconnectManaged((state,message,error)->{if(error==null&&state==org.amnezia.awg.backend.Tunnel.State.DOWN)awgDown.set(true);else rawFailure.compareAndSet("","AmneziaWG: "+(error==null?message:safe(error)));rawStops.countDown();});
-                runtime.multihop.failClosedForRevalidation();
-                runtime.standardExit.failClosedForRevalidation();
-                if(!terminalEngineState(runtime.singBox.getState()))runtime.singBox.stop();
-                if(!terminalEngineState(runtime.xray.getState()))runtime.xray.stop();
+                try{runtime.multihop.failClosedForRevalidation();}catch(Throwable ignored){}
+                try{runtime.standardExit.failClosedForRevalidation();}catch(Throwable ignored){}
+                try{if(!terminalEngineState(runtime.singBox.getState()))runtime.singBox.stop();}catch(Throwable ignored){}
+                try{if(!terminalEngineState(runtime.xray.getState()))runtime.xray.stop();}catch(Throwable ignored){}
 
                 if(!rawStops.await(4, TimeUnit.SECONDS))throw new IllegalStateException("Raw WireGuard/AmneziaWG teardown timed out; session ownership retained.");
                 if(!rawFailure.get().isEmpty())throw new IllegalStateException("Raw tunnel teardown failed: "+rawFailure.get());
