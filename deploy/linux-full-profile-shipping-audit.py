@@ -31,8 +31,12 @@ private_store = read("cmd/client/private_store.go")
 # because it exists in the repository, and fail if the retired v10 shim returns.
 require(telemetry, "Linux telemetry shipping seam",
         '#include "routervpn-connection-profiles-v11.inc"',
-        'linux_telemetry_button_v9("Profiles",G_CALLBACK(linux_telemetry_profiles_v9),t)',
-        "linux_profile_manager_v11(NULL, telemetry->base)")
+        "linux_install_connection_profiles_v11(app)")
+require(full, "Linux profile v11 installer",
+        "linux_install_connection_profiles_v11",
+        "linux_profile_manager_v11",
+        "linux_profile_choose_hops_v11",
+        "linux_profile_connect_v11")
 if (ROOT / "client/linux/routervpn-connection-profiles-v10.inc").exists():
     errors.append("superseded Linux v10 connection-profile compatibility seam still exists")
 require(build, "Linux native shipping build",
