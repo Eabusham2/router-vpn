@@ -18,11 +18,17 @@ for required in (
     "HOMEVPN_KILLSWITCH_HOLD",
     'if [[ ${HOMEVPN_KILLSWITCH_HOLD:-0} != 1 ]]',
     'kill-switch.py" release',
+    'if (( CLEANUP_RC != 0 ))',
+    'strict kill switch remains held for recovery',
 ):
     assert required in stop, f"stop-mode.sh missing transition/manual distinction: {required}"
 
 assert 'HOMEVPN_KILLSWITCH_HOLD:-0} != 1' in platform_stop
 assert 'kill-switch-platform.py" release' in platform_stop
+assert 'if (( STOP_RC != 0 ))' in platform_stop
+assert 'strict platform kill switch remains held for recovery' in platform_stop
+assert 'platform kill-switch release failed; protection remains fail-closed' in platform_stop
+assert platform_stop.index('if (( STOP_RC != 0 ))') < platform_stop.index('kill-switch-platform.py" release'), "platform kill switch can be released before common teardown succeeds"
 assert 'HOMEVPN_KILLSWITCH_HOLD=1' in run_all and 'stop-mode.sh' in run_all
 
 for required in (
