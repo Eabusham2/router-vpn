@@ -9,6 +9,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Activity-owned UI bridge over app-process-owned VPN engines. */
 final class AndroidUnifiedConnectionController implements AutoCloseable {
@@ -26,6 +27,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     private final NativeXrayController xray;
     private final AndroidModeOrchestrator orchestrator;
     private final AndroidMultihopRuntime multihop;
+    private final AtomicBoolean disconnecting = new AtomicBoolean(false);
 
     private String pendingMode = "";
     private List<String> pendingLayers = Collections.emptyList();
@@ -48,7 +50,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         multihop = runtime.multihop;
     }
 
-    boolean isActiveOrTransitioning() { return AndroidVpnMutationGuard.isBusy(activity); }
+    boolean isActiveOrTransitioning() { return disconnecting.get() || AndroidVpnMutationGuard.isBusy(activity); }
     boolean isConnected() { return AndroidHomeStateStore.snapshot(activity).connected; }
     boolean isMultihopConnected() { return multihop.isConnected(); }
     String activeMultihopEntryId() { return multihop.activeEntryId(); }
@@ -114,8 +116,28 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     }
 
     void disconnect(Callback callback) {
-        clearPending();boolean wasMultihop=multihop.isActiveOrTransitioning();try{multihop.disconnect();}catch(Throwable ignored){}try{runtime.standardExit.disconnect();}catch(Throwable ignored){}
-        orchestrator.disconnect(new AndroidModeOrchestrator.Callback(){@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean success,String modeId,String message){activity.runOnUiThread(()->callback.finished(success,wasMultihop&&success?"Disconnected Android multihop and native Router VPN transports.":message));}});
+        clearPending();
+        if(!disconnecting.compareAndSet(false,true)){callback.finished(false,"A Router VPN disconnect is already being verified.");return;}
+        final boolean wasMultihop=multihop.isActiveOrTransitioning();
+        final boolean wasExternal=runtime.standardExit.isActiveOrTransitioning();
+        activity.runOnUiThread(()->callback.progress("Disconnecting and proving owned Android VPN transports stop…"));
+        new Thread(()->{
+            try{
+                if(wasMultihop)multihop.disconnect();
+                if(wasExternal)runtime.standardExit.disconnect();
+            }catch(Throwable error){
+                disconnecting.set(false);
+                activity.runOnUiThread(()->callback.finished(false,"Disconnect incomplete: "+safe(error)));
+                return;
+            }
+            orchestrator.disconnect(new AndroidModeOrchestrator.Callback(){
+                @Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}
+                @Override public void finished(boolean success,String modeId,String message){
+                    disconnecting.set(false);
+                    activity.runOnUiThread(()->callback.finished(success,wasMultihop&&success?"Disconnected Android multihop and native Router VPN transports.":wasExternal&&success?"Disconnected Android custom exit and native Router VPN transports.":message));
+                }
+            });
+        },"routervpn-unified-disconnect").start();
     }
 
     boolean onActivityResult(int requestCode, int resultCode) { if(requestCode!=PREPARE_UNIFIED)return false;Callback cb=pendingCallback;if(resultCode!=Activity.RESULT_OK){clearPending();if(cb!=null)cb.finished(false,"Android VPN permission was not granted; Router VPN stayed disconnected.");return true;}startPending();return true; }
