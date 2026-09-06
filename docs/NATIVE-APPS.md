@@ -12,11 +12,15 @@ Windows source includes native raw WireGuard, full-device layered TUN/DNS paths,
 
 Validated Windows custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. OpenVPN 2.7 profile import and native helper/adapter source remain implemented because Windows OpenVPN is still a target, but current product capability reports it unavailable until strict Windows lifecycle cleanup passes native leak tests. Unsupported graphs fail closed; every supported custom exit withholds Connected until its expected public exit is proven.
 
+Windows x64 also owns the pinned native Tor Expert Bundle/Lyrebird censorship-circumvention runtime for obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets. Windows ARM64 reports Tor unavailable until Tor Project provides a pinned native Expert Bundle for that architecture.
+
 ## macOS
 
 The macOS package contains a native AppKit/MapKit `RouterVPN.app` for amd64 and arm64 with its Router VPN application icon and native menu-bar status item. The menu-bar item provides **Open Router VPN**, **Emergency Stop** and **Quit Router VPN** while the app is running. The app owns a sibling Router VPN controller only when it starts that controller itself. Closing the app performs Router VPN emergency cleanup and stops only the owned process. The app contains no WebKit view.
 
 Native routing, PF kill-switch handling and real multihop are source-implemented. Standard custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. Native OpenVPN 2.7 supports direct and the safe TCP-over-entry case; unsupported OpenVPN/DNS/hop combinations fail closed.
+
+macOS also ships the native Tor bridge builder/runtime around Router VPN-owned pinned Lyrebird/Tor components. The UI exposes obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets while keeping private bridge lines out of public profile/status output.
 
 Unsigned/local builds use the targeted System Settings → Privacy & Security → Open Anyway flow only after verifying the artifact. Do not globally disable Gatekeeper. Signed/notarized distribution plus physical macOS visual/network validation remain release gates.
 
@@ -26,6 +30,8 @@ Linux packages contain a native GTK3 application for amd64 and arm64, built on m
 
 Linux has broad native runtime coverage, nftables kill-switch handling and real multihop. Validated custom exits support WireGuard, SOCKS5, Shadowsocks, Hysteria2 and a native OpenVPN 2.7 direct/safe TCP-over-entry path. Expected-public-exit proof is required before Connected.
 
+Linux also ships the native Tor censorship-bridge panel and Router VPN-owned pinned Lyrebird/Tor runtime for obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets.
+
 ## Android
 
 Android is a native `VpnService` application. It has real WireGuard and native AmneziaWG paths plus the pinned combined libbox/Xray runtime for supported layered modes. AUTO/SMART/CUSTOM require exact selected-node private path proof. Strict embedded sessions require the platform lockdown contract; unsupported strict paths fail closed.
@@ -33,6 +39,8 @@ Android is a native `VpnService` application. It has real WireGuard and native A
 The first real Android multihop subset is standard-WireGuard entry → supported Shadowsocks/Hysteria2 exit with exit proof. AWG-entry and incompatible mixed-engine multihop remain unavailable rather than simulated.
 
 Android also has an app-private typed custom-exit store and native Custom Exits UI. WireGuard, SOCKS5, Shadowsocks and Hysteria2 exits are supported through one full-device path with expected-public-exit proof. OpenVPN remains unavailable because this project does not ship a pinned native Android OpenVPN dataplane.
+
+Tor bridges remain unavailable on Android until Router VPN owns a real native Tor + pluggable-transport `VpnService` dataplane. They are not approximated as a SOCKS5-only path.
 
 Physical VPN permission, lockdown, reconnect/network change, DNS/IPv4/IPv6, custom-exit traffic and leak-negative validation remain release gates.
 
@@ -46,7 +54,25 @@ Per-node private bundle storage and validated external-node selection are implem
 
 External OpenVPN, AmneziaWG-only paths and full desktop-equivalent multihop remain unavailable until a real pinned Apple dataplane exists for them. Unsupported MAX/ALL combinations remain unavailable rather than being inferred from labels.
 
+Tor bridges likewise remain unavailable until Router VPN ships a real native Tor + pluggable-transport PacketTunnel dataplane; the app does not fake them with plain SOCKS5.
+
 Physical iPhone/iPad permission, route-lockdown, reconnect/network change, DNS/IPv4/IPv6, Libbox/custom-exit traffic, leak-negative behavior and signing validation remain release gates.
+
+## Native Speed Lab
+
+Windows, macOS, Linux, Android and iOS/iPadOS expose a native **Speed Lab** surface. It is separate from lightweight live telemetry and from Auto-MTU testing.
+
+Speed Lab measures real Internet download/upload throughput, idle latency distribution, download-loaded latency and upload-loaded latency. Auto timing can stop after bounded throughput stabilization; custom minimum/maximum test-time controls are also available. Mbps is measured from real transfers and is never derived from RTT.
+
+The default test follows the exact current path. Temporary tests are transactional: they may construct only a platform-real configuration, must not overwrite the saved profile, and restore the prior runtime/state after the test. Results are rejected if the measured session/graph changes before adoption.
+
+Where real multihop exists, per-hop latency and throughput are measured independently and bound to the exact launched graph. Desktop/Android use distinct private proof lanes for entry and exit so identical private service addresses cannot be mislabeled. iOS does not pretend desktop-equivalent temporary multihop exists. See `docs/SPEED-LAB.md`.
+
+## Tor censorship-circumvention policy
+
+The Tor bridge family uses vetted Tor circuit cryptography plus real pluggable transports: **obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets**. Imported profile data cannot inject executable paths or raw `ClientTransportPlugin` commands; the trusted runtime owns PT registration and Tor bootstrap.
+
+A single literal obfs4 bridge can use the stricter endpoint-owned pre-tunnel policy. Dynamic/CDN/WebRTC bootstrap used by Snowflake, meek and WebTunnel is not falsely treated as covered by an endpoint-only strict kill switch; incompatible strict combinations fail closed. Tor remains the proved encrypted final path rather than a cosmetic upstream hop, and earlier homemade XOR/custom-cipher ideas are not part of the product.
 
 ## Native application updates
 
