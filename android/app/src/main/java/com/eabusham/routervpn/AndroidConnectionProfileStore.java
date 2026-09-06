@@ -24,17 +24,18 @@ final class AndroidConnectionProfileStore {
     private static final String MULTI_ON="multihop_on", MULTI_ENTRY="multihop_entry", MULTI_EXIT="multihop_exit", MULTI_MODE="multihop_exit_mode";
     private static final SecureRandom RANDOM=new SecureRandom();
     private static final String[] POLICY_KEYS={
-            "home_lan_access","kill_switch_policy","ipv6_mode","base_tunnel","base_fallback",
+            "home_lan_access","kill_switch_policy","ipv6_mode","base_tunnel","base_fallback","start_layer",
             "auto_require_encrypted","auto_require_obfuscation","mtu_policy","manual_mtu",
             "daita_enabled","jumbo_tun","socks_enabled","dns_mode","dns_protocol","dns_host",
             "dns_port","dns_server_name","dns_path"
     };
 
     static final class Record {
-        final String id,name,nodeKind,nodeId,mode; final List<String> customLayers; final boolean autoRequireEncrypted,autoRequireObfuscation;
-        Record(String id,String name,String nodeKind,String nodeId,String mode,List<String>layers,boolean autoRequireEncrypted,boolean autoRequireObfuscation){this.id=id;this.name=name;this.nodeKind=nodeKind;this.nodeId=nodeId;this.mode=mode;this.customLayers=layers;this.autoRequireEncrypted=autoRequireEncrypted;this.autoRequireObfuscation=autoRequireObfuscation;}
+        final String id,name,nodeKind,nodeId,mode,startLayer; final List<String> customLayers; final boolean autoRequireEncrypted,autoRequireObfuscation;
+        Record(String id,String name,String nodeKind,String nodeId,String mode,String startLayer,List<String>layers,boolean autoRequireEncrypted,boolean autoRequireObfuscation){this.id=id;this.name=name;this.nodeKind=nodeKind;this.nodeId=nodeId;this.mode=mode;this.startLayer=startLayer;this.customLayers=layers;this.autoRequireEncrypted=autoRequireEncrypted;this.autoRequireObfuscation=autoRequireObfuscation;}
         String autoRequirementsSummary(){if("external".equals(nodeKind))return "AUTO n/a";if(autoRequireEncrypted&&autoRequireObfuscation)return "AUTO Encrypted+Obfuscation";if(autoRequireEncrypted)return "AUTO Encrypted";if(autoRequireObfuscation)return "AUTO Obfuscation";return "AUTO Off";}
-        @Override public String toString(){return name+" • "+mode+" • "+("external".equals(nodeKind)?"Custom":"Router")+" • "+autoRequirementsSummary();}
+        String startLayerSummary(){if("external".equals(nodeKind))return "Start n/a";if("aes-256-gcm+xor-whitening".equals(startLayer))return "Start AES+XOR";if("aes-256-gcm".equals(startLayer))return "Start AES";return "Start Off";}
+        @Override public String toString(){return name+" • "+mode+" • "+("external".equals(nodeKind)?"Custom":"Router")+" • "+startLayerSummary()+" • "+autoRequirementsSummary();}
     }
 
     private final Context context; private final AndroidNodeStore nodes; private final AndroidStandardExitStore exits; private final File file, legacyFile;
@@ -143,6 +144,7 @@ final class AndroidConnectionProfileStore {
                         throw new IllegalStateException("Connection profile contains non-whitelisted node data: " + key);
                     }
                 }
+                if (policy.has("start_layer")) normalizeStartLayer(policy.optString("start_layer", "off"));
             }
         }
         if (legacyPath || schema < SCHEMA_VERSION) {
@@ -168,11 +170,12 @@ final class AndroidConnectionProfileStore {
     private List<String> customLayers(String mode)throws Exception{if(mode==null||!mode.startsWith("custom:"))return new ArrayList<>();String name=mode.substring(7);JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&name.equals(p.optString("name","")))return jsonStrings(p.optJSONArray("layers"),32);}return new ArrayList<>();}
     private String prepareCustomPresetJSON(String mode,List<String>layers)throws Exception{if(mode==null||!mode.startsWith("custom:")||layers.isEmpty())return null;String name=mode.substring(7);if(name.trim().isEmpty()||name.length()>64)throw new IllegalArgumentException("CUSTOM profile name is invalid.");JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]")),next=new JSONArray();for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&!name.equals(p.optString("name","")))next.put(p);}next.put(new JSONObject().put("name",name).put("layers",new JSONArray(layers)));return next.toString();}
     private static String normalizeMultiMode(String value){value=value==null?"":value.trim().toLowerCase(Locale.ROOT);if(value.isEmpty())value="shadowsocks";if(!"shadowsocks".equals(value)&&!"hysteria2".equals(value))throw new IllegalArgumentException("Multihop exit transport must be Shadowsocks or Hysteria2.");return value;}
+    private static String normalizeStartLayer(String value){value=value==null?"":value.trim().toLowerCase(Locale.ROOT);if(value.isEmpty())value="off";if(!"off".equals(value)&&!"aes-256-gcm".equals(value)&&!"aes-256-gcm+xor-whitening".equals(value))throw new IllegalArgumentException("Start Layer must be Off, AES-256-GCM, or AES-256-GCM + XOR whitening.");return value;}
     private static boolean allowedPolicyKey(String key){for(String allowed:POLICY_KEYS)if(allowed.equals(key))return true;return false;}
     private static String cleanName(String value){value=value==null?"":value.trim();if(value.isEmpty()||value.length()>64)throw new IllegalArgumentException("Connection profile name must be 1–64 characters.");for(int i=0;i<value.length();i++)if(Character.isISOControl(value.charAt(i)))throw new IllegalArgumentException("Connection profile name contains a control character.");return value;}
     private static String normalizeMode(String value){value=value==null?"":value.trim().toLowerCase(Locale.ROOT);if(value.isEmpty())value="smart-auto";if(!value.matches("[a-z0-9._:-]{1,80}"))throw new IllegalArgumentException("Connection profile mode is invalid.");return value;}
     private static List<String> jsonStrings(JSONArray values,int max){List<String>out=new ArrayList<>();Set<String>seen=new HashSet<>();if(values==null)return out;if(values.length()>max)throw new IllegalArgumentException("Too many CUSTOM layers.");for(int i=0;i<values.length();i++){String v=values.optString(i,"").trim().toLowerCase(Locale.ROOT);if(v.isEmpty())continue;if(!v.matches("[a-z0-9._-]{1,64}"))throw new IllegalArgumentException("CUSTOM layer is invalid.");if(seen.add(v))out.add(v);}java.util.Collections.sort(out);return out;}
-    private static Record toRecord(JSONObject row){JSONObject policy=row.optJSONObject("policy");boolean encrypted=policy!=null&&policy.optBoolean("auto_require_encrypted",false),obfuscated=policy!=null&&policy.optBoolean("auto_require_obfuscation",false);return new Record(row.optString("id",""),row.optString("name",""),row.optString("node_kind",""),row.optString("node_id",""),row.optString("mode","smart-auto"),jsonStrings(row.optJSONArray("custom_layers"),32),encrypted,obfuscated);}
+    private static Record toRecord(JSONObject row){JSONObject policy=row.optJSONObject("policy");boolean encrypted=policy!=null&&policy.optBoolean("auto_require_encrypted",false),obfuscated=policy!=null&&policy.optBoolean("auto_require_obfuscation",false);String startLayer=policy==null?"off":normalizeStartLayer(policy.optString("start_layer","off"));return new Record(row.optString("id",""),row.optString("name",""),row.optString("node_kind",""),row.optString("node_id",""),row.optString("mode","smart-auto"),startLayer,jsonStrings(row.optJSONArray("custom_layers"),32),encrypted,obfuscated);}
     private static JSONObject readBundle(File file)throws Exception{return new JSONObject(new String(readLimited(file,AndroidNodeStore.MAX_BUNDLE),StandardCharsets.UTF_8));}
     private static JSONObject selectedProfile(JSONObject bundle){JSONArray a=bundle.optJSONArray("routerProfiles");String id=bundle.optString("selectedRouterID","");if(a==null)return null;for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p!=null&&id.equals(p.optString("id","")))return p;}return a.length()>0?a.optJSONObject(0):null;}
     private static byte[] readLimited(File f,int max)throws Exception{return AndroidPrivateFileStore.read(f,max);}
