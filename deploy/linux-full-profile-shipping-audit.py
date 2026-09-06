@@ -20,25 +20,21 @@ def require(body: str, label: str, *markers: str) -> None:
 
 
 telemetry = read("client/linux/routervpn-telemetry-v9.inc")
-compat = read("client/linux/routervpn-connection-profiles-v10.inc")
 full = read("client/linux/routervpn-connection-profiles-v11.inc")
 build = read("client/linux/build-native-app.sh")
 profiles = read("cmd/client/connection_profiles.go")
 setup = read("cmd/client/connection_profile_setup.go")
 private_store = read("cmd/client/private_store.go")
 
-# The current shipping composition is build -> telemetry-v9 -> v10 compatibility
-# seam -> v11. Prove every link so an orphaned v11 source file cannot be called
-# shipped merely because it exists in the repository.
+# The current shipping composition is build -> telemetry-v9 -> v11 directly.
+# Prove every link so an orphaned v11 source file cannot be called shipped merely
+# because it exists in the repository, and fail if the retired v10 shim returns.
 require(telemetry, "Linux telemetry shipping seam",
-        '#include "routervpn-connection-profiles-v10.inc"',
-        'linux_telemetry_button_v9("Profiles",G_CALLBACK(linux_connection_profiles_v10),t)')
-require(compat, "Linux profile compatibility seam",
         '#include "routervpn-connection-profiles-v11.inc"',
-        "linux_profile_manager_v11(NULL, telemetry->base)",
-        "linux_connection_profiles_v11_install_reference_v10")
-if "api_request(" in compat:
-    errors.append("Linux v10 compatibility seam must not implement a second/stale profile API client")
+        'linux_telemetry_button_v9("Profiles",G_CALLBACK(linux_telemetry_profiles_v9),t)',
+        "linux_profile_manager_v11(NULL, telemetry->base)")
+if (ROOT / "client/linux/routervpn-connection-profiles-v10.inc").exists():
+    errors.append("superseded Linux v10 connection-profile compatibility seam still exists")
 require(build, "Linux native shipping build",
         'TELEMETRY_INC="$ROOT/client/linux/routervpn-telemetry-v9.inc"',
         '#include "routervpn-telemetry-v9.inc"',
