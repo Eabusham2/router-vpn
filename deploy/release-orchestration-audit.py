@@ -91,8 +91,8 @@ for rel, body, concurrency in (
     assert "cancel-in-progress: true" in body, f"{rel} does not collapse duplicate same-SHA runs"
 
 for marker in (
-    'artifact_family": "exact-source-snapshot"',
-    '"tree_sha": tree',
+    'artifact_family\": \"exact-source-snapshot\"',
+    '\"tree_sha\": tree',
     'sha256sum -c "$(basename "$archive").sha256"',
     'router-vpn-source-${{ github.sha }}.json',
 ):
@@ -220,7 +220,7 @@ for audit in (
 # native information architecture). Build-all/RC must not be able to bypass
 # those gates merely because weighted-release-audit.yml is a separate workflow.
 recovered_proc = subprocess.run(
-    [sys.executable, str(ROOT / "deploy" / "recovered-release-audit-v4.py")],
+    [sys.executable, str(ROOT / "deploy" / "recovered-release-audit-v3.py")],
     cwd=ROOT,
     text=True,
     stdout=subprocess.PIPE,
