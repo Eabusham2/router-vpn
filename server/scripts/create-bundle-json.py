@@ -169,6 +169,7 @@ router_profile = {
     "daita_rate_kbps": 192,
     "base_tunnel": "auto",
     "base_fallback": True,
+    "start_layer": "off",
     "custom_layers": [],
     "home_lan_access": True,
     "home_lan_cidrs": ["192.168.50.0/24"],
