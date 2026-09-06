@@ -15,7 +15,7 @@ func modeMeetsAutoRequirements(mode common.Mode, profile common.RouterProfile) (
 	if err != nil {
 		return false, fmt.Sprintf("%s filtered: invalid Start Layer preference: %v", mode.ID, err)
 	}
-	if startLayer != common.StartLayerOff && !modeSupportsStartLayer(mode) {
+	if startLayer != common.StartLayerOff && !common.StartLayerSupportsRawMode(mode.ID) {
 		return false, fmt.Sprintf("%s filtered: Start Layer %s is enabled and this runtime has no proved AES pre-tunnel composition path", mode.ID, startLayer)
 	}
 	if profile.AutoRequireEncrypted && !modeHasEncryptedTransport(mode) {
@@ -25,15 +25,6 @@ func modeMeetsAutoRequirements(mode common.Mode, profile common.RouterProfile) (
 		return false, fmt.Sprintf("%s filtered: Require obfuscation is enabled and this runtime has no recognized camouflage/obfuscation layer", mode.ID)
 	}
 	return true, ""
-}
-
-func modeSupportsStartLayer(mode common.Mode) bool {
-	switch strings.ToLower(strings.TrimSpace(mode.ID)) {
-	case "shadowsocks", "hysteria2", "naive-h2", "naive-h3":
-		return true
-	default:
-		return false
-	}
 }
 
 func normalizedModeLayers(mode common.Mode) map[string]bool {
