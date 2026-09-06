@@ -31,18 +31,18 @@ func TestStartLayerCapabilitiesExposeSecurityTruth(t *testing.T) {
 		t.Fatalf("status=%d body=%q", rr.Code, rr.Body.String())
 	}
 	var body struct {
-		SelectedStartLayer       string   `json:"selected_start_layer"`
-		SelectedNodeSupported    bool     `json:"selected_node_supported"`
-		EffectiveProfileID       string   `json:"effective_profile_id"`
-		EffectiveStartLayer      string   `json:"effective_start_layer"`
-		EffectiveNodeSupported   bool     `json:"effective_node_supported"`
-		CurrentRuntimeSupported  bool     `json:"current_runtime_supported"`
-		CurrentRuntimeLayerActive bool    `json:"current_runtime_layer_active"`
-		SupportedRawModes        []string `json:"supported_raw_modes"`
-		XORCountsAsEncryption    bool     `json:"xor_counts_as_encryption"`
-		XORWithoutAEADAllowed    bool     `json:"xor_without_aead_allowed"`
-		AuthenticatedAEAD        bool     `json:"authenticated_aead_required"`
-		Modes                    []struct {
+		SelectedStartLayer        string   `json:"selected_start_layer"`
+		SelectedNodeSupported     bool     `json:"selected_node_supported"`
+		EffectiveProfileID        string   `json:"effective_profile_id"`
+		EffectiveStartLayer       string   `json:"effective_start_layer"`
+		EffectiveNodeSupported    bool     `json:"effective_node_supported"`
+		CurrentRuntimeSupported   bool     `json:"current_runtime_supported"`
+		CurrentRuntimeLayerActive bool     `json:"current_runtime_layer_active"`
+		SupportedRawModes         []string `json:"supported_raw_modes"`
+		XORCountsAsEncryption     bool     `json:"xor_counts_as_encryption"`
+		XORWithoutAEADAllowed     bool     `json:"xor_without_aead_allowed"`
+		AuthenticatedAEAD         bool     `json:"authenticated_aead_required"`
+		Modes                     []struct {
 			ID                      string `json:"id"`
 			AuthenticatedEncryption bool   `json:"authenticated_encryption"`
 			XORWhitening            bool   `json:"xor_whitening"`
@@ -75,6 +75,43 @@ func TestStartLayerCapabilitiesExposeSecurityTruth(t *testing.T) {
 	}
 	if !foundXOR {
 		t.Fatal("AES+XOR capability missing")
+	}
+}
+
+func TestStartLayerCapabilitiesDoNotCallTransitionActive(t *testing.T) {
+	a := &app{
+		profiles: common.RouterProfileStore{
+			SchemaVersion: common.RouterProfileSchemaVersion,
+			SelectedID:    "home",
+			Profiles: []common.RouterProfile{{
+				SchemaVersion: common.RouterProfileSchemaVersion,
+				ID:            "home",
+				Name:          "Home",
+				NodeKind:      "router-vpn",
+				StartLayer:    common.StartLayerAES256GCM,
+			}},
+		},
+		state: state{Mode: "hysteria2", RuntimeMode: "hysteria2", RouterID: "home", Connected: false, Phase: "checking"},
+	}
+	rr := httptest.NewRecorder()
+	a.startLayerCapabilities(rr, httptest.NewRequest(http.MethodGet, "/api/start-layer/capabilities", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		EffectiveProfileID        string `json:"effective_profile_id"`
+		EffectiveStartLayer       string `json:"effective_start_layer"`
+		CurrentRuntimeSupported   bool   `json:"current_runtime_supported"`
+		CurrentRuntimeLayerActive bool   `json:"current_runtime_layer_active"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.EffectiveProfileID != "home" || body.EffectiveStartLayer != common.StartLayerAES256GCM || !body.CurrentRuntimeSupported {
+		t.Fatalf("transition capability identity drifted: %+v", body)
+	}
+	if body.CurrentRuntimeLayerActive {
+		t.Fatalf("transitioning runtime was falsely advertised as an active proved Start Layer: %+v", body)
 	}
 }
 
