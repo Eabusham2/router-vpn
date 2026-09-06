@@ -37,11 +37,13 @@ try{
 PS1
 }
 # Package the native Windows Router VPN WPF app and its recovery launcher.
-for arch in amd64 arm64;do dir="$OUT/work/RouterVPN-Windows-$arch";mkdir -p "$dir";copy_runtime "$dir";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$dir/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$dir/router-vpn-dns.exe";cp "$DIST/app-update/router-vpn-update-windows-$arch.exe" "$dir/router-vpn-update.exe";cp "$DIST/client/RouterVPN-$arch.exe" "$dir/RouterVPN.exe";cp -a "$ROOT/client" "$dir/client";cp "$ROOT/client/install-windows.ps1" "$dir/install-windows.ps1";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$dir/Setup-Windows-Runtime.ps1";materialize_icons "$dir";write_windows_app_launcher "$dir/Start-RouterVPN.ps1";cat >"$dir/README-WINDOWS.txt" <<'TXT'
+for arch in amd64 arm64;do dir="$OUT/work/RouterVPN-Windows-$arch";mkdir -p "$dir";copy_runtime "$dir";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$dir/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$dir/router-vpn-dns.exe";cp "$DIST/start-layer/router-vpn-start-layer-relay-windows-$arch.exe" "$dir/router-vpn-start-layer-relay.exe";cp "$DIST/app-update/router-vpn-update-windows-$arch.exe" "$dir/router-vpn-update.exe";cp "$DIST/client/RouterVPN-$arch.exe" "$dir/RouterVPN.exe";cp -a "$ROOT/client" "$dir/client";cp "$ROOT/client/install-windows.ps1" "$dir/install-windows.ps1";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$dir/Setup-Windows-Runtime.ps1";materialize_icons "$dir";write_windows_app_launcher "$dir/Start-RouterVPN.ps1";cat >"$dir/README-WINDOWS.txt" <<'TXT'
 Double-click RouterVPN.exe for the normal native Windows Router VPN app. install-windows.ps1 can
 install the package and create a Start Menu entry with the Router VPN icon. Start-RouterVPN.ps1
 remains a recovery launcher for the same WPF product. The app talks only to the local 127.0.0.1
 controller API; it does not launch Edge/Chrome and does not embed a website/WebView.
+The package includes router-vpn-start-layer-relay.exe for optional AES-256-GCM + XOR whitening.
+XOR is obfuscation only; authenticated encryption remains Shadowsocks 2022 AES-256-GCM.
 A short-lived router-vpn-update.exe helper checks immutable exact-SHA releases when the app starts,
 verifies RouterVPN-RELEASE.json plus the package SHA-256, and stages a newer package without
 replacing a running app. The staged package is installed only through the normal restart/handoff.
@@ -53,12 +55,13 @@ This generic application package contains no linked home/server node; link nodes
 Router VPN is MIT-licensed open-source software; see LICENSE.
 TXT
 write_provenance "$dir" "windows-$arch";package_zip "RouterVPN-Windows-$arch" "$dir";done
-for arch in amd64 arm64;do root="$OUT/work/RouterVPNPortable-$arch";app="$root/App/RouterVPN";data="$root/Data";mkdir -p "$app" "$data/generated";copy_runtime "$app";cp -a "$ROOT/client" "$app/client";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe";cp "$DIST/app-update/router-vpn-update-windows-$arch.exe" "$app/router-vpn-update.exe";cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe";cp "$DIST/client/RouterVPNPortableCore-$arch.exe" "$root/RouterVPNPortableCore.exe";cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1";materialize_icons "$app";cat >"$root/README.txt" <<'TXT'
+for arch in amd64 arm64;do root="$OUT/work/RouterVPNPortable-$arch";app="$root/App/RouterVPN";data="$root/Data";mkdir -p "$app" "$data/generated";copy_runtime "$app";cp -a "$ROOT/client" "$app/client";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe";cp "$DIST/start-layer/router-vpn-start-layer-relay-windows-$arch.exe" "$app/router-vpn-start-layer-relay.exe";cp "$DIST/app-update/router-vpn-update-windows-$arch.exe" "$app/router-vpn-update.exe";cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe";cp "$DIST/client/RouterVPNPortableCore-$arch.exe" "$root/RouterVPNPortableCore.exe";cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1";materialize_icons "$app";cat >"$root/README.txt" <<'TXT'
 Double-click RouterVPNPortable.exe. It supervises a short-lived exact-SHA updater and the mature
 Portable runtime owner in RouterVPNPortableCore.exe. Closing Router VPN always terminates an updater
 that is still running, so no process can keep the Portable folder or USB mounted.
-App/RouterVPN contains immutable binaries/catalogs/scripts and the Router VPN window icon. Data
-contains writable settings, private linked node data, generated profiles and native Windows engines.
+App/RouterVPN contains immutable binaries/catalogs/scripts, including the optional AES start-layer
+relay. XOR whitening is obfuscation only and is never treated as encryption without AES-256-GCM.
+Data contains writable settings, private linked node data, generated profiles and native Windows engines.
 A verified newer Portable ZIP is staged only after immutable release identity + package SHA-256
 verification and is applied by replacing the whole Portable folder while Router VPN is stopped.
 No Router VPN state is written to AppData or the registry by the portable launcher/app; move the
@@ -66,7 +69,7 @@ whole folder. The ZIP is generic and contains no linked node. Add nodes separate
 Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.
 TXT
 write_provenance "$root" "windows-portable-$arch";package_zip "RouterVPN-Portable-Windows-$arch" "$root";done
-while IFS= read -r binary;do file=$(basename "$binary");target=${file#router-vpn-client-};os=${target%%-*};rest=${target#*-};arch=${rest%.exe};case "$os" in windows)continue;;esac;name="RouterVPN-${os}-${arch}";dir="$OUT/work/$name";mkdir -p "$dir";copy_runtime "$dir";cp "$binary" "$dir/router-vpn-client";cp "$DIST/dnsproxy/router-vpn-dns-${os}-${arch}" "$dir/router-vpn-dns";updater="$DIST/app-update/router-vpn-update-${os}-${arch}";if [[ -f "$updater" ]];then cp "$updater" "$dir/router-vpn-update";chmod +x "$dir/router-vpn-update";fi;chmod +x "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/modes/"*.sh;cat >"$dir/start-router-vpn.sh" <<'SH2'
+while IFS= read -r binary;do file=$(basename "$binary");target=${file#router-vpn-client-};os=${target%%-*};rest=${target#*-};arch=${rest%.exe};case "$os" in windows)continue;;esac;name="RouterVPN-${os}-${arch}";dir="$OUT/work/$name";mkdir -p "$dir";copy_runtime "$dir";cp "$binary" "$dir/router-vpn-client";cp "$DIST/dnsproxy/router-vpn-dns-${os}-${arch}" "$dir/router-vpn-dns";cp "$DIST/start-layer/router-vpn-start-layer-relay-${os}-${arch}" "$dir/router-vpn-start-layer-relay";updater="$DIST/app-update/router-vpn-update-${os}-${arch}";if [[ -f "$updater" ]];then cp "$updater" "$dir/router-vpn-update";chmod +x "$dir/router-vpn-update";fi;chmod +x "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/router-vpn-start-layer-relay" "$dir/modes/"*.sh;cat >"$dir/start-router-vpn.sh" <<'SH2'
 #!/usr/bin/env sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd);export HOMEVPN_ROOT="$ROOT";export HOMEVPN_CLIENT_CONFIG="$ROOT/client.json";cd "$ROOT"
