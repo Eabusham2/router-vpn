@@ -101,6 +101,7 @@ final class NativeSingBoxController {
         if (!isDirectFullDeviceConfig(rawConfigText)) throw new IllegalStateException("This mode still depends on another local engine and is not a direct embedded libbox mode.");
         JSONObject patchedConfig = new JSONObject(rawConfigText);
         applySelectedDns(root, patchedConfig);
+        AndroidStartLayer.apply(root, patchedConfig, modeId);
         byte[] config = (patchedConfig.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
         if (config.length > MAX_CONFIG) throw new IllegalStateException("Patched sing-box config exceeds safety limit.");
 
