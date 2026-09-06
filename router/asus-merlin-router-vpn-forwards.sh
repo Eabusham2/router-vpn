@@ -51,6 +51,7 @@ ROSENPASS_PORT=${ROSENPASS_PORT:-51822}
 REALITY_PORT=${REALITY_PORT:-443}
 HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
+START_LAYER_XOR_PORT=${START_LAYER_XOR_PORT:-8389}
 XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
 XHTTP_PORT=${XHTTP_PORT:-11443}
 SS_V2RAY_PORT=${SS_V2RAY_PORT:-12443}
@@ -138,6 +139,7 @@ validate_settings(){
   validate_port REALITY_PORT "$REALITY_PORT" || return 1
   validate_port HY2_PORT "$HY2_PORT" || return 1
   validate_port SS_PORT "$SS_PORT" || return 1
+  validate_port START_LAYER_XOR_PORT "$START_LAYER_XOR_PORT" || return 1
   validate_port XRAY_PQ_PORT "$XRAY_PQ_PORT" || return 1
   validate_port XHTTP_PORT "$XHTTP_PORT" || return 1
   validate_port SS_V2RAY_PORT "$SS_V2RAY_PORT" || return 1
@@ -208,7 +210,7 @@ preflight_port_conflicts(){
   RULES=$("$IPTABLES" -t nat -S PREROUTING 2>/dev/null || true)
   for SPEC in \
     "tcp:$ACME_EXTERNAL_PORT" "tcp:$REALITY_PORT" "udp:$AWG_PORT" \
-    "tcp:$SS_PORT" "udp:$SS_PORT" "udp:$HY2_PORT" \
+    "tcp:$SS_PORT" "udp:$SS_PORT" "tcp:$START_LAYER_XOR_PORT" "udp:$START_LAYER_XOR_PORT" "udp:$HY2_PORT" \
     "tcp:$XRAY_PQ_PORT" "tcp:$XHTTP_PORT" "tcp:$SS_V2RAY_PORT" \
     "tcp:$NAIVE_PORT" "udp:$NAIVE_PORT" "tcp:$OVERTLS_PORT" \
     "tcp:$SSR_PORT" "udp:$SSR_PORT" "udp:$WG_PORT" "udp:$ROSENPASS_PORT"
@@ -278,7 +280,7 @@ apply_nat(){
     return 1
   fi
   WAN=$(wan_if)
-  if [ "${ROUTER_VPN_PREFLIGHT_DONE:-0}" != 1; then
+  if [ "${ROUTER_VPN_PREFLIGHT_DONE:-0}" != 1 ]; then
     if ! require_health || ! preflight_port_conflicts "$WAN"; then
       remove_owned_from_chain nat PREROUTING
       return 1
@@ -290,6 +292,8 @@ apply_nat(){
     ensure_nat "$WAN" udp "$AWG_PORT" "$AWG_PORT" &&
     ensure_nat "$WAN" tcp "$SS_PORT" "$SS_PORT" &&
     ensure_nat "$WAN" udp "$SS_PORT" "$SS_PORT" &&
+    ensure_nat "$WAN" tcp "$START_LAYER_XOR_PORT" "$START_LAYER_XOR_PORT" &&
+    ensure_nat "$WAN" udp "$START_LAYER_XOR_PORT" "$START_LAYER_XOR_PORT" &&
     ensure_nat "$WAN" udp "$HY2_PORT" "$HY2_PORT" &&
     ensure_nat "$WAN" tcp "$XRAY_PQ_PORT" "$XRAY_PQ_PORT" &&
     ensure_nat "$WAN" tcp "$XHTTP_PORT" "$XHTTP_PORT" &&
@@ -317,7 +321,7 @@ apply_filter(){
     return 1
   fi
   WAN=$(wan_if)
-  if [ "${ROUTER_VPN_PREFLIGHT_DONE:-0}" != 1; then
+  if [ "${ROUTER_VPN_PREFLIGHT_DONE:-0}" != 1 ]; then
     if ! require_health || ! preflight_port_conflicts "$WAN"; then
       remove_owned_from_chain filter FORWARD
       return 1
@@ -329,6 +333,8 @@ apply_filter(){
     ensure_fwd "$WAN" udp "$AWG_PORT" &&
     ensure_fwd "$WAN" tcp "$SS_PORT" &&
     ensure_fwd "$WAN" udp "$SS_PORT" &&
+    ensure_fwd "$WAN" tcp "$START_LAYER_XOR_PORT" &&
+    ensure_fwd "$WAN" udp "$START_LAYER_XOR_PORT" &&
     ensure_fwd "$WAN" udp "$HY2_PORT" &&
     ensure_fwd "$WAN" tcp "$XRAY_PQ_PORT" &&
     ensure_fwd "$WAN" tcp "$XHTTP_PORT" &&
@@ -437,6 +443,7 @@ write_config(){
   write_saved REALITY_PORT "$REALITY_PORT" "$ACTIVE_TMP"
   write_saved HY2_PORT "$HY2_PORT" "$ACTIVE_TMP"
   write_saved SS_PORT "$SS_PORT" "$ACTIVE_TMP"
+  write_saved START_LAYER_XOR_PORT "$START_LAYER_XOR_PORT" "$ACTIVE_TMP"
   write_saved XRAY_PQ_PORT "$XRAY_PQ_PORT" "$ACTIVE_TMP"
   write_saved XHTTP_PORT "$XHTTP_PORT" "$ACTIVE_TMP"
   write_saved SS_V2RAY_PORT "$SS_V2RAY_PORT" "$ACTIVE_TMP"
@@ -505,6 +512,7 @@ status(){
   printf 'TCP      %-7s -> %s\n' "$REALITY_PORT" "$REALITY_PORT"
   printf 'UDP      %-7s -> %s\n' "$AWG_PORT" "$AWG_PORT"
   printf 'TCP+UDP  %-7s -> %s\n' "$SS_PORT" "$SS_PORT"
+  printf 'TCP+UDP  %-7s -> %s\n' "$START_LAYER_XOR_PORT" "$START_LAYER_XOR_PORT"
   printf 'UDP      %-7s -> %s\n' "$HY2_PORT" "$HY2_PORT"
   printf 'TCP      %-7s -> %s\n' "$XRAY_PQ_PORT" "$XRAY_PQ_PORT"
   printf 'TCP      %-7s -> %s\n' "$XHTTP_PORT" "$XHTTP_PORT"
@@ -541,7 +549,7 @@ verify(){
   for PORT in 22 53 1080 3000 8786 8787 8788 8789 8790 8791 8792 8793 9443 14444 18080 45999; do
     if printf '%s\n' "$NAT_OWNED" | grep -E -- "--dport $PORT( |$)" >/dev/null 2>&1; then warn "forbidden/private WAN destination port $PORT is exposed"; ERR=1; fi
   done
-  APPROVED=" $ACME_EXTERNAL_PORT $REALITY_PORT $AWG_PORT $SS_PORT $HY2_PORT $XRAY_PQ_PORT $XHTTP_PORT $SS_V2RAY_PORT $NAIVE_PORT $OVERTLS_PORT $SSR_PORT $WG_PORT $ROSENPASS_PORT "
+  APPROVED=" $ACME_EXTERNAL_PORT $REALITY_PORT $AWG_PORT $SS_PORT $START_LAYER_XOR_PORT $HY2_PORT $XRAY_PQ_PORT $XHTTP_PORT $SS_V2RAY_PORT $NAIVE_PORT $OVERTLS_PORT $SSR_PORT $WG_PORT $ROSENPASS_PORT "
   printf '%s\n' "$NAT_OWNED" | while IFS= read -r RULE; do
     [ -n "$RULE" ] || continue
     PORT=$(printf '%s\n' "$RULE" | sed -n 's/.*--dport \([0-9][0-9]*\).*/\1/p')
