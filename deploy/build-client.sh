@@ -2,7 +2,7 @@
 set -euo pipefail
 
 rm -rf dist
-mkdir -p dist/client dist/dnsproxy dist/router-agent dist/app-update
+mkdir -p dist/client dist/dnsproxy dist/start-layer dist/router-agent dist/app-update
 
 client_targets=(
   windows/amd64 windows/arm64
@@ -33,6 +33,12 @@ for target in "${client_targets[@]}"; do
   env GOOS="$GOOS" GOARCH="$GOARCH" GOARM=7 CGO_ENABLED=0 \
     go build -trimpath -ldflags='-s -w' -o "$dns_output" ./cmd/dnsproxy
   cp "$dns_output" "dist/$(basename "$dns_output")"
+
+  echo "building start-layer relay $GOOS/$GOARCH"
+  relay_output="dist/start-layer/router-vpn-start-layer-relay-${suffix}${ext}"
+  env GOOS="$GOOS" GOARCH="$GOARCH" GOARM=7 CGO_ENABLED=0 \
+    go build -trimpath -ldflags='-s -w' -o "$relay_output" ./cmd/start-layer-relay
+  cp "$relay_output" "dist/$(basename "$relay_output")"
 done
 
 # The self-update helper is intentionally limited to mainstream desktop
