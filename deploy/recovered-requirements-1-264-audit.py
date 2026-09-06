@@ -65,7 +65,7 @@ need('client/RouterVPN-Windows-App.ps1','Modes','DNS','Settings')
 need('client/RouterVPN-Windows-UnifiedShell.ps1','Content="Add / manage nodes"')
 need('client/RouterVPN-Windows-Telemetry.ps1','UnifiedForwardButton','/api/forwarding/master')
 need('client/macos/RouterVPNMacUnifiedShell.swift','openUnifiedNodes','openUnifiedModes','openUnifiedDNS','openUnifiedSettings','openUnifiedForwarding')
-need('client/linux/routervpn-gtk.c','Nodes','Diagnostics','Emergency stop')
+need('client/linux/routervpn-gtk-product-v5.c','Nodes & Map','Diagnostics','Emergency stop')
 
 # I/J. 149-169: 20 raw/16 logical, truthful readiness, AUTO/SMART/CUSTOM,
 # DNS policy/benchmark/proof and AdGuard default/access truth.
