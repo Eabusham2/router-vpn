@@ -1,3 +1,9 @@
+FROM golang:1.24.13-alpine AS start-layer-build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd/start-layer-relay ./cmd/start-layer-relay
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/router-vpn-start-layer-relay ./cmd/start-layer-relay
+
 FROM rust:1.88.0-bookworm AS overtls-build
 ARG OVERTLS_VERSION=0.3.12
 RUN cargo install overtls --version "${OVERTLS_VERSION}" --locked --root /out \
@@ -23,9 +29,11 @@ FROM debian:bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+COPY --from=start-layer-build /out/router-vpn-start-layer-relay /usr/local/bin/router-vpn-start-layer-relay
 COPY --from=overtls-build /out/bin/overtls-bin /usr/local/bin/overtls-bin
 COPY --from=ssr-build /src/ssr/build/src/ssr-server /usr/local/bin/ssr-server
 COPY --chmod=0755 server/aux-proxies/entrypoint.sh /usr/local/bin/router-vpn-aux-proxies
-RUN /usr/local/bin/overtls-bin --version >/dev/null \
+RUN /usr/local/bin/router-vpn-start-layer-relay -h >/dev/null \
+ && /usr/local/bin/overtls-bin --version >/dev/null \
  && /usr/local/bin/ssr-server -h >/dev/null 2>&1
 ENTRYPOINT ["/usr/local/bin/router-vpn-aux-proxies"]
