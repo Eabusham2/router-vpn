@@ -171,7 +171,11 @@ android_settings = require(
     "mtu_policy", "manual_mtu", "daita_enabled", "jumbo_tun", "socks_enabled",
     "External exits own their protocol settings", "store.importBundle",
     "Connection profiles — Add / Load / Update / Delete", "AndroidConnectionProfilesDialog.show",
+    "AES-256-GCM + XOR whitening — authenticated AES plus protected obfuscation relay",
+    "VpnService-owned protected local relay", "XOR is never counted as encryption",
 )
+if "AES-256-GCM + XOR whitening — unavailable on this Android build" in android_settings or "Android refuses AES+XOR until VpnService owns" in android_settings:
+    errors.append("Android settings still advertise the retired pre-relay AES+XOR unavailable state")
 android_store = require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
     "SCHEMA_VERSION=4", "connection-profiles-v4.json", "connection-profiles-v1.json", "MAX_PROFILES=64", "POLICY_KEYS", "requireIdle",
