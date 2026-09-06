@@ -68,6 +68,8 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 		"AndroidStartLayer.nativeCapabilityReason(currentBundle,c.id)",
 		"if(kind!=Kind.LIBBOX||!AndroidStartLayer.supportsRawMode(id))continue;",
 		"startAndProve(bundle,c,cb)",
+		"failClosedAfterError(error)",
+		"runtime cleanup failed: ",
 		"WireGuard teardown did not prove DOWN before timeout.",
 		"AmneziaWG teardown did not prove DOWN before timeout.",
 		"Libbox teardown did not reach DOWN/FAILED/REVOKED before timeout.",
@@ -82,6 +84,9 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 	}
 	if strings.Contains(orchestrator, "l.await(8,TimeUnit.SECONDS);}") {
 		t.Fatal("Android orchestrator still releases ownership after an unverified asynchronous teardown wait")
+	}
+	if strings.Contains(orchestrator, "try{stopCurrent(false);}catch(Throwable ignored){}") {
+		t.Fatal("Android orchestrator still swallows runtime cleanup failures")
 	}
 
 	service := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java")
