@@ -110,19 +110,19 @@ final class NativeWireGuardController implements Tunnel {
     private void disconnectInternal(boolean publishHomeState, Callback callback) {
         executor.execute(() -> {
             networkMonitor.stop();
-            clearActive();
             try {
                 State result = backend.setState(this, State.DOWN, null);
                 state = result;
+                if (result != State.DOWN) throw new IllegalStateException("WireGuard teardown did not prove DOWN.");
+                clearActive();
                 lastError = "";
                 if (publishHomeState) AndroidHomeStateStore.disconnected(appContext);
                 homeStateOwner = false;
-                callback.done(result, "Native Android WireGuard disconnected.", null);
+                callback.done(State.DOWN, "Native Android WireGuard disconnected.", null);
             } catch (Throwable error) {
                 lastError = safeMessage(error);
-                if (publishHomeState) AndroidHomeStateStore.failed(appContext, "WireGuard disconnect failed: " + lastError);
-                homeStateOwner = false;
-                callback.done(state, "WireGuard disconnect failed: " + lastError, error);
+                if (publishHomeState) AndroidHomeStateStore.failed(appContext, "WireGuard disconnect incomplete: " + lastError);
+                callback.done(state, "WireGuard disconnect incomplete: " + lastError, error);
             }
         });
     }
