@@ -19,6 +19,7 @@ type profileSettingsRequest struct {
 	AutoRequireObfuscation *bool   `json:"auto_require_obfuscation,omitempty"`
 	BaseTunnel             *string `json:"base_tunnel,omitempty"`
 	BaseFallback           *bool   `json:"base_fallback,omitempty"`
+	StartLayer             *string `json:"start_layer,omitempty"`
 	MTUPolicy              *string `json:"mtu_policy,omitempty"`
 	ManualMTU              *int    `json:"manual_mtu,omitempty"`
 	DAITAEnabled           *bool   `json:"daita_enabled,omitempty"`
@@ -36,6 +37,7 @@ type profileSettingsResponse struct {
 	AutoRequireObfuscation bool   `json:"auto_require_obfuscation"`
 	BaseTunnel             string `json:"base_tunnel"`
 	BaseFallback           bool   `json:"base_fallback"`
+	StartLayer             string `json:"start_layer"`
 	MTUPolicy              string `json:"mtu_policy"`
 	ManualMTU              int    `json:"manual_mtu,omitempty"`
 	EffectiveMTU           int    `json:"effective_mtu,omitempty"`
@@ -203,6 +205,13 @@ func applyProfileSettings(profile common.RouterProfile, q profileSettingsRequest
 	if q.BaseFallback != nil {
 		updated.BaseFallback = *q.BaseFallback
 	}
+	if q.StartLayer != nil {
+		value, err := common.NormalizeStartLayerMode(*q.StartLayer)
+		if err != nil {
+			return profile, err
+		}
+		updated.StartLayer = value
+	}
 	if q.MTUPolicy != nil {
 		updated.MTUPolicy = strings.ToLower(strings.TrimSpace(*q.MTUPolicy))
 	}
@@ -231,15 +240,19 @@ func applyProfileSettings(profile common.RouterProfile, q profileSettingsRequest
 }
 
 func writeProfileSettings(w http.ResponseWriter, p common.RouterProfile) {
+	startLayer, err := common.NormalizeStartLayerMode(p.StartLayer)
+	if err != nil {
+		startLayer = common.StartLayerOff
+	}
 	response := profileSettingsResponse{
 		HomeLANAccess: p.HomeLANAccess, KillSwitchPolicy: p.KillSwitchPolicy,
 		IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect,
 		AutoRequireEncrypted: p.AutoRequireEncrypted, AutoRequireObfuscation: p.AutoRequireObfuscation,
-		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback,
+		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback, StartLayer: startLayer,
 		MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
 		EffectiveMTU: p.EffectiveMTU, EffectiveMTUSource: p.EffectiveMTUSource,
 		DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled,
-		Note: "Settings are stored only on the selected Router VPN profile. Disconnect and wait for any AUTO/SMART/CUSTOM transition to finish before editing. SMART AUTO, IPv6 On and Auto MTU are the normalized defaults for new profiles. AUTO encryption/obfuscation requirements filter candidates before attempts. Auto-connect requires AUTO, SMART AUTO, or Last mode. Saved settings apply on the next tunnel start and are not runtime proof by themselves.",
+		Note: "Settings are stored only on the selected Router VPN profile. Disconnect and wait for any AUTO/SMART/CUSTOM transition to finish before editing. SMART AUTO, IPv6 On, Auto MTU and Start layer Off are the normalized defaults for new profiles. AES start layer means authenticated Shadowsocks 2022 AES-256-GCM. AES+XOR adds reversible whitening only after authenticated encryption; XOR never counts as encryption. Unsupported runtime graphs fail closed instead of silently dropping the requested layer.",
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
