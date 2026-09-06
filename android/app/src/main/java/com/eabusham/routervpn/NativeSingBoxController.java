@@ -101,42 +101,53 @@ final class NativeSingBoxController {
         if (!isDirectFullDeviceConfig(rawConfigText)) throw new IllegalStateException("This mode still depends on another local engine and is not a direct embedded libbox mode.");
         JSONObject patchedConfig = new JSONObject(rawConfigText);
         applySelectedDns(root, patchedConfig);
-        AndroidStartLayer.apply(root, patchedConfig, modeId);
-        byte[] config = (patchedConfig.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
-        if (config.length > MAX_CONFIG) throw new IllegalStateException("Patched sing-box config exceeds safety limit.");
-
-        File rootDir = new File(context.getFilesDir(), "layered-sessions");
-        if (!rootDir.isDirectory() && !rootDir.mkdirs()) throw new IllegalStateException("Cannot create layered session directory.");
-        cleanupOldSessions(rootDir);
-        String sessionId = randomHex(16);
-        File session = new File(rootDir, sessionId);
-        if (!session.mkdir()) throw new IllegalStateException("Cannot create layered session.");
-        int total = 0;
+        AndroidStartLayer.RelayPlan relayPlan = AndroidStartLayer.apply(root, patchedConfig, modeId);
         try {
-            if (AndroidKillSwitchPolicy.strictRequested(root)) {
-                writeFile(new File(session, AndroidKillSwitchPolicy.SESSION_MARKER), new byte[]{'1','\n'});
-            }
-            JSONArray names = profile.names();
-            if (names == null) throw new IllegalStateException("Selected mode profile is empty.");
-            for (int i = 0; i < names.length(); i++) {
-                String name = names.getString(i);
-                if (!safeFileName(name)) throw new IllegalStateException("Unsafe profile filename: " + name);
-                byte[] decoded;
-                if ("sing-box.json".equals(name)) decoded = config;
-                else {
-                    String encoded = profile.optString(name, "").trim();
-                    if (encoded.isEmpty()) continue;
-                    decoded = Base64.decode(encoded, Base64.DEFAULT);
+            byte[] config = (patchedConfig.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
+            if (config.length > MAX_CONFIG) throw new IllegalStateException("Patched sing-box config exceeds safety limit.");
+
+            File rootDir = new File(context.getFilesDir(), "layered-sessions");
+            if (!rootDir.isDirectory() && !rootDir.mkdirs()) throw new IllegalStateException("Cannot create layered session directory.");
+            cleanupOldSessions(rootDir);
+            String sessionId = randomHex(16);
+            File session = new File(rootDir, sessionId);
+            if (!session.mkdir()) throw new IllegalStateException("Cannot create layered session.");
+            int total = 0;
+            try {
+                if (AndroidKillSwitchPolicy.strictRequested(root)) {
+                    writeFile(new File(session, AndroidKillSwitchPolicy.SESSION_MARKER), new byte[]{'1','\n'});
                 }
-                if (decoded.length > MAX_PROFILE_FILE) throw new IllegalStateException("Profile file is too large: " + name);
-                total += decoded.length;
-                if (total > MAX_PROFILE_TOTAL) throw new IllegalStateException("Selected mode profile exceeds safety limit.");
-                writeFile(new File(session, name), decoded);
-            }
-            File configFile = new File(session, "sing-box.json");
-            if (!configFile.isFile() || configFile.length() == 0) throw new IllegalStateException("Session is missing sing-box.json.");
-            return new SessionInfo(sessionId, modeId);
-        } catch (Throwable error) { deleteTree(session); throw error; }
+                if (relayPlan != null) {
+                    byte[] metadata = (relayPlan.metadata().toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
+                    if (metadata.length <= 0 || metadata.length > 16 * 1024) throw new IllegalStateException("Start Layer relay metadata exceeds safety limit.");
+                    total += metadata.length;
+                    if (total > MAX_PROFILE_TOTAL) throw new IllegalStateException("Selected mode profile exceeds safety limit.");
+                    writeFile(new File(session, AndroidStartLayerRelay.SESSION_FILE), metadata);
+                }
+                JSONArray names = profile.names();
+                if (names == null) throw new IllegalStateException("Selected mode profile is empty.");
+                for (int i = 0; i < names.length(); i++) {
+                    String name = names.getString(i);
+                    if (!safeFileName(name)) throw new IllegalStateException("Unsafe profile filename: " + name);
+                    byte[] decoded;
+                    if ("sing-box.json".equals(name)) decoded = config;
+                    else {
+                        String encoded = profile.optString(name, "").trim();
+                        if (encoded.isEmpty()) continue;
+                        decoded = Base64.decode(encoded, Base64.DEFAULT);
+                    }
+                    if (decoded.length > MAX_PROFILE_FILE) throw new IllegalStateException("Profile file is too large: " + name);
+                    total += decoded.length;
+                    if (total > MAX_PROFILE_TOTAL) throw new IllegalStateException("Selected mode profile exceeds safety limit.");
+                    writeFile(new File(session, name), decoded);
+                }
+                File configFile = new File(session, "sing-box.json");
+                if (!configFile.isFile() || configFile.length() == 0) throw new IllegalStateException("Session is missing sing-box.json.");
+                return new SessionInfo(sessionId, modeId);
+            } catch (Throwable error) { deleteTree(session); throw error; }
+        } finally {
+            if (relayPlan != null) relayPlan.clear();
+        }
     }
 
     private static void applySelectedDns(JSONObject bundle, JSONObject config) throws Exception {
