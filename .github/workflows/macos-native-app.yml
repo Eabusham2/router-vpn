@@ -89,10 +89,11 @@ jobs:
           done
           (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
           test ! -d dist/macos-native/work
-          grep -Fq 'NSWindow(' client/macos/RouterVPNMacNative.swift
-          grep -Fq 'NSTabViewController' client/macos/RouterVPNMacNative.swift
-          grep -Fq 'http://127.0.0.1:8788' client/macos/RouterVPNMacNative.swift
-          ! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' client/macos/RouterVPNMacNative.swift
+          grep -Fq 'SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"' client/macos/build-native-app.sh
+          grep -Fq 'NSWindow(' client/macos/RouterVPNMacProduct.swift
+          grep -Fq 'NSTabViewController' client/macos/RouterVPNMacProduct.swift
+          grep -Fq 'http://127.0.0.1:8788' client/macos/RouterVPNMacProduct.swift
+          ! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' client/macos/RouterVPNMacProduct.swift client/macos/RouterVPNMacUnifiedShell.swift client/macos/RouterVPNMacTelemetry.swift client/macos/RouterVPNMacSpeedLab.swift client/macos/RouterVPNMacGlobeChrome.swift client/macos/RouterVPNConnectionProfiles.swift client/macos/RouterVPNConnectionProfileChrome.swift client/macos/RouterVPNProductOnboarding.swift client/macos/RouterVPNHomeSummary.swift client/macos/RouterVPNProfileSettings.swift
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-macOS-Native-CI
