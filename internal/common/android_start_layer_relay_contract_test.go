@@ -96,4 +96,27 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 			t.Fatalf("Android VpnService does not own Start Layer relay lifecycle: missing %q", required)
 		}
 	}
+
+	for _, raw := range []struct {
+		path       string
+		name       string
+		downMarker string
+		failMarker string
+	}{
+		{"android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java", "WireGuard", "if (result != State.DOWN) throw new IllegalStateException(\"WireGuard teardown did not prove DOWN.\")", "WireGuard disconnect incomplete:"},
+		{"android/app/src/main/java/com/eabusham/routervpn/NativeAmneziaWGController.java", "AmneziaWG", "if (result != State.DOWN) throw new IllegalStateException(\"AmneziaWG teardown did not prove DOWN.\")", "AmneziaWG disconnect incomplete:"},
+	} {
+		body := repoFile(t, raw.path)
+		for _, required := range []string{raw.downMarker, raw.failMarker, "clearActive();", "homeStateOwner = false;"} {
+			if !strings.Contains(body, required) {
+				t.Fatalf("Android %s raw teardown ownership contract missing %q", raw.name, required)
+			}
+		}
+		down := strings.Index(body, raw.downMarker)
+		clear := strings.Index(body[down:], "clearActive();")
+		release := strings.Index(body[down:], "homeStateOwner = false;")
+		if down < 0 || clear < 0 || release < 0 {
+			t.Fatalf("Android %s raw teardown ownership ordering could not be proved", raw.name)
+		}
+	}
 }
