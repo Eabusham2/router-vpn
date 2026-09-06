@@ -189,8 +189,12 @@ services:
       finalize-current: {condition: service_completed_successfully}
     volumes:
       - /opt/router-vpn/config/aux:/router-vpn:ro
+      - /opt/router-vpn/config/transports/server.json:/router-vpn/transports-server.json:ro
     environment:
       ROUTER_VPN_AUX_DIR: /router-vpn
+      ROUTER_VPN_START_LAYER_KEY_CONFIG: /router-vpn/transports-server.json
+      ROUTER_VPN_START_LAYER_PORT: ${START_LAYER_XOR_PORT:-8389}
+      ROUTER_VPN_START_LAYER_TARGET_PORT: ${SS_PORT:-8388}
 
   update-controller:
     image: ghcr.io/eabusham2/router-vpn-updater:e2a616278142ff4579a11728f05b081bd7e4d665
@@ -244,7 +248,7 @@ services:
       start_period: 10s
 
   socks5:
-    image: ghcr.io/sagernet/sing-box:v1.13.12
+    image: ghcr.io/sagernetwork/sing-box:v1.13.12
     container_name: router-vpn-socks5
     network_mode: host
     restart: unless-stopped
