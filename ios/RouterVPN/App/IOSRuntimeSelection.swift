@@ -51,6 +51,9 @@ enum IOSRuntimeSelector {
         "wg.conf", "wg-socks.conf", "awg.conf", "awg-socks.conf"
     ]
     private static let loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]
+    private static let startLayerRawModes: Set<String> = ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"]
+    private static let startLayerAES = "aes-256-gcm"
+    private static let startLayerAESXOR = "aes-256-gcm+xor-whitening"
 
     static func runnableModes(in bundle: ClientBundle) -> [LogicalMode] {
         bundle.logicalModes.filter { mode in (try? select(bundle: bundle, logicalModeID: mode.id)) != nil }
@@ -62,6 +65,7 @@ enum IOSRuntimeSelector {
         }
 
         if logical.id == "base-raw", logical.variants["wg"] == "wg" {
+            try validateStartLayer(bundle: bundle, rawProfileID: "wg")
             let selection = IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logical.id, rawProfileID: "wg", files: [:])
             do { try IOSDNSRuntimePolicy.validate(selection: selection, in: bundle) }
             catch { throw IOSRuntimeSelectionError.unsupportedMode(error.localizedDescription) }
@@ -97,6 +101,7 @@ enum IOSRuntimeSelector {
 
     private static func selectRawCore(bundle: ClientBundle, rawProfileID: String, logicalModeID: String) throws -> IOSRuntimeSelection {
         guard isSafe(rawProfileID, pattern: rawProfilePattern) else { throw IOSRuntimeSelectionError.invalidProfileName(rawProfileID) }
+        try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)
         if rawProfileID == "wg" { return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [:]) }
         guard let encoded = bundle.profiles[rawProfileID], encoded["sing-box.json"] != nil else {
             throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no iOS-runnable sing-box profile.")
@@ -112,6 +117,34 @@ enum IOSRuntimeSelector {
             throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) depends on a localhost helper that is not part of the iOS PacketTunnel dataplane.")
         }
         return IOSRuntimeSelection(engine: .libbox, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: files)
+    }
+
+    private static func validateStartLayer(bundle: ClientBundle, rawProfileID: String) throws {
+        let start = try normalizedStartLayer(in: bundle)
+        if start == "off" { return }
+        if start == startLayerAESXOR {
+            throw IOSRuntimeSelectionError.unsupportedMode("AES-256-GCM + XOR whitening is unavailable on iOS until PacketTunnel owns a protected local whitening relay; XOR is never counted as encryption or silently ignored.")
+        }
+        guard start == startLayerAES else {
+            throw IOSRuntimeSelectionError.unsupportedMode("Unsupported iOS Start Layer \(start).")
+        }
+        let raw = rawProfileID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard startLayerRawModes.contains(raw) else {
+            throw IOSRuntimeSelectionError.unsupportedMode("Start Layer AES-256-GCM requires an iOS Libbox raw mode: Shadowsocks, Hysteria2, Naive H2, or Naive H3; \(raw) is not a proved composition path.")
+        }
+    }
+
+    private static func normalizedStartLayer(in bundle: ClientBundle) throws -> String {
+        let profile = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
+        let raw = (profile?.startLayer ?? "off").trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: "_", with: "-").replacingOccurrences(of: " ", with: "")
+        switch raw {
+        case "", "off", "none", "disabled": return "off"
+        case "aes", "aes256", "aes-256", "aes-gcm", "aes256-gcm", startLayerAES: return startLayerAES
+        case "aes+xor", "xor+aes", "aes-256-gcm+xor", "xor+aes-256-gcm", startLayerAESXOR: return startLayerAESXOR
+        case "xor", "xor-only", "xor-whitening":
+            throw IOSRuntimeSelectionError.unsupportedMode("XOR whitening is obfuscation only and requires authenticated AES-256-GCM.")
+        default: throw IOSRuntimeSelectionError.unsupportedMode("Unsupported iOS Start Layer \(raw).")
+        }
     }
 
     private static func orderedVariantIDs(_ logical: LogicalMode) -> [String] {
