@@ -13,7 +13,7 @@ done
 
 verified_pids() {
   local out
-  if ! out=$(python3 "$PID_REGISTRY" verified "$ROOT" 2>/dev/null); then
+  if ! out=$(python3 "$PID_REGISTRY" verified-strict "$ROOT" 2>/dev/null); then
     echo 'Router VPN verified PID registry could not be read safely; retaining ownership metadata.' >&2
     return 1
   fi
