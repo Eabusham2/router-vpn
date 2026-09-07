@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -65,6 +66,82 @@ class ProfileIdSafety(unittest.TestCase):
             with self.subTest(name=name):
                 text = (HERE / name).read_text(encoding="utf-8")
                 self.assertIn("from profile_id import", text)
+
+    def readiness_fixture(self, root: Path, profile: str | None) -> dict[str, str]:
+        # Test path selection only. Real engine/config validation runs in ARM64 CI.
+        tools = root / "test-bin"
+        tools.mkdir(exist_ok=True)
+        for name in ("sing-box", "xray"):
+            tool = tools / name
+            tool.write_text('#!/bin/sh\npwd >> "$READINESS_PROBES"\n')
+            tool.chmod(0o700)
+        env = os.environ.copy()
+        env.update(HOMEVPN_ROOT=str(root), READINESS_PROBES=str(root / "probes"))
+        env["PATH"] = str(tools) + os.pathsep + env.get("PATH", os.defpath)
+        if profile is None:
+            env.pop("HOMEVPN_PROFILE_ID", None)
+        else:
+            env["HOMEVPN_PROFILE_ID"] = profile
+        return env
+
+    def write_readiness_profile(self, base: Path) -> None:
+        for mode in ("split", "shadowsocks"):
+            directory = base / mode
+            directory.mkdir(parents=True)
+            for name in ("xray.json", "sing-box.json", "cert.pem"):
+                (directory / name).write_text("test-only path-selection fixture\n")
+
+    def check_readiness(self, script: str, mode: str, env: dict[str, str]):
+        return subprocess.run(
+            ["bash", str(HERE / script), mode], env=env,
+            text=True, capture_output=True, check=False, timeout=5,
+        )
+
+    def test_server_bundle_readiness_uses_reserved_router_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_readiness_profile(root / "generated")
+            for identity in (None, "router"):
+                for script, mode in (("check-mode.sh", "shadowsocks"), ("check-combined.sh", "split")):
+                    with self.subTest(identity=identity, script=script):
+                        result = self.check_readiness(script, mode, self.readiness_fixture(root, identity))
+                        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                        self.assertEqual(result.stdout, "ready")
+
+    def test_linked_readiness_never_borrows_flat_or_other_node_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_readiness_profile(root / "generated")
+            self.write_readiness_profile(root / "generated" / "other-node")
+            env = self.readiness_fixture(root, "home")
+            for script, mode in (("check-mode.sh", "shadowsocks"), ("check-combined.sh", "split")):
+                with self.subTest(script=script):
+                    result = self.check_readiness(script, mode, env)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("cross-node readiness fallback is forbidden", result.stderr)
+            self.assertFalse((root / "probes").exists(), "foreign configuration reached an engine")
+
+    def test_linked_readiness_checks_only_its_own_generated_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_readiness_profile(root / "generated")
+            owned = root / "generated" / "home"
+            self.write_readiness_profile(owned)
+            env = self.readiness_fixture(root, "home")
+            for script, mode in (("check-mode.sh", "shadowsocks"), ("check-combined.sh", "split")):
+                with self.subTest(script=script):
+                    probes = root / "probes"
+                    if probes.exists():
+                        probes.unlink()
+                    result = self.check_readiness(script, mode, env)
+                    self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                    self.assertIn(str(owned / mode), probes.read_text().splitlines())
+                    # A broken own profile must not fall back to the valid flat one.
+                    (owned / mode / "sing-box.json").unlink()
+                    probes.unlink()
+                    result = self.check_readiness(script, mode, env)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(probes.exists(), "incomplete profile fell back to foreign files")
 
     def test_mtu_consumer_rejects_traversal(self) -> None:
         mtu = load_script("mtu-policy.py")
