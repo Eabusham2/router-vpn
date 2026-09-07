@@ -75,9 +75,9 @@ for path in (
         "if (publishHomeState) AndroidHomeStateStore.connected",
         "void disconnectManaged(Callback callback)",
         "disconnectInternal(false, callback)",
-        "if (publishHomeState) AndroidHomeStateStore.disconnected",
         "AndroidHomeStateStore.beginPathRevalidation",
-        "AndroidHomeStateStore.completePathRevalidation",
+        "runtime ownership retained:",
+        "Teardown incomplete; runtime ownership retained:",
     )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java",
@@ -87,7 +87,10 @@ require(
     "awg.disconnectManaged",
     "stopCurrent(false)",
     "stopCurrent(true)",
-    "if(clearHomeState)AndroidHomeStateStore.disconnected(context)",
+    "AndroidHomeStateStore.beginPathRevalidation(context,\"Router VPN disconnect requested;",
+    "AndroidHomeStateStore.failedPreservingOwnership(context,message)",
+    "runtimeBusy(sing.getState())",
+    "runtimeBusy(xray.getState())",
 )
 orchestrator=(ROOT/"android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java").read_text(encoding="utf-8")
 for forbidden in ("wg.connect(bundle", "awg.connect(bundle"):
@@ -95,14 +98,18 @@ for forbidden in ("wg.connect(bundle", "awg.connect(bundle"):
         raise SystemExit(f"Android logical orchestrator revived child Home-state ownership: {forbidden}")
 
 # Every non-native underlay revalidation must visibly invalidate Connected proof
-# and may re-adopt only the same session + exact next path generation.
+# and may re-adopt only the same session + exact next path generation. Failed
+# cleanup must retain the frozen owner/session identity for a later teardown.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidHomeStateStore.java",
     "beginPathRevalidation",
     "completePathRevalidation",
+    "failedPreservingOwnership",
     'putString("path_proof", "pending")',
     'putBoolean("connected", false)',
     "currentGeneration != before.pathGeneration + 1L",
+    "boolean retainOwnership = emergencyDisconnectPending(context)",
+    "if (!retainOwnership) clearAllIdentity(e)",
 )
 revalidator_path = "android/app/src/main/java/com/eabusham/routervpn/AndroidSessionRevalidator.java"
 require(
@@ -117,6 +124,8 @@ require(
     "engines.multihop.failClosedForRevalidation()",
     "engines.standardExit.failClosedForRevalidation()",
     "engines.orchestrator.disconnect",
+    "AndroidHomeStateStore.failedPreservingOwnership(context,message+suffix)",
+    "AndroidHomeStateStore.failedPreservingOwnership(context,message+\"; owner cleanup failed: \"",
 )
 revalidator = (ROOT / revalidator_path).read_text(encoding="utf-8")
 owned_cleanup = revalidator.split("private void failClosedOwnedRuntime", 1)[1].split(
@@ -130,7 +139,7 @@ for path in (
     "android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java",
     "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitRuntime.java",
 ):
-    require(path, "failClosedForRevalidation()")
+    require(path, "failClosedForRevalidation()", "runtime ownership retained")
     body = (ROOT / path).read_text(encoding="utf-8")
     section = body.split("failClosedForRevalidation()", 1)[1].split("@Override", 1)[0]
     if "AndroidHomeStateStore." in section:
@@ -169,6 +178,7 @@ require(
     "engines.amneziaWG.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN",
     "runtimeBusy(engines.xray.getState())",
     "exit.protocol",
+    "Android custom-exit teardown was not proved; runtime ownership retained.",
 )
 standard_runtime = (ROOT / standard_runtime_path).read_text(encoding="utf-8")
 if "protocl" in standard_runtime:
