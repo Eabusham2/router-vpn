@@ -220,7 +220,7 @@ for marker in (
     "AndroidPathProbe.prove(prepared.exitBundle",
     "Exit-node private path proof failed",
     "WireGuard entry →",
-    "if (started) singBox.stop()",
+    "boolean stopped = !started || stopEmbeddedAndProve();",
 ):
     assert marker in multihop_runtime, f"AndroidMultihopRuntime missing exit-proof/fail-closed marker: {marker}"
 
