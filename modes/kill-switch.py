@@ -15,7 +15,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import socket
 import stat
 import subprocess
 import sys
@@ -144,16 +143,13 @@ def resolve_literal_endpoint(endpoint: str) -> list[ipaddress._BaseAddress]:
     try:
         return [ipaddress.ip_address(value)]
     except ValueError:
-        try:
-            infos = socket.getaddrinfo(value, None, type=socket.SOCK_DGRAM)
-            resolved = sorted({str(ipaddress.ip_address(info[4][0])) for info in infos})
-        except OSError:
-            resolved = []
-        suffix = f" (currently resolves to {', '.join(resolved)})" if resolved else ""
+        # Reject without resolving, even for a diagnostic suffix. The guard has
+        # not installed its firewall yet; an OS lookup here would leak DNS on
+        # precisely the pre-tunnel path this strict policy refuses to use.
         raise RuntimeError(
             "strict kill switch requires the selected node endpoint to be a literal IPv4/IPv6 address; "
-            f"hostname {value!r} would require pre-tunnel DNS{suffix}"
-        )
+            f"hostname {value!r} would require pre-tunnel DNS"
+        ) from None
 
 
 def nft_prefix() -> list[str]:
