@@ -222,6 +222,7 @@ jobs:
           python3 test_libbox_link_contract.py
           python3 test_packet_tunnel_libbox_contract.py
           python3 test_runtime_selection_contract.py
+          python3 ../../deploy/test_ios_speed_lab_http_boundary.py
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Prepare exact pinned WireGuardKit
