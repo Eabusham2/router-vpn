@@ -277,6 +277,7 @@ assert "libbox or native Xray mode" in policy
 for executable_contract in (
     "test_android_runtime_teardown.py",
     "test_android_service_stop_confirmation.py",
+    "test_android_mutation_idle_proof.py",
 ):
     subprocess.run(
         [sys.executable, str(ROOT / executable_contract)],
