@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,9 +61,10 @@ func setActiveMultihopGraph(a *app, sel multihopSelection) {
 	activeMultihopGraphs.Store(a, activeMultihopGraph{
 		EntryID: sel.Entry.ID, ExitID: sel.Exit.ID, Base: sel.Base, ExitMode: sel.ExitMode, Started: time.Now().UTC(),
 	})
+	homeExitProofs.Delete(a)
 }
 
-func clearActiveMultihopGraph(a *app) { activeMultihopGraphs.Delete(a) }
+func clearActiveMultihopGraph(a *app) { activeMultihopGraphs.Delete(a); homeExitProofs.Delete(a) }
 
 func getActiveMultihopGraph(a *app) (activeMultihopGraph, bool) {
 	value, ok := activeMultihopGraphs.Load(a)
@@ -399,15 +399,11 @@ func (a *app) proveMultihopExit(exit common.RouterProfile) error {
 	if !trustedPathProbeURL(proofURL) {
 		return errors.New("exit path proof URL is not private/local")
 	}
-	proxyURL, err := url.Parse(multihopProofProxy)
+	client, closeIdle, err := newMultihopLaneHTTPClient(multihopProofProxy, 1200*time.Millisecond)
 	if err != nil {
 		return err
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = http.ProxyURL(proxyURL)
-	transport.ForceAttemptHTTP2 = false
-	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 1200 * time.Millisecond}
+	defer closeIdle()
 	ctx := a.connectionOperationContextOrBackground()
 	var last error
 	deadline := time.Now().Add(9 * time.Second)
@@ -419,11 +415,18 @@ func (a *app) proveMultihopExit(exit common.RouterProfile) error {
 		if reqErr != nil {
 			return reqErr
 		}
+		req.Header.Set("Cache-Control", "no-store")
+		req.Header.Set("Accept-Encoding", "identity")
 		resp, requestErr := client.Do(req)
 		if requestErr == nil {
-			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4097))
 			_ = resp.Body.Close()
-			if readErr == nil && resp.StatusCode/100 == 2 {
+			if ctx.Err() != nil {
+				return errConnectionOperationCancelled
+			}
+			if len(body) > 4096 {
+				last = errors.New("exit proof response is oversized")
+			} else if readErr == nil && resp.StatusCode/100 == 2 {
 				if proofErr := validateSelectedNodeProof(exit, body); proofErr == nil {
 					return nil
 				} else {

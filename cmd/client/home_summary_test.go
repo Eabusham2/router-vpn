@@ -37,21 +37,27 @@ func TestHomeSummaryDoesNotTreatCachedProfilePublicIPAsLiveProof(t *testing.T) {
 }
 
 func TestHomeSummaryUsesOnlyProofForCurrentSession(t *testing.T) {
-	a := &app{}
-	profile := common.RouterProfile{ID: "home", Name: "Home Router", Endpoint: "vpn.example.test"}
-	homeExitProofs.Store(a, homeExitProof{SessionID: "old-session", IP: "198.51.100.20", At: time.Now().UTC()})
-	defer homeExitProofs.Delete(a)
-
-	current := connectionSession{ID: "new-session", Connected: true, Phase: "connected", PathProof: "passed"}
+	a := provedHomeExitFixture(t)
+	current := sessionTrackerFor(a).snapshot(0)
+	profile := a.profiles.Profiles[1]
+	raw, ok := homeExitProofs.Load(a)
+	if !ok {
+		t.Fatal("initial proof missing")
+	}
+	proof := *raw.(*homeExitProof)
+	proofTime := time.Now().UTC().Truncate(time.Second)
+	proof.At = proofTime
+	old := proof
+	old.SessionID = "old-session"
+	homeExitProofs.Store(a, &old)
 	value := buildHomeSummary(a, profile, current, "")
 	if value.ActualExitIP != "" || value.ActualExitStatus != "unproven" {
 		t.Fatalf("old-session exit proof leaked into new session: %+v", value)
 	}
 
-	proofTime := time.Now().UTC().Truncate(time.Second)
-	homeExitProofs.Store(a, homeExitProof{SessionID: "new-session", IP: "198.51.100.21", At: proofTime})
+	homeExitProofs.Store(a, &proof)
 	value = buildHomeSummary(a, profile, current, "")
-	if value.ActualExitIP != "198.51.100.21" || value.ActualExitStatus != "proved" {
+	if value.ActualExitIP != proof.IP || value.ActualExitStatus != "proved" {
 		t.Fatalf("current-session exit proof was not surfaced: %+v", value)
 	}
 	if value.ActualExitTestedAt == "" {

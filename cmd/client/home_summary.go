@@ -1,23 +1,31 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"router-vpn/internal/common"
 )
 
 type homeExitProof struct {
-	SessionID string
-	IP        string
-	At        time.Time
+	Generation uint64
+	SessionID  string
+	RouterID   string
+	Runtime    string
+	Base       string
+	StateToken string
+	Profiles   map[string]string
+	Multihop   bool
+	Graph      activeMultihopGraph
+	IP         string
+	At         time.Time
 }
 
-var homeExitProofs sync.Map
+var homeExitProofs homeExitProofCache
 
 type homeSummaryResponse struct {
 	NodeID             string   `json:"node_id,omitempty"`
@@ -90,17 +98,28 @@ func (a *app) proveHomeExit(w http.ResponseWriter, r *http.Request) {
 	profile, ok := a.profileByIDLocked(targetID)
 	stateAtStart := a.state
 	stateToken := mtuStateSnapshotToken(a.state)
-	profileToken := ""
-	if ok {
-		profileToken = asyncMeasurementProfileToken(profile)
-	}
 	a.mu.Unlock()
 	if !ok {
 		http.Error(w, "active Router VPN node disappeared before public-exit proof", http.StatusConflict)
 		return
 	}
 
-	measured, stop, validate, err := asyncMeasurementPathContext(r.Context(), a, profile, stateAtStart, before, profileToken)
+	graph, graphOK := getActiveMultihopGraph(a)
+	if stateAtStart.Mode == "multihop" {
+		if err := validateActiveMultihopSpeedGraph(stateAtStart, graph, graphOK, graph.EntryID, graph.ExitID); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
+	profiles, err := captureMeasurementProfiles(a, stateAtStart, graph, profile)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	binding := homeExitProof{Generation: homeExitProofs.generation(a), SessionID: before.ID, RouterID: targetID, Runtime: before.ActualMode, Base: before.ActualBase,
+		StateToken: stateToken, Profiles: profiles, Multihop: stateAtStart.Mode == "multihop", Graph: graph}
+	validate := func() error { return a.validateHomeExitBinding(&binding) }
+	measured, stop, err := speedLabPathContext(r.Context(), validate)
 	if err != nil {
 		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "Home public-exit proof") {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -132,48 +151,60 @@ func (a *app) proveHomeExit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.mu.Lock()
-	if asyncMeasurementRequestError(w, r.Context(), measured, "Home public-exit proof") {
-		a.mu.Unlock()
-		return
-	}
-	current, currentOK := a.profileByIDLocked(targetID)
-	if !currentOK || mtuStateSnapshotToken(a.state) != stateToken || asyncMeasurementProfileToken(current) != profileToken {
-		a.mu.Unlock()
-		http.Error(w, "active Router VPN path changed while public-exit proof was running; result discarded", http.StatusConflict)
-		return
-	}
-	previousStore := cloneRouterProfileStore(a.profiles)
-	found := false
-	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID == targetID {
-			a.profiles.Profiles[i].PublicIP = ip
-			found = true
-			break
+	status, persistErr := a.adoptHomeExitProof(measured, binding, ip)
+	if persistErr != nil {
+		if !asyncMeasurementRequestError(w, r.Context(), measured, "Home public-exit proof") {
+			http.Error(w, persistErr.Error(), status)
 		}
-	}
-	if !found {
-		a.mu.Unlock()
-		http.Error(w, "active Router VPN node disappeared before public-exit persistence", http.StatusConflict)
 		return
 	}
-	persistErr := a.persistProfilesLocked()
-	if persistErr != nil {
-		a.rollbackProfilesLocked(previousStore)
-	}
-	a.mu.Unlock()
-	if persistErr != nil {
-		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
-		return
-	}
-	homeExitProofs.Store(a, homeExitProof{SessionID: after.ID, IP: ip, At: time.Now().UTC()})
 	value, err := a.homeSummaryValue()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("content-type", "application/json")
+	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+// Network I/O has already finished. Serialize only adoption with connection and
+// settings mutations, and recheck the session under tracker -> app lock order.
+func (a *app) adoptHomeExitProof(ctx context.Context, binding homeExitProof, ip string) (int, error) {
+	release, err := a.beginNodeBoundOperation()
+	if err != nil {
+		return http.StatusConflict, err
+	}
+	defer release()
+	tracker := sessionTrackerFor(a)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := context.Cause(ctx); err != nil {
+		return http.StatusConflict, err
+	}
+	if err := validateHomeExitBindingLocked(a, tracker.session, &binding); err != nil {
+		return http.StatusConflict, err
+	}
+	ip, err = common.NormalizeExpectedPublicIP(ip)
+	if err != nil {
+		return http.StatusBadGateway, err
+	}
+	previousStore := cloneRouterProfileStore(a.profiles)
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == binding.RouterID {
+			a.profiles.Profiles[i].PublicIP = ip
+			break
+		}
+	}
+	if persistErr := a.persistProfilesLocked(); persistErr != nil {
+		a.rollbackProfilesLocked(previousStore)
+		return http.StatusInternalServerError, persistErr
+	}
+	binding.IP, binding.At = ip, time.Now().UTC()
+	homeExitProofs.Store(a, &binding)
+	return http.StatusOK, nil
 }
 
 func (a *app) homeSummaryValue() (homeSummaryResponse, error) {
@@ -231,11 +262,15 @@ func buildHomeSummary(a *app, profile common.RouterProfile, session connectionSe
 	if session.Connected {
 		actualExitStatus = "unproven"
 		if raw, found := homeExitProofs.Load(a); found {
-			if proof, valid := raw.(homeExitProof); valid && proof.SessionID == session.ID && proof.IP != "" {
+			if proof, valid := raw.(*homeExitProof); valid && a.homeExitProofCurrent(proof, profile, session) && proof.SessionID == session.ID {
 				actualExit = proof.IP
 				actualExitStatus = "proved"
 				actualExitTested = proof.At.Format(time.RFC3339)
 			}
+		}
+	} else if raw, found := homeExitProofs.Load(a); found {
+		if proof, valid := raw.(*homeExitProof); valid {
+			a.homeExitProofCurrent(proof, profile, session)
 		}
 	}
 	warnings := make([]string, 0, 4)
