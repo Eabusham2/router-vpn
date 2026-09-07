@@ -78,10 +78,69 @@ struct IOSSpeedLabMeasurement: Hashable, Sendable {
     }
 }
 
+// One shared HTTP policy for idle, download-load and upload-load requests.
+// Refuse redirects before URLSession can contact a different endpoint or replay
+// an upload. Response validation alone is too late to enforce that boundary.
+private final class IOSSpeedLabHTTP: NSObject, URLSessionTaskDelegate {
+    private static let redirectGuard = IOSSpeedLabHTTP()
+    private static let providerHost = "speed.cloudflare.com"
+
+    static func makeSession(timeout: TimeInterval) -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout
+        config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        config.urlCache = nil
+        config.urlCredentialStorage = nil
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        config.httpAdditionalHeaders = ["User-Agent": "RouterVPN-SpeedLab/1", "Cache-Control": "no-store", "Accept-Encoding": "identity"]
+        return URLSession(configuration: config, delegate: redirectGuard, delegateQueue: nil)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+
+    static func validate(_ response: URLResponse, expectedBytes: Int? = nil) throws -> HTTPURLResponse {
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode),
+              http.statusCode != 206,
+              let url = http.url,
+              url.scheme?.lowercased() == "https",
+              url.host?.lowercased() == providerHost,
+              url.port == nil || url.port == 443,
+              url.user == nil, url.password == nil, url.fragment == nil,
+              url.path == (expectedBytes == nil ? "/__up" : "/__down"),
+              http.value(forHTTPHeaderField: "Content-Range") == nil else {
+            throw URLError(.badServerResponse)
+        }
+        let encoding = http.value(forHTTPHeaderField: "Content-Encoding")?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "identity"
+        guard encoding.isEmpty || encoding == "identity" else {
+            throw NSError(domain: "RouterVPN.SpeedLab", code: 6, userInfo: [NSLocalizedDescriptionKey: "Speed Lab refuses compressed transfer data because it cannot represent the measured wire bytes."])
+        }
+        if let length = http.value(forHTTPHeaderField: "Content-Length") {
+            let value = length.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, value.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                  let parsed = Int(value), parsed >= 0,
+                  expectedBytes == nil || parsed == expectedBytes else {
+                throw NSError(domain: "RouterVPN.SpeedLab", code: 2, userInfo: [NSLocalizedDescriptionKey: "Speed Lab provider returned an invalid or unexpected Content-Length."])
+            }
+        }
+        return http
+    }
+}
+
 enum IOSSpeedLabEngine {
     private static let downloadURL = URL(string: "https://speed.cloudflare.com/__down")!
     private static let uploadURL = URL(string: "https://speed.cloudflare.com/__up")!
-    private static let providerHost = "speed.cloudflare.com"
 
     static func run(duration requested: IOSSpeedLabDuration) async throws -> IOSSpeedLabMeasurement {
         let duration = try IOSSpeedLabDuration.normalized(mode: requested.mode, minSeconds: requested.minSeconds, maxSeconds: requested.maxSeconds)
@@ -103,30 +162,6 @@ enum IOSSpeedLabEngine {
         )
     }
 
-    private static func ephemeralSession(timeout: TimeInterval) -> URLSession {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = timeout
-        config.timeoutIntervalForResource = timeout
-        config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        config.urlCache = nil
-        config.httpShouldSetCookies = false
-        config.httpCookieAcceptPolicy = .never
-        config.httpAdditionalHeaders = ["User-Agent": "RouterVPN-SpeedLab/1", "Cache-Control": "no-store", "Accept-Encoding": "identity"]
-        return URLSession(configuration: config)
-    }
-
-    private static func validatedHTTP(_ response: URLResponse, expectedBytes: Int? = nil) throws -> HTTPURLResponse {
-        guard let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode),
-              http.url?.host?.lowercased() == providerHost else {
-            throw URLError(.badServerResponse)
-        }
-        if let expectedBytes, let length = http.value(forHTTPHeaderField: "Content-Length"), let parsed = Int(length), parsed != expectedBytes {
-            throw NSError(domain: "RouterVPN.SpeedLab", code: 2, userInfo: [NSLocalizedDescriptionKey: "Speed Lab provider returned an unexpected Content-Length."])
-        }
-        return http
-    }
-
     private static func probeOnce() async throws -> Double {
         var components = URLComponents(url: downloadURL, resolvingAgainstBaseURL: false)!
         components.queryItems = [
@@ -137,11 +172,11 @@ enum IOSSpeedLabEngine {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 2.5)
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
-        let session = ephemeralSession(timeout: 2.5)
+        let session = IOSSpeedLabHTTP.makeSession(timeout: 2.5)
         defer { session.invalidateAndCancel() }
         let started = ContinuousClock.now
         let (data, response) = try await session.data(for: request)
-        _ = try validatedHTTP(response, expectedBytes: 1)
+        _ = try IOSSpeedLabHTTP.validate(response, expectedBytes: 1)
         guard data.count == 1 else { throw URLError(.cannotParseResponse) }
         return round3(elapsedSeconds(since: started) * 1000)
     }
@@ -269,11 +304,11 @@ enum IOSSpeedLabEngine {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 20)
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
-        let session = ephemeralSession(timeout: 20)
+        let session = IOSSpeedLabHTTP.makeSession(timeout: 20)
         defer { session.invalidateAndCancel() }
         let started = ContinuousClock.now
         let (data, response) = try await session.data(for: request)
-        _ = try validatedHTTP(response, expectedBytes: bytes)
+        _ = try IOSSpeedLabHTTP.validate(response, expectedBytes: bytes)
         guard data.count == bytes else { throw URLError(.cannotParseResponse) }
         return (Int64(data.count), max(0.000001, elapsedSeconds(since: started)))
     }
@@ -291,11 +326,11 @@ enum IOSSpeedLabEngine {
         request.httpMethod = "POST"
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
-        let session = ephemeralSession(timeout: 20)
+        let session = IOSSpeedLabHTTP.makeSession(timeout: 20)
         defer { session.invalidateAndCancel() }
         let started = ContinuousClock.now
         let (_, response) = try await session.upload(for: request, from: payload)
-        _ = try validatedHTTP(response)
+        _ = try IOSSpeedLabHTTP.validate(response)
         return (Int64(bytes), max(0.000001, elapsedSeconds(since: started)))
     }
 
