@@ -5,6 +5,22 @@ import importlib.util, json, os, pathlib, subprocess, sys, tempfile
 SCRIPT=pathlib.Path(__file__).with_name('kill-switch.py')
 spec=importlib.util.spec_from_file_location('router_vpn_killswitch',SCRIPT);mod=importlib.util.module_from_spec(spec);assert spec and spec.loader;spec.loader.exec_module(mod)
 
+# Input validation must not touch DNS before the strict firewall is installed,
+# including diagnostic/error formatting. This contract is entirely offline.
+from unittest import mock
+with mock.patch('socket.getaddrinfo', return_value=[]) as resolver:
+    for endpoint in ('example.com', 'vpn.example.test', '203.0.113.7:51820'):
+        try:
+            mod.resolve_literal_endpoint(endpoint)
+        except RuntimeError as exc:
+            assert 'literal IPv4/IPv6' in str(exc), str(exc)
+        else:
+            raise AssertionError('non-literal strict endpoint was accepted')
+    for endpoint, expected in (('203.0.113.7', '203.0.113.7'), ('[2001:db8::7]', '2001:db8::7')):
+        assert [str(ip) for ip in mod.resolve_literal_endpoint(endpoint)] == [expected]
+    assert resolver.call_count == 0, 'strict endpoint validation leaked pre-tunnel DNS'
+
+
 def write_private_json(path, value):
     path.write_text(json.dumps(value)+'\n')
     os.chmod(path,0o600)
