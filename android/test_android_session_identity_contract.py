@@ -123,7 +123,14 @@ for marker in (
 ):
     assert marker in standard_runtime, f"Android standard-exit ownership lost marker: {marker}"
 assert "protocl" not in standard_runtime, "Android standard-exit source contains a misspelled protocol field"
-assert "boolean isActiveOrTransitioning() { return AndroidVpnMutationGuard.isBusy(activity); }" in unified
+assert "boolean isActiveOrTransitioning() { return disconnecting.get() || AndroidVpnMutationGuard.isBusy(activity); }" in unified
+# Local disconnect verification must also freeze the Activity bridge before any
+# asynchronous engine operation, and the final callback must report actual success.
+disconnect = unified.split("void disconnect(Callback callback)", 1)[1].split("boolean onActivityResult", 1)[0]
+assert disconnect.index("disconnecting.compareAndSet(false,true)") < disconnect.index("multihop.isActiveOrTransitioning()")
+assert "orchestrator.disconnect(new AndroidModeOrchestrator.Callback()" in disconnect
+assert "callback.finished(success," in disconnect
+assert "callback.finished(true," not in disconnect
 
 # Node and external-profile identity cannot mutate underneath a live/transitioning
 # tunnel. Public list/read operations remain available for rendering telemetry.
@@ -190,7 +197,8 @@ for name, source in (("WireGuard", wireguard), ("AmneziaWG", amnezia)):
         "if (publishHomeState) AndroidHomeStateStore.connected",
         "void disconnectManaged(Callback callback)",
         "disconnectInternal(false, callback)",
-        "if (publishHomeState) AndroidHomeStateStore.disconnected",
+        "boolean emergency = publishHomeState && AndroidHomeStateStore.emergencyDisconnectPending(appContext);",
+        "if (publishHomeState && !emergency) AndroidHomeStateStore.disconnected",
         "AndroidHomeStateStore.beginPathRevalidation",
         "AndroidHomeStateStore.completePathRevalidation",
         "stale Android session/generation",
