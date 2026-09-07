@@ -47,6 +47,25 @@ func TestFastestProfileCancelledRequestCannotSelectWinner(t *testing.T) {
 	}
 }
 
+func TestMultihopLiveLatencyCancelledRequestStopsBeforeProbes(t *testing.T) {
+	a := &app{profiles: common.RouterProfileStore{Profiles: []common.RouterProfile{
+		{ID: "entry", Name: "Entry", NodeKind: "router-vpn", Endpoint: "127.0.0.1"},
+		{ID: "exit", Name: "Exit", NodeKind: "router-vpn", Endpoint: "127.0.0.1"},
+	}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/api/multihop/live-latency", strings.NewReader(`{"entry_id":"entry","exit_id":"exit","samples":5}`)).WithContext(ctx)
+	w := httptest.NewRecorder()
+	started := time.Now()
+	a.multihopLiveLatency(w, req)
+	if w.Code != http.StatusRequestTimeout || !strings.Contains(w.Body.String(), "cancelled") {
+		t.Fatalf("cancelled multihop latency = HTTP %d %q", w.Code, w.Body.String())
+	}
+	if time.Since(started) > 250*time.Millisecond {
+		t.Fatal("cancelled multihop latency kept probing nodes")
+	}
+}
+
 func TestClampSpeedBytes(t *testing.T) {
 	cases := []struct {
 		in, want int64
