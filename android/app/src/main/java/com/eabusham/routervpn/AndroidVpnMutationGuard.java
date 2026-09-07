@@ -22,7 +22,9 @@ final class AndroidVpnMutationGuard {
             // UI forever. Recovery is allowed only when Home is explicitly failed,
             // no app-owned VPN transport remains, no transition is running, and
             // every actual engine is provably idle/terminal.
-            if (!ownedVpn && failedSessionHasNoLiveEngine(home, e)) return false;
+            if (!ownedVpn && failedSessionHasNoLiveEngine(home, e)
+                    && !e.multihop.isActiveOrTransitioning()
+                    && !e.standardExit.isActiveOrTransitioning()) return false;
             return ownedVpn
                     || phaseBusy(home.connected, phase)
                     || e.orchestrator.isRunning()
@@ -63,11 +65,11 @@ final class AndroidVpnMutationGuard {
     }
 
     private static boolean tunnelBusy(com.wireguard.android.backend.Tunnel.State state) {
-        return state != null && state != com.wireguard.android.backend.Tunnel.State.DOWN;
+        return state != com.wireguard.android.backend.Tunnel.State.DOWN;
     }
 
     private static boolean tunnelBusy(org.amnezia.awg.backend.Tunnel.State state) {
-        return state != null && state != org.amnezia.awg.backend.Tunnel.State.DOWN;
+        return state != org.amnezia.awg.backend.Tunnel.State.DOWN;
     }
 
     private static boolean runtimeBusy(String state) {
