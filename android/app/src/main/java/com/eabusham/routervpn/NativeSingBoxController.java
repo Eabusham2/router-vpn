@@ -219,10 +219,19 @@ final class NativeSingBoxController {
 
     void start(SessionInfo session) {
         Intent intent = new Intent(context, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_START).putExtra(LayeredVpnService.EXTRA_SESSION_ID, session.sessionId).putExtra(LayeredVpnService.EXTRA_MODE_ID, session.modeId);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent); else context.startService(intent);
+        AndroidServiceStopConfirmation.start(STATE_KEY, () -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent); else context.startService(intent);
+        });
     }
-    void stop() { context.startService(new Intent(context, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_STOP)); }
-    String getState() { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(STATE_KEY, "DOWN"); }
+    void stop() {
+        AndroidServiceStopConfirmation.request(STATE_KEY, command -> context.startService(
+                new Intent(context, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_STOP)
+                        .putExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, command)));
+    }
+    String getState() {
+        return AndroidServiceStopConfirmation.state(STATE_KEY,
+                () -> context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(STATE_KEY, "DOWN"));
+    }
     String getMode() { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(MODE_KEY, ""); }
     String getError() { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(ERROR_KEY, ""); }
 
