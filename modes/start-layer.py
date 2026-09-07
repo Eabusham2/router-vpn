@@ -138,15 +138,24 @@ def endpoint_hostport(value: str, port: int) -> str:
 
 
 def ss_source(root: Path, profile_id: str) -> Path:
-    for path in (root / "generated" / profile_id / "shadowsocks" / "sing-box.json",
-                 root / "generated" / "shadowsocks" / "sing-box.json"):
+    primary = root / "generated" / profile_id / "shadowsocks" / "sing-box.json"
+    candidates = [primary]
+    if profile_id == "router":
+        # Compatibility for the original single-home install layout only. A
+        # linked node must never borrow another node/home AES credential tree.
+        candidates.append(root / "generated" / "shadowsocks" / "sing-box.json")
+    for path in candidates:
         try:
             info = path.lstat()
         except FileNotFoundError:
             continue
         if stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode):
             return path
-    raise RuntimeError("generated Shadowsocks 2022 AES profile is missing")
+    if profile_id == "router":
+        raise RuntimeError("generated Shadowsocks 2022 AES profile is missing")
+    raise RuntimeError(
+        f"linked Router VPN profile {profile_id!r} is missing its own Shadowsocks 2022 AES profile; cross-node key fallback is forbidden"
+    )
 
 
 def aes_outbound(path: Path) -> dict:
