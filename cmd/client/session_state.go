@@ -40,26 +40,26 @@ type connectionEvent struct {
 }
 
 type connectionSession struct {
-	ID             string             `json:"id"`
-	RouterID       string             `json:"router_id,omitempty"`
-	RequestedMode  string             `json:"requested_mode,omitempty"`
-	RequestedBase  string             `json:"requested_base,omitempty"`
-	ActualMode     string             `json:"actual_mode,omitempty"`
-	ActualBase     string             `json:"actual_base,omitempty"`
-	Engine         string             `json:"engine,omitempty"`
-	Phase          string             `json:"phase"`
-	Connected      bool               `json:"connected"`
-	PathProof      string             `json:"path_proof"`
-	RollbackState  string             `json:"rollback_state"`
-	StopReason     string             `json:"stop_reason,omitempty"`
-	Error          *typedSessionError `json:"error,omitempty"`
-	StartedAt      time.Time          `json:"started_at"`
-	UpdatedAt      time.Time          `json:"updated_at"`
-	EndedAt        *time.Time         `json:"ended_at,omitempty"`
-	ExitIP         string             `json:"exit_ip,omitempty"`
-	DNSProof       dnsProofState      `json:"dns_proof"`
-	Events         []connectionEvent  `json:"events"`
-	LastEventSeq   uint64             `json:"last_event_seq"`
+	ID            string             `json:"id"`
+	RouterID      string             `json:"router_id,omitempty"`
+	RequestedMode string             `json:"requested_mode,omitempty"`
+	RequestedBase string             `json:"requested_base,omitempty"`
+	ActualMode    string             `json:"actual_mode,omitempty"`
+	ActualBase    string             `json:"actual_base,omitempty"`
+	Engine        string             `json:"engine,omitempty"`
+	Phase         string             `json:"phase"`
+	Connected     bool               `json:"connected"`
+	PathProof     string             `json:"path_proof"`
+	RollbackState string             `json:"rollback_state"`
+	StopReason    string             `json:"stop_reason,omitempty"`
+	Error         *typedSessionError `json:"error,omitempty"`
+	StartedAt     time.Time          `json:"started_at"`
+	UpdatedAt     time.Time          `json:"updated_at"`
+	EndedAt       *time.Time         `json:"ended_at,omitempty"`
+	ExitIP        string             `json:"exit_ip,omitempty"`
+	DNSProof      dnsProofState      `json:"dns_proof"`
+	Events        []connectionEvent  `json:"events"`
+	LastEventSeq  uint64             `json:"last_event_seq"`
 }
 
 type observedConnection struct {
@@ -196,6 +196,7 @@ func typedError(message string) *typedSessionError {
 func (t *sessionTracker) declareRequest(mode, base string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	homeExitProofs.Delete(t.a)
 	t.requestedMode = strings.TrimSpace(mode)
 	t.requestedBase = normalizeBase(base)
 	t.declaredAt = time.Now().UTC()
@@ -211,6 +212,7 @@ func (t *sessionTracker) declareRequest(mode, base string) {
 }
 
 func (t *sessionTracker) startLocked(s observedConnection, phase string) {
+	homeExitProofs.Delete(t.a)
 	now := time.Now().UTC()
 	id := fmt.Sprintf("session-%d-%d", now.UnixMilli(), sessionNumber.Add(1))
 	requested := t.requestedMode
@@ -232,7 +234,7 @@ func (t *sessionTracker) startLocked(s observedConnection, phase string) {
 		Phase: phase, PathProof: "not-run", RollbackState: "not-needed",
 		StartedAt: now, UpdatedAt: now,
 		DNSProof: dnsProofState{Status: "not-proven", Reason: "end-to-end selected-DNS proof has not been established for this session"},
-		Events: []connectionEvent{},
+		Events:   []connectionEvent{},
 	}
 	t.lastKey = ""
 	t.dnsProofRunning = false
@@ -264,6 +266,13 @@ func (t *sessionTracker) observe(s observedConnection) {
 	runtimeID := s.RuntimeMode
 	if runtimeID == "" && s.Mode != "off" {
 		runtimeID = s.Mode
+	}
+	// Invalidate at the observed transition, not just during summary reads: a
+	// temporary recheck/rollback must not resurrect the old exit proof later.
+	if !s.Connected || phase != "connected" || t.session.Phase != "connected" ||
+		t.session.PathProof != "passed" || t.session.RouterID != s.RouterID ||
+		t.session.ActualMode != runtimeID || t.session.ActualBase != s.Base {
+		homeExitProofs.Delete(t.a)
 	}
 	logical := s.LogicalMode
 	if logical != "" {
@@ -364,6 +373,7 @@ func (t *sessionTracker) eventLocked(kind, phase, message string, connected bool
 func (t *sessionTracker) markStopReason(reason string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	homeExitProofs.Delete(t.a)
 	if t.session != nil {
 		t.session.StopReason = reason
 		t.eventLocked("stop-request", t.session.Phase, reason, t.session.Connected, t.session.ActualMode, t.session.ActualBase)
@@ -373,6 +383,7 @@ func (t *sessionTracker) markStopReason(reason string) {
 func (t *sessionTracker) markRequestFailure(message string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	homeExitProofs.Delete(t.a)
 	if t.session == nil || t.session.EndedAt != nil {
 		return
 	}
