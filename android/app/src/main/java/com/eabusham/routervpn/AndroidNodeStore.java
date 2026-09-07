@@ -155,7 +155,17 @@ final class AndroidNodeStore {
         if (!safeId(id)) throw new IllegalArgumentException("Invalid local node id.");
         File file = nodeFile(id);
         if (!file.isFile()) throw new IllegalStateException("Stored node is missing.");
-        return file;
+        try {
+            byte[] bytes = readLimited(file, MAX_BUNDLE);
+            JSONObject bundle = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
+            validateBundle(bundle);
+            if (!id.equals(deriveId(bundle, bytes))) throw new IllegalStateException("Stored node identity check failed.");
+            return file;
+        } catch (RuntimeException error) {
+            throw error;
+        } catch (Exception error) {
+            throw new IllegalStateException("Stored Router VPN node failed validation.", error);
+        }
     }
 
     private void requireSelectable(String id) {
