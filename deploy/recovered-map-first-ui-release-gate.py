@@ -14,6 +14,7 @@ GATES = (
     "recovered-map-first-ui-contract-audit-test.py",
     "recovered-map-first-ui-contract-audit.py",
     "native-map-first-ui-audit.py",
+    "speed-lab-shipping-audit-test.py",
     "speed-lab-shipping-audit.py",
     "setup-center-responsive-ui-audit.py",
     "tor-circumvention-audit.py",
