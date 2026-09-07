@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 errors: list[str] = []
@@ -21,6 +22,20 @@ def need(path: str, *markers: str) -> None:
     for marker in markers:
         if marker not in body:
             errors.append(f"{path}: missing Speed Lab marker {marker!r}")
+
+
+def need_go_map_entry(path: str, key: str, value: str) -> None:
+    # gofmt aligns map values with whitespace. Match the actual entry rather
+    # than one formatting choice; comments cannot substitute for live code.
+    body = re.sub(
+        r'("(?:\\.|[^"\\])*"|`[^`]*`)|//[^\n]*|/\*.*?\*/',
+        lambda match: match.group(1) or "",
+        read(path),
+        flags=re.S,
+    )
+    pattern = rf'(?m)^\s*"{re.escape(key)}"\s*:\s*{re.escape(value)}\s*,\s*$'
+    if not re.search(pattern, body):
+        errors.append(f"{path}: missing Speed Lab response entry {key!r}: {value}")
 
 
 def forbid(path: str, *markers: str) -> None:
@@ -72,10 +87,11 @@ need(
     "beginSpeedLabTemporaryPersistenceGuard",
     "speedLabWriteStore(snapshot.Profiles)",
     "measureSpeedLabMultihopHops",
-    '"hops": hops',
     "multihop entry/exit RTT and Mbps are independently measured on the same proved graph",
     "temporary path choices are restored after the test",
 )
+
+need_go_map_entry("cmd/client/speed_lab.go", "hops", "hops")
 
 # Router VPN nodes commonly share the same private 10.77.0.1 API address. Per-hop
 # telemetry must therefore use local routing lanes that bind the request to the
@@ -245,7 +261,7 @@ need(
     "pathGeneration",
     "activeExternalId",
     "runtimeMode",
-    '"passed".equals(now.pathProof)',
+    '\"passed\".equals(now.pathProof)',
     "ParallelRound",
     "parallelRound",
     "streamCount",
@@ -281,7 +297,7 @@ need(
     "pathGeneration",
     "activeEntryId",
     "activeExitId",
-    '"passed".equals(s.pathProof)',
+    '\"passed\".equals(s.pathProof)',
     "ENTRY_PROOF_PORT=1098",
     "EXIT_PROOF_PORT=1099",
     "Proxy.Type.HTTP",
