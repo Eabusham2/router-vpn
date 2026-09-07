@@ -2,17 +2,12 @@ package com.eabusham.routervpn;
 
 import android.content.Context;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
-import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
-import java.net.InetSocketAddress;
-import java.net.Proxy;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -111,7 +106,7 @@ final class AndroidSpeedLabHopMeter {
     }
 
     private void prove(PrivateNode node,int proofPort)throws Exception{
-        HttpURLConnection c=open(node.base+"/health",node.token,"GET",2500,proofPort);
+        HttpURLConnection c=open(node,"/health","GET",2500,proofPort);
         try{
             int code=c.getResponseCode();
             if(code<200||code>=300)throw new IllegalStateException("Hop node proof returned HTTP "+code);
@@ -122,34 +117,41 @@ final class AndroidSpeedLabHopMeter {
     }
 
     private double download(PrivateNode node,int proofPort,int bytes)throws Exception{
-        HttpURLConnection c=open(node.base+"/api/benchmark/download?bytes="+bytes,node.token,"GET",30000,proofPort);c.setRequestProperty("Accept-Encoding","identity");long started=System.nanoTime();long total=0;
+        HttpURLConnection c=open(node,"/api/benchmark/download?bytes="+bytes,"GET",30000,proofPort);c.setRequestProperty("Accept-Encoding","identity");long started=System.nanoTime();long total=0;
         try{int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Hop download benchmark returned HTTP "+code);try(InputStream in=c.getInputStream()){byte[]b=new byte[64<<10];for(int n;(n=in.read(b))!=-1;){total+=n;if(total>bytes)throw new IllegalStateException("Hop download exceeded requested size.");}}}finally{c.disconnect();}
         if(total!=bytes)throw new IllegalStateException("Hop download returned "+total+" bytes, expected "+bytes+".");double seconds=(System.nanoTime()-started)/1_000_000_000d;return bytes*8d/1_000_000d/Math.max(seconds,.000001);
     }
 
     private double upload(PrivateNode node,int proofPort,int bytes)throws Exception{
-        HttpURLConnection c=open(node.base+"/api/benchmark/upload",node.token,"POST",30000,proofPort);c.setDoOutput(true);c.setFixedLengthStreamingMode(bytes);c.setRequestProperty("Content-Type","application/octet-stream");SecureRandom random=new SecureRandom();byte[]chunk=new byte[64<<10];int remaining=bytes;long started=System.nanoTime();
+        HttpURLConnection c=open(node,"/api/benchmark/upload","POST",30000,proofPort);c.setDoOutput(true);c.setFixedLengthStreamingMode(bytes);c.setRequestProperty("Content-Type","application/octet-stream");SecureRandom random=new SecureRandom();byte[]chunk=new byte[64<<10];int remaining=bytes;long started=System.nanoTime();
         try{try(OutputStream out=c.getOutputStream()){while(remaining>0){int n=Math.min(chunk.length,remaining);random.nextBytes(chunk);out.write(chunk,0,n);remaining-=n;}out.flush();}int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Hop upload benchmark returned HTTP "+code);byte[]reply=readLimited(c.getInputStream(),65536,"Hop upload proof is too large.");JSONObject ack=new JSONObject(new String(reply,StandardCharsets.UTF_8));if(ack.optLong("bytes",-1)!=bytes)throw new IllegalStateException("Hop upload byte proof mismatch.");}finally{c.disconnect();}
         double seconds=(System.nanoTime()-started)/1_000_000_000d;return bytes*8d/1_000_000d/Math.max(seconds,.000001);
     }
 
-    private HttpURLConnection open(String value,String token,String method,int timeout,int proofPort)throws Exception{
-        if(proofPort!=ENTRY_PROOF_PORT&&proofPort!=EXIT_PROOF_PORT)throw new IllegalArgumentException("Speed Lab requires a reserved multihop proof lane.");
-        Proxy proxy=new Proxy(Proxy.Type.HTTP,new InetSocketAddress("127.0.0.1",proofPort));
-        HttpURLConnection c=(HttpURLConnection)new URL(value).openConnection(proxy);c.setConnectTimeout(3000);c.setReadTimeout(timeout);c.setUseCaches(false);c.setRequestMethod(method);c.setRequestProperty("Authorization","Bearer "+token);c.setRequestProperty("Cache-Control","no-store");return c;
+    private HttpURLConnection open(PrivateNode node,String route,String method,int timeout,int proofPort)throws Exception{
+        return AndroidPrivateBenchmarkHttp.open(node.base,route,node.token,method,timeout,proofPort);
     }
 
     private PrivateNode privateNode(AndroidNodeStore.Node node)throws Exception{
-        JSONObject bundle=readBundle(node);AndroidNodeStore.validateBundle(bundle);JSONObject profile=selectedProfile(bundle);String api=profile==null?"":profile.optString("router_api","").trim();if(api.isEmpty())api=bundle.optString("routerAPI","").trim();String token=profile==null?"":profile.optString("api_token","").trim();if(token.isEmpty())token=bundle.optString("apiToken","").trim();String expected=AndroidNodeStore.stableNodeIdentity(bundle);if(api.isEmpty()||token.isEmpty())throw new IllegalStateException("Router VPN "+node.name+" has no private benchmark API/token.");if(!expected.matches("[0-9a-f]{64}"))throw new IllegalStateException("Router VPN "+node.name+" has no valid stable node proof identity.");while(api.endsWith("/"))api=api.substring(0,api.length()-1);if(!api.startsWith("http://"))throw new IllegalStateException("Per-hop Speed Lab requires the private Router VPN HTTP API.");return new PrivateNode(api,token,expected);
+        JSONObject bundle=readBundle(node);
+        AndroidNodeStore.validateBundle(bundle);
+        JSONObject profile=AndroidProfileSelection.selectedRouterProfile(bundle);
+        String api=profile.optString("router_api","").trim();
+        if(api.isEmpty())api=bundle.optString("routerAPI","").trim();
+        String token=profile.optString("api_token","").trim();
+        if(token.isEmpty())token=bundle.optString("apiToken","").trim();
+        String expected=AndroidNodeStore.stableNodeIdentity(bundle);
+        if(api.isEmpty()||token.isEmpty())throw new IllegalStateException("Router VPN "+node.name+" has no private benchmark API/token.");
+        if(!expected.matches("[0-9a-f]{64}"))throw new IllegalStateException("Router VPN "+node.name+" has no valid stable node proof identity.");
+        return new PrivateNode(AndroidPrivateBenchmarkHttp.requireBase(api),token,expected);
     }
 
     private JSONObject readBundle(AndroidNodeStore.Node node)throws Exception{
-        if(node.file==null||!node.file.isFile()||node.file.length()<=0||node.file.length()>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Stored hop bundle size is invalid.");try(FileInputStream in=new FileInputStream(node.file);ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[8192];int n,total=0;while((n=in.read(b))!=-1){total+=n;if(total>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Stored hop bundle exceeds safety limit.");out.write(b,0,n);}return new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));}
+        byte[] data=AndroidPrivateFileStore.read(node.file,AndroidNodeStore.MAX_BUNDLE);
+        return new JSONObject(new String(data,StandardCharsets.UTF_8));
     }
 
     private static byte[] readLimited(InputStream in,int max,String error)throws Exception{try(InputStream input=in;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[4096];for(int n,total=0;(n=input.read(b))!=-1;){total+=n;if(total>max)throw new IllegalStateException(error);out.write(b,0,n);}return out.toByteArray();}}
-
-    private static JSONObject selectedProfile(JSONObject bundle){JSONArray rows=bundle.optJSONArray("routerProfiles");String selected=bundle.optString("selectedRouterID","");if(rows==null)return null;for(int i=0;i<rows.length();i++){JSONObject p=rows.optJSONObject(i);if(p!=null&&selected.equals(p.optString("id","")))return p;}return rows.length()>0?rows.optJSONObject(0):null;}
 
     private AndroidHomeStateStore.Snapshot requireGraph(String entry,String exit,AndroidHomeStateStore.Snapshot expected){AndroidHomeStateStore.Snapshot s=AndroidHomeStateStore.snapshot(context);if(!s.connected||!"connected".equals(s.phase)||!"passed".equals(s.pathProof)||!"multihop".equals(s.logicalMode)||!entry.equals(s.activeEntryId)||!exit.equals(s.activeExitId))throw new IllegalStateException("Android multihop graph changed while Speed Lab hop metrics were running; stale results were discarded.");if(expected!=null&&(!expected.sessionId.equals(s.sessionId)||expected.pathGeneration!=s.pathGeneration||!expected.runtimeMode.equals(s.runtimeMode)||!expected.actualBase.equals(s.actualBase)))throw new IllegalStateException("Android multihop session identity changed while Speed Lab hop metrics were running; stale results were discarded.");return s;}
 
