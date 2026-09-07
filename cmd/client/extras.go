@@ -273,14 +273,7 @@ func sameAsyncMeasurementSession(before, after connectionSession) bool {
 }
 
 func asyncMeasurementProfileToken(p common.RouterProfile) string {
-	// Measurement-owned Latency*, PublicIP, DNSResults and FastestDNS* fields are
-	// intentionally excluded. Everything below is user/path policy or identity
-	// that must remain unchanged while a live result is in flight.
-	return fastestProfileSnapshotToken([]common.RouterProfile{p}) + fmt.Sprintf(
-		"\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t",
-		p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName, p.DNSPath,
-		p.BaseTunnel, p.KillSwitchPolicy, p.AutoRequireEncrypted, p.AutoRequireObfuscation,
-	)
+	return liveMeasurementProfileToken(p)
 }
 
 func (a *app) activeAsyncMeasurementProfile() (common.RouterProfile, state, error) {
@@ -352,33 +345,7 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer client.CloseIdleConnections()
-	providers := []string{"https://api64.ipify.org", "https://api.ipify.org"}
-	var result string
-	for _, endpoint := range providers {
-		req, requestErr := http.NewRequestWithContext(measurementCtx, http.MethodGet, endpoint, nil)
-		if requestErr != nil {
-			continue
-		}
-		req.Header.Set("Accept-Encoding", "identity")
-		req.Header.Set("Cache-Control", "no-store")
-		resp, requestErr := client.Do(req)
-		if requestErr != nil {
-			if asyncMeasurementRequestError(w, r.Context(), measurementCtx, "public-exit lookup") {
-				return
-			}
-			continue
-		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 257))
-		_ = resp.Body.Close()
-		if readErr != nil || len(body) > 256 {
-			continue
-		}
-		candidate := strings.TrimSpace(string(body))
-		if resp.StatusCode/100 == 2 && net.ParseIP(candidate) != nil {
-			result = candidate
-			break
-		}
-	}
+	result, lookupErr := probePublicExitIPContext(measurementCtx, client)
 	if asyncMeasurementRequestError(w, r.Context(), measurementCtx, "public-exit lookup") {
 		return
 	}
@@ -386,8 +353,8 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if result == "" {
-		http.Error(w, "could not determine public VPN exit address", http.StatusBadGateway)
+	if lookupErr != nil {
+		http.Error(w, lookupErr.Error(), http.StatusBadGateway)
 		return
 	}
 	if err := validateAsyncMeasurementProfile(a, targetProfile, stateAtStart, sessionAtStart, targetAtStart); err != nil {
