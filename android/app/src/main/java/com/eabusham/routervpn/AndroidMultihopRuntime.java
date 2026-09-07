@@ -140,7 +140,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 }
             }
             if (!stopped) {
-                if (!suppressHome) AndroidHomeStateStore.failed(context, "Android multihop cancellation could not prove embedded engine teardown; runtime ownership retained.");
+                if (!suppressHome) AndroidHomeStateStore.warning(context, "Android multihop cancellation could not prove embedded engine teardown; runtime ownership retained.");
                 callback.finished(false, "Android multihop cancellation incomplete; embedded engine did not prove teardown.");
             } else {
                 if (!suppressHome) {
@@ -162,12 +162,17 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             }
             String message = nonEmpty(error.getMessage(), "Android multihop failed closed.");
             if (!stopped) message += " Embedded engine teardown was not proved; runtime ownership retained.";
-            if (!suppressHome) AndroidHomeStateStore.failed(context, message);
+            if (!suppressHome) {
+                if (stopped) AndroidHomeStateStore.failed(context, message);
+                else AndroidHomeStateStore.warning(context, message);
+            }
             callback.finished(false, message);
         }
     }
 
     void disconnect() {
+        boolean emergency = AndroidHomeStateStore.emergencyDisconnectPending(context);
+        if (!emergency) AndroidHomeStateStore.beginPathRevalidation(context, "Android multihop disconnect requested; retaining graph ownership until embedded teardown is proved.");
         synchronized (this) {
             disconnectRequested = true;
             revalidationTeardown = false;
@@ -183,7 +188,9 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             }
         }
         if (!stopped) {
-            AndroidHomeStateStore.failed(context, "Android multihop disconnect did not prove embedded engine teardown; runtime ownership retained.");
+            AndroidHomeStateStore.warning(context, emergency
+                    ? "Emergency Disconnect requested; Android multihop teardown was not proved; graph ownership retained."
+                    : "Android multihop disconnect did not prove embedded engine teardown; runtime ownership retained.");
             throw new IllegalStateException("Android multihop teardown did not reach DOWN/FAILED/REVOKED before timeout.");
         }
         AndroidHomeStateStore.disconnected(context);
