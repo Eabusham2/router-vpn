@@ -146,6 +146,19 @@ final class AndroidHomeStateStore {
         if (!retainOwnership) clearAllIdentity(e);
         e.apply();
     }
+
+    /** Marks proof/runtime failure while retaining the exact owner/session identity for later cleanup. */
+    static void failedPreservingOwnership(Context context, String warning) {
+        prefs(context).edit()
+                .putString("phase", "failed")
+                .putString("warning", clean(warning))
+                .putString("path_proof", "failed")
+                .putBoolean("connected", false)
+                .remove("actual_exit_ip")
+                .remove("actual_exit_session")
+                .apply();
+    }
+
     static void disconnected(Context context) {
         if (emergencyDisconnectPending(context)) {
             AndroidRuntimeRegistry runtime = AndroidRuntimeRegistry.get(context);
