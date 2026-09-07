@@ -277,7 +277,7 @@ func asyncMeasurementProfileToken(p common.RouterProfile) string {
 	// intentionally excluded. Everything below is user/path policy or identity
 	// that must remain unchanged while a live result is in flight.
 	return fastestProfileSnapshotToken([]common.RouterProfile{p}) + fmt.Sprintf(
-		"\x00%s\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t",
+		"\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t",
 		p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName, p.DNSPath,
 		p.BaseTunnel, p.KillSwitchPolicy, p.AutoRequireEncrypted, p.AutoRequireObfuscation,
 	)
