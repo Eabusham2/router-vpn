@@ -144,9 +144,14 @@ func measureRoutedProfileLatencyViaProxyContext(ctx context.Context, p common.Ro
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4097))
 		_ = resp.Body.Close()
-		if readErr != nil || resp.StatusCode/100 != 2 || len(body) > 4096 || validateSelectedNodeProof(p, body) != nil {
+		if readErr != nil || resp.StatusCode/100 != 2 || len(body) > 4096 {
 			failed++
 			continue
+		}
+		// Do not retain earlier samples after a lane answers as another node.
+		// A wrong identity is not ordinary packet loss within one proved path.
+		if err := validateSelectedNodeProof(p, body); err != nil {
+			return connectionLatencyResult{}, fmt.Errorf("multihop hop lane reached the wrong Router VPN node: %w", err)
 		}
 		values = append(values, float64(time.Since(started).Microseconds())/1000.0)
 		if i+1 < samples {
