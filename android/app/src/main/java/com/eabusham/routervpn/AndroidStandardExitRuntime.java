@@ -173,7 +173,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         boolean emergency=AndroidHomeStateStore.emergencyDisconnectPending(context);
         synchronized(this){
             AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
-            boolean owns="external".equals(home.logicalMode)||singBox.getMode().startsWith("standard-");
+            boolean owns=(active!=null&&!active.isDone())||"external".equals(home.logicalMode)||singBox.getMode().startsWith("standard-");
             if(!owns)return;
             if(!emergency)AndroidHomeStateStore.beginPathRevalidation(context,"Android custom-exit disconnect requested; retaining runtime ownership until embedded teardown is proved.");
             disconnectRequested=true;revalidationTeardown=false;teardownInProgress=true;
