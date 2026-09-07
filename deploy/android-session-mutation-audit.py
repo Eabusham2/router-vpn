@@ -186,7 +186,9 @@ if "protocl" in standard_runtime:
 
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedConnectionController.java",
-    "boolean isActiveOrTransitioning() { return AndroidVpnMutationGuard.isBusy(activity); }",
+    "boolean isActiveOrTransitioning() { return disconnecting.get() || AndroidVpnMutationGuard.isBusy(activity); }",
+    "disconnecting.compareAndSet(false,true)",
+    "callback.finished(success,",
 )
 
 product_path = "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java"
