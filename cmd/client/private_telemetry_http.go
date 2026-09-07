@@ -11,9 +11,10 @@ import (
 	"time"
 )
 
-// Private measurements must follow the active OS/TUN route, not an ambient
-// environment proxy, and must never forward node credentials on a redirect.
-func newPrivateTelemetryHTTPClient(timeout time.Duration) *http.Client {
+// Route-sensitive measurements must follow the active OS/TUN route, not an
+// ambient environment proxy, and must never follow a redirect onto a different
+// path or service.
+func newRouteBoundHTTPClient(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DisableCompression = true
@@ -21,9 +22,13 @@ func newPrivateTelemetryHTTPClient(timeout time.Duration) *http.Client {
 		Transport: transport,
 		Timeout:   timeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return errors.New("private node telemetry redirect refused")
+			return errors.New("route-bound telemetry redirect refused")
 		},
 	}
+}
+
+func newPrivateTelemetryHTTPClient(timeout time.Duration) *http.Client {
+	return newRouteBoundHTTPClient(timeout)
 }
 
 func privateBenchmarkRequestContext(ctx context.Context, method, target, token string, body io.Reader) (*http.Request, error) {
@@ -35,6 +40,29 @@ func privateBenchmarkRequestContext(ctx context.Context, method, target, token s
 		return nil, err
 	}
 	return req.WithContext(ctx), nil
+}
+
+func privateDNSBenchmarkRequestContext(ctx context.Context, routerAPI, token string) (*http.Request, error) {
+	if ctx == nil {
+		return nil, errors.New("private DNS benchmark requires a request context")
+	}
+	base, err := validatedPrivateRouterAPI(routerAPI)
+	if err != nil {
+		return nil, err
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, errors.New("private DNS benchmark requires a node token")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/api/dns/benchmark", strings.NewReader(`{}`))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("Cache-Control", "no-store")
+	return req, nil
 }
 
 // Validate before attaching the node token. The benchmark boundary is not a
