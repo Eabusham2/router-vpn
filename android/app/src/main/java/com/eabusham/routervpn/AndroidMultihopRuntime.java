@@ -25,6 +25,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private Future<?> active;
+    private Thread workerThread;
     private boolean transitioning;
     private boolean connected;
     private boolean disconnectRequested;
@@ -46,7 +47,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
 
     synchronized boolean isActiveOrTransitioning() {
         reconcileRuntimeLocked();
-        if (transitioning || connected) return true;
+        if (transitioning || connected || (active != null && !active.isDone())) return true;
         AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(context);
         return "multihop".equals(home.logicalMode) && runtimeBusy(singBox.getState());
     }
@@ -77,6 +78,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         if (transitioning || connected || (active != null && !active.isDone())) { callback.finished(false, "Another Android multihop session is already active or starting."); return; }
         if (entry == null || exit == null || entry.id.equals(exit.id)) { callback.finished(false, "Multihop requires two different stored nodes."); return; }
         if (exitMode == null || exitMode.trim().isEmpty()) { callback.finished(false, "Choose a supported multihop exit transport."); return; }
+        if (runtimeBusy(singBox.getState())) { callback.finished(false, "The embedded VPN must prove a terminal state before multihop can start."); return; }
         transitioning = true;
         disconnectRequested = false;
         revalidationTeardown = false;
@@ -93,15 +95,24 @@ final class AndroidMultihopRuntime implements AutoCloseable {
 
     private void run(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, Callback callback) {
         boolean started = false;
+        synchronized (this) { workerThread = Thread.currentThread(); }
         try {
+            synchronized (this) {
+                if (disconnectRequested || closed.get() || Thread.currentThread().isInterrupted()) throw new InterruptedException("Multihop start cancelled.");
+            }
             String before = singBox.getState();
-            if ("UP".equals(before) || "STARTING".equals(before) || "STOPPING".equals(before)) throw new IllegalStateException("Disconnect the current embedded VPN before starting multihop.");
+            if (!terminal(before)) throw new IllegalStateException("Disconnect the current embedded VPN before starting multihop.");
             callback.progress("Preparing WireGuard entry → " + exitMode + " exit…");
             AndroidMultihopController.Prepared prepared = builder.prepare(entry.file, exit.file, exitMode);
             if (Thread.currentThread().isInterrupted() || closed.get()) throw new InterruptedException("Multihop start cancelled.");
             callback.progress("Starting one Android VpnService multihop graph…");
-            singBox.start(prepared.session);
-            started = true;
+            synchronized (this) {
+                if (disconnectRequested || closed.get() || Thread.currentThread().isInterrupted()) throw new InterruptedException("Multihop start cancelled before engine launch.");
+                // A launch may publish ownership and then throw. Such a partial
+                // start still requires confirmed teardown.
+                started = true;
+                singBox.start(prepared.session);
+            }
             long deadline = System.currentTimeMillis() + START_TIMEOUT_MS;
             while (System.currentTimeMillis() < deadline) {
                 if (Thread.currentThread().isInterrupted() || closed.get()) throw new InterruptedException("Multihop start cancelled.");
@@ -122,8 +133,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 activeEntryId = entry.id;
                 activeExitId = exit.id;
                 activeExitMode = prepared.exitMode;
+                AndroidHomeStateStore.connectedMultihop(context, entry.id, exit.id, prepared.exitMode);
             }
-            AndroidHomeStateStore.connectedMultihop(context, entry.id, exit.id, prepared.exitMode);
             callback.finished(true, "Connected: " + entry.name + " → " + exit.name + " via WireGuard entry + " + prepared.exitMode + " exit. Exit-node private path proof passed.");
         } catch (InterruptedException interrupted) {
             boolean stopped = !started || stopEmbeddedAndProve();
@@ -173,6 +184,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 else AndroidHomeStateStore.warning(context, message);
             }
             callback.finished(false, message);
+        } finally {
+            synchronized (this) { workerThread = null; }
         }
     }
 
@@ -183,7 +196,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             disconnectRequested = true;
             revalidationTeardown = false;
             transitioning = true;
-            if (active != null && !active.isDone()) active.cancel(true);
+            if (workerThread != null) workerThread.interrupt();
         }
         boolean stopped = stopEmbeddedAndProve();
         synchronized (this) {
@@ -212,7 +225,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             disconnectRequested = true;
             revalidationTeardown = true;
             transitioning = true;
-            if (active != null && !active.isDone()) active.cancel(true);
+            if (workerThread != null) workerThread.interrupt();
         }
         boolean stopped = stopEmbeddedAndProve();
         synchronized (this) {
@@ -231,7 +244,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             disconnectRequested = true;
             revalidationTeardown = true;
             transitioning = true;
-            if (active != null && !active.isDone()) active.cancel(true);
+            if (workerThread != null) workerThread.interrupt();
         }
         if (runtimeBusy(singBox.getState())) stopEmbeddedAndProve();
         synchronized (this) {
@@ -241,7 +254,9 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 clearActiveGraphLocked();
             }
         }
-        executor.shutdownNow();
+        // Let a queued task observe closed/disconnectRequested and complete its
+        // Future normally; cancellation marks a Future done before its worker exits.
+        executor.shutdown();
     }
 
     private synchronized void restoreFromPersistedState() {
@@ -278,6 +293,10 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 catch (InterruptedException error) { interrupted = true; }
             }
             return terminal(singBox.getState());
+        } catch (RuntimeException error) {
+            // A failed stop request or state read is not teardown proof. Keep
+            // ownership and let the caller report an incomplete disconnect.
+            return false;
         } finally {
             if (interrupted) Thread.currentThread().interrupt();
         }
