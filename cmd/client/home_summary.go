@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -90,10 +88,11 @@ func (a *app) proveHomeExit(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	profile, ok := a.profileByIDLocked(targetID)
+	stateAtStart := a.state
 	stateToken := mtuStateSnapshotToken(a.state)
 	profileToken := ""
 	if ok {
-		profileToken = fastestProfileSnapshotToken([]common.RouterProfile{profile})
+		profileToken = asyncMeasurementProfileToken(profile)
 	}
 	a.mu.Unlock()
 	if !ok {
@@ -101,7 +100,28 @@ func (a *app) proveHomeExit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip, err := probePublicExitIP()
+	measured, stop, validate, err := asyncMeasurementPathContext(r.Context(), a, profile, stateAtStart, before, profileToken)
+	if err != nil {
+		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "Home public-exit proof") {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
+		return
+	}
+	defer stop()
+	client, err := newAsyncMeasurementHTTPClient(stateAtStart, 5*time.Second)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer client.CloseIdleConnections()
+	ip, err := probePublicExitIPContext(measured, client)
+	if asyncMeasurementRequestError(w, r.Context(), measured, "Home public-exit proof") {
+		return
+	}
+	if freshnessErr := validate(); freshnessErr != nil {
+		http.Error(w, freshnessErr.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -113,8 +133,12 @@ func (a *app) proveHomeExit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.mu.Lock()
+	if asyncMeasurementRequestError(w, r.Context(), measured, "Home public-exit proof") {
+		a.mu.Unlock()
+		return
+	}
 	current, currentOK := a.profileByIDLocked(targetID)
-	if !currentOK || mtuStateSnapshotToken(a.state) != stateToken || fastestProfileSnapshotToken([]common.RouterProfile{current}) != profileToken {
+	if !currentOK || mtuStateSnapshotToken(a.state) != stateToken || asyncMeasurementProfileToken(current) != profileToken {
 		a.mu.Unlock()
 		http.Error(w, "active Router VPN path changed while public-exit proof was running; result discarded", http.StatusConflict)
 		return
@@ -150,26 +174,6 @@ func (a *app) proveHomeExit(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(value)
-}
-
-func probePublicExitIP() (string, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	for _, endpoint := range []string{"https://api64.ipify.org", "https://api.ipify.org"} {
-		resp, err := client.Get(endpoint)
-		if err != nil {
-			continue
-		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
-		_ = resp.Body.Close()
-		if readErr != nil || resp.StatusCode/100 != 2 {
-			continue
-		}
-		candidate := strings.TrimSpace(string(body))
-		if net.ParseIP(candidate) != nil {
-			return candidate, nil
-		}
-	}
-	return "", errors.New("could not determine the public VPN exit address through the current selected path")
 }
 
 func (a *app) homeSummaryValue() (homeSummaryResponse, error) {
