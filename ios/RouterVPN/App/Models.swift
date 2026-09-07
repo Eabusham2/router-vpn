@@ -397,7 +397,18 @@ struct ClientBundle: Codable {
         modes = try values.decodeIfPresent([VPNMode].self, forKey: .modes) ?? []
         profiles = try values.decodeIfPresent([String: [String: String]].self, forKey: .profiles) ?? [:]
 
-        let selected = routerProfiles.first(where: { $0.id == selectedRouterID }) ?? routerProfiles.first
+        let requestedID = selectedRouterID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selected: RouterProfile?
+        if requestedID.isEmpty {
+            selected = routerProfiles.first
+            if let selected { selectedRouterID = selected.id }
+        } else {
+            guard let exact = routerProfiles.first(where: { $0.id == requestedID }) else {
+                throw DecodingError.dataCorruptedError(forKey: .selectedRouterID, in: values, debugDescription: "Selected Router VPN profile is not present in this bundle")
+            }
+            selected = exact
+            selectedRouterID = requestedID
+        }
         if let selected {
             if endpoint.isEmpty { endpoint = selected.endpoint }
             // Only Router VPN nodes may populate the privileged/control-plane
