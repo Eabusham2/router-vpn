@@ -299,9 +299,9 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 func activeLatencyTarget(a *app) (common.RouterProfile, state, error) {
 	a.mu.Lock()
 	st := a.state
-	if !st.Connected {
+	if !st.Connected || strings.TrimSpace(st.Phase) != "connected" {
 		a.mu.Unlock()
-		return common.RouterProfile{}, st, errors.New("VPN is not connected")
+		return common.RouterProfile{}, st, errors.New("VPN is not connected on a stable path")
 	}
 	target := strings.TrimSpace(st.RouterID)
 	if target == "" {
@@ -320,7 +320,7 @@ func activeLatencyTarget(a *app) (common.RouterProfile, state, error) {
 	if session.ID == "" || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" {
 		return common.RouterProfile{}, st, errors.New("active VPN session has not proved the current path")
 	}
-	if session.RouterID != "" && session.RouterID != p.ID {
+	if session.RouterID != p.ID {
 		return common.RouterProfile{}, st, errors.New("active VPN session identity does not match the running node")
 	}
 	return p, st, nil
@@ -332,7 +332,7 @@ func activeTelemetryPathToken(st state) string {
 
 func validateActiveTelemetryPath(a *app, p common.RouterProfile, st state, sessionID string) error {
 	currentSession := sessionTrackerFor(a).snapshot(0)
-	if sessionID == "" || currentSession.ID != sessionID || !currentSession.Connected || currentSession.Phase != "connected" || currentSession.PathProof != "passed" {
+	if !st.Connected || strings.TrimSpace(st.Phase) != "connected" || sessionID == "" || currentSession.ID != sessionID || !currentSession.Connected || currentSession.Phase != "connected" || currentSession.PathProof != "passed" {
 		return errors.New("VPN session changed while live path telemetry was running; stale result was discarded")
 	}
 	a.mu.Lock()
@@ -342,8 +342,11 @@ func validateActiveTelemetryPath(a *app, p common.RouterProfile, st state, sessi
 	if !ok || currentProfile.ID != p.ID || activeTelemetryPathToken(currentState) != activeTelemetryPathToken(st) {
 		return errors.New("active VPN node/mode/base/path changed while live path telemetry was running; stale result was discarded")
 	}
-	if currentSession.RouterID != "" && currentSession.RouterID != p.ID {
+	if strings.TrimSpace(p.ID) == "" || currentSession.RouterID != p.ID {
 		return errors.New("active VPN session node changed while live path telemetry was running; stale result was discarded")
+	}
+	if asyncMeasurementProfileToken(currentProfile) != asyncMeasurementProfileToken(p) || currentProfile.APIToken != p.APIToken {
+		return errors.New("active VPN profile or policy changed while live path telemetry was running; stale result was discarded")
 	}
 	return nil
 }
