@@ -102,13 +102,24 @@ func clampLiveSamples(value, fallback int) int {
 }
 
 func liveProbePort(endpoint string) (int, error) {
+	return liveProbePortContext(context.Background(), endpoint)
+}
+
+func liveProbePortContext(ctx context.Context, endpoint string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	ports := []int{443, 8388, 10443, 11443, 12443, 13443, 14443, 15443}
 	var last error
+	dialer := &net.Dialer{Timeout: 450 * time.Millisecond}
 	for _, port := range ports {
-		c, err := net.DialTimeout("tcp", net.JoinHostPort(endpoint, fmt.Sprintf("%d", port)), 450*time.Millisecond)
+		c, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(endpoint, fmt.Sprintf("%d", port)))
 		if err == nil {
 			_ = c.Close()
 			return port, nil
+		}
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
 		}
 		last = err
 	}
@@ -119,27 +130,45 @@ func liveProbePort(endpoint string) (int, error) {
 }
 
 func quickProfileLatency(p common.RouterProfile, samples int) (liveLatencyResult, error) {
+	return quickProfileLatencyContext(context.Background(), p, samples)
+}
+
+func quickProfileLatencyContext(ctx context.Context, p common.RouterProfile, samples int) (liveLatencyResult, error) {
+	if err := ctx.Err(); err != nil {
+		return liveLatencyResult{}, err
+	}
 	if strings.TrimSpace(p.Endpoint) == "" {
 		return liveLatencyResult{}, errors.New("node has no endpoint")
 	}
-	port, err := liveProbePort(p.Endpoint)
+	port, err := liveProbePortContext(ctx, p.Endpoint)
 	if err != nil {
 		return liveLatencyResult{}, err
 	}
 	values := make([]float64, 0, samples)
 	failed := 0
+	dialer := &net.Dialer{Timeout: 850 * time.Millisecond}
 	for i := 0; i < samples; i++ {
 		started := time.Now()
-		c, dialErr := net.DialTimeout("tcp", net.JoinHostPort(p.Endpoint, fmt.Sprintf("%d", port)), 850*time.Millisecond)
+		c, dialErr := dialer.DialContext(ctx, "tcp", net.JoinHostPort(p.Endpoint, fmt.Sprintf("%d", port)))
 		if dialErr != nil {
+			if ctx.Err() != nil {
+				return liveLatencyResult{}, ctx.Err()
+			}
 			failed++
 			continue
 		}
 		_ = c.Close()
 		values = append(values, float64(time.Since(started).Microseconds())/1000.0)
 		if i+1 < samples {
-			time.Sleep(20 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return liveLatencyResult{}, ctx.Err()
+			case <-time.After(20 * time.Millisecond):
+			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return liveLatencyResult{}, err
 	}
 	if len(values) == 0 {
 		return liveLatencyResult{}, errors.New("all live latency samples failed")
@@ -171,9 +200,13 @@ func (a *app) liveProfileLatency(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown router profile", http.StatusNotFound)
 		return
 	}
-	result, err := quickProfileLatency(p, q.Samples)
+	result, err := quickProfileLatencyContext(r.Context(), p, q.Samples)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		if r.Context().Err() != nil {
+			http.Error(w, "live latency request was cancelled", http.StatusRequestTimeout)
+		} else {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+		}
 		return
 	}
 	w.Header().Set("content-type", "application/json")
@@ -235,9 +268,17 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 		if kind == "external" && !q.IncludeExternal {
 			continue
 		}
-		if value, err := quickProfileLatency(p, q.Samples); err == nil {
+		value, err := quickProfileLatencyContext(r.Context(), p, q.Samples)
+		if err == nil {
 			results = append(results, value)
+		} else if r.Context().Err() != nil {
+			http.Error(w, "fastest-node measurement was cancelled before selection", http.StatusRequestTimeout)
+			return
 		}
+	}
+	if err := r.Context().Err(); err != nil {
+		http.Error(w, "fastest-node measurement was cancelled before selection", http.StatusRequestTimeout)
+		return
 	}
 	if len(results) == 0 {
 		http.Error(w, "no node returned a live latency result", http.StatusBadGateway)
@@ -254,6 +295,11 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 	selectedID := a.profiles.SelectedID
 	var persistErr error
 	if selectWinner {
+		if r.Context().Err() != nil {
+			a.mu.Unlock()
+			http.Error(w, "fastest-node measurement was cancelled before selection", http.StatusRequestTimeout)
+			return
+		}
 		if a.state.Connected || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 			a.mu.Unlock()
 			http.Error(w, "VPN state changed while fastest-node measurement was running", http.StatusConflict)
