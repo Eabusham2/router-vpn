@@ -66,11 +66,13 @@ require("cmd/client/mtu_retest.go", "registerHomeSummaryRoute(h, a)", "registerH
 require(
     "cmd/client/telemetry.go",
     "/api/profile/fastest", "/api/connection/live-latency", "/api/multihop/live-latency",
-    "/api/connection/speed-test", "/api/benchmark/download", "/api/benchmark/upload",
+    "/api/connection/speed-test", "connectionTelemetryPathContext",
+    "measureRoutedProfileSpeedContext", "measureRoutedProfileSpeedViaProxyContext",
 )
 require(
     "cmd/client/telemetry_hops.go",
     "/api/profile/speed-test", "/api/multihop/speed-test", "measureRoutedProfileSpeed",
+    "/api/benchmark/download", "/api/benchmark/upload", "routedSpeedPathContext",
     "entry_error", "exit_error", "not derived from RTT", "unchanged current client routing graph",
 )
 require(
