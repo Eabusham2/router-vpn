@@ -84,13 +84,13 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": true,
-		"name": "Router VPN Speed Lab",
-		"provider": "Cloudflare Speed Test edge",
-		"current": current,
-		"nodes": nodes,
+		"ok":            true,
+		"name":          "Router VPN Speed Lab",
+		"provider":      "Cloudflare Speed Test edge",
+		"current":       current,
+		"nodes":         nodes,
 		"logical_modes": logicalModes,
-		"raw_modes": rawModes,
+		"raw_modes":     rawModes,
 		"topologies": []map[string]any{
 			{"id": "system-direct", "name": "System direct / no Router VPN", "temporary": true},
 			{"id": "router", "name": "Direct Router VPN node", "temporary": true},
@@ -102,8 +102,8 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 			"custom_min_seconds": 1, "custom_max_seconds": 60,
 		},
 		"platform": map[string]any{
-			"goos": runtime.GOOS,
-			"temporary_router": runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
+			"goos":               runtime.GOOS,
+			"temporary_router":   runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
 			"temporary_multihop": runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
 			"temporary_external": runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
 			"external_protocols": externalProfileProtocolCapabilities(),
@@ -154,7 +154,7 @@ func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDur
 	}
 	var hops []speedLabHopMeasurement
 	if path.Topology == "multihop" {
-		hops, err = measureSpeedLabMultihopHops(a, identity)
+		hops, err = measureSpeedLabMultihopHopsContext(r.Context(), a, identity)
 		if err != nil {
 			return path, measurement, nil, err
 		}
@@ -173,12 +173,33 @@ func speedLabRestoreAfterFailure(a *app, snapshot speedLabTemporarySnapshot, cau
 	return errors.New(cause.Error() + "; temporary-path rollback also failed: " + cleanupErr.Error())
 }
 
+// Link request cancellation and Disconnect to this operation only. Capturing
+// its cancel function prevents a delayed HTTP callback from stopping a newer
+// session after this temporary test has released operationMu.
+func (a *app) speedLabRequestContext(r *http.Request, owner context.Context) (*http.Request, func(), error) {
+	a.mu.Lock()
+	if owner == nil || a.connectionContext != owner || a.connectionCancel == nil {
+		a.mu.Unlock()
+		return nil, nil, errors.New("temporary Speed Lab connection owner changed before measurement")
+	}
+	cancelOwner := a.connectionCancel
+	a.mu.Unlock()
+	ctx, cancel := context.WithCancel(r.Context())
+	stopOperation := context.AfterFunc(owner, cancel)
+	stopRequest := context.AfterFunc(r.Context(), cancelOwner)
+	return r.WithContext(ctx), func() {
+		stopRequest()
+		stopOperation()
+		cancel()
+	}, nil
+}
+
 func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error) {
 	if strings.EqualFold(strings.TrimSpace(q.Topology), "system-direct") {
 		path, measurement, err := a.speedLabSystemDirect(r, duration, minDuration, maxDuration, "temporary")
 		return path, measurement, nil, err
 	}
-	_, finish, err := a.beginConnectionOperation()
+	operationCtx, finish, err := a.beginConnectionOperation()
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
@@ -189,15 +210,11 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 	}
 	defer endPersistenceGuard()
 
-	requestDone := make(chan struct{})
-	go func() {
-		select {
-		case <-r.Context().Done():
-			a.cancelConnectionOperation()
-		case <-requestDone:
-		}
-	}()
-	defer close(requestDone)
+	r, releaseContext, err := a.speedLabRequestContext(r, operationCtx)
+	if err != nil {
+		return speedLabPath{}, speedLabMeasurement{}, nil, err
+	}
+	defer releaseContext()
 
 	snapshot := a.speedLabSnapshotTemporary()
 	path, startErr := a.startSpeedLabTemporaryPath(q)
@@ -215,7 +232,7 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 	measurement, measureErr := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
 	var hops []speedLabHopMeasurement
 	if measureErr == nil && path.Topology == "multihop" {
-		hops, measureErr = measureSpeedLabMultihopHops(a, identity)
+		hops, measureErr = measureSpeedLabMultihopHopsContext(r.Context(), a, identity)
 	}
 	cleanupErr := a.speedLabRestoreTemporary(snapshot)
 	if measureErr != nil {
@@ -272,18 +289,18 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": true,
-		"path": path,
+		"ok":          true,
+		"path":        path,
 		"measurement": measurement,
-		"hops": hops,
+		"hops":        hops,
 		"summary": map[string]any{
-			"idle_ms": measurement.Idle.MedianMs,
-			"download_mbps": measurement.Download.Mbps,
-			"download_loaded_ms": measurement.Download.LoadedLatency.MedianMs,
+			"idle_ms":                 measurement.Idle.MedianMs,
+			"download_mbps":           measurement.Download.Mbps,
+			"download_loaded_ms":      measurement.Download.LoadedLatency.MedianMs,
 			"download_bufferbloat_ms": measurement.Download.BufferbloatMs,
-			"upload_mbps": measurement.Upload.Mbps,
-			"upload_loaded_ms": measurement.Upload.LoadedLatency.MedianMs,
-			"upload_bufferbloat_ms": measurement.Upload.BufferbloatMs,
+			"upload_mbps":             measurement.Upload.Mbps,
+			"upload_loaded_ms":        measurement.Upload.LoadedLatency.MedianMs,
+			"upload_bufferbloat_ms":   measurement.Upload.BufferbloatMs,
 		},
 		"note": "throughput and loaded latency are measured independently; multihop entry/exit RTT and Mbps are independently measured on the same proved graph; no Mbps value is derived from RTT or another hop, and temporary path choices are restored after the test",
 	})
