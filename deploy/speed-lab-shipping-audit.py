@@ -26,9 +26,9 @@ def need(path: str, *markers: str) -> None:
 
 def need_go_map_entry(path: str, key: str, value: str) -> None:
     # gofmt aligns map values with whitespace. Match the actual entry rather
-    # than one formatting choice; comments cannot substitute for live code.
+    # than one formatting choice; comments/raw strings are not live code.
     body = re.sub(
-        r'("(?:\\.|[^"\\])*"|`[^`]*`)|//[^\n]*|/\*.*?\*/',
+        r'("(?:\\.|[^"\\])*")|`[^`]*`|//[^\n]*|/\*.*?\*/',
         lambda match: match.group(1) or "",
         read(path),
         flags=re.S,
@@ -300,7 +300,10 @@ need(
     '\"passed\".equals(s.pathProof)',
     "ENTRY_PROOF_PORT=1098",
     "EXIT_PROOF_PORT=1099",
-    "Proxy.Type.HTTP",
+    "AndroidPrivateBenchmarkHttp.open",
+    "AndroidPrivateBenchmarkHttp.requireBase(api)",
+    "AndroidProfileSelection.selectedRouterProfile(bundle)",
+    "AndroidPrivateFileStore.read",
     "AndroidNodeStore.stableNodeIdentity(bundle)",
     'body.optString("node_id"',
     'body.optString("proof"',
@@ -309,6 +312,37 @@ need(
     "/api/benchmark/upload",
     "/health",
     "stale results were discarded",
+)
+need(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidPrivateBenchmarkHttp.java",
+    "AndroidNumericAddress.parse(uri.getHost())",
+    "Proxy.Type.HTTP",
+    'new InetSocketAddress("127.0.0.1", proofPort)',
+    "proofPort != 1098 && proofPort != 1099",
+    "connection.setInstanceFollowRedirects(false)",
+    "connection.setUseCaches(false)",
+    'connection.setRequestProperty("Accept-Encoding", "identity")',
+    "requireRoute(route, method)",
+    "uri.getRawUserInfo() != null",
+    "uri.getRawQuery() != null",
+    "uri.getRawFragment() != null",
+    "address.isAnyLocalAddress()",
+    "address.isMulticastAddress()",
+    "16 << 20",
+)
+forbid(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidSpeedLabHopMeter.java",
+    "openConnection(",
+    "FileInputStream",
+    "private static JSONObject selectedProfile(",
+)
+need("android/test_android_runtime_contract.py", "test_android_private_benchmark_http.py")
+need(
+    "android/test_android_private_benchmark_http.py",
+    "Android private hop HTTP boundary: PASS",
+    "HttpServer.create",
+    "Credentials escaped on redirect",
+    "Request used the wrong hop lane",
 )
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidSpeedLabDialog.java",
