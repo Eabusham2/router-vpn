@@ -46,7 +46,7 @@ $Root=Resolve-RouterVPNPrivateRoot $RootText
 $ProfileId=Safe-ProfileId([string]$env:HOMEVPN_PROFILE_ID)
 $GeneratedRoot=Safe-Under $Root (Join-Path $Root 'generated')
 $Source=Safe-Under $GeneratedRoot (Join-Path $GeneratedRoot (Join-Path $ProfileId $Mode))
-if(-not(Test-Path -LiteralPath $Source -PathType Container)){$legacy=Safe-Under $GeneratedRoot (Join-Path $GeneratedRoot $Mode);if(Test-Path -LiteralPath $legacy -PathType Container){$Source=$legacy}}
+if(-not(Test-Path -LiteralPath $Source -PathType Container) -and $ProfileId -eq 'router'){$legacy=Safe-Under $GeneratedRoot (Join-Path $GeneratedRoot $Mode);if(Test-Path -LiteralPath $legacy -PathType Container){$Source=$legacy}}
 $Runtime=Safe-Under $Root (Join-Path $Root 'runtime\windows');$SingBox=Join-Path $Runtime 'sing-box.exe';$Xray=Join-Path $Runtime 'xray.exe'
 $RunBase=Safe-Under $Root (Join-Path $Root 'run\windows');$RunDir=Safe-Under $RunBase (Join-Path $RunBase (Join-Path $ProfileId $Mode))
 $WrapperProcessFile=Join-Path $RunDir 'native-windows-mode.process.json';$SingBoxProcessFile=Join-Path $RunDir 'sing-box.process.json';$XrayProcessFile=Join-Path $RunDir 'xray.process.json';$SingConfig=Join-Path $RunDir 'sing-box.json';$XrayConfig=Join-Path $RunDir 'xray.json'
@@ -101,9 +101,9 @@ function Get-SelectedProfile {
   return Get-RouterVPNSelectedProfile $store $selected
 }
 function Profile-String($Profile,[string]$Name,[string]$Default=''){if($Profile-and(Has-Property $Profile $Name)){$v=[string]$Profile.$Name;if(-not[string]::IsNullOrWhiteSpace($v)){return $v}};return $Default}
-function Profile-Int($Profile,[string]$Name,[int]$Default=0){if($Profile-and(Has-Property $Profile $Name)){$n=0;if([int]::TryParse(([string]$Profile.$Name),[ref]$n)-and$n-gt0){return $n}};return $Default}
+function Profile-Int($Profile,[string]$Name,[int]$Default=0){if($Profile-and(Has-Property $Profile $Name)){$n=0;if([int]::TryParse(([string]$Profile.$Name),[ref]$n)-and$n-gt0){return$n}};return$Default}
 function Infer-DnsServerName([string]$DnsHost,[string]$Explicit=''){
-  if(-not[string]::IsNullOrWhiteSpace($Explicit)){return $Explicit}
+  if(-not[string]::IsNullOrWhiteSpace($Explicit)){return$Explicit}
   switch($DnsHost.Trim('[]')){'1.1.1.1'{return'cloudflare-dns.com'}'1.0.0.1'{return'cloudflare-dns.com'}'2606:4700:4700::1111'{return'cloudflare-dns.com'}'2606:4700:4700::1001'{return'cloudflare-dns.com'}'8.8.8.8'{return'dns.google'}'8.8.4.4'{return'dns.google'}'2001:4860:4860::8888'{return'dns.google'}'2001:4860:4860::8844'{return'dns.google'}'9.9.9.9'{return'dns.quad9.net'}'149.112.112.112'{return'dns.quad9.net'}'2620:fe::fe'{return'dns.quad9.net'}}
   if($DnsHost-match'[A-Za-z]'-and$DnsHost-notmatch':'){return$DnsHost};return''
 }
