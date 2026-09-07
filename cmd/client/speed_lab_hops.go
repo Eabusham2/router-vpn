@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 )
@@ -19,6 +20,13 @@ type speedLabHopMeasurement struct {
 }
 
 func measureSpeedLabMultihopHops(a *app, identity speedLabPathIdentity) ([]speedLabHopMeasurement, error) {
+	return measureSpeedLabMultihopHopsContext(context.Background(), a, identity)
+}
+
+func measureSpeedLabMultihopHopsContext(ctx context.Context, a *app, identity speedLabPathIdentity) ([]speedLabHopMeasurement, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !identity.GraphOK || strings.TrimSpace(identity.Graph.EntryID) == "" || strings.TrimSpace(identity.Graph.ExitID) == "" || identity.Graph.EntryID == identity.Graph.ExitID {
 		return nil, errors.New("Speed Lab per-hop measurement requires an exact active multihop graph")
 	}
@@ -53,7 +61,10 @@ func measureSpeedLabMultihopHops(a *app, identity speedLabPathIdentity) ([]speed
 		}
 		hop := speedLabHopMeasurement{Role: role, RouterID: p.ID, Name: pName}
 
-		latency, latencyErr := measureRoutedProfileLatencyViaProxy(p, 4, proxy)
+		latency, latencyErr := measureRoutedProfileLatencyViaProxyContext(ctx, p, 4, proxy)
+		if err := ctx.Err(); err != nil {
+			return speedLabHopMeasurement{}, err
+		}
 		if err := validateSpeedLabIdentity(a, identity); err != nil {
 			return speedLabHopMeasurement{}, err
 		}
@@ -63,7 +74,10 @@ func measureSpeedLabMultihopHops(a *app, identity speedLabPathIdentity) ([]speed
 			hop.Latency = &latency
 		}
 
-		speed, speedErr := measureRoutedProfileSpeedViaProxy(p, 8<<20, proxy)
+		speed, speedErr := measureRoutedProfileSpeedViaProxyContext(ctx, p, 8<<20, proxy)
+		if err := ctx.Err(); err != nil {
+			return speedLabHopMeasurement{}, err
+		}
 		if err := validateSpeedLabIdentity(a, identity); err != nil {
 			return speedLabHopMeasurement{}, err
 		}
