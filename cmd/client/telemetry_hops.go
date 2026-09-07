@@ -154,7 +154,7 @@ func measureRoutedProfileSpeedContext(ctx context.Context, p common.RouterProfil
 
 func validateRoutedSpeedSession(a *app, st state, sessionID string) error {
 	currentSession := sessionTrackerFor(a).snapshot(0)
-	if sessionID == "" || currentSession.ID != sessionID || !currentSession.Connected || currentSession.Phase != "connected" || currentSession.PathProof != "passed" {
+	if !st.Connected || strings.TrimSpace(st.Phase) != "connected" || strings.TrimSpace(st.RouterID) == "" || currentSession.RouterID != st.RouterID || sessionID == "" || currentSession.ID != sessionID || !currentSession.Connected || currentSession.Phase != "connected" || currentSession.PathProof != "passed" {
 		return errors.New("VPN session changed while routed throughput was running; stale result was discarded")
 	}
 	a.mu.Lock()
@@ -164,6 +164,21 @@ func validateRoutedSpeedSession(a *app, st state, sessionID string) error {
 		return errors.New("active VPN node/mode/base/path changed while routed throughput was running; stale result was discarded")
 	}
 	return nil
+}
+
+// All standalone routed speed endpoints share Speed Lab's joined observer.
+// Reject unproved sessions before the first transfer, cancel the in-flight load
+// on path loss, and synchronously validate again before returning measurements.
+// This observes connection ownership; it never stops or replaces the VPN.
+func routedSpeedPathContext(parent context.Context, a *app, st state, graph activeMultihopGraph, sessionID string) (context.Context, func(), func() error, error) {
+	validate := func() error {
+		if st.Mode == "multihop" {
+			return validateCurrentMultihopSpeedGraph(a, st, graph, sessionID)
+		}
+		return validateRoutedSpeedSession(a, st, sessionID)
+	}
+	ctx, stop, err := speedLabPathContext(parent, validate)
+	return ctx, stop, validate, err
 }
 
 func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {
@@ -201,42 +216,48 @@ func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
-
-	var value routedSpeedResult
+	graph, graphOK := getActiveMultihopGraph(a)
+	proxy := ""
 	if st.Mode == "multihop" {
-		graph, graphOK := getActiveMultihopGraph(a)
 		if !graphOK {
 			http.Error(w, "active multihop graph identity is unavailable; refusing ambiguous routed node speed", http.StatusConflict)
 			return
 		}
-		var measureErr error
 		if id == graph.EntryID {
-			value, measureErr = measureRoutedProfileSpeedViaProxyContext(r.Context(), p, q.Bytes, multihopEntryProofProxy)
+			proxy = multihopEntryProofProxy
 		} else if id == graph.ExitID {
-			value, measureErr = measureRoutedProfileSpeedViaProxyContext(r.Context(), p, q.Bytes, multihopProofProxy)
+			proxy = multihopProofProxy
 		} else {
 			http.Error(w, "requested Router VPN node is not part of the active multihop graph", http.StatusConflict)
 			return
 		}
-		if measureErr != nil {
-			http.Error(w, measureErr.Error(), http.StatusBadGateway)
-			return
-		}
-		if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionAtStart); err != nil {
+	}
+	measurementCtx, stopMeasurement, validatePath, err := routedSpeedPathContext(r.Context(), a, st, graph, sessionAtStart)
+	if err != nil {
+		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "routed node speed test") {
 			http.Error(w, err.Error(), http.StatusConflict)
-			return
 		}
+		return
+	}
+	defer stopMeasurement()
+
+	var value routedSpeedResult
+	var measureErr error
+	if st.Mode == "multihop" {
+		value, measureErr = measureRoutedProfileSpeedViaProxyContext(measurementCtx, p, q.Bytes, proxy)
 	} else {
-		var measureErr error
-		value, measureErr = measureRoutedProfileSpeedContext(r.Context(), p, q.Bytes)
-		if measureErr != nil {
-			http.Error(w, measureErr.Error(), http.StatusBadGateway)
-			return
-		}
-		if err := validateRoutedSpeedSession(a, st, sessionAtStart); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
+		value, measureErr = measureRoutedProfileSpeedContext(measurementCtx, p, q.Bytes)
+	}
+	if asyncMeasurementRequestError(w, r.Context(), measurementCtx, "routed node speed test") {
+		return
+	}
+	if err := validatePath(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if measureErr != nil {
+		http.Error(w, measureErr.Error(), http.StatusBadGateway)
+		return
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
@@ -313,18 +334,25 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
+	measurementCtx, stopMeasurement, validatePath, err := routedSpeedPathContext(r.Context(), a, st, graph, sessionAtStart)
+	if err != nil {
+		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "multihop speed test") {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
+		return
+	}
+	defer stopMeasurement()
 
 	payload := map[string]any{
 		"connected": true, "mode": st.Mode, "entry_id": graph.EntryID, "exit_id": graph.ExitID, "bytes": clampSpeedBytes(q.Bytes),
 		"measured_at": time.Now().UTC(),
 		"note":        "each hop result is an independent authenticated transfer through a reserved local proof lane bound to that hop's cryptographic Router VPN node identity; Router VPN never subtracts or divides another measurement to invent per-hop speed",
 	}
-	entryValue, entryErr := measureRoutedProfileSpeedViaProxyContext(r.Context(), entry, q.Bytes, multihopEntryProofProxy)
-	if err := r.Context().Err(); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+	entryValue, entryErr := measureRoutedProfileSpeedViaProxyContext(measurementCtx, entry, q.Bytes, multihopEntryProofProxy)
+	if asyncMeasurementRequestError(w, r.Context(), measurementCtx, "multihop speed test") {
 		return
 	}
-	if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionAtStart); err != nil {
+	if err := validatePath(); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -334,12 +362,11 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 		payload["entry_error"] = entryErr.Error()
 	}
 
-	exitValue, exitErr := measureRoutedProfileSpeedViaProxyContext(r.Context(), exit, q.Bytes, multihopProofProxy)
-	if err := r.Context().Err(); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+	exitValue, exitErr := measureRoutedProfileSpeedViaProxyContext(measurementCtx, exit, q.Bytes, multihopProofProxy)
+	if asyncMeasurementRequestError(w, r.Context(), measurementCtx, "multihop speed test") {
 		return
 	}
-	if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionAtStart); err != nil {
+	if err := validatePath(); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
