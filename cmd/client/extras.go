@@ -361,11 +361,17 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	a.mu.Lock()
+	releaseAdoption, err := a.beginAsyncMeasurementAdoption(measurementCtx)
+	if err != nil {
+		if !asyncMeasurementRequestError(w, r.Context(), measurementCtx, "public-exit lookup") {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
+		return
+	}
 	previousStore := cloneRouterProfileStore(a.profiles)
 	currentProfile, currentOK := a.profileByIDLocked(target)
 	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(stateAtStart) || strings.TrimSpace(a.state.RouterID) != target || !currentOK || asyncMeasurementProfileToken(currentProfile) != targetAtStart {
-		a.mu.Unlock()
+		releaseAdoption()
 		http.Error(w, "active VPN path or policy changed before public-exit persistence", http.StatusConflict)
 		return
 	}
@@ -379,7 +385,7 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 	if persistErr != nil {
 		a.rollbackProfilesLocked(previousStore)
 	}
-	a.mu.Unlock()
+	releaseAdoption()
 	if persistErr != nil {
 		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
 		return
@@ -491,11 +497,17 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "DNS Retest was cancelled before persistence", http.StatusRequestTimeout)
 		return
 	}
-	a.mu.Lock()
+	releaseAdoption, err := a.beginAsyncMeasurementAdoption(measurementCtx)
+	if err != nil {
+		if !asyncMeasurementRequestError(w, r.Context(), measurementCtx, "DNS Retest") {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
+		return
+	}
 	previousStore := cloneRouterProfileStore(a.profiles)
 	current, currentOK := a.profileByIDLocked(p.ID)
 	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(stateAtStart) || strings.TrimSpace(a.state.RouterID) != p.ID || !currentOK || asyncMeasurementProfileToken(current) != profileAtStart {
-		a.mu.Unlock()
+		releaseAdoption()
 		http.Error(w, "active node/path or DNS policy changed before DNS Retest persistence", http.StatusConflict)
 		return
 	}
@@ -515,7 +527,7 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 	if persistErr != nil {
 		a.rollbackProfilesLocked(previousStore)
 	}
-	a.mu.Unlock()
+	releaseAdoption()
 	if persistErr != nil {
 		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
 		return
