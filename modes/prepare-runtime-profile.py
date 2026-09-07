@@ -111,7 +111,7 @@ def patch_json(obj, endpoint: str, final_root: Path) -> None:
 def patch_text(body: str, endpoint: str) -> str:
     host = f"[{endpoint}]" if ":" in endpoint else endpoint
     body = re.sub(
-        r"(?m)^(Endpoint\s*=\s*).*:(\d+)\s*$",
+        r"(?m)^(Endpoint\s*=\s*).*(?::)(\d+)\s*$",
         lambda m: f"{m.group(1)}{host}:{m.group(2)}",
         body,
     )
@@ -244,8 +244,17 @@ def prepare(root_text: str, profile_id: str, mode: str, endpoint: str) -> Path:
     try:
         if mode != "all":
             primary = root / "generated" / profile_id / mode
-            fallback = root / "generated" / mode
-            source = primary if primary.is_dir() else fallback
+            if primary.is_dir():
+                source = primary
+            elif profile_id == "router":
+                # Legacy single-home installations predate per-node generated
+                # trees. Only that canonical legacy owner may use the global
+                # generated/<mode> compatibility path.
+                source = root / "generated" / mode
+            else:
+                raise RuntimeError(
+                    f"linked Router VPN profile {profile_id!r} is missing its own generated {mode!r} runtime; cross-node fallback is forbidden"
+                )
             source = ensure_child(root, source, "runtime profile source")
             copy_profile(source, stage, dest, endpoint)
         sync_dir(stage)
