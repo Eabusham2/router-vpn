@@ -277,7 +277,7 @@ func asyncMeasurementProfileToken(p common.RouterProfile) string {
 	// intentionally excluded. Everything below is user/path policy or identity
 	// that must remain unchanged while a live result is in flight.
 	return fastestProfileSnapshotToken([]common.RouterProfile{p}) + fmt.Sprintf(
-		"\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t",
+		"\x00%s\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t",
 		p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName, p.DNSPath,
 		p.BaseTunnel, p.KillSwitchPolicy, p.AutoRequireEncrypted, p.AutoRequireObfuscation,
 	)
@@ -338,12 +338,24 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session tracker node does not match the running VPN node", http.StatusConflict)
 		return
 	}
-	client := newRouteBoundHTTPClient(5 * time.Second)
+	measurementCtx, stopMeasurement, validatePath, err := asyncMeasurementPathContext(r.Context(), a, targetProfile, stateAtStart, sessionAtStart, targetAtStart)
+	if err != nil {
+		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "public-exit lookup") {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
+		return
+	}
+	defer stopMeasurement()
+	client, err := newAsyncMeasurementHTTPClient(stateAtStart, 5*time.Second)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	defer client.CloseIdleConnections()
 	providers := []string{"https://api64.ipify.org", "https://api.ipify.org"}
 	var result string
 	for _, endpoint := range providers {
-		req, requestErr := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint, nil)
+		req, requestErr := http.NewRequestWithContext(measurementCtx, http.MethodGet, endpoint, nil)
 		if requestErr != nil {
 			continue
 		}
@@ -351,8 +363,7 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		req.Header.Set("Cache-Control", "no-store")
 		resp, requestErr := client.Do(req)
 		if requestErr != nil {
-			if r.Context().Err() != nil {
-				http.Error(w, "public-exit lookup was cancelled", http.StatusRequestTimeout)
+			if asyncMeasurementRequestError(w, r.Context(), measurementCtx, "public-exit lookup") {
 				return
 			}
 			continue
@@ -368,8 +379,11 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	if r.Context().Err() != nil {
-		http.Error(w, "public-exit lookup was cancelled", http.StatusRequestTimeout)
+	if asyncMeasurementRequestError(w, r.Context(), measurementCtx, "public-exit lookup") {
+		return
+	}
+	if err := validatePath(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	if result == "" {
@@ -440,24 +454,47 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, err := privateDNSBenchmarkRequestContext(r.Context(), p.RouterAPI, p.APIToken)
+	measurementCtx, stopMeasurement, validatePath, err := asyncMeasurementPathContext(r.Context(), a, p, stateAtStart, sessionAtStart, profileAtStart)
+	if err != nil {
+		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "DNS Retest") {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
+		return
+	}
+	defer stopMeasurement()
+	if stateAtStart.Mode == "multihop" {
+		// Equal private API addresses are not node identity. Prove the exit lane
+		// before authorizing a benchmark through it; never fall back to direct.
+		if err := proveMultihopLaneNodeContext(measurementCtx, p, multihopProofProxy); err != nil {
+			if !asyncMeasurementRequestError(w, r.Context(), measurementCtx, "DNS Retest") {
+				http.Error(w, "DNS Retest exit-lane proof failed: "+err.Error(), http.StatusConflict)
+			}
+			return
+		}
+	}
+	req, err := privateDNSBenchmarkRequestContext(measurementCtx, p.RouterAPI, p.APIToken)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	client := newPrivateTelemetryHTTPClient(45 * time.Second)
+	client, err := newAsyncMeasurementHTTPClient(stateAtStart, 45*time.Second)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {
-		if r.Context().Err() != nil {
-			http.Error(w, "DNS Retest was cancelled", http.StatusRequestTimeout)
-		} else {
+		if !asyncMeasurementRequestError(w, r.Context(), measurementCtx, "DNS Retest") {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 		}
 		return
 	}
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	_ = resp.Body.Close()
+	if asyncMeasurementRequestError(w, r.Context(), measurementCtx, "DNS Retest") {
+		return
+	}
 	if readErr != nil || len(body) > 1<<20 {
 		http.Error(w, "DNS benchmark response exceeded its bounded result size", http.StatusBadGateway)
 		return
@@ -471,8 +508,11 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid DNS benchmark response", http.StatusBadGateway)
 		return
 	}
-	if r.Context().Err() != nil {
-		http.Error(w, "DNS Retest was cancelled", http.StatusRequestTimeout)
+	if asyncMeasurementRequestError(w, r.Context(), measurementCtx, "DNS Retest") {
+		return
+	}
+	if err := validatePath(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	if err := validateAsyncMeasurementProfile(a, p, stateAtStart, sessionAtStart, profileAtStart); err != nil {
