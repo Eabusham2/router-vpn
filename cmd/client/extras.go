@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -90,26 +91,44 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 	}
 	profileAtStart := fastestProfileSnapshotToken([]common.RouterProfile{p})
 
-	port, err := pickTCPProbePort(p.Endpoint)
+	port, err := pickTCPProbePortContext(r.Context(), p.Endpoint)
 	if err != nil {
-		http.Error(w, "node is not reachable on a known TCP listener: "+err.Error(), http.StatusBadGateway)
+		if r.Context().Err() != nil {
+			http.Error(w, "durable node latency request was cancelled", http.StatusRequestTimeout)
+		} else {
+			http.Error(w, "node is not reachable on a known TCP listener: "+err.Error(), http.StatusBadGateway)
+		}
 		return
 	}
 
 	values := make([]float64, 0, q.Samples)
 	failed := 0
+	dialer := &net.Dialer{Timeout: 1500 * time.Millisecond}
 	for i := 0; i < q.Samples; i++ {
 		started := time.Now()
-		c, dialErr := net.DialTimeout("tcp", net.JoinHostPort(p.Endpoint, fmt.Sprintf("%d", port)), 1500*time.Millisecond)
+		c, dialErr := dialer.DialContext(r.Context(), "tcp", net.JoinHostPort(p.Endpoint, fmt.Sprintf("%d", port)))
 		if dialErr != nil {
+			if r.Context().Err() != nil {
+				http.Error(w, "durable node latency request was cancelled", http.StatusRequestTimeout)
+				return
+			}
 			failed++
 			continue
 		}
 		_ = c.Close()
 		values = append(values, float64(time.Since(started).Microseconds())/1000.0)
 		if i%10 == 9 {
-			time.Sleep(15 * time.Millisecond)
+			select {
+			case <-r.Context().Done():
+				http.Error(w, "durable node latency request was cancelled", http.StatusRequestTimeout)
+				return
+			case <-time.After(15 * time.Millisecond):
+			}
 		}
+	}
+	if r.Context().Err() != nil {
+		http.Error(w, "durable node latency request was cancelled", http.StatusRequestTimeout)
+		return
 	}
 	if len(values) < 5 {
 		http.Error(w, "too few successful latency samples", http.StatusBadGateway)
@@ -143,6 +162,10 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		Description: "TCP handshake latency; median and 10% trimmed mean resist outliers",
 	}
 
+	if r.Context().Err() != nil {
+		http.Error(w, "durable node latency request was cancelled before persistence", http.StatusRequestTimeout)
+		return
+	}
 	a.mu.Lock()
 	previousStore := cloneRouterProfileStore(a.profiles)
 	current, currentOK := a.profileByIDLocked(p.ID)
@@ -179,13 +202,24 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 }
 
 func pickTCPProbePort(endpoint string) (int, error) {
+	return pickTCPProbePortContext(context.Background(), endpoint)
+}
+
+func pickTCPProbePortContext(ctx context.Context, endpoint string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	ports := []int{443, 8388, 10443, 11443, 12443, 13443, 14443, 15443}
 	var last error
+	dialer := &net.Dialer{Timeout: 1200 * time.Millisecond}
 	for _, port := range ports {
-		c, err := net.DialTimeout("tcp", net.JoinHostPort(endpoint, fmt.Sprintf("%d", port)), 1200*time.Millisecond)
+		c, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(endpoint, fmt.Sprintf("%d", port)))
 		if err == nil {
 			_ = c.Close()
 			return port, nil
+		}
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
 		}
 		last = err
 	}
