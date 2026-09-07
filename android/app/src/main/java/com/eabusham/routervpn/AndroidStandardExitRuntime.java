@@ -29,6 +29,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
     private final AtomicBoolean closed=new AtomicBoolean(false);
     private Future<?> active;
+    private Thread workerThread;
     private boolean disconnectRequested;
     private boolean revalidationTeardown;
     private boolean teardownInProgress;
@@ -53,16 +54,22 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
 
     private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,Callback cb){
         boolean started=false,sessionStarted=false;
+        synchronized(this){workerThread=Thread.currentThread();}
         try{
+            synchronized(this){if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled.");}
             String blocked=startBlockedReason();if(!blocked.isEmpty())throw new IllegalStateException(blocked);
             String before=singBox.getState();
-            if("UP".equals(before)||"STARTING".equals(before)||"STOPPING".equals(before))throw new IllegalStateException("Disconnect the current embedded VPN before custom exit.");
+            if(!terminal(before))throw new IllegalStateException("Disconnect the current embedded VPN before custom exit.");
             AndroidHomeStateStore.beginExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg");sessionStarted=true;
             cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing WireGuard entry → "+exit.protocol+" custom exit…");
             NativeSingBoxController.SessionInfo session=direct?directBuilder.prepare(exit):builder.prepare(entry,exit);
             if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
             cb.progress("Starting one Android VpnService custom-exit graph…");
-            singBox.start(session);started=true;
+            synchronized(this){
+                if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before engine launch.");
+                // A partially published start still owns cleanup when launch throws.
+                started=true;singBox.start(session);
+            }
             long deadline=System.currentTimeMillis()+START_TIMEOUT_MS;
             while(System.currentTimeMillis()<deadline){
                 if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
@@ -74,8 +81,10 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             if(!"UP".equals(singBox.getState()))throw new IllegalStateException("Embedded custom-exit engine did not reach UP before timeout.");
             cb.progress("Tunnel is UP; proving the exact public custom exit before Connected…");
             String observed=proveExpectedPublicIp(exit.expectedPublicIp);
-            synchronized(this){if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before Connected adoption.");}
-            AndroidHomeStateStore.connectedExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg",observed);
+            synchronized(this){
+                if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before Connected adoption.");
+                AndroidHomeStateStore.connectedExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg",observed);
+            }
             cb.finished(true,direct?"Connected: direct "+exit.protocol+" custom exit. Public exit proof passed: "+observed:"Connected: WireGuard entry → "+exit.protocol+" custom exit. Public exit proof passed: "+observed);
         } catch(InterruptedException error){
             boolean stopped=!started||stopEmbeddedAndProve();
@@ -108,6 +117,8 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 else AndroidHomeStateStore.warning(context,message);
             }
             cb.finished(false,message);
+        }finally{
+            synchronized(this){workerThread=null;}
         }
     }
 
@@ -166,7 +177,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             if(!owns)return;
             if(!emergency)AndroidHomeStateStore.beginPathRevalidation(context,"Android custom-exit disconnect requested; retaining runtime ownership until embedded teardown is proved.");
             disconnectRequested=true;revalidationTeardown=false;teardownInProgress=true;
-            if(active!=null&&!active.isDone())active.cancel(true);
+            if(workerThread!=null)workerThread.interrupt();
         }
         boolean stopped=stopEmbeddedAndProve();
         synchronized(this){teardownInProgress=!stopped;}
@@ -185,7 +196,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
 
     /** Tear down this owner's runtime without changing Home state; revalidation owns the failed-state adoption. */
     void failClosedForRevalidation(){
-        synchronized(this){disconnectRequested=true;revalidationTeardown=true;teardownInProgress=true;if(active!=null&&!active.isDone())active.cancel(true);}
+        synchronized(this){disconnectRequested=true;revalidationTeardown=true;teardownInProgress=true;if(workerThread!=null)workerThread.interrupt();}
         boolean stopped=stopEmbeddedAndProve();
         synchronized(this){teardownInProgress=!stopped;}
         if(!stopped)throw new IllegalStateException("Android custom-exit revalidation teardown did not reach a terminal state.");
@@ -196,13 +207,15 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         synchronized(this){
             if(!closed.compareAndSet(false,true))return;
             disconnectRequested=true;revalidationTeardown=true;teardownInProgress=true;
-            if(active!=null&&!active.isDone())active.cancel(true);
+            if(workerThread!=null)workerThread.interrupt();
             AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
             owns="external".equals(home.logicalMode)||singBox.getMode().startsWith("standard-");
         }
         if(owns&&runtimeBusy(singBox.getState()))stopEmbeddedAndProve();
         synchronized(this){teardownInProgress=owns&&runtimeBusy(singBox.getState());}
-        executor.shutdownNow();
+        // Queued attempts must observe closed and complete normally; cancelling
+        // their Future would claim completion before worker cleanup finished.
+        executor.shutdown();
     }
 
     private boolean stopEmbeddedAndProve(){
@@ -215,6 +228,9 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 try{Thread.sleep(150L);}catch(InterruptedException error){interrupted=true;}
             }
             return terminal(singBox.getState());
+        }catch(RuntimeException error){
+            // Neither a failed stop request nor a failed state read proves DOWN.
+            return false;
         }finally{if(interrupted)Thread.currentThread().interrupt();}
     }
 
