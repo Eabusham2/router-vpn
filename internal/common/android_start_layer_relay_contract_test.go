@@ -103,21 +103,27 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 	}
 
 	for _, raw := range []struct {
-		path       string
-		name       string
-		downMarker string
-		failMarker string
+		path             string
+		name             string
+		downMarker       string
+		transitionMarker string
+		failMarker       string
 	}{
-		{"android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java", "WireGuard", "if (result != State.DOWN) throw new IllegalStateException(\"WireGuard teardown did not prove DOWN.\")", "WireGuard disconnect incomplete:"},
-		{"android/app/src/main/java/com/eabusham/routervpn/NativeAmneziaWGController.java", "AmneziaWG", "if (result != State.DOWN) throw new IllegalStateException(\"AmneziaWG teardown did not prove DOWN.\")", "AmneziaWG disconnect incomplete:"},
+		{"android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java", "WireGuard", "if (result != State.DOWN) throw new IllegalStateException(\"WireGuard teardown did not prove DOWN.\")", "WireGuard network-transition teardown did not prove DOWN.", "WireGuard disconnect incomplete:"},
+		{"android/app/src/main/java/com/eabusham/routervpn/NativeAmneziaWGController.java", "AmneziaWG", "if (result != State.DOWN) throw new IllegalStateException(\"AmneziaWG teardown did not prove DOWN.\")", "AmneziaWG network-transition teardown did not prove DOWN.", "AmneziaWG disconnect incomplete:"},
 	} {
 		body := repoFile(t, raw.path)
 		for _, required := range []string{
 			raw.downMarker,
+			raw.transitionMarker,
 			raw.failMarker,
 			"clearActive();",
 			"homeStateOwner = false;",
 			"!AndroidHomeStateStore.emergencyDisconnectPending(appContext)",
+			"AndroidHomeStateStore.beginPathRevalidation(appContext,",
+			"runtime ownership retained:",
+			"Teardown incomplete; runtime ownership retained:",
+			"callback.done(state,",
 			"Emergency Disconnect requested; " + raw.name + " disconnect incomplete:",
 		} {
 			if !strings.Contains(body, required) {
