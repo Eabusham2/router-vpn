@@ -36,6 +36,7 @@ jobs:
             server/scripts/pairing.py
           python3 -m json.tool configs/client/logical-modes.json >/dev/null
           python3 deploy/validate-repo.py
+          python3 modes/test_profile_id_safety.py
           bash -n server/finalize/finalize.sh
           bash -n server/finalize/upgrade-safe.sh
           bash -n server/scripts/publish-downloads.sh
@@ -213,7 +214,10 @@ jobs:
             -v "$TEST_ROOT:/opt/router-vpn:ro" \
             --entrypoint /bin/bash router-vpn-ci-init:arm64 -euo pipefail -c '
               export HOMEVPN_ROOT=/opt/router-vpn/client-bundle
-              export HOMEVPN_PROFILE_ID=home
+              # The server publishes one flat generated bundle. Only the reserved
+              # router identity may check that source layout; imported nodes must
+              # still use generated/<profile-id>/<mode> without cross-node fallback.
+              export HOMEVPN_PROFILE_ID=router
               cd /src/modes
               ./check-combined.sh split
               ./check-combined.sh max
