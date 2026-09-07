@@ -25,6 +25,8 @@ func extraRoutes(h *http.ServeMux, a *app) {
 		w.Header().Set("cache-control", "public, max-age=86400")
 		_, _ = io.WriteString(w, faviconSVG)
 	})
+	// The browser root is diagnostics plumbing only. The retired installable
+	// browser client intentionally has no web manifest or service-worker route.
 	h.HandleFunc("/api/logical-modes", a.listLogicalModes)
 	h.HandleFunc("/api/connect-logical", a.connectLogicalTracked)
 	h.HandleFunc("/api/session", a.sessionStatus)
@@ -34,6 +36,9 @@ func extraRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/dns/retest", a.retestDNS)
 	registerMTURetestRoute(h, a)
 	h.HandleFunc("/api/emergency-stop", a.emergencyStopTracked)
+	// Linux keeps its native WG/AWG split-entry chain. Windows and macOS route
+	// to their real native desktop multihop launchers instead of accidentally
+	// exposing the Linux-only handler and returning a false unsupported result.
 	registerDesktopMultihopRoutes(h, a)
 	registerNativeUpdateRoutes(h, a)
 }
@@ -72,6 +77,7 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 	if q.Samples > 200 {
 		q.Samples = 200
 	}
+
 	a.mu.Lock()
 	p, ok := a.profileByIDLocked(q.ID)
 	a.mu.Unlock()
@@ -84,6 +90,7 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profileAtStart := fastestProfileSnapshotToken([]common.RouterProfile{p})
+
 	port, err := pickTCPProbePortContext(r.Context(), p.Endpoint)
 	if err != nil {
 		if r.Context().Err() != nil {
@@ -93,6 +100,7 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
 	values := make([]float64, 0, q.Samples)
 	failed := 0
 	dialer := &net.Dialer{Timeout: 1500 * time.Millisecond}
@@ -139,7 +147,21 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 	}
 	trimmedV := average(trimmed)
 	now := time.Now().UTC()
-	resp := latencyResponse{ID: p.ID, Port: port, Samples: len(values), Failed: failed, MinMs: round3(minV), MedianMs: round3(medianV), TrimmedMs: round3(trimmedV), AverageMs: round3(avgV), P90Ms: round3(p90V), MaxMs: round3(maxV), MeasuredAt: now, Description: "TCP handshake latency; median and 10% trimmed mean resist outliers"}
+	resp := latencyResponse{
+		ID:          p.ID,
+		Port:        port,
+		Samples:     len(values),
+		Failed:      failed,
+		MinMs:       round3(minV),
+		MedianMs:    round3(medianV),
+		TrimmedMs:   round3(trimmedV),
+		AverageMs:   round3(avgV),
+		P90Ms:       round3(p90V),
+		MaxMs:       round3(maxV),
+		MeasuredAt:  now,
+		Description: "TCP handshake latency; median and 10% trimmed mean resist outliers",
+	}
+
 	if r.Context().Err() != nil {
 		http.Error(w, "durable node latency request was cancelled before persistence", http.StatusRequestTimeout)
 		return
@@ -179,128 +201,334 @@ func (a *app) profileLatency(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func pickTCPProbePort(endpoint string) (int, error) { return pickTCPProbePortContext(context.Background(), endpoint) }
+func pickTCPProbePort(endpoint string) (int, error) {
+	return pickTCPProbePortContext(context.Background(), endpoint)
+}
+
 func pickTCPProbePortContext(ctx context.Context, endpoint string) (int, error) {
-	if err := ctx.Err(); err != nil { return 0, err }
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	ports := []int{443, 8388, 10443, 11443, 12443, 13443, 14443, 15443}
 	var last error
 	dialer := &net.Dialer{Timeout: 1200 * time.Millisecond}
 	for _, port := range ports {
 		c, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(endpoint, fmt.Sprintf("%d", port)))
-		if err == nil { _ = c.Close(); return port, nil }
-		if ctx.Err() != nil { return 0, ctx.Err() }
+		if err == nil {
+			_ = c.Close()
+			return port, nil
+		}
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
 		last = err
 	}
-	if last == nil { last = errors.New("no probe ports") }
+	if last == nil {
+		last = errors.New("no probe ports")
+	}
 	return 0, last
 }
 
 func average(values []float64) float64 {
-	if len(values) == 0 { return 0 }
+	if len(values) == 0 {
+		return 0
+	}
 	var total float64
-	for _, v := range values { total += v }
+	for _, v := range values {
+		total += v
+	}
 	return total / float64(len(values))
 }
+
 func percentile(sorted []float64, p float64) float64 {
-	if len(sorted) == 0 { return 0 }
-	if len(sorted) == 1 { return sorted[0] }
+	if len(sorted) == 0 {
+		return 0
+	}
+	if len(sorted) == 1 {
+		return sorted[0]
+	}
 	pos := p * float64(len(sorted)-1)
-	lo := int(math.Floor(pos)); hi := int(math.Ceil(pos))
-	if lo == hi { return sorted[lo] }
+	lo := int(math.Floor(pos))
+	hi := int(math.Ceil(pos))
+	if lo == hi {
+		return sorted[lo]
+	}
 	frac := pos - float64(lo)
 	return sorted[lo]*(1-frac) + sorted[hi]*frac
 }
+
 func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
 
 func captureAsyncMeasurementSession(a *app) (connectionSession, error) {
 	s := sessionTrackerFor(a).snapshot(0)
-	if strings.TrimSpace(s.ID) == "" || !s.Connected || strings.TrimSpace(s.Phase) != "connected" || s.PathProof != "passed" { return connectionSession{}, errors.New("current Router VPN session has not proved a stable connected path") }
+	if strings.TrimSpace(s.ID) == "" || !s.Connected || strings.TrimSpace(s.Phase) != "connected" || s.PathProof != "passed" {
+		return connectionSession{}, errors.New("current Router VPN session has not proved a stable connected path")
+	}
 	return s, nil
 }
+
 func sameAsyncMeasurementSession(before, after connectionSession) bool {
-	return before.ID != "" && after.ID == before.ID && after.Connected && after.Phase == "connected" && after.PathProof == "passed" && after.RouterID == before.RouterID && after.ActualMode == before.ActualMode && after.ActualBase == before.ActualBase
+	return before.ID != "" && after.ID == before.ID && after.Connected && after.Phase == "connected" && after.PathProof == "passed" &&
+		after.RouterID == before.RouterID && after.ActualMode == before.ActualMode && after.ActualBase == before.ActualBase
 }
+
 func asyncMeasurementProfileToken(p common.RouterProfile) string {
-	return fastestProfileSnapshotToken([]common.RouterProfile{p}) + fmt.Sprintf("\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t", p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName, p.DNSPath, p.BaseTunnel, p.KillSwitchPolicy, p.AutoRequireEncrypted, p.AutoRequireObfuscation)
+	// Measurement-owned Latency*, PublicIP, DNSResults and FastestDNS* fields are
+	// intentionally excluded. Everything below is user/path policy or identity
+	// that must remain unchanged while a live result is in flight.
+	return fastestProfileSnapshotToken([]common.RouterProfile{p}) + fmt.Sprintf(
+		"\x00%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t",
+		p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName, p.DNSPath,
+		p.BaseTunnel, p.KillSwitchPolicy, p.AutoRequireEncrypted, p.AutoRequireObfuscation,
+	)
 }
+
 func (a *app) activeAsyncMeasurementProfile() (common.RouterProfile, state, error) {
-	a.mu.Lock(); defer a.mu.Unlock(); st := a.state
-	if !st.Connected || strings.TrimSpace(st.Phase) != "connected" { return common.RouterProfile{}, st, errors.New("connect the VPN first; live proof requires a stable connected path") }
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	st := a.state
+	if !st.Connected || strings.TrimSpace(st.Phase) != "connected" {
+		return common.RouterProfile{}, st, errors.New("connect the VPN first; live proof requires a stable connected path")
+	}
 	target := strings.TrimSpace(st.RouterID)
-	if target == "" { return common.RouterProfile{}, st, errors.New("active VPN node identity is unavailable; refusing to substitute the mutable selected node") }
-	p, ok := a.profileByIDLocked(target); if !ok { return common.RouterProfile{}, st, errors.New("active VPN node disappeared before live proof") }
+	if target == "" {
+		return common.RouterProfile{}, st, errors.New("active VPN node identity is unavailable; refusing to substitute the mutable selected node")
+	}
+	p, ok := a.profileByIDLocked(target)
+	if !ok {
+		return common.RouterProfile{}, st, errors.New("active VPN node disappeared before live proof")
+	}
 	return p, st, nil
 }
+
 func validateAsyncMeasurementProfile(a *app, p common.RouterProfile, st state, session connectionSession, token string) error {
-	if !sameAsyncMeasurementSession(session, sessionTrackerFor(a).snapshot(0)) { return errors.New("VPN session/path changed while live proof was running") }
-	a.mu.Lock(); defer a.mu.Unlock()
-	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(st) || strings.TrimSpace(a.state.RouterID) != p.ID { return errors.New("active VPN node/mode/base/path changed while live proof was running") }
-	current, ok := a.profileByIDLocked(p.ID); if !ok || asyncMeasurementProfileToken(current) != token { return errors.New("active VPN profile or policy changed while live proof was running") }
+	if !sameAsyncMeasurementSession(session, sessionTrackerFor(a).snapshot(0)) {
+		return errors.New("VPN session/path changed while live proof was running")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(st) || strings.TrimSpace(a.state.RouterID) != p.ID {
+		return errors.New("active VPN node/mode/base/path changed while live proof was running")
+	}
+	current, ok := a.profileByIDLocked(p.ID)
+	if !ok || asyncMeasurementProfileToken(current) != token {
+		return errors.New("active VPN profile or policy changed while live proof was running")
+	}
 	return nil
 }
 
 func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet { http.Error(w, "GET only", http.StatusMethodNotAllowed); return }
-	targetProfile, stateAtStart, err := a.activeAsyncMeasurementProfile(); if err != nil { http.Error(w, err.Error(), http.StatusConflict); return }
-	target := targetProfile.ID; targetAtStart := asyncMeasurementProfileToken(targetProfile)
-	sessionAtStart, sessionErr := captureAsyncMeasurementSession(a); if sessionErr != nil { http.Error(w, sessionErr.Error(), http.StatusConflict); return }
-	if sessionAtStart.RouterID != "" && sessionAtStart.RouterID != target { http.Error(w, "session tracker node does not match the running VPN node", http.StatusConflict); return }
-	client := newRouteBoundHTTPClient(5 * time.Second); defer client.CloseIdleConnections()
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	targetProfile, stateAtStart, err := a.activeAsyncMeasurementProfile()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	target := targetProfile.ID
+	targetAtStart := asyncMeasurementProfileToken(targetProfile)
+	sessionAtStart, sessionErr := captureAsyncMeasurementSession(a)
+	if sessionErr != nil {
+		http.Error(w, sessionErr.Error(), http.StatusConflict)
+		return
+	}
+	if sessionAtStart.RouterID != "" && sessionAtStart.RouterID != target {
+		http.Error(w, "session tracker node does not match the running VPN node", http.StatusConflict)
+		return
+	}
+	client := newRouteBoundHTTPClient(5 * time.Second)
+	defer client.CloseIdleConnections()
 	providers := []string{"https://api64.ipify.org", "https://api.ipify.org"}
 	var result string
 	for _, endpoint := range providers {
-		req, requestErr := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint, nil); if requestErr != nil { continue }
-		req.Header.Set("Accept-Encoding", "identity"); req.Header.Set("Cache-Control", "no-store")
-		resp, requestErr := client.Do(req)
+		req, requestErr := http.NewRequestWithContext(r.Context(), http.MethodGet, endpoint, nil)
 		if requestErr != nil {
-			if r.Context().Err() != nil { http.Error(w, "public-exit lookup was cancelled", http.StatusRequestTimeout); return }
 			continue
 		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 257)); _ = resp.Body.Close()
-		if readErr != nil || len(body) > 256 { continue }
-		candidate := strings.TrimSpace(string(body)); if resp.StatusCode/100 == 2 && net.ParseIP(candidate) != nil { result = candidate; break }
+		req.Header.Set("Accept-Encoding", "identity")
+		req.Header.Set("Cache-Control", "no-store")
+		resp, requestErr := client.Do(req)
+		if requestErr != nil {
+			if r.Context().Err() != nil {
+				http.Error(w, "public-exit lookup was cancelled", http.StatusRequestTimeout)
+				return
+			}
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 257))
+		_ = resp.Body.Close()
+		if readErr != nil || len(body) > 256 {
+			continue
+		}
+		candidate := strings.TrimSpace(string(body))
+		if resp.StatusCode/100 == 2 && net.ParseIP(candidate) != nil {
+			result = candidate
+			break
+		}
 	}
-	if r.Context().Err() != nil { http.Error(w, "public-exit lookup was cancelled", http.StatusRequestTimeout); return }
-	if result == "" { http.Error(w, "could not determine public VPN exit address", http.StatusBadGateway); return }
-	if err := validateAsyncMeasurementProfile(a, targetProfile, stateAtStart, sessionAtStart, targetAtStart); err != nil { http.Error(w, err.Error(), http.StatusConflict); return }
-	a.mu.Lock(); previousStore := cloneRouterProfileStore(a.profiles); currentProfile, currentOK := a.profileByIDLocked(target)
-	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(stateAtStart) || strings.TrimSpace(a.state.RouterID) != target || !currentOK || asyncMeasurementProfileToken(currentProfile) != targetAtStart { a.mu.Unlock(); http.Error(w, "active VPN path or policy changed before public-exit persistence", http.StatusConflict); return }
-	for i := range a.profiles.Profiles { if a.profiles.Profiles[i].ID == target { a.profiles.Profiles[i].PublicIP = result; break } }
-	persistErr := a.persistProfilesLocked(); if persistErr != nil { a.rollbackProfilesLocked(previousStore) }; a.mu.Unlock()
-	if persistErr != nil { http.Error(w, persistErr.Error(), http.StatusInternalServerError); return }
+	if r.Context().Err() != nil {
+		http.Error(w, "public-exit lookup was cancelled", http.StatusRequestTimeout)
+		return
+	}
+	if result == "" {
+		http.Error(w, "could not determine public VPN exit address", http.StatusBadGateway)
+		return
+	}
+	if err := validateAsyncMeasurementProfile(a, targetProfile, stateAtStart, sessionAtStart, targetAtStart); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	a.mu.Lock()
+	previousStore := cloneRouterProfileStore(a.profiles)
+	currentProfile, currentOK := a.profileByIDLocked(target)
+	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(stateAtStart) || strings.TrimSpace(a.state.RouterID) != target || !currentOK || asyncMeasurementProfileToken(currentProfile) != targetAtStart {
+		a.mu.Unlock()
+		http.Error(w, "active VPN path or policy changed before public-exit persistence", http.StatusConflict)
+		return
+	}
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == target {
+			a.profiles.Profiles[i].PublicIP = result
+			break
+		}
+	}
+	persistErr := a.persistProfilesLocked()
+	if persistErr != nil {
+		a.rollbackProfilesLocked(previousStore)
+	}
+	a.mu.Unlock()
+	if persistErr != nil {
+		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"public_ip": result, "router_id": target, "multihop": stateAtStart.Mode == "multihop"})
 }
 
-type dnsBenchmarkPayload struct { Winner common.DNSBenchmarkResult `json:"winner"`; Results []common.DNSBenchmarkResult `json:"results"` }
+type dnsBenchmarkPayload struct {
+	Winner  common.DNSBenchmarkResult   `json:"winner"`
+	Results []common.DNSBenchmarkResult `json:"results"`
+}
 
 func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost { http.Error(w, "POST only", http.StatusMethodNotAllowed); return }
-	p, stateAtStart, err := a.activeAsyncMeasurementProfile(); if err != nil { http.Error(w, err.Error(), http.StatusConflict); return }
-	if strings.EqualFold(strings.TrimSpace(p.NodeKind), "external") || p.External != nil { http.Error(w, "DNS Retest requires the active Router VPN home node", http.StatusConflict); return }
-	if strings.TrimSpace(p.RouterAPI) == "" || strings.TrimSpace(p.APIToken) == "" { http.Error(w, "active Router VPN node has no private DNS benchmark API/token", http.StatusConflict); return }
-	profileAtStart := asyncMeasurementProfileToken(p); sessionAtStart, sessionErr := captureAsyncMeasurementSession(a); if sessionErr != nil { http.Error(w, sessionErr.Error(), http.StatusConflict); return }
-	if sessionAtStart.RouterID != "" && sessionAtStart.RouterID != p.ID { http.Error(w, "session tracker node does not match the active DNS benchmark node", http.StatusConflict); return }
-	req, err := privateDNSBenchmarkRequestContext(r.Context(), p.RouterAPI, p.APIToken); if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
-	client := newPrivateTelemetryHTTPClient(45 * time.Second); defer client.CloseIdleConnections(); resp, err := client.Do(req)
-	if err != nil { if r.Context().Err() != nil { http.Error(w, "DNS Retest was cancelled", http.StatusRequestTimeout) } else { http.Error(w, err.Error(), http.StatusBadGateway) }; return }
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1)); _ = resp.Body.Close()
-	if readErr != nil || len(body) > 1<<20 { http.Error(w, "DNS benchmark response exceeded its bounded result size", http.StatusBadGateway); return }
-	if resp.StatusCode/100 != 2 { http.Error(w, strings.TrimSpace(string(body)), resp.StatusCode); return }
-	var payload dnsBenchmarkPayload; if err := json.Unmarshal(body, &payload); err != nil { http.Error(w, "invalid DNS benchmark response", http.StatusBadGateway); return }
-	if r.Context().Err() != nil { http.Error(w, "DNS Retest was cancelled", http.StatusRequestTimeout); return }
-	if err := validateAsyncMeasurementProfile(a, p, stateAtStart, sessionAtStart, profileAtStart); err != nil { http.Error(w, err.Error(), http.StatusConflict); return }
-	if r.Context().Err() != nil { http.Error(w, "DNS Retest was cancelled before persistence", http.StatusRequestTimeout); return }
-	a.mu.Lock(); previousStore := cloneRouterProfileStore(a.profiles); current, currentOK := a.profileByIDLocked(p.ID)
-	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(stateAtStart) || strings.TrimSpace(a.state.RouterID) != p.ID || !currentOK || asyncMeasurementProfileToken(current) != profileAtStart { a.mu.Unlock(); http.Error(w, "active node/path or DNS policy changed before DNS Retest persistence", http.StatusConflict); return }
-	for i := range a.profiles.Profiles { if a.profiles.Profiles[i].ID == p.ID { x := &a.profiles.Profiles[i]; x.DNSResults = payload.Results; if payload.Winner.Address != "" { x.FastestDNSHost = payload.Winner.Address; x.FastestDNSName = payload.Winner.Name; x.FastestDNSLatencyMs = payload.Winner.LatencyMs }; break } }
-	persistErr := a.persistProfilesLocked(); if persistErr != nil { a.rollbackProfilesLocked(previousStore) }; a.mu.Unlock()
-	if persistErr != nil { http.Error(w, persistErr.Error(), http.StatusInternalServerError); return }
-	w.Header().Set("content-type", "application/json"); _ = json.NewEncoder(w).Encode(payload)
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	p, stateAtStart, err := a.activeAsyncMeasurementProfile()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(p.NodeKind), "external") || p.External != nil {
+		http.Error(w, "DNS Retest requires the active Router VPN home node", http.StatusConflict)
+		return
+	}
+	if strings.TrimSpace(p.RouterAPI) == "" || strings.TrimSpace(p.APIToken) == "" {
+		http.Error(w, "active Router VPN node has no private DNS benchmark API/token", http.StatusConflict)
+		return
+	}
+	profileAtStart := asyncMeasurementProfileToken(p)
+	sessionAtStart, sessionErr := captureAsyncMeasurementSession(a)
+	if sessionErr != nil {
+		http.Error(w, sessionErr.Error(), http.StatusConflict)
+		return
+	}
+	if sessionAtStart.RouterID != "" && sessionAtStart.RouterID != p.ID {
+		http.Error(w, "session tracker node does not match the active DNS benchmark node", http.StatusConflict)
+		return
+	}
+
+	req, err := privateDNSBenchmarkRequestContext(r.Context(), p.RouterAPI, p.APIToken)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	client := newPrivateTelemetryHTTPClient(45 * time.Second)
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req)
+	if err != nil {
+		if r.Context().Err() != nil {
+			http.Error(w, "DNS Retest was cancelled", http.StatusRequestTimeout)
+		} else {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+		}
+		return
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	_ = resp.Body.Close()
+	if readErr != nil || len(body) > 1<<20 {
+		http.Error(w, "DNS benchmark response exceeded its bounded result size", http.StatusBadGateway)
+		return
+	}
+	if resp.StatusCode/100 != 2 {
+		http.Error(w, strings.TrimSpace(string(body)), resp.StatusCode)
+		return
+	}
+	var payload dnsBenchmarkPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid DNS benchmark response", http.StatusBadGateway)
+		return
+	}
+	if r.Context().Err() != nil {
+		http.Error(w, "DNS Retest was cancelled", http.StatusRequestTimeout)
+		return
+	}
+	if err := validateAsyncMeasurementProfile(a, p, stateAtStart, sessionAtStart, profileAtStart); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	if r.Context().Err() != nil {
+		http.Error(w, "DNS Retest was cancelled before persistence", http.StatusRequestTimeout)
+		return
+	}
+	a.mu.Lock()
+	previousStore := cloneRouterProfileStore(a.profiles)
+	current, currentOK := a.profileByIDLocked(p.ID)
+	if !a.state.Connected || mtuStateSnapshotToken(a.state) != mtuStateSnapshotToken(stateAtStart) || strings.TrimSpace(a.state.RouterID) != p.ID || !currentOK || asyncMeasurementProfileToken(current) != profileAtStart {
+		a.mu.Unlock()
+		http.Error(w, "active node/path or DNS policy changed before DNS Retest persistence", http.StatusConflict)
+		return
+	}
+	for i := range a.profiles.Profiles {
+		if a.profiles.Profiles[i].ID == p.ID {
+			x := &a.profiles.Profiles[i]
+			x.DNSResults = payload.Results
+			if payload.Winner.Address != "" {
+				x.FastestDNSHost = payload.Winner.Address
+				x.FastestDNSName = payload.Winner.Name
+				x.FastestDNSLatencyMs = payload.Winner.LatencyMs
+			}
+			break
+		}
+	}
+	persistErr := a.persistProfilesLocked()
+	if persistErr != nil {
+		a.rollbackProfilesLocked(previousStore)
+	}
+	a.mu.Unlock()
+	if persistErr != nil {
+		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func (a *app) emergencyStop(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost { http.Error(w, "POST only", http.StatusMethodNotAllowed); return }
-	a.cancelConnectionOperation(); a.operationMu.Lock(); defer a.operationMu.Unlock()
-	if err := a.stopMode(); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
-	w.Header().Set("content-type", "application/json"); _, _ = io.WriteString(w, `{"ok":true,"message":"local Router VPN transports stopped"}`)
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	a.cancelConnectionOperation()
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if err := a.stopMode(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+	_, _ = io.WriteString(w, `{"ok":true,"message":"local Router VPN transports stopped"}`)
 }
