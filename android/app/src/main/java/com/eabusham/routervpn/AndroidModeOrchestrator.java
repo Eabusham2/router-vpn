@@ -44,7 +44,7 @@ final class AndroidModeOrchestrator {
 
     AndroidModeOrchestrator(Context context,NativeWireGuardController wg,NativeAmneziaWGController awg,NativeSingBoxController sing,NativeXrayController xray){this.context=context.getApplicationContext();this.wg=wg;this.awg=awg;this.sing=sing;this.xray=xray;}
     boolean isRunning(){return running;}
-    boolean isActive(){return current!=null||wg.getState()==Tunnel.State.UP||awg.getState()==org.amnezia.awg.backend.Tunnel.State.UP||"UP".equals(sing.getState())||"STARTING".equals(sing.getState())||"UP".equals(xray.getState())||"STARTING".equals(xray.getState());}
+    boolean isActive(){return current!=null||wg.getState()==Tunnel.State.UP||awg.getState()==org.amnezia.awg.backend.Tunnel.State.UP||runtimeBusy(sing.getState())||runtimeBusy(xray.getState());}
     void close(){executor.shutdownNow();}
 
     void auto(File bundle,boolean smart,Callback cb){run(bundle,smart,null,cb);}
@@ -54,7 +54,17 @@ final class AndroidModeOrchestrator {
     void disconnect(Callback cb){
         if(running){cb.finished(false,"","A Router VPN transition is still running.");return;}
         running=true;
-        executor.execute(()->{try{stopCurrent(true);cb.finished(true,"","Disconnected Router VPN native transports.");}catch(Throwable error){cb.finished(false,"",safe(error));}finally{running=false;}});
+        AndroidHomeStateStore.beginPathRevalidation(context,"Router VPN disconnect requested; retaining logical runtime ownership until every child proves terminal.");
+        executor.execute(()->{
+            try{
+                stopCurrent(true);
+                cb.finished(true,"","Disconnected Router VPN native transports.");
+            }catch(Throwable error){
+                String message="Disconnect incomplete; runtime ownership retained: "+safe(error);
+                AndroidHomeStateStore.failedPreservingOwnership(context,message);
+                cb.finished(false,"",message);
+            }finally{running=false;}
+        });
     }
 
     private void run(File bundle,boolean smart,List<String>custom,Callback cb){
@@ -167,8 +177,10 @@ final class AndroidModeOrchestrator {
 
     private String failClosedAfterError(Throwable error){
         String message=safe(error);
-        try{stopCurrent(false);}catch(Throwable cleanup){message += "; runtime cleanup failed: "+safe(cleanup);}
-        AndroidHomeStateStore.failed(context,message);
+        boolean cleanupComplete=true;
+        try{stopCurrent(false);}catch(Throwable cleanup){cleanupComplete=false;message += "; runtime cleanup failed: "+safe(cleanup);}
+        if(cleanupComplete)AndroidHomeStateStore.failed(context,message);
+        else AndroidHomeStateStore.failedPreservingOwnership(context,message);
         return message;
     }
 
@@ -177,8 +189,8 @@ final class AndroidModeOrchestrator {
         if(c==null){
             if(wg.getState()==Tunnel.State.UP)stopWg();
             if(awg.getState()==org.amnezia.awg.backend.Tunnel.State.UP)stopAwg();
-            String ls=sing.getState();if("UP".equals(ls)||"STARTING".equals(ls))stopLibbox();
-            String xs=xray.getState();if("UP".equals(xs)||"STARTING".equals(xs))stopXray();
+            if(runtimeBusy(sing.getState()))stopLibbox();
+            if(runtimeBusy(xray.getState()))stopXray();
             if(clearHomeState)AndroidHomeStateStore.disconnected(context);
             return;
         }
@@ -188,8 +200,10 @@ final class AndroidModeOrchestrator {
     }
     private void stopWg()throws Exception{CountDownLatch l=new CountDownLatch(1);wg.disconnectManaged((s,m,e)->l.countDown());if(!l.await(8,TimeUnit.SECONDS)||wg.getState()!=Tunnel.State.DOWN)throw new IllegalStateException("WireGuard teardown did not prove DOWN before timeout.");}
     private void stopAwg()throws Exception{CountDownLatch l=new CountDownLatch(1);awg.disconnectManaged((s,m,e)->l.countDown());if(!l.await(8,TimeUnit.SECONDS)||awg.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN)throw new IllegalStateException("AmneziaWG teardown did not prove DOWN before timeout.");}
-    private void stopLibbox()throws Exception{sing.stop();long end=System.currentTimeMillis()+8000;while(System.currentTimeMillis()<end){String s=sing.getState();if("DOWN".equals(s)||"FAILED".equals(s)||"REVOKED".equals(s))return;Thread.sleep(150);}throw new IllegalStateException("Libbox teardown did not reach DOWN/FAILED/REVOKED before timeout.");}
-    private void stopXray()throws Exception{xray.stop();long end=System.currentTimeMillis()+8000;while(System.currentTimeMillis()<end){String s=xray.getState();if("DOWN".equals(s)||"FAILED".equals(s)||"REVOKED".equals(s))return;Thread.sleep(150);}throw new IllegalStateException("Xray teardown did not reach DOWN/FAILED/REVOKED before timeout.");}
+    private void stopLibbox()throws Exception{sing.stop();long end=System.currentTimeMillis()+8000;while(System.currentTimeMillis()<end){String s=sing.getState();if(terminal(s))return;Thread.sleep(150);}throw new IllegalStateException("Libbox teardown did not reach DOWN/FAILED/REVOKED before timeout.");}
+    private void stopXray()throws Exception{xray.stop();long end=System.currentTimeMillis()+8000;while(System.currentTimeMillis()<end){String s=xray.getState();if(terminal(s))return;Thread.sleep(150);}throw new IllegalStateException("Xray teardown did not reach DOWN/FAILED/REVOKED before timeout.");}
+    private static boolean terminal(String state){if(state==null)return false;String s=state.trim().toUpperCase();return"DOWN".equals(s)||"FAILED".equals(s)||"REVOKED".equals(s);}
+    private static boolean runtimeBusy(String state){return!terminal(state);}
 
     private List<Candidate> collect(File bundle,boolean autoOnly,boolean applyAutoRequirements)throws Exception{
         JSONObject root=load(bundle);JSONObject profiles=root.optJSONObject("profiles");JSONArray catalog=root.optJSONArray("modes");boolean strict=AndroidKillSwitchPolicy.strictRequested(root);JSONObject profile=selectedProfile(root);
