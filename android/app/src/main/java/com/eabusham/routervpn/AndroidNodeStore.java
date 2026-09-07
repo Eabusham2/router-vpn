@@ -321,14 +321,7 @@ final class AndroidNodeStore {
     }
 
     private static JSONObject selectedProfile(JSONObject bundle) {
-        JSONArray profiles = bundle.optJSONArray("routerProfiles");
-        String wanted = bundle.optString("selectedRouterID", "").trim();
-        if (profiles == null) return null;
-        for (int i = 0; i < profiles.length(); i++) {
-            JSONObject p = profiles.optJSONObject(i);
-            if (p != null && wanted.equals(p.optString("id", ""))) return p;
-        }
-        return profiles.length() > 0 ? profiles.optJSONObject(0) : null;
+        return AndroidProfileSelection.selectedRouterProfile(bundle);
     }
 
     private static JSONObject load(File file) throws Exception { return new JSONObject(new String(readLimited(file, MAX_BUNDLE), StandardCharsets.UTF_8)); }
