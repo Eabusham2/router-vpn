@@ -12,16 +12,27 @@ import (
 // The Connect-screen endpoints are older callers of the same measurement
 // engines. They must observe the same immutable path as Speed Lab rather than
 // reintroducing an OS-route fallback for a multihop private address.
-func connectionTelemetryPathContext(parent context.Context, a *app, p common.RouterProfile, st state, sessionID string) (context.Context, func(), func() error, error) {
-	graph, _ := getActiveMultihopGraph(a)
+func connectionTelemetryPathContext(parent context.Context, a *app, p common.RouterProfile, st state, sessionID string, additionalProfiles ...common.RouterProfile) (context.Context, func(), func() error, error) {
+	graph, graphOK := getActiveMultihopGraph(a)
+	if st.Mode == "multihop" {
+		if err := validateActiveMultihopSpeedGraph(st, graph, graphOK, graph.EntryID, graph.ExitID); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	profiles, err := captureMeasurementProfiles(a, st, graph, append([]common.RouterProfile{p}, additionalProfiles...)...)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	validate := func() error {
 		if err := validateActiveTelemetryPath(a, p, st, sessionID); err != nil {
 			return err
 		}
 		if st.Mode == "multihop" {
-			return validateCurrentMultihopSpeedGraph(a, st, graph, sessionID)
+			if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionID); err != nil {
+				return err
+			}
 		}
-		return nil
+		return validateMeasurementProfiles(a, profiles)
 	}
 	ctx, stop, err := speedLabPathContext(parent, validate)
 	return ctx, stop, validate, err
@@ -46,7 +57,7 @@ func (a *app) connectedMultihopLiveLatency(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	sessionID := sessionTrackerFor(a).snapshot(0).ID
-	measured, stop, validate, err := connectionTelemetryPathContext(r.Context(), a, exit, st, sessionID)
+	measured, stop, validate, err := connectionTelemetryPathContext(r.Context(), a, exit, st, sessionID, entry)
 	if err != nil {
 		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "multihop latency") {
 			http.Error(w, err.Error(), http.StatusConflict)
