@@ -88,9 +88,12 @@ func (r *speedLabPatternReader) Read(p []byte) (int, error) {
 	if len(r.pattern) == 0 {
 		return 0, io.EOF
 	}
-	for i := range p {
-		p[i] = r.pattern[r.offset]
-		r.offset++
+	// Fill contiguous spans, not individual bytes: payload generation must not
+	// become the CPU bottleneck of the upload measurement.
+	for written := 0; written < len(p); {
+		n := copy(p[written:], r.pattern[r.offset:])
+		written += n
+		r.offset += n
 		if r.offset == len(r.pattern) {
 			r.offset = 0
 		}
@@ -164,7 +167,7 @@ func speedLabProbeOnce(ctx context.Context, client *http.Client) (float64, error
 
 func computeSpeedLabLatencyStats(values []float64, failed int) (speedLabLatencyStats, error) {
 	if len(values) == 0 {
-		return speedLabLatencyStats{}, errors.New("no latency probes succeeded")
+		return speedLabLatencyStats{Failed: failed}, errors.New("no latency probes succeeded")
 	}
 	sorted := append([]float64(nil), values...)
 	sort.Float64s(sorted)
@@ -192,6 +195,9 @@ func measureSpeedLabIdleLatency(ctx context.Context) (speedLabLatencyStats, erro
 	failed := 0
 	for i := 0; i < 10; i++ {
 		value, err := speedLabProbeOnce(ctx, client)
+		if err := ctx.Err(); err != nil {
+			return speedLabLatencyStats{}, err
+		}
 		if err != nil {
 			failed++
 		} else {
@@ -231,7 +237,12 @@ func speedLabLoadedLatencySampler(ctx context.Context) <-chan speedLabLatencySta
 			}
 			value, err := speedLabProbeOnce(ctx, client)
 			if err != nil {
-				failed++
+				// Stopping the direction cancels its in-flight probe by design.
+				// That administrative stop is not a network failure. A client
+				// timeout while the sampler remains active still counts.
+				if ctx.Err() == nil {
+					failed++
+				}
 			} else {
 				values = append(values, value)
 			}
@@ -526,32 +537,42 @@ func measureSpeedLabDirection(ctx context.Context, direction string, minDuration
 
 func measureSpeedLab(ctx context.Context, duration speedLabDuration, minDuration, maxDuration time.Duration, validate func() error) (speedLabMeasurement, error) {
 	started := time.Now().UTC()
+	validateCurrent := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if validate != nil {
+			if err := validate(); err != nil {
+				return err
+			}
+		}
+		// A validation callback can race with cancellation. Do not publish its
+		// successful path check as a successful cancelled measurement.
+		return ctx.Err()
+	}
+	if err := validateCurrent(); err != nil {
+		return speedLabMeasurement{}, err
+	}
 	idle, err := measureSpeedLabIdleLatency(ctx)
 	if err != nil {
 		return speedLabMeasurement{}, err
 	}
-	if validate != nil {
-		if err := validate(); err != nil {
-			return speedLabMeasurement{}, err
-		}
+	if err := validateCurrent(); err != nil {
+		return speedLabMeasurement{}, err
 	}
 	download, err := measureSpeedLabDirection(ctx, "download", minDuration, maxDuration, idle.MedianMs)
 	if err != nil {
 		return speedLabMeasurement{}, err
 	}
-	if validate != nil {
-		if err := validate(); err != nil {
-			return speedLabMeasurement{}, err
-		}
+	if err := validateCurrent(); err != nil {
+		return speedLabMeasurement{}, err
 	}
 	upload, err := measureSpeedLabDirection(ctx, "upload", minDuration, maxDuration, idle.MedianMs)
 	if err != nil {
 		return speedLabMeasurement{}, err
 	}
-	if validate != nil {
-		if err := validate(); err != nil {
-			return speedLabMeasurement{}, err
-		}
+	if err := validateCurrent(); err != nil {
+		return speedLabMeasurement{}, err
 	}
 	return speedLabMeasurement{
 		Provider: "Cloudflare Speed Test edge (built-in Router VPN Speed Lab)",
