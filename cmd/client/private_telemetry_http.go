@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,6 +24,17 @@ func newPrivateTelemetryHTTPClient(timeout time.Duration) *http.Client {
 			return errors.New("private node telemetry redirect refused")
 		},
 	}
+}
+
+func privateBenchmarkRequestContext(ctx context.Context, method, target, token string, body io.Reader) (*http.Request, error) {
+	if ctx == nil {
+		return nil, errors.New("private benchmark requires a request context")
+	}
+	req, err := privateBenchmarkRequest(method, target, token, body)
+	if err != nil {
+		return nil, err
+	}
+	return req.WithContext(ctx), nil
 }
 
 // Validate before attaching the node token. The benchmark boundary is not a
