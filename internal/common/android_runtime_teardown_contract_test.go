@@ -16,7 +16,14 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 		{"android/app/src/main/java/com/eabusham/routervpn/NativeAmneziaWGController.java", "AmneziaWG", "AmneziaWG teardown did not prove DOWN.", "AmneziaWG disconnect incomplete:"},
 	} {
 		body := repoFile(t, raw.path)
-		for _, marker := range []string{raw.downMarker, raw.failMarker, "clearActive();", "homeStateOwner = false;"} {
+		for _, marker := range []string{
+			raw.downMarker,
+			raw.failMarker,
+			"clearActive();",
+			"homeStateOwner = false;",
+			"runtime ownership retained:",
+			"Teardown incomplete; runtime ownership retained:",
+		} {
 			if !strings.Contains(body, marker) {
 				t.Fatalf("Android %s teardown ownership missing %q", raw.name, marker)
 			}
@@ -35,6 +42,7 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 		"suppressHome = revalidationTeardown",
 		"Android multihop teardown did not reach DOWN/FAILED/REVOKED before timeout.",
 		"Android multihop disconnect did not prove embedded engine teardown; runtime ownership retained.",
+		"Android multihop teardown was not proved; graph ownership retained.",
 		"return \"multihop\".equals(home.logicalMode) && runtimeBusy(singBox.getState());",
 	} {
 		if !strings.Contains(multihop, marker) {
@@ -63,6 +71,7 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 		"Android custom-exit teardown did not reach DOWN/FAILED/REVOKED before timeout.",
 		"Android custom-exit disconnect did not prove embedded engine teardown; runtime ownership retained.",
 		"Embedded engine teardown was not proved; runtime ownership retained.",
+		"Android custom-exit teardown was not proved; runtime ownership retained.",
 	} {
 		if !strings.Contains(external, marker) {
 			t.Fatalf("Android custom-exit teardown ownership missing %q", marker)
@@ -112,5 +121,17 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 	beforeThread := strings.Split(home, "new Thread(() -> {")[0]
 	if strings.Contains(beforeThread, "runtime.multihop.disconnect()") || strings.Contains(beforeThread, "runtime.standardExit.disconnect()") {
 		t.Fatal("Android Emergency Disconnect performs blocking runtime teardown on the caller/UI thread")
+	}
+
+	homeState := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidHomeStateStore.java")
+	for _, marker := range []string{
+		`EMERGENCY_PREFIX = "Emergency Disconnect requested;"`,
+		"boolean retainOwnership = emergencyDisconnectPending(context);",
+		"if (!retainOwnership) clearAllIdentity(e);",
+		"Emergency Disconnect cannot release session ownership until WireGuard and AmneziaWG both prove DOWN.",
+	} {
+		if !strings.Contains(homeState, marker) {
+			t.Fatalf("Android emergency failed-state ownership retention missing %q", marker)
+		}
 	}
 }
