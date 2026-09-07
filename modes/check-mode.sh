@@ -6,8 +6,20 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/profile-id.sh"
 PROFILE_ID=$(homevpn_profile_id)
-CONF="$ROOT/generated/$PROFILE_ID/$MODE"
-[[ -d "$CONF" ]] || CONF="$ROOT/generated/$MODE"
+profile_dir(){
+  local mode=${1:?mode} primary="$ROOT/generated/$PROFILE_ID/$1" legacy="$ROOT/generated/$1"
+  if [[ -d "$primary" ]]; then
+    printf '%s\n' "$primary"
+    return 0
+  fi
+  if [[ $PROFILE_ID == router && -d "$legacy" ]]; then
+    printf '%s\n' "$legacy"
+    return 0
+  fi
+  echo "linked Router VPN profile '$PROFILE_ID' is missing its own generated '$mode' runtime; cross-node readiness fallback is forbidden" >&2
+  return 1
+}
+if [[ $MODE == all ]]; then CONF="$ROOT/generated/$PROFILE_ID/all"; else CONF=$(profile_dir "$MODE"); fi
 need_bin(){ command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1"; exit 1; }; }
 need_file(){ [[ -s "$1" ]] || { echo "missing profile: $1"; exit 1; }; }
 env_value(){
@@ -36,8 +48,8 @@ check_rosenpass(){ local dir=${1:?Rosenpass dir}; need_bin rosenpass; need_file 
 check_max(){
   local mode=${1:-} base=${2:-}
   [[ -n $mode && -n $base ]] || { echo 'MAX checker requires mode and base'; exit 2; }
-  local dir="$ROOT/generated/$PROFILE_ID/$mode"
-  [[ -d "$dir" ]] || dir="$ROOT/generated/$mode"
+  local dir
+  dir=$(profile_dir "$mode")
   need_file "$dir/chain.env"
   local chain_ready outer_engine pq_base
   chain_ready=$(env_value "$dir/chain.env" CHAIN_READY)
