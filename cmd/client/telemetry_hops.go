@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -40,7 +41,27 @@ func registerHopTelemetryRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/multihop/speed-test", a.multihopSpeedTest)
 }
 
+func newPrivateBenchmarkHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DisableCompression = true
+	return &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("private benchmark redirect refused")
+		},
+	}
+}
+
 func measureRoutedProfileSpeed(p common.RouterProfile, bytesCount int64) (routedSpeedResult, error) {
+	return measureRoutedProfileSpeedContext(context.Background(), p, bytesCount)
+}
+
+func measureRoutedProfileSpeedContext(ctx context.Context, p common.RouterProfile, bytesCount int64) (routedSpeedResult, error) {
+	if err := ctx.Err(); err != nil {
+		return routedSpeedResult{}, err
+	}
 	bytesCount = clampSpeedBytes(bytesCount)
 	kind := strings.ToLower(strings.TrimSpace(p.NodeKind))
 	if kind == "external" || p.External != nil {
@@ -49,7 +70,8 @@ func measureRoutedProfileSpeed(p common.RouterProfile, bytesCount int64) (routed
 	if strings.TrimSpace(p.RouterAPI) == "" || strings.TrimSpace(p.APIToken) == "" {
 		return routedSpeedResult{}, errors.New("node has no private benchmark API/token")
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newPrivateBenchmarkHTTPClient(30 * time.Second)
+	defer client.CloseIdleConnections()
 	base := strings.TrimRight(p.RouterAPI, "/")
 
 	downloadURL := base + "/api/benchmark/download?bytes=" + strconv.FormatInt(bytesCount, 10)
@@ -57,6 +79,7 @@ func measureRoutedProfileSpeed(p common.RouterProfile, bytesCount int64) (routed
 	if err != nil {
 		return routedSpeedResult{}, err
 	}
+	downloadReq = downloadReq.WithContext(ctx)
 	downloadReq.Header.Set("Accept-Encoding", "identity")
 	downloadStarted := time.Now()
 	downloadResp, err := client.Do(downloadReq)
@@ -85,19 +108,23 @@ func measureRoutedProfileSpeed(p common.RouterProfile, bytesCount int64) (routed
 	if err != nil {
 		return routedSpeedResult{}, err
 	}
+	uploadReq = uploadReq.WithContext(ctx)
 	uploadReq.ContentLength = bytesCount
 	uploadStarted := time.Now()
 	uploadResp, err := client.Do(uploadReq)
 	if err != nil {
 		return routedSpeedResult{}, fmt.Errorf("upload benchmark failed: %w", err)
 	}
-	body, readErr := io.ReadAll(io.LimitReader(uploadResp.Body, 64<<10))
+	body, readErr := io.ReadAll(io.LimitReader(uploadResp.Body, (64<<10)+1))
 	_ = uploadResp.Body.Close()
 	if readErr != nil {
 		return routedSpeedResult{}, fmt.Errorf("upload benchmark response failed: %w", readErr)
 	}
 	if uploadResp.StatusCode/100 != 2 {
 		return routedSpeedResult{}, fmt.Errorf("upload benchmark returned HTTP %d", uploadResp.StatusCode)
+	}
+	if len(body) > 64<<10 {
+		return routedSpeedResult{}, errors.New("private benchmark upload response is oversized")
 	}
 	uploadElapsed := time.Since(uploadStarted)
 	var ack struct {
@@ -109,6 +136,10 @@ func measureRoutedProfileSpeed(p common.RouterProfile, bytesCount int64) (routed
 	}
 	if ack.Bytes != bytesCount {
 		return routedSpeedResult{}, fmt.Errorf("upload benchmark acknowledged %d bytes; expected %d", ack.Bytes, bytesCount)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return routedSpeedResult{}, err
 	}
 
 	mbits := float64(bytesCount*8) / 1_000_000.0
@@ -180,9 +211,9 @@ func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {
 		}
 		var measureErr error
 		if id == graph.EntryID {
-			value, measureErr = measureRoutedProfileSpeedViaProxy(p, q.Bytes, multihopEntryProofProxy)
+			value, measureErr = measureRoutedProfileSpeedViaProxyContext(r.Context(), p, q.Bytes, multihopEntryProofProxy)
 		} else if id == graph.ExitID {
-			value, measureErr = measureRoutedProfileSpeedViaProxy(p, q.Bytes, multihopProofProxy)
+			value, measureErr = measureRoutedProfileSpeedViaProxyContext(r.Context(), p, q.Bytes, multihopProofProxy)
 		} else {
 			http.Error(w, "requested Router VPN node is not part of the active multihop graph", http.StatusConflict)
 			return
@@ -197,7 +228,7 @@ func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		var measureErr error
-		value, measureErr = measureRoutedProfileSpeed(p, q.Bytes)
+		value, measureErr = measureRoutedProfileSpeedContext(r.Context(), p, q.Bytes)
 		if measureErr != nil {
 			http.Error(w, measureErr.Error(), http.StatusBadGateway)
 			return
@@ -286,9 +317,13 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 	payload := map[string]any{
 		"connected": true, "mode": st.Mode, "entry_id": graph.EntryID, "exit_id": graph.ExitID, "bytes": clampSpeedBytes(q.Bytes),
 		"measured_at": time.Now().UTC(),
-		"note": "each hop result is an independent authenticated transfer through a reserved local proof lane bound to that hop's cryptographic Router VPN node identity; Router VPN never subtracts or divides another measurement to invent per-hop speed",
+		"note":        "each hop result is an independent authenticated transfer through a reserved local proof lane bound to that hop's cryptographic Router VPN node identity; Router VPN never subtracts or divides another measurement to invent per-hop speed",
 	}
-	entryValue, entryErr := measureRoutedProfileSpeedViaProxy(entry, q.Bytes, multihopEntryProofProxy)
+	entryValue, entryErr := measureRoutedProfileSpeedViaProxyContext(r.Context(), entry, q.Bytes, multihopEntryProofProxy)
+	if err := r.Context().Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionAtStart); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -299,7 +334,11 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 		payload["entry_error"] = entryErr.Error()
 	}
 
-	exitValue, exitErr := measureRoutedProfileSpeedViaProxy(exit, q.Bytes, multihopProofProxy)
+	exitValue, exitErr := measureRoutedProfileSpeedViaProxyContext(r.Context(), exit, q.Bytes, multihopProofProxy)
+	if err := r.Context().Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionAtStart); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
