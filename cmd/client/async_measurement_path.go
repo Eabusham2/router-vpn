@@ -12,18 +12,18 @@ import (
 // An asynchronous proof owns one immutable session and, for multihop, one
 // particular graph generation. End-of-request validation alone would still let
 // an old request keep using the network after disconnect or graph replacement.
-func asyncMeasurementPathContext(parent context.Context, a *app, p common.RouterProfile, st state, session connectionSession, token string) (context.Context, func(), error) {
+func asyncMeasurementPathContext(parent context.Context, a *app, p common.RouterProfile, st state, session connectionSession, token string) (context.Context, func(), func() error, error) {
 	graph, graphOK := getActiveMultihopGraph(a)
 	if st.Mode == "multihop" {
 		if err := validateActiveMultihopSpeedGraph(st, graph, graphOK, graph.EntryID, graph.ExitID); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if p.ID != graph.ExitID || session.RouterID != graph.ExitID {
-			return nil, nil, errors.New("live measurement must belong to the active multihop exit")
+			return nil, nil, nil, errors.New("live measurement must belong to the active multihop exit")
 		}
 	}
 	// Reuse the joined path observer: it cancels HTTP only, never the VPN.
-	return speedLabPathContext(parent, func() error {
+	validate := func() error {
 		if err := validateAsyncMeasurementProfile(a, p, st, session, token); err != nil {
 			return err
 		}
@@ -31,7 +31,9 @@ func asyncMeasurementPathContext(parent context.Context, a *app, p common.Router
 			return validateCurrentMultihopSpeedGraph(a, st, graph, session.ID)
 		}
 		return nil
-	})
+	}
+	ctx, stop, err := speedLabPathContext(parent, validate)
+	return ctx, stop, validate, err
 }
 
 // Private API addresses can overlap across hops. Multihop DNS/public-exit
