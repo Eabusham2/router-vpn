@@ -76,7 +76,7 @@ required_runtime = [
     "AndroidPathProbe.prove(prepared.exitBundle",
     "if (!AndroidPathProbe.prove",
     "Exit-node private path proof failed; multihop was disconnected.",
-    "if (started) singBox.stop()",
+    "boolean stopped = !started || stopEmbeddedAndProve();",
     '"FAILED".equals(state)',
     '"REVOKED".equals(state)',
     "START_TIMEOUT_MS",
@@ -85,6 +85,31 @@ required_runtime = [
 for token in required_runtime:
     assert token in runtime, f"multihop runtime lost fail-closed proof: {token}"
 assert '"ERROR".equals(state)' not in runtime, "LayeredVpnService never publishes ERROR; runtime must use FAILED/REVOKED"
+
+# Requesting STOP is not proof of teardown. Cancellation and start failure must
+# both retain ownership when the embedded service does not reach a terminal state.
+assert runtime.count("boolean stopped = !started || stopEmbeddedAndProve();") == 2
+for token in (
+    "transitioning = !stopped;",
+    "if (stopped) {",
+    "clearActiveGraphLocked();",
+    "runtime ownership retained",
+    "if (!stopped) throw new IllegalStateException",
+):
+    assert token in runtime, f"multihop teardown ownership lost contract: {token}"
+stop = runtime.split("private boolean stopEmbeddedAndProve() {", 1)[1].split("private static boolean terminal", 1)[0]
+for token in (
+    "boolean interrupted = Thread.interrupted();",
+    "singBox.stop();",
+    "STOP_TIMEOUT_MS",
+    "if (terminal(singBox.getState())) return true;",
+    "return terminal(singBox.getState());",
+    "if (interrupted) Thread.currentThread().interrupt();",
+):
+    assert token in stop, f"multihop teardown proof missing: {token}"
+terminal = runtime.split("private static boolean terminal", 1)[1].split("private static boolean runtimeBusy", 1)[0]
+assert "if (state == null) return false;" in terminal
+assert 'return "DOWN".equals(normalized) || "FAILED".equals(normalized) || "REVOKED".equals(normalized);' in terminal
 
 required_ui = [
     "PREPARE_MULTIHOP",
