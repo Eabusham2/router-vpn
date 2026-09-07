@@ -6,8 +6,16 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/profile-id.sh"
 PROFILE_ID=$(homevpn_profile_id)
-CONF="$ROOT/generated/$PROFILE_ID/$MODE"
-[[ -d "$CONF" ]] || CONF="$ROOT/generated/$MODE"
+PRIMARY="$ROOT/generated/$PROFILE_ID/$MODE"
+LEGACY="$ROOT/generated/$MODE"
+if [[ -d "$PRIMARY" ]]; then
+  CONF="$PRIMARY"
+elif [[ $PROFILE_ID == router && -d "$LEGACY" ]]; then
+  CONF="$LEGACY"
+else
+  echo "linked Router VPN profile '$PROFILE_ID' is missing its own generated '$MODE' combined runtime; cross-node readiness fallback is forbidden" >&2
+  exit 1
+fi
 need_bin(){ command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1"; exit 1; }; }
 need_file(){ [[ -s "$1" ]] || { echo "missing profile: $1"; exit 1; }; }
 case "$MODE" in
