@@ -22,15 +22,21 @@ func asyncMeasurementPathContext(parent context.Context, a *app, p common.Router
 			return nil, nil, nil, errors.New("live measurement must belong to the active multihop exit")
 		}
 	}
+	profiles, err := captureMeasurementProfiles(a, st, graph, p)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	// Reuse the joined path observer: it cancels HTTP only, never the VPN.
 	validate := func() error {
 		if err := validateAsyncMeasurementProfile(a, p, st, session, token); err != nil {
 			return err
 		}
 		if st.Mode == "multihop" {
-			return validateCurrentMultihopSpeedGraph(a, st, graph, session.ID)
+			if err := validateCurrentMultihopSpeedGraph(a, st, graph, session.ID); err != nil {
+				return err
+			}
 		}
-		return nil
+		return validateMeasurementProfiles(a, profiles)
 	}
 	ctx, stop, err := speedLabPathContext(parent, validate)
 	return ctx, stop, validate, err
