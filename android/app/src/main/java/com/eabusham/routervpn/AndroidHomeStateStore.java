@@ -133,7 +133,19 @@ final class AndroidHomeStateStore {
         return true;
     }
 
-    static void failed(Context context, String warning) { SharedPreferences.Editor e=prefs(context).edit().putString("phase","failed").putString("warning",clean(warning)).putString("path_proof","failed").putBoolean("connected",false);clearAllIdentity(e).apply(); }
+    static void failed(Context context, String warning) {
+        SharedPreferences p = prefs(context);
+        boolean retainOwnership = emergencyDisconnectPending(context);
+        SharedPreferences.Editor e = p.edit()
+                .putString("phase", "failed")
+                .putString("warning", clean(warning))
+                .putString("path_proof", "failed")
+                .putBoolean("connected", false)
+                .remove("actual_exit_ip")
+                .remove("actual_exit_session");
+        if (!retainOwnership) clearAllIdentity(e);
+        e.apply();
+    }
     static void disconnected(Context context) {
         if (emergencyDisconnectPending(context)) {
             AndroidRuntimeRegistry runtime = AndroidRuntimeRegistry.get(context);
