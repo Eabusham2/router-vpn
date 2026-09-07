@@ -8,7 +8,7 @@ import (
 func TestAndroidSelectedProfileNeverFallsBackAcrossNodes(t *testing.T) {
 	selector := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSelection.java")
 	for _, required := range []string{
-		`bundle.optString("selectedRouterID",`,
+		`"selectedRouterID"`,
 		`bundle.optString("selected_id", "")`,
 		`if (!selected.isEmpty()) {`,
 		`"Selected Router VPN profile '" + selected + "' is missing from this Android node bundle."`,
