@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parent
 JAVA = ROOT / "app" / "src" / "main" / "java" / "com" / "eabusham" / "routervpn"
@@ -269,5 +271,13 @@ assert "SESSION_MARKER" in policy
 assert '"always".equals(policy)' in policy
 assert '"lockdown".equals(policy)' in policy
 assert "libbox or native Xray mode" in policy
+
+# Compile and execute the production runtime classes against deterministic boundary
+# doubles. This checks cancellation/adoption behavior, not physical VPN traffic.
+subprocess.run(
+    [sys.executable, str(ROOT / "test_android_runtime_teardown.py")],
+    cwd=ROOT.parent,
+    check=True,
+)
 
 print("Android runtime truth contract: PASS")
