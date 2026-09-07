@@ -274,10 +274,14 @@ assert "libbox or native Xray mode" in policy
 
 # Compile and execute the production runtime classes against deterministic boundary
 # doubles. This checks cancellation/adoption behavior, not physical VPN traffic.
-subprocess.run(
-    [sys.executable, str(ROOT / "test_android_runtime_teardown.py")],
-    cwd=ROOT.parent,
-    check=True,
-)
+for executable_contract in (
+    "test_android_runtime_teardown.py",
+    "test_android_service_stop_confirmation.py",
+):
+    subprocess.run(
+        [sys.executable, str(ROOT / executable_contract)],
+        cwd=ROOT.parent,
+        check=True,
+    )
 
 print("Android runtime truth contract: PASS")
