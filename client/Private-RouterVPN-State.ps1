@@ -121,6 +121,55 @@ function Read-RouterVPNPrivateJson(
   }
 }
 
+function Get-RouterVPNPrivateFileSHA256(
+  [string]$Path,
+  [string]$Label = 'Router VPN private file',
+  [int]$Limit = 4194304
+) {
+  Assert-RouterVPNNoReparseAncestors $Path
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    throw "$Label is missing: $Path"
+  }
+  $before = Get-Item -LiteralPath $Path -Force
+  if ($before.PSIsContainer -or (($before.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+    throw "Unsafe reparse/non-file $Label path: $Path"
+  }
+  if ($before.Length -lt 0 -or $before.Length -gt $Limit) {
+    throw "$Label exceeds safety limit: $Path"
+  }
+
+  # The open handle excludes write/delete sharing while SHA-256 consumes the
+  # exact bytes. Recheck the pathname after hashing so a caller never accepts a
+  # digest for a leaf that changed identity between scan and use.
+  $stream = [IO.File]::Open(
+    $Path,
+    [IO.FileMode]::Open,
+    [IO.FileAccess]::Read,
+    [IO.FileShare]::Read
+  )
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    if ($stream.Length -gt $Limit) {
+      throw "$Label exceeds safety limit: $Path"
+    }
+    $bytes = $sha.ComputeHash($stream)
+    $after = Get-Item -LiteralPath $Path -Force
+    if (
+      $after.PSIsContainer -or
+      (($after.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
+      $after.FullName -ne $before.FullName -or
+      $after.Length -ne $stream.Length -or
+      $after.LastWriteTimeUtc -ne $before.LastWriteTimeUtc
+    ) {
+      throw "$Label changed during hash: $Path"
+    }
+    return (-join($bytes | ForEach-Object { $_.ToString('x2') }))
+  } finally {
+    $sha.Dispose()
+    $stream.Dispose()
+  }
+}
+
 function Get-RouterVPNProfileStore([string]$RootText) {
   $root = Resolve-RouterVPNPrivateRoot $RootText
   $store = Read-RouterVPNPrivateJson (Join-Path $root 'routers.json') 'Router profile store'
@@ -218,7 +267,7 @@ function Write-RouterVPNProcessRecord([string]$Path,$Process) {
 function Get-RouterVPNVerifiedRecordedProcess([string]$Path) {
   if(-not(Test-Path -LiteralPath $Path)){return $null}
   $record=Read-RouterVPNPrivateJson $Path 'Router VPN process record' 65536
-  if($null -eq $record -or [int]$record.version -ne 1){return $null}
+  if($null-eq$record -or [int]$record.version -ne 1){return $null}
   $pidValue=0
   if(-not [int]::TryParse(([string]$record.pid),[ref]$pidValue) -or $pidValue -le 0){return $null}
   $expectedTicks=[Int64]0
