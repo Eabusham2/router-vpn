@@ -139,12 +139,16 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                     clearActiveGraphLocked();
                 }
             }
+            boolean emergency = AndroidHomeStateStore.emergencyDisconnectPending(context);
             if (!stopped) {
-                if (!suppressHome) AndroidHomeStateStore.warning(context, "Android multihop cancellation could not prove embedded engine teardown; runtime ownership retained.");
+                if (!suppressHome) AndroidHomeStateStore.warning(context, emergency
+                        ? "Emergency Disconnect requested; Android multihop teardown was not proved; graph ownership retained."
+                        : "Android multihop cancellation could not prove embedded engine teardown; runtime ownership retained.");
                 callback.finished(false, "Android multihop cancellation incomplete; embedded engine did not prove teardown.");
             } else {
                 if (!suppressHome) {
-                    if (userCancelled) AndroidHomeStateStore.disconnected(context);
+                    if (emergency) AndroidHomeStateStore.warning(context, "Emergency Disconnect requested; Android multihop graph stopped; awaiting remaining runtime teardown.");
+                    else if (userCancelled) AndroidHomeStateStore.disconnected(context);
                     else AndroidHomeStateStore.failed(context, "Android multihop start was interrupted and disconnected.");
                 }
                 callback.finished(false, userCancelled ? "Android multihop cancelled and disconnected." : "Android multihop start was interrupted and disconnected.");
@@ -163,7 +167,9 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             String message = nonEmpty(error.getMessage(), "Android multihop failed closed.");
             if (!stopped) message += " Embedded engine teardown was not proved; runtime ownership retained.";
             if (!suppressHome) {
-                if (stopped) AndroidHomeStateStore.failed(context, message);
+                boolean emergency = AndroidHomeStateStore.emergencyDisconnectPending(context);
+                if (emergency) AndroidHomeStateStore.warning(context, "Emergency Disconnect requested; " + message);
+                else if (stopped) AndroidHomeStateStore.failed(context, message);
                 else AndroidHomeStateStore.warning(context, message);
             }
             callback.finished(false, message);
@@ -193,7 +199,11 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                     : "Android multihop disconnect did not prove embedded engine teardown; runtime ownership retained.");
             throw new IllegalStateException("Android multihop teardown did not reach DOWN/FAILED/REVOKED before timeout.");
         }
-        AndroidHomeStateStore.disconnected(context);
+        if (emergency) {
+            AndroidHomeStateStore.warning(context, "Emergency Disconnect requested; Android multihop graph stopped; awaiting remaining runtime teardown.");
+        } else {
+            AndroidHomeStateStore.disconnected(context);
+        }
     }
 
     /** Tear down this owner's runtime without changing Home state; the revalidation transaction owns the final state write. */
