@@ -28,12 +28,12 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		"benchmarkDefaultBytes", "benchmarkMaxBytes", "no-store, no-transform", "content-encoding")
 	requireRepoMarkers(t, "cmd/client/telemetry.go",
 		"/api/profile/fastest", "/api/connection/live-latency", "/api/multihop/live-latency",
-		"/api/connection/speed-test", "/api/benchmark/download", "/api/benchmark/upload", "DownloadMbps", "UploadMbps")
+		"/api/connection/speed-test", "connectionTelemetryPathContext", "measureRoutedProfileSpeedContext", "measureRoutedProfileSpeedViaProxyContext", "DownloadMbps", "UploadMbps")
 	requireRepoMarkers(t, "cmd/client/multihop.go",
 		"activeMultihopGraph", "setActiveMultihopGraph", "clearActiveMultihopGraph", "getActiveMultihopGraph",
 		"configured_entry_id", "configured_exit_id", "actual_entry_id", "actual_exit_id")
 	requireRepoMarkers(t, "cmd/client/telemetry_hops.go",
-		"/api/profile/speed-test", "/api/multihop/speed-test", "measureRoutedProfileSpeed",
+		"/api/profile/speed-test", "/api/multihop/speed-test", "/api/benchmark/download", "/api/benchmark/upload", "measureRoutedProfileSpeed",
 		"measureRoutedProfileSpeedViaProxy", "multihopEntryProofProxy", "multihopProofProxy",
 		"validateActiveMultihopSpeedGraph", "does not match active multihop entry", "does not match active multihop exit",
 		"refusing to guess hop ownership", "entry_error", "exit_error", "not derived from RTT", "unchanged current client routing graph")
