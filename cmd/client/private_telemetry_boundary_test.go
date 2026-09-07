@@ -87,6 +87,47 @@ func TestPrivateBenchmarkRequestContextPreservesCancellationAndHeaders(t *testin
 	}
 }
 
+func TestPrivateDNSBenchmarkRequestContextUsesOnlyPrivateNodeAPI(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := privateDNSBenchmarkRequestContext(ctx, "http://10.77.0.1:8787", "fixture-node-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer req.Body.Close()
+	if req.Context() != ctx || req.Method != http.MethodPost || req.URL.String() != "http://10.77.0.1:8787/api/dns/benchmark" {
+		t.Fatalf("unexpected private DNS request: method=%s url=%s", req.Method, req.URL)
+	}
+	for name, want := range map[string]string{
+		"Authorization":   "Bearer fixture-node-token",
+		"Content-Type":    "application/json",
+		"Accept-Encoding": "identity",
+		"Cache-Control":   "no-store",
+	} {
+		if got := req.Header.Get(name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+	cancel()
+	select {
+	case <-req.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("private DNS request did not inherit caller cancellation")
+	}
+	for _, bad := range []struct{ api, token string }{
+		{"https://1.1.1.1", "fixture-node-token"},
+		{"https://example.invalid", "fixture-node-token"},
+		{"http://user:password@10.77.0.1:8787", "fixture-node-token"},
+		{"http://10.77.0.1:8787", ""},
+	} {
+		if got, err := privateDNSBenchmarkRequestContext(context.Background(), bad.api, bad.token); err == nil || got != nil {
+			t.Fatalf("unsafe private DNS request accepted: api=%q token=%q request=%v err=%v", bad.api, bad.token, got, err)
+		}
+	}
+	if got, err := privateDNSBenchmarkRequestContext(nil, "http://10.77.0.1:8787", "fixture-node-token"); err == nil || got != nil {
+		t.Fatal("nil context was accepted for private DNS benchmark")
+	}
+}
+
 func TestPrivateTelemetryBoundaryPreservesPrivateUploadHeaders(t *testing.T) {
 	req, err := privateBenchmarkRequest(http.MethodPost,
 		"http://10.77.0.1:8787/api/benchmark/upload", "fixture-node-token", strings.NewReader("payload"))
@@ -143,7 +184,6 @@ func TestPrivateTelemetryBoundaryDoesNotForwardTokenAcrossRedirect(t *testing.T)
 		if address != "10.77.0.1:8787" {
 			t.Errorf("request escaped the selected private benchmark endpoint: %s", address)
 		}
-		// All sockets remain local to the test; no VPN or household service is used.
 		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
 	}
 	req, err := privateBenchmarkRequest(http.MethodGet,
