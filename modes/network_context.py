@@ -112,6 +112,8 @@ def generated_profile_fingerprint(root: Path, profile_id: str, mode: str) -> str
     The digest covers names and bytes of the selected generated runtime profile,
     which naturally includes endpoint port/protocol-specific config without
     persisting private keys, passwords, certificates, or raw configuration.
+    Linked node identities are never allowed to borrow the legacy global home
+    profile tree when their own generated tree is absent.
     """
     root = Path(root).resolve()
     profile_id = str(profile_id or "").strip()
@@ -119,7 +121,7 @@ def generated_profile_fingerprint(root: Path, profile_id: str, mode: str) -> str
     candidates = []
     if profile_id and mode:
         candidates.append(root / "generated" / profile_id / mode)
-    if mode:
+    if profile_id == "router" and mode:
         candidates.append(root / "generated" / mode)
     selected = next((p for p in candidates if p.is_dir()), None)
     if selected is None:
