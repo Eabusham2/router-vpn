@@ -17,7 +17,7 @@ func TestAndroidHomeConnectedRequiresCurrentPathProof(t *testing.T) {
 		`if(!rawStops.await(4, TimeUnit.SECONDS))throw new IllegalStateException("Raw WireGuard/AmneziaWG teardown timed out; session ownership retained.")`,
 		`if(!wgDown.get()||runtime.wireGuard.getState()!=com.wireguard.android.backend.Tunnel.State.DOWN)throw new IllegalStateException("WireGuard did not prove DOWN during Emergency Disconnect.")`,
 		`if(!awgDown.get()||runtime.amneziaWG.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN)throw new IllegalStateException("AmneziaWG did not prove DOWN during Emergency Disconnect.")`,
-		`Emergency Disconnect completed; all raw tunnels proved DOWN and no Router VPN-owned VPN network remains.`,
+		`Emergency Disconnect completed; all Router VPN engines proved terminal and no Router VPN-owned VPN network remains.`,
 	} {
 		if !strings.Contains(home, required) {
 			t.Fatalf("Android Home Connected/emergency truth missing %q", required)
