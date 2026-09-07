@@ -7,7 +7,6 @@ import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Process;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -42,10 +41,10 @@ final class AndroidForwardingMaster {
         String nodeId="multihop".equals(state.logicalMode)?state.activeExitId:state.activeNodeId;
         if(nodeId==null||nodeId.isEmpty())throw new IllegalStateException("Active Router VPN session node identity is unavailable.");
         JSONObject bundle=readBundle(store.file(nodeId));
-        JSONObject profile=selectedProfile(bundle);
-        String api=profile==null?"":profile.optString("router_api","").trim();
+        JSONObject profile=AndroidProfileSelection.selectedRouterProfile(bundle);
+        String api=profile.optString("router_api","").trim();
         if(api.isEmpty())api=bundle.optString("routerAPI","").trim();
-        String token=profile==null?"":profile.optString("api_token","").trim();
+        String token=profile.optString("api_token","").trim();
         if(token.isEmpty())token=bundle.optString("apiToken","").trim();
         if(api.isEmpty()||token.isEmpty())throw new IllegalStateException("Active Router VPN node has no authenticated private Router API.");
         URI uri=URI.create(api);
@@ -74,6 +73,5 @@ final class AndroidForwardingMaster {
 
     private Network ownedVpnNetwork(){ConnectivityManager cm=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);if(cm==null)return null;Network n=cm.getActiveNetwork();if(n==null)return null;NetworkCapabilities caps=cm.getNetworkCapabilities(n);if(caps==null||!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))return null;if(Build.VERSION.SDK_INT<Build.VERSION_CODES.Q)return null;return caps.getOwnerUid()==Process.myUid()?n:null;}
     private static boolean isPrivate(InetAddress a){if(a.isAnyLocalAddress())return false;if(a.isLoopbackAddress()||a.isLinkLocalAddress()||a.isSiteLocalAddress())return true;byte[]b=a.getAddress();return b.length==16&&(b[0]&0xfe)==0xfc;}
-    private static JSONObject readBundle(File file)throws Exception{if(file==null||!file.isFile()||file.length()<=0||file.length()>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Active node bundle is invalid.");try(FileInputStream in=new FileInputStream(file);ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]buf=new byte[8192];int total=0,n;while((n=in.read(buf))!=-1){total+=n;if(total>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Active node bundle exceeds safety limit.");out.write(buf,0,n);}return new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));}}
-    private static JSONObject selectedProfile(JSONObject bundle){JSONArray a=bundle.optJSONArray("routerProfiles");String id=bundle.optString("selectedRouterID","");if(a==null)return null;for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p!=null&&id.equals(p.optString("id","")))return p;}return a.length()>0?a.optJSONObject(0):null;}
+    private static JSONObject readBundle(File file)throws Exception{if(file==null||!file.isFile()||file.length()<=0||file.length()>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Active node bundle is invalid.");try(FileInputStream in=new FileInputStream(file);ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]buf=new byte[8192];int total=0,n;while((n=in.read(buf))!=-1;){total+=n;if(total>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Active node bundle exceeds safety limit.");out.write(buf,0,n);}return new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));}}
 }
