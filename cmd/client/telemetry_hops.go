@@ -170,12 +170,46 @@ func validateRoutedSpeedSession(a *app, st state, sessionID string) error {
 // Reject unproved sessions before the first transfer, cancel the in-flight load
 // on path loss, and synchronously validate again before returning measurements.
 // This observes connection ownership; it never stops or replaces the VPN.
-func routedSpeedPathContext(parent context.Context, a *app, st state, graph activeMultihopGraph, sessionID string) (context.Context, func(), func() error, error) {
+func routedSpeedPathContext(parent context.Context, a *app, st state, graph activeMultihopGraph, sessionID string, profiles ...common.RouterProfile) (context.Context, func(), func() error, error) {
+	tokens := make(map[string]string)
+	for _, p := range profiles {
+		tokens[p.ID] = asyncMeasurementProfileToken(p)
+	}
+	// Entry changes also invalidate an exit-only test: both nodes own the
+	// multihop dataplane even when only one lane is being measured.
+	a.mu.Lock()
+	ids := []string{st.RouterID}
+	if st.Mode == "multihop" {
+		ids = []string{graph.EntryID, graph.ExitID}
+	}
+	for _, id := range ids {
+		if _, supplied := tokens[id]; !supplied {
+			p, ok := a.profileByIDLocked(id)
+			if !ok {
+				a.mu.Unlock()
+				return nil, nil, nil, errors.New("routed throughput node disappeared before measurement")
+			}
+			tokens[id] = asyncMeasurementProfileToken(p)
+		}
+	}
+	a.mu.Unlock()
 	validate := func() error {
 		if st.Mode == "multihop" {
-			return validateCurrentMultihopSpeedGraph(a, st, graph, sessionID)
+			if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionID); err != nil {
+				return err
+			}
+		} else if err := validateRoutedSpeedSession(a, st, sessionID); err != nil {
+			return err
 		}
-		return validateRoutedSpeedSession(a, st, sessionID)
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		for id, token := range tokens {
+			p, ok := a.profileByIDLocked(id)
+			if !ok || asyncMeasurementProfileToken(p) != token {
+				return errors.New("routed throughput node credentials or path policy changed; stale result was discarded")
+			}
+		}
+		return nil
 	}
 	ctx, stop, err := speedLabPathContext(parent, validate)
 	return ctx, stop, validate, err
@@ -232,7 +266,7 @@ func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	measurementCtx, stopMeasurement, validatePath, err := routedSpeedPathContext(r.Context(), a, st, graph, sessionAtStart)
+	measurementCtx, stopMeasurement, validatePath, err := routedSpeedPathContext(r.Context(), a, st, graph, sessionAtStart, p)
 	if err != nil {
 		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "routed node speed test") {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -334,7 +368,7 @@ func (a *app) multihopSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
-	measurementCtx, stopMeasurement, validatePath, err := routedSpeedPathContext(r.Context(), a, st, graph, sessionAtStart)
+	measurementCtx, stopMeasurement, validatePath, err := routedSpeedPathContext(r.Context(), a, st, graph, sessionAtStart, entry, exit)
 	if err != nil {
 		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "multihop speed test") {
 			http.Error(w, err.Error(), http.StatusConflict)
