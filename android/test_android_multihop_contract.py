@@ -9,6 +9,7 @@ builder = (PKG / "AndroidMultihopController.java").read_text()
 runtime = (PKG / "AndroidMultihopRuntime.java").read_text()
 probe = (PKG / "AndroidPathProbe.java").read_text()
 hop_meter = (PKG / "AndroidSpeedLabHopMeter.java").read_text()
+private_http = (PKG / "AndroidPrivateBenchmarkHttp.java").read_text()
 main = (PKG / "MainActivity.java").read_text()
 
 required_store = [
@@ -144,8 +145,8 @@ for token in [
 for token in [
     "ENTRY_PROOF_PORT=1098",
     "EXIT_PROOF_PORT=1099",
-    "Proxy.Type.HTTP",
-    'new InetSocketAddress("127.0.0.1",proofPort)',
+    "return AndroidPrivateBenchmarkHttp.open(node.base,route,node.token,method,timeout,proofPort);",
+    "AndroidPrivateBenchmarkHttp.requireBase(api)",
     "AndroidNodeStore.stableNodeIdentity(bundle)",
     'body.optString("node_id"',
     'body.optString("proof"',
@@ -156,5 +157,29 @@ for token in [
     "stale results were discarded",
 ]:
     assert token in hop_meter, f"Android exact per-hop Speed Lab proof lost marker: {token}"
+
+# The socket/token boundary is shared, not duplicated inside the hop meter.
+# Keep the exact-lane and credential checks on the class that now owns them;
+# merely dropping the old inlined markers would no longer protect routing.
+for token in (
+    "proofPort != 1098 && proofPort != 1099",
+    'new Proxy(Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", proofPort))',
+    "target.openConnection(lane)",
+    "new URL(requireBase(base) + route)",
+    "AndroidNumericAddress.parse(uri.getHost())",
+    "uri.getRawUserInfo() != null",
+    "uri.getRawQuery() != null",
+    "uri.getRawFragment() != null",
+    "Hop benchmarks refuse to send node credentials to a public address",
+    "requireRoute(route, method)",
+    "connection.setInstanceFollowRedirects(false)",
+    "connection.setUseCaches(false)",
+    "connection.setRequestMethod(method)",
+    'connection.setRequestProperty("Authorization", "Bearer " + token)',
+    "token.charAt(i) < 0x20 || token.charAt(i) == 0x7f",
+    "connection.disconnect()",
+):
+    assert token in private_http, f"Android shared private-hop HTTP boundary lost marker: {token}"
+assert ".openConnection(" not in hop_meter, "hop meter must not bypass its shared authenticated proof lane"
 
 print("android multihop source contract: OK")
