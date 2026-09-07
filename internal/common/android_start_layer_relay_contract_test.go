@@ -112,7 +112,14 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 		{"android/app/src/main/java/com/eabusham/routervpn/NativeAmneziaWGController.java", "AmneziaWG", "if (result != State.DOWN) throw new IllegalStateException(\"AmneziaWG teardown did not prove DOWN.\")", "AmneziaWG disconnect incomplete:"},
 	} {
 		body := repoFile(t, raw.path)
-		for _, required := range []string{raw.downMarker, raw.failMarker, "clearActive();", "homeStateOwner = false;"} {
+		for _, required := range []string{
+			raw.downMarker,
+			raw.failMarker,
+			"clearActive();",
+			"homeStateOwner = false;",
+			"!AndroidHomeStateStore.emergencyDisconnectPending(appContext)",
+			"Emergency Disconnect requested; " + raw.name + " disconnect incomplete:",
+		} {
 			if !strings.Contains(body, required) {
 				t.Fatalf("Android %s raw teardown ownership contract missing %q", raw.name, required)
 			}
@@ -122,6 +129,32 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 		release := strings.Index(body[down:], "homeStateOwner = false;")
 		if down < 0 || clear < 0 || release < 0 {
 			t.Fatalf("Android %s raw teardown ownership ordering could not be proved", raw.name)
+		}
+	}
+
+	homeState := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidHomeStateStore.java")
+	for _, required := range []string{
+		`EMERGENCY_PREFIX = "Emergency Disconnect requested;"`,
+		"static boolean emergencyDisconnectPending(Context context)",
+		"runtime.wireGuard.getState() != com.wireguard.android.backend.Tunnel.State.DOWN",
+		"runtime.amneziaWG.getState() != org.amnezia.awg.backend.Tunnel.State.DOWN",
+		"Emergency Disconnect cannot release session ownership until WireGuard and AmneziaWG both prove DOWN.",
+	} {
+		if !strings.Contains(homeState, required) {
+			t.Fatalf("Android emergency shared-session guard missing %q", required)
+		}
+	}
+
+	home := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidHomeSummary.java")
+	for _, required := range []string{
+		"Emergency Disconnect requested; verifying every Router VPN transport stops.",
+		"runtime.wireGuard.disconnect",
+		"runtime.amneziaWG.disconnect",
+		"AndroidHomeStateStore.disconnected(activity)",
+		"Emergency Disconnect incomplete:",
+	} {
+		if !strings.Contains(home, required) {
+			t.Fatalf("Android Emergency Disconnect transaction missing %q", required)
 		}
 	}
 }
