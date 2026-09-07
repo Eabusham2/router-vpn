@@ -66,7 +66,12 @@ public final class XrayVpnService extends VpnService {
         String action = intent == null ? "" : intent.getAction();
         if (ACTION_STOP.equals(action)) {
             explicitStop = true;
-            executor.execute(() -> shutdown("DOWN", ""));
+            final long command = intent.getLongExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, 0L);
+            executor.execute(() -> {
+                shutdown("DOWN", "");
+                // An interrupted/failed cleanup must not acknowledge a new stop.
+                AndroidServiceStopConfirmation.acknowledge(NativeXrayController.STATE_KEY, command);
+            });
             return Service.START_NOT_STICKY;
         }
         if (!ACTION_START.equals(action)) return Service.START_NOT_STICKY;
