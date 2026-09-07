@@ -148,16 +148,25 @@ func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDur
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
+	pathCtx, stopPath, err := speedLabPathContext(r.Context(), func() error { return validateSpeedLabIdentity(a, identity) })
+	if err != nil {
+		return path, speedLabMeasurement{}, nil, err
+	}
+	defer stopPath()
+	r = r.WithContext(pathCtx)
 	measurement, err := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
 	if err != nil {
-		return path, measurement, nil, err
+		return path, measurement, nil, speedLabPathResultError(pathCtx, err)
 	}
 	var hops []speedLabHopMeasurement
 	if path.Topology == "multihop" {
 		hops, err = measureSpeedLabMultihopHopsContext(r.Context(), a, identity)
 		if err != nil {
-			return path, measurement, nil, err
+			return path, measurement, nil, speedLabPathResultError(pathCtx, err)
 		}
+	}
+	if err := speedLabPathResultError(pathCtx, validateSpeedLabIdentity(a, identity)); err != nil {
+		return path, measurement, nil, err
 	}
 	return path, measurement, hops, nil
 }
@@ -229,11 +238,20 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
 	}
-	measurement, measureErr := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
+	pathCtx, stopPath, err := speedLabPathContext(r.Context(), func() error { return validateSpeedLabIdentity(a, identity) })
+	if err != nil {
+		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
+	}
+	defer stopPath()
+	measurement, measureErr := measureSpeedLab(pathCtx, duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
 	var hops []speedLabHopMeasurement
 	if measureErr == nil && path.Topology == "multihop" {
-		hops, measureErr = measureSpeedLabMultihopHopsContext(r.Context(), a, identity)
+		hops, measureErr = measureSpeedLabMultihopHopsContext(pathCtx, a, identity)
 	}
+	measureErr = speedLabPathResultError(pathCtx, errors.Join(measureErr, validateSpeedLabIdentity(a, identity)))
+	// Stop and join the path observer before intentional temporary teardown.
+	// Cleanup must not turn a completed test into its own stale-path event.
+	stopPath()
 	cleanupErr := a.speedLabRestoreTemporary(snapshot)
 	if measureErr != nil {
 		if cleanupErr != nil {
