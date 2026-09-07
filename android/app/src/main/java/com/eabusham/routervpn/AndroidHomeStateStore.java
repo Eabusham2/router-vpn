@@ -9,6 +9,7 @@ import java.util.UUID;
 /** App-private runtime state used by the product Home dashboard. Never stores tunnel secrets. */
 final class AndroidHomeStateStore {
     private static final String PREFS = "routervpn_home_state_v1";
+    private static final String EMERGENCY_PREFIX = "Emergency Disconnect requested;";
 
     static final class Snapshot {
         final String sessionId, phase, logicalMode, runtimeMode, actualBase, fallback, warning, pathProof;
@@ -83,6 +84,7 @@ final class AndroidHomeStateStore {
     }
 
     static void warning(Context context, String warning) { prefs(context).edit().putString("warning", clean(warning)).apply(); }
+    static boolean emergencyDisconnectPending(Context context) { String warning=prefs(context).getString("warning","");return warning!=null&&warning.startsWith(EMERGENCY_PREFIX); }
     static void clearActualExit(Context context) { prefs(context).edit().remove("actual_exit_ip").remove("actual_exit_session").apply(); }
     static long advancePathGeneration(Context context) {
         SharedPreferences p = prefs(context); long next = p.getLong("path_generation", 0L) + 1L;
@@ -132,7 +134,16 @@ final class AndroidHomeStateStore {
     }
 
     static void failed(Context context, String warning) { SharedPreferences.Editor e=prefs(context).edit().putString("phase","failed").putString("warning",clean(warning)).putString("path_proof","failed").putBoolean("connected",false);clearAllIdentity(e).apply(); }
-    static void disconnected(Context context) { SharedPreferences.Editor e=prefs(context).edit().putString("session_id","").putString("phase","off").putString("logical_mode","").putString("runtime_mode","").putString("actual_base","").putString("fallback","").putString("warning","").putString("path_proof","not-run").putBoolean("connected",false);clearAllIdentity(e).apply(); }
+    static void disconnected(Context context) {
+        if (emergencyDisconnectPending(context)) {
+            AndroidRuntimeRegistry runtime = AndroidRuntimeRegistry.get(context);
+            if (runtime.wireGuard.getState() != com.wireguard.android.backend.Tunnel.State.DOWN
+                    || runtime.amneziaWG.getState() != org.amnezia.awg.backend.Tunnel.State.DOWN) {
+                throw new IllegalStateException("Emergency Disconnect cannot release session ownership until WireGuard and AmneziaWG both prove DOWN.");
+            }
+        }
+        SharedPreferences.Editor e=prefs(context).edit().putString("session_id","").putString("phase","off").putString("logical_mode","").putString("runtime_mode","").putString("actual_base","").putString("fallback","").putString("warning","").putString("path_proof","not-run").putBoolean("connected",false);clearAllIdentity(e).apply();
+    }
 
     static void saveActualExit(Context context, String sessionId, String ip) { prefs(context).edit().putString("actual_exit_session", clean(sessionId)).putString("actual_exit_ip", clean(ip)).apply(); }
     static String actualExitForCurrentSession(Context context) { SharedPreferences p=prefs(context);String session=p.getString("session_id","");String proofSession=p.getString("actual_exit_session","");if(session==null||session.isEmpty()||!session.equals(proofSession))return"";return p.getString("actual_exit_ip",""); }
