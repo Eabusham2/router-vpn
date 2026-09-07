@@ -683,8 +683,16 @@ func (a *app) multihopLiveLatency(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "multihop entry and exit must be different", http.StatusBadRequest)
 		return
 	}
-	entryValue, entryErr := quickProfileLatency(entry, q.Samples)
-	exitValue, exitErr := quickProfileLatency(exit, q.Samples)
+	entryValue, entryErr := quickProfileLatencyContext(r.Context(), entry, q.Samples)
+	if r.Context().Err() != nil {
+		http.Error(w, "multihop node latency request was cancelled", http.StatusRequestTimeout)
+		return
+	}
+	exitValue, exitErr := quickProfileLatencyContext(r.Context(), exit, q.Samples)
+	if r.Context().Err() != nil {
+		http.Error(w, "multihop node latency request was cancelled", http.StatusRequestTimeout)
+		return
+	}
 	payload := map[string]any{"entry_id": entry.ID, "exit_id": exit.ID, "measured_at": time.Now().UTC(), "note": "entry_ms and exit_ms are live client-to-node RTTs. current_path is included only when an actual multihop tunnel is connected; Router VPN does not fake an entry-to-exit hop measurement from arithmetic."}
 	if entryErr == nil {
 		payload["entry"] = entryValue
