@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -65,6 +66,19 @@ type speedLabPatternReader struct {
 	offset  int
 }
 
+// The transport may read the request concurrently with an early response.
+// Count consumed payload bytes rather than assuming ContentLength was sent.
+type speedLabUploadReader struct {
+	reader io.Reader
+	bytes  atomic.Int64
+}
+
+func (r *speedLabUploadReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.bytes.Add(int64(n))
+	return n, err
+}
+
 type speedLabParallelResult struct {
 	bytes int64
 	err   error
@@ -105,6 +119,8 @@ func normalizeSpeedLabDuration(mode string, minSeconds, maxSeconds float64) (spe
 
 func newSpeedLabHTTPClient(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Follow the active OS/TUN route, not an unrelated HTTP(S)_PROXY.
+	transport.Proxy = nil
 	transport.DisableCompression = true
 	transport.MaxIdleConns = 32
 	transport.MaxIdleConnsPerHost = 8
@@ -307,27 +323,38 @@ func speedLabDownloadRound(ctx context.Context, client *http.Client, bytesCount 
 }
 
 func speedLabUploadRound(ctx context.Context, client *http.Client, bytesCount int64, pattern []byte) (int64, time.Duration, error) {
-	reader := io.LimitReader(&speedLabPatternReader{pattern: pattern}, bytesCount)
+	reader := &speedLabUploadReader{reader: io.LimitReader(&speedLabPatternReader{pattern: pattern}, bytesCount)}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, speedLabUploadURL, reader)
 	if err != nil {
 		return 0, 0, err
 	}
 	req.ContentLength = bytesCount
 	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("User-Agent", "RouterVPN-SpeedLab/1")
 	started := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, 0, err
+		return reader.bytes.Load(), time.Since(started), err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	responseBytes, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, (64<<10)+1))
 	elapsed := time.Since(started)
+	sent := reader.bytes.Load()
 	if resp.StatusCode/100 != 2 {
-		return 0, elapsed, fmt.Errorf("upload load returned HTTP %d", resp.StatusCode)
+		return sent, elapsed, fmt.Errorf("upload load returned HTTP %d", resp.StatusCode)
 	}
-	return bytesCount, elapsed, nil
+	if readErr != nil {
+		return sent, elapsed, fmt.Errorf("read upload response: %w", readErr)
+	}
+	if responseBytes > 64<<10 {
+		return sent, elapsed, errors.New("upload response exceeded its 64 KiB limit")
+	}
+	if sent != bytesCount {
+		return sent, elapsed, fmt.Errorf("upload load consumed %d bytes; expected %d", sent, bytesCount)
+	}
+	return sent, elapsed, nil
 }
 
 func speedLabParallelRound(ctx context.Context, direction string, client *http.Client, bytesCount int64, streams int, pattern []byte) (int64, time.Duration, error) {
