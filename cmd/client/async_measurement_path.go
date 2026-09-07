@@ -26,20 +26,21 @@ func asyncMeasurementPathContext(parent context.Context, a *app, p common.Router
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// Reuse the joined path observer: it cancels HTTP only, never the VPN.
-	validate := func() error {
-		if err := validateAsyncMeasurementProfile(a, p, st, session, token); err != nil {
-			return err
-		}
-		if st.Mode == "multihop" {
-			if err := validateCurrentMultihopSpeedGraph(a, st, graph, session.ID); err != nil {
-				return err
-			}
-		}
-		return validateMeasurementProfiles(a, profiles)
+	if profiles[p.ID] != token {
+		return nil, nil, nil, errors.New("captured profile changed before live measurement")
 	}
-	ctx, stop, err := speedLabPathContext(parent, validate)
-	return ctx, stop, validate, err
+	binding := &asyncMeasurementAdoption{
+		owner: a, session: session, stateToken: mtuStateSnapshotToken(st), profiles: profiles,
+		multihop: st.Mode == "multihop", graph: graph, generation: homeExitProofs.generation(a),
+	}
+	// The observer and terminal persistence use the exact same immutable
+	// binding. Stop cancels HTTP only; it never stops or replaces the VPN.
+	ctx, stop, err := speedLabPathContext(parent, binding.validate)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	ctx = context.WithValue(ctx, asyncMeasurementBindingKey{}, binding)
+	return ctx, stop, binding.validate, nil
 }
 
 // Private API addresses can overlap across hops. Multihop DNS/public-exit
