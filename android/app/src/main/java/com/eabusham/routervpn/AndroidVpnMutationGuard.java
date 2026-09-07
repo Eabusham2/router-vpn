@@ -11,8 +11,8 @@ import android.os.Process;
 final class AndroidVpnMutationGuard {
     static boolean isBusy(Context context) {
         if (context == null) return true;
-        boolean ownedVpn = hasOwnedVpnTransport(context);
         try {
+            boolean ownedVpn = hasOwnedVpnTransport(context);
             AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(context);
             AndroidRuntimeRegistry e = AndroidRuntimeRegistry.get(context);
             String phase = home.phase == null ? "" : home.phase.trim().toLowerCase(java.util.Locale.ROOT);
@@ -42,8 +42,13 @@ final class AndroidVpnMutationGuard {
 
     static boolean failedSessionHasNoLiveEngine(Context context, AndroidRuntimeRegistry e) {
         if (context == null || e == null) return false;
-        AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(context);
-        return failedSessionHasNoLiveEngine(home, e) && !hasOwnedVpnTransport(context);
+        try {
+            AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(context);
+            return failedSessionHasNoLiveEngine(home, e) && !hasOwnedVpnTransport(context);
+        } catch (Throwable unavailable) {
+            // An unavailable platform/state query is not proof of completed teardown.
+            return false;
+        }
     }
 
     private static boolean failedSessionHasNoLiveEngine(AndroidHomeStateStore.Snapshot home, AndroidRuntimeRegistry e) {
@@ -80,11 +85,14 @@ final class AndroidVpnMutationGuard {
 
     private static boolean hasOwnedVpnTransport(Context context) {
         ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (cm == null) return false;
+        // Losing the system service or capabilities during a network transition
+        // cannot authorize a profile mutation or failed-session recovery.
+        if (cm == null) return true;
         Network network = cm.getActiveNetwork();
         if (network == null) return false;
         NetworkCapabilities caps = cm.getNetworkCapabilities(network);
-        if (caps == null || !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return false;
+        if (caps == null) return true;
+        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             int owner = caps.getOwnerUid();
             return owner == Process.myUid() || owner < 0;
