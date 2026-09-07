@@ -7,6 +7,7 @@ on:
       - 'modes/network_context.py'
       - 'modes/mtu-policy.py'
       - 'modes/test_mtu_policy.py'
+      - 'modes/test_generated_profile_fingerprint_fail_closed.py'
       - 'modes/mtu-throughput-tuner.py'
       - 'modes/mtu-throughput-tuner-platform.py'
       - 'modes/kill-switch-platform.py'
@@ -22,6 +23,7 @@ on:
       - 'modes/network_context.py'
       - 'modes/mtu-policy.py'
       - 'modes/test_mtu_policy.py'
+      - 'modes/test_generated_profile_fingerprint_fail_closed.py'
       - 'modes/mtu-throughput-tuner.py'
       - 'modes/mtu-throughput-tuner-platform.py'
       - 'modes/kill-switch-platform.py'
@@ -46,9 +48,11 @@ jobs:
           go-version: '1.24.x'
           cache: false
       - name: Compile MTU policy and optimizers
-        run: python3 -m py_compile modes/network_context.py modes/mtu-policy.py modes/mtu-throughput-tuner.py modes/mtu-throughput-tuner-platform.py modes/test_mtu_policy.py
+        run: python3 -m py_compile modes/network_context.py modes/mtu-policy.py modes/mtu-throughput-tuner.py modes/mtu-throughput-tuner-platform.py modes/test_mtu_policy.py modes/test_generated_profile_fingerprint_fail_closed.py
       - name: Run deterministic MTU policy/network tests
-        run: python3 modes/test_mtu_policy.py
+        run: |
+          python3 modes/test_mtu_policy.py
+          python3 modes/test_generated_profile_fingerprint_fail_closed.py
       - name: Run deterministic direct and platform-wrapper optimizer self-tests
         run: |
           python3 modes/mtu-throughput-tuner.py --self-test
