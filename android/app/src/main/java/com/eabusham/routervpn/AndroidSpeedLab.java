@@ -106,15 +106,42 @@ final class AndroidSpeedLab {
     private static void baseBytesGuard(int bytes){if(bytes<1||bytes>(32<<20))throw new IllegalArgumentException("Android Speed Lab round size is outside the bounded 1–32 MiB range.");}
 
     private double probe()throws Exception{
-        HttpURLConnection c=(HttpURLConnection)new URL(DOWN+"?bytes=1&r="+System.nanoTime()).openConnection();c.setConnectTimeout(2500);c.setReadTimeout(2500);c.setInstanceFollowRedirects(false);c.setUseCaches(false);c.setRequestProperty("Accept-Encoding","identity");c.setRequestProperty("Cache-Control","no-store");c.setRequestProperty("User-Agent","RouterVPN-SpeedLab/1");long start=System.nanoTime();int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Latency probe returned HTTP "+code);int count=0;try(InputStream in=c.getInputStream()){while(in.read()!=-1){count++;if(count>1)break;}}finally{c.disconnect();}if(count!=1)throw new IllegalStateException("Latency probe did not return exactly one byte.");return round((System.nanoTime()-start)/1_000_000d);
+        HttpURLConnection c=(HttpURLConnection)new URL(DOWN+"?bytes=1&r="+System.nanoTime()).openConnection();
+        try{
+            c.setConnectTimeout(2500);c.setReadTimeout(2500);c.setInstanceFollowRedirects(false);c.setUseCaches(false);c.setRequestProperty("Accept-Encoding","identity");c.setRequestProperty("Cache-Control","no-store");c.setRequestProperty("User-Agent","RouterVPN-SpeedLab/1");
+            long start=System.nanoTime();int code=c.getResponseCode();
+            if(code<200||code>=300)throw new IllegalStateException("Latency probe returned HTTP "+code);
+            int count=0;
+            try(InputStream in=c.getInputStream()){while(in.read()!=-1){count++;if(count>1)break;}}
+            if(count!=1)throw new IllegalStateException("Latency probe did not return exactly one byte.");
+            return round((System.nanoTime()-start)/1_000_000d);
+        }finally{c.disconnect();}
     }
 
     private long download(int bytes)throws Exception{
-        HttpURLConnection c=(HttpURLConnection)new URL(DOWN+"?bytes="+bytes+"&r="+System.nanoTime()).openConnection();c.setConnectTimeout(3500);c.setReadTimeout(30000);c.setInstanceFollowRedirects(false);c.setUseCaches(false);c.setRequestProperty("Accept-Encoding","identity");c.setRequestProperty("Cache-Control","no-store");c.setRequestProperty("User-Agent","RouterVPN-SpeedLab/1");int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Download load returned HTTP "+code);long total=0;try(InputStream in=c.getInputStream()){byte[]buf=new byte[64<<10];for(int n;(n=in.read(buf))!=-1;){total+=n;if(total>bytes)throw new IllegalStateException("Download exceeded requested size.");}}finally{c.disconnect();}if(total!=bytes)throw new IllegalStateException("Download returned "+total+" bytes, expected "+bytes+".");return total;
+        HttpURLConnection c=(HttpURLConnection)new URL(DOWN+"?bytes="+bytes+"&r="+System.nanoTime()).openConnection();
+        try{
+            c.setConnectTimeout(3500);c.setReadTimeout(30000);c.setInstanceFollowRedirects(false);c.setUseCaches(false);c.setRequestProperty("Accept-Encoding","identity");c.setRequestProperty("Cache-Control","no-store");c.setRequestProperty("User-Agent","RouterVPN-SpeedLab/1");
+            int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Download load returned HTTP "+code);
+            long total=0;
+            try(InputStream in=c.getInputStream()){byte[]buf=new byte[64<<10];for(int n;(n=in.read(buf))!=-1;){total+=n;if(total>bytes)throw new IllegalStateException("Download exceeded requested size.");}}
+            if(total!=bytes)throw new IllegalStateException("Download returned "+total+" bytes, expected "+bytes+".");
+            return total;
+        }finally{c.disconnect();}
     }
 
     private long upload(int bytes)throws Exception{
-        HttpURLConnection c=(HttpURLConnection)new URL(UP).openConnection();c.setConnectTimeout(3500);c.setReadTimeout(30000);c.setInstanceFollowRedirects(false);c.setUseCaches(false);c.setDoOutput(true);c.setRequestMethod("POST");c.setFixedLengthStreamingMode(bytes);c.setRequestProperty("Content-Type","application/octet-stream");c.setRequestProperty("Cache-Control","no-store");c.setRequestProperty("User-Agent","RouterVPN-SpeedLab/1");byte[]chunk=new byte[64<<10];int remaining=bytes;SecureRandom random=RANDOM.get();try(OutputStream out=c.getOutputStream()){while(remaining>0){int n=Math.min(chunk.length,remaining);random.nextBytes(chunk);out.write(chunk,0,n);remaining-=n;}out.flush();}int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Upload load returned HTTP "+code);try(InputStream in=c.getInputStream();ByteArrayOutputStream sink=new ByteArrayOutputStream()){byte[]buf=new byte[4096];for(int n,total=0;(n=in.read(buf))!=-1;){total+=n;if(total>65536)throw new IllegalStateException("Upload response exceeded limit.");sink.write(buf,0,n);}}finally{c.disconnect();}return bytes;
+        HttpURLConnection c=(HttpURLConnection)new URL(UP).openConnection();
+        // Own the connection before opening the output stream or reading any
+        // headers. Those operations can fail before an input stream exists.
+        try{
+            c.setConnectTimeout(3500);c.setReadTimeout(30000);c.setInstanceFollowRedirects(false);c.setUseCaches(false);c.setDoOutput(true);c.setRequestMethod("POST");c.setFixedLengthStreamingMode(bytes);c.setRequestProperty("Content-Type","application/octet-stream");c.setRequestProperty("Cache-Control","no-store");c.setRequestProperty("User-Agent","RouterVPN-SpeedLab/1");
+            byte[]chunk=new byte[64<<10];int remaining=bytes;SecureRandom random=RANDOM.get();
+            try(OutputStream out=c.getOutputStream()){while(remaining>0){int n=Math.min(chunk.length,remaining);random.nextBytes(chunk);out.write(chunk,0,n);remaining-=n;}out.flush();}
+            int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Upload load returned HTTP "+code);
+            try(InputStream in=c.getInputStream();ByteArrayOutputStream sink=new ByteArrayOutputStream()){byte[]buf=new byte[4096];for(int n,total=0;(n=in.read(buf))!=-1;){total+=n;if(total>65536)throw new IllegalStateException("Upload response exceeded limit.");sink.write(buf,0,n);}}
+            return bytes;
+        }finally{c.disconnect();}
     }
 
     private void requireFresh(AndroidHomeStateStore.Snapshot before){AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(context);if(before.connected!=now.connected||!same(before.sessionId,now.sessionId)||before.pathGeneration!=now.pathGeneration||!same(before.phase,now.phase)||!same(before.pathProof,now.pathProof)||!same(before.activeNodeId,now.activeNodeId)||!same(before.activeEntryId,now.activeEntryId)||!same(before.activeExitId,now.activeExitId)||!same(before.activeExternalId,now.activeExternalId)||!same(before.activeExternalProtocol,now.activeExternalProtocol)||!same(before.expectedExternalIp,now.expectedExternalIp)||!same(before.runtimeMode,now.runtimeMode)||!same(before.actualBase,now.actualBase)||!same(before.logicalMode,now.logicalMode))throw new StalePathException("Speed Lab result became stale because the Android VPN path changed during measurement.");if(now.connected&&(!"connected".equals(now.phase)||!"passed".equals(now.pathProof)))throw new StalePathException("Android current path is connected but not path-proved; Speed Lab refuses to label it.");if(!now.connected&&!"off".equals(now.phase))throw new StalePathException("Android disconnected path entered a transition during Speed Lab measurement.");}
