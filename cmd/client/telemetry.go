@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -419,7 +416,10 @@ func privatePathLatencyContext(ctx context.Context, p common.RouterProfile, st s
 	samples = clampLiveSamples(samples, 2)
 	values := make([]float64, 0, samples)
 	failed := 0
-	client := newPrivateTelemetryHTTPClient(1800 * time.Millisecond)
+	client, err := newAsyncMeasurementHTTPClient(st, 1800*time.Millisecond)
+	if err != nil {
+		return connectionLatencyResult{}, err
+	}
 	defer client.CloseIdleConnections()
 	url := base + "/health"
 	for i := 0; i < samples; i++ {
@@ -493,13 +493,24 @@ func (a *app) connectionLiveLatency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
-	value, err := privatePathLatencyContext(r.Context(), p, st, samples)
+	measured, stop, validate, err := connectionTelemetryPathContext(r.Context(), a, p, st, sessionAtStart)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "connection latency") {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
 		return
 	}
-	if err := validateActiveTelemetryPath(a, p, st, sessionAtStart); err != nil {
+	defer stop()
+	value, measureErr := privatePathLatencyContext(measured, p, st, samples)
+	if asyncMeasurementRequestError(w, r.Context(), measured, "connection latency") {
+		return
+	}
+	if err := validate(); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if measureErr != nil {
+		http.Error(w, measureErr.Error(), http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("content-type", "application/json")
@@ -565,94 +576,39 @@ func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := newPrivateTelemetryHTTPClient(30 * time.Second)
-	defer client.CloseIdleConnections()
-	base := strings.TrimRight(p.RouterAPI, "/")
-	downloadURL := base + "/api/benchmark/download?bytes=" + strconv.FormatInt(q.Bytes, 10)
-	downloadReq, err := privateBenchmarkRequestContext(r.Context(), http.MethodGet, downloadURL, p.APIToken, nil)
+	measured, stop, validate, err := connectionTelemetryPathContext(r.Context(), a, p, st, sessionAtStart)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "connection speed test") {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
 		return
 	}
-	downloadStarted := time.Now()
-	downloadResp, err := client.Do(downloadReq)
+	defer stop()
+	// Share the bounded download/upload implementation and acknowledgement
+	// validation with per-node speed tests; do not maintain a second HTTP path.
+	var value routedSpeedResult
+	if st.Mode == "multihop" {
+		value, err = measureRoutedProfileSpeedViaProxyContext(measured, p, q.Bytes, multihopProofProxy)
+	} else {
+		value, err = measureRoutedProfileSpeedContext(measured, p, q.Bytes)
+	}
+	if asyncMeasurementRequestError(w, r.Context(), measured, "connection speed test") {
+		return
+	}
+	if freshnessErr := validate(); freshnessErr != nil {
+		http.Error(w, freshnessErr.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
-		http.Error(w, "download benchmark failed: "+err.Error(), http.StatusBadGateway)
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	downloaded, copyErr := io.Copy(io.Discard, io.LimitReader(downloadResp.Body, q.Bytes+1))
-	_ = downloadResp.Body.Close()
-	if copyErr != nil {
-		http.Error(w, "download benchmark read failed: "+copyErr.Error(), http.StatusBadGateway)
-		return
-	}
-	if downloadResp.StatusCode/100 != 2 {
-		http.Error(w, "download benchmark returned "+downloadResp.Status, http.StatusBadGateway)
-		return
-	}
-	if downloaded != q.Bytes {
-		http.Error(w, fmt.Sprintf("download benchmark returned %d bytes, expected %d", downloaded, q.Bytes), http.StatusBadGateway)
-		return
-	}
-	downloadElapsed := time.Since(downloadStarted)
-	if err := validateActiveTelemetryPath(a, p, st, sessionAtStart); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-
-	uploadPayload := make([]byte, q.Bytes)
-	if _, err := rand.Read(uploadPayload); err != nil {
-		http.Error(w, "could not prepare incompressible upload payload", http.StatusInternalServerError)
-		return
-	}
-	uploadURL := base + "/api/benchmark/upload"
-	uploadReq, err := privateBenchmarkRequestContext(r.Context(), http.MethodPost, uploadURL, p.APIToken, bytes.NewReader(uploadPayload))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	uploadReq.ContentLength = q.Bytes
-	uploadStarted := time.Now()
-	uploadResp, err := client.Do(uploadReq)
-	if err != nil {
-		http.Error(w, "upload benchmark failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	uploadBody, readErr := io.ReadAll(io.LimitReader(uploadResp.Body, 64<<10))
-	_ = uploadResp.Body.Close()
-	if readErr != nil {
-		http.Error(w, "upload benchmark response failed: "+readErr.Error(), http.StatusBadGateway)
-		return
-	}
-	if uploadResp.StatusCode/100 != 2 {
-		http.Error(w, "upload benchmark returned "+uploadResp.Status+": "+strings.TrimSpace(string(uploadBody)), http.StatusBadGateway)
-		return
-	}
-	uploadElapsed := time.Since(uploadStarted)
-	var uploadServer struct {
-		ServerReceiveMs float64 `json:"server_receive_ms"`
-		Bytes           int64   `json:"bytes"`
-	}
-	if err := json.Unmarshal(uploadBody, &uploadServer); err != nil {
-		http.Error(w, "upload benchmark returned invalid JSON", http.StatusBadGateway)
-		return
-	}
-	if uploadServer.Bytes != q.Bytes {
-		http.Error(w, fmt.Sprintf("upload benchmark accepted %d bytes, expected %d", uploadServer.Bytes, q.Bytes), http.StatusBadGateway)
-		return
-	}
-	if err := validateActiveTelemetryPath(a, p, st, sessionAtStart); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-
-	mbits := float64(q.Bytes*8) / 1_000_000.0
+	// Preserve the flat response consumed by all three native desktop shells.
 	result := connectionSpeedResult{
-		Connected: true, Mode: st.Mode, LogicalMode: st.LogicalMode, RouterID: p.ID, Name: p.Name, Bytes: q.Bytes,
-		DownloadMbps: round3(mbits / downloadElapsed.Seconds()), UploadMbps: round3(mbits / uploadElapsed.Seconds()),
-		DownloadMs: round3(float64(downloadElapsed.Microseconds()) / 1000.0), UploadMs: round3(float64(uploadElapsed.Microseconds()) / 1000.0),
-		ServerReceiveMs: round3(uploadServer.ServerReceiveMs), MeasuredAt: time.Now().UTC(),
-		Proof: "authenticated bounded upload/download against the actual session-owned node private router-agent through the unchanged current VPN path",
+		Connected: true, Mode: st.Mode, LogicalMode: st.LogicalMode, RouterID: value.RouterID, Name: value.Name, Bytes: value.Bytes,
+		DownloadMbps: value.DownloadMbps, UploadMbps: value.UploadMbps,
+		DownloadMs: value.DownloadMs, UploadMs: value.UploadMs,
+		ServerReceiveMs: value.ServerReceiveMs, MeasuredAt: value.MeasuredAt, Proof: value.Proof,
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
@@ -683,6 +639,13 @@ func (a *app) multihopLiveLatency(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "multihop entry and exit must be different", http.StatusBadRequest)
 		return
 	}
+	if asyncMeasurementRequestError(w, r.Context(), r.Context(), "multihop node latency request") {
+		return
+	}
+	if st.Mode == "multihop" {
+		a.connectedMultihopLiveLatency(w, r, entry, exit, st, q.Samples)
+		return
+	}
 	entryValue, entryErr := quickProfileLatencyContext(r.Context(), entry, q.Samples)
 	if r.Context().Err() != nil {
 		http.Error(w, "multihop node latency request was cancelled", http.StatusRequestTimeout)
@@ -703,20 +666,6 @@ func (a *app) multihopLiveLatency(w http.ResponseWriter, r *http.Request) {
 		payload["exit"] = exitValue
 	} else {
 		payload["exit_error"] = exitErr.Error()
-	}
-	if st.Connected && st.Mode == "multihop" {
-		if p, current, err := activeLatencyTarget(a); err == nil {
-			sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
-			if path, pathErr := privatePathLatencyContext(r.Context(), p, current, 2); pathErr == nil {
-				if freshnessErr := validateActiveTelemetryPath(a, p, current, sessionAtStart); freshnessErr == nil {
-					payload["current_path"] = path
-				} else {
-					payload["current_path_error"] = freshnessErr.Error()
-				}
-			} else {
-				payload["current_path_error"] = pathErr.Error()
-			}
-		}
 	}
 	if entryErr != nil && exitErr != nil {
 		http.Error(w, "both multihop node latency probes failed", http.StatusBadGateway)
