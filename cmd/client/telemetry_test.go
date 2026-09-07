@@ -2,11 +2,50 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"router-vpn/internal/common"
 )
+
+func TestQuickProfileLatencyContextRejectsCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	_, err := quickProfileLatencyContext(ctx, common.RouterProfile{ID: "node-a", Endpoint: "127.0.0.1"}, 5)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled quick latency = %v, want context.Canceled", err)
+	}
+	if time.Since(started) > 250*time.Millisecond {
+		t.Fatal("cancelled quick latency kept probing ports")
+	}
+}
+
+func TestFastestProfileCancelledRequestCannotSelectWinner(t *testing.T) {
+	a := &app{
+		profiles: common.RouterProfileStore{SelectedID: "node-a", Profiles: []common.RouterProfile{
+			{ID: "node-a", Name: "A", NodeKind: "router-vpn", Endpoint: "127.0.0.1"},
+			{ID: "node-b", Name: "B", NodeKind: "router-vpn", Endpoint: "127.0.0.1"},
+		}},
+		state: state{RouterID: "node-a"},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/api/profile/fastest", strings.NewReader(`{"samples":5}`)).WithContext(ctx)
+	w := httptest.NewRecorder()
+	a.fastestProfile(w, req)
+	if w.Code != http.StatusRequestTimeout {
+		t.Fatalf("cancelled fastest = HTTP %d %q", w.Code, w.Body.String())
+	}
+	if a.profiles.SelectedID != "node-a" || a.state.RouterID != "node-a" {
+		t.Fatalf("cancelled fastest changed selection: selected=%q router=%q", a.profiles.SelectedID, a.state.RouterID)
+	}
+}
 
 func TestClampSpeedBytes(t *testing.T) {
 	cases := []struct {
