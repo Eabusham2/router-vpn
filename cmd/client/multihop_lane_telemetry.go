@@ -237,13 +237,16 @@ func measureRoutedProfileSpeedViaProxyContext(ctx context.Context, p common.Rout
 	if err != nil {
 		return routedSpeedResult{}, fmt.Errorf("hop-lane upload benchmark failed: %w", err)
 	}
-	body, readErr := io.ReadAll(io.LimitReader(uploadResp.Body, 64<<10))
+	body, readErr := io.ReadAll(io.LimitReader(uploadResp.Body, (64<<10)+1))
 	_ = uploadResp.Body.Close()
 	if readErr != nil {
 		return routedSpeedResult{}, fmt.Errorf("hop-lane upload benchmark response failed: %w", readErr)
 	}
 	if uploadResp.StatusCode/100 != 2 {
 		return routedSpeedResult{}, fmt.Errorf("hop-lane upload benchmark returned HTTP %d", uploadResp.StatusCode)
+	}
+	if len(body) > 64<<10 {
+		return routedSpeedResult{}, errors.New("hop-lane upload benchmark response is oversized")
 	}
 	uploadElapsed := time.Since(uploadStarted)
 	var ack struct {
