@@ -8,6 +8,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.Proxy;
 import java.net.URL;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -65,6 +66,7 @@ final class AndroidSpeedLab {
         private static JSONObject directionJson(Direction v)throws Exception{return new JSONObject().put("direction",v.direction).put("mbps",v.mbps).put("bytes",v.bytes).put("seconds",v.seconds).put("rounds",v.rounds).put("loaded_latency",latencyJson(v.loadedLatency)).put("bufferbloat_ms",v.bufferbloatMs).put("stopped_stable",v.stoppedStable);}
     }
 
+    // Measure the OS/TUN route, not a separate ambient HTTP proxy.
     private static final String DOWN="https://speed.cloudflare.com/__down";
     private static final String UP="https://speed.cloudflare.com/__up";
     private static final ThreadLocal<SecureRandom> RANDOM=ThreadLocal.withInitial(SecureRandom::new);
@@ -106,7 +108,7 @@ final class AndroidSpeedLab {
     private static void baseBytesGuard(int bytes){if(bytes<1||bytes>(32<<20))throw new IllegalArgumentException("Android Speed Lab round size is outside the bounded 1–32 MiB range.");}
 
     private double probe()throws Exception{
-        HttpURLConnection c=(HttpURLConnection)new URL(DOWN+"?bytes=1&r="+System.nanoTime()).openConnection();
+        HttpURLConnection c=(HttpURLConnection)new URL(DOWN+"?bytes=1&r="+System.nanoTime()).openConnection(Proxy.NO_PROXY);
         try{
             c.setConnectTimeout(2500);c.setReadTimeout(2500);c.setInstanceFollowRedirects(false);c.setUseCaches(false);c.setRequestProperty("Accept-Encoding","identity");c.setRequestProperty("Cache-Control","no-store");c.setRequestProperty("User-Agent","RouterVPN-SpeedLab/1");
             long start=System.nanoTime();int code=c.getResponseCode();
@@ -119,7 +121,7 @@ final class AndroidSpeedLab {
     }
 
     private long download(int bytes)throws Exception{
-        HttpURLConnection c=(HttpURLConnection)new URL(DOWN+"?bytes="+bytes+"&r="+System.nanoTime()).openConnection();
+        HttpURLConnection c=(HttpURLConnection)new URL(DOWN+"?bytes="+bytes+"&r="+System.nanoTime()).openConnection(Proxy.NO_PROXY);
         try{
             c.setConnectTimeout(3500);c.setReadTimeout(30000);c.setInstanceFollowRedirects(false);c.setUseCaches(false);c.setRequestProperty("Accept-Encoding","identity");c.setRequestProperty("Cache-Control","no-store");c.setRequestProperty("User-Agent","RouterVPN-SpeedLab/1");
             int code=c.getResponseCode();if(code<200||code>=300)throw new IllegalStateException("Download load returned HTTP "+code);
@@ -131,7 +133,7 @@ final class AndroidSpeedLab {
     }
 
     private long upload(int bytes)throws Exception{
-        HttpURLConnection c=(HttpURLConnection)new URL(UP).openConnection();
+        HttpURLConnection c=(HttpURLConnection)new URL(UP).openConnection(Proxy.NO_PROXY);
         // Own the connection before opening the output stream or reading any
         // headers. Those operations can fail before an input stream exists.
         try{

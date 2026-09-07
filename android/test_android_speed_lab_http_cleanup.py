@@ -15,13 +15,15 @@ JAVA = ROOT / "app/src/main/java/com/eabusham/routervpn"
 HARNESS = r'''package com.eabusham.routervpn;
 import android.content.Context;
 import java.io.*;
-import java.lang.reflect.*;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.*;
 import java.util.*;
 
 public final class SpeedLabHttpCleanupTest {
     static String method, scenario;
     static FakeConnection last;
+    static Proxy requestedProxy;
     static final List<String> failures = new ArrayList<>();
     static int cases;
 
@@ -63,7 +65,7 @@ public final class SpeedLabHttpCleanupTest {
         if (!condition) failures.add(method + "/" + scenario + ": " + message);
     }
     static void runCase(AndroidSpeedLab engine, String operation, String failure) throws Exception {
-        method = operation; scenario = failure; last = null; cases++;
+        method = operation; scenario = failure; last = null; requestedProxy = null; cases++;
         Method entry = "probe".equals(SpeedLabHttpCleanupTest.method)
             ? AndroidSpeedLab.class.getDeclaredMethod(method)
             : AndroidSpeedLab.class.getDeclaredMethod(method, int.class);
@@ -78,6 +80,7 @@ public final class SpeedLabHttpCleanupTest {
         check(last != null, "did not create a connection");
         if (last == null) return;
         check(last.disconnects == 1, "disconnect called " + last.disconnects + " times, expected exactly once");
+        check(Proxy.NO_PROXY.equals(requestedProxy), "provider request did not explicitly refuse ambient proxies");
         check(!last.getInstanceFollowRedirects(), "redirect following enabled");
         check(!last.getUseCaches(), "response caching enabled");
         check("no-store".equals(last.getRequestProperty("Cache-Control")), "missing no-store request");
@@ -90,7 +93,14 @@ public final class SpeedLabHttpCleanupTest {
             if (!"https".equals(protocol)) throw new AssertionError("unexpected scheme: " + protocol);
             return new URLStreamHandler() {
                 @Override protected URLConnection openConnection(URL url) {
+                    return connection(url, null);
+                }
+                @Override protected URLConnection openConnection(URL url, Proxy proxy) {
+                    return connection(url, proxy);
+                }
+                private URLConnection connection(URL url, Proxy proxy) {
                     if (!"speed.cloudflare.com".equals(url.getHost())) throw new AssertionError("unexpected provider");
+                    requestedProxy = proxy;
                     last = new FakeConnection(url); return last;
                 }
             };
