@@ -22,6 +22,7 @@ jobs:
         run: |
           python3 ios/RouterVPN/test_runtime_selection_contract.py
           python3 ios/RouterVPN/test_dns_policy_contract.py
+          python3 deploy/test_ios_speed_lab_http_boundary.py
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
       - name: Install XcodeGen
