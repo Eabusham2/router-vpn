@@ -523,7 +523,7 @@ func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
 	defer client.CloseIdleConnections()
 	base := strings.TrimRight(p.RouterAPI, "/")
 	downloadURL := base + "/api/benchmark/download?bytes=" + strconv.FormatInt(q.Bytes, 10)
-	downloadReq, err := privateBenchmarkRequest(http.MethodGet, downloadURL, p.APIToken, nil)
+	downloadReq, err := privateBenchmarkRequestContext(r.Context(), http.MethodGet, downloadURL, p.APIToken, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -560,7 +560,7 @@ func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uploadURL := base + "/api/benchmark/upload"
-	uploadReq, err := privateBenchmarkRequest(http.MethodPost, uploadURL, p.APIToken, bytes.NewReader(uploadPayload))
+	uploadReq, err := privateBenchmarkRequestContext(r.Context(), http.MethodPost, uploadURL, p.APIToken, bytes.NewReader(uploadPayload))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
