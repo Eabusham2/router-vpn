@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import platform
 import socket
+import stat
 import subprocess
 
 MAX_PROFILE_FILES = 128
@@ -106,6 +107,35 @@ def network_fingerprint(endpoint: str) -> str:
     return _digest("network-route-v1", "|".join(pieces).encode("utf-8"))
 
 
+def _read_generated_regular(path: Path, before: os.stat_result) -> bytes:
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise RuntimeError("generated MTU path profile contains a non-regular/symlink entry")
+    if before.st_size < 0 or before.st_size > MAX_PROFILE_FILE_BYTES:
+        raise RuntimeError("generated MTU path profile file exceeds safety limit")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(fd)
+        current = path.lstat()
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode) or not os.path.samestat(before, opened) or not os.path.samestat(opened, current):
+            raise RuntimeError("generated MTU path profile changed during open")
+        chunks: list[bytes] = []
+        total = 0
+        while total <= MAX_PROFILE_FILE_BYTES:
+            chunk = os.read(fd, min(65536, MAX_PROFILE_FILE_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total > MAX_PROFILE_FILE_BYTES:
+            raise RuntimeError("generated MTU path profile file exceeds safety limit")
+        final = path.lstat()
+        if stat.S_ISLNK(final.st_mode) or not stat.S_ISREG(final.st_mode) or not os.path.samestat(opened, final):
+            raise RuntimeError("generated MTU path profile changed during read")
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
 def generated_profile_fingerprint(root: Path, profile_id: str, mode: str) -> str:
     """Hash immutable generated profile inputs so protocol/port/profile changes retest.
 
@@ -126,30 +156,29 @@ def generated_profile_fingerprint(root: Path, profile_id: str, mode: str) -> str
     selected = next((p for p in candidates if p.is_dir()), None)
     if selected is None:
         return _digest("generated-profile-v1", f"missing|{profile_id}|{mode}".encode("utf-8"))
+    selected_info = selected.lstat()
+    if stat.S_ISLNK(selected_info.st_mode) or not stat.S_ISDIR(selected_info.st_mode):
+        raise RuntimeError("generated MTU path profile root is not a safe directory")
 
     digest = hashlib.sha256(b"router-vpn-generated-profile-v1\0")
     count = 0
     total = 0
     for path in sorted(selected.rglob("*")):
-        if not path.is_file():
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise RuntimeError("generated MTU path profile contains a symlink")
+        if stat.S_ISDIR(info.st_mode):
             continue
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("generated MTU path profile contains a non-regular entry")
         count += 1
         if count > MAX_PROFILE_FILES:
             raise RuntimeError("generated MTU path profile has too many files")
-        try:
-            size = path.stat().st_size
-        except OSError as exc:
-            raise RuntimeError("cannot stat generated MTU path profile") from exc
-        if size < 0 or size > MAX_PROFILE_FILE_BYTES:
-            raise RuntimeError("generated MTU path profile file exceeds safety limit")
-        total += size
+        data = _read_generated_regular(path, info)
+        total += len(data)
         if total > MAX_PROFILE_TOTAL_BYTES:
             raise RuntimeError("generated MTU path profile exceeds safety limit")
         rel = path.relative_to(selected).as_posix().encode("utf-8")
         digest.update(len(rel).to_bytes(4, "big")); digest.update(rel)
-        try:
-            data = path.read_bytes()
-        except OSError as exc:
-            raise RuntimeError("cannot read generated MTU path profile") from exc
         digest.update(len(data).to_bytes(8, "big")); digest.update(data)
     return digest.hexdigest()[:24]
