@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -21,14 +22,20 @@ const multihopEntryProofProxy = "http://127.0.0.1:1098"
 
 func newMultihopLaneHTTPClient(proxyRaw string, timeout time.Duration) (*http.Client, func(), error) {
 	proxyURL, err := url.Parse(strings.TrimSpace(proxyRaw))
-	if err != nil || proxyURL.Scheme != "http" || proxyURL.Hostname() != "127.0.0.1" || (proxyURL.Port() != "1098" && proxyURL.Port() != "1099") {
+	if err != nil || proxyURL.Scheme != "http" || proxyURL.Hostname() != "127.0.0.1" || (proxyURL.Port() != "1098" && proxyURL.Port() != "1099") || proxyURL.User != nil || proxyURL.Path != "" || proxyURL.RawQuery != "" || proxyURL.Fragment != "" || proxyURL.ForceQuery {
 		return nil, nil, errors.New("multihop hop telemetry requires a reserved local proof proxy")
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyURL(proxyURL)
 	transport.DisableCompression = true
 	transport.ForceAttemptHTTP2 = false
-	client := &http.Client{Transport: transport, Timeout: timeout}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("multihop proof/benchmark redirect refused")
+		},
+	}
 	return client, transport.CloseIdleConnections, nil
 }
 
@@ -44,6 +51,13 @@ func multihopLaneProofURL(p common.RouterProfile) (string, error) {
 }
 
 func proveMultihopLaneNode(p common.RouterProfile, proxyRaw string) error {
+	return proveMultihopLaneNodeContext(context.Background(), p, proxyRaw)
+}
+
+func proveMultihopLaneNodeContext(ctx context.Context, p common.RouterProfile, proxyRaw string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if strings.EqualFold(strings.TrimSpace(p.NodeKind), "external") || p.External != nil {
 		return errors.New("exact Router VPN hop proof is unavailable for an external-only node")
 	}
@@ -56,7 +70,7 @@ func proveMultihopLaneNode(p common.RouterProfile, proxyRaw string) error {
 		return err
 	}
 	defer closeIdle()
-	req, err := http.NewRequest(http.MethodGet, target, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return err
 	}
@@ -86,6 +100,13 @@ func proveMultihopLaneNode(p common.RouterProfile, proxyRaw string) error {
 }
 
 func measureRoutedProfileLatencyViaProxy(p common.RouterProfile, samples int, proxyRaw string) (connectionLatencyResult, error) {
+	return measureRoutedProfileLatencyViaProxyContext(context.Background(), p, samples, proxyRaw)
+}
+
+func measureRoutedProfileLatencyViaProxyContext(ctx context.Context, p common.RouterProfile, samples int, proxyRaw string) (connectionLatencyResult, error) {
+	if err := ctx.Err(); err != nil {
+		return connectionLatencyResult{}, err
+	}
 	if samples <= 0 {
 		samples = 4
 	}
@@ -104,7 +125,7 @@ func measureRoutedProfileLatencyViaProxy(p common.RouterProfile, samples int, pr
 	values := make([]float64, 0, samples)
 	failed := 0
 	for i := 0; i < samples; i++ {
-		req, reqErr := http.NewRequest(http.MethodGet, target, nil)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if reqErr != nil {
 			return connectionLatencyResult{}, reqErr
 		}
@@ -115,6 +136,9 @@ func measureRoutedProfileLatencyViaProxy(p common.RouterProfile, samples int, pr
 		started := time.Now()
 		resp, requestErr := client.Do(req)
 		if requestErr != nil {
+			if err := ctx.Err(); err != nil {
+				return connectionLatencyResult{}, err
+			}
 			failed++
 			continue
 		}
@@ -126,8 +150,15 @@ func measureRoutedProfileLatencyViaProxy(p common.RouterProfile, samples int, pr
 		}
 		values = append(values, float64(time.Since(started).Microseconds())/1000.0)
 		if i+1 < samples {
-			time.Sleep(35 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return connectionLatencyResult{}, ctx.Err()
+			case <-time.After(35 * time.Millisecond):
+			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return connectionLatencyResult{}, err
 	}
 	if len(values) == 0 {
 		return connectionLatencyResult{}, errors.New("exact multihop hop lane did not return a valid node-identity RTT sample")
@@ -139,12 +170,19 @@ func measureRoutedProfileLatencyViaProxy(p common.RouterProfile, samples int, pr
 		MedianMs: round3(percentile(values, .50)), AverageMs: round3(average(values)),
 		P90Ms: round3(percentile(values, .90)), MaxMs: round3(values[len(values)-1]),
 		MeasuredAt: time.Now().UTC(),
-		Proof: "exact Router VPN node-identity HTTP RTT through reserved local multihop hop lane " + proxyRaw,
+		Proof:      "exact Router VPN node-identity HTTP RTT through reserved local multihop hop lane " + proxyRaw,
 	}, nil
 }
 
 func measureRoutedProfileSpeedViaProxy(p common.RouterProfile, bytesCount int64, proxyRaw string) (routedSpeedResult, error) {
-	if err := proveMultihopLaneNode(p, proxyRaw); err != nil {
+	return measureRoutedProfileSpeedViaProxyContext(context.Background(), p, bytesCount, proxyRaw)
+}
+
+func measureRoutedProfileSpeedViaProxyContext(ctx context.Context, p common.RouterProfile, bytesCount int64, proxyRaw string) (routedSpeedResult, error) {
+	if err := ctx.Err(); err != nil {
+		return routedSpeedResult{}, err
+	}
+	if err := proveMultihopLaneNodeContext(ctx, p, proxyRaw); err != nil {
 		return routedSpeedResult{}, err
 	}
 	bytesCount = clampSpeedBytes(bytesCount)
@@ -163,6 +201,7 @@ func measureRoutedProfileSpeedViaProxy(p common.RouterProfile, bytesCount int64,
 	if err != nil {
 		return routedSpeedResult{}, err
 	}
+	downloadReq = downloadReq.WithContext(ctx)
 	downloadReq.Header.Set("Accept-Encoding", "identity")
 	downloadStarted := time.Now()
 	downloadResp, err := client.Do(downloadReq)
@@ -191,6 +230,7 @@ func measureRoutedProfileSpeedViaProxy(p common.RouterProfile, bytesCount int64,
 	if err != nil {
 		return routedSpeedResult{}, err
 	}
+	uploadReq = uploadReq.WithContext(ctx)
 	uploadReq.ContentLength = bytesCount
 	uploadStarted := time.Now()
 	uploadResp, err := client.Do(uploadReq)
@@ -218,7 +258,7 @@ func measureRoutedProfileSpeedViaProxy(p common.RouterProfile, bytesCount int64,
 	}
 	// Re-prove the same node after the load; token-authenticated byte transfer
 	// alone is not enough to label a hop when private addresses overlap.
-	if err := proveMultihopLaneNode(p, proxyRaw); err != nil {
+	if err := proveMultihopLaneNodeContext(ctx, p, proxyRaw); err != nil {
 		return routedSpeedResult{}, fmt.Errorf("hop-lane identity changed after throughput benchmark: %w", err)
 	}
 
