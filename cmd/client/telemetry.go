@@ -348,10 +348,16 @@ func validateActiveTelemetryPath(a *app, p common.RouterProfile, st state, sessi
 }
 
 func privatePathLatency(p common.RouterProfile, st state, samples int) (connectionLatencyResult, error) {
+	base, err := validatedPrivateRouterAPI(p.RouterAPI)
+	if err != nil {
+		return connectionLatencyResult{}, err
+	}
+	samples = clampLiveSamples(samples, 2)
 	values := make([]float64, 0, samples)
 	failed := 0
-	client := &http.Client{Timeout: 1800 * time.Millisecond}
-	url := strings.TrimRight(p.RouterAPI, "/") + "/health"
+	client := newPrivateTelemetryHTTPClient(1800 * time.Millisecond)
+	defer client.CloseIdleConnections()
+	url := base + "/health"
 	for i := 0; i < samples; i++ {
 		req, err := http.NewRequest(http.MethodGet, url, nil)
 		if err != nil {
@@ -366,9 +372,9 @@ func privatePathLatency(p common.RouterProfile, st state, samples int) (connecti
 			failed++
 			continue
 		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
+		read, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 2049))
 		_ = resp.Body.Close()
-		if resp.StatusCode/100 != 2 {
+		if readErr != nil || read > 2048 || resp.StatusCode/100 != 2 {
 			failed++
 			continue
 		}
@@ -430,6 +436,9 @@ func clampSpeedBytes(value int64) int64 {
 }
 
 func privateBenchmarkRequest(method, url, token string, body io.Reader) (*http.Request, error) {
+	if err := validatePrivateBenchmarkTarget(method, url); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err
@@ -438,6 +447,7 @@ func privateBenchmarkRequest(method, url, token string, body io.Reader) (*http.R
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Cache-Control", "no-store")
+	req.Header.Set("Accept-Encoding", "identity")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/octet-stream")
 	}
@@ -470,7 +480,8 @@ func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newPrivateTelemetryHTTPClient(30 * time.Second)
+	defer client.CloseIdleConnections()
 	base := strings.TrimRight(p.RouterAPI, "/")
 	downloadURL := base + "/api/benchmark/download?bytes=" + strconv.FormatInt(q.Bytes, 10)
 	downloadReq, err := privateBenchmarkRequest(http.MethodGet, downloadURL, p.APIToken, nil)
