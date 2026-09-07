@@ -70,25 +70,25 @@ final class AndroidSessionRevalidator {
                 return;
             }
             // AUTO/SMART/CUSTOM/logical paths are owned by the orchestrator.
-            // Its normal disconnect path clears the current managed child and
-            // may clear Home state before the callback. The callback may adopt
-            // this failure only if the exact pending token still exists OR the
-            // exact next generation is now the empty/off state produced by that
-            // teardown. A newer non-empty session is never touched.
+            // Its disconnect path now retains frozen ownership if child cleanup
+            // fails. The callback may only adopt this failure for the exact
+            // pending token or the exact empty/off state produced by a proved
+            // successful teardown; a newer non-empty session is never touched.
             engines.orchestrator.disconnect(new AndroidModeOrchestrator.Callback(){
                 @Override public void progress(String ignored){}
                 @Override public void finished(boolean ok,String ignoredMode,String cleanupMessage){
                     AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(context);
                     if(!sameRevalidation(token,now)&&!sameCleanedRevalidation(token,now))return;
                     String suffix=ok?"":"; owner cleanup reported: "+safeMessage(cleanupMessage);
-                    AndroidHomeStateStore.failed(context,message+suffix);
+                    if(ok)AndroidHomeStateStore.failed(context,message+suffix);
+                    else AndroidHomeStateStore.failedPreservingOwnership(context,message+suffix);
                 }
             });
         }catch(Throwable cleanupError){
-            // The token is still ours here; make the failed proof visible even
-            // when owner teardown itself reports an error instead of leaving a
-            // stale Connected/connecting state behind.
-            if(isSameRevalidation(token))AndroidHomeStateStore.failed(context,message+"; owner cleanup failed: "+safe(cleanupError));
+            // Teardown did not complete. Keep the exact frozen owner/session
+            // identity so Emergency Disconnect or a later retry still knows
+            // which runtime graph must be stopped.
+            if(isSameRevalidation(token))AndroidHomeStateStore.failedPreservingOwnership(context,message+"; owner cleanup failed: "+safe(cleanupError));
         }
     }
 
