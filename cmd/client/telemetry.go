@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -348,8 +349,22 @@ func validateActiveTelemetryPath(a *app, p common.RouterProfile, st state, sessi
 }
 
 func privatePathLatency(p common.RouterProfile, st state, samples int) (connectionLatencyResult, error) {
+	return privatePathLatencyContext(context.Background(), p, st, samples)
+}
+
+func privatePathLatencyContext(ctx context.Context, p common.RouterProfile, st state, samples int) (connectionLatencyResult, error) {
+	if err := ctx.Err(); err != nil {
+		return connectionLatencyResult{}, err
+	}
+	if p.External != nil || strings.EqualFold(strings.TrimSpace(p.NodeKind), "external") {
+		return connectionLatencyResult{}, errors.New("private Router VPN node latency is unavailable for an external-only node")
+	}
 	base, err := validatedPrivateRouterAPI(p.RouterAPI)
 	if err != nil {
+		return connectionLatencyResult{}, err
+	}
+	// Validate the paired identity before constructing any authenticated request.
+	if _, err := expectedNodeProofID(p); err != nil {
 		return connectionLatencyResult{}, err
 	}
 	samples = clampLiveSamples(samples, 2)
@@ -359,35 +374,56 @@ func privatePathLatency(p common.RouterProfile, st state, samples int) (connecti
 	defer client.CloseIdleConnections()
 	url := base + "/health"
 	for i := 0; i < samples; i++ {
-		req, err := http.NewRequest(http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return connectionLatencyResult{}, err
 		}
 		if strings.TrimSpace(p.APIToken) != "" {
 			req.Header.Set("Authorization", "Bearer "+p.APIToken)
 		}
+		req.Header.Set("Cache-Control", "no-store")
+		req.Header.Set("Accept-Encoding", "identity")
 		started := time.Now()
 		resp, err := client.Do(req)
 		if err != nil {
+			if ctx.Err() != nil {
+				return connectionLatencyResult{}, ctx.Err()
+			}
 			failed++
 			continue
 		}
-		read, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 2049))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<10)+1))
 		_ = resp.Body.Close()
-		if readErr != nil || read > 2048 || resp.StatusCode/100 != 2 {
+		elapsedMs := float64(time.Since(started).Microseconds()) / 1000.0
+		if err := ctx.Err(); err != nil {
+			return connectionLatencyResult{}, err
+		}
+		if readErr != nil || len(body) > 16<<10 || resp.StatusCode/100 != 2 {
 			failed++
 			continue
 		}
-		values = append(values, float64(time.Since(started).Microseconds())/1000.0)
-		if i+1 < samples {
-			time.Sleep(35 * time.Millisecond)
+		// A reachable private address can belong to a different Router VPN node.
+		// Never salvage an earlier sample after an identity mismatch in this set.
+		if err := validateSelectedNodeProof(p, body); err != nil {
+			return connectionLatencyResult{}, fmt.Errorf("private latency node proof failed: %w", err)
 		}
+		values = append(values, elapsedMs)
+		if i+1 < samples {
+			select {
+			case <-ctx.Done():
+				return connectionLatencyResult{}, ctx.Err()
+			case <-time.After(35 * time.Millisecond):
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return connectionLatencyResult{}, err
 	}
 	if len(values) == 0 {
-		return connectionLatencyResult{}, errors.New("current private tunnel path did not answer")
+		return connectionLatencyResult{}, errors.New("current private tunnel path did not answer with a proved node identity")
 	}
 	sort.Float64s(values)
-	return connectionLatencyResult{Connected: true, Mode: st.Mode, RouterID: p.ID, Name: p.Name, Samples: len(values), Failed: failed, MinMs: round3(values[0]), MedianMs: round3(percentile(values, .50)), AverageMs: round3(average(values)), P90Ms: round3(percentile(values, .90)), MaxMs: round3(values[len(values)-1]), MeasuredAt: time.Now().UTC(), Proof: "HTTP RTT to the active node private Router API through the current tunnel"}, nil
+	return connectionLatencyResult{Connected: true, Mode: st.Mode, RouterID: p.ID, Name: p.Name, Samples: len(values), Failed: failed, MinMs: round3(values[0]), MedianMs: round3(percentile(values, .50)), AverageMs: round3(average(values)), P90Ms: round3(percentile(values, .90)), MaxMs: round3(values[len(values)-1]), MeasuredAt: time.Now().UTC(), Proof: "HTTP RTT to the active node private Router API through the current tunnel; paired node identity proved for every sample"}, nil
 }
 
 func (a *app) connectionLiveLatency(w http.ResponseWriter, r *http.Request) {
@@ -408,7 +444,7 @@ func (a *app) connectionLiveLatency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
-	value, err := privatePathLatency(p, st, samples)
+	value, err := privatePathLatencyContext(r.Context(), p, st, samples)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -614,7 +650,7 @@ func (a *app) multihopLiveLatency(w http.ResponseWriter, r *http.Request) {
 	if st.Connected && st.Mode == "multihop" {
 		if p, current, err := activeLatencyTarget(a); err == nil {
 			sessionAtStart := sessionTrackerFor(a).snapshot(0).ID
-			if path, pathErr := privatePathLatency(p, current, 2); pathErr == nil {
+			if path, pathErr := privatePathLatencyContext(r.Context(), p, current, 2); pathErr == nil {
 				if freshnessErr := validateActiveTelemetryPath(a, p, current, sessionAtStart); freshnessErr == nil {
 					payload["current_path"] = path
 				} else {
