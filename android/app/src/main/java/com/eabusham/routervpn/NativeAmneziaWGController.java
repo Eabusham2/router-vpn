@@ -115,12 +115,18 @@ final class NativeAmneziaWGController implements Tunnel {
                 if (result != State.DOWN) throw new IllegalStateException("AmneziaWG teardown did not prove DOWN.");
                 clearActive();
                 lastError = "";
-                if (publishHomeState) AndroidHomeStateStore.disconnected(appContext);
+                if (publishHomeState && !AndroidHomeStateStore.emergencyDisconnectPending(appContext)) AndroidHomeStateStore.disconnected(appContext);
                 homeStateOwner = false;
                 callback.done(State.DOWN, "Native Android AmneziaWG disconnected.", null);
             } catch (Throwable error) {
                 lastError = safeMessage(error);
-                if (publishHomeState) AndroidHomeStateStore.failed(appContext, "AmneziaWG disconnect incomplete: " + lastError);
+                if (publishHomeState) {
+                    if (AndroidHomeStateStore.emergencyDisconnectPending(appContext)) {
+                        AndroidHomeStateStore.warning(appContext, "Emergency Disconnect requested; AmneziaWG disconnect incomplete: " + lastError);
+                    } else {
+                        AndroidHomeStateStore.failed(appContext, "AmneziaWG disconnect incomplete: " + lastError);
+                    }
+                }
                 callback.done(state, "AmneziaWG disconnect incomplete: " + lastError, error);
             }
         });
