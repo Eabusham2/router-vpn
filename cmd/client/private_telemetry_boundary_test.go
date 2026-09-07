@@ -61,6 +61,32 @@ func TestPrivateTelemetryBoundaryRejectsTargetsBeforeAttachingCredentials(t *tes
 	}
 }
 
+func TestPrivateBenchmarkRequestContextPreservesCancellationAndHeaders(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := privateBenchmarkRequestContext(ctx, http.MethodPost,
+		"http://10.77.0.1:8787/api/benchmark/upload", "fixture-node-token", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer req.Body.Close()
+	if req.Context() != ctx {
+		t.Fatal("private benchmark request lost the caller context")
+	}
+	if req.Header.Get("Authorization") != "Bearer fixture-node-token" {
+		t.Fatal("context-bound private benchmark request lost its node token")
+	}
+	cancel()
+	select {
+	case <-req.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("cancelling the caller did not cancel the private benchmark request")
+	}
+	if _, err := privateBenchmarkRequestContext(nil, http.MethodGet,
+		"http://10.77.0.1:8787/api/benchmark/download?bytes=1", "fixture-node-token", nil); err == nil {
+		t.Fatal("nil context was accepted for private benchmark request")
+	}
+}
+
 func TestPrivateTelemetryBoundaryPreservesPrivateUploadHeaders(t *testing.T) {
 	req, err := privateBenchmarkRequest(http.MethodPost,
 		"http://10.77.0.1:8787/api/benchmark/upload", "fixture-node-token", strings.NewReader("payload"))
