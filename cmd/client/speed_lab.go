@@ -284,6 +284,12 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 	if scope == "" {
 		scope = "current"
 	}
+	finishMeasurement, err := beginSpeedLabRun(a)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer finishMeasurement()
 	var path speedLabPath
 	var measurement speedLabMeasurement
 	var hops []speedLabHopMeasurement
