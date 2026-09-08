@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 )
 
 type asyncMeasurementBindingKey struct{}
@@ -12,19 +13,53 @@ type asyncMeasurementBindingKey struct{}
 // observer. It contains profile hashes, never captured credentials or mutable
 // profile pointers. The owner check prevents another app from adopting it.
 type asyncMeasurementAdoption struct {
-	owner      *app
-	session    connectionSession
-	stateToken string
-	profiles   map[string]string
-	multihop   bool
-	graph      activeMultihopGraph
-	generation uint64
+	trackerOnce sync.Once
+	tracker     *sessionTracker
+	trackerErr  error
+	owner       *app
+	session     connectionSession
+	stateToken  string
+	profiles    map[string]string
+	multihop    bool
+	graph       activeMultihopGraph
+	generation  uint64
+}
+
+// speedLabPathContext runs validate synchronously before starting its observer.
+// Capture the registered tracker exactly once at that preflight, without the
+// side effect of sessionTrackerFor (which creates a new observer when absent).
+// The same session ID in a replacement tracker is not the same process owner.
+func (b *asyncMeasurementAdoption) sessionOwner() (*sessionTracker, error) {
+	b.trackerOnce.Do(func() {
+		value, ok := sessionTrackers.Load(b.owner)
+		tracker, typed := value.(*sessionTracker)
+		if !ok || !typed || tracker == nil || tracker.a != b.owner {
+			b.trackerErr = errors.New("live measurement has no matching process session owner")
+			return
+		}
+		b.tracker = tracker
+	})
+	if b.trackerErr != nil {
+		return nil, b.trackerErr
+	}
+	current, ok := sessionTrackers.Load(b.owner)
+	if !ok || current != b.tracker {
+		return nil, errors.New("live measurement process session owner changed")
+	}
+	return b.tracker, nil
 }
 
 // Caller holds tracker.mu -> app.mu. Do not call snapshot or an app-locking
 // validation helper here: persistence must remain atomic with these checks.
 func (b *asyncMeasurementAdoption) validateLocked(current *connectionSession) error {
 	a := b.owner
+	tracker, err := b.sessionOwner()
+	if err != nil {
+		return err
+	}
+	if current != tracker.session {
+		return errors.New("live measurement adoption holds a different session owner's locks")
+	}
 	if current == nil || !b.session.Connected || b.session.Phase != "connected" || b.session.PathProof != "passed" || !sameAsyncMeasurementSession(b.session, *current) {
 		return errors.New("VPN session changed before live measurement adoption")
 	}
@@ -54,7 +89,10 @@ func (b *asyncMeasurementAdoption) validateLocked(current *connectionSession) er
 }
 
 func (b *asyncMeasurementAdoption) validate() error {
-	tracker := sessionTrackerFor(b.owner)
+	tracker, err := b.sessionOwner()
+	if err != nil {
+		return err
+	}
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 	b.owner.mu.Lock()
@@ -70,11 +108,14 @@ func (a *app) beginAsyncMeasurementAdoption(ctx context.Context) (func(), error)
 	if !ok || binding == nil || binding.owner != a {
 		return nil, errors.New("live measurement has no matching immutable adoption binding")
 	}
+	tracker, err := binding.sessionOwner()
+	if err != nil {
+		return nil, err
+	}
 	releaseOperation, err := a.beginNodeBoundOperation()
 	if err != nil {
 		return nil, err
 	}
-	tracker := sessionTrackerFor(a)
 	tracker.mu.Lock()
 	a.mu.Lock()
 	release := func() { a.mu.Unlock(); tracker.mu.Unlock(); releaseOperation() }
