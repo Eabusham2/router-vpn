@@ -189,9 +189,17 @@ def selected_dns_proof() -> bool:
         )
         and mod.has(
             "cmd/client/session_state.go",
-            "proveDNSAsync",
-            "DNSProof",
+            "proveDNSAsyncWithProbe(sessionID, s, runtimeID, proveSelectedDNSContext)",
             'DNSProof.Status = "checking"',
+            "t.invalidateDNSProofBindingLocked()",
+        )
+        and mod.has(
+            "cmd/client/dns_proof_path.go",
+            "asyncMeasurementPathContext",
+            "beginAsyncMeasurementAdoption(ctx)",
+            "defer stop()",
+            "defer release()",
+            "dnsProofBinding.validateLocked(t.session)",
             '"dns-proof"',
             "t.session.DNSProof = proof",
         )
