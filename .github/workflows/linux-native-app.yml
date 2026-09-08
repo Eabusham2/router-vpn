@@ -6,6 +6,7 @@ on:
     paths:
       - 'client/linux/**'
       - 'deploy/package-linux-native.sh'
+      - 'deploy/test-linux-rendered-layout.sh'
       - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
@@ -20,6 +21,7 @@ on:
     paths:
       - 'client/linux/**'
       - 'deploy/package-linux-native.sh'
+      - 'deploy/test-linux-rendered-layout.sh'
       - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
@@ -59,7 +61,7 @@ jobs:
       - name: Install native GUI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file xvfb xauth
       - name: Desktop icon generator self-test
         run: python3 deploy/materialize-desktop-icons.py --self-test
       - name: Test controller and shared contracts
