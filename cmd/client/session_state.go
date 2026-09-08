@@ -85,6 +85,7 @@ type sessionTracker struct {
 	seq                 uint64
 	dnsProofRunning     bool
 	dnsProofLastAttempt time.Time
+	dnsProofBinding     *asyncMeasurementAdoption
 }
 
 var sessionTrackers sync.Map
@@ -131,7 +132,7 @@ func (t *sessionTracker) capture() observedConnection {
 	return observedConnection{
 		Connected: s.Connected, Mode: s.Mode, LogicalMode: s.LogicalMode,
 		RuntimeMode: s.RuntimeMode, Base: s.Base, RouterID: s.RouterID,
-		Phase: s.Phase, LastError: s.LastError, Profile: p,
+		Phase: s.Phase, LastError: s.LastError, Profile: cloneRouterProfile(p),
 	}
 }
 
@@ -239,6 +240,7 @@ func (t *sessionTracker) startLocked(s observedConnection, phase string) {
 	t.lastKey = ""
 	t.dnsProofRunning = false
 	t.dnsProofLastAttempt = time.Time{}
+	t.dnsProofBinding = nil
 }
 
 func (t *sessionTracker) observe(s observedConnection) {
@@ -288,6 +290,7 @@ func (t *sessionTracker) observe(s observedConnection) {
 	t.session.Connected = s.Connected
 	t.session.Error = typedError(s.LastError)
 	t.session.ExitIP = s.Profile.PublicIP
+	t.invalidateDNSProofBindingLocked()
 	if t.session.DNSProof.Status == "not-proven" {
 		t.session.DNSProof.Mode = s.Profile.DNSMode
 		t.session.DNSProof.Host = s.Profile.DNSHost
@@ -341,22 +344,7 @@ func (t *sessionTracker) observe(s observedConnection) {
 }
 
 func (t *sessionTracker) proveDNSAsync(sessionID string, s observedConnection, runtimeID string) {
-	proof := proveSelectedDNS(t.a, s, runtimeID)
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.session == nil || t.session.ID != sessionID {
-		return
-	}
-	if !t.session.Connected || t.session.PathProof != "passed" || t.session.RouterID != s.RouterID || t.session.ActualMode != runtimeID || t.session.ActualBase != s.Base || !t.dnsProofObservationStillCurrentLocked(s, runtimeID) {
-		t.dnsProofRunning = false
-		t.dnsProofLastAttempt = time.Time{}
-		t.session.DNSProof = dnsProofState{Status: "not-proven", Reason: "active VPN node/runtime/base or DNS policy changed while DNS proof was running; stale result discarded"}
-		t.eventLocked("dns-proof-stale", t.session.Phase, t.session.DNSProof.Reason, t.session.Connected, t.session.ActualMode, t.session.ActualBase)
-		return
-	}
-	t.dnsProofRunning = false
-	t.session.DNSProof = proof
-	t.eventLocked("dns-proof", t.session.Phase, proof.Reason, t.session.Connected, t.session.ActualMode, t.session.ActualBase)
+	t.proveDNSAsyncWithProbe(sessionID, s, runtimeID, proveSelectedDNSContext)
 }
 
 func (t *sessionTracker) eventLocked(kind, phase, message string, connected bool, runtimeID, base string) {

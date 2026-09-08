@@ -40,7 +40,7 @@ guard = require(
 require(
     "cmd/client/profile_settings.go",
     'case "", "off", "failed":', "return true",
-    "beginMutationOperation(r)", "oldProfile := profile", "a.state = oldState",
+    "beginMutationOperation(r)", "oldProfile := profile", "a.profiles.Profiles[i] = oldProfile", "a.state = oldState",
 )
 main = require(
     "cmd/client/main.go",
@@ -117,8 +117,12 @@ for rel, markers in {
     ),
     "cmd/client/session_state.go": (
         "profileSettingsBusy(s.Connected, s.Phase)", "profileID = liveID",
-        "dnsProofObservationStillCurrentLocked", "dns-proof-stale", "stale result discarded",
+        "dnsProofObservationStillCurrentLocked", "proveDNSAsyncWithProbe", "proveSelectedDNSContext", "invalidateDNSProofBindingLocked",
         "t.dnsProofLastAttempt = time.Time{}", "asyncMeasurementProfileToken(profile) == asyncMeasurementProfileToken(s.Profile)",
+    ),
+    "cmd/client/dns_proof_path.go": (
+        "asyncMeasurementPathContext", "beginAsyncMeasurementAdoption", "dns-proof-stale", "stale result discarded",
+        "dnsProofBinding.validateLocked", "defer stop()", "defer release()",
     ),
     "cmd/client/extras.go": (
         "captureAsyncMeasurementSession", "sameAsyncMeasurementSession", "activeAsyncMeasurementProfile",
