@@ -66,7 +66,10 @@ func TestDNSUDPProbeValidatesTheWholeResponse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			endpoint, calls := dnsProbeTestServer(t, "udp4", "127.0.0.1:0", func(q []byte) []byte { q[2] |= 128; return tc.reply(q) })
 			duration, err := ProbeDNSUDP(context.Background(), endpoint, 1, time.Second)
-			if (err == nil) != tc.valid || tc.valid && duration <= 0 || !tc.valid && duration != 0 {
+			// A valid loopback exchange can complete within one clock tick (as
+			// observed on Windows). Protocol validation, not positive elapsed
+			// time, decides success; retain the real zero rather than inventing RTT.
+			if (err == nil) != tc.valid || tc.valid && duration < 0 || !tc.valid && duration != 0 {
 				t.Fatalf("duration=%s err=%v valid=%t", duration, err, tc.valid)
 			}
 			if calls.Load() != 1 {
