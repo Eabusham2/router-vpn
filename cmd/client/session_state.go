@@ -288,7 +288,8 @@ func (t *sessionTracker) observe(s observedConnection) {
 	t.session.Phase = phase
 	t.session.Connected = s.Connected
 	t.session.Error = typedError(s.LastError)
-	t.session.ExitIP = s.Profile.PublicIP
+	// Historical profile metadata must not become live public-exit proof.
+	t.session.ExitIP = ""
 	t.invalidateDNSProofBindingLocked()
 	if t.session.DNSProof.Status == "not-proven" {
 		t.session.DNSProof.Mode = s.Profile.DNSMode
@@ -408,7 +409,8 @@ func (a *app) sessionStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(sessionTrackerFor(a).snapshot(0))
+	w.Header().Set("cache-control", "no-store")
+	_ = json.NewEncoder(w).Encode(sessionTrackerFor(a).snapshotWithLiveExitProof())
 }
 
 func (a *app) sessionEvents(w http.ResponseWriter, r *http.Request) {
