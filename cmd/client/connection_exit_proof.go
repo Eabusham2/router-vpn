@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"router-vpn/internal/common"
 )
 
 var publicExitProofProviders = []string{"https://api64.ipify.org", "https://api.ipify.org"}
@@ -25,10 +27,11 @@ func stopTimerWithoutBlocking(timer *time.Timer) {
 }
 
 func proveExpectedPublicExit(ctx context.Context, client *http.Client, providers []string, expected, label string, window time.Duration) error {
-	expectedIP := net.ParseIP(strings.TrimSpace(expected))
-	if expectedIP == nil {
-		return errors.New("expected public exit IP is invalid")
+	publicExpected, err := common.NormalizeExpectedPublicIP(expected)
+	if err != nil {
+		return fmt.Errorf("expected public exit IP is invalid: %w", err)
 	}
+	expectedIP := net.ParseIP(publicExpected)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -45,6 +48,13 @@ func proveExpectedPublicExit(ctx context.Context, client *http.Client, providers
 		label = "public exit"
 	}
 
+	// Preserve the caller's owned transport and TLS settings, but never let a
+	// provider redirect substitute another endpoint as connection evidence.
+	// Do not mutate a shared client's redirect policy.
+	proofClient := *client
+	proofClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("public exit proof redirect refused")
+	}
 	proofCtx, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
 	var last error
@@ -64,7 +74,9 @@ func proveExpectedPublicExit(ctx context.Context, client *http.Client, providers
 				last = err
 				continue
 			}
-			resp, err := client.Do(req)
+			req.Header.Set("Cache-Control", "no-store")
+			req.Header.Set("Accept-Encoding", "identity")
+			resp, err := proofClient.Do(req)
 			if err != nil {
 				if ctx.Err() != nil {
 					return fmt.Errorf("%s proof cancelled: %w", label, ctx.Err())
@@ -72,8 +84,20 @@ func proveExpectedPublicExit(ctx context.Context, client *http.Client, providers
 				last = err
 				continue
 			}
-			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 257))
 			_ = resp.Body.Close()
+			// A late successful body cannot finish a cancelled connection. Also
+			// read a sentinel byte instead of accepting a truncated IP prefix.
+			if err := proofCtx.Err(); err != nil {
+				if ctx.Err() != nil {
+					return fmt.Errorf("%s proof cancelled: %w", label, ctx.Err())
+				}
+				return fmt.Errorf("%s proof timed out: %w", label, err)
+			}
+			if len(body) > 256 {
+				last = fmt.Errorf("%s proof returned an oversized response", label)
+				continue
+			}
 			if readErr != nil {
 				last = readErr
 				continue
