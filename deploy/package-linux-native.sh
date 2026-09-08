@@ -180,5 +180,6 @@ python3 "$ROOT/deploy/check-generic-package-secrets.py" "$OUT"
   sha256sum "$name.tar.gz" > "$name.sha256"
   sha256sum -c "$name.sha256"
 )
+bash "$ROOT/deploy/test-linux-rendered-layout.sh" "$OUT/$name.tar.gz"
 rm -rf "$work"
 echo "Packaged native Linux Router VPN app: $OUT/$name.tar.gz"
