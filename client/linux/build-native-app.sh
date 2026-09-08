@@ -12,12 +12,13 @@ UNIFIED_INC="$ROOT/client/linux/routervpn-unified-shell-v8.inc"
 TELEMETRY_INC="$ROOT/client/linux/routervpn-telemetry-v9.inc"
 SPEED_LAB_INC="$ROOT/client/linux/routervpn-speed-lab-v12.inc"
 GLOBE_INC="$ROOT/client/linux/routervpn-globe-v10.inc"
+RESPONSIVE_INC="$ROOT/client/linux/routervpn-responsive-v15.inc"
 V4="$ROOT/client/linux/routervpn-gtk-product-v4.c"
 V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"
 START_LAYER_SETTINGS="$ROOT/client/linux/apply-start-layer-settings.py"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$GLOBE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
+SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v10.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
 BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v10-shipping.c"
@@ -32,7 +33,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
 done
-for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$GLOBE_INC"; do
+for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$GLOBE_INC" "$RESPONSIVE_INC"; do
   [[ -s "$source" ]] || { echo "Missing Linux shipping include: $source" >&2; exit 2; }
 done
 mkdir -p "$(dirname "$OUT")"
@@ -186,11 +187,27 @@ if text.count(legacy_builder) != 1: raise SystemExit('Linux unified shell could 
 text = text.replace(legacy_builder, 'static void build_ui_legacy_v5(App *app) {', 1)
 self_test_marker = 'static int self_test_v5(void) {'
 if text.count(self_test_marker) != 1: raise SystemExit('Linux unified shell could not find v5 self-test seam')
-text = text.replace(self_test_marker, '#include "routervpn-unified-shell-v8.inc"\n#include "routervpn-telemetry-v9.inc"\n#include "routervpn-speed-lab-v12.inc"\n#include "routervpn-globe-v10.inc"\n\n' + self_test_marker, 1)
+text = text.replace(self_test_marker, '#include "routervpn-unified-shell-v8.inc"\n#include "routervpn-telemetry-v9.inc"\n#include "routervpn-speed-lab-v12.inc"\n#include "routervpn-globe-v10.inc"\n#include "routervpn-responsive-v15.inc"\n\n' + self_test_marker, 1)
 install_old = '    build_ui_v5(&app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
-install_new = '    build_ui_v5(&app);\n    linux_install_telemetry_v9(&app);\n    linux_install_speed_lab_v12(&app);\n    linux_install_globe_v10(&app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
+install_new = '    build_ui_v5(&app);\n    linux_install_telemetry_v9(&app);\n    linux_install_speed_lab_v12(&app);\n    linux_install_globe_v10(&app);\n    linux_install_responsive_v15(&app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
 if text.count(install_old) != 1: raise SystemExit('Linux telemetry/globe installer seam drifted')
 text = text.replace(install_old, install_new, 1)
+# Keep the real-widget layout test in the same compiled shipping entrypoint.
+loop_old = '    gtk_main();\n    g_free(app.package_root);'
+loop_new = '''    if (argc > 1 && strcmp(argv[1], "--layout-self-test") == 0) {
+        int layout_result = linux_responsive_self_test_v15(&app);
+        g_signal_handlers_disconnect_by_func(app.window, G_CALLBACK(on_destroy), &app);
+        shutdown_controller(&app);
+        gtk_widget_destroy(app.window);
+        g_free(app.package_root);
+        g_ptr_array_unref(app.nodes); g_ptr_array_unref(app.router_ids); g_ptr_array_unref(app.mode_ids);
+        curl_global_cleanup();
+        return layout_result;
+    }
+    gtk_main();
+    g_free(app.package_root);'''
+if text.count(loop_old) != 1: raise SystemExit('Linux rendered-layout entrypoint seam drifted')
+text = text.replace(loop_old, loop_new, 1)
 for marker in ('#include "routervpn-product-onboarding-v6.inc"','#include "routervpn-home-summary-v1.inc"','#include "routervpn-profile-settings-v1.inc"','#include "routervpn-auto-requirements-v11.inc"','#include "routervpn-unified-shell-v8.inc"','#include "routervpn-telemetry-v9.inc"','#include "routervpn-speed-lab-v12.inc"','#include "routervpn-globe-v10.inc"','onboarding_read_step_v6(path)','gtk_assistant_set_current_page','refresh_home_summary_v6(app)','Prove actual exit','G_CALLBACK(on_home_exit_v6)','Edit profile settings','G_CALLBACK(on_profile_settings_v7)','router-vpn-advanced-settings-v7','static void build_ui_legacy_v5(App *app) {','linux_install_telemetry_v9(&app);','linux_install_speed_lab_v12(&app);','linux_install_globe_v10(&app);','Map-first startup: onboarding is explicit from Help -> Run Tutorial.'):
     if marker not in text: raise SystemExit(f'missing Linux shipping marker: {marker}')
 if 'show_onboarding_v5(&app, FALSE);' in text: raise SystemExit('Linux shipping build still auto-opens blocking onboarding over the map')
@@ -227,6 +244,9 @@ for marker in 'LinuxSpeedLabV12' '/api/speed-lab/options' '/api/speed-lab/run' '
 for marker in 'LinuxGlobeV10' 'ROUTER VPN GLOBE' 'linux_globe_draw_v10' 'linux_globe_click_v10' 'routervpn_flat_map_v9' 'entry blue' 'exit orange' 'external pink' 'animated packet' 'PATH %.1f ms' 'device location is not fabricated' '/api/multihop/live-latency'; do grep -Fq "$marker" "$GLOBE_INC"; done
 grep -Fq 'Diagnostics' "$SRC"; grep -Fq '/api/session/events?after=0' "$SRC"; grep -Fq 'apply_action_sensitivity_v5' "$SRC"; grep -Fq 'gtk_widget_set_sensitive' "$SRC"; grep -Fq 'truthful-empty-state-actions' "$SRC"; grep -Fq 'gtk_window_set_default_size(GTK_WINDOW(app->window), 960, 680);' "$SRC"
 grep -Fq '/api/mtu/retest' "$SRC"; grep -Fq 'Retest MTU' "$SRC"; grep -Fq '130000' "$SRC"; grep -Fq 'router-vpn-advanced-mtu-v5' "$SRC"
+grep -Fq '#include "routervpn-responsive-v15.inc"' "$BUILD_SRC"
+grep -Fq 'linux_install_responsive_v15(&app);' "$BUILD_SRC"
+grep -Fq 'linux_responsive_self_test_v15(&app)' "$BUILD_SRC"
 "$OUT" --self-test
 
 echo "Built native Linux GTK Router VPN product with map-first unified shell, animated VPN globe, fastest-node connect, live path/multihop telemetry, native Speed Lab with loaded latency, real forwarding master, truthful Home state, editable profile settings and explicit rerunnable onboarding at $OUT"
