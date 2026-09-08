@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -445,31 +444,14 @@ func (w *statusCapturingWriter) Write(p []byte) (int, error) {
 }
 
 func (a *app) connectLogicalTracked(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, (16<<10)+1))
-	if err != nil || len(body) > 16<<10 {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	var q struct {
-		Mode string `json:"mode"`
-		Base string `json:"base"`
-	}
-	if err := json.Unmarshal(body, &q); err == nil && strings.TrimSpace(q.Mode) != "" {
-		sessionTrackerFor(a).declareRequest(q.Mode, q.Base)
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	cw := &statusCapturingWriter{ResponseWriter: w}
-	a.connectLogical(cw, r)
-	if cw.status >= 400 {
-		message := strings.TrimSpace(cw.body.String())
-		if message == "" {
-			message = http.StatusText(cw.status)
-		}
-		sessionTrackerFor(a).markRequestFailure(message)
-	}
+	// The handler declares progress only after acquiring connection ownership;
+	// rejected HTTP requests must not mutate the existing session or proofs.
+	a.connectLogical(w, r)
 }
 
 func (a *app) emergencyStopTracked(w http.ResponseWriter, r *http.Request) {
-	sessionTrackerFor(a).markStopReason("emergency-stop")
+	if r.Method == http.MethodPost {
+		sessionTrackerFor(a).markStopReason("emergency-stop")
+	}
 	a.emergencyStop(w, r)
 }
