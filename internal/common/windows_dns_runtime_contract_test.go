@@ -56,7 +56,7 @@ func TestWindowsRawWireGuardEnforcesAndProvesSelectedDNS(t *testing.T) {
 	proof := readWindowsDNSContractFile(t, "cmd/client/dns_proof.go")
 	for _, marker := range []string{
 		"if kernelDNSMode(runtimeID)",
-		"verifyKernelDNSRuntime(root, s.RouterID, runtimeID, selected)",
+		"verifyKernelDNSRuntimeContext(parent, root, s.RouterID, runtimeID, selected)",
 		"active kernel tunnel config does not force DNS to Router VPN local proxy",
 		"probeLocalDNSProxy()",
 		"net.DefaultResolver.LookupHost",

@@ -154,6 +154,13 @@ func hostPortEqual(hint string, selected dnsSelection) bool {
 }
 
 func verifyKernelDNSRuntime(root, profileID, mode string, selected dnsSelection) error {
+	return verifyKernelDNSRuntimeContext(context.Background(), root, profileID, mode, selected)
+}
+
+func verifyKernelDNSRuntimeContext(ctx context.Context, root, profileID, mode string, selected dnsSelection) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	var configFound bool
 	for _, dir := range runtimeConfigDirs(root, profileID, mode) {
 		for _, name := range []string{"wg.conf", "awg.conf"} {
@@ -186,13 +193,17 @@ configOK:
 	if !hostPortEqual(hint["server"], selected) {
 		return fmt.Errorf("runtime DNS upstream %q does not match selected %s:%d", hint["server"], selected.Host, selected.Port)
 	}
-	return probeLocalDNSProxy()
+	return probeLocalDNSProxyContext(ctx, "127.0.0.1:53")
 }
 
 func probeLocalDNSProxy() error {
+	return probeLocalDNSProxyContext(context.Background(), "127.0.0.1:53")
+}
+
+func probeLocalDNSProxyContext(ctx context.Context, endpoint string) error {
 	// A valid header alone can belong to another question or an incomplete
 	// datagram. Match the randomized IN A question and complete record framing.
-	_, err := common.ProbeDNSUDP(context.Background(), "127.0.0.1:53", 1, 2*time.Second)
+	_, err := common.ProbeDNSUDP(ctx, endpoint, 1, 2*time.Second)
 	if err != nil {
 		return fmt.Errorf("Router VPN local DNS proxy proof failed: %w", err)
 	}
@@ -304,8 +315,24 @@ func dnsProtocolCompatible(actual, selected string) bool {
 }
 
 func proveSelectedDNS(a *app, s observedConnection, runtimeID string) dnsProofState {
+	return proveSelectedDNSContext(context.Background(), a, s, runtimeID)
+}
+
+func proveSelectedDNSContext(parent context.Context, a *app, s observedConnection, runtimeID string) dnsProofState {
+	return proveSelectedDNSWithLookup(parent, a, s, runtimeID, net.DefaultResolver.LookupHost)
+}
+
+func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnection, runtimeID string, lookup func(context.Context, string) ([]string, error)) dnsProofState {
 	selected := expectedDNSSelection(s.Profile)
 	result := dnsProofState{Mode: selected.Mode, Host: selected.Host, Status: "failed"}
+	if parent == nil || lookup == nil {
+		result.Reason = "selected-DNS proof requires an owned context and resolver"
+		return result
+	}
+	if err := context.Cause(parent); err != nil {
+		result.Reason = "selected-DNS proof was cancelled before network work"
+		return result
+	}
 	if !s.Connected || strings.TrimSpace(s.Phase) != "connected" {
 		result.Reason = "selected-node path is not connected"
 		return result
@@ -317,7 +344,7 @@ func proveSelectedDNS(a *app, s observedConnection, runtimeID string) dnsProofSt
 	root := clientRoot(a)
 	var err error
 	if kernelDNSMode(runtimeID) {
-		err = verifyKernelDNSRuntime(root, s.RouterID, runtimeID, selected)
+		err = verifyKernelDNSRuntimeContext(parent, root, s.RouterID, runtimeID, selected)
 	} else {
 		err = verifySingBoxDNSRuntimeForApp(a, root, s.RouterID, runtimeID, selected)
 	}
@@ -327,9 +354,13 @@ func proveSelectedDNS(a *app, s observedConnection, runtimeID string) dnsProofSt
 	}
 
 	started := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 4*time.Second)
 	defer cancel()
-	addrs, err := net.DefaultResolver.LookupHost(ctx, "example.com")
+	addrs, err := lookup(ctx, "example.com")
+	if cause := context.Cause(ctx); cause != nil {
+		result.Reason = "selected-DNS proof was cancelled during resolver work"
+		return result
+	}
 	if err != nil || len(addrs) == 0 {
 		if err == nil {
 			err = errors.New("resolver returned no addresses")
