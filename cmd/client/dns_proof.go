@@ -190,30 +190,11 @@ configOK:
 }
 
 func probeLocalDNSProxy() error {
-	// Minimal A query for example.com. The query ID is arbitrary; success only
-	// requires a syntactically valid response from Router VPN's bound local DNS
-	// proxy. The subsequent OS-resolver proof verifies the client resolver path.
-	q := []byte{
-		0x52, 0x56, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
-		0x00, 0x01, 0x00, 0x01,
-	}
-	conn, err := net.DialTimeout("udp", "127.0.0.1:53", 1500*time.Millisecond)
+	// A valid header alone can belong to another question or an incomplete
+	// datagram. Match the randomized IN A question and complete record framing.
+	_, err := common.ProbeDNSUDP(context.Background(), "127.0.0.1:53", 1, 2*time.Second)
 	if err != nil {
-		return fmt.Errorf("Router VPN local DNS proxy is not reachable: %w", err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err = conn.Write(q); err != nil {
-		return fmt.Errorf("Router VPN local DNS proxy query failed: %w", err)
-	}
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	if err != nil {
-		return fmt.Errorf("Router VPN local DNS proxy returned no response: %w", err)
-	}
-	if n < 12 || buf[0] != 0x52 || buf[1] != 0x56 || buf[2]&0x80 == 0 {
-		return errors.New("Router VPN local DNS proxy returned an invalid DNS response")
+		return fmt.Errorf("Router VPN local DNS proxy proof failed: %w", err)
 	}
 	return nil
 }
