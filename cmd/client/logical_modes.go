@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -389,7 +390,7 @@ func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, erro
 		}
 		if err := a.checkConnectionOperation(); err != nil {
 			_ = a.stopMode()
-			return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL "+id)
+			return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL " + id)
 		}
 		return candidate, nil
 	}
@@ -409,18 +410,18 @@ func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, erro
 	var failures []string
 	for _, candidate := range candidates {
 		if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
-			return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL "+logical.Name)
+			return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL " + logical.Name)
 		}
 		if err := a.startModeAttempt(candidate.RuntimeID, true); err != nil {
 			if errors.Is(err, errConnectionOperationCancelled) {
-				return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL "+logical.Name)
+				return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL " + logical.Name)
 			}
 			failures = append(failures, fmt.Sprintf("%s: %v", candidate.Base, err))
 			continue
 		}
 		if err := a.checkConnectionOperation(); err != nil {
 			_ = a.stopMode()
-			return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL "+logical.Name)
+			return runtimeCandidate{}, a.finalizeCancelledFallback("LOGICAL " + logical.Name)
 		}
 		return candidate, nil
 	}
@@ -436,13 +437,6 @@ func (a *app) listLogicalModes(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
-	_, finish, guardErr := a.beginConnectionOperation()
-	if guardErr != nil {
-		http.Error(w, guardErr.Error(), http.StatusConflict)
-		return
-	}
-	defer finish()
-
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -451,7 +445,8 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 		Mode string `json:"mode"`
 		Base string `json:"base"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil {
+	body, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
+	if readErr != nil || json.Unmarshal(body, &q) != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
@@ -460,6 +455,35 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mode is required", http.StatusBadRequest)
 		return
 	}
+	if r.Context().Err() != nil {
+		http.Error(w, "connection request was cancelled before ownership", http.StatusRequestTimeout)
+		return
+	}
+	_, finish, guardErr := a.beginConnectionOperation()
+	if guardErr != nil {
+		http.Error(w, guardErr.Error(), http.StatusConflict)
+		return
+	}
+	defer finish()
+
+	// Only an accepted connection transaction owns typed progress. Declaring
+	// it in the outer HTTP wrapper let a rejected concurrent request replace
+	// a working session's requested mode, invalidate its proof, and mark it
+	// failed without ever owning or stopping the real VPN.
+	tracker := sessionTrackerFor(a)
+	tracker.declareRequest(q.Mode, q.Base)
+	captured := &statusCapturingWriter{ResponseWriter: w}
+	w = captured
+	defer func() {
+		if captured.status >= http.StatusBadRequest {
+			message := strings.TrimSpace(captured.body.String())
+			if message == "" {
+				message = http.StatusText(captured.status)
+			}
+			// This defer runs before finish releases operation ownership.
+			tracker.markRequestFailure(message)
+		}
+	}()
 	preferred := a.preferredBase(q.Base)
 	used, err := a.startLogicalMode(q.Mode, q.Base)
 	if err != nil {
