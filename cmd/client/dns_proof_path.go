@@ -20,7 +20,22 @@ func (t *sessionTracker) dnsProofPathContext(sessionID string, s observedConnect
 	}
 	st := state{Connected: s.Connected, Phase: s.Phase, Mode: s.Mode, LogicalMode: s.LogicalMode, RuntimeMode: s.RuntimeMode, Base: s.Base, RouterID: s.RouterID}
 	ctx, stop, _, err := asyncMeasurementPathContext(context.Background(), t.a, s.Profile, st, before, asyncMeasurementProfileToken(s.Profile))
-	return ctx, stop, err
+	if err != nil {
+		return nil, nil, err
+	}
+	binding, ok := ctx.Value(asyncMeasurementBindingKey{}).(*asyncMeasurementAdoption)
+	if !ok || binding == nil {
+		stop()
+		return nil, nil, errors.New("DNS proof is missing its process owner binding")
+	}
+	owner, err := binding.sessionOwner()
+	if err != nil || owner != t {
+		// Registration may change between the initial snapshot and path setup.
+		// Never publish into this tracker while adoption locks another tracker.
+		stop()
+		return nil, nil, errors.New("DNS proof process owner changed during path setup")
+	}
+	return ctx, stop, nil
 }
 
 func (t *sessionTracker) discardDNSProof(sessionID string) {
