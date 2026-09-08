@@ -11,29 +11,73 @@ import (
 // source/destination addresses and ports (RFC 5452 section 9.1). This is query
 // matching, not DNSSEC authentication or proof of a usable A/AAAA answer.
 func ValidateDNSProbeResponse(query, response []byte) error {
-	if len(query) < 12 || len(response) < 12 || len(query) > 65535 || len(response) > 65535 {
-		return errors.New("invalid DNS probe message size")
+	offset, err := matchDNSResponseQuestion(query, response)
+	if err != nil {
+		return err
 	}
-	if query[2]&0xf8 != 0 || binary.BigEndian.Uint16(query[4:6]) != 1 ||
-		response[2]&0xf8 != 0x80 || response[2]&2 != 0 ||
-		!bytes.Equal(query[:2], response[:2]) || binary.BigEndian.Uint16(response[4:6]) != 1 {
-		return errors.New("DNS response does not match the probe transaction")
+	if response[2]&2 != 0 {
+		return errors.New("DNS probe response was truncated")
 	}
 	if rcode := response[3] & 15; rcode != 0 && rcode != 3 {
 		return errors.New("DNS probe returned an unsuccessful response code")
 	}
+	return validateDNSRecordFraming(response, offset)
+}
+
+// ValidateDNSForwardQuery bounds an ordinary one-question query before the
+// local proxy allocates an upstream socket. EDNS and opaque additional records
+// are allowed when their framing is complete; dynamic updates are not proxied.
+func ValidateDNSForwardQuery(query []byte) error {
+	if len(query) < 12 || len(query) > 65535 || query[2]&0xf8 != 0 || binary.BigEndian.Uint16(query[4:6]) != 1 {
+		return errors.New("DNS proxy requires one bounded standard query")
+	}
+	_, end, err := dnsProbeName(query, 12)
+	if err != nil || end+4 > len(query) {
+		return errors.New("invalid DNS proxy question")
+	}
+	return validateDNSRecordFraming(query, end+4)
+}
+
+// ValidateDNSForwardResponse is for the local forwarding proxy, not proof or
+// ranking. Preserve genuine DNS error responses and TC so clients can retry
+// over TCP; they must never be relabeled as successful benchmark samples.
+func ValidateDNSForwardResponse(query, response []byte) error {
+	offset, err := matchDNSResponseQuestion(query, response)
+	if err != nil {
+		return err
+	}
+	if response[2]&2 != 0 {
+		// A truncated response still has to match the complete original question.
+		// Its incomplete resource records are not parsed or treated as proof.
+		return nil
+	}
+	return validateDNSRecordFraming(response, offset)
+}
+
+func matchDNSResponseQuestion(query, response []byte) (int, error) {
+	if len(query) < 12 || len(response) < 12 || len(query) > 65535 || len(response) > 65535 {
+		return 0, errors.New("invalid DNS probe message size")
+	}
+	if query[2]&0xf8 != 0 || binary.BigEndian.Uint16(query[4:6]) != 1 ||
+		response[2]&0xf8 != 0x80 || response[3]&0x40 != 0 ||
+		!bytes.Equal(query[:2], response[:2]) || binary.BigEndian.Uint16(response[4:6]) != 1 {
+		return 0, errors.New("DNS response does not match the probe transaction")
+	}
 	qname, qend, err := dnsProbeName(query, 12)
 	if err != nil || qend+4 > len(query) {
-		return errors.New("invalid DNS probe question")
+		return 0, errors.New("invalid DNS probe question")
 	}
 	rname, rend, err := dnsProbeName(response, 12)
 	if err != nil || rend+4 > len(response) || !bytes.Equal(qname, rname) ||
 		!bytes.Equal(query[qend:qend+4], response[rend:rend+4]) {
-		return errors.New("DNS response question differs from the probe")
+		return 0, errors.New("DNS response question differs from the probe")
 	}
+	return rend + 4, nil
+}
+
+func validateDNSRecordFraming(response []byte, offset int) error {
 	// Do not accept a truncated datagram whose header claims records that never
 	// arrived. Compression is allowed for record names, with bounded expansion.
-	offset := rend + 4
 	records := int(binary.BigEndian.Uint16(response[6:8])) + int(binary.BigEndian.Uint16(response[8:10])) + int(binary.BigEndian.Uint16(response[10:12]))
 	for i := 0; i < records; i++ {
 		_, end, err := dnsProbeName(response, offset)
