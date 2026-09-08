@@ -229,6 +229,12 @@ func fastestProfileSnapshotToken(profiles []common.RouterProfile) string {
 }
 
 func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
+	a.fastestProfileWithProbe(w, r, quickProfileLatencyContext)
+}
+
+// The injected probe is a test seam; the HTTP route always uses the real TCP
+// measurement above. Keep networking outside the terminal adoption locks.
+func (a *app) fastestProfileWithProbe(w http.ResponseWriter, r *http.Request, probe func(context.Context, common.RouterProfile, int) (liveLatencyResult, error)) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -265,7 +271,7 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 		if kind == "external" && !q.IncludeExternal {
 			continue
 		}
-		value, err := quickProfileLatencyContext(r.Context(), p, q.Samples)
+		value, err := probe(r.Context(), p, q.Samples)
 		if err == nil {
 			results = append(results, value)
 		} else if r.Context().Err() != nil {
@@ -287,7 +293,22 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 	// Fastest is an intentionally lightweight live RTT probe. Its 1-10 samples
 	// must never overwrite Latency* fields, which are reserved for the durable
 	// >=50-sample /api/profile/latency benchmark (including its real trimmed mean).
-	// Only an explicit winner selection is durable here.
+	// Only an explicit winner selection is durable here. Terminal selection
+	// owns operation -> tracker -> app, matching session observation and proof
+	// adoption. Inverting app -> tracker can deadlock against the observer.
+	// Measurements remain outside these locks, and read-only probes need none.
+	var tracker *sessionTracker
+	if selectWinner {
+		release, err := a.beginMutationOperation(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		defer release()
+		tracker = sessionTrackerFor(a)
+		tracker.mu.Lock()
+		defer tracker.mu.Unlock()
+	}
 	a.mu.Lock()
 	selectedID := a.profiles.SelectedID
 	var persistErr error
@@ -302,7 +323,11 @@ func (a *app) fastestProfile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "VPN state changed while fastest-node measurement was running", http.StatusConflict)
 			return
 		}
-		if sessionTrackerFor(a).snapshot(0).ID != sessionAtStart {
+		currentSessionID := ""
+		if tracker.session != nil {
+			currentSessionID = tracker.session.ID
+		}
+		if currentSessionID != sessionAtStart {
 			a.mu.Unlock()
 			http.Error(w, "VPN session changed while fastest-node measurement was running", http.StatusConflict)
 			return
