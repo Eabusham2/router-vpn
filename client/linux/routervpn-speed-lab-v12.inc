@@ -28,7 +28,98 @@ typedef struct {
     GtkWidget *status;
     GtkWidget *detail;
     GtkWidget *run;
+    GThread *worker;
+    guint poll_source;
+    gint cancelled;
+    gint complete;
+    gboolean closed;
+    gboolean loading_options;
+    gboolean options_ready;
+    gboolean request_ok;
+    long request_timeout;
+    char *request_body;
+    char *request_error;
+    Buffer response;
 } LinuxSpeedLabV12;
+
+/* Only the worker touches response storage until complete is published. All
+ * GTK access stays on the main thread; close cancels and joins before freeing
+ * the dialog state or allowing the app to clean up libcurl. */
+#define LINUX_SPEED_LAB_RESPONSE_LIMIT (2u * 1024u * 1024u)
+
+static size_t linux_speed_lab_receive_v12(void *data, size_t size, size_t count, void *opaque) {
+    LinuxSpeedLabV12 *s = opaque;
+    if (g_atomic_int_get(&s->cancelled) || s->response.len > LINUX_SPEED_LAB_RESPONSE_LIMIT ||
+        (size != 0 && count > (LINUX_SPEED_LAB_RESPONSE_LIMIT - s->response.len) / size)) return 0;
+    return write_cb(data, size, count, &s->response);
+}
+
+static int linux_speed_lab_progress_v12(void *opaque, curl_off_t total_down, curl_off_t down,
+                                        curl_off_t total_up, curl_off_t up) {
+    (void)total_down; (void)down; (void)total_up; (void)up;
+    LinuxSpeedLabV12 *s = opaque;
+    return g_atomic_int_get(&s->cancelled) ? 1 : 0;
+}
+
+static gpointer linux_speed_lab_worker_v12(gpointer opaque) {
+    LinuxSpeedLabV12 *s = opaque;
+    CURL *curl = curl_easy_init();
+    if (curl == NULL) {
+        s->request_error = g_strdup("libcurl initialization failed");
+        g_atomic_int_set(&s->complete, 1);
+        return NULL;
+    }
+    const char *path = s->loading_options ? "/api/speed-lab/options" : "/api/speed-lab/run";
+    char *url = g_strdup_printf("%s%s", ROUTER_VPN_BASE_URL, path);
+    struct curl_slist *headers = curl_slist_append(NULL, "Accept: application/json");
+    if (!s->loading_options) headers = curl_slist_append(headers, "Content-Type: application/json");
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_PROXY, "");
+    curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 3000L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, s->request_timeout);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, linux_speed_lab_receive_v12);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, s);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, linux_speed_lab_progress_v12);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, s);
+    if (!s->loading_options) curl_easy_setopt(curl, CURLOPT_POSTFIELDS, s->request_body);
+    CURLcode code = g_atomic_int_get(&s->cancelled) ? CURLE_ABORTED_BY_CALLBACK : curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    s->request_ok = code == CURLE_OK && status >= 200 && status < 300;
+    if (!s->request_ok) {
+        if (code != CURLE_OK) s->request_error = g_strdup(curl_easy_strerror(code));
+        else if (s->response.data != NULL && g_utf8_validate(s->response.data, -1, NULL))
+            s->request_error = g_utf8_make_valid(s->response.data, MIN(s->response.len, (size_t)4096));
+        else s->request_error = g_strdup("Local controller request failed");
+    }
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    g_free(url);
+    g_atomic_int_set(&s->complete, 1);
+    return NULL;
+}
+
+static void linux_speed_lab_release_request_v12(LinuxSpeedLabV12 *s) {
+    g_clear_pointer(&s->request_body, g_free);
+    g_clear_pointer(&s->request_error, g_free);
+    free(s->response.data);
+    s->response = (Buffer){0};
+}
+
+static void linux_speed_lab_destroy_v12(GtkWidget *widget, gpointer data) {
+    (void)widget;
+    LinuxSpeedLabV12 *s = data;
+    s->closed = TRUE;
+    g_atomic_int_set(&s->cancelled, 1);
+    if (s->poll_source != 0) { g_source_remove(s->poll_source); s->poll_source = 0; }
+    if (s->worker != NULL) { g_thread_join(s->worker); s->worker = NULL; }
+    linux_speed_lab_release_request_v12(s);
+}
 
 static const char *linux_speed_lab_active_id_v12(GtkWidget *combo) {
     const char *id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(combo));
@@ -69,13 +160,13 @@ static void linux_speed_lab_append_nodes_v12(GtkWidget *combo, JsonArray *nodes,
     if (gtk_tree_model_iter_n_children(gtk_combo_box_get_model(GTK_COMBO_BOX(combo)), NULL) > 0) gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
 }
 
-static gboolean linux_speed_lab_load_options_v12(LinuxSpeedLabV12 *s) {
-    Buffer out={0}; char *err=NULL;
-    if (!api_request("/api/speed-lab/options", "GET", NULL, 10000, &out, &err)) {
-        gtk_label_set_text(GTK_LABEL(s->status), err != NULL ? err : "Speed Lab options unavailable"); g_free(err); free(out.data); return FALSE;
+static gboolean linux_speed_lab_apply_options_v12(LinuxSpeedLabV12 *s) {
+    JsonNode *root = parse_json(s->response.data);
+    if (root == NULL || !JSON_NODE_HOLDS_OBJECT(root)) {
+        if (root != NULL) json_node_free(root);
+        gtk_label_set_text(GTK_LABEL(s->status), "Speed Lab options returned invalid JSON");
+        return FALSE;
     }
-    JsonNode *root = parse_json(out.data); free(out.data); g_free(err);
-    if (root == NULL || !JSON_NODE_HOLDS_OBJECT(root)) { if (root != NULL) json_node_free(root); gtk_label_set_text(GTK_LABEL(s->status), "Speed Lab options returned invalid JSON"); return FALSE; }
     JsonObject *obj = json_node_get_object(root); JsonArray *nodes = json_object_has_member(obj, "nodes") ? json_object_get_array_member(obj, "nodes") : NULL;
     linux_speed_lab_append_nodes_v12(s->node, nodes, NULL); linux_speed_lab_append_nodes_v12(s->entry, nodes, NULL); linux_speed_lab_append_nodes_v12(s->exit, nodes, "router-vpn");
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(s->mode)); JsonArray *modes = json_object_has_member(obj, "logical_modes") ? json_object_get_array_member(obj, "logical_modes") : NULL;
@@ -85,7 +176,16 @@ static gboolean linux_speed_lab_load_options_v12(LinuxSpeedLabV12 *s) {
 }
 
 static void linux_speed_lab_refresh_controls_v12(GtkComboBox *ignored, gpointer data) {
-    (void)ignored; LinuxSpeedLabV12 *s=data; if(s==NULL)return;
+    (void)ignored; LinuxSpeedLabV12 *s=data; if(s==NULL||s->closed)return;
+    if (s->worker != NULL || !s->options_ready) {
+        GtkWidget *all[] = {s->scope,s->topology,s->node,s->entry,s->exit,s->mode,s->base,s->exit_mode,s->layers,s->daita,s->jumbo,s->encrypted,s->obfuscated,s->duration_mode,s->min_time,s->max_time};
+        for (guint i=0; i<G_N_ELEMENTS(all); i++) gtk_widget_set_sensitive(all[i], FALSE);
+        gtk_widget_set_sensitive(s->run, s->worker != NULL && !s->loading_options && !g_atomic_int_get(&s->cancelled));
+        return;
+    }
+    gtk_widget_set_sensitive(s->scope, TRUE);
+    gtk_widget_set_sensitive(s->duration_mode, TRUE);
+    gtk_widget_set_sensitive(s->run, TRUE);
     gboolean temporary = strcmp(linux_speed_lab_active_id_v12(s->scope), "temporary") == 0;
     GtkWidget *controls[] = {s->topology,s->node,s->entry,s->exit,s->mode,s->base,s->exit_mode,s->layers,s->daita,s->jumbo,s->encrypted,s->obfuscated};
     for(size_t i=0;i<G_N_ELEMENTS(controls);i++) gtk_widget_set_sensitive(controls[i], temporary);
@@ -146,12 +246,26 @@ static char *linux_speed_lab_hops_v12(JsonObject *obj, guint *count_out) {
     return g_string_free(text, FALSE);
 }
 
-static void linux_speed_lab_run_v12(GtkButton *button,gpointer data){
-    LinuxSpeedLabV12*s=data;if(s==NULL)return;gtk_widget_set_sensitive(GTK_WIDGET(button),FALSE);gtk_label_set_text(GTK_LABEL(s->status),"Building/proving path and running download + upload…");gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),"Speed Lab running. Temporary paths are transactional and restored afterward.",-1);
-    char*body=linux_speed_lab_request_body_v12(s);int timeout=110000;if(strcmp(linux_speed_lab_active_id_v12(s->duration_mode),"custom")==0){timeout=(int)(gtk_range_get_value(GTK_RANGE(s->max_time))*2000.0+80000.0);if(timeout<90000)timeout=90000;}
-    Buffer out={0};char*err=NULL;gboolean ok=api_request("/api/speed-lab/run","POST",body,timeout,&out,&err);g_free(body);
-    if(!ok){gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),err?err:"Speed Lab failed",-1);gtk_label_set_text(GTK_LABEL(s->status),"Speed Lab failed closed; see details.");g_free(err);free(out.data);gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);return;}
-    JsonNode*root=parse_json(out.data);if(root==NULL||!JSON_NODE_HOLDS_OBJECT(root)){gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),"Speed Lab returned invalid JSON",-1);gtk_label_set_text(GTK_LABEL(s->status),"Speed Lab response invalid");if(root!=NULL)json_node_free(root);free(out.data);g_free(err);gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);return;}
+static gboolean linux_speed_lab_valid_summary_v12(JsonObject *object) {
+    JsonNode *ok = json_object_get_member(object, "ok");
+    if (ok == NULL || !JSON_NODE_HOLDS_VALUE(ok) || json_node_get_value_type(ok) != G_TYPE_BOOLEAN || !json_node_get_boolean(ok)) return FALSE;
+    JsonNode *node = json_object_get_member(object, "summary");
+    if (node == NULL || !JSON_NODE_HOLDS_OBJECT(node)) return FALSE;
+    JsonObject *summary = json_node_get_object(node);
+    static const char *const keys[] = {"idle_ms", "download_mbps", "upload_mbps", "download_loaded_ms", "upload_loaded_ms", "download_bufferbloat_ms", "upload_bufferbloat_ms"};
+    for (guint i = 0; i < G_N_ELEMENTS(keys); i++) {
+        JsonNode *value = json_object_get_member(summary, keys[i]);
+        if (value == NULL || !JSON_NODE_HOLDS_VALUE(value)) return FALSE;
+        GType type = json_node_get_value_type(value);
+        if (type != G_TYPE_INT64 && type != G_TYPE_DOUBLE) return FALSE;
+        double number = json_node_get_double(value);
+        if (!isfinite(number) || number < 0.0) return FALSE;
+    }
+    return TRUE;
+}
+
+static void linux_speed_lab_render_v12(LinuxSpeedLabV12 *s, const char *text) {
+    JsonNode*root=parse_json(text);if(root==NULL||!JSON_NODE_HOLDS_OBJECT(root)||!linux_speed_lab_valid_summary_v12(json_node_get_object(root))){gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),"Speed Lab returned invalid JSON",-1);gtk_label_set_text(GTK_LABEL(s->status),"Speed Lab response invalid");if(root!=NULL)json_node_free(root);return;}
     JsonObject*obj=json_node_get_object(root),*summary=json_object_has_member(obj,"summary")?json_object_get_object_member(obj,"summary"):NULL,*measurement=json_object_has_member(obj,"measurement")?json_object_get_object_member(obj,"measurement"):NULL;
     JsonObject*idle_stats=measurement&&json_object_has_member(measurement,"idle_latency")?json_object_get_object_member(measurement,"idle_latency"):NULL,*down=measurement&&json_object_has_member(measurement,"download")?json_object_get_object_member(measurement,"download"):NULL,*up=measurement&&json_object_has_member(measurement,"upload")?json_object_get_object_member(measurement,"upload"):NULL;
     JsonObject*down_loaded=down&&json_object_has_member(down,"loaded_latency")?json_object_get_object_member(down,"loaded_latency"):NULL,*up_loaded=up&&json_object_has_member(up,"loaded_latency")?json_object_get_object_member(up,"loaded_latency"):NULL;
@@ -159,8 +273,73 @@ static void linux_speed_lab_run_v12(GtkButton *button,gpointer data){
     x=g_strdup_printf("p90 %.1f • max %.1f • jitter %.1f ms",linux_speed_lab_number_v12(idle_stats,"p90_ms"),linux_speed_lab_number_v12(idle_stats,"max_ms"),linux_speed_lab_number_v12(idle_stats,"jitter_ms"));gtk_label_set_text(GTK_LABEL(s->idle_detail),x);g_free(x);
     x=g_strdup_printf("loaded %.1f ms • +%.1f bloat • p90 %.1f",linux_speed_lab_number_v12(summary,"download_loaded_ms"),linux_speed_lab_number_v12(summary,"download_bufferbloat_ms"),linux_speed_lab_number_v12(down_loaded,"p90_ms"));gtk_label_set_text(GTK_LABEL(s->download_detail),x);g_free(x);
     x=g_strdup_printf("loaded %.1f ms • +%.1f bloat • p90 %.1f",linux_speed_lab_number_v12(summary,"upload_loaded_ms"),linux_speed_lab_number_v12(summary,"upload_bufferbloat_ms"),linux_speed_lab_number_v12(up_loaded,"p90_ms"));gtk_label_set_text(GTK_LABEL(s->upload_detail),x);g_free(x);
-    guint hop_count=0;char*hop_text=linux_speed_lab_hops_v12(obj,&hop_count);if(hop_text!=NULL){char*combined=g_strdup_printf("%s\nFULL RESULT\n%s",hop_text,out.data?out.data:"{}");gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),combined,-1);g_free(combined);g_free(hop_text);}else gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),out.data?out.data:"{}",-1);
-    if(hop_count>0){x=g_strdup_printf("Finished • real HTTPS throughput + loaded latency • %u hop measurements",hop_count);gtk_label_set_text(GTK_LABEL(s->status),x);g_free(x);}else gtk_label_set_text(GTK_LABEL(s->status),"Finished • real HTTPS throughput + loaded latency");json_node_free(root);free(out.data);g_free(err);gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);
+    guint hop_count=0;char*hop_text=linux_speed_lab_hops_v12(obj,&hop_count);if(hop_text!=NULL){char*combined=g_strdup_printf("%s\nFULL RESULT\n%s",hop_text,text?text:"{}");gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),combined,-1);g_free(combined);g_free(hop_text);}else gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),text?text:"{}",-1);
+    if(hop_count>0){x=g_strdup_printf("Finished • real HTTPS throughput + loaded latency • %u hop measurements",hop_count);gtk_label_set_text(GTK_LABEL(s->status),x);g_free(x);}else gtk_label_set_text(GTK_LABEL(s->status),"Finished • real HTTPS throughput + loaded latency");json_node_free(root);
+}
+
+static gboolean linux_speed_lab_complete_v12(gpointer data) {
+    LinuxSpeedLabV12 *s = data;
+    if (!g_atomic_int_get(&s->complete)) return G_SOURCE_CONTINUE;
+    g_thread_join(s->worker);
+    s->worker = NULL;
+    s->poll_source = 0;
+    if (s->closed) return G_SOURCE_REMOVE;
+    if (g_atomic_int_get(&s->cancelled)) {
+        gtk_label_set_text(GTK_LABEL(s->status), "Cancelled. Controller cleanup must finish before another test can start.");
+        gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),
+            "The test request was cancelled. Temporary-path restoration is owned by the controller; cancellation does not claim restoration has already succeeded.", -1);
+    } else if (!s->request_ok) {
+        gtk_label_set_text(GTK_LABEL(s->status), "Speed Lab failed closed; see details.");
+        gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)), s->request_error ? s->request_error : "Local request failed", -1);
+    } else if (s->loading_options) {
+        s->options_ready = linux_speed_lab_apply_options_v12(s);
+        if (s->options_ready) gtk_label_set_text(GTK_LABEL(s->status), "Ready • current configuration selected; no saved preferences changed");
+    } else linux_speed_lab_render_v12(s, s->response.data);
+    linux_speed_lab_release_request_v12(s);
+    gtk_button_set_label(GTK_BUTTON(s->run), "Run Speed Lab");
+    linux_speed_lab_refresh_controls_v12(NULL, s);
+    return G_SOURCE_REMOVE;
+}
+
+static void linux_speed_lab_start_v12(LinuxSpeedLabV12 *s, gboolean options) {
+    if (s->closed || s->worker != NULL) return;
+    s->loading_options = options;
+    s->request_ok = FALSE;
+    s->request_timeout = options ? 10000L : 110000L;
+    if (!options) {
+        s->request_body = linux_speed_lab_request_body_v12(s);
+        if (strcmp(linux_speed_lab_active_id_v12(s->duration_mode), "custom") == 0)
+            s->request_timeout = MAX(90000L, (long)(gtk_range_get_value(GTK_RANGE(s->max_time))*2000.0 + 80000.0));
+        gtk_label_set_text(GTK_LABEL(s->status), "Proving path and testing throughput/loaded latency… Cancel or Close stops this request.");
+        GtkWidget *metrics[] = {s->idle,s->download,s->upload,s->idle_detail,s->download_detail,s->upload_detail};
+        for (guint i=0; i<G_N_ELEMENTS(metrics); i++) gtk_label_set_text(GTK_LABEL(metrics[i]), "--");
+    } else gtk_label_set_text(GTK_LABEL(s->status), "Loading test options…");
+    g_atomic_int_set(&s->cancelled, 0);
+    g_atomic_int_set(&s->complete, 0);
+    GError *error = NULL;
+    s->worker = g_thread_try_new("router-vpn-speed-lab", linux_speed_lab_worker_v12, s, &error);
+    if (s->worker == NULL) {
+        gtk_label_set_text(GTK_LABEL(s->status), error ? error->message : "Cannot start Speed Lab worker");
+        g_clear_error(&error);
+        linux_speed_lab_release_request_v12(s);
+    } else {
+        gtk_button_set_label(GTK_BUTTON(s->run), options ? "Loading…" : "Cancel test");
+        s->poll_source = g_timeout_add(100, linux_speed_lab_complete_v12, s);
+    }
+    linux_speed_lab_refresh_controls_v12(NULL, s);
+}
+
+static void linux_speed_lab_run_v12(GtkButton *button, gpointer data) {
+    (void)button;
+    LinuxSpeedLabV12 *s = data;
+    if (s == NULL || s->closed) return;
+    if (s->worker != NULL) {
+        g_atomic_int_set(&s->cancelled, 1);
+        gtk_widget_set_sensitive(s->run, FALSE);
+        gtk_label_set_text(GTK_LABEL(s->status), "Cancelling test request…");
+        return;
+    }
+    if (s->options_ready) linux_speed_lab_start_v12(s, FALSE);
 }
 
 static GtkWidget *linux_speed_lab_grid_label_v12(const char*text){GtkWidget*w=gtk_label_new(text);gtk_label_set_xalign(GTK_LABEL(w),0.0f);return w;}
@@ -176,7 +355,14 @@ static void linux_speed_lab_open_v12(GtkButton *button,gpointer data){
     GtkWidget*scroll=gtk_scrolled_window_new(NULL,NULL);gtk_widget_set_vexpand(scroll,TRUE);s->detail=gtk_text_view_new();gtk_text_view_set_editable(GTK_TEXT_VIEW(s->detail),FALSE);gtk_text_view_set_monospace(GTK_TEXT_VIEW(s->detail),TRUE);gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),"Ready. Temporary configurations require Router VPN to be disconnected.",-1);gtk_container_add(GTK_CONTAINER(scroll),s->detail);gtk_box_pack_start(GTK_BOX(root),scroll,TRUE,TRUE,0);
     GtkWidget*actions=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);s->status=gtk_label_new("Cloudflare Speed Test edge • no Mbps derived from RTT");gtk_label_set_xalign(GTK_LABEL(s->status),0.0f);s->run=gtk_button_new_with_label("Run Speed Lab");gtk_box_pack_start(GTK_BOX(actions),s->status,TRUE,TRUE,0);gtk_box_pack_end(GTK_BOX(actions),s->run,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(root),actions,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(area),root,TRUE,TRUE,0);
     g_signal_connect(s->scope,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->topology,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->mode,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->duration_mode,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->min_time,"value-changed",G_CALLBACK(linux_speed_lab_time_v12),s);g_signal_connect(s->max_time,"value-changed",G_CALLBACK(linux_speed_lab_time_v12),s);g_signal_connect(s->run,"clicked",G_CALLBACK(linux_speed_lab_run_v12),s);
-    gtk_widget_show_all(s->dialog);if(!linux_speed_lab_load_options_v12(s))gtk_widget_set_sensitive(s->run,FALSE);linux_speed_lab_refresh_controls_v12(NULL,s);linux_speed_lab_time_v12(NULL,s);gtk_dialog_run(GTK_DIALOG(s->dialog));gtk_widget_destroy(s->dialog);g_free(s);
+    g_object_set_data(G_OBJECT(s->dialog), "linux-speed-lab-v12", s);
+    g_signal_connect(s->dialog, "destroy", G_CALLBACK(linux_speed_lab_destroy_v12), s);
+    gtk_widget_show_all(s->dialog);
+    linux_speed_lab_start_v12(s, TRUE);
+    linux_speed_lab_time_v12(NULL,s);
+    gtk_dialog_run(GTK_DIALOG(s->dialog));
+    if (!s->closed) gtk_widget_destroy(s->dialog);
+    g_free(s);
 }
 
 static void linux_install_speed_lab_v12(App *app){
@@ -192,3 +378,5 @@ static void linux_install_speed_lab_v12(App *app){
 }
 
 /* Linux Speed Lab v12: /api/speed-lab/options + /api/speed-lab/run; current path or temporary System direct, Router VPN, Multihop, External exit/hop; SMART/AUTO/CUSTOM/logical modes; WireGuard/AmneziaWG; real download/upload Mbps; idle/download-loaded/upload-loaded ms, exact per-hop RTT/Mbps on the same proved multihop graph, p90/max/jitter/bufferbloat; Auto timing or 1–60 second custom min/max sliders. */
+
+#include "routervpn-speed-lab-self-test-v13.inc"
