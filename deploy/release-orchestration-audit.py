@@ -186,6 +186,12 @@ for marker in (
 # runtime-ownership, persistence-error, publication, and historical boundaries
 # must travel with exact release orchestration instead of living as orphan scripts.
 for audit in (
+    # Current overrides must certify the same source as the historical gates.
+    # This orchestrator runs inside source-audit, which the native aggregate,
+    # server-image publication and exact-SHA download release all depend on.
+    "deploy/current-requirements-audit.py",
+    "deploy/reconciled-project-contract-audit.py",
+    "deploy/test-current-requirements-release-gate.py",
     "deploy/docker-cleanup-safety-audit.py",
     "deploy/private-bundle-boundary-audit.py",
     "deploy/historical-regression-audit.py",
