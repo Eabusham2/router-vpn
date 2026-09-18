@@ -1,3 +1,5 @@
+#include "routervpn-async-actions-self-test-v16.inc"
+
 /* Invoked only by the explicit --speed-lab-self-test CLI. The fixture server
  * is loopback-only and makes no VPN or Internet requests. Drive the actual
  * dialog, buttons, worker and destroy callback, not a second test UI. */
@@ -125,5 +127,5 @@ static int linux_speed_lab_self_test_v13(void) {
         printf("Speed Lab real-dialog test: %s PASS; heartbeat ticks=%d\n", scenarios[i], probe.ticks);
     }
     gtk_widget_destroy(app.window);
-    return 0;
+    return linux_async_actions_self_test_v16();
 }

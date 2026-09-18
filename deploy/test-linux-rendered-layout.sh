@@ -45,3 +45,5 @@ if curl --noproxy '*' -fsS --max-time 1 http://127.0.0.1:8788/api/status >/dev/n
 fi
 echo 'Linux shipping GTK rendered layout acceptance: PASS'
 python3 "$(dirname "${BASH_SOURCE[0]}")/test-linux-speed-lab-ui.py" "$PACKAGE/router-vpn-app"
+
+python3 "$(dirname "${BASH_SOURCE[0]}")/test-linux-http-job.py"

@@ -29,7 +29,7 @@ def main() -> int:
         raise SystemExit("Speed Lab test requires the executable shipping app")
     if shutil.which("xvfb-run") is None:
         raise SystemExit("Speed Lab UI test needs xvfb and xauth")
-    state = {"get": 0, "post": 0, "cancelled": 0, "errors": []}
+    state = {"get": 0, "post": 0, "cancelled": 0, "errors": [], "actions": [], "action_cancelled": 0}
     lock = threading.Lock()
 
     class Server(http.server.ThreadingHTTPServer):
@@ -41,7 +41,7 @@ def main() -> int:
         def log_message(self, *_args):
             pass
 
-        def wait_for_response(self, seconds: float) -> bool:
+        def wait_for_response(self, seconds: float, counter: str = "cancelled") -> bool:
             deadline = time.monotonic() + seconds
             while time.monotonic() < deadline:
                 try:
@@ -50,7 +50,7 @@ def main() -> int:
                     closed = True
                 if closed:
                     with lock:
-                        state["cancelled"] += 1
+                        state[counter] += 1
                     return False
             return True
 
@@ -68,6 +68,17 @@ def main() -> int:
                 pass
 
         def do_GET(self):
+            fixtures = {
+                "/api/status": {"connected": False, "phase": "disconnected"},
+                "/api/profiles": {"profiles": [], "selected_id": ""},
+                "/api/logical-modes": [{"id": "smart-auto", "name": "SMART AUTO", "available": True}],
+                "/api/profile/settings": {}, "/api/home-summary": {},
+                "/api/session/events": {"events": [], "last_event_seq": 0},
+            }
+            path = self.path.split("?", 1)[0]
+            if path in fixtures:
+                self.respond(200, json.dumps(fixtures[path]).encode())
+                return
             if self.path != "/api/speed-lab/options":
                 with lock:
                     state["errors"].append(self.path)
@@ -94,6 +105,15 @@ def main() -> int:
                 with lock:
                     state["errors"].append("invalid request body")
                 self.respond(400, b"invalid request body")
+                return
+            action_paths = {"/api/strategy/smart-auto", "/api/disconnect", "/api/emergency-stop", "/api/mtu/retest"}
+            if self.path in action_paths and body == {}:
+                with lock:
+                    state["actions"].append(self.path)
+                    connect_number = state["actions"].count("/api/strategy/smart-auto")
+                delayed = self.path in {"/api/disconnect", "/api/mtu/retest"} or (self.path == "/api/strategy/smart-auto" and connect_number == 2)
+                if self.wait_for_response(6 if delayed else .4, "action_cancelled"):
+                    self.respond(200, b'{"ok":true}')
                 return
             if self.path != "/api/speed-lab/run" or body != {"scope": "current", "duration_mode": "auto"}:
                 with lock:
@@ -135,14 +155,17 @@ def main() -> int:
                 str(binary), "--speed-lab-self-test",
             ], env=env, timeout=50, check=False)
         deadline = time.monotonic() + 2
-        while state["cancelled"] < 3 and time.monotonic() < deadline:
+        while (state["cancelled"] < 3 or state["action_cancelled"] < 3) and time.monotonic() < deadline:
             time.sleep(0.03)
         print("Speed Lab loopback fixture:", json.dumps(state, sort_keys=True))
         if result.returncode != 0:
             return result.returncode
         if state["get"] != 7 or state["post"] != 6 or state["cancelled"] != 3 or state["errors"]:
             raise SystemExit("Speed Lab request ownership/cancellation verification failed")
-        print("Linux shipping Speed Lab UI responsiveness and cancellation: PASS")
+        expected_actions = ["/api/strategy/smart-auto", "/api/strategy/smart-auto", "/api/disconnect", "/api/emergency-stop", "/api/mtu/retest"]
+        if state["actions"] != expected_actions or state["action_cancelled"] != 3:
+            raise SystemExit("Linux asynchronous action ordering/cancellation verification failed")
+        print("Linux shipping Speed Lab and main-action UI responsiveness and cancellation: PASS")
         return 0
     finally:
         server.shutdown()

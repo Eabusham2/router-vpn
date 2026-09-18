@@ -30,7 +30,20 @@ base.SPECS[name] = (
 # The wrapper is both the shipping CLI and the importable compatibility API used
 # by the authoritative session-mutation audit. Keep one mutation implementation:
 # the frozen v1 apply() operates on the adjusted SPECS table above.
-apply = base.apply
+async_spec = importlib.util.spec_from_file_location("routervpn_linux_async_actions", HERE / "apply-async-actions.py")
+if async_spec is None or async_spec.loader is None:
+    raise SystemExit("cannot load Linux async action composition")
+async_actions = importlib.util.module_from_spec(async_spec)
+async_spec.loader.exec_module(async_actions)
+frozen_apply = base.apply
+
+
+def apply(src, dst):
+    frozen_apply(src, dst)
+    async_actions.apply(Path(dst))
+
+
+base.apply = apply
 
 if __name__ == "__main__":
     base.main()
