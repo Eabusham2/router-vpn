@@ -18,6 +18,20 @@ static void linux_compact_combos_v15(GtkWidget *widget) {
             }
         }
         g_list_free(cells);
+        /* The shell populates the model before this layer is composed. GTK's
+         * cell context may already hold widths measured without ellipsizing;
+         * reset those cached requests without replacing the model or selection. */
+        GtkWidget *view = gtk_bin_get_child(GTK_BIN(widget));
+        if (GTK_IS_CELL_VIEW(view)) {
+            GtkCellAreaContext *context = NULL;
+            g_object_get(view, "cell-area-context", &context, NULL);
+            if (context != NULL) {
+                gtk_cell_area_context_reset(context);
+                g_object_unref(context);
+            }
+            gtk_widget_queue_resize(view);
+        }
+        gtk_widget_queue_resize(widget);
         gtk_combo_box_set_popup_fixed_width(GTK_COMBO_BOX(widget), FALSE);
         g_signal_connect(widget, "changed", G_CALLBACK(linux_combo_tooltip_v15), NULL);
         linux_combo_tooltip_v15(GTK_COMBO_BOX(widget), NULL);
