@@ -118,15 +118,37 @@ static void linux_install_responsive_v15(App *app) {
     gtk_widget_show_all(app->window);
 }
 
-/* Real-widget acceptance check for the built app under Xvfb. It opens no
- * connections, changes no profiles, and exercises the same shipping widget
- * hierarchy rather than rendering a separate mock UI. */
-static int linux_responsive_self_test_v15(App *app) {
+/* Check the real allocation, then scroll that same control into the viewport.
+ * A control merely existing below the page is not evidence that it is usable. */
+static gboolean linux_control_reachable_v15(GtkWidget *widget, GtkWidget *page,
+                                           GtkWidget *viewport, GtkWidget *scroll) {
+    int x = 0, y = 0;
+    if (widget == NULL || !gtk_widget_is_visible(widget) ||
+        !gtk_widget_translate_coordinates(widget, page, 0, 0, &x, &y)) return FALSE;
+    int width = gtk_widget_get_allocated_width(widget);
+    int height = gtk_widget_get_allocated_height(widget);
+    if (width < 1 || height < 1 || x < 0 ||
+        x + width > gtk_widget_get_allocated_width(viewport) || y < 0 ||
+        y + height > gtk_widget_get_allocated_height(page)) return FALSE;
+    GtkAdjustment *vertical = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroll));
+    if (!gtk_widget_translate_coordinates(widget, viewport, 0, 0, &x, &y)) return FALSE;
+    double top = gtk_adjustment_get_value(vertical) + y;
+    gtk_adjustment_clamp_page(vertical, top, top + height);
+    while (gtk_events_pending()) gtk_main_iteration_do(FALSE);
+    if (!gtk_widget_translate_coordinates(widget, viewport, 0, 0, &x, &y)) return FALSE;
+    return x >= 0 && y >= 0 &&
+           x + width <= gtk_widget_get_allocated_width(viewport) &&
+           y + height <= gtk_widget_get_allocated_height(viewport);
+}
+
+static int linux_responsive_check_sizes_v15(App *app, const char *scenario) {
     LinuxUnifiedV8 *base = g_object_get_data(G_OBJECT(app->window), "linux-unified-v8");
     GtkWidget *scroll = g_object_get_data(G_OBJECT(app->window), "linux-responsive-v15");
-    if (base == NULL || scroll == NULL) return 5;
+    LinuxTelemetryV9 *telemetry = g_object_get_data(G_OBJECT(app->window), "linux-telemetry-v9");
+    if (base == NULL || scroll == NULL || telemetry == NULL) return 5;
     static const int sizes[][2] = {{640,480}, {800,600}, {960,680}, {1280,800}};
-    static const char *const actions[] = {"Open settings", "AUTO requirements", "Retest MTU", "Performance", "Profiles", "Speed Lab", "Presets / CUSTOM", "Details", "DNS details", "Choose hops"};
+    static const char *const actions[] = {"Open settings", "AUTO requirements", "Retest MTU", "Performance", "Profiles", "Speed Lab", "Presets / CUSTOM", "Details", "DNS details", "Choose hops", "Add / manage nodes", "Tor bridges…"};
+    GtkWidget *primary[] = {base->connect, base->kill_switch, base->node, base->mode, base->dns, telemetry->fastest, telemetry->forward, telemetry->live};
     for (guint n = 0; n < G_N_ELEMENTS(sizes); n++) {
         gtk_window_resize(GTK_WINDOW(app->window), sizes[n][0], sizes[n][1]);
         for (int frame = 0; frame < 8; frame++) {
@@ -135,26 +157,62 @@ static int linux_responsive_self_test_v15(App *app) {
         }
         GtkWidget *viewport = gtk_bin_get_child(GTK_BIN(scroll));
         GtkWidget *page = gtk_bin_get_child(GTK_BIN(viewport));
-        int width = gtk_widget_get_allocated_width(viewport);
         int minimum_width = 0, minimum_height = 0;
         gtk_widget_get_preferred_width(app->window, &minimum_width, NULL);
         gtk_widget_get_preferred_height(app->window, &minimum_height, NULL);
-        if (minimum_width > 640 || minimum_height > 480 || width < 1) {
-            fprintf(stderr, "Responsive minimum grew to %dx%d\n", minimum_width, minimum_height);
+        if (minimum_width > 640 || minimum_height > 480 || gtk_widget_get_allocated_width(viewport) < 1) {
+            fprintf(stderr, "Responsive minimum grew to %dx%d (%s)\n", minimum_width, minimum_height, scenario);
             return 6;
         }
         for (guint i = 0; i < G_N_ELEMENTS(actions); i++) {
             GtkWidget *button = linux_telemetry_find_button_v9(page, actions[i]);
-            int x = 0, y = 0;
-            if (button == NULL || !gtk_widget_get_visible(button) ||
-                !gtk_widget_translate_coordinates(button, page, 0, 0, &x, &y) ||
-                x < 0 || x + gtk_widget_get_allocated_width(button) > width ||
-                y < 0 || y + gtk_widget_get_allocated_height(button) > gtk_widget_get_allocated_height(page)) {
-                fprintf(stderr, "Clipped/unreachable action %s at %dx%d\n", actions[i], sizes[n][0], sizes[n][1]);
+            if (!linux_control_reachable_v15(button, page, viewport, scroll)) {
+                fprintf(stderr, "Clipped/unreachable action %s at %dx%d (%s)\n", actions[i], sizes[n][0], sizes[n][1], scenario);
                 return 7;
             }
         }
-        printf("Router VPN rendered layout: %dx%d; all %u actions reachable; minimum %dx%d\n", sizes[n][0], sizes[n][1], (unsigned)G_N_ELEMENTS(actions), minimum_width, minimum_height);
+        for (guint i = 0; i < G_N_ELEMENTS(primary); i++) {
+            if (!linux_control_reachable_v15(primary[i], page, viewport, scroll)) {
+                fprintf(stderr, "Clipped/unreachable primary control %u at %dx%d (%s)\n", i, sizes[n][0], sizes[n][1], scenario);
+                return 7;
+            }
+        }
+        printf("Router VPN rendered layout: %dx%d; all %u actions and %u primary controls reachable; minimum %dx%d (%s)\n", sizes[n][0], sizes[n][1], (unsigned)G_N_ELEMENTS(actions), (unsigned)G_N_ELEMENTS(primary), minimum_width, minimum_height, scenario);
     }
     return 0;
+}
+
+/* Real-widget acceptance check for the built app under Xvfb. It opens no
+ * connections and changes no profiles. Long labels change only existing model
+ * display text; their IDs, selection, callbacks and stored preferences survive. */
+static int linux_responsive_self_test_v15(App *app) {
+    int result = linux_responsive_check_sizes_v15(app, "normal");
+    if (result != 0) return result;
+    LinuxUnifiedV8 *base = g_object_get_data(G_OBJECT(app->window), "linux-unified-v8");
+    GtkTreeModel *model = gtk_combo_box_get_model(GTK_COMBO_BOX(base->mode));
+    GtkTreeIter iter;
+    if (!GTK_IS_LIST_STORE(model) || !gtk_tree_model_get_iter_first(model, &iter)) return 8;
+    char *selected = g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(base->mode)));
+    int rows = gtk_tree_model_iter_n_children(model, NULL);
+    char *original = NULL;
+    gtk_tree_model_get(model, &iter, 0, &original, -1);
+    char *long_label = g_strnfill(1024, 'M');
+    gboolean was_syncing = base->syncing;
+    base->syncing = TRUE;
+    gtk_list_store_set(GTK_LIST_STORE(model), &iter, 0, long_label, -1);
+    base->syncing = was_syncing;
+    result = linux_responsive_check_sizes_v15(app, "long mode label");
+    base->syncing = TRUE;
+    gtk_list_store_set(GTK_LIST_STORE(model), &iter, 0, original, -1);
+    base->syncing = was_syncing;
+    if (gtk_combo_box_get_model(GTK_COMBO_BOX(base->mode)) != model ||
+        gtk_tree_model_iter_n_children(model, NULL) != rows ||
+        g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(base->mode)), selected) != 0) {
+        fprintf(stderr, "Responsive sizing changed mode model or selection\n");
+        result = 9;
+    }
+    g_free(long_label);
+    g_free(original);
+    g_free(selected);
+    return result;
 }
