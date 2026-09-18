@@ -22,10 +22,10 @@ static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); 
 int main(int argc,char **argv) {
     if(argc!=2 || curl_global_init(CURL_GLOBAL_DEFAULT)!=CURLE_OK)return 2;
     int mode=atoi(argv[1]);
-    const char *paths[]={"/api/ok","/api/slow","/api/large","/api/redirect","/api/slow","/api/error"};
-    if(mode<0||mode>5)return 3;
+    const char *paths[]={"/api/ok","/api/slow","/api/large","/api/redirect","/api/slow","/api/error","/api/read","/api/connection/speed-test","/api/multihop/connect"};
+    if(mode<0||mode>8)return 3;
     char *body=strdup("{\"owned\":true}");
-    RVHttpJobV16 *job=rv_http_start_v16(paths[mode],body,mode==4?120:4000,"test");
+    RVHttpJobV16 *job=mode==6?rv_http_start_method_v17(paths[mode],"",4000,"read",1):rv_http_start_v16(paths[mode],body,mode==4?120:4000,"test");
     memset(body,'x',strlen(body));free(body); /* Caller storage does not survive. */
     if(job==NULL)return 4;
     double start=now();
@@ -42,6 +42,9 @@ int main(int argc,char **argv) {
         if(mode==4 && job->result!=CURLE_OPERATION_TIMEDOUT)return 10;
         if(mode==5 && (job->result!=CURLE_OK||job->status!=409))return 11;
     }
+    if(mode==6 && (job->result!=CURLE_OK||job->status!=200||!job->get||job->connecting||strcmp(job->response,"{\"get\":true}")!=0))return 14;
+    if(mode==7 && (job->result!=CURLE_OK||job->connecting))return 15;
+    if(mode==8 && (job->result!=CURLE_OK||!job->connecting))return 16;
     rv_http_free_v16(job);
     if(rv_http_start_v16("https://example.invalid", "{}", 1000,"bad")!=NULL)return 12;
     if(rv_http_start_v16("/api/ok", "{}", 0,"bad")!=NULL)return 13;
@@ -57,6 +60,11 @@ def main():
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
+        def do_GET(self):
+            received.append(self.path)
+            if self.path != '/api/read' or int(self.headers.get('Content-Length','0')) != 0:
+                failures.append('read method/body contract changed')
+            self.send_response(200);self.send_header('Content-Length','12');self.end_headers();self.wfile.write(b'{"get":true}')
         def do_POST(self):
             self.connection.settimeout(2)
             n = int(self.headers.get('Content-Length', '0'))
@@ -96,11 +104,11 @@ def main():
             src.write_text(C_TEST)
             flags = shlex.split(subprocess.check_output(['pkg-config', '--cflags', '--libs', 'libcurl'], text=True))
             subprocess.run(['gcc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-pthread', '-I'+str(ROOT/'client/linux'), str(src), '-o', str(binary), *flags], check=True, timeout=30)
-            for case in range(6):
+            for case in range(9):
                 subprocess.run([str(binary), str(case)], check=True, timeout=8, env=dict(os.environ, http_proxy='http://127.0.0.1:1', ALL_PROXY='http://127.0.0.1:1'))
         end = time.monotonic()+1
         while len(cancelled)<2 and time.monotonic()<end:time.sleep(.02)
-        assert len(received)==6 and len(cancelled)==2 and not failures, (received,cancelled,failures)
+        assert len(received)==9 and len(cancelled)==2 and not failures, (received,cancelled,failures)
         assert '/redirect-target' not in received
         print('Bounded worker, immutable request, no proxies/redirects, cancellation and timeout: PASS')
     finally:

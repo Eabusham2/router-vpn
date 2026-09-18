@@ -22,7 +22,7 @@ static void linux_globe_free_v10(gpointer data){
 static LinuxGlobeV10*linux_globe_state_v10(App*app){return app!=NULL&&app->window!=NULL?g_object_get_data(G_OBJECT(app->window),"linux-globe-v10"):NULL;}
 
 static gboolean linux_globe_refresh_v10(gpointer data){
-    LinuxGlobeV10*g=data;if(g==NULL||g->app==NULL||g->app->window==NULL)return G_SOURCE_REMOVE;g->connected=FALSE;g->path_ms=0.0;g_clear_pointer(&g->entry_id,g_free);g_clear_pointer(&g->exit_id,g_free);
+    LinuxGlobeV10*g=data;if(g==NULL||g->app==NULL||g->app->window==NULL)return G_SOURCE_REMOVE;if(linux_async_busy_v16(g->app)){g->connected=FALSE;g->path_ms=0.0;return G_SOURCE_CONTINUE;}g->connected=FALSE;g->path_ms=0.0;g_clear_pointer(&g->entry_id,g_free);g_clear_pointer(&g->exit_id,g_free);
     if(g->external_ids==NULL)g->external_ids=g_hash_table_new_full(g_str_hash,g_str_equal,g_free,NULL);else g_hash_table_remove_all(g->external_ids);
 
     Buffer profiles_out={0};char*profiles_err=NULL;if(api_request("/api/profiles","GET",NULL,2500,&profiles_out,&profiles_err)){JsonNode*root=parse_json(profiles_out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject*obj=json_node_get_object(root);JsonArray*profiles=json_object_has_member(obj,"profiles")?json_object_get_array_member(obj,"profiles"):NULL;for(guint i=0;profiles!=NULL&&i<json_array_get_length(profiles);i++){JsonObject*p=json_array_get_object_element(profiles,i);if(p==NULL)continue;const char*id=obj_string(p,"id"),*kind=obj_string(p,"node_kind");if(id[0]&&g_ascii_strcasecmp(kind,"external")==0)g_hash_table_add(g->external_ids,g_strdup(id));}json_node_free(root);}}g_free(profiles_err);free(profiles_out.data);

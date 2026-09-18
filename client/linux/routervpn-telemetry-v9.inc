@@ -28,7 +28,7 @@ static GtkWidget *linux_telemetry_find_button_v9(GtkWidget *root, const char *la
 }
 
 static void linux_telemetry_refresh_fastest_v9(LinuxTelemetryV9 *t) {
-    if (t == NULL || t->fastest == NULL) return;
+    if (t == NULL || t->fastest == NULL || linux_async_busy_v16(t->app)) return;
     Buffer out={0}; char *err=NULL;
     if (!api_request("/api/profiles","GET",NULL,4000,&out,&err)) { g_free(err); free(out.data); return; }
     JsonNode *root=parse_json(out.data);
@@ -59,12 +59,11 @@ static void linux_telemetry_refresh_fastest_v9(LinuxTelemetryV9 *t) {
 static void linux_telemetry_fastest_changed_v9(GtkComboBox *combo, gpointer data) {
     LinuxTelemetryV9 *t=data; if(t==NULL||t->syncing)return; const char *id=gtk_combo_box_get_active_id(combo); if(id==NULL||id[0]=='\0')return;
     if(!routervpn_require_mutation_idle(t->app,"selecting a Router VPN node")){linux_telemetry_refresh_fastest_v9(t);return;}
-    gtk_widget_set_sensitive(GTK_WIDGET(combo),FALSE);
-    char *body=NULL; Buffer out={0}; char *err=NULL; gboolean ok=FALSE;
-    if(strcmp(id,"fastest")==0){body=g_strdup("{\"samples\":5,\"select\":true}");ok=api_request("/api/profile/fastest","POST",body,40000,&out,&err);}else{body=json_string_body("id",id);ok=api_request("/api/profile/select","POST",body,12000,&out,&err);}g_free(body);free(out.data);
-    if(!ok){if(err!=NULL)append_diag(t->app,err);g_free(err);linux_telemetry_refresh_fastest_v9(t);gtk_widget_set_sensitive(GTK_WIDGET(combo),!routervpn_mutation_busy(t->app));return;}g_free(err);
-    append_diag(t->app,strcmp(id,"fastest")==0?"Selected the fastest measured Router VPN node. Press Connect when ready.":"Selected Router VPN node. Press Connect when ready.");
-    refresh_all(t->app); linux_unified_refresh_v8(t->base); linux_telemetry_refresh_fastest_v9(t); gtk_widget_set_sensitive(GTK_WIDGET(combo),!routervpn_mutation_busy(t->app));
+    char *body = strcmp(id,"fastest")==0 ? g_strdup("{\"samples\":5,\"select\":true}") : json_string_body("id",id);
+    guint64 request = linux_async_request_v17(t->app, strcmp(id,"fastest")==0 ? "/api/profile/fastest" : "/api/profile/select", body, strcmp(id,"fastest")==0 ? 40000 : 12000, "Node selection; Press Connect when ready.", FALSE);
+    g_free(body);
+    if(request != 0) {gtk_widget_set_sensitive(GTK_WIDGET(combo),FALSE);append_diag(t->app,"Measuring/selecting node; selection is not complete until the controller confirms it. Press Connect when ready.");}
+
 }
 
 static void linux_telemetry_set_forward_label_v9(LinuxTelemetryV9 *t,gboolean known,gboolean enabled){
@@ -87,28 +86,15 @@ static void linux_telemetry_forward_v9(GtkButton *button, gpointer data){
     JsonNode*root=parse_json(out.data);free(out.data);g_free(err);gboolean verified=FALSE,actual=FALSE;if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject*obj=json_node_get_object(root);if(json_object_has_member(obj,"enabled")){actual=json_object_get_boolean_member(obj,"enabled");verified=(actual==wanted);}}if(root!=NULL)json_node_free(root);if(!verified){append_diag(t->app,"Forwarding master response did not verify the requested state.");linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);}else{char*msg=g_strdup_printf("Forwarding master %s on the active Router VPN home node.",actual?"ON":"OFF");append_diag(t->app,msg);g_free(msg);linux_telemetry_set_forward_label_v9(t,TRUE,actual);}gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);
 }
 
-static char *linux_telemetry_json_text_v9(const char *path,const char *method,const char *body,int timeout){Buffer out={0};char*err=NULL;if(api_request(path,method,body,timeout,&out,&err)){char*value=g_strdup(out.data?out.data:"{}");free(out.data);g_free(err);return value;}char*value=g_strdup(err?err:"request failed");g_free(err);free(out.data);return value;}
-
-static char *linux_telemetry_multihop_speed_v9(void){
-    Buffer out={0};char*err=NULL;
-    if(!api_request("/api/multihop/status","GET",NULL,5000,&out,&err)){char*value=g_strdup(err?err:"multihop status failed");g_free(err);free(out.data);return value;}
-    JsonNode*root=parse_json(out.data);free(out.data);g_free(err);
-    if(root==NULL||!JSON_NODE_HOLDS_OBJECT(root)){if(root!=NULL)json_node_free(root);return g_strdup("Multihop status is not valid JSON.");}
-    JsonObject*obj=json_node_get_object(root);const char*entry=obj_string(obj,"entry_id");const char*exit=obj_string(obj,"exit_id");gboolean connected=json_object_has_member(obj,"connected")&&json_object_get_boolean_member(obj,"connected");
-    if(!connected||entry[0]=='\0'||exit[0]=='\0'||strcmp(entry,exit)==0){json_node_free(root);return g_strdup("Connect the actual multihop graph with different entry and exit nodes before testing routed hop speed.");}
-    char*body=g_strdup_printf("{\"entry_id\":\"%s\",\"exit_id\":\"%s\",\"bytes\":4194304}",entry,exit);json_node_free(root);
-    char*value=linux_telemetry_json_text_v9("/api/multihop/speed-test","POST",body,70000);g_free(body);return value;
-}
-
-static void linux_telemetry_performance_v9(GtkButton *button,gpointer data){
-    (void)button;LinuxTelemetryV9*t=data;if(t==NULL)return;GtkWidget*d=gtk_dialog_new_with_buttons("Router VPN Performance",GTK_WINDOW(t->app->window),GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,"Live path RTT",1,"50-sample selected node",2,"Real path speed",3,"Routed hop speeds",4,"Throughput + Auto MTU",5,"Close",GTK_RESPONSE_CLOSE,NULL);gtk_window_set_default_size(GTK_WINDOW(d),760,470);
-    GtkWidget*area=gtk_dialog_get_content_area(GTK_DIALOG(d));GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,8);gtk_container_set_border_width(GTK_CONTAINER(box),14);GtkWidget*note=gtk_label_new("Live RTT measures the current private tunnel. The 50-sample test is the durable node benchmark. Real path speed transfers authenticated bounded data to the active exit. Routed hop speed independently transfers to the entry and exit private agents through the active multihop graph; an unreachable hop keeps its real error. Throughput + Auto MTU is a separate path optimizer.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_xalign(GTK_LABEL(note),0.0f);GtkWidget*result=gtk_label_new("Choose a real measurement.");gtk_label_set_selectable(GTK_LABEL(result),TRUE);gtk_label_set_line_wrap(GTK_LABEL(result),TRUE);gtk_label_set_xalign(GTK_LABEL(result),0.0f);gtk_box_pack_start(GTK_BOX(box),note,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),result,TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(area),box,TRUE,TRUE,0);gtk_widget_show_all(d);
-    for(;;){int response=gtk_dialog_run(GTK_DIALOG(d));if(response==GTK_RESPONSE_CLOSE||response==GTK_RESPONSE_DELETE_EVENT)break;char*text=NULL;if(response==1)text=linux_telemetry_json_text_v9("/api/connection/live-latency","POST","{\"samples\":5}",12000);else if(response==2){const char*id=active_router_id(t->app);char*body=id?g_strdup_printf("{\"id\":\"%s\",\"samples\":50}",id):g_strdup("{}");text=linux_telemetry_json_text_v9("/api/profile/latency","POST",body,180000);g_free(body);refresh_all(t->app);}else if(response==3){text=linux_telemetry_json_text_v9("/api/connection/speed-test","POST","{\"bytes\":8388608}",45000);}else if(response==4){text=linux_telemetry_multihop_speed_v9();}else if(response==5){text=linux_telemetry_json_text_v9("/api/mtu/retest","POST","{}",130000);refresh_all(t->app);}if(text!=NULL){gtk_label_set_text(GTK_LABEL(result),text);g_free(text);}}
-    gtk_widget_destroy(d);
-}
+/* Performance preserves Live path RTT, 50-sample selected node, Real path speed,
+ * Routed hop speeds and Throughput + Auto MTU as separate owned requests.
+ * /api/connection/speed-test and /api/multihop/speed-test remain real transfers. */
+#include "routervpn-performance-v17.inc"
 
 static gboolean linux_telemetry_refresh_v9(gpointer data){
-    LinuxTelemetryV9*t=data;if(t==NULL)return G_SOURCE_REMOVE;linux_telemetry_refresh_fastest_v9(t);
+    LinuxTelemetryV9*t=data;if(t==NULL)return G_SOURCE_REMOVE;
+    if(linux_async_busy_v16(t->app)){gtk_widget_set_sensitive(t->fastest,FALSE);gtk_label_set_text(GTK_LABEL(t->live),"-- ms");return G_SOURCE_CONTINUE;}
+    linux_telemetry_refresh_fastest_v9(t);
     if(t->fastest!=NULL)gtk_widget_set_sensitive(t->fastest,!routervpn_mutation_busy(t->app));
     Buffer out={0};char*err=NULL;if(api_request("/api/connection/live-latency","GET",NULL,3500,&out,&err)){JsonNode*root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject*obj=json_node_get_object(root);double ms=json_object_has_member(obj,"median_ms")?json_object_get_double_member(obj,"median_ms"):0.0;char*label=ms>0?g_strdup_printf("%.1f ms",ms):g_strdup("-- ms");gtk_label_set_text(GTK_LABEL(t->live),label);g_free(label);json_node_free(root);}}else gtk_label_set_text(GTK_LABEL(t->live),"-- ms");g_free(err);free(out.data);
     gboolean forward_enabled=FALSE;if(linux_telemetry_read_forward_v9(t,&forward_enabled))linux_telemetry_set_forward_label_v9(t,TRUE,forward_enabled);else linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);

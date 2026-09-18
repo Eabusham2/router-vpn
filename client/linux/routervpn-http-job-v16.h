@@ -21,7 +21,7 @@ typedef struct {
     size_t length;
     long timeout_ms, status;
     CURLcode result;
-    int connecting;
+    int connecting, get;
 } RVHttpJobV16;
 
 static size_t rv_http_receive_v16(void *data, size_t size, size_t count, void *opaque) {
@@ -57,7 +57,7 @@ static void *rv_http_work_v16(void *opaque) {
     RV_SET(CURLOPT_CONNECTTIMEOUT_MS, 3000L);
     RV_SET(CURLOPT_TIMEOUT_MS, job->timeout_ms);
     RV_SET(CURLOPT_HTTPHEADER, headers);
-    RV_SET(CURLOPT_POSTFIELDS, job->body);
+    if (!job->get) RV_SET(CURLOPT_POSTFIELDS, job->body);
     RV_SET(CURLOPT_WRITEFUNCTION, rv_http_receive_v16);
     RV_SET(CURLOPT_WRITEDATA, job);
 #undef RV_SET
@@ -86,7 +86,7 @@ done:
     return NULL;
 }
 
-static RVHttpJobV16 *rv_http_start_v16(const char *path, const char *body, long timeout_ms, const char *label) {
+static RVHttpJobV16 *rv_http_start_method_v17(const char *path, const char *body, long timeout_ms, const char *label, int get) {
     static const char base[] = "http://127.0.0.1:8788";
     if (path == NULL || strncmp(path, "/api/", 5) != 0 || strlen(path) > 256 ||
         strchr(path, '\r') != NULL || strchr(path, '\n') != NULL ||
@@ -99,12 +99,18 @@ static RVHttpJobV16 *rv_http_start_v16(const char *path, const char *body, long 
     job->body = strdup(body);
     job->label = strdup(label != NULL ? label : "Request");
     job->timeout_ms = timeout_ms;
-    job->connecting = strstr(path, "/connect") != NULL || strncmp(path, "/api/strategy/", 14) == 0 || strcmp(path, "/api/auto") == 0;
+    const char *action = strrchr(path, '/');
+    job->get = get != 0;
+    job->connecting = !job->get && (strcmp(action, "/connect") == 0 || strcmp(action, "/connect-logical") == 0 || strncmp(path, "/api/strategy/", 14) == 0 || strcmp(path, "/api/auto") == 0);
     if (job->url != NULL) (void)snprintf(job->url, sizeof(base) + strlen(path), "%s%s", base, path);
     if (job->url != NULL && job->body != NULL && job->label != NULL && pthread_create(&job->thread, NULL, rv_http_work_v16, job) == 0)
         return job;
     free(job->url); free(job->body); free(job->label); free(job);
     return NULL;
+}
+
+static RVHttpJobV16 *rv_http_start_v16(const char *path, const char *body, long timeout_ms, const char *label) {
+    return rv_http_start_method_v17(path, body, timeout_ms, label, 0);
 }
 
 static int rv_http_ready_v16(RVHttpJobV16 *job) {

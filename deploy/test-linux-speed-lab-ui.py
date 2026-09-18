@@ -29,7 +29,7 @@ def main() -> int:
         raise SystemExit("Speed Lab test requires the executable shipping app")
     if shutil.which("xvfb-run") is None:
         raise SystemExit("Speed Lab UI test needs xvfb and xauth")
-    state = {"get": 0, "post": 0, "cancelled": 0, "errors": [], "actions": [], "action_cancelled": 0}
+    state = {"get": 0, "post": 0, "cancelled": 0, "errors": [], "actions": [], "action_cancelled": 0, "extended": [], "extended_cancelled": 0, "selected": False}
     lock = threading.Lock()
 
     class Server(http.server.ThreadingHTTPServer):
@@ -75,6 +75,12 @@ def main() -> int:
                 "/api/profile/settings": {}, "/api/home-summary": {},
                 "/api/session/events": {"events": [], "last_event_seq": 0},
             }
+            nodes=[{"id":"fixture-entry","name":"Test entry"},{"id":"fixture-exit","name":"Test exit"}]
+            fixtures["/api/multihop/status"]={"connected":state["selected"],"platform_supported":True,"entry_id":"fixture-entry","exit_id":"fixture-exit","nodes":nodes}
+            fixtures["/api/forwarding/master"]={"enabled":False}
+            fixtures["/api/connection/live-latency"]={}
+            if state["selected"]:
+                fixtures["/api/profiles"]={"selected_id":"fixture-fast","profiles":[{"id":"fixture-fast","name":"Test fastest","node_kind":"router-vpn"}]}
             path = self.path.split("?", 1)[0]
             if path in fixtures:
                 self.respond(200, json.dumps(fixtures[path]).encode())
@@ -106,6 +112,21 @@ def main() -> int:
                     state["errors"].append("invalid request body")
                 self.respond(400, b"invalid request body")
                 return
+            extended_paths={"/api/profile/fastest","/api/connection/speed-test","/api/multihop/speed-test","/api/multihop/connect"}
+            if self.path in extended_paths or (self.path=="/api/disconnect" and state["extended"]):
+                with lock:
+                    state["extended"].append(self.path)
+                    speed_index=state["extended"].count("/api/connection/speed-test")
+                expected={"/api/profile/fastest":{"samples":5,"select":True},"/api/connection/speed-test":{"bytes":8388608},"/api/multihop/speed-test":{"entry_id":"fixture-entry","exit_id":"fixture-exit","bytes":4194304},"/api/multihop/connect":{"entry_id":"fixture-entry","exit_id":"fixture-exit","exit_mode":"shadowsocks"},"/api/disconnect":{}}
+                if body!=expected[self.path]:
+                    state["errors"].append([self.path,body]);self.respond(400,b"wrong captured identity");return
+                delayed=self.path=="/api/multihop/connect" or (self.path=="/api/connection/speed-test" and speed_index>1)
+                if not self.wait_for_response(6 if delayed else .4,"extended_cancelled"):return
+                if self.path=="/api/profile/fastest":state["selected"]=True
+                self.respond(200,b'{"ok":true,"fixture":"owned result"}')
+                return
+            if self.path=="/api/multihop/live-latency":
+                self.respond(200,b'{"entry":{"median_ms":1},"exit":{"median_ms":2},"current_path":{"median_ms":3}}');return
             action_paths = {"/api/strategy/smart-auto", "/api/disconnect", "/api/emergency-stop", "/api/mtu/retest"}
             if self.path in action_paths and body == {}:
                 with lock:
@@ -155,7 +176,7 @@ def main() -> int:
                 str(binary), "--speed-lab-self-test",
             ], env=env, timeout=50, check=False)
         deadline = time.monotonic() + 2
-        while (state["cancelled"] < 3 or state["action_cancelled"] < 3) and time.monotonic() < deadline:
+        while (state["cancelled"] < 3 or state["action_cancelled"] < 3 or state["extended_cancelled"] < 3) and time.monotonic() < deadline:
             time.sleep(0.03)
         print("Speed Lab loopback fixture:", json.dumps(state, sort_keys=True))
         if result.returncode != 0:
@@ -165,7 +186,10 @@ def main() -> int:
         expected_actions = ["/api/strategy/smart-auto", "/api/strategy/smart-auto", "/api/disconnect", "/api/emergency-stop", "/api/mtu/retest"]
         if state["actions"] != expected_actions or state["action_cancelled"] != 3:
             raise SystemExit("Linux asynchronous action ordering/cancellation verification failed")
-        print("Linux shipping Speed Lab and main-action UI responsiveness and cancellation: PASS")
+        expected_extended=["/api/profile/fastest","/api/connection/speed-test","/api/multihop/speed-test","/api/connection/speed-test","/api/connection/speed-test","/api/multihop/connect","/api/disconnect"]
+        if state["extended"]!=expected_extended or state["extended_cancelled"]!=3:
+            raise SystemExit("Fastest/Performance/multihop request ownership verification failed")
+        print("Linux shipping Speed Lab, main actions, Fastest, Performance and multihop responsiveness and cancellation: PASS")
         return 0
     finally:
         server.shutdown()

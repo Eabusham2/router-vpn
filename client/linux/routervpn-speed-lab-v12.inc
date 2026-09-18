@@ -33,6 +33,7 @@ typedef struct {
     gint cancelled;
     gint complete;
     gboolean closed;
+    gboolean owns_slot;
     gboolean loading_options;
     gboolean options_ready;
     gboolean request_ok;
@@ -105,6 +106,14 @@ static gpointer linux_speed_lab_worker_v12(gpointer opaque) {
 }
 
 static void linux_speed_lab_release_request_v12(LinuxSpeedLabV12 *s) {
+    if (s->owns_slot) {
+        LinuxAsyncActionsV16 *owner = linux_async_state_v16(s->app);
+        s->owns_slot = FALSE;
+        if (owner != NULL && owner->auxiliary_jobs != 0) {
+            owner->auxiliary_jobs--;
+            if (!owner->closed && owner->changed != NULL) owner->changed(s->app);
+        }
+    }
     g_clear_pointer(&s->request_body, g_free);
     g_clear_pointer(&s->request_error, g_free);
     free(s->response.data);
@@ -303,6 +312,14 @@ static gboolean linux_speed_lab_complete_v12(gpointer data) {
 
 static void linux_speed_lab_start_v12(LinuxSpeedLabV12 *s, gboolean options) {
     if (s->closed || s->worker != NULL) return;
+    if (linux_async_busy_v16(s->app)) {
+        gtk_label_set_text(GTK_LABEL(s->status), "Another operation is pending; no Speed Lab request was started.");
+        return;
+    }
+    LinuxAsyncActionsV16 *owner = linux_async_ensure_v16(s->app);
+    owner->auxiliary_jobs++;
+    s->owns_slot = TRUE;
+    if (owner->changed != NULL) owner->changed(s->app);
     s->loading_options = options;
     s->request_ok = FALSE;
     s->request_timeout = options ? 10000L : 110000L;
