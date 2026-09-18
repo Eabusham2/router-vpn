@@ -192,6 +192,17 @@ install_old = '    build_ui_v5(&app);\n    g_signal_connect(app.window, "destroy
 install_new = '    build_ui_v5(&app);\n    linux_install_telemetry_v9(&app);\n    linux_install_speed_lab_v12(&app);\n    linux_install_globe_v10(&app);\n    linux_install_responsive_v15(&app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
 if text.count(install_old) != 1: raise SystemExit('Linux telemetry/globe installer seam drifted')
 text = text.replace(install_old, install_new, 1)
+# Exercise the shipping Speed Lab dialog against an isolated loopback fixture
+# before a real controller is started or any node/configuration can be changed.
+speed_test_seam = '    App app = {0};'
+if text.count(speed_test_seam) != 1: raise SystemExit('Linux Speed Lab test entrypoint seam drifted')
+text = text.replace(speed_test_seam, '\n'.join([
+    '    if (argc > 1 && strcmp(argv[1], "--speed-lab-self-test") == 0) {',
+    '        int speed_result = linux_speed_lab_self_test_v13();',
+    '        curl_global_cleanup();',
+    '        return speed_result;',
+    '    }', speed_test_seam]), 1)
+
 # Keep the real-widget layout test in the same compiled shipping entrypoint.
 loop_old = '    gtk_main();\n    g_free(app.package_root);'
 loop_new = '''    if (argc > 1 && strcmp(argv[1], "--layout-self-test") == 0) {
