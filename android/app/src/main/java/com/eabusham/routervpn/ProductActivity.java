@@ -79,7 +79,7 @@ public final class ProductActivity extends Activity {
 
         LinearLayout settingsRow=controlRow("Settings");Button settings=smallButton("Open settings");settings.setOnClickListener(v->showSettings());settingsRow.addView(settings);Button connectionProfiles=smallButton("Profiles");connectionProfiles.setContentDescription("Add, load, update or delete a whole non-secret connection profile");connectionProfiles.setOnClickListener(v->showConnectionProfiles());settingsRow.addView(connectionProfiles);performanceButton=smallButton("Performance");performanceButton.setOnClickListener(v->showPerformance());settingsRow.addView(performanceButton);Button mtu=smallButton("MTU");mtu.setOnClickListener(v->showMtuHelp());settingsRow.addView(mtu);sheet.addView(settingsRow,margins(0,dp(7),0,0));autoRequirementsHint=text("AUTO requirements: Off",11,false);autoRequirementsHint.setTextColor(Color.rgb(145,160,184));autoRequirementsHint.setPadding(dp(72),0,0,0);sheet.addView(autoRequirementsHint);
         LinearLayout speedRow=controlRow("Speed");Button speedLabButton=smallButton("Speed Lab");speedLabButton.setContentDescription("Run the dedicated current-path or temporary-config Speed Lab with idle and loaded latency, download/upload Mbps, and proved multihop hop metrics.");speedLabButton.setOnClickListener(v->new AndroidSpeedLabDialog(this,nodeStore,connection,new AndroidSpeedLabController(this,connection)).show());speedRow.addView(speedLabButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));sheet.addView(speedRow,margins(0,dp(7),0,0));
-        LinearLayout modeRow=controlRow("Mode");modeSpinner=new Spinner(this);modeSpinner.setPopupBackgroundDrawable(round(Color.rgb(29,43,68),12));modeRow.addView(modeSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button modeDetails=smallButton("Presets");modeDetails.setOnClickListener(v->AndroidProductParity.showModes(this,nodeStore));modeRow.addView(modeDetails);sheet.addView(modeRow,margins(0,dp(7),0,0));modeHint=text("SMART AUTO is the default.",11,false);modeHint.setTextColor(Color.rgb(145,160,184));sheet.addView(modeHint);
+        LinearLayout modeRow=controlRow("Mode");modeSpinner=new Spinner(this);modeSpinner.setPopupBackgroundDrawable(round(Color.rgb(29,43,68),12));modeRow.addView(modeSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button modeDetails=smallButton("Presets");modeDetails.setOnClickListener(v->showCustomPresetManager());modeRow.addView(modeDetails);sheet.addView(modeRow,margins(0,dp(7),0,0));modeHint=text("SMART AUTO is the default.",11,false);modeHint.setTextColor(Color.rgb(145,160,184));sheet.addView(modeHint);
         LinearLayout dnsRow=controlRow("DNS");dnsSpinner=new Spinner(this);String[]dns={"Home AdGuard","Fastest measured","Custom","DoT","DoH","DoH3","Rescue"};dnsSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,dns));dnsRow.addView(dnsSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button dnsDetails=smallButton("Details");dnsDetails.setOnClickListener(v->AndroidProductParity.showDNS(this,nodeStore));dnsRow.addView(dnsDetails);sheet.addView(dnsRow,margins(0,dp(7),0,0));dnsHint=text("DNS changes the next tunnel resolver path; Connected still requires runtime DNS/path proof.",11,false);dnsHint.setTextColor(Color.rgb(145,160,184));sheet.addView(dnsHint);dnsSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){boolean ready;public void onNothingSelected(android.widget.AdapterView<?>p){}public void onItemSelected(android.widget.AdapterView<?>p,View v,int pos,long id){if(!ready){ready=true;return;}if(mutationBusy()){toast("Disconnect/finish the current VPN operation before changing DNS.");refreshDnsSelection();return;}if(pos==0)setQuickDns("home");else if(pos==1)setQuickDns("fastest");else if(pos==6)setQuickDns("rescue");else AndroidProductParity.showDNS(ProductActivity.this,nodeStore);}});
         LinearLayout footer=row();Button nodes=smallButton("Nodes");nodes.setContentDescription("Add / manage nodes");nodes.setOnClickListener(v->showNodes());footer.addView(nodes);Button profiles=smallButton("Router nodes");profiles.setContentDescription("Manage linked Router VPN node records");profiles.setOnClickListener(v->showProfileManager());footer.addView(profiles);Button pair=smallButton("Add Router");pair.setOnClickListener(v->showPairDialog());footer.addView(pair);Button custom=smallButton("Add custom");custom.setOnClickListener(v->openStandardExits());footer.addView(custom);Button help=smallButton("Help");help.setOnClickListener(v->showHelp());footer.addView(help);sheet.addView(footer,margins(0,dp(8),0,0));return root;
     }
@@ -118,7 +118,83 @@ public final class ProductActivity extends Activity {
 
     private void refreshModeChoices(){String wanted=prefs().getString(MODE_KEY,"smart-auto");List<ModeChoice> values=new ArrayList<>();values.add(new ModeChoice("smart-auto","SMART AUTO — recommended"));values.add(new ModeChoice("auto","AUTO — first proven path"));try{JSONObject root=activeBundle();JSONArray logical=root.optJSONArray("logicalModes");if(logical!=null)for(int i=0;i<logical.length();i++){JSONObject m=logical.optJSONObject(i);if(m==null)continue;String id=m.optString("id","");if(id.isEmpty())continue;values.add(new ModeChoice(id,m.optString("name",id)));}}catch(Exception ignored){}for(CustomPreset p:loadCustomPresets())values.add(new ModeChoice("custom:"+p.name,"CUSTOM • "+p.name,p.layers));values.add(new ModeChoice("custom:new","New CUSTOM preset…"));modeChoices=values;ArrayAdapter<ModeChoice> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,values);modeSpinner.setAdapter(adapter);int index=0;for(int i=0;i<values.size();i++)if(values.get(i).id.equals(wanted)){index=i;break;}modeSpinner.setSelection(index,false);modeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){boolean ready;public void onNothingSelected(android.widget.AdapterView<?>p){}public void onItemSelected(android.widget.AdapterView<?>p,View v,int pos,long id){if(!ready){ready=true;return;}if(pos<0||pos>=modeChoices.size())return;if(mutationBusy()){toast("Disconnect/finish the current VPN operation before changing the next connection mode or CUSTOM preset.");refreshModeChoices();return;}ModeChoice selected=modeChoices.get(pos);if("custom:new".equals(selected.id)){showCustomBuilder(null);return;}prefs().edit().putString(MODE_KEY,selected.id).apply();modeHint.setText(selected.id.startsWith("custom:")?"Saved visual CUSTOM preset • exact required layers":"Unavailable presets remain visible; the engine fails closed with the exact readiness/proof reason.");}});}
     private ModeChoice currentMode(){if(modeSpinner==null||modeChoices.isEmpty())return null;int i=modeSpinner.getSelectedItemPosition();return i>=0&&i<modeChoices.size()?modeChoices.get(i):modeChoices.get(0);}
-    private void showCustomBuilder(CustomPreset editing){if(mutationBusy()){toast("Disconnect/finish the current VPN operation before creating, editing or deleting CUSTOM presets.");return;}try{List<String> layers=allCatalogLayers();if(layers.isEmpty()){toast("No mode layers are available in the selected Router VPN bundle.");return;}LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setPadding(dp(18),dp(8),dp(18),0);EditText name=new EditText(this);name.setHint("Preset name");if(editing!=null)name.setText(editing.name);body.addView(name);body.addView(text("Select exact required layers. Router VPN tries only native Android stacks containing every selected layer and fails closed if no compatible path passes proof.",12,false));boolean[] checked=new boolean[layers.size()];Set<String> old=editing==null?Collections.emptySet():new LinkedHashSet<>(editing.layers);for(int i=0;i<layers.size();i++)checked[i]=old.contains(layers.get(i));AlertDialog.Builder b=new AlertDialog.Builder(this).setTitle(editing==null?"New CUSTOM preset":"Edit CUSTOM • "+editing.name).setView(body).setMultiChoiceItems(layers.toArray(new CharSequence[0]),checked,(d,w,on)->checked[w]=on).setPositiveButton("Save",null).setNeutralButton(editing==null?"Cancel":"Delete",null).setNegativeButton("Cancel",null);AlertDialog dialog=b.create();dialog.setOnShowListener(x->{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{if(mutationBusy()){toast("VPN state changed; disconnect/finish before saving CUSTOM presets.");return;}String n=name.getText().toString().trim();List<String> selected=new ArrayList<>();for(int i=0;i<checked.length;i++)if(checked[i])selected.add(layers.get(i));if(n.isEmpty()||n.length()>64){toast("Preset name must be 1–64 characters.");return;}if(selected.isEmpty()){toast("CUSTOM requires at least one layer.");return;}saveCustomPreset(new CustomPreset(n,selected),editing==null?null:editing.name);prefs().edit().putString(MODE_KEY,"custom:"+n).apply();dialog.dismiss();refreshModeChoices();});if(editing!=null)dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->{if(mutationBusy()){toast("VPN state changed; disconnect/finish before deleting CUSTOM presets.");return;}deleteCustomPreset(editing.name);prefs().edit().putString(MODE_KEY,"smart-auto").apply();dialog.dismiss();refreshModeChoices();});});dialog.show();}catch(Exception error){toast("CUSTOM builder unavailable: "+safe(error));}}
+    private void showCustomPresetManager() {
+        List<CustomPreset> presets = loadCustomPresets();
+        List<String> labels = new ArrayList<>();
+        labels.add("Mode catalog / availability"); labels.add("New CUSTOM preset");
+        for (CustomPreset preset : presets) labels.add("Edit CUSTOM • " + preset.name);
+        new AlertDialog.Builder(this).setTitle("Presets / CUSTOM")
+            .setItems(labels.toArray(new CharSequence[0]), (d, which) -> {
+                if (which == 0) AndroidProductParity.showModes(this, nodeStore);
+                else showCustomBuilder(which == 1 ? null : presets.get(which - 2));
+            }).setNegativeButton("Cancel", null).show();
+    }
+
+    private void showCustomBuilder(CustomPreset editing) {
+        if (mutationBusy()) { toast("Disconnect/finish the current VPN operation before creating, editing or deleting CUSTOM presets."); return; }
+        try {
+            List<String> catalog = allCatalogLayers();
+            List<String> layers = AndroidCustomPresetCommit.editableLayers(catalog, editing == null ? Collections.emptyList() : editing.layers);
+            List<String> layerLabels = new ArrayList<>();
+            for (String layer : layers) layerLabels.add(catalog.contains(layer) ? layer : layer + " — not in this catalog");
+            if (layers.isEmpty()) { toast("No mode layers are available in the selected Router VPN bundle."); return; }
+            LinearLayout body = new LinearLayout(this); body.setOrientation(LinearLayout.VERTICAL);
+            body.setPadding(dp(18), dp(8), dp(18), 0);
+            EditText name = new EditText(this); name.setHint("Preset name");
+            if (editing != null) name.setText(editing.name);
+            body.addView(name);
+            body.addView(text("Choose exact required layers. Save never connects. Save & Connect requires a Router VPN node with Multihop off; incompatible stacks fail closed.", 12, false));
+            Button delete = smallButton("Delete preset");
+            if (editing != null) body.addView(delete);
+            boolean[] checked = new boolean[layers.size()];
+            Set<String> old = editing == null ? Collections.emptySet() : new LinkedHashSet<>(editing.layers);
+            for (int i = 0; i < layers.size(); i++) checked[i] = old.contains(layers.get(i));
+            AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(editing == null ? "New CUSTOM preset" : "Edit CUSTOM • " + editing.name)
+                .setView(body).setMultiChoiceItems(layerLabels.toArray(new CharSequence[0]), checked, (d, w, on) -> checked[w] = on)
+                .setPositiveButton("Save & Connect", null).setNeutralButton("Save", null)
+                .setNegativeButton("Cancel", null).create();
+            dialog.setOnShowListener(x -> {
+                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> saveCustomBuilder(dialog, name, layers, checked, editing, false));
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> saveCustomBuilder(dialog, name, layers, checked, editing, true));
+            });
+            if (editing != null) delete.setOnClickListener(v -> {
+                if (mutationBusy()) { toast("VPN state changed; disconnect/finish before deleting CUSTOM presets."); return; }
+                try { deleteCustomPreset(editing.name); dialog.dismiss(); refreshModeChoices(); }
+                catch (Exception error) { toast(safe(error)); }
+            });
+            dialog.show();
+        } catch (Exception error) { toast("CUSTOM builder unavailable: " + safe(error)); }
+    }
+
+    private void saveCustomBuilder(AlertDialog dialog, EditText name, List<String> layers,
+                                   boolean[] checked, CustomPreset editing, boolean connect) {
+        if (mutationBusy()) { toast("VPN state changed; disconnect/finish before saving CUSTOM presets."); return; }
+        String clean = name.getText().toString().trim();
+        List<String> selected = new ArrayList<>();
+        for (int i = 0; i < checked.length; i++) if (checked[i]) selected.add(layers.get(i));
+        if (!AndroidCustomPresetCommit.validName(clean)) { toast("Use a safe 1–64 character preset name, not new."); return; }
+        if (selected.isEmpty()) { toast("CUSTOM requires at least one layer."); return; }
+        CustomPreset preset = new CustomPreset(clean, selected);
+        try { saveCustomPreset(preset, editing == null ? null : editing.name); }
+        catch (Exception error) { toast(safe(error)); return; }
+        dialog.dismiss(); refreshModeChoices();
+        if (connect) connectSavedCustomPreset(preset);
+    }
+
+    private void connectSavedCustomPreset(CustomPreset preset) {
+        if (isFinishing() || isDestroyed() || mutationBusy()) { toast("Preset saved; VPN state changed, so no new connection was started."); return; }
+        AndroidUnifiedNodeCatalog.Item node = selectedCatalogItem();
+        if (node == null || !node.isRouterVpn() || multihopToggle.isChecked()) {
+            toast("Preset saved. Save & Connect requires a Router VPN node with Multihop off; no other graph was substituted."); return;
+        }
+        try {
+            AndroidNodeStore.Node target = nodeById(node.id);
+            if (target == null) throw new IllegalStateException("The selected Router VPN node is no longer available.");
+            statusView.setText("Preparing CUSTOM • " + preset.name + "…");
+            connection.connectNode(target, "custom:" + preset.name, new ArrayList<>(preset.layers), callback());
+        } catch (Exception error) { toast("Preset saved; connection not started: " + safe(error)); }
+    }
 
     private void refreshNodes(){if(catalog==null||mapView==null)return;try{List<AndroidUnifiedNodeCatalog.Item>items=catalog.list(AndroidUnifiedNodeCatalog.SORT_CURRENT);String selectedKind=prefs().getString(SELECTED_KIND,"router-vpn"),selectedId=prefs().getString(SELECTED_ID,nodeStore.activeId());if(selectedId.isEmpty()&&!items.isEmpty()&&!mutationBusy()){AndroidUnifiedNodeCatalog.Item first=items.get(0);selectedKind=first.kind;selectedId=first.id;if(first.isRouterVpn())nodeStore.select(first.id);prefs().edit().putString(SELECTED_KIND,selectedKind).putString(SELECTED_ID,selectedId).apply();}List<RouterVpnNodeMapView.Marker>markers=new ArrayList<>();String entry,exit;boolean multi;if(connection.isMultihopConnected()){entry=connection.activeMultihopEntryId();exit=connection.activeMultihopExitId();multi=true;}else{entry=prefs().getString(MULTI_ENTRY,"");exit=prefs().getString(MULTI_EXIT,"");multi=prefs().getBoolean(MULTI_ON,false);}AndroidUnifiedNodeCatalog.Item chosen=null;for(AndroidUnifiedNodeCatalog.Item item:items){if(item.kind.equals(selectedKind)&&item.id.equals(selectedId))chosen=item;if(!item.hasCoordinates())continue;String role;if(multi&&item.isRouterVpn()&&item.id.equals(entry))role=RouterVpnNodeMapView.ROLE_ENTRY;else if(multi&&item.isRouterVpn()&&item.id.equals(exit))role=RouterVpnNodeMapView.ROLE_EXIT;else if(item.id.equals(selectedId)&&item.kind.equals(selectedKind))role=RouterVpnNodeMapView.ROLE_SELECTED;else if(!item.isRouterVpn())role=RouterVpnNodeMapView.ROLE_EXTERNAL;else role=RouterVpnNodeMapView.ROLE_NORMAL;double ms=telemetry==null?0:telemetry.cachedMedian(item.id);if(ms<=0&&item.hasMeasuredLatency())ms=item.latencyMedianMs;markers.add(new RouterVpnNodeMapView.Marker(item.kind+":"+item.id,item.name,item.latitude,item.longitude,role,ms));}mapView.setMarkers(markers);nodeButton.setText(chosen==null?"Add / select node":(chosen.isRouterVpn()?"Router • ":"Custom • ")+chosen.name+(telemetry!=null&&telemetry.cachedMedian(chosen.id)>0?String.format(Locale.US," • %.1f ms",telemetry.cachedMedian(chosen.id)):"")+"  ▾");if(fastestButton!=null)fastestButton.setText(chosen==null?"⚡ Fastest ▾":"⚡ "+chosen.name+" ▾");}catch(Exception error){nodeButton.setText("Node catalog unavailable");if(fastestButton!=null)fastestButton.setText("⚡ Fastest ▾");mapView.setMarkers(new ArrayList<>());}}
     private void refreshMap(){refreshNodes();}
@@ -184,9 +260,42 @@ public final class ProductActivity extends Activity {
     private static JSONObject selectedProfile(JSONObject bundle){JSONArray a=bundle.optJSONArray("routerProfiles");String id=bundle.optString("selectedRouterID","");if(a==null)return null;for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p!=null&&id.equals(p.optString("id")))return p;}return a.length()>0?a.optJSONObject(0):null;}
     private List<String> allCatalogLayers()throws Exception{JSONObject root=activeBundle();JSONArray modes=root.optJSONArray("modes");Set<String>set=new LinkedHashSet<>();if(modes!=null)for(int i=0;i<modes.length();i++){JSONObject m=modes.optJSONObject(i);JSONArray l=m==null?null:m.optJSONArray("layers");if(l!=null)for(int j=0;j<l.length();j++){String v=l.optString(j,"").trim().toLowerCase(Locale.US);if(!v.isEmpty())set.add(v);}}return new ArrayList<>(set);}
     private List<CustomPreset> loadCustomPresets(){List<CustomPreset>out=new ArrayList<>();try{JSONArray a=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p==null)continue;String name=p.optString("name","").trim();JSONArray l=p.optJSONArray("layers");List<String>layers=new ArrayList<>();if(l!=null)for(int j=0;j<l.length();j++){String v=l.optString(j,"").trim();if(!v.isEmpty())layers.add(v);}if(!name.isEmpty()&&!layers.isEmpty())out.add(new CustomPreset(name,layers));}}catch(Exception ignored){}return out;}
-    private void saveCustomPreset(CustomPreset preset,String oldName){List<CustomPreset>all=loadCustomPresets();List<CustomPreset>next=new ArrayList<>();for(CustomPreset p:all)if((oldName==null||!p.name.equalsIgnoreCase(oldName))&&!p.name.equalsIgnoreCase(preset.name))next.add(p);next.add(preset);persistCustom(next);}
-    private void deleteCustomPreset(String name){List<CustomPreset>next=new ArrayList<>();for(CustomPreset p:loadCustomPresets())if(!p.name.equalsIgnoreCase(name))next.add(p);persistCustom(next);}
-    private void persistCustom(List<CustomPreset>values){JSONArray a=new JSONArray();for(CustomPreset p:values){JSONObject o=new JSONObject();try{o.put("name",p.name);o.put("layers",new JSONArray(p.layers));a.put(o);}catch(Exception ignored){}}prefs().edit().putString(CUSTOM_KEY,a.toString()).apply();}
+    private JSONArray checkedCustomRows(String raw) throws Exception {
+        JSONArray rows = new JSONArray(raw);
+        if (rows.length() > 64) throw new IllegalStateException("CUSTOM preset limit exceeded.");
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.getJSONObject(i);
+            if (row.getString("name").trim().isEmpty()) throw new IllegalStateException("Existing CUSTOM preset name is invalid.");
+            JSONArray layers = row.getJSONArray("layers");
+            if (layers.length() == 0 || layers.length() > 128) throw new IllegalStateException("Existing CUSTOM layers are invalid.");
+            for (int n = 0; n < layers.length(); n++) if (layers.getString(n).trim().isEmpty()) throw new IllegalStateException("Existing CUSTOM layer is invalid.");
+        }
+        return rows;
+    }
+
+    private void saveCustomPreset(CustomPreset preset, String oldName) throws Exception {
+        AndroidCustomPresetCommit.Snapshot before = AndroidCustomPresetCommit.snapshot(prefs());
+        JSONArray rows = checkedCustomRows(before.presets), next = new JSONArray();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.getJSONObject(i); String name = row.getString("name");
+            if ((oldName == null || !name.equalsIgnoreCase(oldName)) && !name.equalsIgnoreCase(preset.name)) next.put(row);
+        }
+        if (next.length() >= 64) throw new IllegalStateException("CUSTOM preset limit reached.");
+        JSONObject row = new JSONObject(); row.put("name", preset.name); row.put("layers", new JSONArray(preset.layers)); next.put(row);
+        AndroidCustomPresetCommit.publish(before, next.toString(), "custom:" + preset.name, () -> !mutationBusy());
+    }
+
+    private void deleteCustomPreset(String name) throws Exception {
+        AndroidCustomPresetCommit.Snapshot before = AndroidCustomPresetCommit.snapshot(prefs());
+        JSONArray rows = checkedCustomRows(before.presets), next = new JSONArray(); boolean found = false;
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.getJSONObject(i);
+            if (row.getString("name").equalsIgnoreCase(name)) found = true; else next.put(row);
+        }
+        if (!found) throw new IllegalStateException("CUSTOM preset disappeared; reopen the list.");
+        String mode = before.mode.equalsIgnoreCase("custom:" + name) ? "smart-auto" : before.mode;
+        AndroidCustomPresetCommit.publish(before, next.toString(), mode, () -> !mutationBusy());
+    }
 
     private void dialog(String title,String message){new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK",null).show();}
     private SharedPreferences prefs(){return getSharedPreferences(PREFS,MODE_PRIVATE);}

@@ -22,10 +22,10 @@ static gboolean linux_custom_probe_v18(gpointer data) {
     }
     GtkWidget *name = g_object_get_data(G_OBJECT(dialog), "custom-name-v18");
     GPtrArray *checks = g_object_get_data(G_OBJECT(dialog), "custom-checks-v18");
-    const char *names[] = {"fixture-custom", "fixture-renamed", "unused", "new", "cannot-write", "fixture-live", "must-not-save", "multihop-saved"};
+    const char *names[] = {"fixture-custom", "fixture-renamed", "unused", "new", "cannot-write", "fixture-live", "must-not-save", "multihop-saved", "fixture-unknown"};
     gtk_entry_set_text(GTK_ENTRY(name), names[p->scenario]);
-    for (guint i = 0; i < checks->len; i++) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g_ptr_array_index(checks, i)), i == 0);
-    int response = p->scenario == 2 ? GTK_RESPONSE_REJECT : p->scenario >= 3 ? GTK_RESPONSE_APPLY : GTK_RESPONSE_ACCEPT;
+    for (guint i = 0; p->scenario != 8 && i < checks->len; i++) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g_ptr_array_index(checks, i)), i == 0);
+    int response = p->scenario == 2 ? GTK_RESPONSE_REJECT : p->scenario >= 3 && p->scenario != 8 ? GTK_RESPONSE_APPLY : GTK_RESPONSE_ACCEPT;
     if (p->scenario == 6) linux_async_state_v16(p->app)->auxiliary_jobs++;
     if (p->scenario == 3 || p->scenario == 4) p->phase = 1;
     else p->source = 0;
@@ -45,11 +45,16 @@ static int linux_custom_builder_self_test_v18(void) {
     LinuxAsyncActionsV16 *owner = linux_async_state_v16(&app);
     char *path = linux_unified_preset_path_v8(), *backup = g_strconcat(path, ".fixture-backup", NULL);
     int failure = 0;
-    for (int scenario = 0; scenario < 8 && !failure; scenario++) {
+    for (int scenario = 0; scenario < 9 && !failure; scenario++) {
+        if (scenario == 8) {
+            GError *error = NULL;
+            if (!linux_custom_publish_v18(NULL, "fixture-unknown", "wireguard,legacy-unavailable", FALSE, &error)) { g_clear_error(&error); failure = 20; break; }
+            linux_unified_refresh_mode_combo_v8(base);
+        }
         char *before = NULL; g_file_get_contents(path, &before, NULL, NULL);
         if (scenario == 4 && (g_rename(path, backup) != 0 || g_mkdir(path, 0700) != 0)) { failure = 4; g_free(before); break; }
         base->syncing = TRUE;
-        if (scenario != 1 && scenario != 2) gtk_combo_box_set_active_id(GTK_COMBO_BOX(base->mode), "smart-auto");
+        if (scenario != 1 && scenario != 2 && scenario != 8) gtk_combo_box_set_active_id(GTK_COMBO_BOX(base->mode), "smart-auto");
         base->syncing = FALSE;
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(base->multihop), scenario == 7);
         LinuxCustomProbeV18 probe = {.app = &app, .scenario = scenario};
@@ -73,10 +78,15 @@ static int linux_custom_builder_self_test_v18(void) {
         GKeyFile *key = g_key_file_new();
         if (!g_key_file_load_from_file(key, path, G_KEY_FILE_NONE, NULL)) failure = 15;
         char *mode = g_key_file_get_string(key, "state", "selected_mode", NULL);
-        const char *expected[] = {"custom:fixture-custom", "custom:fixture-renamed", "smart-auto", "smart-auto", "smart-auto", "custom:fixture-live", "custom:fixture-live", "custom:multihop-saved"};
+        const char *expected[] = {"custom:fixture-custom", "custom:fixture-renamed", "smart-auto", "smart-auto", "smart-auto", "custom:fixture-live", "custom:fixture-live", "custom:multihop-saved", "custom:fixture-unknown"};
         if (g_strcmp0(mode, expected[scenario]) != 0) failure = 16;
         if (scenario == 1 && g_key_file_has_group(key, "preset:fixture-custom")) failure = 17;
         if (scenario == 2 && g_key_file_has_group(key, "preset:fixture-renamed")) failure = 18;
+        if (scenario == 8) {
+            char *saved = g_key_file_get_string(key, "preset:fixture-unknown", "layers", NULL);
+            if (g_strcmp0(saved, "wireguard,legacy-unavailable") != 0) failure = 21;
+            g_free(saved);
+        }
         struct stat st;
         if (g_stat(path, &st) != 0 || (st.st_mode & 0777) != 0600) failure = 19;
         g_free(mode); g_key_file_unref(key); g_free(before); g_free(after);

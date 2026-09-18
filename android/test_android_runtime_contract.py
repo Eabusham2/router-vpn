@@ -276,6 +276,7 @@ assert "libbox or native Xray mode" in policy
 # doubles. This checks cancellation/adoption behavior, not physical VPN traffic.
 for executable_contract in (
     "test_android_java_syntax.py",
+    "test_android_custom_preset_commit.py",
     "test_android_runtime_teardown.py",
     "test_android_service_stop_confirmation.py",
     "test_android_mutation_idle_proof.py",

@@ -134,6 +134,22 @@ static void linux_custom_builder_v18(LinuxUnifiedV8 *state) {
     for (guint i = 0; linux_custom_layers_v8[i]; i++) {
         GtkWidget *check = gtk_check_button_new_with_label(linux_custom_layers_v8[i]);
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(check), g_hash_table_contains(old, linux_custom_layers_v8[i]));
+        g_object_set_data_full(G_OBJECT(check), "custom-layer-v18", g_strdup(linux_custom_layers_v8[i]), g_free);
+        g_ptr_array_add(checks, check); gtk_container_add(GTK_CONTAINER(flow), check);
+    }
+    /* Editing on a different catalog must not silently discard required layers.
+     * Keep unknown saved layers selected, label them, and let the user remove
+     * them explicitly. Connection still requires the exact server solver. */
+    GHashTableIter old_iter; gpointer old_layer;
+    g_hash_table_iter_init(&old_iter, old);
+    while (g_hash_table_iter_next(&old_iter, &old_layer, NULL)) {
+        gboolean known = FALSE;
+        for (guint i = 0; linux_custom_layers_v8[i]; i++) if (g_strcmp0(old_layer, linux_custom_layers_v8[i]) == 0) known = TRUE;
+        if (known) continue;
+        char *label = g_strdup_printf("%s — not in this catalog", (const char *)old_layer);
+        GtkWidget *check = gtk_check_button_new_with_label(label); g_free(label);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(check), TRUE);
+        g_object_set_data_full(G_OBJECT(check), "custom-layer-v18", g_strdup(old_layer), g_free);
         g_ptr_array_add(checks, check); gtk_container_add(GTK_CONTAINER(flow), check);
     }
     /* Stable handles let the shipping UI acceptance drive these actual widgets. */
@@ -150,7 +166,7 @@ static void linux_custom_builder_v18(LinuxUnifiedV8 *state) {
         GString *layers = g_string_new("");
         for (guint i = 0; i < checks->len; i++) if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(g_ptr_array_index(checks, i)))) {
             if (layers->len) g_string_append_c(layers, ',');
-            g_string_append(layers, linux_custom_layers_v8[i]);
+            g_string_append(layers, g_object_get_data(G_OBJECT(g_ptr_array_index(checks, i)), "custom-layer-v18"));
         }
         gboolean valid = deleting ? editing != NULL : linux_custom_name_valid_v18(clean) && layers->len != 0;
         GError *error = NULL;
