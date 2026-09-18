@@ -29,7 +29,7 @@ def main() -> int:
         raise SystemExit("Speed Lab test requires the executable shipping app")
     if shutil.which("xvfb-run") is None:
         raise SystemExit("Speed Lab UI test needs xvfb and xauth")
-    state = {"get": 0, "post": 0, "cancelled": 0, "errors": [], "actions": [], "action_cancelled": 0, "extended": [], "extended_cancelled": 0, "selected": False}
+    state = {"get": 0, "post": 0, "cancelled": 0, "errors": [], "actions": [], "action_cancelled": 0, "extended": [], "extended_cancelled": 0, "selected": False, "custom_connects": 0}
     lock = threading.Lock()
 
     class Server(http.server.ThreadingHTTPServer):
@@ -112,6 +112,15 @@ def main() -> int:
                     state["errors"].append("invalid request body")
                 self.respond(400, b"invalid request body")
                 return
+            if self.path == "/api/strategy/custom":
+                if body != {"layers": ["wireguard"]}:
+                    state["errors"].append([self.path, body])
+                    self.respond(400, b"CUSTOM exact layers were not preserved")
+                    return
+                state["custom_connects"] += 1
+                if self.wait_for_response(.4):
+                    self.respond(200, b'{"ok":true}')
+                return
             extended_paths={"/api/profile/fastest","/api/connection/speed-test","/api/multihop/speed-test","/api/multihop/connect"}
             if self.path in extended_paths or (self.path=="/api/disconnect" and state["extended"]):
                 with lock:
@@ -189,6 +198,8 @@ def main() -> int:
         expected_extended=["/api/profile/fastest","/api/connection/speed-test","/api/multihop/speed-test","/api/connection/speed-test","/api/connection/speed-test","/api/multihop/connect","/api/disconnect"]
         if state["extended"]!=expected_extended or state["extended_cancelled"]!=3:
             raise SystemExit("Fastest/Performance/multihop request ownership verification failed")
+        if state["custom_connects"] != 1:
+            raise SystemExit("Only checked Save & Connect may submit a CUSTOM connection")
         print("Linux shipping Speed Lab, main actions, Fastest, Performance and multihop responsiveness and cancellation: PASS")
         return 0
     finally:

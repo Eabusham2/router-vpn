@@ -54,6 +54,19 @@ def apply(path: Path) -> None:
 ''' + anchor)
         anchor = 'g_object_set_data_full(G_OBJECT(app->window),"linux-unified-v8",state,g_free);'
         text = replace_once(text, anchor, anchor + 'linux_async_ensure_v16(app)->changed=linux_async_controls_v16;')
+    if path.name == "routervpn-unified-shell-v8.inc":
+        start = text.index("static void linux_unified_custom_builder_v8(")
+        end = text.index("static void linux_unified_mode_changed_v8(", start)
+        text = text[:start] + '''#include "routervpn-custom-builder-v18.inc"
+
+static void linux_unified_custom_builder_v8(LinuxUnifiedV8 *state) {
+    if (state == NULL) return;
+    if (!routervpn_require_mutation_idle(state->app, "editing CUSTOM presets")) {
+        linux_unified_refresh_mode_combo_v8(state); return;
+    }
+    linux_custom_builder_v18(state);
+}
+''' + text[end:]
     if path.name == "routervpn-gtk-product.c":
         anchor = "    App *app = data;\n    refresh_status(app);\n    refresh_session_events(app);\n    return G_SOURCE_CONTINUE;"
         text = replace_once(text, anchor, anchor.replace("    refresh_status(app);", "    if (linux_async_busy_v16(app)) return G_SOURCE_CONTINUE;\n    refresh_status(app);"))

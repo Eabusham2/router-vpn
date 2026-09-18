@@ -1,5 +1,6 @@
 #include "routervpn-async-actions-self-test-v16.inc"
 #include "routervpn-extended-actions-self-test-v17.inc"
+#include "routervpn-custom-builder-self-test-v18.inc"
 
 /* Invoked only by the explicit --speed-lab-self-test CLI. The fixture server
  * is loopback-only and makes no VPN or Internet requests. Drive the actual
@@ -129,5 +130,7 @@ static int linux_speed_lab_self_test_v13(void) {
     }
     gtk_widget_destroy(app.window);
     int actions_result = linux_async_actions_self_test_v16();
-    return actions_result != 0 ? actions_result : linux_extended_actions_self_test_v17();
+    if (actions_result != 0) return actions_result;
+    actions_result = linux_extended_actions_self_test_v17();
+    return actions_result != 0 ? actions_result : linux_custom_builder_self_test_v18();
 }
