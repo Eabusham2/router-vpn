@@ -155,6 +155,7 @@ for marker in (
     "python3 deploy/profile-readiness-marker-audit.py",
     "python3 deploy/test_source_provenance.py",
     "python3 deploy/release-orchestration-audit.py",
+    "python3 deploy/test_live_release_evidence.py",
     "python3 modes/test_kill_switch.py",
     "python3 server/scripts/test_preserve_generated_state.py",
     "python3 deploy/test-release-candidate-provenance.py",
