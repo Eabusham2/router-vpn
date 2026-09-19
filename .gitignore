@@ -16,3 +16,7 @@ android/app/libs/amneziawg-tunnel.commit
 android/app/libs/amneziawg-tunnel-LICENSE.txt
 ios/RouterVPN/.deps/
 ios/RouterVPN/build/
+
+# Private physical/live release proof; never commit raw evidence.
+release-evidence/
+release-evidence*.json
