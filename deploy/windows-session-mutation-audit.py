@@ -132,7 +132,8 @@ telemetry=(ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text(encoding='ut
 for marker in (
     "Assert-RouterVPNMutationIdle 'selecting a node from the VPN globe'",
     "Assert-RouterVPNMutationIdle 'selecting a Router VPN node'",
-    "UnifiedFastestNode').IsEnabled=-not(Test-RouterVPNMutationBusy)",
+    "UnifiedFastestNode').IsEnabled=($Payload.status-and-not(Test-RouterVPNMutationBusyFromStatus $Payload.status))",
+    "status=@('GET','/api/status',$null)",
     "function StartUnifiedTelemetryRefresh",
     "function CancelUnifiedTelemetryRefreshAsync",
     "$script:UnifiedTelemetryClient.SendAsync($Req,$script:UnifiedTelemetryCts.Token)",
@@ -153,6 +154,7 @@ for forbidden in (
     "$R=Api '/api/profile/latency'",
     "$R=Api '/api/connection/speed-test'",
     "$R=Api '/api/multihop/speed-test'",
+    "Test-RouterVPNMutationBusy)",
 ):
     assert forbidden not in telemetry, f'Windows telemetry revived WPF-thread network action: {forbidden}'
 
