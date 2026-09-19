@@ -153,6 +153,17 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
 
     private func selectedLayers() -> [String] { layerButtons.filter { $0.state == .on }.map(\.title).sorted() }
 
+    private func editingPreset() -> MacCustomPreset? {
+        guard presetPopup.indexOfSelectedItem > 0, presetPopup.indexOfSelectedItem - 1 < presets.count else { return nil }
+        return presets[presetPopup.indexOfSelectedItem - 1]
+    }
+
+    private func preservedUnknownLayers() -> [String] {
+        guard let preset = editingPreset() else { return [] }
+        let known = Set(layerButtons.map(\.title))
+        return preset.layers.filter { !known.contains($0) }
+    }
+
     private func applyCurrentPreset() {
         guard presetPopup.indexOfSelectedItem > 0, presetPopup.indexOfSelectedItem - 1 < presets.count else {
             nameField.stringValue = ""
@@ -164,7 +175,9 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
         nameField.stringValue = preset.name
         let selected = Set(preset.layers)
         layerButtons.forEach { $0.state = selected.contains($0.title) ? .on : .off }
-        status.stringValue = "\(preset.layers.count) exact layer requirement\(preset.layers.count == 1 ? "" : "s") saved."
+        let known = Set(layerButtons.map(\.title))
+        let hidden = preset.layers.filter { !known.contains($0) }
+        status.stringValue = "\(preset.layers.count) exact layer requirement\(preset.layers.count == 1 ? "" : "s") saved." + (hidden.isEmpty ? "" : " \(hidden.count) unavailable compatibility layer\(hidden.count == 1 ? "" : "s") will be preserved on edit.")
     }
 
     @objc private func presetChanged() { applyCurrentPreset() }
@@ -183,12 +196,16 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
 
     private func persist() -> MacCustomPreset? {
         let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let layers = selectedLayers()
+        let editing = editingPreset()
+        let layers = Array(Set(selectedLayers() + preservedUnknownLayers())).sorted()
         guard !name.isEmpty else { status.stringValue = "Give this preset a name."; return nil }
         guard !layers.isEmpty else { status.stringValue = "Choose at least one required layer."; return nil }
         guard name.count <= 64 else { status.stringValue = "Preset names are limited to 64 characters."; return nil }
         let preset = MacCustomPreset(name: name, layers: layers)
-        presets.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        presets.removeAll { candidate in
+            candidate.name.caseInsensitiveCompare(name) == .orderedSame ||
+            (editing != nil && candidate.name.caseInsensitiveCompare(editing!.name) == .orderedSame)
+        }
         presets.append(preset)
         presets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         ProductWindowController.saveUnifiedCustomPresets(presets)
