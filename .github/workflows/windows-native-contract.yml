@@ -24,7 +24,6 @@ jobs:
           $files = @(
             'client/Private-RouterVPN-State.ps1',
             'client/native-wireguard-windows.ps1',
-            'client/native-windows-mode.ps1',
             'client/Optimize-RouterVPN-MTU.ps1',
             'client/windows-kill-switch.ps1',
             'client/test-windows-kill-switch.ps1',
@@ -49,6 +48,13 @@ jobs:
           ./client/test-windows-async-actions.ps1
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-async-actions.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 async action regressions failed' }
+      - name: Composed Windows Help and main-control bindings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./client/test-windows-help-binding.ps1
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-help-binding.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 composed Help binding regressions failed' }
       - name: Windows firewall primitives
         shell: pwsh
         run: |
