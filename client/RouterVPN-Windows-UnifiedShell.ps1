@@ -81,7 +81,7 @@ $script:UnifiedAsyncPoller=New-Object Windows.Threading.DispatcherTimer
 $script:UnifiedAsyncPoller.Interval=[TimeSpan]::FromMilliseconds(100)
 function UnifiedAsyncBusy { return $null-ne$script:UnifiedAsyncTask -and -not $script:UnifiedAsyncTask.IsCompleted }
 function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
-    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode')){
+    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton')){
         $C=Control $N;if($null-ne$C){$C.IsEnabled=-not$Busy}
     }
     $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=$true;if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
@@ -347,6 +347,63 @@ function ShowUnifiedCustomBuilder{
     $ProductSource = $ProductSource.Replace('function RefreshProduct{','function RefreshProductLegacy{')
     if (-not $ProductSource.Contains('function ShowPairNodeDialog{')) { throw 'Windows unified shell: refresh wrapper seam drifted.' }
     $ProductSource = $ProductSource.Replace('function ShowPairNodeDialog{',"function RefreshProduct{StartUnifiedRefreshAsync}`nfunction ShowPairNodeDialog{")
+
+    $legacyMultihopOld = @'
+$Result=Api '/api/multihop/connect' 'POST' @{entry_id=$Entry;exit_id=$Exit;base='wg';exit_mode=(MultihopExitModeChoice)} 180;Log ("Multihop connected entry=$($Result.entry_id) exit=$($Result.exit_id) mode=$($Result.exit_mode)")
+'@
+    $legacyMultihopNew = @'
+$Body=@{entry_id=$Entry;exit_id=$Exit;base='wg';exit_mode=(MultihopExitModeChoice)};[void](StartUnifiedApiAsync 'Connecting multihop…' '/api/multihop/connect' 'POST' $Body 200 {param($R)Log ("Multihop connected entry=$($R.entry_id) exit=$($R.exit_id) mode=$($R.exit_mode)")} {param($E)Log ("Multihop failed: $E")} $null)
+'@
+    $legacyMtuOld = @'
+$Result=Api '/api/mtu/retest' 'POST' @{} 130;Log ("MTU Retest: effective=$($Result.effective_mtu) source=$($Result.effective_mtu_source) tested=$($Result.effective_mtu_tested_at)")
+'@
+    $legacyMtuNew = @'
+[void](StartUnifiedApiAsync 'Retesting MTU…' '/api/mtu/retest' 'POST' @{} 130 {param($R)Log ("MTU Retest: effective=$($R.effective_mtu) source=$($R.effective_mtu_source) tested=$($R.effective_mtu_tested_at)")} {param($E)Log ("MTU Retest failed: $E")} $null)
+'@
+    $legacyAutoOld = @'
+$Result=Api '/api/auto' 'POST' @{} 120;Log ("AUTO runtime=$($Result.runtime_mode)")
+'@
+    $legacyAutoNew = @'
+[void](StartUnifiedApiAsync 'Legacy AUTO…' '/api/auto' 'POST' @{} 120 {param($R)Log ("AUTO runtime=$($R.runtime_mode)")} {param($E)Log ("AUTO failed: $E")} $null)
+'@
+    $legacyConnectOld = @'
+$Result=Api '/api/connect-logical' 'POST' @{mode=$Mode;base=(BaseChoice)} 150;Log ("Connected runtime=$($Result.runtime_mode) base=$($Result.base)")
+'@
+    $legacyConnectNew = @'
+$Body=@{mode=$Mode;base=(BaseChoice)};[void](StartUnifiedApiAsync 'Connecting selected mode…' '/api/connect-logical' 'POST' $Body 180 {param($R)Log ("Connected runtime=$($R.runtime_mode) base=$($R.base)")} {param($E)Log ("Connect failed: $E")} $null)
+'@
+    $legacyDnsOld = @'
+$DnsButton.Add_Click({try{$Result=Api '/api/dns/retest' 'POST' @{} 90;Log ("DNS winner: $($Result.winner.address) $($Result.winner.latency_ms)ms")}catch{Log $_.Exception.Message};RefreshDnsPolicy;RefreshProduct})
+'@
+    $legacyDnsNew = @'
+$DnsButton.Add_Click({if(UnifiedAsyncBusy){Log 'DNS Retest refused: another Router VPN action is running.';return};[void](StartUnifiedApiAsync 'Retesting DNS…' '/api/dns/retest' 'POST' @{} 90 {param($R)Log ("DNS winner: $($R.winner.address) $($R.winner.latency_ms)ms")} {param($E)Log ("DNS Retest failed: $E")} $null)})
+'@
+    $legacyLatencyOld = @'
+(Control 'LatencyButton').Add_Click({try{$Profile=SelectedNode;$Result=Api '/api/profile/latency' 'POST' @{id=[string]$Profile.id;samples=50} 180;Log ("Latency median=$($Result.median_ms)ms p90=$($Result.p90_ms)ms")}catch{Log $_.Exception.Message}})
+'@
+    $legacyLatencyNew = @'
+(Control 'LatencyButton').Add_Click({try{$Profile=SelectedNode;$Body=@{id=[string]$Profile.id;samples=50};[void](StartUnifiedApiAsync 'Testing 50-sample node latency…' '/api/profile/latency' 'POST' $Body 180 {param($R)Log ("Latency median=$($R.median_ms)ms p90=$($R.p90_ms)ms")} {param($E)Log ("Latency test failed: $E")} $null)}catch{Log $_.Exception.Message}})
+'@
+    $legacyExternalOld = @'
+ $Result=Api '/api/external-profile/connect' 'POST' $Body 180
+ Log ("External connect passed exact exit proof: "+($Result|ConvertTo-Json -Depth 6 -Compress))
+'@
+    $legacyExternalNew = @'
+ $Success={param($R)Log ("External connect passed exact exit proof: "+($R|ConvertTo-Json -Depth 6 -Compress))}.GetNewClosure()
+ [void](StartUnifiedApiAsync 'Connecting external exit…' '/api/external-profile/connect' 'POST' $Body 180 $Success {param($E)Log ("External connect failed: $E")} $null)
+'@
+    foreach($Pair in @(
+        @($legacyMultihopOld.Trim(),$legacyMultihopNew.Trim()),
+        @($legacyMtuOld.Trim(),$legacyMtuNew.Trim()),
+        @($legacyAutoOld.Trim(),$legacyAutoNew.Trim()),
+        @($legacyConnectOld.Trim(),$legacyConnectNew.Trim()),
+        @($legacyDnsOld.Trim(),$legacyDnsNew.Trim()),
+        @($legacyLatencyOld.Trim(),$legacyLatencyNew.Trim()),
+        @($legacyExternalOld.Trim(),$legacyExternalNew.Trim())
+    )){
+        if(-not $ProductSource.Contains($Pair[0])){throw "Windows unified shell: legacy long-action seam drifted: $($Pair[0].Substring(0,[Math]::Min(80,$Pair[0].Length)))"}
+        $ProductSource=$ProductSource.Replace($Pair[0],$Pair[1])
+    }
 
     $modeRefreshOld = '$ModesGrid.ItemsSource=$Modes;$ModeCombo.ItemsSource=@($Modes|Where-Object{$_.available});if(-not$ModeCombo.SelectedValue-and$ModeCombo.Items.Count-gt0){$ModeCombo.SelectedIndex=0};'
     if (-not $ProductSource.Contains($modeRefreshOld)) { throw 'Windows unified shell: mode refresh contract drifted.' }
