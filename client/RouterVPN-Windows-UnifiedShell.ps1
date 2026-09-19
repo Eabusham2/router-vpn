@@ -230,7 +230,7 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         }
 
         $Dns=$Session.dns_proof
-        $DnsSummary.Text="$script:DnsPolicySummary\r\n\r\nRuntime proof: mode=$($Dns.mode) resolver=$($Dns.host) status=$($Dns.status) latency=$($Dns.latency_ms)ms reason=$($Dns.reason)"
+        $DnsSummary.Text="$script:DnsPolicySummary$([Environment]::NewLine)$([Environment]::NewLine)Runtime proof: mode=$($Dns.mode) resolver=$($Dns.host) status=$($Dns.status) latency=$($Dns.latency_ms)ms reason=$($Dns.reason)"
         $Modes=DecorateModes @($ModesRaw);$ModesGrid.ItemsSource=$Modes;RefreshUnifiedModeChoices $Modes
         $HeaderDetail.Text="Native Windows product - $($Profiles.Count) linked node(s) - order $($script:NodeSort)"
 
