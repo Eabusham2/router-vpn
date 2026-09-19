@@ -335,5 +335,5 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if let ipv6 = IPv6Address(host) { let b = [UInt8](ipv6.rawValue); guard b.count == 16 else { return false }; return (b[0] & 0xfe) == 0xfc || (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) }
         return false
     }
-    private func tunnelError(_ code: Int, _message: String) -> NSError { NSError(domain: "RouterVPN.PacketTunnel", code: code, userInfo: [NSLocalizedDescriptionKey: _message]) }
+    private func tunnelError(_ code: Int, _ message: String) -> NSError { NSError(domain: "RouterVPN.PacketTunnel", code: code, userInfo: [NSLocalizedDescriptionKey: message]) }
 }
