@@ -90,7 +90,13 @@ function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET'
     if(UnifiedAsyncBusy){Log ("$Label refused: another Router VPN action is still running.");return $false}
     [void](CancelUnifiedRefreshAsync)
     try{
-        $Verb=if($Method.ToUpperInvariant()-eq'POST'){[System.Net.Http.HttpMethod]::Post}else{[System.Net.Http.HttpMethod]::Get}
+        $Verb=switch($Method.ToUpperInvariant()){
+            'GET' {[System.Net.Http.HttpMethod]::Get}
+            'POST' {[System.Net.Http.HttpMethod]::Post}
+            'PUT' {[System.Net.Http.HttpMethod]::Put}
+            'DELETE' {[System.Net.Http.HttpMethod]::Delete}
+            default {throw "Unsupported asynchronous HTTP method: $Method"}
+        }
         $Uri=([string]$BaseUrl).TrimEnd('/')+$Path
         $Req=[System.Net.Http.HttpRequestMessage]::new($Verb,$Uri)
         if($null-ne$Body){
