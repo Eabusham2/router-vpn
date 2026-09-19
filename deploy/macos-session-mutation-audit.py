@@ -30,6 +30,8 @@ need(unified,
     'Disconnect already in progress.', 'Disconnect requested.', 'Disconnecting…', 'Checking…',
     'changing the selected mode', 'editing CUSTOM presets', 'saving a CUSTOM preset', 'deleting a CUSTOM preset',
     'changing multihop selection', 'changing persistent kill-switch policy', 'changing DNS policy',
+    'let editing = editingPreset()', 'preservedUnknownLayers()',
+    'candidate.name.caseInsensitiveCompare(editing!.name) == .orderedSame',
     'unified-kill-switch', 'unified-multihop-toggle', 'unified-mode-popup', 'unified-dns-popup',
     'as? NSControl', 'control.isEnabled = !busy', 'self.routerPopup.isEnabled = !busy', 'self.multihopEntryPopup.isEnabled = !busy',
     'button.isEnabled = !unknown && !disconnecting')
