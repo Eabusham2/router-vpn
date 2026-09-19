@@ -208,6 +208,11 @@ require(
     "Auto MTU",
     "DAITA-like",
     "Jumbo",
+    "window?.minSize = NSSize(width: 720, height: 560)",
+    "let scroll = NSScrollView()",
+    "scroll.hasVerticalScroller = true",
+    "nodeCard.trailingAnchor.constraint(lessThanOrEqualTo: statusCard.leadingAnchor, constant: -8)",
+    "setContentCompressionResistancePriority(.defaultLow, for: .horizontal)",
 )
 require_order(
     "macOS bottom control sheet order",
