@@ -54,6 +54,7 @@ jobs:
           python3 deploy/router-forwarding-audit.py
           python3 deploy/test_router_forwarding_fail_open.py
           python3 deploy/release-orchestration-audit.py
+          python3 deploy/test_live_release_evidence.py
           python3 deploy/recovered-release-audit-v3.py
           python3 deploy/historical-regression-audit.py
           python3 deploy/recovered-corrections-audit.py
