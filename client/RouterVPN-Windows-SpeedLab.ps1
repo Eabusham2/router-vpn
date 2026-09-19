@@ -45,7 +45,7 @@ function ShowUnifiedSpeedLab{
 </Window>
 "@
  $Reader=New-Object System.Xml.XmlNodeReader $SX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
- $Scope=$D.FindName('Scope');$Topology=$D.FindName('Topology');$Mode=$D.FindName('Mode');$Node=$D.FindName('Node');$Entry=$D.FindName('Entry');$Exit=$D.FindName('Exit');$Base=$D.FindName('Base');$ExitMode=$D.FindName('ExitMode');$Layers=$D.FindName('Layers');$DurationMode=$D.FindName('DurationMode');$MinTime=$D.FindName('MinTime');$MaxTime=$D.FindName('MaxTime');$MinLabel=$D.FindName('MinLabel');$MaxLabel=$D.FindName('MaxLabel');$Run=$D.FindName('Run');$Status=$D.FindName('Status');$Detail=$D.FindName('Detail')
+ $Scope=$D.FindName('Scope');$Topology=$D.FindName('Topology');$Mode=$D.FindName('Mode');$Node=$D.FindName('Node');$Entry=$D.FindName('Entry');$Exit=$D.FindName('Exit');$Base=$D.FindName('Base');$ExitMode=$D.FindName('ExitMode');$Layers=$D.FindName('Layers');$DurationMode=$D.FindName('DurationMode');$MinTime=$D.FindName('MinTime');$MaxTime=$D.FindName('MaxTime');$MinLabel=$D.FindName('MinLabel');$MaxLabel=$D.FindName('MaxLabel');$Run=$D.FindName('Run');$Advanced=$D.FindName('Advanced');$Status=$D.FindName('Status');$Detail=$D.FindName('Detail');$D.Tag='initial'
  function SelectedTag($Combo){if($null-eq$Combo.SelectedItem){return''};return [string]$Combo.SelectedItem.Tag}
  function NodeItems($Values,[string]$Kind){$out=New-Object System.Collections.ArrayList;foreach($n in @($Values)){if($Kind-and([string]$n.node_kind).ToLowerInvariant()-ne$Kind){continue};$ms=if([double]$n.latency_trimmed_mean_ms-gt0){' • {0:N1} ms'-f[double]$n.latency_trimmed_mean_ms}else{''};[void]$out.Add([pscustomobject]@{id=[string]$n.id;display=([string]$n.name+$ms);kind=[string]$n.node_kind})};return @($out)}
  function RefreshSpeedLabControls{
@@ -53,20 +53,29 @@ function ShowUnifiedSpeedLab{
   $custom=(SelectedTag $DurationMode)-eq'custom';$MinTime.IsEnabled=$custom;$MaxTime.IsEnabled=$custom
   $top=SelectedTag $Topology;$Entry.IsEnabled=$temporary-and($top-eq'multihop'-or$top-eq'external');$Exit.IsEnabled=$temporary-and$top-eq'multihop';$ExitMode.IsEnabled=$temporary-and$top-eq'multihop';$Layers.IsEnabled=$temporary-and([string]$Mode.SelectedValue)-eq'custom'
  }
- try{
-  $Opt=Api '/api/speed-lab/options' -Timeout 10;$Mode.ItemsSource=@($Opt.logical_modes);if($Mode.Items.Count){$Mode.SelectedValue='smart-auto'}
-  $Node.ItemsSource=NodeItems $Opt.nodes ''; $Entry.ItemsSource=NodeItems $Opt.nodes ''; $Exit.ItemsSource=NodeItems $Opt.nodes 'router-vpn'
-  if($Node.Items.Count){$Node.SelectedIndex=0};if($Entry.Items.Count){$Entry.SelectedIndex=0};if($Exit.Items.Count-gt1){$Exit.SelectedIndex=1}elseif($Exit.Items.Count){$Exit.SelectedIndex=0}
- }catch{$Detail.Text='Could not load Speed Lab options: '+$_.Exception.Message;$Run.IsEnabled=$false}
+ $Run.IsEnabled=$false
+ $D.Add_Loaded({
+  if([string]$D.Tag-ne'initial'){return};$D.Tag='owned-options';$Status.Text='Loading Speed Lab paths…';$Detail.Text='Loading current node/mode capabilities without blocking the app.'
+  $Success={param($Opt)
+   $Mode.ItemsSource=@($Opt.logical_modes);if($Mode.Items.Count){$Mode.SelectedValue='smart-auto'}
+   $Node.ItemsSource=NodeItems $Opt.nodes ''; $Entry.ItemsSource=NodeItems $Opt.nodes ''; $Exit.ItemsSource=NodeItems $Opt.nodes 'router-vpn'
+   if($Node.Items.Count){$Node.SelectedIndex=0};if($Entry.Items.Count){$Entry.SelectedIndex=0};if($Exit.Items.Count-gt1){$Exit.SelectedIndex=1}elseif($Exit.Items.Count){$Exit.SelectedIndex=0}
+   $Run.IsEnabled=$true;$D.Tag='ready';$Status.Text='Cloudflare Speed Test edge • no Mbps derived from RTT';$Detail.Text='Ready. Current path uses the path that is actually connected. Temporary config requires Router VPN to be disconnected.';RefreshSpeedLabControls
+  }.GetNewClosure()
+  $Failure={param($E)$Detail.Text='Could not load Speed Lab options: '+$E;$Status.Text='Speed Lab options unavailable.';$Run.IsEnabled=$false;$D.Tag='error'}.GetNewClosure()
+  $Finally={if([string]$D.Tag-eq'owned-options'){$D.Tag='error'}}.GetNewClosure()
+  if(-not(StartUnifiedApiAsync 'Loading Speed Lab options…' '/api/speed-lab/options' 'GET' $null 10 $Success $Failure $Finally)){$D.Tag='error';$Run.IsEnabled=$false}
+ })
  $DurationMode.Add_SelectionChanged({RefreshSpeedLabControls});$Scope.Add_SelectionChanged({RefreshSpeedLabControls});$Topology.Add_SelectionChanged({RefreshSpeedLabControls});$Mode.Add_SelectionChanged({RefreshSpeedLabControls})
  $MinTime.Add_ValueChanged({if($MinTime.Value-gt$MaxTime.Value){$MaxTime.Value=$MinTime.Value};$MinLabel.Text=('Min {0:N0} s'-f$MinTime.Value)})
  $MaxTime.Add_ValueChanged({if($MaxTime.Value-lt$MinTime.Value){$MinTime.Value=$MaxTime.Value};$MaxLabel.Text=('Max {0:N0} s'-f$MaxTime.Value)})
  RefreshSpeedLabControls
- $D.FindName('Advanced').Add_Click({ShowUnifiedAdvancedPerformance})
- $D.FindName('Close').Add_Click({$D.Close()})
+ $Advanced.Add_Click({ShowUnifiedAdvancedPerformance})
+ $D.FindName('Close').Add_Click({if(([string]$D.Tag).StartsWith('owned')-and(UnifiedAsyncBusy)){[void](CancelUnifiedApiAsync $false)};$D.Close()})
  $Run.Add_Click({
   try{
-   $Run.IsEnabled=$false;$Status.Text='Building/proving path and running download + upload…';$Detail.Text='Speed Lab running. Temporary paths are transactional and will be torn down/restored when the test completes.'
+   if(UnifiedAsyncBusy){throw 'Another Router VPN action is still running.'}
+   $Run.IsEnabled=$false;$Advanced.IsEnabled=$false;$D.Tag='owned-run';$Status.Text='Building/proving path and running download + upload…';$Detail.Text='Speed Lab running. Temporary paths are transactional and will be torn down/restored when the test completes or is cancelled.'
    $scope=SelectedTag $Scope;$top=SelectedTag $Topology;$duration=SelectedTag $DurationMode;$payload=@{scope=$scope;duration_mode=$duration}
    if($duration-eq'custom'){$payload.min_seconds=[Math]::Round($MinTime.Value);$payload.max_seconds=[Math]::Round($MaxTime.Value)}
    if($scope-eq'temporary'){
@@ -74,22 +83,28 @@ function ShowUnifiedSpeedLab{
     if($payload.mode-eq'custom'){$payload.custom_layers=@(([string]$Layers.Text).Split(',')|ForEach-Object{$_.Trim()}|Where-Object{$_})}
     $payload.daita=[bool]$D.FindName('DAITA').IsChecked;$payload.jumbo=[bool]$D.FindName('Jumbo').IsChecked;$payload.require_encrypted=[bool]$D.FindName('Encrypted').IsChecked;$payload.require_obfuscation=[bool]$D.FindName('Obfuscated').IsChecked
    }
-   $timeout=if($duration-eq'custom'){[Math]::Max(90,[int]($MaxTime.Value*2+75))}else{110};$R=Api '/api/speed-lab/run' 'POST' $payload $timeout;$S=$R.summary;$M=$R.measurement
-   $D.FindName('IdleBig').Text=('{0:N1} ms'-f[double]$S.idle_ms);$D.FindName('DownBig').Text=('{0:N1} Mbps'-f[double]$S.download_mbps);$D.FindName('UpBig').Text=('{0:N1} Mbps'-f[double]$S.upload_mbps)
-   $D.FindName('IdleDetail').Text=('p90 {0:N1} • max {1:N1} • jitter {2:N1} ms'-f[double]$M.idle_latency.p90_ms,[double]$M.idle_latency.max_ms,[double]$M.idle_latency.jitter_ms)
-   $D.FindName('DownDetail').Text=('loaded {0:N1} ms • +{1:N1} bufferbloat • p90 {2:N1}'-f[double]$S.download_loaded_ms,[double]$S.download_bufferbloat_ms,[double]$M.download.loaded_latency.p90_ms)
-   $D.FindName('UpDetail').Text=('loaded {0:N1} ms • +{1:N1} bufferbloat • p90 {2:N1}'-f[double]$S.upload_loaded_ms,[double]$S.upload_bufferbloat_ms,[double]$M.upload.loaded_latency.p90_ms)
-   $HopLines=New-Object System.Collections.Generic.List[string]
-   foreach($H in @($R.hops)){
-    if($null-eq$H){continue};$role=([string]$H.role).ToUpperInvariant();$name=[string]$H.name;if([string]::IsNullOrWhiteSpace($name)){$name=[string]$H.router_id}
-    $lat='RTT unavailable';$lp=$H.PSObject.Properties['latency'];if($lp-and$null-ne$lp.Value){$lat=('{0:N1} ms'-f[double]$lp.Value.median_ms)}elseif($H.PSObject.Properties['latency_error']){$lat='RTT unavailable: '+[string]$H.latency_error}
-    $spd='speed unavailable';$sp=$H.PSObject.Properties['speed'];if($sp-and$null-ne$sp.Value){$spd=('↓ {0:N1} / ↑ {1:N1} Mbps'-f[double]$sp.Value.download_mbps,[double]$sp.Value.upload_mbps)}elseif($H.PSObject.Properties['speed_error']){$spd='speed unavailable: '+[string]$H.speed_error}
-    [void]$HopLines.Add(('{0} • {1} • {2} • {3}'-f$role,$name,$lat,$spd))
-   }
-   $Json=$R|ConvertTo-Json -Depth 12;if($HopLines.Count){$Detail.Text="PER-HOP — SAME PROVED GRAPH`r`n"+($HopLines-join"`r`n")+"`r`n`r`nFULL RESULT`r`n"+$Json}else{$Detail.Text=$Json}
-   $hopSuffix=if($HopLines.Count){' • '+$HopLines.Count+' hop measurements'}else{''};$Status.Text=('Finished • {0} / {1} • {2}{3}'-f[string]$R.path.scope,[string]$R.path.topology,[string]$M.provider,$hopSuffix)
-  }catch{$Detail.Text=$_.Exception.Message;$Status.Text='Speed Lab failed closed; see details.'}finally{$Run.IsEnabled=$true}
- });[void]$D.ShowDialog()
+   $timeout=if($duration-eq'custom'){[Math]::Max(90,[int]($MaxTime.Value*2+75))}else{110}
+   $Success={param($R)
+    $S=$R.summary;$M=$R.measurement
+    $D.FindName('IdleBig').Text=('{0:N1} ms'-f[double]$S.idle_ms);$D.FindName('DownBig').Text=('{0:N1} Mbps'-f[double]$S.download_mbps);$D.FindName('UpBig').Text=('{0:N1} Mbps'-f[double]$S.upload_mbps)
+    $D.FindName('IdleDetail').Text=('p90 {0:N1} • max {1:N1} • jitter {2:N1} ms'-f[double]$M.idle_latency.p90_ms,[double]$M.idle_latency.max_ms,[double]$M.idle_latency.jitter_ms)
+    $D.FindName('DownDetail').Text=('loaded {0:N1} ms • +{1:N1} bufferbloat • p90 {2:N1}'-f[double]$S.download_loaded_ms,[double]$S.download_bufferbloat_ms,[double]$M.download.loaded_latency.p90_ms)
+    $D.FindName('UpDetail').Text=('loaded {0:N1} ms • +{1:N1} bufferbloat • p90 {2:N1}'-f[double]$S.upload_loaded_ms,[double]$S.upload_bufferbloat_ms,[double]$M.upload.loaded_latency.p90_ms)
+    $HopLines=New-Object System.Collections.Generic.List[string]
+    foreach($H in @($R.hops)){
+     if($null-eq$H){continue};$role=([string]$H.role).ToUpperInvariant();$name=[string]$H.name;if([string]::IsNullOrWhiteSpace($name)){$name=[string]$H.router_id}
+     $lat='RTT unavailable';$lp=$H.PSObject.Properties['latency'];if($lp-and$null-ne$lp.Value){$lat=('{0:N1} ms'-f[double]$lp.Value.median_ms)}elseif($H.PSObject.Properties['latency_error']){$lat='RTT unavailable: '+[string]$H.latency_error}
+     $spd='speed unavailable';$sp=$H.PSObject.Properties['speed'];if($sp-and$null-ne$sp.Value){$spd=('↓ {0:N1} / ↑ {1:N1} Mbps'-f[double]$sp.Value.download_mbps,[double]$sp.Value.upload_mbps)}elseif($H.PSObject.Properties['speed_error']){$spd='speed unavailable: '+[string]$H.speed_error}
+     [void]$HopLines.Add(('{0} • {1} • {2} • {3}'-f$role,$name,$lat,$spd))
+    }
+    $Json=$R|ConvertTo-Json -Depth 12;if($HopLines.Count){$Detail.Text="PER-HOP — SAME PROVED GRAPH$([Environment]::NewLine)"+($HopLines-join[Environment]::NewLine)+"$([Environment]::NewLine)$([Environment]::NewLine)FULL RESULT$([Environment]::NewLine)"+$Json}else{$Detail.Text=$Json}
+    $hopSuffix=if($HopLines.Count){' • '+$HopLines.Count+' hop measurements'}else{''};$Status.Text=('Finished • {0} / {1} • {2}{3}'-f[string]$R.path.scope,[string]$R.path.topology,[string]$M.provider,$hopSuffix)
+   }.GetNewClosure()
+   $Failure={param($E)$Detail.Text=$E;$Status.Text='Speed Lab failed closed; see details.'}.GetNewClosure()
+   $Finally={$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready';RefreshProduct;RefreshUnifiedTelemetry}.GetNewClosure()
+   if(-not(StartUnifiedApiAsync 'Running Speed Lab…' '/api/speed-lab/run' 'POST' $payload $timeout $Success $Failure $Finally)){$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready'}
+  }catch{$Detail.Text=$_.Exception.Message;$Status.Text='Speed Lab failed closed; see details.';$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready'}
+ })[void]$D.ShowDialog()
 }
 '@
 
