@@ -68,36 +68,112 @@ function TickUnifiedMapAnimation{if($null -eq $script:UnifiedRoutePacket -or $nu
     $telemetry=@'
 $script:UnifiedTelemetrySync=$false
 $script:UnifiedForwardSync=$false
-function RefreshUnifiedFastestChoices{
- try{$Store=Api '/api/profiles' -Timeout 4;$Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='fastest';display='⚡ Fastest'});$Routers=@($Store.profiles|Where-Object{(([string]$_.node_kind).ToLowerInvariant() -ne 'external')}|Sort-Object @{Expression={if([double]$_.latency_trimmed_mean_ms -gt 0){[double]$_.latency_trimmed_mean_ms}else{[double]::PositiveInfinity}}},name);foreach($P in $Routers){$Ms=[double]$P.latency_trimmed_mean_ms;$Label=if($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$P.name,$Ms}else{[string]$P.name};[void]$Values.Add([pscustomobject]@{id=[string]$P.id;display=$Label})};$Preferred=[string]$Store.selected_id;$Known=@($Values|Where-Object{[string]$_.id -eq $Preferred}).Count -gt 0;if(-not $Preferred -or -not $Known){$Preferred='fastest'};$script:UnifiedTelemetrySync=$true;(Control 'UnifiedFastestNode').ItemsSource=@($Values);(Control 'UnifiedFastestNode').SelectedValue=$Preferred;$script:UnifiedTelemetrySync=$false}catch{$script:UnifiedTelemetrySync=$false}
+function ApplyUnifiedFastestStore($Store){
+ $Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='fastest';display='⚡ Fastest'})
+ $Routers=@($Store.profiles|Where-Object{(([string]$_.node_kind).ToLowerInvariant() -ne 'external')}|Sort-Object @{Expression={if([double]$_.latency_trimmed_mean_ms -gt 0){[double]$_.latency_trimmed_mean_ms}else{[double]::PositiveInfinity}}},name)
+ foreach($P in $Routers){$Ms=[double]$P.latency_trimmed_mean_ms;$Label=if($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$P.name,$Ms}else{[string]$P.name};[void]$Values.Add([pscustomobject]@{id=[string]$P.id;display=$Label})}
+ $Preferred=[string]$Store.selected_id;$Known=@($Values|Where-Object{[string]$_.id -eq $Preferred}).Count -gt 0;if(-not $Preferred -or -not $Known){$Preferred='fastest'}
+ $script:UnifiedTelemetrySync=$true;(Control 'UnifiedFastestNode').ItemsSource=@($Values);(Control 'UnifiedFastestNode').SelectedValue=$Preferred;$script:UnifiedTelemetrySync=$false
 }
-function RefreshUnifiedForwardingMaster{
- try{$R=Api '/api/forwarding/master' -Timeout 4;$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content=if([bool]$R.enabled){'Forward ON'}else{'Forward OFF'};(Control 'UnifiedForwardButton').Tag=[bool]$R.enabled;(Control 'UnifiedForwardButton').ToolTip='Real server forwarding master on '+[string]$R.name;$script:UnifiedForwardSync=$false}catch{$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content='Forward ?';(Control 'UnifiedForwardButton').Tag=$null;(Control 'UnifiedForwardButton').ToolTip='Connect a Router VPN home-node path to control the real server forwarding master';$script:UnifiedForwardSync=$false}
+$script:UnifiedTelemetryClient=[System.Net.Http.HttpClient]::new()
+$script:UnifiedTelemetryClient.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan
+$script:UnifiedTelemetryTasks=@{}
+$script:UnifiedTelemetryRequests=@{}
+$script:UnifiedTelemetryCts=$null
+$script:UnifiedTelemetryDiscard=$false
+$script:UnifiedTelemetryPoller=New-Object Windows.Threading.DispatcherTimer
+$script:UnifiedTelemetryPoller.Interval=[TimeSpan]::FromMilliseconds(100)
+function UnifiedTelemetryBusy{return $script:UnifiedTelemetryTasks.Count -gt 0}
+function CancelUnifiedTelemetryRefreshAsync{
+ if(-not(UnifiedTelemetryBusy)){return $false};$script:UnifiedTelemetryDiscard=$true;try{$script:UnifiedTelemetryCts.Cancel()}catch{};return $true
 }
+function StartUnifiedTelemetryRefresh{
+ if((UnifiedTelemetryBusy)-or(UnifiedAsyncBusy)){return}
+ $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryDiscard=$false
+ $script:UnifiedTelemetryCts=[System.Threading.CancellationTokenSource]::new();$script:UnifiedTelemetryCts.CancelAfter([TimeSpan]::FromSeconds(12))
+ $Specs=[ordered]@{profiles=@('GET','/api/profiles',$null);live=@('GET','/api/connection/live-latency',$null);forward=@('GET','/api/forwarding/master',$null)}
+ try{
+  if((Control 'UnifiedMultihop').IsChecked){
+   $Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue
+   if($Entry-and$Exit-and$Entry-ne$Exit){$Specs.multihop=@('POST','/api/multihop/live-latency',@{entry_id=$Entry;exit_id=$Exit;samples=2})}
+  }else{(Control 'UnifiedMultihopLatency').Text=''}
+  foreach($Key in $Specs.Keys){
+   $Verb=if($Specs[$Key][0]-eq'POST'){[System.Net.Http.HttpMethod]::Post}else{[System.Net.Http.HttpMethod]::Get}
+   $Req=[System.Net.Http.HttpRequestMessage]::new($Verb,([string]$BaseUrl)+[string]$Specs[$Key][1])
+   if($null-ne$Specs[$Key][2]){$Json=$Specs[$Key][2]|ConvertTo-Json -Depth 12 -Compress;$Req.Content=[System.Net.Http.StringContent]::new($Json,[System.Text.Encoding]::UTF8,'application/json')}
+   $script:UnifiedTelemetryRequests[$Key]=$Req;$script:UnifiedTelemetryTasks[$Key]=$script:UnifiedTelemetryClient.SendAsync($Req,$script:UnifiedTelemetryCts.Token)
+  }
+  $script:UnifiedTelemetryPoller.Start()
+ }catch{[void](CancelUnifiedTelemetryRefreshAsync)}
+}
+function CompleteUnifiedTelemetryRefresh{
+ if(-not(UnifiedTelemetryBusy)){return};foreach($Task in $script:UnifiedTelemetryTasks.Values){if(-not$Task.IsCompleted){return}}
+ $Discard=$script:UnifiedTelemetryDiscard;$Payload=@{};$Responses=@();$script:UnifiedTelemetryPoller.Stop()
+ try{
+  foreach($Key in @($script:UnifiedTelemetryTasks.Keys)){
+   try{
+    $Resp=$script:UnifiedTelemetryTasks[$Key].GetAwaiter().GetResult();$Responses+=$Resp;$Text=$Resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    if($Resp.IsSuccessStatusCode-and-not[string]::IsNullOrWhiteSpace($Text)){$Payload[$Key]=$Text|ConvertFrom-Json}
+   }catch{}
+  }
+  if(-not$Discard){
+   if($Payload.profiles){ApplyUnifiedFastestStore $Payload.profiles}
+   try{(Control 'UnifiedFastestNode').IsEnabled=-not(Test-RouterVPNMutationBusy)}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
+   if($Payload.live){$script:UnifiedRoutePathMs=[double]$Payload.live.median_ms;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f[double]$Payload.live.median_ms);(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}else{$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text='-- ms';(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
+   if($Payload.multihop){$Bits=@();if($Payload.multihop.entry){$Bits+=('IN {0:N1}'-f[double]$Payload.multihop.entry.median_ms)};if($Payload.multihop.exit){$Bits+=('OUT {0:N1}'-f[double]$Payload.multihop.exit.median_ms)};if($Payload.multihop.current_path){$script:UnifiedRoutePathMs=[double]$Payload.multihop.current_path.median_ms;$Bits+=('PATH {0:N1} ms'-f[double]$Payload.multihop.current_path.median_ms)};(Control 'UnifiedMultihopLatency').Text=($Bits-join' • ')}
+   if($Payload.forward){$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content=if([bool]$Payload.forward.enabled){'Forward ON'}else{'Forward OFF'};(Control 'UnifiedForwardButton').Tag=[bool]$Payload.forward.enabled;(Control 'UnifiedForwardButton').ToolTip='Real server forwarding master on '+[string]$Payload.forward.name;$script:UnifiedForwardSync=$false}else{$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content='Forward ?';(Control 'UnifiedForwardButton').Tag=$null;(Control 'UnifiedForwardButton').ToolTip='Connect a Router VPN home-node path to control the real server forwarding master';$script:UnifiedForwardSync=$false}
+  }
+ }finally{
+  foreach($Resp in $Responses){try{$Resp.Dispose()}catch{}};foreach($Req in $script:UnifiedTelemetryRequests.Values){try{$Req.Dispose()}catch{}};try{$script:UnifiedTelemetryCts.Dispose()}catch{}
+  $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryCts=$null;$script:UnifiedTelemetryDiscard=$false
+ }
+}
+$script:UnifiedTelemetryPoller.Add_Tick({CompleteUnifiedTelemetryRefresh})
+function RefreshUnifiedFastestChoices{StartUnifiedTelemetryRefresh}
+function RefreshUnifiedForwardingMaster{StartUnifiedTelemetryRefresh}
 function ToggleUnifiedForwardingMaster{
- if($script:UnifiedForwardSync){return}
- try{$Current=(Control 'UnifiedForwardButton').Tag;if($null -eq $Current){$Now=Api '/api/forwarding/master' -Timeout 5;$Current=[bool]$Now.enabled};$Want=-not [bool]$Current;(Control 'UnifiedForwardButton').Content='Forward …';$R=Api '/api/forwarding/master' 'PUT' @{enabled=$Want} 10;if([bool]$R.enabled -ne $Want){throw 'Forwarding master state did not verify.'};$StateLabel=if($Want){'ON'}else{'OFF'};Log ('Forwarding master '+$StateLabel+' on '+[string]$R.name);RefreshUnifiedForwardingMaster}catch{Log ('Forwarding master failed: '+$_.Exception.Message);RefreshUnifiedForwardingMaster}
+ if($script:UnifiedForwardSync){return};if(UnifiedAsyncBusy){Log 'Forwarding change refused: another Router VPN action is running.';return}
+ $Current=(Control 'UnifiedForwardButton').Tag;if($null-eq$Current){Log 'Forwarding state is not proved yet; refreshing status first.';RefreshUnifiedTelemetry;return}
+ $Want=-not[bool]$Current;(Control 'UnifiedForwardButton').Content='Forward …'
+ $Success={param($R)if([bool]$R.enabled-ne$Want){Log 'Forwarding master response did not verify requested state.';return};$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Tag=[bool]$R.enabled;(Control 'UnifiedForwardButton').Content=if([bool]$R.enabled){'Forward ON'}else{'Forward OFF'};$script:UnifiedForwardSync=$false;$StateLabel=if($Want){'ON'}else{'OFF'};Log ('Forwarding master '+$StateLabel+' on '+[string]$R.name)}.GetNewClosure()
+ [void](StartUnifiedApiAsync 'Updating forwarding…' '/api/forwarding/master' 'PUT' @{enabled=$Want} 10 $Success {param($E)Log ('Forwarding master failed: '+$E)} {RefreshUnifiedTelemetry})
 }
-function RefreshUnifiedTelemetry{
- RefreshUnifiedFastestChoices
- try{(Control 'UnifiedFastestNode').IsEnabled=-not(Test-RouterVPNMutationBusy)}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
- try{$Live=Api '/api/connection/live-latency' -Timeout 4;$script:UnifiedRoutePathMs=[double]$Live.median_ms;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f [double]$Live.median_ms);(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}catch{$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text='-- ms';(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
- try{if((Control 'UnifiedMultihop').IsChecked){$Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue;if($Entry -and $Exit -and $Entry -ne $Exit){$R=Api '/api/multihop/live-latency' 'POST' @{entry_id=$Entry;exit_id=$Exit;samples=2} 8;$Bits=@();if($R.entry){$Bits+=('IN {0:N1}'-f[double]$R.entry.median_ms)};if($R.exit){$Bits+=('OUT {0:N1}'-f[double]$R.exit.median_ms)};if($R.current_path){$script:UnifiedRoutePathMs=[double]$R.current_path.median_ms;$Bits+=('PATH {0:N1} ms'-f[double]$R.current_path.median_ms)};(Control 'UnifiedMultihopLatency').Text=($Bits -join ' • ')}}else{(Control 'UnifiedMultihopLatency').Text=''}}catch{(Control 'UnifiedMultihopLatency').Text=''}
- RefreshUnifiedForwardingMaster
-}
+function RefreshUnifiedTelemetry{StartUnifiedTelemetryRefresh}
 function ShowUnifiedPerformance{
  [xml]$PX=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN Performance" Width="760" Height="470" MinWidth="600" MinHeight="380" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Latency &amp; path performance" FontSize="23" FontWeight="Bold"/><TextBlock Grid.Row="1" Margin="0,8,0,12" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Live RTT uses the current private tunnel. Real path speed transfers authenticated bounded data to the active exit. Routed hop speed independently transfers to the selected entry and exit private agents through the active multihop graph; unreachable hops report their real error. Auto MTU is a separate optimizer."/><TextBox Name="Result" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Background="#101A2B" Foreground="#E8ECF8" Padding="10"/><WrapPanel Grid.Row="3" Margin="0,12,0,0"><Button Name="Live" Content="Live path RTT" Margin="4" Padding="11,6"/><Button Name="Durable" Content="50-sample selected node" Margin="4" Padding="11,6"/><Button Name="Speed" Content="Real path speed" Margin="4" Padding="11,6"/><Button Name="HopSpeed" Content="Routed hop speeds" Margin="4" Padding="11,6"/><Button Name="Mtu" Content="Throughput + Auto MTU" Margin="4" Padding="11,6"/><Button Name="Close" Content="Close" Margin="4" Padding="11,6"/></WrapPanel></Grid></Window>
 "@
- $Reader=New-Object System.Xml.XmlNodeReader $PX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window;$Result=$D.FindName('Result')
- $D.FindName('Live').Add_Click({try{$R=Api '/api/connection/live-latency' 'POST' @{samples=5} 12;$Result.Text=($R|ConvertTo-Json -Depth 6)}catch{$Result.Text=$_.Exception.Message}})
- $D.FindName('Durable').Add_Click({try{$P=SelectedNode;$R=Api '/api/profile/latency' 'POST' @{id=[string]$P.id;samples=50} 180;$Result.Text=($R|ConvertTo-Json -Depth 6);RefreshProduct}catch{$Result.Text=$_.Exception.Message}})
- $D.FindName('Speed').Add_Click({try{$R=Api '/api/connection/speed-test' 'POST' @{bytes=8388608} 45;$Result.Text=($R|ConvertTo-Json -Depth 8)}catch{$Result.Text=$_.Exception.Message}})
- $D.FindName('HopSpeed').Add_Click({try{$Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue;if(-not $Entry -or -not $Exit -or $Entry -eq $Exit){throw 'Choose different multihop entry and exit nodes first.'};$R=Api '/api/multihop/speed-test' 'POST' @{entry_id=$Entry;exit_id=$Exit;bytes=4194304} 70;$Result.Text=($R|ConvertTo-Json -Depth 10)}catch{$Result.Text=$_.Exception.Message}})
- $D.FindName('Mtu').Add_Click({try{$R=Api '/api/mtu/retest' 'POST' @{} 130;$Result.Text=($R|ConvertTo-Json -Depth 8);RefreshProduct}catch{$Result.Text=$_.Exception.Message}})
- $D.FindName('Close').Add_Click({$D.Close()});[void]$D.ShowDialog()
+ $Reader=New-Object System.Xml.XmlNodeReader $PX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window;$Result=$D.FindName('Result');$D.Tag=$null
+ $Buttons=@($D.FindName('Live'),$D.FindName('Durable'),$D.FindName('Speed'),$D.FindName('HopSpeed'),$D.FindName('Mtu'))
+ $RunPerf={param([string]$Label,[string]$Path,$Body,[int]$Timeout,[int]$Depth,[bool]$RefreshAfter)
+  if(UnifiedAsyncBusy){$Result.Text='Another Router VPN action is still running.';return}
+  foreach($B in $Buttons){$B.IsEnabled=$false};$Result.Text=$Label+' running…';$D.Tag='owned'
+  $Success={param($R)$Result.Text=($R|ConvertTo-Json -Depth $Depth);if($RefreshAfter){RefreshProduct}}.GetNewClosure()
+  $Failure={param($E)$Result.Text=$E}.GetNewClosure()
+  $Finally={foreach($B in $Buttons){$B.IsEnabled=$true};$D.Tag=$null}.GetNewClosure()
+  if(-not(StartUnifiedApiAsync $Label $Path 'POST' $Body $Timeout $Success $Failure $Finally)){foreach($B in $Buttons){$B.IsEnabled=$true};$D.Tag=$null}
+ }.GetNewClosure()
+ $D.FindName('Live').Add_Click({&$RunPerf 'Measuring live RTT…' '/api/connection/live-latency' @{samples=5} 12 6 $false})
+ $D.FindName('Durable').Add_Click({try{$P=SelectedNode;&$RunPerf 'Testing 50-sample node latency…' '/api/profile/latency' @{id=[string]$P.id;samples=50} 180 6 $true}catch{$Result.Text=$_.Exception.Message}})
+ $D.FindName('Speed').Add_Click({&$RunPerf 'Testing real path speed…' '/api/connection/speed-test' @{bytes=8388608} 45 8 $false})
+ $D.FindName('HopSpeed').Add_Click({try{$Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue;if(-not$Entry-or-not$Exit-or$Entry-eq$Exit){throw 'Choose different multihop entry and exit nodes first.'};&$RunPerf 'Testing routed hop speeds…' '/api/multihop/speed-test' @{entry_id=$Entry;exit_id=$Exit;bytes=4194304} 70 10 $false}catch{$Result.Text=$_.Exception.Message}})
+ $D.FindName('Mtu').Add_Click({&$RunPerf 'Retesting throughput + Auto MTU…' '/api/mtu/retest' @{} 130 8 $true})
+ $D.FindName('Close').Add_Click({if([string]$D.Tag-eq'owned'-and(UnifiedAsyncBusy)){[void](CancelUnifiedApiAsync $false)};$D.Close()})
+ [void]$D.ShowDialog()
 }
-(Control 'UnifiedFastestNode').Add_SelectionChanged({if($script:UnifiedTelemetrySync){return};$ID=[string](Control 'UnifiedFastestNode').SelectedValue;if(-not $ID){return};try{Assert-RouterVPNMutationIdle 'selecting a Router VPN node';if($ID -eq 'fastest'){[void](Api '/api/profile/fastest' 'POST' @{samples=5;select=$true} 40);Log 'Selected the fastest measured Router VPN node.'}else{[void](Api '/api/profile/select' 'POST' @{id=$ID} 10)};RefreshProduct;RefreshUnifiedTelemetry}catch{Log ('Node selection failed: '+$_.Exception.Message);RefreshUnifiedFastestChoices}})
+(Control 'UnifiedFastestNode').Add_SelectionChanged({
+ if($script:UnifiedTelemetrySync){return};$ID=[string](Control 'UnifiedFastestNode').SelectedValue;if(-not$ID){return}
+ try{
+  Assert-RouterVPNMutationIdle 'selecting a Router VPN node'
+  if(UnifiedAsyncBusy){throw 'Another Router VPN action is still running.'}
+  if($ID-eq'fastest'){
+   [void](StartUnifiedApiAsync 'Selecting fastest node…' '/api/profile/fastest' 'POST' @{samples=5;select=$true} 40 {param($R)Log 'Selected the fastest measured Router VPN node.'} {param($E)Log ('Fastest selection failed: '+$E)} {RefreshProduct;RefreshUnifiedTelemetry})
+  }else{
+   $Success={param($R)Log ('Selected Router VPN node '+$ID)}.GetNewClosure()
+   [void](StartUnifiedApiAsync 'Selecting node…' '/api/profile/select' 'POST' @{id=$ID} 10 $Success {param($E)Log ('Node selection failed: '+$E)} {RefreshProduct;RefreshUnifiedTelemetry})
+  }
+ }catch{Log ('Node selection failed: '+$_.Exception.Message);RefreshUnifiedTelemetry}
+})
 (Control 'UnifiedForwardButton').Add_Click({ToggleUnifiedForwardingMaster})
 (Control 'UnifiedPerformanceButton').Add_Click({ShowUnifiedPerformance})
 '@
@@ -118,7 +194,7 @@ $UnifiedMapAnimationTimer.Start()
     if(-not $ProductSource.Contains($timerMarker)){throw 'Windows map animation timer seam drifted.'}
     $ProductSource=$ProductSource.Replace($timerMarker,$timerInject+"`n"+$timerMarker)
     $closeMarker='$Window.Add_Closed({$Timer.Stop()})'
-    if($ProductSource.Contains($closeMarker)){$ProductSource=$ProductSource.Replace($closeMarker,'$Window.Add_Closed({$Timer.Stop();$UnifiedMapAnimationTimer.Stop()})')}
+    if($ProductSource.Contains($closeMarker)){$ProductSource=$ProductSource.Replace($closeMarker,'$Window.Add_Closed({$Timer.Stop();$UnifiedMapAnimationTimer.Stop();try{if(UnifiedTelemetryBusy){[void](CancelUnifiedTelemetryRefreshAsync)}}catch{};try{$script:UnifiedTelemetryPoller.Stop();$script:UnifiedTelemetryClient.Dispose()}catch{}})')}
 
     $ProductSource+="`n# Windows telemetry UX contract: stylized offline VPN globe, clickable real-coordinate nodes, entry/exit/external/selected role colors, measured node ms, live entry-to-exit route with animated packet and PATH ms, fastest/specific node selector that stays separate from Connect, live path RTT beside Connect/Disconnect, live multihop IN/OUT/PATH RTT, authenticated Real path speed, Routed hop speeds via /api/multihop/speed-test, separate MTU optimizer, Performance panel, and real /api/forwarding/master active-home toggle.`n"
     return $ProductSource
