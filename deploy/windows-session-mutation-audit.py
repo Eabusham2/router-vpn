@@ -77,6 +77,7 @@ for marker in (
     'function CancelUnifiedApiAsync',
     '$script:UnifiedAsyncClient.SendAsync($Req,$Cts.Token)',
     "'Cancel / Disconnect'",
+    "StartUnifiedApiAsync 'Disconnecting…'",
     "StartUnifiedApiAsync 'Retesting MTU…'",
 ):
     assert marker in unified, f'transformed UnifiedShell missing {marker}'
@@ -89,6 +90,7 @@ for forbidden in (
     "$R=Api '/api/external-profile/connect' 'POST'",
     "$R=Api '/api/connect-logical' 'POST'",
     "Api '/api/mtu/retest' 'POST' @{} 130",
+    "[void](Api '/api/disconnect' 'POST' @{} 20)",
 ):
     assert forbidden not in unified, f'Windows unified map revived blocking long action: {forbidden}'
 
