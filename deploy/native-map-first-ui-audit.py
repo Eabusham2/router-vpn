@@ -119,6 +119,8 @@ require(
     "DAITA-like traffic padding",
     "Jumbo TUN",
     "LegacyDetailTabs\" Visibility=\"Collapsed",
+    'MinHeight="480" MinWidth="640"',
+    '<RowDefinition Height="2*" MinHeight="140"/>',
 )
 require_order(
     "Windows bottom control sheet order",
@@ -392,6 +394,9 @@ require(
     "Jumbo",
     "When-In-Use permission",
     "no IP geolocation",
+    "GeometryReader { geo in",
+    "ScrollView {",
+    "private func controlSheet(height: CGFloat)",
 )
 require_order(
     "iOS swipe-up control sheet order",
