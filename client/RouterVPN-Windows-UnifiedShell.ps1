@@ -386,7 +386,7 @@ $DnsButton.Add_Click({try{$Result=Api '/api/dns/retest' 'POST' @{} 90;Log ("DNS 
 $DnsButton.Add_Click({if(UnifiedAsyncBusy){Log 'DNS Retest refused: another Router VPN action is running.';return};[void](StartUnifiedApiAsync 'Retesting DNS…' '/api/dns/retest' 'POST' @{} 90 {param($R)Log ("DNS winner: $($R.winner.address) $($R.winner.latency_ms)ms")} {param($E)Log ("DNS Retest failed: $E")} $null)})
 '@
     $legacyLatencyOld = @'
-(Control 'LatencyButton').Add_Click({try{$Profile=SelectedNode;$Result=Api '/api/profile/latency' 'POST' @{id=[string]$Profile.id;samples=50} 180;Log ("Latency median=$($Result.median_ms)ms p90=$($Result.p90_ms)ms")}catch{Log $_.Exception.Message}})
+(Control 'LatencyButton').Add_Click({try{$Profile=SelectedNode;$Result=Api '/api/profile/latency' 'POST' @{id=[string]$Profile.id;samples=50} 180;Log ("Latency median=$($Result.median_ms)ms p90=$($Result.p90_ms)ms")}catch{Log $_.Exception.Message};RefreshProduct})
 '@
     $legacyLatencyNew = @'
 (Control 'LatencyButton').Add_Click({try{$Profile=SelectedNode;$Body=@{id=[string]$Profile.id;samples=50};[void](StartUnifiedApiAsync 'Testing 50-sample node latency…' '/api/profile/latency' 'POST' $Body 180 {param($R)Log ("Latency median=$($R.median_ms)ms p90=$($R.p90_ms)ms")} {param($E)Log ("Latency test failed: $E")} $null)}catch{Log $_.Exception.Message}})
