@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -26,6 +29,49 @@ def none_markers(rel: str, *markers: str) -> bool:
 
 def exists(rel: str) -> bool:
     return (ROOT / rel).is_file()
+
+
+def live_evidence_release_sha() -> str:
+    """Return only an explicit exact release identity; never guess a moving ref."""
+    for name in ("ROUTER_VPN_RELEASE_SHA", "GITHUB_SHA"):
+        value = os.environ.get(name, "").strip().lower()
+        if re.fullmatch(r"[0-9a-f]{40}", value):
+            return value
+    return ""
+
+
+def live_evidence_gates(*required_gates: str) -> bool:
+    """Validate external physical/live proof without committing it into source.
+
+    Keeping the manifest outside Git avoids the circular bug where committing
+    evidence changes the SHA it is supposed to prove. Manual credit is awarded
+    only to a manifest bound to this exact release SHA, with PASS status and
+    re-hashable raw evidence for every requested gate.
+    """
+    manifest = os.environ.get("ROUTER_VPN_LIVE_EVIDENCE_MANIFEST", "").strip()
+    release_sha = live_evidence_release_sha()
+    if not manifest or not release_sha:
+        return False
+    tool_path = ROOT / "deploy" / "live-release-evidence.py"
+    spec = importlib.util.spec_from_file_location("routervpn_live_release_evidence", tool_path)
+    if spec is None or spec.loader is None:
+        return False
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        data = module.load(Path(manifest).expanduser())
+        if module.problems(data, release_sha):
+            return False
+        gates = data.get("gates", {})
+        for gate in required_gates:
+            item = gates.get(gate)
+            if not isinstance(item, dict) or item.get("status") != "pass" or not item.get("evidence"):
+                return False
+        if module.evidence_source_problems(data, required_gates):
+            return False
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+    return True
 
 
 def no_self_mutating_workflows() -> bool:
@@ -75,12 +121,12 @@ GATES = [
     Gate("private provider-neutral AI configuration lifecycle", 0.5, lambda: all_markers("server/scripts/configure-ai-help.sh", "stty -echo", "umask 077", "chmod 600", "ai-provider", "ai-model", "ai-api.key", "ai-base-url", "gemini", "anthropic", "deepseek", "xai", "moonshot", "local")),
     Gate("one-SHA authoritative native release workflow", 3.0, lambda: all_markers(".github/workflows/release-candidate.yml", "workflow_call:", "RouterVPN-release-candidate-${{ github.sha }}", "windows-native-smoke", "iOS/iPadOS real WireGuard + Libbox PacketTunnel") and all_markers(".github/workflows/build-all.yml", "uses: ./.github/workflows/release-candidate.yml")),
     Gate("short-lived CI package artifacts", 1.0, lambda: all("retention-days: 1" in body(rel) for rel in (".github/workflows/release-candidate.yml", ".github/workflows/client-apps-ci.yml", ".github/workflows/macos-native-app.yml", ".github/workflows/linux-native-app.yml"))),
-    Gate("physical Windows Android iOS reconnect/leak/permission matrix", 4.0, lambda: exists("evidence/release/native-device-matrix.json"), "manual", "must be exact-SHA physical-device evidence"),
-    Gate("external off-LAN simple-method interoperability", 3.0, lambda: exists("evidence/release/offlan-methods.json"), "manual", "must cover each exposed simple method"),
-    Gate("native visual QA", 1.5, lambda: exists("evidence/release/visual-qa.json"), "manual", "real-device screenshots/checklist"),
-    Gate("Apple signing/notarization release proof", 0.5, lambda: exists("evidence/release/apple-signing.json"), "manual", "unsigned CI does not earn this"),
-    Gate("production exact-SHA deploy + live smoke", 2.0, lambda: exists("evidence/release/production-smoke.json"), "manual", "must be post-deploy live proof"),
-    Gate("ASUS forwarding post-release revalidation", 1.0, lambda: exists("evidence/release/asus-forwarding.json"), "manual", "must be live router evidence"),
+    Gate("physical Windows/macOS/Linux/Android/iOS reconnect/leak/permission matrix", 4.0, lambda: live_evidence_gates("physical-windows", "physical-macos", "physical-linux", "physical-android", "physical-ios-ipados"), "manual", "exact-SHA physical-device proof for every shipping native platform"),
+    Gate("external off-LAN simple-method interoperability", 3.0, lambda: live_evidence_gates("off-lan-methods"), "manual", "must cover each exposed simple method"),
+    Gate("native visual QA", 1.5, lambda: live_evidence_gates("native-visual-qa"), "manual", "real-device screenshots/checklist"),
+    Gate("Apple signing/notarization release proof", 0.5, lambda: live_evidence_gates("apple-signing-notarization"), "manual", "unsigned CI does not earn this"),
+    Gate("production exact-SHA deploy + live smoke", 2.0, lambda: live_evidence_gates("private-server-features", "live-ai-providers", "production-exact-sha-deploy", "final-regression"), "manual", "same-SHA private services, provider matrix, production deployment and final regression"),
+    Gate("ASUS forwarding post-release revalidation", 1.0, lambda: live_evidence_gates("asus-forwarding-revalidation"), "manual", "must be live router evidence"),
 ]
 
 

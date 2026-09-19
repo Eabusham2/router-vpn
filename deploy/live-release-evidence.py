@@ -74,13 +74,36 @@ def blank(sha):
             "gates":{gate:{"status":"pending","note":"","evidence":[]} for gate in GATES}}
 
 def digest_file(path):
-    if not path.is_file(): raise ValueError(f"evidence is not a regular file: {path}")
+    if path.is_symlink() or not path.is_file(): raise ValueError(f"evidence is not a regular non-symlink file: {path}")
     size=path.stat().st_size
     if size<1 or size>MAX_BYTES: raise ValueError(f"evidence size must be 1..{MAX_BYTES} bytes: {path}")
     h=hashlib.sha256()
     with path.open("rb") as handle:
         for block in iter(lambda:handle.read(1024*1024),b""): h.update(block)
     return h.hexdigest(),size
+
+def evidence_source_problems(data,gate_names=None):
+    """Re-hash recorded raw proof so stale/missing/tampered files lose credit."""
+    out=[]
+    gates=data.get("gates")
+    if not isinstance(gates,dict): return ["gates must be an object"]
+    names=list(gate_names) if gate_names is not None else list(GATES)
+    for gate in names:
+        item=gates.get(gate)
+        if not isinstance(item,dict) or item.get("status")!="pass": continue
+        rows=item.get("evidence")
+        if not isinstance(rows,list): continue
+        for i,row in enumerate(rows):
+            if not isinstance(row,dict): continue
+            source=row.get("source")
+            if not isinstance(source,str) or not source: continue
+            try: digest,size=digest_file(Path(source))
+            except (OSError,ValueError) as exc:
+                out.append(f"{gate}: evidence[{i}] source verification failed: {exc}")
+                continue
+            if digest!=row.get("sha256"): out.append(f"{gate}: evidence[{i}] source sha256 changed")
+            if size!=row.get("size"): out.append(f"{gate}: evidence[{i}] source size changed")
+    return out
 
 def problems(data,expected_sha=None,require_final=False):
     out=[]
@@ -130,7 +153,7 @@ def cmd_record(args):
     if bad: raise ValueError("existing manifest invalid: "+"; ".join(bad))
     item=data["gates"][args.gate]; rows=[] if args.replace else list(item["evidence"]); known={r["sha256"] for r in rows}
     for raw in args.evidence:
-        src=Path(raw); d,size=digest_file(src)
+        src=Path(raw).expanduser().resolve(strict=True); d,size=digest_file(src)
         if d not in known:
             rows.append({"sha256":d,"size":size,"source":str(src),"captured_at":utc_now()}); known.add(d)
     if args.status=="pass" and not rows: raise ValueError("PASS requires at least one --evidence file")
@@ -153,6 +176,7 @@ def cmd_status(args):
 def cmd_validate(args):
     if args.sha and not SHA_RE.fullmatch(args.sha): raise ValueError("--sha must be exactly 40 lowercase hex characters")
     data=load(Path(args.manifest)); bad=problems(data,args.sha,args.require_final)
+    if args.require_final: bad.extend(evidence_source_problems(data))
     if bad:
         for value in bad: print("INVALID:",value)
         return 2
