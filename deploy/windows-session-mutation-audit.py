@@ -133,8 +133,27 @@ for marker in (
     "Assert-RouterVPNMutationIdle 'selecting a node from the VPN globe'",
     "Assert-RouterVPNMutationIdle 'selecting a Router VPN node'",
     "UnifiedFastestNode').IsEnabled=-not(Test-RouterVPNMutationBusy)",
+    "function StartUnifiedTelemetryRefresh",
+    "function CancelUnifiedTelemetryRefreshAsync",
+    "$script:UnifiedTelemetryClient.SendAsync($Req,$script:UnifiedTelemetryCts.Token)",
+    "StartUnifiedApiAsync 'Updating forwarding…'",
+    "StartUnifiedApiAsync 'Selecting fastest node…'",
+    "StartUnifiedApiAsync 'Selecting node…'",
+    "Testing 50-sample node latency…",
+    "Testing real path speed…",
+    "Testing routed hop speeds…",
 ):
-    assert marker in telemetry, f'Windows telemetry session guard missing {marker}'
+    assert marker in telemetry, f'Windows telemetry session/async guard missing {marker}'
 assert "selecting/connecting a fastest Router VPN node" not in telemetry, 'Fastest selection must not silently connect'
+for forbidden in (
+    "$Live=Api '/api/connection/live-latency'",
+    "$R=Api '/api/multihop/live-latency'",
+    "[void](Api '/api/profile/fastest'",
+    "$R=Api '/api/forwarding/master'",
+    "$R=Api '/api/profile/latency'",
+    "$R=Api '/api/connection/speed-test'",
+    "$R=Api '/api/multihop/speed-test'",
+):
+    assert forbidden not in telemetry, f'Windows telemetry revived WPF-thread network action: {forbidden}'
 
 print('Windows session mutation shipping audit: PASS')
