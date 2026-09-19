@@ -91,7 +91,7 @@ function StartUnifiedTelemetryRefresh{
  if((UnifiedTelemetryBusy)-or(UnifiedAsyncBusy)){return}
  $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryDiscard=$false
  $script:UnifiedTelemetryCts=[System.Threading.CancellationTokenSource]::new();$script:UnifiedTelemetryCts.CancelAfter([TimeSpan]::FromSeconds(12))
- $Specs=[ordered]@{profiles=@('GET','/api/profiles',$null);live=@('GET','/api/connection/live-latency',$null);forward=@('GET','/api/forwarding/master',$null)}
+ $Specs=[ordered]@{status=@('GET','/api/status',$null);profiles=@('GET','/api/profiles',$null);live=@('GET','/api/connection/live-latency',$null);forward=@('GET','/api/forwarding/master',$null)}
  try{
   if((Control 'UnifiedMultihop').IsChecked){
    $Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue
@@ -118,7 +118,7 @@ function CompleteUnifiedTelemetryRefresh{
   }
   if(-not$Discard){
    if($Payload.profiles){ApplyUnifiedFastestStore $Payload.profiles}
-   try{(Control 'UnifiedFastestNode').IsEnabled=-not(Test-RouterVPNMutationBusy)}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
+   try{(Control 'UnifiedFastestNode').IsEnabled=($Payload.status-and-not(Test-RouterVPNMutationBusyFromStatus $Payload.status))}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
    if($Payload.live){$script:UnifiedRoutePathMs=[double]$Payload.live.median_ms;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f[double]$Payload.live.median_ms);(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}else{$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text='-- ms';(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
    if($Payload.multihop){$Bits=@();if($Payload.multihop.entry){$Bits+=('IN {0:N1}'-f[double]$Payload.multihop.entry.median_ms)};if($Payload.multihop.exit){$Bits+=('OUT {0:N1}'-f[double]$Payload.multihop.exit.median_ms)};if($Payload.multihop.current_path){$script:UnifiedRoutePathMs=[double]$Payload.multihop.current_path.median_ms;$Bits+=('PATH {0:N1} ms'-f[double]$Payload.multihop.current_path.median_ms)};(Control 'UnifiedMultihopLatency').Text=($Bits-join' • ')}
    if($Payload.forward){$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content=if([bool]$Payload.forward.enabled){'Forward ON'}else{'Forward OFF'};(Control 'UnifiedForwardButton').Tag=[bool]$Payload.forward.enabled;(Control 'UnifiedForwardButton').ToolTip='Real server forwarding master on '+[string]$Payload.forward.name;$script:UnifiedForwardSync=$false}else{$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content='Forward ?';(Control 'UnifiedForwardButton').Tag=$null;(Control 'UnifiedForwardButton').ToolTip='Connect a Router VPN home-node path to control the real server forwarding master';$script:UnifiedForwardSync=$false}
