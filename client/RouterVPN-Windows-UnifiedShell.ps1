@@ -77,20 +77,29 @@ $script:UnifiedAsyncFinally=$null
 $script:UnifiedAsyncLabel=''
 $script:UnifiedAsyncCancelled=$false
 $script:UnifiedAsyncDisconnectAfterCancel=$false
+$script:UnifiedAsyncActive=$false
+$script:UnifiedAsyncCompleting=$false
+$script:UnifiedAsyncClosed=$false
 $script:UnifiedAsyncPoller=New-Object Windows.Threading.DispatcherTimer
 $script:UnifiedAsyncPoller.Interval=[TimeSpan]::FromMilliseconds(100)
-function UnifiedAsyncBusy { return $null-ne$script:UnifiedAsyncTask -and -not $script:UnifiedAsyncTask.IsCompleted }
+# HTTP completion is not UI completion. Keep this reservation through callbacks
+# and cleanup, including nested dispatcher frames opened by a callback.
+function UnifiedAsyncBusy { return $script:UnifiedAsyncActive }
 function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
-    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton')){
+    if($script:UnifiedAsyncClosed){return}
+    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton')){
         $C=Control $N;if($null-ne$C){$C.IsEnabled=-not$Busy}
     }
     $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=$true;if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
 }
 function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET',$Body=$null,[int]$Timeout=180,[scriptblock]$OnSuccess=$null,[scriptblock]$OnFailure=$null,[scriptblock]$OnFinally=$null){
+    if($script:UnifiedAsyncClosed){return $false}
     if(UnifiedAsyncBusy){Log ("$Label refused: another Router VPN action is still running.");return $false}
-    [void](CancelUnifiedRefreshAsync)
-    if(Get-Command CancelUnifiedTelemetryRefreshAsync -ErrorAction SilentlyContinue){[void](CancelUnifiedTelemetryRefreshAsync)}
+    $script:UnifiedAsyncActive=$true
+    $Req=$null;$Cts=$null
     try{
+        [void](CancelUnifiedRefreshAsync)
+        if(Get-Command CancelUnifiedTelemetryRefreshAsync -ErrorAction SilentlyContinue){[void](CancelUnifiedTelemetryRefreshAsync)}
         $Verb=switch($Method.ToUpperInvariant()){
             'GET' {[System.Net.Http.HttpMethod]::Get}
             'POST' {[System.Net.Http.HttpMethod]::Post}
@@ -113,43 +122,75 @@ function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET'
         $script:UnifiedAsyncPoller.Start()
         return $true
     }catch{
-        if($null-ne$OnFailure){&$OnFailure $_.Exception.Message}else{Log ("$Label failed: "+$_.Exception.Message)}
-        if($null-ne$OnFinally){&$OnFinally}
-        SetUnifiedAsyncUI $false
+        $Detail=$_.Exception.Message
+        try{
+            if(-not$script:UnifiedAsyncClosed){
+                try{if($null-ne$OnFailure){&$OnFailure $Detail}else{Log ("$Label failed: "+$Detail)}}catch{Log ("$Label error callback failed: "+$_.Exception.Message)}
+                try{if($null-ne$OnFinally){&$OnFinally}}catch{Log ("$Label finalizer failed: "+$_.Exception.Message)}
+            }
+        }finally{
+            try{if($null-ne$Cts){$Cts.Cancel()}}catch{}
+            try{if($null-ne$Req){$Req.Dispose()}}catch{}
+            try{if($null-ne$Cts){$Cts.Dispose()}}catch{}
+            $script:UnifiedAsyncPoller.Stop()
+            $script:UnifiedAsyncTask=$null;$script:UnifiedAsyncRequest=$null;$script:UnifiedAsyncCts=$null
+            $script:UnifiedAsyncSuccess=$null;$script:UnifiedAsyncFailure=$null;$script:UnifiedAsyncFinally=$null;$script:UnifiedAsyncLabel=''
+            $script:UnifiedAsyncActive=$false
+            SetUnifiedAsyncUI $false
+        }
         return $false
     }
 }
 function CancelUnifiedApiAsync([bool]$DisconnectAfter=$false){
     if(-not(UnifiedAsyncBusy)){return $false}
     $script:UnifiedAsyncCancelled=$true
-    $script:UnifiedAsyncDisconnectAfterCancel=$DisconnectAfter
-    try{$script:UnifiedAsyncCts.Cancel()}catch{}
+    # Repeated cancel/close events must not retract a requested disconnect.
+    $script:UnifiedAsyncDisconnectAfterCancel=$script:UnifiedAsyncDisconnectAfterCancel -or $DisconnectAfter
+    try{if($null-ne$script:UnifiedAsyncCts){$script:UnifiedAsyncCts.Cancel()}}catch{}
     return $true
 }
 function CompleteUnifiedApiAsync{
-    if($null-eq$script:UnifiedAsyncTask -or -not$script:UnifiedAsyncTask.IsCompleted){return}
+    if($script:UnifiedAsyncCompleting -or $null-eq$script:UnifiedAsyncTask -or -not$script:UnifiedAsyncTask.IsCompleted){return}
+    $script:UnifiedAsyncCompleting=$true
     $Task=$script:UnifiedAsyncTask;$Req=$script:UnifiedAsyncRequest;$Cts=$script:UnifiedAsyncCts;$Success=$script:UnifiedAsyncSuccess;$Failure=$script:UnifiedAsyncFailure;$Finally=$script:UnifiedAsyncFinally;$Label=$script:UnifiedAsyncLabel
-    $Cancelled=$script:UnifiedAsyncCancelled;$DisconnectAfter=$script:UnifiedAsyncDisconnectAfterCancel
+    $Resp=$null;$DisconnectAfter=$false
     $script:UnifiedAsyncPoller.Stop()
-    $script:UnifiedAsyncTask=$null;$script:UnifiedAsyncRequest=$null;$script:UnifiedAsyncCts=$null;$script:UnifiedAsyncSuccess=$null;$script:UnifiedAsyncFailure=$null;$script:UnifiedAsyncFinally=$null;$script:UnifiedAsyncLabel=''
     try{
-        $Resp=$Task.GetAwaiter().GetResult();$script:UnifiedAsyncResponse=$Resp
+        $Resp=$Task.GetAwaiter().GetResult()
         $Text=$Resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         if(-not$Resp.IsSuccessStatusCode){throw ("HTTP "+[int]$Resp.StatusCode+" "+$Text)}
         $Value=if([string]::IsNullOrWhiteSpace($Text)){$null}else{$Text|ConvertFrom-Json}
-        if(-not$Cancelled -and $null-ne$Success){&$Success $Value}
+        if(-not$script:UnifiedAsyncCancelled -and -not$script:UnifiedAsyncClosed -and $null-ne$Success){&$Success $Value}
     }catch{
-        if(-not$Cancelled){if($null-ne$Failure){&$Failure $_.Exception.Message}else{Log ("$Label failed: "+$_.Exception.Message)}}
+        if(-not$script:UnifiedAsyncCancelled -and -not$script:UnifiedAsyncClosed){
+            try{if($null-ne$Failure){&$Failure $_.Exception.Message}else{Log ("$Label failed: "+$_.Exception.Message)}}catch{Log ("$Label error callback failed: "+$_.Exception.Message)}
+        }
     }finally{
-        try{if($null-ne$script:UnifiedAsyncResponse){$script:UnifiedAsyncResponse.Dispose()}}catch{};$script:UnifiedAsyncResponse=$null
-        try{if($null-ne$Req){$Req.Dispose()}}catch{};try{if($null-ne$Cts){$Cts.Dispose()}}catch{}
-        if($null-ne$Finally){&$Finally}
-        SetUnifiedAsyncUI $false
-        RefreshProduct
+        try{
+            if(-not$script:UnifiedAsyncClosed -and $null-ne$Finally){
+                try{&$Finally}catch{Log ("$Label finalizer failed: "+$_.Exception.Message)}
+            }
+        }finally{
+            try{if($null-ne$Resp){$Resp.Dispose()}}catch{}
+            try{if($null-ne$Req){$Req.Dispose()}}catch{}
+            try{if($null-ne$Cts){$Cts.Dispose()}}catch{}
+            # Read cancellation after callbacks: a nested dispatcher may have
+            # received Cancel while a callback was presenting a dialog.
+            $DisconnectAfter=$script:UnifiedAsyncDisconnectAfterCancel
+            $script:UnifiedAsyncTask=$null;$script:UnifiedAsyncRequest=$null;$script:UnifiedAsyncCts=$null;$script:UnifiedAsyncResponse=$null
+            $script:UnifiedAsyncSuccess=$null;$script:UnifiedAsyncFailure=$null;$script:UnifiedAsyncFinally=$null;$script:UnifiedAsyncLabel=''
+            $script:UnifiedAsyncCancelled=$false;$script:UnifiedAsyncDisconnectAfterCancel=$false
+            $script:UnifiedAsyncCompleting=$false;$script:UnifiedAsyncActive=$false
+        }
     }
+    if($script:UnifiedAsyncClosed){return}
     if($DisconnectAfter){
+        # Dispatch cancellation cleanup before synchronous status refresh.
         [void](StartUnifiedApiAsync 'Disconnecting…' '/api/disconnect' 'POST' @{} 20 {param($R)Log 'Disconnected'} {param($E)Log ('Disconnect failed: '+$E)} $null)
+        return
     }
+    SetUnifiedAsyncUI $false
+    RefreshProduct
 }
 $script:UnifiedAsyncPoller.Add_Tick({CompleteUnifiedApiAsync})
 $script:UnifiedRefreshClient=[System.Net.Http.HttpClient]::new()
@@ -432,7 +473,17 @@ $DnsButton.Add_Click({if(UnifiedAsyncBusy){Log 'DNS Retest refused: another Rout
 (Control 'UnifiedDnsDetailsButton').Add_Click({OpenUnifiedDetail 3})
 (Control 'UnifiedSettingsButton').Add_Click({try{$Saved=Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window;if($null -ne $Saved){Log 'Profile settings saved'}}catch{Log ('Settings failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedMtuButton').Add_Click({if(UnifiedAsyncBusy){Log 'MTU Retest refused: another Router VPN action is running.';return};[void](StartUnifiedApiAsync 'Retesting MTU…' '/api/mtu/retest' 'POST' @{} 130 {param($R)Log ("MTU Retest: effective=$($R.effective_mtu) source=$($R.effective_mtu_source)")} {param($E)Log ('MTU Retest failed: '+$E)} $null)})
-(Control 'UnifiedBackButton').Add_Click({BackUnifiedMap})`n$Window.Add_Closed({try{if(UnifiedAsyncBusy){[void](CancelUnifiedApiAsync $false)}}catch{};try{if(UnifiedRefreshBusy){[void](CancelUnifiedRefreshAsync)}}catch{};try{$script:UnifiedAsyncPoller.Stop();$script:UnifiedRefreshPoller.Stop()}catch{};try{$script:UnifiedAsyncClient.Dispose();$script:UnifiedRefreshClient.Dispose()}catch{}})
+(Control 'UnifiedBackButton').Add_Click({BackUnifiedMap})
+$Window.Add_Closed({
+    $script:UnifiedAsyncClosed=$true
+    try{if(UnifiedAsyncBusy){[void](CancelUnifiedApiAsync $false)}}catch{}
+    try{if(UnifiedRefreshBusy){[void](CancelUnifiedRefreshAsync)}}catch{}
+    try{CompleteUnifiedApiAsync}catch{}
+    try{$script:UnifiedAsyncPoller.Stop();$script:UnifiedRefreshPoller.Stop()}catch{}
+    try{$script:UnifiedAsyncClient.Dispose();$script:UnifiedRefreshClient.Dispose()}catch{}
+    try{if($null-ne$script:UnifiedAsyncRequest){$script:UnifiedAsyncRequest.Dispose()}}catch{}
+    try{if($null-ne$script:UnifiedAsyncCts){$script:UnifiedAsyncCts.Dispose()}}catch{}
+})
 (Control 'UnifiedModeCombo').Add_SelectionChanged({if($ModeCombo.SelectedValue){$ID=[string]$ModeCombo.SelectedValue;if($ID -eq 'custom:new'){ShowUnifiedCustomBuilder}else{SaveUnifiedModeID $ID}}})
 (Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;[void](Api '/api/profile/settings' 'POST' @{kill_switch_policy=if($On){'on-connect'}else{'off'}} 12);Log (if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedDnsCombo').Add_SelectionChanged({if(-not $script:Busy){$Tag=ComboTag (Control 'UnifiedDnsCombo') 'home';if($Tag -in @('custom','dot','doh','doh3')){OpenUnifiedDetail 3}else{try{[void](Api '/api/dns/policy' 'POST' @{mode=$Tag} 10);Log ('DNS selected: '+$Tag)}catch{Log ('DNS update failed: '+$_.Exception.Message)};RefreshDnsPolicy;RefreshProduct}}})
