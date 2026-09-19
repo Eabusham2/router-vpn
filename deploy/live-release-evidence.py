@@ -169,7 +169,11 @@ def build_parser():
     return p
 
 def main():
-    try: return build_parser().parse_args().func(build_parser().parse_args())
-    except (OSError,ValueError) as exc: print("ERROR:",exc,file=sys.stderr); return 2
+    try:
+        args=build_parser().parse_args()
+        return args.func(args)
+    except (OSError,ValueError) as exc:
+        print("ERROR:",exc,file=sys.stderr)
+        return 2
 
 if __name__=="__main__": raise SystemExit(main())
