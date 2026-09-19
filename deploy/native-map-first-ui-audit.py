@@ -131,8 +131,8 @@ require_order(
 windows_telemetry = read("client/RouterVPN-Windows-Telemetry.ps1")
 try:
     windows_choices = windows_telemetry.split(
-        "function RefreshUnifiedFastestChoices", 1
-    )[1].split("function RefreshUnifiedForwardingMaster", 1)[0]
+        "function ApplyUnifiedFastestStore", 1
+    )[1].split("$script:UnifiedTelemetryClient", 1)[0]
     windows_selector = windows_telemetry.split(
         "(Control 'UnifiedFastestNode').Add_SelectionChanged", 1
     )[1].split("(Control 'UnifiedForwardButton').Add_Click", 1)[0]
