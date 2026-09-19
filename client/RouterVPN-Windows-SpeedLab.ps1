@@ -2,14 +2,19 @@ function Add-RouterVPNSpeedLabWindowsShell {
     param([Parameter(Mandatory=$true)][string]$ProductSource)
     Set-StrictMode -Version Latest
 
-    $pattern='(?s)function ShowUnifiedPerformance\{.*?\r?\n\}\r?\n\(Control ''UnifiedFastestNode''\)\.Add_SelectionChanged'
-    $match=[regex]::Match($ProductSource,$pattern)
-    if(-not $match.Success){throw 'Windows Speed Lab performance seam drifted.'}
-    $old=$match.Value
-    $oldFunction=$old.Substring(0,$old.LastIndexOf("(Control 'UnifiedFastestNode')"))
+    # Replace only the performance function, never the following event binding.
+    $Functions=@([ScriptBlock]::Create($ProductSource).Ast.FindAll({
+        param($Node)
+        $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $Node.Name -eq 'ShowUnifiedPerformance'
+    },$true))
+    if($Functions.Count -ne 1){throw 'Windows Speed Lab performance seam drifted: expected one function.'}
+    $Performance=$Functions[0].Extent
+    $oldFunction=$Performance.Text
     $advanced=$oldFunction.Replace('function ShowUnifiedPerformance{','function ShowUnifiedAdvancedPerformance{')
 
     $speedLab=@'
+function ShowUnifiedPerformance{ShowUnifiedSpeedLab}
 function ShowUnifiedSpeedLab{
  [xml]$SX=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN Speed Lab" Width="940" Height="760" MinWidth="760" MinHeight="620" WindowStartupLocation="CenterOwner" Background="#08101F" Foreground="#F5F7FF">
@@ -104,12 +109,13 @@ function ShowUnifiedSpeedLab{
    $Finally={$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready';RefreshProduct;RefreshUnifiedTelemetry}.GetNewClosure()
    if(-not(StartUnifiedApiAsync 'Running Speed Lab…' '/api/speed-lab/run' 'POST' $payload $timeout $Success $Failure $Finally)){$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready'}
   }catch{$Detail.Text=$_.Exception.Message;$Status.Text='Speed Lab failed closed; see details.';$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready'}
- })[void]$D.ShowDialog()
+ })
+ [void]$D.ShowDialog()
 }
 '@
 
-    $replacement=$advanced+"`n"+$speedLab+"`n(Control 'UnifiedFastestNode')"
-    $ProductSource=$ProductSource.Substring(0,$match.Index)+$replacement+$ProductSource.Substring($match.Index+$match.Length)
+    $replacement=$advanced+"`n"+$speedLab
+    $ProductSource=$ProductSource.Substring(0,$Performance.StartOffset)+$replacement+$ProductSource.Substring($Performance.EndOffset)
     $ProductSource+="`n# Windows Speed Lab: /api/speed-lab/options + /api/speed-lab/run, real idle/download-loaded/upload-loaded latency, real HTTPS Mbps, exact multihop hop RTT/Mbps, bufferbloat/jitter, current or temporary direct/multihop/external graphs, Auto or custom min/max timing.`n"
     return $ProductSource
 }
