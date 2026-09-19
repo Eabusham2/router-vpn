@@ -267,8 +267,9 @@ extension ProductWindowController {
         let nodeRow = NSStackView(); nodeRow.orientation = .horizontal; nodeRow.spacing = 8; nodeRow.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10); nodeRow.translatesAutoresizingMaskIntoConstraints = false
         nodeCard.addSubview(nodeRow)
         routerPopup.target = self; routerPopup.action = #selector(unifiedRouterChanged)
+        routerPopup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         nodeRow.addArrangedSubview(routerPopup)
-        let manageNode = NSButton(title: "Add / manage nodes", target: self, action: #selector(openUnifiedNodes)); manageNode.bezelStyle = .rounded; nodeRow.addArrangedSubview(manageNode)
+        let manageNode = NSButton(title: "Add / manage nodes", target: self, action: #selector(openUnifiedNodes)); manageNode.bezelStyle = .rounded; manageNode.setContentCompressionResistancePriority(.defaultLow, for: .horizontal); nodeRow.addArrangedSubview(manageNode)
         NSLayoutConstraint.activate([
             nodeRow.leadingAnchor.constraint(equalTo: nodeCard.leadingAnchor), nodeRow.trailingAnchor.constraint(equalTo: nodeCard.trailingAnchor), nodeRow.topAnchor.constraint(equalTo: nodeCard.topAnchor), nodeRow.bottomAnchor.constraint(equalTo: nodeCard.bottomAnchor),
             nodeCard.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16), nodeCard.topAnchor.constraint(equalTo: root.topAnchor, constant: 16), nodeCard.widthAnchor.constraint(lessThanOrEqualToConstant: 450)
@@ -278,10 +279,12 @@ extension ProductWindowController {
         root.addSubview(statusCard)
         let statusStack = NSStackView(); statusStack.orientation = .vertical; statusStack.spacing = 2; statusStack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10); statusStack.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.font = .systemFont(ofSize: 13, weight: .semibold); detailLabel.font = .systemFont(ofSize: 11); detailLabel.textColor = .secondaryLabelColor; detailLabel.maximumNumberOfLines = 2
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal); detailLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         statusStack.addArrangedSubview(statusLabel); statusStack.addArrangedSubview(detailLabel); statusCard.addSubview(statusStack)
         NSLayoutConstraint.activate([
             statusStack.leadingAnchor.constraint(equalTo: statusCard.leadingAnchor), statusStack.trailingAnchor.constraint(equalTo: statusCard.trailingAnchor), statusStack.topAnchor.constraint(equalTo: statusCard.topAnchor), statusStack.bottomAnchor.constraint(equalTo: statusCard.bottomAnchor),
-            statusCard.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16), statusCard.topAnchor.constraint(equalTo: root.topAnchor, constant: 16), statusCard.widthAnchor.constraint(lessThanOrEqualToConstant: 390)
+            statusCard.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16), statusCard.topAnchor.constraint(equalTo: root.topAnchor, constant: 16), statusCard.widthAnchor.constraint(lessThanOrEqualToConstant: 390),
+            nodeCard.trailingAnchor.constraint(lessThanOrEqualTo: statusCard.leadingAnchor, constant: -8)
         ])
 
         let sheet = NSVisualEffectView(); sheet.identifier = NSUserInterfaceItemIdentifier("unified-sheet"); sheet.material = .sidebar; sheet.blendingMode = .withinWindow; sheet.state = .active; sheet.wantsLayer = true; sheet.layer?.cornerRadius = 22; sheet.translatesAutoresizingMaskIntoConstraints = false
