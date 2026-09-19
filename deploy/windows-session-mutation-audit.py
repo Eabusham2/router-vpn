@@ -79,6 +79,15 @@ for marker in (
     "'Cancel / Disconnect'",
     "StartUnifiedApiAsync 'Disconnecting…'",
     "StartUnifiedApiAsync 'Retesting MTU…'",
+    "function StartUnifiedRefreshAsync",
+    "function CancelUnifiedRefreshAsync",
+    "function ApplyUnifiedRefreshSnapshot",
+    "$script:UnifiedRefreshClient.SendAsync($Req,$script:UnifiedRefreshCts.Token)",
+    "[void](CancelUnifiedRefreshAsync)",
+    "$ProductSource.Replace('function RefreshProduct{','function RefreshProductLegacy{')",
+    "function RefreshProduct{StartUnifiedRefreshAsync}",
+    "UnifiedRefreshBusy",
+    "$script:UnifiedRefreshClient.Dispose()",
 ):
     assert marker in unified, f'transformed UnifiedShell missing {marker}'
 
@@ -93,6 +102,9 @@ for forbidden in (
     "[void](Api '/api/disconnect' 'POST' @{} 20)",
 ):
     assert forbidden not in unified, f'Windows unified map revived blocking long action: {forbidden}'
+
+assert '$Timer.Add_Tick({RefreshProduct})' in product, 'Windows timer no longer calls the async public refresh entrypoint'
+assert '$Timer.Add_Tick({RefreshProductLegacy})' not in product, 'Windows timer revived the blocking legacy refresher'
 
 telemetry=(ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text(encoding='utf-8')
 for marker in (
