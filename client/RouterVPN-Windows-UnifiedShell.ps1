@@ -88,6 +88,7 @@ function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
 }
 function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET',$Body=$null,[int]$Timeout=180,[scriptblock]$OnSuccess=$null,[scriptblock]$OnFailure=$null,[scriptblock]$OnFinally=$null){
     if(UnifiedAsyncBusy){Log ("$Label refused: another Router VPN action is still running.");return $false}
+    [void](CancelUnifiedRefreshAsync)
     try{
         $Verb=if($Method.ToUpperInvariant()-eq'POST'){[System.Net.Http.HttpMethod]::Post}else{[System.Net.Http.HttpMethod]::Get}
         $Uri=([string]$BaseUrl).TrimEnd('/')+$Path
@@ -144,6 +145,141 @@ function CompleteUnifiedApiAsync{
     }
 }
 $script:UnifiedAsyncPoller.Add_Tick({CompleteUnifiedApiAsync})
+$script:UnifiedRefreshClient=[System.Net.Http.HttpClient]::new()
+$script:UnifiedRefreshClient.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan
+$script:UnifiedRefreshTasks=@{}
+$script:UnifiedRefreshRequests=@{}
+$script:UnifiedRefreshCts=$null
+$script:UnifiedRefreshDiscard=$false
+$script:UnifiedRefreshPoller=New-Object Windows.Threading.DispatcherTimer
+$script:UnifiedRefreshPoller.Interval=[TimeSpan]::FromMilliseconds(100)
+function UnifiedRefreshBusy { return $script:UnifiedRefreshTasks.Count -gt 0 }
+function CancelUnifiedRefreshAsync {
+    if(-not(UnifiedRefreshBusy)){return $false}
+    $script:UnifiedRefreshDiscard=$true
+    try{$script:UnifiedRefreshCts.Cancel()}catch{}
+    return $true
+}
+function StartUnifiedRefreshAsync {
+    if((UnifiedRefreshBusy) -or (UnifiedAsyncBusy)){return}
+    $script:UnifiedRefreshTasks=@{};$script:UnifiedRefreshRequests=@{};$script:UnifiedRefreshDiscard=$false
+    $script:UnifiedRefreshCts=[System.Threading.CancellationTokenSource]::new()
+    $script:UnifiedRefreshCts.CancelAfter([TimeSpan]::FromSeconds(15))
+    $Paths=[ordered]@{
+        status='/api/status'
+        nodes=('/api/nodes?sort='+[Uri]::EscapeDataString([string]$script:NodeSort))
+        session='/api/session'
+        modes='/api/logical-modes'
+        multihop='/api/multihop/status'
+        events=('/api/session/events?after='+[string]$script:EventSeq)
+    }
+    try{
+        foreach($Key in $Paths.Keys){
+            $Req=[System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get,([string]$BaseUrl)+[string]$Paths[$Key])
+            $script:UnifiedRefreshRequests[$Key]=$Req
+            $script:UnifiedRefreshTasks[$Key]=$script:UnifiedRefreshClient.SendAsync($Req,$script:UnifiedRefreshCts.Token)
+        }
+        $script:UnifiedRefreshPoller.Start()
+    }catch{
+        [void](CancelUnifiedRefreshAsync)
+        $StateText.Text='Controller unavailable';$StateDot.Fill='#FF5D6C';$LastErrorText.Text=$_.Exception.Message
+    }
+}
+function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Timeline){
+    $script:Busy=$true
+    try{
+        $Connected=[bool]$Status.connected;$Phase=[string]$Status.phase
+        $MutationBusy=Test-RouterVPNMutationBusyFromStatus $Status
+        $Disconnecting=$Phase -match '(?i)(disconnecting|stopping)'
+        $StateText.Text=if($Connected){'Connected'}elseif($Phase){$Phase}else{'Off'}
+        $StateDot.Fill=if($Connected){'#35D07F'}elseif($Phase-eq'failed'){'#FF5D6C'}else{'#6B7280'}
+        $Runtime=if($Status.runtime_mode){$Status.runtime_mode}else{$Status.mode}
+        $ConnectionDetail.Text="Phase: $Phase Logical: $($Status.logical_mode) Runtime: $Runtime Base: $($Status.base) Router: $($Status.router_id)"
+        $LastErrorText.Text=[string]$Status.last_error
+        if($Connected){$ProofText.Text='Connected - selected-router private path proof passed.'}
+        $DnsSaveButton.IsEnabled=-not$MutationBusy;$DnsButton.IsEnabled=$Connected
+        foreach($Name in @('PairNodeButton','ImportNodeButton','DeleteNodeButton','SelectNodeButton','SelectLowestLatencyButton','ExternalDirectButton','ExternalViaEntryButton','MultihopConnectButton','AutoButton','ConnectButton')){
+            $C=Control $Name;if($null-ne$C){$C.IsEnabled=-not$MutationBusy}
+        }
+        foreach($Widget in @($RouterCombo,$ModeCombo,$BaseCombo,$DnsModeCombo,$DnsProtocolCombo,$DnsPresetCombo,$DnsHostBox,$DnsPortBox,$DnsServerBox,$DnsPathBox,$MultihopEntryCombo,$MultihopExitCombo,$MultihopExitModeCombo)){
+            if($null-ne$Widget){$Widget.IsEnabled=-not$MutationBusy}
+        }
+
+        $Profiles=@($Store.profiles);$OldNode=[string]$NodesGrid.SelectedValue
+        $RouterCombo.ItemsSource=$Profiles;$NodesGrid.ItemsSource=$Profiles
+        if($Store.selected_id){$RouterCombo.SelectedValue=[string]$Store.selected_id}
+        if($OldNode){$NodesGrid.SelectedValue=$OldNode}
+        DrawMap $Profiles ([string]$Store.selected_id)
+        $Selected=@($Profiles|Where-Object{[string]$_.id-eq[string]$Store.selected_id}|Select-Object -First 1)
+        if($Selected.Count){
+            $Profile=$Selected[0]
+            $Success=if($Profile.effective_mtu_success_ratio){[double]$Profile.effective_mtu_success_ratio*100}else{0}
+            $Perf=if($Profile.effective_mtu_mbps){" Retest=$([Math]::Round([double]$Profile.effective_mtu_mbps,1))Mbps/$([Math]::Round([double]$Profile.effective_mtu_median_rtt_ms,2))ms/$([Math]::Round($Success,1))% success"}else{''}
+            $AdvancedSummary.Text="LAN=$($Profile.home_lan_access) Kill switch=$($Profile.kill_switch_policy) MTU policy=$($Profile.mtu_policy) Effective MTU=$($Profile.effective_mtu) source=$($Profile.effective_mtu_source)$Perf tested=$($Profile.effective_mtu_tested_at) Multihop=$($Profile.multihop_enabled)"
+            $SettingsSummary.Text="Node=$($Profile.name) Endpoint=$($Profile.endpoint) Location=$($Profile.location)"
+            $UnifiedSettings=Control 'UnifiedSettingsSummary'
+            if($null-ne$UnifiedSettings){
+                $AutoReq=@();if([bool]$Profile.auto_require_encrypted){$AutoReq+='Encrypted'};if([bool]$Profile.auto_require_obfuscation){$AutoReq+='Obfuscation'}
+                $AutoReqText=if($AutoReq.Count){$AutoReq -join '+'}else{'Off'}
+                $UnifiedSettings.Text="IPv6=$($Profile.ipv6_mode) • MTU=$($Profile.mtu_policy)/$($Profile.effective_mtu) • LAN=$($Profile.home_lan_access) • AUTO requirements=$AutoReqText"
+            }
+            $UnifiedKill=Control 'UnifiedKillSwitch'
+            if($null-ne$UnifiedKill){$UnifiedKill.IsChecked=([string]$Profile.kill_switch_policy -ne 'off')}
+            $UnifiedDns=Control 'UnifiedDnsCombo'
+            if($null-ne$UnifiedDns -and $Profile.dns_mode){SetComboTag $UnifiedDns ([string]$Profile.dns_mode)}
+        }
+
+        $Dns=$Session.dns_proof
+        $DnsSummary.Text="$script:DnsPolicySummary\r\n\r\nRuntime proof: mode=$($Dns.mode) resolver=$($Dns.host) status=$($Dns.status) latency=$($Dns.latency_ms)ms reason=$($Dns.reason)"
+        $Modes=DecorateModes @($ModesRaw);$ModesGrid.ItemsSource=$Modes;RefreshUnifiedModeChoices $Modes
+        $HeaderDetail.Text="Native Windows product - $($Profiles.Count) linked node(s) - order $($script:NodeSort)"
+
+        $Nodes=@($MH.nodes);$EntrySelected=[string]$MultihopEntryCombo.SelectedValue;$ExitSelected=[string]$MultihopExitCombo.SelectedValue
+        $MultihopEntryCombo.ItemsSource=$Nodes;$MultihopExitCombo.ItemsSource=$Nodes
+        if(-not$EntrySelected-and$MH.entry_id){$EntrySelected=[string]$MH.entry_id};if(-not$ExitSelected-and$MH.exit_id){$ExitSelected=[string]$MH.exit_id}
+        if($EntrySelected){$MultihopEntryCombo.SelectedValue=$EntrySelected};if($ExitSelected){$MultihopExitCombo.SelectedValue=$ExitSelected}
+        $MultihopSummary.Text="Supported=$($MH.platform_supported) Connected=$($MH.connected) Actual exit=$($MH.actual_exit_id) Runtime=$($MH.runtime_exit_mode) Entry bases=$(@($MH.supported_entry_bases)-join',') Exit modes=$(@($MH.supported_exit_modes)-join',')"
+
+        foreach($Event in @($Timeline.events)){
+            $Seq=[uint64]$Event.seq;if($Seq-le$script:EventSeq){continue}
+            $Parts=@([string]$Event.phase);if($Event.runtime_mode){$Parts+=("runtime="+$Event.runtime_mode)};if($Event.base){$Parts+=("base="+$Event.base)};if($Event.message){$Parts+=$Event.message}
+            Log ("Session #$Seq $($Event.type): $($Parts-join' | ')");$script:EventSeq=$Seq
+        }
+        if([uint64]$Timeline.last_event_seq-gt$script:EventSeq){$script:EventSeq=[uint64]$Timeline.last_event_seq}
+
+        $UnifiedConnect=Control 'UnifiedConnectButton'
+        if($null-ne$UnifiedConnect){
+            $UnifiedConnect.Content=if($Disconnecting){'Disconnecting…'}elseif($Connected-or$MutationBusy){'Disconnect'}else{'Connect'}
+            $UnifiedConnect.IsEnabled=-not$Disconnecting
+        }
+        foreach($Name in @('UnifiedKillSwitch','UnifiedMultihop','UnifiedModeCombo','UnifiedDnsCombo')){
+            $C=Control $Name;if($null-ne$C){$C.IsEnabled=-not$MutationBusy}
+        }
+    }finally{$script:Busy=$false}
+}
+function CompleteUnifiedRefreshAsync {
+    if(-not(UnifiedRefreshBusy)){return}
+    foreach($Task in $script:UnifiedRefreshTasks.Values){if(-not$Task.IsCompleted){return}}
+    $Discard=$script:UnifiedRefreshDiscard;$Payload=@{};$Responses=@()
+    $script:UnifiedRefreshPoller.Stop()
+    try{
+        foreach($Key in @($script:UnifiedRefreshTasks.Keys)){
+            $Resp=$script:UnifiedRefreshTasks[$Key].GetAwaiter().GetResult();$Responses+=$Resp
+            $Text=$Resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            if(-not$Resp.IsSuccessStatusCode){throw ("refresh "+$Key+" HTTP "+[int]$Resp.StatusCode+" "+$Text)}
+            $Payload[$Key]=if([string]::IsNullOrWhiteSpace($Text)){$null}else{$Text|ConvertFrom-Json}
+        }
+        if(-not$Discard){ApplyUnifiedRefreshSnapshot $Payload.status $Payload.nodes $Payload.session $Payload.modes $Payload.multihop $Payload.events}
+    }catch{
+        if(-not$Discard){$StateText.Text='Controller unavailable';$StateDot.Fill='#FF5D6C';$LastErrorText.Text=$_.Exception.Message}
+    }finally{
+        foreach($Resp in $Responses){try{$Resp.Dispose()}catch{}}
+        foreach($Req in $script:UnifiedRefreshRequests.Values){try{$Req.Dispose()}catch{}}
+        try{$script:UnifiedRefreshCts.Dispose()}catch{}
+        $script:UnifiedRefreshTasks=@{};$script:UnifiedRefreshRequests=@{};$script:UnifiedRefreshCts=$null;$script:UnifiedRefreshDiscard=$false
+    }
+}
+$script:UnifiedRefreshPoller.Add_Tick({CompleteUnifiedRefreshAsync})
 function GetUnifiedPresets{if(-not(Test-Path -LiteralPath $script:UnifiedPresetFile)){return @()};try{return @((Get-Content -LiteralPath $script:UnifiedPresetFile -Raw -Encoding UTF8|ConvertFrom-Json))}catch{return @()}}
 function SaveUnifiedPresets($Values){[void](New-Item -ItemType Directory -Force -Path (Split-Path $script:UnifiedPresetFile));@($Values)|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $script:UnifiedPresetFile -Encoding UTF8}
 function GetUnifiedModeID{if(Test-Path -LiteralPath $script:UnifiedModeStateFile){$v=(Get-Content -LiteralPath $script:UnifiedModeStateFile -Raw -Encoding UTF8).Trim();if($v){return $v}};return 'smart-auto'}
@@ -207,6 +343,10 @@ function ShowUnifiedCustomBuilder{
  }catch{Log ('CUSTOM builder failed: '+$_.Exception.Message)}}
 '@
     $ProductSource = $ProductSource.Replace($scriptMarker, $scriptMarker + "`n" + $extraState)
+    if (-not $ProductSource.Contains('function RefreshProduct{')) { throw 'Windows unified shell: product refresh seam drifted.' }
+    $ProductSource = $ProductSource.Replace('function RefreshProduct{','function RefreshProductLegacy{')
+    if (-not $ProductSource.Contains('function ShowPairNodeDialog{')) { throw 'Windows unified shell: refresh wrapper seam drifted.' }
+    $ProductSource = $ProductSource.Replace('function ShowPairNodeDialog{',"function RefreshProduct{StartUnifiedRefreshAsync}`nfunction ShowPairNodeDialog{")
 
     $modeRefreshOld = '$ModesGrid.ItemsSource=$Modes;$ModeCombo.ItemsSource=@($Modes|Where-Object{$_.available});if(-not$ModeCombo.SelectedValue-and$ModeCombo.Items.Count-gt0){$ModeCombo.SelectedIndex=0};'
     if (-not $ProductSource.Contains($modeRefreshOld)) { throw 'Windows unified shell: mode refresh contract drifted.' }
@@ -228,7 +368,7 @@ function ShowUnifiedCustomBuilder{
 (Control 'UnifiedDnsDetailsButton').Add_Click({OpenUnifiedDetail 3})
 (Control 'UnifiedSettingsButton').Add_Click({try{$Saved=Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window;if($null -ne $Saved){Log 'Profile settings saved'}}catch{Log ('Settings failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedMtuButton').Add_Click({if(UnifiedAsyncBusy){Log 'MTU Retest refused: another Router VPN action is running.';return};[void](StartUnifiedApiAsync 'Retesting MTU…' '/api/mtu/retest' 'POST' @{} 130 {param($R)Log ("MTU Retest: effective=$($R.effective_mtu) source=$($R.effective_mtu_source)")} {param($E)Log ('MTU Retest failed: '+$E)} $null)})
-(Control 'UnifiedBackButton').Add_Click({BackUnifiedMap})`n$Window.Add_Closed({try{if(UnifiedAsyncBusy){[void](CancelUnifiedApiAsync $false)}}catch{};try{$script:UnifiedAsyncPoller.Stop()}catch{};try{$script:UnifiedAsyncClient.Dispose()}catch{}})
+(Control 'UnifiedBackButton').Add_Click({BackUnifiedMap})`n$Window.Add_Closed({try{if(UnifiedAsyncBusy){[void](CancelUnifiedApiAsync $false)}}catch{};try{if(UnifiedRefreshBusy){[void](CancelUnifiedRefreshAsync)}}catch{};try{$script:UnifiedAsyncPoller.Stop();$script:UnifiedRefreshPoller.Stop()}catch{};try{$script:UnifiedAsyncClient.Dispose();$script:UnifiedRefreshClient.Dispose()}catch{}})
 (Control 'UnifiedModeCombo').Add_SelectionChanged({if($ModeCombo.SelectedValue){$ID=[string]$ModeCombo.SelectedValue;if($ID -eq 'custom:new'){ShowUnifiedCustomBuilder}else{SaveUnifiedModeID $ID}}})
 (Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;[void](Api '/api/profile/settings' 'POST' @{kill_switch_policy=if($On){'on-connect'}else{'off'}} 12);Log (if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedDnsCombo').Add_SelectionChanged({if(-not $script:Busy){$Tag=ComboTag (Control 'UnifiedDnsCombo') 'home';if($Tag -in @('custom','dot','doh','doh3')){OpenUnifiedDetail 3}else{try{[void](Api '/api/dns/policy' 'POST' @{mode=$Tag} 10);Log ('DNS selected: '+$Tag)}catch{Log ('DNS update failed: '+$_.Exception.Message)};RefreshDnsPolicy;RefreshProduct}}})
