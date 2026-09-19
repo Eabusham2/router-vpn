@@ -81,7 +81,7 @@ $script:UnifiedAsyncPoller=New-Object Windows.Threading.DispatcherTimer
 $script:UnifiedAsyncPoller.Interval=[TimeSpan]::FromMilliseconds(100)
 function UnifiedAsyncBusy { return $null-ne$script:UnifiedAsyncTask -and -not $script:UnifiedAsyncTask.IsCompleted }
 function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
-    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton')){
+    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton')){
         $C=Control $N;if($null-ne$C){$C.IsEnabled=-not$Busy}
     }
     $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=$true;if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
@@ -89,6 +89,7 @@ function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
 function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET',$Body=$null,[int]$Timeout=180,[scriptblock]$OnSuccess=$null,[scriptblock]$OnFailure=$null,[scriptblock]$OnFinally=$null){
     if(UnifiedAsyncBusy){Log ("$Label refused: another Router VPN action is still running.");return $false}
     [void](CancelUnifiedRefreshAsync)
+    if(Get-Command CancelUnifiedTelemetryRefreshAsync -ErrorAction SilentlyContinue){[void](CancelUnifiedTelemetryRefreshAsync)}
     try{
         $Verb=switch($Method.ToUpperInvariant()){
             'GET' {[System.Net.Http.HttpMethod]::Get}
