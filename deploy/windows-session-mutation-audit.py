@@ -88,6 +88,18 @@ for marker in (
     "function RefreshProduct{StartUnifiedRefreshAsync}",
     "UnifiedRefreshBusy",
     "$script:UnifiedRefreshClient.Dispose()",
+    "$legacyMultihopOld",
+    "$legacyMtuOld",
+    "$legacyAutoOld",
+    "$legacyConnectOld",
+    "$legacyDnsOld",
+    "$legacyLatencyOld",
+    "$legacyExternalOld",
+    "Testing 50-sample node latency…",
+    "Retesting DNS…",
+    "Legacy AUTO…",
+    "Connecting selected mode…",
+    "Connecting external exit…",
 ):
     assert marker in unified, f'transformed UnifiedShell missing {marker}'
 
