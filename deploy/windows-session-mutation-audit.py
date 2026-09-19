@@ -100,8 +100,18 @@ for marker in (
     "Legacy AUTO…",
     "Connecting selected mode…",
     "Connecting external exit…",
+    "$ProductSource=$ProductSource.Replace($Pair[0],$Pair[1])",
 ):
     assert marker in unified, f'transformed UnifiedShell missing {marker}'
+
+# Old blocking snippets are exact source-transform anchors, not executable
+# shipping callbacks. Remove only those seven named here-string definitions
+# before enforcing the blocking-call ban everywhere else in the helper.
+old_anchor_pattern=re.compile(
+    r"(?ms)^\s*\$legacy(?:Multihop|Mtu|Auto|Connect|Dns|Latency|External)Old\s*=\s*@'\n.*?^\s*'@\s*$"
+)
+unified_without_old_anchors, old_anchor_count=old_anchor_pattern.subn("", unified)
+assert old_anchor_count == 7, f'Windows legacy async conversion anchor count drifted: {old_anchor_count}'
 
 for forbidden in (
     "$R=Api '/api/strategy/smart-auto' 'POST'",
@@ -113,7 +123,7 @@ for forbidden in (
     "Api '/api/mtu/retest' 'POST' @{} 130",
     "[void](Api '/api/disconnect' 'POST' @{} 20)",
 ):
-    assert forbidden not in unified, f'Windows unified map revived blocking long action: {forbidden}'
+    assert forbidden not in unified_without_old_anchors, f'Windows unified shipping transform revived blocking long action: {forbidden}'
 
 assert '$Timer.Add_Tick({RefreshProduct})' in product, 'Windows timer no longer calls the async public refresh entrypoint'
 assert '$Timer.Add_Tick({RefreshProductLegacy})' not in product, 'Windows timer revived the blocking legacy refresher'
