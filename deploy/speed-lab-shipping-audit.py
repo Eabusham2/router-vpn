@@ -193,6 +193,16 @@ need(
     "$R.hops",
     "download_mbps",
     "upload_mbps",
+    "$D.Add_Loaded",
+    "StartUnifiedApiAsync 'Loading Speed Lab options…'",
+    "StartUnifiedApiAsync 'Running Speed Lab…'",
+    "CancelUnifiedApiAsync",
+    "Temporary paths are transactional and will be torn down/restored when the test completes or is cancelled.",
+)
+forbid(
+    "client/RouterVPN-Windows-SpeedLab.ps1",
+    "$Opt=Api '/api/speed-lab/options'",
+    "$R=Api '/api/speed-lab/run'",
 )
 need("client/RouterVPN-Windows-App.ps1", "RouterVPN-Windows-SpeedLab.ps1", "Add-RouterVPNSpeedLabWindowsShell")
 
