@@ -124,7 +124,7 @@ $Count++;Write-Host 'PASS negative control reproduces loss of all 17 main-contro
 # Actually register and invoke the final composed Connect and Help callbacks.
 # Fake controls record callbacks; the invoked functions cannot touch a network.
 $script:HelpTestButtons=@{}
-$script:HelpTestConnects=0;$script:HelpTestOpens=0;$script:HelpTestForced=$false
+$script:HelpTestConnects=0;$script:HelpTestOpens=0;$script:HelpTestForced=$false;$script:HelpTestSpeedLabs=0
 function Control([string]$Name){
     if(-not$script:HelpTestButtons.ContainsKey($Name)){
         $Button=[pscustomobject]@{Callback=$null;Registrations=0}
@@ -135,7 +135,15 @@ function Control([string]$Name){
 }
 function UnifiedConnect{$script:HelpTestConnects++}
 function Show-RouterVPNProductOnboarding{param([switch]$Force)$script:HelpTestOpens++;$script:HelpTestForced=[bool]$Force}
-foreach($Name in @('UnifiedConnectButton','TutorialButton')){
+function ShowUnifiedSpeedLab{$script:HelpTestSpeedLabs++}
+$PerformanceFunctions=@([ScriptBlock]::Create($After).Ast.FindAll({
+    param($Node)
+    $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $Node.Name -eq 'ShowUnifiedPerformance'
+},$true))
+Assert-HelpBinding ($PerformanceFunctions.Count -eq 1) 'Performance button target missing from the composed app'
+. ([ScriptBlock]::Create($PerformanceFunctions[0].Extent.Text))
+foreach($Name in @('UnifiedConnectButton','TutorialButton','UnifiedPerformanceButton')){
     $Binding=@($AfterEvents|Where-Object{(Get-HelpControlName $_) -eq $Name})
     Assert-HelpBinding ($Binding.Count -eq 1) ("Executable binding missing: "+$Name)
     . ([ScriptBlock]::Create($Binding[0].Extent.Text))
@@ -145,4 +153,6 @@ foreach($Name in @('UnifiedConnectButton','TutorialButton')){
 }
 Assert-HelpBinding ($script:HelpTestConnects -eq 1 -and $script:HelpTestOpens -eq 1 -and $script:HelpTestForced) 'Composed Connect/Help callbacks did not invoke the intended actions'
 $Count++;Write-Host 'PASS composed Connect works and Help explicitly opens full onboarding'
+Assert-HelpBinding ($script:HelpTestSpeedLabs -eq 1) 'Performance button did not open Speed Lab'
+$Count++;Write-Host 'PASS composed Performance button invokes Speed Lab'
 Write-Host ("Windows Help binding regression tests: PASS ("+$Count+" checks)")
