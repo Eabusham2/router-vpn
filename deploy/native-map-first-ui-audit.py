@@ -363,8 +363,8 @@ require_order(
 )
 forbid("Android native shell", android, "android.webkit.WebView", 'loadUrl("http://127.0.0.1:8788")')
 
-# iOS/iPadOS: SwiftUI/MapKit owns the map-first product. Unsupported forwarding
-# and desktop-equivalent multihop remain explicit/unavailable rather than fake.
+# iOS/iPadOS: SwiftUI/MapKit owns the map-first product. The server forwarding
+# master is controlled through the proved extension, not a local DNAT claim.
 ios = (
     "ios/RouterVPN/App/ProductRootView.swift",
     "ios/RouterVPN/App/IOSUnifiedProductView.swift",
@@ -373,6 +373,7 @@ ios = (
     "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
     "ios/RouterVPN/App/NodeManagerSheet.swift",
     "ios/RouterVPN/App/IOSUserLocationOverlay.swift",
+    "ios/RouterVPN/App/IOSForwardingMasterView.swift",
 )
 require(
     "iOS/iPadOS native map-first UI",
@@ -382,8 +383,10 @@ require(
     "Connect",
     "Disconnect",
     "Kill switch",
-    "Master port forwarding",
-    "keep this unavailable rather than showing a fake switch",
+    "Server forwarding master",
+    "IOSForwardingMasterButton().environmentObject(model)",
+    "sendProviderMessage",
+    "reply.node_id == node.id",
     "Multihop",
     "Settings",
     "Mode",
