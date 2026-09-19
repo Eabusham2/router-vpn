@@ -243,7 +243,6 @@ struct IOSUnifiedProductView: View {
     @State private var showingDNS = false
     @State private var showingSettings = false
     @State private var showingOnboarding = false
-    @State private var showingForwardingInfo = false
     @State private var startupApplied = false
 
     var body: some View {
@@ -288,11 +287,6 @@ struct IOSUnifiedProductView: View {
         .sheet(isPresented: $showingDNS) { IOSDNSPolicyView().environmentObject(model) }
         .sheet(isPresented: $showingSettings) { IOSUnifiedSettingsView(telemetry: telemetry).environmentObject(model) }
         .sheet(isPresented: $showingOnboarding) { RouterVPNProductOnboardingView().presentationDetents([.medium, .large]).presentationDragIndicator(.visible).interactiveDismissDisabled(false) }
-        .alert("Master port forwarding", isPresented: $showingForwardingInfo) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Incoming forwarding is owned by the authenticated private Router VPN home node and only exists for routable tunnel modes. iOS PacketTunnel paths that cannot enforce arbitrary DNAT keep this unavailable rather than showing a fake switch. Configure the home-node rule in Setup Center/router-agent and validate it off-LAN.")
-        }
         .onAppear { if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { model.message = "Setup is ready. Open Setup guide from the expanded control sheet when needed." } }
         .onChange(of: model.activeRawProfile) { value in if model.connected && !value.isEmpty { model.recordIOSLastRuntime() } }
         .task { guard !startupApplied else { return }; startupApplied = true; await model.applyIOSStartupPolicyIfNeeded(); _ = await telemetry.measureAll(model.allNodeProfiles, samples: 2) }
@@ -368,8 +362,7 @@ struct IOSUnifiedProductView: View {
                         Toggle(isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) })) { Image(systemName: "lock.shield.fill") }
                             .toggleStyle(.button).buttonStyle(.bordered).accessibilityLabel("Kill switch")
                             .disabled(model.profileMutationBlocked)
-                        Button { showingForwardingInfo = true } label: { Image(systemName: "arrow.triangle.branch") }
-                            .buttonStyle(.bordered).accessibilityLabel("Master port forwarding")
+                        IOSForwardingMasterButton().environmentObject(model)
                     }
 
                     unifiedRow(icon: "plus.circle.fill", title: "Add / manage nodes", value: "Router / Custom") { showingNodes = true }
