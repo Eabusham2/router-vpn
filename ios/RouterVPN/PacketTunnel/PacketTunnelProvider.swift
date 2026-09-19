@@ -39,6 +39,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    private var forwardingChannel: RouterVPNForwardingChannel?
+
+    override init() {
+        super.init()
+        forwardingChannel = RouterVPNForwardingChannel(provider: self)
+    }
+
+    override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
+        guard let completionHandler else { return }
+        forwardingChannel?.handle(messageData, completion: completionHandler)
+    }
+
+    private func enableForwarding(profileData: Data, proofID: String) {
+        guard let profile = try? JSONSerialization.jsonObject(with: profileData) as? [String: Any] else { return }
+        forwardingChannel?.activate(profile: profile, proofID: proofID)
+    }
+
     private var wireGuardAdapter: WireGuardAdapter?
     private var libboxEngine: RouterVPNLibboxEngine?
     private var proofTask: URLSessionDataTask?
@@ -50,6 +67,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let pathMonitorQueue = DispatchQueue(label: "com.eabusham.routervpn.path-proof", qos: .utility)
 
     override func startTunnel(options: [String: NSObject]? = nil, completionHandler: @escaping (Error?) -> Void) {
+        forwardingChannel?.invalidate()
         do {
             guard let tunnelProtocol = protocolConfiguration as? NETunnelProviderProtocol, let provider = tunnelProtocol.providerConfiguration else { throw tunnelError(1, "Router VPN PacketTunnel configuration is missing.") }
             guard let bundleData = provider["bundle"] as? Data, !bundleData.isEmpty, bundleData.count <= Self.maxBundleBytes else { throw tunnelError(2, "Router VPN private bundle is missing or exceeds the 32 MiB safety limit.") }
@@ -83,6 +101,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let expectedNodeID = suppliedNodeID.isEmpty ? derivedNodeID : suppliedNodeID
         guard expectedNodeID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw tunnelError(10, "Router VPN node proof id is invalid.") }
         let proofURL = try selectedProofURL(selectedProfile)
+        let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
         let adapter = WireGuardAdapter(with: self) { level, message in if level == .error { NSLog("RouterVPN WireGuard: %@", message) } }
         wireGuardAdapter = adapter
         adapter.start(tunnelConfiguration: tunnelConfiguration) { [weak self] adapterError in
@@ -92,6 +111,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self.proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID, proxyPort: nil) { proofError in
                 guard self.wireGuardAdapter === adapter else { adapter.stop { _ in completionHandler(self.tunnelError(41, "A newer iOS WireGuard runtime replaced this proof attempt.")) }; return }
                 if let proofError { adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(proofError) }; return }
+                self.enableForwarding(profileData: forwardingProfileData, proofID: expectedNodeID)
                 self.armNetworkProofGuard()
                 completionHandler(nil)
             }
@@ -106,12 +126,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         guard expectedNodeID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw tunnelError(14, "Layered iOS modes require the imported node's exact node proof id.") }
         let proofURL = try selectedProofURL(selectedProfile)
+        let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
         do { try engine.start(files: files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(15, "Libbox engine failed to start: \(error.localizedDescription)") }
         proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 16, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during Libbox proof."])); return }
             guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(42, "A newer iOS Libbox runtime replaced this proof attempt.")); return }
             if let proofError { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(proofError); return }
+            self.enableForwarding(profileData: forwardingProfileData, proofID: expectedNodeID)
             self.armNetworkProofGuard()
             completionHandler(nil)
         }
@@ -152,10 +174,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         pathProofGuard = nil
         pathProofOwnerLock.unlock()
         monitor?.cancel()
+        forwardingChannel?.invalidate()
         cancelTunnelWithError(tunnelError(19, "Underlying network changed; selected-node/public-exit proof was invalidated. Reconnect must establish and prove the selected path again."))
     }
 
     private func clearPathProofGuard() {
+        forwardingChannel?.invalidate()
         pathProofOwnerLock.lock()
         let monitor = pathMonitor
         pathMonitor = nil
@@ -180,7 +204,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         adapter.stop { _ in completionHandler() }
     }
 
-    override func sleep(completionHandler: @escaping () -> Void) { libboxEngine?.pause(); completionHandler() }
+    override func sleep(completionHandler: @escaping () -> Void) { forwardingChannel?.invalidate(); libboxEngine?.pause(); completionHandler() }
     override func wake() {
         libboxEngine?.wake()
         // Sleep is a path-proof lifetime boundary even when iOS resumes onto a
@@ -311,5 +335,5 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if let ipv6 = IPv6Address(host) { let b = [UInt8](ipv6.rawValue); guard b.count == 16 else { return false }; return (b[0] & 0xfe) == 0xfc || (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) }
         return false
     }
-    private func tunnelError(_ code: Int, _ message: String) -> NSError { NSError(domain: "RouterVPN.PacketTunnel", code: code, userInfo: [NSLocalizedDescriptionKey: message]) }
+    private func tunnelError(_ code: Int, _message: String) -> NSError { NSError(domain: "RouterVPN.PacketTunnel", code: code, userInfo: [NSLocalizedDescriptionKey: _message]) }
 }
