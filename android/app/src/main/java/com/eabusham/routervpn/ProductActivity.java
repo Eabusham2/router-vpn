@@ -20,6 +20,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -48,7 +49,7 @@ public final class ProductActivity extends Activity {
     private static final String STATE_PROBE_ENTRY="routervpn.via_entry_probe.entry",STATE_PROBE_CANDIDATES="routervpn.via_entry_probe.candidates";
 
     private AndroidNodeStore nodeStore; private AndroidStandardExitStore exitStore; private AndroidUnifiedNodeCatalog catalog; private AndroidUnifiedConnectionController connection; private AndroidTelemetry telemetry; private AndroidForwardingMaster forwardingMaster; private AndroidViaEntryLatencyProbe viaEntryProbe;
-    private RouterVpnNodeMapView mapView; private LinearLayout sheet;
+    private RouterVpnNodeMapView mapView; private LinearLayout sheet; private ScrollView sheetScroll;
     private TextView nodeButton,statusView,modeHint,dnsHint,multihopHint,liveLatency,autoRequirementsHint;
     private Button connectButton,fastestButton,performanceButton,forwardButton;
     private CheckBox killSwitch,multihopToggle; private Spinner modeSpinner,dnsSpinner; private List<ModeChoice> modeChoices=new ArrayList<>();
@@ -69,7 +70,8 @@ public final class ProductActivity extends Activity {
         nodeButton=text("Add / select node",14,true);nodeButton.setTextColor(Color.WHITE);nodeButton.setPadding(dp(12),dp(9),dp(12),dp(9));nodeButton.setBackground(round(Color.rgb(24,38,62),16));nodeButton.setOnClickListener(v->showNodes());root.addView(nodeButton,margins(0,0,0,dp(8)));
         mapView=new RouterVpnNodeMapView(this);mapView.setOnMarkerClickListener(marker->{String raw=marker.id==null?"":marker.id;int cut=raw.indexOf(':');if(cut<=0)return;selectCatalog(raw.substring(0,cut),raw.substring(cut+1));});LinearLayout.LayoutParams mapParams=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,0,0.56f);root.addView(mapView,mapParams);
 
-        sheet=new LinearLayout(this);sheet.setOrientation(LinearLayout.VERTICAL);sheet.setPadding(dp(14),dp(5),dp(14),dp(12));sheet.setBackground(round(Color.rgb(17,27,45),24));sheet.setOnTouchListener((v,event)->{if(event.getAction()==MotionEvent.ACTION_DOWN){sheetTouchY=event.getY();return false;}if(event.getAction()==MotionEvent.ACTION_UP){float delta=event.getY()-sheetTouchY;if(Math.abs(delta)>dp(40)){sheetExpanded=delta<0;applySheetWeight();}return false;}return false;});LinearLayout.LayoutParams sheetParams=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,0,0.44f);sheetParams.setMargins(0,dp(8),0,0);root.addView(sheet,sheetParams);
+        sheet=new LinearLayout(this);sheet.setOrientation(LinearLayout.VERTICAL);sheet.setPadding(dp(14),dp(5),dp(14),dp(12));sheet.setBackground(round(Color.rgb(17,27,45),24));
+        sheetScroll=new ScrollView(this);sheetScroll.setFillViewport(false);sheetScroll.setClipToPadding(false);sheetScroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);sheetScroll.addView(sheet,new ScrollView.LayoutParams(ScrollView.LayoutParams.MATCH_PARENT,ScrollView.LayoutParams.WRAP_CONTENT));sheetScroll.setOnTouchListener((v,event)->{if(event.getAction()==MotionEvent.ACTION_DOWN){sheetTouchY=event.getY();return false;}if(event.getAction()==MotionEvent.ACTION_UP){float delta=event.getY()-sheetTouchY;if(Math.abs(delta)>dp(40)){sheetExpanded=delta<0;applySheetWeight();}return false;}return false;});LinearLayout.LayoutParams sheetParams=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,0,0.44f);sheetParams.setMargins(0,dp(8),0,0);root.addView(sheetScroll,sheetParams);
         TextView handle=text("━━━━━━━━",16,true);handle.setTextColor(Color.rgb(112,126,148));handle.setGravity(Gravity.CENTER);sheet.addView(handle);
         LinearLayout statusRow=row();statusView=text("Disconnected",13,false);statusView.setTextColor(Color.rgb(173,190,214));statusView.setTextIsSelectable(true);statusView.setOnClickListener(v->showConnectionDetails());statusRow.addView(statusView,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button connectionDetails=smallButton("Details / proof");connectionDetails.setOnClickListener(v->showConnectionDetails());statusRow.addView(connectionDetails);sheet.addView(statusRow,margins(0,0,0,dp(7)));
 
@@ -84,7 +86,7 @@ public final class ProductActivity extends Activity {
         LinearLayout footer=row();Button nodes=smallButton("Nodes");nodes.setContentDescription("Add / manage nodes");nodes.setOnClickListener(v->showNodes());footer.addView(nodes);Button profiles=smallButton("Router nodes");profiles.setContentDescription("Manage linked Router VPN node records");profiles.setOnClickListener(v->showProfileManager());footer.addView(profiles);Button pair=smallButton("Add Router");pair.setOnClickListener(v->showPairDialog());footer.addView(pair);Button custom=smallButton("Add custom");custom.setOnClickListener(v->openStandardExits());footer.addView(custom);Button help=smallButton("Help");help.setOnClickListener(v->showHelp());footer.addView(help);sheet.addView(footer,margins(0,dp(8),0,0));return root;
     }
 
-    private void applySheetWeight(){LinearLayout.LayoutParams p=(LinearLayout.LayoutParams)sheet.getLayoutParams();p.weight=sheetExpanded?0.70f:0.44f;sheet.setLayoutParams(p);LinearLayout.LayoutParams m=(LinearLayout.LayoutParams)mapView.getLayoutParams();m.weight=sheetExpanded?0.30f:0.56f;mapView.setLayoutParams(m);}
+    private void applySheetWeight(){LinearLayout.LayoutParams p=(LinearLayout.LayoutParams)sheetScroll.getLayoutParams();p.weight=sheetExpanded?0.70f:0.44f;sheetScroll.setLayoutParams(p);LinearLayout.LayoutParams m=(LinearLayout.LayoutParams)mapView.getLayoutParams();m.weight=sheetExpanded?0.30f:0.56f;mapView.setLayoutParams(m);}
     private void refreshAll(){refreshNodes();refreshModeChoices();refreshConnectionState();refreshSettingsState();refreshDnsSelection();refreshMultihopSummary();refreshTelemetry(false);refreshForwardingState();}
     private boolean mutationBusy(){return AndroidVpnMutationGuard.isBusy(this)||(viaEntryProbe!=null&&viaEntryProbe.isBusy());}
     private void refreshConnectionLater(){mapView.postDelayed(this::refreshAll,350);mapView.postDelayed(this::refreshAll,1300);mapView.postDelayed(this::refreshAll,3000);}
