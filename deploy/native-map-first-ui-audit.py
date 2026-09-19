@@ -333,6 +333,10 @@ require(
     "Auto MTU",
     "DAITA-like",
     "Jumbo",
+    "ScrollView sheetScroll",
+    "sheetScroll.addView(sheet",
+    "sheetScroll.getLayoutParams()",
+    "View.OVER_SCROLL_IF_CONTENT_SCROLLS",
 )
 require_order(
     "Android control sheet order",
