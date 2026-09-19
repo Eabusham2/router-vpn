@@ -56,7 +56,9 @@ need('android/test_android_via_entry_latency_contract.py','AndroidVpnMutationGua
 # A20-9: forwarding master is narrow/private and does not export Setup Center admin credentials.
 need('cmd/router-agent/client_forwarding_master.go','/api/forwarding/master','Setup Center admin token never','authenticated tunnel peers','loopback-only')
 need('android/app/src/main/java/com/eabusham/routervpn/AndroidForwardingMaster.java','/api/forwarding/master','VPN session/path changed')
-need('ios/RouterVPN/App/IOSUnifiedProductView.swift','keep this unavailable rather than showing a fake switch')
+need('ios/RouterVPN/App/IOSUnifiedProductView.swift','IOSForwardingMasterButton().environmentObject(model)')
+need('ios/RouterVPN/App/IOSForwardingMasterView.swift','sendProviderMessage','session.status == .connected','session_id','Server forwarding master')
+need('ios/RouterVPN/PacketTunnel/RouterVPNForwardingChannel.swift','createTCPConnectionThroughTunnel','Policy.verifyProof','Policy.authorize','readback')
 
 # A20-10/11: schema-v4 whole-connection profiles + transactional/frozen runtime identity.
 example=json.loads(text('configs/client/routers.json.example') or '{}')
