@@ -24,6 +24,7 @@ jobs:
           $files = @(
             'client/Private-RouterVPN-State.ps1',
             'client/native-wireguard-windows.ps1',
+            'client/native-windows-mode.ps1',
             'client/Optimize-RouterVPN-MTU.ps1',
             'client/windows-kill-switch.ps1',
             'client/test-windows-kill-switch.ps1',
