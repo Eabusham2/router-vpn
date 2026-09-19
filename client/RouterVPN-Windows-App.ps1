@@ -87,6 +87,33 @@ function global:Show-RouterVPNProductOnboarding{
     }
 }
 
+function Set-RouterVPNProductHelpBinding {
+    param([Parameter(Mandatory=$true)][string]$Source)
+    # Every shell layer inserts handlers before the startup marker. Matching
+    # from Help through that marker would erase the generated app bindings.
+    # Parse without executing, then replace only Help's script-block argument.
+    $Ast=[ScriptBlock]::Create($Source).Ast
+    $Bindings=@($Ast.FindAll({
+        param($Node)
+        $Node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
+        -not $Node.Static -and
+        $Node.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+        $Node.Member.Value -eq 'Add_Click' -and
+        $Node.Expression.Extent.Text -match '^\(\s*Control\s+[''"]TutorialButton[''"]\s*\)$'
+    },$true))
+    if($Bindings.Count -ne 1){throw 'Router VPN Windows full-onboarding Help seam drifted: expected exactly one Help binding.'}
+    $Binding=$Bindings[0]
+    if($Binding.Arguments.Count -ne 1 -or $Binding.Arguments[0] -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst]){
+        throw 'Router VPN Windows full-onboarding Help seam drifted: expected one callback script block.'
+    }
+    $Callback=$Binding.Arguments[0].Extent
+    # PowerShell AST offsets and .NET Substring both count UTF-16 code units;
+    # Unicode before the callback and CRLF source therefore remain intact.
+    return $Source.Substring(0,$Callback.StartOffset)+
+        '{Show-RouterVPNProductOnboarding -Force}'+
+        $Source.Substring($Callback.EndOffset)
+}
+
 $Product=Join-Path $PSScriptRoot 'RouterVPN-Windows-Product-v2.ps1'
 if(-not(Test-Path -LiteralPath $Product)){throw "Router VPN native Windows product shell is missing: $Product"}
 $ProductSource=Get-Content -LiteralPath $Product -Raw -Encoding UTF8
@@ -109,11 +136,7 @@ $ProductSource=Add-RouterVPNUnifiedWindowsShell -ProductSource $ProductSource
 $ProductSource=Add-RouterVPNTelemetryWindowsShell -ProductSource $ProductSource
 $ProductSource=Add-RouterVPNSpeedLabWindowsShell -ProductSource $ProductSource
 $ProductSource=Add-RouterVPNTorBridgeWindowsShell -ProductSource $ProductSource
-$TutorialPattern="(?s)\(Control 'TutorialButton'\)\.Add_Click\(\{.*?\}\)\r?\n\`$BaseCombo\.SelectedIndex=0"
-$TutorialMatch=[regex]::Match($ProductSource,$TutorialPattern)
-if(-not$TutorialMatch.Success){throw 'Router VPN Windows full-onboarding Help seam drifted.'}
-$TutorialReplacement="(Control 'TutorialButton').Add_Click({Show-RouterVPNProductOnboarding -Force})`n`$BaseCombo.SelectedIndex=0"
-$ProductSource=$ProductSource.Substring(0,$TutorialMatch.Index)+$TutorialReplacement+$ProductSource.Substring($TutorialMatch.Index+$TutorialMatch.Length)
+$ProductSource=Set-RouterVPNProductHelpBinding -Source $ProductSource
 $ProductScript=[ScriptBlock]::Create($ProductSource)
 
 $PreviousProductSource=$env:ROUTER_VPN_PRODUCT_SOURCE;$env:ROUTER_VPN_PRODUCT_SOURCE=$Product
@@ -126,6 +149,12 @@ try{
         # enforced by the composed-source contract above and the helpers' own
         # self-tests. This list intentionally guards Product-v2 UI seams only.
         foreach($marker in @('UnifiedShell','UnifiedMapCanvas','UnifiedConnectButton','UnifiedFastestNode','UnifiedLiveLatency','UnifiedForwardButton','UnifiedKillSwitch','UnifiedMultihop','UnifiedMultihopLatency','UnifiedPerformanceButton','UnifiedModeCombo','UnifiedDnsCombo','UnifiedTorButton','Tor bridges','ShowUnifiedTorBridgeBuilder','SMART AUTO','New CUSTOM preset','Snowflake','WebTunnel','Auto / Custom','System.Collections.Generic.HashSet','real stored coordinates')){if(-not$ProductSource.Contains($marker)){throw "Windows unified product self-test missing $marker"}}
+        # Run the same composed-source/event-wiring regressions from source,
+        # installed and Portable packages, before Product-v2's self-test exits.
+        $HelpBindingTest=Join-Path $PSScriptRoot 'test-windows-help-binding.ps1'
+        if(-not(Test-Path -LiteralPath $HelpBindingTest)){throw 'Windows Help binding regression test is missing from this package.'}
+        & $HelpBindingTest -Root (Split-Path $PSScriptRoot -Parent)
+        if(-not$?){throw 'Windows composed Help binding regressions failed.'}
         & $ProductScript -BaseUrl $BaseUrl -SelfTest
     }else{Show-RouterVPNProductOnboarding;& $ProductScript -BaseUrl $BaseUrl}
     if(-not$?){throw 'Router VPN native Windows product shell failed.'}
