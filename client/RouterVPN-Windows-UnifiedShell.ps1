@@ -64,6 +64,86 @@ function Add-RouterVPNUnifiedWindowsShell {
 $script:UnifiedModeStateFile=Join-Path $PSScriptRoot '.routervpn-state\windows-selected-mode-v1.txt'
 $script:UnifiedPresetFile=Join-Path $PSScriptRoot '.routervpn-state\windows-custom-presets-v1.json'
 $script:UnifiedModeChoices=@()
+Add-Type -AssemblyName System.Net.Http
+$script:UnifiedAsyncClient=[System.Net.Http.HttpClient]::new()
+$script:UnifiedAsyncClient.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan
+$script:UnifiedAsyncTask=$null
+$script:UnifiedAsyncRequest=$null
+$script:UnifiedAsyncCts=$null
+$script:UnifiedAsyncResponse=$null
+$script:UnifiedAsyncSuccess=$null
+$script:UnifiedAsyncFailure=$null
+$script:UnifiedAsyncFinally=$null
+$script:UnifiedAsyncLabel=''
+$script:UnifiedAsyncCancelled=$false
+$script:UnifiedAsyncDisconnectAfterCancel=$false
+$script:UnifiedAsyncPoller=New-Object Windows.Threading.DispatcherTimer
+$script:UnifiedAsyncPoller.Interval=[TimeSpan]::FromMilliseconds(100)
+function UnifiedAsyncBusy { return $null-ne$script:UnifiedAsyncTask -and -not $script:UnifiedAsyncTask.IsCompleted }
+function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
+    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode')){
+        $C=Control $N;if($null-ne$C){$C.IsEnabled=-not$Busy}
+    }
+    $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=$true;if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
+}
+function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET',$Body=$null,[int]$Timeout=180,[scriptblock]$OnSuccess=$null,[scriptblock]$OnFailure=$null,[scriptblock]$OnFinally=$null){
+    if(UnifiedAsyncBusy){Log ("$Label refused: another Router VPN action is still running.");return $false}
+    try{
+        $Verb=if($Method.ToUpperInvariant()-eq'POST'){[System.Net.Http.HttpMethod]::Post}else{[System.Net.Http.HttpMethod]::Get}
+        $Uri=([string]$BaseUrl).TrimEnd('/')+$Path
+        $Req=[System.Net.Http.HttpRequestMessage]::new($Verb,$Uri)
+        if($null-ne$Body){
+            $Json=$Body|ConvertTo-Json -Depth 24 -Compress
+            $Req.Content=[System.Net.Http.StringContent]::new($Json,[System.Text.Encoding]::UTF8,'application/json')
+        }
+        $Cts=[System.Threading.CancellationTokenSource]::new()
+        $Cts.CancelAfter([TimeSpan]::FromSeconds([Math]::Max(1,$Timeout)))
+        $script:UnifiedAsyncRequest=$Req;$script:UnifiedAsyncCts=$Cts;$script:UnifiedAsyncSuccess=$OnSuccess;$script:UnifiedAsyncFailure=$OnFailure;$script:UnifiedAsyncFinally=$OnFinally
+        $script:UnifiedAsyncLabel=$Label;$script:UnifiedAsyncCancelled=$false;$script:UnifiedAsyncDisconnectAfterCancel=$false
+        $script:UnifiedAsyncTask=$script:UnifiedAsyncClient.SendAsync($Req,$Cts.Token)
+        SetUnifiedAsyncUI $true $Label
+        $script:UnifiedAsyncPoller.Start()
+        return $true
+    }catch{
+        if($null-ne$OnFailure){&$OnFailure $_.Exception.Message}else{Log ("$Label failed: "+$_.Exception.Message)}
+        if($null-ne$OnFinally){&$OnFinally}
+        SetUnifiedAsyncUI $false
+        return $false
+    }
+}
+function CancelUnifiedApiAsync([bool]$DisconnectAfter=$false){
+    if(-not(UnifiedAsyncBusy)){return $false}
+    $script:UnifiedAsyncCancelled=$true
+    $script:UnifiedAsyncDisconnectAfterCancel=$DisconnectAfter
+    try{$script:UnifiedAsyncCts.Cancel()}catch{}
+    return $true
+}
+function CompleteUnifiedApiAsync{
+    if($null-eq$script:UnifiedAsyncTask -or -not$script:UnifiedAsyncTask.IsCompleted){return}
+    $Task=$script:UnifiedAsyncTask;$Req=$script:UnifiedAsyncRequest;$Cts=$script:UnifiedAsyncCts;$Success=$script:UnifiedAsyncSuccess;$Failure=$script:UnifiedAsyncFailure;$Finally=$script:UnifiedAsyncFinally;$Label=$script:UnifiedAsyncLabel
+    $Cancelled=$script:UnifiedAsyncCancelled;$DisconnectAfter=$script:UnifiedAsyncDisconnectAfterCancel
+    $script:UnifiedAsyncPoller.Stop()
+    $script:UnifiedAsyncTask=$null;$script:UnifiedAsyncRequest=$null;$script:UnifiedAsyncCts=$null;$script:UnifiedAsyncSuccess=$null;$script:UnifiedAsyncFailure=$null;$script:UnifiedAsyncFinally=$null;$script:UnifiedAsyncLabel=''
+    try{
+        $Resp=$Task.GetAwaiter().GetResult();$script:UnifiedAsyncResponse=$Resp
+        $Text=$Resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if(-not$Resp.IsSuccessStatusCode){throw ("HTTP "+[int]$Resp.StatusCode+" "+$Text)}
+        $Value=if([string]::IsNullOrWhiteSpace($Text)){$null}else{$Text|ConvertFrom-Json}
+        if(-not$Cancelled -and $null-ne$Success){&$Success $Value}
+    }catch{
+        if(-not$Cancelled){if($null-ne$Failure){&$Failure $_.Exception.Message}else{Log ("$Label failed: "+$_.Exception.Message)}}
+    }finally{
+        try{if($null-ne$script:UnifiedAsyncResponse){$script:UnifiedAsyncResponse.Dispose()}}catch{};$script:UnifiedAsyncResponse=$null
+        try{if($null-ne$Req){$Req.Dispose()}}catch{};try{if($null-ne$Cts){$Cts.Dispose()}}catch{}
+        if($null-ne$Finally){&$Finally}
+        SetUnifiedAsyncUI $false
+        RefreshProduct
+    }
+    if($DisconnectAfter){
+        [void](StartUnifiedApiAsync 'Disconnecting…' '/api/disconnect' 'POST' @{} 20 {param($R)Log 'Disconnected'} {param($E)Log ('Disconnect failed: '+$E)} $null)
+    }
+}
+$script:UnifiedAsyncPoller.Add_Tick({CompleteUnifiedApiAsync})
 function GetUnifiedPresets{if(-not(Test-Path -LiteralPath $script:UnifiedPresetFile)){return @()};try{return @((Get-Content -LiteralPath $script:UnifiedPresetFile -Raw -Encoding UTF8|ConvertFrom-Json))}catch{return @()}}
 function SaveUnifiedPresets($Values){[void](New-Item -ItemType Directory -Force -Path (Split-Path $script:UnifiedPresetFile));@($Values)|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $script:UnifiedPresetFile -Encoding UTF8}
 function GetUnifiedModeID{if(Test-Path -LiteralPath $script:UnifiedModeStateFile){$v=(Get-Content -LiteralPath $script:UnifiedModeStateFile -Raw -Encoding UTF8).Trim();if($v){return $v}};return 'smart-auto'}
@@ -72,7 +152,52 @@ function RefreshUnifiedModeChoices($Modes){$Wanted=GetUnifiedModeID;$Values=New-
 function UnifiedSelectedProfile{try{$S=Api '/api/profiles' -Timeout 4;return @($S.profiles|Where-Object{[string]$_.id -eq [string]$S.selected_id}|Select-Object -First 1)}catch{return $null}}
 function OpenUnifiedDetail([int]$Index){(Control 'UnifiedShell').Visibility='Collapsed';(Control 'LegacyDetailTabs').Visibility='Visible';(Control 'LegacyDetailTabs').SelectedIndex=$Index;(Control 'UnifiedBackButton').Visibility='Visible'}
 function BackUnifiedMap{(Control 'LegacyDetailTabs').Visibility='Collapsed';(Control 'UnifiedBackButton').Visibility='Collapsed';(Control 'UnifiedShell').Visibility='Visible';RefreshProduct}
-function UnifiedConnect{try{$Status=Api '/api/status' -Timeout 3;$Phase=[string]$Status.phase;if([bool]$Status.connected -or $Phase -match '^(starting|checking)|trying|proving'){[void](Api '/api/disconnect' 'POST' @{} 20);Log 'Disconnected';return};if((Control 'UnifiedMultihop').IsChecked){$Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue;if(-not $Entry -or -not $Exit -or $Entry -eq $Exit){throw 'Multihop requires different entry and exit nodes.'};$R=Api '/api/multihop/connect' 'POST' @{entry_id=$Entry;exit_id=$Exit;base='wg';exit_mode=(MultihopExitModeChoice)} 200;Log ("Multihop connected entry=$($R.entry_id) exit=$($R.exit_id)");return};$P=UnifiedSelectedProfile;if($P -and (([string]$P.node_kind).ToLowerInvariant() -eq 'external')){$R=Api '/api/external-profile/connect' 'POST' @{profile_id=[string]$P.id} 180;Log ('External connected: '+[string]$R.profile.name);return};$ID=[string]$ModeCombo.SelectedValue;if(-not $ID){$ID='smart-auto'};if($ID -eq 'custom:new'){ShowUnifiedCustomBuilder;return};if($ID -eq 'smart-auto'){$R=Api '/api/strategy/smart-auto' 'POST' @{} 240}elseif($ID -eq 'auto'){$R=Api '/api/strategy/auto' 'POST' @{} 200}elseif($ID.StartsWith('custom:')){$Name=$ID.Substring(7);$Preset=@(GetUnifiedPresets|Where-Object{[string]$_.name -eq $Name}|Select-Object -First 1);if(-not $Preset){throw 'Saved CUSTOM preset is missing.'};$R=Api '/api/strategy/custom' 'POST' @{layers=@($Preset.layers)} 240}else{$Choice=@($script:UnifiedModeChoices|Where-Object{[string]$_.id -eq $ID}|Select-Object -First 1);if($Choice -and -not [bool]$Choice.available){throw [string]$Choice.display};$R=Api '/api/connect-logical' 'POST' @{mode=$ID;base='auto'} 180};Log ("Connected winner: "+[string]$R.runtime_mode)}catch{Log ('Connect failed: '+$_.Exception.Message)}finally{RefreshProduct}}
+function UnifiedConnect{
+    if(UnifiedAsyncBusy){
+        [void](CancelUnifiedApiAsync $true)
+        Log 'Cancelling active Router VPN action; disconnect will follow cleanup.'
+        return
+    }
+    try{
+        $Status=Api '/api/status' -Timeout 3;$Phase=[string]$Status.phase
+        if([bool]$Status.connected -or $Phase -match '^(starting|checking)|trying|proving'){
+            [void](StartUnifiedApiAsync 'Disconnecting…' '/api/disconnect' 'POST' @{} 20 {param($R)Log 'Disconnected'} {param($E)Log ('Disconnect failed: '+$E)} $null)
+            return
+        }
+        $Path='';$Body=@{};$Timeout=180;$Label='Connecting…'
+        if((Control 'UnifiedMultihop').IsChecked){
+            $Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue
+            if(-not$Entry-or-not$Exit-or$Entry-eq$Exit){throw 'Multihop requires different entry and exit nodes.'}
+            $Path='/api/multihop/connect';$Body=@{entry_id=$Entry;exit_id=$Exit;base='wg';exit_mode=(MultihopExitModeChoice)};$Timeout=200;$Label='Connecting multihop…'
+        }else{
+            $P=UnifiedSelectedProfile
+            if($P-and(([string]$P.node_kind).ToLowerInvariant()-eq'external')){
+                $Path='/api/external-profile/connect';$Body=@{profile_id=[string]$P.id};$Timeout=180;$Label='Connecting external exit…'
+            }else{
+                $ID=[string]$ModeCombo.SelectedValue;if(-not$ID){$ID='smart-auto'}
+                if($ID-eq'custom:new'){ShowUnifiedCustomBuilder;return}
+                if($ID-eq'smart-auto'){$Path='/api/strategy/smart-auto';$Timeout=240;$Label='SMART AUTO…'}
+                elseif($ID-eq'auto'){$Path='/api/strategy/auto';$Timeout=200;$Label='AUTO…'}
+                elseif($ID.StartsWith('custom:')){
+                    $Name=$ID.Substring(7);$Preset=@(GetUnifiedPresets|Where-Object{[string]$_.name-eq$Name}|Select-Object -First 1)
+                    if(-not$Preset){throw 'Saved CUSTOM preset is missing.'}
+                    $Path='/api/strategy/custom';$Body=@{layers=@($Preset.layers)};$Timeout=240;$Label='CUSTOM…'
+                }else{
+                    $Choice=@($script:UnifiedModeChoices|Where-Object{[string]$_.id-eq$ID}|Select-Object -First 1)
+                    if($Choice-and-not[bool]$Choice.available){throw [string]$Choice.display}
+                    $Path='/api/connect-logical';$Body=@{mode=$ID;base='auto'};$Timeout=180;$Label='Connecting…'
+                }
+            }
+        }
+        $Success={param($R)
+            if($null-ne$R.runtime_mode){Log ('Connected winner: '+[string]$R.runtime_mode)}
+            elseif($null-ne$R.profile){Log ('External connected: '+[string]$R.profile.name)}
+            elseif($null-ne$R.entry_id){Log ("Multihop connected entry=$($R.entry_id) exit=$($R.exit_id)")}
+            else{Log 'Connection proved.'}
+        }.GetNewClosure()
+        [void](StartUnifiedApiAsync $Label $Path 'POST' $Body $Timeout $Success {param($E)Log ('Connect failed: '+$E)} $null)
+    }catch{Log ('Connect failed: '+$_.Exception.Message);RefreshProduct}
+}
 function ShowUnifiedCustomBuilder{
  try{$Raw=@(Api '/api/logical-modes' -Timeout 12);$Layers=New-Object 'System.Collections.Generic.HashSet[string]';foreach($M in $Raw){foreach($V in @($M.variants.PSObject.Properties)){if($V.Value -and $V.Value.mode){foreach($L in @($V.Value.mode.layers)){if($L){[void]$Layers.Add([string]$L)}}}}};$LayerList=@($Layers|Sort-Object);if(-not $LayerList){throw 'No mode layers are available.'}
  [xml]$X=@"
@@ -102,8 +227,8 @@ function ShowUnifiedCustomBuilder{
 (Control 'UnifiedPresetsButton').Add_Click({OpenUnifiedDetail 2})
 (Control 'UnifiedDnsDetailsButton').Add_Click({OpenUnifiedDetail 3})
 (Control 'UnifiedSettingsButton').Add_Click({try{$Saved=Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window;if($null -ne $Saved){Log 'Profile settings saved'}}catch{Log ('Settings failed: '+$_.Exception.Message)};RefreshProduct})
-(Control 'UnifiedMtuButton').Add_Click({try{$Result=Api '/api/mtu/retest' 'POST' @{} 130;Log ("MTU Retest: effective=$($Result.effective_mtu) source=$($Result.effective_mtu_source)")}catch{Log ('MTU Retest failed: '+$_.Exception.Message)};RefreshProduct})
-(Control 'UnifiedBackButton').Add_Click({BackUnifiedMap})
+(Control 'UnifiedMtuButton').Add_Click({if(UnifiedAsyncBusy){Log 'MTU Retest refused: another Router VPN action is running.';return};[void](StartUnifiedApiAsync 'Retesting MTU…' '/api/mtu/retest' 'POST' @{} 130 {param($R)Log ("MTU Retest: effective=$($R.effective_mtu) source=$($R.effective_mtu_source)")} {param($E)Log ('MTU Retest failed: '+$E)} $null)})
+(Control 'UnifiedBackButton').Add_Click({BackUnifiedMap})`n$Window.Add_Closed({try{if(UnifiedAsyncBusy){[void](CancelUnifiedApiAsync $false)}}catch{};try{$script:UnifiedAsyncPoller.Stop()}catch{};try{$script:UnifiedAsyncClient.Dispose()}catch{}})
 (Control 'UnifiedModeCombo').Add_SelectionChanged({if($ModeCombo.SelectedValue){$ID=[string]$ModeCombo.SelectedValue;if($ID -eq 'custom:new'){ShowUnifiedCustomBuilder}else{SaveUnifiedModeID $ID}}})
 (Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;[void](Api '/api/profile/settings' 'POST' @{kill_switch_policy=if($On){'on-connect'}else{'off'}} 12);Log (if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedDnsCombo').Add_SelectionChanged({if(-not $script:Busy){$Tag=ComboTag (Control 'UnifiedDnsCombo') 'home';if($Tag -in @('custom','dot','doh','doh3')){OpenUnifiedDetail 3}else{try{[void](Api '/api/dns/policy' 'POST' @{mode=$Tag} 10);Log ('DNS selected: '+$Tag)}catch{Log ('DNS update failed: '+$_.Exception.Message)};RefreshDnsPolicy;RefreshProduct}}})
