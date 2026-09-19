@@ -72,8 +72,25 @@ for marker in (
     "Assert-RouterVPNMutationIdle 'changing the selected mode'",
     "Assert-RouterVPNMutationIdle 'changing persistent kill-switch policy'",
     "Assert-RouterVPNMutationIdle 'changing DNS policy'",
+    'Add-Type -AssemblyName System.Net.Http',
+    'function StartUnifiedApiAsync',
+    'function CancelUnifiedApiAsync',
+    '$script:UnifiedAsyncClient.SendAsync($Req,$Cts.Token)',
+    "'Cancel / Disconnect'",
+    "StartUnifiedApiAsync 'Retesting MTU…'",
 ):
     assert marker in unified, f'transformed UnifiedShell missing {marker}'
+
+for forbidden in (
+    "$R=Api '/api/strategy/smart-auto' 'POST'",
+    "$R=Api '/api/strategy/auto' 'POST'",
+    "$R=Api '/api/strategy/custom' 'POST'",
+    "$R=Api '/api/multihop/connect' 'POST'",
+    "$R=Api '/api/external-profile/connect' 'POST'",
+    "$R=Api '/api/connect-logical' 'POST'",
+    "Api '/api/mtu/retest' 'POST' @{} 130",
+):
+    assert forbidden not in unified, f'Windows unified map revived blocking long action: {forbidden}'
 
 telemetry=(ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text(encoding='utf-8')
 for marker in (
