@@ -531,8 +531,13 @@ private enum IOSUnifiedPresetStore {
         guard let data = UserDefaults.standard.data(forKey: iosUnifiedPresetsKey), let values = try? JSONDecoder().decode([IOSUnifiedCustomPreset].self, from: data) else { return [] }
         return values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
-    static func save(_ preset: IOSUnifiedCustomPreset) {
-        var values = load(); values.removeAll { $0.name.caseInsensitiveCompare(preset.name) == .orderedSame }; values.append(preset)
+    static func save(_ preset: IOSUnifiedCustomPreset, replacing oldName: String? = nil) {
+        var values = load()
+        values.removeAll { candidate in
+            candidate.name.caseInsensitiveCompare(preset.name) == .orderedSame ||
+            (oldName != nil && candidate.name.caseInsensitiveCompare(oldName!) == .orderedSame)
+        }
+        values.append(preset)
         if let data = try? JSONEncoder().encode(values) { UserDefaults.standard.set(data, forKey: iosUnifiedPresetsKey) }
     }
     static func delete(_ name: String) {
@@ -546,10 +551,12 @@ private struct IOSUnifiedCustomBuilder: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var selected: Set<String>
+    @State private var originalName: String
 
     init(editing: IOSUnifiedCustomPreset? = nil) {
         _name = State(initialValue: editing?.name ?? "")
         _selected = State(initialValue: Set(editing?.layers ?? []))
+        _originalName = State(initialValue: editing?.name ?? "")
     }
 
     var body: some View {
@@ -572,7 +579,9 @@ private struct IOSUnifiedCustomBuilder: View {
     private var valid: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !selected.isEmpty && name.count <= 64 }
     private func save(connect: Bool) {
         guard !model.profileMutationBlocked else { model.message = "Disconnect or let the active VPN transition finish before saving a CUSTOM preset."; return }
-        let preset = IOSUnifiedCustomPreset(name: name.trimmingCharacters(in: .whitespacesAndNewlines), layers: Array(selected).sorted()); IOSUnifiedPresetStore.save(preset)
+        let preset = IOSUnifiedCustomPreset(name: name.trimmingCharacters(in: .whitespacesAndNewlines), layers: Array(selected).sorted())
+        IOSUnifiedPresetStore.save(preset, replacing: originalName.isEmpty ? nil : originalName)
+        originalName = preset.name
         UserDefaults.standard.set(IOSUnifiedModeSelection.customPrefix + preset.name, forKey: iosUnifiedModeKey)
         if connect { Task { await model.runIOSCustom(layers: preset.layers) } }
         dismiss()
