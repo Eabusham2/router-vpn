@@ -113,6 +113,22 @@ old_anchor_pattern=re.compile(
 unified_without_old_anchors, old_anchor_count=old_anchor_pattern.subn("", unified)
 assert old_anchor_count == 7, f'Windows legacy async conversion anchor count drifted: {old_anchor_count}'
 
+# Prove the materializer still targets the exact transformed Product handlers,
+# then inspect the result that would actually ship. This catches source drift in
+# an Old seam before the Windows runner has to materialize the whole app.
+def legacy_handler(name: str, kind: str) -> str:
+    m=re.search(rf"\$legacy{name}{kind}\s*=\s*@'\n(.*?)\n'@", unified, re.S)
+    assert m, f'Windows legacy {name} {kind} handler definition missing'
+    return m.group(1).strip()
+
+shipping_product=product
+for name in ('Multihop','Mtu','Auto','Connect','Dns','Latency','External'):
+    old=legacy_handler(name,'Old')
+    new=legacy_handler(name,'New')
+    count=shipping_product.count(old)
+    assert count == 1, f'Windows Product legacy {name} materializer seam count={count}'
+    shipping_product=shipping_product.replace(old,new,1)
+
 for forbidden in (
     "$R=Api '/api/strategy/smart-auto' 'POST'",
     "$R=Api '/api/strategy/auto' 'POST'",
@@ -124,6 +140,18 @@ for forbidden in (
     "[void](Api '/api/disconnect' 'POST' @{} 20)",
 ):
     assert forbidden not in unified_without_old_anchors, f'Windows unified shipping transform revived blocking long action: {forbidden}'
+    assert forbidden not in shipping_product, f'Windows materialized Product revived blocking long action: {forbidden}'
+
+for marker in (
+    "StartUnifiedApiAsync 'Connecting multihop…'",
+    "StartUnifiedApiAsync 'Retesting MTU…'",
+    "StartUnifiedApiAsync 'Legacy AUTO…'",
+    "StartUnifiedApiAsync 'Connecting selected mode…'",
+    "StartUnifiedApiAsync 'Retesting DNS…'",
+    "StartUnifiedApiAsync 'Testing 50-sample node latency…'",
+    "StartUnifiedApiAsync 'Connecting external exit…'",
+):
+    assert marker in shipping_product, f'Windows materialized Product missing async long-action handler: {marker}'
 
 assert '$Timer.Add_Tick({RefreshProduct})' in product, 'Windows timer no longer calls the async public refresh entrypoint'
 assert '$Timer.Add_Tick({RefreshProductLegacy})' not in product, 'Windows timer revived the blocking legacy refresher'
