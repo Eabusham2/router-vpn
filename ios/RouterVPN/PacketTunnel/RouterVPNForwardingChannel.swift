@@ -81,9 +81,10 @@ final class RouterVPNForwardingChannel: @unchecked Sendable {
     private func exchange(_ bytes: Data, endpoint: Policy.Endpoint, id: UUID, lease: String,
                           completion: @escaping @Sendable (Result<Data, Error>) -> Void) {
         guard operationID == id, sessionID == lease, let provider else { fail(id: id); return }
-        let connection = provider.createTCPConnectionThroughTunnel(
-            to: NWHostEndpoint(hostname: endpoint.host, port: String(endpoint.port)),
-            enableTLS: false, tlsParameters: nil, delegate: nil)
+        guard let port = UInt16(exactly: endpoint.port),
+              let connection = RVPNTunnelTCPConnection(provider: provider, host: endpoint.host, port: port) else {
+            fail(id: id); return
+        }
         let task = HTTPTask(connection: connection, bytes: bytes, queue: queue) { [weak self] result in
             guard let self, self.operationID == id, self.sessionID == lease else { return }
             completion(result)
@@ -127,7 +128,7 @@ final class RouterVPNForwardingChannel: @unchecked Sendable {
     // All mutable members are confined to the channel queue. A bounded read of
     // Connection: close HTTP avoids redirects, proxies, cookies and DNS fallback.
     private final class HTTPTask: @unchecked Sendable {
-        let connection: NWTCPConnection
+        let connection: RVPNTunnelTCPConnection
         let bytes: Data
         let queue: DispatchQueue
         var observation: NSKeyValueObservation?
@@ -136,7 +137,7 @@ final class RouterVPNForwardingChannel: @unchecked Sendable {
         var received = Data()
         var written = false
 
-        init(connection: NWTCPConnection, bytes: Data, queue: DispatchQueue,
+        init(connection: RVPNTunnelTCPConnection, bytes: Data, queue: DispatchQueue,
              callback: @escaping @Sendable (Result<Data, Error>) -> Void) {
             self.connection = connection; self.bytes = bytes; self.queue = queue; self.callback = callback
         }
