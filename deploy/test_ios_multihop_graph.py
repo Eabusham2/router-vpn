@@ -92,6 +92,36 @@ for (key, value) in [("home_lan_access", false), ("daita_enabled", true), ("jumb
     var unsupportedExit = exit; unsupportedExit[key] = value
     reject("do not drop exit policy " + key) { _ = try build(original(), entry, unsupportedExit) }
 }
+// Exercise the actual private-bundle Codable model before graph validation.
+// A raw-dictionary test alone misses flags silently stripped during app import.
+func imported(_ raw: [String:Any]) throws -> [String:Any] {
+    var profile: [String:Any] = ["name":"fixture", "endpoint":"192.0.2.1",
+        "router_api":"http://10.77.0.1:8787", "api_token":"fixture", "adguard_ipv4":"10.77.0.1",
+        "adguard_ipv6":"fd77:77::1", "socks_host":"10.77.0.1", "socks_port":1080,
+        "socks_username":"", "socks_password":""]
+    profile.merge(raw) { _, incoming in incoming }
+    let model = try JSONDecoder().decode(RouterProfile.self, from:JSONSerialization.data(withJSONObject:profile))
+    return try JSONSerialization.jsonObject(with:JSONEncoder().encode(model)) as! [String:Any]
+}
+let legacyImported = try imported(entry)
+try check("legacy import does not invent padding", legacyImported["daita_enabled"] == nil)
+try check("legacy import does not invent Jumbo", legacyImported["jumbo_tun"] == nil)
+for flag in ["daita_enabled", "jumbo_tun"] {
+    for enabled in [true, false] {
+        var requested = entry; requested[flag] = enabled
+        let roundTrip = try imported(requested)
+        try check("import preserves exact \(flag)=\(enabled)", roundTrip[flag] as? Bool == enabled)
+        if enabled {
+            reject("imported entry policy cannot be stripped " + flag) { _ = try build(original(),roundTrip) }
+            requested = exit; requested[flag] = true
+            reject("imported exit policy cannot be stripped " + flag) { _ = try build(original(),entry,imported(requested)) }
+        } else {
+            try check("false policy keeps graph runnable " + flag, !(try build(original(),roundTrip)).isEmpty)
+        }
+    }
+    var invalidFlag = entry; invalidFlag[flag] = "true"
+    reject("nonboolean imported " + flag) { _ = try imported(invalidFlag) }
+}
 for port: Any in [true, "1080", 0, -1, 65536] {
     e = entry; e["socks_port"] = port
     reject("invalid private proxy port") { _ = try build(original(),e) }
@@ -152,7 +182,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="routervpn-multihop-") as directory:
         source, exe = Path(directory) / "main.swift", Path(directory) / "graph-tests"
         source.write_text(TEST)
-        subprocess.run([swift, "-swift-version", "6", str(POLICY), str(source), "-o", str(exe)], check=True, timeout=90)
+        subprocess.run([swift, "-swift-version", "6", str(POLICY), str(ROOT / "ios/RouterVPN/App/Models.swift"), str(source), "-o", str(exe)], check=True, timeout=90)
         command = [str(exe)]
         if args.fixture_dir:
             command.append(str(args.fixture_dir.resolve()))

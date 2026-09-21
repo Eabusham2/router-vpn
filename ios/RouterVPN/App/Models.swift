@@ -151,6 +151,8 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var socksPort: Int
     var socksUsername: String
     var socksPassword: String
+    var daitaEnabled: Bool?
+    var jumboTUN: Bool?
     var daitaHost: String?
     var daitaPort: Int?
     var daitaRateKbps: Int?
@@ -231,6 +233,8 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case socksPort = "socks_port"
         case socksUsername = "socks_username"
         case socksPassword = "socks_password"
+        case daitaEnabled = "daita_enabled"
+        case jumboTUN = "jumbo_tun"
         case daitaHost = "daita_host"
         case daitaPort = "daita_port"
         case daitaRateKbps = "daita_rate_kbps"

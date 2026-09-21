@@ -103,6 +103,7 @@ import platform
 import subprocess
 import sys
 if platform.system() == 'Darwin':
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_disconnect_ownership.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_multihop_graph.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_multihop_profiles.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_session_identity.py')], check=True, timeout=150)

@@ -67,3 +67,43 @@ screen-size acceptance, off-LAN interoperability, live private AI Board/Portaine
 and ASUS validation, and Apple distribution signing require their own evidence.
 A green exact-SHA release certifies its actual source/build/package gates only.
 No results for those physical/private gates are asserted by this document.
+
+## Two-node multihop and release continuation
+
+The two-node implementation uses an owned WireGuard entry endpoint and an
+owned Shadowsocks/Hysteria2 exit transport inside one Libbox PacketTunnel.
+The exit sockets detour through the entry; entry and exit proofs use separate
+private loopback proof routes. Connect completion requires both node identities
+and the same live engine owner. Saved profiles store graph references, not
+credentials. Speed Lab compares the frozen graph and the system connection date,
+so reconnecting the same displayed node invalidates older measurements.
+
+The native release checks now inspect the success path of each of the four
+PacketTunnel runtimes independently. Negative controls remove each runtime's
+network-change guard and must fail; a global count is not sufficient evidence.
+The pinned Libbox configuration gate is a macOS host program even when Xcode
+invokes it while building an iPhone target. Its child process selects the macOS
+SDK without changing the enclosing iPhone build. Six shell regression tests
+verify SDK isolation, exact dependency pinning, failure propagation and cleanup.
+The real native gate still builds the pinned core and checks the actual graphs.
+
+User Disconnect now operates only on the unique Router VPN-owned manager. It
+invalidates measurement identity immediately, serializes repeated requests,
+disables on-demand reconnect with preference readback, and verifies terminal
+connection state before showing Disconnected. Preference failures, changed
+ownership, multiple matching managers, timeouts and an unexpected reconnect
+remain unverified rather than falsely unlocking profile mutation. Twenty-four
+executable tests run the actual production methods with system-manager doubles;
+these are not physical NetworkExtension tests.
+
+The private RouterProfile Codable model preserves explicit daita_enabled and
+jumbo_tun booleans. Graph rejection tests now round-trip the real import model
+before validation, preventing unsupported requested policy from disappearing
+between import and PacketTunnel. This preserves user intent; it does not claim
+that either padding or Jumbo was newly implemented.
+
+The bounded graph does not close generalized multihop, arbitrary external/hop
+families, per-hop measurement parity, additional Start Layer composition, or the
+remaining requirements listed above. Native compilation/configuration parsing
+and publication are separate evidence from device traffic, leaks, private
+production deployment and Apple signing.

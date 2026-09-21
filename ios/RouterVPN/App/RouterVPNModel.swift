@@ -23,6 +23,7 @@ final class RouterVPNModel: ObservableObject {
     @Published var activeEngine = "none"
     @Published var activeRawProfile = ""
     private(set) var activeSessionIdentity: IOSSessionIdentity?
+    private var userDisconnectInProgress = false
     @Published var forwardProtocol = "both"
     @Published var forwardFrom = "25565"
     @Published var forwardTo = "25565"
@@ -71,7 +72,7 @@ final class RouterVPNModel: ObservableObject {
     }
 
     var baseSelectorEnabled: Bool { currentLogicalMode?.baseSelector == true }
-    var profileMutationBlocked: Bool { connected || tunnelTransitioning }
+    var profileMutationBlocked: Bool { connected || tunnelTransitioning || userDisconnectInProgress }
 
     func runtimeLabel(for mode: LogicalMode) -> String {
         guard let bundle,
@@ -413,10 +414,12 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func refreshTunnelStatus() async {
+        guard !userDisconnectInProgress else { return }
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
                 ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
             }
+            guard !userDisconnectInProgress else { return }
             guard managers.count <= 1 else { throw IOSRuntimeSelectionError.unsupportedMode("Multiple Router VPN sessions make status ownership ambiguous.") }
             guard let manager = managers.first else {
                 connected = false; tunnelTransitioning = false; activeSessionIdentity = nil
@@ -440,6 +443,7 @@ final class RouterVPNModel: ObservableObject {
                 activeEngine = engine; activeRawProfile = raw; activeSessionIdentity = identity
             }
         } catch {
+            guard !userDisconnectInProgress else { return }
             // Failure to read preferences is UNKNOWN, not proof that the VPN is
             // down. Lock mutations and invalidate measurements until readback.
             activeSessionIdentity = nil
@@ -449,27 +453,65 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func disconnect() {
-        if tunnelTransitioning { return }
+        guard !tunnelTransitioning, !userDisconnectInProgress else { return }
+        userDisconnectInProgress = true
         tunnelTransitioning = true
+        activeSessionIdentity = nil
         message = "Disconnecting…"
-        Task {
-            defer { tunnelTransitioning = false }
-            let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
-            guard let manager = managers.first else {
-                connected = false; activeEngine = "none"; activeRawProfile = ""; message = "Disconnected"; return
+        Task { await completeUserDisconnect() }
+    }
+
+    private func completeUserDisconnect() async {
+        defer { userDisconnectInProgress = false }
+        do {
+            let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
+                ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
             }
-            manager.isOnDemandEnabled = false
-            manager.onDemandRules = []
-            try? await manager.saveToPreferences()
-            manager.connection.stopVPNTunnel()
-            for _ in 0..<20 {
-                if manager.connection.status == .disconnected || manager.connection.status == .invalid { break }
-                try? await Task.sleep(for: .milliseconds(150))
+            guard managers.count <= 1 else {
+                throw IOSRuntimeSelectionError.unsupportedMode("Multiple Router VPN managers make disconnect ownership ambiguous.")
+            }
+            if let manager = managers.first {
+                manager.isOnDemandEnabled = false
+                manager.onDemandRules = []
+                var persistenceError: Error?
+                do {
+                    try await manager.saveToPreferences()
+                    try await manager.loadFromPreferences()
+                    guard !manager.isOnDemandEnabled, (manager.onDemandRules ?? []).isEmpty else {
+                        throw IOSRuntimeSelectionError.unsupportedMode("On-demand reconnect was not disabled by preference readback.")
+                    }
+                } catch { persistenceError = error }
+                // Even when persistence fails, attempt to stop our own current
+                // connection. Never stop a different provider or report success
+                // while a saved on-demand policy could immediately reconnect.
+                guard (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel" else {
+                    throw IOSRuntimeSelectionError.unsupportedMode("VPN manager ownership changed during disconnect.")
+                }
+                manager.connection.stopVPNTunnel()
+                for _ in 0..<24 {
+                    if manager.connection.status == .disconnected || manager.connection.status == .invalid { break }
+                    try await Task.sleep(for: .milliseconds(150))
+                }
+                if let persistenceError { throw persistenceError }
+                try await manager.loadFromPreferences()
+                guard (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel",
+                      !manager.isOnDemandEnabled, (manager.onDemandRules ?? []).isEmpty,
+                      manager.connection.status == .disconnected || manager.connection.status == .invalid else {
+                    throw IOSRuntimeSelectionError.unsupportedMode("The owned VPN session did not finish a verified stop.")
+                }
             }
             connected = false
+            activeSessionIdentity = nil
             activeEngine = "none"
             activeRawProfile = ""
+            tunnelTransitioning = false
             message = "Disconnected"
+        } catch {
+            // Unknown teardown is not Disconnected. Keep mutations locked and
+            // invalidate Speed Lab/forwarding identity until fresh system status.
+            activeSessionIdentity = nil
+            tunnelTransitioning = true
+            message = "Disconnect is unverified: \(error.localizedDescription)"
         }
     }
 
