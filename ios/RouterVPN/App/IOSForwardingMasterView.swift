@@ -84,7 +84,7 @@ final class IOSForwardingMaster: ObservableObject {
                   let connectedAt = session.connectedDate,
                   let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
                   let data = proto.providerConfiguration?["bundle"] as? Data,
-                  ["wireguard", "libbox"].contains(proto.providerConfiguration?["engine"] as? String ?? "wireguard"),
+                  ["wireguard", "libbox", "multihop-libbox"].contains(proto.providerConfiguration?["engine"] as? String ?? "wireguard"),
                   let active = try? JSONDecoder().decode(ClientBundle.self, from: data),
                   active.selectedRouterID == nodeID,
                   active.routerProfiles.contains(where: { $0.id == nodeID && $0.normalizedNodeKind == "router-vpn" }) else {

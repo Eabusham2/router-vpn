@@ -53,6 +53,8 @@ final class IOSSpeedLabRunner: ObservableObject {
         let nodeID: String
         let engine: String
         let rawProfile: String
+        let transitioning: Bool
+        let sessionIdentity: IOSSessionIdentity?
     }
 
     func run(_ request: IOSSpeedLabRunRequest, model: RouterVPNModel) async {
@@ -85,6 +87,9 @@ final class IOSSpeedLabRunner: ObservableObject {
         await model.refreshTunnelStatus()
         guard !model.tunnelTransitioning else { throw error("Wait for the VPN transition to finish before testing the current path.") }
         let token = pathToken(model)
+        guard !token.connected || token.sessionIdentity != nil else {
+            throw error("Current VPN session identity could not be verified.")
+        }
         let path: String
         if token.connected {
             let node = model.selectedNodeProfile
@@ -119,7 +124,22 @@ final class IOSSpeedLabRunner: ObservableObject {
             case .systemDirect:
                 path = "Temporary system direct • Router VPN disconnected"
             case .multihop:
-                throw error("iOS/iPadOS Speed Lab does not fake desktop-equivalent multihop. Use Windows, macOS, Linux or Android for temporary multihop tests until an Apple PacketTunnel multihop dataplane is shipped.")
+                guard !request.nodeID.isEmpty else { throw error("Choose an exit with a saved multihop graph.") }
+                model.selectNode(request.nodeID)
+                try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
+                guard let selected = model.selectedNodeProfile, selected.id == request.nodeID,
+                      selected.multihopEnabled == true, let saved = model.bundle else {
+                    throw error("Save an entry/exit graph in Multihop before testing it temporarily.")
+                }
+                _ = try model.iosMultihopEntryBundle(for: saved)
+                progress = "Proving temporary entry and exit through the owned PacketTunnel…"
+                await model.connect()
+                try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
+                guard model.connected, model.activeEngine == "multihop-libbox" else {
+                    throw error("Temporary multihop failed both-node path proof: \(model.message)")
+                }
+                startedTemporaryTunnel = true
+                path = "Temporary multihop • \(selected.multihopEntryID ?? "") → \(selected.id) • \(model.activeRawProfile)"
             case .router:
                 guard !request.nodeID.isEmpty else { throw error("Choose a Router VPN node for the temporary test.") }
                 model.selectNode(request.nodeID)
@@ -127,6 +147,9 @@ final class IOSSpeedLabRunner: ObservableObject {
                 try applyTemporaryAutoRequirements(request, model: model)
                 guard let selected = model.selectedNodeProfile, selected.id == request.nodeID, selected.normalizedNodeKind == "router-vpn" else {
                     throw error("The requested temporary Router VPN node could not be selected.")
+                }
+                guard selected.multihopEnabled != true else {
+                    throw error("This node has multihop enabled; choose the Multihop topology to test its saved graph.")
                 }
                 progress = "Starting temporary Router VPN path…"
                 try await connectTemporaryRouter(request, model: model)
@@ -157,7 +180,9 @@ final class IOSSpeedLabRunner: ObservableObject {
             if request.topology == .systemDirect {
                 guard !token.connected else { throw error("Router VPN connected while the system-direct test was being prepared.") }
             } else {
-                guard token.connected else { throw error("Temporary VPN path is not connected after proof.") }
+                guard token.connected, token.sessionIdentity != nil, !token.transitioning else {
+                    throw error("Temporary VPN path/session is not verified after proof.")
+                }
             }
             progress = "Running idle, download-loaded and upload-loaded measurements…"
             let measurement = try await guardedMeasurement(request.duration, model: model, token: token)
@@ -227,7 +252,12 @@ final class IOSSpeedLabRunner: ObservableObject {
             }
         }
         do {
-            let value = try await measurementTask.value
+            let value = try await withTaskCancellationHandler {
+                try await measurementTask.value
+            } onCancel: {
+                measurementTask.cancel()
+                watcher.cancel()
+            }
             watcher.cancel()
             _ = await watcher.result
             await model.refreshTunnelStatus()
@@ -268,7 +298,9 @@ final class IOSSpeedLabRunner: ObservableObject {
             connected: model.connected,
             nodeID: model.connected ? (model.selectedNodeProfile?.id ?? "") : "",
             engine: model.connected ? model.activeEngine : "none",
-            rawProfile: model.connected ? model.activeRawProfile : ""
+            rawProfile: model.connected ? model.activeRawProfile : "",
+            transitioning: model.tunnelTransitioning,
+            sessionIdentity: model.connected ? model.activeSessionIdentity : nil
         )
     }
 

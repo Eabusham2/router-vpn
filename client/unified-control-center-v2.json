@@ -163,7 +163,18 @@
       "macos": "native-entry-exit",
       "linux": "native-entry-exit",
       "android": "bounded-entry-exit",
-      "ios": "unavailable"
+      "ios": "bounded-entry-exit"
+    },
+    "ios_runtime_scope": {
+      "entry": "paired-router-wireguard",
+      "exit": [
+        "paired-router-shadowsocks",
+        "paired-router-hysteria2"
+      ],
+      "candidate_status": "unpublished-native-certification-pending",
+      "independent_per_hop_measurements": false,
+      "end_to_end_speed_lab": true,
+      "reference": "docs/IOS.md"
     }
   },
   "mode_picker": {

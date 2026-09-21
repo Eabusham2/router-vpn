@@ -17,6 +17,7 @@ struct IOSSpeedLabView: View {
     @State private var maxSeconds = 12.0
 
     private var routerNodes: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" } }
+    private var multihopNodes: [RouterProfile] { routerNodes.filter { $0.multihopEnabled == true } }
     private var externalNodes: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "external" } }
 
     var body: some View {
@@ -85,7 +86,7 @@ struct IOSSpeedLabView: View {
                     Text("System direct").tag(IOSSpeedLabRunRequest.Topology.systemDirect)
                     Text("Router node").tag(IOSSpeedLabRunRequest.Topology.router)
                     Text("External direct").tag(IOSSpeedLabRunRequest.Topology.external)
-                    Text("Multihop — unavailable on iOS").tag(IOSSpeedLabRunRequest.Topology.multihop)
+                    Text("Saved multihop graph").tag(IOSSpeedLabRunRequest.Topology.multihop)
                 }
 
                 if topology == .router {
@@ -112,8 +113,9 @@ struct IOSSpeedLabView: View {
                         Text(model.nodeRuntimeSummary(selected)).font(.caption).foregroundStyle(.secondary)
                     }
                 } else if topology == .multihop {
-                    Text("Desktop-style multihop is intentionally unavailable on iOS/iPadOS until an Apple PacketTunnel multihop dataplane can enforce and prove the whole chain. Speed Lab will not fake it.")
-                        .font(.caption).foregroundStyle(.orange)
+                    nodePicker(nodes: multihopNodes, title: "Saved multihop exit")
+                    Text("Tests the saved WireGuard entry → Shadowsocks/Hysteria2 exit graph. Both nodes must pass routed proof. The original selection is restored after teardown; Speed Lab will not substitute a direct path.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
 
                 Text("Temporary tests require Router VPN to be disconnected. The chosen path is proven, measured, torn fully down, and your previous node/mode selection is restored afterward. A recovery journal restores the original saved state after an interrupted test.")
@@ -261,7 +263,8 @@ struct IOSSpeedLabView: View {
         if runner.running { return true }
         if durationMode == .custom && (minSeconds < 1 || maxSeconds > 60 || maxSeconds < minSeconds) { return true }
         if scope == .temporary {
-            if model.connected || model.tunnelTransitioning || topology == .multihop { return true }
+            if model.connected || model.tunnelTransitioning { return true }
+            if topology == .multihop && !multihopNodes.contains(where: { $0.id == nodeID }) { return true }
             if topology == .router && (nodeID.isEmpty || (mode == "custom" && customLayers.isEmpty)) { return true }
             if topology == .external && nodeID.isEmpty { return true }
         }
@@ -291,6 +294,7 @@ struct IOSSpeedLabView: View {
         switch topology {
         case .router: nodeID = routerNodes.first?.id ?? ""
         case .external: nodeID = externalNodes.first?.id ?? ""
+        case .multihop: nodeID = multihopNodes.first?.id ?? ""
         default: break
         }
         loadAutoRequirementsFromNode()

@@ -22,6 +22,7 @@ final class RouterVPNModel: ObservableObject {
     @Published var message = "Import a router bundle from Files or pair from your home LAN"
     @Published var activeEngine = "none"
     @Published var activeRawProfile = ""
+    private(set) var activeSessionIdentity: IOSSessionIdentity?
     @Published var forwardProtocol = "both"
     @Published var forwardFrom = "25565"
     @Published var forwardTo = "25565"
@@ -80,6 +81,7 @@ final class RouterVPNModel: ObservableObject {
         case .wireGuard:
             return selection.rawProfileID.hasPrefix("awg2") ? "AmneziaWG • native" : "WireGuardKit"
         case .libbox: return "Libbox • \(selection.rawProfileID)"
+        case .multihop: return "Multihop • WireGuard → \(selection.rawProfileID)"
         }
     }
 
@@ -221,7 +223,15 @@ final class RouterVPNModel: ObservableObject {
         guard let bundle else { message = "Configure your home router first"; return }
         let selections: [IOSRuntimeSelection]
         do {
-            if let rawProfileID {
+            if selectedRouterProfile?.multihopEnabled == true {
+                guard rawProfileID == nil, let profile = selectedRouterProfile,
+                      profile.multihopExitID == profile.id,
+                      let mode = profile.multihopExitMode, ["shadowsocks", "hysteria2"].contains(mode) else {
+                    throw IOSRuntimeSelectionError.unsupportedMode("Choose a valid multihop graph or disable multihop before selecting an individual raw mode.")
+                }
+                _ = try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: mode)
+                selections = [IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: mode, files: [:])]
+            } else if let rawProfileID {
                 selections = [try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawProfileID)]
             } else if auto {
                 let runnable = IOSRuntimeSelector.runnableModes(in: bundle)
@@ -326,9 +336,17 @@ final class RouterVPNModel: ObservableObject {
             "bundle": try JSONEncoder().encode(bundle)
         ]
         configuration["rawProfileID"] = selection.rawProfileID
+        var entryStrict = false
+        if selection.engine == .multihop {
+            let entry = try iosMultihopEntryBundle(for: bundle)
+            configuration["entryBundle"] = try JSONEncoder().encode(entry)
+            if let profile = entry.routerProfiles.first(where: { $0.id == entry.selectedRouterID }) {
+                entryStrict = profile.killSwitch == true || ["always", "strict", "on", "enabled", "lockdown"].contains(profile.killSwitchPolicy ?? "off")
+            }
+        }
         proto.providerConfiguration = configuration
 
-        let strict = strictKillSwitchEnabled
+        let strict = strictKillSwitchEnabled || entryStrict
         proto.includeAllNetworks = strict
         proto.enforceRoutes = strict
         proto.excludeLocalNetworks = strict ? !homeLANAccess : false
@@ -351,7 +369,7 @@ final class RouterVPNModel: ObservableObject {
         connected = false
         activeEngine = selection.engine.rawValue
         activeRawProfile = selection.rawProfileID
-        return await waitForConnection(manager, attempts: 40)
+        return await waitForConnection(manager, attempts: selection.engine == .multihop ? 100 : 40)
     }
 
     private func waitForConnection(_ manager: NETunnelProviderManager, attempts: Int) async -> Bool {
@@ -389,19 +407,44 @@ final class RouterVPNModel: ObservableObject {
 
     private func modeName(_ id: String) -> String { logicalModes.first(where: { $0.id == id })?.name ?? id }
     private func engineName(_ selection: IOSRuntimeSelection) -> String {
+        if selection.engine == .multihop { return "WireGuard entry → \(selection.rawProfileID) exit" }
         if selection.engine == .libbox { return "Libbox 1.13.12" }
         return selection.rawProfileID.hasPrefix("awg2") ? "AmneziaWG native" : "WireGuardKit"
     }
 
     func refreshTunnelStatus() async {
-        let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
-        guard let manager = managers.first else { connected = false; tunnelTransitioning = false; return }
-        let status = manager.connection.status
-        tunnelTransitioning = status == .connecting || status == .disconnecting || status == .reasserting
-        connected = status == .connected
-        if connected, let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
-            activeEngine = (proto.providerConfiguration?["engine"] as? String) ?? "wireguard"
-            activeRawProfile = (proto.providerConfiguration?["rawProfileID"] as? String) ?? (proto.providerConfiguration?["mode"] as? String) ?? "wg"
+        do {
+            let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
+                ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
+            }
+            guard managers.count <= 1 else { throw IOSRuntimeSelectionError.unsupportedMode("Multiple Router VPN sessions make status ownership ambiguous.") }
+            guard let manager = managers.first else {
+                connected = false; tunnelTransitioning = false; activeSessionIdentity = nil
+                activeEngine = "none"; activeRawProfile = ""; return
+            }
+            let status = manager.connection.status
+            tunnelTransitioning = status == .connecting || status == .disconnecting || status == .reasserting
+            connected = status == .connected
+            activeSessionIdentity = nil
+            if connected {
+                guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                      let configuration = proto.providerConfiguration,
+                      let data = configuration["bundle"] as? Data,
+                      let connectedAt = manager.connection.connectedDate else {
+                    throw IOSRuntimeSelectionError.unsupportedMode("The connected tunnel did not provide its frozen session identity.")
+                }
+                let engine = configuration["engine"] as? String ?? "wireguard"
+                let raw = configuration["rawProfileID"] as? String ?? configuration["mode"] as? String ?? "wg"
+                let identity = try IOSSessionIdentity(connectedAt: connectedAt, engine: engine, rawProfile: raw,
+                    bundleData: data, entryBundleData: configuration["entryBundle"] as? Data)
+                activeEngine = engine; activeRawProfile = raw; activeSessionIdentity = identity
+            }
+        } catch {
+            // Failure to read preferences is UNKNOWN, not proof that the VPN is
+            // down. Lock mutations and invalidate measurements until readback.
+            activeSessionIdentity = nil
+            tunnelTransitioning = true
+            message = "Tunnel status is unverified: \(error.localizedDescription)"
         }
     }
 

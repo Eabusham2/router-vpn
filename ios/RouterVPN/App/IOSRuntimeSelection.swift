@@ -3,6 +3,7 @@ import Foundation
 enum IOSRuntimeEngine: String, Codable, Hashable {
     case wireGuard = "wireguard"
     case libbox = "libbox"
+    case multihop = "multihop-libbox"
 }
 
 struct IOSRuntimeSelection: Hashable {

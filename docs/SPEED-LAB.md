@@ -54,7 +54,7 @@ The desktop controller also restores the previous private profile store before m
 
 iOS/iPadOS has a native Speed Lab for the actual PacketTunnel path plus supported temporary system-direct, Router VPN and external paths. It also has a private recovery journal so interrupted temporary tests can restore persistent state on next launch.
 
-Desktop-style multihop remains unavailable in iOS Speed Lab until the Apple PacketTunnel dataplane can actually create and prove that graph. The UI explicitly shows it as unavailable; it is never simulated.
+The unpublished iOS two-hop candidate adds **Saved multihop graph** as a temporary topology. Choose an exit with a graph saved in Multihop: raw WireGuard entry → Router VPN Shadowsocks/Hysteria2 exit. The runner requires the real `multihop-libbox` session and both-node proof, then retains the existing measurement, teardown and persistent-state recovery sequence. An ordinary one-node test rejects a graph-enabled node rather than silently measuring extra hops. End-to-end measurement does not imply independent iOS per-hop measurements; those remain unfinished. Native/device certification for this candidate is pending; see `docs/IOS.md`.
 
 ## Auto/default and custom time
 

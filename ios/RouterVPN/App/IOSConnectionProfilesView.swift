@@ -34,11 +34,16 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var dnsPort: Int
     var dnsServerName: String
     var dnsPath: String
+    var multihopEnabled: Bool = false
+    var multihopEntryID: String? = nil
+    var multihopExitID: String? = nil
+    var multihopExitMode: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case homeLANAccess, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback, startLayer
         case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect
         case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath
+        case multihopEnabled, multihopEntryID, multihopExitID, multihopExitMode
     }
 }
 
@@ -64,6 +69,10 @@ private extension IOSConnectionSafePreferences {
         dnsPort = try c.decodeIfPresent(Int.self, forKey: .dnsPort) ?? 0
         dnsServerName = try c.decodeIfPresent(String.self, forKey: .dnsServerName) ?? ""
         dnsPath = try c.decodeIfPresent(String.self, forKey: .dnsPath) ?? ""
+        multihopEnabled = try c.decodeIfPresent(Bool.self, forKey: .multihopEnabled) ?? false
+        multihopEntryID = try c.decodeIfPresent(String.self, forKey: .multihopEntryID)
+        multihopExitID = try c.decodeIfPresent(String.self, forKey: .multihopExitID)
+        multihopExitMode = try c.decodeIfPresent(String.self, forKey: .multihopExitMode)
     }
 }
 
@@ -151,7 +160,8 @@ private enum IOSConnectionProfileStore {
         let prefs: IOSConnectionSafePreferences?
         if selected.normalizedNodeKind == "router-vpn" {
             if selected.multihopEnabled == true {
-                throw issue("The selected Router node currently contains desktop-style multihop choices. Current iOS cannot execute full desktop multihop, so this setup is not saved as a misleading iOS connection profile. Disable multihop or save it from a supported desktop/Android path.")
+                guard let bundle = model.bundle else { throw issue("The selected multihop bundle is missing.") }
+                _ = try model.iosMultihopEntryBundle(for: bundle)
             }
             prefs = IOSConnectionSafePreferences(
                 homeLANAccess: selected.homeLANAccess ?? true,
@@ -172,7 +182,11 @@ private enum IOSConnectionProfileStore {
                 dnsHost: selected.dnsHost ?? "",
                 dnsPort: selected.dnsPort ?? 0,
                 dnsServerName: selected.dnsServerName ?? "",
-                dnsPath: selected.dnsPath ?? ""
+                dnsPath: selected.dnsPath ?? "",
+                multihopEnabled: selected.multihopEnabled ?? false,
+                multihopEntryID: selected.multihopEntryID,
+                multihopExitID: selected.multihopExitID,
+                multihopExitMode: selected.multihopExitMode
             )
         } else {
             prefs = nil
@@ -203,7 +217,8 @@ private enum IOSConnectionProfileStore {
         guard let linked = model.allNodeProfiles.first(where: { $0.id == saved.nodeID }), linked.normalizedNodeKind == saved.nodeKind else {
             throw issue("The linked node referenced by this connection profile is missing or changed type.")
         }
-        guard var bundle = model.bundle,
+        guard let nodeData = IOSNodeBundleStore.shared.bundleData(containing: saved.nodeID, current: model.bundle),
+              var bundle = try? JSONDecoder().decode(ClientBundle.self, from: nodeData),
               let index = bundle.routerProfiles.firstIndex(where: { $0.id == saved.nodeID }) else { throw issue("Linked node bundle could not be loaded.") }
 
         if saved.nodeKind == "external" {
@@ -237,12 +252,22 @@ private enum IOSConnectionProfileStore {
         profile.dnsPort = prefs.dnsPort
         profile.dnsServerName = prefs.dnsServerName
         profile.dnsPath = prefs.dnsPath
-        profile.multihopEnabled = false
-        profile.multihopEntryID = nil
-        profile.multihopExitID = nil
+        profile.multihopEnabled = prefs.multihopEnabled
+        profile.multihopEntryID = prefs.multihopEntryID
+        profile.multihopExitID = prefs.multihopExitID
+        profile.multihopExitMode = prefs.multihopExitMode
         bundle.routerProfiles[index] = profile
         bundle.selectedRouterID = saved.nodeID
         bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
+        // Cross-node Load must switch the complete runtime bundle, not only its
+        // visible id while retaining another home's keys and generated profiles.
+        bundle.nodeProofID = profile.nodeProofID ?? bundle.nodeProofID
+        bundle.endpoint = profile.endpoint
+        bundle.apiToken = profile.apiToken
+        bundle.routerAPI = profile.routerAPI
+        bundle.adGuardIPv4 = profile.adGuardIPv4
+        bundle.adGuardIPv6 = profile.adGuardIPv6
+        if prefs.multihopEnabled { _ = try model.iosMultihopEntryBundle(for: bundle) }
 
         do { try model.importBundle(JSONEncoder().encode(bundle)) }
         catch { throw issue("Could not apply saved connection preferences: \(error.localizedDescription)") }
@@ -287,6 +312,9 @@ private enum IOSConnectionProfileStore {
                     throw issue("Router connection profile is missing its non-secret preference snapshot.")
                 }
                 record.preferences = try validatePreferences(preferences)
+                if preferences.multihopEnabled, preferences.multihopExitID != record.nodeID {
+                    throw issue("Saved multihop exit does not match the connection profile's node.")
+                }
                 if record.mode == "external" { throw issue("Router connection profile cannot use external mode.") }
             } else {
                 guard value.preferences == nil, record.customLayers.isEmpty, record.mode == "external" else {
@@ -316,6 +344,13 @@ private enum IOSConnectionProfileStore {
             guard (1280...9000).contains(p.manualMTU) else { throw issue("Connection profile manual MTU must be 1280–9000.") }
         } else {
             p.manualMTU = 0
+        }
+        if p.multihopEnabled {
+            guard let entry = p.multihopEntryID, let exit = p.multihopExitID, entry != exit,
+                  [entry, exit].allSatisfy({ $0.range(of: "\\A[A-Za-z0-9._-]{1,128}\\z", options: .regularExpression) != nil }),
+                  let mode = p.multihopExitMode, ["shadowsocks", "hysteria2"].contains(mode) else {
+                throw issue("Saved multihop requires distinct linked entry/exit ids and a supported exit transport.")
+            }
         }
         p.startupMode = p.startupMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard ["smart-auto", "auto", "last", "manual"].contains(p.startupMode) else { throw issue("Connection profile contains an invalid startup policy.") }
@@ -463,7 +498,7 @@ struct IOSConnectionProfilesView: View {
                     if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary) }
                 }
                 Section("Capability truth") {
-                    Text("Current iOS preserves the Router node Start Layer choice in imported/saved profiles but does not execute the desktop Start-Layer relay itself. Current iOS also does not execute full desktop multihop. Unsupported runtime choices are preserved as profile metadata rather than falsely advertised as an active iOS dataplane feature.")
+                    Text("Profiles preserve the supported WireGuard-entry → Shadowsocks/Hysteria2-exit graph as node references, not copied credentials. Both linked bundles must still exist when loaded. Additional unimplemented Start-Layer or mixed-engine graphs are not advertised as active capabilities.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -490,6 +525,6 @@ struct IOSConnectionProfilesView: View {
 }
 
 // iOS connection-profile contract: Add / Load / Update / Delete complete non-secret choices supported by the current iOS profile model, including Start Layer preservation and visible AUTO encryption/obfuscation requirements.
-// Unsupported desktop Start-Layer runtime/multihop are not falsely advertised as native iOS dataplane capabilities; metadata remains round-trip safe.
+// Supported two-hop graphs are non-secret entry/exit references; additional mixed-engine graphs remain unfinished.
 // Profile mutation is blocked while connected or while NetworkExtension is connecting/reasserting/disconnecting.
 // No RouterProfile/API token/private key/external secret payload is encoded into this store.

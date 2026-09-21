@@ -239,6 +239,7 @@ struct IOSUnifiedProductView: View {
     @AppStorage(iosUnifiedModeKey) private var selectedMode = IOSUnifiedModeSelection.smart
     @State private var expanded = false
     @State private var showingNodes = false
+    @State private var showingMultihop = false
     @State private var showingModes = false
     @State private var showingDNS = false
     @State private var showingSettings = false
@@ -283,6 +284,7 @@ struct IOSUnifiedProductView: View {
             }
         }
         .sheet(isPresented: $showingNodes) { RouterVPNNodeManagerSheet().environmentObject(model) }
+        .sheet(isPresented: $showingMultihop) { IOSMultihopView().environmentObject(model) }
         .sheet(isPresented: $showingModes) { IOSUnifiedModePicker(selectedMode: $selectedMode).environmentObject(model) }
         .sheet(isPresented: $showingDNS) { IOSDNSPolicyView().environmentObject(model) }
         .sheet(isPresented: $showingSettings) { IOSUnifiedSettingsView(telemetry: telemetry).environmentObject(model) }
@@ -316,6 +318,7 @@ struct IOSUnifiedProductView: View {
         return model.connected ? "Disconnect" : "Connect"
     }
     private var selectedModeTitle: String {
+        if selectedProfile?.multihopEnabled == true { return "Multihop • " + (selectedProfile?.multihopExitMode ?? "choose exit") }
         if selectedMode == IOSUnifiedModeSelection.smart { return "SMART AUTO" }
         if selectedMode == IOSUnifiedModeSelection.auto { return "AUTO" }
         if selectedMode.hasPrefix(IOSUnifiedModeSelection.customPrefix) { return "CUSTOM • " + String(selectedMode.dropFirst(IOSUnifiedModeSelection.customPrefix.count)) }
@@ -366,7 +369,7 @@ struct IOSUnifiedProductView: View {
                     }
 
                     unifiedRow(icon: "plus.circle.fill", title: "Add / manage nodes", value: "Router / Custom") { showingNodes = true }
-                    unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: iosMultihopSummary) { showingNodes = true }
+                    unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: iosMultihopSummary) { showingMultihop = true }
                     unifiedRow(icon: "person.crop.rectangle.stack", title: "Profiles & bridges", value: "Router / Custom / Tor") { showingNodes = true }
                     unifiedRow(icon: "slider.horizontal.3", title: "Settings", value: settingsSummary) { showingSettings = true }
                     unifiedRow(icon: "wand.and.stars", title: "Mode", value: selectedModeTitle, disabled: model.profileMutationBlocked) { showingModes = true }
@@ -410,13 +413,12 @@ struct IOSUnifiedProductView: View {
 
     private var iosMultihopSummary: String {
         if let p = selectedProfile, p.multihopEnabled == true, let entry = p.multihopEntryID, let exit = p.multihopExitID {
-            let a = telemetry.cached(entry), b = telemetry.cached(exit)
+            // Direct node-cache RTT is not a routed per-hop measurement.
             var text = "\(entry) → \(exit)"
-            if let a, let b { text += String(format: " • %.1f / %.1f ms", a, b) }
             if let path = telemetry.livePathMs, model.connected { text += String(format: " • PATH %.1f", path) }
             return text
         }
-        return "Unavailable on current iOS dataplane"
+        return "Choose WireGuard entry → encrypted exit"
     }
     private var settingsSummary: String {
         let p = selectedProfile
@@ -453,6 +455,7 @@ struct IOSUnifiedProductView: View {
     }
     private func connectOrDisconnect() {
         guard !model.tunnelTransitioning else { return }
+        if !model.connected, selectedProfile?.multihopEnabled == true { Task { await model.connect() }; return }
         if model.connected { model.disconnect(); return }
         guard let profile = selectedProfile else { showingNodes = true; return }
         if profile.normalizedNodeKind == "external" { Task { await model.connectSelectedExternal() }; return }

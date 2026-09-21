@@ -83,6 +83,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
             switch engine {
             case "wireguard": try startWireGuard(provider: provider, root: root, selectedProfile: selectedProfile, completionHandler: completionHandler)
+            case "multihop-libbox": try startMultihop(provider: provider, root: root, selectedProfile: selectedProfile, completionHandler: completionHandler)
             case "libbox": try startLibbox(provider: provider, root: root, selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
             case "external-libbox": try startExternalLibbox(selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
             default: throw tunnelError(6, "Unsupported Router VPN iOS engine \(engine).")
@@ -124,6 +125,74 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard self.wireGuardAdapter === adapter else { adapter.stop { _ in completionHandler(self.tunnelError(41, "A newer iOS WireGuard runtime replaced this proof attempt.")) }; return }
                 if let proofError { adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(proofError) }; return }
                 self.enableForwarding(profileData: forwardingProfileData, proofID: expectedNodeID)
+                self.armNetworkProofGuard()
+                completionHandler(nil)
+            }
+        }
+    }
+
+    private func startMultihop(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], completionHandler: @escaping (Error?) -> Void) throws {
+        guard selectedProfile["multihop_enabled"] as? Bool == true,
+              let entryID = selectedProfile["multihop_entry_id"] as? String,
+              let exitID = selectedProfile["multihop_exit_id"] as? String,
+              selectedProfile["id"] as? String == exitID,
+              root["selectedRouterID"] as? String == exitID,
+              let exitMode = selectedProfile["multihop_exit_mode"] as? String,
+              provider["rawProfileID"] as? String == exitMode,
+              RouterVPNMultihopGraph.supportedExitModes.contains(exitMode),
+              let entryData = provider["entryBundle"] as? Data, !entryData.isEmpty,
+              entryData.count <= Self.maxBundleBytes,
+              let entryRoot = try JSONSerialization.jsonObject(with: entryData) as? [String: Any],
+              entryRoot["selectedRouterID"] as? String == entryID else {
+            throw tunnelError(50, "Multihop handoff does not match the frozen entry/exit selection.")
+        }
+        var entryProfile = try selectedRouterProfile(entryRoot)
+        var exitProfile = selectedProfile
+        guard entryProfile["id"] as? String == entryID else { throw tunnelError(51, "The captured entry bundle belongs to another node.") }
+        let entryProofID = try suppliedNodeProof(root: entryRoot, selectedProfile: entryProfile)
+        let exitProofID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
+        entryProfile["node_proof_id"] = entryProofID
+        exitProfile["node_proof_id"] = exitProofID
+        let wg = try RouterVPNWireGuardConfig.parse(wireGuardLikeProfile(entryRoot, rawProfileID: "wg"), name: "Router VPN entry")
+        guard wg.peers.count == 1, let peer = wg.peers.first, let remote = peer.endpoint,
+              deriveNodeProof(from: peer.publicKey.base64Key) == entryProofID,
+              let address = URLComponents(string: "udp://" + remote.stringRepresentation),
+              let rawHost = address.host, let port = address.port else {
+            throw tunnelError(52, "Multihop entry WireGuard key does not match the paired node identity.")
+        }
+        let host = rawHost.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        var peerJSON: [String: Any] = ["address": host, "port": port,
+            "public_key": peer.publicKey.base64Key, "allowed_ips": peer.allowedIPs.map(\.stringRepresentation)]
+        if let psk = peer.preSharedKey { peerJSON["pre_shared_key"] = psk.base64Key }
+        if let keepalive = peer.persistentKeepAlive, let value = Int(keepalive) { peerJSON["persistent_keepalive_interval"] = value }
+        let endpoint: [String: Any] = ["type": "wireguard", "address": wg.interface.addresses.map(\.stringRepresentation),
+            "private_key": wg.interface.privateKey.base64Key, "mtu": Int(wg.interface.mtu ?? 1280), "peers": [peerJSON]]
+        let files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryProfile,
+            exitProfile: exitProfile, exitMode: exitMode, files: layeredProfile(root, rawProfileID: exitMode))
+        let finalFiles = try RouterVPNMTUPolicy.libbox(files, profile: selectedProfile)
+        let strict = strictKillSwitchRequested(selectedProfile) || strictKillSwitchRequested(entryProfile)
+        if strict {
+            guard let proto = protocolConfiguration as? NETunnelProviderProtocol, proto.includeAllNetworks, proto.enforceRoutes else {
+                throw tunnelError(53, "Multihop cannot weaken either node's strict route-lockdown policy.")
+            }
+        }
+        let entryURL = try selectedProofURL(entryProfile), exitURL = try selectedProofURL(selectedProfile)
+        let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
+        let engine = RouterVPNLibboxEngine(tunnel: self)
+        libboxEngine = engine
+        do { try engine.start(files: finalFiles, strict: strict) }
+        catch { engine.stop(); libboxEngine = nil; throw error }
+        // These are separately routed proofs, not a direct ping cache or a
+        // repeated exit response. Completion stays pending until BOTH succeed.
+        proveSelectedNode(url: entryURL, expectedNodeID: entryProofID, proxyPort: RouterVPNMultihopGraph.entryProofPort) { [weak self] entryError in
+            guard let self else { engine.stop(); completionHandler(RouterVPNMultihopGraph.issue("Multihop provider was released.")); return }
+            guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(54, "Multihop entry proof belongs to an old runtime.")); return }
+            if let entryError { engine.stop(); self.libboxEngine = nil; completionHandler(entryError); return }
+            self.proveSelectedNode(url: exitURL, expectedNodeID: exitProofID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] exitError in
+                guard let self else { engine.stop(); completionHandler(RouterVPNMultihopGraph.issue("Multihop provider was released.")); return }
+                guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(55, "Multihop exit proof belongs to an old runtime.")); return }
+                if let exitError { engine.stop(); self.libboxEngine = nil; completionHandler(exitError); return }
+                self.enableForwarding(profileData: forwardingProfileData, proofID: exitProofID)
                 self.armNetworkProofGuard()
                 completionHandler(nil)
             }

@@ -370,8 +370,8 @@ need(
 need("android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java", "AndroidSpeedLabDialog")
 
 # iPhone/iPad use their native PacketTunnel model rather than the desktop HTTP
-# controller. Current/temporary path identity is watched continuously; unsupported
-# desktop-equivalent multihop remains unavailable instead of being simulated.
+# controller. Current/temporary path identity is watched continuously. The bounded
+# two-hop candidate is explicit; other desktop-equivalent graphs remain unfinished.
 need(
     "ios/RouterVPN/App/IOSSpeedLab.swift",
     "Router VPN Speed Lab",
@@ -404,9 +404,14 @@ need(
     "case router",
     "case external",
     "case multihop",
-    "iOS/iPadOS Speed Lab does not fake desktop-equivalent multihop",
+    "model.iosMultihopEntryBundle(for: saved)",
+    'model.activeEngine == "multihop-libbox"',
+    "Temporary multihop failed both-node path proof",
     "guardedMeasurement",
     "Temporary Speed Lab tunnel did not fully stop",
+    "model.activeSessionIdentity",
+    "transitioning: model.tunnelTransitioning",
+    "withTaskCancellationHandler",
     "IOSSpeedLabPersistenceJournal.begin",
     "IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState",
     "IOSSpeedLabPersistenceJournal.finish",
@@ -432,8 +437,8 @@ need(
     "bufferbloat",
     "Require encrypted AUTO candidates",
     "Require obfuscation for AUTO candidates",
-    "Multihop — unavailable on iOS",
-    "Speed Lab will not fake it",
+    "Saved multihop graph",
+    "Speed Lab will not substitute a direct path",
 )
 need("ios/RouterVPN/App/ProductRootView.swift", "Open Router VPN Speed Lab", "IOSSpeedLabView()", "IOSSpeedLabPersistenceJournal.recoverIfNeeded")
 forbid("ios/RouterVPN/App/IOSSpeedLabRunner.swift", "fake multihop", "pretend multihop")

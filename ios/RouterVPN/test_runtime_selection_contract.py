@@ -103,6 +103,9 @@ import platform
 import subprocess
 import sys
 if platform.system() == 'Darwin':
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_multihop_graph.py')], check=True, timeout=150)
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_multihop_profiles.py')], check=True, timeout=150)
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_session_identity.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_base_selection.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_wireguard_parser.py')], check=True, timeout=180)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_mtu_policy.py')], check=True, timeout=150)

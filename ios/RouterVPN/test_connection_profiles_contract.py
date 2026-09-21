@@ -35,7 +35,11 @@ for marker in (
     'guard !clean.contains(":") else { throw issue("Connection profile contains an invalid saved mode reference.") }',
     'let mode = try normalizeMode(UserDefaults.standard.string(forKey: iosConnectionModeKey) ?? "smart-auto")',
     'let effectiveMode = try normalizeMode(saved.mode)',
-    'Current iOS cannot execute full desktop multihop',
+    'profile.multihopEnabled = prefs.multihopEnabled',
+    'profile.multihopExitMode = prefs.multihopExitMode',
+    'model.iosMultihopEntryBundle(for: bundle)',
+    'Saved multihop requires distinct linked entry/exit ids',
+    'bundleData(containing: saved.nodeID, current: model.bundle)',
     'guard !model.profileMutationBlocked else',
 ):
     assert marker in SOURCE, f"iOS connection profile migration contract missing {marker!r}"

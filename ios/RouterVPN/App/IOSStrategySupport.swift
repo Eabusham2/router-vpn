@@ -150,6 +150,7 @@ extension RouterVPNModel {
     }
 
     func runIOSSmartAuto() async {
+        if selectedNodeProfile?.multihopEnabled == true { await connect(); return }
         guard let profile = iosStrategyProfile, profile.normalizedNodeKind == "router-vpn" else {
             message = "SMART AUTO requires a selected Router VPN node; external exits use their own direct/hop path."
             return

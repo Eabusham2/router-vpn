@@ -225,12 +225,28 @@ ios_profiles = require(
     "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "iosConnectionProfilesSchemaVersion = 4", "IOSConnectionProfileEnvelope", "Add", "Load", "Update", "Delete",
     "routervpn.connection-profiles.v1", "routervpn.unified.mode.v1", "routervpn.unified.custom-presets.v1",
     "dnsMode", "dnsProtocol", "multihopEnabled", "multihopEntryID", "multihopExitID",
-    "Current iOS also does not execute full desktop multihop", "this setup is not saved as a misleading iOS connection profile",
+    "multihopExitMode", "iosMultihopEntryBundle(for: bundle)",
+    "bundleData(containing: saved.nodeID, current: model.bundle)",
+    "Saved multihop exit does not match the connection profile",
     "Connect separately to prove the path", "No RouterProfile/API token/private key/external secret payload",
 )
+# Loading a linked node must restore its own full private runtime bundle. That
+# operation legitimately reads node credentials; it must not encode them into
+# the separate connection-profile records. Audit the actual Codable types and
+# capture/persistence path instead of banning credential reads across the file.
+try:
+    ios_record_types = ios_profiles.split("private struct IOSConnectionSafePreferences", 1)[1].split("@MainActor\nprivate enum IOSConnectionProfileStore", 1)[0]
+    ios_capture = ios_profiles.split("static func snapshot(", 1)[1].split("static func add(", 1)[0]
+    ios_persist = ios_profiles.split("private static func persist(", 1)[1].split("private static func validateStoredProfiles(", 1)[0]
+except IndexError:
+    errors.append("iOS profile serialization owners could not be located")
+    ios_record_types = ios_capture = ios_persist = ""
 for forbidden in ("apiToken", "privateKey", "presharedKey", "socksPassword", "ExternalNodeConfig"):
-    if forbidden in ios_profiles:
-        errors.append(f"iOS connection profile store unexpectedly references secret-bearing model field/type: {forbidden}")
+    if forbidden in ios_record_types + ios_capture + ios_persist:
+        errors.append(f"iOS connection profile serialization references secret-bearing field/type: {forbidden}")
+if "JSONEncoder().encode(envelope)" not in ios_persist:
+    errors.append("iOS profile persistence no longer encodes the non-secret envelope")
+require("deploy/test_ios_multihop_profiles.py", "IOSConnectionSafePreferences", "private_key", "apiToken", "expectedKeys", "multihopEntryID")
 require(
     "ios/RouterVPN/App/IOSUnifiedProductView.swift",
     "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
