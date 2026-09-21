@@ -91,23 +91,35 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func startWireGuard(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], completionHandler: @escaping (Error?) -> Void) throws {
-        let requestedMode = (provider["mode"] as? String ?? "wg").lowercased(), requestedCandidates = (provider["modeCandidates"] as? [String] ?? []).map { $0.lowercased() }
-        if requestedMode != "auto" && requestedMode != "wg" && !requestedCandidates.contains("wg") { throw tunnelError(7, "WireGuard engine received a non-WireGuard mode request.") }
+        let requestedMode = (provider["mode"] as? String ?? "wg").lowercased()
+        let nativeModes: Set<String> = ["wg", "awg2-fast", "awg2-strong"]
+        guard nativeModes.contains(requestedMode) else { throw tunnelError(7, "Native WireGuard-family engine received unsupported mode \(requestedMode).") }
         try IOSStartLayer.validateWireGuard(profile: selectedProfile)
-        let wgText = try wireGuardProfile(root), tunnelConfiguration = try RouterVPNWireGuardConfig.parse(wgText, name: "Router VPN")
-        guard tunnelConfiguration.peers.count == 1 else { throw tunnelError(8, "Router VPN iOS node proof requires exactly one generated WireGuard server peer.") }
-        let derivedNodeID = deriveNodeProof(from: tunnelConfiguration.peers[0].publicKey.base64Key), suppliedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
-        if !suppliedNodeID.isEmpty && suppliedNodeID != derivedNodeID { throw tunnelError(9, "Router bundle node identity does not match its WireGuard server public key.") }
-        let expectedNodeID = suppliedNodeID.isEmpty ? derivedNodeID : suppliedNodeID
+        let profileText = try wireGuardLikeProfile(root, rawProfileID: requestedMode)
+        let tunnelConfiguration = try RouterVPNWireGuardConfig.parse(profileText, name: requestedMode == "wg" ? "Router VPN" : "Router VPN AmneziaWG")
+        guard tunnelConfiguration.peers.count == 1 else { throw tunnelError(8, "Router VPN iOS node proof requires exactly one generated WireGuard-family server peer.") }
+        let suppliedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
+        let expectedNodeID: String
+        if requestedMode == "wg" {
+            let derivedNodeID = deriveNodeProof(from: tunnelConfiguration.peers[0].publicKey.base64Key)
+            if !suppliedNodeID.isEmpty && suppliedNodeID != derivedNodeID { throw tunnelError(9, "Router bundle node identity does not match its WireGuard server public key.") }
+            expectedNodeID = suppliedNodeID.isEmpty ? derivedNodeID : suppliedNodeID
+        } else {
+            // Durable Router VPN identity is anchored to the normal WG server key.
+            // AWG has a distinct peer key, so prove the same private node after
+            // the AWG tunnel is live instead of equating unrelated server keys.
+            guard !suppliedNodeID.isEmpty else { throw tunnelError(9, "Native AmneziaWG requires the imported Router VPN node proof identity.") }
+            expectedNodeID = suppliedNodeID
+        }
         guard expectedNodeID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw tunnelError(10, "Router VPN node proof id is invalid.") }
         let proofURL = try selectedProofURL(selectedProfile)
         let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
-        let adapter = WireGuardAdapter(with: self) { level, message in if level == .error { NSLog("RouterVPN WireGuard: %@", message) } }
+        let adapter = WireGuardAdapter(with: self) { level, message in if level == .error { NSLog("RouterVPN WireGuard/AWG: %@", message) } }
         wireGuardAdapter = adapter
         adapter.start(tunnelConfiguration: tunnelConfiguration) { [weak self] adapterError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 11, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during startup."])); return }
             guard self.wireGuardAdapter === adapter else { adapter.stop { _ in completionHandler(self.tunnelError(40, "A newer iOS WireGuard runtime replaced this startup attempt.")) }; return }
-            if let adapterError { self.wireGuardAdapter = nil; completionHandler(self.tunnelError(12, "WireGuard engine failed to start: \(adapterError.localizedDescription)")); return }
+            if let adapterError { self.wireGuardAdapter = nil; completionHandler(self.tunnelError(12, "WireGuard-family engine failed to start: \(adapterError.localizedDescription)")); return }
             self.proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID, proxyPort: nil) { proofError in
                 guard self.wireGuardAdapter === adapter else { adapter.stop { _ in completionHandler(self.tunnelError(41, "A newer iOS WireGuard runtime replaced this proof attempt.")) }; return }
                 if let proofError { adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(proofError) }; return }
@@ -296,8 +308,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if let selected = profiles.first(where: { ($0["id"] as? String ?? "") == selectedID }) { return selected }
         return profiles[0]
     }
-    private func wireGuardProfile(_ root: [String: Any]) throws -> String {
-        guard let profiles = root["profiles"] as? [String: Any], let wg = profiles["wg"] as? [String: Any], let encoded = wg["wg.conf"] as? String, !encoded.isEmpty, let data = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters), !data.isEmpty, data.count <= Self.maxProfileBytes, let text = String(data: data, encoding: .utf8) else { throw tunnelError(31, "Router VPN bundle has no valid bounded native WireGuard profile.") }
+    private func wireGuardLikeProfile(_ root: [String: Any], rawProfileID: String) throws -> String {
+        let asset = rawProfileID == "wg" ? "wg.conf" : "awg.conf"
+        guard ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID),
+              let profiles = root["profiles"] as? [String: Any],
+              let raw = profiles[rawProfileID] as? [String: Any],
+              let encoded = raw[asset] as? String, !encoded.isEmpty,
+              let data = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters),
+              !data.isEmpty, data.count <= Self.maxProfileBytes,
+              let text = String(data: data, encoding: .utf8) else {
+            throw tunnelError(31, "Router VPN bundle has no valid bounded native \(rawProfileID == "wg" ? "WireGuard" : "AmneziaWG") profile.")
+        }
         return text
     }
     private func layeredProfile(_ root: [String: Any], rawProfileID: String) throws -> [String: Data] {

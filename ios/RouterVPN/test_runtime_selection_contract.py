@@ -18,7 +18,9 @@ for marker in [
     '"wg.conf", "wg-socks.conf", "awg.conf", "awg-socks.conf"',
     'usesUnsupportedLoopbackHelper(object)',
     'loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]',
-    'no validated WireGuardKit/self-contained Libbox variant is present',
+    'no validated native WireGuard/AmneziaWG or self-contained Libbox variant is present',
+    'if ["awg2-fast", "awg2-strong"].contains(rawProfileID)',
+    'files: ["awg.conf": data]',
     'remain unavailable instead of faking Connected',
 ]:
     assert marker in p, marker

@@ -41,7 +41,7 @@ struct IOSProfileSettingsView: View {
                     Picker("WG/AWG base", selection: $baseTunnel) { ForEach(baseValues, id: \.1) { Text($0.0).tag($0.1) } }
                     Toggle("Allow WG/AWG base fallback", isOn: $baseFallback)
                     if baseTunnel == "awg" {
-                        Text("AmneziaWG stays unavailable on iOS until the native PacketTunnel engine exists; saving this preference does not make it runnable.")
+                        Text("AmneziaWG uses Router VPN's pinned native Apple AmneziaWG PacketTunnel for the generated Fast/Strong profiles. PQ/MAX composites still require every additional layer to be owned by the Apple dataplane.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

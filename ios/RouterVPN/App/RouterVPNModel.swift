@@ -77,7 +77,8 @@ final class RouterVPNModel: ObservableObject {
               let selection = try? IOSRuntimeSelector.select(bundle: bundle, logicalModeID: mode.id)
         else { return "Unavailable" }
         switch selection.engine {
-        case .wireGuard: return "WireGuardKit"
+        case .wireGuard:
+            return selection.rawProfileID.hasPrefix("awg2") ? "AmneziaWG • native" : "WireGuardKit"
         case .libbox: return "Libbox • \(selection.rawProfileID)"
         }
     }
@@ -86,9 +87,12 @@ final class RouterVPNModel: ObservableObject {
         guard let bundle else { return "Import a node bundle first." }
         do {
             let selection = try IOSRuntimeSelector.select(bundle: bundle, logicalModeID: mode.id)
-            return selection.engine == .wireGuard
-                ? "Native WireGuardKit PacketTunnel with exact selected-node proof."
-                : "Pinned Libbox 1.13.12 PacketTunnel using imported raw profile \(selection.rawProfileID), with exact selected-node proof forced through the engine."
+            if selection.engine == .wireGuard {
+                return selection.rawProfileID.hasPrefix("awg2")
+                    ? "Pinned native Apple AmneziaWG PacketTunnel with exact private selected-node proof."
+                    : "Native WireGuardKit PacketTunnel with exact selected-node proof."
+            }
+            return "Pinned Libbox 1.13.12 PacketTunnel using imported raw profile \(selection.rawProfileID), with exact selected-node proof forced through the engine."
         } catch {
             return error.localizedDescription
         }
@@ -242,7 +246,7 @@ final class RouterVPNModel: ObservableObject {
             let manager = managers.first ?? NETunnelProviderManager()
             var failures: [String] = []
             for (index, selection) in selections.enumerated() {
-                if auto { message = "AUTO \(index + 1)/\(selections.count) • trying \(modeName(selection.logicalModeID)) • \(engineName(selection.engine))…" }
+                if auto { message = "AUTO \(index + 1)/\(selections.count) • trying \(modeName(selection.logicalModeID)) • \(engineName(selection))…" }
                 let success = try await start(manager: manager, bundle: bundle, selection: selection)
                 if success {
                     connected = true
@@ -251,10 +255,10 @@ final class RouterVPNModel: ObservableObject {
                     selectedLogicalMode = selection.logicalModeID
                     selectedMode = selection.rawProfileID
                     let strictText = strictKillSwitchEnabled ? " • strict route lockdown" : ""
-                    message = "Connected • \(modeName(selection.logicalModeID)) • \(engineName(selection.engine))\(strictText) • selected-node proof passed"
+                    message = "Connected • \(modeName(selection.logicalModeID)) • \(engineName(selection))\(strictText) • selected-node proof passed"
                     return
                 }
-                failures.append("\(modeName(selection.logicalModeID)) / \(engineName(selection.engine))")
+                failures.append("\(modeName(selection.logicalModeID)) / \(engineName(selection))")
                 if strictKillSwitchEnabled {
                     connected = false
                     message = "Strict AUTO failed closed on \(failures[0]). iOS will not cycle to another engine after a failed strict tunnel because that transition could create a route-lockdown gap; choose another mode manually."
@@ -348,7 +352,10 @@ final class RouterVPNModel: ObservableObject {
     }
 
     private func modeName(_ id: String) -> String { logicalModes.first(where: { $0.id == id })?.name ?? id }
-    private func engineName(_ engine: IOSRuntimeEngine) -> String { engine == .wireGuard ? "WireGuardKit" : "Libbox 1.13.12" }
+    private func engineName(_ selection: IOSRuntimeSelection) -> String {
+        if selection.engine == .libbox { return "Libbox 1.13.12" }
+        return selection.rawProfileID.hasPrefix("awg2") ? "AmneziaWG native" : "WireGuardKit"
+    }
 
     func refreshTunnelStatus() async {
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []

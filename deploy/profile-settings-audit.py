@@ -213,7 +213,7 @@ require(
 )
 ios_settings = require(
     "ios/RouterVPN/App/IOSProfileSettingsView.swift", "Allow home LAN access", "Always / strict",
-    "AmneziaWG stays unavailable on iOS", "MTU policy", "Fixed / manual", "Jumbo TUN is intentionally not exposed",
+    "pinned native Apple AmneziaWG PacketTunnel", "MTU policy", "Fixed / manual", "Jumbo TUN is intentionally not exposed",
     "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "autoRequireEncrypted", "autoRequireObfuscation", "model.importBundle",
     "profileMutationBlocked", ".disabled(model.profileMutationBlocked)",

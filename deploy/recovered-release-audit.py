@@ -82,7 +82,7 @@ def modern_ios_engine_truth() -> bool:
             'case wireGuard = "wireguard"',
             'case libbox = "libbox"',
             'encoded["sing-box.json"] != nil',
-            "Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable",
+            "Xray/helper-only, PQ-only composites, ALL/MAX and unsupported multihop combinations remain unavailable",
         )
         and has(
             "ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",

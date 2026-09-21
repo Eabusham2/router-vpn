@@ -141,7 +141,7 @@ for required in (
 selector = text("ios/RouterVPN/App/IOSRuntimeSelection.swift")
 for required in (
     'case libbox = "libbox"', "sing-box.json",
-    "Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable instead of faking Connected.",
+    "Xray/helper-only, PQ-only composites, ALL/MAX and unsupported multihop combinations remain unavailable instead of faking Connected.",
 ):
     if required not in selector:
         error(f"iOS runtime selection truth boundary missing: {required}")
@@ -161,7 +161,7 @@ for required in ("nodeProofID", "node_proof_id", "nodeProofId", "Router bundle n
 project = text("ios/RouterVPN/project.yml")
 for required in (
     "NSLocalNetworkUsageDescription", "com.apple.networkextension.packet-tunnel",
-    "WireGuardKit", "2fec12a6e1f6e3460b6ee483aa00ad29cddadab1",
+    "WireGuardKit", "9d5ee60edefa95b933a738dd7cda671dd18021fc",
     "Build pinned wireguard-go bridge", "libwg-go.a",
 ):
     if required not in project:

@@ -247,7 +247,7 @@ require(
 # XCFramework dependency; CI artifact naming must reflect the real dual engine.
 require(
     "ios/RouterVPN/prepare-wireguard-kit.sh",
-    "2fec12a6e1f6e3460b6ee483aa00ad29cddadab1",
+    "9d5ee60edefa95b933a738dd7cda671dd18021fc",
     "sys/types.h",
     "swift-tools-version:5.5",
 )

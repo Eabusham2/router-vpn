@@ -59,7 +59,7 @@ enum IOSDNSRuntimePolicy {
     static func validate(selection: IOSRuntimeSelection, in bundle: ClientBundle) throws {
         guard let profile = selectedProfile(in: bundle), profile.normalizedNodeKind == "router-vpn", let policy = try resolve(profile) else { return }
         if selection.engine == .wireGuard && !policy.wireGuardCompatible {
-            throw error("\(policy.mode.uppercased()) DNS requires Libbox on iOS. WireGuardKit can only enforce plain IP DNS without pretending to provide TCP/DoT/DoH/DoH3 transport.")
+            throw error("\(policy.mode.uppercased()) DNS requires Libbox on iOS. The native WireGuard/AmneziaWG engine can only enforce plain IP DNS without pretending to provide TCP/DoT/DoH/DoH3 transport.")
         }
     }
 
@@ -67,12 +67,18 @@ enum IOSDNSRuntimePolicy {
         guard let profile = selectedProfile(in: source), profile.normalizedNodeKind == "router-vpn", let policy = try resolve(profile) else { return source }
         var bundle = source
         var profiles = bundle.profiles
-        if policy.wireGuardCompatible, var wg = profiles["wg"], let encoded = wg["wg.conf"],
-           let data = Data(base64Encoded: encoded, options: []), let text = String(data: data, encoding: .utf8) {
-            wg["wg.conf"] = Data(try patchWireGuard(text, policy: policy).utf8).base64EncodedString()
-            profiles["wg"] = wg
+        if policy.wireGuardCompatible {
+            for rawID in ["wg", "awg2-fast", "awg2-strong"] {
+                let asset = rawID == "wg" ? "wg.conf" : "awg.conf"
+                guard var native = profiles[rawID], let encoded = native[asset],
+                      let data = Data(base64Encoded: encoded, options: []),
+                      let text = String(data: data, encoding: .utf8) else { continue }
+                native[asset] = Data(try patchWireGuard(text, policy: policy).utf8).base64EncodedString()
+                profiles[rawID] = native
+            }
         }
-        for rawID in Array(profiles.keys).filter({ $0 != "wg" }) {
+        let nativeIDs: Set<String> = ["wg", "awg2-fast", "awg2-strong"]
+        for rawID in Array(profiles.keys).filter({ !nativeIDs.contains($0) }) {
             guard let encodedFiles = profiles[rawID], isSelfContainedLibbox(encodedFiles), let encoded = encodedFiles["sing-box.json"],
                   let data = Data(base64Encoded: encoded, options: []), data.count <= 4 * 1024 * 1024 else { continue }
             var next = encodedFiles

@@ -177,7 +177,7 @@ func TestApplePacketTunnelRunsPinnedWireGuardAndLibboxAndKeepsUnsupportedModesFa
 		}
 	}
 	selector := repoFile(t, "ios/RouterVPN/App/IOSRuntimeSelection.swift")
-	for _, required := range []string{`case libbox = "libbox"`, "sing-box.json", "Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable instead of faking Connected."} {
+	for _, required := range []string{`case libbox = "libbox"`, "sing-box.json", "Xray/helper-only, PQ-only composites, ALL/MAX and unsupported multihop combinations remain unavailable instead of faking Connected."} {
 		if !strings.Contains(selector, required) {
 			t.Fatalf("Apple runtime selection truth boundary missing %q", required)
 		}
@@ -192,7 +192,7 @@ func TestApplePacketTunnelRunsPinnedWireGuardAndLibboxAndKeepsUnsupportedModesFa
 		t.Fatal("Apple PacketTunnel still contains the retired unavailable-engine stub")
 	}
 	parser := repoFile(t, "ios/RouterVPN/PacketTunnel/WireGuardQuickConfig.swift")
-	for _, required := range []string{"PrivateKey(base64Key:", "IPAddressRange(from:", "DNSServer(from:", "PersistentKeepalive", "scripts/hooks are never executed", "profile exceeds the 1 MiB safety limit"} {
+	for _, required := range []string{"PrivateKey(base64Key:", "IPAddressRange(from:", "DNSServer(from:", "PersistentKeepalive", "junkPacketCount", "initPacketMagicHeader", "AmneziaWG profile is incomplete", "scripts/hooks are never executed", "profile exceeds the 1 MiB safety limit"} {
 		if !strings.Contains(parser, required) {
 			t.Fatalf("Apple bounded WireGuard parser missing %q", required)
 		}
@@ -204,7 +204,7 @@ func TestApplePacketTunnelRunsPinnedWireGuardAndLibboxAndKeepsUnsupportedModesFa
 		}
 	}
 	project := repoFile(t, "ios/RouterVPN/project.yml")
-	for _, required := range []string{"NSLocalNetworkUsageDescription", "com.apple.networkextension.packet-tunnel", "WireGuardKit", "2fec12a6e1f6e3460b6ee483aa00ad29cddadab1", "Build pinned wireguard-go bridge", "libwg-go.a"} {
+	for _, required := range []string{"NSLocalNetworkUsageDescription", "com.apple.networkextension.packet-tunnel", "WireGuardKit", "9d5ee60edefa95b933a738dd7cda671dd18021fc", "Build pinned wireguard-go bridge", "libwg-go.a"} {
 		if !strings.Contains(project, required) {
 			t.Fatalf("Apple pinned native tunnel build boundary missing %q", required)
 		}

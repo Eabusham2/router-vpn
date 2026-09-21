@@ -72,7 +72,7 @@ enum IOSRuntimeSelector {
             return selection
         }
 
-        var lastReason = "no validated WireGuardKit/self-contained Libbox variant is present"
+        var lastReason = "no validated native WireGuard/AmneziaWG or self-contained Libbox variant is present"
         for rawID in orderedVariantIDs(logical) {
             do {
                 let selection = try selectRawCore(bundle: bundle, rawProfileID: rawID, logicalModeID: logical.id)
@@ -84,7 +84,7 @@ enum IOSRuntimeSelector {
         }
 
         throw IOSRuntimeSelectionError.unsupportedMode(
-            "This iOS build cannot run \(logical.name) from the imported node: \(lastReason). Xray-only, AmneziaWG-only, ALL/MAX and multihop combinations remain unavailable instead of faking Connected. Helper-dependent sslocal/Xray chains are also rejected unless a real Apple dataplane exists. OpenVPN remains outside the iOS dataplane until a pinned native implementation exists."
+            "This iOS build cannot run \(logical.name) from the imported node: \(lastReason). Xray/helper-only, PQ-only composites, ALL/MAX and unsupported multihop combinations remain unavailable instead of faking Connected. Helper-dependent sslocal/Xray chains are also rejected unless a real Apple dataplane exists. OpenVPN remains outside the iOS dataplane until a pinned native implementation exists."
         )
     }
 
@@ -102,7 +102,18 @@ enum IOSRuntimeSelector {
     private static func selectRawCore(bundle: ClientBundle, rawProfileID: String, logicalModeID: String) throws -> IOSRuntimeSelection {
         guard isSafe(rawProfileID, pattern: rawProfilePattern) else { throw IOSRuntimeSelectionError.invalidProfileName(rawProfileID) }
         try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)
-        if rawProfileID == "wg" { return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [:]) }
+        if rawProfileID == "wg" {
+            return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [:])
+        }
+        if ["awg2-fast", "awg2-strong"].contains(rawProfileID) {
+            guard let encoded = bundle.profiles[rawProfileID],
+                  let value = encoded["awg.conf"],
+                  let data = Data(base64Encoded: value, options: []),
+                  !data.isEmpty, data.count <= maxAssetBytes else {
+                throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no bounded native AmneziaWG profile.")
+            }
+            return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: ["awg.conf": data])
+        }
         guard let encoded = bundle.profiles[rawProfileID], encoded["sing-box.json"] != nil else {
             throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no iOS-runnable sing-box profile.")
         }

@@ -56,16 +56,18 @@ targets:
     platform: iOS
     sources: [PacketTunnel]
     preBuildScripts:
-      - name: Build pinned wireguard-go bridge and Libbox bridge
+      - name: Build pinned AmneziaWG-capable WireGuardKit bridge and Libbox bridge
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
-          PIN=2fec12a6e1f6e3460b6ee483aa00ad29cddadab1
+          PIN=9d5ee60edefa95b933a738dd7cda671dd18021fc
           WG_ROOT="$SRCROOT/.deps/wireguard-apple"
           test -d "$WG_ROOT/Sources/WireGuardKitGo"
           ACTUAL="$(git -C "$WG_ROOT" rev-parse HEAD)"
           test "$ACTUAL" = "$PIN" || { echo "WireGuardKit checkout mismatch: $ACTUAL" >&2; exit 1; }
           test "$(sed -n '1p' "$WG_ROOT/Package.swift")" = '// swift-tools-version:5.5'
+          grep -Fq 'public var junkPacketCount: UInt16?' "$WG_ROOT/Sources/WireGuardKit/InterfaceConfiguration.swift"
+          grep -Fq 'github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260814' "$WG_ROOT/Sources/WireGuardKitGo/go.mod"
           make -C "$WG_ROOT/Sources/WireGuardKitGo" build
           test -s "$CONFIGURATION_BUILD_DIR/libwg-go.a"
           "$SRCROOT/prepare-libbox.sh"

@@ -290,9 +290,9 @@ jobs:
           test -d "$WG"
           test -d .deps/Libbox.xcframework
           test -s .deps/libbox-LICENSE.txt
-          test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          test "$(git -C "$WG" rev-parse HEAD)" = '9d5ee60edefa95b933a738dd7cda671dd18021fc'
           test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5'
-          test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1'
+          test "$(cat .deps/wireguard-apple.pin)" = '9d5ee60edefa95b933a738dd7cda671dd18021fc'
           grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
           test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
           test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA"

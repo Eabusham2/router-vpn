@@ -247,9 +247,9 @@ jobs:
         run: |
           APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"; EXT="$APP/PlugIns/RouterVPNPacketTunnel.appex"; WG="$PWD/.deps/wireguard-apple"; IPA="$PWD/build/RouterVPN-native-unsigned-resignable.ipa"
           test -d "$EXT" || { echo "::error::PacketTunnel extension is missing"; exit 1; }
-          test "$(git -C "$WG" rev-parse HEAD)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1' || { echo "::error::WireGuardKit commit pin mismatch"; exit 1; }
+          test "$(git -C "$WG" rev-parse HEAD)" = '9d5ee60edefa95b933a738dd7cda671dd18021fc' || { echo "::error::WireGuardKit commit pin mismatch"; exit 1; }
           test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5' || { echo "::error::WireGuardKit Package.swift toolchain contract changed"; exit 1; }
-          test "$(cat .deps/wireguard-apple.pin)" = '2fec12a6e1f6e3460b6ee483aa00ad29cddadab1' || { echo "::error::WireGuardKit recorded pin mismatch"; exit 1; }
+          test "$(cat .deps/wireguard-apple.pin)" = '9d5ee60edefa95b933a738dd7cda671dd18021fc' || { echo "::error::WireGuardKit recorded pin mismatch"; exit 1; }
           test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a" || { echo "::error::libwg-go.a is missing"; exit 1; }
           test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA" || { echo "::error::iOS app source SHA mismatch"; exit 1; }
           test "$(plutil -extract RouterVPNSourceRepository raw -o - "$APP/Info.plist")" = 'Eabusham2/router-vpn' || { echo "::error::iOS app source repository mismatch"; exit 1; }

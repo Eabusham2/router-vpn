@@ -52,7 +52,10 @@ enum RouterVPNWireGuardConfig {
             }
         }
 
-        let allowedInterfaceKeys: Set<String> = ["privatekey", "address", "listenport", "mtu", "dns"]
+        let allowedInterfaceKeys: Set<String> = [
+            "privatekey", "address", "listenport", "mtu", "dns",
+            "jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"
+        ]
         for key in interfaceValues.keys where !allowedInterfaceKeys.contains(key) {
             throw ParseError.malformed("Unsupported WireGuard interface key \(key); scripts/hooks are never executed by Router VPN.")
         }
@@ -74,8 +77,30 @@ enum RouterVPNWireGuardConfig {
             interface.mtu = mtu
         }
         interface.dns = try csv(interfaceValues["dns"]).map {
-            guard let dns = DNSServer(from: $0) else { throw ParseError.malformed("Only literal IPv4/IPv6 DNS servers are supported in native iOS WireGuard: \($0)") }
+            guard let dns = DNSServer(from: $0) else { throw ParseError.malformed("Only literal IPv4/IPv6 DNS servers are supported in native iOS WireGuard/AmneziaWG: \($0)") }
             return dns
+        }
+
+        let awgKeys: Set<String> = ["jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"]
+        let awgPresent = Set(interfaceValues.keys).intersection(awgKeys)
+        if !awgPresent.isEmpty {
+            guard awgPresent == awgKeys else {
+                throw ParseError.malformed("AmneziaWG profile is incomplete; Router VPN requires Jc/Jmin/Jmax/S1-S4/H1-H4 together.")
+            }
+            interface.junkPacketCount = try requiredUInt16(interfaceValues, "jc", label: "Jc")
+            interface.junkPacketMinSize = try requiredUInt16(interfaceValues, "jmin", label: "Jmin")
+            interface.junkPacketMaxSize = try requiredUInt16(interfaceValues, "jmax", label: "Jmax")
+            guard let jmin = interface.junkPacketMinSize, let jmax = interface.junkPacketMaxSize, jmin <= jmax else {
+                throw ParseError.malformed("AmneziaWG Jmin must not exceed Jmax.")
+            }
+            interface.initPacketJunkSize = try requiredUInt16(interfaceValues, "s1", label: "S1")
+            interface.responsePacketJunkSize = try requiredUInt16(interfaceValues, "s2", label: "S2")
+            interface.cookieReplyPacketJunkSize = try requiredUInt16(interfaceValues, "s3", label: "S3")
+            interface.transportPacketJunkSize = try requiredUInt16(interfaceValues, "s4", label: "S4")
+            interface.initPacketMagicHeader = try magicHeader(interfaceValues, "h1", label: "H1")
+            interface.responsePacketMagicHeader = try magicHeader(interfaceValues, "h2", label: "H2")
+            interface.underloadPacketMagicHeader = try magicHeader(interfaceValues, "h3", label: "H3")
+            interface.transportPacketMagicHeader = try magicHeader(interfaceValues, "h4", label: "H4")
         }
 
         guard !peerSections.isEmpty else { throw ParseError.malformed("WireGuard profile has no peers.") }
@@ -104,12 +129,31 @@ enum RouterVPNWireGuardConfig {
                 peer.endpoint = endpoint
             }
             if let keepaliveText = one(values, "persistentkeepalive") {
-                guard let keepalive = UInt16(keepaliveText) else { throw ParseError.malformed("WireGuard PersistentKeepalive is invalid.") }
-                peer.persistentKeepAlive = keepalive
+                guard UInt16(keepaliveText) != nil else { throw ParseError.malformed("WireGuard PersistentKeepalive is invalid.") }
+                peer.persistentKeepAlive = keepaliveText
             }
             peers.append(peer)
         }
         return TunnelConfiguration(name: name, interface: interface, peers: peers)
+    }
+
+    private static func requiredUInt16(_ values: [String: [String]], _ key: String, label: String) throws -> UInt16 {
+        guard let raw = one(values, key), let value = UInt16(raw) else {
+            throw ParseError.malformed("AmneziaWG \(label) is invalid.")
+        }
+        return value
+    }
+
+    private static func magicHeader(_ values: [String: [String]], _ key: String, label: String) throws -> String {
+        guard let raw = one(values, key),
+              raw.range(of: "^[0-9]{1,10}(-[0-9]{1,10})?$", options: .regularExpression) != nil else {
+            throw ParseError.malformed("AmneziaWG \(label) is invalid.")
+        }
+        let parts = raw.split(separator: "-", maxSplits: 1).compactMap { UInt32($0) }
+        guard !parts.isEmpty, parts.count <= 2, parts.count == 1 || parts[0] <= parts[1] else {
+            throw ParseError.malformed("AmneziaWG \(label) range is invalid.")
+        }
+        return raw
     }
 
     private static func one(_ values: [String: [String]], _ key: String) -> String? {
