@@ -58,7 +58,13 @@ need('cmd/router-agent/client_forwarding_master.go','/api/forwarding/master','Se
 need('android/app/src/main/java/com/eabusham/routervpn/AndroidForwardingMaster.java','/api/forwarding/master','VPN session/path changed')
 need('ios/RouterVPN/App/IOSUnifiedProductView.swift','IOSForwardingMasterButton().environmentObject(model)')
 need('ios/RouterVPN/App/IOSForwardingMasterView.swift','sendProviderMessage','session.status == .connected','session_id','Server forwarding master')
-need('ios/RouterVPN/PacketTunnel/RouterVPNForwardingChannel.swift','createTCPConnectionThroughTunnel','Policy.verifyProof','Policy.authorize','readback')
+# Swift owns the session/HTTP state machine; its Objective-C adapter owns the
+# tunnel-bound Apple API. Require the complete shipping chain, not a dead label
+# or a comment copying the old Swift-only call spelling.
+need('ios/RouterVPN/PacketTunnel/RouterVPNForwardingChannel.swift','RVPNTunnelTCPConnection(provider: provider','Policy.verifyProof','Policy.authorize','readback')
+need('ios/RouterVPN/PacketTunnel/RVPNTunnelTCPConnection.m','[provider createTCPConnectionThroughTunnelToEndpoint:endpoint','inet_pton(AF_INET','inet_pton(AF_INET6','[_connection cancel]')
+need('ios/RouterVPN/project.yml','sources: [PacketTunnel]','SWIFT_OBJC_BRIDGING_HEADER: PacketTunnel/RVPNTunnelTCPConnection.h')
+forbid('ios/RouterVPN/PacketTunnel/RVPNTunnelTCPConnection.m','[provider createTCPConnectionToEndpoint:','[NWTCPConnection alloc]')
 
 # A20-10/11: schema-v4 whole-connection profiles + transactional/frozen runtime identity.
 example=json.loads(text('configs/client/routers.json.example') or '{}')
@@ -83,8 +89,8 @@ need('README.md','8786-8793','45999','14444')
 # A20-16/17: exact-SHA artifact safety, image-only production, and do-not-regress boundaries.
 need('server/scripts/download-broker.py','ROUTER_VPN_GITHUB_SHA')
 need('deploy/native-download-policy-audit.py','same-SHA')
-need('server/scripts/publish-downloads.sh','github_exact_sha_required')
 compose=text('server/portainer-current.yaml')
+need('server/scripts/publish-downloads.sh','github_exact_sha_required')
 if '\nbuild:' in compose or '\n    build:' in compose: errors.append('production compose revived build: path')
 for rel in ('README.md','docs/CURRENT-GUIDE.md','docs/INSTALL-PORTAINER.md'):
     need(rel,'image-only')
