@@ -71,8 +71,16 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		"IOSSpeedResult", "speedTest", "/api/benchmark/download", "/api/benchmark/upload",
 		"Authorization", "downloadMbps", "uploadMbps", "IOSProbeOnce")
 	requireRepoMarkers(t, "ios/RouterVPN/App/IOSUnifiedProductView.swift",
-		"bolt.fill", "livePathMs", "Performance", "Master port forwarding", "IOSUnifiedMap",
+		"bolt.fill", "livePathMs", "Performance", "IOSForwardingMasterButton().environmentObject(model)", "IOSUnifiedMap",
 		"Run real current VPN path speed", "telemetry.speedTest", "packet", "multihop", "New CUSTOM preset")
+	// The live forwarding implementation is a composed view/model, not the old
+	// disabled inline label. Assert both the call site and the actual owner.
+	requireRepoMarkers(t, "ios/RouterVPN/App/IOSForwardingMasterView.swift",
+		"struct IOSForwardingMasterButton: View", "Server forwarding master",
+		"sendProviderMessage", "session.connectedDate == connectedAt",
+		"intent.sessionID == sessionID", "reply.node_id == nodeID", "master.invalidate()")
+	requireRepoMarkers(t, "ios/RouterVPN/PacketTunnel/RouterVPNForwardingChannel.swift",
+		"RVPNTunnelTCPConnection(provider: provider", "Policy.authorize", "Policy.verifyProof", "readback")
 	requireRepoMarkers(t, "ios/RouterVPN/App/NodeManagerSheet.swift",
 		"Pair from home LAN", "Import node bundle", "Select lowest-latency node", "model.removeNode", "Edit", "updateNodeMetadata")
 
