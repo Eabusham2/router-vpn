@@ -71,16 +71,12 @@ func (s *server) clientForwardingMaster(w http.ResponseWriter, r *http.Request) 
 
 	var requested *bool
 	if r.Method == http.MethodPut {
-		var body struct {
-			Enabled *bool `json:"enabled"`
-		}
-		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&body); err != nil || body.Enabled == nil {
-			http.Error(w, "body must be {\"enabled\":true|false}", http.StatusBadRequest)
+		value, err := decodeForwardingMasterRequest(http.MaxBytesReader(w, r.Body, 4096))
+		if err != nil {
+			http.Error(w, "body must be exactly {\"enabled\":true|false}", http.StatusBadRequest)
 			return
 		}
-		requested = body.Enabled
+		requested = &value
 	}
 
 	base, err := validatedAdminMutationBase(getenv("ROUTER_VPN_ADMIN_MUTATION_LISTEN", defaultAdminMutationListen))
@@ -116,7 +112,15 @@ func (s *server) clientForwardingMaster(w http.ResponseWriter, r *http.Request) 
 	if requested != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{Timeout: 4 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	transport := &http.Transport{Proxy: nil}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Timeout:   4 * time.Second,
+		Transport: transport,
+		// A redirect must never turn this narrowly scoped loopback operation
+		// into an arbitrary request carrying the Setup Center admin token.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		http.Error(w, "forwarding administration is unavailable", http.StatusServiceUnavailable)
@@ -136,14 +140,14 @@ func (s *server) clientForwardingMaster(w http.ResponseWriter, r *http.Request) 
 	var admin struct {
 		OK       bool `json:"ok"`
 		Settings struct {
-			ForwardingMaster bool `json:"forwarding_master"`
+			ForwardingMaster *bool `json:"forwarding_master"`
 		} `json:"settings"`
 	}
-	if json.Unmarshal(body, &admin) != nil || !admin.OK {
+	if json.Unmarshal(body, &admin) != nil || !admin.OK || admin.Settings.ForwardingMaster == nil {
 		http.Error(w, "forwarding administration response could not be verified", http.StatusBadGateway)
 		return
 	}
-	if requested != nil && subtle.ConstantTimeByteEq(boolByte(admin.Settings.ForwardingMaster), boolByte(*requested)) != 1 {
+	if requested != nil && subtle.ConstantTimeByteEq(boolByte(*admin.Settings.ForwardingMaster), boolByte(*requested)) != 1 {
 		http.Error(w, "forwarding master did not reach the requested state", http.StatusBadGateway)
 		return
 	}
@@ -151,10 +155,35 @@ func (s *server) clientForwardingMaster(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok":      true,
-		"enabled": admin.Settings.ForwardingMaster,
+		"enabled": *admin.Settings.ForwardingMaster,
 		"peer":    peer.String(),
 		"proof":   "authenticated tunnel-peer request proxied server-side to loopback forwarding policy",
 	})
+}
+
+// Decode exactly one boolean member. Decoding straight into a struct accepts
+// duplicate keys and an unread second JSON value, neither of which is a
+// verifiable master-control command. Consume EOF before any admin mutation.
+func decodeForwardingMasterRequest(body io.Reader) (bool, error) {
+	dec := json.NewDecoder(body)
+	invalid := errors.New("invalid forwarding master command")
+	if token, err := dec.Token(); err != nil || token != json.Delim('{') {
+		return false, invalid
+	}
+	if token, err := dec.Token(); err != nil || token != "enabled" {
+		return false, invalid
+	}
+	var enabled *bool
+	if err := dec.Decode(&enabled); err != nil || enabled == nil {
+		return false, invalid
+	}
+	if token, err := dec.Token(); err != nil || token != json.Delim('}') {
+		return false, invalid
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return false, invalid
+	}
+	return *enabled, nil
 }
 
 func boolByte(v bool) byte {
