@@ -105,33 +105,47 @@ extension RouterVPNModel {
         Set((iosStrategyProfile?.customLayers ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
     }
 
-    private func stopIOSStrategyTunnel() async {
-        let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
+    private func stopIOSStrategyTunnel() async -> Bool {
+        let managers: [NETunnelProviderManager]
+        do {
+            managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
+                ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
+            }
+        } catch {
+            message = "Cannot verify the previous VPN session; no replacement runtime was started."
+            return false
+        }
+        var saved = true
         for manager in managers {
             manager.isOnDemandEnabled = false
             manager.onDemandRules = []
-            try? await manager.saveToPreferences()
+            do { try await manager.saveToPreferences() } catch { saved = false }
             manager.connection.stopVPNTunnel()
         }
         for _ in 0..<24 {
             if managers.allSatisfy({ $0.connection.status == .disconnected || $0.connection.status == .invalid }) { break }
             try? await Task.sleep(for: .milliseconds(150))
         }
+        guard saved, managers.allSatisfy({ $0.connection.status == .disconnected || $0.connection.status == .invalid }) else {
+            message = "Previous VPN teardown is unverified; retry Disconnect before starting another runtime."
+            return false
+        }
         connected = false
         activeEngine = "none"
         activeRawProfile = ""
+        return true
     }
 
     private func connectIOSRawCandidate(_ rawID: String) async -> Bool {
         guard let bundle,
               let selection = try? IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawID) else { return false }
-        if connected { await stopIOSStrategyTunnel() }
+        if connected { guard await stopIOSStrategyTunnel() else { return false } }
         auto = false
         selectedLogicalMode = selection.logicalModeID
         selectedMode = rawID
-        await connect()
+        await connect(rawProfileID: rawID)
         let exact = connected && activeRawProfile == rawID
-        if connected && !exact { await stopIOSStrategyTunnel() }
+        if connected && !exact { _ = await stopIOSStrategyTunnel() }
         return exact
     }
 
@@ -144,7 +158,7 @@ extension RouterVPNModel {
             message = "SMART AUTO is unavailable while iOS Always/strict route lockdown is enabled: changing PacketTunnel engines after a proven connection could create an unproven transition gap. Use strict AUTO or choose a mode manually."
             return
         }
-        if connected { await stopIOSStrategyTunnel() }
+        if connected { guard await stopIOSStrategyTunnel() else { return } }
         auto = true
         await connect()
         guard connected, !activeRawProfile.isEmpty else { return }
@@ -230,7 +244,7 @@ extension RouterVPNModel {
             return
         }
 
-        if connected { await stopIOSStrategyTunnel() }
+        if connected { guard await stopIOSStrategyTunnel() else { return } }
         let attempts = iosStrategyStrictLockdown ? Array(candidates.prefix(1)) : candidates
         for (index, candidate) in attempts.enumerated() {
             message = "CUSTOM \(index + 1)/\(attempts.count) • trying \(candidate.raw) for \(requested.joined(separator: ", "))…"

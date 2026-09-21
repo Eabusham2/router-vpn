@@ -8,7 +8,7 @@ p=app.joinpath('IOSRuntimeSelection.swift').read_text()
 for marker in [
     'case wireGuard = "wireguard"',
     'case libbox = "libbox"',
-    'logical.id == "base-raw"',
+    'static func candidates(bundle: ClientBundle, logicalModeID: String)',
     'selectRaw(bundle: ClientBundle, rawProfileID: String)',
     'encoded["sing-box.json"] != nil',
     'maxAssetBytes = 4 * 1024 * 1024',
@@ -19,8 +19,8 @@ for marker in [
     'usesUnsupportedLoopbackHelper(object)',
     'loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]',
     'no validated native WireGuard/AmneziaWG or self-contained Libbox variant is present',
-    'if ["awg2-fast", "awg2-strong"].contains(rawProfileID)',
-    'files: ["awg.conf": data]',
+    'if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID)',
+    'files: [asset: data]',
     'remain unavailable instead of faking Connected',
 ]:
     assert marker in p, marker
@@ -103,6 +103,8 @@ import platform
 import subprocess
 import sys
 if platform.system() == 'Darwin':
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_base_selection.py')], check=True, timeout=150)
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_wireguard_parser.py')], check=True, timeout=180)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_mtu_policy.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_forwarding_policy.py')], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_forwarding_sdk.py')], check=True, timeout=240)

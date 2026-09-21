@@ -69,7 +69,7 @@ final class RouterVPNModel: ObservableObject {
         return (try? IOSRuntimeSelector.select(bundle: bundle, logicalModeID: selectedLogicalMode)) != nil
     }
 
-    var baseSelectorEnabled: Bool { false }
+    var baseSelectorEnabled: Bool { currentLogicalMode?.baseSelector == true }
     var profileMutationBlocked: Bool { connected || tunnelTransitioning }
 
     func runtimeLabel(for mode: LogicalMode) -> String {
@@ -183,9 +183,11 @@ final class RouterVPNModel: ObservableObject {
         socksPort = String(decoded.socks5Port)
         socksUsername = ""
         socksPassword = ""
-        basePreference = "wg"
+        basePreference = "auto"
         baseFallback = false
         if let selected = decoded.routerProfiles.first(where: { $0.id == decoded.selectedRouterID }) ?? decoded.routerProfiles.first {
+            basePreference = selected.baseTunnel ?? "auto"
+            baseFallback = selected.baseFallback ?? false
             if let access = selected.homeLANAccess { homeLANAccess = access }
             if let cidrs = selected.homeLANCIDRs, !cidrs.isEmpty { homeLANCIDRs = cidrs }
         }
@@ -205,7 +207,13 @@ final class RouterVPNModel: ObservableObject {
         return [selection.rawProfileID]
     }
 
-    func connect() async {
+    func connect() async { await connect(rawProfileID: nil) }
+
+    // Exact raw attempts are used by CUSTOM, SMART reductions and last-good
+    // rollback. Resolving them through the logical picker would silently turn
+    // an AWG Fast attempt into the preferred WG variant of the same mode.
+    func connect(rawProfileID: String?) async {
+        if connected { message = "Disconnect before starting another VPN session"; return }
         if tunnelTransitioning { message = "VPN transition already in progress"; return }
         tunnelTransitioning = true
         defer { tunnelTransitioning = false }
@@ -213,9 +221,11 @@ final class RouterVPNModel: ObservableObject {
         guard let bundle else { message = "Configure your home router first"; return }
         let selections: [IOSRuntimeSelection]
         do {
-            if auto {
+            if let rawProfileID {
+                selections = [try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawProfileID)]
+            } else if auto {
                 let runnable = IOSRuntimeSelector.runnableModes(in: bundle)
-                var values = try runnable.map { try IOSRuntimeSelector.select(bundle: bundle, logicalModeID: $0.id) }
+                var values = try runnable.flatMap { try IOSRuntimeSelector.candidates(bundle: bundle, logicalModeID: $0.id) }
                 if let profile = selectedRouterProfile {
                     let filtered = values.compactMap { selection -> (IOSRuntimeSelection, String?) in
                         (selection, IOSStrategyCatalog.autoRequirementFailure(rawID: selection.rawProfileID, profile: profile))
@@ -226,14 +236,19 @@ final class RouterVPNModel: ObservableObject {
                         throw IOSRuntimeSelectionError.unsupportedMode("AUTO failed closed: no iOS-runnable candidate satisfies the saved requirements. " + rejected.joined(separator: " • "))
                     }
                 }
-                values.sort { lhs, rhs in
-                    if lhs.engine != rhs.engine { return lhs.engine == .wireGuard }
-                    return lhs.logicalModeID < rhs.logicalModeID
-                }
+                let catalog = bundle.logicalModes.map(\.id)
+                values = values.enumerated().sorted { lhs, rhs in
+                    let a = lhs.element, b = rhs.element
+                    if a.engine != b.engine { return a.engine == .wireGuard }
+                    let left = catalog.firstIndex(of: a.logicalModeID) ?? Int.max
+                    let right = catalog.firstIndex(of: b.logicalModeID) ?? Int.max
+                    return left == right ? lhs.offset < rhs.offset : left < right
+                }.map(\.element)
                 guard !values.isEmpty else { throw IOSRuntimeSelectionError.unsupportedMode("This imported node has no iOS-runnable WireGuardKit or Libbox mode for the selected DNS policy.") }
                 selections = strictKillSwitchEnabled ? [values[0]] : values
             } else {
-                selections = [try IOSRuntimeSelector.select(bundle: bundle, logicalModeID: selectedLogicalMode)]
+                let candidates = try IOSRuntimeSelector.candidates(bundle: bundle, logicalModeID: selectedLogicalMode)
+                selections = strictKillSwitchEnabled ? Array(candidates.prefix(1)) : candidates
             }
         } catch {
             connected = false
@@ -242,8 +257,24 @@ final class RouterVPNModel: ObservableObject {
         }
 
         do {
-            let managers = try await NETunnelProviderManager.loadAllFromPreferences()
+            let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
+                ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
+            }
+            guard managers.count <= 1 else {
+                message = "Multiple Router VPN tunnel configurations exist; resolve them before connecting."
+                return
+            }
             let manager = managers.first ?? NETunnelProviderManager()
+            guard manager.connection.status == .disconnected || manager.connection.status == .invalid else {
+                message = "An existing Router VPN tunnel is still active or transitioning; disconnect it before replacement."
+                return
+            }
+            guard self.bundle?.selectedRouterID == bundle.selectedRouterID,
+                  self.bundle?.routerProfiles == bundle.routerProfiles,
+                  self.bundle?.profiles == bundle.profiles else {
+                message = "Node configuration changed while preparing the connection; no runtime was started."
+                return
+            }
             var failures: [String] = []
             for (index, selection) in selections.enumerated() {
                 if auto { message = "AUTO \(index + 1)/\(selections.count) • trying \(modeName(selection.logicalModeID)) • \(engineName(selection))…" }
@@ -264,7 +295,10 @@ final class RouterVPNModel: ObservableObject {
                     message = "Strict AUTO failed closed on \(failures[0]). iOS will not cycle to another engine after a failed strict tunnel because that transition could create a route-lockdown gap; choose another mode manually."
                     return
                 }
-                await stopTrial(manager)
+                guard await stopTrial(manager) else {
+                    message = "Previous VPN teardown is unverified; fallback was stopped rather than overlapping runtimes."
+                    return
+                }
             }
             connected = false
             activeEngine = "none"
@@ -287,11 +321,11 @@ final class RouterVPNModel: ObservableObject {
             "mode": selection.rawProfileID,
             "modeCandidates": [selection.rawProfileID],
             "logicalMode": selection.logicalModeID,
-            "basePreference": "wg",
-            "baseFallback": false,
+            "basePreference": selection.rawProfileID.hasPrefix("awg2") ? "awg" : "wg",
+            "baseFallback": baseFallback,
             "bundle": try JSONEncoder().encode(bundle)
         ]
-        if selection.engine == .libbox { configuration["rawProfileID"] = selection.rawProfileID }
+        configuration["rawProfileID"] = selection.rawProfileID
         proto.providerConfiguration = configuration
 
         let strict = strictKillSwitchEnabled
@@ -340,15 +374,17 @@ final class RouterVPNModel: ObservableObject {
         return manager.connection.status == .connected
     }
 
-    private func stopTrial(_ manager: NETunnelProviderManager) async {
+    private func stopTrial(_ manager: NETunnelProviderManager) async -> Bool {
         manager.isOnDemandEnabled = false
         manager.onDemandRules = []
-        try? await manager.saveToPreferences()
+        do { try await manager.saveToPreferences() }
+        catch { manager.connection.stopVPNTunnel(); return false }
         manager.connection.stopVPNTunnel()
         for _ in 0..<12 {
-            if manager.connection.status == .disconnected || manager.connection.status == .invalid { return }
+            if manager.connection.status == .disconnected || manager.connection.status == .invalid { return true }
             try? await Task.sleep(for: .milliseconds(150))
         }
+        return manager.connection.status == .disconnected || manager.connection.status == .invalid
     }
 
     private func modeName(_ id: String) -> String { logicalModes.first(where: { $0.id == id })?.name ?? id }

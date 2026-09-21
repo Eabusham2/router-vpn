@@ -13,12 +13,13 @@ enum RouterVPNWireGuardConfig {
         }
     }
 
-    static func parse(_ text: String, name: String = "Router VPN") throws -> TunnelConfiguration {
+    static func parse(_ text: String, name: String = "Router VPN", amnezia: Bool = false) throws -> TunnelConfiguration {
         guard text.utf8.count <= 1024 * 1024 else { throw ParseError.malformed("WireGuard profile exceeds the 1 MiB safety limit.") }
 
         var interfaceValues: [String: [String]] = [:]
         var peerSections: [[String: [String]]] = []
         var currentSection = ""
+        var sawInterface = false
 
         for (index, rawLine) in text.split(whereSeparator: { $0.isNewline }).enumerated() {
             var line = String(rawLine)
@@ -31,8 +32,16 @@ enum RouterVPNWireGuardConfig {
                 guard section == "interface" || section == "peer" else {
                     throw ParseError.malformed("Unsupported WireGuard section [\(section)] at line \(index + 1).")
                 }
+                if section == "interface" {
+                    guard !sawInterface, peerSections.isEmpty else {
+                        throw ParseError.malformed("A WireGuard-family profile must contain exactly one initial interface section.")
+                    }
+                    sawInterface = true
+                } else {
+                    guard sawInterface else { throw ParseError.malformed("WireGuard peer appears before the interface.") }
+                    peerSections.append([:])
+                }
                 currentSection = section
-                if section == "peer" { peerSections.append([:]) }
                 continue
             }
             guard let equals = line.firstIndex(of: "=") else {
@@ -59,6 +68,7 @@ enum RouterVPNWireGuardConfig {
         for key in interfaceValues.keys where !allowedInterfaceKeys.contains(key) {
             throw ParseError.malformed("Unsupported WireGuard interface key \(key); scripts/hooks are never executed by Router VPN.")
         }
+        try rejectDuplicateScalars(interfaceValues, allowingLists: ["address", "dns"])
         guard let privateKeyText = one(interfaceValues, "privatekey"), let privateKey = PrivateKey(base64Key: privateKeyText) else {
             throw ParseError.malformed("WireGuard PrivateKey is missing or invalid.")
         }
@@ -83,7 +93,10 @@ enum RouterVPNWireGuardConfig {
 
         let awgKeys: Set<String> = ["jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"]
         let awgPresent = Set(interfaceValues.keys).intersection(awgKeys)
-        if !awgPresent.isEmpty {
+        guard amnezia || awgPresent.isEmpty else {
+            throw ParseError.malformed("AmneziaWG parameters cannot run under a plain WireGuard mode label.")
+        }
+        if amnezia {
             guard awgPresent == awgKeys else {
                 throw ParseError.malformed("AmneziaWG profile is incomplete; Router VPN requires Jc/Jmin/Jmax/S1-S4/H1-H4 together.")
             }
@@ -108,6 +121,7 @@ enum RouterVPNWireGuardConfig {
         let allowedPeerKeys: Set<String> = ["publickey", "presharedkey", "allowedips", "endpoint", "persistentkeepalive"]
         var peers: [PeerConfiguration] = []
         for values in peerSections {
+            try rejectDuplicateScalars(values, allowingLists: ["allowedips"])
             for key in values.keys where !allowedPeerKeys.contains(key) {
                 throw ParseError.malformed("Unsupported WireGuard peer key \(key).")
             }
@@ -132,6 +146,9 @@ enum RouterVPNWireGuardConfig {
                 guard UInt16(keepaliveText) != nil else { throw ParseError.malformed("WireGuard PersistentKeepalive is invalid.") }
                 peer.persistentKeepAlive = keepaliveText
             }
+            guard !peers.contains(where: { $0.publicKey == peer.publicKey }) else {
+                throw ParseError.malformed("Duplicate WireGuard server peer identity.")
+            }
             peers.append(peer)
         }
         return TunnelConfiguration(name: name, interface: interface, peers: peers)
@@ -149,11 +166,19 @@ enum RouterVPNWireGuardConfig {
               raw.range(of: "^[0-9]{1,10}(-[0-9]{1,10})?$", options: .regularExpression) != nil else {
             throw ParseError.malformed("AmneziaWG \(label) is invalid.")
         }
-        let parts = raw.split(separator: "-", maxSplits: 1).compactMap { UInt32($0) }
-        guard !parts.isEmpty, parts.count <= 2, parts.count == 1 || parts[0] <= parts[1] else {
+        let pieces = raw.split(separator: "-", maxSplits: 1)
+        let parts = pieces.compactMap { UInt32($0) }
+        guard parts.count == pieces.count, !parts.isEmpty,
+              parts.count == 1 || parts[0] <= parts[1] else {
             throw ParseError.malformed("AmneziaWG \(label) range is invalid.")
         }
         return raw
+    }
+
+    private static func rejectDuplicateScalars(_ values: [String: [String]], allowingLists: Set<String>) throws {
+        for (key, entries) in values where entries.count != 1 && !allowingLists.contains(key) {
+            throw ParseError.malformed("Duplicate WireGuard-family scalar field: \(key).")
+        }
     }
 
     private static func one(_ values: [String: [String]], _ key: String) -> String? {

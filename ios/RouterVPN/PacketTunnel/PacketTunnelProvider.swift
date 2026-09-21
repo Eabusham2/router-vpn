@@ -96,7 +96,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard nativeModes.contains(requestedMode) else { throw tunnelError(7, "Native WireGuard-family engine received unsupported mode \(requestedMode).") }
         try IOSStartLayer.validateWireGuard(profile: selectedProfile)
         let profileText = try RouterVPNMTUPolicy.wireGuard(wireGuardLikeProfile(root, rawProfileID: requestedMode), profile: selectedProfile)
-        let tunnelConfiguration = try RouterVPNWireGuardConfig.parse(profileText, name: requestedMode == "wg" ? "Router VPN" : "Router VPN AmneziaWG")
+        let tunnelConfiguration = try RouterVPNWireGuardConfig.parse(profileText, name: requestedMode == "wg" ? "Router VPN" : "Router VPN AmneziaWG", amnezia: requestedMode != "wg")
         guard tunnelConfiguration.peers.count == 1 else { throw tunnelError(8, "Router VPN iOS node proof requires exactly one generated WireGuard-family server peer.") }
         let suppliedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         let expectedNodeID: String
@@ -315,7 +315,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
               let profiles = root["profiles"] as? [String: Any],
               let raw = profiles[rawProfileID] as? [String: Any],
               let encoded = raw[asset] as? String, !encoded.isEmpty,
-              let data = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters),
+              let data = Data(base64Encoded: encoded, options: []),
               !data.isEmpty, data.count <= Self.maxProfileBytes,
               let text = String(data: data, encoding: .utf8) else {
             throw tunnelError(31, "Router VPN bundle has no valid bounded native \(rawProfileID == "wg" ? "WireGuard" : "AmneziaWG") profile.")

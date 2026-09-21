@@ -33,7 +33,8 @@ func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) 
 	for _, required := range []string{
 		"try IOSStartLayer.validateWireGuard(profile: selectedProfile)",
 		"let rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)",
-		"let files = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)",
+		"let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)",
+		"let files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)",
 		"try IOSStartLayer.validateExternal(profile: selectedProfile)",
 		"try engine.start(files: files, strict: strict)",
 		"proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID",
@@ -43,11 +44,24 @@ func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) 
 		}
 	}
 
+	// The engine must receive the result of both composers, in that order.
+	start := strings.Index(provider, "private func startLibbox(")
+	end := strings.Index(provider, "private func startExternalLibbox(")
+	if start < 0 || end <= start {
+		t.Fatal("PacketTunnel Libbox composition owner is missing")
+	}
+	body := provider[start:end]
+	compose := strings.Index(body, "let composedFiles = try IOSStartLayer.apply(")
+	mtu := strings.Index(body, "let files = try RouterVPNMTUPolicy.libbox(composedFiles,")
+	run := strings.Index(body, "try engine.start(files: files, strict: strict)")
+	if compose < 0 || mtu <= compose || run <= mtu {
+		t.Fatal("Start Layer and MTU must both compose before the native engine starts")
+	}
+
 	selector := repoFile(t, "ios/RouterVPN/App/IOSRuntimeSelection.swift")
 	for _, required := range []string{
 		`private static let startLayerRawModes: Set<String> = ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"]`,
 		"try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)",
-		"try validateStartLayer(bundle: bundle, rawProfileID: \"wg\")",
 		"Start Layer AES-256-GCM requires an iOS Libbox raw mode",
 		"AES-256-GCM + XOR whitening is unavailable on iOS until PacketTunnel owns a protected local whitening relay",
 		"XOR is never counted as encryption or silently ignored",

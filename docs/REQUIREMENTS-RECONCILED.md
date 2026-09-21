@@ -12,7 +12,7 @@ The following older directions are superseded or canceled:
 - The old tab-heavy/debug-console daily UI is retired. The native map-first product is authoritative.
 - Temporary package output is **not** deleted immediately after a successful or interrupted browser delivery. It is retained for 30 minutes from READY for repeat download/retry; delivery does not extend that deadline. Explicit cancellation, Delete now, or service shutdown cleans it immediately.
 - Do not invent XOR, homemade packet encryption, or a cosmetic “extra encryption” cipher. Use established authenticated encryption and require an encrypted inner tunnel when a bridge/proxy is not itself an authenticated full VPN.
-- Unsupported platform functionality remains disabled/unavailable with a precise reason. Parity never permits fake controls, fake Connected state, fake public exit, fake location, fake Mbps, or fake multihop.
+- Unsupported platform functionality remains disabled/unavailable with a precise reason. Parity never permits fake controls, fake Connected state, fake public exit, fake location, fake Mbps, or fake multihop. These are safety rules for unfinished capabilities, not permission to count platform exclusions as delivered. The later all-device requirement remains open until the actual capability is implemented and verified on each requested platform.
 - No moving `latest`, `main`, `/releases/latest`, or newest-artifact fallback may certify or feed an exact-SHA release.
 - Android/iOS packages remain exact-SHA artifact-only; the Linux AI Board does not pretend to build or sign native mobile applications.
 - The AI Board is the production/private Setup Center host and a bounded requested desktop-package fallback, not the routine cross-platform compile farm.

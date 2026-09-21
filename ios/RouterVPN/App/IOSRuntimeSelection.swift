@@ -60,28 +60,31 @@ enum IOSRuntimeSelector {
     }
 
     static func select(bundle: ClientBundle, logicalModeID: String) throws -> IOSRuntimeSelection {
+        guard let first = try candidates(bundle: bundle, logicalModeID: logicalModeID).first else {
+            throw IOSRuntimeSelectionError.missingLogicalMode
+        }
+        return first
+    }
+
+    // Return ordered runnable alternatives, not just the first one. The caller
+    // owns connect/proof/teardown and may only try another when policy allows it.
+    static func candidates(bundle: ClientBundle, logicalModeID: String) throws -> [IOSRuntimeSelection] {
         guard let logical = bundle.logicalModes.first(where: { $0.id == logicalModeID }) else {
             throw IOSRuntimeSelectionError.missingLogicalMode
         }
 
-        if logical.id == "base-raw", logical.variants["wg"] == "wg" {
-            try validateStartLayer(bundle: bundle, rawProfileID: "wg")
-            let selection = IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logical.id, rawProfileID: "wg", files: [:])
-            do { try IOSDNSRuntimePolicy.validate(selection: selection, in: bundle) }
-            catch { throw IOSRuntimeSelectionError.unsupportedMode(error.localizedDescription) }
-            return selection
-        }
-
         var lastReason = "no validated native WireGuard/AmneziaWG or self-contained Libbox variant is present"
-        for rawID in orderedVariantIDs(logical) {
+        var selections: [IOSRuntimeSelection] = []
+        for rawID in try orderedVariantIDs(logical, bundle: bundle) {
             do {
                 let selection = try selectRawCore(bundle: bundle, rawProfileID: rawID, logicalModeID: logical.id)
                 try IOSDNSRuntimePolicy.validate(selection: selection, in: bundle)
-                return selection
+                selections.append(selection)
             } catch {
                 lastReason = error.localizedDescription
             }
         }
+        if !selections.isEmpty { return selections }
 
         throw IOSRuntimeSelectionError.unsupportedMode(
             "This iOS build cannot run \(logical.name) from the imported node: \(lastReason). Xray/helper-only, PQ-only composites, ALL/MAX and unsupported multihop combinations remain unavailable instead of faking Connected. Helper-dependent sslocal/Xray chains are also rejected unless a real Apple dataplane exists. OpenVPN remains outside the iOS dataplane until a pinned native implementation exists."
@@ -102,17 +105,16 @@ enum IOSRuntimeSelector {
     private static func selectRawCore(bundle: ClientBundle, rawProfileID: String, logicalModeID: String) throws -> IOSRuntimeSelection {
         guard isSafe(rawProfileID, pattern: rawProfilePattern) else { throw IOSRuntimeSelectionError.invalidProfileName(rawProfileID) }
         try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)
-        if rawProfileID == "wg" {
-            return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [:])
-        }
-        if ["awg2-fast", "awg2-strong"].contains(rawProfileID) {
+        if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID) {
+            let asset = rawProfileID == "wg" ? "wg.conf" : "awg.conf"
             guard let encoded = bundle.profiles[rawProfileID],
-                  let value = encoded["awg.conf"],
+                  let value = encoded[asset],
                   let data = Data(base64Encoded: value, options: []),
-                  !data.isEmpty, data.count <= maxAssetBytes else {
-                throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no bounded native AmneziaWG profile.")
+                  !data.isEmpty, data.count <= 1024 * 1024,
+                  String(data: data, encoding: .utf8) != nil else {
+                throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no bounded UTF-8 native WireGuard-family profile.")
             }
-            return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: ["awg.conf": data])
+            return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [asset: data])
         }
         guard let encoded = bundle.profiles[rawProfileID], encoded["sing-box.json"] != nil else {
             throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no iOS-runnable sing-box profile.")
@@ -158,12 +160,24 @@ enum IOSRuntimeSelector {
         }
     }
 
-    private static func orderedVariantIDs(_ logical: LogicalMode) -> [String] {
+    private static func orderedVariantIDs(_ logical: LogicalMode, bundle: ClientBundle) throws -> [String] {
         var result: [String] = []
-        for key in ["wg", "default", "auto", "awg2"] {
-            if let value = logical.variants[key], !value.isEmpty, !result.contains(value) { result.append(value) }
+        let keys: [String]
+        if logical.baseSelector {
+            let profile = IOSDNSRuntimePolicy.selectedProfile(in: bundle)
+            let base = (profile?.baseTunnel ?? "auto").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let preferred: String
+            switch base {
+            case "", "auto", "wg", "wireguard": preferred = "wg"
+            case "awg", "awg2", "amneziawg": preferred = "awg"
+            default: throw IOSRuntimeSelectionError.unsupportedMode("Unknown saved tunnel base; refusing a silent fallback.")
+            }
+            let fallback = base.isEmpty || base == "auto" || (logical.fallback && profile?.baseFallback == true)
+            keys = fallback ? [preferred, preferred == "wg" ? "awg" : "wg"] : [preferred]
+        } else {
+            keys = ["native", "default", "auto", "wg", "awg", "awg2"] + logical.variants.keys.sorted()
         }
-        for key in logical.variants.keys.sorted() {
+        for key in keys {
             if let value = logical.variants[key], !value.isEmpty, !result.contains(value) { result.append(value) }
         }
         return result
