@@ -39,6 +39,8 @@ enum RouterVPNForwardingPolicy {
                   nodeID.range(of: "^[A-Za-z0-9._-]{1,128}$", options: .regularExpression) != nil,
                   proofID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
                   let raw = profile["router_api"] as? String,
+                  raw.utf8.count <= 512, !raw.contains("%"),
+                  raw.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil,
                   let url = URLComponents(string: raw), url.scheme == "http",
                   url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
                   url.path.isEmpty || url.path == "/", let rawHost = url.host else {
@@ -156,6 +158,12 @@ enum RouterVPNForwardingPolicy {
     static func issue(_ message: String) -> NSError { NSError(domain: "RouterVPN.Forwarding", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
 
     private static func privateIP(_ host: String) -> Bool {
+        // Darwin and Linux differ when parsing scoped addresses. Reject every
+        // non-literal character before Foundation/C parsing can normalize it.
+        guard !host.isEmpty, host.utf8.allSatisfy({
+            (48...57).contains($0) || (65...70).contains($0) ||
+            (97...102).contains($0) || $0 == 46 || $0 == 58
+        }) else { return false }
         var v4 = in_addr(), v6 = in6_addr()
         if inet_pton(AF_INET, host, &v4) == 1 {
             let bytes = withUnsafeBytes(of: v4) { Array($0) }
