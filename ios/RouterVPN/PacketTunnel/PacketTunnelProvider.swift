@@ -95,7 +95,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let nativeModes: Set<String> = ["wg", "awg2-fast", "awg2-strong"]
         guard nativeModes.contains(requestedMode) else { throw tunnelError(7, "Native WireGuard-family engine received unsupported mode \(requestedMode).") }
         try IOSStartLayer.validateWireGuard(profile: selectedProfile)
-        let profileText = try wireGuardLikeProfile(root, rawProfileID: requestedMode)
+        let profileText = try RouterVPNMTUPolicy.wireGuard(wireGuardLikeProfile(root, rawProfileID: requestedMode), profile: selectedProfile)
         let tunnelConfiguration = try RouterVPNWireGuardConfig.parse(profileText, name: requestedMode == "wg" ? "Router VPN" : "Router VPN AmneziaWG")
         guard tunnelConfiguration.peers.count == 1 else { throw tunnelError(8, "Router VPN iOS node proof requires exactly one generated WireGuard-family server peer.") }
         let suppliedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
@@ -134,7 +134,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let rawProfileID = (provider["rawProfileID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard rawProfileID.range(of: "^[A-Za-z0-9._-]{1,96}$", options: .regularExpression) != nil, !rawProfileID.contains("..") else { throw tunnelError(13, "iOS Libbox raw profile id is invalid.") }
         let rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)
-        let files = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
+        let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
+        let files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)
         let expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         guard expectedNodeID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw tunnelError(14, "Layered iOS modes require the imported node's exact node proof id.") }
         let proofURL = try selectedProofURL(selectedProfile)
@@ -155,7 +156,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         try IOSStartLayer.validateExternal(profile: selectedProfile)
         let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
-        do { try engine.start(files: runtime.files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
+        do { try engine.start(files: RouterVPNMTUPolicy.libbox(runtime.files, profile: selectedProfile), strict: strict) } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
         proveExternalExit(expectedPublicIP: runtime.expectedPublicIP, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 18, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during external-exit proof."])); return }
             guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(43, "A newer iOS external runtime replaced this proof attempt.")); return }

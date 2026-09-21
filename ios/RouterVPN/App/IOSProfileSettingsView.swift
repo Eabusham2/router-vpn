@@ -63,7 +63,7 @@ struct IOSProfileSettingsView: View {
                 Section("MTU") {
                     Picker("MTU policy", selection: $mtuPolicy) { ForEach(mtuValues, id: \.1) { Text($0.0).tag($0.1) } }
                     if mtuPolicy == "manual" {
-                        TextField("Fixed MTU 576–9000", text: $manualMTU).keyboardType(.numberPad)
+                        TextField("Fixed MTU 1280–9000", text: $manualMTU).keyboardType(.numberPad)
                     }
                     if let p = selectedProfile(), let value = p.effectiveMTU, value > 0 {
                         Text("Current effective MTU: \(value) • \(p.effectiveMTUSource ?? "measured")")
@@ -131,7 +131,7 @@ struct IOSProfileSettingsView: View {
         }
         guard bundle.routerProfiles[index].normalizedNodeKind == "router-vpn" else { status = "External exits own their protocol settings."; return }
         let manual = Int(manualMTU.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-        if mtuPolicy == "manual" && !(576...9000).contains(manual) { status = "Fixed MTU must be 576–9000."; return }
+        if mtuPolicy == "manual" && !(1280...9000).contains(manual) { status = "Fixed MTU must be 1280–9000."; return }
 
         var p = bundle.routerProfiles[index]
         p.homeLANAccess = homeLANAccess

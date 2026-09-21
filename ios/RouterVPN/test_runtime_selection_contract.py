@@ -103,6 +103,7 @@ import platform
 import subprocess
 import sys
 if platform.system() == 'Darwin':
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_mtu_policy.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_forwarding_policy.py')], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_forwarding_sdk.py')], check=True, timeout=240)
 else:

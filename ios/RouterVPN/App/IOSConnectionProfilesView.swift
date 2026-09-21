@@ -313,7 +313,7 @@ private enum IOSConnectionProfileStore {
         p.mtuPolicy = p.mtuPolicy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard ["auto", "manual", "default"].contains(p.mtuPolicy) else { throw issue("Connection profile contains an invalid MTU policy.") }
         if p.mtuPolicy == "manual" {
-            guard (576...9000).contains(p.manualMTU) else { throw issue("Connection profile manual MTU must be 576–9000.") }
+            guard (1280...9000).contains(p.manualMTU) else { throw issue("Connection profile manual MTU must be 1280–9000.") }
         } else {
             p.manualMTU = 0
         }

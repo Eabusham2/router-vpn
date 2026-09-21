@@ -8,7 +8,11 @@ runtime = app.joinpath("IOSDNSRuntimePolicy.swift").read_text()
 for marker in [
     'modeIDs = ["home", "fastest", "custom", "dot", "doh", "doh3", "rescue"]',
     'type = "tls"', 'type = "https"', 'type = "h3"',
-    'WireGuardKit can only enforce plain IP DNS',
+    'selection.engine == .wireGuard && !policy.wireGuardCompatible',
+    'native WireGuard/AmneziaWG engine can only enforce plain IP DNS',
+    'for rawID in ["wg", "awg2-fast", "awg2-strong"]',
+    'let asset = rawID == "wg" ? "wg.conf" : "awg.conf"',
+    'native[asset] = Data(try patchWireGuard(text, policy: policy).utf8).base64EncodedString()',
     'routervpn-selected-dns', '"action": "hijack-dns"',
     'guard final != "direct"', 'fastestDNSHost', 'dnsResults',
     'Array(profiles.keys)', 'isSelfContainedLibbox',

@@ -25,7 +25,7 @@ for marker in (
     'Connection profile contains an invalid IPv6 policy',
     'Connection profile contains an invalid WG/AWG base',
     'Connection profile contains an invalid MTU policy',
-    'Connection profile manual MTU must be 576–9000',
+    'Connection profile manual MTU must be 1280–9000',
     'Connection profile contains an invalid startup policy',
     'Connection profile contains an invalid DNS mode',
     'Custom DNS in a connection profile must use UDP or TCP',
