@@ -7,6 +7,12 @@ VENDOR="$ROOT/ios/RouterVPN/.deps/sing-box-apple"
 PIN=1086ab2563320e0da0c23b3a491d8dfa0939dff4
 [[ $(uname -s) == Darwin ]] || { echo 'Native Libbox parser gate requires macOS'; exit 1; }
 [[ $(git -C "$VENDOR" rev-parse HEAD) == "$PIN" ]] || { echo 'Libbox core pin mismatch'; exit 1; }
+# Xcode invokes this from an iphoneos build phase. The graph fixtures and
+# parser are HOST executables, so they must not inherit the iPhone sysroot.
+# This script runs in its own process; the enclosing IPA build keeps its SDK.
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+[[ -d "$SDKROOT" ]] || { echo 'macOS host SDK is unavailable'; exit 1; }
+unset IPHONEOS_DEPLOYMENT_TARGET TVOS_DEPLOYMENT_TARGET WATCHOS_DEPLOYMENT_TARGET XROS_DEPLOYMENT_TARGET
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 python3 "$ROOT/deploy/test_ios_multihop_graph.py" --fixture-dir "$WORK/fixtures"

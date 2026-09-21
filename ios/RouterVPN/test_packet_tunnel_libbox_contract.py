@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re
+import subprocess
+import sys
 root=Path(__file__).resolve().parent
 provider=(root/'PacketTunnel/PacketTunnelProvider.swift').read_text()
 engine=(root/'PacketTunnel/RouterVPNLibboxEngine.swift').read_text()
@@ -77,5 +79,6 @@ for marker in ['"routervpn-proof"','"type": "mixed"','"listen": "127.0.0.1"','pr
     assert marker in engine, marker
 for marker in ['LibboxPlatformInterfaceProtocol','LibboxCommandServerHandlerProtocol','options.getAutoRoute()','options.getDNSServerAddress()','NEIPv4Route.default()','NEIPv6Route.default()','LibboxGetTunnelFileDescriptor()','NWPathMonitor()','includeAllNetworksRequested']:
     assert marker in platform, marker
+subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_multihop_host_environment.py')], check=True, timeout=45)
 assert 'fake Connected' not in provider
 print('iOS PacketTunnel Libbox + async ownership/network-change/wake proof contract OK')
