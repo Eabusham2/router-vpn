@@ -94,4 +94,15 @@ selection=unified.split('private func selectSpecific', 1)[1].split('private func
 assert 'connectOrDisconnect()' not in selection, 'iOS node selection must never implicitly connect'
 assert 'deinit { timer?.invalidate() }' not in unified, 'Swift 6 nonisolated deinit must not touch non-Sendable Timer'
 runpy.run_path(str(Path(__file__).with_name('test_connection_profiles_contract.py')), run_name='__main__')
+# Every native shipping lane invokes this contract before building the IPA.
+# Execute the actual forwarding policy/model and real-SDK transport checks;
+# standalone test files that are never invoked cannot certify the feature.
+import platform
+import subprocess
+import sys
+if platform.system() == 'Darwin':
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_forwarding_policy.py')], check=True, timeout=300)
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_forwarding_sdk.py')], check=True, timeout=240)
+else:
+    print('iOS forwarding native gates: SKIP on non-Apple source-only lane; required by Apple shipping lanes')
 print('iOS runtime + helper-chain fail-closed + selection/Connect separation + unified AUTO/SMART/CUSTOM strategy contract OK')
