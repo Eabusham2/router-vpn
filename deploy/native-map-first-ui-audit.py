@@ -386,7 +386,7 @@ require(
     "Server forwarding master",
     "IOSForwardingMasterButton().environmentObject(model)",
     "sendProviderMessage",
-    "reply.node_id == node.id",
+    "reply.node_id == nodeID",
     "Multihop",
     "Settings",
     "Mode",

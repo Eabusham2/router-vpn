@@ -1,5 +1,5 @@
 #import <Foundation/Foundation.h>
-#import <NetworkExtension/NEPacketTunnelProvider.h>
+#import <NetworkExtension/NetworkExtension.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
