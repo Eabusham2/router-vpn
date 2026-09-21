@@ -46,7 +46,10 @@ enum RouterVPNForwardingPolicy {
             }
             let host = rawHost.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
             let port = url.port ?? 80
-            guard privateIP(host), (1...65535).contains(port),
+            // Zone/scoped IPv6 literals are interface-dependent local addresses. They must
+            // never be accepted as a persisted Router API identity because a later network
+            // transition could retarget the same textual endpoint to another interface.
+            guard !host.contains("%"), privateIP(host), (1...65535).contains(port),
                   let token = profile["api_token"] as? String,
                   token.range(of: "^[A-Za-z0-9._~+/=-]{16,512}$", options: .regularExpression) != nil else {
                 throw issue("Forwarding agent must be a literal private address with a valid node token.")
