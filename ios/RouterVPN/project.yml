@@ -56,7 +56,7 @@ targets:
     platform: iOS
     sources: [PacketTunnel]
     preBuildScripts:
-      - name: Build pinned AmneziaWG-capable WireGuardKit bridge and Libbox bridge
+      - name: Build pinned wireguard-go bridge and Libbox bridge
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
