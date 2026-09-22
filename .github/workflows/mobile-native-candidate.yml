@@ -5,60 +5,80 @@ on:
     branches: [main]
     paths:
       - .github/workflows/mobile-native-candidate.yml
+      - .github/scripts/stage_mobile_candidate.py
       - configs/mobile-native-candidate.json
   workflow_dispatch:
 
-# Candidate code receives no write token, deployment credentials or signing
-# secrets. This workflow never publishes a release or changes a branch/ref.
 permissions:
   contents: read
 
+# Keep an already-running native compiler available for diagnostics when a new
+# exact candidate is submitted. No job publishes or modifies a branch/tag.
 concurrency:
-  group: mobile-native-candidate-${{ github.ref }}
-  cancel-in-progress: true
+  group: mobile-native-candidate-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
-  snapshot:
-    name: Validate and archive exact candidate source
+  stage:
+    name: Stage exact reviewed immutable Git objects
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: write
     outputs:
-      source_sha: ${{ steps.identity.outputs.source_sha }}
+      source_sha: ${{ steps.stage.outputs.source_sha }}
+      tree_sha: ${{ steps.stage.outputs.tree_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Validate reviewed edits and create immutable objects only
+        id: stage
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        # Executes trusted main helper only, never candidate code. Token is not
+        # inherited by native jobs; helper cannot write refs or release assets.
+        run: python3 .github/scripts/stage_mobile_candidate.py
+
+  snapshot:
+    name: Validate and archive exact candidate source
+    needs: stage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      source_sha: ${{ needs.stage.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.stage.outputs.source_sha }}
+          persist-credentials: false
       - name: Validate candidate identity
-        id: identity
+        env:
+          SOURCE_SHA: ${{ needs.stage.outputs.source_sha }}
+          TREE_SHA: ${{ needs.stage.outputs.tree_sha }}
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os, re, subprocess
+          import json, os, re, subprocess, hashlib
           from pathlib import Path
-          candidate = json.loads(Path('configs/mobile-native-candidate.json').read_text())
-          assert candidate.get('schema_version') == 1
-          sha, tree = candidate['source_sha'], candidate['tree_sha']
+          sha, tree = os.environ['SOURCE_SHA'], os.environ['TREE_SHA']
           assert re.fullmatch('[0-9a-f]{40}', sha)
           assert re.fullmatch('[0-9a-f]{40}', tree)
-          subprocess.run(['git', 'fetch', '--depth=1', 'origin', sha], check=True)
           actual = subprocess.check_output(['git', 'rev-parse', sha + '^{tree}'], text=True).strip()
           assert actual == tree, (actual, tree)
           out = Path(os.environ['RUNNER_TEMP']) / 'candidate-source'
           out.mkdir()
           subprocess.run(['git', 'archive', '--format=tar.gz', '--prefix=router-vpn/', '-o', str(out/'source.tar.gz'), sha], check=True)
-          import hashlib
           digest = hashlib.sha256((out/'source.tar.gz').read_bytes()).hexdigest()
           (out/'source.tar.gz.sha256').write_text(digest + '  source.tar.gz\n')
           (out/'identity.json').write_text(json.dumps({'source_sha':sha, 'tree_sha':tree, 'sha256':digest, 'scope':'unreleased candidate source'}, indent=2)+'\n')
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as handle:
-              handle.write('source_sha='+sha+'\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as handle:
               handle.write('Testing candidate `'+sha+'`, tree `'+tree+'`. Not a published release.\n')
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: mobile-candidate-source-${{ steps.identity.outputs.source_sha }}
+          name: mobile-candidate-source-${{ needs.stage.outputs.source_sha }}
           path: ${{ runner.temp }}/candidate-source/
           if-no-files-found: error
           retention-days: 7
@@ -88,7 +108,37 @@ jobs:
           git -C "$VENDOR" remote add origin https://github.com/SagerNet/sing-box.git
           git -C "$VENDOR" fetch --depth=1 origin 1ac1a339cb1223e9c70eae14c44411c75033c02d
           git -C "$VENDOR" checkout --detach FETCH_HEAD
-          bash deploy/test_mobile_openvpn_pinned.sh "$VENDOR"
+          bash deploy/test_mobile_openvpn_pinned.sh "$VENDOR" 2>&1 | tee "$RUNNER_TEMP/native-core.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mobile-candidate-core-log
+          path: ${{ runner.temp }}/native-core.log
+          retention-days: 1
+
+  contracts:
+    name: Candidate source and ownership regression gates
+    needs: snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.snapshot.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Source and private-runtime contracts
+        run: |
+          go test -race -count=1 ./...
+          go vet ./...
+          python3 deploy/validate-repo.py
+          python3 deploy/full-audit-v4.py
+          python3 deploy/latest-a20-product-contract-audit.py
+          python3 deploy/test_mobile_openvpn_contract.py
+          python3 android/test_android_standard_exit_contract.py
 
   apple:
     name: Candidate real iPhone and iPad build
@@ -105,17 +155,50 @@ jobs:
           go-version: '1.26.3'
           cache: false
       - run: brew install xcodegen
-      - name: Build pinned mobile engines and native app
+      - uses: actions/cache/restore@v4
+        id: engine-cache
+        with:
+          key: routervpn-apple-native-${{ runner.os }}-${{ hashFiles('ios/RouterVPN/prepare-libbox.sh', 'mobile/routervpn_openvpn.go') }}
+          path: |
+            ios/RouterVPN/.deps/Libbox.xcframework
+            ios/RouterVPN/.deps/Libbox.xcframework.pin
+            ios/RouterVPN/.deps/Libbox.routervpn-openvpn.sha256
+            ios/RouterVPN/.deps/libbox-LICENSE.txt
+            ios/RouterVPN/.deps/sing-box-apple
+      - name: Build and verify pinned native engines
+        id: engines
+        working-directory: ios/RouterVPN
+        run: |
+          set -euo pipefail
+          sh prepare-wireguard-kit.sh
+          bash prepare-libbox.sh 2>&1 | tee "$RUNNER_TEMP/apple-engine.log"
+      - uses: actions/cache/save@v4
+        if: steps.engines.outcome == 'success' && steps.engine-cache.outputs.cache-hit != 'true'
+        with:
+          key: ${{ steps.engine-cache.outputs.cache-primary-key }}
+          path: |
+            ios/RouterVPN/.deps/Libbox.xcframework
+            ios/RouterVPN/.deps/Libbox.xcframework.pin
+            ios/RouterVPN/.deps/Libbox.routervpn-openvpn.sha256
+            ios/RouterVPN/.deps/libbox-LICENSE.txt
+            ios/RouterVPN/.deps/sing-box-apple
+      - name: Compile real native app and extension
         working-directory: ios/RouterVPN
         env:
           GITHUB_SHA: ${{ needs.snapshot.outputs.source_sha }}
         run: |
           set -euo pipefail
-          sh prepare-wireguard-kit.sh
-          bash prepare-libbox.sh
           xcodegen generate
-          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" build
+          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" build 2>&1 | tee "$RUNNER_TEMP/apple-build.log"
           test -d build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app/PlugIns/RouterVPNPacketTunnel.appex
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mobile-candidate-apple-logs
+          path: |
+            ${{ runner.temp }}/apple-engine.log
+            ${{ runner.temp }}/apple-build.log
+          retention-days: 1
 
   android:
     name: Candidate real Android APK build
@@ -138,9 +221,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - uses: android-actions/setup-android@v3
+      - name: Install supported Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
       - name: Build actual combined runtime and APK
         working-directory: android
         env:
           GITHUB_SHA: ${{ needs.snapshot.outputs.source_sha }}
-        run: gradle --no-daemon :app:assembleDebug --stacktrace
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee "$RUNNER_TEMP/android-build.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mobile-candidate-android-log
+          path: ${{ runner.temp }}/android-build.log
+          retention-days: 1
