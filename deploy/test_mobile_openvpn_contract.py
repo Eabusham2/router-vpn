@@ -17,7 +17,7 @@ need('ios/RouterVPN/prepare-libbox.sh', 'BRIDGE_SHA', 'BRIDGE_STAMP', 'LibboxRou
 need('android/build-sing-box-libbox.sh', 'OPENVPN_SHA', 'OPENVPN_STAMP', 'routerOpenVPNEndpoint', 'exactly one gomobile go.Seq runtime class', 'test_mobile_openvpn_pinned.sh')
 need('ios/RouterVPN/project.yml', 'test_mobile_openvpn_pinned.sh', '- framework: .deps/Libbox.xcframework')
 need('deploy/test_mobile_openvpn_pinned.sh', 'go test -count=1', 'with_openvpn', 'TestRouterOpenVPNNative', 'SDKROOT=', 'trap')
-need('mobile/routervpn_openvpn_native_test.go.tmpl', 'TestRouterOpenVPNNativeConfig', 'TestRouterOpenVPNNativeLoopback', 'CheckConfig', 'instance.Start()', 'openvpn-server', 'client.Close()', 'if !proved')
+need('mobile/routervpn_openvpn_native_test.go.tmpl', 'TestRouterOpenVPNNativeConfig', 'TestRouterOpenVPNNativeLoopback', 'CheckConfig', 'instance.Start()', 'openvpn-server', 'client.Close()', 'if test.accept && !proved', 'untrusted-CA-rejected', 'wrong-peer-name-rejected', 'malformed-CA-rejected', 'requests.Load() != before', '"override_address": "127.0.0.1"', 'map[string]any{"action": "reject"}')
 for path in ('ios/RouterVPN/App/IOSExternalNodeBuilderView.swift', 'ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift'):
     need(path, 'LibboxRouterOpenVPNEndpoint', 'openvpn-client', '"system"] as? Bool == false')
 need('ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift', 'startExternalLibbox', 'proveExternalExit', 'expectedPublicIP: runtime.expectedPublicIP')
