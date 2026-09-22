@@ -438,7 +438,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     @Override public boolean includeAllNetworks() { return false; }
     @Override public WIFIState readWIFIState() { return null; }
 
-    @Override public StringIterator systemCertificates() {
+    public StringIterator systemCertificates() {
         List<String> certs = new ArrayList<>();
         try {
             KeyStore store = KeyStore.getInstance("AndroidCAStore");
@@ -477,9 +477,26 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         });
     }
 
-    @Override public SystemProxyStatus getSystemProxyStatus() { return null; }
+    @Override public SystemProxyStatus getSystemProxyStatus() { return new SystemProxyStatus(); }
     @Override public void setSystemProxyEnabled(boolean enabled) { }
     @Override public void writeDebugMessage(String message) { Log.d(TAG, message == null ? "" : message); }
+
+    @Override public void cancelNotification(String identifier, int typeID) { }
+    @Override public void startNeighborMonitor(io.nekohasekai.libbox.NeighborUpdateListener listener) throws Exception { throw unsupportedPlatformService(); }
+    @Override public void closeNeighborMonitor(io.nekohasekai.libbox.NeighborUpdateListener listener) { }
+    @Override public void registerMyInterface(String name) { }
+    @Override public boolean usePlatformShell() { return false; }
+    @Override public void checkPlatformShell() throws Exception { throw unsupportedPlatformService(); }
+    @Override public io.nekohasekai.libbox.ShellSession openShellSession(io.nekohasekai.libbox.PlatformUser user, String command, StringIterator environ, String term, int rows, int cols) throws Exception { throw unsupportedPlatformService(); }
+    @Override public io.nekohasekai.libbox.PlatformUser lookupUser(String username) throws Exception { throw unsupportedPlatformService(); }
+    @Override public String lookupSFTPServer() throws Exception { throw unsupportedPlatformService(); }
+    @Override public String readSystemSSHHostKey() throws Exception { throw unsupportedPlatformService(); }
+    @Override public String tailscaleHostname() { return "router-vpn"; }
+    @Override public boolean usePlatformBridge() { return false; }
+    @Override public io.nekohasekai.libbox.BridgeSession createBridge(io.nekohasekai.libbox.BridgeOptions options) throws Exception { throw unsupportedPlatformService(); }
+    @Override public void triggerNativeCrash() throws Exception { throw unsupportedPlatformService(); }
+    @Override public int connectSSHAgent() throws Exception { throw unsupportedPlatformService(); }
+    private static UnsupportedOperationException unsupportedPlatformService() { return new UnsupportedOperationException("Router VPN does not expose shell, SSH, neighbor or platform-bridge services"); }
 
     private void ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

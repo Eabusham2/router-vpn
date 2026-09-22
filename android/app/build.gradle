@@ -41,6 +41,7 @@ def awgStamp = file('libs/amneziawg-tunnel.commit')
 def awgLicense = file('libs/amneziawg-tunnel-LICENSE.txt')
 def libboxAar = file('libs/libbox.aar')
 def libboxStamp = file('libs/libbox.commit')
+def libboxOpenVPNStamp = file('libs/libbox.openvpn.sha256')
 def libboxLicense = file('libs/libbox-LICENSE.txt')
 def libxrayLicense = file('libs/libxray-LICENSE.txt')
 
@@ -83,8 +84,8 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     // Gradle execution time: source-level sed patches can drift and mutate an
     // already-correct package path into a false verifier failure.
     commandLine 'bash', 'build-sing-box-libbox.sh'
-    inputs.files rootProject.file('build-sing-box-libbox.sh'), rootProject.file('routervpn_xray_bridge.go')
-    outputs.files libboxAar, libboxStamp, libboxLicense, libxrayLicense
+    inputs.files rootProject.file('build-sing-box-libbox.sh'), rootProject.file('routervpn_xray_bridge.go'), rootProject.file('../mobile/routervpn_openvpn.go'), rootProject.file('../mobile/routervpn_openvpn_native_test.go.tmpl'), rootProject.file('../deploy/test_mobile_openvpn_pinned.sh')
+    outputs.files libboxAar, libboxStamp, libboxLicense, libxrayLicense, libboxOpenVPNStamp
 }
 
 tasks.named('preBuild').configure {
@@ -138,7 +139,7 @@ dependencies {
     // android/build-awg-tunnel.sh. No moving JitPack/Maven coordinate is used.
     implementation files('libs/amneziawg-tunnel.aar')
     // One pinned gomobile runtime built by android/build-sing-box-libbox.sh:
-    // sing-box v1.13.12 at 1086ab2563320e0da0c23b3a491d8dfa0939dff4
+    // sing-box v1.14.1 at 1ac1a339cb1223e9c70eae14c44411c75033c02d
     // plus libXray at 294fb37343205b9b0cb7b7b1b423d3d4b60d9998, whose
     // go.mod pins Xray-core v26.7.11 (50231eaff98c). Keeping both engines in
     // the same libbox AAR avoids duplicate go.Seq/libgojni runtimes in one APK.

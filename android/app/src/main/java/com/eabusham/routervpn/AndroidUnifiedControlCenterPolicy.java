@@ -23,9 +23,9 @@ final class AndroidUnifiedControlCenterPolicy {
 
     // Android product truth: these are encrypted final transports with a real
     // VpnService/native engine in the current app. Do not copy desktop-only
-    // OpenVPN/Tor capability into this set.
+    // Tor capability into this set.
     static final Set<String> FINAL_ENCRYPTED_TYPES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
-            "router-vpn", "wireguard", "amneziawg", "shadowsocks", "shadowsocks-2022", "hysteria2")));
+            "router-vpn", "wireguard", "amneziawg", "shadowsocks", "shadowsocks-2022", "hysteria2", "openvpn")));
 
     // Node-builder/bridge catalog. Hysteria2 and Shadowsocks are also valid
     // encrypted final transports; SOCKS/HTTP(S) remain bridge-only unless an
@@ -36,7 +36,6 @@ final class AndroidUnifiedControlCenterPolicy {
     static final Map<String,String> UNAVAILABLE_TYPES;
     static {
         Map<String,String> unavailable = new HashMap<>();
-        unavailable.put("openvpn", "OpenVPN is unavailable on Android until Router VPN ships a pinned native Android OpenVPN VpnService dataplane.");
         unavailable.put("tor-bridge", "Tor bridges are unavailable on Android until Router VPN ships a native Tor + pluggable-transport VpnService dataplane with dynamic Tor-exit proof.");
         UNAVAILABLE_TYPES = Collections.unmodifiableMap(unavailable);
     }
@@ -44,6 +43,7 @@ final class AndroidUnifiedControlCenterPolicy {
     static final List<String> SECURE_SUITES = Collections.unmodifiableList(Arrays.asList(
             "WireGuard Noise_IK + ChaCha20-Poly1305",
             "AmneziaWG Noise_IK + ChaCha20-Poly1305",
+            "OpenVPN verified TLS + negotiated data cipher",
             "HTTPS CONNECT TLS 1.3 with certificate verification",
             "Shadowsocks 2022 BLAKE3 + AEAD",
             "Hysteria2 QUIC + TLS 1.3"));

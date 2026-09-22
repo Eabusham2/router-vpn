@@ -3,7 +3,7 @@ import Libbox
 @preconcurrency import Network
 @preconcurrency import NetworkExtension
 
-/// Minimal Router VPN NetworkExtension bridge for the exact pinned Libbox 1.13.12 API.
+/// Minimal Router VPN NetworkExtension bridge for the exact pinned Libbox 1.14.1 API.
 /// It intentionally implements only Router VPN policy and does not inherit another app's UI/preferences model.
 final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, LibboxCommandServerHandlerProtocol {
     weak var tunnel: PacketTunnelProvider?
@@ -156,6 +156,24 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
     func sendNotification(_ notification: LibboxNotification?) throws { try send(notification) }
     func localDNSTransport() -> (any LibboxLocalDNSTransportProtocol)? { nil }
     func systemCertificates() -> (any LibboxStringIteratorProtocol)? { nil }
+    func cancelNotification(_ identifier: String?, typeID: Int32) throws {}
+    func startNeighborMonitor(_ listener: LibboxNeighborUpdateListenerProtocol?) throws {
+        throw error("Neighbor discovery is not enabled by Router VPN tunnel configurations")
+    }
+    func closeNeighborMonitor(_ listener: LibboxNeighborUpdateListenerProtocol?) throws {}
+    func registerMyInterface(_ name: String?) {}
+    func usePlatformShell() -> Bool { false }
+    func checkPlatformShell() throws { throw error("Router VPN does not expose a platform shell") }
+    func openShellSession(_ user: LibboxPlatformUser?, command: String?, environ: LibboxStringIteratorProtocol?, term: String?, rows: Int32, cols: Int32) throws -> LibboxShellSessionProtocol { throw error("Router VPN does not expose a platform shell") }
+    func lookupUser(_ username: String?) throws -> LibboxPlatformUser { throw error("Router VPN does not expose OS user lookup") }
+    func lookupSFTPServer() throws -> String { throw error("Router VPN does not expose SFTP") }
+    func readSystemSSHHostKey() throws -> String { throw error("Router VPN does not expose SSH host keys") }
+    func tailscaleHostname() -> String { "router-vpn" }
+    func usePlatformBridge() -> Bool { false }
+    func createBridge(_ options: LibboxBridgeOptions?) throws -> LibboxBridgeSessionProtocol { throw error("Router VPN does not create a platform bridge") }
+    func triggerNativeCrash() throws { throw error("Intentional native crashes are disabled") }
+    func connectSSHAgent(_ ret0_: UnsafeMutablePointer<Int32>?) throws { throw error("Router VPN does not expose an SSH agent") }
+
     func reset() { networkSettings = nil; monitor?.cancel(); monitor = nil }
 
     private static func update(_ listener: LibboxInterfaceUpdateListenerProtocol, from path: NWPath) {

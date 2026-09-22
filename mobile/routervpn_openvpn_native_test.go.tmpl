@@ -1,0 +1,210 @@
+package libbox
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+)
+
+func routerNativeCertificates(t *testing.T) (string, string, string, string, string) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "RouterVPN test CA"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	issue := func(serial int64, name string, usage x509.ExtKeyUsage) (string, string) {
+		key, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if e != nil {
+			t.Fatal(e)
+		}
+		cert := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}, DNSNames: []string{name}}
+		raw, e := x509.CreateCertificate(rand.Reader, cert, ca, &key.PublicKey, caKey)
+		if e != nil {
+			t.Fatal(e)
+		}
+		secret, e := x509.MarshalPKCS8PrivateKey(key)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: raw})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: secret}))
+	}
+	server, serverKey := issue(2, "routervpn-native.test", x509.ExtKeyUsageServerAuth)
+	client, clientKey := issue(3, "routervpn-client.test", x509.ExtKeyUsageClientAuth)
+	return caPEM, server, serverKey, client, clientKey
+}
+func routerNativeProfile(ca, cert, key string) string {
+	return "client\ndev tun\nproto tcp-client\nremote 192.0.2.1 1194\nremote-cert-tls server\nverify-x509-name routervpn-native.test name\ndata-ciphers AES-256-GCM:AES-128-GCM\n<ca>\n" + ca + "</ca>\n<cert>\n" + cert + "</cert>\n<key>\n" + key + "</key>\n"
+}
+func routerNativeConfig(endpoint map[string]any, proxyPort int) map[string]any {
+	return map[string]any{
+		"log":       map[string]any{"disabled": true},
+		"endpoints": []any{endpoint},
+		"inbounds":  []any{map[string]any{"type": "mixed", "tag": "test-in", "listen": "127.0.0.1", "listen_port": proxyPort}},
+		"route":     map[string]any{"final": "custom-exit"},
+	}
+}
+func TestRouterOpenVPNNativeConfig(t *testing.T) {
+	ca, _, _, cert, key := routerNativeCertificates(t)
+	for _, detour := range []string{"", "entry-wg"} {
+		for _, network := range []string{"tcp-client", "udp"} {
+			source := strings.Replace(routerNativeProfile(ca, cert, key), "proto tcp-client", "proto "+network, 1)
+			raw, err := RouterOpenVPNEndpoint(source, "", "", "custom-exit", detour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ep map[string]any
+			if err = json.Unmarshal([]byte(raw), &ep); err != nil {
+				t.Fatal(err)
+			}
+			config := routerNativeConfig(ep, 1099)
+			if detour != "" {
+				// Configuration-only fixture with an internal userspace WG endpoint.
+				config["endpoints"] = []any{map[string]any{"type": "wireguard", "tag": "entry-wg", "system": false, "address": []string{"10.77.0.2/32"}, "private_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=", "peers": []any{map[string]any{"address": "198.51.100.2", "port": 51820, "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=", "allowed_ips": []string{"0.0.0.0/0", "::/0"}}}}, ep}
+			}
+			data, _ := json.Marshal(config)
+			if err := CheckConfig(string(data)); err != nil {
+				t.Fatalf("pinned native %s/%s config failed: %v", network, detour, err)
+			}
+			ep["tls"] = map[string]any{"certificate": []string{"invalid certificate"}, "remote_certificate_tls": "server"}
+			data, _ = json.Marshal(config)
+			if err := CheckConfig(string(data)); err == nil {
+				t.Fatal("native core accepted invalid TLS material")
+			}
+		}
+	}
+}
+
+type routerNativeOwner struct {
+	*box.Box
+	once       sync.Once
+	closeError error
+}
+
+func (o *routerNativeOwner) Close() error {
+	o.once.Do(func() { o.closeError = o.Box.Close() })
+	return o.closeError
+}
+func routerNativeStart(t *testing.T, root map[string]any) *routerNativeOwner {
+	t.Helper()
+	ctx := baseContext(nil)
+	data, e := json.Marshal(root)
+	if e != nil {
+		t.Fatal(e)
+	}
+	opts, e := parseConfig(ctx, string(data))
+	if e != nil {
+		t.Fatal(e)
+	}
+	instance, e := box.New(box.Options{Context: ctx, Options: opts})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = instance.Start(); e != nil {
+		instance.Close()
+		t.Fatal(e)
+	}
+	owner := &routerNativeOwner{Box: instance}
+	t.Cleanup(func() { owner.Close() })
+	return owner
+}
+func routerNativeFreePort(t *testing.T) int {
+	t.Helper()
+	l, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	p := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return p
+}
+func TestRouterOpenVPNNativeLoopback(t *testing.T) {
+	ca, server, serverKey, cert, key := routerNativeCertificates(t)
+	vpnPort, proxyPort := routerNativeFreePort(t), routerNativeFreePort(t)
+	for proxyPort == vpnPort {
+		proxyPort = routerNativeFreePort(t)
+	}
+	serverRoot := map[string]any{"log": map[string]any{"disabled": true}, "endpoints": []any{map[string]any{
+		"type": "openvpn-server", "tag": "test-server", "system": false, "listen": "127.0.0.1", "listen_port": vpnPort, "network": "tcp", "address": []string{"10.211.17.1/24"}, "data_ciphers": []string{"AES-256-GCM", "AES-128-GCM"},
+		"tls": map[string]any{"certificate": []string{server}, "key": []string{serverKey}, "client_certificate": []string{ca}, "verify_client_certificate": "require", "remote_certificate_tls": "client"},
+	}}, "outbounds": []any{map[string]any{"type": "direct", "tag": "egress"}}, "route": map[string]any{"final": "egress"}}
+	routerNativeStart(t, serverRoot)
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "routervpn-native-openvpn-encrypted-path"
+	httpServer := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(want)) })}
+	go httpServer.Serve(echo)
+	t.Cleanup(func() { httpServer.Close() })
+	raw, err := RouterOpenVPNEndpoint(routerNativeProfile(ca, cert, key), "", "", "custom-exit", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var endpoint map[string]any
+	_ = json.Unmarshal([]byte(raw), &endpoint)
+	// Production import rejects local-loopback remotes. This isolated test
+	// redirects ONLY its generated fixture to a local server, never a live node.
+	endpoint["server"] = "127.0.0.1"
+	endpoint["server_port"] = vpnPort
+	client := routerNativeStart(t, routerNativeConfig(endpoint, proxyPort))
+	proxy, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", proxyPort))
+	transport := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true}
+	t.Cleanup(transport.CloseIdleConnections)
+	httpClient := &http.Client{Transport: transport, Timeout: 8 * time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	var last error
+	proved := false
+	for ctx.Err() == nil {
+		req, _ := http.NewRequestWithContext(ctx, "GET", "http://"+echo.Addr().String()+"/native-proof", nil)
+		response, e := httpClient.Do(req)
+		if e == nil {
+			data, e2 := io.ReadAll(io.LimitReader(response.Body, 1024))
+			response.Body.Close()
+			if e2 == nil && response.StatusCode == 200 && string(data) == want {
+				last = nil
+				proved = true
+				break
+			}
+			last = fmt.Errorf("native data-path response mismatch")
+		} else {
+			last = e
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !proved {
+		t.Fatalf("native OpenVPN TLS handshake/data path failed: %v", last)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	conn, e := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), time.Second)
+	if e == nil {
+		conn.Close()
+		t.Fatal("OpenVPN runtime retained its listener after shutdown")
+	}
+	t.Log("Real pinned OpenVPN client/server handshake, payload and shutdown passed on loopback; no OS TUN or private node used")
+}

@@ -15,15 +15,15 @@ extension RouterVPNModel {
     var selectedExternalProtocol: String { selectedNodeProfile?.external?.protocolName.lowercased() ?? "" }
 
     var selectedExternalSupportedOnIOS: Bool {
-        selectedNodeIsExternal && ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"].contains(selectedExternalProtocol)
+        selectedNodeIsExternal && ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(selectedExternalProtocol)
     }
 
     func nodeRuntimeSummary(_ profile: RouterProfile) -> String {
         if profile.normalizedNodeKind == "external" {
             let protocolName = profile.external?.protocolName.lowercased() ?? "unknown"
-            if protocolName == "openvpn" { return "External OpenVPN — unavailable on iOS until a pinned native Apple OpenVPN dataplane exists" }
+            if protocolName == "openvpn" { return "External OpenVPN — native pinned client with exact public-exit proof" }
             if protocolName == "tor-bridge" { return "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom — unavailable on iOS until Router VPN ships a real native Tor + pluggable-transport PacketTunnel dataplane with dynamic Tor-exit proof" }
-            if ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"].contains(protocolName) { return "External \(protocolName) — native Libbox PacketTunnel + exact public-exit proof" }
+            if ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolName) { return "External \(protocolName) — native Libbox PacketTunnel + exact public-exit proof" }
             return "External \(protocolName) — unsupported"
         }
         return "Router VPN node — WireGuardKit / Libbox modes + exact private node proof"
@@ -84,7 +84,7 @@ extension RouterVPNModel {
         guard selectedExternalSupportedOnIOS else {
             connected = false
             if selectedExternalProtocol == "openvpn" {
-                message = "OpenVPN external exits are unavailable on iOS until Router VPN ships a pinned native Apple OpenVPN dataplane."
+                message = "OpenVPN native capability is unavailable in this build."
             } else if selectedExternalProtocol == "tor-bridge" {
                 message = "Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on iOS until Router VPN ships a real native Tor + pluggable-transport PacketTunnel dataplane. A fixed expected-exit IP cannot substitute for Tor's dynamic circuit-exit proof."
             } else {
@@ -104,8 +104,24 @@ extension RouterVPNModel {
         tunnelTransitioning = true
         defer { tunnelTransitioning = false }
         do {
-            let managers = try await NETunnelProviderManager.loadAllFromPreferences()
+            let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
+                ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
+            }
+            guard managers.count <= 1 else {
+                message = "Multiple Router VPN tunnel configurations exist; resolve them before connecting."
+                return
+            }
             let manager = managers.first ?? NETunnelProviderManager()
+            guard manager.connection.status == .disconnected || manager.connection.status == .invalid else {
+                message = "An existing Router VPN tunnel is active or transitioning; disconnect it before replacement."
+                return
+            }
+            guard self.bundle?.selectedRouterID == bundle.selectedRouterID,
+                  self.bundle?.routerProfiles == bundle.routerProfiles,
+                  self.bundle?.profiles == bundle.profiles else {
+                message = "External node configuration changed while preparing the connection; no runtime was started."
+                return
+            }
             let proto = NETunnelProviderProtocol()
             proto.providerBundleIdentifier = "com.eabusham.routervpn.PacketTunnel"
             proto.serverAddress = profile.endpoint

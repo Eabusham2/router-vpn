@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Libbox
 
 struct RouterVPNExternalExitRuntime {
     let protocolName: String
@@ -14,10 +15,7 @@ enum RouterVPNExternalExitBuilder {
             throw error("Selected profile is not an external custom node.")
         }
         let protocolName = string(external["protocol"]).lowercased()
-        guard ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"].contains(protocolName) else {
-            if protocolName == "openvpn" {
-                throw error("OpenVPN external exits are unavailable on iOS until Router VPN ships a pinned native Apple OpenVPN dataplane; this build will not fake support through Libbox 1.13.12.")
-            }
+        guard ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolName) else {
             if protocolName == "tor-bridge" {
                 throw error("Tor bridges are unavailable on iOS until Router VPN ships a native Tor + pluggable-transport PacketTunnel dataplane with dynamic Tor-exit proof.")
             }
@@ -28,7 +26,7 @@ enum RouterVPNExternalExitBuilder {
 
         var endpoints: [[String: Any]] = []
         var outbounds: [[String: Any]] = []
-        if protocolName == "wireguard" { endpoints.append(custom) } else { outbounds.append(custom) }
+        if protocolName == "wireguard" || protocolName == "openvpn" { endpoints.append(custom) } else { outbounds.append(custom) }
 
         let mtu = externalMTU(external: external, protocolName: protocolName)
         let tun: [String: Any] = [
@@ -53,6 +51,18 @@ enum RouterVPNExternalExitBuilder {
 
     private static func customExit(external: [String: Any], protocolName: String) throws -> [String: Any] {
         switch protocolName {
+        case "openvpn":
+            guard let ovpn = external["openvpn"] as? [String: Any], let config = ovpn["config"] as? String else { throw error("OpenVPN inline configuration is missing.") }
+            // Do not trim secrets or use a separate process/Go runtime. The
+            // resulting endpoint still routes only through the owned Libbox TUN.
+            var failure: NSError?
+            let encoded = LibboxRouterOpenVPNEndpoint(config, ovpn["username"] as? String ?? "", ovpn["password"] as? String ?? "", "custom-exit", "", &failure)
+            if let failure { throw failure }
+            guard let encoded, let data = encoded.data(using: .utf8),
+                  let endpoint = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  endpoint["type"] as? String == "openvpn-client", endpoint["system"] as? Bool == false,
+                  endpoint["tag"] as? String == "custom-exit", endpoint["detour"] == nil else { throw error("OpenVPN native compiler returned an invalid owned endpoint.") }
+            return endpoint
         case "wireguard":
             guard let wg = external["wireguard"] as? [String: Any] else { throw error("External WireGuard block is missing.") }
             let endpoint = string(wg["endpoint"])

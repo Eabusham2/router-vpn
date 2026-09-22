@@ -30,9 +30,8 @@ final class RouterVPNLibboxEngine {
         try fm.createDirectory(at: work, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]); try fm.createDirectory(at: temp, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         for (name, data) in safeFiles { let destination = base.appendingPathComponent(name); try data.write(to: destination, options: [.atomic]); try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path) }
         runtimeRoot = base
-        let setup = LibboxSetupOptions(); setup.basePath = base.path; setup.workingPath = work.path; setup.tempPath = temp.path; setup.logMaxLines = 1000
+        let setup = LibboxSetupOptions(); setup.basePath = base.path; setup.workingPath = work.path; setup.tempPath = temp.path; setup.logMaxLines = 1000; setup.oomKillerEnabled = true
         var setupError: NSError?; LibboxSetup(setup, &setupError); if let setupError { throw error("Libbox setup failed: \(setupError.localizedDescription)") }
-        LibboxSetMemoryLimit(true)
         var createError: NSError?; let created = LibboxNewCommandServer(platform, platform, &createError)
         if let createError { throw error("Libbox command server creation failed: \(createError.localizedDescription)") }
         guard let created else { throw error("Libbox command server creation returned nil") }

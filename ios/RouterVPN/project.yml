@@ -47,10 +47,13 @@ targets:
         INFOPLIST_KEY_RouterVPNSourceRepository: "Eabusham2/router-vpn"
         INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-app"
         TARGETED_DEVICE_FAMILY: "1,2"
+        OTHER_LDFLAGS: "$(inherited) -lresolv -framework UIKit"
     dependencies:
       - target: RouterVPNPacketTunnel
         embed: true
         codeSign: false
+      - framework: .deps/Libbox.xcframework
+        embed: false
   RouterVPNPacketTunnel:
     type: app-extension
     platform: iOS
@@ -72,9 +75,10 @@ targets:
           test -s "$CONFIGURATION_BUILD_DIR/libwg-go.a"
           "$SRCROOT/prepare-libbox.sh"
           bash "$SRCROOT/../../deploy/test_ios_multihop_pinned.sh"
+          bash "$SRCROOT/../../deploy/test_mobile_openvpn_pinned.sh" "$SRCROOT/.deps/sing-box-apple"
           test -d "$SRCROOT/.deps/Libbox.xcframework"
           test -s "$SRCROOT/.deps/libbox-LICENSE.txt"
-          test "$(tr -d '\r\n' < "$SRCROOT/.deps/Libbox.xcframework.pin")" = '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator'
+          test "$(tr -d '\r\n' < "$SRCROOT/.deps/Libbox.xcframework.pin")" = '1.14.1+1ac1a339cb1223e9c70eae14c44411c75033c02d+go1.26.3+0.1.12+ios,iossimulator'
     postBuildScripts:
       - name: Stamp exact source provenance
         basedOnDependencyAnalysis: false

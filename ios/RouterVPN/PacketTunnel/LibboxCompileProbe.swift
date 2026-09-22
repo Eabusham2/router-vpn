@@ -2,7 +2,7 @@ import Foundation
 import Libbox
 
 enum RouterVPNLibboxCompileProbe {
-    static let expectedVersion = "1.13.12"
+    static let expectedVersion = "1.14.1"
 
     static func verifyPinnedRuntime() throws {
         let actual = LibboxVersion().trimmingCharacters(in: .whitespacesAndNewlines)

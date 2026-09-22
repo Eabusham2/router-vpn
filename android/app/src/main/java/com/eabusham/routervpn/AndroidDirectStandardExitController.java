@@ -22,12 +22,11 @@ final class AndroidDirectStandardExitController {
 
     NativeSingBoxController.SessionInfo prepare(AndroidStandardExitStore.Entry exit) throws Exception {
         AndroidStandardExitStore.validate(exit);
-        if ("openvpn".equals(exit.protocol)) throw new IllegalArgumentException("OpenVPN direct exit is unavailable on Android until a native OpenVPN dataplane is pinned and validated.");
 
         JSONObject custom = customExitJson(exit);
         JSONArray endpoints = new JSONArray();
         JSONArray outbounds = new JSONArray();
-        if ("wireguard".equals(exit.protocol)) endpoints.put(custom); else outbounds.put(custom);
+        if ("wireguard".equals(exit.protocol) || "openvpn".equals(exit.protocol)) endpoints.put(custom); else outbounds.put(custom);
 
         JSONObject tun = new JSONObject()
                 .put("type", "tun").put("tag", "tun-in")
@@ -69,6 +68,7 @@ final class AndroidDirectStandardExitController {
     }
 
     private static JSONObject customExitJson(AndroidStandardExitStore.Entry e) throws Exception {
+        if ("openvpn".equals(e.protocol)) return AndroidOpenVPN.endpoint(e, "");
         if ("wireguard".equals(e.protocol)) {
             JSONObject peer = new JSONObject().put("address", e.server).put("port", e.serverPort)
                     .put("public_key", e.wgPeerPublicKey).put("allowed_ips", new JSONArray(e.wgAllowedIps));

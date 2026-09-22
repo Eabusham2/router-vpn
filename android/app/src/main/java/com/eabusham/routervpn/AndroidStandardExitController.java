@@ -38,7 +38,7 @@ final class AndroidStandardExitController {
 
     private static JSONObject buildConfig(JSONObject entry,WgConfig wg,AndroidStandardExitStore.Entry exit)throws Exception{
         JSONArray endpoints=new JSONArray().put(wg.toEndpointJson());JSONArray outbounds=new JSONArray();
-        JSONObject custom=customExitJson(exit);if("wireguard".equals(exit.protocol))endpoints.put(custom);else outbounds.put(custom);
+        JSONObject custom=customExitJson(exit);if("wireguard".equals(exit.protocol)||"openvpn".equals(exit.protocol))endpoints.put(custom);else outbounds.put(custom);
         JSONObject dns=selectedDns(entry);int mtu=effectiveMtu(entry);JSONObject tun=new JSONObject().put("type","tun").put("tag","tun-in").put("address",new JSONArray().put("172.29.92.1/30").put("fd29:92::1/126")).put("mtu",mtu).put("auto_route",true).put("strict_route",true).put("stack","system");
         JSONObject proof=new JSONObject().put("type","mixed").put("tag","standard-exit-proof").put("listen","127.0.0.1").put("listen_port",1099);
         JSONObject route=new JSONObject().put("rules",new JSONArray().put(new JSONObject().put("protocol","dns").put("action","hijack-dns"))).put("final","custom-exit").put("auto_detect_interface",true);
@@ -46,6 +46,7 @@ final class AndroidStandardExitController {
     }
 
     private static JSONObject customExitJson(AndroidStandardExitStore.Entry e)throws Exception{
+        if("openvpn".equals(e.protocol))return AndroidOpenVPN.endpoint(e,"entry-wg");
         if("wireguard".equals(e.protocol)){JSONObject peer=new JSONObject().put("address",e.server).put("port",e.serverPort).put("public_key",e.wgPeerPublicKey).put("allowed_ips",new JSONArray(e.wgAllowedIps));if(!e.wgPreSharedKey.isEmpty())peer.put("pre_shared_key",e.wgPreSharedKey);JSONObject endpoint=new JSONObject().put("type","wireguard").put("tag","custom-exit").put("address",new JSONArray(e.wgAddresses)).put("private_key",e.wgPrivateKey).put("peers",new JSONArray().put(peer)).put("detour","entry-wg");if(e.wgMtu!=0)endpoint.put("mtu",e.wgMtu);return endpoint;}
         JSONObject out=new JSONObject().put("tag","custom-exit").put("server",e.server).put("server_port",e.serverPort).put("detour","entry-wg");
         if("socks5".equals(e.protocol)){out.put("type","socks").put("version","5");if(!e.username.isEmpty())out.put("username",e.username).put("password",e.password);}
