@@ -1,0 +1,146 @@
+name: Mobile native candidate validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mobile-native-candidate.yml
+      - configs/mobile-native-candidate.json
+  workflow_dispatch:
+
+# Candidate code receives no write token, deployment credentials or signing
+# secrets. This workflow never publishes a release or changes a branch/ref.
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-native-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    name: Validate and archive exact candidate source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate candidate identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          candidate = json.loads(Path('configs/mobile-native-candidate.json').read_text())
+          assert candidate.get('schema_version') == 1
+          sha, tree = candidate['source_sha'], candidate['tree_sha']
+          assert re.fullmatch('[0-9a-f]{40}', sha)
+          assert re.fullmatch('[0-9a-f]{40}', tree)
+          subprocess.run(['git', 'fetch', '--depth=1', 'origin', sha], check=True)
+          actual = subprocess.check_output(['git', 'rev-parse', sha + '^{tree}'], text=True).strip()
+          assert actual == tree, (actual, tree)
+          out = Path(os.environ['RUNNER_TEMP']) / 'candidate-source'
+          out.mkdir()
+          subprocess.run(['git', 'archive', '--format=tar.gz', '--prefix=router-vpn/', '-o', str(out/'source.tar.gz'), sha], check=True)
+          import hashlib
+          digest = hashlib.sha256((out/'source.tar.gz').read_bytes()).hexdigest()
+          (out/'source.tar.gz.sha256').write_text(digest + '  source.tar.gz\n')
+          (out/'identity.json').write_text(json.dumps({'source_sha':sha, 'tree_sha':tree, 'sha256':digest, 'scope':'unreleased candidate source'}, indent=2)+'\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as handle:
+              handle.write('source_sha='+sha+'\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as handle:
+              handle.write('Testing candidate `'+sha+'`, tree `'+tree+'`. Not a published release.\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-candidate-source-${{ steps.identity.outputs.source_sha }}
+          path: ${{ runner.temp }}/candidate-source/
+          if-no-files-found: error
+          retention-days: 7
+
+  core:
+    name: Native OpenVPN parsing and real loopback data path
+    needs: snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.snapshot.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Execute bounded parser tests and race checks
+        run: go test -race -count=1 -timeout=90s ./mobile
+      - name: Check actual pinned OpenVPN core and encrypted loopback transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          VENDOR="$RUNNER_TEMP/sing-box-openvpn"
+          git init -q "$VENDOR"
+          git -C "$VENDOR" remote add origin https://github.com/SagerNet/sing-box.git
+          git -C "$VENDOR" fetch --depth=1 origin 1ac1a339cb1223e9c70eae14c44411c75033c02d
+          git -C "$VENDOR" checkout --detach FETCH_HEAD
+          bash deploy/test_mobile_openvpn_pinned.sh "$VENDOR"
+
+  apple:
+    name: Candidate real iPhone and iPad build
+    needs: snapshot
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.snapshot.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - run: brew install xcodegen
+      - name: Build pinned mobile engines and native app
+        working-directory: ios/RouterVPN
+        env:
+          GITHUB_SHA: ${{ needs.snapshot.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          sh prepare-wireguard-kit.sh
+          bash prepare-libbox.sh
+          xcodegen generate
+          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" build
+          test -d build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app/PlugIns/RouterVPNPacketTunnel.appex
+
+  android:
+    name: Candidate real Android APK build
+    needs: snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.snapshot.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+      - name: Build actual combined runtime and APK
+        working-directory: android
+        env:
+          GITHUB_SHA: ${{ needs.snapshot.outputs.source_sha }}
+        run: gradle --no-daemon :app:assembleDebug --stacktrace

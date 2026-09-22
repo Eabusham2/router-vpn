@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "source_sha": "eba734f10cee89708e4013e9255cac45101d6ebd",
+  "tree_sha": "d5ce4181f8cc7ff72840eb14c8769c0a177a05c2",
+  "purpose": "Validate the staged native mobile OpenVPN/core upgrade before promoting its runtime changes to main. This is not a release or feature-completion record."
+}
