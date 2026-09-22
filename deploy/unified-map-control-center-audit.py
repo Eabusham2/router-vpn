@@ -104,8 +104,8 @@ forbid(
 
 # iOS policy must be an intersection of the shared product catalog and the real
 # Apple PacketTunnel, not a copy of desktop/cross-platform capability. The
-# PacketTunnel currently owns WG + the bounded Libbox external families; AWG,
-# OpenVPN and Tor remain explicit unavailable truths.
+# PacketTunnel owns WG and the bounded Libbox external families, including
+# OpenVPN. External AWG and Tor retain separate unimplemented capability gates.
 need(
     "ios/RouterVPN/App/IOSUnifiedSecureTransport.swift",
     "alwaysOn = true",
@@ -119,7 +119,8 @@ need(
     '"https-connect",',
     '"hysteria2",',
     '"amneziawg": "AmneziaWG is unavailable on iOS',
-    '"openvpn": "OpenVPN is unavailable on iOS',
+    '"openvpn",',
+    "OpenVPN verified TLS + negotiated data cipher",
     '"tor-bridge": "Tor bridges are unavailable on iOS',
     "Noise_IK",
     "TLS 1.3",
@@ -133,15 +134,17 @@ forbid(
 )
 need(
     "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
-    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]',
-    "OpenVPN external exits are unavailable on iOS",
+    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]',
+    "LibboxRouterOpenVPNEndpoint",
+    'endpoint["type"] as? String == "openvpn-client"',
+    'endpoint["system"] as? Bool == false',
     "Tor bridges are unavailable on iOS",
     "must be a literal IP so setup cannot leak pre-tunnel DNS",
 )
 
-# Android has a separate VpnService/runtime capability boundary. OpenVPN and Tor
-# are deliberately unavailable there; the unified control policy must not accept
-# either merely because the cross-platform catalog contains those node families.
+# Android owns its separate VpnService boundary. OpenVPN is compiled into that
+# same native runtime; Tor must not be accepted just because the desktop catalog
+# contains it. TLS cipher/version labels must describe negotiation truthfully.
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java",
     'DEFAULT_MODE = "smart-auto"',
@@ -149,7 +152,7 @@ need(
     "AUTHENTICATED_TRANSPORT_ALWAYS_ON = true",
     '"router-vpn", "wireguard", "amneziawg", "shadowsocks", "shadowsocks-2022", "hysteria2"',
     '"socks5", "http-connect", "https-connect", "shadowsocks-2022", "hysteria2"',
-    'unavailable.put("openvpn", "OpenVPN is unavailable on Android',
+    "OpenVPN verified TLS + negotiated data cipher",
     'unavailable.put("tor-bridge", "Tor bridges are unavailable on Android',
     "String unavailable = UNAVAILABLE_TYPES.get(last)",
     "is a bridge only. Add an authenticated encrypted tunnel after it.",
@@ -165,11 +168,11 @@ forbid(
 )
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
-    'new Capability("openvpn",false',
+    'new Capability("openvpn",true',
     'new Capability("tor-bridge",false',
-    "OpenVPN custom exit is unavailable on pinned sing-box 1.13.x",
+    'AndroidOpenVPN.endpoint(e, "")',
     "Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on Android",
-    'Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2")',
+    'Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn")',
     "must be a literal IP to avoid pre-tunnel DNS",
 )
 
