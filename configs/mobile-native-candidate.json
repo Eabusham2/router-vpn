@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_sha": "97e936e057313c1e57793876d5463d83b80aacc5",
-  "tree_sha": "a8153bb5d923228f6ecb8360217b6886b7a263f8",
-  "purpose": "Read-only validation of native OpenVPN with a local-only routed payload test and negative CA/name verification. Candidate objects already exist; no CI Git writes or feature-completion claims are permitted."
+  "source_sha": "31140af78812cace9d84113e30cf9fa20c316ac4",
+  "tree_sha": "fd9f37cd34add7ecd2494084baeed3e5aa181f2d",
+  "purpose": "Read-only native build validation of the corrected Libbox 1.14 Swift/Java bindings, with retained OpenVPN TLS payload and negative trust tests. Candidate objects already exist; no CI Git writes or feature-completion claims are permitted."
 }
