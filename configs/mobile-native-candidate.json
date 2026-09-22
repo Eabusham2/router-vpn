@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_sha": "339666e057cae9d34e47f1ad4822ce6b488e5704",
-  "tree_sha": "8430829400b93163c7b94fc82dc9d7f4727a3480",
-  "purpose": "Validate the exact reviewed native OpenVPN candidate using read-only source retrieval. Candidate Git objects were created through the authorized repository connector; CI must not reconstruct or upload this source. This is not a release or feature-completion record."
+  "source_sha": "97e936e057313c1e57793876d5463d83b80aacc5",
+  "tree_sha": "a8153bb5d923228f6ecb8360217b6886b7a263f8",
+  "purpose": "Read-only validation of native OpenVPN with a local-only routed payload test and negative CA/name verification. Candidate objects already exist; no CI Git writes or feature-completion claims are permitted."
 }
