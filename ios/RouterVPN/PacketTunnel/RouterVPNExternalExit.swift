@@ -58,7 +58,7 @@ enum RouterVPNExternalExitBuilder {
             var failure: NSError?
             let encoded = LibboxRouterOpenVPNEndpoint(config, ovpn["username"] as? String ?? "", ovpn["password"] as? String ?? "", "custom-exit", "", &failure)
             if let failure { throw failure }
-            guard let encoded, let data = encoded.data(using: .utf8),
+            guard let data = encoded.data(using: .utf8),
                   let endpoint = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   endpoint["type"] as? String == "openvpn-client", endpoint["system"] as? Bool == false,
                   endpoint["tag"] as? String == "custom-exit", endpoint["detour"] == nil else { throw error("OpenVPN native compiler returned an invalid owned endpoint.") }

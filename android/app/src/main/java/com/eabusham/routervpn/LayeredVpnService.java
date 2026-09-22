@@ -31,7 +31,6 @@ import io.nekohasekai.libbox.PlatformInterface;
 import io.nekohasekai.libbox.RoutePrefix;
 import io.nekohasekai.libbox.RoutePrefixIterator;
 import io.nekohasekai.libbox.SetupOptions;
-import io.nekohasekai.libbox.StringBox;
 import io.nekohasekai.libbox.StringIterator;
 import io.nekohasekai.libbox.SystemProxyStatus;
 import io.nekohasekai.libbox.TunOptions;
@@ -267,8 +266,19 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         while (inet6.hasNext()) { RoutePrefix route = inet6.next(); builder.addAddress(route.address(), route.prefix()); }
 
         if (options.getAutoRoute()) {
-            StringBox dns = options.getDNSServerAddress();
-            if (dns != null && dns.getValue() != null && !dns.getValue().isEmpty()) builder.addDnsServer(dns.getValue());
+            StringIterator dns = options.getDNSServerAddress();
+            int dnsCount = 0;
+            if (dns == null) throw new IllegalStateException("Libbox did not provide in-tunnel DNS.");
+            while (dns.hasNext()) {
+                String address = dns.next();
+                if (++dnsCount > 16 || address == null || address.trim().isEmpty()) {
+                    throw new IllegalStateException("Libbox returned an invalid or oversized in-tunnel DNS list.");
+                }
+                // Builder accepts numeric addresses; no hostname resolution or
+                // system-DNS fallback is introduced by this binding adapter.
+                builder.addDnsServer(address.trim());
+            }
+            if (dnsCount == 0) throw new IllegalStateException("Libbox did not provide in-tunnel DNS.");
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 boolean has4 = addRoutes33(builder, options.getInet4RouteAddress(), false);
                 boolean has6 = addRoutes33(builder, options.getInet6RouteAddress(), false);

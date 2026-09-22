@@ -25,9 +25,17 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         guard (1280...9000).contains(mtu) else { throw error("Libbox requested unsafe MTU \(mtu)") }
         settings.mtu = NSNumber(value: mtu)
 
-        let dnsAddress = try options.getDNSServerAddress().value
-        guard !dnsAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw error("Libbox did not provide an in-tunnel DNS server") }
-        let dns = NEDNSSettings(servers: [dnsAddress])
+        let dnsIterator = try options.getDNSServerAddress()
+        var dnsAddresses: [String] = []
+        while dnsIterator.hasNext() {
+            let address = dnsIterator.next().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard dnsAddresses.count < 16, IPv4Address(address) != nil || IPv6Address(address) != nil else {
+                throw error("Libbox returned an invalid or oversized in-tunnel DNS list")
+            }
+            dnsAddresses.append(address)
+        }
+        guard !dnsAddresses.isEmpty else { throw error("Libbox did not provide an in-tunnel DNS server") }
+        let dns = NEDNSSettings(servers: dnsAddresses)
         dns.matchDomains = [""]
         dns.matchDomainsNoSearch = true
         settings.dnsSettings = dns
@@ -166,8 +174,14 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
     func checkPlatformShell() throws { throw error("Router VPN does not expose a platform shell") }
     func openShellSession(_ user: LibboxPlatformUser?, command: String?, environ: LibboxStringIteratorProtocol?, term: String?, rows: Int32, cols: Int32) throws -> LibboxShellSessionProtocol { throw error("Router VPN does not expose a platform shell") }
     func lookupUser(_ username: String?) throws -> LibboxPlatformUser { throw error("Router VPN does not expose OS user lookup") }
-    func lookupSFTPServer() throws -> String { throw error("Router VPN does not expose SFTP") }
-    func readSystemSSHHostKey() throws -> String { throw error("Router VPN does not expose SSH host keys") }
+    func lookupSFTPServer(_ failure: NSErrorPointer) -> String {
+        failure?.pointee = error("Router VPN does not expose SFTP")
+        return ""
+    }
+    func readSystemSSHHostKey(_ failure: NSErrorPointer) -> String {
+        failure?.pointee = error("Router VPN does not expose SSH host keys")
+        return ""
+    }
     func tailscaleHostname() -> String { "router-vpn" }
     func usePlatformBridge() -> Bool { false }
     func createBridge(_ options: LibboxBridgeOptions?) throws -> LibboxBridgeSessionProtocol { throw error("Router VPN does not create a platform bridge") }

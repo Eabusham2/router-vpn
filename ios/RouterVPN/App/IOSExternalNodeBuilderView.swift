@@ -61,7 +61,7 @@ extension RouterVPNModel {
             var failure: NSError?
             let encoded = LibboxRouterOpenVPNEndpoint(openVPNConfig, username, password, "custom-exit", "", &failure)
             if let failure { throw failure }
-            guard let encoded, let data = encoded.data(using: .utf8),
+            guard let data = encoded.data(using: .utf8),
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   object["type"] as? String == "openvpn-client", object["system"] as? Bool == false,
                   object["tag"] as? String == "custom-exit", object["detour"] == nil else {

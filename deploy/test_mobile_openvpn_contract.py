@@ -33,5 +33,22 @@ for path in ('ios/RouterVPN/App/IOSUnifiedSecureTransport.swift','android/app/sr
     text=need(path, '"openvpn"', 'Tor bridges')
     assert 'OpenVPN is unavailable' not in text
 need('android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java', 'showOpenVPNForm()', 'entry.openVPNConfig=config.getText().toString()', 'entry.password=password.getText().toString()', 'exitStore.save(entry)', 'config.setSaveEnabled(false)', 'dialog.setOnDismissListener')
+# Match the generated 1.14 binding contract on both platforms. Native CI still
+# compiles against the actual headers/AAR; these guards prevent old adapters
+# from being restored unnoticed during source composition.
+need('ios/RouterVPN/PacketTunnel/RouterVPNLibboxPlatform.swift',
+     'let dnsIterator = try options.getDNSServerAddress()',
+     'while dnsIterator.hasNext()', 'NEDNSSettings(servers: dnsAddresses)',
+     'dnsAddresses.count < 16', 'guard !dnsAddresses.isEmpty',
+     'func lookupSFTPServer(_ failure: NSErrorPointer) -> String',
+     'func readSystemSSHHostKey(_ failure: NSErrorPointer) -> String',
+     'failure?.pointee = error(')
+need('android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java',
+     'StringIterator dns = options.getDNSServerAddress()', 'while (dns.hasNext())',
+     'builder.addDnsServer(address.trim())', 'dnsCount > 16', 'dnsCount == 0')
+for path in ('ios/RouterVPN/App/IOSExternalNodeBuilderView.swift',
+             'ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift'):
+    text=need(path, 'guard let data = encoded.data(using: .utf8)')
+    assert 'guard let encoded,' not in text, 'OpenVPN binding returns a non-optional String'
 subprocess.run(['go','test','-count=1','./mobile'],cwd=ROOT,check=True,timeout=45)
 print('Mobile OpenVPN shipping, private-store, owned-graph and parser contracts: PASS')
