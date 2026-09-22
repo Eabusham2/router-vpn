@@ -11,7 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "deploy/test_ios_multihop_pinned.sh"
-PIN = "1086ab2563320e0da0c23b3a491d8dfa0939dff4"
+PIN = "1ac1a339cb1223e9c70eae14c44411c75033c02d"
 
 # Executed in place of Apple/Git/Go tools. The REAL shipping shell is under test;
 # native CI separately runs the real compiler and exact-pinned Libbox parser.

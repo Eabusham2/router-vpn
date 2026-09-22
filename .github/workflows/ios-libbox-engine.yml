@@ -44,7 +44,7 @@ jobs:
         run: |
           test -d .deps/Libbox.xcframework
           test -s .deps/libbox-LICENSE.txt
-          grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
+          grep -Fq '1.14.1+1ac1a339cb1223e9c70eae14c44411c75033c02d+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
           python3 - <<'PY'
           import plistlib
           p=plistlib.load(open('.deps/Libbox.xcframework/Info.plist','rb'))
@@ -77,7 +77,7 @@ jobs:
           grep -Fq 'LibboxVersion()' PacketTunnel/LibboxCompileProbe.swift
       - uses: actions/upload-artifact@v4
         with:
-          name: RouterVPN-Libbox-1.13.12-signature
+          name: RouterVPN-Libbox-1.14.1-signature
           path: |
             ios/RouterVPN/.deps/Libbox.xcframework/**/Headers/Libbox.h
             ios/RouterVPN/.deps/Libbox.xcframework.pin

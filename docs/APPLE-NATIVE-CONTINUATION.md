@@ -55,8 +55,12 @@ Start Layer, node proof, DNS and release checks are retained.
 
 ## Still open, not waived
 
+The September 22 native OpenVPN integration supersedes the earlier blanket
+mobile OpenVPN exclusion; its supported profiles and test boundaries are documented
+in [MOBILE-OPENVPN.md](MOBILE-OPENVPN.md).
+
 The current source still lacks full iOS multihop and routed-hop telemetry parity,
-mobile OpenVPN, the complete mobile helper/PQ/MAX/ALL graph set, mobile Tor
+unrestricted OpenVPN profile compatibility, the complete mobile helper/PQ/MAX/ALL graph set, mobile Tor
 transports, iOS protected XOR-relay support, complete strict SMART transition
 ownership, and complete path-measured Auto-MTU/Jumbo/padding parity. Existing
 platform-specific documentation/source gates describe narrower support; those

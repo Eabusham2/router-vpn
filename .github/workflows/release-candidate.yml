@@ -259,7 +259,7 @@ jobs:
           test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$EXT/Info.plist")" = 'ios-packet-tunnel' || { echo "::error::iOS PacketTunnel artifact family mismatch"; exit 1; }
           test -d .deps/Libbox.xcframework || { echo "::error::Libbox.xcframework is missing"; exit 1; }
           test -s .deps/libbox-LICENSE.txt || { echo "::error::Libbox license is missing"; exit 1; }
-          grep -Fq '1.13.12+1086ab2563320e0da0c23b3a491d8dfa0939dff4+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin || { echo "::error::Libbox exact pin mismatch"; exit 1; }
+          grep -Fq '1.14.1+1ac1a339cb1223e9c70eae14c44411c75033c02d+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin || { echo "::error::Libbox exact pin mismatch"; exit 1; }
           for marker in 'WireGuardAdapter(with: self)' 'startLibbox' 'RouterVPNLibboxEngine' 'body["node_id"] as? String == expectedNodeID' 'body["proof"] as? String == Self.proofKind'; do grep -Fq "$marker" PacketTunnel/PacketTunnelProvider.swift || { echo "::error::PacketTunnel source contract missing: $marker"; exit 1; }; done
           rm -rf build/unsigned; mkdir -p build/unsigned/Payload; ditto "$APP" build/unsigned/Payload/RouterVPN.app; (cd build/unsigned && zip -qry ../RouterVPN-native-unsigned-resignable.ipa Payload); unzip -tq "$IPA" >/dev/null
           python3 ../../server/scripts/mobile-artifact-provenance.py --name router-vpn-ios.ipa --path "$IPA" --sha "$GITHUB_SHA" --repo Eabusham2/router-vpn

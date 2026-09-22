@@ -1,4 +1,5 @@
 import Network
+import Libbox
 import SwiftUI
 
 private enum IOSExternalNodeProtocol: String, CaseIterable, Identifiable {
@@ -8,6 +9,7 @@ private enum IOSExternalNodeProtocol: String, CaseIterable, Identifiable {
     case httpsConnect = "https-connect"
     case shadowsocks
     case hysteria2
+    case openvpn
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -17,6 +19,7 @@ private enum IOSExternalNodeProtocol: String, CaseIterable, Identifiable {
         case .httpsConnect: return "HTTPS CONNECT"
         case .shadowsocks: return "Shadowsocks"
         case .hysteria2: return "Hysteria2"
+        case .openvpn: return "OpenVPN"
         }
     }
 }
@@ -40,16 +43,34 @@ extension RouterVPNModel {
         wgAddresses: [String],
         wgAllowedIPs: [String],
         wgDNS: [String],
-        wgMTU: Int?
+        wgMTU: Int?,
+        openVPNConfig: String = ""
     ) throws {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
         }
-        let supported = Set(["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"])
+        let supported = Set(["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"])
         guard supported.contains(protocolName) else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 2, userInfo: [NSLocalizedDescriptionKey: "This external protocol has no proven iOS PacketTunnel dataplane."])
         }
-        let server = try iosExternalLiteralIP(rawServer, label: "External server")
+        let compiledOpenVPN: [String: Any]?
+        if protocolName == "openvpn" {
+            guard LibboxVersion().trimmingCharacters(in: .whitespacesAndNewlines) == "1.14.1" else {
+                throw NSError(domain: "RouterVPN.ExternalNode", code: 32, userInfo: [NSLocalizedDescriptionKey: "Native OpenVPN core pin mismatch."])
+            }
+            var failure: NSError?
+            let encoded = LibboxRouterOpenVPNEndpoint(openVPNConfig, username, password, "custom-exit", "", &failure)
+            if let failure { throw failure }
+            guard let data = encoded.data(using: .utf8),
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  object["type"] as? String == "openvpn-client", object["system"] as? Bool == false,
+                  object["tag"] as? String == "custom-exit", object["detour"] == nil else {
+                throw NSError(domain: "RouterVPN.ExternalNode", code: 33, userInfo: [NSLocalizedDescriptionKey: "Native OpenVPN compiler returned an invalid endpoint."])
+            }
+            compiledOpenVPN = object
+        } else { compiledOpenVPN = nil }
+        let server = try iosExternalLiteralIP(compiledOpenVPN?["server"] as? String ?? rawServer, label: "External server")
+        let port = compiledOpenVPN?["server_port"] as? Int ?? port
         let expected = try iosExternalPublicIP(rawExpected, label: "Expected public exit IP")
         guard (1...65535).contains(port) else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 3, userInfo: [NSLocalizedDescriptionKey: "External server port must be 1..65535."])
@@ -61,6 +82,10 @@ extension RouterVPNModel {
 
         var external: [String: Any] = ["protocol": protocolName, "expected_public_ip": expected]
         switch protocolName {
+        case "openvpn":
+            // Persist the private source profile, not a second set of generated
+            // credentials. PacketTunnel recompiles the frozen profile before use.
+            external["openvpn"] = ["config": openVPNConfig, "username": username, "password": password]
         case "wireguard":
             guard !wgPrivateKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !wgPeerPublicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -231,6 +256,7 @@ struct IOSExternalNodeBuilderView: View {
     @State private var wgAllowed = "0.0.0.0/0, ::/0"
     @State private var wgDNS = ""
     @State private var wgMTU = ""
+    @State private var openVPNConfig = ""
     @State private var errorText = ""
 
     var body: some View {
@@ -240,13 +266,15 @@ struct IOSExternalNodeBuilderView: View {
                     Picker("External node type", selection: $selected) {
                         ForEach(IOSExternalNodeProtocol.allCases) { item in Text(item.title).tag(item) }
                     }
-                    Text("iOS exposes only external protocols with a real pinned PacketTunnel dataplane. OpenVPN and Tor are not presented here until their Apple runtime paths are proven.")
+                    Text("iOS exposes only external protocols with a real pinned PacketTunnel dataplane. OpenVPN uses the pinned native client. Tor still requires a separate native transport path.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Identity") {
                     TextField("Display name", text: $name)
-                    TextField("Server literal IP", text: $server).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("Port", text: $port).keyboardType(.numberPad)
+                    if selected != .openvpn {
+                        TextField("Server literal IP", text: $server).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        TextField("Port", text: $port).keyboardType(.numberPad)
+                    }
                     TextField("Expected public exit IP", text: $expectedPublicIP).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
                 if selected == .socks5 || selected == .httpConnect || selected == .httpsConnect {
@@ -265,6 +293,16 @@ struct IOSExternalNodeBuilderView: View {
                 }
                 if selected == .hysteria2 {
                     Section("Hysteria2") { SecureField("Password", text: $secret); TextField("TLS server name / SNI", text: $tlsName).textInputAutocapitalization(.never).autocorrectionDisabled() }
+                }
+                if selected == .openvpn {
+                    Section("Private OpenVPN profile") {
+                        TextEditor(text: $openVPNConfig).frame(minHeight: 150)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        TextField("Username (when required)", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        SecureField("Password (when required)", text: $password)
+                        Text("Paste a complete inline .ovpn profile. Its remote list, TLS verification and authentication are compiled by the same native core used by PacketTunnel. Scripts, plugins and external file references are rejected.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if selected == .wireguard {
                     Section("WireGuard") {
@@ -300,14 +338,14 @@ struct IOSExternalNodeBuilderView: View {
     private func save() {
         guard !model.profileMutationBlocked else { errorText = "Disconnect or let the active VPN transition finish before adding an external node."; return }
         do {
-            guard let numericPort = Int(port) else { throw NSError(domain: "RouterVPN.ExternalNode", code: 30, userInfo: [NSLocalizedDescriptionKey: "Enter a valid port."]) }
+            guard let numericPort = (selected == .openvpn ? 1194 : Int(port)) else { throw NSError(domain: "RouterVPN.ExternalNode", code: 30, userInfo: [NSLocalizedDescriptionKey: "Enter a valid port."]) }
             let mtu = wgMTU.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : Int(wgMTU)
             if selected == .wireguard && mtu == nil && !wgMTU.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw NSError(domain: "RouterVPN.ExternalNode", code: 31, userInfo: [NSLocalizedDescriptionKey: "Enter a valid WireGuard MTU."]) }
             try model.createIOSExternalNode(
                 protocolName: selected.rawValue, name: name, server: server, port: numericPort, expectedPublicIP: expectedPublicIP,
                 username: username, password: password, method: method, secret: secret, tlsServerName: tlsName,
                 wgPrivateKey: wgPrivate, wgPeerPublicKey: wgPeer, wgPresharedKey: wgPSK,
-                wgAddresses: csv(wgAddresses), wgAllowedIPs: csv(wgAllowed), wgDNS: csv(wgDNS), wgMTU: mtu
+                wgAddresses: csv(wgAddresses), wgAllowedIPs: csv(wgAllowed), wgDNS: csv(wgDNS), wgMTU: mtu, openVPNConfig: openVPNConfig
             )
             dismiss()
         } catch { errorText = error.localizedDescription }

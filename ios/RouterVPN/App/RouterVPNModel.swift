@@ -95,7 +95,7 @@ final class RouterVPNModel: ObservableObject {
                     ? "Pinned native Apple AmneziaWG PacketTunnel with exact private selected-node proof."
                     : "Native WireGuardKit PacketTunnel with exact selected-node proof."
             }
-            return "Pinned Libbox 1.13.12 PacketTunnel using imported raw profile \(selection.rawProfileID), with exact selected-node proof forced through the engine."
+            return "Pinned Libbox 1.14.1 PacketTunnel using imported raw profile \(selection.rawProfileID), with exact selected-node proof forced through the engine."
         } catch {
             return error.localizedDescription
         }
@@ -409,7 +409,7 @@ final class RouterVPNModel: ObservableObject {
     private func modeName(_ id: String) -> String { logicalModes.first(where: { $0.id == id })?.name ?? id }
     private func engineName(_ selection: IOSRuntimeSelection) -> String {
         if selection.engine == .multihop { return "WireGuard entry → \(selection.rawProfileID) exit" }
-        if selection.engine == .libbox { return "Libbox 1.13.12" }
+        if selection.engine == .libbox { return "Libbox 1.14.1" }
         return selection.rawProfileID.hasPrefix("awg2") ? "AmneziaWG native" : "WireGuardKit"
     }
 

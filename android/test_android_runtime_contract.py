@@ -52,7 +52,7 @@ assert "registerDefaultNetworkCallback" in service
 # v26.7.11; a standalone libxray.aar dependency would reintroduce duplicate
 # go.Seq/JNI runtime classes.
 for marker in (
-    "1086ab2563320e0da0c23b3a491d8dfa0939dff4",
+    "1ac1a339cb1223e9c70eae14c44411c75033c02d",
     "294fb37343205b9b0cb7b7b1b423d3d4b60d9998",
     "v1.260327.1-0.20260711155151-50231eaff98c",
     "GO_TOOLCHAIN=go1.26.3",

@@ -4,8 +4,8 @@ here=Path(__file__).resolve()
 p=here.with_name('prepare-libbox.sh').read_text()
 workflow=(here.parents[2]/'.github/workflows/ios-libbox-engine.yml').read_text()
 required=[
- 'VERSION=1.13.12',
- 'COMMIT=1086ab2563320e0da0c23b3a491d8dfa0939dff4',
+ 'VERSION=1.14.1',
+ 'COMMIT=1ac1a339cb1223e9c70eae14c44411c75033c02d',
  'GO_TOOLCHAIN=go1.26.3',
  'GOMOBILE_VERSION=0.1.12',
  'go run ./cmd/internal/build_libbox -target apple -platform ios,iossimulator',
@@ -13,7 +13,8 @@ required=[
  'libbox-LICENSE.txt',
  "('ios','')",
  "('ios','simulator')",
- "if grep -Fq 'with_openvpn'",
+ "grep -Fq 'with_openvpn'",
+ 'LibboxRouterOpenVPNEndpoint', 'BRIDGE_SHA', 'BRIDGE_STAMP',
 ]
 for marker in required:
     assert marker in p, marker

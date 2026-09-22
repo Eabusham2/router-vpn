@@ -147,7 +147,7 @@ for required in (
         error(f"iOS runtime selection truth boundary missing: {required}")
 external_ios = text("ios/RouterVPN/App/RouterVPNModelExternal.swift")
 for required in (
-    "external-libbox", "External OpenVPN — unavailable on iOS until a pinned native Apple OpenVPN dataplane exists",
+    "external-libbox", "External OpenVPN — native pinned client with exact public-exit proof",
     "exact public-exit proof",
 ):
     if required not in external_ios:

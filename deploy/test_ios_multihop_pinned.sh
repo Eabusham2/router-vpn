@@ -4,7 +4,7 @@
 set -euo pipefail
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VENDOR="$ROOT/ios/RouterVPN/.deps/sing-box-apple"
-PIN=1086ab2563320e0da0c23b3a491d8dfa0939dff4
+PIN=1ac1a339cb1223e9c70eae14c44411c75033c02d
 [[ $(uname -s) == Darwin ]] || { echo 'Native Libbox parser gate requires macOS'; exit 1; }
 [[ $(git -C "$VENDOR" rev-parse HEAD) == "$PIN" ]] || { echo 'Libbox core pin mismatch'; exit 1; }
 # Xcode invokes this from an iphoneos build phase. The graph fixtures and
@@ -22,7 +22,7 @@ python3 "$ROOT/deploy/test_ios_multihop_graph.py" --fixture-dir "$WORK/fixtures"
   export GOOS=darwin
   export GOARCH=$(go env GOHOSTARCH)
   export CGO_ENABLED=0
-  go build -trimpath -tags with_wireguard,with_quic,with_gvisor -o "$WORK/sing-box" ./cmd/sing-box
+  go build -trimpath -ldflags=-checklinkname=0 -tags with_wireguard,with_quic,with_gvisor -o "$WORK/sing-box" ./cmd/sing-box
 )
 for graph in "$WORK"/fixtures/*.json; do
   "$WORK/sing-box" check -c "$graph"

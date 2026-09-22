@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-VERSION=1.13.12
-COMMIT=1086ab2563320e0da0c23b3a491d8dfa0939dff4
+VERSION=1.14.1
+COMMIT=1ac1a339cb1223e9c70eae14c44411c75033c02d
 LIBXRAY_COMMIT=294fb37343205b9b0cb7b7b1b423d3d4b60d9998
 XRAY_CORE_VERSION=v1.260327.1-0.20260711155151-50231eaff98c
 GO_TOOLCHAIN=go1.26.3
@@ -18,6 +18,9 @@ AAR="$LIBDIR/libbox.aar"
 STAMP="$LIBDIR/libbox.commit"
 LICENSE_OUT="$LIBDIR/libbox-LICENSE.txt"
 XRAY_LICENSE_OUT="$LIBDIR/libxray-LICENSE.txt"
+OPENVPN_SOURCE="$ROOT/../mobile/routervpn_openvpn.go"
+OPENVPN_STAMP="$LIBDIR/libbox.openvpn.sha256"
+OPENVPN_SHA=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$OPENVPN_SOURCE")
 EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN"
 
 verify_aar() {
@@ -66,7 +69,7 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
+  for symbol in     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
     grep -Fq "$symbol" "$api_list" || {
       echo "combined libbox AAR is missing $symbol bridge" >&2
       return 1
@@ -85,7 +88,7 @@ verify_aar() {
   trap - RETURN
 }
 
-if [[ -s "$AAR" && -f "$STAMP" && $(tr -d '\r\n' <"$STAMP") == "$EXPECTED_STAMP" ]]; then
+if [[ -s "$AAR" && -f "$STAMP" && $(tr -d '\r\n' <"$STAMP") == "$EXPECTED_STAMP" && -f "$OPENVPN_STAMP" && $(tr -d '\r\n' <"$OPENVPN_STAMP") == "$OPENVPN_SHA" ]]; then
   verify_aar
   printf 'Pinned combined Android Go runtime already built: sing-box %s + libXray %s\n' "$VERSION" "$LIBXRAY_COMMIT"
   exit 0
@@ -171,6 +174,9 @@ grep -Fq "github.com/xtls/xray-core $XRAY_CORE_VERSION" "$XRAY_VENDOR/go.mod" ||
 
 git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
 install -m 0644 "$ROOT/routervpn_xray_bridge.go" "$VENDOR/experimental/libbox/routervpn_xray_bridge.go"
+# Same Go runtime and protected socket path as every other mobile Libbox mode.
+grep -Fq 'with_openvpn' "$VENDOR/cmd/internal/build_libbox/main.go"
+install -m 0644 "$OPENVPN_SOURCE" "$VENDOR/experimental/libbox/routervpn_openvpn.go"
 
 (
   cd "$VENDOR"
@@ -198,7 +204,8 @@ install -m 0644 "$ROOT/routervpn_xray_bridge.go" "$VENDOR/experimental/libbox/ro
     exit 1
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
-  go_retry test ./experimental/libbox
+  go_retry test -ldflags=-checklinkname=0 ./experimental/libbox
+  bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
   go_retry run ./cmd/internal/build_libbox -target android
 )
 
@@ -208,5 +215,6 @@ install -m 0644 "$SOURCE_AAR" "$AAR"
 install -m 0644 "$VENDOR/LICENSE" "$LICENSE_OUT"
 install -m 0644 "$XRAY_VENDOR/LICENSE" "$XRAY_LICENSE_OUT"
 printf '%s\n' "$EXPECTED_STAMP" >"$STAMP"
+printf '%s\n' "$OPENVPN_SHA" > "$OPENVPN_STAMP"
 verify_aar
 printf 'Built one pinned Android Go runtime: sing-box %s (%s) + libXray %s / Xray-core %s\n' "$VERSION" "$COMMIT" "$LIBXRAY_COMMIT" "$XRAY_CORE_VERSION"

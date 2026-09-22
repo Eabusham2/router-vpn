@@ -131,14 +131,14 @@ need(
 )
 
 # Android has its own process-owned VpnService/custom-exit store rather than the
-# desktop local-controller API. It exposes the same six real typed families and
-# rejects OpenVPN/Tor instead of manufacturing support.
+# desktop local-controller API. Native OpenVPN is included through the owned
+# Libbox runtime; Tor remains an explicit separate capability boundary.
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
     'new Capability("wireguard",true', 'new Capability("socks5",true',
     'new Capability("http",true', 'new Capability("https",true',
     'new Capability("shadowsocks",true', 'new Capability("hysteria2",true',
-    'new Capability("openvpn",false', 'new Capability("tor-bridge",false',
+    'new Capability("openvpn",true', 'new Capability("tor-bridge",false',
     "AndroidPrivateFileStore.write",
 )
 need(
@@ -151,8 +151,8 @@ need(
     "activeOrTransitioning()",
 )
 
-# iOS/iPadOS now owns the same six common external families through pinned
-# Libbox/WireGuardKit PacketTunnel paths. OpenVPN and Tor remain unavailable.
+# iOS/iPadOS owns seven external families through pinned Libbox/WireGuardKit
+# PacketTunnel paths, including native OpenVPN. Tor remains separately unimplemented.
 # External bundles must not inherit home Router/SOCKS defaults merely to satisfy
 # the compatibility envelope. The full linked-node store can be much larger than
 # a reasonable Keychain value, so bundles are AES-GCM sealed into a bounded,
@@ -171,7 +171,7 @@ need(
     "IOSExternalNodeProtocol",
     'case httpConnect = "http-connect"',
     'case httpsConnect = "https-connect"',
-    'Set(["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"])',
+    'Set(["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"])',
     'external["http_connect"] = block',
     'external["https_connect"] = block',
     "HTTPS CONNECT requires a safe TLS server name/SNI",
@@ -180,7 +180,9 @@ need(
     "linkNodeBundle(data)",
     "profileMutationBlocked",
     "literal IP so setup cannot leak pre-tunnel DNS",
-    "OpenVPN and Tor are not presented here",
+    "LibboxRouterOpenVPNEndpoint",
+    'external["openvpn"] = ["config": openVPNConfig, "username": username, "password": password]',
+    'case openvpn',
     '"router_api": ""',
     '"adguard_ipv4": ""',
     '"adguard_ipv6": ""',
@@ -194,7 +196,6 @@ forbid(
     "ios/RouterVPN/App/IOSExternalNodeBuilderView.swift",
     '"socks_port": 1080',
     '"socks5Port": 1080',
-    'case openvpn',
     'case tor',
 )
 need(
@@ -207,7 +208,7 @@ need(
 )
 need(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
-    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]',
+    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]',
     "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom",
     "IOSNodeBundleStore.shared.link",
     'value.socks5Host = ""; value.socks5Port = 0',
@@ -231,7 +232,7 @@ forbid(
 )
 need(
     "ios/RouterVPN/App/NodeManagerSheet.swift",
-    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]',
+    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]',
     "Connect external",
 )
 need(
@@ -276,13 +277,16 @@ forbid(
 )
 need(
     "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
-    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]',
+    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]',
     'case "http-connect", "https-connect"',
     'let key = secure ? "https_connect" : "http_connect"',
     '"type": "http"',
     "External HTTPS CONNECT requires a safe TLS server name",
     "Plain HTTP CONNECT cannot carry TLS metadata",
-    "OpenVPN external exits are unavailable on iOS",
+    "LibboxRouterOpenVPNEndpoint",
+    'endpoint["type"] as? String == "openvpn-client"',
+    'endpoint["system"] as? Bool == false',
+    'endpoint["detour"] == nil',
     "Tor bridges are unavailable on iOS",
 )
 
