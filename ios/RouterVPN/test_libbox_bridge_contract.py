@@ -12,7 +12,7 @@ for marker in [
 ]: assert marker in platform, marker
 for marker in [
  'RouterVPNLibboxCompileProbe.verifyPinnedRuntime()', 'LibboxSetupOptions()',
- 'LibboxSetup(setup, &setupError)', 'LibboxSetMemoryLimit(true)',
+ 'LibboxSetup(setup, &setupError)', 'setup.oomKillerEnabled = true',
  'LibboxNewCommandServer(platform, platform, &createError)', 'server.startOrReloadService',
  'files["sing-box.json"]', '.posixPermissions: 0o700', '.posixPermissions: 0o600',
  'data.count <= 4 * 1024 * 1024', 'total <= 12 * 1024 * 1024',

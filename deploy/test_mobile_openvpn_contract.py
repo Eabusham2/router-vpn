@@ -32,5 +32,6 @@ need('android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitRuntim
 for path in ('ios/RouterVPN/App/IOSUnifiedSecureTransport.swift','android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java'):
     text=need(path, '"openvpn"', 'Tor bridges')
     assert 'OpenVPN is unavailable' not in text
+need('android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java', 'showOpenVPNForm()', 'entry.openVPNConfig=config.getText().toString()', 'entry.password=password.getText().toString()', 'exitStore.save(entry)', 'config.setSaveEnabled(false)', 'dialog.setOnDismissListener')
 subprocess.run(['go','test','-count=1','./mobile'],cwd=ROOT,check=True,timeout=45)
 print('Mobile OpenVPN shipping, private-store, owned-graph and parser contracts: PASS')

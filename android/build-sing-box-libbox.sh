@@ -204,7 +204,7 @@ install -m 0644 "$OPENVPN_SOURCE" "$VENDOR/experimental/libbox/routervpn_openvpn
     exit 1
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
-  go_retry test ./experimental/libbox
+  go_retry test -ldflags=-checklinkname=0 ./experimental/libbox
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
   go_retry run ./cmd/internal/build_libbox -target android
 )

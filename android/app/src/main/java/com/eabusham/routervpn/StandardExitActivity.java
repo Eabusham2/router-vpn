@@ -117,16 +117,16 @@ public final class StandardExitActivity extends Activity {
 
     private void chooseProtocol() {
         if(activeOrTransitioning()){toast("Disconnect/finish the current VPN session before adding or editing custom exits.");return;}
-        String[] protocols={"WireGuard","SOCKS5","HTTP CONNECT","HTTPS CONNECT + TLS","Shadowsocks","Hysteria2","OpenVPN — unavailable"};
-        String[] ids={"wireguard","socks5","http","https","shadowsocks","hysteria2"};
+        String[] protocols={"WireGuard","SOCKS5","HTTP CONNECT","HTTPS CONNECT + TLS","Shadowsocks","Hysteria2","OpenVPN"};
+        String[] ids={"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn"};
         new AlertDialog.Builder(this).setTitle("Add custom exit protocol").setItems(protocols,(d,w)->{
-            if(w==6){dialog("OpenVPN unavailable",AndroidStandardExitStore.capabilities().get(6).reason);return;}
             showAddForm(ids[w]);
         }).setNegativeButton("Cancel",null).show();
     }
 
     private void showAddForm(String protocol) {
         if(activeOrTransitioning()){toast("Disconnect/finish the current VPN session before adding a custom exit.");return;}
+        if("openvpn".equals(protocol)){showOpenVPNForm();return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int p=dp(10);form.setPadding(p,p,p,p);
         EditText name=field("Name",false),server=field("Server literal IP",false),port=field("Server port",false),expected=field("Expected public exit IP",false);
         port.setInputType(InputType.TYPE_CLASS_NUMBER);form.addView(name);form.addView(server);form.addView(port);form.addView(expected);
@@ -149,10 +149,48 @@ public final class StandardExitActivity extends Activity {
         }).setNegativeButton("Cancel",null).show();
     }
 
+    private void showOpenVPNForm() {
+        if(activeOrTransitioning()){toast("Disconnect before adding an OpenVPN exit.");return;}
+        LinearLayout form=new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        int padding=dp(12);form.setPadding(padding,padding,padding,padding);
+        EditText name=field("Display name",false),expected=field("Expected public exit IP",false);
+        EditText config=field("Paste complete inline .ovpn profile",false);
+        config.setSingleLine(false);config.setMinLines(7);config.setMaxLines(12);
+        config.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        config.setSaveEnabled(false);
+        EditText username=field("Username (when required)",false),password=field("Password (when required)",true);
+        username.setSaveEnabled(false);password.setSaveEnabled(false);
+        if(android.os.Build.VERSION.SDK_INT>=android.os.Build.VERSION_CODES.O){
+            config.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+        }
+        TextView error=text("",13,false);
+        form.addView(name);form.addView(expected);form.addView(config);form.addView(username);form.addView(password);
+        form.addView(text("The native client reads the remote list and inline CA/client keys. Scripts, plugins and filesystem references are rejected. Exit verification still runs before Connected is shown.",13,false));
+        form.addView(error);
+        ScrollView scroll=new ScrollView(this);scroll.addView(form);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Add OpenVPN exit").setView(scroll)
+                .setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
+        dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            if(activeOrTransitioning()){error.setText("VPN state changed; disconnect before saving.");return;}
+            try{
+                AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();
+                entry.name=name.getText().toString();entry.protocol="openvpn";
+                entry.expectedPublicIp=expected.getText().toString();
+                entry.openVPNConfig=config.getText().toString();
+                entry.username=username.getText().toString();entry.password=password.getText().toString();
+                // The private store validates with the same native compiler as the live runtime.
+                exitStore.save(entry);refresh();toast("Saved "+entry.name);dialog.dismiss();
+            }catch(Exception failure){error.setText("Save failed: "+safe(failure));}
+        }));
+        dialog.setOnDismissListener(ignored->{config.setText("");username.setText("");password.setText("");});
+        dialog.show();
+    }
+
     private void showSavedExits(boolean connect, boolean direct) {
         try {
             List<AndroidStandardExitStore.Entry> exits=exitStore.list();
-            if(exits.isEmpty()){new AlertDialog.Builder(this).setTitle("No custom exits").setMessage("Add WireGuard, SOCKS5, HTTP/HTTPS CONNECT, Shadowsocks or Hysteria2 first.").setPositiveButton("Add",(d,w)->chooseProtocol()).setNegativeButton("Cancel",null).show();return;}
+            if(exits.isEmpty()){new AlertDialog.Builder(this).setTitle("No custom exits").setMessage("Add WireGuard, SOCKS5, HTTP/HTTPS CONNECT, Shadowsocks, Hysteria2 or OpenVPN first.").setPositiveButton("Add",(d,w)->chooseProtocol()).setNegativeButton("Cancel",null).show();return;}
             String[] labels=new String[exits.size()];for(int i=0;i<exits.size();i++){AndroidStandardExitStore.Entry e=exits.get(i);labels[i]=e.name+" — "+e.protocol+"\n"+e.server+":"+e.serverPort+" → "+e.expectedPublicIp;}
             String title=!connect?"Manage custom exits":direct?"Choose direct external exit":"Choose external exit after Router VPN entry";
             new AlertDialog.Builder(this).setTitle(title).setItems(labels,(d,w)->{if(connect){if(direct)requestDirect(exits.get(w));else chooseEntry(exits.get(w));}else showExitActions(exits.get(w));}).setPositiveButton(connect?"Cancel":"Add new",(d,w)->{if(!connect)chooseProtocol();}).setNegativeButton("Close",null).show();

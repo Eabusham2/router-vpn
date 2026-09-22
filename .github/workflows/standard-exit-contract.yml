@@ -172,5 +172,5 @@ jobs:
           grep -Fq 'Connect direct external exit' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
           grep -Fq 'Router VPN WireGuard entry → external exit' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
           grep -Fq 'VpnService.prepare(this)' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
-          grep -Fq 'OpenVPN unavailable' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
+          python3 deploy/test_mobile_openvpn_contract.py
           grep -Fq 'StandardExitActivity' android/app/src/main/AndroidManifest.xml

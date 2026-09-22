@@ -17,4 +17,4 @@ trap 'rm -f "$TEST"' EXIT
 install -m 0644 "$ROOT/mobile/routervpn_openvpn_native_test.go.tmpl" "$TEST"
 install -m 0644 "$ROOT/mobile/routervpn_openvpn.go" "$VENDOR/experimental/libbox/routervpn_openvpn.go"
 cd "$VENDOR"
-go test -count=1 -timeout=120s -tags with_openvpn,with_wireguard,with_quic,with_gvisor ./experimental/libbox -run '^TestRouterOpenVPNNative' -v
+go test -count=1 -timeout=120s -ldflags=-checklinkname=0 -tags with_openvpn,with_wireguard,with_quic,with_gvisor ./experimental/libbox -run '^TestRouterOpenVPNNative' -v

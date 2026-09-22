@@ -40,7 +40,7 @@ need('server/scripts/generate-setup-assets.py','Home AdGuard','Fastest measured'
 # A20-5: real external node model includes all supported families; mobile OpenVPN remains fail closed.
 need('internal/common/profile_schema.go','case "wireguard"','case "openvpn"','case "shadowsocks"','case "socks5"','case "http-connect"','case "https-connect"','case "hysteria2"')
 need('android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java','http-connect','https-connect','hysteria2','openvpn')
-need('ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift','OpenVPN external exits are unavailable on iOS')
+need('ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift','LibboxRouterOpenVPNEndpoint','openvpn-client','endpoint["system"] as? Bool == false')
 
 # A20-6/7: role-colored real-coordinate map and real throughput are separate from RTT/MTU.
 need('ios/RouterVPN/App/IOSUnifiedProductView.swift','real coordinates','animated packet','path','Location')

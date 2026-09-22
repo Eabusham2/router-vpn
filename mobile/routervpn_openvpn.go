@@ -644,6 +644,9 @@ func routerOpenVPNWords(line string) ([]string, error) {
 	var quote rune
 	escaped, token := false, false
 	for _, c := range line {
+		if (c < 0x20 && c != '\t') || c == 0x7f {
+			return nil, errors.New("invalid control character")
+		}
 		if escaped {
 			b.WriteRune(c)
 			escaped = false

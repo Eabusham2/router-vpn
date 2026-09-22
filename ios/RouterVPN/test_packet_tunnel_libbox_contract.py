@@ -75,7 +75,7 @@ for runtime in ('startWireGuard', 'startMultihop', 'startLibbox', 'startExternal
 
 assert 'adapter.stop { [weak self] _ in self?.wireGuardAdapter = nil' not in provider, 'old async stop callback can clobber a newer WireGuard owner'
 assert 'defer { self.proofTask = nil; self.proofSession?.finishTasksAndInvalidate(); self.proofSession = nil }' not in provider, 'old proof callback can clobber a newer proof session'
-for marker in ['"routervpn-proof"','"type": "mixed"','"listen": "127.0.0.1"','proofProxyPort = 1099','LibboxNewCommandServer','LibboxSetMemoryLimit(true)']:
+for marker in ['"routervpn-proof"','"type": "mixed"','"listen": "127.0.0.1"','proofProxyPort = 1099','LibboxNewCommandServer','setup.oomKillerEnabled = true']:
     assert marker in engine, marker
 for marker in ['LibboxPlatformInterfaceProtocol','LibboxCommandServerHandlerProtocol','options.getAutoRoute()','options.getDNSServerAddress()','NEIPv4Route.default()','NEIPv6Route.default()','LibboxGetTunnelFileDescriptor()','NWPathMonitor()','includeAllNetworksRequested']:
     assert marker in platform, marker
