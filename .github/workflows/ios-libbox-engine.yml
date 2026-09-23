@@ -52,7 +52,7 @@ jobs:
           assert ('ios','') in plats, plats
           assert ('ios','simulator') in plats, plats
           PY
-          HEADER=$(find .deps/Libbox.xcframework -path '*/Headers/Libbox.h' -print -quit)
+          HEADER=$(find .deps/Libbox.xcframework -path '*/Headers/Libbox.objc.h' -print -quit)
           test -s "$HEADER"
           echo '=== exact pinned Libbox PlatformInterface/command signatures ==='
           SIGNATURES="$RUNNER_TEMP/routervpn-libbox-signatures.txt"
@@ -79,7 +79,7 @@ jobs:
         with:
           name: RouterVPN-Libbox-1.14.1-signature
           path: |
-            ios/RouterVPN/.deps/Libbox.xcframework/**/Headers/Libbox.h
+            ios/RouterVPN/.deps/Libbox.xcframework/**/Headers/Libbox.objc.h
             ios/RouterVPN/.deps/Libbox.xcframework.pin
             ios/RouterVPN/.deps/libbox-LICENSE.txt
           if-no-files-found: error
