@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"router-vpn/internal/multihoprelay"
+	"runtime"
 	"strconv"
 	"time"
 )
@@ -76,12 +77,11 @@ func (relayExecRunner) Start(ctx context.Context, config []byte, lease multihopr
 	if err := configureRelayProcess(cmd); err != nil {
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
-		return nil, errors.New("relay engine could not start")
+	p, err := startOwnedRelayProcess(cmd, dir)
+	if err != nil {
+		return nil, err
 	}
-	p := &relayProcess{cmd: cmd, done: make(chan struct{}), dir: dir}
 	adopted = true
-	go func() { _ = cmd.Wait(); close(p.done) }()
 	// Authenticate the exact fresh credentials. A listener already occupying the
 	// port must not be mistaken for the engine just launched.
 	for p.Alive() {
@@ -131,4 +131,26 @@ func probeRelayAuthentication(ctx context.Context, l multihoprelay.Lease) error 
 		return errors.New("relay credential verification failed")
 	}
 	return nil
+}
+
+// Linux parent-death signals follow the creating OS thread, not merely the Go
+// process. Keep that thread alive until Wait confirms this exact child exited.
+func startOwnedRelayProcess(cmd *exec.Cmd, dir string) (*relayProcess, error) {
+	p := &relayProcess{cmd: cmd, done: make(chan struct{}), dir: dir}
+	started := make(chan error, 1)
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		defer close(p.done)
+		err := cmd.Start()
+		started <- err
+		if err == nil {
+			_ = cmd.Wait()
+		}
+	}()
+	if err := <-started; err != nil {
+		<-p.done
+		return nil, errors.New("relay engine could not start")
+	}
+	return p, nil
 }
