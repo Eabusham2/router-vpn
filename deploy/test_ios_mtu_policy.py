@@ -76,6 +76,55 @@ reject("missing config") { _ = try P.libbox([:], profile:fixed(1400)) }
 reject("invalid JSON") { _ = try P.libbox(["sing-box.json":Data("false".utf8)], profile:fixed(1400)) }
 reject("no TUN") { _ = try P.libbox(files(["inbounds":[["type":"mixed"]]]), profile:fixed(1400)) }
 reject("ambiguous TUNs") { _ = try P.libbox(files(["inbounds":[["type":"tun"],["type":"tun"]]]), profile:fixed(1400)) }
+// Exercise the actual per-hop policy used after graph construction.
+func nested(_ outer: Any = 1420, _ inner: Any = 1420, _ host: String = "198.51.100.2") throws -> [String: Data] {
+    try files([
+        "inbounds": [["type":"tun", "tag":"tun-in", "mtu":1280], ["type":"mixed", "listen_port":1099]],
+        "endpoints": [
+            ["type":"wireguard", "tag":"routervpn-hop-entry", "mtu":outer, "private_key":"entry-secret"],
+            ["type":"wireguard", "tag":"proxy", "mtu":inner, "detour":"routervpn-hop-entry", "peers":[["address":host]], "private_key":"exit-secret"]
+        ],
+        "route":["final":"proxy"], "dns":["final":"selected-dns"]
+    ])
+}
+func graphRoot(_ files: [String: Data]) throws -> [String: Any] { try JSONSerialization.jsonObject(with:files["sing-box.json"]!) as! [String: Any] }
+@MainActor func checkHops(_ name: String, _ files: [String: Data], outer: Int, inner: Int, tun: Int) throws {
+    let value = try graphRoot(files)
+    let hops = value["endpoints"] as! [[String: Any]]
+    let incoming = value["inbounds"] as! [[String: Any]]
+    try check(name + " entry", hops[0]["mtu"] as? Int == outer)
+    try check(name + " exit", hops[1]["mtu"] as? Int == inner)
+    try check(name + " TUN", incoming[0]["mtu"] as? Int == tun)
+    try check(name + " identity", hops[0]["private_key"] as? String == "entry-secret" && hops[1]["private_key"] as? String == "exit-secret")
+}
+let nestedAuto = try P.multihop(nested(),entryProfile:[:],exitProfile:[:])
+try checkHops("configured auto envelope",nestedAuto,outer:1420,inner:1360,tun:1280)
+try checkHops("IPv6 envelope",P.multihop(nested(1420,1420,"2001:db8::2"),entryProfile:[:],exitProfile:[:]),outer:1420,inner:1328,tun:1280)
+let separate = try P.multihop(nested(),entryProfile:fixed(1500),exitProfile:fixed(1400))
+try checkHops("independent fixed policies",separate,outer:1500,inner:1400,tun:1400)
+try checkHops("small fixed inner",P.multihop(nested(),entryProfile:[:],exitProfile:fixed(1300)),outer:1420,inner:1300,tun:1300)
+try checkHops("auto ignores stale measurements",P.multihop(nested(),entryProfile:["effective_mtu":9000],exitProfile:["effective_mtu":9000]),outer:1420,inner:1360,tun:1280)
+try check("per-hop patch idempotent", P.multihop(separate,entryProfile:fixed(1500),exitProfile:fixed(1400)) == separate)
+try check("per-hop keeps non-config assets", nestedAuto["ca.pem"] == Data("keep certificate".utf8))
+try check("per-hop does not mutate input", (try graphRoot(nested())["endpoints"] as! [[String: Any]])[0]["mtu"] as? Int == 1420)
+reject("fixed exit cannot overwrite entry") { _ = try P.multihop(nested(),entryProfile:[:],exitProfile:fixed(1400)) }
+reject("small entry cannot claim dual-stack nested transport") { _ = try P.multihop(nested(1280),entryProfile:[:],exitProfile:[:]) }
+reject("invalid saved entry MTU policy") { _ = try P.multihop(nested(),entryProfile:["mtu_policy":"invented"],exitProfile:[:]) }
+reject("invalid saved exit MTU policy") { _ = try P.multihop(nested(),entryProfile:[:],exitProfile:["mtu_policy":"invented"]) }
+reject("boolean entry MTU") { _ = try P.multihop(nested(true),entryProfile:[:],exitProfile:[:]) }
+reject("fractional exit MTU") { _ = try P.multihop(nested(1420,1400.5),entryProfile:[:],exitProfile:[:]) }
+for outer in 1360...1500 {
+    for host in ["198.51.100.2", "2001:db8::2"] {
+        let result = try graphRoot(P.multihop(nested(outer,1420,host),entryProfile:[:],exitProfile:[:]))
+        let mtu = (result["endpoints"] as! [[String:Any]])[1]["mtu"] as! Int
+        let overhead = host.contains(":") ? 80 : 60
+        try check("every padded inner packet fits its entry", ((mtu+15)/16)*16+overhead <= outer && mtu >= 1280)
+    }
+}
+let ss = try files(["inbounds":[["type":"tun","mtu":1280]],"endpoints":[["type":"wireguard","tag":"routervpn-hop-entry","mtu":1420]],"outbounds":[["type":"shadowsocks","tag":"proxy"]]])
+let ssPatched = try graphRoot(P.multihop(ss,entryProfile:fixed(1440),exitProfile:fixed(1400)))
+try check("proxy exit preserves separate entry MTU", (ssPatched["endpoints"] as! [[String:Any]])[0]["mtu"] as? Int == 1440)
+try check("proxy exit applies OS MTU", (ssPatched["inbounds"] as! [[String:Any]])[0]["mtu"] as? Int == 1400)
 print("iOS fixed-MTU executable policy: PASS (\(checks) checks)")
 '''
 
@@ -89,6 +138,7 @@ def main():
         "RouterVPNMTUPolicy.wireGuard(wireGuardLikeProfile(root, rawProfileID: requestedMode), profile: selectedProfile)",
         "RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)",
         "RouterVPNMTUPolicy.libbox(runtime.files, profile: selectedProfile)",
+        "RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)",
     ):
         assert call in provider, "fixed MTU is not connected to the shipping native engine: " + call
     for name in ("IOSProfileSettingsView.swift", "IOSConnectionProfilesView.swift"):

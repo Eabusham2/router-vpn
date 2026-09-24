@@ -1031,6 +1031,10 @@ func (a *app) stopMode() error {
 
 func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 	a.mu.Lock()
+	relayOwner := a.cmd
+	a.mu.Unlock()
+	relayErr := releaseDesktopRelay(a, relayOwner)
+	a.mu.Lock()
 	cmd := a.cmd
 	modeID := a.state.Mode
 	logicalMode := a.state.LogicalMode
@@ -1079,6 +1083,11 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 				return failure
 			}
 		}
+	}
+
+	if relayErr != nil {
+		a.failStopTransaction(modeID, logicalMode, runtimeMode, base, routerID, relayErr)
+		return relayErr
 	}
 
 	if !holdKillSwitch {

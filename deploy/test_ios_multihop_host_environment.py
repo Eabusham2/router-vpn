@@ -41,7 +41,7 @@ elif name == "python3":
     assert args[0].endswith("test_ios_multihop_graph.py")
     assert args[1] == "--fixture-dir"
     directory = pathlib.Path(args[2]); directory.mkdir()
-    for filename in ("shadowsocks.json", "hysteria2.json", "shadowsocks-ipv4-only.json"):
+    for filename in ("shadowsocks.json", "hysteria2.json", "shadowsocks-ipv4-only.json", "wireguard.json", "wireguard-ipv4-only.json"):
         (directory / filename).write_text("{}")
     record({"event":"fixtures", "work":str(directory.parent)})
 elif name == "go":
@@ -106,9 +106,9 @@ class HostEnvironmentTest(unittest.TestCase):
     def test_xcode_iphone_sdk_is_not_used_for_host_executables(self):
         result, events = self.run_gate()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([event["event"] for event in events], ["fixtures", "build", "check", "check", "check"])
+        self.assertEqual([event["event"] for event in events], ["fixtures", "build", "check", "check", "check", "check", "check"])
         self.assertEqual({event["fixture"] for event in events if event["event"] == "check"},
-                         {"shadowsocks.json", "hysteria2.json", "shadowsocks-ipv4-only.json"})
+                         {"shadowsocks.json", "hysteria2.json", "shadowsocks-ipv4-only.json", "wireguard.json", "wireguard-ipv4-only.json"})
 
     def test_wrong_pin_stops_before_build(self):
         result, events = self.run_gate("pin")

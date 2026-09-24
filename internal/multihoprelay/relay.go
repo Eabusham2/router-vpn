@@ -4,6 +4,7 @@ package multihoprelay
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -19,6 +20,7 @@ import (
 
 var ident = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 var nonce = regexp.MustCompile(`^[0-9a-f]{32}$`)
+var listenerSecret = regexp.MustCompile(`^[0-9a-f]{48}$`)
 var proofID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var ErrUnavailable = errors.New("requested server-side exit is not provisioned")
 var ErrOwnership = errors.New("relay lease does not belong to this peer and session")
@@ -45,6 +47,11 @@ type Request struct {
 	EntryNodeID string `json:"entry_node_id"`
 	ExitID      string `json:"exit_id"`
 	ExitMode    string `json:"exit_mode"`
+	// Optional client-generated listener proposal allows the client to prepare
+	// its final graph before acquiring a lease, without restarting its TUN.
+	Port     int    `json:"listen_port,omitempty"`
+	Username string `json:"listener_username,omitempty"`
+	Password string `json:"listener_password,omitempty"`
 }
 type Lease struct {
 	Request
@@ -120,13 +127,30 @@ func (m *Manager) Available() []map[string]string {
 	defer m.mu.Unlock()
 	out := []map[string]string{}
 	for _, e := range m.cfg.Exits {
-		out = append(out, map[string]string{"exit_id": e.ID, "exit_mode": e.Mode, "exit_node_id": e.NodeID})
+		item := map[string]string{"exit_id": e.ID, "exit_mode": e.Mode, "exit_node_id": e.NodeID}
+		if e.Mode == "wg" {
+			if text, ok := e.Transport["private_key"].(string); ok {
+				raw, err := base64.StdEncoding.Strict().DecodeString(text)
+				if err == nil {
+					if key, err := ecdh.X25519().NewPrivateKey(raw); err == nil {
+						item["client_public_key"] = base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
+					}
+				}
+			}
+		}
+		out = append(out, item)
 	}
 	return out
 }
 func (m *Manager) validate(peer netip.Addr, q Request) error {
 	if !peer.IsValid() || peer.Zone() != "" || peer.IsUnspecified() || !nonce.MatchString(q.SessionID) || q.EntryNodeID != m.node || !ident.MatchString(q.ExitID) {
 		return ErrOwnership
+	}
+	if q.Port != 0 || q.Username != "" || q.Password != "" {
+		if q.Port < m.cfg.FirstPort || q.Port > m.cfg.LastPort ||
+			!listenerSecret.MatchString(q.Username) || !listenerSecret.MatchString(q.Password) || q.Username == q.Password {
+			return ErrOwnership
+		}
 	}
 	return nil
 }
@@ -187,9 +211,12 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	for _, s := range m.leases {
 		used[s.Port] = true
 	}
-	port := 0
+	port := q.Port
+	if port != 0 && used[port] {
+		return Lease{}, ErrBusy
+	}
 	for p := m.cfg.FirstPort; p <= m.cfg.LastPort; p++ {
-		if !used[p] {
+		if port == 0 && !used[p] {
 			port = p
 			break
 		}
@@ -204,6 +231,9 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	password, err := secret()
 	if err != nil {
 		return Lease{}, err
+	}
+	if q.Port != 0 {
+		username, password = q.Username, q.Password
 	}
 	lease := Lease{Request: q, NodeID: m.node, ExitNodeID: exit.NodeID, Host: m.cfg.ListenIP, Port: port, Username: username, Password: password, ExpiresAt: m.now().Add(time.Duration(m.cfg.TTLSeconds) * time.Second)}
 	config, err := Build(*exit, peer, lease)

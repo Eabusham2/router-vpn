@@ -1,3 +1,21 @@
+/* Non-secret execution preference shared by the map and saved setups. */
+static GKeyFile *linux_unified_load_keyfile_v8(void);
+static void linux_unified_save_keyfile_v8(GKeyFile *key);
+static char *linux_multihop_execution_choice_v1(void) {
+    GKeyFile *key = linux_unified_load_keyfile_v8();
+    char *choice = g_key_file_get_string(key, "state", "multihop_execution", NULL);
+    g_key_file_unref(key);
+    if (choice == NULL) return g_strdup("auto");
+    if (g_strcmp0(choice,"local") != 0 && g_strcmp0(choice,"server") != 0 && g_strcmp0(choice,"auto") != 0) { g_free(choice); return g_strdup("local"); }
+    return choice;
+}
+static void linux_multihop_store_execution_v1(const char *choice) {
+    const char *safe = g_strcmp0(choice,"server") == 0 ? "server" : (g_strcmp0(choice,"auto") == 0 ? "auto" : "local");
+    GKeyFile *key = linux_unified_load_keyfile_v8();
+    g_key_file_set_string(key,"state","multihop_execution",safe);
+    linux_unified_save_keyfile_v8(key); g_key_file_unref(key);
+}
+
 /* Composed into the canonical core after its immutable-session transform. */
 #include "routervpn-http-job-v16.h"
 static void append_diag(App *app, const char *line);
@@ -5,7 +23,9 @@ static void refresh_all(App *app);
 
 typedef struct {
     App *app;
-    RVHttpJobV16 *primary, *stop;
+    RVHttpJobV16 *primary, *stop, *progress;
+    guint64 progress_generation;
+    gint64 next_progress;
     guint poll;
     gboolean closed;
     guint auxiliary_jobs;
@@ -36,9 +56,9 @@ static void linux_async_close_v16(GtkWidget *widget, gpointer data) {
     s->closed = TRUE;
     if (s->poll != 0) { g_source_remove(s->poll); s->poll = 0; }
     /* Signal BOTH first. Shutdown never waits on one uncancelled request. */
-    rv_http_cancel_v16(s->primary); rv_http_cancel_v16(s->stop);
-    rv_http_free_v16(s->primary); rv_http_free_v16(s->stop);
-    s->primary = NULL; s->stop = NULL;
+    rv_http_cancel_v16(s->primary); rv_http_cancel_v16(s->stop); rv_http_cancel_v16(s->progress);
+    rv_http_free_v16(s->primary); rv_http_free_v16(s->stop); rv_http_free_v16(s->progress);
+    s->primary = NULL; s->stop = NULL; s->progress = NULL;
     g_clear_pointer(&s->last_result, g_free);
 }
 static void linux_async_report_v16(LinuxAsyncActionsV16 *s, RVHttpJobV16 *job) {
@@ -59,6 +79,33 @@ static void linux_async_report_v16(LinuxAsyncActionsV16 *s, RVHttpJobV16 *job) {
     if (!ok) gtk_label_set_text(GTK_LABEL(s->app->error), line);
     g_free(line); g_free(detail);
 }
+static char *linux_multihop_progress_text_v1(const char *json);
+static void linux_async_progress_v1(LinuxAsyncActionsV16 *s) {
+    gboolean observing = !s->closed && s->primary != NULL && s->stop == NULL &&
+        strstr(s->primary->url, "/api/multihop/connect") != NULL && !atomic_load(&s->primary->cancelled);
+    if (!observing) {
+        rv_http_cancel_v16(s->progress); rv_http_free_v16(s->progress); s->progress = NULL;
+        return;
+    }
+    if (rv_http_ready_v16(s->progress)) {
+        RVHttpJobV16 *job = s->progress;
+        if (s->progress_generation == s->generation && !atomic_load(&job->cancelled) &&
+            job->result == CURLE_OK && job->status == 200 && job->response != NULL && job->length <= 32768) {
+            char *summary = linux_multihop_progress_text_v1(job->response);
+            if (summary != NULL) {
+                g_object_set_data_full(G_OBJECT(s->app->window), "linux-multihop-progress", summary, g_free);
+                if (s->changed != NULL) s->changed(s->app);
+            }
+        }
+        rv_http_free_v16(job); s->progress = NULL;
+        s->next_progress = g_get_monotonic_time() + 500000;
+    }
+    if (s->progress == NULL && g_get_monotonic_time() >= s->next_progress) {
+        s->progress_generation = s->generation;
+        s->progress = rv_http_start_method_v17("/api/multihop/status", "", 2000, "Multihop comparison progress", 1);
+        if (s->progress == NULL) s->next_progress = g_get_monotonic_time() + 1000000;
+    }
+}
 static gboolean linux_async_poll_v16(gpointer data) {
     LinuxAsyncActionsV16 *s = data;
     gboolean changed = FALSE;
@@ -70,6 +117,7 @@ static gboolean linux_async_poll_v16(gpointer data) {
         linux_async_report_v16(s, s->stop);
         rv_http_free_v16(s->stop); s->stop = NULL; changed = TRUE;
     }
+    linux_async_progress_v1(s);
     gboolean pending = s->primary != NULL || s->stop != NULL;
     if (!pending) s->poll = 0;
     if (changed && s->changed != NULL) s->changed(s->app);
@@ -113,6 +161,9 @@ static gboolean linux_async_submit_v17(App *app, const char *path, const char *b
         append_diag(app, "Could not start request worker; no new request was issued.");
         return TRUE;
     }
+    rv_http_cancel_v16(s->progress); rv_http_free_v16(s->progress); s->progress = NULL;
+    s->next_progress = 0;
+    g_object_set_data_full(G_OBJECT(app->window), "linux-multihop-progress", NULL, g_free);
     s->generation++;
     if (stop) s->stop = job; else s->primary = job;
     if (s->poll == 0) s->poll = g_timeout_add(50, linux_async_poll_v16, s);

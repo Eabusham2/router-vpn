@@ -51,6 +51,13 @@ final class RouterAnnotation: NSObject, MKAnnotation {
     }
 }
 
+private final class MultihopProgressTransportDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     let api: ProductAPI
     let statusLabel = NSTextField(labelWithString: "Checking…")
@@ -65,6 +72,15 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     let multihopEntryPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let multihopExitPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let multihopExitModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let multihopExecutionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    var multihopProgressTimer: Timer?
+    var multihopProgressTask: URLSessionDataTask?
+    var multihopProgressSession: URLSession?
+    var multihopProgressGeneration = UUID()
+    var multihopProgressDeadline = Date.distantPast
+    var multihopProgressLastID = ""
+    var multihopProgressOldID = ""
+    let multihopComparisonLabel = NSTextField(wrappingLabelWithString: "Compare: (last-node RTT + external-server RTT) / 2; either timeout rejects the candidate.")
     let dnsModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let dnsProtocolPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let dnsPresetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -88,7 +104,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         appendHelp("Install once; pair/import Router VPN or validated external node data separately. External protocol credentials remain only in the controller private store.")
     }
     required init?(coder: NSCoder) { nil }
-    deinit { timer?.invalidate() }
+    deinit { timer?.invalidate(); multihopProgressTimer?.invalidate(); multihopProgressTask?.cancel(); multihopProgressSession?.invalidateAndCancel() }
 
     func button(_ title: String, _ action: Selector) -> NSButton { let b = NSButton(title: title, target: self, action: action); b.bezelStyle = .rounded; b.controlSize = .large; return b }
     func label(_ text: String) -> NSTextField { let x = NSTextField(labelWithString: text); x.textColor = .secondaryLabelColor; return x }
@@ -149,12 +165,93 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let exit = NSStackView(); exit.orientation = .vertical; exit.addArrangedSubview(label("Exit node")); exit.addArrangedSubview(multihopExitPopup)
         let mode = NSStackView(); mode.orientation = .vertical; mode.addArrangedSubview(label("Exit transport")); multihopExitModePopup.addItems(withTitles: ["Shadowsocks", "Hysteria2"]); multihopExitModePopup.selectItem(at: 0); mode.addArrangedSubview(multihopExitModePopup)
         selectors.addArrangedSubview(entry); selectors.addArrangedSubview(exit); selectors.addArrangedSubview(mode); s.addArrangedSubview(selectors)
+        configureMultihopExecution(); s.addArrangedSubview(multihopExecutionPopup); s.addArrangedSubview(multihopComparisonLabel)
         let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Connect real multihop", #selector(connectMultihop))); row.addArrangedSubview(button("Refresh multihop readiness", #selector(refreshAdvancedAction))); row.addArrangedSubview(button("Retest MTU", #selector(retestMTU))); row.addArrangedSubview(button("Emergency stop", #selector(emergencyStop))); s.addArrangedSubview(row); s.addArrangedSubview(scroll(advancedText)); return s
     }
     func settingsView() -> NSView { let s = NSStackView(); s.orientation = .vertical; s.spacing = 10; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18); s.addArrangedSubview(scroll(settingsText)); return s }
     func helpView() -> NSView { let s = NSStackView(); s.orientation = .vertical; s.spacing = 10; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18); let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Pair/add node", #selector(pairNode))); row.addArrangedSubview(button("Prove public VPN exit", #selector(publicExit))); row.addArrangedSubview(button("Emergency stop", #selector(emergencyStop))); row.addArrangedSubview(button("Refresh", #selector(refreshAction))); s.addArrangedSubview(row); s.addArrangedSubview(scroll(helpText)); return s }
     func forwardingView() -> NSView { let s = NSStackView(); s.orientation = .vertical; s.spacing = 8; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18); let note = NSTextField(wrappingLabelWithString: "Forwarding is sent only to the selected Router VPN node through its authenticated private router API. Enter the node-supported JSON rule payload; proxy-only modes cannot fake arbitrary DNAT."); note.textColor = .secondaryLabelColor; s.addArrangedSubview(note); forwardInput.isEditable = true; forwardInput.font = .monospacedSystemFont(ofSize: 12, weight: .regular); forwardInput.string = "{\n  \"enabled\": true\n}"; let inputScroll = NSScrollView(); inputScroll.hasVerticalScroller = true; inputScroll.documentView = forwardInput; inputScroll.heightAnchor.constraint(equalToConstant: 130).isActive = true; s.addArrangedSubview(inputScroll); let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Apply forwarding payload", #selector(applyForward))); row.addArrangedSubview(button("Clear forwarding", #selector(clearForward))); s.addArrangedSubview(row); s.addArrangedSubview(scroll(forwardOutput)); return s }
 
+    func stopMultihopProgress() {
+        multihopProgressGeneration = UUID()
+        multihopProgressTimer?.invalidate(); multihopProgressTimer = nil
+        multihopProgressTask?.cancel(); multihopProgressTask = nil
+        multihopProgressSession?.invalidateAndCancel(); multihopProgressSession = nil
+    }
+    func startMultihopProgress() {
+        stopMultihopProgress()
+        multihopProgressOldID = multihopProgressLastID
+        multihopProgressDeadline = Date().addingTimeInterval(195)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = [:]
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        configuration.timeoutIntervalForRequest = 2
+        configuration.timeoutIntervalForResource = 2
+        multihopProgressSession = URLSession(configuration: configuration, delegate: MultihopProgressTransportDelegate(), delegateQueue: nil)
+        multihopProgressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.pollMultihopProgress() }
+        pollMultihopProgress()
+    }
+    func pollMultihopProgress() {
+        guard window?.isVisible == true, Date() < multihopProgressDeadline else { stopMultihopProgress(); return }
+        guard multihopProgressTask == nil, let session = multihopProgressSession else { return }
+        let generation = multihopProgressGeneration
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8788/api/multihop/status")!)
+        request.timeoutInterval = 2
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let task = session.dataTask(with: request) { [weak self] data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode
+            let payload: [String: Any]? = error == nil && status == 200 && (data?.count ?? 32769) <= 32768 ?
+                data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } : nil
+            DispatchQueue.main.async {
+                guard let self, self.multihopProgressGeneration == generation else { return }
+                self.multihopProgressTask = nil
+                guard let payload, let comparison = payload["comparison"] as? [String: Any],
+                      let id = comparison["id"] as? String, !id.isEmpty, id != self.multihopProgressOldID else { return }
+                self.multihopComparisonLabel.stringValue = self.multihopComparisonSummary(payload)
+                if comparison["complete"] as? Bool == true { self.stopMultihopProgress() }
+            }
+        }
+        multihopProgressTask = task
+        task.resume()
+    }
+    func configureMultihopExecution() {
+        if multihopExecutionPopup.numberOfItems == 0 {
+            multihopExecutionPopup.addItems(withTitles: ["Local — exit runs on device", "Server — exit runs on entry node", "Compare both — lowest valid average"])
+            let saved = UserDefaults.standard.string(forKey: "routervpn.multihop.execution.v1") ?? "auto"
+            multihopExecutionPopup.selectItem(at: ["local", "server", "auto"].firstIndex(of: saved) ?? 2)
+            multihopExecutionPopup.target = self
+            multihopExecutionPopup.action = #selector(multihopExecutionChanged)
+            multihopExecutionPopup.identifier = NSUserInterfaceItemIdentifier("multihop-execution")
+        }
+        multihopExecutionPopup.toolTip = "Server runs the exit tunnel on the entry node. Compare explicitly tests that trust model against the device-owned local tunnel."
+        multihopComparisonLabel.textColor = .secondaryLabelColor
+    }
+    @objc func multihopExecutionChanged() {
+        guard ensureMutationIdle("changing multihop execution") else { return }
+        UserDefaults.standard.set(multihopExecutionChoice(), forKey: "routervpn.multihop.execution.v1")
+    }
+    func multihopExecutionChoice() -> String {
+        let index = multihopExecutionPopup.indexOfSelectedItem
+        return (0..<3).contains(index) ? ["local", "server", "auto"][index] : "local"
+    }
+    func multihopComparisonSummary(_ status: [String: Any]) -> String {
+        multihopProgressLastID = (status["comparison"] as? [String: Any])?["id"] as? String ?? ""
+        guard let comparison = status["comparison"] as? [String: Any] else {
+            return "Compare: (last-node RTT + external-server RTT) / 2; either timeout rejects the candidate."
+        }
+        var lines = ["Execution: \(status["execution"] as? String ?? "none") • \(comparison["stage"] as? String ?? "starting")"]
+        for item in comparison["measurements"] as? [[String: Any]] ?? [] {
+            let candidate = item["candidate"] as? [String: Any] ?? [:]
+            let name = "\(candidate["execution"] as? String ?? "") / \(candidate["transport"] as? String ?? "")"
+            if item["eligible"] as? Bool == true,
+               let last = item["last_node_ms"] as? Double, let external = item["external_ms"] as? Double, let score = item["score_ms"] as? Double, last.isFinite, external.isFinite, score.isFinite, last > 0, external > 0, score > 0 {
+                lines.append(String(format: "%@: (%.1f + %.1f) / 2 = %.1f ms", name, last, external, score))
+            } else { lines.append("\(name): rejected — \(item["failure"] as? String ?? "probe failed")") }
+        }
+        if let failure = comparison["failure"] as? String, !failure.isEmpty { lines.append(failure) }
+        return lines.joined(separator: "\n")
+    }
     func asyncAction(_ work: @escaping () throws -> String) { DispatchQueue.global(qos: .userInitiated).async { [weak self] in guard let self else { return }; do { let message = try work(); DispatchQueue.main.async { self.appendHelp(message); self.refreshAll() } } catch { DispatchQueue.main.async { self.errorLabel.stringValue = error.localizedDescription; self.appendHelp("ERROR: \(error.localizedDescription)"); self.refreshLive() } } } }
     @objc func autoConnect() { asyncAction { String(data: try self.api.request("/api/auto", method: "POST", body: [:], timeout: 150), encoding: .utf8) ?? "AUTO connected" } }
     @objc func connectSelected() { let i = modePopup.indexOfSelectedItem; guard i >= 0 && i < modeIDs.count else { return }; let mode = modeIDs[i]; let base = ["auto", "wg", "awg"][max(0, min(basePopup.indexOfSelectedItem, 2))]; asyncAction { String(data: try self.api.request("/api/connect-logical", method: "POST", body: ["mode": mode, "base": base], timeout: 180), encoding: .utf8) ?? "Connected" } }
@@ -164,7 +261,10 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let entryID = multihopNodeIDs[ei], exitID = multihopNodeIDs[xi]
         guard entryID != exitID else { appendHelp("Multihop entry and exit nodes must be different."); return }
         let exitMode = multihopExitModePopup.indexOfSelectedItem == 1 ? "hysteria2" : "shadowsocks"
-        asyncAction { String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": "wg", "exit_mode": exitMode], timeout: 180), encoding: .utf8) ?? "Multihop connected" }
+        let execution = multihopExecutionChoice()
+        multihopComparisonLabel.stringValue = execution == "auto" ? "Comparing local and server paths; timed-out probes are excluded…" : "Starting \(execution) multihop…"
+        startMultihopProgress()
+        asyncAction { defer { DispatchQueue.main.async { self.stopMultihopProgress() } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": "wg", "exit_mode": exitMode, "execution": execution], timeout: 180), encoding: .utf8) ?? "Multihop connected" }
     }
     func selectedNodeID() -> String? {
         if let a = map.selectedAnnotations.first as? RouterAnnotation { return a.routerID }
@@ -271,7 +371,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
     func renderMap() { map.removeAnnotations(map.annotations); var annotations: [RouterAnnotation] = []; for p in profiles { let lat = (p["latitude"] as? NSNumber)?.doubleValue ?? 0; let lon = (p["longitude"] as? NSNumber)?.doubleValue ?? 0; guard CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: lat, longitude: lon)), !(lat == 0 && lon == 0) else { continue }; annotations.append(RouterAnnotation(id: p["id"] as? String ?? "", name: p["name"] as? String ?? "Router", location: p["location"] as? String ?? "", latency: (p["latency_median_ms"] as? NSNumber)?.doubleValue ?? 0, lat: lat, lon: lon)) }; map.addAnnotations(annotations); if !annotations.isEmpty { map.showAnnotations(annotations, animated: false) } }
     func refreshModes() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let modes = try api.json("/api/logical-modes", timeout: 12) as? [[String: Any]] else { return }; let ready = modes.filter { $0["available"] as? Bool == true }; DispatchQueue.main.async { self.modeIDs = ready.compactMap { $0["id"] as? String }; self.modePopup.removeAllItems(); self.modePopup.addItems(withTitles: ready.map { $0["name"] as? String ?? $0["id"] as? String ?? "Mode" }); self.modesText.string = modes.map { mode in var layerSet = Set<String>(); if let variants = mode["variants"] as? [String: Any] { for value in variants.values { if let variant = value as? [String: Any], let raw = variant["mode"] as? [String: Any], let layers = raw["layers"] as? [String] { for layer in layers { if !layer.isEmpty { layerSet.insert(layer) } } } } }; let layers = layerSet.sorted().isEmpty ? "—" : layerSet.sorted().joined(separator: " • "); let pingMin=(mode["ping_min_ms"] as? NSNumber)?.doubleValue ?? 0, pingMax=(mode["ping_max_ms"] as? NSNumber)?.doubleValue ?? 0, trafficMin=(mode["traffic_min_pct"] as? NSNumber)?.doubleValue ?? 0, trafficMax=(mode["traffic_max_pct"] as? NSNumber)?.doubleValue ?? 0, speedMin=(mode["speed_loss_min_pct"] as? NSNumber)?.doubleValue ?? 0, speedMax=(mode["speed_loss_max_pct"] as? NSNumber)?.doubleValue ?? 0; let available=mode["available"] as? Bool ?? false; let bases=(mode["ready_bases"] as? [String] ?? []).joined(separator: ", "); let reason=(mode["reason"] as? String ?? "").isEmpty ? (available ? "selected variant is runnable; final Connected still requires selected-path proof" : "no runnable variant") : (mode["reason"] as? String ?? ""); return "\(available ? "✓" : "—") \(mode["name"] as? String ?? "Mode")\n  \(mode["description"] as? String ?? "")\n  layers: \(layers)\n  added latency \(String(format: "%.1f–%.1f ms", pingMin,pingMax)) • traffic \(String(format: "+%.1f–%.1f%%",trafficMin,trafficMax)) • speed loss \(String(format: "%.1f–%.1f%%",speedMin,speedMax))\n  readiness: \(available ? "Ready" : "Unavailable")\(bases.isEmpty ? "" : " • bases: \(bases)")\n  reason: \(reason)" }.joined(separator: "\n\n") } } catch { } } }
-    func refreshAdvanced() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { let data = try api.request("/api/multihop/status", timeout: 10); guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }; let nodes = obj["nodes"] as? [[String: Any]] ?? []; let ids = nodes.compactMap { $0["id"] as? String }; let names = nodes.map { $0["name"] as? String ?? $0["id"] as? String ?? "Node" }; let savedEntry = obj["entry_id"] as? String ?? ""; let savedExit = obj["exit_id"] as? String ?? ""; let prettyData = try JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]); let pretty = String(data: prettyData, encoding: .utf8) ?? ""; DispatchQueue.main.async { let oldEntry = self.multihopEntryPopup.indexOfSelectedItem >= 0 && self.multihopEntryPopup.indexOfSelectedItem < self.multihopNodeIDs.count ? self.multihopNodeIDs[self.multihopEntryPopup.indexOfSelectedItem] : savedEntry; let oldExit = self.multihopExitPopup.indexOfSelectedItem >= 0 && self.multihopExitPopup.indexOfSelectedItem < self.multihopNodeIDs.count ? self.multihopNodeIDs[self.multihopExitPopup.indexOfSelectedItem] : savedExit; self.multihopNodeIDs = ids; self.multihopEntryPopup.removeAllItems(); self.multihopExitPopup.removeAllItems(); self.multihopEntryPopup.addItems(withTitles: names); self.multihopExitPopup.addItems(withTitles: names); if let i = ids.firstIndex(of: oldEntry) { self.multihopEntryPopup.selectItem(at: i) } else if let i = ids.firstIndex(of: savedEntry) { self.multihopEntryPopup.selectItem(at: i) }; if let i = ids.firstIndex(of: oldExit) { self.multihopExitPopup.selectItem(at: i) } else if let i = ids.firstIndex(of: savedExit) { self.multihopExitPopup.selectItem(at: i) }; self.advancedText.string = "Multihop status and proof:\n\(pretty)\n\nMTU Retest is available above only for a connected single Router VPN node with Auto MTU. Results are network/path-specific and report effective MTU plus measured private-node throughput/RTT/success. Strict kill switch is applied before the full-device TUN starts. External direct/entry→exit uses the separate validated external profile path and exact expected public-exit proof." } } catch { DispatchQueue.main.async { self.advancedText.string = "Advanced status unavailable: \(error.localizedDescription)" } } } }
+    func refreshAdvanced() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { let data = try api.request("/api/multihop/status", timeout: 10); guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }; let nodes = obj["nodes"] as? [[String: Any]] ?? []; let ids = nodes.compactMap { $0["id"] as? String }; let names = nodes.map { $0["name"] as? String ?? $0["id"] as? String ?? "Node" }; let savedEntry = obj["entry_id"] as? String ?? ""; let savedExit = obj["exit_id"] as? String ?? ""; let prettyData = try JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]); let pretty = String(data: prettyData, encoding: .utf8) ?? ""; DispatchQueue.main.async { let oldEntry = self.multihopEntryPopup.indexOfSelectedItem >= 0 && self.multihopEntryPopup.indexOfSelectedItem < self.multihopNodeIDs.count ? self.multihopNodeIDs[self.multihopEntryPopup.indexOfSelectedItem] : savedEntry; let oldExit = self.multihopExitPopup.indexOfSelectedItem >= 0 && self.multihopExitPopup.indexOfSelectedItem < self.multihopNodeIDs.count ? self.multihopNodeIDs[self.multihopExitPopup.indexOfSelectedItem] : savedExit; self.multihopNodeIDs = ids; self.multihopEntryPopup.removeAllItems(); self.multihopExitPopup.removeAllItems(); self.multihopEntryPopup.addItems(withTitles: names); self.multihopExitPopup.addItems(withTitles: names); if let i = ids.firstIndex(of: oldEntry) { self.multihopEntryPopup.selectItem(at: i) } else if let i = ids.firstIndex(of: savedEntry) { self.multihopEntryPopup.selectItem(at: i) }; if let i = ids.firstIndex(of: oldExit) { self.multihopExitPopup.selectItem(at: i) } else if let i = ids.firstIndex(of: savedExit) { self.multihopExitPopup.selectItem(at: i) }; self.multihopComparisonLabel.stringValue = self.multihopComparisonSummary(obj); self.advancedText.string = "Multihop status and proof:\n\(pretty)\n\nMTU Retest is available above only for a connected single Router VPN node with Auto MTU. Results are network/path-specific and report effective MTU plus measured private-node throughput/RTT/success. Strict kill switch is applied before the full-device TUN starts. External direct/entry→exit uses the separate validated external profile path and exact expected public-exit proof." } } catch { DispatchQueue.main.async { self.advancedText.string = "Advanced status unavailable: \(error.localizedDescription)" } } } }
     func appendHelp(_ message: String) { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; helpText.textStorage?.append(NSAttributedString(string: "[\(f.string(from: Date()))] \(message.trimmingCharacters(in: .whitespacesAndNewlines))\n")); helpText.scrollToEndOfDocument(nil) }
 }
 

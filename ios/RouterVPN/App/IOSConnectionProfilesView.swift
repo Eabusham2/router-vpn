@@ -38,12 +38,13 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var multihopEntryID: String? = nil
     var multihopExitID: String? = nil
     var multihopExitMode: String? = nil
+    var multihopExecution: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case homeLANAccess, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback, startLayer
         case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect
         case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath
-        case multihopEnabled, multihopEntryID, multihopExitID, multihopExitMode
+        case multihopEnabled, multihopEntryID, multihopExitID, multihopExitMode, multihopExecution
     }
 }
 
@@ -73,6 +74,8 @@ private extension IOSConnectionSafePreferences {
         multihopEntryID = try c.decodeIfPresent(String.self, forKey: .multihopEntryID)
         multihopExitID = try c.decodeIfPresent(String.self, forKey: .multihopExitID)
         multihopExitMode = try c.decodeIfPresent(String.self, forKey: .multihopExitMode)
+        multihopExecution = try c.decodeIfPresent(String.self, forKey: .multihopExecution)
+        guard ["local", "server", "auto"].contains(multihopExecution ?? "local") else { throw DecodingError.dataCorruptedError(forKey: .multihopExecution, in: c, debugDescription: "Unknown multihop execution") }
     }
 }
 
@@ -186,7 +189,8 @@ private enum IOSConnectionProfileStore {
                 multihopEnabled: selected.multihopEnabled ?? false,
                 multihopEntryID: selected.multihopEntryID,
                 multihopExitID: selected.multihopExitID,
-                multihopExitMode: selected.multihopExitMode
+                multihopExitMode: selected.multihopExitMode,
+                multihopExecution: selected.multihopExecution
             )
         } else {
             prefs = nil
@@ -256,6 +260,7 @@ private enum IOSConnectionProfileStore {
         profile.multihopEntryID = prefs.multihopEntryID
         profile.multihopExitID = prefs.multihopExitID
         profile.multihopExitMode = prefs.multihopExitMode
+        profile.multihopExecution = prefs.multihopExecution ?? "local"
         bundle.routerProfiles[index] = profile
         bundle.selectedRouterID = saved.nodeID
         bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
@@ -348,7 +353,7 @@ private enum IOSConnectionProfileStore {
         if p.multihopEnabled {
             guard let entry = p.multihopEntryID, let exit = p.multihopExitID, entry != exit,
                   [entry, exit].allSatisfy({ $0.range(of: "\\A[A-Za-z0-9._-]{1,128}\\z", options: .regularExpression) != nil }),
-                  let mode = p.multihopExitMode, ["shadowsocks", "hysteria2"].contains(mode) else {
+                  let mode = p.multihopExitMode, ["wg", "shadowsocks", "hysteria2"].contains(mode) else {
                 throw issue("Saved multihop requires distinct linked entry/exit ids and a supported exit transport.")
             }
         }

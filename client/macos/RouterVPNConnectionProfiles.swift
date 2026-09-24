@@ -109,6 +109,7 @@ extension ProductWindowController {
             "name": name, "mode": mode, "custom_layers": layers,
             "multihop_enabled": multihop, "multihop_entry_id": entry,
             "multihop_exit_id": exit, "multihop_exit_mode": exitMode,
+            "multihop_execution": multihop ? multihopExecutionChoice() : "",
         ]
         if let id { body["id"] = id }
         return body
@@ -136,6 +137,10 @@ extension ProductWindowController {
         let enabled = payload["multihop_enabled"] as? Bool ?? false
         UserDefaults.standard.set(enabled, forKey: macConnectionMultihopEnabledKey)
 
+        let requested = payload["multihop_execution"] as? String ?? "local"
+        let execution = ["local", "server", "auto"].contains(requested) ? requested : "local"
+        UserDefaults.standard.set(execution, forKey: "routervpn.multihop.execution.v1")
+        multihopExecutionPopup.selectItem(at: ["local", "server", "auto"].firstIndex(of: execution) ?? 0)
         refreshAll()
         refreshUnifiedModeMenu(preferred: mode)
         if let entry = payload["multihop_entry_id"] as? String, let index = multihopNodeIDs.firstIndex(of: entry) { multihopEntryPopup.selectItem(at: index) }

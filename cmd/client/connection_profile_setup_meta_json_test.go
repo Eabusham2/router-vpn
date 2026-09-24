@@ -29,7 +29,7 @@ func TestConnectionProfileSetupMetaRejectsUnknownFields(t *testing.T) {
 	for name, raw := range map[string]string{
 		"store-field": `{"version":1,"entries":{},"hidden":true}`,
 		"entry-field": `{"version":1,"entries":{"saved-one":{"multihop_exit_mode":"shadowsocks","hidden":true}}}`,
-		"bad-mode": `{"version":1,"entries":{"saved-one":{"multihop_exit_mode":"not-real"}}}`,
+		"bad-mode":    `{"version":1,"entries":{"saved-one":{"multihop_exit_mode":"not-real"}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			var store connectionProfileSetupMetaStore

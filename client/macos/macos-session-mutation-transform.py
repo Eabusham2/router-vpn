@@ -25,6 +25,17 @@ _CURRENT_UNIFIED_CUSTOM_SAVE_NEW = '''
 
 def _pairs_for(mode: str):
     pairs = PAIRS[mode]
+    if mode == "product":
+        matches = [i for i, (old64, _) in enumerate(pairs)
+                   if 'guard entryID != exitID' in base64.b64decode(old64).decode("utf-8") and '/api/multihop/connect' in base64.b64decode(old64).decode("utf-8")]
+        if len(matches) != 1:
+            raise SystemExit("multihop execution callback mutation pair changed")
+        current = [list(pair) for pair in pairs]
+        current[matches[0]] = [
+            base64.b64encode('        guard entryID != exitID else { appendHelp("Multihop entry and exit nodes must be different."); return }\n        let exitMode = multihopExitModePopup.indexOfSelectedItem == 1 ? "hysteria2" : "shadowsocks"\n        let execution = multihopExecutionChoice()\n        multihopComparisonLabel.stringValue = execution == "auto" ? "Comparing local and server paths; timed-out probes are excluded…" : "Starting \\(execution) multihop…"\n        startMultihopProgress()\n        asyncAction { defer { DispatchQueue.main.async { self.stopMultihopProgress() } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": "wg", "exit_mode": exitMode, "execution": execution], timeout: 180), encoding: .utf8) ?? "Multihop connected" }\n    }\n    func selectedNodeID() -> String? {\n'.encode()).decode(),
+            base64.b64encode('        guard entryID != exitID else { appendHelp("Multihop entry and exit nodes must be different."); return }\n        let exitMode = multihopExitModePopup.indexOfSelectedItem == 1 ? "hysteria2" : "shadowsocks"\n        let execution = multihopExecutionChoice()\n        multihopComparisonLabel.stringValue = execution == "auto" ? "Comparing local and server paths; timed-out probes are excluded…" : "Starting \\(execution) multihop…"\n        startMultihopProgress()\n        asyncAction { try self.requireMutationIdle("starting multihop"); defer { DispatchQueue.main.async { self.stopMultihopProgress() } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": "wg", "exit_mode": exitMode, "execution": execution], timeout: 180), encoding: .utf8) ?? "Multihop connected" }\n    }\n    func selectedNodeID() -> String? {\n'.encode()).decode(),
+        ]
+        return current
     if mode != "unified":
         return pairs
     hits = [

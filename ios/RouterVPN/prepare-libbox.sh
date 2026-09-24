@@ -14,6 +14,8 @@ LICENSE_OUT="$DEPS/libbox-LICENSE.txt"
 BRIDGE_SOURCE="$ROOT/../../mobile/routervpn_openvpn.go"
 BRIDGE_STAMP="$DEPS/Libbox.routervpn-openvpn.sha256"
 BRIDGE_SHA=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$BRIDGE_SOURCE")
+MULTIHOP_SHA=$(python3 "$ROOT/../../deploy/prepare-mobile-multihop.py" --digest)
+BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$MULTIHOP_SHA")
 EXPECTED_STAMP="$VERSION+$COMMIT+$GO_TOOLCHAIN+$GOMOBILE_VERSION+ios,iossimulator"
 
 verify_framework() {
@@ -49,6 +51,7 @@ headers=list(Path(sys.argv[1]).rglob('Libbox.objc.h'))
 assert headers, 'Libbox generated headers missing'
 for header in headers:
     assert 'LibboxRouterOpenVPNEndpoint' in header.read_text(), str(header)
+    assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
 PYHEAD
   test -f "$STAMP"
   test "$(tr -d '\r\n' < "$STAMP")" = "$EXPECTED_STAMP"
@@ -96,10 +99,13 @@ grep -Fq 'with_wireguard' "$VENDOR/cmd/internal/build_libbox/main.go"
 # Both native targets must contain the real OpenVPN endpoint, not a UI stub.
 grep -Fq 'with_openvpn' "$VENDOR/cmd/internal/build_libbox/main.go"
 install -m 0644 "$BRIDGE_SOURCE" "$VENDOR/experimental/libbox/routervpn_openvpn.go"
+python3 "$ROOT/../../deploy/prepare-mobile-multihop.py" "$VENDOR"
 
 git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
 (
   cd "$VENDOR"
+  go test ./experimental/libbox/routervpn/...
+  go test -tags with_wireguard,with_gvisor ./experimental/libbox -run TestRouterMultihop -count=1
   go run ./cmd/internal/build_libbox -target apple -platform ios,iossimulator
 )
 SOURCE="$VENDOR/Libbox.xcframework"

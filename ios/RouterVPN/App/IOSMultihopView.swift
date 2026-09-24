@@ -9,7 +9,7 @@ extension RouterVPNModel {
         guard let exit = exitBundle.routerProfiles.first(where: { $0.id == exitBundle.selectedRouterID }),
               exit.normalizedNodeKind == "router-vpn", exit.multihopEnabled == true,
               exit.multihopExitID == exit.id, let entryID = exit.multihopEntryID, entryID != exit.id,
-              let mode = exit.multihopExitMode, ["shadowsocks", "hysteria2"].contains(mode),
+              let mode = exit.multihopExitMode, ["wg", "shadowsocks", "hysteria2"].contains(mode),
               let data = IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
               data.count <= 32 * 1024 * 1024 else {
             throw iosMultihopError("The saved multihop entry/exit is missing or no longer linked. Choose the graph again.")
@@ -36,7 +36,8 @@ extension RouterVPNModel {
         return entry
     }
 
-    func saveIOSMultihop(enabled: Bool, entryID: String, exitID: String, exitMode: String) throws {
+    func saveIOSMultihop(enabled: Bool, entryID: String, exitID: String, exitMode: String, execution: String = "local") throws {
+        guard ["local", "server", "auto"].contains(execution) else { throw iosMultihopError("Choose Local, Server, or Compare both.") }
         guard !profileMutationBlocked else { throw iosMultihopError("Disconnect before changing the active graph.") }
         if !enabled {
             guard var value = bundle,
@@ -48,7 +49,7 @@ extension RouterVPNModel {
             message = "Multihop disabled. The next Connect uses the selected normal mode."
             return
         }
-        guard ["shadowsocks", "hysteria2"].contains(exitMode), entryID != exitID,
+        guard ["wg", "shadowsocks", "hysteria2"].contains(exitMode), entryID != exitID,
               let data = IOSNodeBundleStore.shared.bundleData(containing: exitID, current: bundle) else {
             throw iosMultihopError("Choose two different linked Router VPN nodes and an exit transport.")
         }
@@ -62,6 +63,7 @@ extension RouterVPNModel {
         value.routerProfiles[index].multihopEntryID = entryID
         value.routerProfiles[index].multihopExitID = exitID
         value.routerProfiles[index].multihopExitMode = exitMode
+        value.routerProfiles[index].multihopExecution = execution
         let exit = value.routerProfiles[index]
         value.nodeProofID = exit.nodeProofID ?? value.nodeProofID
         value.endpoint = exit.endpoint
@@ -91,6 +93,7 @@ struct IOSMultihopView: View {
     @State private var entryID = ""
     @State private var exitID = ""
     @State private var exitMode = "shadowsocks"
+    @State private var execution = "local"
     @State private var detail = ""
     private var nodes: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" } }
 
@@ -108,19 +111,27 @@ struct IOSMultihopView: View {
                         ForEach(nodes) { node in Text(node.name.isEmpty ? node.id : node.name).tag(node.id) }
                     }
                     Picker("Exit transport", selection: $exitMode) {
+                        Text("WireGuard").tag("wg")
                         Text("Shadowsocks 2022").tag("shadowsocks")
                         Text("Hysteria2").tag("hysteria2")
                     }
+                    Picker("Execution", selection: $execution) {
+                        Text("Local — exit on this device").tag("local")
+                        Text("Server — exit on entry node").tag("server")
+                        Text("Compare both — lower valid average").tag("auto")
+                    }
+                    Text("Compare uses (last-node response time + one random external-server response time) / 2. Either timeout rejects the candidate. Server execution explicitly trusts the entry node with the exit tunnel; paired exit credentials must already be provisioned there.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Text("One PacketTunnel owns both hops. Exit transport traffic goes through the entry, DNS goes through the exit, and each node is proved separately before Connected.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.disabled(model.profileMutationBlocked)
                 Section("Connection requirements") {
-                    Text("Link at least two Router VPN homes. This path uses a full-route raw WireGuard entry and a self-contained Shadowsocks or Hysteria2 exit. Both transport endpoints and the selected DNS resolver must be literal IP addresses; additional Start Layers, DAITA and Jumbo must be off. LAN-Off filtering is not yet supported by this graph and is rejected rather than ignored. Other graphs remain unfinished, not simulated.")
+                    Text("Link at least two Router VPN homes. This path uses a full-route raw WireGuard entry and a WireGuard, self-contained Shadowsocks or Hysteria2 exit. Both transport endpoints and the selected DNS resolver must be literal IP addresses; additional Start Layers, DAITA and Jumbo must be off. LAN-Off filtering is not yet supported by this graph and is rejected rather than ignored. Other graphs remain unfinished, not simulated.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Save graph") {
-                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: exitMode); dismiss() }
+                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: exitMode, execution: execution); dismiss() }
                         catch { detail = error.localizedDescription }
                     }.disabled(model.profileMutationBlocked || (enabled && (entryID.isEmpty || exitID.isEmpty || entryID == exitID)))
                     if !detail.isEmpty { Text(detail).font(.caption) }
@@ -134,6 +145,7 @@ struct IOSMultihopView: View {
                 entryID = profile?.multihopEntryID ?? ""
                 exitID = profile?.multihopExitID ?? (profile?.id ?? "")
                 exitMode = profile?.multihopExitMode ?? "shadowsocks"
+                execution = profile?.multihopExecution ?? "local"
             }
         }
     }

@@ -117,6 +117,18 @@ func candidates(_ bundle: ClientBundle, _ logical: String = "base-raw") throws -
             reject("Start Layer not silently ignored \(raw)") { _ = try IOSRuntimeSelector.selectRaw(bundle:fixture(start:"aes-256-gcm"),rawProfileID:raw) }
             reject("encrypted DNS not silently downgraded \(raw)") { _ = try IOSRuntimeSelector.selectRaw(bundle:fixture(dns:"dot"),rawProfileID:raw) }
         }
+        for raw in ["wg", "awg2-fast", "awg2-strong"] {
+            var unsupportedPort = try fixture(dns:"custom")
+            unsupportedPort.routerProfiles[0].dnsProtocol = "udp"
+            unsupportedPort.routerProfiles[0].dnsPort = 5353
+            reject("native \(raw) cannot silently reset custom DNS port") {
+                _ = try IOSRuntimeSelector.selectRaw(bundle:unsupportedPort,rawProfileID:raw)
+            }
+        }
+        var allowedCustomPort = try fixture(dns:"custom")
+        allowedCustomPort.routerProfiles[0].dnsProtocol = "udp"
+        allowedCustomPort.routerProfiles[0].dnsPort = 53
+        try check("native DNS accepts explicit UDP53", IOSRuntimeSelector.selectRaw(bundle:allowedCustomPort,rawProfileID:"wg").rawProfileID == "wg")
         var noFallback = try fixture(base:"awg", fallback:true)
         noFallback.logicalModes[0] = LogicalMode(id:"base-raw",name:"Raw",description:"",baseSelector:true,fallback:false,variants:["wg":"wg","awg":"awg2-fast"])
         try check("catalog can forbid fallback", candidates(noFallback) == ["awg2-fast"])

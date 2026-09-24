@@ -185,9 +185,9 @@ private final class MacConnectionProfileControls: NSObject {
         return id
     }
 
-    private func currentMultihopSnapshot() throws -> (enabled: Bool, entry: String, exit: String, exitMode: String) {
+    private func currentMultihopSnapshot() throws -> (enabled: Bool, entry: String, exit: String, exitMode: String, execution: String) {
         let enabled = UserDefaults.standard.bool(forKey: macConnectionMultihopEnabledKey)
-        guard enabled, let owner else { return (false, "", "", "") }
+        guard enabled, let owner else { return (false, "", "", "", "") }
         let entryIndex = owner.multihopEntryPopup.indexOfSelectedItem
         let exitIndex = owner.multihopExitPopup.indexOfSelectedItem
         guard entryIndex >= 0, exitIndex >= 0,
@@ -200,7 +200,7 @@ private final class MacConnectionProfileControls: NSObject {
             throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 5, userInfo: [NSLocalizedDescriptionKey: "Multihop entry and exit nodes must be different."])
         }
         let exitMode = owner.multihopExitModePopup.indexOfSelectedItem == 1 ? "hysteria2" : "shadowsocks"
-        return (true, entry, exit, exitMode)
+        return (true, entry, exit, exitMode, owner.multihopExecutionChoice())
     }
 
     private func applyLoadedMultihop(_ root: [String: Any]) {
@@ -214,6 +214,10 @@ private final class MacConnectionProfileControls: NSObject {
             if let index = owner.multihopNodeIDs.firstIndex(of: entry) { owner.multihopEntryPopup.selectItem(at: index) }
             if let index = owner.multihopNodeIDs.firstIndex(of: exit) { owner.multihopExitPopup.selectItem(at: index) }
             owner.multihopExitModePopup.selectItem(at: exitMode == "hysteria2" ? 1 : 0)
+            let choice = root["multihop_execution"] as? String ?? "local"
+            let execution = ["local", "server", "auto"].contains(choice) ? choice : "local"
+            UserDefaults.standard.set(execution, forKey: "routervpn.multihop.execution.v1")
+            owner.multihopExecutionPopup.selectItem(at: ["local", "server", "auto"].firstIndex(of: execution) ?? 0)
             owner.refreshAdvanced()
         }
         if let content = owner.window?.contentView {
@@ -236,7 +240,7 @@ private final class MacConnectionProfileControls: NSObject {
         var body: [String: Any] = [
             "name": clean, "mode": snapshot.mode, "custom_layers": snapshot.layers,
             "multihop_enabled": hops.enabled, "multihop_entry_id": hops.entry,
-            "multihop_exit_id": hops.exit, "multihop_exit_mode": hops.exitMode
+            "multihop_exit_id": hops.exit, "multihop_exit_mode": hops.exitMode, "multihop_execution": hops.execution
         ]
         if updating { body["id"] = try selectedID() }
         let data = try api.request(path, method: "POST", body: body, timeout: 10)

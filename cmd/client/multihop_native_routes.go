@@ -75,6 +75,9 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 		return multihopSelection{}, errors.New("first native Windows/macOS multihop path supports standard WireGuard entry only")
 	}
 	exitMode := strings.TrimSpace(q.ExitMode)
+	if exitMode == "auto" && q.Execution == "auto" {
+		exitMode = "shadowsocks"
+	}
 	if exitMode == "" {
 		exitMode = "shadowsocks"
 	}
@@ -126,6 +129,9 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"actual_entry_id":            actualEntry,
 		"actual_exit_id":             actualExit,
 		"enabled":                    control.MultihopEnabled,
+		"comparison":                 comparisonProgress(a),
+		"execution":                  graph.Execution,
+		"supported_executions":       []string{"local", "server", "auto"},
 		"supported_entry_bases":      []string{"wg"},
 		"supported_exit_modes":       []string{"shadowsocks", "hysteria2"},
 		"standard_exit_capabilities": externalProfileProtocolCapabilities(),
@@ -201,6 +207,14 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if execution, err := routeExecution(q); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	} else if execution != "local" {
+		a.runMultihopExecution(w, r, sel, q)
+		return
+	}
+
 	// Preserve any existing graph until its owning runtime has actually stopped.
 	// Failed teardown must keep exact entry/exit identity available for recovery.
 	sessionTrackerFor(a).declareRequest("multihop", sel.Base)

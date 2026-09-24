@@ -48,6 +48,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
         guard let completionHandler else { return }
+        if messageData.count <= 128,
+           let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
+           request == ["operation": "multihop-progress"] {
+            completionHandler(libboxEngine?.multihopProgress()); return
+        }
         forwardingChannel?.handle(messageData, completion: completionHandler)
     }
 
@@ -153,23 +158,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let exitProofID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         entryProfile["node_proof_id"] = entryProofID
         exitProfile["node_proof_id"] = exitProofID
-        let wg = try RouterVPNWireGuardConfig.parse(wireGuardLikeProfile(entryRoot, rawProfileID: "wg"), name: "Router VPN entry")
-        guard wg.peers.count == 1, let peer = wg.peers.first, let remote = peer.endpoint,
-              deriveNodeProof(from: peer.publicKey.base64Key) == entryProofID,
-              let address = URLComponents(string: "udp://" + remote.stringRepresentation),
-              let rawHost = address.host, let port = address.port else {
-            throw tunnelError(52, "Multihop entry WireGuard key does not match the paired node identity.")
+        let endpoint = try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: entryProofID, name: "Router VPN entry").endpoint
+        let rawFiles: [String: Data]
+        if exitMode == "wg" {
+            let exit = try multihopWireGuardEndpoint(root: root, expectedProofID: exitProofID, name: "Router VPN exit")
+            rawFiles = try RouterVPNMultihopGraph.wireGuardFiles(endpoint: exit.endpoint, profile: exitProfile, dnsServers: exit.dns)
+        } else {
+            rawFiles = try layeredProfile(root, rawProfileID: exitMode)
         }
-        let host = rawHost.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        var peerJSON: [String: Any] = ["address": host, "port": port,
-            "public_key": peer.publicKey.base64Key, "allowed_ips": peer.allowedIPs.map(\.stringRepresentation)]
-        if let psk = peer.preSharedKey { peerJSON["pre_shared_key"] = psk.base64Key }
-        if let keepalive = peer.persistentKeepAlive, let value = Int(keepalive) { peerJSON["persistent_keepalive_interval"] = value }
-        let endpoint: [String: Any] = ["type": "wireguard", "address": wg.interface.addresses.map(\.stringRepresentation),
-            "private_key": wg.interface.privateKey.base64Key, "mtu": Int(wg.interface.mtu ?? 1280), "peers": [peerJSON]]
         let files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryProfile,
-            exitProfile: exitProfile, exitMode: exitMode, files: layeredProfile(root, rawProfileID: exitMode))
-        let finalFiles = try RouterVPNMTUPolicy.libbox(files, profile: selectedProfile)
+            exitProfile: exitProfile, exitMode: exitMode, files: rawFiles)
+        let finalFiles = try RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)
         let strict = strictKillSwitchRequested(selectedProfile) || strictKillSwitchRequested(entryProfile)
         if strict {
             guard let proto = protocolConfiguration as? NETunnelProviderProtocol, proto.includeAllNetworks, proto.enforceRoutes else {
@@ -180,8 +179,25 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self)
         libboxEngine = engine
-        do { try engine.start(files: finalFiles, strict: strict) }
+        do {
+            let execution = selectedProfile["multihop_execution"] as? String ?? "local"
+            guard ["local", "server", "auto"].contains(execution) else { throw tunnelError(56, "Unknown multihop execution choice") }
+            if execution == "local" { try engine.start(files: finalFiles, strict: strict) }
+            else {
+                let metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
+                    "entry_node_id": entryProofID, "exit_node_id": exitProofID,
+                    "entry_api": entryProfile["router_api"] as? String ?? "", "exit_api": selectedProfile["router_api"] as? String ?? "",
+                    "entry_token": entryProfile["api_token"] as? String ?? "", "exit_token": selectedProfile["api_token"] as? String ?? "",
+                    "entry_tag": RouterVPNMultihopGraph.entryTag, "exit_mode": exitMode, "execution": execution]
+                let encoded = try JSONSerialization.data(withJSONObject: metadata)
+                try engine.start(files: finalFiles, strict: strict, multihopMetadata: String(decoding: encoded, as: UTF8.self))
+            }
+        }
         catch { engine.stop(); libboxEngine = nil; throw error }
+        self.armNetworkProofGuard()
+        engine.completeMultihopExecution { [weak self] comparisonError in
+            guard let self, self.libboxEngine === engine else { engine.stop(); completionHandler(RouterVPNMultihopGraph.issue("Multihop comparison belongs to an old runtime.")); return }
+            if let comparisonError { engine.stop(); self.libboxEngine = nil; completionHandler(comparisonError); return }
         // These are separately routed proofs, not a direct ping cache or a
         // repeated exit response. Completion stays pending until BOTH succeed.
         proveSelectedNode(url: entryURL, expectedNodeID: entryProofID, proxyPort: RouterVPNMultihopGraph.entryProofPort) { [weak self] entryError in
@@ -197,6 +213,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 completionHandler(nil)
             }
         }
+        }
+    }
+
+    /// Prove each WG server key against its own captured node identity. In
+    /// particular, an exit label can never certify a reused entry peer key.
+    private func multihopWireGuardEndpoint(root: [String: Any], expectedProofID: String, name: String) throws -> (endpoint: [String: Any], dns: [String]) {
+        let wg = try RouterVPNWireGuardConfig.parse(wireGuardLikeProfile(root, rawProfileID: "wg"), name: name)
+        guard wg.peers.count == 1, let peer = wg.peers.first, let remote = peer.endpoint,
+              deriveNodeProof(from: peer.publicKey.base64Key) == expectedProofID,
+              let address = URLComponents(string: "udp://" + remote.stringRepresentation),
+              let rawHost = address.host, let port = address.port else {
+            throw tunnelError(52, "Multihop WireGuard server key does not match its paired node identity.")
+        }
+        let host = rawHost.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        var peerJSON: [String: Any] = ["address": host, "port": port,
+            "public_key": peer.publicKey.base64Key, "allowed_ips": peer.allowedIPs.map(\.stringRepresentation)]
+        if let psk = peer.preSharedKey { peerJSON["pre_shared_key"] = psk.base64Key }
+        if let keepalive = peer.persistentKeepAlive, let value = Int(keepalive) { peerJSON["persistent_keepalive_interval"] = value }
+        let endpoint: [String: Any] = ["type": "wireguard", "address": wg.interface.addresses.map(\.stringRepresentation),
+            "private_key": wg.interface.privateKey.base64Key, "mtu": Int(wg.interface.mtu ?? 1280), "peers": [peerJSON]]
+        return (endpoint, wg.interface.dns.map(\.stringRepresentation))
     }
 
     private func startLibbox(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
@@ -256,6 +293,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         pathProofGuard = nil
         pathProofOwnerLock.unlock()
         monitor?.cancel()
+        libboxEngine?.invalidateMultihop()
         forwardingChannel?.invalidate()
         cancelTunnelWithError(tunnelError(19, "Underlying network changed; selected-node/public-exit proof was invalidated. Reconnect must establish and prove the selected path again."))
     }

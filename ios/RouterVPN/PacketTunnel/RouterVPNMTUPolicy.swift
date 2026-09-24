@@ -87,6 +87,65 @@ enum RouterVPNMTUPolicy {
         return output
     }
 
+    /// Keep each frozen hop's policy separate. A nested WG transport must fit
+    /// inside the entry endpoint's IP MTU, including UDP/IP headers, the 32-byte
+    /// WG transport header/tag and 16-byte plaintext padding. This is a bound
+    /// from configured interfaces, NOT a claim that the live path was measured.
+    static func multihop(_ files: [String: Data], entryProfile: [String: Any], exitProfile: [String: Any]) throws -> [String: Data] {
+        guard let data = files["sing-box.json"], !data.isEmpty, data.count <= maxConfigBytes,
+              var root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var inbounds = root["inbounds"] as? [[String: Any]],
+              var endpoints = root["endpoints"] as? [[String: Any]] else {
+            throw issue("Multihop MTU requires the owned bounded native graph.")
+        }
+        let tun = inbounds.indices.filter { inbounds[$0]["type"] as? String == "tun" }
+        let entry = endpoints.indices.filter { endpoints[$0]["tag"] as? String == "routervpn-hop-entry" }
+        let exit = endpoints.indices.filter { endpoints[$0]["tag"] as? String == "proxy" }
+        guard tun.count == 1, entry.count == 1, exit.count <= 1,
+              endpoints.count == entry.count + exit.count,
+              endpoints.allSatisfy({ $0["type"] as? String == "wireguard" }) else {
+            throw issue("Multihop MTU ownership is ambiguous; no hop policy was replaced.")
+        }
+        let tunIndex = tun[0], entryIndex = entry[0]
+        let entryMTU = try fixedMTU(profile: entryProfile) ?? mtuValue(endpoints[entryIndex]["mtu"])
+        guard (minimum...maximum).contains(entryMTU) else { throw issue("Entry MTU is outside the supported dual-stack range.") }
+        let fixedExit = try fixedMTU(profile: exitProfile)
+        var tunMTU = try fixedExit ?? mtuValue(inbounds[tunIndex]["mtu"])
+        endpoints[entryIndex]["mtu"] = entryMTU
+        if let exitIndex = exit.first {
+            guard endpoints[exitIndex]["detour"] as? String == "routervpn-hop-entry",
+                  let peers = endpoints[exitIndex]["peers"] as? [[String: Any]], peers.count == 1,
+                  let host = peers[0]["address"] as? String, !host.isEmpty else {
+                throw issue("Nested WireGuard MTU requires the owned exit-through-entry dialer.")
+            }
+            let overhead = host.contains(":") ? 80 : 60
+            let payloadLimit = ((entryMTU - overhead) / 16) * 16
+            guard payloadLimit >= minimum else {
+                throw issue("The configured entry MTU cannot carry a dual-stack nested WireGuard packet. Increase the entry MTU or select another exit transport.")
+            }
+            let importedExit = try mtuValue(endpoints[exitIndex]["mtu"])
+            let exitMTU = fixedExit ?? min(importedExit, payloadLimit)
+            guard (minimum...maximum).contains(exitMTU), exitMTU <= payloadLimit else {
+                throw issue("The requested fixed exit MTU does not fit inside the configured entry. It was not silently clamped or applied to the wrong hop.")
+            }
+            endpoints[exitIndex]["mtu"] = exitMTU
+            tunMTU = fixedExit ?? min(tunMTU, exitMTU)
+        }
+        guard (minimum...maximum).contains(tunMTU) else { throw issue("Multihop TUN MTU is outside the supported dual-stack range.") }
+        inbounds[tunIndex]["mtu"] = tunMTU
+        root["inbounds"] = inbounds; root["endpoints"] = endpoints
+        let encoded = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        guard encoded.count <= maxConfigBytes else { throw issue("Multihop MTU configuration exceeds the safety limit.") }
+        var output = files; output["sing-box.json"] = encoded
+        return output
+    }
+
+    private static func mtuValue(_ value: Any?) throws -> Int {
+        guard let value else { throw issue("The owned graph is missing an explicit interface MTU.") }
+        struct Value: Decodable { let mtu: Int }
+        return try JSONDecoder().decode(Value.self, from: JSONSerialization.data(withJSONObject: ["mtu": value])).mtu
+    }
+
     private static func issue(_ message: String) -> NSError {
         NSError(domain: "RouterVPN.MTU", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }

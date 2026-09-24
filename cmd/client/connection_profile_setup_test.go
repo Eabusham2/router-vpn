@@ -195,3 +195,42 @@ func TestConnectionProfileSetupLoadPreflightsMetadataBeforeMutatingSelection(t *
 		t.Fatalf("failed setup load partially mutated selection: selected=%q router=%q", selected, routerID)
 	}
 }
+
+func TestConnectionProfileExecutionRoundTripAndLegacyDefault(t *testing.T) {
+	for _, execution := range []string{"local", "server", "auto", ""} {
+		t.Run(execution, func(t *testing.T) {
+			a := setupProfileTestApp(t)
+			body := map[string]any{"name": "Execution setup", "mode": "base-raw", "multihop_enabled": true, "multihop_entry_id": "entry", "multihop_exit_id": "exit", "multihop_exit_mode": "shadowsocks", "multihop_execution": execution}
+			saved := postSetup(t, a, "/api/connection-profile/setup/save", body)
+			if saved.Code != 200 {
+				t.Fatal(saved.Body.String())
+			}
+			var value map[string]any
+			_ = json.Unmarshal(saved.Body.Bytes(), &value)
+			want := execution
+			if want == "" {
+				want = "local"
+			}
+			if value["multihop_execution"] != want {
+				t.Fatal("saved execution changed")
+			}
+			id := value["profile"].(map[string]any)["id"].(string)
+			loaded := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id})
+			if loaded.Code != 200 {
+				t.Fatal(loaded.Body.String())
+			}
+			_ = json.Unmarshal(loaded.Body.Bytes(), &value)
+			if value["multihop_execution"] != want {
+				t.Fatal("loaded execution changed")
+			}
+			if a.state.Connected {
+				t.Fatal("loading a profile started a tunnel")
+			}
+		})
+	}
+	a := setupProfileTestApp(t)
+	r := postSetup(t, a, "/api/connection-profile/setup/save", map[string]any{"name": "Invalid", "mode": "base-raw", "multihop_enabled": true, "multihop_entry_id": "entry", "multihop_exit_id": "exit", "multihop_execution": "fake"})
+	if r.Code != 400 {
+		t.Fatal("invalid execution persisted")
+	}
+}

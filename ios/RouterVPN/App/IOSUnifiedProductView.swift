@@ -292,6 +292,12 @@ struct IOSUnifiedProductView: View {
         .onAppear { if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { model.message = "Setup is ready. Open Setup guide from the expanded control sheet when needed." } }
         .onChange(of: model.activeRawProfile) { value in if model.connected && !value.isEmpty { model.recordIOSLastRuntime() } }
         .task { guard !startupApplied else { return }; startupApplied = true; await model.applyIOSStartupPolicyIfNeeded(); _ = await telemetry.measureAll(model.allNodeProfiles, samples: 2) }
+        .task {
+            while !Task.isCancelled {
+                await model.refreshIOSMultihopExecutionProgress()
+                try? await Task.sleep(for: .milliseconds(600))
+            }
+        }
         .task(id: model.connected) {
             while !Task.isCancelled {
                 await telemetry.refreshLivePath(profile: model.unifiedSelectedProfile, connected: model.connected)
@@ -398,6 +404,7 @@ struct IOSUnifiedProductView: View {
                         Button("Run setup guide again") { UserDefaults.standard.set(0, forKey: "RouterVPNProductOnboardingStepV2"); showingOnboarding = true }
                             .buttonStyle(.bordered)
                     }
+                    if !model.multihopProgressText.isEmpty { Text(model.multihopProgressText).font(.caption).textSelection(.enabled) }
                     Text(model.message).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                 }.padding(.horizontal, 14).padding(.bottom, 14)
             }

@@ -80,6 +80,10 @@ final class AndroidMultihopController {
     }
 
     Prepared prepare(File entryBundle, File exitBundle, String exitMode) throws Exception {
+        return prepare(entryBundle, exitBundle, exitMode, "local");
+    }
+    Prepared prepare(File entryBundle, File exitBundle, String exitMode, String execution) throws Exception {
+        if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
         if (entryBundle == null || exitBundle == null) throw new IllegalArgumentException("Choose both an entry and an exit node.");
         if (entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())) throw new IllegalArgumentException("Entry and exit must be different stored nodes.");
         if (!("shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode))) throw new IllegalArgumentException("Android multihop currently supports Shadowsocks or Hysteria2 as the exit transport.");
@@ -115,6 +119,7 @@ final class AndroidMultihopController {
             if (names == null) throw new IllegalStateException("Exit profile is empty.");
             for (int i = 0; i < names.length(); i++) {
                 String name = names.getString(i);
+                if("routervpn-multihop.json".equals(name))throw new IllegalArgumentException("Imported profile uses a reserved multihop metadata file.");
                 if (!safeFileName(name)) throw new IllegalStateException("Unsafe exit profile filename: " + name);
                 byte[] data;
                 if ("sing-box.json".equals(name)) data = patched;
@@ -127,6 +132,19 @@ final class AndroidMultihopController {
                 total += data.length;
                 if (total > MAX_TOTAL) throw new IllegalStateException("Multihop session exceeds private staging limit.");
                 writeFile(new File(session, name), data);
+            }
+            if(!"local".equals(execution)) {
+                JSONObject a=selectedRouterProfile(entry),b=selectedRouterProfile(exit);
+                if(a==null||b==null)throw new IllegalArgumentException("Both paired node profiles are required.");
+                JSONObject metadata=new JSONObject().put("entry_id",a.getString("id")).put("exit_id",b.getString("id"))
+                    .put("entry_node_id",a.optString("node_proof_id",entry.optString("nodeProofId","")))
+                    .put("exit_node_id",b.optString("node_proof_id",exit.optString("nodeProofId","")))
+                    .put("entry_api",a.getString("router_api")).put("exit_api",b.getString("router_api"))
+                    .put("entry_token",a.getString("api_token")).put("exit_token",b.getString("api_token"))
+                    .put("entry_tag","entry-wg").put("exit_mode",exitMode).put("execution",execution);
+                byte[] privateMetadata=metadata.toString().getBytes(StandardCharsets.UTF_8);
+                if(privateMetadata.length>16384)throw new IllegalArgumentException("Multihop metadata exceeds the safety bound.");
+                writeFile(new File(session,"routervpn-multihop.json"),privateMetadata);
             }
             File configFile = new File(session, "sing-box.json");
             if (!configFile.isFile() || configFile.length() == 0) throw new IllegalStateException("Multihop session is missing sing-box.json.");

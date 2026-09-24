@@ -67,7 +67,7 @@ for mode in ["shadowsocks", "hysteria2"] {
     if CommandLine.arguments.count == 2 {
         let directory = URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true)
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
-        try built["sing-box.json"]!.write(to:directory.appendingPathComponent(mode+".json"))
+        try RouterVPNMTUPolicy.multihop(built,entryProfile:entry,exitProfile:exit)["sing-box.json"]!.write(to:directory.appendingPathComponent(mode+".json"))
     }
 }
 var e = entry; e["id"] = "exit"
@@ -167,8 +167,100 @@ var v4Entry = entry; v4Entry["ipv6_mode"] = "off"
 let entryV4Data = try build(original(),v4Entry,exit)["sing-box.json"]!
 try check("entry IPv6-Off policy is not silently weakened", entryV4Data == v4Data)
 if CommandLine.arguments.count == 2 {
-    try v4Data.write(to:URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true).appendingPathComponent("shadowsocks-ipv4-only.json"))
+    try RouterVPNMTUPolicy.multihop(["sing-box.json":v4Data],entryProfile:entry,exitProfile:v4)["sing-box.json"]!.write(to:URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true).appendingPathComponent("shadowsocks-ipv4-only.json"))
 }
+
+// Nested WG exits are native endpoints, never outbounds mislabeled as proxies.
+var wgExit = wg
+var wgExitPeer = (wg["peers"] as! [[String:Any]])[0]
+wgExitPeer["public_key"] = Data(repeating:2,count:32).base64EncodedString()
+wgExitPeer["address"] = "198.51.100.2"
+wgExit["private_key"] = Data(repeating:3,count:32).base64EncodedString()
+wgExit["peers"] = [wgExitPeer]
+var wgExitProfile = exit
+wgExitProfile["dns_mode"] = "home"
+wgExitProfile["adguard_ipv4"] = "10.77.0.1"
+@MainActor func wgFiles(_ ep: [String:Any] = wgExit, _ profile: [String:Any] = wgExitProfile, _ dns: [String] = ["10.77.0.1"]) throws -> [String:Data] {
+    try P.wireGuardFiles(endpoint:ep, profile:profile, dnsServers:dns)
+}
+@MainActor func wgGraph(_ files: [String:Data], _ profile: [String:Any] = wgExitProfile) throws -> [String:Data] {
+    try P.build(entryEndpoint:wg,entryProfile:entry,exitProfile:profile,exitMode:"wg",files:files)
+}
+let nestedInput = try wgFiles()
+let nested = try wgGraph(nestedInput)
+let nestedRoot = try JSONSerialization.jsonObject(with:nested["sing-box.json"]!) as! [String:Any]
+let nestedEndpoints = nestedRoot["endpoints"] as! [[String:Any]]
+let nestedOutbounds = nestedRoot["outbounds"] as! [[String:Any]]
+let nestedInbounds = nestedRoot["inbounds"] as! [[String:Any]]
+let nestedRoute = nestedRoot["route"] as! [String:Any]
+let nestedDNS = nestedRoot["dns"] as! [String:Any]
+try check("WG has two independently owned endpoints", nestedEndpoints.count == 2 && nestedEndpoints.allSatisfy { $0["type"] as? String == "wireguard" && $0["system"] as? Bool == false })
+try check("only entry can dial underlay", nestedEndpoints[0]["detour"] == nil && nestedEndpoints[1]["detour"] as? String == P.entryTag)
+try check("public route uses WG exit endpoint", nestedRoute["final"] as? String == "proxy" && nestedEndpoints[1]["tag"] as? String == "proxy")
+try check("entry proof alone uses private socks", nestedOutbounds.count == 1 && nestedOutbounds[0]["tag"] as? String == P.entryPrivateTag)
+try check("WG key ownership preserved", nestedEndpoints[0]["private_key"] as? String == key && nestedEndpoints[1]["private_key"] as? String == wgExit["private_key"] as? String)
+try check("WG DNS traverses exit endpoint", (nestedDNS["servers"] as! [[String:Any]])[0]["detour"] as? String == "proxy")
+try check("WG has only one system TUN", nestedInbounds.filter { $0["type"] as? String == "tun" }.count == 1)
+try check("WG input remains unchanged", try wgFiles() == nestedInput)
+try check("WG output deterministic", try wgGraph(nestedInput) == nested)
+reject("same WG server hidden behind distinct node IDs") { _ = try wgGraph(wgFiles(wg)) }
+for unsafeHost in ["0.0.0.0", "127.0.0.1", "224.0.0.1", "255.255.255.255", "169.254.1.1", "::", "::1", "ff02::1", "fe80::1", "::ffff:127.0.0.1", "example.com", "fd77::1%en0"] {
+    var endpoint = wgExit; var peer = wgExitPeer; peer["address"] = unsafeHost; endpoint["peers"] = [peer]
+    reject("unsafe WG exit transport \(unsafeHost)") { _ = try wgGraph(wgFiles(endpoint)) }
+    reject("unsafe WG DNS \(unsafeHost)") { _ = try wgFiles(wgExit,[:],[unsafeHost]) }
+}
+for extra in ["detour", "bind_interface", "routing_mark", "domain_resolver", "workers"] {
+    var endpoint = wgExit; endpoint[extra] = "unowned"
+    reject("WG imported dial policy \(extra)") { _ = try wgFiles(endpoint) }
+}
+for (field,value) in [("system",true as Any),("mtu",true as Any),("mtu",1279 as Any),("mtu",9001 as Any),("private_key","bad-key" as Any),("address",["not-a-cidr"] as Any)] {
+    var endpoint = wgExit; endpoint[field] = value
+    reject("invalid WG endpoint \(field)") { _ = try wgFiles(endpoint) }
+}
+for (field,value) in [("port",true as Any),("port",65536 as Any),("port",0 as Any),("public_key","bad-key" as Any),("pre_shared_key","bad-key" as Any),("allowed_ips",["0.0.0.0/0"] as Any),("persistent_keepalive_interval",-1 as Any),("persistent_keepalive_interval",65536 as Any)] {
+    var endpoint = wgExit;var peer = wgExitPeer;peer[field] = value;endpoint["peers"] = [peer]
+    reject("invalid WG peer \(field)") { _ = try wgFiles(endpoint) }
+}
+var secondPeer = wgExit; secondPeer["peers"] = [wgExitPeer,wgExitPeer]
+reject("multiple WG exit peers") { _ = try wgFiles(secondPeer) }
+for dns in [[],["10.77.0.1","1.1.1.1"],["8.8.8.8"]] {
+    reject("no missing, duplicated or changed selected DNS") { _ = try wgFiles(wgExit,wgExitProfile,dns) }
+}
+for mode in ["dot","doh","doh3","invented"] {
+    var profile = wgExitProfile;profile["dns_mode"] = mode
+    reject("do not relabel unsupported native DNS \(mode)") { _ = try wgFiles(wgExit,profile) }
+}
+var customDNS = wgExitProfile;customDNS["dns_mode"]="custom";customDNS["dns_host"]="10.77.0.1";customDNS["dns_protocol"]="udp"
+try check("WG custom UDP53 DNS", try wgFiles(wgExit,customDNS)["sing-box.json"] != nil)
+customDNS["dns_port"]=5353
+reject("do not silently replace selected DNS port") { _ = try wgFiles(wgExit,customDNS) }
+customDNS["dns_port"]=53;customDNS["dns_protocol"]="tcp"
+reject("do not silently replace selected DNS protocol") { _ = try wgFiles(wgExit,customDNS) }
+var measuredDNS = wgExitProfile;measuredDNS["dns_mode"]="fastest";measuredDNS["fastest_dns_host"]="10.77.0.1"
+try check("WG measured DNS selection", try wgFiles(wgExit,measuredDNS)["sing-box.json"] != nil)
+measuredDNS.removeValue(forKey:"fastest_dns_host")
+reject("fastest without measurements") { _ = try wgFiles(wgExit,measuredDNS) }
+measuredDNS["dns_results"]=[["address":"1.1.1.1","working":false,"latency_ms":1.0],["address":"10.77.0.1","working":true,"latency_ms":3.0]]
+try check("WG real successful fastest DNS result", try wgFiles(wgExit,measuredDNS)["sing-box.json"] != nil)
+var v6Profile=wgExitProfile;v6Profile["adguard_ipv4"]="";v6Profile["adguard_ipv6"]="fd77:77::1"
+try check("WG IPv6 resolver remains inside exit", try wgFiles(wgExit,v6Profile,["fd77:77::1"])["sing-box.json"] != nil)
+var bypassRoot = try JSONSerialization.jsonObject(with:nestedInput["sing-box.json"]!) as! [String:Any]
+bypassRoot["outbounds"] = [["type":"direct","tag":"direct"]]
+reject("WG no alternate direct outbound") { _ = try wgGraph(files(bypassRoot)) }
+bypassRoot = try JSONSerialization.jsonObject(with:nestedInput["sing-box.json"]!) as! [String:Any]
+bypassRoot["endpoints"] = [wgExit,wgExit]
+reject("WG no duplicate exit endpoint") { _ = try wgGraph(files(bypassRoot)) }
+if CommandLine.arguments.count == 2 {
+    let directory=URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true)
+    try RouterVPNMTUPolicy.multihop(nested,entryProfile:entry,exitProfile:wgExitProfile)["sing-box.json"]!.write(to:directory.appendingPathComponent("wireguard.json"))
+    var ipv4 = wgExitProfile;ipv4["ipv6_mode"]="off"
+    let blocked = try wgGraph(wgFiles(wgExit,ipv4),ipv4)
+    try RouterVPNMTUPolicy.multihop(blocked,entryProfile:entry,exitProfile:ipv4)["sing-box.json"]!.write(to:directory.appendingPathComponent("wireguard-ipv4-only.json"))
+    let blockedRoot=try JSONSerialization.jsonObject(with:blocked["sing-box.json"]!) as! [String:Any]
+    let blockedRules=(blockedRoot["route"] as! [String:Any])["rules"] as! [[String:Any]]
+    try check("WG IPv6 OFF is a reject route not omission", blockedRules.contains { $0["ip_version"] as? Int == 6 && $0["action"] as? String == "reject" })
+}
+
 print("Native iOS multihop graph: PASS (\(checks) executable checks; no node was contacted)")
 '''
 
@@ -182,7 +274,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="routervpn-multihop-") as directory:
         source, exe = Path(directory) / "main.swift", Path(directory) / "graph-tests"
         source.write_text(TEST)
-        subprocess.run([swift, "-swift-version", "6", str(POLICY), str(ROOT / "ios/RouterVPN/App/Models.swift"), str(source), "-o", str(exe)], check=True, timeout=90)
+        subprocess.run([swift, "-swift-version", "6", str(POLICY), str(POLICY.with_name("RouterVPNMTUPolicy.swift")), str(ROOT / "ios/RouterVPN/App/Models.swift"), str(source), "-o", str(exe)], check=True, timeout=90)
         command = [str(exe)]
         if args.fixture_dir:
             command.append(str(args.fixture_dir.resolve()))
@@ -191,7 +283,11 @@ def main():
     for required in [
         'case "multihop-libbox": try startMultihop',
         'RouterVPNMultihopGraph.build(entryEndpoint:',
-        'deriveNodeProof(from: peer.publicKey.base64Key) == entryProofID',
+        'RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)',
+        'deriveNodeProof(from: peer.publicKey.base64Key) == expectedProofID',
+        'multihopWireGuardEndpoint(root: entryRoot, expectedProofID: entryProofID',
+        'multihopWireGuardEndpoint(root: root, expectedProofID: exitProofID',
+        'RouterVPNMultihopGraph.wireGuardFiles(endpoint: exit.endpoint',
         'expectedNodeID: entryProofID, proxyPort: RouterVPNMultihopGraph.entryProofPort',
         'expectedNodeID: exitProofID, proxyPort: RouterVPNLibboxEngine.proofProxyPort',
         'self.libboxEngine === engine',

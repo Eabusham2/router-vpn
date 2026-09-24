@@ -22,14 +22,17 @@ public typealias PublicKey = PrivateKey
 public typealias PreSharedKey = PrivateKey
 public struct IPAddressRange {
     public let raw: String
+    public var stringRepresentation: String { raw }
     public init?(from raw: String) { guard !raw.isEmpty else { return nil }; self.raw = raw }
 }
 public struct DNSServer {
     public let raw: String
+    public var stringRepresentation: String { raw }
     public init?(from raw: String) { guard !raw.isEmpty else { return nil }; self.raw = raw }
 }
 public struct Endpoint {
     public let raw: String
+    public var stringRepresentation: String { raw }
     public init?(from raw: String) { guard !raw.isEmpty else { return nil }; self.raw = raw }
 }
 public struct InterfaceConfiguration {
@@ -61,6 +64,22 @@ TEST = r'''
 import Foundation
 import WireGuardKit
 
+// The actual provider mapping method runs below. Only the unavailable
+// NetworkExtension owner, key-hash provider and WG adapter data types are
+// doubled; the production parser and all mapping/identity comparisons run.
+@MainActor final class MappingHarness {
+    private func wireGuardLikeProfile(_ root: [String: Any], rawProfileID: String) throws -> String {
+        guard rawProfileID == "wg", let text = root["fixture"] as? String else { throw tunnelError(1, "Missing test profile") }
+        return text
+    }
+    private func deriveNodeProof(from publicKey: String) -> String { "test-proof-" + publicKey }
+    private func tunnelError(_ code: Int, _ text: String) -> NSError { NSError(domain: "MappingTest", code: code, userInfo: [NSLocalizedDescriptionKey: text]) }
+    // SHIPPING_MULTIHOP_MAPPING
+    func map(_ text: String, expected: String) throws -> (endpoint: [String: Any], dns: [String]) {
+        try multihopWireGuardEndpoint(root: ["fixture": text], expectedProofID: expected, name: "test hop")
+    }
+}
+
 let key = Data(repeating:1,count:32).base64EncodedString()
 let peer = Data(repeating:2,count:32).base64EncodedString()
 let psk = Data(repeating:3,count:32).base64EncodedString()
@@ -74,6 +93,10 @@ let awg = plain.replacingOccurrences(of:"[Peer]",with:parameters + "[Peer]")
     }
     @MainActor static func reject(_ name: String, _ text: String, amnezia: Bool = false) {
         do { _ = try RouterVPNWireGuardConfig.parse(text, amnezia:amnezia); fatalError("Accepted invalid " + name) }
+        catch { checks += 1 }
+    }
+    @MainActor static func rejectMapping(_ name: String, _ text: String, expected: String) {
+        do { _ = try MappingHarness().map(text, expected: expected); fatalError("Accepted invalid " + name) }
         catch { checks += 1 }
     }
     @MainActor static func main() throws {
@@ -116,6 +139,29 @@ let awg = plain.replacingOccurrences(of:"[Peer]",with:parameters + "[Peer]")
         reject("duplicate peer identity",plain+"[Peer]\nPublicKey = \(peer)\nAllowedIPs = 192.0.2.0/24\n")
         reject("oversized input",String(repeating:"x",count:1024*1024+1))
         try check("repeated address list supported",RouterVPNWireGuardConfig.parse(plain.replacingOccurrences(of:"[Peer]",with:"Address = 10.79.0.2/32\n[Peer]")).interface.addresses.count == 3)
+        let mapping = MappingHarness()
+        let mapped = try mapping.map(plain, expected: "test-proof-" + peer)
+        let entryPeer = (mapped.endpoint["peers"] as! [[String:Any]])[0]
+        try check("mapping preserves private key", mapped.endpoint["private_key"] as? String == key)
+        try check("mapping preserves peer and PSK", entryPeer["public_key"] as? String == peer && entryPeer["pre_shared_key"] as? String == psk)
+        try check("mapping preserves endpoint", entryPeer["address"] as? String == "192.0.2.1" && entryPeer["port"] as? Int == 51822)
+        try check("mapping preserves keepalive and MTU", entryPeer["persistent_keepalive_interval"] as? Int == 25 && mapped.endpoint["mtu"] as? Int == 1400)
+        try check("mapping preserves DNS", mapped.dns == ["10.77.0.1"])
+        try check("mapping preserves both default routes", entryPeer["allowed_ips"] as? [String] == ["0.0.0.0/0", "::/0"])
+        let exitKey = Data(repeating:4,count:32).base64EncodedString()
+        let exitPeerKey = Data(repeating:5,count:32).base64EncodedString()
+        let exitText = plain.replacingOccurrences(of:key,with:exitKey).replacingOccurrences(of:peer,with:exitPeerKey)
+            .replacingOccurrences(of:"192.0.2.1:51822",with:"[2001:db8::20]:51823").replacingOccurrences(of:"10.77.0.1",with:"10.88.0.1")
+        let mappedExit = try mapping.map(exitText, expected: "test-proof-" + exitPeerKey)
+        let actualExit = (mappedExit.endpoint["peers"] as! [[String:Any]])[0]
+        try check("mapping keeps entry and exit private keys separate", mappedExit.endpoint["private_key"] as? String == exitKey && mappedExit.endpoint["private_key"] as? String != mapped.endpoint["private_key"] as? String)
+        try check("mapping handles literal IPv6 endpoint", actualExit["address"] as? String == "2001:db8::20" && actualExit["port"] as? Int == 51823)
+        try check("mapping keeps exit DNS separate", mappedExit.dns == ["10.88.0.1"] && mapped.dns == ["10.77.0.1"])
+        rejectMapping("entry key cannot prove the exit", plain, expected: "test-proof-" + exitPeerKey)
+        rejectMapping("exit key cannot prove the entry", exitText, expected: "test-proof-" + peer)
+        rejectMapping("mapping cannot accept two peers", plain + "[Peer]\nPublicKey = \(exitPeerKey)\nAllowedIPs = 192.0.2.0/24\nEndpoint = 198.51.100.1:51822\n", expected: "test-proof-" + peer)
+        rejectMapping("mapping requires a remote", plain.replacingOccurrences(of:"Endpoint = 192.0.2.1:51822\n",with:""), expected: "test-proof-" + peer)
+        rejectMapping("mapping must not treat AWG as plain WG", awg, expected: "test-proof-" + peer)
         print("Native WireGuard/AmneziaWG parser: PASS (\(checks) checks; adapter types doubled, no tunnel opened)")
     }
 }
@@ -127,10 +173,15 @@ def main():
         raise SystemExit("swiftc required for native parser behavior tests")
     provider = (PARSER.parent / "PacketTunnelProvider.swift").read_text()
     assert 'amnezia: requestedMode != "wg"' in provider, "native provider does not enforce the claimed WG/AWG family"
+    start = provider.index("    private func multihopWireGuardEndpoint(")
+    end = provider.index("    private func startLibbox(", start)
+    mapping = provider[start:end]
+    assert "deriveNodeProof(from: peer.publicKey.base64Key) == expectedProofID" in mapping
+    assert r"wg.interface.dns.map(\.stringRepresentation)" in mapping
     with tempfile.TemporaryDirectory(prefix="routervpn-wg-parser-") as tmp:
         tmp = Path(tmp)
         types, tests = tmp / "AdapterTypes.swift", tmp / "Tests.swift"
-        types.write_text(TYPES); tests.write_text(TEST)
+        types.write_text(TYPES); tests.write_text(TEST.replace("    // SHIPPING_MULTIHOP_MAPPING", mapping))
         library = tmp / ("libWireGuardKit.dylib" if platform.system() == "Darwin" else "libWireGuardKit.so")
         subprocess.run([swift, "-swift-version", "6", "-emit-module", "-emit-library", "-module-name", "WireGuardKit",
                         str(types), "-emit-module-path", str(tmp / "WireGuardKit.swiftmodule"), "-o", str(library)],

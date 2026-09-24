@@ -1,0 +1,51 @@
+package libbox
+
+import (
+ "context"
+ "errors"
+ "fmt"
+ "net"
+ "strings"
+ box "github.com/sagernet/sing-box"
+ "github.com/sagernet/sing-box/protocol/group"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+ M "github.com/sagernet/sing/common/metadata"
+)
+
+// RouterMultihop is bound into the ONE existing Go runtime on each mobile OS.
+// The public bridge never exposes a server credential or arbitrary dial method.
+type RouterMultihop struct { controller *mobilemultihop.Controller }
+func NewRouterMultihop(config, metadata string)(*RouterMultihop,error){
+ c,e:=mobilemultihop.New(config,metadata);if e!=nil{return nil,e};return &RouterMultihop{c},nil
+}
+func (m *RouterMultihop) Config()string{return m.controller.Config()}
+func (m *RouterMultihop) ProgressJSON()string{return m.controller.ProgressJSON()}
+func (m *RouterMultihop) NetworkChanged(){m.controller.NetworkChanged()}
+func (m *RouterMultihop) Healthy()bool{return m.controller.Healthy()}
+func (m *RouterMultihop) Close()error{return m.controller.Close()}
+func (m *RouterMultihop) Run(server *CommandServer)error{
+ if server==nil||server.StartedService==nil||server.StartedService.Instance()==nil||server.StartedService.Instance().Box()==nil{return errors.New("native multihop engine is not running")}
+ engine:=&routerMultihopEngine{server:server,instance:server.StartedService.Instance().Box()}
+ return m.controller.Run(context.Background(),engine)
+}
+type routerMultihopEngine struct{server *CommandServer;instance *box.Box}
+func (e *routerMultihopEngine) Identity()string{
+ current:=e.server.StartedService.Instance();if current==nil||current.Box()!=e.instance{return ""};return fmt.Sprintf("%p",e.instance)
+}
+func (e *routerMultihopEngine) Dial(ctx context.Context,tag,address string)(net.Conn,error){
+ if e.Identity()==""{return nil,errors.New("native multihop instance changed")}
+ if tag!=mobilemultihop.LocalTag&&tag!=mobilemultihop.ServerTag&&tag!="entry-wg"&&tag!="routervpn-hop-entry"{return nil,errors.New("unowned outbound tag")}
+ host,_,err:=net.SplitHostPort(address);if err!=nil||net.ParseIP(strings.Trim(host,"[]"))==nil{return nil,errors.New("routed probes require a literal destination")}
+ outbound,ok:=e.instance.Outbound().Outbound(tag);if !ok{return nil,errors.New("native candidate outbound is missing")}
+ return outbound.DialContext(ctx,"tcp",M.ParseSocksaddr(address))
+}
+func (e *routerMultihopEngine) selector()(*group.Selector,error){
+ if e.Identity()==""{return nil,errors.New("native multihop instance changed")}
+ outbound,ok:=e.instance.Outbound().Outbound(mobilemultihop.SelectorTag);if !ok{return nil,errors.New("multihop selector missing")}
+ selector,ok:=outbound.(*group.Selector);if !ok{return nil,errors.New("unowned native selector")};return selector,nil
+}
+func (e *routerMultihopEngine) Select(tag string)error{
+ if tag!=mobilemultihop.LocalTag&&tag!=mobilemultihop.ServerTag{return errors.New("unproved execution selection")}
+ selector,err:=e.selector();if err!=nil{return err};if !selector.SelectOutbound(tag)||selector.Now()!=tag{return errors.New("native selector refused winner")};return nil
+}
+func (e *routerMultihopEngine) Selected()string{selector,err:=e.selector();if err!=nil{return ""};return selector.Now()}

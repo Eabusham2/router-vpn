@@ -20,10 +20,11 @@ import (
 const multihopProofProxy = "http://127.0.0.1:1099"
 
 type multihopConnectRequest struct {
-	EntryID  string `json:"entry_id"`
-	ExitID   string `json:"exit_id"`
-	Base     string `json:"base"`
-	ExitMode string `json:"exit_mode"`
+	EntryID   string `json:"entry_id"`
+	ExitID    string `json:"exit_id"`
+	Base      string `json:"base"`
+	ExitMode  string `json:"exit_mode"`
+	Execution string `json:"execution,omitempty"`
 }
 
 type multihopSelection struct {
@@ -48,18 +49,19 @@ type multihopNodeSummary struct {
 }
 
 type activeMultihopGraph struct {
-	EntryID  string
-	ExitID   string
-	Base     string
-	ExitMode string
-	Started  time.Time
+	Execution string
+	EntryID   string
+	ExitID    string
+	Base      string
+	ExitMode  string
+	Started   time.Time
 }
 
 var activeMultihopGraphs sync.Map
 
 func setActiveMultihopGraph(a *app, sel multihopSelection) {
 	activeMultihopGraphs.Store(a, activeMultihopGraph{
-		EntryID: sel.Entry.ID, ExitID: sel.Exit.ID, Base: sel.Base, ExitMode: sel.ExitMode, Started: time.Now().UTC(),
+		Execution: "local", EntryID: sel.Entry.ID, ExitID: sel.Exit.ID, Base: sel.Base, ExitMode: sel.ExitMode, Started: time.Now().UTC(),
 	})
 	homeExitProofs.Delete(a)
 }
@@ -166,6 +168,9 @@ func resolveMultihopSelection(control common.RouterProfile, profiles []common.Ro
 		return multihopSelection{}, errors.New("multihop entry base must be WireGuard or AmneziaWG")
 	}
 	exitMode := strings.TrimSpace(q.ExitMode)
+	if exitMode == "auto" && q.Execution == "auto" {
+		exitMode = "shadowsocks"
+	}
 	if exitMode == "" {
 		exitMode = "shadowsocks"
 	}
@@ -203,6 +208,9 @@ func (a *app) multihopStatus(w http.ResponseWriter, r *http.Request) {
 		"actual_entry_id":       actualEntry,
 		"actual_exit_id":        actualExit,
 		"enabled":               control.MultihopEnabled,
+		"comparison":            comparisonProgress(a),
+		"execution":             graph.Execution,
+		"supported_executions":  []string{"local", "server", "auto"},
 		"supported_entry_bases": []string{"wg", "awg"},
 		"supported_exit_modes":  []string{"shadowsocks", "hysteria2"},
 		"connected":             state.Connected && state.Mode == "multihop",
@@ -263,6 +271,14 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 	sel, err := resolveMultihopSelection(control, profiles, q)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if execution, err := routeExecution(q); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	} else if execution != "local" {
+		a.runMultihopExecution(w, r, sel, q)
 		return
 	}
 

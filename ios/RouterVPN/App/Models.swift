@@ -173,6 +173,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var multihopEntryID: String?
     var multihopExitID: String?
     var multihopExitMode: String?
+    var multihopExecution: String?
     var mtuPolicy: String?
     var manualMTU: Int?
     var effectiveMTU: Int?
@@ -255,6 +256,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case multihopEntryID = "multihop_entry_id"
         case multihopExitID = "multihop_exit_id"
         case multihopExitMode = "multihop_exit_mode"
+        case multihopExecution = "multihop_execution"
         case mtuPolicy = "mtu_policy"
         case manualMTU = "manual_mtu"
         case effectiveMTU = "effective_mtu"

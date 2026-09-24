@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate both actual composed graphs with the EXACT shipped Libbox core.
+# Validate every actual composed graph with the EXACT shipped Libbox core.
 # This invokes `check`, never `run`: no tunnel, node traffic, or live secrets.
 set -euo pipefail
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -27,4 +27,4 @@ python3 "$ROOT/deploy/test_ios_multihop_graph.py" --fixture-dir "$WORK/fixtures"
 for graph in "$WORK"/fixtures/*.json; do
   "$WORK/sing-box" check -c "$graph"
 done
-echo 'Pinned Libbox accepts both owned multihop graphs (configuration proof only, not device traffic proof)'
+echo 'Pinned Libbox accepts all owned multihop graphs (configuration proof only, not device traffic proof)'

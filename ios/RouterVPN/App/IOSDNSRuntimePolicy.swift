@@ -10,7 +10,7 @@ struct IOSResolvedDNSPolicy: Hashable {
     let path: String
 
     var wireGuardCompatible: Bool {
-        type == "udp" && (IPv4Address(host) != nil || IPv6Address(host) != nil)
+        type == "udp" && port == 53 && (IPv4Address(host) != nil || IPv6Address(host) != nil)
     }
 }
 

@@ -18,7 +18,7 @@ func (m *connectionProfileSetupMeta) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	for key := range raw {
-		if key != "multihop_exit_mode" {
+		if key != "multihop_exit_mode" && key != "multihop_execution" {
 			return fmt.Errorf("connection profile setup metadata contains unsupported field %q", key)
 		}
 	}
@@ -31,6 +31,13 @@ func (m *connectionProfileSetupMeta) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	decoded.MultihopExitMode = mode
+	if _, present := raw["multihop_execution"]; present {
+		execution, err := routeExecution(multihopConnectRequest{Execution: decoded.MultihopExecution})
+		if err != nil {
+			return err
+		}
+		decoded.MultihopExecution = string(execution)
+	}
 	*m = connectionProfileSetupMeta(decoded)
 	return nil
 }

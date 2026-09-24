@@ -20,6 +20,10 @@ final class RouterVPNModel: ObservableObject {
     @Published var connected = false
     @Published var tunnelTransitioning = false
     @Published var message = "Import a router bundle from Files or pair from your home LAN"
+    @Published var multihopProgressText = ""
+    var multihopProgressGeneration = UUID()
+    var multihopProgressInFlight: UUID?
+    var multihopProgressDeadline = Date.distantPast
     @Published var activeEngine = "none"
     @Published var activeRawProfile = ""
     private(set) var activeSessionIdentity: IOSSessionIdentity?
@@ -114,6 +118,7 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func importBundle(_ data: Data) throws {
+        multihopProgressGeneration = UUID(); multihopProgressText = ""
         guard data.count <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
         let decoded = try JSONDecoder().decode(ClientBundle.self, from: data)
         let prepared = try IOSDNSRuntimePolicy.patch(decoded)
@@ -216,6 +221,7 @@ final class RouterVPNModel: ObservableObject {
     // rollback. Resolving them through the logical picker would silently turn
     // an AWG Fast attempt into the preferred WG variant of the same mode.
     func connect(rawProfileID: String?) async {
+        multihopProgressGeneration = UUID(); multihopProgressText = ""
         if connected { message = "Disconnect before starting another VPN session"; return }
         if tunnelTransitioning { message = "VPN transition already in progress"; return }
         tunnelTransitioning = true
@@ -227,7 +233,7 @@ final class RouterVPNModel: ObservableObject {
             if selectedRouterProfile?.multihopEnabled == true {
                 guard rawProfileID == nil, let profile = selectedRouterProfile,
                       profile.multihopExitID == profile.id,
-                      let mode = profile.multihopExitMode, ["shadowsocks", "hysteria2"].contains(mode) else {
+                      let mode = profile.multihopExitMode, ["wg", "shadowsocks", "hysteria2"].contains(mode) else {
                     throw IOSRuntimeSelectionError.unsupportedMode("Choose a valid multihop graph or disable multihop before selecting an individual raw mode.")
                 }
                 _ = try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: mode)
@@ -370,7 +376,7 @@ final class RouterVPNModel: ObservableObject {
         connected = false
         activeEngine = selection.engine.rawValue
         activeRawProfile = selection.rawProfileID
-        return await waitForConnection(manager, attempts: selection.engine == .multihop ? 100 : 40)
+        return await waitForConnection(manager, attempts: selection.engine == .multihop ? ((selectedRouterProfile?.multihopExecution ?? "local") == "local" ? 100 : 480) : 40)
     }
 
     private func waitForConnection(_ manager: NETunnelProviderManager, attempts: Int) async -> Bool {
@@ -453,6 +459,7 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func disconnect() {
+        multihopProgressGeneration = UUID(); multihopProgressText = ""
         guard !tunnelTransitioning, !userDisconnectInProgress else { return }
         userDisconnectInProgress = true
         tunnelTransitioning = true

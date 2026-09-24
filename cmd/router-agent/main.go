@@ -41,6 +41,17 @@ type server struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "check-multihop-registry" {
+		if len(os.Args) != 4 {
+			log.Fatal("check-multihop-registry requires private registry and entry configuration paths")
+		}
+		count, err := checkRelayRegistry(os.Args[2], os.Args[3])
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("Validated %d native relay configurations without starting a tunnel\n", count)
+		return
+	}
 	path := getenv("ROUTER_VPN_CONFIG", getenv("HOMEVPN_ROUTER_CONFIG", "/etc/router-vpn/router-agent.json"))
 	b, err := os.ReadFile(path)
 	if err != nil {

@@ -33,6 +33,8 @@ function Add-RouterVPNUnifiedWindowsShell {
       <TextBlock Name="UnifiedLastError" Foreground="#FF9CA8" TextWrapping="Wrap" Margin="0,0,0,6"/>
       <Grid Margin="0,2,0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Name="UnifiedConnectButton" Content="Connect" FontSize="17" FontWeight="Bold" Padding="18,10" Background="#6857E5" Foreground="White"/><CheckBox Name="UnifiedKillSwitch" Grid.Column="1" Content="Kill switch" VerticalAlignment="Center" Margin="14,0,0,0"/></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Multihop" FontWeight="SemiBold" VerticalAlignment="Center"/><CheckBox Name="UnifiedMultihop" Grid.Column="1" VerticalAlignment="Center" Margin="6,0"/><ComboBox Name="UnifiedEntryCombo" Grid.Column="2" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="150"/><TextBlock Grid.Column="3" Text=" → " VerticalAlignment="Center"/><ComboBox Name="UnifiedExitCombo" Grid.Column="4" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="150"/><ComboBox Name="UnifiedExitMode" Grid.Column="5" Margin="6,0,0,0"><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/></ComboBox></Grid>
+      <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Execution" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedExecution" Grid.Column="1" SelectedIndex="2" ToolTip="Local keeps the exit tunnel on this device. Server trusts the entry node to run the exit. Compare tests both and keeps the lower valid average."><ComboBoxItem Content="Local — exit runs on device" Tag="local"/><ComboBoxItem Content="Server — exit runs on entry node" Tag="server"/><ComboBoxItem Content="Compare both — lowest valid average" Tag="auto"/></ComboBox></Grid>
+      <TextBlock Name="UnifiedComparisonText" Text="Compare: (last-node RTT + external-server RTT) / 2. Either timeout excludes the candidate." TextWrapping="Wrap" Foreground="#A8B6D5" FontSize="11" Margin="76,0,0,4"/>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Settings" FontWeight="SemiBold" VerticalAlignment="Center"/><TextBlock Name="UnifiedSettingsSummary" Grid.Column="1" Foreground="#A8B6D5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/><StackPanel Grid.Column="2" Orientation="Horizontal"><Button Name="UnifiedSettingsButton" Content="Open settings" Padding="10,5"/><Button Name="UnifiedMtuButton" Content="Retest MTU" Margin="6,0,0,0" Padding="10,5"/></StackPanel></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Mode" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedModeCombo" Grid.Column="1" DisplayMemberPath="display" SelectedValuePath="id"/><Button Name="UnifiedPresetsButton" Grid.Column="2" Content="Presets / CUSTOM" Margin="6,0,0,0" Padding="10,5"/></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="DNS" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedDnsCombo" Grid.Column="1"><ComboBoxItem Content="Home AdGuard" Tag="home"/><ComboBoxItem Content="Fastest measured" Tag="fastest"/><ComboBoxItem Content="Custom" Tag="custom"/><ComboBoxItem Content="DoT" Tag="dot"/><ComboBoxItem Content="DoH" Tag="doh"/><ComboBoxItem Content="DoH3" Tag="doh3"/><ComboBoxItem Content="Rescue" Tag="rescue"/></ComboBox><Button Name="UnifiedDnsDetailsButton" Grid.Column="2" Content="DNS details" Margin="6,0,0,0" Padding="10,5"/></Grid>
@@ -85,9 +87,94 @@ $script:UnifiedAsyncPoller.Interval=[TimeSpan]::FromMilliseconds(100)
 # HTTP completion is not UI completion. Keep this reservation through callbacks
 # and cleanup, including nested dispatcher frames opened by a callback.
 function UnifiedAsyncBusy { return $script:UnifiedAsyncActive }
+function UnifiedMultihopValue($Object,[string]$Name,$Default=$null){
+    if($null-eq$Object){return $Default}
+    if($Object-is[System.Collections.IDictionary]){if($Object.Contains($Name)){return $Object[$Name]};return $Default}
+    $Property=$Object.PSObject.Properties[$Name];if($null-ne$Property){return $Property.Value};return $Default
+}
+function RefreshUnifiedMultihopComparison($Status){
+    $ComparisonForID=UnifiedMultihopValue $Status 'comparison';$script:UnifiedComparisonLastID=[string](UnifiedMultihopValue $ComparisonForID 'id' '')
+    $Label=Control 'UnifiedComparisonText';if($null-eq$Label){return}
+    $Comparison=UnifiedMultihopValue $Status 'comparison'
+    if($null-eq$Comparison){$Label.Text='Compare: (last-node RTT + external-server RTT) / 2. Either timeout excludes the candidate.';return}
+    $Lines=@('Execution: '+[string](UnifiedMultihopValue $Status 'execution' 'none')+' | '+[string](UnifiedMultihopValue $Comparison 'stage' 'starting'))
+    foreach($M in @(UnifiedMultihopValue $Comparison 'measurements' @())){
+        $C=UnifiedMultihopValue $M 'candidate';$Name=[string](UnifiedMultihopValue $C 'execution' '')+' / '+[string](UnifiedMultihopValue $C 'transport' '')
+        $Last=UnifiedMultihopValue $M 'last_node_ms';$External=UnifiedMultihopValue $M 'external_ms';$Score=UnifiedMultihopValue $M 'score_ms'
+        if([bool](UnifiedMultihopValue $M 'eligible' $false) -and $null-ne$Last -and $null-ne$External -and $null-ne$Score -and [double]$Last-gt0 -and [double]$External-gt0 -and [double]$Score-gt0 -and -not[Double]::IsInfinity([double]$Last) -and -not[Double]::IsInfinity([double]$External) -and -not[Double]::IsNaN([double]$Last) -and -not[Double]::IsNaN([double]$External) -and -not[Double]::IsInfinity([double]$Score) -and -not[Double]::IsNaN([double]$Score)){
+            $Lines+=('{0}: ({1:F1} + {2:F1}) / 2 = {3:F1} ms' -f $Name,[double](UnifiedMultihopValue $M 'last_node_ms' 0),[double](UnifiedMultihopValue $M 'external_ms' 0),[double](UnifiedMultihopValue $M 'score_ms' 0))
+        }else{$Lines+=($Name+': rejected — '+[string](UnifiedMultihopValue $M 'failure' 'probe failed'))}
+    }
+    $Failure=[string](UnifiedMultihopValue $Comparison 'failure' '');if($Failure){$Lines+=$Failure}
+    $Label.Text=$Lines-join[Environment]::NewLine
+}
+# Independent read-only observer: bounded body, no proxy/redirects, no node secrets.
+$script:UnifiedComparisonLastID=''
+$script:UnifiedComparisonOldID=''
+$script:UnifiedComparisonWatching=$false
+$script:UnifiedComparisonTask=$null
+$script:UnifiedComparisonRequest=$null
+$script:UnifiedComparisonCts=$null
+$script:UnifiedComparisonNext=[DateTime]::MinValue
+$script:UnifiedComparisonHandler=[System.Net.Http.HttpClientHandler]::new()
+$script:UnifiedComparisonHandler.UseProxy=$false
+$script:UnifiedComparisonHandler.AllowAutoRedirect=$false
+$script:UnifiedComparisonClient=[System.Net.Http.HttpClient]::new($script:UnifiedComparisonHandler)
+$script:UnifiedComparisonClient.MaxResponseContentBufferSize=32768
+$script:UnifiedComparisonClient.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan
+$script:UnifiedComparisonPoller=New-Object Windows.Threading.DispatcherTimer
+$script:UnifiedComparisonPoller.Interval=[TimeSpan]::FromMilliseconds(100)
+function StopUnifiedComparisonProgress {
+    $script:UnifiedComparisonWatching=$false
+    try{if($null-ne$script:UnifiedComparisonCts){$script:UnifiedComparisonCts.Cancel()}}catch{}
+}
+function StartUnifiedComparisonProgress {
+    StopUnifiedComparisonProgress
+    $script:UnifiedComparisonOldID=$script:UnifiedComparisonLastID
+    $script:UnifiedComparisonWatching=$true
+    $script:UnifiedComparisonNext=[DateTime]::MinValue
+    $script:UnifiedComparisonPoller.Start()
+}
+function PollUnifiedComparisonProgress {
+    if($script:UnifiedAsyncClosed -or $script:UnifiedAsyncCancelled -or -not(UnifiedAsyncBusy)){StopUnifiedComparisonProgress}
+    if($null-ne$script:UnifiedComparisonTask -and $script:UnifiedComparisonTask.IsCompleted){
+        $Response=$null
+        try{
+            $Response=$script:UnifiedComparisonTask.GetAwaiter().GetResult()
+            $Text=$Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            if($script:UnifiedComparisonWatching -and -not$script:UnifiedAsyncClosed -and $Response.IsSuccessStatusCode){
+                $Status=$Text|ConvertFrom-Json
+                $Comparison=UnifiedMultihopValue $Status 'comparison'
+                $ID=[string](UnifiedMultihopValue $Comparison 'id' '')
+                if($ID -and $ID-ne$script:UnifiedComparisonOldID){RefreshUnifiedMultihopComparison $Status}
+            }
+        }catch{}finally{
+            if($null-ne$Response){$Response.Dispose()}
+            if($null-ne$script:UnifiedComparisonRequest){$script:UnifiedComparisonRequest.Dispose()}
+            if($null-ne$script:UnifiedComparisonCts){$script:UnifiedComparisonCts.Dispose()}
+            $script:UnifiedComparisonTask=$null;$script:UnifiedComparisonRequest=$null;$script:UnifiedComparisonCts=$null
+            $script:UnifiedComparisonNext=[DateTime]::UtcNow.AddMilliseconds(500)
+        }
+    }
+    if(-not$script:UnifiedComparisonWatching){if($null-eq$script:UnifiedComparisonTask){$script:UnifiedComparisonPoller.Stop()};return}
+    if($null-eq$script:UnifiedComparisonTask -and [DateTime]::UtcNow-ge$script:UnifiedComparisonNext){
+        try{
+            $script:UnifiedComparisonRequest=[System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get,'http://127.0.0.1:8788/api/multihop/status')
+            $script:UnifiedComparisonCts=[System.Threading.CancellationTokenSource]::new()
+            $script:UnifiedComparisonCts.CancelAfter([TimeSpan]::FromSeconds(2))
+            $script:UnifiedComparisonTask=$script:UnifiedComparisonClient.SendAsync($script:UnifiedComparisonRequest,$script:UnifiedComparisonCts.Token)
+        }catch{
+            StopUnifiedComparisonProgress
+            if($null-ne$script:UnifiedComparisonRequest){$script:UnifiedComparisonRequest.Dispose()}
+            if($null-ne$script:UnifiedComparisonCts){$script:UnifiedComparisonCts.Dispose()}
+            $script:UnifiedComparisonRequest=$null;$script:UnifiedComparisonCts=$null
+        }
+    }
+}
+$script:UnifiedComparisonPoller.Add_Tick({PollUnifiedComparisonProgress})
 function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
     if($script:UnifiedAsyncClosed){return}
-    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton')){
+    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','UnifiedExecution','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton')){
         $C=Control $N;if($null-ne$C){$C.IsEnabled=-not$Busy}
     }
     $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=$true;if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
@@ -118,6 +205,7 @@ function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET'
         $script:UnifiedAsyncRequest=$Req;$script:UnifiedAsyncCts=$Cts;$script:UnifiedAsyncSuccess=$OnSuccess;$script:UnifiedAsyncFailure=$OnFailure;$script:UnifiedAsyncFinally=$OnFinally
         $script:UnifiedAsyncLabel=$Label;$script:UnifiedAsyncCancelled=$false;$script:UnifiedAsyncDisconnectAfterCancel=$false
         $script:UnifiedAsyncTask=$script:UnifiedAsyncClient.SendAsync($Req,$Cts.Token)
+        if($Path-eq'/api/multihop/connect'){StartUnifiedComparisonProgress}
         SetUnifiedAsyncUI $true $Label
         $script:UnifiedAsyncPoller.Start()
         return $true
@@ -144,6 +232,7 @@ function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET'
 function CancelUnifiedApiAsync([bool]$DisconnectAfter=$false){
     if(-not(UnifiedAsyncBusy)){return $false}
     $script:UnifiedAsyncCancelled=$true
+    StopUnifiedComparisonProgress
     # Repeated cancel/close events must not retract a requested disconnect.
     $script:UnifiedAsyncDisconnectAfterCancel=$script:UnifiedAsyncDisconnectAfterCancel -or $DisconnectAfter
     try{if($null-ne$script:UnifiedAsyncCts){$script:UnifiedAsyncCts.Cancel()}}catch{}
@@ -287,6 +376,7 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         if(-not$EntrySelected-and$MH.entry_id){$EntrySelected=[string]$MH.entry_id};if(-not$ExitSelected-and$MH.exit_id){$ExitSelected=[string]$MH.exit_id}
         if($EntrySelected){$MultihopEntryCombo.SelectedValue=$EntrySelected};if($ExitSelected){$MultihopExitCombo.SelectedValue=$ExitSelected}
         $MultihopSummary.Text="Supported=$($MH.platform_supported) Connected=$($MH.connected) Actual exit=$($MH.actual_exit_id) Runtime=$($MH.runtime_exit_mode) Entry bases=$(@($MH.supported_entry_bases)-join',') Exit modes=$(@($MH.supported_exit_modes)-join',')"
+        RefreshUnifiedMultihopComparison $MH
 
         foreach($Event in @($Timeline.events)){
             $Seq=[uint64]$Event.seq;if($Seq-le$script:EventSeq){continue}
@@ -352,7 +442,7 @@ function UnifiedConnect{
         if((Control 'UnifiedMultihop').IsChecked){
             $Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue
             if(-not$Entry-or-not$Exit-or$Entry-eq$Exit){throw 'Multihop requires different entry and exit nodes.'}
-            $Path='/api/multihop/connect';$Body=@{entry_id=$Entry;exit_id=$Exit;base='wg';exit_mode=(MultihopExitModeChoice)};$Timeout=200;$Label='Connecting multihop…'
+            $Path='/api/multihop/connect';$Body=@{entry_id=$Entry;exit_id=$Exit;base='wg';exit_mode=(MultihopExitModeChoice)};$Body.execution=[string](Control 'UnifiedExecution').SelectedItem.Tag;$Timeout=200;$Label='Connecting multihop…'
         }else{
             $P=UnifiedSelectedProfile
             if($P-and(([string]$P.node_kind).ToLowerInvariant()-eq'external')){
@@ -476,6 +566,9 @@ $DnsButton.Add_Click({if(UnifiedAsyncBusy){Log 'DNS Retest refused: another Rout
 (Control 'UnifiedBackButton').Add_Click({BackUnifiedMap})
 $Window.Add_Closed({
     $script:UnifiedAsyncClosed=$true
+    StopUnifiedComparisonProgress
+    try{$script:UnifiedComparisonPoller.Stop();$script:UnifiedComparisonClient.Dispose()}catch{}
+    try{if($null-ne$script:UnifiedComparisonRequest){$script:UnifiedComparisonRequest.Dispose()};if($null-ne$script:UnifiedComparisonCts){$script:UnifiedComparisonCts.Dispose()}}catch{}
     try{if(UnifiedAsyncBusy){[void](CancelUnifiedApiAsync $false)}}catch{}
     try{if(UnifiedRefreshBusy){[void](CancelUnifiedRefreshAsync)}}catch{}
     try{CompleteUnifiedApiAsync}catch{}

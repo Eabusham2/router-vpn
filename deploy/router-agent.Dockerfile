@@ -19,7 +19,7 @@ RUN apk add --no-cache build-base linux-headers curl tar \
 FROM ghcr.io/sagernet/sing-box:v1.13.12 AS relay-core
 
 FROM alpine:3.22
-RUN apk add --no-cache nftables ca-certificates wireguard-tools iproute2
+RUN apk add --no-cache nftables ca-certificates wireguard-tools iproute2 python3
 COPY --from=build /router-vpn-agent /usr/local/bin/router-vpn-agent
 COPY --from=relay-core /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY --from=build /relay-fixtures /tmp/relay-fixtures
@@ -30,4 +30,7 @@ COPY --from=awg-tools-build /src/amneziawg-tools/src/wg /usr/local/bin/awg
 RUN chmod 0755 /usr/local/bin/awg \
  && command -v wg >/dev/null \
  && command -v awg >/dev/null
+COPY server/scripts/provision-multihop-relays.py server/scripts/verified-regular-read.py server/scripts/atomic-private-write.py /usr/local/lib/router-vpn-relay/
+RUN chmod 0755 /usr/local/lib/router-vpn-relay/provision-multihop-relays.py \
+ && ln -s /usr/local/lib/router-vpn-relay/provision-multihop-relays.py /usr/local/bin/router-vpn-relay-pair
 ENTRYPOINT ["/usr/local/bin/router-vpn-agent"]

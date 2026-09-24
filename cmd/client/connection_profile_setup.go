@@ -15,18 +15,20 @@ import (
 const connectionProfileSetupMetaVersion = 1
 
 type connectionProfileSetupRequest struct {
-	ID               string   `json:"id,omitempty"`
-	Name             string   `json:"name"`
-	Mode             string   `json:"mode,omitempty"`
-	CustomLayers     []string `json:"custom_layers,omitempty"`
-	MultihopEnabled  bool     `json:"multihop_enabled"`
-	MultihopEntryID  string   `json:"multihop_entry_id,omitempty"`
-	MultihopExitID   string   `json:"multihop_exit_id,omitempty"`
-	MultihopExitMode string   `json:"multihop_exit_mode,omitempty"`
+	ID                string   `json:"id,omitempty"`
+	Name              string   `json:"name"`
+	Mode              string   `json:"mode,omitempty"`
+	CustomLayers      []string `json:"custom_layers,omitempty"`
+	MultihopEnabled   bool     `json:"multihop_enabled"`
+	MultihopEntryID   string   `json:"multihop_entry_id,omitempty"`
+	MultihopExitID    string   `json:"multihop_exit_id,omitempty"`
+	MultihopExitMode  string   `json:"multihop_exit_mode,omitempty"`
+	MultihopExecution string   `json:"multihop_execution,omitempty"`
 }
 
 type connectionProfileSetupMeta struct {
-	MultihopExitMode string `json:"multihop_exit_mode,omitempty"`
+	MultihopExitMode  string `json:"multihop_exit_mode,omitempty"`
+	MultihopExecution string `json:"multihop_execution,omitempty"`
 }
 
 type connectionProfileSetupMetaStore struct {
@@ -85,6 +87,9 @@ func loadConnectionProfileSetupMeta(a *app) (connectionProfileSetupMetaStore, er
 	for id, meta := range store.Entries {
 		if !validProfileID(id) {
 			return connectionProfileSetupMetaStore{}, errors.New("connection profile setup metadata contains an invalid id")
+		}
+		if _, err := routeExecution(multihopConnectRequest{Execution: meta.MultihopExecution}); err != nil {
+			return connectionProfileSetupMetaStore{}, err
 		}
 		if _, err := normalizeConnectionProfileExitMode(meta.MultihopExitMode); err != nil {
 			return connectionProfileSetupMetaStore{}, err
@@ -145,6 +150,11 @@ func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updati
 	}
 	q.MultihopEntryID = strings.TrimSpace(q.MultihopEntryID)
 	q.MultihopExitID = strings.TrimSpace(q.MultihopExitID)
+	execution, err := routeExecution(multihopConnectRequest{Execution: q.MultihopExecution})
+	q.MultihopExecution = string(execution)
+	if err != nil {
+		return q, err
+	}
 	q.MultihopExitMode, err = normalizeConnectionProfileExitMode(q.MultihopExitMode)
 	if err != nil {
 		return q, err
@@ -166,6 +176,7 @@ func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updati
 		q.MultihopEntryID = ""
 		q.MultihopExitID = ""
 		q.MultihopExitMode = ""
+		q.MultihopExecution = ""
 	}
 	return q, nil
 }
@@ -301,7 +312,7 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 		meta.Entries = map[string]connectionProfileSetupMeta{}
 	}
 	if err == nil {
-		meta.Entries[id] = connectionProfileSetupMeta{MultihopExitMode: q.MultihopExitMode}
+		meta.Entries[id] = connectionProfileSetupMeta{MultihopExitMode: q.MultihopExitMode, MultihopExecution: q.MultihopExecution}
 		err = persistConnectionProfileSetupMeta(a, meta)
 	}
 	var rollbackErr error
@@ -331,6 +342,7 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 	base["multihop_entry_id"] = q.MultihopEntryID
 	base["multihop_exit_id"] = q.MultihopExitID
 	base["multihop_exit_mode"] = q.MultihopExitMode
+	base["multihop_execution"] = q.MultihopExecution
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(base)
@@ -380,7 +392,10 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 	}
 	profileMap, _ := payload["profile"].(map[string]any)
 	id, _ := profileMap["id"].(string)
+	payload["multihop_execution"] = "local" // legacy profiles never silently grant entry-side execution
 	if item, ok := meta.Entries[id]; ok {
+		execution, _ := routeExecution(multihopConnectRequest{Execution: item.MultihopExecution})
+		payload["multihop_execution"] = execution
 		payload["multihop_exit_mode"] = item.MultihopExitMode
 	}
 	if prefs, ok := profileMap["preferences"].(map[string]any); ok {

@@ -56,6 +56,12 @@ PY
 HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$EXIT_ID" HOMEVPN_ENDPOINT="$EXIT_ENDPOINT" \
   python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$EXIT_CONFIG"
 
+# Optional execution descriptor was created by the node-bound desktop owner.
+# It is applied after DNS policy; only control/exit wiring changes, not DNS.
+if [[ -n ${6:-} ]]; then
+  HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/multihop-execution.py" "$EXIT_CONFIG" "$6" "$(basename "$ENTRY_CONF" .conf)"
+fi
+
 sing-box check -D "$EXIT_DIR" -c "$EXIT_CONFIG" >/dev/null
 sudo sing-box run -D "$EXIT_DIR" -c "$EXIT_CONFIG" &
 EXIT_PID=$!

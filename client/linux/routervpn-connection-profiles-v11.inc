@@ -101,6 +101,9 @@ static char *linux_profile_setup_body_v11(LinuxUnifiedV8 *state, const char *nam
     json_builder_set_member_name(builder, "multihop_entry_id"); json_builder_add_string_value(builder, multihop && entry != NULL ? entry : "");
     json_builder_set_member_name(builder, "multihop_exit_id"); json_builder_add_string_value(builder, multihop && exit != NULL ? exit : "");
     json_builder_set_member_name(builder, "multihop_exit_mode"); json_builder_add_string_value(builder, multihop && g_strcmp0(exit_mode, "hysteria2") == 0 ? "hysteria2" : (multihop ? "shadowsocks" : ""));
+    char *execution = linux_multihop_execution_choice_v1();
+    json_builder_set_member_name(builder, "multihop_execution"); json_builder_add_string_value(builder, multihop ? execution : "");
+    g_free(execution);
     json_builder_end_object(builder);
     JsonNode *root = json_builder_get_root(builder);
     JsonGenerator *gen = json_generator_new();
@@ -307,6 +310,7 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
                     linux_profile_apply_custom_v11(loaded_mode, layers);
                     linux_unified_store_mode_v8(loaded_mode[0] ? loaded_mode : "smart-auto");
                     linux_profile_store_selection_v11(loaded_on, loaded_entry, loaded_exit, loaded_exit_mode);
+                    linux_multihop_store_execution_v1(obj_string(obj, "multihop_execution"));
                     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->multihop), loaded_on);
                     linux_unified_refresh_mode_combo_v8(state);
                     linux_unified_refresh_v8(state);

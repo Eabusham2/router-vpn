@@ -171,8 +171,8 @@ func TestCleanupStopsFurtherCandidates(t *testing.T) {
 	bad := sample(1, 1)
 	bad.dead = true
 	d := &driver{runs: map[Execution][]*trial{Local: {bad}}}
-	_, _, e := Compare(context.Background(), cand(), d, opts())
-	if !errors.Is(e, ErrTeardown) || len(d.opened) != 1 {
+	_, owned, e := Compare(context.Background(), cand(), d, opts())
+	if !errors.Is(e, ErrTeardown) || owned != bad || len(d.opened) != 1 {
 		t.Fatal(e, d.opened)
 	}
 }

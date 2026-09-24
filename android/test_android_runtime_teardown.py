@@ -58,7 +58,11 @@ final class AndroidMultihopController {
     }
     AndroidMultihopController(Context c, NativeSingBoxController s) {}
     List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f) { return Collections.emptyList(); }
-    Prepared prepare(File entry, File exit, String mode) { return new Prepared(exit,mode); }
+    static volatile String lastExecution = "";
+    Prepared prepare(File entry, File exit, String mode) { return prepare(entry,exit,mode,"local"); }
+    Prepared prepare(File entry, File exit, String mode, String execution) {
+        lastExecution=execution; return new Prepared(exit,mode);
+    }
 }
 final class AndroidStandardExitStore {
     static final class Entry {
@@ -192,6 +196,17 @@ public final class RuntimeTeardownHarness {
         check(!owner.busy(),"worker did not release ownership after completion");
     }
     static void tests(String kind) {
+        if ("multihop".equals(kind)) for (String execution:new String[]{"local","server","auto"}) {
+            test("multihop captured execution "+execution,()->{
+                try(Owner owner=new Owner(kind)) {
+                    Callback cb=new Callback(0);
+                    owner.multihop.connect(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),"shadowsocks",execution,cb);
+                    cb.awaitDone();
+                    check(cb.ok&&execution.equals(AndroidMultihopController.lastExecution),"execution changed before preparation");
+                    owner.disconnect();awaitIdle(owner);
+                }
+            });
+        }
         test(kind+" successful proof",()->{
             try(Owner owner=new Owner(kind)) {
                 Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();

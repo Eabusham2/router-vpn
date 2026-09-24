@@ -75,7 +75,7 @@ No results for those physical/private gates are asserted by this document.
 ## Two-node multihop and release continuation
 
 The two-node implementation uses an owned WireGuard entry endpoint and an
-owned Shadowsocks/Hysteria2 exit transport inside one Libbox PacketTunnel.
+owned WireGuard/Shadowsocks/Hysteria2 exit transport inside one Libbox PacketTunnel.
 The exit sockets detour through the entry; entry and exit proofs use separate
 private loopback proof routes. Connect completion requires both node identities
 and the same live engine owner. Saved profiles store graph references, not
@@ -111,3 +111,44 @@ families, per-hop measurement parity, additional Start Layer composition, or the
 remaining requirements listed above. Native compilation/configuration parsing
 and publication are separate evidence from device traffic, leaks, private
 production deployment and Apple signing.
+
+
+## Nested WireGuard exit continuation — September 23, 2026
+
+The iOS/iPadOS graph now accepts a native WireGuard exit as well as the
+previous Shadowsocks/Hysteria2 exits. Both WireGuard keys are parsed from the
+frozen paired node bundles and independently matched to their expected node
+proof identities before either runtime starts. Two different node labels cannot
+reuse the same server key. The final userspace WireGuard endpoint dials only
+through the entry endpoint; only one NetworkExtension TUN is created.
+
+The selected exit-node plain DNS resolver is carried into the composed graph
+and detours through the exit. Native WireGuard DNS compatibility now requires
+UDP port 53, rather than silently accepting an unrepresentable custom port.
+Malformed or conflicting peer, route, address-family, resolver and dial policy
+is rejected. The multihop-specific MTU step preserves each frozen hop's
+fixed setting rather than applying the exit's value to the entry. For nested
+WireGuard it subtracts the inner UDP/IP and WireGuard envelope, including
+16-byte padding, from the configured entry budget. Auto keeps the conservative
+OS TUN; an incompatible requested fixed exit MTU is rejected rather than
+silently clamped. This is configured encapsulation headroom, not a live PMTU
+measurement. The executable policy covers 358 cases, including every entry
+MTU from 1360 through 1500 for both outer address families. The preexisting separate entry/exit proof lanes, session freshness,
+saved graph ownership and temporary-test restoration remain in place.
+
+`deploy/test_ios_multihop_graph.py` executes 155 policy/graph checks and emits
+five pinned-core configuration fixtures, including WireGuard exits with dual
+stack and IPv4-only policy. The host-build regression requires all five fixtures
+and verifies failure propagation, cleanup and Xcode SDK isolation. A local
+configuration check passed all five using the official Linux binary whose
+embedded revision is `1ac1a339cb1223e9c70eae14c44411c75033c02d`; the archive
+was verified against the upstream artifact digest. This checks the same core
+configuration, not the Apple framework or live NetworkExtension behavior. Local policy
+checks are not substitutes for the required pinned-core check, native IPA build,
+real two-node traffic test or network-transition/leak-negative acceptance.
+
+This remains client-owned nested encryption. A server-managed entry→exit mode
+would need its own per-client forwarding, exit credential management and failure
+isolation. No server-wide route or home-router setting is changed by this patch.
+The new exit transport does not close the generalized graphs or the remaining
+feature/device/deployment requirements above.

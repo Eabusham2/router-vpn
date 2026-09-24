@@ -49,7 +49,7 @@ final class AndroidConnectionProfileStore {
         requireIdle("loading a connection profile");
         JSONObject row=find(id);String kind=row.getString("node_kind"),nodeId=row.getString("node_id");
         String mode=normalizeMode(row.optString("mode","smart-auto"));List<String>layers=jsonStrings(row.optJSONArray("custom_layers"),32);
-        boolean multi=row.optBoolean("multihop_enabled",false);String entry=row.optString("multihop_entry_id",""),exit=row.optString("multihop_exit_id","");String multiMode=normalizeMultiMode(row.optString("multihop_exit_mode","shadowsocks"));
+        boolean multi=row.optBoolean("multihop_enabled",false);String entry=row.optString("multihop_entry_id",""),exit=row.optString("multihop_exit_id","");String multiMode=normalizeMultiMode(row.optString("multihop_exit_mode","shadowsocks"));String execution=normalizeExecution(row.optString("multihop_execution","local"));
         if(multi){
             if(!"router-vpn".equals(kind))throw new IllegalStateException("Android multihop connection profiles must use a Router VPN node, not an external-only selected node.");
             if(entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null||findNode(exit)==null)throw new IllegalStateException("Saved multihop references missing/invalid Router nodes.");
@@ -69,7 +69,7 @@ final class AndroidConnectionProfileStore {
         // All validation above is complete before any selection, node-file, preset or preference mutation.
         if(updatedBundle!=null){AndroidNodeStore.Node applied=nodes.importBundle(updatedBundle);if(!nodeId.equals(applied.id))throw new IllegalStateException("Router node identity changed during connection-profile apply; refusing to continue.");}
         SharedPreferences.Editor edit=prefs().edit().putString(SELECTED_KIND,kind).putString(SELECTED_ID,nodeId).putString(MODE_KEY,mode)
-                .putBoolean(MULTI_ON,multi).putString(MULTI_ENTRY,entry).putString(MULTI_EXIT,exit).putString(MULTI_MODE,multiMode);
+                .putBoolean(MULTI_ON,multi).putString(MULTI_ENTRY,entry).putString(MULTI_EXIT,exit).putString(MULTI_MODE,multiMode).putString("multihop_execution",execution);
         if(preparedCustom!=null)edit.putString(CUSTOM_KEY,preparedCustom);
         if(!edit.commit()){
             String rollbackDetail="";
@@ -92,7 +92,7 @@ final class AndroidConnectionProfileStore {
         if(multi){if(!"router-vpn".equals(kind))throw new IllegalStateException("Disable multihop before saving an external-only connection profile.");if(entry==null||exit==null||entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null||findNode(exit)==null)throw new IllegalStateException("Current multihop selection is incomplete or references missing nodes.");}
         else{entry="";exit="";multiMode="shadowsocks";}
         JSONObject row=new JSONObject().put("id",id).put("name",name).put("node_kind",kind).put("node_id",nodeId).put("mode",mode).put("custom_layers",new JSONArray(layers))
-                .put("multihop_enabled",multi).put("multihop_entry_id",entry==null?"":entry).put("multihop_exit_id",exit==null?"":exit).put("multihop_exit_mode",multiMode);if(policy!=null)row.put("policy",policy);return row;
+                .put("multihop_enabled",multi).put("multihop_entry_id",entry==null?"":entry).put("multihop_exit_id",exit==null?"":exit).put("multihop_exit_mode",multiMode).put("multihop_execution",normalizeExecution(p.getString("multihop_execution","local")));if(policy!=null)row.put("policy",policy);return row;
     }
 
     private void requireIdle(String action){if(AndroidVpnMutationGuard.isBusy(context))throw new IllegalStateException("Disconnect Router VPN or let the active transition finish before "+action+"; live session identity and proof must remain immutable.");}
@@ -135,6 +135,7 @@ final class AndroidConnectionProfileStore {
             normalizeMode(row.optString("mode", "smart-auto"));
             jsonStrings(row.optJSONArray("custom_layers"), 32);
             normalizeMultiMode(row.optString("multihop_exit_mode", "shadowsocks"));
+            normalizeExecution(row.optString("multihop_execution","local"));
             JSONObject policy = row.optJSONObject("policy");
             if (policy != null) {
                 Iterator<String> keys = policy.keys();
@@ -169,6 +170,7 @@ final class AndroidConnectionProfileStore {
 
     private List<String> customLayers(String mode)throws Exception{if(mode==null||!mode.startsWith("custom:"))return new ArrayList<>();String name=mode.substring(7);JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&name.equals(p.optString("name","")))return jsonStrings(p.optJSONArray("layers"),32);}return new ArrayList<>();}
     private String prepareCustomPresetJSON(String mode,List<String>layers)throws Exception{if(mode==null||!mode.startsWith("custom:")||layers.isEmpty())return null;String name=mode.substring(7);if(name.trim().isEmpty()||name.length()>64)throw new IllegalArgumentException("CUSTOM profile name is invalid.");JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]")),next=new JSONArray();for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&!name.equals(p.optString("name","")))next.put(p);}next.put(new JSONObject().put("name",name).put("layers",new JSONArray(layers)));return next.toString();}
+    private static String normalizeExecution(String value){if(!java.util.Arrays.asList("local","server","auto").contains(value))throw new IllegalArgumentException("Invalid saved multihop execution.");return value;}
     private static String normalizeMultiMode(String value){value=value==null?"":value.trim().toLowerCase(Locale.ROOT);if(value.isEmpty())value="shadowsocks";if(!"shadowsocks".equals(value)&&!"hysteria2".equals(value))throw new IllegalArgumentException("Multihop exit transport must be Shadowsocks or Hysteria2.");return value;}
     private static String normalizeStartLayer(String value){value=value==null?"":value.trim().toLowerCase(Locale.ROOT);if(value.isEmpty())value="off";if(!"off".equals(value)&&!"aes-256-gcm".equals(value)&&!"aes-256-gcm+xor-whitening".equals(value))throw new IllegalArgumentException("Start Layer must be Off, AES-256-GCM, or AES-256-GCM + XOR whitening.");return value;}
     private static boolean allowedPolicyKey(String key){for(String allowed:POLICY_KEYS)if(allowed.equals(key))return true;return false;}

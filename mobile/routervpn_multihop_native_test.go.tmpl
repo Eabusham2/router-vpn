@@ -1,0 +1,25 @@
+package libbox
+
+import (
+ "crypto/ecdh"
+ "encoding/base64"
+ "encoding/json"
+ "strings"
+ "testing"
+)
+func TestRouterMultihopNativeSelectorConfig(t *testing.T){
+ private,err:=ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("a",32)));if err!=nil{t.Fatal(err)}
+ remote,err:=ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("b",32)));if err!=nil{t.Fatal(err)}
+ graph:=map[string]any{
+  "inbounds":[]any{map[string]any{"type":"tun","tag":"tun","address":[]string{"172.29.94.1/30"},"auto_route":true,"strict_route":true,"stack":"system","mtu":1280}},
+  "endpoints":[]any{map[string]any{"type":"wireguard","tag":"entry-wg","address":[]string{"10.77.0.2/32"},"private_key":base64.StdEncoding.EncodeToString(private.Bytes()),"peers":[]any{map[string]any{"address":"192.0.2.1","port":51820,"public_key":base64.StdEncoding.EncodeToString(remote.PublicKey().Bytes()),"allowed_ips":[]string{"0.0.0.0/0"}}}}},
+  "outbounds":[]any{map[string]any{"type":"shadowsocks","tag":"proxy","server":"192.0.2.2","server_port":8388,"method":"2022-blake3-aes-128-gcm","password":"AAAAAAAAAAAAAAAAAAAAAA==","detour":"entry-wg"}},
+  "route":map[string]any{"final":"proxy"},
+  "dns":map[string]any{"servers":[]any{map[string]any{"type":"udp","tag":"exit-dns","server":"10.88.0.1","detour":"proxy"}},"final":"exit-dns"},
+ }
+ metadata:=map[string]string{"entry_id":"entry","exit_id":"exit","entry_node_id":strings.Repeat("a",64),"exit_node_id":strings.Repeat("b",64),"entry_api":"http://10.77.0.1:8787","exit_api":"http://10.88.0.1:8787","entry_token":"fixture-not-secret","exit_token":"fixture-not-secret","entry_tag":"entry-wg","exit_mode":"shadowsocks","execution":"auto"}
+ config,_:=json.Marshal(graph);meta,_:=json.Marshal(metadata)
+ plan,err:=NewRouterMultihop(string(config),string(meta));if err!=nil{t.Fatal(err)}
+ if err=CheckConfig(plan.Config());err!=nil{t.Fatal("pinned native core rejected actual execution graph:",err)}
+ if err=plan.Run(nil);err==nil{t.Fatal("missing native instance accepted")}
+}

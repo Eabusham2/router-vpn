@@ -156,3 +156,5 @@ $Count++;Write-Host 'PASS composed Connect works and Help explicitly opens full 
 Assert-HelpBinding ($script:HelpTestSpeedLabs -eq 1) 'Performance button did not open Speed Lab'
 $Count++;Write-Host 'PASS composed Performance button invokes Speed Lab'
 Write-Host ("Windows Help binding regression tests: PASS ("+$Count+" checks)")
+
+& (Join-Path $Client 'test-windows-multihop-execution.ps1') -ProductSource $After

@@ -72,6 +72,30 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Object lock = new Object();
     private CommandServer commandServer;
+    private volatile io.nekohasekai.libbox.RouterMultihop executionController;
+    private static volatile java.lang.ref.WeakReference<LayeredVpnService> currentService=new java.lang.ref.WeakReference<>(null);
+    private final android.os.Handler executionHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private volatile String executionNetwork="";
+    private volatile boolean executionProved;
+    static String multihopProgressJSON(){LayeredVpnService service=currentService.get();io.nekohasekai.libbox.RouterMultihop plan=service==null?null:service.executionController;return plan==null?"":plan.progressJSON();}
+    private void cancelMultihopComparison(){io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
+    private String executionNetworkIdentity(){
+        java.util.ArrayList<String> values=new java.util.ArrayList<>();
+        try{for(Network network:connectivity.getAllNetworks()){
+            NetworkCapabilities caps=connectivity.getNetworkCapabilities(network);
+            LinkProperties links=connectivity.getLinkProperties(network);
+            if(caps==null||caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)||links==null)continue;
+            values.add(network.toString()+":"+links.getInterfaceName()+":"+links.getLinkAddresses());
+        }}catch(Exception failure){return "";}
+        java.util.Collections.sort(values);return values.toString();
+    }
+    private final Runnable executionWatch=new Runnable(){public void run(){
+        io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan==null)return;
+        if(!executionNetwork.equals(executionNetworkIdentity())||(executionProved&&!plan.healthy())){
+            plan.networkChanged();executor.execute(()->shutdown("FAILED","Multihop network or server lease changed; reconnect to compare again."));return;
+        }
+        executionHandler.postDelayed(this,500);
+    }};
     private ParcelFileDescriptor tunDescriptor;
     private AndroidStartLayerRelay startLayerRelay;
     private File activeSession;
@@ -88,11 +112,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         super.onCreate();
         connectivity = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
         ensureNotificationChannel();
+        currentService=new java.lang.ref.WeakReference<>(this);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? "" : intent.getAction();
         if (ACTION_STOP.equals(action)) {
+            cancelMultihopComparison();
             explicitStop = true;
             final long command = intent.getLongExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, 0L);
             executor.execute(() -> {
@@ -148,6 +174,14 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             setup.setLogMaxLines(2000);
             setup.setDebug(false);
             Libbox.setup(setup);
+            io.nekohasekai.libbox.RouterMultihop preparedExecution=null;
+            File executionFile=new File(session,"routervpn-multihop.json").getCanonicalFile();
+            if(executionFile.isFile()){
+                if(!modeId.startsWith("multihop-")||!executionFile.getParentFile().equals(session))throw new IllegalStateException("Unowned multihop metadata.");
+                String metadata=new String(readLimited(executionFile,16384),java.nio.charset.StandardCharsets.UTF_8);
+                preparedExecution=Libbox.newRouterMultihop(config,metadata);
+                config=preparedExecution.config();
+            }
             Libbox.checkConfig(config);
 
             pendingRelay = AndroidStartLayerRelay.startIfConfigured(this, session, message -> executor.execute(() -> {
@@ -160,13 +194,25 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 activeSession = session;
                 activeMode = modeId;
                 activeConfig = config;
+                executionController=preparedExecution;executionProved=false;
                 commandServer = new CommandServer(this, this);
                 commandServer.start();
                 commandServer.startOrReloadService(config, new OverrideOptions());
                 if (tunDescriptor == null || tunDescriptor.getFileDescriptor() == null || !tunDescriptor.getFileDescriptor().valid()) {
                     throw new IllegalStateException("sing-box started without establishing an Android VPN TUN.");
                 }
-                publish("UP", modeId, "");
+            }
+            io.nekohasekai.libbox.RouterMultihop ownedExecution=executionController;
+            CommandServer ownedServer=commandServer;
+            if(ownedExecution!=null){
+                executionNetwork=executionNetworkIdentity();
+                if(executionNetwork.isEmpty())throw new IllegalStateException("Underlying network identity is unavailable.");
+                executionHandler.post(executionWatch);
+                ownedExecution.run(ownedServer);
+            }
+            synchronized(lock){
+                if(explicitStop||commandServer!=ownedServer||executionController!=ownedExecution)throw new IllegalStateException("VPN ownership changed during multihop comparison.");
+                executionProved=true;publish("UP",modeId,"");
             }
             updateForeground("Layered VPN active: " + modeId);
         } catch (RevokedException revoked) {
@@ -181,12 +227,15 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     @Override public void onRevoke() {
+        cancelMultihopComparison();
         explicitStop = false;
         executor.execute(() -> shutdown("REVOKED", "Android revoked VPN permission."));
         super.onRevoke();
     }
 
     @Override public void onDestroy() {
+        cancelMultihopComparison();
+        if(currentService.get()==this)currentService.clear();
         String terminal = state;
         String mode = activeMode;
         File session;
@@ -224,6 +273,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     private void closeCoreLocked() {
+        executionHandler.removeCallbacks(executionWatch);
+        if(executionController!=null){
+            try{executionController.close();}catch(Exception failure){Log.w(TAG,"Server lease cleanup was not confirmed; bounded server expiry remains in force.");}
+            executionController=null;executionProved=false;
+        }
         if (commandServer != null) {
             try { commandServer.closeService(); } catch (Throwable ignored) { }
             try { commandServer.close(); } catch (Throwable ignored) { }
@@ -477,6 +531,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         executor.execute(() -> {
             synchronized (lock) {
                 if (commandServer == null || activeConfig.isEmpty()) return;
+                if(executionController!=null){cancelMultihopComparison();shutdown("FAILED","Multihop reload needs a fresh owned comparison.");return;}
                 try {
                     commandServer.startOrReloadService(activeConfig, new OverrideOptions());
                 } catch (Throwable error) {

@@ -318,6 +318,11 @@ extension ProductWindowController {
         multihopRow.addArrangedSubview(multihopToggle); multihopRow.addArrangedSubview(multihopEntryPopup); multihopRow.addArrangedSubview(NSTextField(labelWithString: "→")); multihopRow.addArrangedSubview(multihopExitPopup); multihopRow.addArrangedSubview(multihopExitModePopup)
         let editHops = NSButton(title: "Details", target: self, action: #selector(openUnifiedMultihop)); editHops.bezelStyle = .rounded; multihopRow.addArrangedSubview(editHops); controls.addArrangedSubview(multihopRow)
 
+        configureMultihopExecution()
+        let executionRow = unifiedLabeledRow(title: "Execution")
+        executionRow.addArrangedSubview(multihopExecutionPopup); controls.addArrangedSubview(executionRow)
+        controls.addArrangedSubview(multihopComparisonLabel)
+
         let settingsRow = unifiedLabeledRow(title: "Settings")
         let settingsButton = NSButton(title: "Open settings", target: self, action: #selector(openUnifiedSettings)); settingsButton.bezelStyle = .rounded; settingsRow.addArrangedSubview(settingsButton)
         let requirementsSummary = NSTextField(labelWithString: "AUTO requirements: Off"); requirementsSummary.identifier = NSUserInterfaceItemIdentifier("unified-auto-requirements"); requirementsSummary.textColor = .secondaryLabelColor; requirementsSummary.lineBreakMode = .byTruncatingTail; settingsRow.addArrangedSubview(requirementsSummary)

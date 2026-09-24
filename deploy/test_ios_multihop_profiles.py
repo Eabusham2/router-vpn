@@ -26,6 +26,13 @@ graph.multihopEnabled = true
 graph.multihopEntryID = "home-entry"
 graph.multihopExitID = "home-exit"
 graph.multihopExitMode = "shadowsocks"
+// Every offered exit mode survives the real private Codable profile model.
+for mode in ["wg", "shadowsocks", "hysteria2"] {
+    var candidate = graph
+    candidate.multihopExitMode = mode
+    let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self, from: JSONEncoder().encode(candidate))
+    try check("saved graph preserves exact exit family \(mode)", copy == candidate && copy.multihopExitMode == mode)
+}
 let encoded = try JSONEncoder().encode(graph)
 let restored = try JSONDecoder().decode(IOSConnectionSafePreferences.self, from: encoded)
 try check("all non-secret preferences round trip", restored == graph)

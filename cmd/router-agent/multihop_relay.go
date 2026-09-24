@@ -73,17 +73,26 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 		return q, bad
 	}
 	fields := map[string]string{}
+	seen := map[string]bool{}
+	port := 0
 	for d.More() {
 		key, e := d.Token()
 		name, ok := key.(string)
 		if e != nil || !ok {
 			return q, bad
 		}
-		if _, exists := fields[name]; exists {
+		if seen[name] {
 			return q, bad
 		}
+		seen[name] = true
+		if name == "listen_port" {
+			if d.Decode(&port) != nil || port < 26240 || port > 26271 {
+				return q, bad
+			}
+			continue
+		}
 		switch name {
-		case "session_id", "entry_node_id", "exit_id", "exit_mode":
+		case "session_id", "entry_node_id", "exit_id", "exit_mode", "listener_username", "listener_password":
 		default:
 			return q, bad
 		}
@@ -93,13 +102,21 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 		}
 		fields[name] = *value
 	}
-	if end, e := d.Token(); e != nil || end != json.Delim('}') || len(fields) != 4 {
+	if end, e := d.Token(); e != nil || end != json.Delim('}') || (len(fields) != 4 && len(fields) != 6) {
 		return q, bad
 	}
 	if _, e := d.Token(); e != io.EOF {
 		return q, bad
 	}
-	q = multihoprelay.Request{SessionID: fields["session_id"], EntryNodeID: fields["entry_node_id"], ExitID: fields["exit_id"], ExitMode: fields["exit_mode"]}
+	for _, key := range []string{"session_id", "entry_node_id", "exit_id", "exit_mode"} {
+		if fields[key] == "" {
+			return q, bad
+		}
+	}
+	if (port != 0) != (fields["listener_username"] != "" && fields["listener_password"] != "") {
+		return q, bad
+	}
+	q = multihoprelay.Request{Port: port, Username: fields["listener_username"], Password: fields["listener_password"], SessionID: fields["session_id"], EntryNodeID: fields["entry_node_id"], ExitID: fields["exit_id"], ExitMode: fields["exit_mode"]}
 	return q, nil
 }
 func registerMultihopRelayRoute(h *http.ServeMux, s *server) {

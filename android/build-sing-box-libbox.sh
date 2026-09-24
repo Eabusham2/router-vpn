@@ -21,6 +21,8 @@ XRAY_LICENSE_OUT="$LIBDIR/libxray-LICENSE.txt"
 OPENVPN_SOURCE="$ROOT/../mobile/routervpn_openvpn.go"
 OPENVPN_STAMP="$LIBDIR/libbox.openvpn.sha256"
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$OPENVPN_SOURCE")
+MULTIHOP_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-multihop.py" --digest)
+OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$MULTIHOP_SHA")
 EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN"
 
 verify_aar() {
@@ -69,7 +71,7 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
+  for symbol in     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
     grep -Fq "$symbol" "$api_list" || {
       echo "combined libbox AAR is missing $symbol bridge" >&2
       return 1
@@ -177,6 +179,7 @@ install -m 0644 "$ROOT/routervpn_xray_bridge.go" "$VENDOR/experimental/libbox/ro
 # Same Go runtime and protected socket path as every other mobile Libbox mode.
 grep -Fq 'with_openvpn' "$VENDOR/cmd/internal/build_libbox/main.go"
 install -m 0644 "$OPENVPN_SOURCE" "$VENDOR/experimental/libbox/routervpn_openvpn.go"
+python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
 
 (
   cd "$VENDOR"
@@ -204,6 +207,8 @@ install -m 0644 "$OPENVPN_SOURCE" "$VENDOR/experimental/libbox/routervpn_openvpn
     exit 1
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
+  go_retry test ./experimental/libbox/routervpn/...
+  go_retry test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run TestRouterMultihop -count=1
   go_retry test -ldflags=-checklinkname=0 ./experimental/libbox
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
   go_retry run ./cmd/internal/build_libbox -target android

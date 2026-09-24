@@ -6,6 +6,7 @@ additional exact seams keep short transactional profile operations synchronous;
 long actions get an owned request and Stop gets a separate preemption lane.
 """
 from pathlib import Path
+import importlib.util
 
 
 def replace_once(text: str, old: str, new: str) -> str:
@@ -47,7 +48,8 @@ def apply(path: Path) -> None:
         if(linux_async_stopping_v16(app)) {gtk_button_set_label(GTK_BUTTON(state->connect),"Disconnecting…");gtk_widget_set_sensitive(state->connect,FALSE);}
         else if(linux_async_connecting_v16(app)) {gtk_button_set_label(GTK_BUTTON(state->connect),"Disconnect");gtk_widget_set_sensitive(state->connect,TRUE);}
         else gtk_widget_set_sensitive(state->connect, g_strcmp0(gtk_button_get_label(GTK_BUTTON(state->connect)), "Disconnect") == 0);
-        gtk_label_set_text(GTK_LABEL(state->status), "Operation pending • configuration locked • live status refresh paused");
+        const char *comparison = g_object_get_data(G_OBJECT(app->window), "linux-multihop-progress");
+        gtk_label_set_text(GTK_LABEL(state->status), comparison != NULL ? comparison : "Operation pending • configuration locked • live status refresh paused");
     } else linux_unified_refresh_v8(state);
 }
 
@@ -85,4 +87,11 @@ static void linux_unified_custom_builder_v8(LinuxUnifiedV8 *state) {
         gtk_dialog_response(GTK_DIALOG(state->dialog), GTK_RESPONSE_CLOSE);
     } else linux_multihop_update_summary_v7(state, "Multihop request refused; another owned operation is pending.");
 ''' + text[end:].replace('    free(out.data); g_free(err); g_free(payload);', '    g_free(payload);', 1)
+    if path.name in {"routervpn-profile-settings-v1.inc", "routervpn-profile-settings-session.inc"}:
+        spec = importlib.util.spec_from_file_location("linux_multihop_execution", Path(__file__).with_name("apply-multihop-execution.py"))
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Missing multihop execution composer")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        text = module.apply(text)
     path.write_text(text)

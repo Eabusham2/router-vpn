@@ -33,11 +33,12 @@ Current source supports:
 - fixed dual-stack MTU applied to the actual native WG/AWG, Router Libbox and external Libbox TUNs;
 - tunnel-owned server forwarding-master control, with private node/session proof and independent readback;
 - pinned Libbox PacketTunnel paths for the supported Router VPN layered modes;
-- supported external WireGuard, SOCKS5, Shadowsocks and Hysteria2 exits through the real Apple dataplane;
+- supported external WireGuard, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN TLS-client exits through the real Apple dataplane;
+- one owned multihop PacketTunnel with a WireGuard entry and WireGuard/Shadowsocks/Hysteria2 Router VPN exit, independent node proofs, saved graph profiles and temporary Speed Lab transactions;
 - strict NetworkExtension route-lockdown controls where requested;
 - selected-node/private-path and expected-public-exit proof before Connected.
 
-Do **not** infer desktop parity from the UI. OpenVPN, full desktop-equivalent multihop, mobile helper/PQ composites and unsupported mixed graphs still require implementation. Server forwarding-master control is implemented; it is not arbitrary phone-local DNAT. Unsupported paths fail closed for safety, but an unavailable label does not close a feature-parity requirement. See `docs/APPLE-NATIVE-CONTINUATION.md` for this continuation's verified scope and the remaining work.
+Do **not** infer desktop parity from the UI. Mobile OpenVPN is implemented for the explicit bounded profile subset documented in `docs/MOBILE-OPENVPN.md`; arbitrary OpenVPN directives are not silently ignored. Generalized desktop-equivalent multihop, mobile helper/PQ composites and unsupported mixed graphs still require implementation. Server forwarding-master control is implemented; it is not arbitrary phone-local DNAT. Unsupported paths fail closed for safety, but an unavailable label does not close a feature-parity requirement. See `docs/APPLE-NATIVE-CONTINUATION.md` for this continuation's verified scope and the remaining work.
 
 Physical iPhone/iPad VPN permission, Wi-Fi/cellular transition, reconnect, DNS/IPv4/IPv6 leak-negative behavior and signing/distribution remain release gates beyond source compilation.
 
