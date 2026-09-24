@@ -66,6 +66,11 @@ func init() {
 		reserved[p] = true
 	}
 
+	// Private per-session multihop relay listeners must never enter broad WAN forwarding.
+	for port := 26240; port <= 26271; port++ {
+		reserved[port] = true
+	}
+
 	root := filepath.Dir(path)
 	for _, conf := range []string{
 		filepath.Join(root, "wireguard", "wg0.conf"),

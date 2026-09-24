@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/multihoprelay"
 )
 
 type cfg struct {
@@ -32,6 +33,7 @@ type cfg struct {
 }
 
 type server struct {
+	relay *multihoprelay.Manager
 	cfg   cfg
 	nets  []*net.IPNet
 	mu    sync.Mutex
@@ -71,6 +73,9 @@ func main() {
 		}
 		s.nets = append(s.nets, n)
 	}
+	if err := s.initializeMultihopRelay(); err != nil {
+		log.Fatal(err)
+	}
 	if err := s.ensureBaseRules(); err != nil {
 		log.Fatal(err)
 	}
@@ -81,6 +86,7 @@ func main() {
 	h.HandleFunc("/api/forward/clear", s.clear)
 	h.HandleFunc("/api/dns/benchmark", s.dnsBenchmark)
 	registerBenchmarkRoutes(h, s)
+	registerMultihopRelayRoute(h, s)
 	log.Printf("router agent listening on %s", c.Listen)
 	log.Fatal(http.ListenAndServe(c.Listen, h))
 }
