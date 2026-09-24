@@ -1,0 +1,53 @@
+name: Recover staged multihop source
+on:
+  push:
+    paths:
+      - '.github/workflows/continuation-recovery.yml'
+permissions:
+  contents: read
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover exact saved Git objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request, zlib
+          root = pathlib.Path('recovery'); root.mkdir()
+          base = 'https://api.github.com/repos/Eabusham2/router-vpn/'
+          def get(path):
+              request = urllib.request.Request(base+path, headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(request, timeout=30) as response: return json.load(response)
+          def blob(sha):
+              value = get('git/blobs/'+sha)
+              data = base64.b64decode(value['content'])
+              actual = hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+              if actual != sha: raise RuntimeError('Git blob digest mismatch')
+              return data
+          original = blob('2565497ac78f5e07a13cedff02f128b4d91d4d51')
+          (root/'original.gz.b64').write_bytes(original)
+          decoder = zlib.decompressobj(16+zlib.MAX_WBITS)
+          partial = decoder.decompress(base64.b64decode(original))
+          (root/'original.patch').write_bytes(partial)
+          tree = get('git/trees/7521caa5514d03444f7fbb5f04230574d12095e6?recursive=1')
+          if tree.get('truncated'): raise RuntimeError('Saved source tree truncated')
+          manifest = []
+          for entry in tree['tree']:
+              path = entry['path']
+              if path.startswith('.github/routervpn-source-import/patch.') and entry['type']=='blob':
+                  name = pathlib.PurePosixPath(path).name
+                  (root/name).write_bytes(blob(entry['sha']))
+                  manifest.append({'name':name,'sha':entry['sha']})
+          (root/'manifest.json').write_text(json.dumps({'gzip_complete':decoder.eof,'recovered_bytes':len(partial),'fragments':manifest},indent=2))
+          print('Recovered',len(partial),'patch bytes and',len(manifest),'fragments; gzip complete:',decoder.eof)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: router-vpn-staged-source-recovery
+          path: recovery/
+          retention-days: 7
+          if-no-files-found: error
