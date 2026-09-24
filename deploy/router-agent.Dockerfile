@@ -16,7 +16,7 @@ RUN apk add --no-cache build-base linux-headers curl tar \
  && make -C /src/amneziawg-tools/src \
  && test -x /src/amneziawg-tools/src/wg
 
-FROM ghcr.io/sagernet/sing-box:1.13.12 AS relay-core
+FROM ghcr.io/sagernet/sing-box:v1.13.12 AS relay-core
 
 FROM alpine:3.22
 RUN apk add --no-cache nftables ca-certificates wireguard-tools iproute2
