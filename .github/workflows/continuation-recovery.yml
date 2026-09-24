@@ -30,8 +30,15 @@ jobs:
               return data
           original = blob('2565497ac78f5e07a13cedff02f128b4d91d4d51')
           (root/'original.gz.b64').write_bytes(original)
+          encoded = original[:len(original)//4*4]
           decoder = zlib.decompressobj(16+zlib.MAX_WBITS)
-          partial = decoder.decompress(base64.b64decode(original))
+          partial = bytearray()
+          compressed = base64.b64decode(encoded)
+          decode_error = ''
+          for offset in range(0,len(compressed),128):
+              try: partial.extend(decoder.decompress(compressed[offset:offset+128]))
+              except zlib.error as error:
+                  decode_error = str(error); break
           (root/'original.patch').write_bytes(partial)
           tree = get('git/trees/7521caa5514d03444f7fbb5f04230574d12095e6?recursive=1')
           if tree.get('truncated'): raise RuntimeError('Saved source tree truncated')
@@ -42,7 +49,7 @@ jobs:
                   name = pathlib.PurePosixPath(path).name
                   (root/name).write_bytes(blob(entry['sha']))
                   manifest.append({'name':name,'sha':entry['sha']})
-          (root/'manifest.json').write_text(json.dumps({'gzip_complete':decoder.eof,'recovered_bytes':len(partial),'fragments':manifest},indent=2))
+          (root/'manifest.json').write_text(json.dumps({'gzip_complete':decoder.eof,'decode_error':decode_error,'recovered_bytes':len(partial),'fragments':manifest},indent=2))
           print('Recovered',len(partial),'patch bytes and',len(manifest),'fragments; gzip complete:',decoder.eof)
           PY
       - uses: actions/upload-artifact@v4
