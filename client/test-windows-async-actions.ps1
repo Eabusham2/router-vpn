@@ -7,7 +7,7 @@ $source = Get-Content -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-Un
 $extra = [regex]::Match($source, '(?ms)^    \$extraState = @''\r?\n(.*?)\r?\n''@')
 if (-not $extra.Success) { throw 'Shipping async source block not found.' }
 $ast = [ScriptBlock]::Create($extra.Groups[1].Value).Ast
-$names = @('UnifiedAsyncBusy','SetUnifiedAsyncUI','StartUnifiedApiAsync','CancelUnifiedApiAsync','CompleteUnifiedApiAsync')
+$names = @('UnifiedAsyncBusy','SetUnifiedAsyncUI','StartUnifiedApiAsync','CancelUnifiedApiAsync','CompleteUnifiedApiAsync','StartUnifiedComparisonProgress','StopUnifiedComparisonProgress')
 foreach ($name in $names) {
     $nodes = @($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}, $true))
     if ($nodes.Count -ne 1) { throw "Expected one shipping function: $name" }
@@ -29,6 +29,15 @@ function Reset-Fixture {
     $script:UnifiedAsyncPoller=[pscustomobject]@{Starts=0;Stops=0}
     $script:UnifiedAsyncPoller | Add-Member ScriptMethod Start {$this.Starts++}
     $script:UnifiedAsyncPoller | Add-Member ScriptMethod Stop {$this.Stops++}
+    # Comparison functions are the shipping definitions above, not no-op stubs.
+    # Only their timer/transport dependencies are doubled; no observer request
+    # or VPN connection is made by this isolated lifecycle suite.
+    $script:UnifiedComparisonWatching=$false; $script:UnifiedComparisonCts=$null
+    $script:UnifiedComparisonLastID='old-comparison'; $script:UnifiedComparisonOldID=''
+    $script:UnifiedComparisonNext=[DateTime]::MinValue
+    $script:UnifiedComparisonPoller=[pscustomobject]@{Starts=0;Stops=0}
+    $script:UnifiedComparisonPoller | Add-Member ScriptMethod Start {$this.Starts++}
+    $script:UnifiedComparisonPoller | Add-Member ScriptMethod Stop {$this.Stops++}
     $script:UnifiedAsyncClient=[pscustomobject]@{Sends=0;Pending=$null;LastPath='';ThrowOnSend=$false;SeenCts=$null}
     $script:UnifiedAsyncClient | Add-Member ScriptMethod SendAsync {
         param($Request,$Token)
@@ -114,6 +123,36 @@ Assert ($script:Successes -eq 0 -and $script:Finalizers -eq 0 -and $script:Refre
 Assert (-not (StartUnifiedApiAsync 'Late' '/api/strategy/auto' 'POST' @{})) 'Closed window accepted a new request'
 Write-Host 'PASS closed window suppresses callbacks and new actions'
 
+# A multihop request owns its independent read-only observer. Cancelling an
+# already completed HTTP request must still cancel the observer and suppress
+# success before the authoritative Disconnect begins.
+Reset-Fixture
+[void](StartUnifiedApiAsync 'Compare multihop' '/api/multihop/connect' 'POST' @{execution='auto'} 180 {param($r)$script:Successes++} $null $null)
+Assert ($script:UnifiedComparisonWatching -and $script:UnifiedComparisonPoller.Starts -eq 1) 'Multihop did not start its shipping progress observer'
+Assert ($script:UnifiedComparisonOldID -eq 'old-comparison') 'Observer did not freeze the previous comparison identity'
+$script:UnifiedComparisonCts=[System.Threading.CancellationTokenSource]::new()
+$observerCts=$script:UnifiedComparisonCts
+$r=Finish-Response
+[void](CancelUnifiedApiAsync $true)
+Assert (-not $script:UnifiedComparisonWatching -and $observerCts.IsCancellationRequested) 'Cancel left the comparison observer running'
+CompleteUnifiedApiAsync
+Assert ($script:Successes -eq 0 -and $script:UnifiedAsyncClient.LastPath -eq '/api/disconnect') 'Cancelled comparison skipped Disconnect or ran success'
+Assert (-not $script:UnifiedComparisonWatching) 'Disconnect restarted the old comparison observer'
+$r=Finish-Response
+CompleteUnifiedApiAsync
+$observerCts.Dispose();$script:UnifiedComparisonCts=$null
+Write-Host 'PASS multihop observer cancellation retains exact action ownership'
+
+Reset-Fixture
+StartUnifiedComparisonProgress
+$script:UnifiedComparisonCts=[System.Threading.CancellationTokenSource]::new()
+$observerCts=$script:UnifiedComparisonCts
+StopUnifiedComparisonProgress
+StopUnifiedComparisonProgress
+Assert (-not $script:UnifiedComparisonWatching -and $observerCts.IsCancellationRequested) 'Repeated observer stop did not remain cancelled'
+$observerCts.Dispose();$script:UnifiedComparisonCts=$null
+Write-Host 'PASS repeated comparison observer cancellation is idempotent'
+
 # Parse the emitted handlers, not just the transformer that contains them as strings.
 $handlers=[regex]::Match($source, '(?ms)^    \$handlers = @''\r?\n(.*?)\r?\n''@')
 Assert $handlers.Success 'Shipping handler block missing'
@@ -121,4 +160,4 @@ $tokens=$null;$errors=$null
 [void][System.Management.Automation.Language.Parser]::ParseInput($handlers.Groups[1].Value,[ref]$tokens,[ref]$errors)
 Assert ($errors.Count -eq 0) ('Shipping event-handler parse failed: '+(($errors|ForEach-Object Message)-join '; '))
 Write-Host 'PASS generated window event handlers parse'
-Write-Host 'Windows async action regression tests: PASS (7 groups)'
+Write-Host 'Windows async action regression tests: PASS (9 groups)'
