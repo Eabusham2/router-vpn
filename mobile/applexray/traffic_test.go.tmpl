@@ -1,0 +1,308 @@
+package routervpnxray
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/mlkem"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/xtls/xray-core/transport/internet"
+)
+
+// These tests never reach the public Internet, use a user key or change routes.
+// The real native client talks to a separate exact-revision Xray server process.
+// Only the physical dialer's documentation-IP destination is mapped to loopback.
+// All cryptography and VLESS/TCP/UDP framing use the actual production engines.
+type loopbackUnderlay struct {
+	destination string
+	mu          sync.Mutex
+	calls       int
+}
+
+func (d *loopbackUnderlay) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != "tcp" || destination.String() != "192.0.2.1:443" {
+		return nil, fmt.Errorf("unexpected outer dial %s %s", network, destination.String())
+	}
+	d.mu.Lock()
+	d.calls++
+	d.mu.Unlock()
+	return (&net.Dialer{}).DialContext(ctx, "tcp", d.destination)
+}
+func (*loopbackUnderlay) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, fmt.Errorf("unexpected physical UDP dial")
+}
+func loopbackCamouflage(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "www.example.com"}, DNSNames: []string{"www.example.com"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	cert, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.X509KeyPair(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	server.EnableHTTP2 = true
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, CurvePreferences: []tls.CurveID{tls.X25519}}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return server.Listener.Addr().String()
+}
+func loopbackEcho(t *testing.T) (string, string) {
+	t.Helper()
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		tcp.Close()
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	connections := map[net.Conn]bool{}
+	t.Cleanup(func() {
+		tcp.Close()
+		udp.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for c := range connections {
+			c.Close()
+		}
+	})
+	go func() {
+		for {
+			c, err := tcp.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			connections[c] = true
+			mu.Unlock()
+			go func() { defer c.Close(); _, _ = io.Copy(c, c); mu.Lock(); delete(connections, c); mu.Unlock() }()
+		}
+	}()
+	go func() {
+		b := make([]byte, 65535)
+		for {
+			n, a, err := udp.ReadFrom(b)
+			if err != nil {
+				return
+			}
+			_, _ = udp.WriteTo(b[:n], a)
+		}
+	}()
+	return tcp.Addr().String(), udp.LocalAddr().String()
+}
+func startLoopbackXray(t *testing.T, mode, camouflage string, raw []byte) (string, []byte) {
+	t.Helper()
+	binary := os.Getenv("ROUTER_VPN_XRAY_TEST_BINARY")
+	if binary == "" {
+		t.Fatal("pinned Xray fixture binary is required for encrypted traffic tests")
+	}
+	// Reserve a loopback-only candidate port; a readiness check also verifies
+	// that the exact child is still running before the test adopts the port.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	realityKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := applexray.Object(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbound := client["outbounds"].([]any)[0].(map[string]any)
+	stream := outbound["streamSettings"].(map[string]any)
+	stream["realitySettings"].(map[string]any)["password"] = base64.RawURLEncoding.EncodeToString(realityKey.PublicKey().Bytes())
+	user := outbound["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
+	serverUser := map[string]any{"id": user["id"]}
+	if flow, ok := user["flow"]; ok {
+		serverUser["flow"] = flow
+	}
+	decryption := "none"
+	if mode == "reality-pq-vision" || mode == "reality-xhttp" || mode == "max" {
+		seed := make([]byte, 64)
+		if _, err := rand.Read(seed); err != nil {
+			t.Fatal(err)
+		}
+		pq, err := mlkem.NewDecapsulationKey768(seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		user["encryption"] = "mlkem768x25519plus.native.0rtt." + base64.RawURLEncoding.EncodeToString(pq.EncapsulationKey().Bytes())
+		decryption = "mlkem768x25519plus.native.600s." + base64.RawURLEncoding.EncodeToString(seed)
+	}
+	serverStream := map[string]any{"network": stream["network"], "security": "reality", "realitySettings": map[string]any{"target": camouflage, "serverNames": []string{"www.example.com"}, "privateKey": base64.RawURLEncoding.EncodeToString(realityKey.Bytes()), "shortIds": []string{"0123456789abcdef"}}}
+	if mode == "reality-xhttp" {
+		serverStream["xhttpSettings"] = stream["xhttpSettings"]
+		serverStream["finalmask"] = stream["finalmask"]
+	}
+	server := map[string]any{"log": map[string]any{"loglevel": "warning"}, "inbounds": []any{map[string]any{"tag": "local-test-server", "listen": "127.0.0.1", "port": port, "protocol": "vless", "settings": map[string]any{"clients": []any{serverUser}, "decryption": decryption}, "streamSettings": serverStream}}, "outbounds": []any{map[string]any{"protocol": "freedom", "tag": "test-echo"}}}
+	config, err := json.Marshal(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "test-server.json")
+	if err := os.WriteFile(path, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.Create(filepath.Join(t.TempDir(), "server.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(binary, "run", "-c", path)
+	command.Stdout = log
+	command.Stderr = log
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("test server process did not exit")
+		}
+		log.Close()
+	})
+	ready := false
+	for until := time.Now().Add(5 * time.Second); time.Now().Before(until); {
+		select {
+		case err := <-done:
+			done <- err
+			log.Close()
+			body, _ := os.ReadFile(log.Name())
+			t.Fatalf("fixture server failed: %v: %s", err, body)
+		default:
+		}
+		c, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+		if err == nil {
+			c.Close()
+			ready = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !ready {
+		t.Fatal("loopback Xray server never became ready")
+	}
+	normalized, err := json.Marshal(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return address, normalized
+}
+func TestNativeXrayEncryptedLoopbackTCPAndUDP(t *testing.T) {
+	install.Do(func() { internet.UseAlternativeSystemDialer(systemDialer{}) })
+	camouflage := loopbackCamouflage(t)
+	tcp, udp := loopbackEcho(t)
+	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp"} {
+		t.Run(mode, func(t *testing.T) {
+			endpoint, raw := startLoopbackXray(t, mode, camouflage, nativeConfig(t, mode))
+			plan, err := applexray.Prepare(mode, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			underlay := &loopbackUnderlay{destination: endpoint}
+			binding := &binding{ctx: ctx, dialer: underlay, server: netip.MustParseAddrPort("192.0.2.1:443"), sockets: map[*ownedConn]bool{}}
+			h := &Outbound{ctx: context.WithValue(ctx, bindingKey{}, binding), cancel: cancel, binding: binding, plan: plan}
+			if err := h.Start(adapter.StartStateStart); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = h.Close() })
+			conn, err := h.DialContext(ctx, "tcp", M.ParseSocksaddr(tcp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.SetDeadline(time.Now().Add(8 * time.Second))
+			payload := bytes.Repeat([]byte("authenticated-native-xray-payload/"), 512)
+			if _, err = conn.Write(payload); err != nil {
+				t.Fatal("encrypted TCP write:", err)
+			}
+			received := make([]byte, len(payload))
+			if _, err = io.ReadFull(conn, received); err != nil {
+				t.Fatal("encrypted TCP read:", err)
+			}
+			if !bytes.Equal(received, payload) {
+				t.Fatal("encrypted TCP payload changed")
+			}
+			conn.Close()
+			packets, err := h.ListenPacket(ctx, M.ParseSocksaddr(udp))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer packets.Close()
+			for _, size := range []int{64, 1200, 9000} {
+				packets.SetDeadline(time.Now().Add(8 * time.Second))
+				message := bytes.Repeat([]byte{byte(size)}, size)
+				if _, err = packets.WriteTo(message, M.ParseSocksaddr(udp)); err != nil {
+					t.Fatalf("encrypted UDP %d write: %v", size, err)
+				}
+				b := make([]byte, 65535)
+				n, from, err := packets.ReadFrom(b)
+				if err != nil {
+					t.Fatalf("encrypted UDP %d read: %v", size, err)
+				}
+				if from.String() != udp || n != size || !bytes.Equal(b[:n], message) {
+					t.Fatalf("encrypted UDP %d destination/payload changed", size)
+				}
+			}
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := packets.WriteTo([]byte("after-close"), M.ParseSocksaddr(udp)); err == nil {
+				t.Fatal("datagram survived native owner teardown")
+			}
+			underlay.mu.Lock()
+			calls := underlay.calls
+			underlay.mu.Unlock()
+			if calls == 0 {
+				t.Fatal("test bypassed encrypted physical transport")
+			}
+		})
+	}
+}

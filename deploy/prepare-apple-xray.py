@@ -43,7 +43,7 @@ def prepare(sing, xray):
             continue  # Parent-only composition test; native tests use the actual prepared cores.
         (policy/source.name).write_bytes(source.read_bytes())
     target=sing/'protocol/routervpnxray';target.mkdir(parents=True,exist_ok=True)
-    for src,dst in [('outbound.go.tmpl','outbound.go'),('native_test.go.tmpl','native_test.go')]:
+    for src,dst in [('outbound.go.tmpl','outbound.go'),('native_test.go.tmpl','native_test.go'),('traffic_test.go.tmpl','traffic_test.go')]:
         (target/dst).write_bytes((ROOT/'mobile/applexray'/src).read_bytes())
     (sing/'experimental/libbox/routervpn_xray_compiler.go').write_bytes((ROOT/'mobile/applexray/bridge.go.tmpl').read_bytes())
     (sing/'experimental/libbox/routervpn_xray_compiler_test.go').write_bytes((ROOT/'mobile/applexray/bridge_test.go.tmpl').read_bytes())
