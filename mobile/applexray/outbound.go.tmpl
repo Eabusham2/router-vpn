@@ -1,0 +1,354 @@
+// This file is compiled inside the exact pinned sing-box Apple build. The
+// desktop/mobile parent repository never vendors or rewrites a moving core.
+package routervpnxray
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"sync"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	xcommon "github.com/xtls/xray-core/common"
+	xbuf "github.com/xtls/xray-core/common/buf"
+	xnet "github.com/xtls/xray-core/common/net"
+	xcore "github.com/xtls/xray-core/core"
+	_ "github.com/xtls/xray-core/main/distro/all"
+	"github.com/xtls/xray-core/transport"
+	"github.com/xtls/xray-core/transport/internet"
+)
+
+type Options struct {
+	Mode       string `json:"mode"`
+	ConfigJSON string `json:"config_json"`
+	// The composer owns an optional encrypted outer transport. Imported Xray
+	// socket options cannot replace the physical interface or install a resolver.
+	Detour string `json:"detour,omitempty"`
+}
+
+var install sync.Once
+var lifecycle sync.Mutex
+
+func RegisterOutbound(registry *outbound.Registry) {
+	// Immutable after first installation: Xray's dialer API forbids concurrent
+	// replacement. Every actual call still requires its exact owned instance.
+	install.Do(func() { internet.UseAlternativeSystemDialer(systemDialer{}) })
+	outbound.Register[Options](registry, applexray.Type, NewOutbound)
+}
+
+var _ adapter.Outbound = (*Outbound)(nil)
+var _ adapter.Lifecycle = (*Outbound)(nil)
+
+type Outbound struct {
+	outbound.Adapter
+	ctx      context.Context
+	cancel   context.CancelFunc
+	binding  *binding
+	plan     applexray.Plan
+	mu       sync.Mutex
+	instance *xcore.Instance
+	closed   bool
+}
+
+func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options Options) (adapter.Outbound, error) {
+	plan, err := applexray.Prepare(options.Mode, []byte(options.ConfigJSON))
+	if err != nil {
+		return nil, err
+	}
+	d, err := dialer.New(ctx, option.DialerOptions{Detour: options.Detour}, false)
+	if err != nil {
+		return nil, err
+	}
+	owned, cancel := context.WithCancel(ctx)
+	b := &binding{ctx: owned, dialer: d, server: plan.Server, sockets: map[*ownedConn]bool{}}
+	owned = context.WithValue(owned, bindingKey{}, b)
+	return &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(applexray.Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, option.DialerOptions{Detour: options.Detour}), ctx: owned, cancel: cancel, binding: b, plan: plan}, nil
+}
+func (h *Outbound) Start(stage adapter.StartStage) error {
+	if stage != adapter.StartStateStart {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed || h.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	if h.instance != nil {
+		return errors.New("native Xray instance already started")
+	}
+	lifecycle.Lock()
+	defer lifecycle.Unlock()
+	cfg, err := xcore.LoadConfig("json", bytes.NewReader(h.plan.JSON))
+	if err != nil {
+		return errors.New("native Xray rejected the imported protocol configuration")
+	}
+	instance, err := xcore.NewWithContext(xcore.RouterVPNNativeContext(h.ctx), cfg)
+	if err != nil {
+		return errors.New("native Xray instance could not be constructed")
+	}
+	bindings.Store(instance, h.binding)
+	if err = instance.Start(); err != nil {
+		h.binding.close()
+		_ = instance.Close()
+		bindings.Delete(instance)
+		return errors.New("native Xray instance failed to start")
+	}
+	h.instance = instance
+	return nil
+}
+func (h *Outbound) owner() (*xcore.Instance, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed || h.instance == nil || h.ctx.Err() != nil {
+		return nil, net.ErrClosed
+	}
+	return h.instance, nil
+}
+func (h *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	instance, err := h.owner()
+	if err != nil {
+		return nil, err
+	}
+	switch N.NetworkName(network) {
+	case N.NetworkUDP:
+		packet, err := h.ListenPacket(ctx, destination)
+		if err != nil {
+			return nil, err
+		}
+		return &connectedPacket{PacketConn: packet, remote: destination}, nil
+	case N.NetworkTCP:
+	default:
+		return nil, errors.New("unsupported Xray connection network")
+	}
+	dest := xnet.Destination{Network: xnet.Network_TCP, Address: xnet.ParseAddress(destination.AddrString()), Port: xnet.Port(destination.Port)}
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(h.ctx, cancel)
+	conn, err := xcore.Dial(ctx, instance, dest)
+	if err != nil {
+		stop()
+		cancel()
+		return nil, err
+	}
+	return &rayConn{Conn: conn, cancel: cancel, stop: stop}, nil
+}
+func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	instance, err := h.owner()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(h.ctx, cancel)
+	dest := xnet.UDPDestination(xnet.ParseAddress(destination.AddrString()), xnet.Port(destination.Port))
+	link, err := xcore.RouterVPNDispatchPacket(ctx, instance, dest)
+	if err != nil {
+		stop()
+		cancel()
+		return nil, err
+	}
+	backend := &packetRay{link: link, dest: dest, cancel: cancel, stop: stop}
+	return applexray.NewPacketConn(ctx, backend), nil
+}
+func (h *Outbound) Close() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil
+	}
+	h.closed = true
+	h.cancel()
+	h.binding.close()
+	if h.instance == nil {
+		return nil
+	}
+	instance := h.instance
+	h.instance = nil
+	lifecycle.Lock()
+	err := instance.Close()
+	lifecycle.Unlock()
+	bindings.Delete(instance)
+	return err
+}
+
+type rayConn struct {
+	net.Conn
+	once   sync.Once
+	cancel context.CancelFunc
+	stop   func() bool
+}
+
+func (c *rayConn) Close() error {
+	var err error
+	c.once.Do(func() { c.stop(); c.cancel(); err = c.Conn.Close() })
+	return err
+}
+
+type bindingKey struct{}
+
+var bindings sync.Map // *xcore.Instance -> *binding; retained through instance close.
+type binding struct {
+	ctx     context.Context
+	dialer  N.Dialer
+	server  netip.AddrPort
+	mu      sync.Mutex
+	closed  bool
+	sockets map[*ownedConn]bool
+}
+type systemDialer struct{}
+
+func (systemDialer) DestIpAddress() xnet.IP { return nil }
+func (systemDialer) Dial(ctx context.Context, source xnet.Address, dest xnet.Destination, sockopt *internet.SocketConfig) (net.Conn, error) {
+	b, _ := ctx.Value(bindingKey{}).(*binding)
+	if b == nil {
+		if instance := xcore.FromContext(ctx); instance != nil {
+			value, _ := bindings.Load(instance)
+			b, _ = value.(*binding)
+		}
+	}
+	if b == nil || b.ctx.Err() != nil {
+		return nil, errors.New("Xray dial has no current native tunnel owner")
+	}
+	// The only outer connection is the frozen REALITY/XHTTP server. Application
+	// destinations are VLESS payloads; they cannot create ordinary-interface dials.
+	if dest.Network != xnet.Network_TCP || dest.Address.Family().IsDomain() {
+		return nil, errors.New("unowned Xray outer transport destination")
+	}
+	ip, ok := netip.AddrFromSlice(dest.Address.IP())
+	if !ok || netip.AddrPortFrom(ip.Unmap(), uint16(dest.Port)) != b.server {
+		return nil, errors.New("Xray attempted an endpoint outside its frozen route")
+	}
+	if source != nil && source != xnet.AnyIP && source != xnet.AnyIPv6 {
+		return nil, errors.New("Xray cannot select its own source interface")
+	}
+	if sockopt != nil {
+		return nil, errors.New("Xray cannot override the native tunnel socket policy")
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(b.ctx, cancel)
+	defer stop()
+	conn, err := b.dialer.DialContext(cctx, N.NetworkTCP, M.ParseSocksaddr(b.server.String()))
+	if err != nil {
+		return nil, err
+	}
+	owned := &ownedConn{Conn: conn, binding: b}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || b.ctx.Err() != nil {
+		_ = conn.Close()
+		return nil, net.ErrClosed
+	}
+	b.sockets[owned] = true
+	return owned, nil
+}
+func (b *binding) close() {
+	b.mu.Lock()
+	b.closed = true
+	all := make([]*ownedConn, 0, len(b.sockets))
+	for conn := range b.sockets {
+		all = append(all, conn)
+	}
+	b.mu.Unlock()
+	for _, conn := range all {
+		_ = conn.Close()
+	}
+}
+
+type ownedConn struct {
+	net.Conn
+	binding *binding
+	once    sync.Once
+}
+
+func (c *ownedConn) Close() error {
+	var err error
+	c.once.Do(func() { err = c.Conn.Close(); c.binding.mu.Lock(); delete(c.binding.sockets, c); c.binding.mu.Unlock() })
+	return err
+}
+
+// Unlike Xray's convenience UDP wrapper, this ray never truncates at buf.Size,
+// releases all pooled buffers, and is wrapped with real context/deadline control.
+type packetRay struct {
+	link    *transport.Link
+	dest    xnet.Destination
+	cancel  context.CancelFunc
+	stop    func() bool
+	once    sync.Once
+	readMu  sync.Mutex
+	writeMu sync.Mutex
+	pending xbuf.MultiBuffer
+}
+
+func (p *packetRay) ReadPacket() ([]byte, net.Addr, error) {
+	p.readMu.Lock()
+	defer p.readMu.Unlock()
+	for len(p.pending) == 0 {
+		next, err := p.link.Reader.ReadMultiBuffer()
+		if err != nil {
+			xbuf.ReleaseMulti(next)
+			return nil, nil, err
+		}
+		p.pending = next
+	}
+	packet := p.pending[0]
+	p.pending[0] = nil
+	p.pending = p.pending[1:]
+	defer packet.Release()
+	destination := p.dest
+	if packet.UDP != nil {
+		destination = *packet.UDP
+	}
+	// Payload endpoint names stay inside the encrypted route; no DNS call is made.
+	addr := M.ParseSocksaddr(destination.NetAddr())
+	return append([]byte(nil), packet.Bytes()...), addr, nil
+}
+func (p *packetRay) WritePacket(data []byte, addr net.Addr) error {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	host, port, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return err
+	}
+	destination, err := xnet.ParseDestination("udp:" + net.JoinHostPort(host, port))
+	if err != nil {
+		return err
+	}
+	buffer := xbuf.NewWithSize(int32(len(data)))
+	copy(buffer.Extend(int32(len(data))), data)
+	buffer.UDP = &destination
+	return p.link.Writer.WriteMultiBuffer(xbuf.MultiBuffer{buffer})
+}
+func (p *packetRay) Close() error {
+	p.once.Do(func() {
+		p.stop()
+		p.cancel()
+		xcommon.Interrupt(p.link.Reader)
+		xcommon.Interrupt(p.link.Writer)
+		p.readMu.Lock()
+		xbuf.ReleaseMulti(p.pending)
+		p.pending = nil
+		p.readMu.Unlock()
+	})
+	return nil
+}
+
+var _ io.Closer = (*Outbound)(nil)
+
+// Connected UDP still uses the same owned packet implementation and deadlines.
+type connectedPacket struct {
+	net.PacketConn
+	remote M.Socksaddr
+}
+
+func (c *connectedPacket) Read(b []byte) (int, error)  { n, _, err := c.ReadFrom(b); return n, err }
+func (c *connectedPacket) Write(b []byte) (int, error) { return c.WriteTo(b, c.remote) }
+func (c *connectedPacket) RemoteAddr() net.Addr        { return c.remote }

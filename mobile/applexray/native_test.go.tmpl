@@ -1,0 +1,154 @@
+package routervpnxray
+
+import (
+	"context"
+	"crypto/ecdh"
+	"crypto/mlkem"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+	"sync"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	M "github.com/sagernet/sing/common/metadata"
+	xnet "github.com/xtls/xray-core/common/net"
+	xcore "github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/transport/internet"
+)
+
+func nativeConfig(t *testing.T, mode string) []byte {
+	t.Helper()
+	key, err := ecdh.X25519().NewPrivateKey(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := map[string]any{"id": "11111111-1111-4111-8111-111111111111", "flow": "xtls-rprx-vision", "encryption": "none"}
+	stream := map[string]any{"network": "raw", "security": "reality", "realitySettings": map[string]any{"serverName": "www.example.com", "fingerprint": "chrome", "password": base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), "shortId": "0123456789abcdef"}}
+	if mode == "reality-pq-vision" || mode == "reality-xhttp" || mode == "max" {
+		pq, err := mlkem.NewDecapsulationKey768(make([]byte, 64))
+		if err != nil {
+			t.Fatal(err)
+		}
+		user["encryption"] = "mlkem768x25519plus.native.0rtt." + base64.RawURLEncoding.EncodeToString(pq.EncapsulationKey().Bytes())
+	}
+	if mode == "reality-xhttp" {
+		delete(user, "flow")
+		stream["network"] = "xhttp"
+		stream["xhttpSettings"] = map[string]any{"path": "/assets/sync", "mode": "auto"}
+		stream["finalmask"] = map[string]any{"tcp": []any{map[string]any{"type": "fragment", "settings": map[string]any{"packets": "tlshello", "length": "100-300", "delay": "10-30", "maxSplit": "3-7"}}}}
+	}
+	doc := map[string]any{"log": map[string]any{"loglevel": "warning"}, "inbounds": []any{map[string]any{"tag": "local", "listen": "127.0.0.1", "port": 1090, "protocol": "socks", "settings": map[string]any{"auth": "noauth", "udp": true}}}, "outbounds": []any{map[string]any{"tag": "proxy", "protocol": "vless", "settings": map[string]any{"vnext": []any{map[string]any{"address": "192.0.2.1", "port": 443, "users": []any{user}}}}, "streamSettings": stream}}}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+type fixtureDialer struct {
+	mu    sync.Mutex
+	calls int
+	peers []net.Conn
+}
+
+func (d *fixtureDialer) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	a, b := net.Pipe()
+	d.mu.Lock()
+	d.calls++
+	d.peers = append(d.peers, b)
+	d.mu.Unlock()
+	return a, nil
+}
+func (d *fixtureDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("no actual UDP underlay in fixture")
+}
+func (d *fixtureDialer) close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, p := range d.peers {
+		_ = p.Close()
+	}
+}
+func TestNativeXrayActualPinnedConfigurationAndLifecycle(t *testing.T) {
+	install.Do(func() { internet.UseAlternativeSystemDialer(systemDialer{}) })
+	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"} {
+		t.Run(mode, func(t *testing.T) {
+			plan, err := applexray.Prepare(mode, nativeConfig(t, mode))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			d := &fixtureDialer{}
+			defer d.close()
+			b := &binding{ctx: ctx, dialer: d, server: plan.Server, sockets: map[*ownedConn]bool{}}
+			h := &Outbound{ctx: context.WithValue(ctx, bindingKey{}, b), cancel: cancel, binding: b, plan: plan}
+			if err = h.Start(adapter.StartStateStart); err != nil {
+				t.Fatal(mode, err)
+			}
+			if _, err = h.owner(); err != nil {
+				t.Fatal(err)
+			}
+			if d.calls != 0 {
+				t.Fatal("configuration/startup opened a premature external connection")
+			}
+			if xcore.RouterVPNIsNativeContext(context.Background()) {
+				t.Fatal("unowned context marked native")
+			}
+			captured := h.instance
+			if !xcore.RouterVPNIsNativeContext(xcore.RouterVPNNativeContext(context.Background())) {
+				t.Fatal("native marker lost")
+			}
+
+			if err = h.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = h.owner(); !errors.Is(err, net.ErrClosed) {
+				t.Fatal("closed instance still available")
+			}
+			if _, exists := bindings.Load(captured); exists {
+				t.Fatal("old instance binding leaked")
+			}
+		})
+	}
+}
+func TestNativeXrayUnderlayCannotEscapeOrOutliveItsOwner(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := &fixtureDialer{}
+	defer d.close()
+	b := &binding{ctx: ctx, dialer: d, server: netip.MustParseAddrPort("192.0.2.1:443"), sockets: map[*ownedConn]bool{}}
+	owned := context.WithValue(ctx, bindingKey{}, b)
+	dial := systemDialer{}
+	valid := xnet.TCPDestination(xnet.ParseAddress("192.0.2.1"), 443)
+	for _, test := range []struct {
+		ctx  context.Context
+		dest xnet.Destination
+		opts *internet.SocketConfig
+	}{{ctx, valid, nil}, {owned, xnet.TCPDestination(xnet.ParseAddress("192.0.2.2"), 443), nil}, {owned, xnet.TCPDestination(xnet.ParseAddress("vpn.example.com"), 443), nil}, {owned, xnet.UDPDestination(xnet.ParseAddress("192.0.2.1"), 443), nil}, {owned, valid, &internet.SocketConfig{}}} {
+		if _, err := dial.Dial(test.ctx, nil, test.dest, test.opts); err == nil {
+			t.Fatal("unowned socket accepted")
+		}
+	}
+	if d.calls != 0 {
+		t.Fatal("unowned socket reached the network dialer")
+	}
+	conn, err := dial.Dial(owned, nil, valid, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.close()
+	cancel()
+	if _, err = conn.Write([]byte("late")); err == nil {
+		t.Fatal("owned socket survived teardown")
+	}
+	if _, err = dial.Dial(owned, nil, valid, nil); err == nil {
+		t.Fatal("closed context dial accepted")
+	}
+	if d.calls != 1 {
+		t.Fatal("unexpected network attempts")
+	}
+}

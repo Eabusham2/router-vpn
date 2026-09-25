@@ -1,0 +1,45 @@
+name: Native Apple Xray protocol and ownership tests
+on:
+  push:
+    paths:
+      - 'internal/applexray/**'
+      - 'mobile/applexray/**'
+      - 'deploy/prepare-apple-xray.py'
+      - 'deploy/test_apple_xray_pinned.sh'
+      - '.github/workflows/apple-xray-native.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-xray:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Prepare immutable native engines and compile the actual adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          SING="$RUNNER_TEMP/routervpn-sing-box"
+          XRAY="$RUNNER_TEMP/routervpn-xray"
+          git init "$SING"
+          git -C "$SING" remote add origin https://github.com/SagerNet/sing-box.git
+          git -C "$SING" fetch --depth=1 origin 1ac1a339cb1223e9c70eae14c44411c75033c02d
+          git -C "$SING" checkout --detach FETCH_HEAD
+          git init "$XRAY"
+          git -C "$XRAY" remote add origin https://github.com/XTLS/Xray-core.git
+          git -C "$XRAY" fetch --depth=1 origin 50231eaff98ccc31b5cbd247a721c16e97fe5ec1
+          git -C "$XRAY" checkout --detach FETCH_HEAD
+          python3 deploy/prepare-apple-xray.py "$SING" "$XRAY"
+          (
+            cd "$SING"
+            go mod edit -go=1.26.3
+            go mod edit -require=github.com/xtls/xray-core@v1.260327.1-0.20260711155151-50231eaff98c
+            go mod edit -replace="github.com/xtls/xray-core=$XRAY"
+            go mod tidy
+          )
+          bash deploy/test_apple_xray_pinned.sh "$SING" "$XRAY"

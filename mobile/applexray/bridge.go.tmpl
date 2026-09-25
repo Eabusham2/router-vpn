@@ -1,0 +1,34 @@
+package libbox
+
+import (
+	"context"
+	"encoding/json"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	"net"
+	"net/netip"
+	"time"
+)
+
+// RouterCompileXrayProfile is pure configuration validation/composition. It
+// neither starts a second runtime nor opens a socket in the host application.
+func RouterCompileXrayProfile(mode, wrapper, xray string) (string, error) {
+	output, err := applexray.Compile(mode, []byte(wrapper), []byte(xray))
+	return string(output), err
+}
+func RouterXrayRevision() string { return "50231eaff98ccc31b5cbd247a721c16e97fe5ec1" }
+
+// RouterResolveXrayProfile is called by the host BEFORE starting PacketTunnel.
+// Only the configured outer node hostname is resolved; the native tunnel itself
+// accepts frozen literal endpoints and never falls back to ordinary DNS.
+func RouterResolveXrayProfile(mode, wrapper, xray string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	files, err := applexray.ResolveAndCompile(ctx, mode, []byte(wrapper), []byte(xray), func(ctx context.Context, host string) ([]netip.Addr, error) {
+		return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	})
+	if err != nil {
+		return "", err
+	}
+	output, err := json.Marshal(files)
+	return string(output), err
+}

@@ -1,0 +1,42 @@
+// Added only to Router VPN's exact pinned, disposable Xray dependency checkout.
+// Keeping this small shim IN package core preserves its private context helper;
+// no unsupported go:linkname or fabricated context key crosses the package API.
+package core
+
+import (
+	"context"
+	"errors"
+	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/features/routing"
+	"github.com/xtls/xray-core/transport"
+)
+
+func RouterVPNDispatchPacket(ctx context.Context, instance *Instance, dest net.Destination) (*transport.Link, error) {
+	if instance == nil || dest.Network != net.Network_UDP {
+		return nil, errors.New("native packet dispatch requires an owned UDP instance")
+	}
+	ctx = toContext(ctx, instance)
+	dispatcher, ok := instance.GetFeature(routing.DispatcherType()).(routing.Dispatcher)
+	if !ok {
+		return nil, errors.New("native packet dispatcher missing")
+	}
+	return dispatcher.Dispatch(ctx, dest)
+}
+
+// This marker is scoped to the Router VPN instance and survives upstream
+// detached contexts by looking up that instance's original context. Ordinary
+// upstream instances retain their own behavior.
+type routerVPNNativeContextKey struct{}
+
+func RouterVPNNativeContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, routerVPNNativeContextKey{}, true)
+}
+func RouterVPNIsNativeContext(ctx context.Context) bool {
+	if ctx.Value(routerVPNNativeContextKey{}) == true {
+		return true
+	}
+	if instance := FromContext(ctx); instance != nil {
+		return instance.ctx.Value(routerVPNNativeContextKey{}) == true
+	}
+	return false
+}
