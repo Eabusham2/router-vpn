@@ -138,7 +138,7 @@ for rel in("client/native-windows-mode.ps1","client/Setup-Windows-Runtime.ps1","
 
 # Apple: pinned WireGuardKit plus validated Libbox PacketTunnel; unsupported engines remain fail closed.
 need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift","import WireGuardKit","WireGuardAdapter(with: self)","RouterVPNWireGuardConfig.parse","strict Apple kill switch requested",'case "libbox":','case "external-libbox":',"RouterVPNLibboxEngine","proveExternalExit","deriveNodeProof",'body["node_id"] as? String == expectedNodeID','body["proof"] as? String == Self.proofKind',"completionHandler(nil)")
-need("ios/RouterVPN/App/IOSRuntimeSelection.swift",'case libbox = "libbox"',"sing-box.json","Xray/helper-only, PQ-only composites, ALL/MAX and unsupported multihop combinations remain unavailable instead of faking Connected.")
+need("ios/RouterVPN/App/IOSRuntimeSelection.swift",'case libbox = "libbox"',"sing-box.json","Unimplemented helper/PQ/MAX chains and unsupported multihop combinations remain unavailable instead of faking Connected; native REALITY, PQ REALITY, XHTTP and dual-transport Xray graphs are supported.")
 need("ios/RouterVPN/App/RouterVPNModelExternal.swift","external-libbox","External OpenVPN — native pinned client with exact public-exit proof","exact public-exit proof")
 no("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift","Link AmneziaWGKit/Xray engine before signing this target.")
 need("ios/RouterVPN/PacketTunnel/WireGuardQuickConfig.swift","PrivateKey(base64Key:","IPAddressRange(from:","DNSServer(from:","junkPacketCount","initPacketMagicHeader","AmneziaWG profile is incomplete","scripts/hooks are never executed","profile exceeds the 1 MiB safety limit")

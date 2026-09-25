@@ -79,7 +79,23 @@ enum IOSDNSRuntimePolicy {
         }
         let nativeIDs: Set<String> = ["wg", "awg2-fast", "awg2-strong"]
         for rawID in Array(profiles.keys).filter({ !nativeIDs.contains($0) }) {
-            guard let encodedFiles = profiles[rawID], isSelfContainedLibbox(encodedFiles), let encoded = encodedFiles["sing-box.json"],
+            guard var encodedFiles = profiles[rawID] else { continue }
+            var nativeXray = false
+            if encodedFiles["xray.json"] != nil && IOSNativeXrayProfile.modeIDs.contains(rawID) {
+                var decoded: [String: Data] = [:]
+                var valid = true, total = 0
+                for (name, value) in encodedFiles {
+                    guard value.utf8.count <= 6 * 1024 * 1024, let data = Data(base64Encoded: value, options: []), data.count <= 4 * 1024 * 1024 else { valid = false; break }
+                    total += data.count
+                    if total > 12 * 1024 * 1024 { valid = false; break }
+                    decoded[name] = data
+                }
+                if valid, let composed = try? IOSNativeXrayProfile.compose(mode: rawID, files: decoded, homeDNS: profile.adGuardIPv4), let config = composed["sing-box.json"] {
+                    encodedFiles["sing-box.json"] = config.base64EncodedString()
+                    nativeXray = true
+                }
+            }
+            guard nativeXray || isSelfContainedLibbox(encodedFiles), let encoded = encodedFiles["sing-box.json"],
                   let data = Data(base64Encoded: encoded, options: []), data.count <= 4 * 1024 * 1024 else { continue }
             var next = encodedFiles
             next["sing-box.json"] = try patchLibbox(data, policy: policy, profile: profile).base64EncodedString()

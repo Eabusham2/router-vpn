@@ -141,7 +141,7 @@ for required in (
 selector = text("ios/RouterVPN/App/IOSRuntimeSelection.swift")
 for required in (
     'case libbox = "libbox"', "sing-box.json",
-    "Xray/helper-only, PQ-only composites, ALL/MAX and unsupported multihop combinations remain unavailable instead of faking Connected.",
+    "Unimplemented helper/PQ/MAX chains and unsupported multihop combinations remain unavailable instead of faking Connected; native REALITY, PQ REALITY, XHTTP and dual-transport Xray graphs are supported.",
 ):
     if required not in selector:
         error(f"iOS runtime selection truth boundary missing: {required}")

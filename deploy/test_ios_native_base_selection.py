@@ -188,7 +188,7 @@ def main():
         test.write_text(TEST.replace("    // SHIPPING_STRATEGY_METHOD", method))
         binary = tmp / "tests"
         subprocess.run([swift, "-swift-version", "6", str(APP / "Models.swift"),
-                        str(dns), str(APP / "IOSRuntimeSelection.swift"), str(test), "-o", str(binary)],
+                        str(dns), str(APP / "IOSNativeXrayProfile.swift"), str(APP / "IOSRuntimeSelection.swift"), str(test), "-o", str(binary)],
                        check=True, timeout=90)
         subprocess.run([str(binary)], check=True, timeout=25)
     print("Apple CI uses real Network.framework; no VPN/server connections were made.")

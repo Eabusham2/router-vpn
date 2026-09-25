@@ -139,7 +139,7 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 		cancel()
 		return nil, err
 	}
-	return &rayConn{Conn: conn, cancel: cancel, stop: stop}, nil
+	return applexray.NewStreamConn(ctx, &rayConn{Conn: conn, cancel: cancel, stop: stop}, destination), nil
 }
 func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
 	instance, err := h.owner()

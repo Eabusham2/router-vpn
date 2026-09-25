@@ -21,6 +21,8 @@ targets:
       - Resources
       - path: ../../LICENSE
         buildPhase: resources
+      - path: .deps/xray-core-LICENSE.txt
+        buildPhase: resources
     postBuildScripts:
       - name: Stamp exact source provenance
         basedOnDependencyAnalysis: false

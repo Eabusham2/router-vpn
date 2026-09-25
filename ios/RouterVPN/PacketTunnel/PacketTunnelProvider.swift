@@ -1,3 +1,4 @@
+import Libbox
 import CFNetwork
 import CryptoKit
 import Foundation
@@ -243,7 +244,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startLibbox(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
         let rawProfileID = (provider["rawProfileID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard rawProfileID.range(of: "^[A-Za-z0-9._-]{1,96}$", options: .regularExpression) != nil, !rawProfileID.contains("..") else { throw tunnelError(13, "iOS Libbox raw profile id is invalid.") }
-        let rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)
+        var rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)
+        if let original = rawFiles["xray.json"] {
+            guard let wrapper = rawFiles["sing-box.json"], let wrapperText = String(data: wrapper, encoding: .utf8), let xrayText = String(data: original, encoding: .utf8) else { throw tunnelError(58, "Native Xray requires its exact UTF-8 imported graph.") }
+            var failure: NSError?
+            let compiled: String? = LibboxRouterCompileXrayProfile(rawProfileID, wrapperText, xrayText, &failure)
+            if let failure { throw failure }
+            guard let compiled, !compiled.isEmpty, compiled.utf8.count <= Self.maxProfileBytes else { throw tunnelError(58, "Native Xray graph validation failed.") }
+            rawFiles["sing-box.json"] = Data(compiled.utf8)
+        }
         let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
         let files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)
         let expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)

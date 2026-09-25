@@ -1,3 +1,4 @@
+import Libbox
 import Combine
 import Foundation
 @preconcurrency import NetworkExtension
@@ -85,7 +86,7 @@ final class RouterVPNModel: ObservableObject {
         switch selection.engine {
         case .wireGuard:
             return selection.rawProfileID.hasPrefix("awg2") ? "AmneziaWG • native" : "WireGuardKit"
-        case .libbox: return "Libbox • \(selection.rawProfileID)"
+        case .libbox: return selection.files["xray.json"] != nil ? "Xray + Libbox • \(selection.rawProfileID)" : "Libbox • \(selection.rawProfileID)"
         case .multihop: return "Multihop • WireGuard → \(selection.rawProfileID)"
         }
     }
@@ -330,6 +331,40 @@ final class RouterVPNModel: ObservableObject {
     }
 
     private func start(manager: NETunnelProviderManager, bundle: ClientBundle, selection: IOSRuntimeSelection) async throws -> Bool {
+        var launchBundle = bundle
+        if selection.engine == .libbox && selection.files["xray.json"] != nil {
+            // Carry the exact compiled wrapper, including legacy XHTTP imports,
+            // into the extension. Do not merely update a host readiness label.
+            guard let wrapperData = selection.files["sing-box.json"], let originalData = selection.files["xray.json"],
+                  let wrapper = String(data: wrapperData, encoding: .utf8), let original = String(data: originalData, encoding: .utf8) else {
+                throw IOSRuntimeSelectionError.unsupportedMode("The native Xray selection lost its owned graph.")
+            }
+            let mode = selection.rawProfileID
+            let resolved = try await Task.detached(priority: .userInitiated) {
+                var failure: NSError?
+                let output: String? = LibboxRouterResolveXrayProfile(mode, wrapper, original, &failure)
+                if let failure { throw failure }
+                guard let output, output.utf8.count <= 12 * 1024 * 1024 else {
+                    throw IOSRuntimeSelectionError.unsupportedMode("Native Xray endpoint preparation failed.")
+                }
+                return output
+            }.value
+            guard !Task.isCancelled,
+                  self.bundle?.selectedRouterID == bundle.selectedRouterID,
+                  self.bundle?.routerProfiles == bundle.routerProfiles,
+                  self.bundle?.profiles == bundle.profiles,
+                  manager.connection.status == .disconnected || manager.connection.status == .invalid else {
+                throw IOSRuntimeSelectionError.unsupportedMode("The selected node or VPN ownership changed during endpoint preparation.")
+            }
+            let replacements = try JSONDecoder().decode([String: Data].self, from: Data(resolved.utf8))
+            guard Set(replacements.keys) == Set(["sing-box.json", "xray.json"]), replacements.values.allSatisfy({ !$0.isEmpty && $0.count <= 4 * 1024 * 1024 }) else {
+                throw IOSRuntimeSelectionError.unsupportedMode("Native Xray preparation returned an invalid asset set.")
+            }
+            var launchFiles = selection.files
+            for (name, data) in replacements { launchFiles[name] = data }
+            launchBundle.profiles[selection.rawProfileID] = launchFiles.mapValues { $0.base64EncodedString() }
+            launchBundle = try IOSDNSRuntimePolicy.patch(launchBundle)
+        }
         let proto = NETunnelProviderProtocol()
         proto.providerBundleIdentifier = "com.eabusham.routervpn.PacketTunnel"
         proto.serverAddress = bundle.endpoint
@@ -340,7 +375,7 @@ final class RouterVPNModel: ObservableObject {
             "logicalMode": selection.logicalModeID,
             "basePreference": selection.rawProfileID.hasPrefix("awg2") ? "awg" : "wg",
             "baseFallback": baseFallback,
-            "bundle": try JSONEncoder().encode(bundle)
+            "bundle": try JSONEncoder().encode(launchBundle)
         ]
         configuration["rawProfileID"] = selection.rawProfileID
         var entryStrict = false
@@ -415,7 +450,7 @@ final class RouterVPNModel: ObservableObject {
     private func modeName(_ id: String) -> String { logicalModes.first(where: { $0.id == id })?.name ?? id }
     private func engineName(_ selection: IOSRuntimeSelection) -> String {
         if selection.engine == .multihop { return "WireGuard entry → \(selection.rawProfileID) exit" }
-        if selection.engine == .libbox { return "Libbox 1.14.1" }
+        if selection.engine == .libbox { return selection.files["xray.json"] != nil ? "Xray 26.7.11 + Libbox 1.14.1" : "Libbox 1.14.1" }
         return selection.rawProfileID.hasPrefix("awg2") ? "AmneziaWG native" : "WireGuardKit"
     }
 

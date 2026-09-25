@@ -177,7 +177,7 @@ func TestApplePacketTunnelRunsPinnedWireGuardAndLibboxAndKeepsUnsupportedModesFa
 		}
 	}
 	selector := repoFile(t, "ios/RouterVPN/App/IOSRuntimeSelection.swift")
-	for _, required := range []string{`case libbox = "libbox"`, "sing-box.json", "Xray/helper-only, PQ-only composites, ALL/MAX and unsupported multihop combinations remain unavailable instead of faking Connected."} {
+	for _, required := range []string{`case libbox = "libbox"`, "sing-box.json", "Unimplemented helper/PQ/MAX chains and unsupported multihop combinations remain unavailable instead of faking Connected; native REALITY, PQ REALITY, XHTTP and dual-transport Xray graphs are supported."} {
 		if !strings.Contains(selector, required) {
 			t.Fatalf("Apple runtime selection truth boundary missing %q", required)
 		}

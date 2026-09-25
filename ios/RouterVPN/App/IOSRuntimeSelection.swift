@@ -88,7 +88,7 @@ enum IOSRuntimeSelector {
         if !selections.isEmpty { return selections }
 
         throw IOSRuntimeSelectionError.unsupportedMode(
-            "This iOS build cannot run \(logical.name) from the imported node: \(lastReason). Xray/helper-only, PQ-only composites, ALL/MAX and unsupported multihop combinations remain unavailable instead of faking Connected. Helper-dependent sslocal/Xray chains are also rejected unless a real Apple dataplane exists. OpenVPN remains outside the iOS dataplane until a pinned native implementation exists."
+            "This iOS build cannot run \(logical.name) from the imported node: \(lastReason). Unimplemented helper/PQ/MAX chains and unsupported multihop combinations remain unavailable instead of faking Connected; native REALITY, PQ REALITY, XHTTP and dual-transport Xray graphs are supported. Each requested helper must be part of the owned Apple dataplane. OpenVPN is available through the native external TLS-client node path."
         )
     }
 
@@ -117,11 +117,16 @@ enum IOSRuntimeSelector {
             }
             return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [asset: data])
         }
-        guard let encoded = bundle.profiles[rawProfileID], encoded["sing-box.json"] != nil else {
+        guard let encoded = bundle.profiles[rawProfileID], encoded["sing-box.json"] != nil || (IOSNativeXrayProfile.modeIDs.contains(rawProfileID) && encoded["xray.json"] != nil) else {
             throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no iOS-runnable sing-box profile.")
         }
-        let files = try decodeProfile(encoded)
-        if let helper = unsupportedHelperAssets.first(where: { files[$0] != nil }) {
+        var files = try decodeProfile(encoded)
+        let nativeXray = files["xray.json"] != nil && IOSNativeXrayProfile.modeIDs.contains(rawProfileID)
+        if nativeXray {
+            let profile = IOSDNSRuntimePolicy.selectedProfile(in: bundle)
+            files = try IOSNativeXrayProfile.compose(mode: rawProfileID, files: files, homeDNS: profile?.adGuardIPv4 ?? "")
+        }
+        if let helper = unsupportedHelperAssets.first(where: { files[$0] != nil && !(nativeXray && $0 == "xray.json") }) {
             throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) requires desktop helper asset \(helper), which the iOS PacketTunnel does not start.")
         }
         guard let config = files["sing-box.json"], let object = try? JSONSerialization.jsonObject(with: config) as? [String: Any] else {

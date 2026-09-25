@@ -32,7 +32,7 @@ func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) 
 	provider := repoFile(t, "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift")
 	for _, required := range []string{
 		"try IOSStartLayer.validateWireGuard(profile: selectedProfile)",
-		"let rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)",
+		"var rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)",
 		"let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)",
 		"let files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)",
 		"try IOSStartLayer.validateExternal(profile: selectedProfile)",
@@ -51,10 +51,11 @@ func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) 
 		t.Fatal("PacketTunnel Libbox composition owner is missing")
 	}
 	body := provider[start:end]
+	native := strings.Index(body, "LibboxRouterCompileXrayProfile(")
 	compose := strings.Index(body, "let composedFiles = try IOSStartLayer.apply(")
 	mtu := strings.Index(body, "let files = try RouterVPNMTUPolicy.libbox(composedFiles,")
 	run := strings.Index(body, "try engine.start(files: files, strict: strict)")
-	if compose < 0 || mtu <= compose || run <= mtu {
+	if native < 0 || compose <= native || mtu <= compose || run <= mtu {
 		t.Fatal("Start Layer and MTU must both compose before the native engine starts")
 	}
 
