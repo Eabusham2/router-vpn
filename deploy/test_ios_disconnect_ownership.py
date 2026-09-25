@@ -64,6 +64,8 @@ enum Status { case invalid, disconnected, connecting, connected, reasserting, di
     var activeEngine = "multihop-libbox"
     var activeRawProfile = "hysteria2"
     var message = "Connected"
+    var multihopProgressGeneration = UUID()
+    var multihopProgressText = "Comparison in progress"
     private var userDisconnectInProgress = false
     var profileMutationBlocked: Bool { connected || tunnelTransitioning || userDisconnectInProgress }
     func finishTask() async { while userDisconnectInProgress { await Task.yield() } }
@@ -84,7 +86,10 @@ enum Status { case invalid, disconnected, connecting, connected, reasserting, di
         check("no owned manager is a verified absence", model.message == "Disconnected" && !model.profileMutationBlocked)
         check("foreign manager never saved or stopped", foreign.saves == 0 && foreign.connection.stops == 0)
         let owned = NETunnelProviderManager(); model = fresh([foreign, owned])
+        let comparisonBeforeDisconnect = model.multihopProgressGeneration
         model.disconnect()
+        check("comparison generation invalidated before teardown", model.multihopProgressGeneration != comparisonBeforeDisconnect)
+        check("stale comparison text cleared before teardown", model.multihopProgressText.isEmpty)
         check("identity invalidated before asynchronous teardown", model.activeSessionIdentity == nil)
         check("mutations locked through teardown", model.profileMutationBlocked)
         model.disconnect(); await model.finishTask()
