@@ -195,9 +195,12 @@ def main():
         text=ENGINE.read_text()
         seam='DispatchQueue.global(qos: .userInitiated).async { delivery.run() }'
         assert text.count(seam)==1
-        broken.write_text(text.replace(seam,'DispatchQueue.global(qos: .userInitiated).async { try? plan.run(owned); completion(nil) }'))
+        # Require an explicit Sendable closure: Apple's preconcurrency Dispatch
+        # overload and compiler versions can diagnose inferred closures differently.
+        broken.write_text(text.replace(seam, 'let unsafe: @Sendable () -> Void = { try? plan.run(owned); completion(nil) }; DispatchQueue.global(qos: .userInitiated).async(execute: unsafe)'))
         bad=subprocess.run(args+[str(broken),str(harness),'-o',str(tmp/'bad')],capture_output=True,text=True,timeout=90)
-        assert bad.returncode != 0 and 'non-sendable' in bad.stderr.lower(), 'Regression control accepted unowned foreign captures'
+        diagnostics = (bad.stdout + bad.stderr).lower()
+        assert bad.returncode != 0 and ('sendable' in diagnostics or 'data race' in diagnostics), ('Regression control accepted unowned foreign captures or failed for another reason: ' + diagnostics[-2000:])
         print('Negative control: old non-Sendable asynchronous captures correctly rejected')
 
 if __name__ == '__main__':
