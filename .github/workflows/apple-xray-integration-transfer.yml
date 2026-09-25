@@ -1,0 +1,72 @@
+name: Verify exact Apple Xray integration source
+on:
+  push:
+    paths: ['.github/workflows/apple-xray-integration-transfer.yml']
+permissions:
+  contents: write
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Validate complete source, run tests, and publish exact Git objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, tempfile, urllib.request
+          api_base='https://api.github.com/repos/Eabusham2/router-vpn/'
+          output=pathlib.Path(os.environ['RUNNER_TEMP'])/'apple-xray-integration';output.mkdir()
+          def api(path,data=None):
+              req=urllib.request.Request(api_base+path,data=None if data is None else json.dumps(data).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+              with urllib.request.urlopen(req,timeout=40) as response:return json.load(response)
+          def git(*args):return subprocess.check_output(['git',*args])
+          temporary='.github/workflows/apple-xray-integration-transfer.yml'
+          git('rm',temporary)
+          assert git('write-tree').decode().strip()=='4918c62d54604241d3cc86755a15c469ba4a0e2f','main moved; refusing different baseline'
+          parts=[]
+          for sha,size in [('f442a6d93de4b207626c1021e8a03372860237b5',8000),('a53218a803ff626d9c5a73a1d69ca867219b52e5',8000),('e59a713be9bfd3b4b23c25aa9badfd433c3152db',5412)]:
+              raw=base64.b64decode(api('git/blobs/'+sha)['content'])
+              assert len(raw)==size and hashlib.sha1(b'blob '+str(size).encode()+b'\0'+raw).hexdigest()==sha,'incomplete source fragment'
+              parts.append(raw)
+          encoded=b''.join(parts)
+          assert len(encoded)==21412
+          patch=gzip.decompress(base64.b64decode(encoded,validate=True))
+          assert len(patch)==54886 and hashlib.sha256(patch).hexdigest()=='cde983a8baca7073774127e72feef90fe3c24ec3ec6359ed12a745027875e691','complete patch digest mismatch'
+          with tempfile.NamedTemporaryFile() as f:
+              f.write(patch);f.flush();git('apply','--index',f.name)
+          target='650b845edfbabb7e2de30d0108ae3835ed97d4a4'
+          assert git('write-tree').decode().strip()==target,'candidate source tree mismatch'
+          checks=[['go','test','-race','-count=1','-timeout=240s','./...'],['go','vet','./...'],['python3','deploy/validate-repo.py'],['python3','ios/RouterVPN/test_runtime_selection_contract.py'],['python3','ios/RouterVPN/test_libbox_build_contract.py'],['python3','ios/RouterVPN/test_packet_tunnel_libbox_contract.py']]
+          for n,command in enumerate(checks):
+              with (output/('check-'+str(n)+'.log')).open('w') as log:subprocess.run(command,check=True,stdout=log,stderr=subprocess.STDOUT,timeout=300)
+              print('PASS',' '.join(command),flush=True)
+          assert not git('diff','--name-only').strip(),'verification mutated candidate files'
+          entries=[]
+          for row in git('diff','--cached','--name-status','--no-renames').decode().splitlines():
+              status,path=row.split('\t',1)
+              if status=='D':
+                  assert path==temporary
+                  entries.append({'path':path,'mode':'100644','type':'blob','sha':None});continue
+              mode,sha,stage=git('ls-files','--stage','--',path).decode().split('\t')[0].split()
+              assert stage=='0'
+              raw=git('cat-file','blob',sha)
+              stored=api('git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
+              assert stored['sha']==sha,'uploaded source blob mismatch'
+              entries.append({'path':path,'mode':mode,'type':'blob','sha':sha})
+              print('Verified',path,sha,flush=True)
+          (output/'manifest.json').write_text(json.dumps({'tree':target,'files':entries,'checks':checks},indent=2))
+          print('Complete verified source tree',target,'; this job does not move main',flush=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: router-vpn-apple-xray-integration
+          path: ${{ runner.temp }}/apple-xray-integration/
+          if-no-files-found: error
+          retention-days: 7
