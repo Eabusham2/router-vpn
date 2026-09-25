@@ -10,13 +10,26 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('prepare_xray',ROOT/'deploy/prepare-apple-xray.py')
 MODULE=importlib.util.module_from_spec(spec);spec.loader.exec_module(MODULE)
 
+VISION = '''
+var p uintptr
+p = uintptr(unsafe.Pointer(commonConn))
+p = uintptr(unsafe.Pointer(tlsConn.Conn))
+p = uintptr(unsafe.Pointer(utlsConn.Conn))
+p = uintptr(unsafe.Pointer(realityConn.Conn))
+\t\t\ti, _ := t.FieldByName("input")
+\t\t\tr, _ := t.FieldByName("rawInput")
+input = (*bytes.Reader)(unsafe.Pointer(p + i.Offset))
+rawInput = (*bytes.Buffer)(unsafe.Pointer(p + r.Offset))
+'''
+
 class Prepare(unittest.TestCase):
     def fixture(self,tmp):
         sing=Path(tmp)/'sing';xray=Path(tmp)/'xray'
-        for root,path in ((sing,'include'),(sing,'experimental/libbox'),(xray,'core'),(xray,'transport/internet/reality')):
+        for root,path in ((sing,'include'),(sing,'experimental/libbox'),(xray,'core'),(xray,'transport/internet/reality'),(xray,'proxy/vless/outbound')):
             (root/path).mkdir(parents=True,exist_ok=True)
         (sing/'include/registry.go').write_text('import (\n\t"github.com/sagernet/sing-box/protocol/vless"\n)\nfunc register() {\n\tvless.RegisterOutbound(registry)\n}\n')
         (xray/'transport/internet/reality/reality.go').write_text('package reality\nfunc client() {\n\tif !uConn.Verified {\n\t\tlegacySpider()\n\t}\n}\n')
+        (xray/'proxy/vless/outbound/outbound.go').write_text(VISION)
         return sing,xray
     def run_prepare(self,sing,xray):
         with mock.patch.object(MODULE,'checkout') as check:
@@ -39,6 +52,18 @@ class Prepare(unittest.TestCase):
             self.assertIn('xcore.NewWithContext(xcore.RouterVPNNativeContext(h.ctx), cfg)',native)
             self.assertIn('internet.UseAlternativeSystemDialer(systemDialer{})',native)
             self.assertIn('bindings.Delete(instance)',native)
+    def test_vision_pointer_checks_are_kept_not_suppressed(self):
+        patched = MODULE.patch_vision_buffers(VISION)
+        self.assertEqual(MODULE.patch_vision_buffers(patched), patched)
+        self.assertNotIn('uintptr', patched)
+        self.assertIn('unsafe.Add(p, i.Offset)', patched)
+        self.assertIn('i.Type != reflect.TypeOf(bytes.Reader{})', patched)
+        self.assertIn('r.Type != reflect.TypeOf(bytes.Buffer{})', patched)
+        self.assertNotIn('nocheckptr', patched)
+        with self.assertRaises(ValueError):
+            MODULE.patch_vision_buffers(patched.replace('unsafe.Add(p, i.Offset)', 'unsafe.Pointer(p)'))
+        with self.assertRaises(ValueError):
+            MODULE.patch_vision_buffers(VISION.replace('realityConn.Conn', 'different(pointer)'))
     def test_wrong_revision_fails_before_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             sing,xray=self.fixture(tmp)

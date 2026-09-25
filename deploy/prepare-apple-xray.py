@@ -3,6 +3,7 @@
 from pathlib import Path
 import argparse
 import hashlib
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,10 +34,39 @@ def insert_once(text, anchor, extra, label):
         return text
     return text.replace(anchor,anchor+'\n'+extra,1)
 
+def patch_vision_buffers(text):
+    # Keep a real GC-tracked pointer between reflection and the offset access.
+    # A stored uintptr is not a pointer and fails Go's pointer-safety checker.
+    before = 'var p uintptr'
+    after = 'var p unsafe.Pointer'
+    previous = '\t\t\ti, _ := t.FieldByName("input")\n\t\t\tr, _ := t.FieldByName("rawInput")'
+    checked = '\t\t\ti, inputOK := t.FieldByName("input")\n\t\t\tr, rawOK := t.FieldByName("rawInput")\n\t\t\tif !inputOK || !rawOK || i.Type != reflect.TypeOf(bytes.Reader{}) || r.Type != reflect.TypeOf(bytes.Buffer{}) {\n\t\t\t\treturn errors.New("native Vision buffer layout differs from pinned transport")\n\t\t\t}'
+    # Reapplying preparation is allowed only for this exact complete patch.
+    if after in text:
+        if before in text or text.count(after) != 1 or text.count(checked) != 1:
+            raise ValueError('Native Vision pointer patch differs')
+        if text.count('unsafe.Add(p, i.Offset)') != 1 or text.count('unsafe.Add(p, r.Offset)') != 1 or 'unsafe.Pointer(p +' in text:
+            raise ValueError('Native Vision pointer access differs')
+        return text
+    if text.count(before) != 1 or text.count(previous) != 1:
+        raise ValueError('Pinned Vision buffer reflection boundary changed')
+    text = text.replace(before, after, 1).replace(previous, checked, 1)
+    text, count = re.subn(r'p = uintptr\(unsafe.Pointer\(([^()]+)\)\)', r'p = unsafe.Pointer(\1)', text)
+    if count != 4:
+        raise ValueError('Pinned Vision pointer owners changed')
+    for field in ('i', 'r'):
+        old = 'unsafe.Pointer(p + '+field+'.Offset)'
+        if text.count(old) != 1:
+            raise ValueError('Pinned Vision buffer access changed')
+        text = text.replace(old, 'unsafe.Add(p, '+field+'.Offset)', 1)
+    return text
+
 def prepare(sing, xray):
     sing=sing.resolve();xray=xray.resolve()
     checkout(sing,SING_PIN,'github.com/sagernet/sing-box')
     checkout(xray,XRAY_PIN,'github.com/xtls/xray-core')
+    vision=xray/'proxy/vless/outbound/outbound.go'
+    vision.write_text(patch_vision_buffers(vision.read_text()))
     policy=sing/'experimental/libbox/routervpn/applexray';policy.mkdir(parents=True,exist_ok=True)
     for source in (ROOT/'internal/applexray').glob('*.go'):
         if source.name == 'preparation_test.go':
