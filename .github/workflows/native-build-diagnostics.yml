@@ -1,0 +1,54 @@
+name: Native compiler diagnostics
+on:
+  push:
+    paths: ['.github/workflows/native-build-diagnostics.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Extract compiler errors without copying full logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re, urllib.request
+          root = pathlib.Path('diagnostics'); root.mkdir()
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+          opener = urllib.request.build_opener(NoRedirect)
+          for name, job in [('ios',107914867272), ('android',107914867255)]:
+              url = 'https://api.github.com/repos/Eabusham2/router-vpn/actions/jobs/'+str(job)+'/logs'
+              request = urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+              try:
+                  response = opener.open(request,timeout=30)
+              except urllib.error.HTTPError as error:
+                  if error.code != 302:
+                      (root/(name+'.txt')).write_text('Log request status '+str(error.code)); continue
+                  location=error.headers['Location']
+                  if not location.startswith('https://'): raise RuntimeError('Invalid log redirect')
+                  response=urllib.request.urlopen(location,timeout=30)
+              with response:
+                  raw=response.read(32*1024*1024+1)
+              if len(raw)>32*1024*1024: raise RuntimeError('Diagnostic log exceeds bound')
+              lines=raw.decode('utf-8-sig',errors='replace').splitlines()
+              hits=[i for i,s in enumerate(lines) if re.search(r'(^|\W)(error:|fatal error:|FAIL:|AssertionError|cannot find|undefined:|BUILD FAILED|BUILD SUCCEEDED|FAILURE:)',s)]
+              keep=set()
+              for i in hits:
+                  keep.update(range(max(0,i-2),min(len(lines),i+7)))
+              selected=[lines[i] for i in sorted(keep)]
+              if len(selected)>500: selected=selected[-500:]
+              text='\n'.join(selected) if selected else '\n'.join(lines[-35:])
+              (root/(name+'.txt')).write_text(text)
+              print(name+': '+str(len(hits))+' diagnostic matches; '+str(len(selected))+' lines retained')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: router-vpn-compiler-diagnostics
+          path: diagnostics/
+          retention-days: 3
+          if-no-files-found: error
