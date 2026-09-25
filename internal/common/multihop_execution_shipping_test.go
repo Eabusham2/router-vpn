@@ -17,7 +17,7 @@ func TestMultihopExecutionShippingOwners(t *testing.T) {
 		"client/linux/apply-multihop-execution.py":                                                 {"linux_multihop_execution_changed_v1", "execution"},
 		"android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java":                  {"newRouterMultihop", "multihopProgressJSON", "executionController"},
 		"android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedConnectionController.java": {"pendingExecution", "execution"},
-		"ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift":                                   {"LibboxNewRouterMultihop", "plan.run(owned)", "try plan.close()", "ownershipLock", "ownershipGeneration"},
+		"ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift":                                   {"LibboxNewRouterMultihop", "plan.run(server)", "MultihopDelivery", "delivery.run()", "callbackLock", "callback = nil", "isCurrent(owner)", "try plan.close()", "ownershipLock", "ownershipGeneration"},
 		"ios/RouterVPN/App/IOSMultihopProgress.swift":                                              {"multihopProgressInFlight", "multihopProgressDeadline", "multihopProgressGeneration", "16384"},
 		"ios/RouterVPN/App/IOSMultihopView.swift":                                                  {"multihopExecution", "server", "auto"},
 		"ios/RouterVPN/App/IOSConnectionProfilesView.swift":                                        {"multihopExecution", "forKey: .multihopExecution", "profile.multihopExecution = prefs.multihopExecution"},

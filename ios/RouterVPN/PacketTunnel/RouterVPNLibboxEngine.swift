@@ -107,34 +107,82 @@ final class RouterVPNLibboxEngine {
         let capturedPlan = multihop, capturedServer = server, generation = ownershipGeneration
         ownershipLock.unlock()
         guard let plan = capturedPlan, let owned = capturedServer else { completion(nil); return }
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        let delivery = MultihopDelivery(owner: self, plan: plan, server: owned,
+                                        generation: generation, completion: completion)
+        DispatchQueue.global(qos: .userInitiated).async { delivery.run() }
+    }
+
+    /// Only this delivery object crosses Dispatch's Sendable boundary. The
+    /// generated Objective-C handles predate Sendable: the Go controller locks
+    /// its state and Close cancels/waits for Run before the command server closes.
+    /// Swift ownership is checked under ownershipLock. The callback is consumed
+    /// once under callbackLock; the timer retains delivery, never the engine.
+    /// Do not mark all Libbox handles or the whole engine unchecked Sendable.
+    private final class MultihopDelivery: @unchecked Sendable {
+        private weak var owner: RouterVPNLibboxEngine?
+        private let plan: LibboxRouterMultihop
+        private let server: LibboxCommandServer
+        private let generation: UUID
+        private let callbackLock = NSLock()
+        private var callback: ((Error?) -> Void)?
+        private var started = false
+
+        init(owner: RouterVPNLibboxEngine, plan: LibboxRouterMultihop,
+             server: LibboxCommandServer, generation: UUID,
+             completion: @escaping (Error?) -> Void) {
+            self.owner = owner; self.plan = plan; self.server = server
+            self.generation = generation; self.callback = completion
+        }
+        private func finish(_ error: Error?) {
+            callbackLock.lock()
+            let completion = callback
+            callback = nil
+            callbackLock.unlock()
+            completion?(error)
+        }
+        private func isCurrent(_ owner: RouterVPNLibboxEngine) -> Bool {
+            owner.ownershipLock.lock()
+            defer { owner.ownershipLock.unlock() }
+            return owner.ownershipGeneration == generation && owner.multihop === plan && owner.server === server
+        }
+        func run() {
+            callbackLock.lock()
+            guard !started else { callbackLock.unlock(); return }
+            started = true
+            callbackLock.unlock()
             do {
-                try plan.run(owned)
-                guard let self else { throw NSError(domain: "RouterVPN.Multihop", code: 1, userInfo: [NSLocalizedDescriptionKey: "Multihop owner was released."]) }
+                guard let owner, isCurrent(owner) else { throw staleOwner() }
+                try plan.run(server)
+                guard isCurrent(owner) else { throw staleOwner() }
                 let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
                 timer.schedule(deadline: .now() + 1, repeating: 1)
-                timer.setEventHandler { [weak self] in
-                    guard let self else { return }
-                    self.ownershipLock.lock()
-                    let current = self.ownershipGeneration == generation && self.multihop === plan && self.server === owned
-                    self.ownershipLock.unlock()
-                    if current && !plan.healthy() {
-                        self.tunnel?.cancelTunnelWithError(self.error("Multihop lease or network proof expired; reconnect to compare again."))
-                    }
-                }
-                self.ownershipLock.lock()
-                let current = self.ownershipGeneration == generation && self.server === owned && self.multihop === plan
+                timer.setEventHandler { [self] in checkHealth() }
+                owner.ownershipLock.lock()
+                let current = owner.ownershipGeneration == generation && owner.server === server && owner.multihop === plan
                 if current {
-                    self.multihopHealth?.cancel()
-                    self.multihopHealth = timer
-                    // Resume before releasing ownership: Stop can never cancel a
-                    // suspended source or leave a newly resumed orphan behind.
+                    owner.multihopHealth?.cancel()
+                    owner.multihopHealth = timer
+                    // Resume before releasing ownership: Stop cannot cancel a
+                    // suspended timer or leave a newly resumed orphan behind.
                     timer.resume()
                 }
-                self.ownershipLock.unlock()
-                guard current else { timer.setEventHandler {}; timer.resume(); timer.cancel(); throw self.error("Multihop runtime changed before completion.") }
-                completion(nil)
-            } catch { completion(error) }
+                owner.ownershipLock.unlock()
+                guard current else {
+                    timer.setEventHandler {}; timer.resume(); timer.cancel()
+                    throw staleOwner()
+                }
+                finish(nil)
+            } catch { finish(error) }
+        }
+        private func checkHealth() {
+            guard let owner, isCurrent(owner) else { return }
+            let healthy = plan.healthy()
+            guard !healthy, isCurrent(owner) else { return }
+            owner.tunnel?.cancelTunnelWithError(owner.error("Multihop lease or network proof expired; reconnect to compare again."))
+        }
+        private func staleOwner() -> NSError {
+            NSError(domain: "RouterVPN.Multihop", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Multihop runtime changed before completion."])
         }
     }
     func multihopProgress() -> Data? {
