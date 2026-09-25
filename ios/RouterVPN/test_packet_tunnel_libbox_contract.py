@@ -51,14 +51,28 @@ def verify_proof_lifecycle(source):
         success = body.find('completionHandler(nil)')
         assert arm >= 0 and success > arm, name + ': success must follow network-proof guard activation'
         assert body.count('self.armNetworkProofGuard()') == 1, name + ': network proof must be armed once'
-        for call in calls:
-            assert 0 <= body.find(call) < arm, name + ': guard activation must follow routed identity proof'
         owner = 'guard self.wireGuardAdapter === adapter else' if name == 'startWireGuard' else 'guard self.libboxEngine === engine else'
-        assert body.rfind(owner, 0, arm) >= 0, name + ': success must retain the exact runtime owner'
         if name == 'startMultihop':
-            assert body.index(calls[0]) < body.index(calls[1]) < arm, 'both hop identities must be proved in order'
-            assert body.index('if let entryError') < body.index(calls[1]), 'failed entry proof must stop before exit proof'
-            assert body.index('if let exitError') < arm, 'failed exit proof must stop before connection completion'
+            # This longer path arms BEFORE comparison. The SAME captured guard
+            # must remain current after comparison and each node proof; a second
+            # arm would incorrectly clear a network-change invalidation.
+            assert 'let comparisonGuard = self.armNetworkProofGuard()' in body
+            compare = body.index('engine.completeMultihopExecution')
+            assert arm < compare < body.index(calls[0]) < body.index(calls[1]) < success
+            assert body.index('if let comparisonError') < body.index(calls[0])
+            assert body.index('if let entryError') < body.index(calls[1])
+            assert body.index('if let exitError') < success
+            guard = 'guard self.currentPathProofGuard() === comparisonGuard else'
+            phases = (body[compare:body.index(calls[0])],
+                      body[body.index(calls[0]):body.index(calls[1])],
+                      body[body.index(calls[1]):success])
+            for phase in phases:
+                assert guard in phase, 'multihop must retain its network generation through every asynchronous phase'
+                assert 'self.libboxEngine === engine else' in phase, 'multihop must retain the exact runtime through every asynchronous phase'
+        else:
+            for call in calls:
+                assert 0 <= body.find(call) < arm, name + ': guard activation must follow routed identity proof'
+            assert body.rfind(owner, 0, arm) >= 0, name + ': success must retain the exact runtime owner'
 
 verify_proof_lifecycle(provider)
 for runtime in ('startWireGuard', 'startMultihop', 'startLibbox', 'startExternalLibbox'):
@@ -72,6 +86,20 @@ for runtime in ('startWireGuard', 'startMultihop', 'startLibbox', 'startExternal
         pass
     else:
         raise AssertionError('lifecycle contract accepted an unguarded ' + runtime)
+
+# Each generation checkpoint is independently required, not a marker count.
+checkpoint = 'guard self.currentPathProofGuard() === comparisonGuard else'
+start = provider.index('    private func startMultihop(')
+end = provider.index('    private func multihopWireGuardEndpoint(', start)
+for match in re.finditer(re.escape(checkpoint), provider[start:end]):
+    at = start + match.start()
+    broken = provider[:at] + provider[at:].replace(checkpoint, 'guard true else', 1)
+    try:
+        verify_proof_lifecycle(broken)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('lifecycle contract accepted a stale multihop generation')
 
 assert 'adapter.stop { [weak self] _ in self?.wireGuardAdapter = nil' not in provider, 'old async stop callback can clobber a newer WireGuard owner'
 assert 'defer { self.proofTask = nil; self.proofSession?.finishTasksAndInvalidate(); self.proofSession = nil }' not in provider, 'old proof callback can clobber a newer proof session'

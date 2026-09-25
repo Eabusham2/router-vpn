@@ -126,7 +126,7 @@ def main() -> int:
                 with lock:
                     state["extended"].append(self.path)
                     speed_index=state["extended"].count("/api/connection/speed-test")
-                expected={"/api/profile/fastest":{"samples":5,"select":True},"/api/connection/speed-test":{"bytes":8388608},"/api/multihop/speed-test":{"entry_id":"fixture-entry","exit_id":"fixture-exit","bytes":4194304},"/api/multihop/connect":{"entry_id":"fixture-entry","exit_id":"fixture-exit","exit_mode":"shadowsocks"},"/api/disconnect":{}}
+                expected={"/api/profile/fastest":{"samples":5,"select":True},"/api/connection/speed-test":{"bytes":8388608},"/api/multihop/speed-test":{"entry_id":"fixture-entry","exit_id":"fixture-exit","bytes":4194304},"/api/multihop/connect":{"entry_id":"fixture-entry","exit_id":"fixture-exit","exit_mode":"shadowsocks","execution":"auto"},"/api/disconnect":{}}
                 if body!=expected[self.path]:
                     state["errors"].append([self.path,body]);self.respond(400,b"wrong captured identity");return
                 delayed=self.path=="/api/multihop/connect" or (self.path=="/api/connection/speed-test" and speed_index>1)

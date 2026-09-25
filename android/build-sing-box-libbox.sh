@@ -209,7 +209,7 @@ python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
   go_retry test ./experimental/libbox/routervpn/...
   go_retry test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run TestRouterMultihop -count=1
-  go_retry test -ldflags=-checklinkname=0 ./experimental/libbox
+  go_retry test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
   go_retry run ./cmd/internal/build_libbox -target android
 )

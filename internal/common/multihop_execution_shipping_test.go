@@ -37,3 +37,42 @@ func TestMultihopExecutionShippingOwners(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeMultihopConfigChecksKeepWireGuardEnabled(t *testing.T) {
+	for _, file := range []string{"android/build-sing-box-libbox.sh", "ios/RouterVPN/prepare-libbox.sh"} {
+		body, err := os.ReadFile(filepath.Join("../..", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		checked := 0
+		for _, line := range strings.Split(string(body), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 3 || fields[1] != "test" {
+				continue
+			}
+			nativePackage := false
+			wireguard := false
+			for i, field := range fields {
+				if field == "./experimental/libbox" {
+					nativePackage = true
+				}
+				if field == "-tags" && i+1 < len(fields) {
+					for _, tag := range strings.Split(fields[i+1], ",") {
+						if tag == "with_wireguard" {
+							wireguard = true
+						}
+					}
+				}
+			}
+			if nativePackage {
+				checked++
+				if !wireguard {
+					t.Errorf("%s: actual native multihop test omitted WireGuard: %s", file, line)
+				}
+			}
+		}
+		if checked == 0 {
+			t.Errorf("%s: actual native configuration test is missing", file)
+		}
+	}
+}

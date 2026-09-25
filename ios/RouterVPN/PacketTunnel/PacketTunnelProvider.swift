@@ -194,22 +194,26 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
         catch { engine.stop(); libboxEngine = nil; throw error }
-        self.armNetworkProofGuard()
+        // One guard spans the comparison and both node proofs. Rearming after
+        // a long comparison would erase an intervening network invalidation.
+        let comparisonGuard = self.armNetworkProofGuard()
         engine.completeMultihopExecution { [weak self] comparisonError in
             guard let self, self.libboxEngine === engine else { engine.stop(); completionHandler(RouterVPNMultihopGraph.issue("Multihop comparison belongs to an old runtime.")); return }
             if let comparisonError { engine.stop(); self.libboxEngine = nil; completionHandler(comparisonError); return }
+            guard self.currentPathProofGuard() === comparisonGuard else { engine.stop(); completionHandler(self.tunnelError(57, "Multihop network changed during comparison.")); return }
         // These are separately routed proofs, not a direct ping cache or a
         // repeated exit response. Completion stays pending until BOTH succeed.
         proveSelectedNode(url: entryURL, expectedNodeID: entryProofID, proxyPort: RouterVPNMultihopGraph.entryProofPort) { [weak self] entryError in
             guard let self else { engine.stop(); completionHandler(RouterVPNMultihopGraph.issue("Multihop provider was released.")); return }
             guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(54, "Multihop entry proof belongs to an old runtime.")); return }
             if let entryError { engine.stop(); self.libboxEngine = nil; completionHandler(entryError); return }
+            guard self.currentPathProofGuard() === comparisonGuard else { engine.stop(); completionHandler(self.tunnelError(57, "Multihop network changed during entry proof.")); return }
             self.proveSelectedNode(url: exitURL, expectedNodeID: exitProofID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] exitError in
                 guard let self else { engine.stop(); completionHandler(RouterVPNMultihopGraph.issue("Multihop provider was released.")); return }
                 guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(55, "Multihop exit proof belongs to an old runtime.")); return }
                 if let exitError { engine.stop(); self.libboxEngine = nil; completionHandler(exitError); return }
+                guard self.currentPathProofGuard() === comparisonGuard else { engine.stop(); completionHandler(self.tunnelError(57, "Multihop network changed during exit proof.")); return }
                 self.enableForwarding(profileData: forwardingProfileData, proofID: exitProofID)
-                self.armNetworkProofGuard()
                 completionHandler(nil)
             }
         }
@@ -272,7 +276,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func armNetworkProofGuard() {
+    @discardableResult
+    private func armNetworkProofGuard() -> NetworkProofGuard {
         let monitor = NWPathMonitor()
         let guardState = NetworkProofGuard(owner: self)
         pathProofOwnerLock.lock()
@@ -283,6 +288,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         previous?.cancel()
         monitor.pathUpdateHandler = { path in guardState.handle(path) }
         monitor.start(queue: pathMonitorQueue)
+        return guardState
     }
 
     private func invalidateSelectedPathProof(_ guardState: NetworkProofGuard) {
