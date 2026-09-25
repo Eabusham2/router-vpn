@@ -82,13 +82,16 @@ def read_json_regular(path: Path):
 
 server=read_json_regular(server_path)
 secrets=read_json_regular(secrets_path)
-client_enc=secrets.get('vless_encryption','none')
-server_dec='none'
-for inbound in server.get('inbounds',[]):
-    value=inbound.get('settings',{}).get('decryption')
-    if value:
-        server_dec=value
-        break
+# The ordinary REALITY inbound deliberately uses decryption=none. Selecting
+# the first nonempty setting pairs that server with a hybrid-PQ client and
+# produces a configuration which parses but cannot negotiate the same protocol.
+client_enc=secrets.get('vless_encryption')
+pq_inbounds=[x for x in server.get('inbounds',[]) if isinstance(x,dict) and x.get('tag')=='pq-reality-in']
+if len(pq_inbounds)!=1:
+    raise RuntimeError('XHTTP requires exactly one preserved PQ REALITY server identity')
+server_dec=pq_inbounds[0].get('settings',{}).get('decryption')
+if not all(isinstance(x,str) and x.startswith('mlkem768x25519plus.') for x in (client_enc,server_dec)):
+    raise RuntimeError('XHTTP/MAX-TLS requires both generated hybrid-PQ encryption and decryption; refusing a silent downgrade')
 server['inbounds']=[x for x in server.get('inbounds',[]) if x.get('tag')!='max-xhttp-in']
 finalmask={'tcp':[{'type':'fragment','settings':{'packets':'tlshello','length':'100-300','delay':'10-30','maxSplit':'3-7'}}]}
 server['inbounds'].append({
