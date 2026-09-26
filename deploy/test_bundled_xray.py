@@ -79,4 +79,32 @@ class Bundle(unittest.TestCase):
             before=binary.read_bytes()
             with mock.patch.object(BUILD,'fetch_source') as fetch,self.assertRaises(ValueError):BUILD.build('linux/amd64',folder)
             fetch.assert_not_called();self.assertEqual(binary.read_bytes(),before)
+
+SEAL=load('seal_xray',ROOT/'deploy/seal-xray-runtime.py')
+class Signing(Bundle):
+    def test_signed_macho_identity_does_not_require_linker_flags_in_build_info(self):
+        for target in ('darwin/amd64','darwin/arm64'):
+            with self.subTest(target=target),tempfile.TemporaryDirectory() as temp:
+                folder=Path(temp)/'bundle';binary,meta=self.fixture(folder,target)
+                binary.write_bytes(b'signed Mach-O fixture\0'+BUILD.marker(meta['policy_sha256']).encode()+b'\0signature')
+                info='xray: go1.26.3\n\tbuild\tGOOS=darwin\n\tbuild\tGOARCH='+target.split('/')[1]+'\n'
+                with mock.patch.object(SEAL.subprocess,'run') as signature, mock.patch.object(SEAL.subprocess,'check_output',return_value=info):
+                    SEAL.seal(folder,target)
+                    signature.assert_called_once_with(['codesign','--verify','--strict',str(binary)],check=True,timeout=20)
+                saved=json.loads((folder/'XRAY-RUNTIME.json').read_text())
+                self.assertEqual(saved['sha256'],hashlib.sha256(binary.read_bytes()).hexdigest())
+                self.assertEqual(saved['size'],binary.stat().st_size)
+                self.assertEqual(saved['policy_sha256'],meta['policy_sha256'])
+    def test_signing_failure_wrong_architecture_and_missing_identity_do_not_reseal(self):
+        for failure in ('signature','architecture','identity'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as temp:
+                folder=Path(temp)/'bundle';binary,meta=self.fixture(folder,'darwin/arm64')
+                if failure!='identity':binary.write_bytes(BUILD.marker(meta['policy_sha256']).encode())
+                receipt=folder/'XRAY-RUNTIME.json';before=receipt.read_bytes()
+                info='xray: go1.26.3\nGOOS=darwin\nGOARCH='+('amd64' if failure=='architecture' else 'arm64')
+                effect=SEAL.subprocess.CalledProcessError(1,'codesign') if failure=='signature' else None
+                with mock.patch.object(SEAL.subprocess,'run',side_effect=effect), mock.patch.object(SEAL.subprocess,'check_output',return_value=info):
+                    with self.assertRaises((ValueError,SEAL.subprocess.CalledProcessError)):SEAL.seal(folder,'darwin/arm64')
+                self.assertEqual(before,receipt.read_bytes())
+
 if __name__=='__main__':unittest.main()

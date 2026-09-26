@@ -141,9 +141,15 @@ func TestWindowsRawAndLayeredNativeRuntimeIsRealAndUnsupportedModesStayGated(t *
 		t.Fatal("Windows kill switch must use profile default outbound Block rather than a block-all rule that can override narrow allow rules")
 	}
 	setup := repoFile(t, "client/Setup-Windows-Runtime.ps1")
-	for _, required := range []string{"1.13.12", "26.7.11", "SHA-256 mismatch", "e93fc531134eb1beb4efa3c74990a24e48456098a31c03b60d5ddf17f223cf98", "af801b62c4d41d248d3db8016d4c6e2a7ccfb7ed443e3738aeb6f9e062321512", "CompanionPatterns", "*.dll", "*.dat"} {
+	for _, required := range []string{"1.13.12", "26.7.11", "SHA-256 mismatch", "e93fc531134eb1beb4efa3c74990a24e48456098a31c03b60d5ddf17f223cf98", "Install-RouterVPNBundledXray -BundleRoot $AppRoot -Destination $Runtime -Architecture $arch", "CompanionPatterns", "*.dll"} {
 		if !strings.Contains(setup, required) {
 			t.Fatalf("Windows pinned runtime setup missing %q", required)
+		}
+	}
+	bundleInstaller := repoFile(t, "client/Install-Bundled-Xray.ps1")
+	for _, required := range []string{"50231eaff98ccc31b5cbd247a721c16e97fe5ec1", "Get-FileHash", "policy_sha256", "XRAY-RUNTIME.json", "schema_version", "toolchain", "[IO.File]::Replace"} {
+		if !strings.Contains(bundleInstaller, required) {
+			t.Fatalf("corrected Windows engine installer missing %q", required)
 		}
 	}
 	catalog := repoFile(t, "client/Prepare-Windows-Mode-Catalog-v2.ps1")

@@ -17,9 +17,16 @@ def seal(directory,target):
     if metadata['target']!=target or metadata['upstream_revision']!=POLICY.XRAY_PIN or metadata['policy_sha256']!=POLICY.digest():raise ValueError('Source identity changed before signing')
     subprocess.run(['codesign','--verify','--strict',str(binary)],check=True,timeout=20)
     info=subprocess.check_output(['go','version','-m',str(binary)],text=True,timeout=20)
-    for expected in ('GOOS=darwin','GOARCH='+target.split('/')[1], 'routervpn-'+POLICY.XRAY_PIN+'.'+POLICY.digest()):
-        if expected not in info:raise ValueError('Signed engine differs from its expected architecture/source')
-    raw=binary.read_bytes();metadata['size']=len(raw);metadata['sha256']=hashlib.sha256(raw).hexdigest()
+    for expected in ('GOOS=darwin','GOARCH='+target.split('/')[1], 'go1.26.3'):
+        if expected not in info:raise ValueError('Signed engine differs from its expected architecture/toolchain')
+    # Go omits -X linker values from `go version -m` in a trimmed release build.
+    # The exact runtime identity is a compiled string in the signed executable,
+    # so validate it there without executing a foreign-architecture Mach-O.
+    raw=binary.read_bytes()
+    compiled_identity=('routervpn-'+POLICY.XRAY_PIN+'.'+POLICY.digest()).encode('ascii')
+    if compiled_identity not in raw:
+        raise ValueError('Signed engine does not contain its compiled source identity')
+    metadata['size']=len(raw);metadata['sha256']=hashlib.sha256(raw).hexdigest()
     receipt.write_text(json.dumps(metadata,sort_keys=True,indent=2)+'\n')
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('directory',type=Path);p.add_argument('target')
