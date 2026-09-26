@@ -95,6 +95,10 @@ for path in modes client; do
   rm -rf "$ROOT/$path"
   cp -a "$SRC/$path" "$ROOT/$path"
 done
+mkdir -p "$ROOT/runtime"
+[[ ! -L "$ROOT/runtime" && ! -L "$ROOT/runtime/xray" ]] || { echo 'Unsafe runtime installation path' >&2; exit 1; }
+rm -rf "$ROOT/runtime/xray"
+cp -a "$SRC/runtime/xray" "$ROOT/runtime/xray"
 for file in client.json modes.json logical-modes.json router-vpn-client router-vpn-dns router-vpn-start-layer-relay router-vpn-update router-vpn-app RouterVPN.ico router-vpn.png MODES.md CLIENT.md SECURITY.md LICENSE ROUTER-VPN-SOURCE.json; do
   [[ -e "$SRC/$file" ]] && cp -a "$SRC/$file" "$ROOT/$file"
 done
@@ -153,6 +157,7 @@ the normal Router VPN Linux runtime setup; unsupported mode checks remain unavai
 than being substituted with a fake compatibility path.
 TXT
 
+"$ROOT/deploy/package-xray-runtime.sh" "linux/$ARCH" "$dir"
 python3 "$ROOT/server/scripts/source_provenance.py" "$dir" --family "linux-$ARCH"
 tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
 archive_list="$work/archive-members.txt"

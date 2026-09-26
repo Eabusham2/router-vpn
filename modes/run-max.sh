@@ -60,7 +60,7 @@ cleanup(){
 trap cleanup EXIT INT TERM
 
 case "${OUTER_ENGINE:-}" in
-  xray) add_bg sudo xray run -c "$CONF/outer-xray.json" ;;
+  xray) source "$SCRIPT_DIR/xray-runtime.sh"; add_bg sudo "$XRAY_BIN" run -c "$CONF/outer-xray.json" ;;
   sing-box|none) ;;
   *) echo "invalid MAX OUTER_ENGINE: ${OUTER_ENGINE:-unset}" >&2; exit 1 ;;
 esac

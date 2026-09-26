@@ -12,7 +12,7 @@ HEADER_RE = re.compile(rf"^# GENERATED exact-SHA Router VPN production compose: 
 BROKER_RE = re.compile(rf"(?m)^\s*ROUTER_VPN_GITHUB_SHA:\s*({SHA})\s*$")
 IMAGE_RE = re.compile(rf"ghcr\.io/eabusham2/router-vpn-(init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):({SHA})")
 EXPECTED = {
-    "init": 3,
+    "init": 4,
     "agent": 1,
     "wireguard": 1,
     "awg2": 1,

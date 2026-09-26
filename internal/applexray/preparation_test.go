@@ -37,3 +37,17 @@ func TestSharedNativeXrayPreparation(t *testing.T) {
 		t.Fatalf("shared Xray preparation: %v\n%s", err, output)
 	}
 }
+
+func TestCorrectedEngineBundleValidation(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		python, err = exec.LookPath("python")
+	}
+	if err != nil {
+		t.Fatal("Python is required for corrected engine package verification")
+	}
+	cmd := exec.Command(python, filepath.Join("..", "..", "deploy", "test_bundled_xray.py"))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("corrected engine package: %v\n%s", err, output)
+	}
+}

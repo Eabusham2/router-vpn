@@ -58,6 +58,8 @@ for arch in amd64 arm64; do
 
   "$ROOT/client/macos/build-native-app.sh" "$dir" "$arch"
 
+  "$ROOT/deploy/package-xray-runtime.sh" "darwin/$arch" "$dir"
+
   # Seal every distributed Mach-O before packaging. CI/release candidates use
   # an ad-hoc identity so quarantine cannot mistake an unsealed bundle for a
   # modified/corrupt app. Production can supply a Developer ID Application
@@ -68,6 +70,8 @@ for arch in amd64 arm64; do
   sign_macho "$dir/router-vpn-start-layer-relay"
   sign_macho "$dir/router-vpn-update"
   sign_macho "$dir/RouterVPN.app"
+  sign_macho "$dir/runtime/xray/xray"
+  python3 "$ROOT/deploy/seal-xray-runtime.py" "$dir/runtime/xray" "darwin/$arch"
 
   cat >"$dir/start-router-vpn.sh" <<'SH'
 #!/usr/bin/env bash

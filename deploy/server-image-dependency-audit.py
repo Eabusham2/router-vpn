@@ -52,7 +52,7 @@ for rel, body in docs.items():
 
 for required in (
     "ghcr.io/sagernet/sing-box:v1.13.12",
-    "ghcr.io/xtls/xray-core:26.7.11",
+    "golang:1.26.3-alpine AS xray",
     "ghcr.io/rosenpass/rosenpass:sha-00569eb",
     "pocat/naiveproxy:v2.11.4",
     "ghcr.io/shadowsocks/ssserver-rust:v1.24.0",
@@ -60,4 +60,8 @@ for required in (
 ):
     assert required in joined, f"fixed transport dependency missing: {required}"
 
+assert "deploy/build-xray-runtime.py" in docs["server/init/Dockerfile"]
+assert "COPY --from=xray /xray/linux-${TARGETARCH}/xray" in docs["server/init/Dockerfile"]
+assert "50231eaff98ccc31b5cbd247a721c16e97fe5ec1" in (ROOT/"deploy/prepare-xray-runtime.py").read_text()
+assert "POLICY.prepare(source)" in (ROOT/"deploy/build-xray-runtime.py").read_text()
 print("published server image dependency pin audit: OK")

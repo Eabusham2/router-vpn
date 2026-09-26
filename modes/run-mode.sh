@@ -50,7 +50,7 @@ start_dns_proxy(){ local bin pid; bin=$(dns_binary); sudo env HOMEVPN_DNS_PROTOC
 make_local_socks_chain(){ local out="$RUN/local-socks-chain.json"; python3 "$SCRIPT_DIR/runtime-config.py" local-socks "$ROOT" "$out" "${HOMEVPN_SOCKS_HOST:-10.77.0.1}" "${HOMEVPN_SOCKS_PORT:-1080}"; printf '%s' "$out"; }
 run_kernel_tunnel(){ local tool=$1 full=$2 split=$3; local cfg=$full; socks_only && cfg=$split; if ! socks_only; then patch_kernel_dns "$cfg"; fi; sudo "$tool" up "$cfg"; cleanup_kernel(){ sudo "$tool" down "$cfg" >/dev/null 2>&1 || true; }; trap cleanup_kernel EXIT INT TERM; if socks_only; then local proxy_cfg; proxy_cfg=$(make_local_socks_chain); sudo sing-box run -c "$proxy_cfg"; return; fi; start_dns_proxy; while sleep 3600; do :; done; }
 run_sing_box(){ local cfg="$CONF/sing-box.json"; local tmp="$RUN/$MODE-sing-box.json"; python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$cfg"; if [[ ${HOMEVPN_SOCKS:-false} == true || ${HOMEVPN_JUMBO:-false} == true ]]; then local variant=jumbo; [[ ${HOMEVPN_SOCKS:-false} == true ]] && variant=socks; python3 "$SCRIPT_DIR/runtime-config.py" sing-variant "$ROOT" "$cfg" "$tmp" "$variant"; cfg="$tmp"; fi; sing-box check -D "$CONF" -c "$cfg" >/dev/null; exec sudo sing-box run -D "$CONF" -c "$cfg"; }
-run_xray_tun(){ start_bg sudo xray run -c "$CONF/xray.json"; local pid=$LAST_BG_PID; sleep 1; kill -0 "$pid" >/dev/null 2>&1 || { echo 'Xray REALITY process failed to start' >&2; exit 1; }; run_sing_box; }
+run_xray_tun(){ source "$SCRIPT_DIR/xray-runtime.sh"; start_bg sudo "$XRAY_BIN" run -c "$CONF/xray.json"; local pid=$LAST_BG_PID; sleep 1; kill -0 "$pid" >/dev/null 2>&1 || { echo 'Xray REALITY process failed to start' >&2; exit 1; }; run_sing_box; }
 
 start_start_layer_relay
 

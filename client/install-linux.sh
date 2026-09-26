@@ -7,7 +7,8 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf nftables git make gcc libc6-dev golang-go curl python3 tar cmake clang pkg-config libsodium-dev cargo rustc tor
 "$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
-mkdir -p "$ROOT" "$ROOT/bin" /usr/local/bin /usr/local/lib /usr/local/sbin
+mkdir -p "$ROOT" "$ROOT/bin" "$ROOT/client" /usr/local/bin /usr/local/lib /usr/local/sbin
+install -m 644 "$BUNDLE/client/verify-bundled-xray.py" "$ROOT/client/verify-bundled-xray.py"
 cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
 ARCH=$(uname -m)
 case "$ARCH" in

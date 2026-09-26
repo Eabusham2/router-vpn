@@ -54,7 +54,7 @@ exact readiness reason rather than being substituted with a compatibility-layer 
 This generic application package contains no linked home/server node; link nodes separately.
 Router VPN is MIT-licensed open-source software; see LICENSE.
 TXT
-write_provenance "$dir" "windows-$arch";package_zip "RouterVPN-Windows-$arch" "$dir";done
+"$ROOT/deploy/package-xray-runtime.sh" "windows/$arch" "$dir";write_provenance "$dir" "windows-$arch";package_zip "RouterVPN-Windows-$arch" "$dir";done
 for arch in amd64 arm64;do root="$OUT/work/RouterVPNPortable-$arch";app="$root/App/RouterVPN";data="$root/Data";mkdir -p "$app" "$data/generated";copy_runtime "$app";cp -a "$ROOT/client" "$app/client";cp "$DIST/client/router-vpn-client-windows-$arch.exe" "$app/router-vpn-client.exe";cp "$DIST/dnsproxy/router-vpn-dns-windows-$arch.exe" "$app/router-vpn-dns.exe";cp "$DIST/start-layer/router-vpn-start-layer-relay-windows-$arch.exe" "$app/router-vpn-start-layer-relay.exe";cp "$DIST/app-update/router-vpn-update-windows-$arch.exe" "$app/router-vpn-update.exe";cp "$DIST/client/RouterVPNPortable-$arch.exe" "$root/RouterVPNPortable.exe";cp "$DIST/client/RouterVPNPortableCore-$arch.exe" "$root/RouterVPNPortableCore.exe";cp "$DIST/client/RouterVPNSetupRuntime-$arch.exe" "$root/RouterVPNSetupRuntime.exe";cp "$ROOT/client/Setup-Windows-Runtime.ps1" "$root/Setup-Windows-Runtime.ps1";materialize_icons "$app";cat >"$root/README.txt" <<'TXT'
 Double-click RouterVPNPortable.exe. It supervises a short-lived exact-SHA updater and the mature
 Portable runtime owner in RouterVPNPortableCore.exe. Closing Router VPN always terminates an updater
@@ -68,7 +68,7 @@ No Router VPN state is written to AppData or the registry by the portable launch
 whole folder. The ZIP is generic and contains no linked node. Add nodes separately by import/pairing.
 Router VPN is MIT-licensed open-source software; see App/RouterVPN/LICENSE.
 TXT
-write_provenance "$root" "windows-portable-$arch";package_zip "RouterVPN-Portable-Windows-$arch" "$root";done
+"$ROOT/deploy/package-xray-runtime.sh" "windows/$arch" "$app";write_provenance "$root" "windows-portable-$arch";package_zip "RouterVPN-Portable-Windows-$arch" "$root";done
 while IFS= read -r binary;do file=$(basename "$binary");target=${file#router-vpn-client-};os=${target%%-*};rest=${target#*-};arch=${rest%.exe};case "$os" in windows)continue;;esac;name="RouterVPN-${os}-${arch}";dir="$OUT/work/$name";mkdir -p "$dir";copy_runtime "$dir";cp "$binary" "$dir/router-vpn-client";cp "$DIST/dnsproxy/router-vpn-dns-${os}-${arch}" "$dir/router-vpn-dns";cp "$DIST/start-layer/router-vpn-start-layer-relay-${os}-${arch}" "$dir/router-vpn-start-layer-relay";updater="$DIST/app-update/router-vpn-update-${os}-${arch}";if [[ -f "$updater" ]];then cp "$updater" "$dir/router-vpn-update";chmod +x "$dir/router-vpn-update";fi;chmod +x "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/router-vpn-start-layer-relay" "$dir/modes/"*.sh;cat >"$dir/start-router-vpn.sh" <<'SH2'
 #!/usr/bin/env sh
 set -eu
@@ -76,5 +76,5 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd);export HOMEVPN_ROOT="$ROOT";ex
 if [ -x "$ROOT/router-vpn-update" ]; then "$ROOT/router-vpn-update" --download --json >/dev/null 2>&1 & fi
 exec ./router-vpn-client
 SH2
-chmod +x "$dir/start-router-vpn.sh";write_provenance "$dir" "$os-$arch";package_tgz "$name" "$dir";done < <(find "$DIST/client" -maxdepth 1 -type f -name 'router-vpn-client-*'|sort)
+chmod +x "$dir/start-router-vpn.sh";if [[ "$os" =~ ^(linux|darwin)$ && "$arch" =~ ^(amd64|arm64)$ ]];then "$ROOT/deploy/package-xray-runtime.sh" "$os/$arch" "$dir";fi;write_provenance "$dir" "$os-$arch";package_tgz "$name" "$dir";done < <(find "$DIST/client" -maxdepth 1 -type f -name 'router-vpn-client-*'|sort)
 python3 "$ROOT/deploy/check-generic-package-secrets.py" "$OUT";cp "$DIST/SHA256SUMS" "$OUT/BINARY-SHA256SUMS";(cd "$OUT";find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0|sort -z|xargs -0 sha256sum>SHA256SUMS);rm -rf "$OUT/work";printf 'Packaged MIT-licensed secret-free generic artifacts in %s\n' "$OUT"

@@ -18,10 +18,11 @@ export HOMEVPN_MTU=${HOMEVPN_MTU:-1320}
 python3 "$SCRIPT_DIR/mtu-policy.py" apply "$CONF"
 HOMEVPN_PROFILE_ID="$PROFILE_ID" "$SCRIPT_DIR/check-mode.sh" "$MODE" >/dev/null
 HOMEVPN_PROFILE_ID="$PROFILE_ID" python3 "$SCRIPT_DIR/dns-policy.py" patch-sing "$CONF/sing-box.json"
-xray run -test -c "$CONF/xray.json" >/dev/null
+source "$SCRIPT_DIR/xray-runtime.sh"
+"$XRAY_BIN" run -test -c "$CONF/xray.json" >/dev/null
 sing-box check -D "$CONF" -c "$CONF/sing-box.json" >/dev/null
 
-sudo xray run -c "$CONF/xray.json" >>"$RUN/$MODE.log" 2>&1 &
+sudo "$XRAY_BIN" run -c "$CONF/xray.json" >>"$RUN/$MODE.log" 2>&1 &
 XPID=$!
 python3 "$SCRIPT_DIR/runtime-pids.py" record "$ROOT" "$MODE" "$XPID"
 sleep 1

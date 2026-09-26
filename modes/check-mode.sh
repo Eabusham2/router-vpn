@@ -43,7 +43,7 @@ check_naive(){
   esac
   check_sing "$dir" sing-box.json
 }
-check_xray(){ local file=${1:?xray config}; need_bin xray; need_file "$file"; xray run -test -c "$file" >/dev/null; }
+check_xray(){ local file=${1:?xray config}; source "$SCRIPT_DIR/xray-runtime.sh"; need_bin "$XRAY_BIN"; need_file "$file"; "$XRAY_BIN" run -test -c "$file" >/dev/null; }
 check_rosenpass(){ local dir=${1:?Rosenpass dir}; need_bin rosenpass; need_file "$dir/rosenpass.toml"; need_file "$dir/rosenpass.env"; need_file "$dir/rosenpass-client-public"; need_file "$dir/rosenpass-client-secret"; need_file "$dir/rosenpass-server-public"; }
 check_max(){
   local mode=${1:-} base=${2:-}

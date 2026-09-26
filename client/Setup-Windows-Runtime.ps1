@@ -128,6 +128,7 @@ if ($Portable) {
   $ModesDir = Join-Path $PackageRoot 'modes'
   $ModesSource = Join-Path $PackageRoot 'modes.json'
 }
+. (Join-Path $AppRoot 'client\Install-Bundled-Xray.ps1')
 $Runtime = Join-Path $DataRoot 'runtime\windows'
 $Prep = Join-Path $HelpersRoot 'Prepare-Windows-Mode-Catalog-v2.ps1'
 $OpenVPNSetup = Join-Path $HelpersRoot 'Install-RouterVPN-OpenVPN.ps1'
@@ -140,22 +141,17 @@ switch ($arch) {
   'x64' {
     $sbAsset = "sing-box-$SingBoxVersion-windows-amd64.zip"
     $sbSha = 'e93fc531134eb1beb4efa3c74990a24e48456098a31c03b60d5ddf17f223cf98'
-    $xrAsset = 'Xray-windows-64.zip'
-    $xrSha = 'af801b62c4d41d248d3db8016d4c6e2a7ccfb7ed443e3738aeb6f9e062321512'
     $TorNativeAvailable = $true
   }
   'arm64' {
     $sbAsset = "sing-box-$SingBoxVersion-windows-arm64.zip"
     $sbSha = 'e01560b07061fa79e67cb7dc8727ac5e3010fa9f93444ddaf0c014967f52a1b4'
-    $xrAsset = 'Xray-windows-arm64-v8a.zip'
-    $xrSha = 'c4868e84cbedc9fcc3e636968804a8b3891101eedefe4305aa87d3d05ee1d1b1'
   }
   default { throw "Unsupported Windows architecture: $arch" }
 }
 $sbUrl = "https://github.com/SagerNet/sing-box/releases/download/v$SingBoxVersion/$sbAsset"
-$xrUrl = "https://github.com/XTLS/Xray-core/releases/download/v$XrayVersion/$xrAsset"
 Install-PinnedArchive "sing-box-$SingBoxVersion" $sbUrl $sbSha 'sing-box.exe' $Runtime @('*.dll')
-Install-PinnedArchive "xray-$XrayVersion" $xrUrl $xrSha 'xray.exe' $Runtime @('*.dll','*.dat')
+Install-RouterVPNBundledXray -BundleRoot $AppRoot -Destination $Runtime -Architecture $arch
 if ($TorNativeAvailable) {
   $torUrl = "https://dist.torproject.org/torbrowser/$TorExpertVersion/tor-expert-bundle-windows-x86_64-$TorExpertVersion.tar.gz"
   Install-PinnedTorExpertBundle $torUrl $TorExpertWindowsX64Sha256 $TorVersion $Runtime

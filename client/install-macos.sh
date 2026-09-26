@@ -11,6 +11,7 @@ brew install wireguard-tools go make git python sing-box shadowsocks-rust tor ||
 
 ROOT=/opt/router-vpn-client
 sudo mkdir -p "$ROOT" "$ROOT/client" "$ROOT/bin" /usr/local/bin
+sudo install -m 644 "$BUNDLE/client/verify-bundled-xray.py" "$ROOT/client/verify-bundled-xray.py"
 [[ -f "$BUNDLE/modes/native-multihop-darwin.sh" ]] || { echo 'This bundle is missing the canonical native macOS multihop helper.' >&2; exit 1; }
 sudo cp -a "$BUNDLE/client.json" "$BUNDLE/routers.json" "$BUNDLE/modes.json" "$BUNDLE/modes" "$BUNDLE/generated" "$ROOT/"
 ARCH=$(uname -m)

@@ -10,7 +10,7 @@ import tempfile
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 CUSTOM_IMAGES = {
-    "init": 3,
+    "init": 4,
     "agent": 1,
     "wireguard": 1,
     "awg2": 1,

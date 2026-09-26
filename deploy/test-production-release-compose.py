@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -41,7 +42,10 @@ def test_exact_sha_materialization() -> None:
         assert rendered.startswith("# GENERATED exact-SHA Router VPN production compose: " + TARGET)
         assert "# Generated from server/portainer-current.yaml" in rendered
         assert "ghcr.io/sagernet/sing-box:v1.13.12" in rendered
-        assert "ghcr.io/xtls/xray-core:26.7.11" in rendered
+        assert "ghcr.io/xtls/xray-core:26.7.11" not in rendered
+        xray_section = re.search(r"(?ms)^  xray-pq:\n.*?(?=^  [a-z]|\Z)", rendered).group(0)
+        assert "router-vpn-init:" + TARGET in xray_section
+        assert 'entrypoint: ["/usr/local/bin/xray"]' in xray_section
         assert "ghcr.io/eabusham2/router-vpn-updater:" + TARGET in rendered
         assert "ROUTER_VPN_UPDATE_LISTEN: 127.0.0.1:8793" in rendered
         assert "ROUTER_VPN_GITHUB_SHA: " + TARGET in rendered

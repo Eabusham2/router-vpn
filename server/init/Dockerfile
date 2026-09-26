@@ -26,21 +26,31 @@ RUN mkdir -p dist \
 FROM golang:1.24.13-bookworm AS go-toolchain
 
 FROM ghcr.io/sagernet/sing-box:v1.13.12 AS singbox
-FROM ghcr.io/xtls/xray-core:26.7.11 AS xray
+FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS xray
+RUN apk add --no-cache git python3
+WORKDIR /src
+COPY . /src
+# Prepared at image build time in CI; the private server never recompiles these
+# engines at startup or when serving a requested package.
+RUN for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
+      python3 /src/deploy/build-xray-runtime.py "$target" "/xray/$(echo "$target" | tr / -)" || exit 1; \
+    done
 FROM ghcr.io/rosenpass/rosenpass:sha-00569eb AS rosenpass
 
 FROM debian:bookworm-slim
+ARG TARGETARCH
 RUN apt-get update \
  && apt-get install -y --no-install-recommends bash ca-certificates curl iproute2 iptables nftables openssl procps python3 qrencode wireguard-tools zip \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=go-toolchain /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
-COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
+COPY --from=xray /xray/linux-${TARGETARCH}/xray /usr/local/bin/xray
 COPY --from=rosenpass /usr/local/bin/rosenpass /usr/local/bin/rosenpass
 WORKDIR /src
 COPY . /src
 COPY --from=binaries /src/dist /src/dist
+COPY --from=xray /xray /src/dist/xray
 COPY server/init/noninteractive.sh /usr/local/bin/router-vpn-init
 COPY server/init/entrypoint-v2.sh /usr/local/bin/router-vpn-init-entrypoint
 RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' {} + \

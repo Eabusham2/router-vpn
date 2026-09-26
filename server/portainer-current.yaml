@@ -141,7 +141,8 @@ services:
     command: ["run", "-c", "/etc/sing-box/config.json"]
 
   xray-pq:
-    image: ghcr.io/xtls/xray-core:26.7.11
+    image: ghcr.io/eabusham2/router-vpn-init:e2a616278142ff4579a11728f05b081bd7e4d665
+    entrypoint: ["/usr/local/bin/xray"]
     container_name: router-vpn-xray
     network_mode: host
     user: "0:0"

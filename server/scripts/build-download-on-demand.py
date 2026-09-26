@@ -455,6 +455,7 @@ def build_private_bundle(work: Path, base: Path, src_root: Path) -> Path:
     copy_file(src_root / "configs" / "client" / "modes.json", root / "modes.json")
     copy_file(src_root / "configs" / "client" / "logical-modes.json", root / "logical-modes.json")
     copy_file(src_root / "LICENSE", root / "LICENSE")
+    copy_tree(src_root / "dist" / "xray", root / "dist" / "xray")
     return root
 
 
@@ -489,6 +490,7 @@ def build_local(work: Path, name: str, src_root: Path, compiled_root: Path, base
         data = root / "Data"
         data.mkdir(parents=True, exist_ok=True)
         copy_generic_runtime(src_root, app)
+        copy_tree(src_root / "dist" / "xray" / f"windows-{arch}", app / "runtime" / "xray")
         copy_file(require_dist(compiled_root, f"router-vpn-client-windows-{arch}.exe"), app / "router-vpn-client.exe")
         copy_file(require_dist(compiled_root, f"router-vpn-dns-windows-{arch}.exe"), app / "router-vpn-dns.exe")
         copy_file(require_dist(compiled_root, f"RouterVPNPortable-{arch}.exe"), root / "RouterVPNPortable.exe")
@@ -512,6 +514,7 @@ def build_local(work: Path, name: str, src_root: Path, compiled_root: Path, base
     if family == "windows":
         root = work / f"RouterVPN-Windows-{arch}"
         copy_generic_runtime(src_root, root)
+        copy_tree(src_root / "dist" / "xray" / f"windows-{arch}", root / "runtime" / "xray")
         copy_file(require_dist(compiled_root, f"router-vpn-client-windows-{arch}.exe"), root / "router-vpn-client.exe")
         copy_file(require_dist(compiled_root, f"router-vpn-dns-windows-{arch}.exe"), root / "router-vpn-dns.exe")
         copy_file(require_dist(compiled_root, f"RouterVPN-{arch}.exe"), root / "RouterVPN.exe")

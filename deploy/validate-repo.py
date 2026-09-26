@@ -290,7 +290,7 @@ if "busybox:1.36" in compose:
     error("production compose still references retired BusyBox static :8786 server")
 for required in (
     "ghcr.io/sagernet/sing-box:v1.13.12",
-    "ghcr.io/xtls/xray-core:26.7.11",
+    'entrypoint: ["/usr/local/bin/xray"]',
     "/src/server/scripts/download-broker.py",
     '"http://127.0.0.1:8786/healthz"',
     "ROUTER_VPN_GITHUB_SHA:",
@@ -301,7 +301,7 @@ if re.search(r"(?m)^\s*context:\s*https?://", compose):
     error("production compose reintroduced a remote Git Docker build context")
 
 expected_images = {
-    "init": 3, "agent": 1, "wireguard": 1, "awg2": 1,
+    "init": 4, "agent": 1, "wireguard": 1, "awg2": 1,
     "rosenpass": 1, "naive": 1, "ss-v2ray": 1, "aux": 1,
 }
 all_runtime_tags: list[str] = []
@@ -383,7 +383,7 @@ pins = {
     "server/init/Dockerfile": (
         "golang:1.24.13-alpine", "golang:1.24.13-bookworm",
         "ghcr.io/sagernet/sing-box:v1.13.12",
-        "ghcr.io/xtls/xray-core:26.7.11", "ghcr.io/rosenpass/rosenpass:sha-00569eb",
+        "golang:1.26.3-alpine AS xray", "deploy/build-xray-runtime.py", "ghcr.io/rosenpass/rosenpass:sha-00569eb",
     ),
     "server/awg2/Dockerfile": (
         "golang:1.25.12-bookworm",

@@ -20,12 +20,13 @@ need_bin(){ command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1"; exi
 need_file(){ [[ -s "$1" ]] || { echo "missing profile: $1"; exit 1; }; }
 case "$MODE" in
   split|max)
-    need_bin xray
+    source "$SCRIPT_DIR/xray-runtime.sh"
+    need_bin "$XRAY_BIN"
     need_bin sing-box
     need_file "$CONF/xray.json"
     need_file "$CONF/sing-box.json"
     need_file "$CONF/cert.pem"
-    xray run -test -c "$CONF/xray.json" >/dev/null
+    "$XRAY_BIN" run -test -c "$CONF/xray.json" >/dev/null
     (cd "$CONF" && sing-box check -D "$CONF" -c sing-box.json >/dev/null)
     ;;
   *) echo "unknown combined mode: $MODE" >&2; exit 2 ;;
