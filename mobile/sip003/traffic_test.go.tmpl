@@ -286,7 +286,10 @@ func udpExchange(t *testing.T, proxy string, destination *net.UDPAddr) {
 	header := []byte{0, 0, 0, 1}
 	header = append(header, destination.IP.To4()...)
 	header = append(header, byte(destination.Port>>8), byte(destination.Port))
-	for _, size := range []int{64, 1200, 9000} {
+	// 2000 bytes is deliberately above a typical QUIC datagram and therefore
+	// exercises Hysteria2 fragmentation/reassembly. Jumbo-TUN support is a
+	// separate capability and is not inferred from this userspace UDP relay.
+	for _, size := range []int{64, 1200, 2000} {
 		payload := bytes.Repeat([]byte{byte(size)}, size)
 		conn.SetDeadline(time.Now().Add(8 * time.Second))
 		if _, e = conn.Write(append(append([]byte{}, header...), payload...)); e != nil {

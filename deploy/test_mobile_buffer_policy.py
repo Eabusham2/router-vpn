@@ -7,13 +7,23 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('buffer_policy',ROOT/'deploy/prepare-mobile-buffers.py')
 MODULE=importlib.util.module_from_spec(spec);spec.loader.exec_module(MODULE)
+PINNED_FILES=dict(MODULE.FILES)
 class Tests(unittest.TestCase):
+    def test_production_dependency_pins_are_exact(self):
+        self.assertEqual(PINNED_FILES,{
+            'common/buf/buffer_standard.go':('608fbf3f13067a7568c491990dba764b81107e87','16 * 1024'),
+            'common/buf/buffer_low_memory.go':('81fb10a26460dea3586486118d091a43020284eb','8 * 1024'),
+        })
     def fixture(self,root):
         (root/'common/buf').mkdir(parents=True)
         (root/'go.mod').write_text('module github.com/sagernet/sing\n\ngo 1.24\n')
-        for name,(_,udp) in MODULE.FILES.items():
+        synthetic={}
+        for name,(_,udp) in PINNED_FILES.items():
             low='low_memory' in name
-            (root/name).write_text('//go:build '+('with_low_memory' if low else '!with_low_memory')+'\n\npackage buf\n\nconst (\n\tBufferSize    = '+('16' if low else '32')+' * 1024\n\tUDPBufferSize = '+udp+'\n)\n')
+            path=root/name
+            path.write_text('//go:build '+('with_low_memory' if low else '!with_low_memory')+'\n\npackage buf\n\nconst (\n\tBufferSize    = '+('16' if low else '32')+' * 1024\n\tUDPBufferSize = '+udp+'\n)\n')
+            synthetic[name]=(MODULE.blobsha(path.read_bytes()),udp)
+        MODULE.FILES=synthetic
     def test_exact_idempotent_copy_leaves_original_tcp_and_cache_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             src=Path(tmp)/'source';dst=Path(tmp)/'owned';self.fixture(src)

@@ -43,13 +43,17 @@ def main() -> int:
         write(src / "configs/client/modes.json", "CURRENT-CATALOG\n")
         write(src / "configs/client/logical-modes.json", "CURRENT-LOGICAL\n")
         write(src / "LICENSE", "CURRENT-LICENSE\n")
+        write(src / "dist/xray/linux-amd64/xray", "CURRENT-XRAY\n")
+        write(src / "dist/xray/linux-amd64/XRAY-RUNTIME.json", "{}\n")
+        write(src / "dist/xray/linux-amd64/XRAY-LICENSE", "CURRENT-XRAY-LICENSE\n")
 
         out = MOD.build_private_bundle(work, base, src)
         assert (out / "routers.json").read_text(encoding="utf-8").startswith('{"selected_id"')
         assert (out / "generated/wg/wg.conf").read_text(encoding="utf-8") == "PRIVATE-NODE-PROFILE\n"
         assert not (out / "modes/stale.sh").exists()
         assert not (out / "client/stale.ps1").exists()
-        assert not (out / "dist").exists()
+        assert not (out / "dist/stale.bin").exists()
+        assert (out / "dist/xray/linux-amd64/xray").read_text(encoding="utf-8") == "CURRENT-XRAY\n"
         assert (out / "modes/current.sh").read_text(encoding="utf-8") == "CURRENT-MODE\n"
         assert (out / "client/current.ps1").read_text(encoding="utf-8") == "CURRENT-CLIENT\n"
         assert (out / "modes.json").read_text(encoding="utf-8") == "CURRENT-CATALOG\n"

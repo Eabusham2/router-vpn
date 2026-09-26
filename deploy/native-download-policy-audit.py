@@ -184,18 +184,21 @@ for marker in ("generic package contains private bundle", "generic package conta
 
 need(
     "client/install-xray.sh",
-    "VERSION=v26.7.11",
-    "EXPECTED_SHA256=",
-    "Xray archive checksum mismatch",
-    "p.is_absolute()",
-    '".." in p.parts',
-    "stat.S_ISLNK",
-    "max_archive",
-    "max_members",
-    "max_total",
-    "zf.open(binary",
+    'SOURCE="$BUNDLE/runtime/xray"',
+    'SOURCE="$BUNDLE/dist/xray/$TARGET"',
+    'verify-bundled-xray.py',
+    'install-bundled-xray.py',
 )
-forbid("client/install-xray.sh", "releases/latest", "extractall(", "extract(")
+forbid("client/install-xray.sh", "releases/latest", "curl ", "wget ", "extractall(", "extract(")
+need(
+    "client/verify-bundled-xray.py",
+    "PIN='50231eaff98ccc31b5cbd247a721c16e97fe5ec1'",
+    "VERSION='26.7.11'",
+    "TOOLCHAIN='go1.26.3'",
+    "Ambiguous bundled engine receipt",
+    "Bundled engine checksum or size mismatch",
+    "Binary does not identify the required corrected runtime",
+)
 
 need(
     "client/install-macos-complete.sh",

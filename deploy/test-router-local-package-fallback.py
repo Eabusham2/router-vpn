@@ -42,6 +42,10 @@ def fake_source(root: Path) -> None:
     )
     dist = root / "dist"
     for arch in ("amd64", "arm64"):
+        runtime = dist / "xray" / f"windows-{arch}"
+        write(runtime / "xray.exe", "authenticated bundled Xray fixture\n")
+        write(runtime / "XRAY-RUNTIME.json", "{}\n")
+        write(runtime / "XRAY-LICENSE", "fixture license\n")
         for name in (
             f"router-vpn-client-windows-{arch}.exe",
             f"router-vpn-dns-windows-{arch}.exe",
