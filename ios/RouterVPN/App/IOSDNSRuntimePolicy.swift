@@ -95,10 +95,32 @@ enum IOSDNSRuntimePolicy {
                     nativeXray = true
                 }
             }
-            guard nativeXray || isSelfContainedLibbox(encodedFiles), let encoded = encodedFiles["sing-box.json"],
+            var nativeSIP003 = false
+            if rawID == IOSNativeSIP003Profile.modeID && encodedFiles["sslocal.json"] != nil {
+                var decoded: [String: Data] = [:], valid = true
+                var total = 0
+                for (name, value) in encodedFiles {
+                    guard value.utf8.count <= 6 * 1024 * 1024, let data = Data(base64Encoded: value, options: []), data.count <= 4 * 1024 * 1024 else { valid = false; break }
+                    total += data.count; if total > 12 * 1024 * 1024 { valid = false; break }
+                    decoded[name] = data
+                }
+                if valid, let composed = try? IOSNativeSIP003Profile.compose(files: decoded), let config = composed["sing-box.json"] {
+                    encodedFiles["sing-box.json"] = config.base64EncodedString(); nativeSIP003 = true
+                }
+            }
+            guard nativeXray || nativeSIP003 || isSelfContainedLibbox(encodedFiles), let encoded = encodedFiles["sing-box.json"],
                   let data = Data(base64Encoded: encoded, options: []), data.count <= 4 * 1024 * 1024 else { continue }
             var next = encodedFiles
             next["sing-box.json"] = try patchLibbox(data, policy: policy, profile: profile).base64EncodedString()
+            if nativeSIP003 {
+                var decoded: [String: Data] = [:]
+                for (name, encoded) in next {
+                    guard let data = Data(base64Encoded: encoded, options: []) else { throw error("Invalid native SIP003 asset.") }
+                    decoded[name] = data
+                }
+                let compiled = try IOSNativeSIP003Profile.compose(files: decoded)
+                next["sing-box.json"] = compiled["sing-box.json"]?.base64EncodedString()
+            }
             profiles[rawID] = next
         }
         bundle.profiles = profiles

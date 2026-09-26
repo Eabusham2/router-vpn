@@ -73,7 +73,7 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
+  for symbol in     routerCompileSIP003Profile     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
     grep -Fq "$symbol" "$api_list" || {
       echo "combined libbox AAR is missing $symbol bridge" >&2
       return 1
@@ -219,6 +219,7 @@ python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
   go_retry test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
+  bash "$ROOT/../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   go_retry run ./cmd/internal/build_libbox -target android
 )
 

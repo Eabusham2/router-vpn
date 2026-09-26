@@ -1,0 +1,11 @@
+package libbox
+
+import "github.com/sagernet/sing-box/experimental/libbox/routervpn/nativesip003"
+
+// RouterCompileSIP003Profile validates and composes only the generated
+// Shadowsocks 2022 + built-in WebSocket/TLS TCP and Hysteria2 UDP graph. It
+// starts no helper and opens no sockets. Actual traffic belongs to Libbox.
+func RouterCompileSIP003Profile(wrapper, helper string) (string, error) {
+	result, err := nativesip003.Compile([]byte(wrapper), []byte(helper))
+	return string(result), err
+}

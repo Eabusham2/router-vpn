@@ -126,7 +126,9 @@ enum IOSRuntimeSelector {
             let profile = IOSDNSRuntimePolicy.selectedProfile(in: bundle)
             files = try IOSNativeXrayProfile.compose(mode: rawProfileID, files: files, homeDNS: profile?.adGuardIPv4 ?? "")
         }
-        if let helper = unsupportedHelperAssets.first(where: { files[$0] != nil && !(nativeXray && $0 == "xray.json") }) {
+        let nativeSIP003 = rawProfileID == IOSNativeSIP003Profile.modeID && files["sslocal.json"] != nil
+        if nativeSIP003 { files = try IOSNativeSIP003Profile.compose(files: files) }
+        if let helper = unsupportedHelperAssets.first(where: { files[$0] != nil && !(nativeXray && $0 == "xray.json") && !(nativeSIP003 && $0 == "sslocal.json") }) {
             throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) requires desktop helper asset \(helper), which the iOS PacketTunnel does not start.")
         }
         guard let config = files["sing-box.json"], let object = try? JSONSerialization.jsonObject(with: config) as? [String: Any] else {

@@ -117,3 +117,5 @@ if platform.system() == 'Darwin':
 else:
     print('iOS forwarding native gates: SKIP on non-Apple source-only lane; required by Apple shipping lanes')
 print('iOS runtime + helper-chain fail-closed + selection/Connect separation + unified AUTO/SMART/CUSTOM strategy contract OK')
+
+runpy.run_path(str(root/"deploy/test_ios_native_sip003_profiles.py"), run_name="__main__")

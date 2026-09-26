@@ -1,0 +1,371 @@
+package routervpnsip003test
+
+import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+)
+
+// All destinations and subprocesses belong to this test. No user configuration,
+// public service, privileged TUN, DNS override or host route is involved.
+func marshal(t *testing.T, v any) []byte {
+	t.Helper()
+	raw, e := json.Marshal(v)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return raw
+}
+func freePort(t *testing.T, network string) int {
+	t.Helper()
+	if network == "tcp" {
+		l, e := net.Listen("tcp", "127.0.0.1:0")
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer l.Close()
+		return l.Addr().(*net.TCPAddr).Port
+	}
+	p, e := net.ListenPacket("udp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer p.Close()
+	return p.LocalAddr().(*net.UDPAddr).Port
+}
+func address(port int) string { return net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) }
+func process(t *testing.T, exe string, args []string, ready string) {
+	t.Helper()
+	if exe == "" {
+		t.Fatal("the pinned native server/client test executable is required")
+	}
+	log, e := os.Create(filepath.Join(t.TempDir(), "fixture.log"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.Stdout = log
+	cmd.Stderr = log
+	if e = cmd.Start(); e != nil {
+		log.Close()
+		t.Fatal(e)
+	}
+	done := make(chan struct{})
+	var exit error
+	go func() { exit = cmd.Wait(); close(done) }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("owned test process did not exit")
+		}
+		log.Close()
+		if t.Failed() {
+			b, _ := os.ReadFile(log.Name())
+			if len(b) > 6000 {
+				b = b[len(b)-6000:]
+			}
+			t.Logf("isolated fixture diagnostics: %s", b)
+		}
+	})
+	for deadline := time.Now().Add(8 * time.Second); time.Now().Before(deadline); {
+		select {
+		case <-done:
+			t.Fatalf("fixture exited before readiness: %v", exit)
+		default:
+		}
+		c, e := net.DialTimeout("tcp", ready, 100*time.Millisecond)
+		if e == nil {
+			c.Close()
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("owned fixture never opened its expected listener")
+}
+func echoes(t *testing.T) (*net.TCPAddr, *net.UDPAddr) {
+	t.Helper()
+	tcp, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	udp, e := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if e != nil {
+		tcp.Close()
+		t.Fatal(e)
+	}
+	if e = startwhitening.ConfigureUDPSocket(udp); e != nil {
+		tcp.Close()
+		udp.Close()
+		t.Fatal(e)
+	}
+	var mu sync.Mutex
+	stopped := false
+	connections := map[net.Conn]bool{}
+	t.Cleanup(func() {
+		tcp.Close()
+		udp.Close()
+		mu.Lock()
+		stopped = true
+		for c := range connections {
+			c.Close()
+		}
+		mu.Unlock()
+	})
+	go func() {
+		for {
+			c, e := tcp.Accept()
+			if e != nil {
+				return
+			}
+			mu.Lock()
+			if stopped {
+				mu.Unlock()
+				c.Close()
+				return
+			}
+			connections[c] = true
+			mu.Unlock()
+			go func() { defer c.Close(); _, _ = io.Copy(c, c); mu.Lock(); delete(connections, c); mu.Unlock() }()
+		}
+	}()
+	go func() {
+		b := make([]byte, 65535)
+		for {
+			n, a, e := udp.ReadFromUDP(b)
+			if e != nil {
+				return
+			}
+			_, _ = udp.WriteToUDP(b[:n], a)
+		}
+	}()
+	return tcp.Addr().(*net.TCPAddr), udp.LocalAddr().(*net.UDPAddr)
+}
+func certificate(t *testing.T) (string, string, string, string) {
+	t.Helper()
+	key, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if e != nil {
+		t.Fatal(e)
+	}
+	spec := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "vpn.example.test"}, DNSNames: []string{"vpn.example.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
+	der, e := x509.CreateCertificate(rand.Reader, spec, spec, &key.PublicKey, key)
+	if e != nil {
+		t.Fatal(e)
+	}
+	private, e := x509.MarshalPKCS8PrivateKey(key)
+	if e != nil {
+		t.Fatal(e)
+	}
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if e = os.WriteFile(certFile, cert, 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}), 0600); e != nil {
+		t.Fatal(e)
+	}
+	return certFile, keyFile, base64.StdEncoding.EncodeToString(der), string(cert)
+}
+func configFile(t *testing.T, name string, config any) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if e := os.WriteFile(p, marshal(t, config), 0600); e != nil {
+		t.Fatal(e)
+	}
+	return p
+}
+func request(c net.Conn, command byte, destination *net.TCPAddr) (string, error) {
+	if _, e := c.Write([]byte{5, 1, 0}); e != nil {
+		return "", e
+	}
+	hello := make([]byte, 2)
+	if _, e := io.ReadFull(c, hello); e != nil {
+		return "", e
+	}
+	if !bytes.Equal(hello, []byte{5, 0}) {
+		return "", fmt.Errorf("unexpected SOCKS greeting")
+	}
+	packet := []byte{5, command, 0, 1}
+	packet = append(packet, destination.IP.To4()...)
+	packet = append(packet, byte(destination.Port>>8), byte(destination.Port))
+	if _, e := c.Write(packet); e != nil {
+		return "", e
+	}
+	header := make([]byte, 4)
+	if _, e := io.ReadFull(c, header); e != nil {
+		return "", e
+	}
+	if header[0] != 5 || header[1] != 0 {
+		return "", fmt.Errorf("SOCKS request rejected")
+	}
+	size := 4
+	if header[3] == 4 {
+		size = 16
+	} else if header[3] != 1 {
+		return "", fmt.Errorf("unexpected SOCKS address family")
+	}
+	bound := make([]byte, size+2)
+	if _, e := io.ReadFull(c, bound); e != nil {
+		return "", e
+	}
+	host := net.IP(bound[:size])
+	if host.IsUnspecified() {
+		host = net.IPv4(127, 0, 0, 1)
+	}
+	return net.JoinHostPort(host.String(), strconv.Itoa(int(binary.BigEndian.Uint16(bound[size:])))), nil
+}
+func tcpExchange(proxy string, destination *net.TCPAddr, payload []byte, timeout time.Duration) error {
+	c, e := net.DialTimeout("tcp", proxy, timeout)
+	if e != nil {
+		return e
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(timeout))
+	if _, e = request(c, 1, destination); e != nil {
+		return e
+	}
+	if _, e = c.Write(payload); e != nil {
+		return e
+	}
+	b := make([]byte, len(payload))
+	if _, e = io.ReadFull(c, b); e != nil {
+		return e
+	}
+	if !bytes.Equal(b, payload) {
+		return fmt.Errorf("encrypted TCP payload differs")
+	}
+	return nil
+}
+func udpExchange(t *testing.T, proxy string, destination *net.UDPAddr) {
+	t.Helper()
+	control, e := net.DialTimeout("tcp", proxy, 5*time.Second)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer control.Close()
+	control.SetDeadline(time.Now().Add(20 * time.Second))
+	relay, e := request(control, 3, &net.TCPAddr{IP: net.IPv4zero})
+	if e != nil {
+		t.Fatal(e)
+	}
+	target, e := net.ResolveUDPAddr("udp", relay)
+	if e != nil {
+		t.Fatal(e)
+	}
+	conn, e := net.DialUDP("udp", nil, target)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer conn.Close()
+	if e = startwhitening.ConfigureUDPSocket(conn); e != nil {
+		t.Fatal(e)
+	}
+	header := []byte{0, 0, 0, 1}
+	header = append(header, destination.IP.To4()...)
+	header = append(header, byte(destination.Port>>8), byte(destination.Port))
+	for _, size := range []int{64, 1200, 9000} {
+		payload := bytes.Repeat([]byte{byte(size)}, size)
+		conn.SetDeadline(time.Now().Add(8 * time.Second))
+		if _, e = conn.Write(append(append([]byte{}, header...), payload...)); e != nil {
+			t.Fatal(e)
+		}
+		buffer := make([]byte, 65535)
+		n, e := conn.Read(buffer)
+		if e != nil {
+			t.Fatalf("encrypted Hysteria2 UDP %d: %v", size, e)
+		}
+		if n != len(header)+size || !bytes.Equal(buffer[:len(header)], header) || !bytes.Equal(buffer[len(header):n], payload) {
+			t.Fatalf("encrypted UDP %d payload/destination differs", size)
+		}
+	}
+}
+func TestRouterSIP003RealEncryptedTCPAndUDP(t *testing.T) {
+	sing, plugin := os.Getenv("ROUTER_VPN_SING_TEST_BINARY"), os.Getenv("ROUTER_VPN_V2RAY_TEST_BINARY")
+	tcp, udp := echoes(t)
+	certFile, keyFile, certRaw, certPEM := certificate(t)
+	ssPort, hyPort, pluginPort := freePort(t, "tcp"), freePort(t, "udp"), freePort(t, "tcp")
+	key := make([]byte, 32)
+	if _, e := rand.Read(key); e != nil {
+		t.Fatal(e)
+	}
+	password := base64.StdEncoding.EncodeToString(key)
+	server := map[string]any{"log": map[string]any{"level": "warn"}, "inbounds": []any{
+		map[string]any{"type": "shadowsocks", "tag": "ss", "listen": "127.0.0.1", "listen_port": ssPort, "network": "tcp", "method": "2022-blake3-aes-256-gcm", "password": password},
+		map[string]any{"type": "hysteria2", "tag": "hy", "listen": "127.0.0.1", "listen_port": hyPort, "users": []any{map[string]any{"name": "fixture", "password": "hy-authentication-fixture"}}, "obfs": map[string]any{"type": "salamander", "password": "hy-mask-fixture"}, "tls": map[string]any{"enabled": true, "certificate_path": certFile, "key_path": keyFile}},
+	}, "outbounds": []any{map[string]any{"type": "direct", "tag": "echo"}}, "route": map[string]any{"rules": []any{map[string]any{"ip_cidr": []string{"127.0.0.1/32"}, "port": []int{tcp.Port, udp.Port}, "action": "route", "outbound": "echo"}, map[string]any{"action": "reject"}}}}
+	process(t, sing, []string{"run", "-c", configFile(t, "server.json", server)}, address(ssPort))
+	process(t, plugin, []string{"-server", "-localAddr", "127.0.0.1", "-localPort", strconv.Itoa(pluginPort), "-remoteAddr", "127.0.0.1", "-remotePort", strconv.Itoa(ssPort), "-tls", "-host", "vpn.example.test", "-path", "/shadowsocks", "-cert", certFile, "-key", keyFile}, address(pluginPort))
+	helper := map[string]any{"server": "192.0.2.1", "server_port": pluginPort, "password": password, "method": "2022-blake3-aes-256-gcm", "local_address": "127.0.0.1", "local_port": 1092, "mode": "tcp_only", "plugin": "v2ray-plugin", "plugin_opts": "tls;host=vpn.example.test;path=/shadowsocks;certRaw=" + certRaw}
+	wrapper := map[string]any{"log": map[string]any{"level": "warn"}, "inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}}, "outbounds": []any{
+		map[string]any{"type": "socks", "tag": "tcp-stack", "server": "127.0.0.1", "server_port": 1092, "version": "5"},
+		map[string]any{"type": "hysteria2", "tag": "udp-stack", "server": "192.0.2.1", "server_port": hyPort, "password": "hy-authentication-fixture", "obfs": map[string]any{"type": "salamander", "password": "hy-mask-fixture"}, "tls": map[string]any{"enabled": true, "server_name": "vpn.example.test", "certificate": []string{certPEM}}},
+	}, "route": map[string]any{"rules": []any{map[string]any{"protocol": "dns", "action": "hijack-dns"}, map[string]any{"network": "tcp", "action": "route", "outbound": "tcp-stack"}, map[string]any{"network": "udp", "action": "route", "outbound": "udp-stack"}}, "final": "tcp-stack"}, "dns": map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "home", "server": "192.0.2.53", "detour": "tcp-stack"}}, "final": "home"}}
+	compiled, e := libbox.RouterCompileSIP003Profile(string(marshal(t, wrapper)), string(marshal(t, helper)))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var graph map[string]any
+	if e = json.Unmarshal([]byte(compiled), &graph); e != nil {
+		t.Fatal(e)
+	}
+	// Map only physical endpoints to the isolated local fixture. All passwords,
+	// TLS/SNI/certificates, WebSocket/mux options and routed protocols stay intact.
+	for _, item := range graph["outbounds"].([]any) {
+		item.(map[string]any)["server"] = "127.0.0.1"
+	}
+	for _, variant := range []string{"authenticated", "wrong-key", "wrong-certificate"} {
+		t.Run(variant, func(t *testing.T) {
+			var config map[string]any
+			json.Unmarshal(marshal(t, graph), &config)
+			clientPort := freePort(t, "tcp")
+			config["inbounds"] = []any{map[string]any{"type": "mixed", "listen": "127.0.0.1", "listen_port": clientPort}}
+			outbound := config["outbounds"].([]any)[0].(map[string]any)
+			if variant == "wrong-key" {
+				outbound["password"] = base64.StdEncoding.EncodeToString(make([]byte, 32))
+			}
+			if variant == "wrong-certificate" {
+				_, _, wrong, _ := certificate(t)
+				outbound["plugin_opts"] = "tls;host=vpn.example.test;path=/shadowsocks;certRaw=" + wrong
+			}
+			raw := marshal(t, config)
+			if e = libbox.CheckConfig(string(raw)); e != nil {
+				t.Fatal("actual mobile core rejected composed graph", e)
+			}
+			process(t, sing, []string{"run", "-c", configFile(t, "client.json", config)}, address(clientPort))
+			payload := bytes.Repeat([]byte("native-authenticated-sip003/"), 512)
+			if variant != "authenticated" {
+				if e = tcpExchange(address(clientPort), tcp, payload, time.Second); e == nil {
+					t.Fatal("unauthenticated transport echoed plaintext")
+				}
+				return
+			}
+			if e = tcpExchange(address(clientPort), tcp, payload, 8*time.Second); e != nil {
+				t.Fatal("SS2022 over TLS/WebSocket", e)
+			}
+			udpExchange(t, address(clientPort), udp)
+		})
+	}
+}

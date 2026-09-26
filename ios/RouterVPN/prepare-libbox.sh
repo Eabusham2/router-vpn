@@ -60,6 +60,7 @@ for header in headers:
     assert 'LibboxRouterOpenVPNEndpoint' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
     assert 'LibboxRouterCompileXrayProfile' in header.read_text(), str(header)
+    assert 'LibboxRouterCompileSIP003Profile' in header.read_text(), str(header)
     assert 'LibboxRouterXrayRevision' in header.read_text(), str(header)
     assert 'LibboxRouterResolveXrayProfile' in header.read_text(), str(header)
 PYHEAD
@@ -132,6 +133,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   [[ $(go list -m -f '{{.Version}}' github.com/xtls/xray-core) == "$XRAY_VERSION" ]]
   bash "$ROOT/../../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_VENDOR"
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
+  bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   go test ./experimental/libbox/routervpn/...
   go test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run TestRouterMultihop -count=1
   GOFLAGS="-ldflags=-checklinkname=0" go run ./cmd/internal/build_libbox -target apple -platform ios,iossimulator

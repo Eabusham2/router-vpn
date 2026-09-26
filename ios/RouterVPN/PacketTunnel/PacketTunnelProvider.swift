@@ -253,6 +253,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let compiled, !compiled.isEmpty, compiled.utf8.count <= Self.maxProfileBytes else { throw tunnelError(58, "Native Xray graph validation failed.") }
             rawFiles["sing-box.json"] = Data(compiled.utf8)
         }
+        if rawProfileID == "ss-v2ray" {
+            guard let helper = rawFiles["sslocal.json"], let wrapper = rawFiles["sing-box.json"],
+                  let helperText = String(data: helper, encoding: .utf8), let wrapperText = String(data: wrapper, encoding: .utf8) else {
+                throw tunnelError(58, "Native SIP003 requires its exact generated UTF-8 graph.")
+            }
+            var failure: NSError?
+            let compiled: String? = LibboxRouterCompileSIP003Profile(wrapperText, helperText, &failure)
+            if let failure { throw failure }
+            guard let compiled, !compiled.isEmpty, compiled.utf8.count <= 4 * 1024 * 1024 else {
+                throw tunnelError(58, "The native SIP003 compiler did not return a bounded profile.")
+            }
+            rawFiles["sing-box.json"] = Data(compiled.utf8)
+        }
         let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
         let files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)
         let expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)

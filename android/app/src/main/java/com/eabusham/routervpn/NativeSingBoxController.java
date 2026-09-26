@@ -13,6 +13,10 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.CodingErrorAction;
+import java.nio.ByteBuffer;
+
+import io.nekohasekai.libbox.Libbox;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -80,7 +84,10 @@ final class NativeSingBoxController {
             byte[] config;
             try { config = Base64.decode(encoded, Base64.DEFAULT); } catch (IllegalArgumentException invalid) { continue; }
             if (config.length == 0 || config.length > MAX_CONFIG) continue;
-            if (!isDirectFullDeviceConfig(new String(config, StandardCharsets.UTF_8))) continue;
+            String candidate;
+            try { candidate = compileNativeSIP003(profile, id, strictUTF8(config)); }
+            catch (Exception invalid) { continue; }
+            if (!isDirectFullDeviceConfig(candidate)) continue;
             String name = mode.optString("name", id).trim();
             result.add(new ModeInfo(id, name.isEmpty() ? id : name));
         }
@@ -97,10 +104,13 @@ final class NativeSingBoxController {
         if (configEncoded.isEmpty()) throw new IllegalStateException("The selected mode has no sing-box config.");
         byte[] rawConfig = Base64.decode(configEncoded, Base64.DEFAULT);
         if (rawConfig.length == 0 || rawConfig.length > MAX_CONFIG) throw new IllegalStateException("sing-box config size is invalid.");
-        String rawConfigText = new String(rawConfig, StandardCharsets.UTF_8);
+        String rawConfigText = compileNativeSIP003(profile, modeId, strictUTF8(rawConfig));
         if (!isDirectFullDeviceConfig(rawConfigText)) throw new IllegalStateException("This mode still depends on another local engine and is not a direct embedded libbox mode.");
         JSONObject patchedConfig = new JSONObject(rawConfigText);
         applySelectedDns(root, patchedConfig);
+        // Recompile after DNS selection: UDP/DoH3 must use the real Hysteria2
+        // leg, not the SS2022 WebSocket/TLS transport restricted to TCP.
+        if ("ss-v2ray".equals(modeId)) patchedConfig = new JSONObject(compileNativeSIP003(profile, modeId, patchedConfig.toString()));
         AndroidStartLayer.RelayPlan relayPlan = AndroidStartLayer.apply(root, patchedConfig, modeId);
         try {
             byte[] config = (patchedConfig.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
@@ -148,6 +158,33 @@ final class NativeSingBoxController {
         } finally {
             if (relayPlan != null) relayPlan.clear();
         }
+    }
+
+    private static String strictUTF8(byte[] raw) throws Exception {
+        return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(raw)).toString();
+    }
+
+    private static String compileNativeSIP003(JSONObject profile, String modeId, String wrapper) throws Exception {
+        if (!"ss-v2ray".equals(modeId)) return wrapper;
+        if (wrapper.isEmpty() || wrapper.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG)
+            throw new IllegalStateException("Native SIP003 config exceeds its safety limit.");
+        JSONArray names = profile.names();
+        if (names == null) throw new IllegalStateException("Native SIP003 profile is missing.");
+        for (int i = 0; i < names.length(); i++) {
+            String name = names.getString(i);
+            if (!("sing-box.json".equals(name) || "sslocal.json".equals(name) || "cert.pem".equals(name) || "stack.json".equals(name)))
+                throw new IllegalStateException("Native SIP003 profile contains an unowned helper asset.");
+        }
+        String encoded = profile.optString("sslocal.json", "");
+        if (encoded.isEmpty() || encoded.length() > ((MAX_CONFIG + 2) / 3) * 4)
+            throw new IllegalStateException("Native SIP003 helper profile exceeds its safety limit.");
+        byte[] raw = Base64.decode(encoded, Base64.DEFAULT);
+        if (raw.length == 0 || raw.length > MAX_CONFIG) throw new IllegalStateException("Native SIP003 helper profile is invalid.");
+        String result = Libbox.routerCompileSIP003Profile(wrapper, strictUTF8(raw));
+        if (result == null || result.isEmpty() || result.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG)
+            throw new IllegalStateException("Native SIP003 compiler returned no bounded graph.");
+        return result;
     }
 
     private static void applySelectedDns(JSONObject bundle, JSONObject config) throws Exception {

@@ -1,0 +1,52 @@
+name: Native Shadowsocks V2Ray TLS and Hysteria2 interoperability
+on:
+  push:
+    paths:
+      - 'internal/nativesip003/**'
+      - 'mobile/sip003/**'
+      - 'mobile/routervpn_sip003_bridge.go.tmpl'
+      - 'deploy/prepare-mobile-multihop.py'
+      - 'deploy/test_mobile_sip003_pinned.sh'
+      - 'deploy/test_ios_native_sip003_profiles.py'
+      - 'ios/RouterVPN/App/IOSNativeXrayProfile.swift'
+      - 'ios/RouterVPN/App/IOSRuntimeSelection.swift'
+      - 'ios/RouterVPN/App/IOSDNSRuntimePolicy.swift'
+      - 'android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java'
+      - '.github/workflows/mobile-sip003-native.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  encrypted-traffic:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Compile exact native engine and exchange authenticated TCP and UDP
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race -count=1 ./internal/nativesip003
+          SING="$RUNNER_TEMP/routervpn-sip003-core"
+          git init "$SING"
+          git -C "$SING" remote add origin https://github.com/SagerNet/sing-box.git
+          git -C "$SING" fetch --depth=1 origin 1ac1a339cb1223e9c70eae14c44411c75033c02d
+          git -C "$SING" checkout --detach FETCH_HEAD
+          python3 deploy/prepare-mobile-multihop.py "$SING"
+          (cd "$SING" && go mod tidy)
+          bash deploy/test_mobile_sip003_pinned.sh "$SING"
+  apple-host-policy:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise shipping Swift selection, DNS and graph preservation
+        run: python3 deploy/test_ios_native_sip003_profiles.py
