@@ -1,0 +1,53 @@
+package splithttp
+
+import (
+ "bytes"
+ "errors"
+ "io"
+ "sync"
+ "sync/atomic"
+ "testing"
+ "time"
+)
+
+type closeProbe struct { io.Reader; calls atomic.Int32; entered, release chan struct{}; once sync.Once }
+func (p *closeProbe) Close() error {
+ p.calls.Add(1)
+ if p.entered != nil { p.once.Do(func(){close(p.entered)}); <-p.release }
+ return nil
+}
+func TestRouterVPNResponsePublicationAndLateClose(t *testing.T) {
+ for i:=0;i<200;i++ {
+  w:=&WaitReadCloser{Wait:make(chan struct{})};p:=&closeProbe{Reader:bytes.NewReader([]byte("response"))}
+  start:=make(chan struct{});var wg sync.WaitGroup;wg.Add(2)
+  go func(){defer wg.Done();<-start;w.Set(p)}()
+  go func(){defer wg.Done();<-start;b:=make([]byte,8);n,err:=io.ReadFull(w,b);if n!=8||err!=nil||string(b)!="response"{t.Errorf("lost response: %d %v",n,err)}}()
+  close(start);wg.Wait();if err:=w.Close();err!=nil{t.Fatal(err)}
+  if p.calls.Load()!=1{t.Fatal("owned response not closed once")}
+ }
+ w:=&WaitReadCloser{Wait:make(chan struct{})};_ = w.Close()
+ p:=&closeProbe{Reader:bytes.NewReader(nil)};w.Set(p)
+ if p.calls.Load()!=1{t.Fatal("late response escaped teardown")}
+ if _,err:=w.Read(make([]byte,1));!errors.Is(err,io.ErrClosedPipe){t.Fatal("closed reader accepted",err)}
+}
+func TestRouterVPNConcurrentCloseWaitsForOwnedResponse(t *testing.T) {
+ w:=&WaitReadCloser{Wait:make(chan struct{})}
+ p:=&closeProbe{Reader:bytes.NewReader(nil),entered:make(chan struct{}),release:make(chan struct{})};w.Set(p)
+ first,second:=make(chan struct{}),make(chan struct{})
+ go func(){_ = w.Close();close(first)}();<-p.entered
+ go func(){_ = w.Close();close(second)}()
+ select{case <-second:t.Fatal("second close certified pending teardown");case <-time.After(10*time.Millisecond):}
+ close(p.release);<-first;<-second
+ if p.calls.Load()!=1{t.Fatal("duplicate response close")}
+}
+func TestRouterVPNSetCloseRaceDoesNotLeak(t *testing.T) {
+ for i:=0;i<200;i++ {
+  w:=&WaitReadCloser{Wait:make(chan struct{})};p:=&closeProbe{Reader:bytes.NewReader(nil)}
+  start:=make(chan struct{});var wg sync.WaitGroup;wg.Add(3)
+  go func(){defer wg.Done();<-start;w.Set(p)}()
+  go func(){defer wg.Done();<-start;_ = w.Close()}()
+  go func(){defer wg.Done();<-start;_,_ = w.Read(make([]byte,1))}()
+  close(start);wg.Wait()
+  if p.calls.Load()!=1{t.Fatal("response leaked or closed twice")}
+ }
+}

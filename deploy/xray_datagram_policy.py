@@ -4,6 +4,10 @@ Only packet buffers grow. The ordinary 8 KiB stream pool remains unchanged.
 The wire format still uses the original 16-bit length and XUDP framing.
 """
 PATCHES = {
+    'proxy/freedom/freedom.go': [
+        ('func (r *PacketReader) ReadMultiBuffer() (buf.MultiBuffer, error) {\n\tb := buf.New()\n\tb.Resize(0, buf.Size)',
+         'func (r *PacketReader) ReadMultiBuffer() (buf.MultiBuffer, error) {\n\tb := buf.NewWithSize(65535)\n\tb.Resize(0, 65535)'),
+    ],
     'common/xudp/xudp.go': [
         ('if length == 0 || length+666 > buf.Size {\n\t\t\tcontinue\n\t\t}\n\n\t\teb := buf.New()',
          'if length == 0 {\n\t\t\tcontinue\n\t\t}\n\t\tif length > 65535 {\n\t\t\tbuf.ReleaseMulti(mb2Write)\n\t\t\treturn errors.New("XUDP payload exceeds its 16-bit datagram framing")\n\t\t}\n\n\t\teb := buf.NewWithSize(length + 666)'),

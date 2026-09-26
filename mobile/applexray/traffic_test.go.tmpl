@@ -348,7 +348,7 @@ func TestNativeXrayEncryptedLoopbackTCPAndUDP(t *testing.T) {
 					t.Fatalf("encrypted UDP %d read: %v", size, err)
 				}
 				if from.String() != udp || n != size || !bytes.Equal(b[:n], message) {
-					t.Fatalf("encrypted UDP %d destination/payload changed", size)
+					t.Fatalf("encrypted UDP %d destination/payload changed: received=%d from=%v expected=%s", size, n, from, udp)
 				}
 			}
 			if err := h.Close(); err != nil {

@@ -15,8 +15,12 @@ _datagram_spec = importlib.util.spec_from_file_location('routervpn_datagrams', R
 DATAGRAMS = importlib.util.module_from_spec(_datagram_spec)
 _datagram_spec.loader.exec_module(DATAGRAMS)
 
+_connection_spec = importlib.util.spec_from_file_location('xray_connection_policy', ROOT/'deploy/xray_connection_policy.py')
+CONNECTIONS = importlib.util.module_from_spec(_connection_spec)
+_connection_spec.loader.exec_module(CONNECTIONS)
+
 def sources():
-    return sorted((ROOT/'internal/applexray').glob('*.go')) + sorted((ROOT/'mobile/applexray').glob('*.tmpl')) + [Path(__file__).resolve(), ROOT/'deploy/xray_datagram_policy.py']
+    return sorted((ROOT/'internal/applexray').glob('*.go')) + sorted((ROOT/'mobile/applexray').glob('*.tmpl')) + [Path(__file__).resolve(), ROOT/'deploy/xray_datagram_policy.py', ROOT/'deploy/xray_connection_policy.py']
 
 def digest():
     h = hashlib.sha256()
@@ -71,6 +75,8 @@ def prepare(sing, xray):
     checkout(sing,SING_PIN,'github.com/sagernet/sing-box')
     checkout(xray,XRAY_PIN,'github.com/xtls/xray-core')
     DATAGRAMS.prepare(xray)
+    CONNECTIONS.prepare(xray)
+    (xray/'transport/internet/splithttp/routervpn_response_test.go').write_bytes((ROOT/'mobile/applexray/wait_reader_test.go.tmpl').read_bytes())
     vision=xray/'proxy/vless/outbound/outbound.go'
     vision.write_text(patch_vision_buffers(vision.read_text()))
     policy=sing/'experimental/libbox/routervpn/applexray';policy.mkdir(parents=True,exist_ok=True)

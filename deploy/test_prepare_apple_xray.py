@@ -33,6 +33,9 @@ class Prepare(unittest.TestCase):
         for name,pairs in MODULE.DATAGRAMS.PATCHES.items():
             path=xray/name;path.parent.mkdir(parents=True,exist_ok=True)
             path.write_text('\n'.join(old for old,_ in pairs))
+        for name,pairs in MODULE.CONNECTIONS.PATCHES.items():
+            path=xray/name;path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text('\n'.join(old if old!='c.closed = true' else (old+'\n')*3 for old,_ in pairs))
         return sing,xray
     def run_prepare(self,sing,xray):
         with mock.patch.object(MODULE,'checkout') as check:
@@ -79,6 +82,12 @@ class Prepare(unittest.TestCase):
         self.assertIn('b.UDP = address',text)
         self.assertIn('NewWithSize(65535)',text)
 
+    def test_connection_corrections_are_exact_and_idempotent(self):
+        for name,pairs in MODULE.CONNECTIONS.PATCHES.items():
+            before='\n'.join(old if old!='c.closed = true' else (old+'\n')*3 for old,_ in pairs)
+            after=MODULE.CONNECTIONS.patch_text(name,before)
+            self.assertEqual(MODULE.CONNECTIONS.patch_text(name,after),after)
+            with self.assertRaises(ValueError):MODULE.CONNECTIONS.patch_text(name,'changed source')
     def test_wrong_revision_fails_before_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             sing,xray=self.fixture(tmp)
