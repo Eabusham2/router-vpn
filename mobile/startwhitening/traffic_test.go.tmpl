@@ -251,10 +251,11 @@ func TestAuthenticatedWhiteningEncryptedTCPUDPAndTeardown(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pc.Close()
-	// 60 KiB remains far above Router VPN's largest TUN MTU and catches the
-	// historical 8/16 KiB buffer truncation without exceeding the legal UDP
-	// envelope after Shadowsocks 2022 metadata/authentication overhead.
-	for _, size := range []int{64, 1200, 9000, 60 * 1024} {
+	// The shipping Jumbo TUN ceiling is 9000 bytes. The whitening unit tests
+	// separately prove 65,000-byte raw datagrams; this end-to-end encrypted
+	// test must include the Shadowsocks 2022 envelope, so it proves the product
+	// MTU boundary rather than an unrelated near-maximum UDP application size.
+	for _, size := range []int{64, 1200, 9000} {
 		pc.SetDeadline(time.Now().Add(5 * time.Second))
 		payload := bytes.Repeat([]byte{byte(size)}, size)
 		if _, err = pc.WriteTo(payload, M.ParseSocksaddr(udp)); err != nil {
