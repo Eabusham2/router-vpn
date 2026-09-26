@@ -2,6 +2,7 @@ FROM golang:1.24.13-alpine AS start-layer-build
 WORKDIR /src
 COPY go.mod ./
 COPY cmd/start-layer-relay ./cmd/start-layer-relay
+COPY internal/startwhitening ./internal/startwhitening
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/router-vpn-start-layer-relay ./cmd/start-layer-relay
 
 FROM rust:1.88.0-bookworm AS overtls-build

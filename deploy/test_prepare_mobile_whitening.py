@@ -15,12 +15,23 @@ class Tests(unittest.TestCase):
     def test_actual_transport_and_policy_are_copied_exactly(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);self.fixture(root)
-            with mock.patch.object(MODULE,'checkout') as check:MODULE.prepare(root);check.assert_called_once_with(root)
+            with mock.patch.object(MODULE,'checkout') as check:MODULE.prepare(root);check.assert_called_once_with(root.resolve())
             initial={str(p.relative_to(root)):p.read_bytes() for p in root.rglob('*') if p.is_file()}
             with mock.patch.object(MODULE,'checkout'):MODULE.prepare(root)
             self.assertEqual(initial,{str(p.relative_to(root)):p.read_bytes() for p in root.rglob('*') if p.is_file()})
             self.assertEqual((root/'protocol/routervpnwhitening/outbound.go').read_bytes(),(ROOT/'mobile/startwhitening/outbound.go.tmpl').read_bytes())
             self.assertEqual((root/'experimental/libbox/routervpn/startwhitening/conn.go').read_bytes(),(ROOT/'internal/startwhitening/conn.go').read_bytes())
+    def test_checkout_uses_canonical_path_through_directory_alias(self):
+        with tempfile.TemporaryDirectory() as temp:
+            parent=Path(temp);actual=parent/'source';self.fixture(actual)
+            alias=parent/'alias'
+            try:alias.symlink_to(actual,target_is_directory=True)
+            except (OSError,NotImplementedError):self.skipTest('directory symlink unavailable on this host')
+            with mock.patch.object(MODULE,'checkout') as check:
+                MODULE.prepare(alias)
+                check.assert_called_once_with(actual.resolve())
+            self.assertEqual((actual/'protocol/routervpnwhitening/outbound.go').read_bytes(),
+                             (ROOT/'mobile/startwhitening/outbound.go.tmpl').read_bytes())
     def test_wrong_pin_never_changes_sources(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);self.fixture(root);before=(root/'include/registry.go').read_bytes()
