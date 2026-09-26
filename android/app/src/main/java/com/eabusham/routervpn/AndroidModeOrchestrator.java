@@ -165,13 +165,13 @@ final class AndroidModeOrchestrator {
         String startReason=AndroidStartLayer.nativeCapabilityReason(currentBundle,c.id);
         if(!startReason.isEmpty()){cb.progress(c.name+" rejected before launch: "+startReason);return false;}
         stopCurrent(false);boolean up;
-        if(c.kind==Kind.WG)up=startWg(bundle);else if(c.kind==Kind.AWG)up=startAwg(bundle);else if(c.kind==Kind.XRAY)up=startXray(bundle,c.id);else up=startLibbox(bundle,c.id);
+        if(c.kind==Kind.WG)up=startWg(bundle);else if(c.kind==Kind.AWG)up=startAwg(bundle,c.id);else if(c.kind==Kind.XRAY)up=startXray(bundle,c.id);else up=startLibbox(bundle,c.id);
         if(!up){cb.progress(c.name+" failed to establish a native VPN TUN.");stopCurrent(false);return false;}
         boolean proof;try{proof=AndroidPathProbe.prove(bundle,8000);}catch(Exception error){cb.progress(c.name+" path proof error: "+safe(error));proof=false;}
         if(!proof){cb.progress(c.name+" did not reach the selected Router VPN health path; rejecting it.");stopCurrent(false);return false;}current=c;return true;
     }
     private boolean startWg(File bundle)throws Exception{CountDownLatch latch=new CountDownLatch(1);final Tunnel.State[]state={Tunnel.State.DOWN};wg.connectManaged(bundle,(s,m,e)->{state[0]=s;latch.countDown();});return latch.await(20,TimeUnit.SECONDS)&&state[0]==Tunnel.State.UP;}
-    private boolean startAwg(File bundle)throws Exception{CountDownLatch latch=new CountDownLatch(1);final org.amnezia.awg.backend.Tunnel.State[]state={org.amnezia.awg.backend.Tunnel.State.DOWN};awg.connectManaged(bundle,(s,m,e)->{state[0]=s;latch.countDown();});return latch.await(20,TimeUnit.SECONDS)&&state[0]==org.amnezia.awg.backend.Tunnel.State.UP;}
+    private boolean startAwg(File bundle,String rawProfileID)throws Exception{CountDownLatch latch=new CountDownLatch(1);final org.amnezia.awg.backend.Tunnel.State[]state={org.amnezia.awg.backend.Tunnel.State.DOWN};awg.connectManaged(bundle,rawProfileID,(s,m,e)->{state[0]=s;latch.countDown();});return latch.await(20,TimeUnit.SECONDS)&&state[0]==org.amnezia.awg.backend.Tunnel.State.UP;}
     private boolean startLibbox(File bundle,String id)throws Exception{NativeSingBoxController.SessionInfo session=sing.prepareSession(bundle,id);sing.start(session);long end=System.currentTimeMillis()+20000L;while(System.currentTimeMillis()<end){String s=sing.getState();if("UP".equals(s))return true;if("FAILED".equals(s)||"REVOKED".equals(s))return false;Thread.sleep(200);}return false;}
     private boolean startXray(File bundle,String id)throws Exception{NativeXrayController.SessionInfo session=xray.prepareSession(bundle,id);xray.start(session);long end=System.currentTimeMillis()+25000L;while(System.currentTimeMillis()<end){String s=xray.getState();if("UP".equals(s))return true;if("FAILED".equals(s)||"REVOKED".equals(s))return false;Thread.sleep(200);}return false;}
 
@@ -216,7 +216,7 @@ final class AndroidModeOrchestrator {
         for(int i=0;i<catalog.length();i++){
             JSONObject m=catalog.optJSONObject(i);if(m==null||(autoOnly&&!m.optBoolean("auto_eligible",false)))continue;String id=m.optString("id","");List<String>layers=strings(m.optJSONArray("layers"));
             if(requireEncrypted&&!hasEncrypted(layers))continue;if(requireObfuscation&&!hasObfuscation(layers))continue;
-            Kind kind=null;if(!strict&&"wg".equals(id)&&has(profiles,"wg","wg.conf"))kind=Kind.WG;else if(!strict&&"awg2-fast".equals(id)&&has(profiles,"awg2-fast","awg.conf"))kind=Kind.AWG;else if(direct.contains(id))kind=Kind.LIBBOX;else if(directXray.contains(id))kind=Kind.XRAY;if(kind==null)continue;
+            Kind kind=null;if(!strict&&"wg".equals(id)&&has(profiles,"wg","wg.conf"))kind=Kind.WG;else if(!strict&&NativeAmneziaWGController.supportedRawProfile(id)&&has(profiles,id,"awg.conf"))kind=Kind.AWG;else if(direct.contains(id))kind=Kind.LIBBOX;else if(directXray.contains(id))kind=Kind.XRAY;if(kind==null)continue;
             if(startLayerEnabled){
                 if(kind!=Kind.LIBBOX||!AndroidStartLayer.supportsRawMode(id))continue;
             }

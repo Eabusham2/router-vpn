@@ -40,21 +40,35 @@ final class NativeAmneziaWGController implements Tunnel {
     String getError() { return lastError; }
 
     /** Direct raw-tunnel use owns the shared Home/session state. */
-    void connect(File privateBundle, Callback callback) { connectInternal(privateBundle, true, callback); }
+    void connect(File privateBundle, Callback callback) { connectInternal(privateBundle, "awg2-fast", true, callback); }
 
     /** AUTO/SMART/CUSTOM child transport: the outer orchestrator owns Home/session state. */
     void connectManaged(File privateBundle, Callback callback) { connectInternal(privateBundle, false, callback); }
 
+    /** Preserve the exact selected Fast/Strong profile; no hidden fallback. */
+    void connectManaged(File privateBundle, String rawProfileID, Callback callback) {
+        connectInternal(privateBundle, rawProfileID, false, callback);
+    }
+
     private void connectInternal(File privateBundle, boolean publishHomeState, Callback callback) {
+        connectInternal(privateBundle, "awg2-fast", publishHomeState, callback);
+    }
+
+    private void connectInternal(File privateBundle, String rawProfileID, boolean publishHomeState, Callback callback) {
+        if (!supportedRawProfile(rawProfileID)) {
+            IllegalArgumentException error = new IllegalArgumentException("Unknown native AmneziaWG raw profile.");
+            callback.done(state, error.getMessage(), error);
+            return;
+        }
         String activeNodeId = AndroidHomeStateStore.nodeIdFromBundleFile(privateBundle);
         homeStateOwner = publishHomeState;
-        if (publishHomeState) AndroidHomeStateStore.begin(appContext, "raw-tunnel", "awg2-fast", "awg", activeNodeId);
+        if (publishHomeState) AndroidHomeStateStore.begin(appContext, "raw-tunnel", rawProfileID, "awg", activeNodeId);
         executor.execute(() -> {
             try {
                 networkMonitor.stop();
                 clearActive();
                 if (AndroidKillSwitchPolicy.strictRequested(privateBundle)) throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
-                Config config = loadConfig(privateBundle);
+                Config config = loadConfig(privateBundle, rawProfileID);
                 State result = backend.setState(this, State.UP, config);
                 state = result;
                 if (result != State.UP) throw new IllegalStateException("AmneziaWG backend did not enter UP state.");
@@ -67,9 +81,9 @@ final class NativeAmneziaWGController implements Tunnel {
                 activeConfig = config;
                 activeBundle = privateBundle;
                 lastError = "";
-                if (publishHomeState) AndroidHomeStateStore.connected(appContext, "raw-tunnel", "awg2-fast", "awg", "", activeNodeId);
+                if (publishHomeState) AndroidHomeStateStore.connected(appContext, "raw-tunnel", rawProfileID, "awg", "", activeNodeId);
                 networkMonitor.start(() -> executor.execute(this::recoverAfterNetworkChange));
-                callback.done(State.UP, "Native Android AmneziaWG 2 is active with selected DNS/MTU and selected-node private path proof.", null);
+                callback.done(State.UP, "Native Android " + rawProfileID + " is active with selected DNS/MTU and selected-node private path proof.", null);
             } catch (Throwable error) {
                 failClosed(error, publishHomeState);
                 callback.done(state, "Native AmneziaWG failed: " + lastError, error);
@@ -170,14 +184,19 @@ final class NativeAmneziaWGController implements Tunnel {
 
     private void clearActive() { activeConfig = null; activeBundle = null; }
 
-    private static Config loadConfig(File privateBundle) throws Exception {
+    static boolean supportedRawProfile(String rawProfileID) {
+        return "awg2-fast".equals(rawProfileID) || "awg2-strong".equals(rawProfileID);
+    }
+
+    private static Config loadConfig(File privateBundle, String rawProfileID) throws Exception {
+        if (!supportedRawProfile(rawProfileID)) throw new IllegalArgumentException("Unknown native AmneziaWG raw profile.");
         if (!privateBundle.isFile()) throw new IllegalStateException("Import/link a Router VPN node first.");
         if (privateBundle.length() <= 0 || privateBundle.length() > 64L * 1024L * 1024L) throw new IllegalStateException("Private node bundle size is invalid.");
         JSONObject root = new JSONObject(new String(readLimited(privateBundle, 64 * 1024 * 1024), StandardCharsets.UTF_8));
         JSONObject profiles = root.optJSONObject("profiles"); if (profiles == null) throw new IllegalStateException("Node bundle has no generated profiles.");
-        JSONObject awg = profiles.optJSONObject("awg2-fast"); int fallbackMtu = 1400;
-        if (awg == null) { awg = profiles.optJSONObject("awg2-strong"); fallbackMtu = 1360; }
-        if (awg == null) throw new IllegalStateException("Node bundle has no AmneziaWG 2 profile.");
+        JSONObject awg = profiles.optJSONObject(rawProfileID);
+        int fallbackMtu = "awg2-strong".equals(rawProfileID) ? 1360 : 1400;
+        if (awg == null) throw new IllegalStateException("Node bundle has no " + rawProfileID + " profile; another raw mode will not be substituted.");
         String encoded = awg.optString("awg.conf", "").trim(); if (encoded.isEmpty()) throw new IllegalStateException("Node bundle has no AmneziaWG awg.conf.");
         byte[] decoded = Base64.decode(encoded, Base64.DEFAULT); if (decoded.length <= 0 || decoded.length > 512 * 1024) throw new IllegalStateException("AmneziaWG profile size is invalid.");
         String patched = AndroidNativeProfilePolicy.patchWireGuardLikeConfig(root, new String(decoded, StandardCharsets.UTF_8), fallbackMtu);
