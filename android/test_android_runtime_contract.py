@@ -177,7 +177,7 @@ for marker in (
     "AndroidPathProbe.prove(bundle",
     "No candidate passed selected-node path proof",
     'if(!strict&&"wg".equals(id)',
-    'else if(!strict&&"awg2-fast".equals(id)',
+    'else if(!strict&&NativeAmneziaWGController.supportedRawProfile(id)&&has(profiles,id,"awg.conf")',
     "Kind { WG, AWG, LIBBOX, XRAY }",
     "xray.listDirectXrayModes",
     "startXray(bundle,c.id)",
