@@ -30,6 +30,9 @@ class Prepare(unittest.TestCase):
         (sing/'include/registry.go').write_text('import (\n\t"github.com/sagernet/sing-box/protocol/vless"\n)\nfunc register() {\n\tvless.RegisterOutbound(registry)\n}\n')
         (xray/'transport/internet/reality/reality.go').write_text('package reality\nfunc client() {\n\tif !uConn.Verified {\n\t\tlegacySpider()\n\t}\n}\n')
         (xray/'proxy/vless/outbound/outbound.go').write_text(VISION)
+        for name,pairs in MODULE.DATAGRAMS.PATCHES.items():
+            path=xray/name;path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text('\n'.join(old for old,_ in pairs))
         return sing,xray
     def run_prepare(self,sing,xray):
         with mock.patch.object(MODULE,'checkout') as check:
@@ -64,6 +67,18 @@ class Prepare(unittest.TestCase):
             MODULE.patch_vision_buffers(patched.replace('unsafe.Add(p, i.Offset)', 'unsafe.Pointer(p)'))
         with self.assertRaises(ValueError):
             MODULE.patch_vision_buffers(VISION.replace('realityConn.Conn', 'different(pointer)'))
+    def test_datagram_patch_is_bounded_and_idempotent(self):
+        for name,pairs in MODULE.DATAGRAMS.PATCHES.items():
+            with self.subTest(path=name):
+                old='\n'.join(before for before,_ in pairs)
+                new=MODULE.DATAGRAMS.patch_text(name,old)
+                self.assertEqual(MODULE.DATAGRAMS.patch_text(name,new),new)
+                with self.assertRaises(ValueError):MODULE.DATAGRAMS.patch_text(name,'unrelated source')
+        text='\n'.join(after for pairs in MODULE.DATAGRAMS.PATCHES.values() for _,after in pairs)
+        self.assertIn('length > 65535',text)
+        self.assertIn('b.UDP = address',text)
+        self.assertIn('NewWithSize(65535)',text)
+
     def test_wrong_revision_fails_before_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             sing,xray=self.fixture(tmp)

@@ -3,6 +3,7 @@
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 import re
 import subprocess
 
@@ -10,8 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SING_PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 XRAY_PIN = '50231eaff98ccc31b5cbd247a721c16e97fe5ec1'
 
+_datagram_spec = importlib.util.spec_from_file_location('routervpn_datagrams', ROOT/'deploy/xray_datagram_policy.py')
+DATAGRAMS = importlib.util.module_from_spec(_datagram_spec)
+_datagram_spec.loader.exec_module(DATAGRAMS)
+
 def sources():
-    return sorted((ROOT/'internal/applexray').glob('*.go')) + sorted((ROOT/'mobile/applexray').glob('*.tmpl')) + [Path(__file__).resolve()]
+    return sorted((ROOT/'internal/applexray').glob('*.go')) + sorted((ROOT/'mobile/applexray').glob('*.tmpl')) + [Path(__file__).resolve(), ROOT/'deploy/xray_datagram_policy.py']
 
 def digest():
     h = hashlib.sha256()
@@ -65,6 +70,7 @@ def prepare(sing, xray):
     sing=sing.resolve();xray=xray.resolve()
     checkout(sing,SING_PIN,'github.com/sagernet/sing-box')
     checkout(xray,XRAY_PIN,'github.com/xtls/xray-core')
+    DATAGRAMS.prepare(xray)
     vision=xray/'proxy/vless/outbound/outbound.go'
     vision.write_text(patch_vision_buffers(vision.read_text()))
     policy=sing/'experimental/libbox/routervpn/applexray';policy.mkdir(parents=True,exist_ok=True)

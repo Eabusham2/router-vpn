@@ -176,7 +176,9 @@ func startLoopbackXray(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, 
 	serverStream := map[string]any{"network": stream["network"], "security": "reality", "realitySettings": map[string]any{"target": camouflage, "serverNames": []string{"www.example.com"}, "privateKey": base64.RawURLEncoding.EncodeToString(realityKey.Bytes()), "shortIds": []string{"0123456789abcdef"}}}
 	if mode == "reality-xhttp" {
 		serverStream["xhttpSettings"] = stream["xhttpSettings"]
-		serverStream["finalmask"] = stream["finalmask"]
+		if mask, present := stream["finalmask"]; present {
+			serverStream["finalmask"] = mask
+		}
 	}
 	// Explicitly authorize only this test's loopback echo endpoints. New Xray
 	// versions correctly reject private destinations from VLESS by default.
@@ -259,9 +261,32 @@ func TestNativeXrayEncryptedLoopbackTCPAndUDP(t *testing.T) {
 	install.Do(func() { internet.UseAlternativeSystemDialer(systemDialer{}) })
 	camouflage := loopbackCamouflage(t)
 	tcp, udp := loopbackEcho(t)
-	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp"} {
-		t.Run(mode, func(t *testing.T) {
-			endpoint, raw := startLoopbackXray(t, mode, camouflage, tcp, udp, nativeConfig(t, mode))
+	tests := []struct{ mode, mask string }{
+		{"reality-vision", "original"}, {"reality-pq-vision", "original"},
+		{"reality-xhttp", "original"}, {"reality-xhttp", "no-finalmask-control"},
+		{"reality-xhttp", "tcp-segments-control"},
+	}
+	for _, test := range tests {
+		mode := test.mode
+		t.Run(mode+"/"+test.mask, func(t *testing.T) {
+			input := nativeConfig(t, mode)
+			if mode == "reality-xhttp" && test.mask != "original" {
+				config, err := applexray.Object(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				stream := config["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
+				if test.mask == "no-finalmask-control" {
+					delete(stream, "finalmask")
+				} else {
+					stream["finalmask"].(map[string]any)["tcp"].([]any)[0].(map[string]any)["settings"].(map[string]any)["packets"] = "1-1"
+				}
+				input, err = json.Marshal(config)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			endpoint, raw := startLoopbackXray(t, mode, camouflage, tcp, udp, input)
 			plan, err := applexray.Prepare(mode, raw)
 			if err != nil {
 				t.Fatal(err)

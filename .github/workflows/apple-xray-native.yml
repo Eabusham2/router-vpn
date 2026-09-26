@@ -5,6 +5,7 @@ on:
       - 'internal/applexray/**'
       - 'mobile/applexray/**'
       - 'deploy/prepare-apple-xray.py'
+      - 'deploy/xray_datagram_policy.py'
       - 'deploy/test_apple_xray_pinned.sh'
       - '.github/workflows/apple-xray-native.yml'
   workflow_dispatch:
