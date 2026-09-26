@@ -23,3 +23,17 @@ func TestPinnedNativeCompositionAndFailureScope(t *testing.T) {
 		t.Fatalf("native composition failed: %v\n%s", err, out)
 	}
 }
+
+func TestSharedNativeXrayPreparation(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		python, err = exec.LookPath("python")
+	}
+	if err != nil {
+		t.Fatal("Python is required for shared native runtime preparation")
+	}
+	cmd := exec.Command(python, filepath.Join("..", "..", "deploy", "test_shared_xray_runtime.py"))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("shared Xray preparation: %v\n%s", err, output)
+	}
+}

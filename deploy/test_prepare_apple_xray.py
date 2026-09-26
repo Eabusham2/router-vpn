@@ -38,7 +38,7 @@ class Prepare(unittest.TestCase):
             path.write_text('\n'.join(old if old!='c.closed = true' else (old+'\n')*3 for old,_ in pairs))
         return sing,xray
     def run_prepare(self,sing,xray):
-        with mock.patch.object(MODULE,'checkout') as check:
+        with mock.patch.object(MODULE,'checkout') as check, mock.patch.object(MODULE.SHARED,'checkout'):
             MODULE.prepare(sing,xray)
             self.assertEqual(check.call_count,2)
     def test_deterministic_composition_and_instance_scope(self):
@@ -102,6 +102,6 @@ class Prepare(unittest.TestCase):
             sing,xray=self.fixture(tmp);self.run_prepare(sing,xray)
             file=xray/'transport/internet/reality/reality.go'
             file.write_text(file.read_text().replace('_ = uConn.Close()','weakenedClose()'))
-            with mock.patch.object(MODULE,'checkout'),self.assertRaises(ValueError):MODULE.prepare(sing,xray)
+            with mock.patch.object(MODULE,'checkout'),mock.patch.object(MODULE.SHARED,'checkout'),self.assertRaises(ValueError):MODULE.prepare(sing,xray)
 
 if __name__=='__main__':unittest.main()

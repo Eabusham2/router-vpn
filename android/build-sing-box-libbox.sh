@@ -13,6 +13,8 @@ NDK_VERSION=28.0.13004108
 GOMOBILE_VERSION=0.1.12
 VENDOR="$ROOT/.vendor/sing-box"
 XRAY_VENDOR="$ROOT/.vendor/libXray-combined"
+XRAY_CORE_VENDOR="$ROOT/.vendor/xray-core-shared"
+XRAY_POLICY_SHA=$(python3 "$ROOT/../deploy/prepare-xray-runtime.py" --digest)
 LIBDIR="$ROOT/app/libs"
 AAR="$LIBDIR/libbox.aar"
 STAMP="$LIBDIR/libbox.commit"
@@ -23,7 +25,7 @@ OPENVPN_STAMP="$LIBDIR/libbox.openvpn.sha256"
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$OPENVPN_SOURCE")
 MULTIHOP_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-multihop.py" --digest)
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$MULTIHOP_SHA")
-EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN"
+EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA"
 
 verify_aar() {
   test -s "$AAR"
@@ -143,7 +145,7 @@ GOBIN="$GO_BIN_DIR" go_retry install "github.com/sagernet/gomobile/cmd/gobind@v$
 [[ -x "$GO_BIN_DIR/gomobile" && -x "$GO_BIN_DIR/gobind" ]] || { echo 'Pinned gomobile/gobind installation failed' >&2; exit 1; }
 export PATH="$GO_BIN_DIR:$PATH"
 
-rm -rf "$VENDOR" "$XRAY_VENDOR"
+rm -rf "$VENDOR" "$XRAY_VENDOR" "$XRAY_CORE_VENDOR"
 mkdir -p "$(dirname "$VENDOR")" "$LIBDIR"
 
 clone_exact() {
@@ -168,6 +170,8 @@ clone_exact() {
 
 clone_exact https://github.com/SagerNet/sing-box.git "$VENDOR" "$COMMIT" "sing-box $VERSION"
 clone_exact https://github.com/XTLS/libXray.git "$XRAY_VENDOR" "$LIBXRAY_COMMIT" "libXray"
+clone_exact https://github.com/XTLS/Xray-core.git "$XRAY_CORE_VENDOR" 50231eaff98ccc31b5cbd247a721c16e97fe5ec1 "Xray-core"
+python3 "$ROOT/../deploy/prepare-xray-runtime.py" "$XRAY_CORE_VENDOR"
 
 grep -Fq "github.com/xtls/xray-core $XRAY_CORE_VERSION" "$XRAY_VENDOR/go.mod" || {
   echo 'Pinned libXray no longer references the expected Xray-core v26.7.11 pseudo-version' >&2
@@ -192,7 +196,10 @@ python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
   go mod edit -go="$GO_MOD_VERSION"
   go mod edit -require=github.com/xtls/libxray@v0.0.0
   go mod edit -replace="github.com/xtls/libxray=$XRAY_VENDOR"
+  go mod edit -replace="github.com/xtls/xray-core=$XRAY_CORE_VENDOR"
   go_retry mod tidy
+  core_dir=$(go_retry list -m -f '{{.Dir}}' github.com/xtls/xray-core)
+  [[ "$core_dir" == "$XRAY_CORE_VENDOR" ]] || { echo 'combined engine lost its prepared Xray source' >&2; exit 1; }
   resolved=$(go_retry list -m -f '{{.Version}}' github.com/xtls/xray-core)
   [[ "$resolved" == "$XRAY_CORE_VERSION" ]] || {
     echo "combined module resolved unexpected Xray-core: $resolved" >&2

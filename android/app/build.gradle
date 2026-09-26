@@ -86,6 +86,7 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     commandLine 'bash', 'build-sing-box-libbox.sh'
     inputs.files rootProject.file('build-sing-box-libbox.sh'), rootProject.file('routervpn_xray_bridge.go'), rootProject.file('../mobile/routervpn_openvpn.go'), rootProject.file('../mobile/routervpn_openvpn_native_test.go.tmpl'), rootProject.file('../deploy/test_mobile_openvpn_pinned.sh')
     inputs.files rootProject.file('../deploy/prepare-mobile-multihop.py'), rootProject.fileTree('../internal/mobilemultihop'), rootProject.fileTree('../internal/routechoice'), rootProject.fileTree('../internal/multihoprelay'), rootProject.fileTree('../mobile')
+    inputs.files rootProject.file('../deploy/prepare-xray-runtime.py'), rootProject.file('../deploy/xray_connection_policy.py'), rootProject.file('../deploy/xray_datagram_policy.py')
     outputs.files libboxAar, libboxStamp, libboxLicense, libxrayLicense, libboxOpenVPNStamp
 }
 
