@@ -2,10 +2,13 @@ name: Native authenticated AES and whitening traffic
 on:
   push:
     paths:
+      - 'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'
+      - 'deploy/test_ios_start_layer.py'
       - 'internal/startwhitening/**'
       - 'mobile/startwhitening/**'
       - 'cmd/start-layer-relay/**'
       - 'deploy/prepare-mobile-whitening.py'
+      - 'deploy/prepare-mobile-buffers.py'
       - 'deploy/test_prepare_mobile_whitening.py'
       - 'deploy/test_mobile_whitening_pinned.sh'
       - '.github/workflows/mobile-start-layer-native.yml'
@@ -36,3 +39,10 @@ jobs:
           python3 deploy/prepare-mobile-whitening.py "$SING"
           (cd "$SING" && go mod tidy)
           bash deploy/test_mobile_whitening_pinned.sh "$SING"
+  apple-start-layer-composition:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute actual Swift Start Layer composition
+        run: python3 deploy/test_ios_start_layer.py

@@ -34,7 +34,7 @@ func TestAndroidNativeWireGuardAmneziaWGLayeredAndNarrowMultihopAreReal(t *testi
 		}
 	}
 	awg := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/NativeAmneziaWGController.java")
-	for _, required := range []string{"org.amnezia.awg.backend.GoBackend", "backend.setState(this, State.UP, config)", "backend.setState(this, State.DOWN, null)", "Config.parse", `profiles.optJSONObject("awg2-fast")`, `profiles.optJSONObject("awg2-strong")`, `awg.optString("awg.conf"`, "AndroidKillSwitchPolicy.strictRequested(privateBundle)", "AndroidNativeProfilePolicy.patchWireGuardLikeConfig", "AndroidPathProbe.prove(privateBundle, 8000)", "recoverAfterNetworkChange", "network-transition recovery failed closed"} {
+	for _, required := range []string{"org.amnezia.awg.backend.GoBackend", "backend.setState(this, State.UP, config)", "backend.setState(this, State.DOWN, null)", "Config.parse", `profiles.optJSONObject(rawProfileID)`, `"awg2-fast".equals(rawProfileID)`, `"awg2-strong".equals(rawProfileID)`, "another raw mode will not be substituted", `awg.optString("awg.conf"`, "AndroidKillSwitchPolicy.strictRequested(privateBundle)", "AndroidNativeProfilePolicy.patchWireGuardLikeConfig", "AndroidPathProbe.prove(privateBundle, 8000)", "recoverAfterNetworkChange", "network-transition recovery failed closed"} {
 		if !strings.Contains(awg, required) {
 			t.Fatalf("Android AmneziaWG runtime missing %q", required)
 		}

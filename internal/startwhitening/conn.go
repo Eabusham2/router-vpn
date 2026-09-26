@@ -39,13 +39,13 @@ type Owner struct {
 	closeDone  chan struct{}
 	closeErr   error
 	pending    int
-	conns      map[*Conn]struct{}
+	conns      map[*Conn]io.Closer
 }
 
 func NewOwner(parent context.Context) *Owner {
 	ctx, cancel := context.WithCancel(parent)
 	gen, reset := context.WithCancel(ctx)
-	o := &Owner{ctx: ctx, cancel: cancel, generation: gen, reset: reset, conns: make(map[*Conn]struct{}), closeDone: make(chan struct{})}
+	o := &Owner{ctx: ctx, cancel: cancel, generation: gen, reset: reset, conns: make(map[*Conn]io.Closer), closeDone: make(chan struct{})}
 	go func() { <-ctx.Done(); _ = o.Close() }()
 	return o
 }
@@ -89,8 +89,8 @@ func (o *Owner) Open(ctx context.Context, key [32]byte, datagram bool, dial func
 		o.mu.Unlock()
 		return nil, errors.New("native dialer returned no whitening connection")
 	}
-	conn := &Conn{Conn: raw, key: key, datagram: datagram, owner: o}
-	o.conns[conn] = struct{}{}
+	conn := &Conn{Conn: raw, key: key, datagram: datagram, owner: o, generation: generation}
+	o.conns[conn] = conn
 	o.mu.Unlock()
 	return conn, nil
 }
@@ -112,9 +112,9 @@ func (o *Owner) finish(closeOwner bool) error {
 	} else {
 		o.generation, o.reset = context.WithCancel(o.ctx)
 	}
-	all := make([]*Conn, 0, len(o.conns))
-	for conn := range o.conns {
-		all = append(all, conn)
+	all := make([]io.Closer, 0, len(o.conns))
+	for _, closer := range o.conns {
+		all = append(all, closer)
 	}
 	o.mu.Unlock()
 	var errs []error
@@ -145,6 +145,7 @@ type Conn struct {
 	closeOnce               sync.Once
 	closeErr                error
 	owner                   *Owner
+	generation              context.Context
 }
 
 func apply(b []byte, key [32]byte, offset uint64) {
@@ -213,7 +214,9 @@ func (c *Conn) Close() error {
 		c.readMu.Unlock()
 		if c.owner != nil {
 			c.owner.mu.Lock()
-			delete(c.owner.conns, c)
+			if c.owner.conns[c] == c {
+				delete(c.owner.conns, c)
+			}
 			c.owner.mu.Unlock()
 		}
 	})

@@ -141,10 +141,9 @@ enum IOSRuntimeSelector {
     private static func validateStartLayer(bundle: ClientBundle, rawProfileID: String) throws {
         let start = try normalizedStartLayer(in: bundle)
         if start == "off" { return }
-        if start == startLayerAESXOR {
-            throw IOSRuntimeSelectionError.unsupportedMode("AES-256-GCM + XOR whitening is unavailable on iOS until PacketTunnel owns a protected local whitening relay; XOR is never counted as encryption or silently ignored.")
-        }
-        guard start == startLayerAES else {
+        // Both choices are compiled by PacketTunnel; AES+XOR uses the pinned
+        // routervpn-aes-xor outbound, never an unowned local helper.
+        guard start == startLayerAES || start == startLayerAESXOR else {
             throw IOSRuntimeSelectionError.unsupportedMode("Unsupported iOS Start Layer \(start).")
         }
         let raw = rawProfileID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

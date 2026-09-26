@@ -14,8 +14,10 @@ func TestNativeWhiteningBuildComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal("Python required for native Start Layer composition")
 	}
-	cmd := exec.Command(python, filepath.Join("..", "..", "deploy", "test_prepare_mobile_whitening.py"))
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("native Start Layer composition: %v\n%s", err, output)
+	for _, script := range []string{"test_prepare_mobile_whitening.py", "test_mobile_buffer_policy.py"} {
+		cmd := exec.Command(python, filepath.Join("..", "..", "deploy", script))
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("native Start Layer %s: %v\n%s", script, err, output)
+		}
 	}
 }

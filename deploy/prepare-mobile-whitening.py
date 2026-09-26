@@ -8,7 +8,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 def inputs():
-    return [Path(__file__).resolve()] + sorted((ROOT/'internal/startwhitening').glob('*.go')) + sorted((ROOT/'mobile/startwhitening').glob('*.tmpl'))
+    return [Path(__file__).resolve(), ROOT/"deploy/prepare-mobile-buffers.py"] + sorted((ROOT/'internal/startwhitening').glob('*.go')) + sorted((ROOT/'mobile/startwhitening').glob('*.tmpl'))
 
 def digest():
     h=hashlib.sha256()

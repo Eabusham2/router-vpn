@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 enum IOSStartLayer {
     static let off = "off"
@@ -6,6 +7,8 @@ enum IOSStartLayer {
     static let aesXOR = "aes-256-gcm+xor-whitening"
     static let aesMethod = "2022-blake3-aes-256-gcm"
     static let aesTag = "start-layer-aes"
+    static let nativeWhiteningType = "routervpn-aes-xor"
+    static let whiteningPort = 8389
 
     private static let supportedRawModes: Set<String> = ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"]
     private static let maxJSONBytes = 4 * 1024 * 1024
@@ -47,10 +50,10 @@ enum IOSStartLayer {
         guard supportedRawModes.contains(rawMode) else {
             throw error("\(rawMode) has no proved iOS Start Layer composition path.")
         }
-        if start == aesXOR {
-            throw error("AES-256-GCM + XOR whitening is not available on iOS until PacketTunnel owns a protected local whitening relay; XOR is never counted as encryption or silently ignored.")
-        }
-        guard start == aes else { throw error("Unsupported iOS Start Layer \(start).") }
+        guard start == aes || start == aesXOR else { throw error("Unsupported iOS Start Layer \(start).") }
+        // XOR is obfuscation only; the native outbound always uses authenticated
+        // Shadowsocks 2022 AES. No local listener, second VPN, or helper process.
+        let whitening = start == aesXOR
 
         guard let targetData = files["sing-box.json"], !targetData.isEmpty, targetData.count <= maxJSONBytes,
               var target = try JSONSerialization.jsonObject(with: targetData) as? [String: Any],
@@ -58,17 +61,24 @@ enum IOSStartLayer {
             throw error("Selected iOS raw profile has no valid bounded sing-box outbounds for Start Layer composition.")
         }
 
+        try requireUniqueTags(outbounds)
         if rawMode == "shadowsocks" {
             let index = try exactlyOneIndex(type: "shadowsocks", in: outbounds, label: "selected Shadowsocks mode")
             try requireAESOutbound(outbounds[index])
-            return files
+            guard whitening else { return files }
+            outbounds[index] = try nativeWhitening(outbounds[index])
+            target["outbounds"] = outbounds
+            return try replacingConfig(target, in: files)
+        }
+        guard !outbounds.contains(where: { ($0["tag"] as? String) == aesTag }) else {
+            throw error("Start Layer route tag already belongs to an outbound; refusing to replace its owner.")
         }
 
         guard let profiles = root["profiles"] as? [String: Any],
               let shadowsocks = profiles["shadowsocks"] as? [String: Any],
               let encoded = shadowsocks["sing-box.json"] as? String,
               !encoded.isEmpty,
-              let sourceData = Data(base64Encoded: encoded, options: .ignoreUnknownCharacters),
+              let sourceData = Data(base64Encoded: encoded, options: []),
               !sourceData.isEmpty, sourceData.count <= maxJSONBytes,
               let source = try JSONSerialization.jsonObject(with: sourceData) as? [String: Any],
               let sourceOutbounds = source["outbounds"] as? [[String: Any]] else {
@@ -78,14 +88,15 @@ enum IOSStartLayer {
         let aesIndex = try exactlyOneIndex(type: "shadowsocks", in: sourceOutbounds, label: "generated Shadowsocks profile")
         var aesOutbound = sourceOutbounds[aesIndex]
         try requireAESOutbound(aesOutbound)
+        if whitening { aesOutbound = try nativeWhitening(aesOutbound) }
         aesOutbound["tag"] = aesTag
 
         let proxyIndexes = outbounds.indices.filter { (outbounds[$0]["tag"] as? String ?? "") == "proxy" }
         guard proxyIndexes.count == 1, let proxyIndex = proxyIndexes.first else {
             throw error("\(rawMode) must expose exactly one proxy outbound for iOS Start Layer composition.")
         }
-        let existingDetour = (outbounds[proxyIndex]["detour"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard existingDetour.isEmpty else {
+        let existingDetour = outbounds[proxyIndex]["detour"] as? String
+        guard outbounds[proxyIndex]["detour"] == nil || existingDetour == "" else {
             throw error("\(rawMode) proxy outbound already owns a detour; Start Layer will not overwrite it.")
         }
 
@@ -97,6 +108,10 @@ enum IOSStartLayer {
         outbounds.append(aesOutbound)
         target["outbounds"] = outbounds
 
+        return try replacingConfig(target, in: files)
+    }
+
+    private static func replacingConfig(_ target: [String: Any], in files: [String: Data]) throws -> [String: Data] {
         let composed = try JSONSerialization.data(withJSONObject: target, options: [.sortedKeys])
         guard !composed.isEmpty, composed.count <= maxJSONBytes else {
             throw error("Composed iOS Start Layer profile exceeds the bounded sing-box config size.")
@@ -104,6 +119,31 @@ enum IOSStartLayer {
         var result = files
         result["sing-box.json"] = composed
         return result
+    }
+
+    private static func requireUniqueTags(_ outbounds: [[String: Any]]) throws {
+        var tags = Set<String>()
+        for outbound in outbounds {
+            guard let tag = outbound["tag"] as? String, !tag.isEmpty, tags.insert(tag).inserted else {
+                throw error("Start Layer requires unique, nonempty outbound ownership tags.")
+            }
+        }
+    }
+
+    private static func nativeWhitening(_ outbound: [String: Any]) throws -> [String: Any] {
+        try requireAESOutbound(outbound)
+        let allowed: Set<String> = ["type", "tag", "method", "password", "server", "server_port"]
+        guard Set(outbound.keys).isSubset(of: allowed), outbound["type"] as? String == "shadowsocks",
+              outbound["method"] as? String == aesMethod,
+              let password = outbound["password"] as? String, (16...4096).contains(password.utf8.count),
+              !password.contains("\0"), let server = outbound["server"] as? String,
+              !server.isEmpty, server == server.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            throw error("Native AES+XOR cannot silently discard a plugin, detour, socket policy, or invalid key.")
+        }
+        var native = outbound
+        native["type"] = nativeWhiteningType
+        native["server_port"] = whiteningPort
+        return native
     }
 
     private static func exactlyOneIndex(type: String, in outbounds: [[String: Any]], label: String) throws -> Int {
@@ -120,7 +160,12 @@ enum IOSStartLayer {
         let method = (outbound["method"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let password = outbound["password"] as? String ?? ""
         let server = (outbound["server"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let port = outbound["server_port"] as? Int ?? 0
+        let number = outbound["server_port"] as? NSNumber
+        let port = number?.intValue ?? 0
+        guard let number, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite, number.doubleValue == Double(port) else {
+            throw error("Start Layer AES port must be an exact integer, not a Boolean or fraction.")
+        }
         guard method == aesMethod, !password.isEmpty else {
             throw error("Start Layer requires authenticated Shadowsocks 2022 BLAKE3 AES-256-GCM.")
         }

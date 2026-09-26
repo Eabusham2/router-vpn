@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) {
+func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T) {
 	composer := repoFile(t, "ios/RouterVPN/PacketTunnel/IOSStartLayer.swift")
 	for _, required := range []string{
 		`static let aes = "aes-256-gcm"`,
@@ -13,8 +13,8 @@ func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) 
 		`static let aesMethod = "2022-blake3-aes-256-gcm"`,
 		`private static let supportedRawModes: Set<String> = ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"]`,
 		"Start Layer requires authenticated Shadowsocks 2022 BLAKE3 AES-256-GCM",
-		"AES-256-GCM + XOR whitening is not available on iOS until PacketTunnel owns a protected local whitening relay",
-		"XOR is never counted as encryption or silently ignored",
+		`static let nativeWhiteningType = "routervpn-aes-xor"`,
+		"XOR is obfuscation only",
 		`outbounds[proxyIndex]["server"] = "127.0.0.1"`,
 		`outbounds[proxyIndex]["detour"] = aesTag`,
 		`result["sing-box.json"] = composed`,
@@ -64,8 +64,8 @@ func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) 
 		`private static let startLayerRawModes: Set<String> = ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"]`,
 		"try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)",
 		"Start Layer AES-256-GCM requires an iOS Libbox raw mode",
-		"AES-256-GCM + XOR whitening is unavailable on iOS until PacketTunnel owns a protected local whitening relay",
-		"XOR is never counted as encryption or silently ignored",
+		"start == startLayerAES || start == startLayerAESXOR",
+		"routervpn-aes-xor",
 	} {
 		if !strings.Contains(selector, required) {
 			t.Fatalf("iOS runtime selector can choose an engine that cannot honor Start Layer: missing %q", required)
@@ -76,13 +76,11 @@ func TestAppleStartLayerIsComposedByPacketTunnelAndXORFailsClosed(t *testing.T) 
 	for _, required := range []string{
 		`@State private var startLayer = "off"`,
 		"AES-256-GCM — authenticated Libbox modes",
-		"AES-256-GCM + XOR whitening — unavailable on iOS",
-		"protected local whitening relay",
+		"AES-256-GCM + XOR whitening — native",
+		"tunnel-owned native outbound",
 		"XOR is obfuscation only and is never counted as encryption",
 		`startLayer = (p.startLayer ?? "off").lowercased()`,
 		"p.startLayer = startLayer",
-		`startLayer == "aes-256-gcm+xor-whitening"`,
-		"AES+XOR cannot be saved as iOS-runnable",
 	} {
 		if !strings.Contains(settings, required) {
 			t.Fatalf("iOS native Settings can no longer configure Start Layer truthfully: missing %q", required)

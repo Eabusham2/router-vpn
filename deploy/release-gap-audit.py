@@ -99,14 +99,14 @@ require(
     'static let aes = "aes-256-gcm"',
     'static let aesXOR = "aes-256-gcm+xor-whitening"',
     'static let aesMethod = "2022-blake3-aes-256-gcm"',
-    "AES-256-GCM + XOR whitening is not available on iOS until PacketTunnel owns a protected local whitening relay",
-    "XOR is never counted as encryption or silently ignored",
+    'static let nativeWhiteningType = "routervpn-aes-xor"',
+    "XOR is obfuscation only",
     'outbounds[proxyIndex]["detour"] = aesTag',
 )
 require(
     "ios/RouterVPN/App/IOSRuntimeSelection.swift",
     "try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)",
-    "AES-256-GCM + XOR whitening is unavailable on iOS until PacketTunnel owns a protected local whitening relay",
+    "start == startLayerAES || start == startLayerAESXOR",
 )
 require(
     "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
