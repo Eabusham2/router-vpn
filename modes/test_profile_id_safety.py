@@ -75,8 +75,15 @@ class ProfileIdSafety(unittest.TestCase):
             tool = tools / name
             tool.write_text('#!/bin/sh\npwd >> "$READINESS_PROBES"\n')
             tool.chmod(0o700)
+        script_dir = root / "test-modes"
+        script_dir.mkdir(exist_ok=True)
+        for name in ("check-mode.sh", "check-combined.sh", "profile-id.sh"):
+            (script_dir / name).write_bytes((HERE / name).read_bytes())
+            (script_dir / name).chmod(0o700)
+        (script_dir / "xray-runtime.sh").write_text("#!/bin/sh\nXRAY_BIN=xray\n")
+        (script_dir / "xray-runtime.sh").chmod(0o700)
         env = os.environ.copy()
-        env.update(HOMEVPN_ROOT=str(root), READINESS_PROBES=str(root / "probes"))
+        env.update(HOMEVPN_ROOT=str(root), READINESS_PROBES=str(root / "probes"), READINESS_SCRIPT_DIR=str(script_dir))
         env["PATH"] = str(tools) + os.pathsep + env.get("PATH", os.defpath)
         if profile is None:
             env.pop("HOMEVPN_PROFILE_ID", None)
@@ -92,8 +99,9 @@ class ProfileIdSafety(unittest.TestCase):
                 (directory / name).write_text("test-only path-selection fixture\n")
 
     def check_readiness(self, script: str, mode: str, env: dict[str, str]):
+        script_dir = Path(env.get("READINESS_SCRIPT_DIR", str(HERE)))
         return subprocess.run(
-            ["bash", str(HERE / script), mode], env=env,
+            ["bash", str(script_dir / script), mode], env=env,
             text=True, capture_output=True, check=False, timeout=5,
         )
 

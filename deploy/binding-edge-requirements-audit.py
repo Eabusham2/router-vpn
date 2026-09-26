@@ -61,7 +61,7 @@ need('server/scripts/setup_center_update.py','automatically restore the prior st
 
 # Dependencies must be pinned; floating latest/main download sources are not an
 # acceptable production/native artifact mechanism.
-need('deploy/native-download-policy-audit.py','VERSION=v26.7.11','AWG_GO_COMMIT=0527dfa47639714dd8f5c9ffbd9d40d19083f0ba','SSR_COMMIT=227127c4bc5a6555e0556693d084c96860e75b5e')
+need('deploy/native-download-policy-audit.py',"VERSION='26.7.11'",'verify-bundled-xray.py','AWG_GO_COMMIT=0527dfa47639714dd8f5c9ffbd9d40d19083f0ba','SSR_COMMIT=227127c4bc5a6555e0556693d084c96860e75b5e')
 for rel in ('server/scripts/download-broker.py','client/install-xray.sh'):
     forbid(rel,'/releases/latest','refs/heads/main')
 
