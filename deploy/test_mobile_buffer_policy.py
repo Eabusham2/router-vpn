@@ -49,4 +49,42 @@ class Tests(unittest.TestCase):
             (src/'escape').symlink_to(Path(tmp)/'outside')
             with self.assertRaises(ValueError):MODULE.copy_verified(src,dst)
             self.assertFalse(dst.exists())
+class SocketPolicyTests(unittest.TestCase):
+    def test_protection_hooks_are_preserved_and_preparation_is_idempotent(self):
+        for path, edits in MODULE.SOCKETS.PATCHES.items():
+            original = "// native platform protection remains first\n" + "\n".join(old for old,new in edits)
+            fixed = MODULE.SOCKETS.patch_text(path, original)
+            self.assertEqual(MODULE.SOCKETS.patch_text(path,fixed),fixed)
+            self.assertTrue(fixed.startswith("// native platform protection remains first"))
+            for old,new in edits:
+                self.assertIn(new,fixed)
+                self.assertIn(old,fixed)
+            if 'dialer' in path:
+                self.assertIn('control.Append(dialer.Control, startwhitening.UDPControl)',fixed)
+                self.assertIn('control.Append(listener.Control, startwhitening.UDPControl)',fixed)
+
+    def test_partial_duplicate_or_changed_socket_guards_are_rejected(self):
+        for path, edits in MODULE.SOCKETS.PATCHES.items():
+            original = "\n".join(old for old,new in edits)
+            fixed = MODULE.SOCKETS.patch_text(path,original)
+            for invalid in (fixed + "\n" + MODULE.SOCKETS.IMPORT,
+                            fixed.replace('control.Append','unreviewedReplacement',1),
+                            original.replace(edits[0][0],edits[0][1],1)):
+                with self.subTest(path=path),self.assertRaises(ValueError):
+                    MODULE.SOCKETS.patch_text(path,invalid)
+
+    def test_socket_patch_preflights_all_files_before_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owner=root/'experimental/libbox/routervpn/startwhitening/udp_buffers.go'
+            owner.parent.mkdir(parents=True);owner.write_text('package startwhitening')
+            sources={}
+            for path,edits in MODULE.SOCKETS.PATCHES.items():
+                text="\n".join(old for old,new in edits)
+                source=root/path;source.parent.mkdir(parents=True,exist_ok=True);source.write_text(text);sources[path]=text
+            broken=root/'common/listener/listener_udp.go'
+            broken.write_text('changed upstream source')
+            with self.assertRaises(ValueError):MODULE.SOCKETS.prepare(root)
+            self.assertEqual((root/'common/dialer/default.go').read_text(),sources['common/dialer/default.go'])
+
 if __name__=='__main__':unittest.main()

@@ -9,6 +9,7 @@ on:
       - 'cmd/start-layer-relay/**'
       - 'deploy/prepare-mobile-whitening.py'
       - 'deploy/prepare-mobile-buffers.py'
+      - 'deploy/mobile_udp_socket_policy.py'
       - 'deploy/test_prepare_mobile_whitening.py'
       - 'deploy/test_mobile_whitening_pinned.sh'
       - '.github/workflows/mobile-start-layer-native.yml'
@@ -17,7 +18,11 @@ permissions:
   contents: read
 jobs:
   native-start-layer:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

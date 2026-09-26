@@ -164,10 +164,13 @@ func TestUDPResetsEachDatagramAndSupportsJumbo(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer socket.Close()
+	if err := ConfigureUDPSocket(socket); err != nil {
+		t.Fatal(err)
+	}
 	owner := NewOwner(context.Background())
 	defer owner.Close()
 	c, err := owner.Open(context.Background(), testKey(t), true, func(ctx context.Context) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "udp", socket.LocalAddr().String())
+		return (&net.Dialer{Control: UDPControl}).DialContext(ctx, "udp", socket.LocalAddr().String())
 	})
 	if err != nil {
 		t.Fatal(err)

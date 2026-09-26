@@ -37,7 +37,7 @@ func (d *testUnderlay) DialContext(ctx context.Context, network string, destinat
 	d.mu.Lock()
 	d.calls++
 	d.mu.Unlock()
-	return (&net.Dialer{}).DialContext(ctx, network, d.address)
+	return (&net.Dialer{Control: startwhitening.UDPControl}).DialContext(ctx, network, d.address)
 }
 func (*testUnderlay) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
 	return nil, errors.New("fixture expects a connected UDP socket")
@@ -120,6 +120,11 @@ func echoEndpoints(t *testing.T) (string, string) {
 	udp, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		tcp.Close()
+		t.Fatal(err)
+	}
+	if err := startwhitening.ConfigureUDPSocket(udp.(*net.UDPConn)); err != nil {
+		tcp.Close()
+		udp.Close()
 		t.Fatal(err)
 	}
 	var mu sync.Mutex

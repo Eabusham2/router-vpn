@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"router-vpn/internal/startwhitening"
 	"runtime"
 	"strings"
 	"sync"
@@ -16,11 +17,11 @@ import (
 )
 
 const (
-	whiteningLabel     = "router-vpn-xor-whitening-v1\x00"
-	idleTimeout        = 2 * time.Minute
-	maxKeyConfigSize   = 4 << 20
-	maxTCPConnections  = 256
-	maxUDPSessions     = 256
+	whiteningLabel    = "router-vpn-xor-whitening-v1\x00"
+	idleTimeout       = 2 * time.Minute
+	maxKeyConfigSize  = 4 << 20
+	maxTCPConnections = 256
+	maxUDPSessions    = 256
 )
 
 type singBoxConfig struct {
@@ -265,6 +266,9 @@ func relayUDP(listen, target string, key [32]byte) error {
 		return err
 	}
 	defer ln.Close()
+	if err := startwhitening.ConfigureUDPSocket(ln); err != nil {
+		return err
+	}
 
 	var mu sync.Mutex
 	sessions := make(map[string]*udpSession)
@@ -292,6 +296,10 @@ func relayUDP(listen, target string, key [32]byte) error {
 		mu.Unlock()
 		conn, err := net.DialUDP("udp", nil, targetAddr)
 		if err != nil {
+			return nil, err
+		}
+		if err := startwhitening.ConfigureUDPSocket(conn); err != nil {
+			_ = conn.Close()
 			return nil, err
 		}
 		session := &udpSession{conn: conn, peer: peer, lastUsed: time.Now()}

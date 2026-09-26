@@ -7,6 +7,7 @@ lengths remain unchanged. The original verified module cache is never modified.
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -17,6 +18,9 @@ import tempfile
 PIN='1ac1a339cb1223e9c70eae14c44411c75033c02d'
 MODULE='github.com/sagernet/sing'
 VERSION='v0.9.4'
+_socket_spec=importlib.util.spec_from_file_location('mobile_udp_sockets',Path(__file__).with_name('mobile_udp_socket_policy.py'))
+SOCKETS=importlib.util.module_from_spec(_socket_spec)
+_socket_spec.loader.exec_module(SOCKETS)
 FILES={
  'common/buf/buffer_standard.go':('608fbf3f13067a7568c491990dba764b81107e87','16 * 1024'),
  'common/buf/buffer_low_memory.go':('81fb10a26460dea3586486118d091a43020284eb','8 * 1024'),
@@ -84,6 +88,7 @@ def prepare(vendor):
     dest=vendor/'.routervpn-sources/sing'
     copy_verified(source,dest)
     go('mod','edit','-replace='+MODULE+'='+str(dest))
+    SOCKETS.prepare(vendor)
     go('mod','tidy')
     print('Verified native UDP buffer policy: complete 65535-byte ciphertext; TCP capacities unchanged')
 
