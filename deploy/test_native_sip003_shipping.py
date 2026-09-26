@@ -34,6 +34,12 @@ class Shipping(unittest.TestCase):
         self.assertIn('Libbox.routerCompileSIP003Profile(wrapper, strictUTF8(raw))',source)
         self.assertIn('CodingErrorAction.REPORT',source)
         self.assertNotIn('ProcessBuilder',source)
+    def test_fixture_build_includes_the_real_quic_transport(self):
+        script=(ROOT/'deploy/test_mobile_sip003_pinned.sh').read_text()
+        commands=[line for line in script.splitlines() if 'go build ' in line and 'sing-fixture' in line or 'go test -race' in line]
+        self.assertEqual(len(commands),3)
+        for command in commands:self.assertIn('-tags with_quic,with_wireguard,with_gvisor',command)
+        self.assertIn('with_low_memory',commands[-1])
     def test_protocol_proof_is_not_replaced_by_configuration_success(self):
         orchestrator=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java').read_text()
         self.assertIn('AndroidPathProbe.prove(bundle',orchestrator)
