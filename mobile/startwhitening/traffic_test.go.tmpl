@@ -1,0 +1,327 @@
+package routervpnwhitening
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// Only the physical socket boundary is mapped to loopback. The shipping AES
+// method and the shipping server whitening process exchange actual wire bytes.
+type testUnderlay struct {
+	address string
+	mu      sync.Mutex
+	calls   int
+}
+
+func (d *testUnderlay) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if destination.String() != "192.0.2.1:8389" || (network != "tcp" && network != "udp") {
+		return nil, errors.New("fixture rejected unexpected physical destination")
+	}
+	d.mu.Lock()
+	d.calls++
+	d.mu.Unlock()
+	return (&net.Dialer{}).DialContext(ctx, network, d.address)
+}
+func (*testUnderlay) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("fixture expects a connected UDP socket")
+}
+func freePair(t *testing.T) (string, int) {
+	t.Helper()
+	for i := 0; i < 10; i++ {
+		tcp, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		address := tcp.Addr().String()
+		port := tcp.Addr().(*net.TCPAddr).Port
+		udp, err := net.ListenPacket("udp", address)
+		tcp.Close()
+		if err == nil {
+			udp.Close()
+			return address, port
+		}
+	}
+	t.Fatal("no TCP+UDP fixture port available")
+	return "", 0
+}
+func testProcess(t *testing.T, executable string, args []string, address string) {
+	t.Helper()
+	if executable == "" {
+		t.Fatal("actual pinned engine/relay fixture executable is required")
+	}
+	log, err := os.Create(filepath.Join(t.TempDir(), "process.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(executable, args...)
+	command.Stdout = log
+	command.Stderr = log
+	if err = command.Start(); err != nil {
+		log.Close()
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	var exitErr error
+	go func() { exitErr = command.Wait(); close(done) }()
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("owned fixture process did not stop")
+		}
+		log.Close()
+		if t.Failed() {
+			raw, _ := os.ReadFile(log.Name())
+			if len(raw) > 8192 {
+				raw = raw[len(raw)-8192:]
+			}
+			t.Logf("fixture diagnostics: %s", raw)
+		}
+	})
+	for until := time.Now().Add(5 * time.Second); time.Now().Before(until); {
+		select {
+		case <-done:
+			t.Fatalf("fixture exited before readiness: %v", exitErr)
+		default:
+		}
+		c, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("owned fixture listener did not become ready")
+}
+func echoEndpoints(t *testing.T) (string, string) {
+	t.Helper()
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		tcp.Close()
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	connections := map[net.Conn]bool{}
+	var stopping bool
+	t.Cleanup(func() {
+		tcp.Close()
+		udp.Close()
+		mu.Lock()
+		stopping = true
+		for c := range connections {
+			c.Close()
+		}
+		mu.Unlock()
+	})
+	go func() {
+		for {
+			c, err := tcp.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			if stopping {
+				mu.Unlock()
+				c.Close()
+				return
+			}
+			connections[c] = true
+			mu.Unlock()
+			go func() { defer c.Close(); _, _ = io.Copy(c, c); mu.Lock(); delete(connections, c); mu.Unlock() }()
+		}
+	}()
+	go func() {
+		b := make([]byte, 65535)
+		for {
+			n, a, err := udp.ReadFrom(b)
+			if err != nil {
+				return
+			}
+			_, _ = udp.WriteTo(b[:n], a)
+		}
+	}()
+	return tcp.Addr().String(), udp.LocalAddr().String()
+}
+func runAESWhiteningServer(t *testing.T, tcpEcho, udpEcho string) (string, string) {
+	t.Helper()
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	password := base64.StdEncoding.EncodeToString(key)
+	ss, ssPort := freePair(t)
+	relay, _ := freePair(t)
+	tcp, _ := net.ResolveTCPAddr("tcp", tcpEcho)
+	udp, _ := net.ResolveUDPAddr("udp", udpEcho)
+	config := map[string]any{
+		"log":       map[string]any{"level": "warn"},
+		"inbounds":  []any{map[string]any{"type": "shadowsocks", "tag": "test-aes", "listen": "127.0.0.1", "listen_port": ssPort, "method": startwhitening.Method, "password": password}},
+		"outbounds": []any{map[string]any{"type": "direct", "tag": "test-echo"}},
+		"route": map[string]any{"rules": []any{
+			map[string]any{"ip_cidr": []string{"127.0.0.1/32"}, "port": []int{tcp.Port, udp.Port}, "action": "route", "outbound": "test-echo"},
+			map[string]any{"action": "reject"},
+		}},
+	}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "server.json")
+	if err = os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	testProcess(t, os.Getenv("ROUTER_VPN_SING_TEST_BINARY"), []string{"run", "-c", path}, ss)
+	testProcess(t, os.Getenv("ROUTER_VPN_WHITENING_TEST_BINARY"), []string{"--mode", "server", "--listen", relay, "--target", ss, "--key-config", path}, relay)
+	return relay, password
+}
+func TestAuthenticatedWhiteningEncryptedTCPUDPAndTeardown(t *testing.T) {
+	tcp, udp := echoEndpoints(t)
+	address, password := runAESWhiteningServer(t, tcp, udp)
+	options := Options{ServerOptions: option.ServerOptions{Server: "192.0.2.1", ServerPort: 8389}, Method: startwhitening.Method, Password: password}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	underlay := &testUnderlay{address: address}
+	h, err := newOutbound(ctx, "start-layer-aes", options, underlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	// Multiple connections, uneven stream writes and >8 KiB packets exercise
+	// independent offsets and real authenticated ciphertext on both directions.
+	for attempt := 0; attempt < 3; attempt++ {
+		c, err := h.DialContext(ctx, "tcp", M.ParseSocksaddr(tcp))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		payload := bytes.Repeat([]byte(fmt.Sprintf("authenticated-aes-xor-%d/", attempt)), 3000)
+		saved := append([]byte(nil), payload...)
+		written := make(chan error, 1)
+		go func() {
+			_, err := c.Write(payload[:117])
+			if err == nil {
+				_, err = c.Write(payload[117:])
+			}
+			written <- err
+		}()
+		got := make([]byte, len(payload))
+		_, err = io.ReadFull(c, got)
+		if err != nil {
+			c.Close()
+			t.Fatal("encrypted TCP read", err)
+		}
+		if err = <-written; err != nil {
+			c.Close()
+			t.Fatal("encrypted TCP write", err)
+		}
+		if !bytes.Equal(got, saved) || !bytes.Equal(payload, saved) {
+			t.Fatal("encrypted TCP payload or caller buffer changed")
+		}
+		c.Close()
+	}
+	pc, err := h.ListenPacket(ctx, M.ParseSocksaddr(udp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	for _, size := range []int{64, 1200, 9000, 64000} {
+		pc.SetDeadline(time.Now().Add(5 * time.Second))
+		payload := bytes.Repeat([]byte{byte(size)}, size)
+		if _, err = pc.WriteTo(payload, M.ParseSocksaddr(udp)); err != nil {
+			t.Fatalf("encrypted UDP %d write: %v", size, err)
+		}
+		got := make([]byte, 65535)
+		n, from, err := pc.ReadFrom(got)
+		if err != nil || n != size || from.String() != udp || !bytes.Equal(got[:n], payload) {
+			t.Fatalf("encrypted UDP %d differs or failed: %v", size, err)
+		}
+	}
+	h.InterfaceUpdated(ctx)
+	if _, err = pc.WriteTo([]byte("stale"), M.ParseSocksaddr(udp)); err == nil {
+		t.Fatal("old datagram socket survived interface reset")
+	}
+	next, err := h.ListenPacket(ctx, M.ParseSocksaddr(udp))
+	if err != nil {
+		t.Fatal("new generation rejected", err)
+	}
+	if err = h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = next.WriteTo([]byte("late"), M.ParseSocksaddr(udp)); err == nil {
+		t.Fatal("datagram socket survived owner close")
+	}
+	if _, err = h.DialContext(ctx, "tcp", M.ParseSocksaddr(tcp)); err == nil {
+		t.Fatal("closed owner opened new physical socket")
+	}
+}
+func TestWrongAESKeyCannotFallBackToCleartext(t *testing.T) {
+	tcp, udp := echoEndpoints(t)
+	address, password := runAESWhiteningServer(t, tcp, udp)
+	wrong := make([]byte, 32)
+	if _, err := rand.Read(wrong); err != nil {
+		t.Fatal(err)
+	}
+	options := Options{ServerOptions: option.ServerOptions{Server: "192.0.2.1", ServerPort: 8389}, Method: startwhitening.Method, Password: base64.StdEncoding.EncodeToString(wrong)}
+	h, err := newOutbound(context.Background(), "test-wrong", options, &testUnderlay{address: address})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	// Deliberately match only whitening. The remaining mismatch is the actual
+	// authenticated AES key, so an echo would demonstrate an encryption bypass.
+	h.key, err = startwhitening.Key(startwhitening.Method, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := h.DialContext(context.Background(), "tcp", M.ParseSocksaddr(tcp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(250 * time.Millisecond))
+	_, _ = c.Write([]byte("must not echo without AES authentication"))
+	b := make([]byte, 64)
+	n, err := c.Read(b)
+	if err == nil || n != 0 {
+		t.Fatal("incorrect AES key returned unauthenticated data")
+	}
+}
+func TestWhiteningRejectsUnownedEndpointsAndMethods(t *testing.T) {
+	valid := Options{ServerOptions: option.ServerOptions{Server: "192.0.2.1", ServerPort: 8389}, Method: startwhitening.Method, Password: base64.StdEncoding.EncodeToString(make([]byte, 32))}
+	for _, host := range []string{"127.0.0.1", "::1", "::", "224.0.0.1", "fe80::1%en0", "localhost", "node.example/escape", "bad name", "vpn..example", "bad:host"} {
+		bad := valid
+		bad.Server = host
+		if _, err := newOutbound(context.Background(), "bad", bad, &testUnderlay{}); err == nil {
+			t.Fatalf("invalid outer endpoint accepted: %s", host)
+		}
+	}
+	for _, method := range []string{"xor", "none", "aes-128-gcm", "2022-blake3-aes-128-gcm"} {
+		bad := valid
+		bad.Method = method
+		if _, err := newOutbound(context.Background(), "bad", bad, &testUnderlay{}); err == nil {
+			t.Fatal("weaker/no encryption accepted")
+		}
+	}
+}

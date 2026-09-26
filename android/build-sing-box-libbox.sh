@@ -211,6 +211,7 @@ python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
   go_retry test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run TestRouterMultihop -count=1
   go_retry test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
+  bash "$ROOT/../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   go_retry run ./cmd/internal/build_libbox -target android
 )
 

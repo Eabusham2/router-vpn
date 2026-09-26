@@ -131,6 +131,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   go mod tidy
   [[ $(go list -m -f '{{.Version}}' github.com/xtls/xray-core) == "$XRAY_VERSION" ]]
   bash "$ROOT/../../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_VENDOR"
+  bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   go test ./experimental/libbox/routervpn/...
   go test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run TestRouterMultihop -count=1
   GOFLAGS="-ldflags=-checklinkname=0" go run ./cmd/internal/build_libbox -target apple -platform ios,iossimulator

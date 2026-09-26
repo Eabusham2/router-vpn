@@ -1,0 +1,135 @@
+// Router VPN's native AES+XOR Start Layer uses the same authenticated
+// Shadowsocks implementation as the pinned Libbox core. XOR only transforms
+// that method's ciphertext; no unauthenticated XOR-only outbound is registered.
+package routervpnwhitening
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"regexp"
+	"strings"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	shadowsocks "github.com/sagernet/sing-shadowsocks2"
+	"github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+type Options struct {
+	option.ServerOptions
+	Method   string `json:"method"`
+	Password string `json:"password"`
+}
+
+func RegisterOutbound(registry *outbound.Registry) {
+	outbound.Register[Options](registry, startwhitening.Type, NewOutbound)
+}
+
+var _ adapter.Outbound = (*Outbound)(nil)
+
+type Outbound struct {
+	outbound.Adapter
+	owner  *startwhitening.Owner
+	dialer N.Dialer
+	method shadowsocks.Method
+	server M.Socksaddr
+	key    [32]byte
+}
+
+func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options Options) (adapter.Outbound, error) {
+	if err := validate(options); err != nil {
+		return nil, err
+	}
+	// There is no raw socket, subprocess, local listener, imported socket option
+	// or fallback dialer. Libbox supplies the active native platform protection.
+	d, err := dialer.New(ctx, option.DialerOptions{}, options.ServerIsDomain())
+	if err != nil {
+		return nil, err
+	}
+	return newOutbound(ctx, tag, options, d)
+}
+
+var hostnameLabel = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+func validate(options Options) error {
+	if _, err := startwhitening.Key(options.Method, options.Password); err != nil {
+		return err
+	}
+	if options.ServerPort == 0 || options.Server == "" || len(options.Server) > 253 || strings.ContainsAny(options.Server, "/@\r\n\x00 %") || strings.EqualFold(options.Server, "localhost") {
+		return errors.New("invalid native AES+XOR node endpoint")
+	}
+	if ip, err := netip.ParseAddr(options.Server); err == nil {
+		ip = ip.Unmap()
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+			return errors.New("invalid native AES+XOR node address")
+		}
+	} else {
+		for _, label := range strings.Split(strings.TrimSuffix(options.Server, "."), ".") {
+			if !hostnameLabel.MatchString(label) {
+				return errors.New("invalid native AES+XOR node hostname")
+			}
+		}
+	}
+	return nil
+}
+func newOutbound(ctx context.Context, tag string, options Options, d N.Dialer) (*Outbound, error) {
+	if ctx == nil || d == nil {
+		return nil, errors.New("native AES+XOR requires an owned platform dialer")
+	}
+	if err := validate(options); err != nil {
+		return nil, err
+	}
+	key, err := startwhitening.Key(options.Method, options.Password)
+	if err != nil {
+		return nil, err
+	}
+	method, err := shadowsocks.CreateMethod(ctx, startwhitening.Method, shadowsocks.MethodOptions{Password: options.Password})
+	if err != nil {
+		return nil, errors.New("native AES+XOR profile has invalid authenticated AES key material")
+	}
+	return &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(startwhitening.Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, option.DialerOptions{}), owner: startwhitening.NewOwner(ctx), dialer: d, method: method, server: options.ServerOptions.Build(), key: key}, nil
+}
+func (h *Outbound) physical(ctx context.Context, network string) (net.Conn, error) {
+	return h.owner.Open(ctx, h.key, network == N.NetworkUDP, func(ctx context.Context) (net.Conn, error) { return h.dialer.DialContext(ctx, network, h.server) })
+}
+func (h *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	ctx, metadata := adapter.ExtendContext(ctx)
+	metadata.Outbound = h.Tag()
+	metadata.Destination = destination
+	switch N.NetworkName(network) {
+	case N.NetworkTCP:
+		raw, err := h.physical(ctx, N.NetworkTCP)
+		if err != nil {
+			return nil, err
+		}
+		return h.method.DialEarlyConn(raw, destination), nil
+	case N.NetworkUDP:
+		raw, err := h.physical(ctx, N.NetworkUDP)
+		if err != nil {
+			return nil, err
+		}
+		return bufio.NewBindPacketConn(h.method.DialPacketConn(raw), destination), nil
+	default:
+		return nil, errors.New("native AES+XOR accepts only TCP and UDP")
+	}
+}
+func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	ctx, metadata := adapter.ExtendContext(ctx)
+	metadata.Outbound = h.Tag()
+	metadata.Destination = destination
+	raw, err := h.physical(ctx, N.NetworkUDP)
+	if err != nil {
+		return nil, err
+	}
+	return h.method.DialPacketConn(raw), nil
+}
+func (h *Outbound) InterfaceUpdated(context.Context) { h.owner.Reset() }
+func (h *Outbound) Close() error                     { return h.owner.Close() }

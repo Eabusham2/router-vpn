@@ -2,15 +2,19 @@
 """Compile the tested shared route/lease policy into each existing Libbox build."""
 import argparse
 import hashlib
+import importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ('routechoice', 'multihoprelay', 'mobilemultihop')
+_whitening_spec = importlib.util.spec_from_file_location('routervpn_whitening', ROOT/'deploy/prepare-mobile-whitening.py')
+WHITENING = importlib.util.module_from_spec(_whitening_spec)
+_whitening_spec.loader.exec_module(WHITENING)
 def inputs():
     paths = [ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl']
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths
+    return paths + WHITENING.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -22,6 +26,7 @@ def prepare(vendor):
     vendor=vendor.resolve();module=vendor/'go.mod'
     if not module.is_file() or not module.read_text().startswith('module github.com/sagernet/sing-box\n'):
         raise ValueError('expected the verified disposable sing-box checkout')
+    WHITENING.prepare(vendor)
     root=vendor/'experimental/libbox'
     for package in PACKAGES:
         output=root/'routervpn'/package;output.mkdir(parents=True,exist_ok=True)

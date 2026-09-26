@@ -1,0 +1,38 @@
+name: Native authenticated AES and whitening traffic
+on:
+  push:
+    paths:
+      - 'internal/startwhitening/**'
+      - 'mobile/startwhitening/**'
+      - 'cmd/start-layer-relay/**'
+      - 'deploy/prepare-mobile-whitening.py'
+      - 'deploy/test_prepare_mobile_whitening.py'
+      - 'deploy/test_mobile_whitening_pinned.sh'
+      - '.github/workflows/mobile-start-layer-native.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-start-layer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Verify policy and compose exact authenticated engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race -count=1 ./internal/startwhitening ./cmd/start-layer-relay
+          python3 deploy/test_prepare_mobile_whitening.py
+          SING="$RUNNER_TEMP/routervpn-whitening-core"
+          git init "$SING"
+          git -C "$SING" remote add origin https://github.com/SagerNet/sing-box.git
+          git -C "$SING" fetch --depth=1 origin 1ac1a339cb1223e9c70eae14c44411c75033c02d
+          git -C "$SING" checkout --detach FETCH_HEAD
+          python3 deploy/prepare-mobile-whitening.py "$SING"
+          (cd "$SING" && go mod tidy)
+          bash deploy/test_mobile_whitening_pinned.sh "$SING"
