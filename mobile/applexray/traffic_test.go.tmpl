@@ -177,7 +177,7 @@ func startLoopbackXray(t *testing.T, mode, camouflage string, raw []byte) (strin
 		serverStream["xhttpSettings"] = stream["xhttpSettings"]
 		serverStream["finalmask"] = stream["finalmask"]
 	}
-	server := map[string]any{"log": map[string]any{"loglevel": "warning"}, "inbounds": []any{map[string]any{"tag": "local-test-server", "listen": "127.0.0.1", "port": port, "protocol": "vless", "settings": map[string]any{"clients": []any{serverUser}, "decryption": decryption}, "streamSettings": serverStream}}, "outbounds": []any{map[string]any{"protocol": "freedom", "tag": "test-echo"}}}
+	server := map[string]any{"log": map[string]any{"loglevel": "debug"}, "inbounds": []any{map[string]any{"tag": "local-test-server", "listen": "127.0.0.1", "port": port, "protocol": "vless", "settings": map[string]any{"clients": []any{serverUser}, "decryption": decryption}, "streamSettings": serverStream}}, "outbounds": []any{map[string]any{"protocol": "freedom", "tag": "test-echo"}}}
 	config, err := json.Marshal(server)
 	if err != nil {
 		t.Fatal(err)
@@ -206,6 +206,10 @@ func startLoopbackXray(t *testing.T, mode, camouflage string, raw []byte) (strin
 			t.Error("test server process did not exit")
 		}
 		log.Close()
+		if t.Failed() {
+			body, _ := os.ReadFile(log.Name())
+			t.Logf("isolated fixture server diagnostics: %s", body)
+		}
 	})
 	ready := false
 	for until := time.Now().Add(5 * time.Second); time.Now().Before(until); {
@@ -242,6 +246,17 @@ func TestNativeXrayEncryptedLoopbackTCPAndUDP(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			endpoint, raw := startLoopbackXray(t, mode, camouflage, nativeConfig(t, mode))
 			plan, err := applexray.Prepare(mode, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Fixture-only diagnostics: the production compiler still disables file
+			// logging. Generated test keys are ephemeral and no user profile is used.
+			diagnostic, err := applexray.Object(plan.JSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			diagnostic["log"] = map[string]any{"loglevel": "debug"}
+			plan.JSON, err = json.Marshal(diagnostic)
 			if err != nil {
 				t.Fatal(err)
 			}
