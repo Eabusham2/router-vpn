@@ -56,6 +56,12 @@ def copy_verified(source,dest):
     staging=Path(tempfile.mkdtemp(prefix='sing-buffer-',dir=dest.parent))
     try:
         shutil.copytree(source,staging,dirs_exist_ok=True,copy_function=shutil.copyfile)
+        # copytree copies directory metadata even with copyfile for files. Go's
+        # immutable module cache uses read-only directories; only our fresh
+        # disposable copy receives owner-write permission, never that cache.
+        for folder in [staging, *(p for p in staging.rglob('*') if p.is_dir())]:
+            if folder.is_symlink():raise ValueError('unsafe staged source directory')
+            folder.chmod(folder.stat().st_mode | 0o700)
         for name,raw in replacement.items():(staging/name).write_bytes(raw)
         (staging/'.routervpn-buffer-policy.json').write_text(json.dumps({'module':MODULE,'version':VERSION,'files':{name:hashlib.sha256(raw).hexdigest() for name,raw in replacement.items()}},sort_keys=True))
         os.replace(staging,dest)

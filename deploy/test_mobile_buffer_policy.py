@@ -25,6 +25,21 @@ class Tests(unittest.TestCase):
                 self.assertIn('BufferSize    = '+('16' if 'low_memory' in name else '32')+' * 1024',text)
             (dst/'common/buf/buffer_standard.go').write_text('drift')
             with self.assertRaises(ValueError):MODULE.copy_verified(src,dst)
+    def test_readonly_go_cache_directories_stay_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src=Path(tmp)/'source';dst=Path(tmp)/'owned';self.fixture(src)
+            folders=[src,*(p for p in src.rglob('*') if p.is_dir())]
+            try:
+                for p in folders:p.chmod(0o555)
+                MODULE.copy_verified(src,dst)
+                MODULE.copy_verified(src,dst)
+                for p in folders:self.assertEqual(p.stat().st_mode & 0o777,0o555)
+                for p in [dst,*(p for p in dst.rglob('*') if p.is_dir())]:
+                    self.assertEqual(p.stat().st_mode & 0o700,0o700)
+                self.assertTrue((dst/'.routervpn-buffer-policy.json').is_file())
+            finally:
+                for p in folders:p.chmod(0o755)
+
     def test_changed_dependency_and_symlink_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             src=Path(tmp)/'source';dst=Path(tmp)/'owned';self.fixture(src)
