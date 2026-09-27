@@ -1,0 +1,87 @@
+name: Verify hop measurement source transfer
+on:
+  push:
+    paths:
+      - '.github/workflows/publish-hop-measurement-source.yml'
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Reconstruct, test, and publish checked source objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, tempfile, time, urllib.request, urllib.error
+          root=pathlib.Path.cwd()
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'hop-source-verification'
+          out.mkdir(exist_ok=True)
+          api_root='https://api.github.com/repos/Eabusham2/router-vpn/'
+          base=os.environ['GITHUB_SHA']
+          expected='c611d04feaf4a7969ddaad0921b400014e43b7eb'
+          parts='9e1d859c10d90cc829ad8e6a34edfd7eb7577ec7 f4c7d07b7d9e46158c6b4cb1d8af8378e5d978ec 6c4bb803bb3e44f96856d601ff098b2ea6c75737 adea2952400c6f4611b926c9ac97d39802fded64 fc1fc0279c8f3bfb9ed42b912689f65732a67230 cce1357656db07c367931d8d6e71697006682c1f 016dfeb799576d222db2326fe609adc23ae639fe 4fbe8eda5d006e4a3b46284d2956a92512bd19b6 4555c117c4dd5fce4ee34537c6583177e098f695 5f85fb96c70b12f21344ae06a61b99a81407732e'.split()
+          def git(*args):return subprocess.check_output(['git',*args])
+          def api(path,data=None):
+              body=None if data is None else json.dumps(data).encode()
+              for attempt in range(4):
+                  request=urllib.request.Request(api_root+path,data=body,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+                  try:
+                      with urllib.request.urlopen(request,timeout=40) as response:return json.load(response)
+                  except urllib.error.HTTPError as error:
+                      if error.code not in (429,500,502,503,504) or attempt==3:raise
+                      time.sleep(2**attempt)
+          def blob(sha):
+              data=api('git/blobs/'+sha)
+              raw=base64.b64decode(data['content'])
+              assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==sha
+              return raw
+          assert git('status','--porcelain').strip()==b''
+          assert api('git/ref/heads/main')['object']['sha']==base,'main advanced'
+          git('rm','.github/workflows/publish-hop-measurement-source.yml')
+          assert git('write-tree').decode().strip()=='398374674b63a8b2f1c512065bc116f513706a98'
+          encoded=b''.join(blob(sha) for sha in parts)
+          assert len(encoded)==32324
+          patch=gzip.decompress(base64.b64decode(encoded,validate=True))
+          assert len(patch)==83125
+          assert hashlib.sha256(patch).hexdigest()=='f9331408fe8c78a442a0485424c0853e037c8a799fb85985d3ca239a38e46d81'
+          with tempfile.TemporaryDirectory() as directory:
+              file=pathlib.Path(directory)/'source.patch';file.write_bytes(patch)
+              git('apply','--index',str(file))
+          assert git('write-tree').decode().strip()==expected,'source tree mismatch'
+          checks=[['go','test','-race','-count=1','-timeout=240s','./...'],['go','vet','./...'],['python3','deploy/test_native_hop_measurement.py'],['python3','deploy/validate-repo.py']]
+          for number,command in enumerate(checks):
+              with (out/('check-'+str(number)+'.log')).open('w') as log:
+                  subprocess.run(command,stdout=log,stderr=subprocess.STDOUT,check=True,timeout=420)
+              print('PASS',' '.join(command),flush=True)
+          assert git('diff','--name-only').strip()==b''
+          assert git('write-tree').decode().strip()==expected
+          entries=[]
+          for row in git('diff','--cached','--name-status','--no-renames').decode().splitlines():
+              status,path=row.split('\t',1)
+              if status=='D':entries.append({'path':path,'mode':'100644','type':'blob','sha':None});continue
+              mode,sha,_=git('ls-files','--stage','--',path).decode().split('\t')[0].split()
+              raw=git('cat-file','blob',sha)
+              result=api('git/blobs',{'content':base64.b64encode(raw).decode(),'encoding':'base64'})
+              assert result['sha']==sha,'published source object mismatch'
+              entries.append({'path':path,'mode':mode,'type':'blob','sha':sha})
+              print('Verified source object',path,flush=True)
+          result={'base':base,'base_tree':api('git/commits/'+base)['tree']['sha'],'tree':expected,'entries':entries,'checks':[' '.join(command) for command in checks],'ref_updated':False}
+          (out/'source-objects.json').write_text(json.dumps(result,indent=2))
+          print(json.dumps(result),flush=True)
+          print('All source objects verified; no branch was created or updated by this job.',flush=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: router-vpn-hop-source-verification
+          path: ${{ runner.temp }}/hop-source-verification/
+          if-no-files-found: error
+          retention-days: 7
