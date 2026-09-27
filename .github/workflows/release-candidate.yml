@@ -205,6 +205,8 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Android graph integration dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
       - name: Runtime contracts and APK
         run: |
           python3 android/test_android_runtime_contract.py

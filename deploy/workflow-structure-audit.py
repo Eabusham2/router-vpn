@@ -91,4 +91,19 @@ assert rc.count("      - name: Weighted source/manual release accounting") == 1,
     f"{rc_rel}: weighted release accounting step duplicated/missing"
 )
 
+# Each job has an isolated runner; dependencies from the source job do not
+# carry over to APK builds. Every graph-test invocation needs its own install.
+for workflow in (rc_rel, ".github/workflows/android-multihop-contract.yml"):
+    jobs = re.split(r"(?m)^  [A-Za-z0-9_-]+:\n", body(workflow))[1:]
+    checked = 0
+    for job in jobs:
+        marker = "python3 android/test_android_multihop_graph.py"
+        if marker not in job:
+            continue
+        dependency = "sudo apt-get install -y -qq libandroid-json-java"
+        assert dependency in job, f"{workflow}: graph test lacks its own runner dependency"
+        assert job.index(dependency) < job.index(marker), f"{workflow}: graph dependency installed after execution"
+        checked += 1
+    assert checked >= (2 if workflow == rc_rel else 1), f"{workflow}: mandatory graph test jobs are missing"
+
 print("workflow structural integrity audit: OK")
