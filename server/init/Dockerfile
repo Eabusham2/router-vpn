@@ -51,6 +51,10 @@ WORKDIR /src
 COPY . /src
 COPY --from=binaries /src/dist /src/dist
 COPY --from=xray /xray /src/dist/xray
+# Mode validators resolve the code-owned runtime, not the private node bundle.
+# Keep the receipt and license alongside the native binary; a PATH-only copy
+# cannot satisfy the corrected-engine integrity contract.
+COPY --from=xray /xray/linux-${TARGETARCH}/ /src/runtime/xray/
 COPY server/init/noninteractive.sh /usr/local/bin/router-vpn-init
 COPY server/init/entrypoint-v2.sh /usr/local/bin/router-vpn-init-entrypoint
 RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' {} + \
@@ -61,6 +65,7 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && /bin/bash -n /usr/local/bin/router-vpn-init-entrypoint \
  && /bin/bash -n /src/server/scripts/apply-runtime.sh \
  && go version \
+ && python3 /src/client/verify-bundled-xray.py /src/runtime/xray >/dev/null \
  && /usr/local/bin/rosenpass --version >/dev/null \
  && command -v qrencode >/dev/null \
  && command -v sysctl >/dev/null \

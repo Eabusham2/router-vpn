@@ -5,6 +5,9 @@ from unittest import mock
 import hashlib
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
@@ -79,6 +82,53 @@ class Bundle(unittest.TestCase):
             before=binary.read_bytes()
             with mock.patch.object(BUILD,'fetch_source') as fetch,self.assertRaises(ValueError):BUILD.build('linux/amd64',folder)
             fetch.assert_not_called();self.assertEqual(binary.read_bytes(),before)
+
+class ImageRuntime(unittest.TestCase):
+    def test_image_installs_complete_code_owned_runtime_and_verifies_it(self):
+        dockerfile=(ROOT/'server/init/Dockerfile').read_text()
+        copy='COPY --from=xray /xray/linux-${TARGETARCH}/ /src/runtime/xray/'
+        check='python3 /src/client/verify-bundled-xray.py /src/runtime/xray'
+        self.assertIn(copy,dockerfile)
+        self.assertIn(check,dockerfile)
+        self.assertGreater(dockerfile.index(copy),dockerfile.index('COPY . /src',dockerfile.index('FROM debian:')))
+        self.assertGreater(dockerfile.index(check),dockerfile.index(copy))
+        workflow=(ROOT/'.github/workflows/release-candidate.yml').read_text()
+        self.assertIn('python3 deploy/test_bundled_xray.py',workflow)
+
+    @unittest.skipUnless(os.name=='posix' and shutil.which('bash'), 'POSIX shell resolver')
+    def test_resolver_uses_image_receipt_not_path_or_private_bundle(self):
+        # Execute the real resolver and verifier against an isolated image layout.
+        # The tiny executable is a fixture, not evidence of a working Xray engine.
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)/'image';runtime=root/'runtime/xray'
+            runtime.mkdir(parents=True);(root/'client').mkdir();(root/'modes').mkdir()
+            shutil.copyfile(ROOT/'client/verify-bundled-xray.py',root/'client/verify-bundled-xray.py')
+            shutil.copyfile(ROOT/'modes/xray-runtime.sh',root/'modes/xray-runtime.sh')
+            marker='Xray '+VERIFY.VERSION+' ('+BUILD.marker(BUILD.POLICY.digest())+')'
+            binary=runtime/'xray';binary.write_text('#!/bin/sh\necho "'+marker+'"\n');binary.chmod(0o755)
+            meta={'schema_version':1,'runtime':'xray','version':VERIFY.VERSION,'upstream_revision':VERIFY.PIN,
+                  'policy_sha256':BUILD.POLICY.digest(),'target':VERIFY.host_target(),'toolchain':VERIFY.TOOLCHAIN,
+                  'size':binary.stat().st_size,'sha256':hashlib.sha256(binary.read_bytes()).hexdigest()}
+            receipt=runtime/'XRAY-RUNTIME.json';receipt.write_text(json.dumps(meta))
+            (runtime/'XRAY-LICENSE').write_text('fixture license')
+            private=Path(temp)/'private-node';private.mkdir()
+            pathbin=Path(temp)/'path-bin';pathbin.mkdir()
+            poison=pathbin/'xray';poison.write_text('#!/bin/sh\necho PATH_FALLBACK_FORBIDDEN\nexit 92\n');poison.chmod(0o755)
+            env=dict(os.environ,HOMEVPN_ROOT=str(private),PATH=str(pathbin)+os.pathsep+os.environ['PATH'])
+            command=['bash','-c','source "$1"; printf "%s\\n" "$XRAY_BIN"','test',str(root/'modes/xray-runtime.sh')]
+            result=subprocess.run(command,env=env,text=True,capture_output=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout.strip(),str(binary))
+            original=binary.read_bytes();binary.write_bytes(original+b'# tamper\n')
+            result=subprocess.run(command,env=env,text=True,capture_output=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('checksum or size mismatch',result.stderr)
+            self.assertNotIn('PATH_FALLBACK_FORBIDDEN',result.stdout)
+            binary.write_bytes(original);receipt.unlink()
+            result=subprocess.run(command,env=env,text=True,capture_output=True,timeout=20)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('Unsafe or missing bundled Xray file',result.stderr)
+            self.assertNotIn('PATH_FALLBACK_FORBIDDEN',result.stdout)
 
 SEAL=load('seal_xray',ROOT/'deploy/seal-xray-runtime.py')
 class Signing(Bundle):
