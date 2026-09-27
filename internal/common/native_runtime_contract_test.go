@@ -92,7 +92,7 @@ func TestAndroidNativeWireGuardAmneziaWGLayeredAndNarrowMultihopAreReal(t *testi
 		}
 	}
 	multihop := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java")
-	for _, required := range []string{`"shadowsocks".equals(exitMode)`, `"hysteria2".equals(exitMode)`, `proxy.put("detour", "entry-wg")`, `put("type", "wireguard")`, "AndroidNodeStore.stableNodeIdentity(entry)", "AndroidNodeStore.stableNodeIdentity(exit)"} {
+	for _, required := range []string{`"shadowsocks".equals(exitMode)`, `"hysteria2".equals(exitMode)`, `proxy.put("detour", "entry-wg")`, `Libbox.routerCompileWireGuardProfile(`, `Libbox.routerWireGuardExitConfig(`, `"wg".equals(exitMode)`, "AndroidNodeStore.stableNodeIdentity(entry)", "AndroidNodeStore.stableNodeIdentity(exit)"} {
 		if !strings.Contains(multihop, required) {
 			t.Fatalf("Android narrow multihop runtime missing %q", required)
 		}

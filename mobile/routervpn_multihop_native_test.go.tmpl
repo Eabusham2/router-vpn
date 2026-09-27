@@ -2,6 +2,9 @@ package libbox
 
 import (
  "crypto/ecdh"
+ "crypto/sha256"
+ "encoding/hex"
+ "fmt"
  "encoding/base64"
  "encoding/json"
  "strings"
@@ -28,4 +31,43 @@ func TestRouterMultihopNativeSelectorConfig(t *testing.T){
  if err=CheckConfig(protectedPlan.Config());err!=nil{t.Fatal("native selector lost LAN enforcement:",err)}
  if err=plan.Run(nil);err==nil{t.Fatal("missing native instance accepted")}
  if _,err=NewRouterHopMeasurement(nil,string(meta));err==nil{t.Fatal("measurement accepted without a running native instance")}
+}
+
+// Validate the actual endpoint schema in the pinned Android and Apple core,
+// not just a Java stub accepting a JSON string.
+func TestRouterNativeWireGuardExitGraph(t *testing.T) {
+ makeProfile:=func(clientByte,serverByte byte,host string)(string,string){
+  client,err:=ecdh.X25519().NewPrivateKey([]byte(strings.Repeat(string(clientByte),32)));if err!=nil{t.Fatal(err)}
+  server,err:=ecdh.X25519().NewPrivateKey([]byte(strings.Repeat(string(serverByte),32)));if err!=nil{t.Fatal(err)}
+  key:=base64.StdEncoding.EncodeToString(server.PublicKey().Bytes())
+  proof:=sha256.Sum256([]byte("router-vpn-node-proof-v1\n"+key))
+  config:=fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = 10.77.0.2/24, fd77:77::2/64\nDNS = 10.77.0.1\nMTU = 1420\n[Peer]\nPublicKey = %s\nEndpoint = %s:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n",base64.StdEncoding.EncodeToString(client.Bytes()),key,host)
+  return config,hex.EncodeToString(proof[:])
+ }
+ entryText,entryID:=makeProfile('a','b',"192.0.2.1")
+ exitText,exitID:=makeProfile('c','d',"192.0.2.2")
+ raw,err:=RouterCompileWireGuardProfile(entryText,entryID);if err!=nil{t.Fatal(err)}
+ var entryResult map[string]any;if err=json.Unmarshal([]byte(raw),&entryResult);err!=nil{t.Fatal(err)}
+ entry:=entryResult["endpoint"].(map[string]any);entry["tag"]="entry-wg"
+ raw,err=RouterWireGuardExitConfig(exitText,exitID);if err!=nil{t.Fatal(err)}
+ var config map[string]any;if err=json.Unmarshal([]byte(raw),&config);err!=nil{t.Fatal(err)}
+ exit:=config["endpoints"].([]any)[0].(map[string]any);exit["detour"]="entry-wg"
+ config["endpoints"]=[]any{entry,exit}
+ for _,endpoint:=range []map[string]any{entry,exit}{
+  peer:=endpoint["peers"].([]any)[0].(map[string]any)
+  if peer["persistent_keepalive_interval"]!=float64(25){t.Fatal("native keepalive was dropped")}
+ }
+ encoded,_:=json.Marshal(config)
+ policies:=`{"entry":{"home_lan_access":false,"ipv6_mode":"off"},"exit":{"home_lan_access":false,"router_api":"http://10.77.0.1:8787"}}`
+ sized,err:=RouterApplyMultihopMTUPolicy(string(encoded),policies);if err!=nil{t.Fatal(err)}
+ protected,err:=RouterApplyMultihopLANPolicy(sized,policies);if err!=nil{t.Fatal(err)}
+ if err=CheckConfig(protected);err!=nil{t.Fatal("pinned core rejected nested native WG and MTU/LAN/IPv6 policies:",err)}
+ metadata:=map[string]string{"entry_id":"entry","exit_id":"exit","entry_node_id":entryID,"exit_node_id":exitID,
+  "entry_api":"http://10.77.0.1:8787","exit_api":"http://10.77.0.1:8787","entry_token":"fixture-entry","exit_token":"fixture-exit","entry_tag":"entry-wg","exit_mode":"wg"}
+ for _,execution:=range []string{"local","server","auto"}{
+  metadata["execution"]=execution;meta,_:=json.Marshal(metadata)
+  plan,err:=NewRouterMultihop(protected,string(meta));if err!=nil{t.Fatal(execution,err)}
+  if err=CheckConfig(plan.Config());err!=nil{t.Fatal("pinned core rejected WG selector",execution,err)}
+ }
+ if _,err=RouterCompileWireGuardProfile(exitText,entryID);err==nil{t.Fatal("native compiler accepted the wrong paired identity")}
 }

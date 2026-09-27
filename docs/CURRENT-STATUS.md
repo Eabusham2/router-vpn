@@ -89,7 +89,7 @@ Linux also has a native OpenVPN 2.7 custom-exit path. It applies Router VPN-owne
 
 ### Android
 
-Android is a native `VpnService` application, not a controller-only shell. It has real WireGuard and AmneziaWG paths, the pinned combined libbox/Xray runtime for supported layered modes, AUTO/SMART/CUSTOM orchestration, strict-policy handling, exact selected-node proof and a real narrow multihop path.
+Android is a native `VpnService` application, not a controller-only shell. It has real WireGuard and AmneziaWG paths, the pinned combined libbox/Xray runtime for supported layered modes, AUTO/SMART/CUSTOM orchestration, strict-policy handling, exact selected-node proof and a real one-TUN WireGuard-entry multihop path to a distinct WireGuard, Shadowsocks or Hysteria2 Router VPN exit. The frozen exit DNS policy, separate per-hop fixed MTU bounds, LAN-Off and IPv6-Off policies are compiled before session staging. Configured MTU bounds are not reported as fresh path measurements.
 
 Android has an app-private typed external/custom-exit store and native Custom Exits product screen for WireGuard, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN TLS-client profiles. OpenVPN uses the pinned native mobile Libbox endpoint for direct exits and the supported WireGuard-entry graph. Supported external graphs remain one full-device VPN path and success is withheld until a forced proof observes the saved expected public exit IP. The inline-profile, authentication and certificate-verification boundaries are documented in `MOBILE-OPENVPN.md`.
 

@@ -80,7 +80,7 @@ func TestNativeMultihopConfigChecksKeepWireGuardEnabled(t *testing.T) {
 func TestMobileLANPolicyCannotSkipEitherNativeOwner(t *testing.T) {
 	for file, markers := range map[string][]string{
 		"ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift":                           {"LibboxRouterApplyMultihopLANPolicy(text", "let policy = try JSONSerialization.data(withJSONObject: [\"entry\": entryProfile, \"exit\": exitProfile])", "proto.excludeLocalNetworks == ((entryProfile"},
-		"android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java": {"Libbox.routerApplyMultihopLANPolicy(config.toString(),lanProfiles.toString())"},
+		"android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java": {"Libbox.routerApplyMultihopMTUPolicy(config.toString(),lanProfiles.toString())", "Libbox.routerApplyMultihopLANPolicy(sized,lanProfiles.toString())"},
 		"mobile/routervpn_multihop_bridge.go.tmpl":                                        {"return mobilemultihop.ApplyLANPolicy(config, profiles)"},
 		".github/workflows/release-candidate.yml":                                         {"python3 deploy/test_mobile_lan_policy.py"},
 	} {

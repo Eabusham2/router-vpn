@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 MAX_FILE = 64 << 10
 MAX_RECORDS = 128
@@ -240,7 +241,21 @@ def record(root: str, mode: str, pid_text: str) -> None:
     except ValueError as exc:
         raise RuntimeError("invalid runtime PID") from exc
     start = process_start(pid)
-    command_hash = process_command_hash(pid)
+    command_hash = ""
+    # /proc cmdline may be momentarily empty while a newly spawned child execs.
+    # Bind every retry to the original birth identity; never adopt a reused PID
+    # or accept an empty command. This bounded startup retry changes no stop gate.
+    for attempt in range(4):
+        candidate = process_command_hash(pid)
+        if process_start(pid) != start:
+            raise RuntimeError(f"runtime PID {pid} changed identity during registration")
+        if candidate:
+            command_hash = candidate
+            break
+        if process_is_zombie(pid):
+            raise RuntimeError(f"runtime PID {pid} exited before registration")
+        if attempt < 3:
+            time.sleep(0.01)
     if not command_hash:
         raise RuntimeError(f"cannot identify runtime PID {pid} command")
     path = mode_file(root, mode)

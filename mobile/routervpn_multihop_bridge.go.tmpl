@@ -19,6 +19,16 @@ import (
 func RouterApplyMultihopLANPolicy(config, profiles string)(string,error){
  return mobilemultihop.ApplyLANPolicy(config, profiles)
 }
+// RouterCompileWireGuardProfile verifies the paired key and keeps native options.
+func RouterCompileWireGuardProfile(config, nodeID string)(string,error){
+ return mobilemultihop.CompileWireGuardProfile(config, nodeID)
+}
+func RouterWireGuardExitConfig(config, nodeID string)(string,error){
+ return mobilemultihop.WireGuardExitConfig(config, nodeID)
+}
+func RouterApplyMultihopMTUPolicy(config, profiles string)(string,error){
+ return mobilemultihop.ApplyMTUPolicy(config, profiles)
+}
 type RouterMultihop struct { controller *mobilemultihop.Controller }
 func NewRouterMultihop(config, metadata string)(*RouterMultihop,error){
  c,e:=mobilemultihop.New(config,metadata);if e!=nil{return nil,e};return &RouterMultihop{c},nil

@@ -122,3 +122,32 @@ against the pinned Libbox source and checks the generated selector graph with
 that native core. The authoritative exact-SHA release run must pass separately.
 Physical-device networking, private-server deployment, reconnect/leak-negative
 acceptance and Apple signing are not established by offline tests or a green build.
+
+## Android WireGuard exit and frozen graph policy — September 27, 2026
+
+Android now compiles standard WireGuard entry to a different Router VPN
+WireGuard exit inside the existing Libbox VpnService, alongside its
+Shadowsocks/Hysteria2 exits. Local, server and automatic comparison keep the same
+session-owned selector, independent node proofs and private lease lifecycle.
+The native parser binds each WireGuard public key to the paired node identity,
+preserves preshared keys and persistent keepalive, and rejects duplicate peers,
+ambiguous fields, shell directives and hostname bootstrap. This is not an
+additional OS VPN, external shell helper or AWG-as-WireGuard substitution.
+
+The frozen exit DNS policy is applied to the encrypted exit endpoint before
+session files exist. A missing selected profile or absent encrypted DNS outbound
+is an error, never an implicit first-node or direct-DNS fallback. Both hops
+retain separate fixed MTU settings. Nested WireGuard reserves IP/UDP, WireGuard
+authentication and padding overhead; an explicit fixed exit MTU that does not fit
+is rejected rather than silently clamped. Default sizing is a configured
+conservative bound, not a claim of measured Auto-MTU completion. IPv6-Off retains
+OS IPv6 capture and rejects ordinary TUN IPv6 traffic. LAN-Off continues to
+compile both frozen nodes' private-network policy.
+
+Executable coverage includes the shipping Java controllers linked to the actual
+shared Go compiler and policy package, malformed-input and ownership negatives,
+and native graph schema tests in both pinned Android/Apple builds. JVM tests
+double Android OS handles and the node store, not the graph/compiler/DNS policy.
+They do not replace physical-device routing, leak or network-transition tests.
+Additional helper/PQ/MAX/ALL, AWG-entry and mobile Tor dataplanes remain open;
+this addition does not waive or claim those broader requirements.

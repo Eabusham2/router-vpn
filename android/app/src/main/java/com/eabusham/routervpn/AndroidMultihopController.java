@@ -13,16 +13,14 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 
 /**
  * Builds one real Android VpnService graph: standard WireGuard entry endpoint ->
- * self-contained Shadowsocks/Hysteria2 exit outbound -> Internet.
+ * independent WireGuard endpoint or Shadowsocks/Hysteria2 exit -> Internet.
  *
- * Pinned sing-box 1.13.12 resolves DialerOptions.detour through OutboundManager,
+ * Pinned sing-box 1.14.1 resolves DialerOptions.detour through OutboundManager,
  * whose Outbound(tag) falls back to EndpointManager.Get(tag); WireGuard endpoints
  * implement adapter.Outbound. Keep other/mixed engine combinations fail-closed.
  */
@@ -73,6 +71,14 @@ final class AndroidMultihopController {
 
     List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File exitBundle) throws Exception {
         List<NativeSingBoxController.ModeInfo> result = new ArrayList<>();
+        JSONObject bundle = loadBundle(exitBundle);
+        JSONObject profiles = bundle.optJSONObject("profiles");
+        if (profiles != null && profiles.optJSONObject("wg") != null) {
+            String nativeConfig = io.nekohasekai.libbox.Libbox.routerWireGuardExitConfig(
+                    readWireGuardText(bundle), AndroidNodeStore.stableNodeIdentity(bundle));
+            io.nekohasekai.libbox.Libbox.checkConfig(nativeConfig);
+            result.add(new NativeSingBoxController.ModeInfo("wg", "WireGuard"));
+        }
         for (NativeSingBoxController.ModeInfo mode : singBox.listDirectLibboxModes(exitBundle)) {
             if ("shadowsocks".equals(mode.id) || "hysteria2".equals(mode.id)) result.add(mode);
         }
@@ -86,24 +92,38 @@ final class AndroidMultihopController {
         if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
         if (entryBundle == null || exitBundle == null) throw new IllegalArgumentException("Choose both an entry and an exit node.");
         if (entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())) throw new IllegalArgumentException("Entry and exit must be different stored nodes.");
-        if (!("shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode))) throw new IllegalArgumentException("Android multihop currently supports Shadowsocks or Hysteria2 as the exit transport.");
+        if (!("wg".equals(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode))) throw new IllegalArgumentException("Android multihop requires a native WireGuard, Shadowsocks or Hysteria2 exit.");
 
         JSONObject entry = loadBundle(entryBundle);
         JSONObject exit = loadBundle(exitBundle);
         String entryIdentity = AndroidNodeStore.stableNodeIdentity(entry);
         String exitIdentity = AndroidNodeStore.stableNodeIdentity(exit);
         if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
-        WgConfig wg = parseWireGuard(entry);
+        if (entryIdentity.isEmpty() || exitIdentity.isEmpty()) throw new IllegalArgumentException("Both multihop nodes need paired identities.");
+        requireOwnedPolicies(entry); requireOwnedPolicies(exit);
+        JSONObject wg = new JSONObject(io.nekohasekai.libbox.Libbox.routerCompileWireGuardProfile(
+                readWireGuardText(entry), entryIdentity)).getJSONObject("endpoint").put("tag", "entry-wg");
         EntryPrivate entryPrivate = parseEntryPrivate(entry);
-        JSONObject exitProfile = requiredProfile(exit, exitMode);
-        String encodedConfig = exitProfile.optString("sing-box.json", "").trim();
-        if (encodedConfig.isEmpty()) throw new IllegalStateException("Exit mode has no embedded sing-box config.");
-        byte[] rawConfig = Base64.decode(encodedConfig, Base64.DEFAULT);
-        if (rawConfig.length == 0 || rawConfig.length > MAX_CONFIG) throw new IllegalStateException("Exit sing-box config size is invalid.");
-        JSONObject config = new JSONObject(new String(rawConfig, StandardCharsets.UTF_8));
+        JSONObject exitProfile;
+        JSONObject config;
+        if ("wg".equals(exitMode)) {
+            String compiled = io.nekohasekai.libbox.Libbox.routerWireGuardExitConfig(readWireGuardText(exit), exitIdentity);
+            config = new JSONObject(compiled);
+            // Stage only the compiled graph: a second raw VPN is never started.
+            exitProfile = new JSONObject().put("sing-box.json", "native-wireguard-graph");
+        } else {
+            exitProfile = requiredProfile(exit, exitMode);
+            String encodedConfig = exitProfile.optString("sing-box.json", "").trim();
+            if (encodedConfig.isEmpty() || encodedConfig.length() > MAX_CONFIG * 2) throw new IllegalStateException("Exit mode has no bounded embedded config.");
+            byte[] rawConfig = Base64.decode(encodedConfig, Base64.DEFAULT);
+            if (rawConfig.length == 0 || rawConfig.length > MAX_CONFIG) throw new IllegalStateException("Exit sing-box config size is invalid.");
+            config = new JSONObject(strictUTF8(rawConfig));
+        }
         makeMultihopConfig(config, wg, entryPrivate, exitMode);
+        NativeSingBoxController.applySelectedDns(exit, config);
         JSONObject lanProfiles=new JSONObject().put("entry",selectedRouterProfile(entry)).put("exit",selectedRouterProfile(exit));
-        String filtered=io.nekohasekai.libbox.Libbox.routerApplyMultihopLANPolicy(config.toString(),lanProfiles.toString());
+        String sized=io.nekohasekai.libbox.Libbox.routerApplyMultihopMTUPolicy(config.toString(),lanProfiles.toString());
+        String filtered=io.nekohasekai.libbox.Libbox.routerApplyMultihopLANPolicy(sized,lanProfiles.toString());
         if(filtered==null||filtered.isEmpty())throw new IllegalStateException("Native multihop LAN policy was not compiled.");
         byte[] patched = (filtered + "\n").getBytes(StandardCharsets.UTF_8);
         if (patched.length > MAX_CONFIG) throw new IllegalStateException("Multihop sing-box config exceeds safety limit.");
@@ -140,8 +160,8 @@ final class AndroidMultihopController {
                 JSONObject a=selectedRouterProfile(entry),b=selectedRouterProfile(exit);
                 if(a==null||b==null)throw new IllegalArgumentException("Both paired node profiles are required.");
                 JSONObject metadata=new JSONObject().put("entry_id",a.getString("id")).put("exit_id",b.getString("id"))
-                    .put("entry_node_id",a.optString("node_proof_id",entry.optString("nodeProofId","")))
-                    .put("exit_node_id",b.optString("node_proof_id",exit.optString("nodeProofId","")))
+                    .put("entry_node_id",entryIdentity)
+                    .put("exit_node_id",exitIdentity)
                     .put("entry_api",a.getString("router_api")).put("exit_api",b.getString("router_api"))
                     .put("entry_token",a.getString("api_token")).put("exit_token",b.getString("api_token"))
                     .put("entry_tag","entry-wg").put("exit_mode",exitMode).put("execution",execution);
@@ -158,10 +178,15 @@ final class AndroidMultihopController {
         }
     }
 
-    private static void makeMultihopConfig(JSONObject config, WgConfig wg, EntryPrivate entryPrivate, String exitMode) throws Exception {
+    private static void makeMultihopConfig(JSONObject config, JSONObject wg, EntryPrivate entryPrivate, String exitMode) throws Exception {
         JSONArray existingEndpoints = config.optJSONArray("endpoints");
-        if (existingEndpoints != null && existingEndpoints.length() != 0) throw new IllegalStateException("Exit config already contains endpoints; mixed endpoint graphs are not accepted for Android multihop.");
+        boolean wireGuardExit = "wg".equals(exitMode);
+        if (config.has("endpoints") && existingEndpoints == null) throw new IllegalStateException("Malformed exit endpoints.");
+        if (wireGuardExit) {
+            if (existingEndpoints == null || existingEndpoints.length()!=1) throw new IllegalStateException("WireGuard exit requires exactly one owned endpoint.");
+        } else if (existingEndpoints != null && existingEndpoints.length()!=0) throw new IllegalStateException("Unexpected exit endpoints.");
         JSONArray inbounds = config.optJSONArray("inbounds");
+        if (inbounds == null || inbounds.length()!=1) throw new IllegalStateException("Multihop requires exactly one full-device TUN.");
         boolean fullDeviceTun = false;
         if (inbounds != null) for (int i = 0; i < inbounds.length(); i++) {
             JSONObject inbound = inbounds.optJSONObject(i);
@@ -179,24 +204,56 @@ final class AndroidMultihopController {
         if (!"proxy".equals(finalTag)) throw new IllegalStateException("Exit profile final route is not the expected proxy outbound.");
         JSONArray outbounds = config.optJSONArray("outbounds");
         if (outbounds == null) throw new IllegalStateException("Exit profile has no outbounds.");
-        JSONObject proxy = null;
+        JSONObject proxy = wireGuardExit ? existingEndpoints.getJSONObject(0) : null;
+        if (wireGuardExit && outbounds.length()!=0) throw new IllegalStateException("WireGuard exit cannot contain an alternate outbound.");
         for (int i = 0; i < outbounds.length(); i++) {
             JSONObject outbound = outbounds.optJSONObject(i);
-            if (outbound == null) continue;
+            if (outbound == null) throw new IllegalStateException("Invalid exit outbound.");
             String tag = outbound.optString("tag", "");
             if ("entry-private".equals(tag)) throw new IllegalStateException("Exit profile already contains reserved entry-private outbound.");
-            if ("proxy".equals(tag)) proxy = outbound;
+            if ("entry-wg".equals(tag)) throw new IllegalStateException("Exit consumes the owned entry tag.");
+            if ("proxy".equals(tag)) {
+                if (proxy != null) throw new IllegalStateException("Duplicate exit tags.");
+                proxy=outbound;
+            } else if (!("direct".equals(outbound.optString("type")) || "block".equals(outbound.optString("type")))) {
+                throw new IllegalStateException("Unowned extra exit outbound.");
+            }
         }
         if (proxy == null) throw new IllegalStateException("Exit profile has no proxy outbound.");
         String type = proxy.optString("type", "").toLowerCase(Locale.ROOT);
-        String expected = "shadowsocks".equals(exitMode) ? "shadowsocks" : "hysteria2";
+        String expected = wireGuardExit ? "wireguard" : exitMode;
         if (!expected.equals(type)) throw new IllegalStateException("Exit mode engine does not match its generated profile.");
-        if (proxy.has("detour") && !proxy.optString("detour", "").trim().isEmpty()) throw new IllegalStateException("Exit proxy already has a detour; nested/mixed multihop is not accepted.");
+        if (!"proxy".equals(proxy.optString("tag"))) throw new IllegalStateException("Exit endpoint lost its owned tag.");
+        for (String key:new String[]{"detour","bind_interface","inet4_bind_address","inet6_bind_address","routing_mark","network_strategy","domain_resolver"}) {
+            if (proxy.has(key)) throw new IllegalStateException("Exit already owns dial policy; it was not overwritten.");
+        }
+        if (wireGuardExit) {
+            String a=wg.getJSONArray("peers").getJSONObject(0).getString("public_key");
+            String b=proxy.getJSONArray("peers").getJSONObject(0).getString("public_key");
+            if(a.equals(b)) throw new IllegalStateException("WireGuard hops cannot reuse the same server key under different labels.");
+        } else if (!literalIP(proxy.optString("server", ""))) {
+            throw new IllegalStateException("Exit requires a literal endpoint; direct DNS bootstrap is forbidden.");
+        }
 
+        JSONObject tun=inbounds.getJSONObject(0);
+        for(String key:new String[]{"route_address","route_exclude_address","route_address_set","route_exclude_address_set"}) {
+            if(tun.has(key)) throw new IllegalStateException("Saved split or bypass policy cannot be silently discarded.");
+        }
+        if(route.has("rule_set")) throw new IllegalStateException("Multihop cannot replace an imported rule set.");
+        JSONArray importedRules=route.optJSONArray("rules");
+        if(route.has("rules") && importedRules==null) throw new IllegalStateException("Invalid imported route rules.");
+        if(importedRules!=null) for(int i=0;i<importedRules.length();i++) {
+            JSONObject rule=importedRules.getJSONObject(i);
+            if(rule.length()!=2 || !"dns".equals(rule.optString("protocol")) || !"hijack-dns".equals(rule.optString("action"))) throw new IllegalStateException("Multihop cannot replace custom routing rules.");
+        }
+        tun.put("strict_route",true).put("stack","system");
+        tun.remove("interface_name");
         proxy.put("detour", "entry-wg");
         outbounds.put(entryPrivate.toOutboundJson());
         config.put("outbounds", outbounds);
-        config.put("endpoints", new JSONArray().put(wg.toEndpointJson()));
+        JSONArray endpoints=new JSONArray().put(wg);
+        if(wireGuardExit) endpoints.put(proxy);
+        config.put("endpoints", endpoints);
         inbounds.put(new JSONObject().put("type", "mixed").put("tag", "multihop-entry-proof").put("listen", "127.0.0.1").put("listen_port", ENTRY_PROOF_PORT));
         inbounds.put(new JSONObject().put("type", "mixed").put("tag", "multihop-proof").put("listen", "127.0.0.1").put("listen_port", EXIT_PROOF_PORT));
         config.put("inbounds", inbounds);
@@ -211,14 +268,18 @@ final class AndroidMultihopController {
     }
 
     private static JSONObject selectedRouterProfile(JSONObject bundle) {
-        JSONArray profiles = bundle.optJSONArray("routerProfiles");
-        if (profiles == null || profiles.length() == 0) return null;
-        String wanted = bundle.optString("selectedRouterID", "").trim();
-        for (int i = 0; i < profiles.length(); i++) {
-            JSONObject profile = profiles.optJSONObject(i);
-            if (profile != null && wanted.equals(profile.optString("id", ""))) return profile;
+        return AndroidProfileSelection.selectedRouterProfile(bundle);
+    }
+
+    private static void requireOwnedPolicies(JSONObject bundle) {
+        JSONObject profile=selectedRouterProfile(bundle);
+        for (String name:new String[]{"daita_enabled","jumbo_tun"}) {
+            Object value=profile.opt(name);
+            if (value!=null && value!=JSONObject.NULL && !(value instanceof Boolean)) throw new IllegalArgumentException("Invalid multihop policy type.");
+            if (Boolean.TRUE.equals(value)) throw new IllegalArgumentException("This graph does not own the requested "+name+" policy.");
         }
-        return profiles.optJSONObject(0);
+        String start=profile.optString("start_layer","off").trim().toLowerCase(Locale.ROOT);
+        if (!java.util.Arrays.asList("","off","none","disabled").contains(start)) throw new IllegalArgumentException("This graph does not own an additional Start Layer.");
     }
 
     private static EntryPrivate parseEntryPrivate(JSONObject bundle) {
@@ -239,16 +300,8 @@ final class AndroidMultihopController {
     }
 
     private static boolean literalIP(String value) {
-        if (value == null || value.isEmpty()) return false;
-        if (value.indexOf(':') >= 0) return value.matches("(?i)[0-9a-f:]+") && value.contains(":");
-        String[] parts = value.split("\\.", -1);
-        if (parts.length != 4) return false;
-        for (String part : parts) {
-            if (part.isEmpty() || part.length() > 3 || !part.matches("[0-9]+")) return false;
-            try { int x = Integer.parseInt(part); if (x < 0 || x > 255) return false; }
-            catch (NumberFormatException error) { return false; }
-        }
-        return true;
+        try { return AndroidNumericAddress.parse(value) != null; }
+        catch (Exception invalid) { return false; }
     }
 
     private static String stripBrackets(String value) {
@@ -264,70 +317,18 @@ final class AndroidMultihopController {
         return profile;
     }
 
-    private static WgConfig parseWireGuard(JSONObject bundle) throws Exception {
-        JSONObject profiles = bundle.optJSONObject("profiles");
-        JSONObject wgProfile = profiles == null ? null : profiles.optJSONObject("wg");
-        String encoded = wgProfile == null ? "" : wgProfile.optString("wg.conf", "").trim();
-        if (encoded.isEmpty()) throw new IllegalStateException("Entry node has no standard WireGuard profile.");
-        byte[] raw = Base64.decode(encoded, Base64.DEFAULT);
-        if (raw.length == 0 || raw.length > 1024 * 1024) throw new IllegalStateException("Entry WireGuard profile size is invalid.");
-        String config = new String(raw, StandardCharsets.UTF_8);
-        Map<String,String> iface = new LinkedHashMap<>(), peer = new LinkedHashMap<>();
-        Map<String,String> current = null; int peers = 0;
-        for (String rawLine : config.split("\\r?\\n")) {
-            String line = rawLine.trim();
-            int comment = line.indexOf('#'); if (comment >= 0) line = line.substring(0, comment).trim();
-            if (line.isEmpty()) continue;
-            if ("[Interface]".equalsIgnoreCase(line)) { current = iface; continue; }
-            if ("[Peer]".equalsIgnoreCase(line)) { peers++; if (peers > 1) throw new IllegalStateException("Android multihop entry requires exactly one WireGuard peer."); current = peer; continue; }
-            int eq = line.indexOf('=');
-            if (current != null && eq > 0) current.put(line.substring(0, eq).trim().toLowerCase(Locale.ROOT), line.substring(eq + 1).trim());
-        }
-        if (peers != 1) throw new IllegalStateException("Android multihop entry requires exactly one WireGuard peer.");
-        WgConfig result = new WgConfig();
-        result.privateKey = required(iface, "privatekey", "Entry WireGuard private key is missing.");
-        result.addresses = splitCsv(required(iface, "address", "Entry WireGuard address is missing."));
-        result.publicKey = required(peer, "publickey", "Entry WireGuard peer public key is missing.");
-        result.preSharedKey = peer.getOrDefault("presharedkey", "").trim();
-        result.allowedIps = splitCsv(required(peer, "allowedips", "Entry WireGuard AllowedIPs are missing."));
-        String endpoint = required(peer, "endpoint", "Entry WireGuard endpoint is missing.");
-        HostPort hp = parseEndpoint(endpoint); result.host = hp.host; result.port = hp.port;
-        String mtu = iface.getOrDefault("mtu", "").trim();
-        if (!mtu.isEmpty()) { try { result.mtu = Integer.parseInt(mtu); } catch (NumberFormatException e) { throw new IllegalStateException("Entry WireGuard MTU is invalid."); } }
-        if (result.mtu != 0 && (result.mtu < 1280 || result.mtu > 9000)) throw new IllegalStateException("Entry WireGuard MTU is outside the safe range.");
-        return result;
+    private static String readWireGuardText(JSONObject bundle) throws Exception {
+        JSONObject profile=requiredProfile(bundle,"wg");
+        String encoded=profile.optString("wg.conf", "").trim();
+        if (encoded.isEmpty() || encoded.length()>2*1024*1024) throw new IllegalStateException("Node has no bounded standard WireGuard profile.");
+        byte[] raw=Base64.decode(encoded,Base64.DEFAULT);
+        if(raw.length==0 || raw.length>1024*1024) throw new IllegalStateException("WireGuard profile size is invalid.");
+        return strictUTF8(raw);
     }
-
-    private static final class WgConfig {
-        String privateKey, publicKey, preSharedKey, host; List<String> addresses, allowedIps; int port, mtu;
-        JSONObject toEndpointJson() throws Exception {
-            JSONObject endpoint = new JSONObject().put("type", "wireguard").put("tag", "entry-wg").put("address", new JSONArray(addresses)).put("private_key", privateKey);
-            if (mtu != 0) endpoint.put("mtu", mtu);
-            JSONObject peer = new JSONObject().put("address", host).put("port", port).put("public_key", publicKey).put("allowed_ips", new JSONArray(allowedIps));
-            if (!preSharedKey.isEmpty()) peer.put("pre_shared_key", preSharedKey);
-            endpoint.put("peers", new JSONArray().put(peer));
-            return endpoint;
-        }
+    private static String strictUTF8(byte[] value) throws Exception {
+        return StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(value)).toString();
     }
-
-    private static final class HostPort { final String host; final int port; HostPort(String host, int port) { this.host = host; this.port = port; } }
-    private static HostPort parseEndpoint(String value) {
-        String host; String portText;
-        if (value.startsWith("[")) {
-            int close = value.indexOf(']'); if (close < 1 || close + 2 > value.length() || value.charAt(close + 1) != ':') throw new IllegalStateException("Entry WireGuard endpoint is invalid.");
-            host = value.substring(1, close).trim(); portText = value.substring(close + 2).trim();
-        } else {
-            int colon = value.lastIndexOf(':'); if (colon < 1 || colon == value.length() - 1) throw new IllegalStateException("Entry WireGuard endpoint is invalid.");
-            host = value.substring(0, colon).trim(); portText = value.substring(colon + 1).trim();
-        }
-        if (host.isEmpty()) throw new IllegalStateException("Entry WireGuard endpoint host is empty.");
-        int port; try { port = Integer.parseInt(portText); } catch (NumberFormatException e) { throw new IllegalStateException("Entry WireGuard endpoint port is invalid."); }
-        if (port < 1 || port > 65535) throw new IllegalStateException("Entry WireGuard endpoint port is invalid.");
-        return new HostPort(host, port);
-    }
-
-    private static String required(Map<String,String> map, String key, String message) { String value = map.getOrDefault(key, "").trim(); if (value.isEmpty()) throw new IllegalStateException(message); return value; }
-    private static List<String> splitCsv(String value) { List<String> out = new ArrayList<>(); for (String part : value.split(",")) { String item = part.trim(); if (!item.isEmpty()) out.add(item); } if (out.isEmpty()) throw new IllegalStateException("WireGuard list value is empty."); return out; }
     private static JSONObject loadBundle(File file) throws Exception {
         if (file == null || !file.isFile() || file.length() <= 0 || file.length() > MAX_BUNDLE) throw new IllegalStateException("Private node bundle is missing or invalid.");
         try (FileInputStream in = new FileInputStream(file); ByteArrayOutputStream out = new ByteArrayOutputStream()) {

@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""Exercise the shipping Android graph builder against the real shared Go policy.
+
+Android service handles and the node-file store are boundary doubles. JSON uses
+Android's real implementation, and native compiler/MTU/LAN calls execute the
+shipping Go package, not precomputed answers. Actual AAR/SDK and packet traffic
+are verified separately; this test does not claim physical-device acceptance.
+"""
+from pathlib import Path
+import os
+import shutil
+import subprocess
+import tempfile
+
+ROOT=Path(__file__).resolve().parents[1]
+JAVA=ROOT/'android/app/src/main/java/com/eabusham/routervpn'
+GO_HELPER=r'''package main
+import("encoding/json";"fmt";"os";"io";"router-vpn/internal/mobilemultihop")
+func main(){
+ var r struct{Operation string;Config string;Policy string}
+ if err:=json.NewDecoder(io.LimitReader(os.Stdin,8*1024*1024)).Decode(&r);err!=nil{fmt.Fprintln(os.Stderr,"invalid request");os.Exit(2)}
+ var value string;var err error
+ switch r.Operation{
+ case "parse":value,err=mobilemultihop.CompileWireGuardProfile(r.Config,r.Policy)
+ case "exit":value,err=mobilemultihop.WireGuardExitConfig(r.Config,r.Policy)
+ case "mtu":value,err=mobilemultihop.ApplyMTUPolicy(r.Config,r.Policy)
+ case "lan":value,err=mobilemultihop.ApplyLANPolicy(r.Config,r.Policy)
+ default:fmt.Fprintln(os.Stderr,"unknown test operation");os.Exit(2)
+ }
+ if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(2)}
+ fmt.Print(value)
+}
+'''
+STUBS={
+'android/content/Context.java':r'''package android.content;
+public class Context {
+ private final java.io.File root;
+ public Context(java.io.File root){this.root=root;}
+ public Context getApplicationContext(){return this;} public java.io.File getFilesDir(){return root;}
+ public static final int MODE_PRIVATE=0;
+ public Object startService(Intent i){throw new AssertionError("No service may start while preparing a graph");}
+ public Object startForegroundService(Intent i){throw new AssertionError("No service may start while preparing a graph");}
+ public SharedPreferences getSharedPreferences(String s,int mode){return (key,fallback)->fallback;}
+}''',
+'android/content/SharedPreferences.java':'package android.content; public interface SharedPreferences {String getString(String key,String fallback);}',
+'android/content/Intent.java':r'''package android.content; public class Intent {
+ public Intent(Context c,Class<?> cls){} public Intent setAction(String s){return this;}
+ public Intent putExtra(String key,String value){return this;} public Intent putExtra(String key,long value){return this;}
+}''',
+'android/os/Build.java':'package android.os; public final class Build {public static class VERSION {public static int SDK_INT=36;} public static class VERSION_CODES {public static final int O=26;}}',
+'android/util/Base64.java':'package android.util; public final class Base64 {public static final int DEFAULT=0; public static byte[] decode(String s,int flags){return java.util.Base64.getMimeDecoder().decode(s);}}',
+'com/eabusham/routervpn/Boundaries.java':r'''package com.eabusham.routervpn;
+import org.json.JSONObject;
+final class AndroidNodeStore {
+ static String stableNodeIdentity(JSONObject b)throws Exception {return b.getString("nodeProofId");}
+ static void validateBundle(JSONObject b){AndroidProfileSelection.selectedRouterProfile(b);}
+}
+final class AndroidKillSwitchPolicy {
+ static final String SESSION_MARKER="strict-session";
+ static boolean strictRequested(JSONObject b){return AndroidProfileSelection.selectedRouterProfile(b).optBoolean("kill_switch",false);}
+}
+final class AndroidStartLayer {
+ static final class RelayPlan {JSONObject metadata(){return new JSONObject();}void clear(){}}
+ static RelayPlan apply(JSONObject a,JSONObject b,String mode){throw new AssertionError("No Start Layer is started by graph preparation");}
+}
+final class AndroidStartLayerRelay {static final String SESSION_FILE="start-layer.json";}
+final class AndroidServiceStopConfirmation {
+ static final String EXTRA_COMMAND="command";
+ static void start(String key,Runnable r){throw new AssertionError("No runtime starts in a compiler test");}
+ static void request(String key,java.util.function.LongConsumer c){throw new AssertionError("No stop side effect in compiler test");}
+ static String state(String key,java.util.function.Supplier<String> value){return value.get();}
+}
+final class LayeredVpnService {static final String ACTION_START="start",ACTION_STOP="stop",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode";}
+''',
+'io/nekohasekai/libbox/Libbox.java':r'''package io.nekohasekai.libbox;
+import org.json.JSONObject;import java.nio.charset.StandardCharsets;import java.util.concurrent.TimeUnit;
+public final class Libbox {
+ private static String call(String op,String config,String policy)throws Exception {
+  Process p=new ProcessBuilder(System.getenv("ROUTERVPN_GO_POLICY_TEST")).start();
+  try {
+   JSONObject input=new JSONObject().put("Operation",op).put("Config",config).put("Policy",policy);
+   p.getOutputStream().write(input.toString().getBytes(StandardCharsets.UTF_8));p.getOutputStream().close();
+   // Fixtures are deliberately bounded to less than a pipe buffer.
+   if(!p.waitFor(10,TimeUnit.SECONDS))throw new IllegalStateException("Native policy test timed out");
+   String out=new String(p.getInputStream().readAllBytes(),StandardCharsets.UTF_8);
+   String error=new String(p.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);
+   if(p.exitValue()!=0)throw new IllegalArgumentException(error);
+   return out;
+  }finally{p.destroyForcibly();}
+ }
+ public static String routerCompileWireGuardProfile(String c,String p)throws Exception{return call("parse",c,p);}
+ public static String routerWireGuardExitConfig(String c,String p)throws Exception{return call("exit",c,p);}
+ public static String routerApplyMultihopMTUPolicy(String c,String p)throws Exception{return call("mtu",c,p);}
+ public static String routerApplyMultihopLANPolicy(String c,String p)throws Exception{return call("lan",c,p);}
+ public static String routerCompileSIP003Profile(String a,String b){throw new AssertionError("Unrelated native compiler cannot be substituted");}
+ public static void checkConfig(String c)throws Exception {new JSONObject(c);}
+}''',
+}
+HARNESS=r'''package com.eabusham.routervpn;
+import android.content.Context;import org.json.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.security.MessageDigest;import java.util.*;
+public final class MultihopGraphHarness {
+ static int checks;
+ static void check(boolean b,String message){if(!b)throw new AssertionError(message);checks++;}
+ static boolean has(JSONArray values,String text)throws Exception {for(int i=0;i<values.length();i++)if(text.equals(values.getString(i)))return true;return false;}
+ static String key(char ch){char[] c=new char[32];Arrays.fill(c,ch);return Base64.getEncoder().encodeToString(new String(c).getBytes(StandardCharsets.UTF_8));}
+ static String proof(String key)throws Exception {return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(("router-vpn-node-proof-v1\n"+key).getBytes(StandardCharsets.UTF_8)));}
+ static String wg(char ch){return "[Interface]\nAddress = 10.77.0.2/24, fd77:77::2/64\nPrivateKey = "+key('z')+"\nDNS = 192.168.50.133\nMTU = 1420\n[Peer]\nPublicKey = "+key(ch)+"\nPresharedKey = "+key('p')+"\nEndpoint = 192.0.2."+(ch=='a'?1:2)+":51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n";}
+ static JSONObject bundle(char ch)throws Exception {
+  String id="node-"+ch;
+  JSONObject profile=new JSONObject().put("id",id).put("dns_mode","home").put("adguard_ipv4","192.168.50.133")
+    .put("socks_host","10.77.0.1").put("socks_port",1080).put("router_api","http://10.77.0.1:8787").put("api_token","fixture-token");
+  return new JSONObject().put("selectedRouterID",id).put("nodeProofId",proof(key(ch))).put("routerProfiles",new JSONArray().put(profile))
+   .put("profiles",new JSONObject().put("wg",new JSONObject().put("wg.conf",Base64.getEncoder().encodeToString(wg(ch).getBytes(StandardCharsets.UTF_8)))))
+   .put("modes",new JSONArray().put(new JSONObject().put("id","wg").put("name","WireGuard")));
+ }
+ static File save(Path dir,JSONObject b)throws Exception{return Files.writeString(dir.resolve(UUID.randomUUID()+".json"),b.toString()).toFile();}
+ static JSONObject profile(JSONObject b)throws Exception{return b.getJSONArray("routerProfiles").getJSONObject(0);}
+ static int sessions(Path app)throws Exception {Path p=app.resolve("layered-sessions");if(!Files.exists(p))return 0;try(var stream=Files.list(p)){return (int)stream.count();}}
+ static JSONObject prepare(AndroidMultihopController builder,Path app,File a,File b,String execution)throws Exception{
+  AndroidMultihopController.Prepared result=builder.prepare(a,b,"wg",execution);
+  Path session=app.resolve("layered-sessions").resolve(result.session.sessionId);
+  check(result.session.modeId.equals("multihop-wg"),"mode was relabelled");
+  check(!Files.exists(session.resolve("wg.conf")),"raw second-backend config was staged");
+  JSONObject metadata=new JSONObject(Files.readString(session.resolve("routervpn-multihop.json")));
+  check(metadata.getString("execution").equals(execution),"execution choice was lost");
+  check(!metadata.getString("entry_node_id").equals(metadata.getString("exit_node_id")),"node proofs collapsed");
+  JSONObject config=new JSONObject(Files.readString(session.resolve("sing-box.json")));
+  check(config.getJSONArray("endpoints").length()==2,"expected two native endpoints");
+  JSONObject entry=config.getJSONArray("endpoints").getJSONObject(0),exit=config.getJSONArray("endpoints").getJSONObject(1);
+  check(entry.getString("tag").equals("entry-wg")&&!entry.has("detour"),"entry socket ownership changed");
+  check(exit.getString("tag").equals("proxy")&&exit.getString("detour").equals("entry-wg"),"exit bypasses entry");
+  check(exit.getInt("mtu")==1360&&entry.getInt("mtu")==1420,"nested MTU bound lost");
+  for(JSONObject e:new JSONObject[]{entry,exit})check(e.getJSONArray("peers").getJSONObject(0).getInt("persistent_keepalive_interval")==25,"keepalive dropped");
+  check(config.getJSONArray("outbounds").length()==1,"unexpected alternate exit outbound");
+  check(config.getJSONArray("outbounds").getJSONObject(0).getString("detour").equals("entry-wg"),"private proof path lost entry");
+  check(config.getJSONArray("inbounds").length()==3,"one TUN and separate proof lanes required");
+  check(config.getJSONArray("inbounds").getJSONObject(1).getInt("listen_port")==1098,"entry proof lane changed");
+  check(config.getJSONArray("inbounds").getJSONObject(2).getInt("listen_port")==1099,"exit proof lane changed");
+  JSONObject dns=config.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
+  check(dns.getString("detour").equals("proxy"),"DNS bypasses the encrypted exit");
+  return config;
+ }
+ interface Mutation {void apply(JSONObject b)throws Exception;}
+ static void rejected(AndroidMultihopController builder,Path app,Path dir,File a,Mutation mutation)throws Exception {
+  JSONObject b=bundle('b');mutation.apply(b);int before=sessions(app);File file=save(dir,b);boolean rejected=false;
+  try{builder.prepare(a,file,"wg");}catch(Exception expected){rejected=true;}
+  check(rejected,"invalid graph was accepted");check(sessions(app)==before,"rejected graph left session state");
+ }
+ public static void main(String[] args)throws Exception {
+  Path dir=Path.of(args[0]);Path app=Files.createDirectory(dir.resolve("app"));Context context=new Context(app.toFile());
+  AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
+  File a=save(dir,bundle('a')),b=save(dir,bundle('b'));byte[] originalA=Files.readAllBytes(a.toPath()),originalB=Files.readAllBytes(b.toPath());
+  check(builder.listSupportedExitModes(b).stream().anyMatch(m->m.id.equals("wg")),"WireGuard absent from picker");
+  for(String execution:new String[]{"local","server","auto"}) prepare(builder,app,a,b,execution);
+  JSONObject encrypted=bundle('b');profile(encrypted).put("dns_mode","doh").put("dns_host","1.1.1.1");
+  JSONObject config=prepare(builder,app,a,save(dir,encrypted),"local");
+  JSONObject dns=config.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
+  check(dns.getString("type").equals("https")&&dns.getJSONObject("tls").getBoolean("enabled"),"DoH silently downgraded");
+  JSONObject off=bundle('b');profile(off).put("home_lan_access",false).put("ipv6_mode","off");
+  config=prepare(builder,app,a,save(dir,off),"local");
+  check(config.getJSONObject("dns").getString("strategy").equals("ipv4_only"),"IPv6-off DNS policy lost");
+  check(config.getJSONArray("inbounds").getJSONObject(0).getJSONArray("address").length()==2,"IPv6 capture removed");
+  boolean blockedLAN=false;
+  JSONArray rules=config.getJSONObject("route").getJSONArray("rules");
+  for(int i=0;i<rules.length();i++){
+   JSONObject rule=rules.getJSONObject(i);JSONArray cidrs=rule.optJSONArray("ip_cidr");
+   if("reject".equals(rule.optString("action")) && cidrs!=null && has(cidrs,"192.168.0.0/16") && rule.getJSONArray("inbound").getString(0).equals("tun-in")) blockedLAN=true;
+  }
+  check(blockedLAN,"LAN-Off has no TUN-owned private-network rejection");
+  check(has(config.getJSONArray("inbounds").getJSONObject(0).getJSONArray("route_address"),"192.168.0.0/16"),"LAN capture routes were not installed");
+  rejected(builder,app,dir,a,x->x.put("nodeProofId",proof(key('x'))));
+  rejected(builder,app,dir,a,x->x.put("selectedRouterID","missing-node"));
+  rejected(builder,app,dir,a,x->profile(x).put("mtu_policy","fixed").put("manual_mtu",1400));
+  rejected(builder,app,dir,a,x->profile(x).put("daita_enabled",true));
+  rejected(builder,app,dir,a,x->profile(x).put("jumbo_tun",true));
+  rejected(builder,app,dir,a,x->profile(x).put("start_layer","unowned"));
+  rejected(builder,app,dir,a,x->x.getJSONObject("profiles").getJSONObject("wg").put("wg.conf",Base64.getEncoder().encodeToString((wg('b')+"[Peer]\n").getBytes(StandardCharsets.UTF_8))));
+  JSONObject same=bundle('a');rejected(builder,app,dir,a,x->{x.put("nodeProofId",same.getString("nodeProofId"));x.put("profiles",same.getJSONObject("profiles"));});
+  check(Arrays.equals(originalA,Files.readAllBytes(a.toPath()))&&Arrays.equals(originalB,Files.readAllBytes(b.toPath())),"source bundles mutated");
+  boolean failed=false;try{NativeSingBoxController.applySelectedDns(bundle('b'),new JSONObject().put("outbounds",new JSONArray().put(new JSONObject().put("type","direct").put("tag","proxy"))));}catch(Exception expected){failed=true;}
+  check(failed,"DNS accepted a direct-only proxy tag");
+  System.out.println("Android shipping multihop compiler: PASS ("+checks+" checks; real Go policy, Android handles doubled)");
+ }
+}
+'''
+
+def main():
+    for command in ('go','javac','java'):
+        if not shutil.which(command):raise RuntimeError(command+' is required for native graph integration tests')
+    jar=Path(os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar'))
+    if not jar.is_file():raise RuntimeError('Install libandroid-json-java or set ANDROID_JSON_JAR to the Android JSON implementation')
+    with tempfile.TemporaryDirectory(prefix='.native-graph-test-',dir=ROOT) as go_dir,tempfile.TemporaryDirectory(prefix='routervpn-android-graph-') as temp:
+        go_dir=Path(go_dir);temp=Path(temp);(go_dir/'main.go').write_text(GO_HELPER)
+        binary=temp/'policy';subprocess.run(['go','build','-o',str(binary),str(go_dir/'main.go')],cwd=ROOT,check=True,timeout=90)
+        sources=temp/'src';sources.mkdir()
+        for name,source in STUBS.items():
+            target=sources/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(source)
+        app=sources/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
+        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidProfileSelection','AndroidNumericAddress'):
+            shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
+        (app/'MultihopGraphHarness.java').write_text(HARNESS)
+        classes=temp/'classes'
+        subprocess.run(['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(classes),*[str(p) for p in sources.rglob('*.java')]],check=True,timeout=60)
+        fixtures=temp/'fixtures';fixtures.mkdir();env=dict(os.environ,ROUTERVPN_GO_POLICY_TEST=str(binary))
+        subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.MultihopGraphHarness',str(fixtures)],env=env,check=True,timeout=80)
+if __name__=='__main__':main()

@@ -112,7 +112,7 @@ need("android/app/src/main/java/com/eabusham/routervpn/AndroidNativeProfilePolic
 need("android/app/src/main/java/com/eabusham/routervpn/AndroidUnderlyingNetworkMonitor.java","NET_CAPABILITY_NOT_VPN","initialized && (current == null || !current.equals(network))")
 need("android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java","AndroidPathProbe.prove(bundle","No candidate passed selected-node path proof","SMART AUTO could not restore its last-known-good mode","void all(File bundle,Callback cb)","protectionRank","ALL failed closed because no Android-native branch passed Start Layer requirements and selected-node path proof","Composite desktop MAX chains remain separate and are never faked on Android")
 need("android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java","MAX_NODES = 24","stableNodeIdentity","router-nodes-v1","return stable.substring(0, 32)")
-need("android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java",'"shadowsocks".equals(exitMode)','"hysteria2".equals(exitMode)','proxy.put("detour", "entry-wg")','put("type", "wireguard")',"AndroidNodeStore.stableNodeIdentity(entry)")
+need("android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java",'"shadowsocks".equals(exitMode)','"hysteria2".equals(exitMode)','proxy.put("detour", "entry-wg")','Libbox.routerCompileWireGuardProfile(', 'Libbox.routerWireGuardExitConfig(',"AndroidNodeStore.stableNodeIdentity(entry)")
 need("android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java","AndroidPathProbe.prove(prepared.exitBundle",'"FAILED".equals(state)','"REVOKED".equals(state)',"Exit-node private path proof failed; multihop was disconnected.")
 need("android/app/src/main/java/com/eabusham/routervpn/AndroidPathProbe.java","AndroidNodeStore.stableNodeIdentity(bundle)","expectedNode.equals(body.optString(\"node_id\"","PROOF_KIND.equals(body.optString(\"proof\"")
 need("android/app/src/main/java/com/eabusham/routervpn/MainActivity.java","VpnService.prepare(this)","Connect embedded layered mode","AUTO — first proven working mode","SMART AUTO — simplify and restore safely","Multihop — choose entry → exit","Strict embedded libbox/Xray sessions require","AWG-entry multihop")
@@ -155,6 +155,12 @@ for line in read("server/portainer-current.yaml").splitlines():
 for rel in("cmd/client/windows_runtime.go","cmd/portable-launcher/main.go","deploy/package-builds.sh","client/Setup-Windows-Runtime.ps1"):
  text=read(rel)
  if"Prepare-Windows-Mode-Catalog.ps1"in text and"Prepare-Windows-Mode-Catalog-v2.ps1"not in text:errors.append(f"{rel}: selects retired Windows catalog v1")
+
+# The native parser moved to Go; require its shipping integration and execution.
+need("internal/mobilemultihop/wireguard.go", "func CompileWireGuardProfile", "func WireGuardExitConfig", "persistent_keepalive_interval", "expectedNodeID")
+need(".github/workflows/release-candidate.yml", "python3 android/test_android_multihop_graph.py")
+need("mobile/routervpn_multihop_native_test.go.tmpl", "TestRouterNativeWireGuardExitGraph", "CheckConfig(protected)")
+if not (ROOT/"android/test_android_multihop_graph.py").is_file(): errors.append("missing executable Java-to-Go multihop graph tests")
 
 if errors:
  print("ROUTER VPN FULL AUDIT: FAIL",file=sys.stderr)

@@ -26,6 +26,8 @@ jobs:
           find modes server client deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: Go source contracts
         run: go test ./...
+      - name: Android graph integration dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
       - name: Repository and current-product contracts
         run: |
           python3 deploy/validate-repo.py
@@ -33,6 +35,7 @@ jobs:
           python3 deploy/test_native_hop_measurement.py
           python3 deploy/test_mobile_lan_policy.py
           python3 deploy/test_bundled_xray.py
+          python3 modes/test_runtime_pid_registration.py
           python3 deploy/full-audit-v4.py
           python3 deploy/release-gap-audit.py
           python3 deploy/product-parity-audit.py
@@ -96,6 +99,7 @@ jobs:
           python3 client/test_native_onboarding_contract.py
           python3 android/test_android_runtime_contract.py
           python3 android/test_android_multihop_contract.py
+          python3 android/test_android_multihop_graph.py
           python3 android/test_android_session_identity_contract.py
           python3 android/test_android_native_policy_contract.py
           python3 android/test_android_standard_exit_contract.py
@@ -205,6 +209,7 @@ jobs:
         run: |
           python3 android/test_android_runtime_contract.py
           python3 android/test_android_multihop_contract.py
+          python3 android/test_android_multihop_graph.py
           python3 android/test_android_session_identity_contract.py
           python3 android/test_android_native_policy_contract.py
           python3 android/test_android_standard_exit_contract.py

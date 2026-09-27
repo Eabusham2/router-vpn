@@ -187,7 +187,7 @@ final class NativeSingBoxController {
         return result;
     }
 
-    private static void applySelectedDns(JSONObject bundle, JSONObject config) throws Exception {
+    static void applySelectedDns(JSONObject bundle, JSONObject config) throws Exception {
         DnsSelection selected = dnsSelection(bundle);
         String detour = chooseDnsDetour(config);
         String protocol = selected.protocol;
@@ -218,14 +218,7 @@ final class NativeSingBoxController {
     }
 
     private static DnsSelection dnsSelection(JSONObject bundle) throws Exception {
-        JSONArray profiles = bundle.optJSONArray("routerProfiles");
-        String selectedId = bundle.optString("selectedRouterID", "").trim();
-        JSONObject profile = null;
-        if (profiles != null) {
-            for(int i=0;i<profiles.length();i++){JSONObject p=profiles.optJSONObject(i);if(p!=null && selectedId.equals(p.optString("id"))){profile=p;break;}}
-            if(profile==null && profiles.length()>0) profile=profiles.optJSONObject(0);
-        }
-        if(profile==null) throw new IllegalStateException("Node bundle has no selected router DNS profile.");
+        JSONObject profile = AndroidProfileSelection.selectedRouterProfile(bundle);
         DnsSelection s = new DnsSelection();
         s.mode = profile.optString("dns_mode", "fastest").toLowerCase(Locale.ROOT);
         String fastest = profile.optString("fastest_dns_host", "1.1.1.1").trim();
@@ -249,9 +242,16 @@ final class NativeSingBoxController {
 
     private static boolean hasLetter(String value){for(int i=0;i<value.length();i++)if(Character.isLetter(value.charAt(i)))return true;return false;}
     private static String chooseDnsDetour(JSONObject config) {
-        JSONArray outbounds=config.optJSONArray("outbounds");
-        if(outbounds!=null) for(String candidate:new String[]{"proxy","tcp-stack","ss-hop","outer"}) for(int i=0;i<outbounds.length();i++){JSONObject o=outbounds.optJSONObject(i);if(o!=null&&candidate.equals(o.optString("tag")))return candidate;}
-        return "direct";
+        for (String candidate:new String[]{"proxy","tcp-stack","ss-hop","outer"}) {
+            for (String group:new String[]{"outbounds","endpoints"}) {
+                JSONArray values=config.optJSONArray(group);
+                if(values!=null) for(int i=0;i<values.length();i++) {
+                    JSONObject outbound=values.optJSONObject(i);
+                    if(outbound!=null && candidate.equals(outbound.optString("tag")) && !"direct".equals(outbound.optString("type")) && !"block".equals(outbound.optString("type"))) return candidate;
+                }
+            }
+        }
+        throw new IllegalStateException("Selected DNS has no owned encrypted outbound; direct fallback is forbidden.");
     }
 
     void start(SessionInfo session) {

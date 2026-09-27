@@ -48,12 +48,10 @@ required_builder = [
     "AndroidNodeStore.stableNodeIdentity(exit)",
     "entryIdentity.equals(exitIdentity)",
     '"entry-wg"',
-    'put("type", "wireguard")',
     'proxy.put("detour", "entry-wg")',
     'config.put("endpoints"',
     '"proxy".equals(finalTag)',
     'AndroidKillSwitchPolicy.strictRequested(entry) || AndroidKillSwitchPolicy.strictRequested(exit)',
-    'peers > 1',
     'MAX_SESSION_DIRS = 32',
     'MAX_TOTAL = 32 * 1024 * 1024',
     'ENTRY_PROOF_PORT = 1098',
@@ -71,7 +69,16 @@ for token in required_builder:
     assert token in builder, f"multihop builder lost contract: {token}"
 for unsupported in ['"all".equals(exitMode)', '"max".equals(exitMode)', '"awg2-fast".equals(exitMode)', '"awg2-strong".equals(exitMode)']:
     assert unsupported not in builder, f"unsupported Android multihop branch became accepted: {unsupported}"
-assert "persistent_keepalive_interval" not in builder, "pinned sing-box 1.13.12 WireGuardPeer has no persistent keepalive option"
+# Parsing now belongs to the shared native compiler, not an unchecked Java map.
+# The exact pinned 1.14.1 WireGuardPeer does include persistent keepalive.
+compiler=(ROOT / "internal/mobilemultihop/wireguard.go").read_text()
+for token in ("routerCompileWireGuardProfile(", "routerWireGuardExitConfig(", "routerApplyMultihopMTUPolicy(", "NativeSingBoxController.applySelectedDns(exit, config)"):
+    assert token in builder, "Android multihop lost its shared native owner: " + token
+for token in ('peers > 1', 'persistent_keepalive_interval', 'expectedNodeID', 'base64.StdEncoding.Strict()', 'case "[peer]":'):
+    assert token in compiler, "shared native peer verification lost: " + token
+native_test=(ROOT / "mobile/routervpn_multihop_native_test.go.tmpl").read_text()
+assert 'TestRouterNativeWireGuardExitGraph' in native_test, "both native builds must type-check the compiled WG graph"
+assert (ROOT / "android/test_android_multihop_graph.py").is_file(), "shipping Java-to-Go behavior tests are mandatory"
 
 required_runtime = [
     "AndroidPathProbe.prove(prepared.exitBundle",
