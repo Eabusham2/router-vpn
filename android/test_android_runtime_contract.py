@@ -207,17 +207,30 @@ for marker in (
 # outbound -> Internet. Entry/exit must differ and exit proof is mandatory.
 for marker in (
     'proxy.put("detour", "entry-wg")',
-    '"type", "wireguard"',
+    'Libbox.routerCompileWireGuardProfile(',
+    'Libbox.routerWireGuardExitConfig(',
+    'Libbox.routerApplyMultihopMTUPolicy(',
+    'NativeSingBoxController.applySelectedDns(exit, config)',
+    '"wg".equals(exitMode)',
     '"tag", "entry-wg"',
     "stableNodeIdentity(entry)",
     "stableNodeIdentity(exit)",
     "Entry and exit resolve to the same Router VPN node identity",
     '"shadowsocks".equals(exitMode)',
     '"hysteria2".equals(exitMode)',
-    "Exit proxy already has a detour",
+    "Exit already owns dial policy; it was not overwritten.",
     "MAX_TOTAL",
 ):
     assert marker in multihop, f"AndroidMultihopController missing graph/safety marker: {marker}"
+
+# WireGuard parsing moved to the checksum-pinned native module. Keep the
+# identity, peer and ownership checks and require behavioral coverage at the
+# Java-to-Go boundary rather than requiring a duplicate unchecked Java parser.
+native_wg=(ROOT.parent / "internal/mobilemultihop/wireguard.go").read_text()
+for marker in ('func CompileWireGuardProfile', 'func WireGuardExitConfig', 'expectedNodeID', 'peers > 1', 'persistent_keepalive_interval', 'base64.StdEncoding.Strict()'):
+    assert marker in native_wg, f"shared native WireGuard policy missing: {marker}"
+assert (ROOT / "test_android_multihop_graph.py").is_file()
+assert 'python3 android/test_android_multihop_graph.py' in (ROOT.parent / ".github/workflows/release-candidate.yml").read_text()
 for marker in (
     "AndroidPathProbe.prove(prepared.exitBundle",
     "Exit-node private path proof failed",
@@ -253,7 +266,7 @@ for marker in (
     "Always-on",
     "Block connections without VPN",
     "WireGuard entry plus a different stored node",
-    "Shadowsocks or Hysteria2 exit",
+    "WireGuard, Shadowsocks or Hysteria2 exit",
     "AWG-entry multihop",
     "private NativeXrayController xray;",
     "private void chooseXrayMode()",
