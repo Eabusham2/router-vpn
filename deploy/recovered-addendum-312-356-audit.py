@@ -66,7 +66,12 @@ need('server/finalize/current-entrypoint.sh','https://icanhazip.com','https://ap
 forbid('server/finalize/current-entrypoint.sh','ddns','DDNS')
 rc_has('python3 deploy/release-orchestration-audit.py','python3 deploy/historical-regression-audit.py')
 need('deploy/release-orchestration-audit.py','server/scripts/test_preserve_generated_state.py')
-need('deploy/native-download-policy-audit.py','VERSION=v26.7.11','AWG_GO_COMMIT','SSR_COMMIT')
+# Xray is now a checksum-verified project-built runtime, not an upstream ZIP.
+# Require the exact source pin and verifier contract instead of an obsolete
+# installer variable. This does not substitute a label for binary verification.
+need('deploy/native-download-policy-audit.py',"VERSION='26.7.11'",'verify-bundled-xray.py',
+     'Bundled engine checksum or size mismatch','Binary does not identify the required corrected runtime',
+     'AWG_GO_COMMIT','SSR_COMMIT')
 
 # 348-356: LICENSE in packages; composed management UI; branding/full guide;
 # secret-free generic app separation; authenticated mutations; mode table; explicit regressions.

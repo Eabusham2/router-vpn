@@ -25,6 +25,11 @@ FILES={
  'common/buf/buffer_standard.go':('608fbf3f13067a7568c491990dba764b81107e87','16 * 1024'),
  'common/buf/buffer_low_memory.go':('81fb10a26460dea3586486118d091a43020284eb','8 * 1024'),
 }
+def relative_key(path, root):
+    # Manifest keys follow Git's forward-slash paths on every host. str(Path)
+    # uses backslashes on Windows and otherwise bypasses replacement lookup.
+    return path.relative_to(root).as_posix()
+
 def blobsha(raw):return hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
 def patched(source):
     result={}
@@ -48,8 +53,8 @@ def copy_verified(source,dest):
         wanted={name:hashlib.sha256(raw).hexdigest() for name,raw in replacement.items()}
         if not marker.is_file() or json.loads(marker.read_text())!={'module':MODULE,'version':VERSION,'files':wanted}:
             raise ValueError('existing native dependency copy is not owned by this policy')
-        expected={str(p.relative_to(source)):replacement.get(str(p.relative_to(source)),p.read_bytes()) for p in source.rglob('*') if p.is_file()}
-        actual={str(p.relative_to(dest)) for p in dest.rglob('*') if p.is_file() and p.name!='.routervpn-buffer-policy.json'}
+        expected={relative_key(p,source):replacement.get(relative_key(p,source),p.read_bytes()) for p in source.rglob('*') if p.is_file()}
+        actual={relative_key(p,dest) for p in dest.rglob('*') if p.is_file() and p.name!='.routervpn-buffer-policy.json'}
         if actual!=set(expected):raise ValueError('native dependency copy file set drifted')
         for name,raw in expected.items():
             target=dest/name

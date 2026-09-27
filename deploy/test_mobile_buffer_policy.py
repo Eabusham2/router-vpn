@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Execute the dependency copy policy without downloading anything."""
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import importlib.util
 import tempfile
 import unittest
@@ -9,6 +9,15 @@ spec=importlib.util.spec_from_file_location('buffer_policy',ROOT/'deploy/prepare
 MODULE=importlib.util.module_from_spec(spec);spec.loader.exec_module(MODULE)
 PINNED_FILES=dict(MODULE.FILES)
 class Tests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(setattr, MODULE, 'FILES', dict(MODULE.FILES))
+
+    def test_manifest_keys_match_on_windows_and_posix_hosts(self):
+        for path, root in ((PureWindowsPath('C:/cache/common/buf/buffer_standard.go'), PureWindowsPath('C:/cache')),
+                           (PurePosixPath('/cache/common/buf/buffer_standard.go'), PurePosixPath('/cache'))):
+            self.assertEqual(MODULE.relative_key(path, root), 'common/buf/buffer_standard.go')
+            self.assertIn(MODULE.relative_key(path, root), PINNED_FILES)
+
     def test_production_dependency_pins_are_exact(self):
         self.assertEqual(PINNED_FILES,{
             'common/buf/buffer_standard.go':('608fbf3f13067a7568c491990dba764b81107e87','16 * 1024'),
