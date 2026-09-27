@@ -379,10 +379,12 @@ final class RouterVPNModel: ObservableObject {
         ]
         configuration["rawProfileID"] = selection.rawProfileID
         var entryStrict = false
+        var entryAllowsLAN = true
         if selection.engine == .multihop {
             let entry = try iosMultihopEntryBundle(for: bundle)
             configuration["entryBundle"] = try JSONEncoder().encode(entry)
             if let profile = entry.routerProfiles.first(where: { $0.id == entry.selectedRouterID }) {
+                entryAllowsLAN = profile.homeLANAccess ?? true
                 entryStrict = profile.killSwitch == true || ["always", "strict", "on", "enabled", "lockdown"].contains(profile.killSwitchPolicy ?? "off")
             }
         }
@@ -391,7 +393,9 @@ final class RouterVPNModel: ObservableObject {
         let strict = strictKillSwitchEnabled || entryStrict
         proto.includeAllNetworks = strict
         proto.enforceRoutes = strict
-        proto.excludeLocalNetworks = strict ? !homeLANAccess : false
+        // Excluding local networks sends them OUTSIDE the tunnel. LAN-Off must
+        // never enable that bypass; either hop can request the stricter policy.
+        proto.excludeLocalNetworks = strict && homeLANAccess && entryAllowsLAN
         proto.excludeAPNs = false
         proto.excludeCellularServices = false
 

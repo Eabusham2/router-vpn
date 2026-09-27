@@ -102,7 +102,10 @@ final class AndroidMultihopController {
         if (rawConfig.length == 0 || rawConfig.length > MAX_CONFIG) throw new IllegalStateException("Exit sing-box config size is invalid.");
         JSONObject config = new JSONObject(new String(rawConfig, StandardCharsets.UTF_8));
         makeMultihopConfig(config, wg, entryPrivate, exitMode);
-        byte[] patched = (config.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
+        JSONObject lanProfiles=new JSONObject().put("entry",selectedRouterProfile(entry)).put("exit",selectedRouterProfile(exit));
+        String filtered=io.nekohasekai.libbox.Libbox.routerApplyMultihopLANPolicy(config.toString(),lanProfiles.toString());
+        if(filtered==null||filtered.isEmpty())throw new IllegalStateException("Native multihop LAN policy was not compiled.");
+        byte[] patched = (filtered + "\n").getBytes(StandardCharsets.UTF_8);
         if (patched.length > MAX_CONFIG) throw new IllegalStateException("Multihop sing-box config exceeds safety limit.");
 
         File root = new File(context.getFilesDir(), "layered-sessions");

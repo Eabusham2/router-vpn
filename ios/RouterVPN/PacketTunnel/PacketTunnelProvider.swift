@@ -90,7 +90,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             if strict {
                 guard tunnelProtocol.includeAllNetworks, tunnelProtocol.enforceRoutes else { throw tunnelError(4, "strict Apple kill switch requested but NetworkExtension route lockdown is not enabled") }
                 let allowLAN = selectedProfile["home_lan_access"] as? Bool ?? true
-                guard tunnelProtocol.excludeLocalNetworks == !allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
+                guard (provider["engine"] as? String) == "multihop" || tunnelProtocol.excludeLocalNetworks == allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
             }
 
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
@@ -176,11 +176,20 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         let files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryProfile,
             exitProfile: exitProfile, exitMode: exitMode, files: rawFiles)
-        let finalFiles = try RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)
+        let mtuFiles = try RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)
+        guard let source = mtuFiles["sing-box.json"], let text = String(data: source, encoding: .utf8) else { throw tunnelError(58, "Missing multihop LAN-policy graph") }
+        let policy = try JSONSerialization.data(withJSONObject: ["entry": entryProfile, "exit": exitProfile])
+        var failure: NSError?
+        let filtered: String? = LibboxRouterApplyMultihopLANPolicy(text, String(decoding: policy, as: UTF8.self), &failure)
+        if let failure { throw failure }
+        guard let filtered, !filtered.isEmpty, filtered.utf8.count <= Self.maxProfileBytes else { throw tunnelError(58, "Native multihop LAN policy was not compiled") }
+        var finalFiles = mtuFiles
+        finalFiles["sing-box.json"] = Data(filtered.utf8)
         let strict = strictKillSwitchRequested(selectedProfile) || strictKillSwitchRequested(entryProfile)
         if strict {
-            guard let proto = protocolConfiguration as? NETunnelProviderProtocol, proto.includeAllNetworks, proto.enforceRoutes else {
-                throw tunnelError(53, "Multihop cannot weaken either node's strict route-lockdown policy.")
+            guard let proto = protocolConfiguration as? NETunnelProviderProtocol, proto.includeAllNetworks, proto.enforceRoutes,
+                  proto.excludeLocalNetworks == ((entryProfile["home_lan_access"] as? Bool ?? true) && (exitProfile["home_lan_access"] as? Bool ?? true)) else {
+                throw tunnelError(53, "Multihop cannot weaken either node's strict route-lockdown or LAN policy.")
             }
         }
         let entryURL = try selectedProofURL(entryProfile), exitURL = try selectedProofURL(selectedProfile)

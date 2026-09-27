@@ -135,7 +135,7 @@ extension RouterVPNModel {
             let strict = externalStrict(profile)
             proto.includeAllNetworks = strict
             proto.enforceRoutes = strict
-            proto.excludeLocalNetworks = strict ? !(profile.homeLANAccess ?? false) : false
+            proto.excludeLocalNetworks = strict && (profile.homeLANAccess ?? true)
             proto.excludeAPNs = false
             proto.excludeCellularServices = false
             manager.protocolConfiguration = proto

@@ -86,7 +86,7 @@ e = entry; e["socks_username"] = "user"
 reject("partial SOCKS credentials") { _ = try build(original(),e) }
 e = entry; e["start_layer"] = "aes-256-gcm"
 reject("no silent layer omission") { _ = try build(original(),e) }
-for (key, value) in [("home_lan_access", false), ("daita_enabled", true), ("jumbo_tun", true)] {
+for (key, value) in [("daita_enabled", true), ("jumbo_tun", true)] {
     var unsupportedEntry = entry; unsupportedEntry[key] = value
     reject("do not drop entry policy " + key) { _ = try build(original(), unsupportedEntry) }
     var unsupportedExit = exit; unsupportedExit[key] = value
@@ -102,6 +102,13 @@ func imported(_ raw: [String:Any]) throws -> [String:Any] {
     profile.merge(raw) { _, incoming in incoming }
     let model = try JSONDecoder().decode(RouterProfile.self, from:JSONSerialization.data(withJSONObject:profile))
     return try JSONSerialization.jsonObject(with:JSONEncoder().encode(model)) as! [String:Any]
+}
+for node in [entry, exit] {
+    var lanOff = node; lanOff["home_lan_access"] = false
+    lanOff["home_lan_cidrs"] = ["192.168.50.0/24"]
+    let captured = try imported(lanOff)
+    try check("LAN-Off survives the actual private model", captured["home_lan_access"] as? Bool == false)
+    try check("LAN ranges survive the actual private model", captured["home_lan_cidrs"] as? [String] == ["192.168.50.0/24"])
 }
 let legacyImported = try imported(entry)
 try check("legacy import does not invent padding", legacyImported["daita_enabled"] == nil)

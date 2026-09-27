@@ -14,6 +14,11 @@ import (
 
 // RouterMultihop is bound into the ONE existing Go runtime on each mobile OS.
 // The public bridge never exposes a server credential or arbitrary dial method.
+// RouterApplyMultihopLANPolicy is the shared Android/Apple full-device policy.
+// It returns a new bounded config; neither host routes nor source profiles change.
+func RouterApplyMultihopLANPolicy(config, profiles string)(string,error){
+ return mobilemultihop.ApplyLANPolicy(config, profiles)
+}
 type RouterMultihop struct { controller *mobilemultihop.Controller }
 func NewRouterMultihop(config, metadata string)(*RouterMultihop,error){
  c,e:=mobilemultihop.New(config,metadata);if e!=nil{return nil,e};return &RouterMultihop{c},nil

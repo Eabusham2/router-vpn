@@ -33,10 +33,9 @@ enum RouterVPNMultihopGraph {
         }
         // No saved setting is silently dropped when building the smaller graph.
         for profile in [entryProfile, exitProfile] {
-            guard profile["home_lan_access"] as? Bool != false,
-                  profile["daita_enabled"] as? Bool != true,
+            guard profile["daita_enabled"] as? Bool != true,
                   profile["jumbo_tun"] as? Bool != true else {
-                throw issue("This graph does not yet own LAN-Off filtering, DAITA padding or Jumbo TUN. Those requested policies cannot be silently ignored.")
+                throw issue("This graph does not yet own DAITA padding or Jumbo TUN. Those requested policies cannot be silently ignored.")
             }
             let start = (profile["start_layer"] as? String ?? "off").lowercased()
             guard ["", "off", "none", "disabled"].contains(start) else {

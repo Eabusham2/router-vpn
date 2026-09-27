@@ -60,6 +60,7 @@ for header in headers:
     assert 'LibboxRouterOpenVPNEndpoint' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
     assert 'LibboxNewRouterHopMeasurement' in header.read_text(), str(header)
+    assert 'LibboxRouterApplyMultihopLANPolicy' in header.read_text(), str(header)
     assert 'LibboxRouterCompileXrayProfile' in header.read_text(), str(header)
     assert 'LibboxRouterCompileSIP003Profile' in header.read_text(), str(header)
     assert 'LibboxRouterXrayRevision' in header.read_text(), str(header)

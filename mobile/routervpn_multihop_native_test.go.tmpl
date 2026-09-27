@@ -21,6 +21,11 @@ func TestRouterMultihopNativeSelectorConfig(t *testing.T){
  config,_:=json.Marshal(graph);meta,_:=json.Marshal(metadata)
  plan,err:=NewRouterMultihop(string(config),string(meta));if err!=nil{t.Fatal(err)}
  if err=CheckConfig(plan.Config());err!=nil{t.Fatal("pinned native core rejected actual execution graph:",err)}
+ profiles,_:=json.Marshal(map[string]any{"entry":map[string]any{"home_lan_access":false,"home_lan_cidrs":[]string{"192.168.50.0/24"}},"exit":map[string]any{"home_lan_access":false,"router_api":"http://10.88.0.1:8787"}})
+ protected,err:=RouterApplyMultihopLANPolicy(string(config),string(profiles));if err!=nil{t.Fatal(err)}
+ if err=CheckConfig(protected);err!=nil{t.Fatal("native core rejected LAN-Off routes:",err)}
+ protectedPlan,err:=NewRouterMultihop(protected,string(meta));if err!=nil{t.Fatal("LAN policy lost multihop compatibility:",err)}
+ if err=CheckConfig(protectedPlan.Config());err!=nil{t.Fatal("native selector lost LAN enforcement:",err)}
  if err=plan.Run(nil);err==nil{t.Fatal("missing native instance accepted")}
  if _,err=NewRouterHopMeasurement(nil,string(meta));err==nil{t.Fatal("measurement accepted without a running native instance")}
 }

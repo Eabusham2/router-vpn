@@ -80,6 +80,25 @@ exact readback of deletion; expiry removes abandoned sessions. A Linux agent
 crash terminates its owned child engines. Exit credentials remain in private
 operator files; they are not returned in capability or progress responses.
 
+## Mobile LAN-Off enforcement
+
+The shared native compiler applies both frozen nodes' `home_lan_access` policy
+before engine startup. When a node disables LAN access, its configured private
+`home_lan_cidrs` are denied to ordinary TUN traffic. An absent/empty list uses
+RFC1918 IPv4 ranges and IPv6 ULA. Public, default, malformed or ambiguous network
+ranges are rejected, never silently substituted. More-specific TUN included
+routes keep physical LAN routes from bypassing this filter.
+
+Only the selected exit's exact TCP Router API host/port remains reachable for
+normal private control. Entry/exit proof listeners and native DNS dialers keep
+their existing separately owned paths; the policy does not create an admin,
+SSH, SOCKS or subnet-wide bypass. IPv6-Off stays ahead of the control exception.
+Apple's `excludeLocalNetworks` routes local traffic **outside** the VPN, so it is
+never enabled by LAN-Off; both hop policies must permit that exclusion. Android
+and Apple compile the same policy, and native build tests parse the protected
+graph with the pinned core. Real-device network and leak-negative tests remain
+separate evidence, not implied by this source implementation.
+
 ## Native controls and saved setups
 
 Windows, macOS and Linux expose Local / Server / Compare both in their multihop
