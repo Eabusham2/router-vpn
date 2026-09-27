@@ -19,6 +19,8 @@ import android.system.OsConstants;
 import android.util.Base64;
 import android.util.Log;
 
+import org.json.JSONObject;
+
 import io.nekohasekai.libbox.CommandServer;
 import io.nekohasekai.libbox.CommandServerHandler;
 import io.nekohasekai.libbox.ConnectionOwner;
