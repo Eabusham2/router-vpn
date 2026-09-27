@@ -54,6 +54,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
            request == ["operation": "multihop-progress"] {
             completionHandler(libboxEngine?.multihopProgress()); return
         }
+        if messageData.count <= 256,
+           let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
+           request.count == 2, let operation = request["operation"],
+           ["hop-measure-start", "hop-measure-status", "hop-measure-cancel"].contains(operation),
+           let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil {
+            completionHandler(libboxEngine?.hopMeasurementRequest(operation: operation, request: id)); return
+        }
         forwardingChannel?.handle(messageData, completion: completionHandler)
     }
 
@@ -180,19 +187,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self)
         libboxEngine = engine
+        let metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
+            "entry_node_id": entryProofID, "exit_node_id": exitProofID,
+            "entry_api": entryProfile["router_api"] as? String ?? "", "exit_api": selectedProfile["router_api"] as? String ?? "",
+            "entry_token": entryProfile["api_token"] as? String ?? "", "exit_token": selectedProfile["api_token"] as? String ?? "",
+            "entry_tag": RouterVPNMultihopGraph.entryTag, "exit_mode": exitMode, "execution": selectedProfile["multihop_execution"] as? String ?? "local"]
+        let encoded = try JSONSerialization.data(withJSONObject: metadata)
+        let hopMetadata = String(decoding: encoded, as: UTF8.self)
         do {
             let execution = selectedProfile["multihop_execution"] as? String ?? "local"
             guard ["local", "server", "auto"].contains(execution) else { throw tunnelError(56, "Unknown multihop execution choice") }
             if execution == "local" { try engine.start(files: finalFiles, strict: strict) }
-            else {
-                let metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
-                    "entry_node_id": entryProofID, "exit_node_id": exitProofID,
-                    "entry_api": entryProfile["router_api"] as? String ?? "", "exit_api": selectedProfile["router_api"] as? String ?? "",
-                    "entry_token": entryProfile["api_token"] as? String ?? "", "exit_token": selectedProfile["api_token"] as? String ?? "",
-                    "entry_tag": RouterVPNMultihopGraph.entryTag, "exit_mode": exitMode, "execution": execution]
-                let encoded = try JSONSerialization.data(withJSONObject: metadata)
-                try engine.start(files: finalFiles, strict: strict, multihopMetadata: String(decoding: encoded, as: UTF8.self))
-            }
+            else { try engine.start(files: finalFiles, strict: strict, multihopMetadata: hopMetadata) }
         }
         catch { engine.stop(); libboxEngine = nil; throw error }
         // One guard spans the comparison and both node proofs. Rearming after
@@ -214,6 +220,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(55, "Multihop exit proof belongs to an old runtime.")); return }
                 if let exitError { engine.stop(); self.libboxEngine = nil; completionHandler(exitError); return }
                 guard self.currentPathProofGuard() === comparisonGuard else { engine.stop(); completionHandler(self.tunnelError(57, "Multihop network changed during exit proof.")); return }
+                do { try engine.enableHopMeasurement(metadata: hopMetadata) }
+                catch { engine.stop(); self.libboxEngine = nil; completionHandler(error); return }
                 self.enableForwarding(profileData: forwardingProfileData, proofID: exitProofID)
                 completionHandler(nil)
             }

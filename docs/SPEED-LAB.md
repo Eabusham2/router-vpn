@@ -128,3 +128,29 @@ Speed Lab must always preserve these invariants:
 5. Throughput is measured from real bytes/time, never inferred from latency.
 6. Per-hop measurements use distinct local hop lanes, exact node proof and independent transfers.
 7. Unsupported platform graphs stay unavailable rather than showing cosmetic success.
+
+
+## Native mobile routed-hop measurement action
+
+The iPhone/iPad and Android Speed Lab surfaces additionally expose an explicit
+**Measure entry and exit** action for an already-proved supported multihop graph.
+The shared Go service runs inside the retained Libbox engine. It opens each
+request through that hop's actual outbound, with no ambient HTTP proxy, normal
+network dialer, DNS bootstrap or direct-exit fallback. The entry and exit API
+identities and credentials come from the frozen node bundles, not the UI request.
+
+The entry result measures device → entry; the exit result measures device →
+entry → exit. These are cumulative path rates, not inferred segment bandwidth.
+The action sends 8 MiB in each direction to each node (32 MiB total), uses six
+independent idle samples per node, and records available concurrently sampled
+loaded latency and bufferbloat. A fast transfer that finishes before a loaded
+sample completes reports that statistic unavailable instead of inventing zero.
+Download and upload use the authenticated private `/api/benchmark` endpoints;
+byte counts, framing and node identity must pass before a result is accepted.
+
+A changed native instance, selected execution path, physical-network notification,
+Disconnect, view cancellation or expired request invalidates in-flight results.
+The extension/service serializes requests and exposes only a bounded redacted
+status object. No settings, route, selected node or saved profile are changed.
+This measurement action does not extend the currently supported graph families
+or satisfy the separate arbitrary-hop/PQ/Tor implementation requirements.

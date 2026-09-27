@@ -22,4 +22,5 @@ func TestRouterMultihopNativeSelectorConfig(t *testing.T){
  plan,err:=NewRouterMultihop(string(config),string(meta));if err!=nil{t.Fatal(err)}
  if err=CheckConfig(plan.Config());err!=nil{t.Fatal("pinned native core rejected actual execution graph:",err)}
  if err=plan.Run(nil);err==nil{t.Fatal("missing native instance accepted")}
+ if _,err=NewRouterHopMeasurement(nil,string(meta));err==nil{t.Fatal("measurement accepted without a running native instance")}
 }

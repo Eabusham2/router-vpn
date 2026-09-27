@@ -9,6 +9,7 @@ final class RouterVPNLibboxEngine {
     private var configContent = ""
     private var runtimeRoot: URL?
     private var multihop: LibboxRouterMultihop?
+    private var hopMeasurement: LibboxRouterHopMeasurement?
     private var multihopHealth: DispatchSourceTimer?
     private let ownershipLock = NSLock()
     private var ownershipGeneration = UUID()
@@ -90,10 +91,11 @@ final class RouterVPNLibboxEngine {
         ownershipLock.lock()
         if let expected, expected != ownershipGeneration { ownershipLock.unlock(); return }
         ownershipGeneration = UUID()
-        let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot
-        multihop = nil; server = nil; multihopHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
+        let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot, probe = hopMeasurement
+        hopMeasurement = nil; multihop = nil; server = nil; multihopHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
         ownershipLock.unlock()
         health?.cancel()
+        try? probe?.close()
         if let plan {
             do { try plan.close() }
             catch { tunnel?.writeLibboxLog("Server multihop cleanup was not confirmed; its bounded lease expiry remains in force.") }
@@ -185,6 +187,33 @@ final class RouterVPNLibboxEngine {
                     userInfo: [NSLocalizedDescriptionKey: "Multihop runtime changed before completion."])
         }
     }
+    // Installed only after both hop identities are proved. Metadata comes from
+    // the captured bundles, never from application IPC or an edited selection.
+    func enableHopMeasurement(metadata: String) throws {
+        ownershipLock.lock()
+        defer { ownershipLock.unlock() }
+        guard let server, !starting, hopMeasurement == nil else { throw error("Hop measurement owner is unavailable") }
+        var failure: NSError?
+        guard let probe = LibboxNewRouterHopMeasurement(server, metadata, &failure), failure == nil else {
+            throw failure ?? error("Cannot bind hop measurement to the native tunnel")
+        }
+        hopMeasurement = probe
+    }
+    func hopMeasurementRequest(operation: String, request: String) -> Data? {
+        ownershipLock.lock()
+        defer { ownershipLock.unlock() }
+        guard let probe = hopMeasurement else { return nil }
+        do {
+            switch operation {
+            case "hop-measure-start": try probe.start(request, bytes: 8388608)
+            case "hop-measure-cancel": probe.cancel(request)
+            case "hop-measure-status": break
+            default: return nil
+            }
+            let data = Data(probe.statusJSON().utf8)
+            return data.count <= 16384 ? data : nil
+        } catch { return nil }
+    }
     func multihopProgress() -> Data? {
         ownershipLock.lock(); let plan = multihop; ownershipLock.unlock()
         guard let plan else { return nil }
@@ -192,12 +221,12 @@ final class RouterVPNLibboxEngine {
         return data.count <= 16384 ? data : nil
     }
     func invalidateMultihop() {
-        ownershipLock.lock(); let plan = multihop; ownershipLock.unlock()
-        plan?.networkChanged()
+        ownershipLock.lock(); let plan = multihop, probe = hopMeasurement; ownershipLock.unlock()
+        probe?.networkChanged(); plan?.networkChanged()
     }
     func pause() {
-        ownershipLock.lock(); let plan = multihop, owned = server; ownershipLock.unlock()
-        plan?.networkChanged(); owned?.pause()
+        ownershipLock.lock(); let plan = multihop, owned = server, probe = hopMeasurement; ownershipLock.unlock()
+        probe?.networkChanged(); plan?.networkChanged(); owned?.pause()
     }
     func wake() { ownershipLock.lock(); let owned = server; ownershipLock.unlock(); owned?.wake() }
     private func startService() throws {
@@ -207,7 +236,7 @@ final class RouterVPNLibboxEngine {
     }
     private func closeService() throws { ownershipLock.lock(); let owned = server; ownershipLock.unlock(); try owned?.closeService() }
     private func reloadService() throws {
-        ownershipLock.lock(); let comparing = multihop != nil; ownershipLock.unlock()
+        ownershipLock.lock(); let comparing = multihop != nil || hopMeasurement != nil; ownershipLock.unlock()
         guard !comparing else { throw error("Multihop reload requires a fresh owned comparison") }
         try startService()
     }

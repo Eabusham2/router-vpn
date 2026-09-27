@@ -133,7 +133,7 @@ final class AndroidMultihopController {
                 if (total > MAX_TOTAL) throw new IllegalStateException("Multihop session exceeds private staging limit.");
                 writeFile(new File(session, name), data);
             }
-            if(!"local".equals(execution)) {
+            {
                 JSONObject a=selectedRouterProfile(entry),b=selectedRouterProfile(exit);
                 if(a==null||b==null)throw new IllegalArgumentException("Both paired node profiles are required.");
                 JSONObject metadata=new JSONObject().put("entry_id",a.getString("id")).put("exit_id",b.getString("id"))

@@ -73,12 +73,27 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private final Object lock = new Object();
     private CommandServer commandServer;
     private volatile io.nekohasekai.libbox.RouterMultihop executionController;
+    private volatile io.nekohasekai.libbox.RouterHopMeasurement hopMeasurement;
     private static volatile java.lang.ref.WeakReference<LayeredVpnService> currentService=new java.lang.ref.WeakReference<>(null);
     private final android.os.Handler executionHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private volatile String executionNetwork="";
     private volatile boolean executionProved;
     static String multihopProgressJSON(){LayeredVpnService service=currentService.get();io.nekohasekai.libbox.RouterMultihop plan=service==null?null:service.executionController;return plan==null?"":plan.progressJSON();}
-    private void cancelMultihopComparison(){io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
+    static String hopMeasurementRequest(String operation,String id) throws Exception {
+        LayeredVpnService service=currentService.get();
+        if(service==null||id==null||!id.matches("[0-9a-f]{32}"))throw new IllegalStateException("No captured hop measurement session.");
+        synchronized(service.lock){
+            io.nekohasekai.libbox.RouterHopMeasurement probe=service.hopMeasurement;
+            if(probe==null||!"UP".equals(service.state))throw new IllegalStateException("The proved multihop runtime is unavailable.");
+            if("start".equals(operation))probe.start(id,8388608);
+            else if("cancel".equals(operation))probe.cancel(id);
+            else if(!"status".equals(operation))throw new IllegalArgumentException("Unknown hop measurement operation.");
+            String response=probe.statusJSON();
+            if(response==null||response.length()>16384)throw new IllegalStateException("Oversized measurement status.");
+            return response;
+        }
+    }
+    private void cancelMultihopComparison(){io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
     private String executionNetworkIdentity(){
         java.util.ArrayList<String> values=new java.util.ArrayList<>();
         try{for(Network network:connectivity.getAllNetworks()){
@@ -90,9 +105,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         java.util.Collections.sort(values);return values.toString();
     }
     private final Runnable executionWatch=new Runnable(){public void run(){
-        io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan==null)return;
-        if(!executionNetwork.equals(executionNetworkIdentity())||(executionProved&&!plan.healthy())){
-            plan.networkChanged();executor.execute(()->shutdown("FAILED","Multihop network or server lease changed; reconnect to compare again."));return;
+        io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan==null&&hopMeasurement==null)return;
+        if(!executionNetwork.equals(executionNetworkIdentity())||(executionProved&&plan!=null&&!plan.healthy())){
+            cancelMultihopComparison();executor.execute(()->shutdown("FAILED","Multihop network or server lease changed; reconnect to compare again."));return;
         }
         executionHandler.postDelayed(this,500);
     }};
@@ -175,12 +190,18 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             setup.setDebug(false);
             Libbox.setup(setup);
             io.nekohasekai.libbox.RouterMultihop preparedExecution=null;
+            String hopMetadata=null;
             File executionFile=new File(session,"routervpn-multihop.json").getCanonicalFile();
             if(executionFile.isFile()){
                 if(!modeId.startsWith("multihop-")||!executionFile.getParentFile().equals(session))throw new IllegalStateException("Unowned multihop metadata.");
                 String metadata=new String(readLimited(executionFile,16384),java.nio.charset.StandardCharsets.UTF_8);
-                preparedExecution=Libbox.newRouterMultihop(config,metadata);
-                config=preparedExecution.config();
+                hopMetadata=metadata;
+                String execution=new JSONObject(metadata).optString("execution","local");
+                if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Unknown multihop execution.");
+                if(!"local".equals(execution)){
+                    preparedExecution=Libbox.newRouterMultihop(config,metadata);
+                    config=preparedExecution.config();
+                }
             }
             Libbox.checkConfig(config);
 
@@ -204,11 +225,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             }
             io.nekohasekai.libbox.RouterMultihop ownedExecution=executionController;
             CommandServer ownedServer=commandServer;
-            if(ownedExecution!=null){
+            if(hopMetadata!=null){
                 executionNetwork=executionNetworkIdentity();
                 if(executionNetwork.isEmpty())throw new IllegalStateException("Underlying network identity is unavailable.");
                 executionHandler.post(executionWatch);
-                ownedExecution.run(ownedServer);
+                if(ownedExecution!=null)ownedExecution.run(ownedServer);
+                synchronized(lock){hopMeasurement=Libbox.newRouterHopMeasurement(ownedServer,hopMetadata);}
+                executionHandler.removeCallbacks(executionWatch);executionHandler.post(executionWatch);
             }
             synchronized(lock){
                 if(explicitStop||commandServer!=ownedServer||executionController!=ownedExecution)throw new IllegalStateException("VPN ownership changed during multihop comparison.");
@@ -274,6 +297,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
 
     private void closeCoreLocked() {
         executionHandler.removeCallbacks(executionWatch);
+        if(hopMeasurement!=null){try{hopMeasurement.close();}catch(Exception error){Log.w(TAG,"Hop measurement teardown is pending.");}hopMeasurement=null;}
         if(executionController!=null){
             try{executionController.close();}catch(Exception failure){Log.w(TAG,"Server lease cleanup was not confirmed; bounded server expiry remains in force.");}
             executionController=null;executionProved=false;
@@ -531,7 +555,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         executor.execute(() -> {
             synchronized (lock) {
                 if (commandServer == null || activeConfig.isEmpty()) return;
-                if(executionController!=null){cancelMultihopComparison();shutdown("FAILED","Multihop reload needs a fresh owned comparison.");return;}
+                if(executionController!=null||hopMeasurement!=null){cancelMultihopComparison();shutdown("FAILED","Multihop reload needs a fresh owned comparison.");return;}
                 try {
                     commandServer.startOrReloadService(activeConfig, new OverrideOptions());
                 } catch (Throwable error) {

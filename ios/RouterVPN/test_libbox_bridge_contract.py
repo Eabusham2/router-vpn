@@ -26,4 +26,5 @@ import subprocess
 import sys
 if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_libbox_delivery.py')], check=True, timeout=180)
+    subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_native_hop_measurement.py')], check=True, timeout=180)
 print('Router VPN iOS Libbox bridge source contract OK')

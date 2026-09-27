@@ -77,6 +77,16 @@ public final class LibboxSetupOptions {
     public var oomKillerEnabled = false
 }
 public final class LibboxOverrideOptions { public init() {} }
+public final class LibboxRouterHopMeasurement {
+    public init() {}
+    public func start(_ request: String, bytes: Int64) throws {}
+    public func cancel(_ request: String) {}
+    public func statusJSON() -> String { "{}" }
+    public func networkChanged() {}
+    public func close() throws {}
+}
+public func LibboxNewRouterHopMeasurement(_ server: LibboxCommandServer, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterHopMeasurement? { LibboxRouterHopMeasurement() }
+
 public func LibboxNewRouterMultihop(_ text: String, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text) }
 public func LibboxSetup(_ setup: LibboxSetupOptions, _ failure: UnsafeMutablePointer<NSError?>?) {}
 public func LibboxNewCommandServer(_ platform: AnyObject, _ handler: AnyObject, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxCommandServer? { LibboxCommandServer() }

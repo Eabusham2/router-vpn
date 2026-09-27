@@ -30,6 +30,7 @@ jobs:
         run: |
           python3 deploy/validate-repo.py
           python3 deploy/test_multihop_execution.py
+          python3 deploy/test_native_hop_measurement.py
           python3 deploy/full-audit-v4.py
           python3 deploy/release-gap-audit.py
           python3 deploy/product-parity-audit.py

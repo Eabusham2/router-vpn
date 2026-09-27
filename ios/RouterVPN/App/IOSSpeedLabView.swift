@@ -4,6 +4,7 @@ struct IOSSpeedLabView: View {
     @EnvironmentObject private var model: RouterVPNModel
     @Environment(\.dismiss) private var dismiss
     @StateObject private var runner = IOSSpeedLabRunner()
+    @StateObject private var hopProbe = IOSHopMeasurements()
 
     @State private var scope = IOSSpeedLabRunRequest.Scope.current
     @State private var topology = IOSSpeedLabRunRequest.Topology.systemDirect
@@ -27,6 +28,7 @@ struct IOSSpeedLabView: View {
                     hero
                     pathCard
                     durationCard
+                    IOSHopMeasurementsCard(probe: hopProbe, otherTestRunning: runner.running)
                     if let result = runner.lastResult { resultCards(result) }
                     if !runner.lastError.isEmpty { errorCard }
                     runCard
@@ -238,7 +240,7 @@ struct IOSSpeedLabView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(runDisabled)
+            .disabled(runDisabled || hopProbe.running)
             Text(runner.running ? runner.progress : "Uses real public test transfers. Mbps is never derived from RTT; loaded latency is sampled concurrently with each direction's traffic.")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
