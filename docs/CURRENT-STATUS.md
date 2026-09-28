@@ -188,3 +188,24 @@ AI Help is server-side and provider-neutral. Current adapters cover OpenAI, Goog
 - Unsupported platform features stay unavailable with a real reason; UI/CSS must never force them Ready.
 
 Use `docs/CURRENT-GUIDE.md` for setup/operation detail and `docs/NATIVE-APPS.md` for native application boundaries.
+
+### Android single-node WireGuard policy continuation — September 28, 2026
+
+Single-node standard WireGuard can also run as a native endpoint in the existing
+Libbox VpnService. AUTO/logical selection uses that owner when the saved DNS
+transport/port, LAN-Off, IPv6-Off or strict policy cannot be enforced by the
+address-only backend. Ordinary compatible raw WG/AWG selection is preserved.
+The native compiler verifies the paired peer identity, preserves keys and
+keepalive, applies fixed MTU separately to the OS TUN and native endpoint, and
+stages only the compiled graph. It does not start an additional VPN. Both DNS
+and hostname bootstrap use the encrypted endpoint; Home DNS is not replaced
+with a public resolver, and unmeasured Fastest has no fabricated winner.
+
+The raw policy path no longer adopts saved effective MTU without a matching
+current-path proof, silently falls back from a missing/duplicate selected
+profile, or accepts invalid fixed MTU. Invalid graphs fail before session
+staging. The executable Java-to-Go integration tests exercise the shipping
+controllers and policy code, with Android OS handles doubled. Real-device
+routing/leak/transition proof remains required. Mobile Tor, remaining helper
+chains, AWG-entry multihop and real mobile Auto-MTU/Retest/padding/Jumbo remain
+open requirements, not completed features merely because refusal is safe.

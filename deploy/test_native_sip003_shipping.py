@@ -26,9 +26,12 @@ class Shipping(unittest.TestCase):
     def test_android_compilation_precedes_readiness_and_follows_dns(self):
         source=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java').read_text()
         listing=source[source.index('List<ModeInfo> listDirectLibboxModes'):source.index('SessionInfo prepareSession')]
-        self.assertLess(listing.index('compileNativeSIP003'),listing.index('isDirectFullDeviceConfig'))
-        setup=source[source.index('SessionInfo prepareSession'):source.index('private static String strictUTF8')]
-        self.assertLess(setup.index('compileNativeSIP003'),setup.index('isDirectFullDeviceConfig'))
+        self.assertLess(listing.index('compileStandaloneProfile'),listing.index('isDirectFullDeviceConfig'))
+        setup=source[source.index('SessionInfo prepareSession'):source.index('private static String compileStandaloneProfile')]
+        compiler=source[source.index('private static String compileStandaloneProfile'):source.index('private static String strictUTF8')]
+        self.assertIn('if (!"wg".equals(modeId)) return compileNativeSIP003(profile, modeId, strictUTF8(raw));',compiler)
+        self.assertIn('Libbox.routerWireGuardExitConfig',compiler)
+        self.assertLess(setup.index('compileStandaloneProfile'),setup.index('isDirectFullDeviceConfig'))
         self.assertLess(setup.index('applySelectedDns'),setup.rindex('compileNativeSIP003'))
         self.assertLess(setup.rindex('compileNativeSIP003'),setup.index('AndroidStartLayer.apply'))
         self.assertIn('Libbox.routerCompileSIP003Profile(wrapper, strictUTF8(raw))',source)

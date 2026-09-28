@@ -25,15 +25,18 @@ final class AndroidProfileSelection {
                 bundle.optString("selected_id", "")
         ).trim();
         JSONObject first = null;
+        JSONObject match = null;
         for (int i = 0; i < profiles.length(); i++) {
             JSONObject profile = profiles.optJSONObject(i);
             if (profile == null) continue;
             if (first == null) first = profile;
             if (!selected.isEmpty() && selected.equals(profile.optString("id", "").trim())) {
-                return profile;
+                if (match != null) throw new IllegalStateException("Selected Router VPN profile is duplicated; policy ownership is ambiguous.");
+                match = profile;
             }
         }
 
+        if (match != null) return match;
         if (!selected.isEmpty()) {
             throw new IllegalStateException(
                     "Selected Router VPN profile '" + selected + "' is missing from this Android node bundle."

@@ -79,15 +79,18 @@ final class NativeSingBoxController {
             if (!safeToken(id)) continue;
             JSONObject profile = profiles.optJSONObject(id);
             if (profile == null) continue;
-            String encoded = profile.optString("sing-box.json", "").trim();
-            if (encoded.isEmpty()) continue;
-            byte[] config;
-            try { config = Base64.decode(encoded, Base64.DEFAULT); } catch (IllegalArgumentException invalid) { continue; }
-            if (config.length == 0 || config.length > MAX_CONFIG) continue;
             String candidate;
-            try { candidate = compileNativeSIP003(profile, id, strictUTF8(config)); }
-            catch (Exception invalid) { continue; }
-            if (!isDirectFullDeviceConfig(candidate)) continue;
+            try {
+                candidate = compileStandaloneProfile(root, profile, id);
+                if (!isDirectFullDeviceConfig(candidate)) continue;
+                if ("wg".equals(id)) {
+                    JSONObject config = new JSONObject(candidate);
+                    applySelectedDns(root, config);
+                    config = AndroidWireGuardLibboxPolicy.apply(root, config);
+                    if (!AndroidStartLayer.nativeCapabilityReason(root, id).isEmpty()) continue;
+                    Libbox.checkConfig(config.toString());
+                }
+            } catch (Exception invalid) { continue; }
             String name = mode.optString("name", id).trim();
             result.add(new ModeInfo(id, name.isEmpty() ? id : name));
         }
@@ -100,19 +103,22 @@ final class NativeSingBoxController {
         JSONObject profiles = root.optJSONObject("profiles");
         JSONObject profile = profiles == null ? null : profiles.optJSONObject(modeId);
         if (profile == null) throw new IllegalStateException("The selected mode has no generated profile.");
-        String configEncoded = profile.optString("sing-box.json", "").trim();
-        if (configEncoded.isEmpty()) throw new IllegalStateException("The selected mode has no sing-box config.");
-        byte[] rawConfig = Base64.decode(configEncoded, Base64.DEFAULT);
-        if (rawConfig.length == 0 || rawConfig.length > MAX_CONFIG) throw new IllegalStateException("sing-box config size is invalid.");
-        String rawConfigText = compileNativeSIP003(profile, modeId, strictUTF8(rawConfig));
+        String rawConfigText = compileStandaloneProfile(root, profile, modeId);
+        if ("wg".equals(modeId)) {
+            // Only the compiled graph is staged. A second WireGuard VPN or
+            // unused raw-backend file must never be started implicitly.
+            profile = new JSONObject().put("sing-box.json", "native-wireguard-graph");
+        }
         if (!isDirectFullDeviceConfig(rawConfigText)) throw new IllegalStateException("This mode still depends on another local engine and is not a direct embedded libbox mode.");
         JSONObject patchedConfig = new JSONObject(rawConfigText);
         applySelectedDns(root, patchedConfig);
+        if ("wg".equals(modeId)) patchedConfig = AndroidWireGuardLibboxPolicy.apply(root, patchedConfig);
         // Recompile after DNS selection: UDP/DoH3 must use the real Hysteria2
         // leg, not the SS2022 WebSocket/TLS transport restricted to TCP.
         if ("ss-v2ray".equals(modeId)) patchedConfig = new JSONObject(compileNativeSIP003(profile, modeId, patchedConfig.toString()));
         AndroidStartLayer.RelayPlan relayPlan = AndroidStartLayer.apply(root, patchedConfig, modeId);
         try {
+            Libbox.checkConfig(patchedConfig.toString());
             byte[] config = (patchedConfig.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
             if (config.length > MAX_CONFIG) throw new IllegalStateException("Patched sing-box config exceeds safety limit.");
 
@@ -160,6 +166,26 @@ final class NativeSingBoxController {
         }
     }
 
+    private static String compileStandaloneProfile(JSONObject bundle, JSONObject profile, String modeId) throws Exception {
+        String asset = "wg".equals(modeId) ? "wg.conf" : "sing-box.json";
+        int maximum = "wg".equals(modeId) ? 1024 * 1024 : MAX_CONFIG;
+        String encoded = profile.optString(asset, "");
+        if (encoded.isEmpty() || encoded.length() > ((maximum + 2) / 3) * 4) {
+            throw new IllegalStateException("The selected native profile is missing or oversized.");
+        }
+        byte[] raw = Base64.decode(encoded, Base64.DEFAULT);
+        if (raw.length == 0 || raw.length > maximum) throw new IllegalStateException("Native profile size is invalid.");
+        if (!"wg".equals(modeId)) return compileNativeSIP003(profile, modeId, strictUTF8(raw));
+        JSONArray names = profile.names();
+        for (int i = 0; names != null && i < names.length(); i++) {
+            String name = names.getString(i);
+            if (!("wg.conf".equals(name) || "stack.json".equals(name))) {
+                throw new IllegalStateException("WireGuard profile contains an unowned helper asset.");
+            }
+        }
+        return Libbox.routerWireGuardExitConfig(strictUTF8(raw), AndroidNodeStore.stableNodeIdentity(bundle));
+    }
+
     private static String strictUTF8(byte[] raw) throws Exception {
         return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(raw)).toString();
@@ -204,7 +230,17 @@ final class NativeSingBoxController {
             server.put("tls", new JSONObject().put("enabled", true).put("server_name", selected.serverName));
         }
         if ("https".equals(protocol)||"h3".equals(protocol)) server.put("path", selected.path);
-        config.put("dns", new JSONObject().put("servers", new JSONArray().put(server)).put("final", "selected-dns"));
+        JSONArray servers = new JSONArray();
+        if (!literalDnsHost(selected.host)) {
+            JSONObject profile = AndroidProfileSelection.selectedRouterProfile(bundle);
+            String bootstrap = firstNonEmpty(profile.optString("adguard_ipv4", ""), profile.optString("adguard_ipv6", ""));
+            if (!literalDnsHost(bootstrap)) throw new IllegalStateException("Resolver hostname requires a configured literal home DNS bootstrap through the VPN.");
+            servers.put(new JSONObject().put("type", "udp").put("tag", "routervpn-bootstrap-dns")
+                    .put("server", bootstrap).put("server_port", 53).put("detour", detour));
+            server.put("domain_resolver", "routervpn-bootstrap-dns");
+        }
+        servers.put(server);
+        config.put("dns", new JSONObject().put("servers", servers).put("final", "selected-dns"));
         JSONObject route = config.optJSONObject("route"); if (route == null) { route = new JSONObject(); config.put("route", route); }
         JSONArray rules = route.optJSONArray("rules"); if (rules == null) rules = new JSONArray();
         boolean hasDnsRule = false;
@@ -220,19 +256,21 @@ final class NativeSingBoxController {
     private static DnsSelection dnsSelection(JSONObject bundle) throws Exception {
         JSONObject profile = AndroidProfileSelection.selectedRouterProfile(bundle);
         DnsSelection s = new DnsSelection();
-        s.mode = profile.optString("dns_mode", "fastest").toLowerCase(Locale.ROOT);
-        String fastest = profile.optString("fastest_dns_host", "1.1.1.1").trim();
+        s.mode = AndroidNativeProfilePolicy.stringPolicy(profile, "dns_mode", "home");
+        if (s.mode.isEmpty()) s.mode = "home";
+        if (!java.util.Arrays.asList("home", "fastest", "custom", "dot", "doh", "doh3", "rescue").contains(s.mode)) throw new IllegalStateException("Unknown DNS mode.");
+        String fastest = profile.optString("fastest_dns_host", "").trim();
         s.protocol = profile.optString("dns_protocol", "udp").toLowerCase(Locale.ROOT);
         s.host = profile.optString("dns_host", fastest).trim();
-        s.port = profile.optInt("dns_port", 0);
+        s.port = AndroidNativeProfilePolicy.exactInteger(profile, "dns_port", 0, 0, 65535);
         s.serverName = profile.optString("dns_server_name", "").trim();
         s.path = profile.optString("dns_path", "/dns-query").trim();
-        if ("home".equals(s.mode)) { s.host=profile.optString("adguard_ipv4", profile.optString("adguard_ipv6", "10.77.0.1")).trim(); s.protocol="udp";s.port=53;s.serverName="";s.path=""; }
+        if ("home".equals(s.mode)) { s.host=firstNonEmpty(profile.optString("adguard_ipv4", ""), profile.optString("adguard_ipv6", "")); s.protocol="udp";s.port=53;s.serverName="";s.path=""; }
         else if ("fastest".equals(s.mode)) { s.host=fastest;s.protocol="udp";s.port=53;s.serverName="";s.path=""; }
         else if ("doh".equals(s.mode)) { s.protocol="https";if(s.port<=0)s.port=443; }
         else if ("dot".equals(s.mode)) { s.protocol="tls";if(s.port<=0)s.port=853; }
         else if ("doh3".equals(s.mode)) { s.protocol="h3";if(s.port<=0)s.port=443; }
-        else if ("rescue".equals(s.mode)) { s.protocol="rescue";if(s.host.isEmpty())s.host=fastest;if(s.port<=0)s.port=443; }
+        else if ("rescue".equals(s.mode)) { s.protocol="rescue";if(s.host.isEmpty())s.host=firstNonEmpty(fastest,"1.1.1.1");if(s.port<=0)s.port=443; }
         else { if("doh".equals(s.protocol))s.protocol="https";else if("dot".equals(s.protocol))s.protocol="tls";else if("doh3".equals(s.protocol))s.protocol="h3"; if(s.port<=0)s.port=("https".equals(s.protocol)||"h3".equals(s.protocol))?443:"tls".equals(s.protocol)?853:53; }
         if(s.host.isEmpty()) throw new IllegalStateException("Selected DNS host is empty.");
         if(s.serverName.isEmpty()) { String known=KNOWN_TLS_NAMES.get(s.host); if(known!=null)s.serverName=known; else if(s.host.indexOf(':')<0 && hasLetter(s.host))s.serverName=s.host; }
@@ -240,6 +278,11 @@ final class NativeSingBoxController {
         return s;
     }
 
+    private static String firstNonEmpty(String first, String second) { return first.trim().isEmpty() ? second.trim() : first.trim(); }
+    private static boolean literalDnsHost(String value) {
+        try { return AndroidNumericAddress.parse(value) != null; }
+        catch (Exception invalid) { return false; }
+    }
     private static boolean hasLetter(String value){for(int i=0;i<value.length();i++)if(Character.isLetter(value.charAt(i)))return true;return false;}
     private static String chooseDnsDetour(JSONObject config) {
         for (String candidate:new String[]{"proxy","tcp-stack","ss-hop","outer"}) {

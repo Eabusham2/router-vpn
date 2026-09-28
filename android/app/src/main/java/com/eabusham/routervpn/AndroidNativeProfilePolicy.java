@@ -3,7 +3,6 @@ package com.eabusham.routervpn;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -16,6 +15,7 @@ final class AndroidNativeProfilePolicy {
         if (config == null || config.length() == 0 || config.length() > 512 * 1024) {
             throw new IllegalStateException("Native tunnel config size is invalid.");
         }
+        if (requiresLibbox(bundle)) throw new IllegalStateException("This saved policy requires the native Libbox WireGuard path; the address-only backend cannot silently ignore it.");
         String dns = selectedPlainUdpDns(bundle);
         int mtu = selectedMtu(bundle, fallbackMtu);
         String normalized = config.replace("\r\n", "\n").replace('\r', '\n');
@@ -33,19 +33,24 @@ final class AndroidNativeProfilePolicy {
                     if (!mtuWritten) out.add("MTU = " + mtu);
                 }
                 inInterface = "[Interface]".equalsIgnoreCase(trimmed);
-                if (inInterface) sawInterface = true;
+                if (inInterface) {
+                    if (sawInterface) throw new IllegalStateException("Multiple native interfaces make policy ownership ambiguous.");
+                    sawInterface = true;
+                }
                 dnsWritten = false;
                 mtuWritten = false;
                 out.add(line);
                 continue;
             }
             if (inInterface && startsKey(trimmed, "DNS")) {
-                if (!dnsWritten) out.add("DNS = " + dns);
+                if (dnsWritten) throw new IllegalStateException("Duplicate native DNS fields are ambiguous.");
+                out.add("DNS = " + dns);
                 dnsWritten = true;
                 continue;
             }
             if (inInterface && startsKey(trimmed, "MTU")) {
-                if (!mtuWritten) out.add("MTU = " + mtu);
+                if (mtuWritten) throw new IllegalStateException("Duplicate native MTU fields are ambiguous.");
+                out.add("MTU = " + mtu);
                 mtuWritten = true;
                 continue;
             }
@@ -81,6 +86,9 @@ final class AndroidNativeProfilePolicy {
         if (!"udp".equals(protocol)) {
             throw new IllegalStateException("Selected DNS protocol '" + protocol + "' cannot be enforced by Android's address-only native VPN DNS API. Use an embedded libbox mode instead of silently downgrading DNS transport.");
         }
+        if ("custom".equals(mode) && exactInteger(p, "dns_port", 53, 1, 65535) != 53) {
+            throw new IllegalStateException("Native address-only DNS cannot enforce a custom port; use Libbox.");
+        }
         if (!isLiteralIp(host)) throw new IllegalStateException("Native Android DNS requires a literal IPv4/IPv6 address; selected value is not an IP.");
         return host;
     }
@@ -88,25 +96,55 @@ final class AndroidNativeProfilePolicy {
     static int selectedMtu(JSONObject bundle, int fallback) {
         int base = validMtu(fallback) ? fallback : 1380;
         JSONObject p = selectedProfile(bundle);
-        if (p == null) return base;
-        String policy = p.optString("mtu_policy", "default").trim().toLowerCase(Locale.ROOT);
-        int manual = p.optInt("manual_mtu", 0);
-        int effective = p.optInt("effective_mtu", 0);
-        if ("manual".equals(policy)) return validMtu(manual) ? manual : base;
-        if ("auto".equals(policy)) return validMtu(effective) ? effective : base;
-        return base;
+        String policy = stringPolicy(p, "mtu_policy", "auto");
+        if ("manual".equals(policy) || "fixed".equals(policy)) {
+            return exactInteger(p, "manual_mtu", 0, 1280, 9000);
+        }
+        if ("auto".equals(policy) || "default".equals(policy) || policy.isEmpty()) {
+            // A saved effective_mtu without a fresh path/config identity is not
+            // a measurement of this session. Keep only the runtime default.
+            return base;
+        }
+        throw new IllegalStateException("Unknown native MTU policy; it was not silently ignored.");
     }
 
     static JSONObject selectedProfile(JSONObject bundle) {
-        if (bundle == null) return null;
-        JSONArray profiles = bundle.optJSONArray("routerProfiles");
-        String wanted = bundle.optString("selectedRouterID", "").trim();
-        if (profiles == null) return null;
-        for (int i = 0; i < profiles.length(); i++) {
-            JSONObject p = profiles.optJSONObject(i);
-            if (p != null && wanted.equals(p.optString("id", ""))) return p;
+        return AndroidProfileSelection.selectedRouterProfile(bundle);
+    }
+
+    static boolean requiresLibbox(JSONObject bundle) throws Exception {
+        JSONObject profile = selectedProfile(bundle);
+        String ipv6 = stringPolicy(profile, "ipv6_mode", "on");
+        if (!java.util.Arrays.asList("", "on", "auto", "off").contains(ipv6)) throw new IllegalStateException("Unknown IPv6 policy.");
+        if ("off".equals(ipv6) || !booleanPolicy(profile, "home_lan_access", true)
+                || booleanPolicy(profile, "daita_enabled", false) || booleanPolicy(profile, "jumbo_tun", false)) return true;
+        try { selectedPlainUdpDns(bundle); return false; }
+        catch (IllegalStateException needsTransport) { return true; }
+    }
+
+    static String stringPolicy(JSONObject profile, String key, String fallback) {
+        Object raw = profile.opt(key);
+        if (raw == null) return fallback;
+        if (!(raw instanceof String)) throw new IllegalStateException(key + " must be a string.");
+        return ((String) raw).trim().toLowerCase(Locale.ROOT);
+    }
+
+    static boolean booleanPolicy(JSONObject profile, String key, boolean fallback) {
+        Object raw = profile.opt(key);
+        if (raw == null) return fallback;
+        if (!(raw instanceof Boolean)) throw new IllegalStateException(key + " must be a boolean.");
+        return (Boolean) raw;
+    }
+
+    static int exactInteger(JSONObject profile, String key, int fallback, int min, int max) {
+        Object raw = profile.opt(key);
+        if (raw == null) raw = fallback;
+        if (!(raw instanceof Number)) throw new IllegalStateException(key + " must be an exact integer.");
+        double value = ((Number) raw).doubleValue();
+        if (!Double.isFinite(value) || value != Math.rint(value) || value < min || value > max) {
+            throw new IllegalStateException(key + " is outside the supported range " + min + "–" + max + ".");
         }
-        return profiles.length() > 0 ? profiles.optJSONObject(0) : null;
+        return (int) value;
     }
 
     private static boolean startsKey(String line, String key) {
@@ -114,7 +152,7 @@ final class AndroidNativeProfilePolicy {
         return eq > 0 && key.equalsIgnoreCase(line.substring(0, eq).trim());
     }
 
-    private static boolean validMtu(int mtu) { return mtu >= 1200 && mtu <= 9000; }
+    private static boolean validMtu(int mtu) { return mtu >= 1280 && mtu <= 9000; }
 
     private static String firstNonEmpty(String a, String b) {
         String x = a == null ? "" : a.trim();
@@ -122,14 +160,7 @@ final class AndroidNativeProfilePolicy {
     }
 
     private static boolean isLiteralIp(String value) {
-        if (value == null || value.trim().isEmpty()) return false;
-        String v = value.trim();
-        try {
-            InetAddress parsed = InetAddress.getByName(v);
-            if (v.indexOf(':') >= 0) return parsed.getAddress().length == 16;
-            return v.matches("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}") && parsed.getAddress().length == 4;
-        } catch (Exception invalid) {
-            return false;
-        }
+        try { return value != null && AndroidNumericAddress.parse(value) != null; }
+        catch (Exception invalid) { return false; }
     }
 }

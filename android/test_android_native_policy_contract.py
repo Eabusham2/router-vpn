@@ -70,4 +70,20 @@ for marker in (
 ):
     assert marker in main, f"MainActivity missing native truth/identity marker {marker}"
 
+# Advanced DNS and LAN/IPv6 policies select the real one-TUN native WG
+# endpoint, rather than silently stripping settings in the address-only API.
+native = read("NativeSingBoxController.java")
+single = read("AndroidWireGuardLibboxPolicy.java")
+strategy = read("AndroidModeOrchestrator.java")
+for marker in ("compileStandaloneProfile", "Libbox.routerWireGuardExitConfig", "AndroidWireGuardLibboxPolicy.apply(root, patchedConfig)", "Libbox.checkConfig(patchedConfig.toString())"):
+    assert marker in native, marker
+assert "AndroidProfileSelection.selectedRouterProfile(bundle)" in policy
+assert "effective) ? effective" not in policy, "raw backend must not reuse unbound saved MTU"
+assert "InetAddress.getByName" not in policy, "policy validation must not issue DNS on the underlying network"
+assert "!AndroidNativeProfilePolicy.requiresLibbox(root)" in strategy
+for marker in ('"ip_version", 6', '"action", "reject"', 'Libbox.routerApplyMultihopLANPolicy', 'endpoint.put("mtu", nativeMtu)', 'tun.put("mtu", tunMtu)'):
+    assert marker in single, marker
+assert (ROOT / "test_android_multihop_graph.py").is_file()
+assert "directChecks(context,dir,app)" in (ROOT / "test_android_multihop_graph.py").read_text()
+
 print("Android native DNS/MTU/recovery contract: PASS")

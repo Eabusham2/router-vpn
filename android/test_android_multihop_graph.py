@@ -48,7 +48,7 @@ public class Context {
  public Intent putExtra(String key,String value){return this;} public Intent putExtra(String key,long value){return this;}
 }''',
 'android/os/Build.java':'package android.os; public final class Build {public static class VERSION {public static int SDK_INT=36;} public static class VERSION_CODES {public static final int O=26;}}',
-'android/util/Base64.java':'package android.util; public final class Base64 {public static final int DEFAULT=0; public static byte[] decode(String s,int flags){return java.util.Base64.getMimeDecoder().decode(s);}}',
+'android/util/Base64.java':'package android.util; public final class Base64 {public static final int DEFAULT=0,NO_WRAP=2; public static String encodeToString(byte[] data,int flags){return java.util.Base64.getEncoder().encodeToString(data);} public static byte[] decode(String s,int flags){return java.util.Base64.getMimeDecoder().decode(s);}}',
 'com/eabusham/routervpn/Boundaries.java':r'''package com.eabusham.routervpn;
 import org.json.JSONObject;
 final class AndroidNodeStore {
@@ -59,11 +59,7 @@ final class AndroidKillSwitchPolicy {
  static final String SESSION_MARKER="strict-session";
  static boolean strictRequested(JSONObject b){return AndroidProfileSelection.selectedRouterProfile(b).optBoolean("kill_switch",false);}
 }
-final class AndroidStartLayer {
- static final class RelayPlan {JSONObject metadata(){return new JSONObject();}void clear(){}}
- static RelayPlan apply(JSONObject a,JSONObject b,String mode){throw new AssertionError("No Start Layer is started by graph preparation");}
-}
-final class AndroidStartLayerRelay {static final String SESSION_FILE="start-layer.json";}
+final class AndroidStartLayerRelay {static final String SESSION_FILE="start-layer.json";static final int LISTEN_PORT=18389,SERVER_PORT=8389;}
 final class AndroidServiceStopConfirmation {
  static final String EXTRA_COMMAND="command";
  static void start(String key,Runnable r){throw new AssertionError("No runtime starts in a compiler test");}
@@ -93,7 +89,8 @@ public final class Libbox {
  public static String routerApplyMultihopMTUPolicy(String c,String p)throws Exception{return call("mtu",c,p);}
  public static String routerApplyMultihopLANPolicy(String c,String p)throws Exception{return call("lan",c,p);}
  public static String routerCompileSIP003Profile(String a,String b){throw new AssertionError("Unrelated native compiler cannot be substituted");}
- public static void checkConfig(String c)throws Exception {new JSONObject(c);}
+ public static boolean rejectConfig;
+ public static void checkConfig(String c)throws Exception {if(rejectConfig)throw new IllegalArgumentException("Injected native schema failure");new JSONObject(c);}
 }''',
 }
 HARNESS=r'''package com.eabusham.routervpn;
@@ -141,6 +138,100 @@ public final class MultihopGraphHarness {
   return config;
  }
  interface Mutation {void apply(JSONObject b)throws Exception;}
+ static JSONObject direct(NativeSingBoxController nativeWG,Path dir,Path app,JSONObject bundle)throws Exception {
+  File source=save(dir,bundle);byte[] original=Files.readAllBytes(source.toPath());
+  check(nativeWG.listDirectLibboxModes(source).stream().anyMatch(m->m.id.equals("wg")),"native single WG absent from selector");
+  NativeSingBoxController.SessionInfo info=nativeWG.prepareSession(source,"wg");
+  Path session=app.resolve("layered-sessions").resolve(info.sessionId);
+  check(info.modeId.equals("wg"),"native single WG mode relabelled");
+  check(!Files.exists(session.resolve("wg.conf")),"single WG staged a second raw VPN config");
+  check(!Files.exists(session.resolve("routervpn-multihop.json")),"single WG claimed multihop");
+  JSONObject graph=new JSONObject(Files.readString(session.resolve("sing-box.json")));
+  check(graph.getJSONArray("inbounds").length()==1,"single WG has multiple OS inbounds");
+  check(graph.getJSONArray("endpoints").length()==1&&graph.getJSONArray("outbounds").length()==0,"single WG has an unowned exit");
+  check(!graph.getJSONArray("endpoints").getJSONObject(0).has("detour"),"single WG depends on another tunnel");
+  check(graph.getJSONArray("endpoints").getJSONObject(0).getJSONArray("peers").getJSONObject(0).getInt("persistent_keepalive_interval")==25,"single WG lost keepalive");
+  check(Arrays.equals(original,Files.readAllBytes(source.toPath())),"single WG mutated source credentials");
+  JSONArray dns=graph.getJSONObject("dns").getJSONArray("servers");
+  for(int n=0;n<dns.length();n++)check(dns.getJSONObject(n).getString("detour").equals("proxy"),"DNS or bootstrap escapes native WG");
+  return graph;
+ }
+ static void directRejected(NativeSingBoxController nativeWG,Path dir,Path app,Mutation mutation)throws Exception {
+  JSONObject source=bundle('b');mutation.apply(source);File file=save(dir,source);int count=sessions(app);
+  boolean failed=false;try{nativeWG.prepareSession(file,"wg");}catch(Exception expected){failed=true;}
+  check(failed,"invalid single WG policy accepted");check(sessions(app)==count,"invalid single WG left session state");
+  check(nativeWG.listDirectLibboxModes(file).stream().noneMatch(m->m.id.equals("wg")),"invalid WG policy advertised as runnable");
+ }
+ static void directChecks(Context context,Path dir,Path app)throws Exception {
+  NativeSingBoxController nativeWG=new NativeSingBoxController(context);
+  JSONObject source=bundle('b');profile(source).put("effective_mtu",9000).put("mtu_policy","auto");
+  JSONObject graph=direct(nativeWG,dir,app,source);
+  check(graph.getJSONArray("endpoints").getJSONObject(0).getInt("mtu")==1420,"stale saved MTU adopted as current path proof");
+  check(AndroidNativeProfilePolicy.selectedMtu(source,1380)==1380,"raw backend adopted stale saved MTU");
+  check(!AndroidNativeProfilePolicy.requiresLibbox(source),"ordinary home DNS lost raw WG capability");
+  check(AndroidNativeProfilePolicy.selectedPlainUdpDns(source).equals("192.168.50.133"),"literal home DNS rejected");
+  for(String mode:new String[]{"custom","dot","doh","doh3"}) {
+   source=bundle('b');JSONObject policy=profile(source);
+   policy.put("dns_mode",mode).put("dns_host","192.0.2.53").put("dns_protocol","tcp").put("dns_server_name","dns.example.test");
+   if(mode.equals("custom"))policy.put("dns_port",5353);
+   graph=direct(nativeWG,dir,app,source);
+   JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
+   String expected=mode.equals("custom")?"tcp":mode.equals("dot")?"tls":mode.equals("doh")?"https":"h3";
+   check(dns.getString("type").equals(expected),"advanced DNS protocol was downgraded");
+   check(dns.getString("server").equals("192.0.2.53"),"saved DNS was substituted");
+   if(!mode.equals("custom"))check(dns.getJSONObject("tls").getString("server_name").equals("dns.example.test"),"TLS identity was lost");
+   check(AndroidNativeProfilePolicy.requiresLibbox(source),"AUTO would choose address-only backend for advanced DNS");
+  }
+  source=bundle('b');profile(source).put("dns_mode","doh").put("dns_host","resolver.example.test");
+  graph=direct(nativeWG,dir,app,source);JSONArray dns=graph.getJSONObject("dns").getJSONArray("servers");
+  check(dns.length()==2&&dns.getJSONObject(0).getString("server").equals("192.168.50.133"),"hostname bootstrap lost configured AdGuard");
+  check(dns.getJSONObject(1).getString("domain_resolver").equals("routervpn-bootstrap-dns"),"hostname DNS bootstrap can recurse");
+  source=bundle('b');profile(source).put("adguard_ipv4","").put("adguard_ipv6","fd50::53");
+  graph=direct(nativeWG,dir,app,source);
+  check(graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0).getString("server").equals("fd50::53"),"IPv6-only AdGuard policy lost");
+  source=bundle('b');profile(source).put("mtu_policy","fixed").put("manual_mtu",1350).put("ipv6_mode","off").put("home_lan_access",false).put("kill_switch",true);
+  graph=direct(nativeWG,dir,app,source);JSONObject tun=graph.getJSONArray("inbounds").getJSONObject(0);
+  check(tun.getInt("mtu")==1350&&graph.getJSONArray("endpoints").getJSONObject(0).getInt("mtu")==1350,"fixed MTU not applied to both native interfaces");
+  check(tun.getJSONArray("address").length()==2,"IPv6 off removed capture instead of rejecting traffic");
+  check(graph.getJSONObject("dns").getString("strategy").equals("ipv4_only"),"IPv6 off DNS policy lost");
+  JSONArray rules=graph.getJSONObject("route").getJSONArray("rules");boolean v6=false,lan=false,proof=false;
+  for(int i=0;i<rules.length();i++){
+   JSONObject rule=rules.getJSONObject(i);
+   if("reject".equals(rule.optString("action"))&&rule.optInt("ip_version")==6)v6=true;
+   if("reject".equals(rule.optString("action"))&&rule.has("ip_cidr")&&has(rule.getJSONArray("ip_cidr"),"192.168.0.0/16"))lan=true;
+   if("route".equals(rule.optString("action"))&&rule.has("port")&&rule.getInt("port")==8787)proof=true;
+  }
+  check(v6&&lan&&proof,"single WG lost IPv6/LAN rejection or exact private proof exception");
+  check(AndroidNativeProfilePolicy.requiresLibbox(source),"LAN/IPv6 constraints do not select policy-capable WG");
+  for(Object invalid:new Object[]{0,1279,9001,1340.5,true,"1350",JSONObject.NULL}) {
+   directRejected(nativeWG,dir,app,x->profile(x).put("mtu_policy","fixed").put("manual_mtu",invalid));
+  }
+  directRejected(nativeWG,dir,app,x->x.put("selectedRouterID","missing-node"));
+  directRejected(nativeWG,dir,app,x->x.getJSONArray("routerProfiles").put(new JSONObject(profile(x).toString())));
+  directRejected(nativeWG,dir,app,x->x.put("nodeProofId",proof(key('x'))));
+  directRejected(nativeWG,dir,app,x->profile(x).put("mtu_policy","unknown"));
+  directRejected(nativeWG,dir,app,x->profile(x).put("ipv6_mode","unknown"));
+  directRejected(nativeWG,dir,app,x->profile(x).put("home_lan_access","false"));
+  directRejected(nativeWG,dir,app,x->profile(x).put("daita_enabled",true));
+  directRejected(nativeWG,dir,app,x->profile(x).put("jumbo_tun",true));
+  directRejected(nativeWG,dir,app,x->profile(x).put("start_layer","aes"));
+  directRejected(nativeWG,dir,app,x->profile(x).put("dns_mode","fastest"));
+  directRejected(nativeWG,dir,app,x->profile(x).put("dns_mode","unknown"));
+  directRejected(nativeWG,dir,app,x->profile(x).put("dns_mode","custom").put("dns_host","192.0.2.53").put("dns_port",65536));
+  directRejected(nativeWG,dir,app,x->x.getJSONObject("profiles").getJSONObject("wg").put("outer-xray.json","e30="));
+  io.nekohasekai.libbox.Libbox.rejectConfig=true;
+  try { directRejected(nativeWG,dir,app,x->{}); }
+  finally { io.nekohasekai.libbox.Libbox.rejectConfig=false; }
+  // The strict marker must belong to the newly prepared single-node session.
+  source=bundle('b');profile(source).put("kill_switch",true);
+  NativeSingBoxController.SessionInfo strict=nativeWG.prepareSession(save(dir,source),"wg");
+  check(Files.isRegularFile(app.resolve("layered-sessions").resolve(strict.sessionId).resolve(AndroidKillSwitchPolicy.SESSION_MARKER)),"strict WG policy was not delivered to the VpnService");
+  for(String extra:new String[]{"DNS = 192.0.2.53\n", "MTU = 1350\n", "[Interface]\n"}) {
+   String raw=wg('b').replace("[Peer]",extra+"[Peer]");boolean failed=false;
+   try{AndroidNativeProfilePolicy.patchWireGuardLikeConfig(bundle('b'),raw,1380);}catch(Exception expected){failed=true;}
+   check(failed,"raw policy silently repaired ambiguous interface fields");
+  }
+ }
  static void rejected(AndroidMultihopController builder,Path app,Path dir,File a,Mutation mutation)throws Exception {
   JSONObject b=bundle('b');mutation.apply(b);int before=sessions(app);File file=save(dir,b);boolean rejected=false;
   try{builder.prepare(a,file,"wg");}catch(Exception expected){rejected=true;}
@@ -179,7 +270,8 @@ public final class MultihopGraphHarness {
   check(Arrays.equals(originalA,Files.readAllBytes(a.toPath()))&&Arrays.equals(originalB,Files.readAllBytes(b.toPath())),"source bundles mutated");
   boolean failed=false;try{NativeSingBoxController.applySelectedDns(bundle('b'),new JSONObject().put("outbounds",new JSONArray().put(new JSONObject().put("type","direct").put("tag","proxy"))));}catch(Exception expected){failed=true;}
   check(failed,"DNS accepted a direct-only proxy tag");
-  System.out.println("Android shipping multihop compiler: PASS ("+checks+" checks; real Go policy, Android handles doubled)");
+  directChecks(context,dir,app);
+  System.out.println("Android shipping single/multihop WG compiler: PASS ("+checks+" checks; real Go policy, Android handles doubled)");
  }
 }
 '''
@@ -196,7 +288,7 @@ def main():
         for name,source in STUBS.items():
             target=sources/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(source)
         app=sources/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
-        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidProfileSelection','AndroidNumericAddress'):
+        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer'):
             shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
         (app/'MultihopGraphHarness.java').write_text(HARNESS)
         classes=temp/'classes'
