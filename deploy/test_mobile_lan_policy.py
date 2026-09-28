@@ -35,7 +35,16 @@ class Tests(unittest.TestCase):
         external=(ROOT/'ios/RouterVPN/App/RouterVPNModelExternal.swift').read_text()
         appExpr=re.search(r'proto\.excludeLocalNetworks = ([^\n]+)',app).group(1)
         externalExpr=re.search(r'proto\.excludeLocalNetworks = ([^\n]+)',external).group(1)
+        provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
+        preflight=re.search(r'guard (\(provider\["engine"\].+?) else \{ throw tunnelError\(5,',provider).group(1)
         source='''import Foundation
+struct TunnelProtocol { var excludeLocalNetworks: Bool }
+func preflight(_ engine: String, _ allowLAN: Bool, _ exclusion: Bool) -> Bool {
+    let provider: [String: Any] = ["engine":engine]
+    let tunnelProtocol = TunnelProtocol(excludeLocalNetworks:exclusion)
+    return PREFLIGHT
+}
+
 struct Profile {var homeLANAccess: Bool?}
 func regular(_ strict: Bool, _ homeLANAccess: Bool, _ entryAllowsLAN: Bool) -> Bool { APP }
 func external(_ strict: Bool, _ profile: Profile) -> Bool { EXTERNAL }
@@ -47,8 +56,14 @@ for strict in [false,true] { for home in [false,true] { for entry in [false,true
 for strict in [false,true] {for home: Bool? in [nil,false,true] {
     precondition(external(strict,Profile(homeLANAccess:home)) == (strict && (home ?? true)));checks += 1
 }}
+for home in [false,true] { for exclusion in [false,true] {
+    precondition(preflight("multihop-libbox",home,exclusion));checks += 1
+    precondition(preflight("libbox",home,exclusion) == (home == exclusion));checks += 1
+    precondition(preflight("wireguard",home,exclusion) == (home == exclusion));checks += 1
+    precondition(preflight("multihop",home,exclusion) == (home == exclusion));checks += 1
+} }
 print("Shipping Apple LAN exclusion: PASS (\\(checks) checks)")
-'''.replace('APP',appExpr).replace('EXTERNAL',externalExpr)
+'''.replace('APP',appExpr).replace('EXTERNAL',externalExpr).replace('PREFLIGHT',preflight)
         with tempfile.TemporaryDirectory(prefix='routervpn-lan-exclusion-') as tmp:
             tmp=Path(tmp);file=tmp/'main.swift';binary=tmp/'test';file.write_text(source)
             subprocess.run([swift,'-swift-version','6',str(file),'-o',str(binary)],check=True,timeout=60)

@@ -23,7 +23,10 @@ enum IOSDNSRuntimePolicy {
     private static let loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]
 
     static func selectedProfile(in bundle: ClientBundle) -> RouterProfile? {
-        bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
+        let selected = bundle.selectedRouterID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if selected.isEmpty { return bundle.routerProfiles.count == 1 ? bundle.routerProfiles.first : nil }
+        let matches = bundle.routerProfiles.filter { $0.id == selected }
+        return matches.count == 1 ? matches[0] : nil
     }
 
     static func resolve(_ profile: RouterProfile) throws -> IOSResolvedDNSPolicy? {
@@ -57,14 +60,16 @@ enum IOSDNSRuntimePolicy {
     }
 
     static func validate(selection: IOSRuntimeSelection, in bundle: ClientBundle) throws {
-        guard let profile = selectedProfile(in: bundle), profile.normalizedNodeKind == "router-vpn", let policy = try resolve(profile) else { return }
+        guard let profile = selectedProfile(in: bundle) else { throw error("The selected Router VPN profile is missing or ambiguous; another node's DNS policy was not substituted.") }
+        guard profile.normalizedNodeKind == "router-vpn", let policy = try resolve(profile) else { return }
         if selection.engine == .wireGuard && !policy.wireGuardCompatible {
             throw error("\(policy.mode.uppercased()) DNS requires Libbox on iOS. The native WireGuard/AmneziaWG engine can only enforce plain IP DNS without pretending to provide TCP/DoT/DoH/DoH3 transport.")
         }
     }
 
     static func patch(_ source: ClientBundle) throws -> ClientBundle {
-        guard let profile = selectedProfile(in: source), profile.normalizedNodeKind == "router-vpn", let policy = try resolve(profile) else { return source }
+        guard let profile = selectedProfile(in: source) else { throw error("The selected Router VPN profile is missing or ambiguous; another node's DNS policy was not substituted.") }
+        guard profile.normalizedNodeKind == "router-vpn", let policy = try resolve(profile) else { return source }
         var bundle = source
         var profiles = bundle.profiles
         if policy.wireGuardCompatible {

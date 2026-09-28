@@ -157,7 +157,11 @@ enum IOSNativeSIP003Profile {
                           outbound["server"] as? String == "127.0.0.1", port(outbound["server_port"]) == localPort,
                           outbound["version"] as? String == "5" else { throw issue() }
                 } else {
-                    guard NSDictionary(dictionary: outbound).isEqual(to: expected) else { throw issue() }
+                    // Compare canonical JSON values, not a Foundation bridge
+                    // between NSNumber and native Swift Int dictionaries.
+                    let actualJSON = try JSONSerialization.data(withJSONObject: outbound, options: [.sortedKeys])
+                    let expectedJSON = try JSONSerialization.data(withJSONObject: expected, options: [.sortedKeys])
+                    guard actualJSON == expectedJSON else { throw issue() }
                 }
                 outbounds[index] = expected
             case "hysteria2":

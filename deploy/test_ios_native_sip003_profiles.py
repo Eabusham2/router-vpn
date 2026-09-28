@@ -40,10 +40,10 @@ func obj(_ value: String) throws -> [String:Any] { try JSONSerialization.jsonObj
                 let ss=outbounds[0]
                 try check("no local helper",ss["type"] as? String == "shadowsocks" && ss["plugin"] as? String == "v2ray-plugin" && ss["network"] as? String == "tcp")
                 for field in ["server","server_port","password","method","plugin","plugin_opts"] {
-                    try check("exact protocol field "+field,NSDictionary(dictionary:[field:ss[field]!]).isEqual(to:[field:helper[field]!]))
+                    try check("exact protocol field "+field,JSONSerialization.data(withJSONObject: [field:ss[field]!], options: [.sortedKeys]) == JSONSerialization.data(withJSONObject: [field:helper[field]!], options: [.sortedKeys]))
                 }
                 let before=try obj(original.profiles["ss-v2ray"]!["sing-box.json"]!), old=before["outbounds"] as! [[String:Any]]
-                try check("UDP cryptography preserved",NSDictionary(dictionary:outbounds[1]).isEqual(to:old[1]))
+                try check("UDP cryptography preserved",JSONSerialization.data(withJSONObject: outbounds[1], options: [.sortedKeys]) == JSONSerialization.data(withJSONObject: old[1], options: [.sortedKeys]))
                 let servers=(config["dns"] as! [String:Any])["servers"] as! [[String:Any]]
                 for server in servers {
                     let type=server["type"] as! String, expected=["udp","h3","quic"].contains(type) ? "udp-stack" : "tcp-stack"

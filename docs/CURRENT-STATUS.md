@@ -209,3 +209,19 @@ controllers and policy code, with Android OS handles doubled. Real-device
 routing/leak/transition proof remains required. Mobile Tor, remaining helper
 chains, AWG-entry multihop and real mobile Auto-MTU/Retest/padding/Jumbo remain
 open requirements, not completed features merely because refusal is safe.
+
+### Apple profile/lockdown correction — September 28, 2026
+
+Apple runtime and DNS selection now reject missing or duplicate selected node
+identities rather than borrowing the first node's settings. A legacy bundle
+without an explicit selection is accepted only when it has exactly one node.
+The PacketTunnel early lockdown check recognizes `multihop-libbox` and leaves
+its LAN intersection to the existing two-node validator; entry-LAN-Off combined
+with exit-LAN-On no longer fails an exit-only comparison first. Both node
+lockdown requirements still must pass before an engine starts.
+
+SIP003 exact-field preservation compares canonical JSON instead of bridging
+Foundation NSNumber/native Swift dictionaries, which falsely rejected equal
+profiles under Swift 6.4 on Linux. Its key, TLS, UDP-leg and extra-field rejection
+checks remain mandatory. These corrections are implementation/test evidence,
+not a claim that the remaining mobile runtime requirements are complete.

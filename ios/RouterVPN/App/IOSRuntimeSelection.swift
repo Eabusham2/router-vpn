@@ -155,8 +155,10 @@ enum IOSRuntimeSelector {
     }
 
     private static func normalizedStartLayer(in bundle: ClientBundle) throws -> String {
-        let profile = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
-        let raw = (profile?.startLayer ?? "off").trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: "_", with: "-").replacingOccurrences(of: " ", with: "")
+        guard let profile = IOSDNSRuntimePolicy.selectedProfile(in: bundle) else {
+            throw IOSRuntimeSelectionError.unsupportedMode("The selected Router VPN profile is missing or ambiguous.")
+        }
+        let raw = (profile.startLayer ?? "off").trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: "_", with: "-").replacingOccurrences(of: " ", with: "")
         switch raw {
         case "", "off", "none", "disabled": return "off"
         case "aes", "aes256", "aes-256", "aes-gcm", "aes256-gcm", startLayerAES: return startLayerAES

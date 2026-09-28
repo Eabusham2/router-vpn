@@ -90,7 +90,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             if strict {
                 guard tunnelProtocol.includeAllNetworks, tunnelProtocol.enforceRoutes else { throw tunnelError(4, "strict Apple kill switch requested but NetworkExtension route lockdown is not enabled") }
                 let allowLAN = selectedProfile["home_lan_access"] as? Bool ?? true
-                guard (provider["engine"] as? String) == "multihop" || tunnelProtocol.excludeLocalNetworks == allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
+                // The two-node validator below checks the intersection of both
+                // LAN policies. Comparing only the exit here rejects a valid
+                // entry-LAN-Off / exit-LAN-On graph before that check can run.
+                guard (provider["engine"] as? String) == "multihop-libbox" || tunnelProtocol.excludeLocalNetworks == allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
             }
 
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()

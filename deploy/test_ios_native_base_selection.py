@@ -132,6 +132,16 @@ func candidates(_ bundle: ClientBundle, _ logical: String = "base-raw") throws -
         var noFallback = try fixture(base:"awg", fallback:true)
         noFallback.logicalModes[0] = LogicalMode(id:"base-raw",name:"Raw",description:"",baseSelector:true,fallback:false,variants:["wg":"wg","awg":"awg2-fast"])
         try check("catalog can forbid fallback", candidates(noFallback) == ["awg2-fast"])
+        var missingNode = try fixture(); missingNode.selectedRouterID = "absent"
+        reject("DNS cannot borrow the first node") { _ = try IOSDNSRuntimePolicy.patch(missingNode) }
+        reject("runtime cannot borrow the first node") { _ = try candidates(missingNode) }
+        var duplicateNode = try fixture(); duplicateNode.routerProfiles.append(duplicateNode.routerProfiles[0])
+        reject("duplicate selected nodes are ambiguous") { _ = try candidates(duplicateNode) }
+        reject("duplicate DNS node is ambiguous") { _ = try IOSDNSRuntimePolicy.patch(duplicateNode) }
+        var emptySelection = try fixture(); emptySelection.selectedRouterID = ""
+        try check("one legacy node can be selected", IOSDNSRuntimePolicy.selectedProfile(in: emptySelection)?.id == "home")
+        emptySelection.routerProfiles.append(emptySelection.routerProfiles[0])
+        reject("multiple unnamed nodes cannot be guessed") { _ = try candidates(emptySelection) }
         var duplicate = try fixture(); duplicate.logicalModes[0] = LogicalMode(id:"base-raw",name:"Raw",description:"",baseSelector:true,fallback:true,variants:["wg":"wg","awg":"wg"])
         try check("deduplicate identical runtime", candidates(duplicate) == ["wg"])
         reject("path traversal raw id") { _ = try IOSRuntimeSelector.selectRaw(bundle:fixture(),rawProfileID:"../wg") }
