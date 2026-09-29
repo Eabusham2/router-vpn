@@ -6,6 +6,7 @@ checks these property assignments against the exact pinned Apple engine.
 """
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
@@ -174,8 +175,14 @@ def main():
     provider = (PARSER.parent / "PacketTunnelProvider.swift").read_text()
     assert 'amnezia: requestedMode != "wg"' in provider, "native provider does not enforce the claimed WG/AWG family"
     start = provider.index("    private func multihopWireGuardEndpoint(")
-    end = provider.index("    private func startLibbox(", start)
+    # Extract only the intended mapping method, not every helper until the
+    # next engine start. New native adapters may be declared between them.
+    following = re.search(r"(?m)^    private func ", provider[start + 1:])
+    assert following is not None, "mapping method has no bounded end"
+    end = start + 1 + following.start()
     mapping = provider[start:end]
+    assert mapping.count("    private func ") == 1
+    assert "LibboxRouterCompileAmneziaProfile" not in mapping
     assert "deriveNodeProof(from: peer.publicKey.base64Key) == expectedProofID" in mapping
     assert r"wg.interface.dns.map(\.stringRepresentation)" in mapping
     with tempfile.TemporaryDirectory(prefix="routervpn-wg-parser-") as tmp:
