@@ -14,6 +14,8 @@ struct IOSProfileSettingsView: View {
     @State private var autoRequireObfuscation = false
     @State private var mtuPolicy = "auto"
     @State private var manualMTU = ""
+    @State private var daitaEnabled = false
+    @State private var jumboTUN = false
     @State private var startupMode = "smart-auto"
     @State private var autoConnect = false
     @State private var status = ""
@@ -69,7 +71,9 @@ struct IOSProfileSettingsView: View {
                         Text("Current effective MTU: \(value) • \(p.effectiveMTUSource ?? "measured")")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("Auto measured MTU is the default and is path/config specific. Jumbo TUN is intentionally not exposed here because current iOS support is path-specific/incomplete; unsupported settings are not faked green.")
+                    Toggle("Jumbo TUN — compatible proxy paths", isOn: $jumboTUN)
+                    Toggle("DAITA-like bounded traffic padding", isOn: $daitaEnabled)
+                    Text("Padding uses the private endpoint inside the selected encrypted path, up to 192 kbps each direction. It is not Mullvad DAITA. Jumbo sets a compatible proxy TUN to 9000 bytes, not the Internet link or raw WG/AWG endpoint.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Startup") {
@@ -101,7 +105,7 @@ struct IOSProfileSettingsView: View {
 
     private func selectedProfile() -> RouterProfile? {
         guard let bundle = model.bundle else { return nil }
-        return bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
+        return IOSDNSRuntimePolicy.selectedProfile(in: bundle)
     }
 
     private func load() {
@@ -117,6 +121,8 @@ struct IOSProfileSettingsView: View {
         autoRequireObfuscation = p.autoRequireObfuscation ?? false
         mtuPolicy = (p.mtuPolicy ?? "auto").lowercased()
         manualMTU = (p.manualMTU ?? 0) > 0 ? String(p.manualMTU!) : ""
+        daitaEnabled = p.daitaEnabled ?? false
+        jumboTUN = p.jumboTUN ?? false
         startupMode = (p.startupMode ?? "smart-auto").lowercased()
         autoConnect = p.autoConnect ?? false
     }
@@ -124,7 +130,8 @@ struct IOSProfileSettingsView: View {
     private func save() {
         guard !model.profileMutationBlocked else { status = "Disconnect or let the active VPN transition finish before changing profile settings."; return }
         guard var bundle = model.bundle,
-              let index = bundle.routerProfiles.firstIndex(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.indices.first else {
+              let selected = IOSDNSRuntimePolicy.selectedProfile(in: bundle),
+              let index = bundle.routerProfiles.firstIndex(where: { $0.id == selected.id }) else {
             status = "Pair/import and select a Router VPN node first."; return
         }
         guard bundle.routerProfiles[index].normalizedNodeKind == "router-vpn" else { status = "External exits own their protocol settings."; return }
@@ -143,6 +150,8 @@ struct IOSProfileSettingsView: View {
         p.autoRequireObfuscation = autoRequireObfuscation
         p.mtuPolicy = mtuPolicy
         p.manualMTU = mtuPolicy == "manual" ? manual : 0
+        p.daitaEnabled = daitaEnabled
+        p.jumboTUN = jumboTUN
         p.startupMode = startupMode
         p.autoConnect = autoConnect
         bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
@@ -161,4 +170,4 @@ struct IOSProfileSettingsView: View {
 // Require encrypted + Require obfuscation AUTO filters / Auto measured-fixed-runtime MTU /
 // SMART AUTO startup default / secret-free connection-profile Add-Load-Update-Delete including AUTO requirements.
 // Persistent settings/profile mutation stays disabled through connected/connecting/reasserting/disconnecting state.
-// Jumbo/DAITA/SOCKS are omitted when the current Apple runtime cannot truthfully claim their support.
+// Native padding and compatible proxy Jumbo are applied by the performance compiler.

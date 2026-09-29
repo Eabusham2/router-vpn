@@ -65,6 +65,8 @@ for header in headers:
     assert 'LibboxRouterApplyMultihopLANPolicy' in header.read_text(), str(header)
     assert 'LibboxRouterCompileWireGuardProfile' in header.read_text(), str(header)
     assert 'LibboxRouterCompileAmneziaProfile' in header.read_text(), str(header)
+    for symbol in ['LibboxRouterApplyPerformancePolicy','LibboxRouterStartPerformance','LibboxRouterPerformanceFailure','LibboxRouterInvalidatePerformance','LibboxRouterPerformanceStatus']:
+        assert symbol in header.read_text(), str(header)
     assert 'LibboxRouterAmneziaExitConfig' in header.read_text(), str(header)
     assert 'LibboxRouterWireGuardExitConfig' in header.read_text(), str(header)
     assert 'LibboxRouterApplyMultihopMTUPolicy' in header.read_text(), str(header)
@@ -144,8 +146,9 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   go test ./experimental/libbox/routervpn/...
-  go test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia)' -count=1
-  go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1 -timeout=120s
+  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance)' -count=1
+  go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
+  go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf -count=1 -timeout=120s
   python3 "$ROOT/../../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
   GOFLAGS="-ldflags=-checklinkname=0" go run ./cmd/internal/build_libbox -target apple -platform ios,iossimulator
 )

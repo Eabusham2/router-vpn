@@ -132,7 +132,11 @@ final class AndroidMultihopController {
         String sized=io.nekohasekai.libbox.Libbox.routerApplyMultihopMTUPolicy(config.toString(),lanProfiles.toString());
         String filtered=io.nekohasekai.libbox.Libbox.routerApplyMultihopLANPolicy(sized,lanProfiles.toString());
         if(filtered==null||filtered.isEmpty())throw new IllegalStateException("Native multihop LAN policy was not compiled.");
-        byte[] patched = (filtered + "\n").getBytes(StandardCharsets.UTF_8);
+        JSONObject entryPerformance = new JSONObject(selectedRouterProfile(entry).toString()).put("node_proof_id",entryIdentity);
+        JSONObject exitPerformance = new JSONObject(selectedRouterProfile(exit).toString()).put("node_proof_id",exitIdentity);
+        config = new JSONObject(io.nekohasekai.libbox.Libbox.routerApplyPerformancePolicy(filtered,new JSONObject().put("entry",entryPerformance).put("exit",exitPerformance).toString()));
+        io.nekohasekai.libbox.Libbox.checkConfig(config.toString());
+        byte[] patched = (config.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         if (patched.length > MAX_CONFIG) throw new IllegalStateException("Multihop sing-box config exceeds safety limit.");
 
         File root = new File(context.getFilesDir(), "layered-sessions");
@@ -283,7 +287,8 @@ final class AndroidMultihopController {
         for (String name:new String[]{"daita_enabled","jumbo_tun"}) {
             Object value=profile.opt(name);
             if (value!=null && value!=JSONObject.NULL && !(value instanceof Boolean)) throw new IllegalArgumentException("Invalid multihop policy type.");
-            if (Boolean.TRUE.equals(value)) throw new IllegalArgumentException("This graph does not own the requested "+name+" policy.");
+            // The shared performance compiler enforces both captured policies
+            // after graph/MTU/LAN composition and before any session is staged.
         }
         String start=profile.optString("start_layer","off").trim().toLowerCase(Locale.ROOT);
         if (!java.util.Arrays.asList("","off","none","disabled").contains(start)) throw new IllegalArgumentException("This graph does not own an additional Start Layer.");

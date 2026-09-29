@@ -1,0 +1,167 @@
+package routervpnperformance
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"strconv"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/adapter"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobileperf"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/protocol/group"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+type Options mobileperf.CoverOptions
+
+func RegisterService(registry *boxService.Registry) {
+	boxService.Register[Options](registry, mobileperf.CoverType, NewService)
+}
+
+var _ adapter.Service = (*Service)(nil)
+var _ adapter.InterfaceUpdateListener = (*Service)(nil)
+
+type Service struct {
+	boxService.Adapter
+	ctx       context.Context
+	cancel    context.CancelFunc
+	manager   adapter.OutboundManager
+	options   mobileperf.CoverOptions
+	worker    *mobileperf.Cover
+	ready     atomic.Bool
+	invalid   atomic.Bool
+	activated atomic.Bool
+}
+
+func NewService(ctx context.Context, _ log.ContextLogger, tag string, options Options) (adapter.Service, error) {
+	value := mobileperf.CoverOptions(options)
+	if err := value.Validate(); err != nil {
+		return nil, err
+	}
+	if tag != "routervpn-cover-entry" && tag != "routervpn-cover-exit" {
+		return nil, errors.New("unowned cover service tag")
+	}
+	manager := service.FromContext[adapter.OutboundManager](ctx)
+	if manager == nil {
+		return nil, errors.New("cover requires the native outbound manager")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	s := &Service{Adapter: boxService.NewAdapter(mobileperf.CoverType, tag), ctx: ctx, cancel: cancel, manager: manager, options: value}
+	worker, err := mobileperf.NewCover(s, value)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	s.worker = worker
+	return s, nil
+}
+func (s *Service) Start(stage adapter.StartStage) error {
+	if stage == adapter.StartStateStarted {
+		s.ready.Store(true)
+	}
+	return nil
+}
+
+// The host activates after local/server graph selection. Merely parsing or
+// starting a config cannot open a socket or mark padding proved.
+func (s *Service) Activate() error {
+	if !s.ready.Load() || s.invalid.Load() {
+		return errors.New("cover belongs to an unready or changed path")
+	}
+	if !s.activated.CompareAndSwap(false, true) {
+		return errors.New("native cover was already activated")
+	}
+	return s.worker.Start(s.ctx)
+}
+func (s *Service) Close() error {
+	s.invalid.Store(true)
+	s.ready.Store(false)
+	s.cancel()
+	return s.worker.Close()
+}
+func (s *Service) InterfaceUpdated(context.Context) {
+	// Core construction publishes its initial interface before this service is
+	// ready. Only a change to a started instance invalidates captured proofs.
+	if !s.ready.Load() || !s.activated.Load() {
+		return
+	}
+	s.invalid.Store(true)
+	s.worker.Invalidate()
+}
+func (s *Service) Healthy() bool {
+	return !s.invalid.Load() && s.ready.Load() && s.worker.Healthy() && s.Identity() != ""
+}
+func (s *Service) StatusJSON() string { return s.worker.StatusJSON() }
+func (s *Service) resolve(tag string, seen map[string]bool) (adapter.Outbound, string, error) {
+	if seen[tag] || len(seen) > 12 {
+		return nil, "", errors.New("cyclic cover route")
+	}
+	seen[tag] = true
+	out, ok := s.manager.Outbound(tag)
+	if !ok {
+		return nil, "", errors.New("cover route is missing")
+	}
+	identity := fmt.Sprintf("%p", out)
+	if selector, ok := out.(*group.Selector); ok {
+		selected := selector.Now()
+		child, suffix, err := s.resolve(selected, seen)
+		return child, identity + ":" + selected + ":" + suffix, err
+	}
+	switch out.Type() {
+	case "wireguard", "routervpn-amneziawg", "shadowsocks", "hysteria2", "routervpn-aes-xor", "routervpn-xray":
+		return out, identity, nil
+	case "socks":
+		dependencies := out.Dependencies()
+		if len(dependencies) != 1 {
+			return nil, "", errors.New("cover cannot use plaintext SOCKS outside an encrypted path")
+		}
+		_, suffix, err := s.resolve(dependencies[0], seen)
+		return out, identity + ":" + suffix, err
+	default:
+		return nil, "", errors.New("cover has no accepted encrypted route")
+	}
+}
+func (s *Service) Identity() string {
+	if !s.ready.Load() || s.invalid.Load() || s.ctx.Err() != nil {
+		return ""
+	}
+	_, proof, err := s.resolve(s.options.ProofTag, map[string]bool{})
+	if err != nil {
+		return ""
+	}
+	_, packet, err := s.resolve(s.options.PacketTag, map[string]bool{})
+	if err != nil {
+		return ""
+	}
+	return proof + ":" + packet
+}
+func (s *Service) Dial(ctx context.Context, network, tag, address string) (net.Conn, error) {
+	if s.Identity() == "" {
+		return nil, errors.New("cover path changed")
+	}
+	u, _ := url.Parse(s.options.API)
+	if network == "tcp" {
+		if tag != s.options.ProofTag || address != u.Host {
+			return nil, errors.New("unowned cover proof destination")
+		}
+	} else if network == "udp" {
+		if tag != s.options.PacketTag || address != net.JoinHostPort(s.options.Sink, strconv.Itoa(mobileperf.CoverPort)) {
+			return nil, errors.New("unowned private cover destination")
+		}
+	} else {
+		return nil, errors.New("unowned cover transport")
+	}
+	// Resolve to the exact chosen branch, not a selector that can change between
+	// checking identity and dial. Shared worker rechecks captured identity.
+	out, _, err := s.resolve(tag, map[string]bool{})
+	if err != nil {
+		return nil, err
+	}
+	return out.DialContext(ctx, network, M.ParseSocksaddr(address))
+}

@@ -47,7 +47,7 @@ try check("all non-secret preferences round trip", restored == graph)
 let object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
 let expectedKeys: Set<String> = [
     "homeLANAccess", "killSwitch", "killSwitchPolicy", "ipv6Mode", "baseTunnel", "baseFallback", "startLayer",
-    "autoRequireEncrypted", "autoRequireObfuscation", "mtuPolicy", "manualMTU", "startupMode", "autoConnect",
+    "autoRequireEncrypted", "autoRequireObfuscation", "mtuPolicy", "manualMTU", "daitaEnabled", "jumboTUN", "startupMode", "autoConnect",
     "dnsMode", "dnsProtocol", "dnsHost", "dnsPort", "dnsServerName", "dnsPath",
     "multihopEnabled", "multihopEntryID", "multihopExitID", "multihopExitMode"
 ]
@@ -73,6 +73,14 @@ do {
     _ = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONSerialization.data(withJSONObject:bad))
     fatalError("Invalid nonboolean graph flag was accepted")
 } catch { checks += 1 }
+let padded = try preferences(#"{"daitaEnabled":true,"jumboTUN":true}"#)
+try check("padding and Jumbo choices are saved", padded.daitaEnabled && padded.jumboTUN)
+let paddingRestored = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONEncoder().encode(padded))
+try check("padding and Jumbo choices round trip", paddingRestored == padded)
+for key in ["daitaEnabled","jumboTUN"] {
+    var bad = object;bad[key] = "true"
+    do { _ = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONSerialization.data(withJSONObject:bad));fatalError("invalid performance flag accepted") } catch { checks += 1 }
+}
 print("iOS shipping multihop profile serialization: PASS (\(checks) executable checks; no credentials/network/storage used)")
 '''
 

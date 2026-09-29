@@ -175,3 +175,45 @@ func TestRouterNativeAmneziaGraph(t *testing.T) {
 		t.Fatal("native AWG accepted an imported bypass option")
 	}
 }
+
+func TestRouterNativePerformanceGraph(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32)))
+	for _, mode := range []string{"shadowsocks", "hysteria2"} {
+		outbound := map[string]any{"type": mode, "tag": "proxy", "server": "192.0.2.1", "server_port": 8388, "password": key}
+		if mode == "shadowsocks" {
+			outbound["method"] = "2022-blake3-aes-256-gcm"
+		} else {
+			outbound["tls"] = map[string]any{"enabled": true, "server_name": "node.example.test"}
+		}
+		root := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "address": []string{"172.29.94.1/30", "fd29:94::1/126"}, "auto_route": true, "strict_route": true, "mtu": 1380}}, "outbounds": []any{outbound}, "route": map[string]any{"final": "proxy"}}
+		profile := map[string]any{"node_proof_id": strings.Repeat("a", 64), "router_api": "http://10.77.0.1:8787", "daita_enabled": true, "daita_host": "10.77.0.1", "daita_rate_kbps": 192, "jumbo_tun": true}
+		config, _ := json.Marshal(root)
+		policies, _ := json.Marshal(map[string]any{"entry": profile, "exit": profile})
+		compiled, err := RouterApplyPerformancePolicy(string(config), string(policies))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = CheckConfig(compiled); err != nil {
+			t.Fatal("registered native performance graph rejected", mode, err)
+		}
+		var readback map[string]any
+		json.Unmarshal([]byte(compiled), &readback)
+		if readback["inbounds"].([]any)[0].(map[string]any)["mtu"] != float64(9000) || len(readback["services"].([]any)) != 1 {
+			t.Fatal("native graph lost requested performance policy")
+		}
+		services := readback["services"].([]any)
+		owned := services[0].(map[string]any)
+		owned["rate_kbps"] = 1000000
+		invalid, _ := json.Marshal(readback)
+		if err = CheckConfig(string(invalid)); err == nil {
+			t.Fatal("native parser accepted unbounded cover rate")
+		}
+	}
+	if _, err := RouterStartPerformance(nil); err == nil {
+		t.Fatal("padding activated without a retained native service")
+	}
+	if RouterPerformanceFailure(nil) == "" {
+		t.Fatal("missing native owner reported healthy")
+	}
+	RouterInvalidatePerformance(nil)
+}

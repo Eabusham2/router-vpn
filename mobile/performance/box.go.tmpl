@@ -1,0 +1,7 @@
+package box
+
+import "github.com/sagernet/sing-box/adapter"
+
+// Expose only the services belonging to this retained instance; no global
+// registry survives a session reload or allows cross-session activation.
+func (s *Box) RouterVPNServices() []adapter.Service { return s.service.Services() }

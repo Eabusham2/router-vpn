@@ -256,3 +256,22 @@ identity is separately proved through the encrypted path. Fixed MTU updates
 both the owned AWG stack and OS TUN. These are automated implementation checks,
 not physical-device validation. Native Tor, remaining helper chains and mobile
 Auto-MTU/Retest/padding/Jumbo remain open until implemented and tested.
+
+### Mobile bounded padding and compatible Jumbo integration
+
+Android and iOS/iPadOS use the same owned native performance compiler and cover
+service. DAITA-like here means bounded encrypted-path cover traffic, not the
+Mullvad/Maybenot implementation. Each requested home-node worker proves its
+private node identity and UDP sink before activation, uses at most 20 datagrams
+per second and 192 kbps of payload per direction, and fails if replies stop or
+the path changes. Workers and timers are cancelled and joined with the owning
+VPN. Imported configuration cannot activate cover traffic that is disabled in
+the captured user preferences. Local/Server/Compare multihop activates workers
+only after final path selection; each hop retains its own private destination.
+
+Jumbo sets a compatible proxy OS TUN to 9000 bytes without changing the physical
+Internet link, DNS, route ownership or a WG/AWG packet endpoint. Raw packet
+Jumbo and conflicting fixed-MTU requests are rejected. iOS Settings and saved
+connection profiles preserve both choices. Source, graph and lifecycle tests
+are not a substitute for device acceptance. Auto-MTU/Retest, native mobile Tor
+and remaining helper-chain parity are separate unfinished requirements.

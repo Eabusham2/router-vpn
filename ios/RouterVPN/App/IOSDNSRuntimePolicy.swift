@@ -64,7 +64,7 @@ enum IOSDNSRuntimePolicy {
         let ipv6 = clean(profile.ipv6Mode).lowercased()
         guard ["", "on", "auto", "off"].contains(ipv6) else { throw error("Unknown saved IPv6 policy.") }
         let dns = try resolve(profile)
-        return dns?.wireGuardCompatible == false || profile.homeLANAccess == false || ipv6 == "off"
+        return dns?.wireGuardCompatible == false || profile.homeLANAccess == false || ipv6 == "off" || profile.daitaEnabled == true || profile.jumboTUN == true
     }
 
     static func validate(selection: IOSRuntimeSelection, in bundle: ClientBundle) throws {

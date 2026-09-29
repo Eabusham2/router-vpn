@@ -69,6 +69,7 @@ stub(PKG,'RouterMultihop','{public void networkChanged(){}public boolean healthy
 stub(PKG,'RouterHopMeasurement','{public void networkChanged(){}public void start(String id,long size)throws Exception{}public void cancel(String id){}public String statusJSON(){return "";}public void close()throws Exception{} }')
 stub(PKG,'Libbox','''{public static final int InterfaceTypeOther=0,InterfaceTypeWIFI=1,InterfaceTypeCellular=2,InterfaceTypeEthernet=3;
  public static void setup(SetupOptions o)throws Exception{}public static void checkConfig(String c)throws Exception{}
+ public static long routerStartPerformance(CommandServer s)throws Exception{return 0;}public static String routerPerformanceFailure(CommandServer s){return "";}public static void routerInvalidatePerformance(CommandServer s){}
  public static RouterMultihop newRouterMultihop(String c,String m)throws Exception{return null;}public static RouterHopMeasurement newRouterHopMeasurement(CommandServer c,String m)throws Exception{return null;} }''')
 stub(PKG,'CommandServer','{public CommandServer(PlatformInterface p,CommandServerHandler h)throws Exception{}public void start()throws Exception{}public void startOrReloadService(String c,OverrideOptions o)throws Exception{}public void closeService()throws Exception{}public void close(){}public void resetNetwork(){} }')
 stub(PKG,'CommandServerHandler','{void serviceStop();void serviceReload();SystemProxyStatus getSystemProxyStatus();void setSystemProxyEnabled(boolean b);void writeDebugMessage(String s);}','interface')

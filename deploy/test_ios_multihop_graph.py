@@ -88,9 +88,9 @@ e = entry; e["start_layer"] = "aes-256-gcm"
 reject("no silent layer omission") { _ = try build(original(),e) }
 for (key, value) in [("daita_enabled", true), ("jumbo_tun", true)] {
     var unsupportedEntry = entry; unsupportedEntry[key] = value
-    reject("do not drop entry policy " + key) { _ = try build(original(), unsupportedEntry) }
+    try check("entry performance policy reaches next compiler " + key, try build(original(),unsupportedEntry)["sing-box.json"] != nil)
     var unsupportedExit = exit; unsupportedExit[key] = value
-    reject("do not drop exit policy " + key) { _ = try build(original(), entry, unsupportedExit) }
+    try check("exit performance policy reaches next compiler " + key, try build(original(),entry,unsupportedExit)["sing-box.json"] != nil)
 }
 // Exercise the actual private-bundle Codable model before graph validation.
 // A raw-dictionary test alone misses flags silently stripped during app import.
@@ -119,9 +119,9 @@ for flag in ["daita_enabled", "jumbo_tun"] {
         let roundTrip = try imported(requested)
         try check("import preserves exact \(flag)=\(enabled)", roundTrip[flag] as? Bool == enabled)
         if enabled {
-            reject("imported entry policy cannot be stripped " + flag) { _ = try build(original(),roundTrip) }
+            try check("imported entry performance flag is available", try build(original(),roundTrip)["sing-box.json"] != nil)
             requested = exit; requested[flag] = true
-            reject("imported exit policy cannot be stripped " + flag) { _ = try build(original(),entry,imported(requested)) }
+            try check("imported exit performance flag is available", try build(original(),entry,imported(requested))["sing-box.json"] != nil)
         } else {
             try check("false policy keeps graph runnable " + flag, !(try build(original(),roundTrip)).isEmpty)
         }
@@ -321,7 +321,7 @@ for (field,value) in [("dns_port",0 as Any),("dns_port",true as Any),("dns_host"
     var changed = hostnamePolicy;changed["dns_host"]="192.0.2.53";changed[field]=value
     reject("invalid DNS policy " + field) { _ = try wgFiles(wgExit,changed) }
 }
-for (field,value) in [("ipv6_mode","unrecognized" as Any),("ipv6_mode",true as Any),("daita_enabled",true as Any),("jumbo_tun",true as Any)] {
+for (field,value) in [("ipv6_mode","unrecognized" as Any),("ipv6_mode",true as Any),("jumbo_tun",true as Any)] {
     var changed=wgExitProfile;changed[field]=value
     reject("single graph does not ignore " + field) { _ = try P.singleWireGuardPolicy(nestedInput,profile:changed) }
 }

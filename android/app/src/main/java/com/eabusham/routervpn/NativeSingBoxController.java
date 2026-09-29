@@ -88,6 +88,7 @@ final class NativeSingBoxController {
                     applySelectedDns(root, config);
                     config = AndroidWireGuardLibboxPolicy.apply(root, config);
                     if (!AndroidStartLayer.nativeCapabilityReason(root, id).isEmpty()) continue;
+                    config = applyPerformance(root, config);
                     Libbox.checkConfig(config.toString());
                 }
             } catch (Exception invalid) { continue; }
@@ -118,6 +119,7 @@ final class NativeSingBoxController {
         if ("ss-v2ray".equals(modeId)) patchedConfig = new JSONObject(compileNativeSIP003(profile, modeId, patchedConfig.toString()));
         AndroidStartLayer.RelayPlan relayPlan = AndroidStartLayer.apply(root, patchedConfig, modeId);
         try {
+            patchedConfig = applyPerformance(root, patchedConfig);
             Libbox.checkConfig(patchedConfig.toString());
             byte[] config = (patchedConfig.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
             if (config.length > MAX_CONFIG) throw new IllegalStateException("Patched sing-box config exceeds safety limit.");
@@ -164,6 +166,15 @@ final class NativeSingBoxController {
         } finally {
             if (relayPlan != null) relayPlan.clear();
         }
+    }
+
+    static JSONObject applyPerformance(JSONObject bundle, JSONObject config) throws Exception {
+        JSONObject profile = new JSONObject(AndroidProfileSelection.selectedRouterProfile(bundle).toString());
+        profile.put("node_proof_id", AndroidNodeStore.stableNodeIdentity(bundle));
+        String policy = new JSONObject().put("entry",profile).put("exit",profile).toString();
+        String result = Libbox.routerApplyPerformancePolicy(config.toString(),policy);
+        if (result == null || result.isEmpty() || result.length() > MAX_CONFIG) throw new IllegalStateException("Native performance policy returned no bounded graph.");
+        return new JSONObject(result);
     }
 
     static boolean nativeWireGuardFamily(String mode) {

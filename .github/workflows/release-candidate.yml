@@ -34,6 +34,7 @@ jobs:
           python3 deploy/test_multihop_execution.py
           python3 deploy/test_native_hop_measurement.py
           python3 deploy/test_mobile_lan_policy.py
+          python3 deploy/test_mobile_performance_shipping.py
           python3 deploy/test_bundled_xray.py
           python3 modes/test_runtime_pid_registration.py
           python3 deploy/full-audit-v4.py

@@ -370,16 +370,63 @@ type packetCapture struct{ packets chan []byte }
 
 func (*packetCapture) ReturnHeadroom() int { return 4 }
 func (p *packetCapture) ReturnPackets(packets [][]byte) [][]byte {
+	// Like the production dispatcher, return unrelated datagrams to the stack.
+	var unconsumed [][]byte
 	for _, packet := range packets {
-		if len(packet) >= 4 {
-			select {
-			case p.packets <- append([]byte{}, packet[4:]...):
-			default:
+		if len(packet) < 4+20 {
+			unconsumed = append(unconsumed, packet)
+			continue
+		}
+		body := packet[4:]
+		offset := 0
+		switch body[0] >> 4 {
+		case 4:
+			offset = int(body[0]&15) * 4
+			if offset < 20 || len(body) < offset+8 || body[9] != 1 || body[offset] != 0 {
+				unconsumed = append(unconsumed, packet)
+				continue
 			}
+		case 6:
+			offset = 40
+			if len(body) < 48 || body[6] != 58 || body[offset] != 129 {
+				unconsumed = append(unconsumed, packet)
+				continue
+			}
+		default:
+			unconsumed = append(unconsumed, packet)
+			continue
+		}
+		if binary.BigEndian.Uint16(body[offset+4:offset+6]) != 0x4100 || binary.BigEndian.Uint16(body[offset+6:offset+8]) != 0x0100 {
+			unconsumed = append(unconsumed, packet)
+			continue
+		}
+		select {
+		case p.packets <- append([]byte{}, body...):
+		default:
+			unconsumed = append(unconsumed, packet)
 		}
 	}
-	return nil
+	return unconsumed
 }
+func TestRawCapturePreservesUnrelatedDatagrams(t *testing.T) {
+	capture := &packetCapture{packets: make(chan []byte, 1)}
+	udp := make([]byte, 4+28)
+	udp[4] = 0x45
+	udp[4+9] = 17
+	control := make([]byte, 4+48)
+	control[4] = 0x60
+	control[4+6] = 58
+	control[4+40] = 134
+	if remaining := capture.ReturnPackets([][]byte{udp, control}); len(remaining) != 2 || &remaining[0][0] != &udp[0] || &remaining[1][0] != &control[0] {
+		t.Fatal("unrelated datagrams were consumed")
+	}
+	select {
+	case <-capture.packets:
+		t.Fatal("unrelated datagram mislabeled as echo reply")
+	default:
+	}
+}
+
 func checksum(raw []byte) uint16 {
 	sum := uint32(0)
 	for len(raw) > 1 {
@@ -454,7 +501,7 @@ func TestActualAmneziaWGRawIPv4IPv6ICMPAndReturnOwnership(t *testing.T) {
 				offset, replyType = 40, 129
 			}
 			if len(reply) != offset+len(body) || reply[offset] != replyType || !bytes.Equal(reply[offset+8:], payload) {
-				t.Fatal("raw native ICMP response mismatch", ipv6)
+				t.Fatalf("raw native ICMP response mismatch: IPv6=%v length=%d expected=%d header=%x", ipv6, len(reply), offset+len(body), reply[:min(len(reply), 48)])
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatal("raw native ICMP timed out", ipv6)

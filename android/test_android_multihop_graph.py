@@ -15,7 +15,7 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 JAVA=ROOT/'android/app/src/main/java/com/eabusham/routervpn'
 GO_HELPER=r'''package main
-import("encoding/json";"fmt";"os";"io";"router-vpn/internal/mobilemultihop")
+import("encoding/json";"fmt";"os";"io";"router-vpn/internal/mobilemultihop";"router-vpn/internal/mobileperf")
 func main(){
  var r struct{Operation string;Config string;Policy string}
  if err:=json.NewDecoder(io.LimitReader(os.Stdin,8*1024*1024)).Decode(&r);err!=nil{fmt.Fprintln(os.Stderr,"invalid request");os.Exit(2)}
@@ -27,6 +27,7 @@ func main(){
  case "awg-exit":value,err=mobilemultihop.AmneziaExitConfig(r.Config,r.Policy)
  case "mtu":value,err=mobilemultihop.ApplyMTUPolicy(r.Config,r.Policy)
  case "lan":value,err=mobilemultihop.ApplyLANPolicy(r.Config,r.Policy)
+ case "performance":value,err=mobileperf.Apply(r.Config,r.Policy)
  default:fmt.Fprintln(os.Stderr,"unknown test operation");os.Exit(2)
  }
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(2)}
@@ -92,6 +93,7 @@ public final class Libbox {
  public static String routerAmneziaExitConfig(String c,String p)throws Exception{return call("awg-exit",c,p);}
  public static String routerApplyMultihopMTUPolicy(String c,String p)throws Exception{return call("mtu",c,p);}
  public static String routerApplyMultihopLANPolicy(String c,String p)throws Exception{return call("lan",c,p);}
+ public static String routerApplyPerformancePolicy(String c,String p)throws Exception{return call("performance",c,p);}
  public static String routerCompileSIP003Profile(String a,String b){throw new AssertionError("Unrelated native compiler cannot be substituted");}
  public static boolean rejectConfig;
  public static void checkConfig(String c)throws Exception {if(rejectConfig)throw new IllegalArgumentException("Injected native schema failure");new JSONObject(c);}
@@ -282,7 +284,10 @@ public final class MultihopGraphHarness {
   directRejected(nativeWG,dir,app,x->profile(x).put("mtu_policy","unknown"));
   directRejected(nativeWG,dir,app,x->profile(x).put("ipv6_mode","unknown"));
   directRejected(nativeWG,dir,app,x->profile(x).put("home_lan_access","false"));
-  directRejected(nativeWG,dir,app,x->profile(x).put("daita_enabled",true));
+  source=bundle('b');profile(source).put("daita_enabled",true);
+  graph=direct(nativeWG,dir,app,source);
+  check(graph.getJSONArray("services").length()==1&&graph.getJSONArray("services").getJSONObject(0).getString("packet_tag").equals("proxy"),"WG padding is not owned by the selected native endpoint");
+  directRejected(nativeWG,dir,app,x->profile(x).put("daita_enabled",true).put("daita_rate_kbps",9999));
   directRejected(nativeWG,dir,app,x->profile(x).put("jumbo_tun",true));
   directRejected(nativeWG,dir,app,x->profile(x).put("start_layer","aes"));
   directRejected(nativeWG,dir,app,x->profile(x).put("dns_mode","fastest"));
@@ -332,7 +337,10 @@ public final class MultihopGraphHarness {
   rejected(builder,app,dir,a,x->x.put("nodeProofId",proof(key('x'))));
   rejected(builder,app,dir,a,x->x.put("selectedRouterID","missing-node"));
   rejected(builder,app,dir,a,x->profile(x).put("mtu_policy","fixed").put("manual_mtu",1400));
-  rejected(builder,app,dir,a,x->profile(x).put("daita_enabled",true));
+  JSONObject padded=bundle('b');profile(padded).put("daita_enabled",true);
+  JSONObject paddingGraph=prepare(builder,app,a,save(dir,padded),"local");
+  check(paddingGraph.getJSONArray("services").getJSONObject(0).getString("node_id").equals(padded.getString("nodeProofId")),"multihop padding used the wrong node identity");
+  rejected(builder,app,dir,a,x->profile(x).put("daita_enabled",true).put("daita_host","192.0.2.12"));
   rejected(builder,app,dir,a,x->profile(x).put("jumbo_tun",true));
   rejected(builder,app,dir,a,x->profile(x).put("start_layer","unowned"));
   rejected(builder,app,dir,a,x->x.getJSONObject("profiles").getJSONObject("wg").put("wg.conf",Base64.getEncoder().encodeToString((wg('b')+"[Peer]\n").getBytes(StandardCharsets.UTF_8))));

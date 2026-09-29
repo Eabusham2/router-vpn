@@ -22,6 +22,8 @@ class Tests(unittest.TestCase):
         bridge=(ROOT/'mobile/routervpn_multihop_bridge.go.tmpl').read_text()
         self.assertIn('return mobilemultihop.ApplyLANPolicy(config, profiles)',bridge)
         self.assertNotIn('ProcessBuilder',android)
+        self.assertIn('routerApplyPerformancePolicy(filtered,',android)
+        self.assertIn('finalFiles = try performanceFiles(finalFiles',body)
     def test_native_build_checks_the_policy_graph(self):
         source=(ROOT/'mobile/routervpn_multihop_native_test.go.tmpl').read_text()
         for marker in ['RouterApplyMultihopLANPolicy(', 'CheckConfig(protected)', 'NewRouterMultihop(protected', 'CheckConfig(protectedPlan.Config())']:

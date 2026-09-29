@@ -33,10 +33,10 @@ enum RouterVPNMultihopGraph {
         }
         // No saved setting is silently dropped when building the smaller graph.
         for profile in [entryProfile, exitProfile] {
-            guard profile["daita_enabled"] as? Bool != true,
-                  profile["jumbo_tun"] as? Bool != true else {
-                throw issue("This graph does not yet own DAITA padding or Jumbo TUN. Those requested policies cannot be silently ignored.")
-            }
+            struct Performance: Decodable { let daita_enabled: Bool?; let jumbo_tun: Bool? }
+            _ = try JSONDecoder().decode(Performance.self, from: JSONSerialization.data(withJSONObject: profile))
+            // Both policies are applied after the final MTU/LAN graph is built.
+            // The shared native compiler rejects unsafe Jumbo compositions.
             let start = (profile["start_layer"] as? String ?? "off").lowercased()
             guard ["", "off", "none", "disabled"].contains(start) else {
                 throw issue("This multihop graph does not yet compose an additional Start Layer; turn it off before selecting this graph.")
@@ -237,7 +237,7 @@ enum RouterVPNMultihopGraph {
     static func singleWireGuardPolicy(_ files: [String: Data], profile: [String: Any]) throws -> [String: Data] {
         struct Policy: Decodable { let ipv6_mode: String?; let daita_enabled: Bool?; let jumbo_tun: Bool? }
         let policy = try JSONDecoder().decode(Policy.self, from: JSONSerialization.data(withJSONObject: profile))
-        guard policy.daita_enabled != true, policy.jumbo_tun != true else { throw issue("This native graph does not own the requested padding or Jumbo policy.") }
+        guard policy.jumbo_tun != true else { throw issue("Jumbo requires a compatible proxy TUN, not a raw WG/AWG endpoint.") }
         let ipv6 = (policy.ipv6_mode ?? "on").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard ["", "on", "auto", "off"].contains(ipv6) else { throw issue("Unknown saved IPv6 policy.") }
         guard ipv6 == "off" else { return files }

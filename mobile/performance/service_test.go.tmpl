@@ -1,0 +1,197 @@
+package routervpnperformance
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobileperf"
+	"github.com/sagernet/sing-box/log"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Boundary doubles replace only the existing encrypted outbound's socket. The
+// registered service, worker, private proof, ownership and close are unchanged.
+type testManager struct {
+	adapter.OutboundManager
+	mu  sync.RWMutex
+	out adapter.Outbound
+}
+
+func (m *testManager) Outbound(tag string) (adapter.Outbound, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.out, m.out != nil && tag == m.out.Tag()
+}
+func (m *testManager) set(out adapter.Outbound) { m.mu.Lock(); m.out = out; m.mu.Unlock() }
+
+type testOutbound struct {
+	outbound.Adapter
+	api   string
+	calls atomic.Int64
+	wg    sync.WaitGroup
+}
+
+func (o *testOutbound) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	o.calls.Add(1)
+	if network == "tcp" && address.String() == "10.77.0.1:8787" {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", o.api)
+	}
+	if network != "udp" || address.String() != "10.77.0.1:45999" {
+		return nil, errors.New("unowned test outbound destination")
+	}
+	c, s := net.Pipe()
+	o.wg.Add(1)
+	go func() {
+		defer o.wg.Done()
+		defer s.Close()
+		packet := make([]byte, 1201)
+		for {
+			n, err := s.Read(packet)
+			if err != nil {
+				return
+			}
+			if _, err = s.Write(packet[:n]); err != nil {
+				return
+			}
+		}
+	}()
+	return c, nil
+}
+func (*testOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("cover must not create a listener")
+}
+func fixtureService(t *testing.T, wrongProof bool) (*Service, *testManager, *testOutbound) {
+	t.Helper()
+	node := strings.Repeat("a", 64)
+	replyNode := node
+	if wrongProof {
+		replyNode = strings.Repeat("b", 64)
+	}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			t.Error("unowned proof path")
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": replyNode, "proof": "router-vpn-private-agent-v1"})
+	}))
+	t.Cleanup(api.Close)
+	out := &testOutbound{Adapter: outbound.NewAdapter("hysteria2", "proxy", []string{"tcp", "udp"}, nil), api: strings.TrimPrefix(api.URL, "http://")}
+	manager := &testManager{out: out}
+	ctx := service.ContextWith[adapter.OutboundManager](context.Background(), manager)
+	owned, err := NewService(ctx, log.NewNOPFactory().Logger(), "routervpn-cover-exit", Options(mobileperf.CoverOptions{NodeID: node, API: "http://10.77.0.1:8787", Sink: "10.77.0.1", RateKbps: 32, ProofTag: "proxy", PacketTag: "proxy"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := owned.(*Service)
+	t.Cleanup(func() { s.Close(); out.wg.Wait() })
+	return s, manager, out
+}
+func TestNativePerformanceNoIOUntilExplicitActivation(t *testing.T) {
+	s, _, out := fixtureService(t, false)
+	if s.Healthy() || out.calls.Load() != 0 {
+		t.Fatal("construction opened a socket")
+	}
+	s.InterfaceUpdated(context.Background())
+	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if err := s.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.Healthy() || out.calls.Load() != 0 {
+		t.Fatal("parsing/start claimed or opened cover traffic")
+	}
+	if err := s.Activate(); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Healthy() || out.calls.Load() != 2 {
+		t.Fatal("activation did not prove TCP and UDP")
+	}
+	if err := s.Activate(); err == nil {
+		t.Fatal("duplicate worker started")
+	}
+	s.Close()
+	if s.Healthy() {
+		t.Fatal("closed service active")
+	}
+	if err := s.Activate(); err == nil {
+		t.Fatal("closed service restarted")
+	}
+}
+func TestNativePerformanceStopsOnReplacementAndNetworkChange(t *testing.T) {
+	for _, change := range []string{"replacement", "network", "close"} {
+		t.Run(change, func(t *testing.T) {
+			s, manager, out := fixtureService(t, false)
+			s.Start(adapter.StartStateStarted)
+			if err := s.Activate(); err != nil {
+				t.Fatal(err)
+			}
+			switch change {
+			case "replacement":
+				manager.set(&testOutbound{Adapter: outbound.NewAdapter("hysteria2", "proxy", []string{"tcp", "udp"}, nil), api: out.api})
+			case "network":
+				s.InterfaceUpdated(context.Background())
+			default:
+				s.Close()
+			}
+			if s.Healthy() {
+				t.Fatal("stale padding reported healthy")
+			}
+			s.Close()
+			out.wg.Wait()
+		})
+	}
+}
+func TestNativePerformanceCannotUsePlaintextOrWrongNode(t *testing.T) {
+	s, manager, out := fixtureService(t, false)
+	manager.set(&testOutbound{Adapter: outbound.NewAdapter("direct", "proxy", []string{"tcp", "udp"}, nil), api: out.api})
+	s.Start(adapter.StartStateStarted)
+	if err := s.Activate(); err == nil || out.calls.Load() != 0 {
+		t.Fatal("plaintext route accepted")
+	}
+	bad, _, badOut := fixtureService(t, true)
+	bad.Start(adapter.StartStateStarted)
+	if err := bad.Activate(); err == nil {
+		t.Fatal("wrong private node enabled cover")
+	}
+	if badOut.calls.Load() != 1 {
+		t.Fatal("UDP cover started before node proof")
+	}
+}
+func TestNativePerformanceDestinationCannotBeReplaced(t *testing.T) {
+	s, _, out := fixtureService(t, false)
+	s.Start(adapter.StartStateStarted)
+	for _, q := range [][3]string{{"tcp", "proxy", "10.77.0.2:8787"}, {"udp", "proxy", "10.77.0.1:22"}, {"udp", "direct", "10.77.0.1:45999"}, {"udp", "proxy", "1.1.1.1:45999"}} {
+		if c, err := s.Dial(context.Background(), q[0], q[1], q[2]); err == nil {
+			c.Close()
+			t.Fatal("unowned target accepted")
+		}
+	}
+	if out.calls.Load() != 0 {
+		t.Fatal("unowned destination reached a real dialer")
+	}
+	if err := s.Activate(); err != nil {
+		t.Fatal(err)
+	}
+	var group sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		group.Add(1)
+		go func() { defer group.Done(); s.Close() }()
+	}
+	group.Wait()
+	before := out.calls.Load()
+	time.Sleep(60 * time.Millisecond)
+	if before != out.calls.Load() {
+		t.Fatal("network work survived joined teardown")
+	}
+}

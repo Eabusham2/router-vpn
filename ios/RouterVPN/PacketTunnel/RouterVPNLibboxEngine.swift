@@ -11,6 +11,7 @@ final class RouterVPNLibboxEngine {
     private var multihop: LibboxRouterMultihop?
     private var hopMeasurement: LibboxRouterHopMeasurement?
     private var multihopHealth: DispatchSourceTimer?
+    private var performanceHealth: DispatchSourceTimer?
     private let ownershipLock = NSLock()
     private var ownershipGeneration = UUID()
     private var starting = false
@@ -91,10 +92,12 @@ final class RouterVPNLibboxEngine {
         ownershipLock.lock()
         if let expected, expected != ownershipGeneration { ownershipLock.unlock(); return }
         ownershipGeneration = UUID()
-        let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot, probe = hopMeasurement
-        hopMeasurement = nil; multihop = nil; server = nil; multihopHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
+        let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot, probe = hopMeasurement, paddingHealth = performanceHealth
+        hopMeasurement = nil; multihop = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
         ownershipLock.unlock()
         health?.cancel()
+        paddingHealth?.cancel()
+        if let owned { LibboxRouterInvalidatePerformance(owned) }
         try? probe?.close()
         if let plan {
             do { try plan.close() }
@@ -104,6 +107,47 @@ final class RouterVPNLibboxEngine {
         platform.reset()
         if let directory { try? FileManager.default.removeItem(at: directory) }
     }
+    /// Activate only after the final selected path is proved. The services
+    /// remain owned by this native instance and are closed with it.
+    func activatePerformance() throws {
+        ownershipLock.lock()
+        let owned = server, generation = ownershipGeneration
+        ownershipLock.unlock()
+        guard let owned else { throw error("Native performance owner is missing") }
+        var failure: NSError?
+        let count = LibboxRouterStartPerformance(owned, &failure)
+        if let failure { throw failure }
+        guard count > 0 else { return }
+        let watcher = PerformanceWatch(owner: self, server: owned, generation: generation)
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(500))
+        timer.setEventHandler { watcher.check() }
+        ownershipLock.lock()
+        let current = ownershipGeneration == generation && server === owned
+        if current { performanceHealth?.cancel(); performanceHealth = timer; timer.resume() }
+        ownershipLock.unlock()
+        if !current { timer.setEventHandler {}; timer.resume(); timer.cancel(); LibboxRouterInvalidatePerformance(owned); throw error("Native performance activation became stale") }
+    }
+    private final class PerformanceWatch: @unchecked Sendable {
+        private weak var owner: RouterVPNLibboxEngine?
+        private let server: LibboxCommandServer
+        private let generation: UUID
+        init(owner: RouterVPNLibboxEngine, server: LibboxCommandServer, generation: UUID) { self.owner = owner; self.server = server; self.generation = generation }
+        func check() {
+            guard let owner else { return }
+            owner.ownershipLock.lock()
+            let current = owner.server === server && owner.ownershipGeneration == generation
+            owner.ownershipLock.unlock()
+            guard current else { return }
+            let failure = LibboxRouterPerformanceFailure(server)
+            guard failure == nil || failure != "" else { return }
+            owner.ownershipLock.lock()
+            let stillCurrent = owner.server === server && owner.ownershipGeneration == generation
+            owner.ownershipLock.unlock()
+            if stillCurrent { owner.tunnel?.cancelTunnelWithError(owner.error("Requested padding stopped or its private path changed.")) }
+        }
+    }
+
     func completeMultihopExecution(_ completion: @escaping (Error?) -> Void) {
         ownershipLock.lock()
         let capturedPlan = multihop, capturedServer = server, generation = ownershipGeneration
@@ -221,11 +265,13 @@ final class RouterVPNLibboxEngine {
         return data.count <= 16384 ? data : nil
     }
     func invalidateMultihop() {
-        ownershipLock.lock(); let plan = multihop, probe = hopMeasurement; ownershipLock.unlock()
+        ownershipLock.lock(); let plan = multihop, probe = hopMeasurement, owned = server; ownershipLock.unlock()
+        if let owned { LibboxRouterInvalidatePerformance(owned) }
         probe?.networkChanged(); plan?.networkChanged()
     }
     func pause() {
         ownershipLock.lock(); let plan = multihop, owned = server, probe = hopMeasurement; ownershipLock.unlock()
+        if let owned { LibboxRouterInvalidatePerformance(owned) }
         probe?.networkChanged(); plan?.networkChanged(); owned?.pause()
     }
     func wake() { ownershipLock.lock(); let owned = server; ownershipLock.unlock(); owned?.wake() }
@@ -236,7 +282,7 @@ final class RouterVPNLibboxEngine {
     }
     private func closeService() throws { ownershipLock.lock(); let owned = server; ownershipLock.unlock(); try owned?.closeService() }
     private func reloadService() throws {
-        ownershipLock.lock(); let comparing = multihop != nil || hopMeasurement != nil; ownershipLock.unlock()
+        ownershipLock.lock(); let comparing = multihop != nil || hopMeasurement != nil || performanceHealth != nil; ownershipLock.unlock()
         guard !comparing else { throw error("Multihop reload requires a fresh owned comparison") }
         try startService()
     }

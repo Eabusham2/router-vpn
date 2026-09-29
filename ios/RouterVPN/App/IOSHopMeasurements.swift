@@ -19,7 +19,9 @@ struct IOSHopMeasurementResult: Decodable {
         let max_ms: Double
         let jitter_ms: Double
         var valid: Bool {
-            (1...24).contains(samples) && [min_ms, median_ms, average_ms, p90_ms, max_ms, jitter_ms].allSatisfy { $0.isFinite && $0 >= 0 }
+            guard (1...24).contains(samples) else { return false }
+            let values: [Double] = [min_ms, median_ms, average_ms, p90_ms, max_ms, jitter_ms]
+            return values.allSatisfy { $0.isFinite && $0 >= 0 }
         }
     }
     struct Transfer: Decodable {
@@ -30,8 +32,11 @@ struct IOSHopMeasurementResult: Decodable {
         let loaded_reason: String?
         let bufferbloat_ms: Double?
         var valid: Bool {
-            (65536...8388608).contains(bytes) && seconds.isFinite && seconds > 0 && mbps.isFinite && mbps > 0 &&
-            abs(Double(bytes) * 8 / seconds / 1_000_000 - mbps) <= max(0.000001, mbps * 0.000001)
+            guard (Int64(65536)...Int64(8388608)).contains(bytes), seconds.isFinite,
+                  seconds > 0, mbps.isFinite, mbps > 0 else { return false }
+            let calculated: Double = Double(bytes) * 8.0 / seconds / 1_000_000.0
+            let tolerance: Double = max(0.000001, mbps * 0.000001)
+            return abs(calculated - mbps) <= tolerance
         }
     }
     let node_id: String

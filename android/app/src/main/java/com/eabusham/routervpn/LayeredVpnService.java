@@ -73,7 +73,18 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Object lock = new Object();
-    private CommandServer commandServer;
+    private volatile CommandServer commandServer;
+    private volatile boolean performanceActive;
+    private final Runnable performanceWatch = new Runnable() { public void run() {
+        CommandServer owned = commandServer;
+        if (!performanceActive || owned == null || !"UP".equals(state)) return;
+        String failure = Libbox.routerPerformanceFailure(owned);
+        if (failure == null || !failure.isEmpty()) {
+            executor.execute(() -> { if (commandServer == owned && performanceActive) shutdown("FAILED", "Requested padding stopped or its private path changed."); });
+            return;
+        }
+        executionHandler.postDelayed(this, 500);
+    }};
     private volatile io.nekohasekai.libbox.RouterMultihop executionController;
     private volatile io.nekohasekai.libbox.RouterHopMeasurement hopMeasurement;
     private static volatile java.lang.ref.WeakReference<LayeredVpnService> currentService=new java.lang.ref.WeakReference<>(null);
@@ -95,7 +106,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             return response;
         }
     }
-    private void cancelMultihopComparison(){io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
+    private void cancelMultihopComparison(){CommandServer owned=commandServer;if(owned!=null)Libbox.routerInvalidatePerformance(owned);io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
     private String executionNetworkIdentity(){
         java.util.ArrayList<String> values=new java.util.ArrayList<>();
         try{for(Network network:connectivity.getAllNetworks()){
@@ -235,10 +246,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 synchronized(lock){hopMeasurement=Libbox.newRouterHopMeasurement(ownedServer,hopMetadata);}
                 executionHandler.removeCallbacks(executionWatch);executionHandler.post(executionWatch);
             }
+            long performanceServices = Libbox.routerStartPerformance(ownedServer);
             synchronized(lock){
                 if(explicitStop||commandServer!=ownedServer||executionController!=ownedExecution)throw new IllegalStateException("VPN ownership changed during multihop comparison.");
+                performanceActive = performanceServices > 0;
                 executionProved=true;publish("UP",modeId,"");
             }
+            if (performanceActive) executionHandler.post(performanceWatch);
             updateForeground("Layered VPN active: " + modeId);
         } catch (RevokedException revoked) {
             Log.w(TAG, revoked.getMessage());
@@ -298,6 +312,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     private void closeCoreLocked() {
+        performanceActive = false;
+        executionHandler.removeCallbacks(performanceWatch);
+        if (commandServer != null) Libbox.routerInvalidatePerformance(commandServer);
         executionHandler.removeCallbacks(executionWatch);
         if(hopMeasurement!=null){try{hopMeasurement.close();}catch(Exception error){Log.w(TAG,"Hop measurement teardown is pending.");}hopMeasurement=null;}
         if(executionController!=null){

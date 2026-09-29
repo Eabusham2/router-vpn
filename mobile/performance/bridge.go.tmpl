@@ -1,0 +1,97 @@
+package libbox
+
+import (
+	"encoding/json"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobileperf"
+	performance "github.com/sagernet/sing-box/service/routervpnperformance"
+)
+
+func RouterApplyPerformancePolicy(config, profiles string) (string, error) {
+	return mobileperf.Apply(config, profiles)
+}
+func routerPerformanceServices(server *CommandServer) ([]*performance.Service, error) {
+	if server == nil || server.StartedService == nil {
+		return nil, errors.New("native performance owner is not running")
+	}
+	instance := server.StartedService.Instance()
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("native performance instance unavailable")
+	}
+	services := instance.Box().RouterVPNServices()
+	output := []*performance.Service{}
+	for _, service := range services {
+		if service.Type() == mobileperf.CoverType {
+			typed, ok := service.(*performance.Service)
+			if !ok {
+				return nil, errors.New("unowned native cover service")
+			}
+			output = append(output, typed)
+		}
+	}
+	if len(output) > 2 {
+		return nil, errors.New("native cover service budget exceeded")
+	}
+	if instance != server.StartedService.Instance() {
+		return nil, errors.New("native performance instance changed")
+	}
+	return output, nil
+}
+func RouterStartPerformance(server *CommandServer) (int64, error) {
+	if server == nil || server.StartedService == nil {
+		return 0, errors.New("native performance owner missing")
+	}
+	instance := server.StartedService.Instance()
+	services, err := routerPerformanceServices(server)
+	if err != nil {
+		return 0, err
+	}
+	for _, service := range services {
+		if err = service.Activate(); err != nil {
+			for _, owned := range services {
+				owned.InterfaceUpdated(nil)
+			}
+			return 0, err
+		}
+	}
+	if instance == nil || instance != server.StartedService.Instance() {
+		for _, owned := range services {
+			owned.InterfaceUpdated(nil)
+		}
+		return 0, errors.New("native performance activation belongs to a replaced instance")
+	}
+	return int64(len(services)), nil
+}
+func RouterPerformanceFailure(server *CommandServer) string {
+	services, err := routerPerformanceServices(server)
+	if err != nil {
+		return "native performance owner changed"
+	}
+	for _, service := range services {
+		if !service.Healthy() {
+			return "requested private padding stopped or its path changed"
+		}
+	}
+	return ""
+}
+func RouterInvalidatePerformance(server *CommandServer) {
+	services, err := routerPerformanceServices(server)
+	if err != nil {
+		return
+	}
+	for _, service := range services {
+		service.InterfaceUpdated(nil)
+	}
+}
+func RouterPerformanceStatus(server *CommandServer) string {
+	services, err := routerPerformanceServices(server)
+	if err != nil {
+		return `{"active":false,"error":"native performance owner unavailable"}`
+	}
+	statuses := []json.RawMessage{}
+	for _, service := range services {
+		statuses = append(statuses, json.RawMessage(service.StatusJSON()))
+	}
+	result, _ := json.Marshal(map[string]any{"services": statuses})
+	return string(result)
+}

@@ -26,6 +26,8 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var autoRequireObfuscation: Bool
     var mtuPolicy: String
     var manualMTU: Int
+    var daitaEnabled: Bool = false
+    var jumboTUN: Bool = false
     var startupMode: String
     var autoConnect: Bool
     var dnsMode: String
@@ -43,7 +45,7 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case homeLANAccess, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback, startLayer
-        case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect
+        case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect, daitaEnabled, jumboTUN
         case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath
         case multihopEnabled, multihopEntryMode, multihopEntryID, multihopExitID, multihopExitMode, multihopExecution
     }
@@ -63,6 +65,8 @@ private extension IOSConnectionSafePreferences {
         autoRequireObfuscation = try c.decodeIfPresent(Bool.self, forKey: .autoRequireObfuscation) ?? false
         mtuPolicy = try c.decodeIfPresent(String.self, forKey: .mtuPolicy) ?? "auto"
         manualMTU = try c.decodeIfPresent(Int.self, forKey: .manualMTU) ?? 0
+        daitaEnabled = try c.decodeIfPresent(Bool.self, forKey: .daitaEnabled) ?? false
+        jumboTUN = try c.decodeIfPresent(Bool.self, forKey: .jumboTUN) ?? false
         startupMode = try c.decodeIfPresent(String.self, forKey: .startupMode) ?? "smart-auto"
         autoConnect = try c.decodeIfPresent(Bool.self, forKey: .autoConnect) ?? false
         dnsMode = try c.decodeIfPresent(String.self, forKey: .dnsMode) ?? "home"
@@ -181,6 +185,8 @@ private enum IOSConnectionProfileStore {
                 autoRequireObfuscation: selected.autoRequireObfuscation ?? false,
                 mtuPolicy: (selected.mtuPolicy ?? "auto").lowercased(),
                 manualMTU: selected.manualMTU ?? 0,
+                daitaEnabled: selected.daitaEnabled ?? false,
+                jumboTUN: selected.jumboTUN ?? false,
                 startupMode: (selected.startupMode ?? "smart-auto").lowercased(),
                 autoConnect: selected.autoConnect ?? false,
                 dnsMode: (selected.dnsMode ?? "home").lowercased(),
@@ -252,6 +258,8 @@ private enum IOSConnectionProfileStore {
         profile.autoRequireObfuscation = prefs.autoRequireObfuscation
         profile.mtuPolicy = prefs.mtuPolicy
         profile.manualMTU = prefs.manualMTU
+        profile.daitaEnabled = prefs.daitaEnabled
+        profile.jumboTUN = prefs.jumboTUN
         profile.startupMode = prefs.startupMode
         profile.autoConnect = prefs.autoConnect
         profile.dnsMode = prefs.dnsMode

@@ -17,7 +17,7 @@ class Tests(unittest.TestCase):
             source=(ROOT/path).read_text()
             self.assertIn('test ./experimental/libbox/routervpn/...',source)
             self.assertIn('prepare-mobile-multihop.py',source)
-            self.assertIn("-run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia)' -count=1",source)
+            self.assertIn("-run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance)' -count=1",source)
             self.assertNotIn('-run TestRouterMultihop -count=1',source)
 
         bridge=(ROOT/'mobile/routervpn_hop_measurement.go.tmpl').read_text()
@@ -77,6 +77,6 @@ print("Shipping hop renderer: real rates, missing samples and rejected results P
         with tempfile.TemporaryDirectory() as tmp:
             file=Path(tmp)/'main.swift';exe=Path(tmp)/'tests'
             file.write_text('import Foundation\n'+source+test)
-            subprocess.run(['swiftc','-swift-version','6',str(file),'-o',str(exe)],check=True,timeout=60)
+            subprocess.run(['swiftc','-swift-version','6',str(file),'-o',str(exe)],check=True,timeout=120)
             subprocess.run([str(exe)],check=True,timeout=10)
 if __name__=='__main__':unittest.main()

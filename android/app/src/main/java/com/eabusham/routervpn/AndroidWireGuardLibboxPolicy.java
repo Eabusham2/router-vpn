@@ -8,7 +8,7 @@ import io.nekohasekai.libbox.Libbox;
 final class AndroidWireGuardLibboxPolicy {
     static JSONObject apply(JSONObject bundle, JSONObject config) throws Exception {
         JSONObject profile = AndroidProfileSelection.selectedRouterProfile(bundle);
-        for (String key : new String[]{"daita_enabled", "jumbo_tun"}) {
+        for (String key : new String[]{"jumbo_tun"}) {
             if (AndroidNativeProfilePolicy.booleanPolicy(profile, key, false)) {
                 throw new IllegalStateException("Native WireGuard Libbox does not implement " + key + "; no session was started.");
             }

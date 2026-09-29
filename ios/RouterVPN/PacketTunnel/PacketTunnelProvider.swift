@@ -192,6 +192,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard let filtered, !filtered.isEmpty, filtered.utf8.count <= Self.maxProfileBytes else { throw tunnelError(58, "Native multihop LAN policy was not compiled") }
         var finalFiles = mtuFiles
         finalFiles["sing-box.json"] = Data(filtered.utf8)
+        finalFiles = try performanceFiles(finalFiles, entryProfile: entryProfile, exitProfile: exitProfile)
         let strict = strictKillSwitchRequested(selectedProfile) || strictKillSwitchRequested(entryProfile)
         if strict {
             guard let proto = protocolConfiguration as? NETunnelProviderProtocol, proto.includeAllNetworks, proto.enforceRoutes,
@@ -236,8 +237,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(55, "Multihop exit proof belongs to an old runtime.")); return }
                 if let exitError { engine.stop(); self.libboxEngine = nil; completionHandler(exitError); return }
                 guard self.currentPathProofGuard() === comparisonGuard else { engine.stop(); completionHandler(self.tunnelError(57, "Multihop network changed during exit proof.")); return }
-                do { try engine.enableHopMeasurement(metadata: hopMetadata) }
+                do { try engine.activatePerformance(); try engine.enableHopMeasurement(metadata: hopMetadata) }
                 catch { engine.stop(); self.libboxEngine = nil; completionHandler(error); return }
+                guard self.currentPathProofGuard() === comparisonGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Multihop changed during performance activation.")); return }
                 self.enableForwarding(profileData: forwardingProfileData, proofID: exitProofID)
                 completionHandler(nil)
             }
@@ -334,19 +336,34 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             files["sing-box.json"] = Data(protected.utf8)
         }
         guard expectedNodeID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw tunnelError(14, "Layered iOS modes require the imported node's exact node proof id.") }
+        var performanceProfile = selectedProfile
+        performanceProfile["node_proof_id"] = expectedNodeID
+        files = try performanceFiles(files, entryProfile: performanceProfile, exitProfile: performanceProfile)
         let provenNodeID = expectedNodeID
         let proofURL = try selectedProofURL(selectedProfile)
         let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
         do { try engine.start(files: files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(15, "Libbox engine failed to start: \(error.localizedDescription)") }
+        let singlePathGuard = self.armNetworkProofGuard()
         proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 16, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during Libbox proof."])); return }
             guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(42, "A newer iOS Libbox runtime replaced this proof attempt.")); return }
             if let proofError { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(proofError); return }
+            do { try engine.activatePerformance() } catch { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(error); return }
+            guard self.currentPathProofGuard() === singlePathGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Native path changed during performance activation.")); return }
             self.enableForwarding(profileData: forwardingProfileData, proofID: provenNodeID)
-            self.armNetworkProofGuard()
             completionHandler(nil)
         }
+    }
+
+    private func performanceFiles(_ files: [String: Data], entryProfile: [String: Any], exitProfile: [String: Any]) throws -> [String: Data] {
+        guard let source = files["sing-box.json"], let text = String(data: source, encoding: .utf8) else { throw tunnelError(58,"Native performance graph is missing.") }
+        let profiles = try JSONSerialization.data(withJSONObject: ["entry": entryProfile, "exit": exitProfile])
+        var failure: NSError?
+        let compiled: String? = LibboxRouterApplyPerformancePolicy(text, String(decoding: profiles, as: UTF8.self), &failure)
+        if let failure { throw failure }
+        guard let compiled, !compiled.isEmpty, compiled.utf8.count <= Self.maxProfileBytes else { throw tunnelError(58,"Native performance graph is invalid.") }
+        var result = files; result["sing-box.json"] = Data(compiled.utf8); return result
     }
 
     private func startExternalLibbox(selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
