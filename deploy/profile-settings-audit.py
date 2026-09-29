@@ -213,13 +213,16 @@ require(
 )
 ios_settings = require(
     "ios/RouterVPN/App/IOSProfileSettingsView.swift", "Allow home LAN access", "Always / strict",
-    "pinned native Apple AmneziaWG PacketTunnel", "MTU policy", "Fixed / manual", "Jumbo TUN is intentionally not exposed",
+    "pinned native Apple AmneziaWG PacketTunnel", "MTU policy", "Fixed / manual", "Jumbo TUN — compatible proxy paths", "DAITA-like bounded traffic padding", "p.daitaEnabled = daitaEnabled", "p.jumboTUN = jumboTUN",
     "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "autoRequireEncrypted", "autoRequireObfuscation", "model.importBundle",
     "profileMutationBlocked", ".disabled(model.profileMutationBlocked)",
     "guard !model.profileMutationBlocked else", "Disconnect or let the active VPN transition finish before changing profile settings.",
     "Connection profiles", "IOSConnectionProfilesView",
 )
+require("deploy/test_mobile_performance_shipping.py", "test_apple_activates_only_after_path_proof", "test_android_stages_final_policy_after_mtu_and_lan")
+require("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift", "LibboxRouterApplyPerformancePolicy", "engine.activatePerformance()")
+require("ios/RouterVPN/App/IOSConnectionProfilesView.swift", "profile.daitaEnabled = prefs.daitaEnabled", "profile.jumboTUN = prefs.jumboTUN")
 ios_profiles = require(
     "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
     "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "iosConnectionProfilesSchemaVersion = 4", "IOSConnectionProfileEnvelope", "Add", "Load", "Update", "Delete",

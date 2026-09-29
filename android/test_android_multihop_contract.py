@@ -130,7 +130,10 @@ required_ui = [
     "nodes.size() < 2",
     "!node.id.equals(entry.id)",
     "Shadowsocks or Hysteria2",
-    "AWG entry remains gated",
+    "chooseMultihopEntryTransport",
+    "pendingEntryMode",
+    "awg2-fast",
+    "awg2-strong",
     "Multihop normally adds latency",
 ]
 for token in required_ui:
