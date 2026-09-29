@@ -15,7 +15,8 @@ class Shipping(unittest.TestCase):
             with mock.patch.object(PREPARE.WHITENING,'prepare'),mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'):
                 PREPARE.prepare(vendor)
             for source in (ROOT/'internal/mobileperf').glob('*.go'):
-                self.assertEqual(source.read_bytes(),(vendor/'experimental/libbox/routervpn/mobileperf'/source.name).read_bytes())
+                expected=source.read_text().replace('"router-vpn/internal/','"github.com/sagernet/sing-box/experimental/libbox/routervpn/')
+                self.assertEqual(expected,(vendor/'experimental/libbox/routervpn/mobileperf'/source.name).read_text())
         expected=[ROOT/'deploy/prepare-mobile-performance.py',*sorted((ROOT/'mobile/performance').glob('*.tmpl'))]
         for path in expected:self.assertIn(path,PREPARE.inputs())
     def test_mobile_sdk_builds_run_real_worker_and_graph_tests(self):
@@ -27,6 +28,10 @@ class Shipping(unittest.TestCase):
                 self.assertIn(capital+suffix,text)
             line=next(line for line in text.splitlines() if 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance)' in line)
             self.assertIn('with_quic',line)
+            for command in text.splitlines():
+                if 'test ' in command and './experimental/libbox' in command and './experimental/libbox/routervpn' not in command:
+                    self.assertIn('with_quic',command,'every libbox graph test includes the real QUIC transport')
+
         tests=(ROOT/'mobile/performance/service_test.go.tmpl').read_text()
         for marker in ['TestNativePerformanceNoIOUntilExplicitActivation','TestNativePerformanceStopsOnReplacementAndNetworkChange','TestNativePerformanceCannotUsePlaintextOrWrongNode','TestNativePerformanceDestinationCannotBeReplaced']:
             self.assertIn(marker,tests)
