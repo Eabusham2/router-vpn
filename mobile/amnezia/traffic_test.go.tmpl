@@ -396,7 +396,10 @@ func checksum(raw []byte) uint16 {
 }
 func TestActualAmneziaWGRawIPv4IPv6ICMPAndReturnOwnership(t *testing.T) {
 	pair := newActualPair(t, nil)
-	if err := exchange(t, pair, "udp", "10.78.0.1"); err != nil {
+	// UDP has no stream retransmission and the first cold datagram can race
+	// native stack/handshake readiness. Prove the same UDP path with bounded
+	// retransmits; do not turn a single lost setup packet into a fake key error.
+	if err := coldUDPReady(pair); err != nil {
 		t.Fatal(err)
 	}
 	capture := &packetCapture{packets: make(chan []byte, 4)}
@@ -522,4 +525,38 @@ func TestAmneziaFirstReadRechecksConfiguredPadding(t *testing.T) {
 	if _, err := tunnel.Read([][]byte{make([]byte, 128)}, make([]int, 1), 16); !errors.Is(err, net.ErrClosed) {
 		t.Fatal("unconfigured close did not cancel the reader")
 	}
+}
+
+// Retain one captured native socket and nonce. This permits real startup loss,
+// not an alternate route, altered credentials, skipped proof or direct retry.
+func coldUDPReady(pair *actualPair) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	conn, err := pair.client.DialContext(ctx, "udp", M.ParseSocksaddr("10.78.0.1:9999"))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	nonce := make([]byte, 64)
+	if _, err = rand.Read(nonce); err != nil {
+		return err
+	}
+	response := make([]byte, 65)
+	for attempts := 0; attempts < 24 && ctx.Err() == nil; attempts++ {
+		_ = conn.SetDeadline(time.Now().Add(300 * time.Millisecond))
+		if _, err = conn.Write(nonce); err != nil {
+			return err
+		}
+		n, readErr := conn.Read(response)
+		if readErr == nil {
+			if n != len(nonce) || !bytes.Equal(response[:n], nonce) {
+				return errors.New("cold UDP reply mismatch")
+			}
+			return nil
+		}
+		if timeout, ok := readErr.(net.Error); !ok || !timeout.Timeout() {
+			return readErr
+		}
+	}
+	return errors.New("native cold UDP did not prove its captured encrypted path within the bounded handshake budget")
 }
