@@ -125,6 +125,23 @@ let ss = try files(["inbounds":[["type":"tun","mtu":1280]],"endpoints":[["type":
 let ssPatched = try graphRoot(P.multihop(ss,entryProfile:fixed(1440),exitProfile:fixed(1400)))
 try check("proxy exit preserves separate entry MTU", (ssPatched["endpoints"] as! [[String:Any]])[0]["mtu"] as? Int == 1440)
 try check("proxy exit applies OS MTU", (ssPatched["inbounds"] as! [[String:Any]])[0]["mtu"] as? Int == 1400)
+// Native AWG must receive fixed policy on its userspace endpoint as well.
+var awgRoot = root
+var awgEndpoints = awgRoot["endpoints"] as! [[String:Any]]
+awgEndpoints[0]["type"] = "routervpn-amneziawg"
+awgEndpoints[0]["amnezia"] = ["s4":"32"]
+awgRoot["endpoints"] = awgEndpoints
+let awgFixed = try graphRoot(P.libbox(files(awgRoot),profile:fixed(1380)))
+let awgFixedEP = (awgFixed["endpoints"] as! [[String:Any]])[0]
+try check("native AWG fixed MTU applied to owned stack", awgFixedEP["mtu"] as? Int == 1380)
+try check("MTU does not discard AWG parameters", awgFixedEP["amnezia"] as? [String:String] == ["s4":"32"])
+var awgNested = try graphRoot(nested())
+var awgHops = awgNested["endpoints"] as! [[String:Any]]
+awgHops[0]["type"] = "routervpn-amneziawg"; awgHops[0]["amnezia"] = ["s4":"32"]
+awgNested["endpoints"] = awgHops
+try checkHops("native AWG entry fixed policy", P.multihop(files(awgNested),entryProfile:fixed(1500),exitProfile:fixed(1400)),outer:1500,inner:1400,tun:1400)
+try checkHops("native AWG entry default envelope", P.multihop(files(awgNested),entryProfile:[:],exitProfile:[:]),outer:1420,inner:1360,tun:1280)
+reject("native AWG does not bypass nested size constraints") { _ = try P.multihop(files(awgNested),entryProfile:fixed(1280),exitProfile:[:]) }
 print("iOS fixed-MTU executable policy: PASS (\(checks) checks)")
 '''
 

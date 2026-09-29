@@ -77,7 +77,7 @@ enum RouterVPNMTUPolicy {
         // A native WireGuard endpoint has its own userspace TUN. Keep a fixed
         // manual policy consistent there instead of only changing the OS TUN.
         if var endpoints = root["endpoints"] as? [[String: Any]] {
-            for i in endpoints.indices where endpoints[i]["type"] as? String == "wireguard" { endpoints[i]["mtu"] = mtu }
+            for i in endpoints.indices where ["wireguard", "routervpn-amneziawg"].contains(endpoints[i]["type"] as? String ?? "") { endpoints[i]["mtu"] = mtu }
             root["endpoints"] = endpoints
         }
         var output = files
@@ -103,7 +103,7 @@ enum RouterVPNMTUPolicy {
         let exit = endpoints.indices.filter { endpoints[$0]["tag"] as? String == "proxy" }
         guard tun.count == 1, entry.count == 1, exit.count <= 1,
               endpoints.count == entry.count + exit.count,
-              endpoints.allSatisfy({ $0["type"] as? String == "wireguard" }) else {
+              endpoints.allSatisfy({ ["wireguard", "routervpn-amneziawg"].contains($0["type"] as? String ?? "") }) else {
             throw issue("Multihop MTU ownership is ambiguous; no hop policy was replaced.")
         }
         let tunIndex = tun[0], entryIndex = entry[0]

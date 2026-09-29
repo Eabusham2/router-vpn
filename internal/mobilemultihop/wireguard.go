@@ -39,6 +39,10 @@ func WireGuardExitConfig(config, expectedNodeID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return nativeExitConfig(profile)
+}
+
+func nativeExitConfig(profile wireGuardProfile) (string, error) {
 	if len(profile.DNS) != 1 {
 		return "", errors.New("WireGuard exit requires one literal selected DNS resolver")
 	}

@@ -10,7 +10,7 @@ class Shipping(unittest.TestCase):
     def test_compiler_and_bridge_are_copied_byte_exactly(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/'go.mod').write_text('module github.com/sagernet/sing-box\n')
-            with mock.patch.object(PREPARE.WHITENING,'prepare'):
+            with mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.AMNEZIA,'prepare'):
                 PREPARE.prepare(root)
             native=root/'experimental/libbox/routervpn/nativesip003'
             for source in (ROOT/'internal/nativesip003').glob('*.go'):
@@ -29,7 +29,7 @@ class Shipping(unittest.TestCase):
         self.assertLess(listing.index('compileStandaloneProfile'),listing.index('isDirectFullDeviceConfig'))
         setup=source[source.index('SessionInfo prepareSession'):source.index('private static String compileStandaloneProfile')]
         compiler=source[source.index('private static String compileStandaloneProfile'):source.index('private static String strictUTF8')]
-        self.assertIn('if (!"wg".equals(modeId)) return compileNativeSIP003(profile, modeId, strictUTF8(raw));',compiler)
+        self.assertIn('if (!nativeWireGuardFamily(modeId)) return compileNativeSIP003(profile, modeId, strictUTF8(raw));',compiler)
         self.assertIn('Libbox.routerWireGuardExitConfig',compiler)
         self.assertLess(setup.index('compileStandaloneProfile'),setup.index('isDirectFullDeviceConfig'))
         self.assertLess(setup.index('applySelectedDns'),setup.rindex('compileNativeSIP003'))

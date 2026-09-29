@@ -36,6 +36,7 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var dnsPath: String
     var multihopEnabled: Bool = false
     var multihopEntryID: String? = nil
+    var multihopEntryMode: String? = nil
     var multihopExitID: String? = nil
     var multihopExitMode: String? = nil
     var multihopExecution: String? = nil
@@ -44,7 +45,7 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
         case homeLANAccess, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback, startLayer
         case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect
         case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath
-        case multihopEnabled, multihopEntryID, multihopExitID, multihopExitMode, multihopExecution
+        case multihopEnabled, multihopEntryMode, multihopEntryID, multihopExitID, multihopExitMode, multihopExecution
     }
 }
 
@@ -72,6 +73,8 @@ private extension IOSConnectionSafePreferences {
         dnsPath = try c.decodeIfPresent(String.self, forKey: .dnsPath) ?? ""
         multihopEnabled = try c.decodeIfPresent(Bool.self, forKey: .multihopEnabled) ?? false
         multihopEntryID = try c.decodeIfPresent(String.self, forKey: .multihopEntryID)
+        multihopEntryMode = try c.decodeIfPresent(String.self, forKey: .multihopEntryMode)
+        guard ["wg","awg2-fast","awg2-strong"].contains(multihopEntryMode ?? "wg") else { throw DecodingError.dataCorruptedError(forKey: .multihopEntryMode, in: c, debugDescription:"Unknown multihop entry transport") }
         multihopExitID = try c.decodeIfPresent(String.self, forKey: .multihopExitID)
         multihopExitMode = try c.decodeIfPresent(String.self, forKey: .multihopExitMode)
         multihopExecution = try c.decodeIfPresent(String.self, forKey: .multihopExecution)
@@ -188,6 +191,7 @@ private enum IOSConnectionProfileStore {
                 dnsPath: selected.dnsPath ?? "",
                 multihopEnabled: selected.multihopEnabled ?? false,
                 multihopEntryID: selected.multihopEntryID,
+                multihopEntryMode: selected.multihopEntryMode,
                 multihopExitID: selected.multihopExitID,
                 multihopExitMode: selected.multihopExitMode,
                 multihopExecution: selected.multihopExecution
@@ -258,6 +262,7 @@ private enum IOSConnectionProfileStore {
         profile.dnsPath = prefs.dnsPath
         profile.multihopEnabled = prefs.multihopEnabled
         profile.multihopEntryID = prefs.multihopEntryID
+        profile.multihopEntryMode = prefs.multihopEntryMode ?? "wg"
         profile.multihopExitID = prefs.multihopExitID
         profile.multihopExitMode = prefs.multihopExitMode
         profile.multihopExecution = prefs.multihopExecution ?? "local"

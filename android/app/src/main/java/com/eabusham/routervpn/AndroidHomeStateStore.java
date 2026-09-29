@@ -13,7 +13,7 @@ final class AndroidHomeStateStore {
 
     static final class Snapshot {
         final String sessionId, phase, logicalMode, runtimeMode, actualBase, fallback, warning, pathProof;
-        final String activeNodeId, activeEntryId, activeExitId;
+        final String activeNodeId, activeEntryId, activeExitId, activeEntryMode;
         final String activeExternalId, activeExternalName, activeExternalProtocol, expectedExternalIp;
         final long pathGeneration;
         final boolean connected;
@@ -28,6 +28,7 @@ final class AndroidHomeStateStore {
             pathProof = p.getString("path_proof", connectedValue(p) ? "passed" : "not-run");
             activeNodeId = p.getString("active_node_id", "");
             activeEntryId = p.getString("active_entry_id", "");
+            activeEntryMode = p.getString("active_entry_mode", "wg");
             activeExitId = p.getString("active_exit_id", "");
             activeExternalId = p.getString("active_external_id", "");
             activeExternalName = p.getString("active_external_name", "");
@@ -51,9 +52,13 @@ final class AndroidHomeStateStore {
     }
 
     static String beginMultihop(Context context, String entryId, String exitId, String runtimeMode) {
+        return beginMultihop(context,entryId,exitId,runtimeMode,"wg");
+    }
+    static String beginMultihop(Context context, String entryId, String exitId, String runtimeMode, String entryMode) {
+        if (!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(entryMode)) throw new IllegalArgumentException("Invalid live entry transport.");
         String session = UUID.randomUUID().toString();
-        SharedPreferences.Editor e = clearExternal(baseSession(context, session, "multihop", runtimeMode, "wg"));
-        e.putString("active_node_id", clean(exitId)).putString("active_entry_id", clean(entryId)).putString("active_exit_id", clean(exitId)).apply();
+        SharedPreferences.Editor e = clearExternal(baseSession(context, session, "multihop", runtimeMode, entryMode.equals("wg") ? "wg" : "awg"));
+        e.putString("active_node_id", clean(exitId)).putString("active_entry_id", clean(entryId)).putString("active_entry_mode",entryMode).putString("active_exit_id", clean(exitId)).apply();
         return session;
     }
 
@@ -72,9 +77,13 @@ final class AndroidHomeStateStore {
     }
 
     static void connectedMultihop(Context context, String entryId, String exitId, String runtimeMode) {
+        connectedMultihop(context,entryId,exitId,runtimeMode,"wg");
+    }
+    static void connectedMultihop(Context context, String entryId, String exitId, String runtimeMode, String entryMode) {
+        if (!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(entryMode)) throw new IllegalArgumentException("Invalid live entry transport.");
         SharedPreferences p = prefs(context); String session = existingOrNewSession(p);
         SharedPreferences.Editor e = clearExternal(p.edit());
-        e.putString("session_id", session).putString("phase", "connected").putString("logical_mode", "multihop").putString("runtime_mode", clean(runtimeMode)).putString("actual_base", "wg").putString("active_node_id", clean(exitId)).putString("fallback", "").putString("warning", "").putString("path_proof", "passed").putString("active_entry_id", clean(entryId)).putString("active_exit_id", clean(exitId)).putBoolean("connected", true).apply();
+        e.putString("session_id", session).putString("phase", "connected").putString("logical_mode", "multihop").putString("runtime_mode", clean(runtimeMode)).putString("actual_base", entryMode.equals("wg") ? "wg" : "awg").putString("active_node_id", clean(exitId)).putString("fallback", "").putString("warning", "").putString("path_proof", "passed").putString("active_entry_id", clean(entryId)).putString("active_entry_mode",entryMode).putString("active_exit_id", clean(exitId)).putBoolean("connected", true).apply();
     }
 
     static void connectedExternal(Context context, String externalId, String name, String protocol, String expectedIp, String base, String observedIp) {
@@ -177,7 +186,7 @@ final class AndroidHomeStateStore {
 
     private static SharedPreferences.Editor baseSession(Context context,String session,String logical,String runtime,String base){SharedPreferences p=prefs(context);long generation=p.getLong("path_generation",0L)+1L;return p.edit().putString("session_id",session).putString("phase","connecting").putString("logical_mode",clean(logical)).putString("runtime_mode",clean(runtime)).putString("actual_base",clean(base)).putString("fallback","").putString("warning","").putString("path_proof","pending").putBoolean("connected",false).putLong("path_generation",generation).remove("actual_exit_ip").remove("actual_exit_session");}
     private static String existingOrNewSession(SharedPreferences p){String session=p.getString("session_id","");return session==null||session.isEmpty()?UUID.randomUUID().toString():session;}
-    private static SharedPreferences.Editor clearRouterGraph(SharedPreferences.Editor e){return e.remove("active_node_id").remove("active_entry_id").remove("active_exit_id");}
+    private static SharedPreferences.Editor clearRouterGraph(SharedPreferences.Editor e){return e.remove("active_node_id").remove("active_entry_id").remove("active_entry_mode").remove("active_exit_id");}
     private static SharedPreferences.Editor clearExternal(SharedPreferences.Editor e){return e.remove("active_external_id").remove("active_external_name").remove("active_external_protocol").remove("expected_external_ip");}
     private static SharedPreferences.Editor clearGraphAndExternal(SharedPreferences.Editor e){return clearExternal(clearRouterGraph(e));}
     private static SharedPreferences.Editor clearAllIdentity(SharedPreferences.Editor e){return clearGraphAndExternal(e).remove("actual_exit_ip").remove("actual_exit_session");}

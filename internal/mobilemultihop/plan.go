@@ -47,6 +47,7 @@ type Metadata struct {
 	EntryToken  string `json:"entry_token"`
 	ExitToken   string `json:"exit_token"`
 	EntryTag    string `json:"entry_tag"`
+	EntryMode   string `json:"entry_mode,omitempty"`
 	ExitMode    string `json:"exit_mode"`
 	Execution   string `json:"execution"`
 }
@@ -183,6 +184,12 @@ func New(config, metadata string) (*Controller, error) {
 	if meta.EntryTag != "entry-wg" && meta.EntryTag != "routervpn-hop-entry" {
 		return nil, errors.New("unowned entry endpoint")
 	}
+	if meta.EntryMode == "" {
+		meta.EntryMode = "wg"
+	}
+	if meta.EntryMode != "wg" && meta.EntryMode != "awg2-fast" && meta.EntryMode != "awg2-strong" {
+		return nil, errors.New("unimplemented entry transport")
+	}
 	if meta.ExitMode != "wg" && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" {
 		return nil, errors.New("unimplemented exit transport")
 	}
@@ -227,8 +234,21 @@ func New(config, metadata string) (*Controller, error) {
 			}
 			if value["tag"] == meta.EntryTag {
 				entryCount++
-				if value["type"] != "wireguard" {
-					return nil, errors.New("entry is not a native WireGuard endpoint")
+				expectedEntry := "wireguard"
+				if meta.EntryMode != "wg" {
+					expectedEntry = AmneziaType
+				}
+				if value["type"] != expectedEntry {
+					return nil, errors.New("entry label does not match the owned native endpoint")
+				}
+				if expectedEntry == AmneziaType {
+					raw, err := json.Marshal(value)
+					if err != nil {
+						return nil, err
+					}
+					if _, err = AmneziaRuntimeConfig(string(raw)); err != nil {
+						return nil, err
+					}
 				}
 			}
 			if value["tag"] == "proxy" {

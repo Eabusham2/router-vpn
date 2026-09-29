@@ -31,6 +31,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     private boolean disconnectRequested;
     private boolean revalidationTeardown;
     private String activeEntryId = "";
+    private String activeEntryMode = "";
     private String activeExitId = "";
     private String activeExitMode = "";
 
@@ -57,6 +58,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         return connected;
     }
 
+    synchronized String activeEntryMode() { reconcileRuntimeLocked(); return connected ? activeEntryMode : ""; }
+
     synchronized String activeEntryId() {
         reconcileRuntimeLocked();
         return connected ? activeEntryId : "";
@@ -76,6 +79,10 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         connect(entry, exit, exitMode, "local", callback);
     }
     synchronized void connect(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, Callback callback) {
+        connect(entry,exit,exitMode,execution,"wg",callback);
+    }
+    synchronized void connect(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String entryMode, Callback callback) {
+        if (!NativeSingBoxController.nativeWireGuardFamily(entryMode)) { callback.finished(false,"Choose an exact native entry transport.");return; }
         if(!java.util.Arrays.asList("local","server","auto").contains(execution)){callback.finished(false,"Invalid multihop execution.");return;}
         if (closed.get()) { callback.finished(false, "Android multihop runtime is closed."); return; }
         reconcileRuntimeLocked();
@@ -87,9 +94,9 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         disconnectRequested = false;
         revalidationTeardown = false;
         clearActiveGraphLocked();
-        AndroidHomeStateStore.beginMultihop(context, entry.id, exit.id, exitMode.trim());
+        AndroidHomeStateStore.beginMultihop(context, entry.id, exit.id, exitMode.trim(), entryMode);
         try {
-            active = executor.submit(() -> run(entry, exit, exitMode.trim(), execution, callback));
+            active = executor.submit(() -> run(entry, exit, exitMode.trim(), execution, entryMode, callback));
         } catch (RuntimeException error) {
             transitioning = false;
             AndroidHomeStateStore.failed(context, nonEmpty(error.getMessage(), "Could not start Android multihop worker."));
@@ -97,7 +104,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         }
     }
 
-    private void run(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, Callback callback) {
+    private void run(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String entryMode, Callback callback) {
         boolean started = false;
         synchronized (this) { workerThread = Thread.currentThread(); }
         try {
@@ -106,8 +113,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             }
             String before = singBox.getState();
             if (!terminal(before)) throw new IllegalStateException("Disconnect the current embedded VPN before starting multihop.");
-            callback.progress("Preparing WireGuard entry → " + exitMode + " exit…");
-            AndroidMultihopController.Prepared prepared = builder.prepare(entry.file, exit.file, exitMode, execution);
+            callback.progress("Preparing " + entryMode + " entry → " + exitMode + " exit…");
+            AndroidMultihopController.Prepared prepared = builder.prepare(entry.file, exit.file, exitMode, execution, entryMode);
             if (Thread.currentThread().isInterrupted() || closed.get()) throw new InterruptedException("Multihop start cancelled.");
             callback.progress("Starting one Android VpnService multihop graph…");
             synchronized (this) {
@@ -135,11 +142,12 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 transitioning = false;
                 connected = true;
                 activeEntryId = entry.id;
+                activeEntryMode = entryMode;
                 activeExitId = exit.id;
                 activeExitMode = prepared.exitMode;
-                AndroidHomeStateStore.connectedMultihop(context, entry.id, exit.id, prepared.exitMode);
+                AndroidHomeStateStore.connectedMultihop(context, entry.id, exit.id, prepared.exitMode, entryMode);
             }
-            callback.finished(true, "Connected: " + entry.name + " → " + exit.name + " via WireGuard entry + " + prepared.exitMode + " exit. Exit-node private path proof passed.");
+            callback.finished(true, "Connected: " + entry.name + " → " + exit.name + " via " + entryMode + " entry + " + prepared.exitMode + " exit. Exit-node private path proof passed.");
         } catch (InterruptedException interrupted) {
             boolean stopped = !started || stopEmbeddedAndProve();
             Thread.currentThread().interrupt();
@@ -265,10 +273,11 @@ final class AndroidMultihopRuntime implements AutoCloseable {
 
     private synchronized void restoreFromPersistedState() {
         AndroidHomeStateStore.Snapshot state = AndroidHomeStateStore.snapshot(context);
-        if (state.connected && "multihop".equals(state.logicalMode) && !state.activeEntryId.isEmpty() && !state.activeExitId.isEmpty() && "UP".equals(singBox.getState())) {
+        if (state.connected && "multihop".equals(state.logicalMode) && !state.activeEntryId.isEmpty() && !state.activeExitId.isEmpty() && NativeSingBoxController.nativeWireGuardFamily(state.activeEntryMode) && "UP".equals(singBox.getState())) {
             connected = true;
             transitioning = false;
             activeEntryId = state.activeEntryId;
+            activeEntryMode = state.activeEntryMode;
             activeExitId = state.activeExitId;
             activeExitMode = state.runtimeMode;
         } else if (state.connected && "multihop".equals(state.logicalMode)) {
@@ -316,6 +325,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
 
     private void clearActiveGraphLocked() {
         activeEntryId = "";
+        activeEntryMode = "";
         activeExitId = "";
         activeExitMode = "";
     }

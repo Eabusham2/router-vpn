@@ -33,6 +33,14 @@ for mode in ["wg", "shadowsocks", "hysteria2"] {
     let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self, from: JSONEncoder().encode(candidate))
     try check("saved graph preserves exact exit family \(mode)", copy == candidate && copy.multihopExitMode == mode)
 }
+for mode in ["wg","awg2-fast","awg2-strong"] {
+    var candidate = graph; candidate.multihopEntryMode = mode
+    let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONEncoder().encode(candidate))
+    try check("saved entry mode keeps exact engine variant",copy.multihopEntryMode == mode && copy == candidate)
+}
+var badEntry = try JSONSerialization.jsonObject(with:JSONEncoder().encode(graph)) as! [String:Any]
+badEntry["multihopEntryMode"] = "awg2-pq"
+do { _ = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONSerialization.data(withJSONObject:badEntry));fatalError("unknown entry silently downgraded") } catch { checks += 1 }
 let encoded = try JSONEncoder().encode(graph)
 let restored = try JSONDecoder().decode(IOSConnectionSafePreferences.self, from: encoded)
 try check("all non-secret preferences round trip", restored == graph)

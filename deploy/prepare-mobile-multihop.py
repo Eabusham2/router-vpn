@@ -10,11 +10,14 @@ PACKAGES = ('routechoice', 'multihoprelay', 'mobilemultihop', 'nativesip003', 'h
 _whitening_spec = importlib.util.spec_from_file_location('routervpn_whitening', ROOT/'deploy/prepare-mobile-whitening.py')
 WHITENING = importlib.util.module_from_spec(_whitening_spec)
 _whitening_spec.loader.exec_module(WHITENING)
+_amnezia_spec = importlib.util.spec_from_file_location('routervpn_amnezia', ROOT/'deploy/prepare-mobile-amnezia.py')
+AMNEZIA = importlib.util.module_from_spec(_amnezia_spec)
+_amnezia_spec.loader.exec_module(AMNEZIA)
 def inputs():
     paths = [ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + WHITENING.inputs() + [Path(__file__).resolve()]
+    return paths + WHITENING.inputs() + AMNEZIA.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -43,6 +46,7 @@ def prepare(vendor):
     tests = vendor/'protocol/routervpnsip003test'
     tests.mkdir(parents=True, exist_ok=True)
     (tests/'traffic_test.go').write_bytes((ROOT/'mobile/sip003/traffic_test.go.tmpl').read_bytes())
+    AMNEZIA.prepare(vendor)
     print('Shared multihop source digest:',digest())
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('vendor',type=Path,nargs='?');parser.add_argument('--digest',action='store_true');args=parser.parse_args()

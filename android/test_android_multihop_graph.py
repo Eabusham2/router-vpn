@@ -23,6 +23,8 @@ func main(){
  switch r.Operation{
  case "parse":value,err=mobilemultihop.CompileWireGuardProfile(r.Config,r.Policy)
  case "exit":value,err=mobilemultihop.WireGuardExitConfig(r.Config,r.Policy)
+ case "awg-parse":value,err=mobilemultihop.CompileAmneziaProfile(r.Config,r.Policy)
+ case "awg-exit":value,err=mobilemultihop.AmneziaExitConfig(r.Config,r.Policy)
  case "mtu":value,err=mobilemultihop.ApplyMTUPolicy(r.Config,r.Policy)
  case "lan":value,err=mobilemultihop.ApplyLANPolicy(r.Config,r.Policy)
  default:fmt.Fprintln(os.Stderr,"unknown test operation");os.Exit(2)
@@ -86,6 +88,8 @@ public final class Libbox {
  }
  public static String routerCompileWireGuardProfile(String c,String p)throws Exception{return call("parse",c,p);}
  public static String routerWireGuardExitConfig(String c,String p)throws Exception{return call("exit",c,p);}
+ public static String routerCompileAmneziaProfile(String c,String p)throws Exception{return call("awg-parse",c,p);}
+ public static String routerAmneziaExitConfig(String c,String p)throws Exception{return call("awg-exit",c,p);}
  public static String routerApplyMultihopMTUPolicy(String c,String p)throws Exception{return call("mtu",c,p);}
  public static String routerApplyMultihopLANPolicy(String c,String p)throws Exception{return call("lan",c,p);}
  public static String routerCompileSIP003Profile(String a,String b){throw new AssertionError("Unrelated native compiler cannot be substituted");}
@@ -161,6 +165,72 @@ public final class MultihopGraphHarness {
   boolean failed=false;try{nativeWG.prepareSession(file,"wg");}catch(Exception expected){failed=true;}
   check(failed,"invalid single WG policy accepted");check(sessions(app)==count,"invalid single WG left session state");
   check(nativeWG.listDirectLibboxModes(file).stream().noneMatch(m->m.id.equals("wg")),"invalid WG policy advertised as runnable");
+ }
+
+ static JSONObject awgBundle(char ch)throws Exception {
+  JSONObject source=bundle(ch);
+  String options="Jc=3\nJmin=40\nJmax=900\nS1=56\nS2=48\nS3=24\nS4=32\nH1=10000000-19999999\nH2=20000000-29999999\nH3=30000000-39999999\nH4=40000000-49999999\n";
+  String config=wg(ch).replace("[Peer]",options+"[Peer]").replace(key(ch),key((char)(ch+5)));
+  for(String mode:new String[]{"awg2-fast","awg2-strong"}) {
+   String variant=mode.equals("awg2-strong")?config.replace("Jc=3","Jc=6").replace("S4=32","S4=80"):config;
+   source.getJSONObject("profiles").put(mode,new JSONObject().put("awg.conf",Base64.getEncoder().encodeToString(variant.getBytes(StandardCharsets.UTF_8))));
+   source.getJSONArray("modes").put(new JSONObject().put("id",mode).put("name",mode));
+  }
+  return source;
+ }
+ static void awgChecks(Context context,Path dir,Path app)throws Exception {
+  NativeSingBoxController controller=new NativeSingBoxController(context);
+  for(String mode:new String[]{"awg2-fast","awg2-strong"})for(String dnsMode:new String[]{"home","custom","dot","doh","doh3"}) {
+   JSONObject source=awgBundle('b'),policy=profile(source);
+   policy.put("dns_mode",dnsMode).put("dns_host","resolver.example.test").put("dns_protocol","tcp").put("dns_server_name","resolver.example.test")
+     .put("home_lan_access",false).put("ipv6_mode","off").put("kill_switch",true).put("mtu_policy","fixed").put("manual_mtu",1360);
+   File bundleFile=save(dir,source);byte[] original=Files.readAllBytes(bundleFile.toPath());
+   check(controller.listDirectLibboxModes(bundleFile).stream().anyMatch(m->m.id.equals(mode)),"native AWG missing from mode selection");
+   NativeSingBoxController.SessionInfo selected=controller.prepareSession(bundleFile,mode);
+   Path session=app.resolve("layered-sessions").resolve(selected.sessionId);
+   JSONObject config=new JSONObject(Files.readString(session.resolve("sing-box.json")));
+   JSONObject endpoint=config.getJSONArray("endpoints").getJSONObject(0);
+   check(selected.modeId.equals(mode)&&endpoint.getString("type").equals("routervpn-amneziawg"),"AWG variant was relabelled as standard WG");
+   check(config.getJSONArray("endpoints").length()==1&&config.getJSONArray("inbounds").length()==1,"AWG opened a second VPN");
+   check(!Files.exists(session.resolve("awg.conf"))&&Files.exists(session.resolve(AndroidKillSwitchPolicy.SESSION_MARKER)),"AWG staging lost strict ownership");
+   check(endpoint.getJSONObject("amnezia").length()==11,"AWG obfuscation parameters were dropped");
+   check(endpoint.getJSONObject("amnezia").getString("s4").equals(mode.equals("awg2-strong")?"80":"32"),"AWG Strong became Fast");
+   check(endpoint.getJSONArray("peers").getJSONObject(0).getString("public_key").equals(key('g')),"AWG key was replaced with the node's WG identity key");
+   check(endpoint.getInt("mtu")==1360&&config.getJSONArray("inbounds").getJSONObject(0).getInt("mtu")==1360,"AWG MTU policy not applied");
+   JSONArray servers=config.getJSONObject("dns").getJSONArray("servers");String expected=dnsMode.equals("home")?"udp":dnsMode.equals("custom")?"tcp":dnsMode.equals("dot")?"tls":dnsMode.equals("doh")?"https":"h3";
+   check(servers.getJSONObject(servers.length()-1).getString("type").equals(expected),"AWG selected DNS transport was lost");
+   for(int i=0;i<servers.length();i++)check(servers.getJSONObject(i).getString("detour").equals("proxy"),"AWG DNS escaped its encrypted endpoint");
+   check(config.getJSONObject("dns").getString("strategy").equals("ipv4_only"),"AWG IPv6-Off policy lost");
+   check(Arrays.equals(original,Files.readAllBytes(bundleFile.toPath())),"AWG source credentials mutated");
+  }
+  JSONObject invalid=awgBundle('b');String encoded=invalid.getJSONObject("profiles").getJSONObject("awg2-fast").getString("awg.conf");
+  String raw=new String(Base64.getDecoder().decode(encoded),StandardCharsets.UTF_8).replace("S4=32\n","");
+  invalid.getJSONObject("profiles").getJSONObject("awg2-fast").put("awg.conf",Base64.getEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8)));
+  int before=sessions(app);boolean failed=false;
+  try{controller.prepareSession(save(dir,invalid),"awg2-fast");}catch(Exception expected){failed=true;}
+  check(failed&&sessions(app)==before,"incomplete AWG was silently downgraded");
+ }
+
+ static void awgEntryChecks(Context context,Path dir)throws Exception {
+  Path app=Files.createDirectory(dir.resolve("awg-entry-app"));Context isolated=new Context(app.toFile());
+  AndroidMultihopController builder=new AndroidMultihopController(isolated,new NativeSingBoxController(isolated));
+  JSONObject a=awgBundle('a'),b=bundle('b');File entry=save(dir,a),exit=save(dir,b);
+  for(String mode:new String[]{"awg2-fast","awg2-strong"})for(String execution:new String[]{"local","server","auto"}) {
+   AndroidMultihopController.Prepared result=builder.prepare(entry,exit,"wg",execution,mode);
+   Path session=app.resolve("layered-sessions").resolve(result.session.sessionId);
+   JSONObject graph=new JSONObject(Files.readString(session.resolve("sing-box.json")));
+   JSONObject meta=new JSONObject(Files.readString(session.resolve("routervpn-multihop.json")));
+   JSONObject first=graph.getJSONArray("endpoints").getJSONObject(0),last=graph.getJSONArray("endpoints").getJSONObject(1);
+   check(first.getString("type").equals("routervpn-amneziawg")&&last.getString("type").equals("wireguard"),"AWG entry was silently converted to WG");
+   check(last.getString("detour").equals(first.getString("tag")),"exit does not use the AWG entry");
+   check(meta.getString("entry_mode").equals(mode)&&meta.getString("execution").equals(execution),"frozen AWG graph identity lost");
+   check(first.getJSONObject("amnezia").getString("jc").equals(mode.equals("awg2-fast")?"3":"6"),"AWG entry strength silently changed");
+   check(first.getJSONArray("peers").getJSONObject(0).getString("public_key").equals(key('f')),"AWG entry used wrong peer key");
+   check(meta.getString("entry_node_id").equals(a.getString("nodeProofId")),"AWG entry discarded independent node proof");
+   check(graph.getJSONArray("inbounds").length()==3,"AWG entry opened another OS TUN");
+  }
+  boolean failed=false;try{builder.prepare(entry,exit,"wg","local","awg2-pq");}catch(Exception expected){failed=true;}
+  check(failed,"unimplemented AWG PQ mislabeled as Fast");
  }
  static void directChecks(Context context,Path dir,Path app)throws Exception {
   NativeSingBoxController nativeWG=new NativeSingBoxController(context);
@@ -271,6 +341,8 @@ public final class MultihopGraphHarness {
   boolean failed=false;try{NativeSingBoxController.applySelectedDns(bundle('b'),new JSONObject().put("outbounds",new JSONArray().put(new JSONObject().put("type","direct").put("tag","proxy"))));}catch(Exception expected){failed=true;}
   check(failed,"DNS accepted a direct-only proxy tag");
   directChecks(context,dir,app);
+  awgChecks(context,dir,app);
+  awgEntryChecks(context,dir);
   System.out.println("Android shipping single/multihop WG compiler: PASS ("+checks+" checks; real Go policy, Android handles doubled)");
  }
 }

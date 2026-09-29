@@ -13,6 +13,7 @@ final class AndroidSpeedLabController {
     interface Callback { void progress(String message); void finished(AndroidSpeedLab.Result result, Throwable error); }
 
     static final class Request {
+        String entryMode="wg", execution="local";
         String scope="current", topology="router", mode="smart-auto", exitMode="shadowsocks", durationMode="auto";
         AndroidNodeStore.Node node,entry,exit;
         AndroidStandardExitStore.Entry standardExit;
@@ -62,7 +63,7 @@ final class AndroidSpeedLabController {
                     connection.connectNode(request.node,mode,layers,bridge);break;
                 case "multihop":
                     if(request.entry==null||request.exit==null||request.entry.id.equals(request.exit.id)){finish(callback,null,new IllegalArgumentException("Choose different Router VPN entry and exit nodes."));return;}
-                    connection.connectMultihop(request.entry,request.exit,normalize(request.exitMode,"shadowsocks"),bridge);break;
+                    connection.connectMultihop(request.entry,request.exit,normalize(request.exitMode,"shadowsocks"),normalize(request.execution,"local"),normalize(request.entryMode,"wg"),bridge);break;
                 case "external":
                     if(request.standardExit==null){finish(callback,null,new IllegalArgumentException("Choose a stored custom exit."));return;}
                     connection.connectExternal(request.entry,request.standardExit,request.externalDirect,bridge);break;

@@ -69,6 +69,8 @@ public final class MainActivity extends Activity {
     private NativeXrayController.ModeInfo pendingXrayMode;
     private AndroidNodeStore.Node pendingEntryNode, pendingExitNode;
     private String pendingExitMode = "";
+    private String pendingEntryMode = "wg";
+    private String pendingHopExecution = "local";
     private boolean wgBusy, awgBusy, layeredBusy, xrayBusy, automationBusy, multihopBusy, pendingSmart;
     private boolean pendingAll;
     private List<String> pendingCustomLayers;
@@ -183,7 +185,7 @@ public final class MainActivity extends Activity {
         modesView = section("Modes in active bundle", "Not imported");
         c.addView(modesView, margins(0, dp(12), 0, 0));
         c.addView(section("Android capability boundary",
-                "Raw WireGuard and AmneziaWG 2 use embedded userspace backends. Self-contained generated sing-box profiles use pinned libbox, and self-contained Reality/XHTTP profiles use pinned Xray-core v26.7.11 through a dedicated Android VpnService. AUTO/SMART/CUSTOM/ALL require selected-node private path proof. Real Android multihop is currently limited to a standard WireGuard entry plus a different stored node using a self-contained WireGuard, Shadowsocks or Hysteria2 exit; the exit node must pass private path proof before Connected. AWG-entry multihop and composite MAX/mixed sidecar chains remain gated; ALL ranks only real Android-native branches strongest-to-weaker and never relabels a partial MAX sidecar as ALL. Strict embedded libbox/Xray sessions require Android 10+ Always-on plus lockdown/Block connections without VPN; raw strict WG/AWG fail closed. Multihop adds latency by design. Network changes reset/revalidate libbox and native Xray, but final reconnect/leak behavior still needs real-device validation. SOCKS5 remains tunnel/LAN-only; never expose TCP 1080 to WAN."), margins(0, dp(20), 0, dp(20)));
+                "Raw WireGuard and AmneziaWG 2 use embedded userspace backends. Self-contained generated sing-box profiles use pinned libbox, and self-contained Reality/XHTTP profiles use pinned Xray-core v26.7.11 through a dedicated Android VpnService. AUTO/SMART/CUSTOM/ALL require selected-node private path proof. Real Android multihop is currently available with a WireGuard entry plus a different stored node, or a native AmneziaWG Fast/Strong entry, using a self-contained WireGuard, Shadowsocks or Hysteria2 exit; the exit node must pass private path proof before Connected. AWG-entry multihop uses the native pinned endpoint; composite MAX/mixed sidecar chains remain separate; ALL ranks only real Android-native branches strongest-to-weaker and never relabels a partial MAX sidecar as ALL. Strict embedded libbox/Xray sessions require Android 10+ Always-on plus lockdown/Block connections without VPN; raw strict WG/AWG fail closed. Multihop adds latency by design. Network changes reset/revalidate libbox and native Xray, but final reconnect/leak behavior still needs real-device validation. SOCKS5 remains tunnel/LAN-only; never expose TCP 1080 to WAN."), margins(0, dp(20), 0, dp(20)));
 
         ScrollView s = new ScrollView(this);
         s.addView(c);
@@ -578,11 +580,11 @@ public final class MainActivity extends Activity {
         try {
             List<AndroidNodeStore.Node> nodes = nodeStore.list();
             if (nodes.size() < 2) {
-                new AlertDialog.Builder(this).setTitle("Two routers required").setMessage("Add at least two different Router VPN node bundles. Android multihop currently supports standard WireGuard entry → WireGuard/Shadowsocks/Hysteria2 exit.").setPositiveButton("Add router", (d, w) -> openBundlePicker()).setNegativeButton("Cancel", null).show();
+                new AlertDialog.Builder(this).setTitle("Two routers required").setMessage("Add at least two different Router VPN node bundles. Android multihop supports WireGuard or AmneziaWG entry → WireGuard/Shadowsocks/Hysteria2 exit.").setPositiveButton("Add router", (d, w) -> openBundlePicker()).setNegativeButton("Cancel", null).show();
                 return;
             }
             CharSequence[] labels = nodeLabels(nodes, null);
-            new AlertDialog.Builder(this).setTitle("Choose multihop entry node").setMessage("Entry currently must contain standard WireGuard. AWG entry remains gated.").setItems(labels, (d, which) -> chooseMultihopExit(nodes.get(which))).setNegativeButton("Cancel", null).show();
+            new AlertDialog.Builder(this).setTitle("Choose multihop entry node").setMessage("Choose a node with WireGuard or AmneziaWG Fast/Strong. Its exact transport is selected before VPN permission.").setItems(labels, (d, which) -> chooseMultihopExit(nodes.get(which))).setNegativeButton("Cancel", null).show();
         } catch (Exception e) { toast("Multihop node scan failed: " + e.getMessage()); }
     }
 
@@ -605,8 +607,23 @@ public final class MainActivity extends Activity {
             }
             CharSequence[] labels = new CharSequence[modes.size()];
             for (int i = 0; i < modes.size(); i++) labels[i] = modes.get(i).name + " [" + modes.get(i).id + "]";
-            new AlertDialog.Builder(this).setTitle("Choose exit transport").setMessage("Path: " + entry.name + " → " + exit.name + " → Internet. Multihop normally adds latency.").setItems(labels, (d, which) -> requestMultihop(entry, exit, modes.get(which).id)).setNegativeButton("Cancel", null).show();
+            new AlertDialog.Builder(this).setTitle("Choose exit transport").setMessage("Path: " + entry.name + " → " + exit.name + " → Internet. Multihop normally adds latency.").setItems(labels, (d, which) -> chooseMultihopEntryTransport(entry, exit, modes.get(which).id)).setNegativeButton("Cancel", null).show();
         } catch (Exception e) { toast("Exit compatibility check failed: " + e.getMessage()); }
+    }
+
+    private void chooseMultihopEntryTransport(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode) {
+        if (rawActiveOrBusy() || layeredActiveOrBusy()) { toast("Disconnect before changing multihop."); return; }
+        new AlertDialog.Builder(this).setTitle("Choose entry transport")
+                .setItems(new String[]{"WireGuard", "AmneziaWG Fast", "AmneziaWG Strong"}, (dialog, index) -> {
+                    String entryMode = new String[]{"wg", "awg2-fast", "awg2-strong"}[index];
+                    new AlertDialog.Builder(this).setTitle("Choose execution")
+                            .setMessage("Local keeps the exit on this device. Server uses the entry node's pre-provisioned exit. Compare uses both response times and rejects either timeout.")
+                            .setItems(new String[]{"Local", "Server", "Compare both"}, (choice, selected) -> {
+                                pendingEntryMode=entryMode;
+                                pendingHopExecution=new String[]{"local","server","auto"}[selected];
+                                requestMultihop(entry,exit,exitMode);
+                            }).setNegativeButton("Cancel",null).show();
+                }).setNegativeButton("Cancel",null).show();
     }
 
     private void requestMultihop(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String mode) {
@@ -623,13 +640,14 @@ public final class MainActivity extends Activity {
 
     private void startPendingMultihop() {
         AndroidNodeStore.Node entry = pendingEntryNode, exit = pendingExitNode;
-        String mode = pendingExitMode;
+        String mode = pendingExitMode, entryMode = pendingEntryMode, execution = pendingHopExecution;
+        pendingEntryMode = "wg"; pendingHopExecution = "local";
         pendingEntryNode = null; pendingExitNode = null; pendingExitMode = "";
         if (entry == null || exit == null || mode.isEmpty()) return;
         if (rawActiveOrBusy() || layeredActiveOrBusy()) { statusView.setText("Another VPN became active; multihop start cancelled."); refreshNativeState(); return; }
         multihopBusy = true;
         refreshNativeState();
-        multihop.connect(entry, exit, mode, new AndroidMultihopRuntime.Callback() {
+        multihop.connect(entry, exit, mode, execution, entryMode, new AndroidMultihopRuntime.Callback() {
             @Override public void progress(String message) { runOnUiThread(() -> { statusView.setText(message); refreshNativeState(); }); }
             @Override public void finished(boolean ok, String message) { runOnUiThread(() -> { multihopBusy = false; statusView.setText(message); if (!ok) toast(message); refreshNativeState(); }); }
         });

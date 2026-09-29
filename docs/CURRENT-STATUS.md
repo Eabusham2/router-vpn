@@ -240,3 +240,19 @@ non-direct exit, with exact TLS identity and no system resolver fallback.
 Both-node LAN policy is still compiled natively, fixed MTU still changes its
 owned interface, and IPv6-Off retains capture plus TUN-scoped rejection. These
 configuration and lifecycle tests are distinct from physical-device proof.
+
+### Native AmneziaWG entry and policy integration — September 28, 2026
+
+Android and iOS/iPadOS can compose awg2-fast or awg2-strong as the entry in
+one owned Libbox VPN, with WG, Shadowsocks or Hysteria2 exits. The entry choice
+is retained by connection profiles and Speed Lab. Local/Server/Compare keep
+the exact entry. Advanced DNS, LAN and IPv6 policy can also use the native
+single-node AWG endpoint instead of silently substituting standard WireGuard.
+
+The adapter uses the checksum-pinned upstream AmneziaWG implementation and
+retains all eleven generated parameters. Both mobile builds run its actual
+TCP, UDP, IPv4/IPv6, raw ICMP, wrong-key/header and teardown tests. Paired node
+identity is separately proved through the encrypted path. Fixed MTU updates
+both the owned AWG stack and OS TUN. These are automated implementation checks,
+not physical-device validation. Native Tor, remaining helper chains and mobile
+Auto-MTU/Retest/padding/Jumbo remain open until implemented and tested.

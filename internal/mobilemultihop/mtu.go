@@ -54,7 +54,7 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 	}
 	for _, raw := range endpoints {
 		value, ok := raw.(map[string]any)
-		if !ok || value["type"] != "wireguard" {
+		if !ok || value["type"] != "wireguard" && value["type"] != AmneziaType {
 			return "", errors.New("unowned MTU endpoint")
 		}
 		switch value["tag"] {

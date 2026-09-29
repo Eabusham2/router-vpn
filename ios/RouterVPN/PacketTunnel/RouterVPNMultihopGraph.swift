@@ -302,9 +302,9 @@ enum RouterVPNMultihopGraph {
     /// Both hops have independent userspace WG devices. Only the final graph
     /// composer adds the exit detour; imported bind/detour policy is forbidden.
     private static func wireGuardEndpoint(_ value: [String: Any], tag: String) throws -> [String: Any] {
-        let keys: Set<String> = ["type", "tag", "address", "private_key", "peers", "mtu", "system"]
+        let keys: Set<String> = ["type", "tag", "address", "private_key", "peers", "mtu", "system", "amnezia"]
         let peerKeys: Set<String> = ["address", "port", "public_key", "pre_shared_key", "allowed_ips", "persistent_keepalive_interval"]
-        guard Set(value.keys).isSubset(of: keys), value["type"] as? String == "wireguard",
+        guard Set(value.keys).isSubset(of: keys), ["wireguard", "routervpn-amneziawg"].contains(value["type"] as? String ?? ""),
               value["system"] == nil || value["system"] as? Bool == false,
               validKey(value["private_key"]),
               let peers = value["peers"] as? [[String: Any]], peers.count == 1, let peer = peers.first,
@@ -318,6 +318,21 @@ enum RouterVPNMultihopGraph {
               (0...65535).contains(try integer(peer["persistent_keepalive_interval"]) ?? 0) else {
             throw issue("Each WireGuard hop needs one valid, literal-IP, dual-stack full-route peer with no unowned dial policy.")
         }
+        if value["type"] as? String == "routervpn-amneziawg" {
+            guard let parameters = value["amnezia"] as? [String: String], Set(parameters.keys) == Set(["jc","jmin","jmax","s1","s2","s3","s4","h1","h2","h3","h4"]) else { throw issue("Native AWG lost its exact obfuscation parameters.") }
+            for key in ["jc","jmin","jmax","s1","s2","s3","s4"] {
+                guard let text = parameters[key], fullMatch(text,"[0-9]+"), let n = Int(text), (0...(key == "jc" ? 128 : 1280)).contains(n) else { throw issue("Native AWG obfuscation exceeds its bounded policy.") }
+            }
+            guard Int(parameters["jmin"]!)! <= Int(parameters["jmax"]!)!, Int(parameters["s1"]!)! + 148 != Int(parameters["s2"]!)! + 92 else { throw issue("Inconsistent native AWG padding policy.") }
+            var ranges: [ClosedRange<UInt32>] = []
+            for key in ["h1","h2","h3","h4"] {
+                let parts = parameters[key]!.split(separator:"-",omittingEmptySubsequences:false)
+                guard (1...2).contains(parts.count), parts.allSatisfy({ fullMatch(String($0),"[0-9]+") }),
+                      let low = UInt32(parts[0]), let high = UInt32(parts.last!), low > 4, high >= low else { throw issue("Invalid native AWG header range.") }
+                let range = low...high
+                guard !ranges.contains(where: { $0.overlaps(range) }) else { throw issue("Overlapping native AWG header ranges.") }; ranges.append(range)
+            }
+        } else if value["amnezia"] != nil { throw issue("Standard WireGuard cannot discard AWG parameters.") }
         var endpoint = value
         endpoint["tag"] = tag; endpoint["system"] = false
         return endpoint

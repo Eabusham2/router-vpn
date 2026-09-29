@@ -83,7 +83,7 @@ final class NativeSingBoxController {
             try {
                 candidate = compileStandaloneProfile(root, profile, id);
                 if (!isDirectFullDeviceConfig(candidate)) continue;
-                if ("wg".equals(id)) {
+                if (nativeWireGuardFamily(id)) {
                     JSONObject config = new JSONObject(candidate);
                     applySelectedDns(root, config);
                     config = AndroidWireGuardLibboxPolicy.apply(root, config);
@@ -104,7 +104,7 @@ final class NativeSingBoxController {
         JSONObject profile = profiles == null ? null : profiles.optJSONObject(modeId);
         if (profile == null) throw new IllegalStateException("The selected mode has no generated profile.");
         String rawConfigText = compileStandaloneProfile(root, profile, modeId);
-        if ("wg".equals(modeId)) {
+        if (nativeWireGuardFamily(modeId)) {
             // Only the compiled graph is staged. A second WireGuard VPN or
             // unused raw-backend file must never be started implicitly.
             profile = new JSONObject().put("sing-box.json", "native-wireguard-graph");
@@ -112,7 +112,7 @@ final class NativeSingBoxController {
         if (!isDirectFullDeviceConfig(rawConfigText)) throw new IllegalStateException("This mode still depends on another local engine and is not a direct embedded libbox mode.");
         JSONObject patchedConfig = new JSONObject(rawConfigText);
         applySelectedDns(root, patchedConfig);
-        if ("wg".equals(modeId)) patchedConfig = AndroidWireGuardLibboxPolicy.apply(root, patchedConfig);
+        if (nativeWireGuardFamily(modeId)) patchedConfig = AndroidWireGuardLibboxPolicy.apply(root, patchedConfig);
         // Recompile after DNS selection: UDP/DoH3 must use the real Hysteria2
         // leg, not the SS2022 WebSocket/TLS transport restricted to TCP.
         if ("ss-v2ray".equals(modeId)) patchedConfig = new JSONObject(compileNativeSIP003(profile, modeId, patchedConfig.toString()));
@@ -166,24 +166,30 @@ final class NativeSingBoxController {
         }
     }
 
+    static boolean nativeWireGuardFamily(String mode) {
+        return "wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode);
+    }
+
     private static String compileStandaloneProfile(JSONObject bundle, JSONObject profile, String modeId) throws Exception {
-        String asset = "wg".equals(modeId) ? "wg.conf" : "sing-box.json";
-        int maximum = "wg".equals(modeId) ? 1024 * 1024 : MAX_CONFIG;
+        String asset = "wg".equals(modeId) ? "wg.conf" : nativeWireGuardFamily(modeId) ? "awg.conf" : "sing-box.json";
+        int maximum = nativeWireGuardFamily(modeId) ? 1024 * 1024 : MAX_CONFIG;
         String encoded = profile.optString(asset, "");
         if (encoded.isEmpty() || encoded.length() > ((maximum + 2) / 3) * 4) {
             throw new IllegalStateException("The selected native profile is missing or oversized.");
         }
         byte[] raw = Base64.decode(encoded, Base64.DEFAULT);
         if (raw.length == 0 || raw.length > maximum) throw new IllegalStateException("Native profile size is invalid.");
-        if (!"wg".equals(modeId)) return compileNativeSIP003(profile, modeId, strictUTF8(raw));
+        if (!nativeWireGuardFamily(modeId)) return compileNativeSIP003(profile, modeId, strictUTF8(raw));
         JSONArray names = profile.names();
         for (int i = 0; names != null && i < names.length(); i++) {
             String name = names.getString(i);
-            if (!("wg.conf".equals(name) || "stack.json".equals(name))) {
+            if (!(asset.equals(name) || "stack.json".equals(name))) {
                 throw new IllegalStateException("WireGuard profile contains an unowned helper asset.");
             }
         }
-        return Libbox.routerWireGuardExitConfig(strictUTF8(raw), AndroidNodeStore.stableNodeIdentity(bundle));
+        String nodeID = AndroidNodeStore.stableNodeIdentity(bundle);
+        return "wg".equals(modeId) ? Libbox.routerWireGuardExitConfig(strictUTF8(raw), nodeID)
+                : Libbox.routerAmneziaExitConfig(strictUTF8(raw), nodeID);
     }
 
     private static String strictUTF8(byte[] raw) throws Exception {

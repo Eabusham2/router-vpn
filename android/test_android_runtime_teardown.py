@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class NativeSingBoxController {
+    static boolean nativeWireGuardFamily(String mode){return java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode);}
     static final class ModeInfo {}
     static final class SessionInfo {}
     volatile String state = "DOWN", mode = "";
@@ -59,8 +60,8 @@ final class AndroidMultihopController {
     AndroidMultihopController(Context c, NativeSingBoxController s) {}
     List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f) { return Collections.emptyList(); }
     static volatile String lastExecution = "";
-    Prepared prepare(File entry, File exit, String mode) { return prepare(entry,exit,mode,"local"); }
-    Prepared prepare(File entry, File exit, String mode, String execution) {
+    Prepared prepare(File entry, File exit, String mode) { return prepare(entry,exit,mode,"local","wg"); }
+    Prepared prepare(File entry, File exit, String mode, String execution, String entryMode) {
         lastExecution=execution; return new Prepared(exit,mode);
     }
 }
@@ -83,7 +84,7 @@ final class AndroidPathProbe {
 final class AndroidHomeStateStore {
     static final class Snapshot {
         boolean connected;
-        String logicalMode="", phase="off", activeEntryId="", activeExitId="", runtimeMode="";
+        String logicalMode="", phase="off", activeEntryId="", activeExitId="", activeEntryMode="wg", runtimeMode="";
     }
     static volatile Snapshot current = new Snapshot();
     static volatile java.util.concurrent.CountDownLatch connectedEntered, connectedRelease;
@@ -96,12 +97,12 @@ final class AndroidHomeStateStore {
     }
     static Snapshot snapshot(Context c) { return current; }
     static boolean emergencyDisconnectPending(Context c) { return false; }
-    static String beginMultihop(Context c, String entry, String exit, String mode) {
+    static String beginMultihop(Context c, String entry, String exit, String mode, String entryMode) {
         Snapshot s=new Snapshot(); s.logicalMode="multihop"; s.phase="connecting";
-        s.activeEntryId=entry; s.activeExitId=exit; s.runtimeMode=mode; current=s; return "multi-session";
+        s.activeEntryId=entry; s.activeEntryMode=entryMode; s.activeExitId=exit; s.runtimeMode=mode; current=s; return "multi-session";
     }
-    static void connectedMultihop(Context c, String entry, String exit, String mode) {
-        beginMultihop(c,entry,exit,mode); beforeConnectedWrite(); current.connected=true; current.phase="connected";
+    static void connectedMultihop(Context c, String entry, String exit, String mode, String entryMode) {
+        beginMultihop(c,entry,exit,mode,entryMode); beforeConnectedWrite(); current.connected=true; current.phase="connected";
     }
     static void beginExternal(Context c, String id, String name, String protocol, String ip, String base) {
         Snapshot s=new Snapshot();s.logicalMode="external";s.phase="connecting";current=s;

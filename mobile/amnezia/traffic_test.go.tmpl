@@ -1,0 +1,525 @@
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/buf"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This server runs the unmodified pinned AmneziaWG cryptographic backend.
+// Only physical addressing is translated from documentation IPs to loopback.
+// No Router VPN node, public address, real key or OS TUN is contacted/created.
+type referenceBind struct {
+	mu      sync.Mutex
+	c       *net.UDPConn
+	packets atomic.Int64
+	headers sync.Map
+}
+
+func (b *referenceBind) Open(uint16) ([]awgconn.ReceiveFunc, uint16, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.c != nil {
+		return nil, 0, errors.New("reference already open")
+	}
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return nil, 0, err
+	}
+	b.c = c
+	read := func(p [][]byte, s []int, e []awgconn.Endpoint) (int, error) {
+		n, remote, err := c.ReadFromUDPAddrPort(p[0])
+		if err != nil {
+			return 0, err
+		}
+		s[0] = n
+		e[0] = peerEndpoint(remote)
+		b.packets.Add(1)
+		// Generated S1 prepends 56 bytes to the 148-byte initiation. Inspect
+		// its actual header, never a random junk/padding prefix.
+		if n == 56+148 {
+			b.headers.Store(binary.LittleEndian.Uint32(p[0][56:60]), true)
+		}
+		return 1, nil
+	}
+	return []awgconn.ReceiveFunc{read}, uint16(c.LocalAddr().(*net.UDPAddr).Port), nil
+}
+func (b *referenceBind) Close() error {
+	b.mu.Lock()
+	c := b.c
+	b.c = nil
+	b.mu.Unlock()
+	if c != nil {
+		return c.Close()
+	}
+	return nil
+}
+func (b *referenceBind) SetMark(mark uint32) error {
+	if mark != 0 {
+		return errors.New("mark prohibited in test")
+	}
+	return nil
+}
+func (b *referenceBind) Send(packets [][]byte, endpoint awgconn.Endpoint) error {
+	ep, ok := endpoint.(peerEndpoint)
+	if !ok {
+		return errors.New("reference endpoint type")
+	}
+	b.mu.Lock()
+	c := b.c
+	b.mu.Unlock()
+	if c == nil {
+		return net.ErrClosed
+	}
+	for _, p := range packets {
+		if _, err := c.WriteToUDPAddrPort(p, netip.AddrPort(ep)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (b *referenceBind) ParseEndpoint(text string) (awgconn.Endpoint, error) {
+	ep, err := netip.ParseAddrPort(text)
+	if err != nil || !ep.Addr().IsLoopback() {
+		return nil, errors.New("reference peer must be loopback")
+	}
+	return peerEndpoint(ep), nil
+}
+func (b *referenceBind) BatchSize() int { return 1 }
+func (b *referenceBind) address() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.c.LocalAddr().String()
+}
+
+type mappedDialer struct {
+	target netip.AddrPort
+	actual string
+	deny   atomic.Bool
+	calls  atomic.Int64
+}
+
+func (d *mappedDialer) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	d.calls.Add(1)
+	if d.deny.Load() || network != "udp" || address.String() != d.target.String() {
+		return nil, errors.New("unowned dial or forced failure")
+	}
+	return (&net.Dialer{}).DialContext(ctx, "udp4", d.actual)
+}
+func (*mappedDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("no listener allowed")
+}
+
+type echoHandler struct{}
+
+func (echoHandler) JudgeFlow(uint8, netip.AddrPort, netip.AddrPort, []byte) tun.FlowVerdict {
+	return tun.FlowVerdict{Action: tun.ActionAccept}
+}
+func (echoHandler) NewDNSPacket([]byte, M.Socksaddr, M.Socksaddr, N.PacketWriter) {}
+func (echoHandler) NewConnectionEx(_ context.Context, c net.Conn, _, _ M.Socksaddr, done N.CloseHandlerFunc) {
+	go func() {
+		defer c.Close()
+		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+		_, err := io.Copy(c, c)
+		if done != nil {
+			done(err)
+		}
+	}()
+}
+func (echoHandler) NewPacketConnectionEx(_ context.Context, c N.PacketConn, _, _ M.Socksaddr, done N.CloseHandlerFunc) {
+	go func() {
+		defer c.Close()
+		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+		for {
+			p := buf.NewPacket()
+			address, err := c.ReadPacket(p)
+			if err != nil {
+				p.Release()
+				if done != nil {
+					done(err)
+				}
+				return
+			}
+			if err = c.WritePacket(p, address); err != nil {
+				if done != nil {
+					done(err)
+				}
+				return
+			}
+		}
+	}()
+}
+func keys(t *testing.T) (string, string) {
+	t.Helper()
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(key.Bytes()), base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
+}
+func parameters() map[string]string {
+	return map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+}
+
+type actualPair struct {
+	client      *Endpoint
+	reference   *awg.Device
+	binding     *referenceBind
+	dialer      *mappedDialer
+	serverStack *nativeTun
+}
+
+func newActualPair(t *testing.T, mutate func(*Options)) *actualPair {
+	t.Helper()
+	clientKey, clientPublic := keys(t)
+	serverKey, serverPublic := keys(t)
+	psk := make([]byte, 32)
+	_, _ = rand.Read(psk)
+	options := Options{Type: mobilemultihop.AmneziaType, MTU: 1400, Address: []string{"10.78.0.2/24", "fd78:78::2/64"}, PrivateKey: clientKey,
+		Peers: []mobilemultihop.AmneziaPeer{{Address: "192.0.2.1", Port: 51820, PublicKey: serverPublic, PreSharedKey: base64.StdEncoding.EncodeToString(psk), AllowedIPs: []string{"0.0.0.0/0", "::/0"}, Keepalive: 25}}, Parameters: parameters()}
+	logger := log.NewNOPFactory().Logger()
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: context.Background(), Logger: logger, Handler: echoHandler{}, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/24"), netip.MustParsePrefix("fd78:78::1/64")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := wrapTun(stack)
+	bind := &referenceBind{}
+	server := awg.NewDevice(wrapped, bind, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+	var ipc strings.Builder
+	key, _ := base64.StdEncoding.DecodeString(serverKey)
+	pub, _ := base64.StdEncoding.DecodeString(clientPublic)
+	fmt.Fprintf(&ipc, "private_key=%x\n", key)
+	for k, v := range parameters() {
+		fmt.Fprintf(&ipc, "%s=%s\n", k, v)
+	}
+	fmt.Fprintf(&ipc, "public_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", pub, psk)
+	if err = server.IpcSet(ipc.String()); err != nil {
+		server.Close()
+		t.Fatal("reference configuration rejected")
+	}
+	if err = wrapped.configuredPadding(32); err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	if err = server.Up(); err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	if err = wrapped.Device.Start(); err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	dialer := &mappedDialer{target: netip.MustParseAddrPort("192.0.2.1:51820"), actual: bind.address()}
+	if mutate != nil {
+		mutate(&options)
+	}
+	client, err := newEndpoint(context.Background(), nil, logger, "proxy", options, dialer, nil)
+	if err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	pair := &actualPair{client, server, bind, dialer, wrapped}
+	t.Cleanup(func() { _ = client.Close(); server.Close() })
+	if err = client.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	return pair
+}
+func exchange(t *testing.T, pair *actualPair, network, host string) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	c, err := pair.client.DialContext(ctx, network, M.ParseSocksaddr(net.JoinHostPort(host, "9999")))
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+	payload := []byte("real-pinned-AmneziaWG-encrypted-echo")
+	if _, err = c.Write(payload); err != nil {
+		return err
+	}
+	out := make([]byte, len(payload))
+	if _, err = io.ReadFull(c, out); err != nil {
+		return err
+	}
+	if !bytes.Equal(out, payload) {
+		return errors.New("decrypted payload mismatch")
+	}
+	return nil
+}
+func TestActualAmneziaWGEncryptedIPv4IPv6TrafficAndTeardown(t *testing.T) {
+	pair := newActualPair(t, nil)
+	for _, network := range []string{"tcp", "udp"} {
+		for _, host := range []string{"10.78.0.1", "fd78:78::1"} {
+			if err := exchange(t, pair, network, host); err != nil {
+				for role, device := range map[string]*awg.Device{"client": pair.client.device, "server": pair.reference} {
+					status, _ := device.IpcGet()
+					for _, line := range strings.Split(status, "\n") {
+						if strings.HasPrefix(line, "last_handshake_") || strings.HasPrefix(line, "rx_bytes=") || strings.HasPrefix(line, "tx_bytes=") {
+							t.Log(role, line)
+						}
+					}
+				}
+				t.Log("owned physical dials", pair.dialer.calls.Load(), "reference datagrams", pair.binding.packets.Load())
+				t.Fatal(network, host, err)
+			}
+		}
+	}
+	if pair.dialer.calls.Load() != 1 || pair.binding.packets.Load() == 0 {
+		t.Fatal("did not use exactly one protected physical connection")
+	}
+	sawAWG := false
+	pair.binding.headers.Range(func(key, value any) bool {
+		n := key.(uint32)
+		if n >= 10000000 && n <= 49999999 {
+			sawAWG = true
+		}
+		return true
+	})
+	if !sawAWG {
+		t.Fatal("test never observed native AWG header ranges")
+	}
+	if err := pair.client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := exchange(t, pair, "udp", "10.78.0.1"); err == nil {
+		t.Fatal("closed runtime accepted traffic")
+	}
+	if err := pair.client.Start(adapter.StartStateStart); err == nil {
+		t.Fatal("closed runtime restarted")
+	}
+	if pair.dialer.calls.Load() != 1 {
+		t.Fatal("closed runtime created a fallback socket")
+	}
+}
+func TestActualAmneziaWGWrongPSKAndHeaderDoNotPass(t *testing.T) {
+	for _, mode := range []string{"wrong-key", "wrong-header"} {
+		t.Run(mode, func(t *testing.T) {
+			pair := newActualPair(t, func(options *Options) {
+				if mode == "wrong-key" {
+					key := bytes.Repeat([]byte{9}, 32)
+					options.Peers[0].PreSharedKey = base64.StdEncoding.EncodeToString(key)
+				} else {
+					options.Parameters["h1"] = "50000000-59999999"
+				}
+			})
+			if err := exchange(t, pair, "udp", "10.78.0.1"); err == nil {
+				t.Fatal("invalid crypto/transport parameters passed")
+			}
+			if pair.dialer.calls.Load() != 1 {
+				t.Fatal("invalid peer caused an alternate physical dial")
+			}
+		})
+	}
+}
+func TestNativeAmneziaBindRejectsUnownedSockets(t *testing.T) {
+	pair := newActualPair(t, nil)
+	if _, err := pair.client.bind.ParseEndpoint("192.0.2.9:51820"); err == nil {
+		t.Fatal("peer substitution")
+	}
+	if err := pair.client.bind.SetMark(12); err == nil {
+		t.Fatal("unowned routing mark")
+	}
+	if err := pair.client.bind.Send([][]byte{{1}}, peerEndpoint(netip.MustParseAddrPort("192.0.2.9:51820"))); err == nil {
+		t.Fatal("alternate peer send")
+	}
+	pair.dialer.deny.Store(true)
+	pair.client.InterfaceUpdated(context.Background())
+	deadline := time.Now().Add(2 * time.Second)
+	for pair.client.started.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if pair.client.started.Load() {
+		t.Fatal("failed network rebind remained usable")
+	}
+	if err := exchange(t, pair, "udp", "10.78.0.1"); err == nil {
+		t.Fatal("failed rebind fell back")
+	}
+}
+
+// Keep a compile reference to binary key handling without printing key material.
+var _ = hex.EncodeToString
+
+type packetCapture struct{ packets chan []byte }
+
+func (*packetCapture) ReturnHeadroom() int { return 4 }
+func (p *packetCapture) ReturnPackets(packets [][]byte) [][]byte {
+	for _, packet := range packets {
+		if len(packet) >= 4 {
+			select {
+			case p.packets <- append([]byte{}, packet[4:]...):
+			default:
+			}
+		}
+	}
+	return nil
+}
+func checksum(raw []byte) uint16 {
+	sum := uint32(0)
+	for len(raw) > 1 {
+		sum += uint32(binary.BigEndian.Uint16(raw[:2]))
+		raw = raw[2:]
+	}
+	if len(raw) == 1 {
+		sum += uint32(raw[0]) << 8
+	}
+	for sum>>16 != 0 {
+		sum = (sum & 65535) + (sum >> 16)
+	}
+	return ^uint16(sum)
+}
+func TestActualAmneziaWGRawIPv4IPv6ICMPAndReturnOwnership(t *testing.T) {
+	pair := newActualPair(t, nil)
+	if err := exchange(t, pair, "udp", "10.78.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	capture := &packetCapture{packets: make(chan []byte, 4)}
+	if err := pair.client.AttachReturn(capture); err != nil {
+		t.Fatal(err)
+	}
+	if err := pair.client.AttachReturn(&packetCapture{}); err == nil {
+		t.Fatal("return owner replaced")
+	}
+	for _, ipv6 := range []bool{false, true} {
+		payload := []byte("native-raw-packet-not-proxy-only")
+		body := make([]byte, 8+len(payload))
+		body[0] = 8
+		body[4] = 0x41
+		body[6] = 1
+		copy(body[8:], payload)
+		var packet []byte
+		if !ipv6 {
+			binary.BigEndian.PutUint16(body[2:4], checksum(body))
+			packet = make([]byte, 20+len(body))
+			packet[0] = 0x45
+			packet[8] = 64
+			packet[9] = 1
+			copy(packet[12:16], netip.MustParseAddr("10.78.0.2").AsSlice())
+			copy(packet[16:20], netip.MustParseAddr("10.78.0.1").AsSlice())
+			binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
+			binary.BigEndian.PutUint16(packet[10:12], checksum(packet[:20]))
+			copy(packet[20:], body)
+		} else {
+			body[0] = 128
+			packet = make([]byte, 40+len(body))
+			packet[0] = 0x60
+			packet[6] = 58
+			packet[7] = 64
+			binary.BigEndian.PutUint16(packet[4:6], uint16(len(body)))
+			copy(packet[8:24], netip.MustParseAddr("fd78:78::2").AsSlice())
+			copy(packet[24:40], netip.MustParseAddr("fd78:78::1").AsSlice())
+			pseudo := append([]byte{}, packet[8:40]...)
+			pseudo = binary.BigEndian.AppendUint32(pseudo, uint32(len(body)))
+			pseudo = append(pseudo, 0, 0, 0, 58)
+			pseudo = append(pseudo, body...)
+			binary.BigEndian.PutUint16(body[2:4], checksum(pseudo))
+			copy(packet[40:], body)
+		}
+		if err := pair.client.WritePackets([][]byte{packet}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case reply := <-capture.packets:
+			offset, replyType := 20, byte(0)
+			if ipv6 {
+				offset, replyType = 40, 129
+			}
+			if len(reply) != offset+len(body) || reply[offset] != replyType || !bytes.Equal(reply[offset+8:], payload) {
+				t.Fatal("raw native ICMP response mismatch", ipv6)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("raw native ICMP timed out", ipv6)
+		}
+	}
+	if err := pair.client.DetachReturn(capture); err != nil {
+		t.Fatal(err)
+	}
+	var group sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		group.Add(1)
+		go func() { defer group.Done(); _ = pair.client.Close() }()
+	}
+	group.Wait()
+	if err := pair.client.WritePackets([][]byte{make([]byte, 40)}); err == nil {
+		t.Fatal("closed raw tunnel accepted a packet")
+	}
+}
+
+func TestAmneziaFirstReadRechecksConfiguredPadding(t *testing.T) {
+	for _, padding := range []int{0, 32, 80, 1280} {
+		tunnel := &nativeTun{configured: make(chan struct{}), done: make(chan struct{}), output: make(chan []byte, 1)}
+		payload := []byte{0x45, 1, 2, 3}
+		tunnel.output <- payload
+		type result struct {
+			n   int
+			err error
+		}
+		finished := make(chan result, 1)
+		buffer := make([]byte, 2048)
+		sizes := make([]int, 1)
+		go func() { n, err := tunnel.Read([][]byte{buffer}, sizes, 16); finished <- result{n, err} }()
+		select {
+		case <-finished:
+			t.Fatal("packet read before immutable config")
+		case <-time.After(5 * time.Millisecond):
+		}
+		if err := tunnel.configuredPadding(padding); err != nil {
+			t.Fatal(err)
+		}
+		first := <-finished
+		if first.err != nil {
+			t.Fatal(first.err)
+		}
+		if padding == 0 {
+			if first.n != 1 || !bytes.Equal(buffer[16:16+len(payload)], payload) {
+				t.Fatal("zero-padding packet lost")
+			}
+		} else {
+			if first.n != 0 || sizes[0] != 0 {
+				t.Fatal("stale padding consumed a packet")
+			}
+			n, err := tunnel.Read([][]byte{buffer}, sizes, 16+padding)
+			if err != nil || n != 1 || !bytes.Equal(buffer[16+padding:16+padding+len(payload)], payload) {
+				t.Fatal("configured padding did not preserve packet", err)
+			}
+			if _, err = tunnel.Read([][]byte{buffer}, sizes, 16); err == nil {
+				t.Fatal("repeated wrong offset could spin forever")
+			}
+		}
+		if err := tunnel.configuredPadding(padding); err == nil {
+			t.Fatal("running padding policy changed")
+		}
+		close(tunnel.done)
+	}
+	tunnel := &nativeTun{configured: make(chan struct{}), done: make(chan struct{}), output: make(chan []byte, 1)}
+	close(tunnel.done)
+	if _, err := tunnel.Read([][]byte{make([]byte, 128)}, make([]int, 1), 16); !errors.Is(err, net.ErrClosed) {
+		t.Fatal("unconfigured close did not cancel the reader")
+	}
+}

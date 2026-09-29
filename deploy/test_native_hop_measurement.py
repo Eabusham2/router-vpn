@@ -17,6 +17,9 @@ class Tests(unittest.TestCase):
             source=(ROOT/path).read_text()
             self.assertIn('test ./experimental/libbox/routervpn/...',source)
             self.assertIn('prepare-mobile-multihop.py',source)
+            self.assertIn("-run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia)' -count=1",source)
+            self.assertNotIn('-run TestRouterMultihop -count=1',source)
+
         bridge=(ROOT/'mobile/routervpn_hop_measurement.go.tmpl').read_text()
         for marker in ('e.core.Selected()', 'outbound.DialContext(ctx', 'service.Invalidate()', 'hopmeasure.New(engine'):
             self.assertIn(marker,bridge)

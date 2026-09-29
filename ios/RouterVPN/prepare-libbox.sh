@@ -12,6 +12,7 @@ DEPS="$ROOT/.deps"
 VENDOR="$DEPS/sing-box-apple"
 XRAY_VENDOR="$DEPS/xray-core-apple"
 XRAY_LICENSE_OUT="$DEPS/xray-core-LICENSE.txt"
+AMNEZIA_LICENSE_OUT="$DEPS/native-amneziawg-LICENSE.txt"
 FRAMEWORK="$DEPS/Libbox.xcframework"
 STAMP="$DEPS/Libbox.xcframework.pin"
 LICENSE_OUT="$DEPS/libbox-LICENSE.txt"
@@ -26,6 +27,7 @@ EXPECTED_STAMP="$VERSION+$COMMIT+$GO_TOOLCHAIN+$GOMOBILE_VERSION+ios,iossimulato
 
 verify_framework() {
   test -d "$FRAMEWORK"
+  test -s "$AMNEZIA_LICENSE_OUT"
   test -f "$FRAMEWORK/Info.plist"
   /usr/libexec/PlistBuddy -c 'Print :AvailableLibraries' "$FRAMEWORK/Info.plist" >/dev/null
   python3 - "$FRAMEWORK/Info.plist" <<'PY'
@@ -62,6 +64,8 @@ for header in headers:
     assert 'LibboxNewRouterHopMeasurement' in header.read_text(), str(header)
     assert 'LibboxRouterApplyMultihopLANPolicy' in header.read_text(), str(header)
     assert 'LibboxRouterCompileWireGuardProfile' in header.read_text(), str(header)
+    assert 'LibboxRouterCompileAmneziaProfile' in header.read_text(), str(header)
+    assert 'LibboxRouterAmneziaExitConfig' in header.read_text(), str(header)
     assert 'LibboxRouterWireGuardExitConfig' in header.read_text(), str(header)
     assert 'LibboxRouterApplyMultihopMTUPolicy' in header.read_text(), str(header)
     assert 'LibboxRouterCompileXrayProfile' in header.read_text(), str(header)
@@ -140,7 +144,9 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   go test ./experimental/libbox/routervpn/...
-  go test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run TestRouterMultihop -count=1
+  go test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia)' -count=1
+  go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1 -timeout=120s
+  python3 "$ROOT/../../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
   GOFLAGS="-ldflags=-checklinkname=0" go run ./cmd/internal/build_libbox -target apple -platform ios,iossimulator
 )
 SOURCE="$VENDOR/Libbox.xcframework"
@@ -148,6 +154,7 @@ SOURCE="$VENDOR/Libbox.xcframework"
 mv "$SOURCE" "$FRAMEWORK"
 install -m 0644 "$VENDOR/LICENSE" "$LICENSE_OUT"
 install -m 0644 "$XRAY_VENDOR/LICENSE" "$XRAY_LICENSE_OUT"
+install -m 0644 "$VENDOR/routervpn-amnezia-LICENSE.txt" "$AMNEZIA_LICENSE_OUT"
 printf '%s\n' "$EXPECTED_STAMP" > "$STAMP"
 printf '%s\n' "$BRIDGE_SHA" > "$BRIDGE_STAMP"
 verify_framework

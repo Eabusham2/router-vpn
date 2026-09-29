@@ -23,6 +23,8 @@ targets:
         buildPhase: resources
       - path: .deps/xray-core-LICENSE.txt
         buildPhase: resources
+      - path: .deps/native-amneziawg-LICENSE.txt
+        buildPhase: resources
     postBuildScripts:
       - name: Stamp exact source provenance
         basedOnDependencyAnalysis: false

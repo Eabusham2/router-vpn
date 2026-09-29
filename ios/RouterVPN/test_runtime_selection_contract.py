@@ -33,7 +33,7 @@ layered=p[p.index('        var files = try decodeProfile(encoded)'):p.index('   
 assert layered.index('unsupportedHelperAssets.first') < layered.index('return IOSRuntimeSelection(engine: .libbox')
 assert layered.index('usesUnsupportedLoopbackHelper(object)') < layered.index('return IOSRuntimeSelection(engine: .libbox')
 raw=p[p.index('        if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID)'):p.index('        var files = try decodeProfile(encoded)')]
-assert 'rawProfileID == "wg", try IOSDNSRuntimePolicy.requiresWireGuardLibbox(in: bundle)' in raw
+assert 'if try IOSDNSRuntimePolicy.requiresWireGuardLibbox(in: bundle)' in raw
 assert 'files: [asset: data]' in raw
 
 # Keep the source contract tied to the real generated profiles that motivated

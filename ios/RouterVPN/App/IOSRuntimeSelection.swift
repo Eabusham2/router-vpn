@@ -117,7 +117,7 @@ enum IOSRuntimeSelector {
             }
             // Preserve the original WG asset. The PacketTunnel validates its
             // paired peer and compiles DNS-aware WG inside the existing engine.
-            if rawProfileID == "wg", try IOSDNSRuntimePolicy.requiresWireGuardLibbox(in: bundle) {
+            if try IOSDNSRuntimePolicy.requiresWireGuardLibbox(in: bundle) {
                 return IOSRuntimeSelection(engine: .libbox, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [asset: data])
             }
             return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [asset: data])

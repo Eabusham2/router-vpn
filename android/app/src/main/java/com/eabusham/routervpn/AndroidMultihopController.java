@@ -89,6 +89,10 @@ final class AndroidMultihopController {
         return prepare(entryBundle, exitBundle, exitMode, "local");
     }
     Prepared prepare(File entryBundle, File exitBundle, String exitMode, String execution) throws Exception {
+        return prepare(entryBundle, exitBundle, exitMode, execution, "wg");
+    }
+    Prepared prepare(File entryBundle, File exitBundle, String exitMode, String execution, String entryMode) throws Exception {
+        if (!NativeSingBoxController.nativeWireGuardFamily(entryMode)) throw new IllegalArgumentException("Choose the exact native entry transport.");
         if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
         if (entryBundle == null || exitBundle == null) throw new IllegalArgumentException("Choose both an entry and an exit node.");
         if (entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())) throw new IllegalArgumentException("Entry and exit must be different stored nodes.");
@@ -101,8 +105,11 @@ final class AndroidMultihopController {
         if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
         if (entryIdentity.isEmpty() || exitIdentity.isEmpty()) throw new IllegalArgumentException("Both multihop nodes need paired identities.");
         requireOwnedPolicies(entry); requireOwnedPolicies(exit);
-        JSONObject wg = new JSONObject(io.nekohasekai.libbox.Libbox.routerCompileWireGuardProfile(
-                readWireGuardText(entry), entryIdentity)).getJSONObject("endpoint").put("tag", "entry-wg");
+        String entryText = readNativeText(entry, entryMode);
+        String nativeEntry = "wg".equals(entryMode)
+                ? io.nekohasekai.libbox.Libbox.routerCompileWireGuardProfile(entryText, entryIdentity)
+                : io.nekohasekai.libbox.Libbox.routerCompileAmneziaProfile(entryText, entryIdentity);
+        JSONObject wg = new JSONObject(nativeEntry).getJSONObject("endpoint").put("tag", "entry-wg");
         EntryPrivate entryPrivate = parseEntryPrivate(entry);
         JSONObject exitProfile;
         JSONObject config;
@@ -160,7 +167,7 @@ final class AndroidMultihopController {
                 JSONObject a=selectedRouterProfile(entry),b=selectedRouterProfile(exit);
                 if(a==null||b==null)throw new IllegalArgumentException("Both paired node profiles are required.");
                 JSONObject metadata=new JSONObject().put("entry_id",a.getString("id")).put("exit_id",b.getString("id"))
-                    .put("entry_node_id",entryIdentity)
+                    .put("entry_node_id",entryIdentity).put("entry_mode",entryMode)
                     .put("exit_node_id",exitIdentity)
                     .put("entry_api",a.getString("router_api")).put("exit_api",b.getString("router_api"))
                     .put("entry_token",a.getString("api_token")).put("exit_token",b.getString("api_token"))
@@ -318,8 +325,11 @@ final class AndroidMultihopController {
     }
 
     private static String readWireGuardText(JSONObject bundle) throws Exception {
-        JSONObject profile=requiredProfile(bundle,"wg");
-        String encoded=profile.optString("wg.conf", "").trim();
+        return readNativeText(bundle,"wg");
+    }
+    private static String readNativeText(JSONObject bundle, String mode) throws Exception {
+        JSONObject profile=requiredProfile(bundle,mode);
+        String encoded=profile.optString("wg".equals(mode) ? "wg.conf" : "awg.conf", "").trim();
         if (encoded.isEmpty() || encoded.length()>2*1024*1024) throw new IllegalStateException("Node has no bounded standard WireGuard profile.");
         byte[] raw=Base64.decode(encoded,Base64.DEFAULT);
         if(raw.length==0 || raw.length>1024*1024) throw new IllegalStateException("WireGuard profile size is invalid.");

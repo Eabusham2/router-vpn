@@ -1,73 +1,177 @@
 package libbox
 
 import (
- "crypto/ecdh"
- "crypto/sha256"
- "encoding/hex"
- "fmt"
- "encoding/base64"
- "encoding/json"
- "strings"
- "testing"
+	"crypto/ecdh"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
 )
-func TestRouterMultihopNativeSelectorConfig(t *testing.T){
- private,err:=ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("a",32)));if err!=nil{t.Fatal(err)}
- remote,err:=ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("b",32)));if err!=nil{t.Fatal(err)}
- graph:=map[string]any{
-  "inbounds":[]any{map[string]any{"type":"tun","tag":"tun","address":[]string{"172.29.94.1/30"},"auto_route":true,"strict_route":true,"stack":"system","mtu":1280}},
-  "endpoints":[]any{map[string]any{"type":"wireguard","tag":"entry-wg","address":[]string{"10.77.0.2/32"},"private_key":base64.StdEncoding.EncodeToString(private.Bytes()),"peers":[]any{map[string]any{"address":"192.0.2.1","port":51820,"public_key":base64.StdEncoding.EncodeToString(remote.PublicKey().Bytes()),"allowed_ips":[]string{"0.0.0.0/0"}}}}},
-  "outbounds":[]any{map[string]any{"type":"shadowsocks","tag":"proxy","server":"192.0.2.2","server_port":8388,"method":"2022-blake3-aes-128-gcm","password":"AAAAAAAAAAAAAAAAAAAAAA==","detour":"entry-wg"}},
-  "route":map[string]any{"final":"proxy"},
-  "dns":map[string]any{"servers":[]any{map[string]any{"type":"udp","tag":"exit-dns","server":"10.88.0.1","detour":"proxy"}},"final":"exit-dns"},
- }
- metadata:=map[string]string{"entry_id":"entry","exit_id":"exit","entry_node_id":strings.Repeat("a",64),"exit_node_id":strings.Repeat("b",64),"entry_api":"http://10.77.0.1:8787","exit_api":"http://10.88.0.1:8787","entry_token":"fixture-not-secret","exit_token":"fixture-not-secret","entry_tag":"entry-wg","exit_mode":"shadowsocks","execution":"auto"}
- config,_:=json.Marshal(graph);meta,_:=json.Marshal(metadata)
- plan,err:=NewRouterMultihop(string(config),string(meta));if err!=nil{t.Fatal(err)}
- if err=CheckConfig(plan.Config());err!=nil{t.Fatal("pinned native core rejected actual execution graph:",err)}
- profiles,_:=json.Marshal(map[string]any{"entry":map[string]any{"home_lan_access":false,"home_lan_cidrs":[]string{"192.168.50.0/24"}},"exit":map[string]any{"home_lan_access":false,"router_api":"http://10.88.0.1:8787"}})
- protected,err:=RouterApplyMultihopLANPolicy(string(config),string(profiles));if err!=nil{t.Fatal(err)}
- if err=CheckConfig(protected);err!=nil{t.Fatal("native core rejected LAN-Off routes:",err)}
- protectedPlan,err:=NewRouterMultihop(protected,string(meta));if err!=nil{t.Fatal("LAN policy lost multihop compatibility:",err)}
- if err=CheckConfig(protectedPlan.Config());err!=nil{t.Fatal("native selector lost LAN enforcement:",err)}
- if err=plan.Run(nil);err==nil{t.Fatal("missing native instance accepted")}
- if _,err=NewRouterHopMeasurement(nil,string(meta));err==nil{t.Fatal("measurement accepted without a running native instance")}
+
+func TestRouterMultihopNativeSelectorConfig(t *testing.T) {
+	private, err := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("a", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("b", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := map[string]any{
+		"inbounds":  []any{map[string]any{"type": "tun", "tag": "tun", "address": []string{"172.29.94.1/30"}, "auto_route": true, "strict_route": true, "stack": "system", "mtu": 1280}},
+		"endpoints": []any{map[string]any{"type": "wireguard", "tag": "entry-wg", "address": []string{"10.77.0.2/32"}, "private_key": base64.StdEncoding.EncodeToString(private.Bytes()), "peers": []any{map[string]any{"address": "192.0.2.1", "port": 51820, "public_key": base64.StdEncoding.EncodeToString(remote.PublicKey().Bytes()), "allowed_ips": []string{"0.0.0.0/0"}}}}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.2", "server_port": 8388, "method": "2022-blake3-aes-128-gcm", "password": "AAAAAAAAAAAAAAAAAAAAAA==", "detour": "entry-wg"}},
+		"route":     map[string]any{"final": "proxy"},
+		"dns":       map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "exit-dns", "server": "10.88.0.1", "detour": "proxy"}}, "final": "exit-dns"},
+	}
+	metadata := map[string]string{"entry_id": "entry", "exit_id": "exit", "entry_node_id": strings.Repeat("a", 64), "exit_node_id": strings.Repeat("b", 64), "entry_api": "http://10.77.0.1:8787", "exit_api": "http://10.88.0.1:8787", "entry_token": "fixture-not-secret", "exit_token": "fixture-not-secret", "entry_tag": "entry-wg", "exit_mode": "shadowsocks", "execution": "auto"}
+	config, _ := json.Marshal(graph)
+	meta, _ := json.Marshal(metadata)
+	plan, err := NewRouterMultihop(string(config), string(meta))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = CheckConfig(plan.Config()); err != nil {
+		t.Fatal("pinned native core rejected actual execution graph:", err)
+	}
+	profiles, _ := json.Marshal(map[string]any{"entry": map[string]any{"home_lan_access": false, "home_lan_cidrs": []string{"192.168.50.0/24"}}, "exit": map[string]any{"home_lan_access": false, "router_api": "http://10.88.0.1:8787"}})
+	protected, err := RouterApplyMultihopLANPolicy(string(config), string(profiles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = CheckConfig(protected); err != nil {
+		t.Fatal("native core rejected LAN-Off routes:", err)
+	}
+	protectedPlan, err := NewRouterMultihop(protected, string(meta))
+	if err != nil {
+		t.Fatal("LAN policy lost multihop compatibility:", err)
+	}
+	if err = CheckConfig(protectedPlan.Config()); err != nil {
+		t.Fatal("native selector lost LAN enforcement:", err)
+	}
+	if err = plan.Run(nil); err == nil {
+		t.Fatal("missing native instance accepted")
+	}
+	if _, err = NewRouterHopMeasurement(nil, string(meta)); err == nil {
+		t.Fatal("measurement accepted without a running native instance")
+	}
 }
 
 // Validate the actual endpoint schema in the pinned Android and Apple core,
 // not just a Java stub accepting a JSON string.
 func TestRouterNativeWireGuardExitGraph(t *testing.T) {
- makeProfile:=func(clientByte,serverByte byte,host string)(string,string){
-  client,err:=ecdh.X25519().NewPrivateKey([]byte(strings.Repeat(string(clientByte),32)));if err!=nil{t.Fatal(err)}
-  server,err:=ecdh.X25519().NewPrivateKey([]byte(strings.Repeat(string(serverByte),32)));if err!=nil{t.Fatal(err)}
-  key:=base64.StdEncoding.EncodeToString(server.PublicKey().Bytes())
-  proof:=sha256.Sum256([]byte("router-vpn-node-proof-v1\n"+key))
-  config:=fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = 10.77.0.2/24, fd77:77::2/64\nDNS = 10.77.0.1\nMTU = 1420\n[Peer]\nPublicKey = %s\nEndpoint = %s:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n",base64.StdEncoding.EncodeToString(client.Bytes()),key,host)
-  return config,hex.EncodeToString(proof[:])
- }
- entryText,entryID:=makeProfile('a','b',"192.0.2.1")
- exitText,exitID:=makeProfile('c','d',"192.0.2.2")
- raw,err:=RouterCompileWireGuardProfile(entryText,entryID);if err!=nil{t.Fatal(err)}
- var entryResult map[string]any;if err=json.Unmarshal([]byte(raw),&entryResult);err!=nil{t.Fatal(err)}
- entry:=entryResult["endpoint"].(map[string]any);entry["tag"]="entry-wg"
- raw,err=RouterWireGuardExitConfig(exitText,exitID);if err!=nil{t.Fatal(err)}
- var config map[string]any;if err=json.Unmarshal([]byte(raw),&config);err!=nil{t.Fatal(err)}
- exit:=config["endpoints"].([]any)[0].(map[string]any);exit["detour"]="entry-wg"
- config["endpoints"]=[]any{entry,exit}
- for _,endpoint:=range []map[string]any{entry,exit}{
-  peer:=endpoint["peers"].([]any)[0].(map[string]any)
-  if peer["persistent_keepalive_interval"]!=float64(25){t.Fatal("native keepalive was dropped")}
- }
- encoded,_:=json.Marshal(config)
- policies:=`{"entry":{"home_lan_access":false,"ipv6_mode":"off"},"exit":{"home_lan_access":false,"router_api":"http://10.77.0.1:8787"}}`
- sized,err:=RouterApplyMultihopMTUPolicy(string(encoded),policies);if err!=nil{t.Fatal(err)}
- protected,err:=RouterApplyMultihopLANPolicy(sized,policies);if err!=nil{t.Fatal(err)}
- if err=CheckConfig(protected);err!=nil{t.Fatal("pinned core rejected nested native WG and MTU/LAN/IPv6 policies:",err)}
- metadata:=map[string]string{"entry_id":"entry","exit_id":"exit","entry_node_id":entryID,"exit_node_id":exitID,
-  "entry_api":"http://10.77.0.1:8787","exit_api":"http://10.77.0.1:8787","entry_token":"fixture-entry","exit_token":"fixture-exit","entry_tag":"entry-wg","exit_mode":"wg"}
- for _,execution:=range []string{"local","server","auto"}{
-  metadata["execution"]=execution;meta,_:=json.Marshal(metadata)
-  plan,err:=NewRouterMultihop(protected,string(meta));if err!=nil{t.Fatal(execution,err)}
-  if err=CheckConfig(plan.Config());err!=nil{t.Fatal("pinned core rejected WG selector",execution,err)}
- }
- if _,err=RouterCompileWireGuardProfile(exitText,entryID);err==nil{t.Fatal("native compiler accepted the wrong paired identity")}
+	makeProfile := func(clientByte, serverByte byte, host string) (string, string) {
+		client, err := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat(string(clientByte), 32)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		server, err := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat(string(serverByte), 32)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		key := base64.StdEncoding.EncodeToString(server.PublicKey().Bytes())
+		proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + key))
+		config := fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = 10.77.0.2/24, fd77:77::2/64\nDNS = 10.77.0.1\nMTU = 1420\n[Peer]\nPublicKey = %s\nEndpoint = %s:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n", base64.StdEncoding.EncodeToString(client.Bytes()), key, host)
+		return config, hex.EncodeToString(proof[:])
+	}
+	entryText, entryID := makeProfile('a', 'b', "192.0.2.1")
+	exitText, exitID := makeProfile('c', 'd', "192.0.2.2")
+	raw, err := RouterCompileWireGuardProfile(entryText, entryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entryResult map[string]any
+	if err = json.Unmarshal([]byte(raw), &entryResult); err != nil {
+		t.Fatal(err)
+	}
+	entry := entryResult["endpoint"].(map[string]any)
+	entry["tag"] = "entry-wg"
+	raw, err = RouterWireGuardExitConfig(exitText, exitID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err = json.Unmarshal([]byte(raw), &config); err != nil {
+		t.Fatal(err)
+	}
+	exit := config["endpoints"].([]any)[0].(map[string]any)
+	exit["detour"] = "entry-wg"
+	config["endpoints"] = []any{entry, exit}
+	for _, endpoint := range []map[string]any{entry, exit} {
+		peer := endpoint["peers"].([]any)[0].(map[string]any)
+		if peer["persistent_keepalive_interval"] != float64(25) {
+			t.Fatal("native keepalive was dropped")
+		}
+	}
+	encoded, _ := json.Marshal(config)
+	policies := `{"entry":{"home_lan_access":false,"ipv6_mode":"off"},"exit":{"home_lan_access":false,"router_api":"http://10.77.0.1:8787"}}`
+	sized, err := RouterApplyMultihopMTUPolicy(string(encoded), policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protected, err := RouterApplyMultihopLANPolicy(sized, policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = CheckConfig(protected); err != nil {
+		t.Fatal("pinned core rejected nested native WG and MTU/LAN/IPv6 policies:", err)
+	}
+	metadata := map[string]string{"entry_id": "entry", "exit_id": "exit", "entry_node_id": entryID, "exit_node_id": exitID,
+		"entry_api": "http://10.77.0.1:8787", "exit_api": "http://10.77.0.1:8787", "entry_token": "fixture-entry", "exit_token": "fixture-exit", "entry_tag": "entry-wg", "exit_mode": "wg"}
+	for _, execution := range []string{"local", "server", "auto"} {
+		metadata["execution"] = execution
+		meta, _ := json.Marshal(metadata)
+		plan, err := NewRouterMultihop(protected, string(meta))
+		if err != nil {
+			t.Fatal(execution, err)
+		}
+		if err = CheckConfig(plan.Config()); err != nil {
+			t.Fatal("pinned core rejected WG selector", execution, err)
+		}
+	}
+	if _, err = RouterCompileWireGuardProfile(exitText, entryID); err == nil {
+		t.Fatal("native compiler accepted the wrong paired identity")
+	}
+}
+
+func TestRouterNativeAmneziaGraph(t *testing.T) {
+	client, err := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("a", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("b", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := fmt.Sprintf("[Interface]\nPrivateKey=%s\nAddress=10.78.0.2/24,fd78:78::2/64\nDNS=10.78.0.1\nMTU=1400\nJc=3\nJmin=40\nJmax=900\nS1=56\nS2=48\nS3=24\nS4=32\nH1=10000000-19999999\nH2=20000000-29999999\nH3=30000000-39999999\nH4=40000000-49999999\n[Peer]\nPublicKey=%s\nEndpoint=192.0.2.1:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", base64.StdEncoding.EncodeToString(client.Bytes()), base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()))
+	compiled, err := RouterAmneziaExitConfig(text, strings.Repeat("f", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = CheckConfig(compiled); err != nil {
+		t.Fatal("native registered AWG graph rejected", err)
+	}
+	var root map[string]any
+	_ = json.Unmarshal([]byte(compiled), &root)
+	endpoint := root["endpoints"].([]any)[0].(map[string]any)
+	if endpoint["type"] != "routervpn-amneziawg" {
+		t.Fatal("AWG became ordinary WG")
+	}
+	for _, field := range []string{"private_key", "amnezia", "peers"} {
+		before := endpoint[field]
+		delete(endpoint, field)
+		invalid, _ := json.Marshal(root)
+		if err = CheckConfig(string(invalid)); err == nil {
+			t.Fatal("incomplete AWG accepted", field)
+		}
+		endpoint[field] = before
+	}
+	endpoint["bind_interface"] = "unowned-underlay"
+	invalid, _ := json.Marshal(root)
+	if err = CheckConfig(string(invalid)); err == nil {
+		t.Fatal("native AWG accepted an imported bypass option")
+	}
 }

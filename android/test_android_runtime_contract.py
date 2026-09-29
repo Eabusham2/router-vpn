@@ -234,7 +234,9 @@ assert 'python3 android/test_android_multihop_graph.py' in (ROOT.parent / ".gith
 for marker in (
     "AndroidPathProbe.prove(prepared.exitBundle",
     "Exit-node private path proof failed",
-    "WireGuard entry →",
+    'entryMode + " entry → "',
+    "builder.prepare(entry.file, exit.file, exitMode, execution, entryMode)",
+    "activeEntryMode = entryMode",
     "boolean stopped = !started || stopEmbeddedAndProve();",
 ):
     assert marker in multihop_runtime, f"AndroidMultihopRuntime missing exit-proof/fail-closed marker: {marker}"

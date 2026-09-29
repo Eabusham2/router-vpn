@@ -6,7 +6,7 @@ extension RouterVPNModel {
     /// Return the complete *entry's* private bundle, never the selected exit's
     /// raw files with a different display id. Capture before suspension/start.
     func iosMultihopEntryBundle(for exitBundle: ClientBundle) throws -> ClientBundle {
-        guard let exit = exitBundle.routerProfiles.first(where: { $0.id == exitBundle.selectedRouterID }),
+        guard let exit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle),
               exit.normalizedNodeKind == "router-vpn", exit.multihopEnabled == true,
               exit.multihopExitID == exit.id, let entryID = exit.multihopEntryID, entryID != exit.id,
               let mode = exit.multihopExitMode, ["wg", "shadowsocks", "hysteria2"].contains(mode),
@@ -14,13 +14,15 @@ extension RouterVPNModel {
               data.count <= 32 * 1024 * 1024 else {
             throw iosMultihopError("The saved multihop entry/exit is missing or no longer linked. Choose the graph again.")
         }
+        let entryMode = exit.multihopEntryMode ?? "wg"
+        guard ["wg","awg2-fast","awg2-strong"].contains(entryMode) else { throw iosMultihopError("Unknown saved entry transport.") }
         var entry = try JSONDecoder().decode(ClientBundle.self, from: data)
         guard let profile = entry.routerProfiles.first(where: { $0.id == entryID }),
               profile.normalizedNodeKind == "router-vpn",
               let proof = profile.nodeProofID, !proof.isEmpty, proof != exit.nodeProofID,
-              let raw = entry.profiles["wg"]?["wg.conf"],
+              let raw = entry.profiles[entryMode]?[entryMode == "wg" ? "wg.conf" : "awg.conf"],
               let config = Data(base64Encoded: raw), !config.isEmpty, config.count <= 1024 * 1024 else {
-            throw iosMultihopError("Choose a different paired Router VPN entry with its own WireGuard profile.")
+            throw iosMultihopError("Choose a different paired Router VPN entry with its own selected WireGuard-family profile.")
         }
         for node in [profile, exit] {
             guard ["", "off", "none", "disabled"].contains((node.startLayer ?? "off").lowercased()) else {
@@ -36,7 +38,8 @@ extension RouterVPNModel {
         return entry
     }
 
-    func saveIOSMultihop(enabled: Bool, entryID: String, exitID: String, exitMode: String, execution: String = "local") throws {
+    func saveIOSMultihop(enabled: Bool, entryID: String, exitID: String, exitMode: String, execution: String = "local", entryMode: String = "wg") throws {
+        guard ["wg","awg2-fast","awg2-strong"].contains(entryMode) else { throw iosMultihopError("Choose an exact native entry transport.") }
         guard ["local", "server", "auto"].contains(execution) else { throw iosMultihopError("Choose Local, Server, or Compare both.") }
         guard !profileMutationBlocked else { throw iosMultihopError("Disconnect before changing the active graph.") }
         if !enabled {
@@ -61,6 +64,7 @@ extension RouterVPNModel {
         value.selectedRouterID = exitID
         value.routerProfiles[index].multihopEnabled = true
         value.routerProfiles[index].multihopEntryID = entryID
+        value.routerProfiles[index].multihopEntryMode = entryMode
         value.routerProfiles[index].multihopExitID = exitID
         value.routerProfiles[index].multihopExitMode = exitMode
         value.routerProfiles[index].multihopExecution = execution
@@ -91,6 +95,7 @@ struct IOSMultihopView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var enabled = false
     @State private var entryID = ""
+    @State private var entryMode = "wg"
     @State private var exitID = ""
     @State private var exitMode = "shadowsocks"
     @State private var execution = "local"
@@ -102,9 +107,14 @@ struct IOSMultihopView: View {
             Form {
                 Section("Entry → exit") {
                     Toggle("Use multihop", isOn: $enabled)
-                    Picker("WireGuard entry", selection: $entryID) {
+                    Picker("Entry node", selection: $entryID) {
                         Text("Choose entry").tag("")
                         ForEach(nodes) { node in Text(node.name.isEmpty ? node.id : node.name).tag(node.id) }
+                    }
+                    Picker("Entry transport", selection: $entryMode) {
+                        Text("WireGuard").tag("wg")
+                        Text("AmneziaWG Fast").tag("awg2-fast")
+                        Text("AmneziaWG Strong").tag("awg2-strong")
                     }
                     Picker("Exit node", selection: $exitID) {
                         Text("Choose exit").tag("")
@@ -126,12 +136,12 @@ struct IOSMultihopView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }.disabled(model.profileMutationBlocked)
                 Section("Connection requirements") {
-                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard entry and a WireGuard, self-contained Shadowsocks or Hysteria2 exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. Additional Start Layers, DAITA and Jumbo must currently be off for this graph.")
+                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard or native AmneziaWG Fast/Strong entry and a WireGuard, self-contained Shadowsocks or Hysteria2 exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. Additional Start Layers, DAITA and Jumbo must currently be off for this graph.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Save graph") {
-                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: exitMode, execution: execution); dismiss() }
+                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: exitMode, execution: execution, entryMode: entryMode); dismiss() }
                         catch { detail = error.localizedDescription }
                     }.disabled(model.profileMutationBlocked || (enabled && (entryID.isEmpty || exitID.isEmpty || entryID == exitID)))
                     if !detail.isEmpty { Text(detail).font(.caption) }
@@ -143,6 +153,7 @@ struct IOSMultihopView: View {
                 let profile = model.selectedNodeProfile
                 enabled = profile?.multihopEnabled ?? false
                 entryID = profile?.multihopEntryID ?? ""
+                entryMode = profile?.multihopEntryMode ?? "wg"
                 exitID = profile?.multihopExitID ?? (profile?.id ?? "")
                 exitMode = profile?.multihopExitMode ?? "shadowsocks"
                 execution = profile?.multihopExecution ?? "local"

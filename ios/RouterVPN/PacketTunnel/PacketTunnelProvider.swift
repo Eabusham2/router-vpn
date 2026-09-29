@@ -169,7 +169,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let exitProofID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         entryProfile["node_proof_id"] = entryProofID
         exitProfile["node_proof_id"] = exitProofID
-        let endpoint = try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: entryProofID, name: "Router VPN entry").endpoint
+        let entryMode = selectedProfile["multihop_entry_mode"] as? String ?? "wg"
+        guard ["wg","awg2-fast","awg2-strong"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
+        let endpoint = entryMode == "wg"
+            ? try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: entryProofID, name: "Router VPN entry").endpoint
+            : try nativeAmneziaEndpoint(root: entryRoot, expectedProofID: entryProofID, mode: entryMode).endpoint
         let rawFiles: [String: Data]
         if exitMode == "wg" {
             let exit = try multihopWireGuardEndpoint(root: root, expectedProofID: exitProofID, name: "Router VPN exit")
@@ -203,7 +207,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             "entry_node_id": entryProofID, "exit_node_id": exitProofID,
             "entry_api": entryProfile["router_api"] as? String ?? "", "exit_api": selectedProfile["router_api"] as? String ?? "",
             "entry_token": entryProfile["api_token"] as? String ?? "", "exit_token": selectedProfile["api_token"] as? String ?? "",
-            "entry_tag": RouterVPNMultihopGraph.entryTag, "exit_mode": exitMode, "execution": selectedProfile["multihop_execution"] as? String ?? "local"]
+            "entry_tag": RouterVPNMultihopGraph.entryTag, "entry_mode": entryMode, "exit_mode": exitMode, "execution": selectedProfile["multihop_execution"] as? String ?? "local"]
         let encoded = try JSONSerialization.data(withJSONObject: metadata)
         let hopMetadata = String(decoding: encoded, as: UTF8.self)
         do {
@@ -261,19 +265,37 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         return (endpoint, wg.interface.dns.map(\.stringRepresentation))
     }
 
+    /// The Amnezia peer key is not the node's standard WG identity anchor.
+    /// The compiler preserves all AWG options; the existing private node proof
+    /// after startup must validate the captured durable identity independently.
+    private func nativeAmneziaEndpoint(root: [String: Any], expectedProofID: String, mode: String) throws -> (endpoint: [String: Any], dns: [String]) {
+        guard ["awg2-fast", "awg2-strong"].contains(mode), expectedProofID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw tunnelError(58,"Native AWG requires the captured paired node identity and exact mode.") }
+        let text = try wireGuardLikeProfile(root, rawProfileID: mode)
+        var failure: NSError?
+        let compiled: String? = LibboxRouterCompileAmneziaProfile(text, expectedProofID, &failure)
+        if let failure { throw failure }
+        guard let compiled, !compiled.isEmpty, compiled.utf8.count <= Self.maxProfileBytes,
+              let object = try JSONSerialization.jsonObject(with: Data(compiled.utf8)) as? [String: Any],
+              let endpoint = object["endpoint"] as? [String: Any], endpoint["type"] as? String == "routervpn-amneziawg",
+              let dns = object["dns"] as? [String] else { throw tunnelError(58,"Native AWG compiler did not return its owned endpoint.") }
+        return (endpoint, dns)
+    }
+
     private func startLibbox(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
         let rawProfileID = (provider["rawProfileID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard rawProfileID.range(of: "^[A-Za-z0-9._-]{1,96}$", options: .regularExpression) != nil, !rawProfileID.contains("..") else { throw tunnelError(13, "iOS Libbox raw profile id is invalid.") }
         var expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         var rawFiles: [String: Data]
-        if rawProfileID == "wg" {
+        if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID) {
             try IOSStartLayer.validateWireGuard(profile: selectedProfile)
-            if expectedNodeID.isEmpty {
+            if expectedNodeID.isEmpty && rawProfileID == "wg" {
                 let parsed = try RouterVPNWireGuardConfig.parse(wireGuardLikeProfile(root, rawProfileID: "wg"), name: "Router VPN")
                 guard parsed.peers.count == 1, let peer = parsed.peers.first else { throw tunnelError(58, "Native WG requires exactly one owned peer.") }
                 expectedNodeID = deriveNodeProof(from: peer.publicKey.base64Key)
             }
-            let native = try multihopWireGuardEndpoint(root: root, expectedProofID: expectedNodeID, name: "Router VPN")
+            let native = rawProfileID == "wg"
+                ? try multihopWireGuardEndpoint(root: root, expectedProofID: expectedNodeID, name: "Router VPN")
+                : try nativeAmneziaEndpoint(root: root, expectedProofID: expectedNodeID, mode: rawProfileID)
             rawFiles = try RouterVPNMultihopGraph.wireGuardFiles(endpoint: native.endpoint, profile: selectedProfile, dnsServers: native.dns)
             rawFiles = try RouterVPNMultihopGraph.singleWireGuardPolicy(rawFiles, profile: selectedProfile)
         } else {
@@ -302,7 +324,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
         var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)
-        if rawProfileID == "wg" {
+        if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID) {
             guard let data = files["sing-box.json"], let text = String(data: data, encoding: .utf8) else { throw tunnelError(58, "Native WG lost its compiled graph.") }
             let policies = try JSONSerialization.data(withJSONObject: ["entry": selectedProfile, "exit": selectedProfile])
             var failure: NSError?

@@ -340,6 +340,34 @@ if CommandLine.arguments.count == 2 {
     try check("WG IPv6 OFF is a reject route not omission", blockedRules.contains { $0["ip_version"] as? Int == 6 && $0["action"] as? String == "reject" })
 }
 
+// Exercise the shipping Swift graph with a real native AWG-shaped entry.
+var nativeAWG = wg
+nativeAWG["type"] = "routervpn-amneziawg"
+nativeAWG["amnezia"] = ["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]
+for exitMode in ["wg","shadowsocks","hysteria2"] {
+    let before = try exitMode == "wg" ? wgFiles() : files(original(exitMode))
+    let composed = try P.build(entryEndpoint:nativeAWG,entryProfile:entry,exitProfile:wgExitProfile,exitMode:exitMode,files:before)
+    let sized = try RouterVPNMTUPolicy.multihop(composed,entryProfile:entry,exitProfile:wgExitProfile)
+    let root = try JSONSerialization.jsonObject(with:sized["sing-box.json"]!) as! [String:Any]
+    let endpoints = root["endpoints"] as! [[String:Any]]
+    try check("AWG entry remains the actual native engine", endpoints[0]["type"] as? String == "routervpn-amneziawg")
+    try check("AWG padding is not stripped", endpoints[0]["amnezia"] as? [String:String] == nativeAWG["amnezia"] as? [String:String])
+    if CommandLine.arguments.count == 2 {
+        try sized["sing-box.json"]!.write(to:URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true).appendingPathComponent("amnezia-entry-"+exitMode+".json"))
+    }
+}
+for mutation in ["missing","wrong-type","overlap","extra"] {
+    var changed = nativeAWG
+    var params = changed["amnezia"] as! [String:String]
+    switch mutation {
+    case "missing": params.removeValue(forKey:"s4")
+    case "wrong-type": changed["type"]="wireguard"
+    case "overlap": params["h2"]=params["h1"]
+    default: params["unowned"]="1"
+    }
+    changed["amnezia"]=params
+    reject("invalid native AWG " + mutation) { _ = try P.build(entryEndpoint:changed,entryProfile:entry,exitProfile:wgExitProfile,exitMode:"wg",files:wgFiles()) }
+}
 print("Native iOS multihop graph: PASS (\(checks) executable checks; no node was contacted)")
 '''
 

@@ -1,0 +1,208 @@
+package routervpnamnezia
+
+import (
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
+
+	awgtun "github.com/amnezia-vpn/amneziawg-go/v3/tun"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	"github.com/sagernet/sing-tun"
+)
+
+// Reuse the pinned core's one userspace IP stack; do not compile a second
+// gVisor fork. Only event types and the raw-packet input queue need adapting.
+type nativeTun struct {
+	wg.Device
+	events          chan awgtun.Event
+	output          chan []byte
+	done            chan struct{}
+	once            sync.Once
+	pumps           sync.WaitGroup
+	returnPath      atomic.Pointer[packetReturn]
+	configured      chan struct{}
+	readOffset      atomic.Int32
+	refreshedOffset atomic.Bool
+}
+type packetReturn struct {
+	path     tun.Return
+	headroom int
+}
+
+var _ awgtun.Device = (*nativeTun)(nil)
+
+func wrapTun(device wg.Device) *nativeTun {
+	t := &nativeTun{Device: device, events: make(chan awgtun.Event, 4), output: make(chan []byte, 128), done: make(chan struct{}), configured: make(chan struct{})}
+	t.pumps.Add(2)
+	go func() {
+		defer t.pumps.Done()
+		defer close(t.events)
+		for {
+			select {
+			case <-t.done:
+				return
+			case event, ok := <-device.Events():
+				if !ok {
+					return
+				}
+				select {
+				case t.events <- awgtun.Event(event):
+				case <-t.done:
+					return
+				}
+			}
+		}
+	}()
+	go func() {
+		defer t.pumps.Done()
+		buffer := make([]byte, 65535)
+		sizes := make([]int, 1)
+		for {
+			n, err := device.Read([][]byte{buffer}, sizes, 0)
+			if err != nil {
+				return
+			}
+			if n == 1 && sizes[0] > 0 && sizes[0] <= len(buffer) {
+				packet := append([]byte{}, buffer[:sizes[0]]...)
+				select {
+				case t.output <- packet:
+				case <-t.done:
+					return
+				}
+			}
+		}
+	}()
+	return t
+}
+
+// NewDevice starts its reader before IpcSet applies S4. The first read can
+// already have offset=16. Return zero packets once so upstream recomputes it.
+func (t *nativeTun) configuredPadding(padding int) error {
+	if padding < 0 || padding > 1280 || !t.readOffset.CompareAndSwap(0, int32(16+padding)) {
+		return errors.New("invalid or repeated native AWG padding initialization")
+	}
+	close(t.configured)
+	return nil
+}
+func (t *nativeTun) Events() <-chan awgtun.Event { return t.events }
+func (t *nativeTun) Read(buffers [][]byte, sizes []int, offset int) (int, error) {
+	if len(buffers) != 1 || len(sizes) < 1 || offset < 0 || offset > len(buffers[0]) {
+		return 0, errors.New("invalid AWG TUN read")
+	}
+	select {
+	case <-t.done:
+		return 0, net.ErrClosed
+	case <-t.configured:
+	}
+	select {
+	case <-t.done:
+		return 0, net.ErrClosed
+	default:
+	}
+	if offset != int(t.readOffset.Load()) {
+		if offset == 16 && t.refreshedOffset.CompareAndSwap(false, true) {
+			sizes[0] = 0
+			return 0, nil
+		}
+		return 0, errors.New("native AWG read offset differs from its immutable padding policy")
+	}
+	select {
+	case <-t.done:
+		return 0, net.ErrClosed
+	case packet := <-t.output:
+		if len(packet) > len(buffers[0])-offset {
+			return 0, errors.New("AWG TUN packet exceeds receive buffer")
+		}
+		sizes[0] = copy(buffers[0][offset:], packet)
+		return 1, nil
+	}
+}
+func (t *nativeTun) Write(buffers [][]byte, offset int) (int, error) {
+	select {
+	case <-t.done:
+		return 0, net.ErrClosed
+	default:
+	}
+	returnPath := t.returnPath.Load()
+	if returnPath == nil {
+		return t.Device.Write(buffers, offset)
+	}
+	packets := make([][]byte, 0, len(buffers))
+	for _, buffer := range buffers {
+		if offset < 0 || offset > len(buffer) {
+			return 0, errors.New("invalid AWG TUN write")
+		}
+		packet := make([]byte, returnPath.headroom+len(buffer)-offset)
+		copy(packet[returnPath.headroom:], buffer[offset:])
+		packets = append(packets, packet)
+	}
+	remaining := returnPath.path.ReturnPackets(packets)
+	for _, packet := range remaining {
+		if len(packet) < returnPath.headroom {
+			return 0, errors.New("invalid AWG return packet")
+		}
+		if _, err := t.Device.Write([][]byte{packet[returnPath.headroom:]}, 0); err != nil {
+			return 0, err
+		}
+	}
+	return len(buffers), nil
+}
+func (t *nativeTun) inject(packets [][]byte) error {
+	mtu, err := t.MTU()
+	if err != nil {
+		return err
+	}
+	for _, packet := range packets {
+		if len(packet) == 0 {
+			continue
+		}
+		if len(packet) > mtu || len(packet) < 20 {
+			return errors.New("invalid native AWG packet size")
+		}
+		if packet[0]>>4 != 4 && packet[0]>>4 != 6 {
+			return errors.New("native AWG requires an IP packet")
+		}
+		if packet[0]>>4 == 6 && len(packet) < 40 {
+			return errors.New("short native AWG IPv6 packet")
+		}
+		copyPacket := append([]byte{}, packet...)
+		select {
+		case <-t.done:
+			return net.ErrClosed
+		case t.output <- copyPacket:
+		default:
+			return errors.New("bounded native AWG packet queue is full")
+		}
+	}
+	return nil
+}
+func (t *nativeTun) attach(path tun.Return) error {
+	if path == nil || path.ReturnHeadroom() < 0 || path.ReturnHeadroom() > 256 {
+		return errors.New("invalid native AWG return owner")
+	}
+	next := &packetReturn{path: path, headroom: path.ReturnHeadroom()}
+	for {
+		old := t.returnPath.Load()
+		if old != nil {
+			if old.path == path {
+				return nil
+			}
+			return errors.New("native AWG return owner already attached")
+		}
+		if t.returnPath.CompareAndSwap(nil, next) {
+			return nil
+		}
+	}
+}
+func (t *nativeTun) detach(path tun.Return) error {
+	old := t.returnPath.Load()
+	if old != nil && old.path == path {
+		t.returnPath.CompareAndSwap(old, nil)
+	}
+	return nil
+}
+func (t *nativeTun) Close() error {
+	t.once.Do(func() { close(t.done); t.returnPath.Store(nil); _ = t.Device.Close(); t.pumps.Wait() })
+	return nil
+}

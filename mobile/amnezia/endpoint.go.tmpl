@@ -1,0 +1,285 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+type Options mobilemultihop.AmneziaEndpointConfig
+
+func RegisterEndpoint(registry *endpoint.Registry) {
+	endpoint.Register[Options](registry, mobilemultihop.AmneziaType, NewEndpoint)
+}
+
+var (
+	_ adapter.Endpoint                    = (*Endpoint)(nil)
+	_ adapter.FlowOutbound                = (*Endpoint)(nil)
+	_ adapter.InterfaceUpdateListener     = (*Endpoint)(nil)
+	_ adapter.OutboundWithPreferredRoutes = (*Endpoint)(nil)
+)
+
+type Endpoint struct {
+	endpoint.Adapter
+	ctx     context.Context
+	cancel  context.CancelFunc
+	router  adapter.Router
+	dns     adapter.DNSRouter
+	life    sync.Mutex
+	started atomic.Bool
+	closed  bool
+	runtime mobilemultihop.AmneziaRuntime
+	stack   *nativeTun
+	device  *awg.Device
+	bind    *peerBind
+}
+
+func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options Options) (adapter.Endpoint, error) {
+	dialOptions := option.DialerOptions{Detour: options.Detour}
+	owned, err := dialer.New(ctx, dialOptions, false)
+	if err != nil {
+		return nil, err
+	}
+	manager := service.FromContext[adapter.NetworkManager](ctx)
+	if manager == nil {
+		return nil, errors.New("native AWG requires the active network owner")
+	}
+	return newEndpoint(ctx, router, logger, tag, options, owned, manager.InterfaceFinder())
+}
+func newEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options Options, owned N.Dialer, finder control.InterfaceFinder) (*Endpoint, error) {
+	if ctx == nil || owned == nil {
+		return nil, errors.New("native AWG requires a protected dialer")
+	}
+	raw, err := json.Marshal(options)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := mobilemultihop.AmneziaRuntimeConfig(string(raw))
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	e := &Endpoint{Adapter: endpoint.NewAdapterWithDialerOptions(mobilemultihop.AmneziaType, tag, []string{N.NetworkTCP, N.NetworkUDP, N.NetworkICMP}, option.DialerOptions{Detour: options.Detour}), ctx: ctx, cancel: cancel, router: router, dns: service.FromContext[adapter.DNSRouter](ctx), runtime: runtime}
+	var handler tun.Handler
+	if router != nil {
+		handler = e
+	}
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: logger, System: false, Handler: handler, UDPTimeout: 60 * time.Second, ICMPTimeout: 30 * time.Second, InterfaceFinder: finder, Name: tag, MTU: uint32(runtime.MTU), Address: runtime.Addresses, AllowedAddress: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	e.stack = wrapTun(stack)
+	e.bind = &peerBind{ctx: ctx, dialer: owned, target: runtime.Remote}
+	return e, nil
+}
+func (e *Endpoint) Start(stage adapter.StartStage) error {
+	if stage != adapter.StartStateStart {
+		return nil
+	}
+	e.life.Lock()
+	defer e.life.Unlock()
+	if e.closed || e.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	if e.started.Load() {
+		return nil
+	}
+	// Upstream owns protocol and cryptography. Never log the IPC string, keys,
+	// packet contents or the peer-supplied errors containing that configuration.
+	device := awg.NewDevice(e.stack, e.bind, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+	if err := device.IpcSet(e.runtime.UAPI); err != nil {
+		device.Close()
+		e.closed = true
+		e.cancel()
+		return errors.New("pinned AmneziaWG backend rejected its compiled profile")
+	}
+	if err := e.stack.configuredPadding(e.runtime.TransportPadding); err != nil {
+		device.Close()
+		e.closed = true
+		e.cancel()
+		return err
+	}
+	e.runtime.UAPI = ""
+	if err := e.stack.Device.Start(); err != nil {
+		device.Close()
+		e.closed = true
+		e.cancel()
+		return err
+	}
+	if err := device.Up(); err != nil {
+		device.Close()
+		e.closed = true
+		e.cancel()
+		return errors.New("native AmneziaWG peer could not start through its protected dialer")
+	}
+	e.device = device
+	e.started.Store(true)
+	return nil
+}
+func (e *Endpoint) Close() error {
+	e.cancel()
+	e.started.Store(false)
+	e.life.Lock()
+	defer e.life.Unlock()
+	if e.closed {
+		return nil
+	}
+	e.closed = true
+	if e.device != nil {
+		e.device.Close()
+		e.device = nil
+	} else {
+		_ = e.bind.Close()
+		_ = e.stack.Close()
+	}
+	e.runtime.UAPI = ""
+	return nil
+}
+func (e *Endpoint) InterfaceUpdated(ctx context.Context) {
+	if !e.started.Load() {
+		return
+	}
+	go func() {
+		e.life.Lock()
+		defer e.life.Unlock()
+		if e.closed || ctx.Err() != nil || e.ctx.Err() != nil || e.device == nil {
+			return
+		}
+		if err := e.device.BindUpdate(); err != nil {
+			e.started.Store(false)
+			e.cancel()
+			e.device.Close()
+			e.device = nil
+			e.closed = true
+		}
+	}()
+}
+func (e *Endpoint) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if !e.started.Load() || e.ctx.Err() != nil {
+		return nil, net.ErrClosed
+	}
+	if destination.IsDomain() {
+		if e.dns == nil {
+			return nil, errors.New("native AWG has no owned DNS router")
+		}
+		addresses, err := e.dns.Lookup(ctx, destination.Fqdn, adapter.DNSQueryOptions{})
+		if err != nil {
+			return nil, err
+		}
+		return N.DialSerial(ctx, e.stack.Device, network, destination, addresses)
+	}
+	if !destination.Addr.IsValid() {
+		return nil, errors.New("invalid native AWG destination")
+	}
+	return e.stack.Device.DialContext(ctx, network, destination)
+}
+func (e *Endpoint) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	if !e.started.Load() || e.ctx.Err() != nil {
+		return nil, net.ErrClosed
+	}
+	if destination.IsDomain() {
+		if e.dns == nil {
+			return nil, errors.New("native AWG has no owned DNS router")
+		}
+		addresses, err := e.dns.Lookup(ctx, destination.Fqdn, adapter.DNSQueryOptions{})
+		if err != nil {
+			return nil, err
+		}
+		c, _, err := N.ListenSerial(ctx, e.stack.Device, destination, addresses)
+		return c, err
+	}
+	if !destination.Addr.IsValid() {
+		return nil, errors.New("invalid native AWG destination")
+	}
+	return e.stack.Device.ListenPacket(ctx, destination)
+}
+func (e *Endpoint) PreferredDomain(*adapter.InboundContext, string) bool { return false }
+func (e *Endpoint) PreferredAddress(_ *adapter.InboundContext, address netip.Addr) bool {
+	return e.started.Load() && address.IsValid()
+}
+func (e *Endpoint) PortAddresses() (netip.Addr, netip.Addr) {
+	return e.stack.Inet4Address(), e.stack.Inet6Address()
+}
+func (e *Endpoint) PortMTU() uint32                    { return uint32(e.runtime.MTU) }
+func (e *Endpoint) AttachReturn(path tun.Return) error { return e.stack.attach(path) }
+func (e *Endpoint) DetachReturn(path tun.Return) error { return e.stack.detach(path) }
+func (e *Endpoint) WritePackets(packets [][]byte) error {
+	if !e.started.Load() || e.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	return e.stack.inject(packets)
+}
+func (e *Endpoint) PreMatchFlow(string, netip.Addr) adapter.PreMatchAction {
+	if !e.started.Load() {
+		return adapter.PreMatchReject
+	}
+	return adapter.PreMatchFlow
+}
+func (e *Endpoint) JudgeFlow(network uint8, source, destination netip.AddrPort, packet []byte) tun.FlowVerdict {
+	for _, prefix := range e.runtime.Addresses {
+		if destination.Addr() == prefix.Addr() {
+			return tun.FlowVerdict{Action: tun.ActionAccept}
+		}
+	}
+	if e.router == nil {
+		return tun.FlowVerdict{Action: tun.ActionReject}
+	}
+	return adapter.JudgeFlow(e.router, e.Tag(), e.Type(), network, source, destination, packet)
+}
+func (e *Endpoint) NewDNSPacket(payload []byte, source, destination M.Socksaddr, writer N.PacketWriter) {
+	if e.router != nil {
+		e.router.HijackDNSPacket(e.ctx, payload, writer, adapter.InboundContext{Inbound: e.Tag(), InboundType: e.Type(), Network: N.NetworkUDP, Source: source, Destination: destination, Protocol: "dns"})
+	}
+}
+func (e *Endpoint) NewConnectionEx(ctx context.Context, c net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	if e.router == nil {
+		_ = c.Close()
+		if onClose != nil {
+			onClose(errors.New("unowned native AWG inbound"))
+		}
+		return
+	}
+	metadata := adapter.InboundContext{Inbound: e.Tag(), InboundType: e.Type(), Source: source, Destination: destination}
+	for _, prefix := range e.runtime.Addresses {
+		if destination.Addr == prefix.Addr() {
+			metadata.OriginDestination = destination
+			if destination.Addr.Is4() {
+				metadata.Destination.Addr = netip.MustParseAddr("127.0.0.1")
+			} else {
+				metadata.Destination.Addr = netip.IPv6Loopback()
+			}
+		}
+	}
+	e.router.RouteConnectionEx(ctx, c, metadata, onClose)
+}
+func (e *Endpoint) NewPacketConnectionEx(ctx context.Context, c N.PacketConn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	if e.router == nil {
+		_ = c.Close()
+		if onClose != nil {
+			onClose(errors.New("unowned native AWG inbound"))
+		}
+		return
+	}
+	// The Router VPN node owns inbound destinations; no imported route is added.
+	e.router.RoutePacketConnectionEx(ctx, c, adapter.InboundContext{Inbound: e.Tag(), InboundType: e.Type(), Source: source, Destination: destination}, onClose)
+}

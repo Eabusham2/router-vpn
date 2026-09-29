@@ -20,6 +20,7 @@ AAR="$LIBDIR/libbox.aar"
 STAMP="$LIBDIR/libbox.commit"
 LICENSE_OUT="$LIBDIR/libbox-LICENSE.txt"
 XRAY_LICENSE_OUT="$LIBDIR/libxray-LICENSE.txt"
+AMNEZIA_LICENSE_OUT="$LIBDIR/native-amneziawg-LICENSE.txt"
 OPENVPN_SOURCE="$ROOT/../mobile/routervpn_openvpn.go"
 OPENVPN_STAMP="$LIBDIR/libbox.openvpn.sha256"
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$OPENVPN_SOURCE")
@@ -29,6 +30,7 @@ EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_P
 
 verify_aar() {
   test -s "$AAR"
+  test -s "$AMNEZIA_LICENSE_OUT"
   unzip -tq "$AAR" >/dev/null
 
   local tmp classes aar_list class_list api_list
@@ -73,7 +75,7 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in     routerCompileWireGuardProfile     routerWireGuardExitConfig     routerApplyMultihopMTUPolicy     routerApplyMultihopLANPolicy     newRouterHopMeasurement     routerCompileSIP003Profile     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
+  for symbol in     routerCompileAmneziaProfile     routerAmneziaExitConfig     routerCompileWireGuardProfile     routerWireGuardExitConfig     routerApplyMultihopMTUPolicy     routerApplyMultihopLANPolicy     newRouterHopMeasurement     routerCompileSIP003Profile     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
     grep -Fq "$symbol" "$api_list" || {
       echo "combined libbox AAR is missing $symbol bridge" >&2
       return 1
@@ -215,7 +217,9 @@ python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
   go_retry test ./experimental/libbox/routervpn/...
-  go_retry test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run TestRouterMultihop -count=1
+  go_retry test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia)' -count=1
+  go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1 -timeout=120s
+  python3 "$ROOT/../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
   go_retry test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
@@ -228,6 +232,7 @@ SOURCE_AAR="$VENDOR/libbox.aar"
 install -m 0644 "$SOURCE_AAR" "$AAR"
 install -m 0644 "$VENDOR/LICENSE" "$LICENSE_OUT"
 install -m 0644 "$XRAY_VENDOR/LICENSE" "$XRAY_LICENSE_OUT"
+install -m 0644 "$VENDOR/routervpn-amnezia-LICENSE.txt" "$AMNEZIA_LICENSE_OUT"
 printf '%s\n' "$EXPECTED_STAMP" >"$STAMP"
 printf '%s\n' "$OPENVPN_SHA" > "$OPENVPN_STAMP"
 verify_aar

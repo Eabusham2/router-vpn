@@ -171,6 +171,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var autoRequireObfuscation: Bool?
     var multihopEnabled: Bool?
     var multihopEntryID: String?
+    var multihopEntryMode: String?
     var multihopExitID: String?
     var multihopExitMode: String?
     var multihopExecution: String?
@@ -254,6 +255,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case autoRequireObfuscation = "auto_require_obfuscation"
         case multihopEnabled = "multihop_enabled"
         case multihopEntryID = "multihop_entry_id"
+        case multihopEntryMode = "multihop_entry_mode"
         case multihopExitID = "multihop_exit_id"
         case multihopExitMode = "multihop_exit_mode"
         case multihopExecution = "multihop_execution"
