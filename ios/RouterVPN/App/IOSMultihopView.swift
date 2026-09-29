@@ -126,7 +126,7 @@ struct IOSMultihopView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }.disabled(model.profileMutationBlocked)
                 Section("Connection requirements") {
-                    Text("Link at least two Router VPN homes. This path uses a full-route raw WireGuard entry and a WireGuard, self-contained Shadowsocks or Hysteria2 exit. Both transport endpoints and the selected DNS resolver must be literal IP addresses; additional Start Layers, DAITA and Jumbo must be off. LAN-Off filtering is not yet supported by this graph and is rejected rather than ignored. Other graphs remain unfinished, not simulated.")
+                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard entry and a WireGuard, self-contained Shadowsocks or Hysteria2 exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. Additional Start Layers, DAITA and Jumbo must currently be off for this graph.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)

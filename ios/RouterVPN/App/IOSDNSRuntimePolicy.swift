@@ -59,6 +59,14 @@ enum IOSDNSRuntimePolicy {
         return IOSResolvedDNSPolicy(mode: mode, type: type, host: host, port: port, serverName: serverName, path: path)
     }
 
+    static func requiresWireGuardLibbox(in bundle: ClientBundle) throws -> Bool {
+        guard let profile = selectedProfile(in: bundle) else { throw error("Missing exact WireGuard node policy.") }
+        let ipv6 = clean(profile.ipv6Mode).lowercased()
+        guard ["", "on", "auto", "off"].contains(ipv6) else { throw error("Unknown saved IPv6 policy.") }
+        let dns = try resolve(profile)
+        return dns?.wireGuardCompatible == false || profile.homeLANAccess == false || ipv6 == "off"
+    }
+
     static func validate(selection: IOSRuntimeSelection, in bundle: ClientBundle) throws {
         guard let profile = selectedProfile(in: bundle) else { throw error("The selected Router VPN profile is missing or ambiguous; another node's DNS policy was not substituted.") }
         guard profile.normalizedNodeKind == "router-vpn", let policy = try resolve(profile) else { return }

@@ -115,6 +115,11 @@ enum IOSRuntimeSelector {
                   String(data: data, encoding: .utf8) != nil else {
                 throw IOSRuntimeSelectionError.unsupportedMode("Raw runtime \(rawProfileID) has no bounded UTF-8 native WireGuard-family profile.")
             }
+            // Preserve the original WG asset. The PacketTunnel validates its
+            // paired peer and compiles DNS-aware WG inside the existing engine.
+            if rawProfileID == "wg", try IOSDNSRuntimePolicy.requiresWireGuardLibbox(in: bundle) {
+                return IOSRuntimeSelection(engine: .libbox, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [asset: data])
+            }
             return IOSRuntimeSelection(engine: .wireGuard, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: [asset: data])
         }
         guard let encoded = bundle.profiles[rawProfileID], encoded["sing-box.json"] != nil || (IOSNativeXrayProfile.modeIDs.contains(rawProfileID) && encoded["xray.json"] != nil) else {

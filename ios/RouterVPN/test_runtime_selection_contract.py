@@ -26,8 +26,15 @@ for marker in [
     assert marker in p, marker
 assert 'Data(base64Encoded:' in p
 assert 'value.contains("..")' in p
-assert p.index('unsupportedHelperAssets.first') < p.index('return IOSRuntimeSelection(engine: .libbox')
-assert p.index('usesUnsupportedLoopbackHelper(object)') < p.index('return IOSRuntimeSelection(engine: .libbox')
+# Raw standard WG has no helper assets: its native endpoint is reconstructed
+# from the verified peer inside PacketTunnel. Existing layered mode ordering
+# must still reject every unowned helper before returning its Libbox selection.
+layered=p[p.index('        var files = try decodeProfile(encoded)'):p.index('    private static func validateStartLayer')]
+assert layered.index('unsupportedHelperAssets.first') < layered.index('return IOSRuntimeSelection(engine: .libbox')
+assert layered.index('usesUnsupportedLoopbackHelper(object)') < layered.index('return IOSRuntimeSelection(engine: .libbox')
+raw=p[p.index('        if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID)'):p.index('        var files = try decodeProfile(encoded)')]
+assert 'rawProfileID == "wg", try IOSDNSRuntimePolicy.requiresWireGuardLibbox(in: bundle)' in raw
+assert 'files: [asset: data]' in raw
 
 # Keep the source contract tied to the real generated profiles that motivated
 # the iOS fail-closed boundary. Desktop Xray/sslocal wrappers must not become

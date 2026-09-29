@@ -264,7 +264,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func startLibbox(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
         let rawProfileID = (provider["rawProfileID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard rawProfileID.range(of: "^[A-Za-z0-9._-]{1,96}$", options: .regularExpression) != nil, !rawProfileID.contains("..") else { throw tunnelError(13, "iOS Libbox raw profile id is invalid.") }
-        var rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)
+        var expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
+        var rawFiles: [String: Data]
+        if rawProfileID == "wg" {
+            try IOSStartLayer.validateWireGuard(profile: selectedProfile)
+            if expectedNodeID.isEmpty {
+                let parsed = try RouterVPNWireGuardConfig.parse(wireGuardLikeProfile(root, rawProfileID: "wg"), name: "Router VPN")
+                guard parsed.peers.count == 1, let peer = parsed.peers.first else { throw tunnelError(58, "Native WG requires exactly one owned peer.") }
+                expectedNodeID = deriveNodeProof(from: peer.publicKey.base64Key)
+            }
+            let native = try multihopWireGuardEndpoint(root: root, expectedProofID: expectedNodeID, name: "Router VPN")
+            rawFiles = try RouterVPNMultihopGraph.wireGuardFiles(endpoint: native.endpoint, profile: selectedProfile, dnsServers: native.dns)
+            rawFiles = try RouterVPNMultihopGraph.singleWireGuardPolicy(rawFiles, profile: selectedProfile)
+        } else {
+            rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)
+        }
         if let original = rawFiles["xray.json"] {
             guard let wrapper = rawFiles["sing-box.json"], let wrapperText = String(data: wrapper, encoding: .utf8), let xrayText = String(data: original, encoding: .utf8) else { throw tunnelError(58, "Native Xray requires its exact UTF-8 imported graph.") }
             var failure: NSError?
@@ -287,18 +301,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             rawFiles["sing-box.json"] = Data(compiled.utf8)
         }
         let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
-        let files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)
-        let expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
+        var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)
+        if rawProfileID == "wg" {
+            guard let data = files["sing-box.json"], let text = String(data: data, encoding: .utf8) else { throw tunnelError(58, "Native WG lost its compiled graph.") }
+            let policies = try JSONSerialization.data(withJSONObject: ["entry": selectedProfile, "exit": selectedProfile])
+            var failure: NSError?
+            let protected: String? = LibboxRouterApplyMultihopLANPolicy(text, String(decoding: policies, as: UTF8.self), &failure)
+            if let failure { throw failure }
+            guard let protected, !protected.isEmpty, protected.utf8.count <= Self.maxProfileBytes else { throw tunnelError(58, "Native WG LAN policy was not compiled.") }
+            files["sing-box.json"] = Data(protected.utf8)
+        }
         guard expectedNodeID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw tunnelError(14, "Layered iOS modes require the imported node's exact node proof id.") }
+        let provenNodeID = expectedNodeID
         let proofURL = try selectedProofURL(selectedProfile)
         let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
         do { try engine.start(files: files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(15, "Libbox engine failed to start: \(error.localizedDescription)") }
-        proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
+        proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 16, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during Libbox proof."])); return }
             guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(42, "A newer iOS Libbox runtime replaced this proof attempt.")); return }
             if let proofError { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(proofError); return }
-            self.enableForwarding(profileData: forwardingProfileData, proofID: expectedNodeID)
+            self.enableForwarding(profileData: forwardingProfileData, proofID: provenNodeID)
             self.armNetworkProofGuard()
             completionHandler(nil)
         }
@@ -461,8 +484,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func selectedRouterProfile(_ root: [String: Any]) throws -> [String: Any] {
         guard let profiles = root["routerProfiles"] as? [[String: Any]], !profiles.isEmpty else { throw tunnelError(30, "Router VPN bundle has no routerProfiles.") }
         let selectedID = root["selectedRouterID"] as? String ?? ""
-        if let selected = profiles.first(where: { ($0["id"] as? String ?? "") == selectedID }) { return selected }
-        return profiles[0]
+        if selectedID.isEmpty && profiles.count == 1 { return profiles[0] }
+        let matches = profiles.filter { ($0["id"] as? String ?? "") == selectedID }
+        guard !selectedID.isEmpty, matches.count == 1 else { throw tunnelError(30, "Selected Router VPN identity is missing or ambiguous.") }
+        return matches[0]
     }
     private func wireGuardLikeProfile(_ root: [String: Any], rawProfileID: String) throws -> String {
         let asset = rawProfileID == "wg" ? "wg.conf" : "awg.conf"

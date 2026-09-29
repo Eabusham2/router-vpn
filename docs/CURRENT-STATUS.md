@@ -225,3 +225,18 @@ Foundation NSNumber/native Swift dictionaries, which falsely rejected equal
 profiles under Swift 6.4 on Linux. Its key, TLS, UDP-leg and extra-field rejection
 checks remain mandatory. These corrections are implementation/test evidence,
 not a claim that the remaining mobile runtime requirements are complete.
+
+### Apple native WireGuard DNS parity — September 28, 2026
+
+Standard WireGuard now uses the existing Libbox PacketTunnel when its saved DNS
+transport/port, LAN-Off or IPv6-Off policy requires that engine. The original WG
+asset remains the source of peer-key verification; the extension compiles the
+one-TUN graph before starting. Plain compatible raw WireGuard and AmneziaWG
+selection remain unchanged. This does not substitute WG for an AWG request.
+
+Single-node and WireGuard-entry graphs preserve custom UDP/TCP ports, DoT, DoH
+and DoH3. Resolver hostnames use a saved literal bootstrap through the same
+non-direct exit, with exact TLS identity and no system resolver fallback.
+Both-node LAN policy is still compiled natively, fixed MTU still changes its
+owned interface, and IPv6-Off retains capture plus TUN-scoped rejection. These
+configuration and lifecycle tests are distinct from physical-device proof.

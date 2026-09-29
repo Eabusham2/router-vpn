@@ -108,7 +108,7 @@ final class RouterVPNModel: ObservableObject {
 
     private var selectedRouterProfile: RouterProfile? {
         guard let bundle else { return nil }
-        return bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
+        return IOSDNSRuntimePolicy.selectedProfile(in: bundle)
     }
 
     private var strictKillSwitchEnabled: Bool {

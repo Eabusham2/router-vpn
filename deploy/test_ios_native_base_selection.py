@@ -115,20 +115,36 @@ func candidates(_ bundle: ClientBundle, _ logical: String = "base-raw") throws -
             var bad = try fixture(); bad.profiles[raw] = [asset:"not-base64"]
             reject("invalid native encoding \(raw)") { _ = try IOSRuntimeSelector.selectRaw(bundle:bad,rawProfileID:raw) }
             reject("Start Layer not silently ignored \(raw)") { _ = try IOSRuntimeSelector.selectRaw(bundle:fixture(start:"aes-256-gcm"),rawProfileID:raw) }
-            reject("encrypted DNS not silently downgraded \(raw)") { _ = try IOSRuntimeSelector.selectRaw(bundle:fixture(dns:"dot"),rawProfileID:raw) }
+            if raw == "wg" {
+                try check("WG encrypted DNS uses its native Libbox endpoint", IOSRuntimeSelector.selectRaw(bundle:fixture(dns:"dot"),rawProfileID:raw).engine == .libbox)
+            } else {
+                reject("encrypted DNS not silently downgraded \(raw)") { _ = try IOSRuntimeSelector.selectRaw(bundle:fixture(dns:"dot"),rawProfileID:raw) }
+            }
         }
         for raw in ["wg", "awg2-fast", "awg2-strong"] {
             var unsupportedPort = try fixture(dns:"custom")
             unsupportedPort.routerProfiles[0].dnsProtocol = "udp"
             unsupportedPort.routerProfiles[0].dnsPort = 5353
-            reject("native \(raw) cannot silently reset custom DNS port") {
-                _ = try IOSRuntimeSelector.selectRaw(bundle:unsupportedPort,rawProfileID:raw)
+            if raw == "wg" {
+                try check("WG custom DNS port uses Libbox", IOSRuntimeSelector.selectRaw(bundle:unsupportedPort,rawProfileID:raw).engine == .libbox)
+            } else {
+                reject("native \(raw) cannot silently reset custom DNS port") { _ = try IOSRuntimeSelector.selectRaw(bundle:unsupportedPort,rawProfileID:raw) }
             }
         }
         var allowedCustomPort = try fixture(dns:"custom")
         allowedCustomPort.routerProfiles[0].dnsProtocol = "udp"
         allowedCustomPort.routerProfiles[0].dnsPort = 53
         try check("native DNS accepts explicit UDP53", IOSRuntimeSelector.selectRaw(bundle:allowedCustomPort,rawProfileID:"wg").rawProfileID == "wg")
+        for mode in ["dot", "doh", "doh3"] {
+            let selected = try IOSRuntimeSelector.selectRaw(bundle:fixture(dns:mode),rawProfileID:"wg")
+            try check("WG advanced DNS keeps raw identity", selected.engine == .libbox && selected.rawProfileID == "wg" && selected.files["wg.conf"] != nil)
+        }
+        var lanOff = try fixture(); lanOff.routerProfiles[0].homeLANAccess = false
+        try check("WG LAN filtering uses Libbox", IOSRuntimeSelector.selectRaw(bundle:lanOff,rawProfileID:"wg").engine == .libbox)
+        var ipv6Off = try fixture(); ipv6Off.routerProfiles[0].ipv6Mode = "off"
+        try check("WG IPv6 filtering uses Libbox", IOSRuntimeSelector.selectRaw(bundle:ipv6Off,rawProfileID:"wg").engine == .libbox)
+        ipv6Off.routerProfiles[0].ipv6Mode = "unrecognized"
+        reject("unknown IPv6 not ignored") { _ = try IOSRuntimeSelector.selectRaw(bundle:ipv6Off,rawProfileID:"wg") }
         var noFallback = try fixture(base:"awg", fallback:true)
         noFallback.logicalModes[0] = LogicalMode(id:"base-raw",name:"Raw",description:"",baseSelector:true,fallback:false,variants:["wg":"wg","awg":"awg2-fast"])
         try check("catalog can forbid fallback", candidates(noFallback) == ["awg2-fast"])
@@ -181,6 +197,13 @@ def main():
     begin = strategy.index("    private func connectIOSRawCandidate(")
     end = strategy.index("    func runIOSSmartAuto()", begin)
     method = strategy[begin:end]
+    provider=(ROOT / "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift").read_text()
+    scope=provider[provider.index("    private func startLibbox("):provider.index("    private func startExternalLibbox(")]
+    for marker in ("if rawProfileID == \"wg\"", "multihopWireGuardEndpoint(root: root, expectedProofID: expectedNodeID", "RouterVPNMultihopGraph.wireGuardFiles(", "RouterVPNMultihopGraph.singleWireGuardPolicy(", "LibboxRouterApplyMultihopLANPolicy(", "expectedNodeID: provenNodeID"):
+        assert marker in scope, "native WireGuard launch wiring missing: " + marker
+    assert scope.index("LibboxRouterApplyMultihopLANPolicy(") < scope.index("engine.start(")
+    selection=provider[provider.index("    private func selectedRouterProfile("):provider.index("    private func wireGuardLikeProfile(")]
+    assert "matches.count == 1" in selection and "profiles.count == 1" in selection
     model = (APP / "RouterVPNModel.swift").read_text()
     assert 'func connect(rawProfileID: String?) async' in model
     assert 'selections = [try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawProfileID)]' in model

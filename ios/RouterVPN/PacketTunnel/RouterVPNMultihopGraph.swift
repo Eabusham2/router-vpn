@@ -128,21 +128,10 @@ enum RouterVPNMultihopGraph {
         // Initial MTU is conservative; a fixed policy is applied afterward by
         // the shared PacketTunnel MTU helper, not presented as Auto measurement.
         tun["mtu"] = 1280
-        guard let dns = original["dns"] as? [String: Any], let dnsTag = dns["final"] as? String,
-              let servers = dns["servers"] as? [[String: Any]],
-              let selectedDNS = servers.first(where: { $0["tag"] as? String == dnsTag }),
-              let dnsHost = selectedDNS["server"] as? String, literalIP(dnsHost),
-              ["udp", "tcp", "tls", "https", "h3"].contains(selectedDNS["type"] as? String ?? "") else {
-            throw issue("Multihop DNS needs a saved literal resolver that can be sent through the exit without bootstrap fallback.")
-        }
-        guard (dns["rules"] as? [Any] ?? []).isEmpty else {
-            throw issue("Multihop cannot silently discard custom DNS routing rules.")
-        }
-        var finalDNS = selectedDNS
-        finalDNS["detour"] = "proxy"
-        finalDNS.removeValue(forKey: "domain_resolver")
-        var dnsPolicy = dns
-        dnsPolicy["servers"] = [finalDNS]
+        guard let dns = original["dns"] as? [String: Any] else { throw issue("Missing exit DNS policy.") }
+        // Preserve a hostname resolver and its bounded literal bootstrap. Both
+        // are re-owned by the same encrypted exit; no direct/system lookup.
+        var dnsPolicy = try exitDNS(dns)
         var routeRules: [[String: Any]] = [
             ["inbound": [entryProofTag], "action": "route", "outbound": entryPrivateTag],
             ["protocol": "dns", "action": "hijack-dns"]
@@ -150,7 +139,7 @@ enum RouterVPNMultihopGraph {
         if entryProfile["ipv6_mode"] as? String == "off" || exitProfile["ipv6_mode"] as? String == "off" {
             // Reject client IPv6 inside the owned TUN, not by omitting the v6
             // default route (which would leak it to the physical interface).
-            routeRules.append(["ip_version": 6, "action": "reject"])
+            routeRules.append(["inbound": [tun["tag"] as? String ?? "tun-in"], "ip_version": 6, "action": "reject"])
             dnsPolicy["strategy"] = "ipv4_only"
         }
         let config: [String: Any] = [
@@ -169,47 +158,145 @@ enum RouterVPNMultihopGraph {
         return result
     }
 
-    /// Convert a parsed native WG exit into the same graph input shape. Both
-    /// the app and extension retain the selected plain-DNS policy; unsupported
-    /// transports or ports are rejected instead of silently being converted.
+    /// The same native WG endpoint supports direct and nested packet graphs.
+    /// DNS is a separate Libbox transport, never an address-only OS DNS claim.
     static func wireGuardFiles(endpoint: [String: Any], profile: [String: Any], dnsServers: [String]) throws -> [String: Data] {
-        guard dnsServers.count == 1, let dnsHost = dnsServers.first, serverIP(dnsHost) else {
-            throw issue("WireGuard multihop requires exactly one literal selected DNS resolver.")
+        guard dnsServers.count == 1, let importedDNS = dnsServers.first, serverIP(importedDNS) else {
+            throw issue("WireGuard requires exactly one bounded literal imported DNS resolver.")
         }
-        let mode = (profile["dns_mode"] as? String ?? "").lowercased()
-        let host: String
+        let mode = try setting(profile, "dns_mode", "").lowercased()
+        var host = "", type = "udp", port = 53
+        let requestedPort = try integer(profile["dns_port"])
+        var name = try setting(profile, "dns_server_name", "")
+        var path = try setting(profile, "dns_path", "/dns-query")
         switch mode {
-        case "": host = dnsHost
+        case "": host = importedDNS
         case "home":
-            let v4 = profile["adguard_ipv4"] as? String ?? ""
-            host = v4.isEmpty ? profile["adguard_ipv6"] as? String ?? "" : v4
+            let v4 = try setting(profile, "adguard_ipv4", "")
+            host = try v4.isEmpty ? setting(profile, "adguard_ipv6", "") : v4
         case "custom":
-            let proto = (profile["dns_protocol"] as? String ?? "udp").lowercased()
-            guard ["", "udp"].contains(proto), (try integer(profile["dns_port"]) ?? 53) == 53 else {
-                throw issue("Native WireGuard DNS requires UDP port 53; other DNS transports need a supported Libbox exit mode.")
-            }
-            host = profile["dns_host"] as? String ?? ""
+            host = try setting(profile, "dns_host", "")
+            type = try setting(profile, "dns_protocol", "udp").lowercased()
+            if type.isEmpty { type = "udp" }
+            guard ["udp", "tcp"].contains(type) else { throw issue("Custom DNS requires explicit UDP or TCP.") }
+            port = requestedPort ?? 53
+        case "dot", "doh", "doh3":
+            host = try setting(profile, "dns_host", "")
+            type = ["dot": "tls", "doh": "https", "doh3": "h3"][mode]!
+            port = requestedPort ?? (mode == "dot" ? 853 : 443)
         case "fastest", "rescue":
-            let saved = profile["fastest_dns_host"] as? String ?? ""
+            let saved = try setting(profile, "fastest_dns_host", "")
             let results = (profile["dns_results"] as? [[String: Any]] ?? []).filter {
-                $0["working"] as? Bool == true && ($0["latency_ms"] as? Double ?? -1) >= 0
+                $0["working"] as? Bool == true && ($0["latency_ms"] as? Double ?? -1).isFinite && ($0["latency_ms"] as? Double ?? -1) >= 0
             }.sorted { ($0["latency_ms"] as? Double ?? .greatestFiniteMagnitude) < ($1["latency_ms"] as? Double ?? .greatestFiniteMagnitude) }
-            let fastest = saved.isEmpty ? results.first?["address"] as? String ?? "" : saved
-            host = fastest.isEmpty && mode == "rescue" ? "1.1.1.1" : fastest
-        default:
-            throw issue("The requested DNS transport is not encoded by the selected native WireGuard profile.")
+            host = saved.isEmpty ? results.first?["address"] as? String ?? "" : saved
+            if host.isEmpty && mode == "rescue" { host = "1.1.1.1" }
+        default: throw issue("Unknown saved WireGuard DNS policy.")
         }
-        guard host.trimmingCharacters(in: .whitespacesAndNewlines) == dnsHost else {
-            throw issue("WireGuard DNS does not match the frozen exit-node DNS selection.")
+        guard (1...65535).contains(port), serverIP(host) || hostname(host) else { throw issue("The selected DNS host or port is invalid.") }
+        if type == "udp", port == 53, serverIP(host) {
+            guard host == importedDNS else { throw issue("WireGuard DNS does not match the frozen exit-node DNS selection.") }
         }
+        var server: [String: Any] = ["type": type, "tag": "selected-dns", "server": host, "server_port": port, "detour": "proxy"]
+        if ["tls", "https", "h3"].contains(type) {
+            if name.isEmpty && hostname(host) { name = host }
+            guard hostname(name) else { throw issue("Encrypted DNS requires its explicit TLS server name.") }
+            server["tls"] = ["enabled": true, "server_name": name]
+        }
+        if ["https", "h3"].contains(type) {
+            if path.isEmpty { path = "/dns-query" }
+            guard path.hasPrefix("/"), path.utf8.count <= 2048, path.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value < 0x7f }) else { throw issue("Invalid encrypted DNS request path.") }
+            server["path"] = path
+        }
+        var servers: [[String: Any]] = []
+        if !literalIP(host) {
+            let choices = ["fastest_dns_host", "adguard_ipv4", "adguard_ipv6"]
+            var bootstrap = ""
+            for key in choices {
+                let candidate = try setting(profile, key, "")
+                if serverIP(candidate) { bootstrap = candidate; break }
+            }
+            guard !bootstrap.isEmpty else { throw issue("Resolver hostname requires a literal saved bootstrap inside the encrypted exit.") }
+            servers.append(["type": "udp", "tag": "routervpn-bootstrap-dns", "server": bootstrap, "server_port": 53, "detour": "proxy"])
+            server["domain_resolver"] = "routervpn-bootstrap-dns"
+        }
+        servers.append(server)
         let exit = try wireGuardEndpoint(endpoint, tag: "proxy")
         let config: [String: Any] = [
-            "inbounds": [["type": "tun", "tag": "tun-in", "auto_route": true]],
+            "log": ["level": "warn"],
+            "inbounds": [["type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true,
+                "stack": "system", "address": ["172.29.94.1/30", "fd29:94::1/126"], "mtu": 1280]],
             "endpoints": [exit], "outbounds": [[String: Any]](),
-            "dns": ["servers": [["type": "udp", "tag": "selected-dns", "server": dnsHost, "server_port": 53, "detour": "proxy"]], "final": "selected-dns"],
-            "route": ["final": "proxy", "rules": [["protocol": "dns", "action": "hijack-dns"]]]
+            "dns": try exitDNS(["servers": servers, "final": "selected-dns"]),
+            "route": ["auto_detect_interface": true, "final": "proxy", "rules": [["protocol": "dns", "action": "hijack-dns"]]]
         ]
         return ["sing-box.json": try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])]
+    }
+
+    /// Apply a saved IPv6 preference to the existing single-node WG graph.
+    static func singleWireGuardPolicy(_ files: [String: Data], profile: [String: Any]) throws -> [String: Data] {
+        struct Policy: Decodable { let ipv6_mode: String?; let daita_enabled: Bool?; let jumbo_tun: Bool? }
+        let policy = try JSONDecoder().decode(Policy.self, from: JSONSerialization.data(withJSONObject: profile))
+        guard policy.daita_enabled != true, policy.jumbo_tun != true else { throw issue("This native graph does not own the requested padding or Jumbo policy.") }
+        let ipv6 = (policy.ipv6_mode ?? "on").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["", "on", "auto", "off"].contains(ipv6) else { throw issue("Unknown saved IPv6 policy.") }
+        guard ipv6 == "off" else { return files }
+        guard let data = files["sing-box.json"], data.count <= maxBytes,
+              var root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let inbounds = root["inbounds"] as? [[String: Any]], inbounds.count == 1,
+              inbounds[0]["tag"] as? String == "tun-in", inbounds[0]["type"] as? String == "tun",
+              var route = root["route"] as? [String: Any], route["final"] as? String == "proxy",
+              let rules = route["rules"] as? [[String: Any]], var dns = root["dns"] as? [String: Any] else { throw issue("Native WG lost its one-TUN graph.") }
+        route["rules"] = [["inbound": ["tun-in"], "ip_version": 6, "action": "reject"]] + rules
+        dns["strategy"] = "ipv4_only"; root["route"] = route; root["dns"] = dns
+        var result = files; result["sing-box.json"] = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]); return result
+    }
+
+    /// The host and extension both validate the same no-fallback DNS graph.
+    private static func exitDNS(_ source: [String: Any]) throws -> [String: Any] {
+        guard let final = source["final"] as? String, fullMatch(final, "[A-Za-z0-9._-]{1,96}"),
+              var servers = source["servers"] as? [[String: Any]], (1...2).contains(servers.count),
+              source["rules"] == nil || (source["rules"] as? [Any])?.isEmpty == true,
+              let selected = servers.firstIndex(where: { $0["tag"] as? String == final }) else { throw issue("DNS needs an exact owned final resolver and no custom routing rules.") }
+        var tags: Set<String> = []
+        for index in servers.indices {
+            guard let tag = servers[index]["tag"] as? String, fullMatch(tag,"[A-Za-z0-9._-]{1,96}"), tags.insert(tag).inserted,
+                  let host = servers[index]["server"] as? String, serverIP(host) || hostname(host),
+                  let type = servers[index]["type"] as? String, ["udp", "tcp", "tls", "https", "h3"].contains(type),
+                  (1...65535).contains(try integer(servers[index]["server_port"]) ?? 53),
+                  (servers[index]["detour"] as? String) == "proxy" else { throw issue("DNS has an invalid or unowned encrypted route.") }
+            for field in ["bind_interface", "inet4_bind_address", "inet6_bind_address", "routing_mark", "network_strategy", "network_type", "fallback_network_type"] {
+                guard servers[index][field] == nil else { throw issue("DNS cannot replace a pre-existing underlay dial policy.") }
+            }
+            if ["tls", "https", "h3"].contains(type) {
+                guard let tls = servers[index]["tls"] as? [String: Any], tls["enabled"] as? Bool == true,
+                      tls["insecure"] == nil || tls["insecure"] as? Bool == false,
+                      let name = tls["server_name"] as? String, hostname(name) else { throw issue("DNS requires verified TLS with the saved server name.") }
+            }
+            servers[index]["detour"] = "proxy"
+        }
+        let host = servers[selected]["server"] as! String
+        if literalIP(host) {
+            guard servers.count == 1, servers[selected]["domain_resolver"] == nil else { throw issue("Literal DNS must not retain an unowned bootstrap resolver.") }
+        } else {
+            guard servers.count == 2, let bootstrapTag = servers[selected]["domain_resolver"] as? String, bootstrapTag != final,
+                  let bootstrap = servers.first(where: { $0["tag"] as? String == bootstrapTag }),
+                  let address = bootstrap["server"] as? String, serverIP(address), bootstrap["type"] as? String == "udp",
+                  (try integer(bootstrap["server_port"]) ?? 53) == 53, bootstrap["domain_resolver"] == nil else { throw issue("DNS hostname bootstrap must be literal, nonrecursive and owned by the same exit.") }
+        }
+        var result = source; result["servers"] = servers; return result
+    }
+    private static func setting(_ profile: [String: Any], _ key: String, _ fallback: String) throws -> String {
+        guard let value = profile[key] else { return fallback }
+        guard let value = value as? String else { throw issue("Invalid saved \(key) type.") }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private static func hostname(_ value: String) -> Bool {
+        guard !value.isEmpty, value.utf8.count <= 253, !literalIP(value), value.contains("."),
+              value.unicodeScalars.allSatisfy({ $0.isASCII }), !value.hasSuffix(".") else { return false }
+        return value.split(separator: ".", omittingEmptySubsequences: false).allSatisfy {
+            fullMatch(String($0), "[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+        } && value.unicodeScalars.contains { CharacterSet.letters.contains($0) }
     }
 
     /// Both hops have independent userspace WG devices. Only the final graph

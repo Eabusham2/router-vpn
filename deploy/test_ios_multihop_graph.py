@@ -240,9 +240,11 @@ for mode in ["dot","doh","doh3","invented"] {
 var customDNS = wgExitProfile;customDNS["dns_mode"]="custom";customDNS["dns_host"]="10.77.0.1";customDNS["dns_protocol"]="udp"
 try check("WG custom UDP53 DNS", try wgFiles(wgExit,customDNS)["sing-box.json"] != nil)
 customDNS["dns_port"]=5353
-reject("do not silently replace selected DNS port") { _ = try wgFiles(wgExit,customDNS) }
+let customPort = try JSONSerialization.jsonObject(with:wgFiles(wgExit,customDNS)["sing-box.json"]!) as! [String:Any]
+try check("nonstandard DNS port retained", ((customPort["dns"] as! [String:Any])["servers"] as! [[String:Any]])[0]["server_port"] as? Int == 5353)
 customDNS["dns_port"]=53;customDNS["dns_protocol"]="tcp"
-reject("do not silently replace selected DNS protocol") { _ = try wgFiles(wgExit,customDNS) }
+let customTCP = try JSONSerialization.jsonObject(with:wgFiles(wgExit,customDNS)["sing-box.json"]!) as! [String:Any]
+try check("custom TCP DNS retained", ((customTCP["dns"] as! [String:Any])["servers"] as! [[String:Any]])[0]["type"] as? String == "tcp")
 var measuredDNS = wgExitProfile;measuredDNS["dns_mode"]="fastest";measuredDNS["fastest_dns_host"]="10.77.0.1"
 try check("WG measured DNS selection", try wgFiles(wgExit,measuredDNS)["sing-box.json"] != nil)
 measuredDNS.removeValue(forKey:"fastest_dns_host")
@@ -257,6 +259,76 @@ reject("WG no alternate direct outbound") { _ = try wgGraph(files(bypassRoot)) }
 bypassRoot = try JSONSerialization.jsonObject(with:nestedInput["sing-box.json"]!) as! [String:Any]
 bypassRoot["endpoints"] = [wgExit,wgExit]
 reject("WG no duplicate exit endpoint") { _ = try wgGraph(files(bypassRoot)) }
+
+// The exact extension graph supports encrypted DNS and its exit-routed bootstrap.
+var advancedFixtures: [String:Data] = [:]
+for (mode,type,port) in [("dot","tls",853),("doh","https",443),("doh3","h3",443),("custom","tcp",5353)] {
+    for host in ["192.0.2.53","resolver.example.test"] {
+        var profile = wgExitProfile
+        profile["dns_mode"] = mode; profile["dns_protocol"] = "tcp"; profile["dns_host"] = host
+        profile["dns_port"] = port; profile["dns_server_name"] = "resolver.example.test"; profile["dns_path"] = "/owned-query"
+        let raw = try wgFiles(wgExit,profile)
+        let graph = try wgGraph(raw,profile)
+        let object = try JSONSerialization.jsonObject(with:graph["sing-box.json"]!) as! [String:Any]
+        let dns = object["dns"] as! [String:Any], servers = dns["servers"] as! [[String:Any]]
+        let selected = servers.last!
+        try check("WG keeps DNS protocol", selected["type"] as? String == type)
+        try check("WG keeps selected DNS host and port", selected["server"] as? String == host && selected["server_port"] as? Int == port)
+        try check("all DNS dialers use the encrypted exit", servers.allSatisfy { $0["detour"] as? String == "proxy" })
+        if !P.literalIP(host) {
+            try check("hostname has literal bootstrap", servers.count == 2 && servers[0]["server"] as? String == "10.77.0.1" && selected["domain_resolver"] as? String == servers[0]["tag"] as? String)
+        } else { try check("literal DNS needs no bootstrap", servers.count == 1 && selected["domain_resolver"] == nil) }
+        if type != "tcp" {
+            let tls = selected["tls"] as! [String:Any]
+            try check("DNS certificate identity preserved", tls["enabled"] as? Bool == true && tls["server_name"] as? String == "resolver.example.test" && tls["insecure"] == nil)
+        }
+        if mode == "doh" || mode == "doh3" { try check("encrypted request path preserved", selected["path"] as? String == "/owned-query") }
+        var ipv4 = profile; ipv4["ipv6_mode"] = "off"
+        let single = try P.singleWireGuardPolicy(raw, profile:ipv4)
+        let singleObject = try JSONSerialization.jsonObject(with:single["sing-box.json"]!) as! [String:Any]
+        let tuns = singleObject["inbounds"] as! [[String:Any]]
+        let rules = (singleObject["route"] as! [String:Any])["rules"] as! [[String:Any]]
+        try check("single WG uses one dual-stack captured TUN", tuns.count == 1 && (tuns[0]["address"] as? [String])?.count == 2)
+        try check("single IPv6 policy rejects only TUN traffic", rules[0]["inbound"] as? [String] == ["tun-in"] && rules[0]["ip_version"] as? Int == 6 && rules[0]["action"] as? String == "reject")
+        try check("single DNS policy also disables AAAA", (singleObject["dns"] as! [String:Any])["strategy"] as? String == "ipv4_only")
+        advancedFixtures["wg-dns-"+mode+(P.literalIP(host) ? "-literal" : "-hostname")+".json"] = try RouterVPNMTUPolicy.multihop(graph,entryProfile:entry,exitProfile:profile)["sing-box.json"]!
+        advancedFixtures["single-wg-dns-"+mode+(P.literalIP(host) ? "-literal" : "-hostname")+".json"] = try RouterVPNMTUPolicy.libbox(single,profile:ipv4)["sing-box.json"]!
+    }
+}
+var hostnamePolicy = wgExitProfile
+hostnamePolicy["dns_mode"]="doh";hostnamePolicy["dns_host"]="resolver.example.test";hostnamePolicy["dns_server_name"]="resolver.example.test"
+let hostnameInput = try wgFiles(wgExit,hostnamePolicy)
+let hostnameRoot = try JSONSerialization.jsonObject(with:hostnameInput["sing-box.json"]!) as! [String:Any]
+for mutation in ["direct-bootstrap","self-reference","missing-bootstrap","duplicate-tag","insecure","wrong-port","custom-rule","wrong-final","hostname-bootstrap","extra-direct"] {
+    var changed = hostnameRoot
+    var dns = changed["dns"] as! [String:Any], servers = dns["servers"] as! [[String:Any]]
+    switch mutation {
+    case "direct-bootstrap":servers[0]["detour"]="direct"
+    case "self-reference":servers[1]["domain_resolver"]="selected-dns"
+    case "missing-bootstrap":servers.removeFirst()
+    case "duplicate-tag":servers[0]["tag"]="selected-dns"
+    case "insecure":var tls=servers[1]["tls"] as! [String:Any];tls["insecure"]=true;servers[1]["tls"]=tls
+    case "wrong-port":servers[1]["server_port"]=true
+    case "custom-rule":dns["rules"]=[["query_type":"A","server":"direct"]]
+    case "wrong-final":dns["final"]="unowned"
+    case "hostname-bootstrap":servers[0]["server"]="another.example.test"
+    default:servers.append(["type":"local","tag":"unowned-system"])
+    }
+    dns["servers"]=servers;changed["dns"]=dns
+    reject("unsafe DNS graph " + mutation) { _ = try wgGraph(files(changed),hostnamePolicy) }
+}
+for (field,value) in [("dns_port",0 as Any),("dns_port",true as Any),("dns_host","https://resolver.example.test" as Any),("dns_host","localhost" as Any),("dns_server_name","" as Any),("dns_path","relative-path" as Any)] {
+    var changed = hostnamePolicy;changed["dns_host"]="192.0.2.53";changed[field]=value
+    reject("invalid DNS policy " + field) { _ = try wgFiles(wgExit,changed) }
+}
+for (field,value) in [("ipv6_mode","unrecognized" as Any),("ipv6_mode",true as Any),("daita_enabled",true as Any),("jumbo_tun",true as Any)] {
+    var changed=wgExitProfile;changed[field]=value
+    reject("single graph does not ignore " + field) { _ = try P.singleWireGuardPolicy(nestedInput,profile:changed) }
+}
+if CommandLine.arguments.count == 2 {
+    let directory=URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true)
+    for (name,data) in advancedFixtures { try data.write(to:directory.appendingPathComponent(name)) }
+}
 if CommandLine.arguments.count == 2 {
     let directory=URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true)
     try RouterVPNMTUPolicy.multihop(nested,entryProfile:entry,exitProfile:wgExitProfile)["sing-box.json"]!.write(to:directory.appendingPathComponent("wireguard.json"))

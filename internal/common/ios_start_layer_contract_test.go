@@ -32,9 +32,9 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	provider := repoFile(t, "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift")
 	for _, required := range []string{
 		"try IOSStartLayer.validateWireGuard(profile: selectedProfile)",
-		"var rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)",
+		"rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)",
 		"let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)",
-		"let files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)",
+		"var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)",
 		"try IOSStartLayer.validateExternal(profile: selectedProfile)",
 		"try engine.start(files: files, strict: strict)",
 		"proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID",
@@ -53,10 +53,22 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	body := provider[start:end]
 	native := strings.Index(body, "LibboxRouterCompileXrayProfile(")
 	compose := strings.Index(body, "let composedFiles = try IOSStartLayer.apply(")
-	mtu := strings.Index(body, "let files = try RouterVPNMTUPolicy.libbox(composedFiles,")
+	mtu := strings.Index(body, "var files = try RouterVPNMTUPolicy.libbox(composedFiles,")
 	run := strings.Index(body, "try engine.start(files: files, strict: strict)")
 	if native < 0 || compose <= native || mtu <= compose || run <= mtu {
 		t.Fatal("Start Layer and MTU must both compose before the native engine starts")
+	}
+
+	for _, required := range []string{
+		"RouterVPNMultihopGraph.wireGuardFiles(",
+		"RouterVPNMultihopGraph.singleWireGuardPolicy(",
+		"LibboxRouterApplyMultihopLANPolicy(",
+		"let provenNodeID = expectedNodeID",
+	} {
+		position := strings.Index(body, required)
+		if position < 0 || position >= run {
+			t.Fatalf("native WG validation must precede engine launch: %q", required)
+		}
 	}
 
 	selector := repoFile(t, "ios/RouterVPN/App/IOSRuntimeSelection.swift")
