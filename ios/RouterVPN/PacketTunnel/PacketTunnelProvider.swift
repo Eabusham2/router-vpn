@@ -349,6 +349,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 16, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during Libbox proof."])); return }
             guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(42, "A newer iOS Libbox runtime replaced this proof attempt.")); return }
             if let proofError { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(proofError); return }
+            guard self.currentPathProofGuard() === singlePathGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Native path changed during node proof.")); return }
             do { try engine.activatePerformance() } catch { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(error); return }
             guard self.currentPathProofGuard() === singlePathGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Native path changed during performance activation.")); return }
             self.enableForwarding(profileData: forwardingProfileData, proofID: provenNodeID)

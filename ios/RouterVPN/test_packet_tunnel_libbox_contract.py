@@ -69,6 +69,21 @@ def verify_proof_lifecycle(source):
             for phase in phases:
                 assert guard in phase, 'multihop must retain its network generation through every asynchronous phase'
                 assert 'self.libboxEngine === engine else' in phase, 'multihop must retain the exact runtime through every asynchronous phase'
+            # Padding activation is another asynchronous/private-network phase.
+            # A guard before it cannot replace a guard after it, or vice versa.
+            padding = body.index('engine.activatePerformance()')
+            assert guard in body[body.index('if let exitError'):padding]
+            assert guard in body[padding:success]
+        elif name == 'startLibbox':
+            assert 'let singlePathGuard = self.armNetworkProofGuard()' in body
+            proof = body.index(calls[0])
+            padding = body.index('engine.activatePerformance()')
+            guard = 'guard self.currentPathProofGuard() === singlePathGuard else'
+            assert arm < proof < padding < success
+            assert owner in body[proof:padding]
+            assert body.index('if let proofError') < body.index(guard)
+            assert guard in body[proof:padding], 'node proof must retain its original network generation'
+            assert guard in body[padding:success], 'padding activation must retain the same network generation'
         else:
             for call in calls:
                 assert 0 <= body.find(call) < arm, name + ': guard activation must follow routed identity proof'
@@ -87,19 +102,22 @@ for runtime in ('startWireGuard', 'startMultihop', 'startLibbox', 'startExternal
     else:
         raise AssertionError('lifecycle contract accepted an unguarded ' + runtime)
 
-# Each generation checkpoint is independently required, not a marker count.
-checkpoint = 'guard self.currentPathProofGuard() === comparisonGuard else'
-start = provider.index('    private func startMultihop(')
-end = provider.index('    private func multihopWireGuardEndpoint(', start)
-for match in re.finditer(re.escape(checkpoint), provider[start:end]):
-    at = start + match.start()
-    broken = provider[:at] + provider[at:].replace(checkpoint, 'guard true else', 1)
-    try:
-        verify_proof_lifecycle(broken)
-    except AssertionError:
-        pass
-    else:
-        raise AssertionError('lifecycle contract accepted a stale multihop generation')
+# Removing any one checkpoint must be rejected, including the checkpoint
+# after padding rather than merely the older comparison/node-proof checks.
+for runtime, captured in [('startMultihop','comparisonGuard'),('startLibbox','singlePathGuard')]:
+    checkpoint = 'guard self.currentPathProofGuard() === ' + captured + ' else'
+    start = provider.index('    private func ' + runtime + '(')
+    end = provider.find('\n    private func ',start+1)
+    assert end > start
+    for match in re.finditer(re.escape(checkpoint),provider[start:end]):
+        at = start + match.start()
+        broken = provider[:at] + provider[at:].replace(checkpoint,'guard true else',1)
+        try:
+            verify_proof_lifecycle(broken)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError('lifecycle contract accepted a stale ' + runtime + ' generation')
 
 assert 'adapter.stop { [weak self] _ in self?.wireGuardAdapter = nil' not in provider, 'old async stop callback can clobber a newer WireGuard owner'
 assert 'defer { self.proofTask = nil; self.proofSession?.finishTasksAndInvalidate(); self.proofSession = nil }' not in provider, 'old proof callback can clobber a newer proof session'
