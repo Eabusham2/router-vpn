@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"router-vpn/internal/mtuprobe"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,14 +129,24 @@ func (s *server) runDAITASink() {
 		return
 	}
 	defer pc.Close()
-	buf := make([]byte, 2048)
+	s.servePrivateDatagrams(pc)
+}
+func (s *server) servePrivateDatagrams(pc net.PacketConn) {
+	buf := make([]byte, maxPrivateDatagram+1)
+	budget := &mtuprobe.Limiter{}
 	for {
 		n, addr, err := pc.ReadFrom(buf)
 		if err != nil {
 			log.Printf("DAITA-like cover endpoint: %v", err)
 			return
 		}
-		if n <= 0 {
+		if n <= 0 || n > maxPrivateDatagram {
+			continue
+		}
+		if reply, handled := s.mtuDatagram(buf[:n], addr, budget); handled {
+			if reply != nil {
+				_, _ = pc.WriteTo(reply, addr)
+			}
 			continue
 		}
 		// Generate a bounded reverse-direction packet. The reply is never larger
