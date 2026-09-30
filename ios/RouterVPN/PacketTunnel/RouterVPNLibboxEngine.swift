@@ -114,9 +114,11 @@ final class RouterVPNLibboxEngine {
         let owned = server, generation = ownershipGeneration
         ownershipLock.unlock()
         guard let owned else { throw error("Native performance owner is missing") }
+        var count: Int64 = 0
         var failure: NSError?
-        let count = LibboxRouterStartPerformance(owned, &failure)
+        let success = LibboxRouterStartPerformance(owned, &count, &failure)
         if let failure { throw failure }
+        guard success, (0...2).contains(count) else { throw error("Native performance activation returned an invalid result") }
         guard count > 0 else { return }
         let watcher = PerformanceWatch(owner: self, server: owned, generation: generation)
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))

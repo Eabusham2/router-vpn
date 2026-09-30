@@ -59,6 +59,8 @@ class Shipping(unittest.TestCase):
         engine=(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift').read_text()
         for marker in ['LibboxRouterInvalidatePerformance(owned)','PerformanceWatch','ownershipGeneration == generation','performanceHealth = nil','paddingHealth?.cancel()']:
             self.assertIn(marker,engine)
+        self.assertIn('LibboxRouterStartPerformance(owned, &count, &failure)',engine)
+        self.assertIn('var count: Int64 = 0',engine)
         prefs=(ROOT/'ios/RouterVPN/App/IOSConnectionProfilesView.swift').read_text()
         for name in ['daitaEnabled','jumboTUN']:
             self.assertIn('profile.'+name+' = prefs.'+name,prefs)
