@@ -108,7 +108,11 @@ func (c *Controller) live(ctx context.Context, expected State) bool {
 		return false
 	}
 	current, err := c.owner.Capture()
-	return err == nil && current == expected && current.Session != "" && current.Path != "" && current.Interface != ""
+	// A platform read may synchronously race a Stop or network callback.
+	c.mu.Lock()
+	valid = !c.closed && !c.invalid
+	c.mu.Unlock()
+	return valid && ctx.Err() == nil && err == nil && current == expected && current.Session != "" && current.Path != "" && current.Interface != ""
 }
 func (c *Controller) sessionLive(ctx context.Context, expected State) (State, bool) {
 	if ctx.Err() != nil {
@@ -121,49 +125,27 @@ func (c *Controller) sessionLive(ctx context.Context, expected State) (State, bo
 		return State{}, false
 	}
 	current, err := c.owner.Capture()
-	return current, err == nil && current.Session == expected.Session && current.Path == expected.Path && current.Interface == expected.Interface
+	c.mu.Lock()
+	valid = !c.closed && !c.invalid
+	c.mu.Unlock()
+	return current, valid && ctx.Err() == nil && err == nil && current.Session == expected.Session && current.Path == expected.Path && current.Interface == expected.Interface
 }
-func (c *Controller) phase(value string) { c.mu.Lock(); c.status.Phase = value; c.mu.Unlock() }
+func (c *Controller) phase(value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.closed && !c.invalid {
+		c.status.Phase = value
+	}
+}
+
+// Run and native asynchronous Start use the same published operation and
+// completion path. Neither entrypoint can bypass cancellation or invalidation.
 func (c *Controller) Run(request string, force bool) error {
-	if !requestPattern.MatchString(request) {
-		return errors.New("invalid MTU request identity")
-	}
-	c.mu.Lock()
-	if c.closed || c.invalid || c.status.Running {
-		c.mu.Unlock()
-		return errors.New("MTU owner is busy, stopped or invalidated")
-	}
-	if !c.Requested() {
-		c.mu.Unlock()
-		return errors.New("choose Auto MTU without Jumbo before Retest")
-	}
-	if c.status.Request == request {
-		c.mu.Unlock()
-		return errors.New("MTU request identifiers cannot be reused")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	done := make(chan struct{})
-	c.cancel = cancel
-	c.done = done
-	c.status = Status{Request: request, Phase: "capturing", Running: true, Source: "unmeasured", Candidates: []Candidate{}}
-	config := c.currentConfig
-	c.mu.Unlock()
-	defer close(done)
-	defer cancel()
-	err := c.run(ctx, config, force)
-	c.mu.Lock()
-	c.status.Running = false
-	c.status.Complete = true
+	op, err := c.begin(request)
 	if err != nil {
-		if c.status.Failure == "" {
-			c.status.Failure = "MTU measurement or adoption failed"
-		}
-		if !c.status.Restored {
-			c.status.Phase = "failed"
-		}
+		return err
 	}
-	c.mu.Unlock()
-	return err
+	return c.execute(op, force)
 }
 func (c *Controller) run(ctx context.Context, config string, force bool) (runErr error) {
 	original, err := c.owner.Capture()
@@ -206,6 +188,10 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 			return
 		}
 		c.mu.Lock()
+		if c.closed || c.invalid || rollbackCtx.Err() != nil {
+			c.mu.Unlock()
+			return
+		}
 		c.currentConfig = config
 		c.status.Restored = true
 		c.status.EffectiveMTU = original.MTU
@@ -278,6 +264,9 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		return errors.New("no MTU candidate passed the private packet and transfer measurements")
 	}
 	winner := Choose(passed, original.MTU)
+	if !winner.Working {
+		return errors.New("no finite eligible MTU measurement remained")
+	}
 	c.phase("adopting " + strconv.Itoa(winner.MTU))
 	if !c.live(ctx, expected) {
 		return context.Canceled
@@ -314,6 +303,10 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		return err
 	}
 	c.mu.Lock()
+	if c.closed || c.invalid || ctx.Err() != nil {
+		c.mu.Unlock()
+		return context.Canceled
+	}
 	c.currentConfig = final
 	c.status.Measured = true
 	c.status.EffectiveMTU = winner.MTU
@@ -354,8 +347,14 @@ func (c *Controller) packets(ctx context.Context, engine *probeEngine, result *C
 		if err != nil {
 			return err
 		}
+		deadline := time.Now().Add(600 * time.Millisecond)
+		if end, ok := ctx.Deadline(); ok && end.Before(deadline) {
+			deadline = end
+		}
+		if err = conn.SetDeadline(deadline); err != nil {
+			return errors.New("MTU socket cannot enforce its bounded deadline")
+		}
 		result.PacketsSent++
-		_ = conn.SetDeadline(time.Now().Add(600 * time.Millisecond))
 		started := time.Now()
 		n, err := conn.Write(request)
 		if err != nil || n != len(request) {
@@ -363,7 +362,7 @@ func (c *Controller) packets(ctx context.Context, engine *probeEngine, result *C
 		}
 		reply := make([]byte, size+1)
 		n, err = conn.Read(reply)
-		if err != nil || mtuprobe.ValidateReply(request, reply[:n], c.profile.Token, c.profile.Proof, time.Now()) != nil {
+		if err != nil || n < 0 || n > len(reply) || mtuprobe.ValidateReply(request, reply[:n], c.profile.Token, c.profile.Proof, time.Now()) != nil {
 			continue
 		}
 		result.PacketsReceived++
@@ -380,25 +379,32 @@ func (c *Controller) packets(ctx context.Context, engine *probeEngine, result *C
 // Choose refuses throughput changes within a 5% noise band and never trades
 // over 0.2 ms of measured packet RTT for the apparent transfer-rate improvement.
 func Choose(candidates []Candidate, original int) Candidate {
-	if len(candidates) == 0 {
-		return Candidate{}
-	}
-	winner := candidates[0]
-	for _, candidate := range candidates {
-		if candidate.MTU == original {
-			winner = candidate
-			break
-		}
-	}
 	rate := func(candidate Candidate) float64 {
-		if !candidate.Working || candidate.Download == nil || candidate.Upload == nil {
+		if !candidate.Working || candidate.MTU < MinMTU || candidate.MTU > MaxMTU || candidate.MedianRTT <= 0 ||
+			math.IsNaN(candidate.MedianRTT) || math.IsInf(candidate.MedianRTT, 0) || candidate.Download == nil || candidate.Upload == nil {
 			return 0
 		}
 		a, b := candidate.Download.Mbps, candidate.Upload.Mbps
 		if a <= 0 || b <= 0 || math.IsNaN(a) || math.IsNaN(b) || math.IsInf(a, 0) || math.IsInf(b, 0) {
 			return 0
 		}
-		return 2 / (1/a + 1/b)
+		low, high := math.Min(a, b), math.Max(a, b)
+		return low / ((1 + low/high) / 2)
+	}
+	winner := Candidate{}
+	for _, candidate := range candidates {
+		if rate(candidate) == 0 {
+			continue
+		}
+		if !winner.Working || candidate.MTU == original {
+			winner = candidate
+		}
+		if candidate.MTU == original {
+			break
+		}
+	}
+	if !winner.Working {
+		return Candidate{}
 	}
 	baselineRTT := winner.MedianRTT
 	for _, candidate := range candidates {
@@ -453,9 +459,24 @@ func (c *Controller) Cancel(request string) {
 	}
 	c.mu.Unlock()
 }
+
+// revokeLocked keeps historical samples without presenting them as current.
+// A zero effective MTU means unknown; it is never passed to ChangeMTU.
+func (c *Controller) revokeLocked(phase string) {
+	c.status.Measured = false
+	c.status.Restored = false
+	c.status.EffectiveMTU = 0
+	c.status.Source = "unavailable-stale-owner"
+	c.status.Phase = phase
+}
 func (c *Controller) Invalidate() {
 	c.mu.Lock()
 	c.invalid = true
+	if c.closed {
+		c.revokeLocked("stopped")
+	} else {
+		c.revokeLocked("invalidated")
+	}
 	if c.cancel != nil {
 		c.cancel()
 	}
@@ -464,6 +485,7 @@ func (c *Controller) Invalidate() {
 func (c *Controller) Close() error {
 	c.mu.Lock()
 	c.closed = true
+	c.revokeLocked("stopped")
 	if c.cancel != nil {
 		c.cancel()
 	}
