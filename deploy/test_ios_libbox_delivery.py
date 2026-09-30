@@ -23,6 +23,8 @@ public final class LibboxTestState: @unchecked Sendable {
     private var plan: LibboxRouterMultihop?
     private var starts = 0
     private var stops = 0
+    private var paddingCount: Int64 = 0
+    private var server: LibboxCommandServer?
     public func configure(block: Bool = false, fail: Bool = false) {
         lock.lock(); defer { lock.unlock() }
         self.block = block; self.fail = fail; plan = nil
@@ -33,6 +35,12 @@ public final class LibboxTestState: @unchecked Sendable {
         plan = value; return value
     }
     public func current() -> LibboxRouterMultihop? { lock.lock(); defer { lock.unlock() }; return plan }
+    public func configurePadding(_ count: Int64) { lock.lock(); paddingCount=count; lock.unlock() }
+    public func makeServer() -> LibboxCommandServer {
+        lock.lock(); defer { lock.unlock() }
+        let value=LibboxCommandServer(paddingCount);server=value;return value
+    }
+    public func currentServer() -> LibboxCommandServer? { lock.lock(); defer { lock.unlock() }; return server }
     public func started() { lock.lock(); starts += 1; lock.unlock() }
     public func stopped() { lock.lock(); stops += 1; lock.unlock() }
     public func counts() -> (Int, Int) { lock.lock(); defer { lock.unlock() }; return (starts, stops) }
@@ -62,7 +70,19 @@ public final class LibboxRouterMultihop {
     public func allowCompletion() { release.signal() }
 }
 public final class LibboxCommandServer {
-    public init() {}
+    private let lock=NSLock()
+    private let paddingCount: Int64
+    private var invalidated=false
+    private var active=false
+    public init(_ count: Int64 = 0) { paddingCount=count }
+    public func activate(_ count: UnsafeMutablePointer<Int64>, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool {
+        lock.lock();defer { lock.unlock() }
+        if invalidated { failure?.pointee=NSError(domain:"Fixture",code:7);return false }
+        count.pointee=paddingCount;active=paddingCount>0;return true
+    }
+    public func invalidatePadding() { lock.lock(); invalidated=true; active=false; lock.unlock() }
+    public func performanceFailure() -> String { lock.lock(); defer { lock.unlock() }; return paddingCount==0 || (active && !invalidated) ? "" : "fixture path invalidated" }
+
     public func start() throws { LibboxTestState.shared.started() }
     public func startOrReloadService(_ text: String, options: LibboxOverrideOptions) throws {}
     public func closeService() throws {}
@@ -85,11 +105,16 @@ public final class LibboxRouterHopMeasurement {
     public func networkChanged() {}
     public func close() throws {}
 }
+// Exact generated scalar/error ABI, including output and NSError pointers.
+public func LibboxRouterStartPerformance(_ server: LibboxCommandServer, _ count: UnsafeMutablePointer<Int64>, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.activate(count,failure) }
+public func LibboxRouterInvalidatePerformance(_ server: LibboxCommandServer) { server.invalidatePadding() }
+public func LibboxRouterPerformanceFailure(_ server: LibboxCommandServer) -> String? { server.performanceFailure() }
+
 public func LibboxNewRouterHopMeasurement(_ server: LibboxCommandServer, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterHopMeasurement? { LibboxRouterHopMeasurement() }
 
 public func LibboxNewRouterMultihop(_ text: String, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text) }
 public func LibboxSetup(_ setup: LibboxSetupOptions, _ failure: UnsafeMutablePointer<NSError?>?) {}
-public func LibboxNewCommandServer(_ platform: AnyObject, _ handler: AnyObject, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxCommandServer? { LibboxCommandServer() }
+public func LibboxNewCommandServer(_ platform: AnyObject, _ handler: AnyObject, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxCommandServer? { LibboxTestState.shared.makeServer() }
 '''
 HARNESS = r'''
 import Foundation
@@ -180,6 +205,41 @@ final class CompletionState: @unchecked Sendable {
             check("failure allows reentrant owned cleanup", completed.wait())
             check("failure is delivered once", completed.values() == (1, 1))
             check("failed comparison never reports health cancellation", provider.count() == 0)
+        }
+        do {
+            state.configurePadding(1)
+            let provider=PacketTunnelProvider()
+            let owned=RouterVPNLibboxEngine(tunnel:provider)
+            try owned.start(files:files,strict:false)
+            try owned.activatePerformance()
+            let old=state.currentServer()!
+            old.invalidatePadding()
+            let deadline=Date().addingTimeInterval(3)
+            while provider.count()==0 && Date()<deadline { Thread.sleep(forTimeInterval:0.01) }
+            check("padding failure cancels its owned tunnel",provider.count()>0)
+            owned.stop()
+            state.configurePadding(0)
+            let replacementProvider=PacketTunnelProvider()
+            let replacement=RouterVPNLibboxEngine(tunnel:replacementProvider)
+            try replacement.start(files:files,strict:false)
+            try replacement.activatePerformance()
+            old.invalidatePadding()
+            Thread.sleep(forTimeInterval:0.65)
+            check("old padding failure cannot cancel replacement",replacementProvider.count()==0)
+            replacement.stop()
+        }
+        do {
+            state.configurePadding(2)
+            let provider=PacketTunnelProvider()
+            let engine=RouterVPNLibboxEngine(tunnel:provider)
+            try engine.start(files:files,strict:false)
+            let server=state.currentServer()!
+            try engine.activatePerformance()
+            engine.stop()
+            let before=provider.count()
+            server.invalidatePadding();Thread.sleep(forTimeInterval:0.65)
+            check("stopped padding timer cannot cancel again",provider.count()==before)
+            state.configurePadding(0)
         }
         check("no mock native server survives tests", state.counts().0 == state.counts().1)
         print("Swift 6 shipping Libbox delivery: PASS (\(checks) checks; native handles doubled, no network opened)")
