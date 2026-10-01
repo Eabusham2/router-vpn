@@ -1,0 +1,65 @@
+package inbound
+
+import (
+ "context"
+ "errors"
+ "sync"
+ "testing"
+ "time"
+ "github.com/sagernet/sing-box/adapter"
+)
+type mtuTestInbound struct{
+ mu sync.Mutex
+ tag,kind string
+ alive bool
+ started,closed int
+ failure adapter.StartStage
+ fail,closeFail bool
+ gate chan struct{}
+ entered chan struct{}
+}
+func(t *mtuTestInbound)Tag()string{return t.tag}
+func(t *mtuTestInbound)Type()string{return t.kind}
+func(t *mtuTestInbound)Start(stage adapter.StartStage)error{
+ if stage==adapter.StartStateStart&&t.gate!=nil {close(t.entered);<-t.gate}
+ t.mu.Lock();defer t.mu.Unlock();t.started++
+ if t.fail&&stage==t.failure{return errors.New("fixture start error")};t.alive=true;return nil
+}
+func(t *mtuTestInbound)Close()error{t.mu.Lock();defer t.mu.Unlock();t.closed++;t.alive=false;if t.closeFail{return errors.New("fixture close error")};return nil}
+func mtuFixture()(*Manager,*mtuTestInbound,*mtuTestInbound,*mtuTestInbound){
+ a:=&mtuTestInbound{tag:"tun",kind:"tun",alive:true};b:=&mtuTestInbound{tag:"tun",kind:"tun"};r:=&mtuTestInbound{tag:"tun",kind:"tun"}
+ m:=&Manager{started:true,stage:adapter.StartStateStarted,inbounds:[]adapter.Inbound{a},inboundByTag:map[string]adapter.Inbound{"tun":a}}
+ return m,a,b,r
+}
+func TestRouterVPNTunReplacementAndRollback(t *testing.T){
+ for _,fail:=range []bool{false,true}{
+  m,a,b,r:=mtuFixture();b.fail=fail;b.failure=adapter.StartStatePostStart
+  current,err:=m.RouterVPNReplaceTun(context.Background(),a,b,r)
+  if fail{if err==nil||current!=r||!r.alive||b.alive{t.Fatal("failed replacement not restored")}}else{if err!=nil||current!=b||!b.alive||r.alive{t.Fatal("candidate not adopted")}}
+  if a.alive||a.closed!=1{t.Fatal("old TUN retained its native reader")}
+  got,ok:=m.Get("tun");if !ok||got!=current{t.Fatal("wrong registered owner")}
+ }
+}
+func TestRouterVPNTunFailureDoesNotStartAnOverlappingReader(t *testing.T){
+ m,a,b,r:=mtuFixture();b.fail=true;b.closeFail=true
+ current,err:=m.RouterVPNReplaceTun(context.Background(),a,b,r)
+ if current!=nil||err==nil||r.started!=0{t.Fatal("unconfirmed shutdown allowed overlap")}
+ if _,ok:=m.inboundByTag["tun"];ok{t.Fatal("failed owner still published")}
+}
+func TestRouterVPNTunInvalidationAndStaleCapture(t *testing.T){
+ m,a,b,r:=mtuFixture();ctx,cancel:=context.WithCancel(context.Background());cancel()
+ if _,err:=m.RouterVPNReplaceTun(ctx,a,b,r);err==nil||a.closed!=0{t.Fatal("cancelled work changed live TUN")}
+ m,a,b,r=mtuFixture();other:=&mtuTestInbound{tag:"tun",kind:"tun"}
+ if _,err:=m.RouterVPNReplaceTun(context.Background(),other,b,r);err==nil||a.closed!=0{t.Fatal("stale pointer mutated current TUN")}
+}
+func TestRouterVPNTunMutationIsSerialized(t *testing.T){
+ m,a,b,r:=mtuFixture();b.gate=make(chan struct{});b.entered=make(chan struct{})
+ completed:=make(chan struct{});go func(){defer close(completed);_,_=m.RouterVPNReplaceTun(context.Background(),a,b,r)}()
+ <-b.entered
+ other:=&mtuTestInbound{tag:"tun",kind:"tun"};backup:=&mtuTestInbound{tag:"tun",kind:"tun"}
+ second:=make(chan error,1);go func(){_,err:=m.RouterVPNReplaceTun(context.Background(),a,other,backup);second<-err}()
+ select{case <-second:t.Fatal("replacement lock did not serialize ownership");case <-time.After(10*time.Millisecond):}
+ close(b.gate);<-completed
+ if err:=<-second;err==nil{t.Fatal("second stale operation replaced winner")}
+ if other.started!=0{t.Fatal("stale candidate started")}
+}

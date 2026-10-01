@@ -1,0 +1,69 @@
+package inbound
+
+import (
+ "context"
+ "errors"
+ "fmt"
+ "github.com/sagernet/sing-box/adapter"
+)
+
+// RouterVPNReplaceTun is an ownership-checked, TUN-only transaction. Its
+// lifecycle lock is shared with Start, Close, Remove and Create. Get stays
+// available to routing callbacks while a closed reader is replaced.
+func (m *Manager) RouterVPNReplaceTun(ctx context.Context, expected, candidate, rollback adapter.Inbound) (adapter.Inbound, error) {
+ m.routervpnLifecycle.Lock()
+ defer m.routervpnLifecycle.Unlock()
+ if expected == nil || candidate == nil || rollback == nil || expected == candidate || expected == rollback || candidate == rollback {
+  return nil, errors.New("distinct TUN transaction objects required")
+ }
+ tag := expected.Tag()
+ if tag == "" || expected.Type() != "tun" || candidate.Type() != "tun" || rollback.Type() != "tun" || candidate.Tag()!=tag || rollback.Tag()!=tag {
+  return nil, errors.New("TUN transaction cannot replace another inbound family")
+ }
+ m.access.Lock()
+ index := -1
+ for i, owned := range m.inbounds { if owned == expected { index = i; break } }
+ current := m.started && m.stage == adapter.StartStateStarted && m.inboundByTag[tag] == expected && index >= 0
+ m.access.Unlock()
+ if !current || ctx.Err()!=nil {
+  _ = candidate.Close(); _ = rollback.Close()
+  return expected, errors.New("TUN transaction belongs to a stale or stopped inbound")
+ }
+ publish := func(value adapter.Inbound) {
+  m.access.Lock(); defer m.access.Unlock()
+  if value == nil {
+   delete(m.inboundByTag,tag)
+   m.inbounds=append(m.inbounds[:index],m.inbounds[index+1:]...)
+  } else { m.inbounds[index]=value; m.inboundByTag[tag]=value }
+ }
+ start := func(value adapter.Inbound, contextCheck bool) error {
+  for _, stage := range adapter.ListStartStages {
+   if contextCheck && ctx.Err()!=nil { return ctx.Err() }
+   if err:=adapter.LegacyStart(value,stage);err!=nil{return err}
+  }
+  if contextCheck { return ctx.Err() }; return nil
+ }
+ // The application still owns the original OS TUN handle while the native
+ // duplicate is closed. Traffic may pause; it must not fall back to WAN.
+ if err:=expected.Close();err!=nil {
+  _=candidate.Close();_=rollback.Close();publish(nil)
+  return nil, fmt.Errorf("old TUN teardown is unverified: %w",err)
+ }
+ if err:=start(candidate,true);err!=nil {
+  if closeErr:=candidate.Close();closeErr!=nil {
+   _=rollback.Close();publish(nil)
+   return nil,fmt.Errorf("failed candidate could not be stopped: %w",closeErr)
+  }
+  // Cancellation alone restores the old configuration. The platform adapter
+  // independently refuses any OpenTun after Stop or a physical-path change.
+  if restoreErr:=start(rollback,false);restoreErr!=nil {
+   _=rollback.Close();publish(nil)
+   return nil,fmt.Errorf("TUN rollback failed after candidate rejection: %w",restoreErr)
+  }
+  publish(rollback)
+  return rollback,fmt.Errorf("TUN candidate rejected; prior reader restored: %w",err)
+ }
+ _=rollback.Close()
+ publish(candidate)
+ return candidate,nil
+}
