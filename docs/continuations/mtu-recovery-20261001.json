@@ -1,0 +1,30 @@
+{
+  "base": "00b2ec14fb9bb9c11cde94539e2294da0aa7d6b7",
+  "files": [
+    ".github/workflows/mtu-contract.yml",
+    "android/app/build.gradle",
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidMTUDialog.java",
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidMTUMeasurementGate.java",
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidMTUSession.java",
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java",
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java",
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java",
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidNativeProfilePolicy.java",
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSettingsDialog.java",
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidSpeedLabController.java",
+    "android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java",
+    "android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java",
+    "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
+    "android/build-sing-box-libbox.sh",
+    "android/test_android_layered_service_compile.py",
+    "android/test_android_mtu_measurement_gate.py",
+    "android/test_android_mtu_session.py",
+    "deploy/prepare-mobile-mtu.py",
+    "deploy/prepare-mobile-multihop.py",
+    "deploy/prepare-retained-tun.py",
+    "deploy/test_mobile_mtu_status.py"
+  ],
+  "sha256": "e2c61ce4644649cc901d843b4ac4c5f6ce6340b5a5c48569d3a44b08b52b8691",
+  "decoded_stream_complete": false,
+  "note": "Only complete patch sections recovered. Missing native and Apple files must be restored before applying as a production batch."
+}
