@@ -126,7 +126,17 @@ final class PacketTunnelProvider {
     func cancelTunnelWithError(_ error: Error) { lock.lock(); cancels += 1; lock.unlock() }
     func count() -> Int { lock.lock(); defer { lock.unlock() }; return cancels }
 }
+final class MTUPlatformDouble {
+    var hasOwner = false
+    var measurementReady = true
+    func initialMeasurementHold(_ lease: String) throws {}
+    func stop() {}
+    func invalidate() {}
+    func activate(server: LibboxCommandServer, config: String, profile: String, onAbort: @escaping @Sendable (String) -> Void) { hasOwner = true }
+    func request(operation: String, request: String, session: String) -> Data? { nil }
+}
 final class RouterVPNLibboxPlatform {
+    let mtu = MTUPlatformDouble()
     init(tunnel: PacketTunnelProvider) {}
     var onLog: ((String) -> Void)?
     var onStopService: (() throws -> Void)?

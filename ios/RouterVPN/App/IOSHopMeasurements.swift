@@ -99,6 +99,7 @@ private final class IOSHopReply: @unchecked Sendable {
             guard let self, let model else { return }
             defer { if self.generation == round { self.running = false; self.task = nil } }
             do {
+                try await IOSMTUControl.withHold(model: model) {
                 let managers = try await NETunnelProviderManager.loadAllFromPreferences()
                 let owned = managers.filter { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel" }
                 guard owned.count == 1, let connection = owned[0].connection as? NETunnelProviderSession,
@@ -122,6 +123,7 @@ private final class IOSHopReply: @unchecked Sendable {
                     try await Task.sleep(for: .milliseconds(350))
                 }
                 throw CancellationError()
+                }
             } catch {
                 if self.generation == round { self.cancelRequest(); self.text = "Measurement discarded: the request failed, timed out, or its tunnel changed." }
             }

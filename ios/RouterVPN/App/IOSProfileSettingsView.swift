@@ -63,12 +63,13 @@ struct IOSProfileSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("MTU") {
+                    IOSMTUCard()
                     Picker("MTU policy", selection: $mtuPolicy) { ForEach(mtuValues, id: \.1) { Text($0.0).tag($0.1) } }
                     if mtuPolicy == "manual" {
                         TextField("Fixed MTU 1280–9000", text: $manualMTU).keyboardType(.numberPad)
                     }
                     if let p = selectedProfile(), let value = p.effectiveMTU, value > 0 {
-                        Text("Current effective MTU: \(value) • \(p.effectiveMTUSource ?? "measured")")
+                        Text("Saved MTU: \(value) • not a fresh measurement of this session")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Toggle("Jumbo TUN — compatible proxy paths", isOn: $jumboTUN)

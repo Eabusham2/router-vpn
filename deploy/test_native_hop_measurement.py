@@ -2,6 +2,8 @@
 """Execute shared hop result validation and check native shipping integration."""
 from pathlib import Path
 import json
+import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -17,7 +19,15 @@ class Tests(unittest.TestCase):
             source=(ROOT/path).read_text()
             self.assertIn('test ./experimental/libbox/routervpn/...',source)
             self.assertIn('prepare-mobile-multihop.py',source)
-            self.assertIn("-run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance)' -count=1",source)
+            selectors=[]
+            for line in source.splitlines():
+                if line.lstrip().startswith('#') or './experimental/libbox ' not in line or '-run ' not in line:continue
+                words=shlex.split(line)
+                if './experimental/libbox' in words and 'test' in words and '-run' in words:
+                    self.assertIn('-count=1',words)
+                    selectors.append(re.compile(words[words.index('-run')+1]))
+            for family in ('Multihop','NativeWireGuard','NativeAmnezia','NativePerformance','MTU'):
+                self.assertTrue(any(p.search('TestRouter'+family) for p in selectors),path+' omits '+family)
             self.assertNotIn('-run TestRouterMultihop -count=1',source)
 
         bridge=(ROOT/'mobile/routervpn_hop_measurement.go.tmpl').read_text()

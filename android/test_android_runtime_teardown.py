@@ -45,6 +45,13 @@ final class NativeSingBoxController {
         state = "DOWN";
     }
 }
+final class LayeredVpnService {
+    static final AtomicInteger mtuStarts = new AtomicInteger();
+    static void startAutomaticMTU() {
+        if (!AndroidHomeStateStore.current.connected) throw new AssertionError("MTU started before path proof adoption");
+        mtuStarts.incrementAndGet();
+    }
+}
 final class AndroidNodeStore {
     static final class Node {
         final String id, name; final File file;
@@ -169,7 +176,7 @@ public final class RuntimeTeardownHarness {
         final Context context=new Context(); final NativeSingBoxController engine=new NativeSingBoxController();
         final AndroidMultihopRuntime multihop; final AndroidStandardExitRuntime external;
         Owner(String kind) {
-            AndroidHomeStateStore.reset();
+            AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0);
             multihop="multihop".equals(kind)?new AndroidMultihopRuntime(context,engine):null;
             external=multihop==null?new AndroidStandardExitRuntime(context,engine):null;
         }
@@ -212,6 +219,7 @@ public final class RuntimeTeardownHarness {
             try(Owner owner=new Owner(kind)) {
                 Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();
                 check(cb.ok&&AndroidHomeStateStore.current.connected,"normal connection never reached proved Connected");
+                check(LayeredVpnService.mtuStarts.get()==(owner.multihop!=null?1:0),"MTU must start once, only after selected-router proof");
                 owner.disconnect();awaitIdle(owner);
             }
         });
@@ -244,7 +252,8 @@ public final class RuntimeTeardownHarness {
                 Callback cb=new Callback(0);
                 try {owner.connect(cb);owner.disconnect();check(owner.busy(),"queued worker ownership was lost");}
                 finally {release.countDown();cb.awaitDone();}
-                check(!cb.ok&&owner.engine.starts.get()==0,"queued attempt launched after Disconnect");awaitIdle(owner);
+                check(!cb.ok&&owner.engine.starts.get()==0,"queued attempt launched after Disconnect");
+                check(LayeredVpnService.mtuStarts.get()==0,"cancelled queued attempt launched MTU");awaitIdle(owner);
             }
         });
         test(kind+" Connected adoption cannot overtake Disconnect",()->{
@@ -270,7 +279,7 @@ public final class RuntimeTeardownHarness {
                 try {owner.connect(cb);cb.awaitEntered();owner.disconnect();}
                 finally {cb.release.countDown();cb.awaitDone();}
                 check(owner.engine.starts.get()==0,"engine launched after Disconnect completed");
-                check(!cb.ok,"cancelled attempt reported Connected");awaitIdle(owner);
+                check(!cb.ok,"cancelled attempt reported Connected");check(LayeredVpnService.mtuStarts.get()==0,"cancelled attempt launched MTU");awaitIdle(owner);
             }
         });
         test(kind+" partial start failure tears down",()->{

@@ -17,19 +17,22 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private final class NetworkProofGuard: @unchecked Sendable {
         private let lock = NSLock()
         private var sawInitialPath = false
+        private var fingerprint: String?
         private var invalidated = false
         weak var owner: PacketTunnelProvider?
 
         init(owner: PacketTunnelProvider) { self.owner = owner }
 
         func handle(_ path: NWPath) {
-            _ = path.status
+            let current = RouterVPNPhysicalPath.snapshot(path)?.signature
             lock.lock()
             if !sawInitialPath {
                 sawInitialPath = true
+                fingerprint = current
                 lock.unlock()
                 return
             }
+            if let current, current == fingerprint { lock.unlock(); return }
             if invalidated {
                 lock.unlock()
                 return
@@ -40,6 +43,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    private var initialMTUHold = ""
     private var forwardingChannel: RouterVPNForwardingChannel?
 
     override init() {
@@ -60,6 +64,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
            ["hop-measure-start", "hop-measure-status", "hop-measure-cancel"].contains(operation),
            let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil {
             completionHandler(libboxEngine?.hopMeasurementRequest(operation: operation, request: id)); return
+        }
+        if messageData.count <= 256,
+           let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
+           request.count == 3, let operation = request["operation"],
+           ["mtu-status", "mtu-start", "mtu-cancel", "mtu-hold", "mtu-release"].contains(operation),
+           let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
+           let session = request["session_id"], session.isEmpty || UUID(uuidString: session) != nil {
+            completionHandler(libboxEngine?.mtuRequest(operation: operation, request: id, session: session)); return
         }
         forwardingChannel?.handle(messageData, completion: completionHandler)
     }
@@ -82,6 +94,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String: NSObject]? = nil, completionHandler: @escaping (Error?) -> Void) {
         forwardingChannel?.invalidate()
         do {
+            initialMTUHold = options?["routervpn_mtu_hold"] as? String ?? ""
+            guard initialMTUHold.isEmpty || initialMTUHold.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { throw tunnelError(60, "Invalid MTU comparison lease") }
             guard let tunnelProtocol = protocolConfiguration as? NETunnelProviderProtocol, let provider = tunnelProtocol.providerConfiguration else { throw tunnelError(1, "Router VPN PacketTunnel configuration is missing.") }
             guard let bundleData = provider["bundle"] as? Data, !bundleData.isEmpty, bundleData.count <= Self.maxBundleBytes else { throw tunnelError(2, "Router VPN private bundle is missing or exceeds the 32 MiB safety limit.") }
             guard let root = try JSONSerialization.jsonObject(with: bundleData) as? [String: Any] else { throw tunnelError(3, "Router VPN private bundle is invalid JSON.") }
@@ -240,6 +254,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 do { try engine.activatePerformance(); try engine.enableHopMeasurement(metadata: hopMetadata) }
                 catch { engine.stop(); self.libboxEngine = nil; completionHandler(error); return }
                 guard self.currentPathProofGuard() === comparisonGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Multihop changed during performance activation.")); return }
+                var mtuProfile = selectedProfile
+                mtuProfile["node_proof_id"] = exitProofID
+                engine.activateMTU(profile: mtuProfile)
                 self.enableForwarding(profileData: forwardingProfileData, proofID: exitProofID)
                 completionHandler(nil)
             }
@@ -343,6 +360,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let proofURL = try selectedProofURL(selectedProfile)
         let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
+        try engine.prepareMTUHold(initialMTUHold)
         do { try engine.start(files: files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(15, "Libbox engine failed to start: \(error.localizedDescription)") }
         let singlePathGuard = self.armNetworkProofGuard()
         proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
@@ -352,6 +370,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard self.currentPathProofGuard() === singlePathGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Native path changed during node proof.")); return }
             do { try engine.activatePerformance() } catch { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(error); return }
             guard self.currentPathProofGuard() === singlePathGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Native path changed during performance activation.")); return }
+            var mtuProfile = selectedProfile
+            mtuProfile["node_proof_id"] = provenNodeID
+            engine.activateMTU(profile: mtuProfile)
             self.enableForwarding(profileData: forwardingProfileData, proofID: provenNodeID)
             completionHandler(nil)
         }
@@ -371,6 +392,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         try IOSStartLayer.validateExternal(profile: selectedProfile)
         let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
+        try engine.prepareMTUHold(initialMTUHold)
         do { try engine.start(files: RouterVPNMTUPolicy.libbox(runtime.files, profile: selectedProfile), strict: strict) } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
         proveExternalExit(expectedPublicIP: runtime.expectedPublicIP, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 18, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during external-exit proof."])); return }

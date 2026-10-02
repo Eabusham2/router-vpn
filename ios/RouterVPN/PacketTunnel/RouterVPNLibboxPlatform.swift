@@ -12,6 +12,8 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
     var onReloadService: (() throws -> Void)?
     var onLog: ((String) -> Void)?
 
+    let mtu = RouterVPNMTUSession()
+    private let settingsLock = NSRecursiveLock()
     private var networkSettings: NEPacketTunnelNetworkSettings?
     private var monitor: NWPathMonitor?
 
@@ -23,6 +25,9 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         let mtu = Int(options.getMTU())
         guard (1280...9000).contains(mtu) else { throw error("Libbox requested unsafe MTU \(mtu)") }
+        settingsLock.lock(); defer { settingsLock.unlock() }
+        let mtuOpen = try self.mtu.beforeOpen(mtu: Int32(mtu))
+        defer { self.mtu.failedOpen(mtuOpen) }
         settings.mtu = NSNumber(value: mtu)
 
         let dnsIterator = try options.getDNSServerAddress()
@@ -93,9 +98,12 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
 
         try apply(settings, to: tunnel)
         networkSettings = settings
-        if let fd = tunnel.packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32 { ret0_.pointee = fd; return }
+        if let fd = tunnel.packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32, fd >= 0 {
+            try self.mtu.didOpen(mtuOpen, mtu: Int32(mtu)); ret0_.pointee = fd; return
+        }
         let fallbackFD = LibboxGetTunnelFileDescriptor()
         guard fallbackFD != -1 else { throw error("NetworkExtension TUN file descriptor is unavailable") }
+        try self.mtu.didOpen(mtuOpen, mtu: Int32(mtu))
         ret0_.pointee = fallbackFD
     }
 
@@ -116,7 +124,7 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         monitor?.cancel()
         let next = NWPathMonitor(); monitor = next
         let first = DispatchSemaphore(value: 0)
-        let delivery = InterfaceMonitorDelivery(listener: listener, first: first)
+        let delivery = InterfaceMonitorDelivery(listener: listener, first: first, mtu: mtu)
         next.pathUpdateHandler = { path in delivery.deliver(path) }
         next.start(queue: DispatchQueue(label: "routervpn.libbox.path"))
         if first.wait(timeout: .now() + 5) == .timedOut { next.cancel(); monitor = nil; throw error("Timed out while discovering the default iOS network interface") }
@@ -142,6 +150,8 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
     func underNetworkExtension() -> Bool { true }
     func includeAllNetworks() -> Bool { includeAllNetworksRequested }
     func clearDNSCache() {
+        if mtu.isChanging { return }
+        if mtu.hasOwner { mtu.invalidate() }
         guard let tunnel, let settings = networkSettings else { return }
         tunnel.reasserting = true
         tunnel.setTunnelNetworkSettings(nil) { _ in tunnel.setTunnelNetworkSettings(settings) { _ in tunnel.reasserting = false } }
@@ -156,8 +166,11 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         status.available = true; status.enabled = proxy.httpEnabled; return status
     }
     func setSystemProxyEnabled(_ enabled: Bool) throws {
+        settingsLock.lock(); defer { settingsLock.unlock() }
+        if mtu.isChanging { throw error("Finish the owned MTU transaction before changing system proxy settings") }
         guard let tunnel, let settings = networkSettings, let proxy = settings.proxySettings, proxy.httpServer != nil else { return }
         if proxy.httpEnabled == enabled { return }
+        if mtu.hasOwner { mtu.invalidate() }
         proxy.httpEnabled = enabled; proxy.httpsEnabled = enabled; settings.proxySettings = proxy; try apply(settings, to: tunnel)
     }
     func send(_: LibboxNotification?) throws {}
@@ -169,7 +182,7 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         throw error("Neighbor discovery is not enabled by Router VPN tunnel configurations")
     }
     func closeNeighborMonitor(_ listener: LibboxNeighborUpdateListenerProtocol?) throws {}
-    func registerMyInterface(_ name: String?) {}
+    func registerMyInterface(_ name: String?) { mtu.registerInterface(name) }
     func usePlatformShell() -> Bool { false }
     func checkPlatformShell() throws { throw error("Router VPN does not expose a platform shell") }
     func openShellSession(_ user: LibboxPlatformUser?, command: String?, environ: LibboxStringIteratorProtocol?, term: String?, rows: Int32, cols: Int32) throws -> LibboxShellSessionProtocol { throw error("Router VPN does not expose a platform shell") }
@@ -188,7 +201,11 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
     func triggerNativeCrash() throws { throw error("Intentional native crashes are disabled") }
     func connectSSHAgent(_ ret0_: UnsafeMutablePointer<Int32>?) throws { throw error("Router VPN does not expose an SSH agent") }
 
-    func reset() { networkSettings = nil; monitor?.cancel(); monitor = nil }
+    func reset() {
+        mtu.stop()
+        settingsLock.lock(); defer { settingsLock.unlock() }
+        networkSettings = nil; monitor?.cancel(); monitor = nil
+    }
 
     private static func update(_ listener: LibboxInterfaceUpdateListenerProtocol, from path: NWPath) {
         guard path.status != .unsatisfied, let iface = path.availableInterfaces.first else { listener.updateDefaultInterface("", interfaceIndex: -1, isExpensive: false, isConstrained: false); return }
@@ -203,14 +220,19 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         private let first: DispatchSemaphore
         private let lock = NSLock()
         private var deliveredFirst = false
+        private let mtu: RouterVPNMTUSession
 
-        init(listener: LibboxInterfaceUpdateListenerProtocol, first: DispatchSemaphore) {
+        init(listener: LibboxInterfaceUpdateListenerProtocol, first: DispatchSemaphore, mtu: RouterVPNMTUSession) {
+            self.mtu = mtu
             self.listener = listener
             self.first = first
         }
 
         func deliver(_ path: NWPath) {
-            RouterVPNLibboxPlatform.update(listener, from: path)
+            let physical = RouterVPNPhysicalPath.snapshot(path)
+            if mtu.observePhysicalPath(name: physical?.name ?? "", signature: physical?.signature ?? "") {
+                RouterVPNLibboxPlatform.update(listener, from: path)
+            }
             lock.lock()
             let shouldSignal = !deliveredFirst
             deliveredFirst = true

@@ -150,6 +150,11 @@ extension RouterVPNModel {
     }
 
     func runIOSSmartAuto() async {
+        do { try await IOSMTUControl.withHold(model: self) { await runIOSSmartAutoHeld() } }
+        catch { message = "SMART AUTO MTU isolation failed: \(error.localizedDescription)" }
+    }
+
+    private func runIOSSmartAutoHeld() async {
         if selectedNodeProfile?.multihopEnabled == true { await connect(); return }
         guard let profile = iosStrategyProfile, profile.normalizedNodeKind == "router-vpn" else {
             message = "SMART AUTO requires a selected Router VPN node; external exits use their own direct/hop path."
@@ -200,6 +205,11 @@ extension RouterVPNModel {
     }
 
     func runIOSCustom(layers requestedRaw: [String]) async {
+        do { try await IOSMTUControl.withHold(model: self) { await runIOSCustomHeld(layers: requestedRaw) } }
+        catch { message = "CUSTOM MTU isolation failed: \(error.localizedDescription)" }
+    }
+
+    private func runIOSCustomHeld(layers requestedRaw: [String]) async {
         guard let profile = iosStrategyProfile, profile.normalizedNodeKind == "router-vpn", let bundle else {
             message = "CUSTOM requires a selected Router VPN node."
             return

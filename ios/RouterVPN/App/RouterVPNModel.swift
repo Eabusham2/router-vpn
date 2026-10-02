@@ -411,7 +411,9 @@ final class RouterVPNModel: ObservableObject {
         }
         try await manager.saveToPreferences()
         try await manager.loadFromPreferences()
-        try manager.connection.startVPNTunnel()
+        let mtuHold = IOSMTUMeasurementGate.current
+        let options: [String: NSObject]? = mtuHold.isEmpty ? nil : ["routervpn_mtu_hold": mtuHold as NSString]
+        try manager.connection.startVPNTunnel(options: options)
         connected = false
         activeEngine = selection.engine.rawValue
         activeRawProfile = selection.rawProfileID

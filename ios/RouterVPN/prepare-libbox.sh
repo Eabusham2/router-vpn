@@ -146,7 +146,8 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   go test ./experimental/libbox/routervpn/...
-  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance)' -count=1
+  go test -race ./adapter/inbound -run TestRouterVPN -count=1
+  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|MTU)' -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf -count=1 -timeout=120s
   python3 "$ROOT/../../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"

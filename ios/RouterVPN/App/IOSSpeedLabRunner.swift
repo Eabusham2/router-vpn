@@ -65,12 +65,13 @@ final class IOSSpeedLabRunner: ObservableObject {
         defer { running = false }
 
         do {
-            let result: IOSSpeedLabRunResult
+            let result: IOSSpeedLabRunResult = try await IOSMTUControl.withHold(model: model) {
             switch request.scope {
             case .current:
-                result = try await runCurrent(request, model: model)
+                return try await runCurrent(request, model: model)
             case .temporary:
-                result = try await runTemporary(request, model: model)
+                return try await runTemporary(request, model: model)
+            }
             }
             lastResult = result
             progress = "Complete"
@@ -239,6 +240,9 @@ final class IOSSpeedLabRunner: ObservableObject {
     }
 
     private func guardedMeasurement(_ duration: IOSSpeedLabDuration, model: RouterVPNModel, token: PathToken) async throws -> IOSSpeedLabMeasurement {
+        guard IOSMTUMeasurementGate.held else { throw error("MTU measurement lease is missing") }
+        try await IOSMTUControl.holdCurrent(model, request: IOSMTUMeasurementGate.current)
+        guard pathToken(model) == token else { throw CancellationError() }
         let measurementTask = Task { try await IOSSpeedLabEngine.run(duration: duration) }
         let watcher = Task { @MainActor in
             while !Task.isCancelled {

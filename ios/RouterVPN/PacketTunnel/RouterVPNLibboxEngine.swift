@@ -95,6 +95,7 @@ final class RouterVPNLibboxEngine {
         let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot, probe = hopMeasurement, paddingHealth = performanceHealth
         hopMeasurement = nil; multihop = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
         ownershipLock.unlock()
+        platform.mtu.stop()
         health?.cancel()
         paddingHealth?.cancel()
         if let owned { LibboxRouterInvalidatePerformance(owned) }
@@ -109,6 +110,36 @@ final class RouterVPNLibboxEngine {
     }
     /// Activate only after the final selected path is proved. The services
     /// remain owned by this native instance and are closed with it.
+    func prepareMTUHold(_ lease: String) throws { try platform.mtu.initialMeasurementHold(lease) }
+
+    func activateMTU(profile: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: profile), data.count <= 65536,
+              let metadata = String(data: data, encoding: .utf8) else { return }
+        ownershipLock.lock()
+        guard let owned = server else { ownershipLock.unlock(); return }
+        let generation = ownershipGeneration, config = configContent
+        let delivery = MTUFailureDelivery(owner: self, generation: generation)
+        ownershipLock.unlock()
+        platform.mtu.activate(server: owned, config: config, profile: metadata) { message in delivery.fail(message) }
+        ownershipLock.lock(); let current = server === owned && ownershipGeneration == generation; ownershipLock.unlock()
+        if !current { platform.mtu.stop() }
+    }
+    func mtuRequest(operation: String, request: String, session: String) -> Data? {
+        platform.mtu.request(operation: operation, request: request, session: session)
+    }
+    private final class MTUFailureDelivery: @unchecked Sendable {
+        private weak var owner: RouterVPNLibboxEngine?
+        private let generation: UUID
+        init(owner: RouterVPNLibboxEngine, generation: UUID) { self.owner = owner; self.generation = generation }
+        func fail(_ message: String) {
+            guard let owner else { return }
+            owner.ownershipLock.lock()
+            let current = owner.ownershipGeneration == generation && owner.server != nil
+            owner.ownershipLock.unlock()
+            if current { owner.tunnel?.cancelTunnelWithError(owner.error(message)) }
+        }
+    }
+
     func activatePerformance() throws {
         ownershipLock.lock()
         let owned = server, generation = ownershipGeneration
@@ -251,7 +282,9 @@ final class RouterVPNLibboxEngine {
         guard let probe = hopMeasurement else { return nil }
         do {
             switch operation {
-            case "hop-measure-start": try probe.start(request, bytes: 8388608)
+            case "hop-measure-start":
+            guard !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
+                try probe.start(request, bytes: 8388608)
             case "hop-measure-cancel": probe.cancel(request)
             case "hop-measure-status": break
             default: return nil
@@ -267,11 +300,13 @@ final class RouterVPNLibboxEngine {
         return data.count <= 16384 ? data : nil
     }
     func invalidateMultihop() {
+        platform.mtu.invalidate()
         ownershipLock.lock(); let plan = multihop, probe = hopMeasurement, owned = server; ownershipLock.unlock()
         if let owned { LibboxRouterInvalidatePerformance(owned) }
         probe?.networkChanged(); plan?.networkChanged()
     }
     func pause() {
+        platform.mtu.invalidate()
         ownershipLock.lock(); let plan = multihop, owned = server, probe = hopMeasurement; ownershipLock.unlock()
         if let owned { LibboxRouterInvalidatePerformance(owned) }
         probe?.networkChanged(); plan?.networkChanged(); owned?.pause()
@@ -282,10 +317,10 @@ final class RouterVPNLibboxEngine {
         guard let server = owned, !content.isEmpty else { throw error("Libbox service is not configured") }
         try server.startOrReloadService(content, options: LibboxOverrideOptions())
     }
-    private func closeService() throws { ownershipLock.lock(); let owned = server; ownershipLock.unlock(); try owned?.closeService() }
+    private func closeService() throws { platform.mtu.stop(); ownershipLock.lock(); let owned = server; ownershipLock.unlock(); try owned?.closeService() }
     private func reloadService() throws {
         ownershipLock.lock(); let comparing = multihop != nil || hopMeasurement != nil || performanceHealth != nil; ownershipLock.unlock()
-        guard !comparing else { throw error("Multihop reload requires a fresh owned comparison") }
+        guard !comparing, !platform.mtu.hasOwner else { throw error("Native reload requires a fresh owned comparison and MTU session") }
         try startService()
     }
 
