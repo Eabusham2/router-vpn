@@ -1,0 +1,106 @@
+name: Finalize Apple MTU ownership
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact main SHA to extend without overwriting newer work
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-apple-mtu-ownership
+  cancel-in-progress: false
+
+jobs:
+  verify-and-publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ inputs.expected_head }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Apply reviewed source patch with exact parent and original-file checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 - <<'PY'
+          import hashlib,re,subprocess,os
+          from pathlib import Path
+          assert re.fullmatch('[0-9a-f]{40}',os.environ['EXPECTED_HEAD'])
+          patch=Path('docs/continuations/apple-mtu-ownership-final.patch')
+          data=patch.read_bytes()
+          assert hashlib.sha256(data).hexdigest()=='f23d3458431054f009889c1da5c4e7854225f326ef72147591cbb950316ce360'
+          entries=re.findall(r'^diff --git a/(\S+) b/\1\nindex ([a-f0-9]{40})\.\.([a-f0-9]{40}) 100644$',data.decode(),re.M)
+          assert len(entries)==8
+          def blob(path):
+              raw=Path(path).read_bytes()
+              return hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
+          assert all(p.startswith(('ios/RouterVPN/','deploy/test_ios_')) and '..' not in Path(p).parts for p,_,_ in entries)
+          assert all(blob(p)==old for p,old,_ in entries)
+          subprocess.run(['git','apply','--check',str(patch)],check=True)
+          subprocess.run(['git','apply',str(patch)],check=True)
+          assert all(blob(p)==new for p,_,new in entries)
+          p=Path('internal/mobilemtu/README.md');text=p.read_text()
+          old='The separate Apple WireGuardKit owner is not yet adapted to this controller;\nits existing fixed/manual policy is unchanged.'
+          new='Apple WG and both native AWG variants select their Libbox endpoint owner for\nAuto-MTU, preserving the exact transport and imported peer bytes. The raw\nWireGuardKit path remains available for nonadaptive fixed/manual/default MTU;\na stale raw Auto-MTU handoff is rejected rather than silently ignored.'
+          assert text.count(old)==1;p.write_text(text.replace(old,new))
+          p=Path('docs/CURRENT-STATUS.md');text=p.read_text()
+          old='The raw Apple WireGuardKit MTU adapter, other listed helper-engine gaps,\nsigned/device/off-LAN/ASUS validation remain open. No router was deployed.'
+          new='Apple WG/AWG Auto-MTU uses the Libbox endpoint owner without changing the\nselected transport; nonadaptive fixed/manual/default MTU retains the raw\nWireGuardKit path. Multihop also adopts its startup measurement hold before\nlaunch. Other listed helper-engine gaps and signed/device/off-LAN/ASUS\nvalidation remain open. No router was deployed.'
+          assert text.count(old)==1;p.write_text(text.replace(old,new))
+          PY
+      - name: Run shipping ownership, selection, policy and cancellation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/test_ios_mtu_control.py
+          python3 deploy/test_ios_mtu_session.py
+          python3 deploy/test_ios_mtu_policy.py
+          python3 deploy/test_ios_native_base_selection.py
+          python3 deploy/test_ios_libbox_delivery.py
+          python3 deploy/test_ios_session_identity.py
+          python3 deploy/test_ios_disconnect_ownership.py
+          python3 deploy/test_ios_start_layer.py
+          python3 deploy/test_native_hop_measurement.py
+          python3 deploy/test_mobile_performance_shipping.py
+          python3 ios/RouterVPN/test_dns_policy_contract.py
+          python3 ios/RouterVPN/test_runtime_selection_contract.py
+      - name: Publish only the ten verified source and documentation paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re,subprocess
+          from pathlib import Path
+          paths=re.findall(r'^diff --git a/(\S+) b/\1$',Path('docs/continuations/apple-mtu-ownership-final.patch').read_text(),re.M)
+          paths+=['internal/mobilemtu/README.md','docs/CURRENT-STATUS.md']
+          assert len(paths)==10 and len(set(paths))==10
+          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          changed.update(subprocess.check_output(['git','ls-files','--others','--exclude-standard'],text=True).splitlines())
+          assert changed==set(paths),sorted(changed-set(paths))
+          subprocess.run(['git','add','--']+paths,check=True)
+          PY
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Bind Apple Auto-MTU to its real native owner and hold multihop before startup'
+          git push origin HEAD:refs/heads/main
+          git rev-parse HEAD > apple-mtu-final-head.txt
+          printf 'Published tested Apple MTU source: `%s`\n\nReal SDK compilation and device validation are separate gates.\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apple-mtu-final-head-${{ github.run_id }}
+          path: apple-mtu-final-head.txt
+          retention-days: 14

@@ -1,0 +1,183 @@
+diff --git a/ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift b/ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift
+index da073ce122bd36693c373989e1d6ae869a1dbcd0..8f70416fa10c807c07b6ff1e0a5a3a7304350105 100644
+--- a/ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift
++++ b/ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift
+@@ -126,6 +126,7 @@
+         let nativeModes: Set<String> = ["wg", "awg2-fast", "awg2-strong"]
+         guard nativeModes.contains(requestedMode) else { throw tunnelError(7, "Native WireGuard-family engine received unsupported mode \(requestedMode).") }
+         try IOSStartLayer.validateWireGuard(profile: selectedProfile)
++        guard try !RouterVPNMTUPolicy.requiresAdaptiveOwner(profile: selectedProfile) else { throw tunnelError(60, "Auto-MTU requires the Libbox TUN owner. Reconnect from Router VPN to refresh this saved native selection.") }
+         let profileText = try RouterVPNMTUPolicy.wireGuard(wireGuardLikeProfile(root, rawProfileID: requestedMode), profile: selectedProfile)
+         let tunnelConfiguration = try RouterVPNWireGuardConfig.parse(profileText, name: requestedMode == "wg" ? "Router VPN" : "Router VPN AmneziaWG", amnezia: requestedMode != "wg")
+         guard tunnelConfiguration.peers.count == 1 else { throw tunnelError(8, "Router VPN iOS node proof requires exactly one generated WireGuard-family server peer.") }
+@@ -217,6 +218,7 @@
+         let entryURL = try selectedProofURL(entryProfile), exitURL = try selectedProofURL(selectedProfile)
+         let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
+         let engine = RouterVPNLibboxEngine(tunnel: self)
++        try engine.prepareMTUHold(initialMTUHold)
+         libboxEngine = engine
+         let metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
+             "entry_node_id": entryProofID, "exit_node_id": exitProofID,
+diff --git a/deploy/test_ios_mtu_control.py b/deploy/test_ios_mtu_control.py
+index fe5300a835ba322481c43c1451db448ef83884c5..af2f000edb3b60d849b67fdac150dbde3b80d66b 100644
+--- a/deploy/test_ios_mtu_control.py
++++ b/deploy/test_ios_mtu_control.py
+@@ -117,6 +117,31 @@
+  }
+ }
+ """
++def verify_startup_holds(provider):
++    sections=(('startMultihop(', 'multihopWireGuardEndpoint('),
++              ('startLibbox(', 'performanceFiles('),
++              ('startExternalLibbox(', 'selectedRouterProfile('))
++    for start, end in sections:
++        begin=provider.index('    private func '+start)
++        finish=provider.index('    private func '+end,begin)
++        body=provider[begin:finish]
++        assert body.count('try engine.prepareMTUHold(initialMTUHold)')==1, start+' lost startup MTU hold'
++        assert body.index('try engine.prepareMTUHold(initialMTUHold)') < body.index('engine.start('), start+' starts before holding MTU'
++
++provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
++raw=provider[provider.index('        let requestedMode ='):provider.index('    private func startMultihop(')]
++assert raw.index('!RouterVPNMTUPolicy.requiresAdaptiveOwner(profile: selectedProfile)') < raw.index('WireGuardAdapter(with: self)')
++
++verify_startup_holds(provider)
++for index in range(3):
++    marker='try engine.prepareMTUHold(initialMTUHold)'
++    before, after=provider.split(marker,index+1)[:-1],provider.split(marker,index+1)[-1]
++    mutant=marker.join(before)+'// missing comparison hold'+after
++    try:verify_startup_holds(mutant)
++    except AssertionError:pass
++    else:raise AssertionError('Startup-hold negative control was accepted: '+str(index))
++print('Every native Apple startup holds MTU before launch; all three missing-hold controls rejected.')
++
+ with tempfile.TemporaryDirectory(prefix='routervpn-mtu-control-') as directory:
+  tmp=Path(directory);(tmp/'NetworkExtension.swift').write_text(STUB);(tmp/'Harness.swift').write_text(TEST)
+  swift=shutil.which('swiftc')
+diff --git a/ios/RouterVPN/App/IOSDNSRuntimePolicy.swift b/ios/RouterVPN/App/IOSDNSRuntimePolicy.swift
+index 58883e849c6a3d90582c0cbc4402223b7ed7f079..86387b5e49dee6117f581f8d6b8e98e62072f2af 100644
+--- a/ios/RouterVPN/App/IOSDNSRuntimePolicy.swift
++++ b/ios/RouterVPN/App/IOSDNSRuntimePolicy.swift
+@@ -64,7 +64,13 @@
+         let ipv6 = clean(profile.ipv6Mode).lowercased()
+         guard ["", "on", "auto", "off"].contains(ipv6) else { throw error("Unknown saved IPv6 policy.") }
+         let dns = try resolve(profile)
+-        return dns?.wireGuardCompatible == false || profile.homeLANAccess == false || ipv6 == "off" || profile.daitaEnabled == true || profile.jumboTUN == true
++        let mtu = clean(profile.mtuPolicy).lowercased()
++        guard ["", "auto", "default", "manual", "fixed"].contains(mtu) else { throw error("Unknown saved MTU policy.") }
++        // Auto-MTU needs the process-owned TUN replacement and socket binding
++        // callbacks. Preserve the exact WG/AWG mode and peer, not a protocol
++        // fallback. Fixed/default MTU can still use the raw native adapter.
++        let adaptiveMTU = (mtu.isEmpty || mtu == "auto") && profile.jumboTUN != true
++        return adaptiveMTU || dns?.wireGuardCompatible == false || profile.homeLANAccess == false || ipv6 == "off" || profile.daitaEnabled == true || profile.jumboTUN == true
+     }
+ 
+     static func validate(selection: IOSRuntimeSelection, in bundle: ClientBundle) throws {
+diff --git a/deploy/test_ios_native_base_selection.py b/deploy/test_ios_native_base_selection.py
+index f555facf35e810dd2ee87ff2d85cebc8afc34478..d3db2e9cface029ec375fed8c8dbff93994fd0fa 100644
+--- a/deploy/test_ios_native_base_selection.py
++++ b/deploy/test_ios_native_base_selection.py
+@@ -57,7 +57,7 @@
+         "router_api":"http://10.77.0.1:8787", "api_token":"fixture-only-not-a-secret",
+         "adguard_ipv4":"10.77.0.1", "adguard_ipv6":"fd77:77::1", "socks_host":"10.77.0.1",
+         "socks_port":1080, "socks_username":"", "socks_password":"", "base_tunnel":base,
+-        "base_fallback":fallback, "dns_mode":dns, "dns_host":"1.1.1.1", "dns_server_name":"cloudflare-dns.com", "start_layer":start
++        "mtu_policy":"fixed", "manual_mtu":1380, "base_fallback":fallback, "dns_mode":dns, "dns_host":"1.1.1.1", "dns_server_name":"cloudflare-dns.com", "start_layer":start
+     ]
+     var bundle = ClientBundle.empty
+     bundle.selectedRouterID = "home"
+@@ -122,6 +122,21 @@
+             unsupportedPort.routerProfiles[0].dnsProtocol = "udp"
+             unsupportedPort.routerProfiles[0].dnsPort = 5353
+             try check("native family custom port uses Libbox", IOSRuntimeSelector.selectRaw(bundle:unsupportedPort,rawProfileID:raw).engine == .libbox)
++        }
++        for raw in ["wg", "awg2-fast", "awg2-strong"] {
++            for policy: String? in [nil, "", "auto", "AUTO", " auto "] {
++                var adaptive = try fixture(); adaptive.routerProfiles[0].mtuPolicy = policy
++                let selected = try IOSRuntimeSelector.selectRaw(bundle: adaptive, rawProfileID: raw)
++                let asset = raw == "wg" ? "wg.conf" : "awg.conf"
++                try check("Auto-MTU uses its owned Libbox TUN \(raw) \(policy ?? "absent")", selected.engine == .libbox)
++                try check("Auto-MTU preserves exact protocol and peer bytes", selected.rawProfileID == raw && selected.files[asset]?.base64EncodedString() == adaptive.profiles[raw]?[asset])
++            }
++            for policy in ["fixed", "manual", "default"] {
++                var fixed = try fixture(); fixed.routerProfiles[0].mtuPolicy = policy
++                try check("nonadaptive native adapter remains runnable \(raw) \(policy)", IOSRuntimeSelector.selectRaw(bundle: fixed, rawProfileID: raw).engine == .wireGuard)
++            }
++            var invalid = try fixture(); invalid.routerProfiles[0].mtuPolicy = "unknown-mtu"
++            reject("invalid MTU policy cannot silently pick a backend") { _ = try IOSRuntimeSelector.selectRaw(bundle: invalid, rawProfileID: raw) }
+         }
+         var allowedCustomPort = try fixture(dns:"custom")
+         allowedCustomPort.routerProfiles[0].dnsProtocol = "udp"
+diff --git a/ios/RouterVPN/PacketTunnel/RouterVPNMTUSession.swift b/ios/RouterVPN/PacketTunnel/RouterVPNMTUSession.swift
+index 9614977bd5666e44a6e90223f714fc9201be400d..0f0c12aa7accc21bcdc0d174ee39b1924fd0e168 100644
+--- a/ios/RouterVPN/PacketTunnel/RouterVPNMTUSession.swift
++++ b/ios/RouterVPN/PacketTunnel/RouterVPNMTUSession.swift
+@@ -135,7 +135,8 @@
+         // The shared profile parser owns policy validation. Manual/fixed/Jumbo
+         // never silently become automatic; do not start a test for those modes.
+         let policy = (try? JSONSerialization.jsonObject(with: Data(profile.utf8))) as? [String: Any]
+-        let automatic = (policy?["mtu_policy"] as? String ?? "auto").lowercased() == "auto"
++        let mode = (policy?["mtu_policy"] as? String ?? "auto").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
++        let automatic = mode.isEmpty || mode == "auto"
+         stateLock.lock(); automaticPending = automatic && policy?["jumbo_tun"] as? Bool != true && hold; stateLock.unlock()
+         if automatic && policy?["jumbo_tun"] as? Bool != true && !hold {
+             try? next.start(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(), force: false)
+diff --git a/deploy/test_ios_mtu_session.py b/deploy/test_ios_mtu_session.py
+index 0592ca679b39cbc7f5271767493531b7759a6976..bd8eabd32ca81c52aba8b8d5c25060d346bf522e 100644
+--- a/deploy/test_ios_mtu_session.py
++++ b/deploy/test_ios_mtu_session.py
+@@ -131,6 +131,12 @@
+ check(FakeOS.starts==starts+1,"deferred Auto-MTU did not start after final release")
+ check(request(held,"mtu-hold",id,heldSession)?["measurement_ready"] as? Bool == true,"running Auto-MTU was not drained for Speed Lab")
+ let stoppedCount=FakeOS.closes;held.stop();check(FakeOS.closes==stoppedCount+1,"native controller not closed on Stop")
++for raw in ["{}", "{\"mtu_policy\":\"\"}", "{\"mtu_policy\":\" AUTO \"}"] {
++ let alias=ready();let count=FakeOS.starts
++ alias.activate(server:LibboxCommandServer(),config:"{}",profile:raw){_ in}
++ check(FakeOS.starts==count+1,"normalized automatic policy failed to start")
++ alias.stop()
++}
+ let manual=ready();let manualStarts=FakeOS.starts
+ manual.activate(server:LibboxCommandServer(),config:"{}",profile:"{\"mtu_policy\":\"manual\"}"){_ in}
+ check(FakeOS.starts==manualStarts,"manual policy silently optimized")
+diff --git a/ios/RouterVPN/PacketTunnel/RouterVPNMTUPolicy.swift b/ios/RouterVPN/PacketTunnel/RouterVPNMTUPolicy.swift
+index 6bc6353e7891ad6ed9793ef9ae76d6e94eda3dc0..c26187b4383ecc16cd858b5057f1aacc3620bedd 100644
+--- a/ios/RouterVPN/PacketTunnel/RouterVPNMTUPolicy.swift
++++ b/ios/RouterVPN/PacketTunnel/RouterVPNMTUPolicy.swift
+@@ -6,6 +6,16 @@
+     static let minimum = 1280  // Every shipped iOS TUN is IPv4/IPv6 capable.
+     static let maximum = 9000
+     private static let maxConfigBytes = 4 * 1024 * 1024
++
++    static func requiresAdaptiveOwner(profile: [String: Any]) throws -> Bool {
++        struct Settings: Decodable { let mtu_policy: String?; let jumbo_tun: Bool? }
++        let settings = try JSONDecoder().decode(Settings.self, from: JSONSerialization.data(withJSONObject: profile))
++        switch (settings.mtu_policy ?? "auto").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
++        case "", "auto": return settings.jumbo_tun != true
++        case "default", "manual", "fixed": return false
++        default: throw issue("Unknown iOS MTU policy; refusing an unowned native backend.")
++        }
++    }
+ 
+     static func fixedMTU(profile: [String: Any]) throws -> Int? {
+         struct Settings: Decodable {
+diff --git a/deploy/test_ios_mtu_policy.py b/deploy/test_ios_mtu_policy.py
+index f77dff1fb96877621557bb74ece8c40836d70dff..99db0eebc3173d912ee7a9ffed1e25f617b2a05b 100644
+--- a/deploy/test_ios_mtu_policy.py
++++ b/deploy/test_ios_mtu_policy.py
+@@ -36,6 +36,16 @@
+ try check("insert missing MTU", P.wireGuard(absent, profile: fixed(1300)) == absent.replacingOccurrences(of:"[Interface]\n", with:"[Interface]\nMTU = 1300\n"))
+ let commented = source.replacingOccurrences(of:"MTU = 1420", with:"  mtu = 1420 # old mtu")
+ try check("case insensitive exact key", P.wireGuard(commented, profile: fixed(1300)).contains("MTU = 1300\n"))
++for profile: [String: Any] in [[:], ["mtu_policy":""], ["mtu_policy":"auto"], ["mtu_policy":" AUTO "]] {
++    try check("adaptive policy requires an owned backend", P.requiresAdaptiveOwner(profile:profile))
++}
++for mode in ["manual", "fixed", "default"] {
++    try check("nonadaptive raw policy preserved", !P.requiresAdaptiveOwner(profile:["mtu_policy":mode]))
++}
++try check("Jumbo is not silently adaptive", !P.requiresAdaptiveOwner(profile:["mtu_policy":"auto","jumbo_tun":true]))
++for invalid: [String: Any] in [["mtu_policy":true],["mtu_policy":14],["mtu_policy":"invented"],["jumbo_tun":"true"]] {
++    reject("invalid adaptive-owner settings") { _ = try P.requiresAdaptiveOwner(profile:invalid) }
++}
+ let crlf = source.replacingOccurrences(of:"\n", with:"\r\n")
+ try check("CRLF accepted", P.wireGuard(crlf, profile: fixed(1400)) == crlf.replacingOccurrences(of:"MTU = 1420", with:"MTU = 1400"))
+ let awg = source.replacingOccurrences(of:"[Interface]\n", with:"[Interface]\nJc=4\nJmin=40\nJmax=70\nS1=40\nS2=60\nS3=0\nS4=0\nH1=11111\nH2=22222\nH3=33333\nH4=44444\n")
