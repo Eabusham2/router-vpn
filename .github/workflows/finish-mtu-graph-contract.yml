@@ -1,0 +1,121 @@
+name: Finalize MTU graph contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact current main SHA; refuse a moved branch
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-mtu-graph-contract
+  cancel-in-progress: false
+
+jobs:
+  finalize-tested-source:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_HEAD: ${{ inputs.expected_head }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Reconcile the exact reviewed graph-test boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 - <<'PY'
+          import hashlib,os,re
+          from pathlib import Path
+          assert re.fullmatch('[0-9a-f]{40}',os.environ['EXPECTED_HEAD'])
+          p=Path('android/test_android_multihop_graph.py');raw=p.read_bytes()
+          assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()=='1de664e6ecdd4c0397a0bff7d8f09a94b4eecb2c'
+          text=raw.decode('utf-8')
+          old='  check(!AndroidNativeProfilePolicy.requiresLibbox(source),"ordinary home DNS lost raw WG capability");'
+          new='''  check(AndroidNativeProfilePolicy.requiresLibbox(source),"adaptive MTU selected an address-only backend without its owner");
+            JSONObject fixedHome=new JSONObject(source.toString());profile(fixedHome).put("mtu_policy","fixed").put("manual_mtu",1380);
+            check(!AndroidNativeProfilePolicy.requiresLibbox(fixedHome),"fixed home DNS lost raw WG capability");
+            String fixedRaw=AndroidNativeProfilePolicy.patchWireGuardLikeConfig(fixedHome,wg('b'),1380);
+            check(fixedRaw.contains("DNS = 192.168.50.133")&&fixedRaw.contains("MTU = 1380"),"raw fixed policy lost its requested DNS or MTU");
+            boolean adaptiveRawRejected=false;
+            try{AndroidNativeProfilePolicy.patchWireGuardLikeConfig(source,wg('b'),1380);}catch(Exception expected){adaptiveRawRejected=true;}
+            check(adaptiveRawRejected,"address-only backend silently accepted adaptive MTU");'''
+          replacements=[(old,new),
+            ('policy.put("dns_mode",mode).put("dns_host","192.0.2.53")','policy.put("mtu_policy","fixed").put("manual_mtu",1380).put("dns_mode",mode).put("dns_host","192.0.2.53")'),
+            ("AndroidNativeProfilePolicy.patchWireGuardLikeConfig(bundle('b'),raw,1380)","AndroidNativeProfilePolicy.patchWireGuardLikeConfig(fixedHome,raw,1380)")]
+          for old,new in replacements:
+              assert text.count(old)==1
+              text=text.replace(old,new)
+          p.write_text(text)
+          p=Path('docs/CURRENT-STATUS.md');text=p.read_text()
+          heading='''## Current mobile MTU integration (October 1, 2026)
+
+          Android (`71be1466`) and iOS (`2dc2630f`) now include the process-owned
+          Libbox Auto-MTU controller, Retest UI, cancellation, actual MTU readback,
+          VPN-bound probes, and measurement holds across temporary comparison
+          sessions. Native integration passed on Linux and macOS. See
+          `internal/mobilemtu/README.md` for behavior and test boundaries.
+
+          This supersedes the older “not wired into live TUN replacement” statement
+          below. That earlier section remains as a historical recovery checkpoint.
+          Actual packaged-app builds and device acceptance are separate gates;
+          source/contract passes do not establish complete release readiness.
+          The raw Apple WireGuardKit MTU adapter, other listed helper-engine gaps,
+          signed/device/off-LAN/ASUS validation remain open. No router was deployed.
+
+          '''
+          assert text.startswith('# Current Status — single operational checklist\n\n')
+          p.write_text(text.replace('\n\n','\n\n'+heading,1))
+          PY
+      - name: Run the real Java-to-Go graph integration and ownership regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y libandroid-json-java
+          python3 android/test_android_multihop_graph.py
+          python3 android/test_android_runtime_contract.py
+          python3 android/test_android_native_policy_contract.py
+          python3 android/test_android_session_identity_contract.py
+          python3 deploy/test_native_sip003_shipping.py
+          python3 deploy/test_mobile_performance_shipping.py
+          go test -race ./internal/mobilemtu ./internal/mobilemultihop ./internal/mobileperf
+      - name: Publish only the two reviewed source paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+          selected=['android/test_android_multihop_graph.py','docs/CURRENT-STATUS.md']
+          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          changed.update(subprocess.check_output(['git','ls-files','--others','--exclude-standard'],text=True).splitlines())
+          assert changed==set(selected),sorted(changed)
+          subprocess.run(['git','add','--']+selected,check=True)
+          PY
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Prove adaptive versus fixed MTU owner selection and update integration status'
+          git push origin HEAD:refs/heads/main
+          git rev-parse HEAD > final-mtu-graph-head.txt
+          printf 'Verified graph contract commit: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: final-mtu-graph-head-${{ github.run_id }}
+          path: final-mtu-graph-head.txt
+          retention-days: 14
