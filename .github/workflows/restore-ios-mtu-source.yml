@@ -1,0 +1,92 @@
+name: Restore iOS MTU source
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact current main SHA; refuse a moved branch
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: restore-ios-mtu-source
+  cancel-in-progress: false
+
+jobs:
+  restore-tested-apple-source:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ inputs.expected_head }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Check exact parent and complete checksummed source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 - <<'PY'
+          import hashlib,lzma,os,re,subprocess,tempfile
+          from pathlib import Path
+          assert re.fullmatch('[0-9a-f]{40}',os.environ['EXPECTED_HEAD'])
+          raw=Path('docs/continuations/ios-mtu-integration-20261001.patch.xz').read_bytes()
+          assert len(raw)==17284
+          assert hashlib.sha256(raw).hexdigest()=='e7addfa61a01e292110da6f69640f09cd6a1342ff3c9ec61448a8a6a319c019c'
+          decoder=lzma.LZMADecompressor(memlimit=64*1024*1024)
+          patch=decoder.decompress(raw,max_length=1024*1024)
+          assert decoder.eof and not decoder.unused_data and len(patch)==77896
+          assert hashlib.sha256(patch).hexdigest()=='abb05aa9c3d771fab7250aa8372c2a8ae4251c96876e22e420e8f5874ad21c78'
+          with tempfile.NamedTemporaryFile(suffix='.patch') as tmp:
+              tmp.write(patch);tmp.flush()
+              subprocess.run(['git','apply','--check',tmp.name],check=True)
+              subprocess.run(['git','apply',tmp.name],check=True)
+          # Normalize the one reviewed extra EOF blank line in the IPC source.
+          p=Path('ios/RouterVPN/App/IOSMTUControl.swift')
+          p.write_text(p.read_text().rstrip()+'\n')
+          PY
+      - name: Execute production Swift ownership and IPC regression suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/test_ios_mtu_session.py
+          python3 deploy/test_ios_mtu_control.py
+          python3 deploy/test_ios_libbox_delivery.py
+          python3 deploy/test_mobile_mtu_status.py
+          python3 deploy/test_ios_session_identity.py
+          python3 deploy/test_ios_disconnect_ownership.py
+          python3 deploy/test_ios_mtu_policy.py
+          python3 deploy/test_ios_start_layer.py
+          python3 ios/RouterVPN/test_runtime_selection_contract.py
+      - name: Commit only the reviewed source manifest and fast-forward main
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,subprocess
+          from pathlib import Path
+          selected=json.loads(Path('docs/continuations/ios-mtu-integration-20261001.json').read_text())['files']
+          assert len(selected)==16 and len(set(selected))==16
+          assert all(p.startswith(('ios/RouterVPN/','deploy/test_ios_')) and '..' not in Path(p).parts for p in selected)
+          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          changed.update(subprocess.check_output(['git','ls-files','--others','--exclude-standard'],text=True).splitlines())
+          assert changed.issubset(set(selected)),sorted(changed-set(selected))
+          subprocess.run(['git','add','--']+selected,check=True)
+          PY
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Integrate iOS Auto-MTU owner, Retest UI, session IPC and comparison leases'
+          git push origin HEAD:refs/heads/main
+          git rev-parse HEAD > restored-ios-head.txt
+          printf 'Restored iOS source commit: `%s`\n\nProduction-source boundary tests passed. Real Apple SDK compile and physical-device validation are separate gates.\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: restored-ios-mtu-head-${{ github.run_id }}
+          path: restored-ios-head.txt
+          retention-days: 14

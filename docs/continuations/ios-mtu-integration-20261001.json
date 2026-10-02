@@ -1,0 +1,32 @@
+{
+  "base_before_android_restore": "707cba77689c461ced23f94f20044bf0f66660ca",
+  "files": [
+    "deploy/test_ios_mtu_session.py",
+    "deploy/test_ios_mtu_control.py",
+    "deploy/test_ios_libbox_delivery.py",
+    "ios/RouterVPN/App/IOSMTUClient.swift",
+    "ios/RouterVPN/App/IOSMTUControl.swift",
+    "ios/RouterVPN/App/IOSMTUMeasurementGate.swift",
+    "ios/RouterVPN/App/IOSProfileSettingsView.swift",
+    "ios/RouterVPN/App/IOSSpeedLabRunner.swift",
+    "ios/RouterVPN/App/IOSStrategySupport.swift",
+    "ios/RouterVPN/App/RouterVPNModel.swift",
+    "ios/RouterVPN/App/IOSHopMeasurements.swift",
+    "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
+    "ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",
+    "ios/RouterVPN/PacketTunnel/RouterVPNLibboxPlatform.swift",
+    "ios/RouterVPN/PacketTunnel/RouterVPNMTUSession.swift",
+    "ios/RouterVPN/PacketTunnel/RouterVPNPhysicalPath.swift"
+  ],
+  "sha256": "abb05aa9c3d771fab7250aa8372c2a8ae4251c96876e22e420e8f5874ad21c78",
+  "compressed_sha256": "e7addfa61a01e292110da6f69640f09cd6a1342ff3c9ec61448a8a6a319c019c",
+  "new_files": [
+    "deploy/test_ios_mtu_session.py",
+    "deploy/test_ios_mtu_control.py",
+    "ios/RouterVPN/App/IOSMTUClient.swift",
+    "ios/RouterVPN/App/IOSMTUControl.swift",
+    "ios/RouterVPN/App/IOSMTUMeasurementGate.swift",
+    "ios/RouterVPN/PacketTunnel/RouterVPNMTUSession.swift",
+    "ios/RouterVPN/PacketTunnel/RouterVPNPhysicalPath.swift"
+  ]
+}
