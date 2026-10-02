@@ -26,6 +26,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
       - name: Check exact parent and complete checksummed source archive
         shell: bash
         run: |
@@ -38,7 +42,7 @@ jobs:
           raw=Path('docs/continuations/ios-mtu-integration-20261001.patch.xz').read_bytes()
           assert len(raw)==17284
           assert hashlib.sha256(raw).hexdigest()=='e7addfa61a01e292110da6f69640f09cd6a1342ff3c9ec61448a8a6a319c019c'
-          decoder=lzma.LZMADecompressor(memlimit=64*1024*1024)
+          decoder=lzma.LZMADecompressor(memlimit=128*1024*1024)
           patch=decoder.decompress(raw,max_length=1024*1024)
           assert decoder.eof and not decoder.unused_data and len(patch)==77896
           assert hashlib.sha256(patch).hexdigest()=='abb05aa9c3d771fab7250aa8372c2a8ae4251c96876e22e420e8f5874ad21c78'
@@ -46,9 +50,12 @@ jobs:
               tmp.write(patch);tmp.flush()
               subprocess.run(['git','apply','--check',tmp.name],check=True)
               subprocess.run(['git','apply',tmp.name],check=True)
-          # Normalize the one reviewed extra EOF blank line in the IPC source.
           p=Path('ios/RouterVPN/App/IOSMTUControl.swift')
           p.write_text(p.read_text().rstrip()+'\n')
+          fixes=Path('docs/continuations/mtu-release-contracts-20261001.patch')
+          assert hashlib.sha256(fixes.read_bytes()).hexdigest()=='80f5aee423161de9c261e11a544e8dd4c8702c17cd8dcff2f4444bdce1420ab0'
+          subprocess.run(['git','apply','--check',str(fixes)],check=True)
+          subprocess.run(['git','apply',str(fixes)],check=True)
           PY
       - name: Execute production Swift ownership and IPC regression suites
         shell: bash
@@ -63,7 +70,10 @@ jobs:
           python3 deploy/test_ios_mtu_policy.py
           python3 deploy/test_ios_start_layer.py
           python3 ios/RouterVPN/test_runtime_selection_contract.py
-      - name: Commit only the reviewed source manifest and fast-forward main
+          python3 android/test_android_runtime_teardown.py
+          python3 deploy/test_native_hop_measurement.py
+          bash -n ios/RouterVPN/prepare-libbox.sh
+      - name: Commit only the reviewed source manifests and fast-forward main
         shell: bash
         run: |
           set -euo pipefail
@@ -73,6 +83,7 @@ jobs:
           selected=json.loads(Path('docs/continuations/ios-mtu-integration-20261001.json').read_text())['files']
           assert len(selected)==16 and len(set(selected))==16
           assert all(p.startswith(('ios/RouterVPN/','deploy/test_ios_')) and '..' not in Path(p).parts for p in selected)
+          selected+=['android/test_android_runtime_teardown.py','deploy/test_native_hop_measurement.py','ios/RouterVPN/prepare-libbox.sh']
           changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
           changed.update(subprocess.check_output(['git','ls-files','--others','--exclude-standard'],text=True).splitlines())
           assert changed.issubset(set(selected)),sorted(changed-set(selected))
