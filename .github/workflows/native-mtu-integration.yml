@@ -39,7 +39,7 @@ jobs:
           GOTOOLCHAIN: local
           GOMAXPROCS: '2'
           GOMEMLIMIT: 2GiB
-        run: go test -p 2 -race ./adapter/inbound ./experimental/libbox/routervpn/mobilemtu ./experimental/libbox/routervpn/mtuprobe ./experimental/libbox/routervpn/hopmeasure ./experimental/libbox
+        run: go test -p 2 -race ./adapter/inbound ./experimental/libbox/routervpn/mobilemtu ./experimental/libbox/routervpn/mtuprobe ./experimental/libbox/routervpn/hopmeasure ./experimental/libbox/internal/oomprofile ./experimental/libbox
       - name: Preserve source-bound native integration evidence
         if: always()
         shell: bash

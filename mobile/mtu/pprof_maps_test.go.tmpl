@@ -1,0 +1,35 @@
+//go:build linux || android
+
+package oomprofile
+
+import (
+ "encoding/binary"
+ "os"
+ "path/filepath"
+ "testing"
+)
+
+func TestRouterVPNProcMapsParser(t *testing.T) {
+ input := []byte("00400000-0040b000 r-xp 00002000 fc:01 7 /bin/test (deleted)\n"+
+  "00600000-00601000 rw-p 00000000 00:00 0 [heap]\n"+
+  "bad-map r-xp 00 00:00 9 /bad\n"+
+  "00700000-00701000 r-xp 00000000 00:00 0 [vdso]\n"+
+  "00800000-00801000 r-xp 00000000 00:00 0 \n")
+ type mapping struct{lo,hi,offset uint64;file string}
+ var actual []mapping
+ stdParseProcSelfMaps(input,func(lo,hi,offset uint64,file,id string){actual=append(actual,mapping{lo,hi,offset,file})})
+ if len(actual)!=2 || actual[0]!=(mapping{0x400000,0x40b000,0x2000,"/bin/test"}) || actual[1].file!="[vdso]" {t.Fatalf("incorrect executable mappings: %#v",actual)}
+}
+func TestRouterVPNELFBuildID(t *testing.T) {
+ for _,order:=range []binary.ByteOrder{binary.LittleEndian,binary.BigEndian}{
+  blob:=make([]byte,160);copy(blob,"\x7fELF");blob[4]=2;blob[5]=1;if order==binary.BigEndian{blob[5]=2}
+  order.PutUint64(blob[40:],64);order.PutUint16(blob[58:],64);order.PutUint16(blob[60:],1)
+  order.PutUint32(blob[68:],7);order.PutUint64(blob[88:],128);order.PutUint64(blob[96:],20)
+  order.PutUint32(blob[128:],4);order.PutUint32(blob[132:],4);order.PutUint32(blob[136:],3)
+  copy(blob[140:],"GNU\x00");copy(blob[144:],[]byte{1,2,3,4})
+  path:=filepath.Join(t.TempDir(),"mapped.elf");if err:=os.WriteFile(path,blob,0600);err!=nil{t.Fatal(err)}
+  id,err:=stdELFBuildID(path);if err!=nil||id!="01020304"{t.Fatalf("ELF build ID %q %v",id,err)}
+  if err:=os.WriteFile(path,blob[:32],0600);err!=nil{t.Fatal(err)}
+  if _,err:=stdELFBuildID(path);err==nil{t.Fatal("truncated ELF accepted")}
+ }
+}
