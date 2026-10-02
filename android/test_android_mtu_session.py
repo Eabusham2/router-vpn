@@ -27,14 +27,52 @@ P='io.nekohasekai.libbox'
 stub(P,'CommandServer','{}')
 stub(P,'RouterMTUState','''{private String session,path,iface;private int mtu;public void setSession(String s){session=s;}public String getSession(){return session;}public void setPath(String s){path=s;}public String getPath(){return path;}public void setInterface(String s){iface=s;}public String getInterface(){return iface;}public void setMTU(int n){mtu=n;}public int getMTU(){return mtu;}}''')
 stub(P,'RouterMTUPlatform','''{RouterMTUState captureMTU();void beginMTUChange(RouterMTUState s)throws Exception;void endMTUChange()throws Exception;void bindMTUSocket(RouterMTUState s,long fd)throws Exception;String readMTUCache();boolean compareAndSwapMTUCache(String a,String b);void abortMTU(String reason);}''','interface')
-stub(P,'RouterMTU','''{public int starts,cancels,closes;public boolean active,invalid,restored;public String id="",override;public void start(String request,boolean force)throws Exception{if(active||invalid)throw new IllegalStateException();id=request;starts++;active=true;restored=false;}public boolean running(){return active;}public void cancel(String request){if(id.equals(request)){cancels++;active=false;restored=true;}}public void networkChanged(){invalid=true;active=false;}public void close(){closes++;active=false;invalid=true;}public String statusJSON(){if(override!=null)return override;return "{\\"request_id\\":\\""+id+"\\",\\"phase\\":\\""+(invalid?"invalidated":active?"measuring":"restored")+"\\",\\"running\\":"+active+",\\"complete\\":"+(!active)+",\\"restored\\":"+restored+",\\"measured\\":false,\\"original_mtu\\":1280,\\"effective_mtu\\":"+(invalid?0:1280)+"}";}}''')
-stub(P,'Libbox','''{public static RouterMTU latest;public static int created;public static RouterMTU newRouterMTU(CommandServer core,RouterMTUPlatform owner,String config,String profile)throws Exception{if(owner.captureMTU()==null)throw new IllegalStateException("no capture");created++;return latest=new RouterMTU();}}''')
+stub(P,'RouterMTU',r'''{
+ public interface Action { void run() throws Exception; }
+ public int starts,cancels,closes,closeFailures;
+ public volatile boolean active,invalid,restored;
+ public String id="",override;public Action closeHook;
+ public void start(String request,boolean force)throws Exception {
+  if(active||invalid)throw new IllegalStateException();
+  id=request;starts++;active=true;restored=false;
+ }
+ public boolean running(){return active;}
+ public void cancel(String request){if(id.equals(request)){cancels++;active=false;restored=true;}}
+ public void networkChanged(){invalid=true;active=false;}
+ public void close()throws Exception {
+  closes++;if(closeHook!=null)closeHook.run();
+  if(closeFailures>0){closeFailures--;throw new IllegalStateException("injected drain failure");}
+  active=false;invalid=true;
+ }
+ public String statusJSON(){
+  if(override!=null)return override;
+  boolean idle=id.isEmpty()&&!invalid;
+  return "{\"request_id\":\""+id+"\",\"phase\":\""+(invalid?"invalidated":active?"measuring":idle?"idle":"restored")
+   +"\",\"source\":\""+(idle?"configured-unmeasured":"restored-unmeasured")
+   +"\",\"running\":"+active+",\"complete\":"+(!active)+",\"restored\":"+restored
+   +",\"measured\":false,\"original_mtu\":"+(idle?0:1280)+",\"effective_mtu\":"+(invalid?0:1280)+"}";
+ }
+}''')
+stub(P,'Libbox','''{
+ public interface Hook { void run(RouterMTU value) throws Exception; }
+ public static volatile RouterMTU latest;public static volatile Hook afterCreate;
+ public static int created;
+ public static RouterMTU newRouterMTU(CommandServer core,RouterMTUPlatform owner,String config,String profile)throws Exception {
+  if(owner.captureMTU()==null)throw new IllegalStateException("no capture");
+  created++;RouterMTU value=new RouterMTU();latest=value;
+  Hook hook=afterCreate;if(hook!=null)hook.run(value);
+  return value;
+ }
+}''')
 HARNESS=r'''
 package com.eabusham.routervpn;
 import android.content.*;
 import android.net.*;
 import io.nekohasekai.libbox.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 public class Main {
  static int checks;
  interface Operation{void run()throws Exception;}
@@ -52,7 +90,94 @@ public class Main {
   Fixture()throws Exception{physical.links.name="wlan0";physical.links.addresses.add("192.0.2.2/24");vpn.caps.vpn=true;cm.networks=new Network[]{physical,vpn};cm.active=vpn;context.service=cm;context.preferences=store;owner=new AndroidMTUSession(context,o->aborts++,name->mtu);}
   RouterMTUState establish()throws Exception{owner.beforeOpen();owner.established(1280);owner.registered("tun0");return owner.captureMTU();}
  }
+
+ static void await(CountDownLatch latch,String message)throws Exception {
+  if(!latch.await(2,TimeUnit.SECONDS))throw new AssertionError(message);
+ }
+ static Thread worker(Operation operation,AtomicReference<Throwable> error) {
+  Thread thread=new Thread(()->{try{operation.run();}catch(Throwable failure){error.compareAndSet(null,failure);}});
+  thread.setDaemon(true);thread.start();return thread;
+ }
+ static void join(Thread thread,AtomicReference<Throwable> error)throws Exception {
+  thread.join(3000);check(!thread.isAlive(),"native lifecycle deadlocked");
+  if(error.get()!=null)throw new AssertionError("worker failed",error.get());
+ }
+ static void constructorShutdown()throws Exception {
+  Fixture fixture=new Fixture();fixture.establish();
+  CountDownLatch constructing=new CountDownLatch(1),release=new CountDownLatch(1),closing=new CountDownLatch(1);
+  AtomicInteger finished=new AtomicInteger(),callbacks=new AtomicInteger();
+  AtomicReference<Throwable> error=new AtomicReference<>();
+  Libbox.afterCreate=nativeOwner->{
+   // Native Close can await a platform callback on another thread. Holding the
+   // session's platform monitor during Close would deadlock that callback.
+   nativeOwner.closeHook=()->{
+    Thread callback=worker(()->{fixture.owner.captureMTU();callbacks.incrementAndGet();},error);
+    callback.join(1000);
+    if(callback.isAlive())throw new IllegalStateException("Close held the platform callback monitor");
+   };
+   constructing.countDown();await(release,"constructor was not released");
+  };
+  Thread activating=worker(()->fixture.owner.activate(new CommandServer(),"{}","{}"),error);
+  Thread stopping=null;
+  try {
+   await(constructing,"constructor was not reached");
+   stopping=worker(()->{closing.countDown();fixture.owner.close();finished.incrementAndGet();},error);
+   await(closing,"Stop was not reached");
+   long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(1);
+   while(fixture.owner.captureMTU()!=null&&System.nanoTime()<end)Thread.sleep(1);
+   check(fixture.owner.captureMTU()==null,"Stop did not revoke platform callbacks immediately");
+   stopping.join(80);
+   check(finished.get()==0,"shutdown returned while the native constructor still owned the session");
+  } finally {
+   release.countDown();Libbox.afterCreate=null;
+   activating.join(3000);if(stopping!=null)stopping.join(3000);
+  }
+  join(activating,error);join(stopping,error);
+  RouterMTU nativeOwner=Libbox.latest;
+  check(nativeOwner.starts==0&&nativeOwner.closes==1&&callbacks.get()==1,"stale constructor started a probe, leaked its owner, or deadlocked Close");
+  fixture.owner.close();check(nativeOwner.closes==1,"successful teardown was not idempotent");
+  rejects(fixture.owner::drainForMeasurement,"closed unstarted optimizer was accepted by Speed Lab");
+ }
+ static void failedDrainRetry()throws Exception {
+  Fixture fixture=new Fixture();fixture.establish();
+  fixture.owner.activate(new CommandServer(),"{}","{}");RouterMTU nativeOwner=Libbox.latest;
+  nativeOwner.closeFailures=1;rejects(fixture.owner::close,"native drain error was swallowed");
+  check(nativeOwner.closes==1&&fixture.owner.captureMTU()==null,"failed close did not revoke the session");
+  rejects(()->fixture.owner.request("start",fixture.owner.identity,"a".repeat(32)),"failed close allowed a new probe");
+  fixture.owner.close();check(nativeOwner.closes==2,"failed native owner was not retained for retry");
+  fixture.owner.close();check(nativeOwner.closes==2,"successful retry did not release its owner");
+ }
+ static void staleConstructorDrainRetry()throws Exception {
+  Fixture fixture=new Fixture();fixture.establish();
+  Libbox.afterCreate=nativeOwner->{nativeOwner.closeFailures=1;fixture.owner.networkChanged();};
+  try { fixture.owner.activate(new CommandServer(),"{}","{}"); } finally { Libbox.afterCreate=null; }
+  RouterMTU nativeOwner=Libbox.latest;
+  check(nativeOwner.starts==0&&nativeOwner.closes==1,"stale factory result was not retired before startup");
+  fixture.owner.close();check(nativeOwner.closes==2,"failed stale constructor drain lost the only native owner");
+ }
+ static void verifiedHandoff()throws Exception {
+  Fixture idle=new Fixture();idle.establish();Object lease=AndroidMTUMeasurementGate.acquire();
+  try {
+   idle.owner.activate(new CommandServer(),"{}","{}");RouterMTU nativeOwner=Libbox.latest;
+   check(nativeOwner.starts==0,"automatic probes ignored Speed Lab's startup hold");
+   idle.owner.drainForMeasurement();
+   check(!nativeOwner.restored&&nativeOwner.starts==0,"idle handoff fabricated a measured or restored result");
+   nativeOwner.override="x".repeat(32769);
+   rejects(idle.owner::drainForMeasurement,"idle handoff skipped bounded status validation");
+   nativeOwner.override="{\"running\":false,\"restored\":true,\"effective_mtu\":1420}";
+   rejects(idle.owner::drainForMeasurement,"handoff accepted a result that disagrees with actual OS MTU");
+   nativeOwner.override=null;idle.mtu=1400;
+   rejects(idle.owner::drainForMeasurement,"idle optimizer hid a failed OS MTU readback");
+   idle.mtu=1280;idle.owner.networkChanged();
+   rejects(idle.owner::drainForMeasurement,"inactive stale optimizer was accepted by Speed Lab");
+  } finally { AndroidMTUMeasurementGate.release(lease);idle.owner.close(); }
+  Fixture fixed=new Fixture();fixed.establish();fixed.owner.activate(new CommandServer(),"{}","{\"mtu_policy\":\"manual\"}");
+  fixed.owner.drainForMeasurement();fixed.mtu=1400;
+  rejects(fixed.owner::drainForMeasurement,"no-optimizer handoff skipped current OS MTU verification");
+  fixed.owner.close();rejects(fixed.owner::drainForMeasurement,"stopped fixed policy passed Speed Lab handoff");
+ }
  public static void main(String[] args)throws Exception{
+  constructorShutdown();failedDrainRetry();staleConstructorDrainRetry();verifiedHandoff();
   Fixture a=new Fixture();check(a.owner.captureMTU()==null,"missing interface invented");RouterMTUState first=a.establish();check(first!=null&&first.getMTU()==1280,"initial actual readback lost");
   rejects(a.owner::beforeOpen,"unowned reader replacement allowed");
   RouterMTUState wrong=new RouterMTUState();wrong.setSession("other");wrong.setPath(first.getPath());wrong.setInterface(first.getInterface());wrong.setMTU(1280);

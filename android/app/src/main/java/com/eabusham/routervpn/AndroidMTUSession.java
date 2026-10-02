@@ -28,6 +28,10 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     interface Failure { void abort(AndroidMTUSession owner); }
     interface InterfaceReader { int mtu(String name) throws Exception; }
     private static final Object CACHE_LOCK = new Object();
+    // Native construction/start/drain must serialize with teardown. This is NOT
+    // the platform monitor: native shutdown can wait for captureMTU/bindMTUSocket
+    // callbacks on another thread, and those callbacks synchronize on this.
+    private final Object lifecycle = new Object();
     private final ConnectivityManager connectivity;
     private final SharedPreferences preferences;
     private final Failure failure;
@@ -106,8 +110,17 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     }
     void close() throws Exception {
         closed = true; invalid = true;
+        synchronized (lifecycle) { closeController(); }
+    }
+    // Called only with lifecycle held, never with the platform monitor held.
+    // Retain an owner whose drain failed so a subsequent close can retry it.
+    private void closeController() throws Exception {
         RouterMTU owned = controller;
-        if (owned != null) { owned.networkChanged(); owned.close(); }
+        if (owned != null) {
+            owned.networkChanged();
+            owned.close();
+            controller = null;
+        }
     }
     private Network vpnNetwork() throws Exception {
         Network found = null;
@@ -171,57 +184,85 @@ final class AndroidMTUSession implements RouterMTUPlatform {
 
     // The service executor invokes this after final selection, not each SMART trial.
     void activate(CommandServer core, String config, String metadata) {
-        synchronized (this) { if (activated || closed || invalid) return; activated = true; }
-        try {
-            JSONObject profile = new JSONObject(metadata);
-            String policy = profile.optString("mtu_policy", "auto").trim().toLowerCase(java.util.Locale.ROOT);
-            if (!(policy.isEmpty() || "auto".equals(policy)) || profile.optBoolean("jumbo_tun", false)) {
-                notice = "Fixed, runtime-default and Jumbo modes do not enter Auto-MTU."; return;
-            }
-            long end = android.os.SystemClock.elapsedRealtime() + 2500;
-            while (!closed && !invalid && captureMTU() == null && android.os.SystemClock.elapsedRealtime() < end) Thread.sleep(20);
-            if (closed || invalid) return;
-            RouterMTU created = Libbox.newRouterMTU(core, this, config, metadata);
-            synchronized (this) {
-                if (closed || invalid) { created.networkChanged(); created.close(); return; }
+        synchronized (lifecycle) {
+            if (activated || closed || invalid) return;
+            activated = true;
+            try {
+                JSONObject profile = new JSONObject(metadata);
+                String policy = profile.optString("mtu_policy", "auto").trim().toLowerCase(java.util.Locale.ROOT);
+                if (!(policy.isEmpty() || "auto".equals(policy)) || profile.optBoolean("jumbo_tun", false)) {
+                    notice = "Fixed, runtime-default and Jumbo modes do not enter Auto-MTU."; return;
+                }
+                long end = android.os.SystemClock.elapsedRealtime() + 2500;
+                while (!closed && !invalid && captureMTU() == null && android.os.SystemClock.elapsedRealtime() < end) Thread.sleep(20);
+                if (closed || invalid) return;
+                RouterMTU created = Libbox.newRouterMTU(core, this, config, metadata);
+                if (created == null) throw new IllegalStateException("Native MTU owner was not created.");
+                // Publish even a stale result before retiring it. close() must
+                // neither miss an in-flight constructor nor lose a failed drain.
                 controller = created;
+                if (closed || invalid) { closeController(); return; }
+                if (!AndroidMTUMeasurementGate.held()) AndroidMTUMeasurementGate.startMTU(() -> created.start(UUID.randomUUID().toString().replace("-", ""), false));
+                notice = "";
+            } catch (Exception error) {
+                notice = closed || invalid ? "MTU session is stopped or stale."
+                        : "Auto-MTU has no verified measurement for this native path; configured MTU is retained.";
             }
-            if (!AndroidMTUMeasurementGate.held()) AndroidMTUMeasurementGate.startMTU(() -> created.start(UUID.randomUUID().toString().replace("-", ""), false));
-            notice = "";
-        } catch (Exception error) { notice = "Auto-MTU has no verified measurement for this native path; configured MTU is retained."; }
+        }
+    }
+    private static JSONObject status(RouterMTU owned) throws Exception {
+        String raw = owned.statusJSON();
+        if (raw == null || raw.length() > 32768) throw new IllegalStateException("MTU status exceeds the IPC bound.");
+        return new JSONObject(raw);
     }
     void drainForMeasurement() throws Exception {
-        RouterMTU owned = controller;
-        if (owned == null || !owned.running()) return;
-        JSONObject progress = new JSONObject(owned.statusJSON());
-        String request = progress.optString("request_id", "");
-        if (!request.matches("[0-9a-f]{32}")) throw new IllegalStateException("MTU operation identity is unavailable.");
-        owned.cancel(request);
-        long end = android.os.SystemClock.elapsedRealtime() + 10000;
-        while (owned.running() && !closed && android.os.SystemClock.elapsedRealtime() < end) Thread.sleep(20);
-        if (closed || invalid || owned.running()) throw new IllegalStateException("MTU cancellation did not retain a verified measurement path.");
-        JSONObject result = new JSONObject(owned.statusJSON());
-        if (!result.optBoolean("restored", false) && !result.optBoolean("measured", false)
-                && result.optInt("original_mtu", 0) != result.optInt("effective_mtu", -1)) {
-            throw new IllegalStateException("MTU rollback was not verified before Speed Lab.");
+        synchronized (lifecycle) {
+            if (closed || invalid) throw new IllegalStateException("MTU measurement path is stopped or stale.");
+            RouterMTU owned = controller;
+            if (owned != null && owned.running()) {
+                JSONObject progress = status(owned);
+                String request = progress.optString("request_id", "");
+                if (!request.matches("[0-9a-f]{32}")) throw new IllegalStateException("MTU operation identity is unavailable.");
+                owned.cancel(request);
+                long end = android.os.SystemClock.elapsedRealtime() + 10000;
+                while (owned.running() && !closed && !invalid && android.os.SystemClock.elapsedRealtime() < end) Thread.sleep(20);
+            }
+            if (closed || invalid || (owned != null && owned.running())) throw new IllegalStateException("MTU cancellation did not retain a verified measurement path.");
+            RouterMTUState current = captureMTU();
+            if (current == null) throw new IllegalStateException("The system VPN MTU could not be verified before Speed Lab.");
+            // Fixed/default policies have no optimizer but still need an actual
+            // current OS readback. An idle optimizer may also have been held by
+            // Speed Lab before its first test; that is not a measured result.
+            if (owned == null) return;
+            JSONObject result = status(owned);
+            boolean untouched = "idle".equals(result.optString("phase", ""))
+                    && "configured-unmeasured".equals(result.optString("source", ""))
+                    && result.optString("request_id", "").isEmpty()
+                    && result.optInt("original_mtu", -1) == 0;
+            if (result.optBoolean("running", true) || result.optInt("effective_mtu", -1) != current.getMTU()
+                    || (!untouched && !result.optBoolean("restored", false) && !result.optBoolean("measured", false)
+                    && result.optInt("original_mtu", 0) != result.optInt("effective_mtu", -1))
+                    || !same(current, captureMTU())) {
+                throw new IllegalStateException("MTU rollback was not verified before Speed Lab.");
+            }
         }
     }
     boolean running() { RouterMTU owned = controller; return owned != null && owned.running(); }
     String request(String operation, String session, String request) throws Exception {
-        checkNetwork();
-        RouterMTU owned = controller;
-        if (!"status".equals(operation)) {
-            if (closed || invalid || !identity.equals(session) || owned == null || request == null || !request.matches("[0-9a-f]{32}")) throw new IllegalStateException("MTU request is stale or unavailable.");
-            if ("start".equals(operation)) AndroidMTUMeasurementGate.startMTU(() -> owned.start(request, true));
-            else if ("cancel".equals(operation)) owned.cancel(request);
-            else throw new IllegalArgumentException("Unknown MTU request.");
+        synchronized (lifecycle) {
+            checkNetwork();
+            RouterMTU owned = controller;
+            if (!"status".equals(operation)) {
+                if (closed || invalid || !identity.equals(session) || owned == null || request == null || !request.matches("[0-9a-f]{32}")) throw new IllegalStateException("MTU request is stale or unavailable.");
+                if ("start".equals(operation)) AndroidMTUMeasurementGate.startMTU(() -> owned.start(request, true));
+                else if ("cancel".equals(operation)) owned.cancel(request);
+                else throw new IllegalArgumentException("Unknown MTU request.");
+            }
+            JSONObject result = owned == null ? new JSONObject() : status(owned);
+            if (owned == null) result.put("phase", "unavailable").put("failure", notice);
+            result.put("session_id", identity);
+            result.put("measurement_hold", AndroidMTUMeasurementGate.held());
+            return result.toString();
         }
-        String raw = owned == null ? "{}" : owned.statusJSON();
-        if (raw == null || raw.length() > 32768) throw new IllegalStateException("MTU status exceeds the IPC bound.");
-        JSONObject result = new JSONObject(raw);
-        if (owned == null) result.put("phase", "unavailable").put("failure", notice);
-        result.put("session_id", identity);
-        result.put("measurement_hold", AndroidMTUMeasurementGate.held());
-        return result.toString();
     }
 }
