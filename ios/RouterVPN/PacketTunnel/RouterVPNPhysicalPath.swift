@@ -14,7 +14,10 @@ enum RouterVPNPhysicalPath {
         }
         guard eligible.count == 1, let selected = eligible.first else { return nil }
         var failure: NSError?
-        guard let native = LibboxRouterMTUPhysicalPath(selected.name, &failure), failure == nil, !native.isEmpty else { return nil }
+        // gomobile returns a nonoptional NSString and reports failure separately.
+        // An error (even with a nonempty value) never grants path ownership.
+        let native = LibboxRouterMTUPhysicalPath(selected.name, &failure)
+        guard failure == nil, !native.isEmpty else { return nil }
         let fields = [selected.name, String(selected.index), native,
                       String(path.isExpensive), String(path.isConstrained), String(path.supportsIPv4),
                       String(path.supportsIPv6), String(path.supportsDNS)] + path.gateways.map { String(describing: $0) }.sorted()

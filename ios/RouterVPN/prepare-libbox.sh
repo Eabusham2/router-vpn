@@ -77,6 +77,8 @@ for header in headers:
 PYHEAD
   test -f "$STAMP"
   test "$(tr -d '\r\n' < "$STAMP")" = "$EXPECTED_STAMP"
+  # Compile the complete consumers against generated headers, not Swift doubles.
+  python3 "$ROOT/../../deploy/test_ios_physical_path.py" --framework "$FRAMEWORK"
 }
 
 if [[ -d "$FRAMEWORK" && -f "$STAMP" && $(tr -d '\r\n' < "$STAMP") == "$EXPECTED_STAMP" && -f "$BRIDGE_STAMP" && $(tr -d '\r\n' < "$BRIDGE_STAMP") == "$BRIDGE_SHA" ]]; then

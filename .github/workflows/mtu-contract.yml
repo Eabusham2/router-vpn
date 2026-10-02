@@ -55,6 +55,7 @@ jobs:
       - name: Execute production Swift owner, IPC, leases and rejection cases
         run: |
           python3 deploy/test_mobile_mtu_status.py
+          python3 deploy/test_ios_physical_path.py
           python3 deploy/test_ios_mtu_session.py
           python3 deploy/test_ios_mtu_control.py
           python3 deploy/test_ios_libbox_delivery.py

@@ -51,8 +51,8 @@ public func LibboxNewRouterMTU(_ server:LibboxCommandServer?,_ platform:LibboxRo
  guard platform?.captureMTU() != nil else {error?.pointee=NSError(domain:"fixture",code:1);return nil}
  let core=LibboxRouterMTU();FakeOS.current=core;return core
 }
-public func LibboxRouterMTUPhysicalPath(_ name:String?,_ error:UnsafeMutablePointer<NSError?>?)->String?{
- if name != "en0" {error?.pointee=NSError(domain:"fixture",code:1);return nil};return FakeOS.path
+public func LibboxRouterMTUPhysicalPath(_ name:String?,_ error:UnsafeMutablePointer<NSError?>?)->String{
+ if name != "en0" {error?.pointee=NSError(domain:"fixture",code:1);return ""};return FakeOS.path
 }
 public func LibboxRouterReadMTUInterface(_ name:String?,_ result:UnsafeMutablePointer<Int32>?,_ error:UnsafeMutablePointer<NSError?>?)->Bool {
  guard FakeOS.readable,name=="utun7" else{return false};result?.pointee=FakeOS.mtu;return true
