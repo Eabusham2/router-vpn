@@ -1,0 +1,48 @@
+package libbox
+
+import (
+ "strings"
+ "testing"
+)
+
+type mtuPlatformFixture struct {raw string; writes int; allow bool}
+func(p *mtuPlatformFixture)CaptureMTU()*RouterMTUState{return nil}
+func(p *mtuPlatformFixture)BeginMTUChange(*RouterMTUState)error{return nil}
+func(p *mtuPlatformFixture)EndMTUChange()error{return nil}
+func(p *mtuPlatformFixture)BindMTUSocket(*RouterMTUState,int64)error{return nil}
+func(p *mtuPlatformFixture)ReadMTUCache()string{return p.raw}
+func(p *mtuPlatformFixture)CompareAndSwapMTUCache(a,b string)bool{p.writes++;if !p.allow||p.raw!=a{return false};p.raw=b;return true}
+func(p *mtuPlatformFixture)AbortMTU(string){}
+func TestRouterMTURequiresLiveNativeOwner(t *testing.T){
+ if _,err:=NewRouterMTU(nil,&mtuPlatformFixture{},"{}","{}");err==nil{t.Fatal("missing native owner accepted")}
+ if _,err:=NewRouterMTU(&CommandServer{},&mtuPlatformFixture{},"{}","{}");err==nil{t.Fatal("unstarted native owner accepted")}
+ var empty *RouterMTU
+ if empty.Start(strings.Repeat("a",32),true)==nil||empty.Running()||empty.StatusJSON()!="{}"||empty.Close()!=nil{t.Fatal("invalid bridge handle became active")}
+ empty.Cancel("");empty.NetworkChanged()
+}
+func TestRouterMTUPlatformStateBoundaries(t *testing.T){
+ good:=RouterMTUState{Session:"session",Path:"path",Interface:"tun",MTU:1420}
+ got,err:=routerMTUState(&good);if err!=nil||*routerMTUExport(got)!=good{t.Fatal("native state round trip")}
+ if _,err:=routerMTUState(nil);err==nil{t.Fatal("nil state accepted")}
+ for _,field:=range []string{"session","path","interface","low","high","oversize"}{
+  value:=good
+  switch field{case "session":value.Session="";case "path":value.Path="";case "interface":value.Interface="";case "low":value.MTU=1279;case "high":value.MTU=9001;case "oversize":value.Path=strings.Repeat("x",257)}
+  if _,err:=routerMTUState(&value);err==nil{t.Fatalf("%s state accepted",field)}
+ }
+}
+func TestRouterMTUPreferencesCASAndBounds(t *testing.T){
+ platform:=&mtuPlatformFixture{allow:true};store:=routerMTUPreferences{platform}
+ if ok,err:=store.CompareAndSwapMTUCache("","one");!ok||err!=nil{t.Fatal("CAS failed")}
+ if ok,_:=store.CompareAndSwapMTUCache("","stale");ok||platform.raw!="one"{t.Fatal("stale write clobbered cache")}
+ before:=platform.writes
+ if ok,err:=store.CompareAndSwapMTUCache("one",strings.Repeat("x",65537));ok||err==nil||platform.writes!=before{t.Fatal("oversized cache reached platform")}
+ platform.raw=strings.Repeat("x",65537)
+ if _,err:=store.ReadMTUCache();err==nil{t.Fatal("oversized cache read accepted")}
+}
+func TestRouterMTUInterfaceInputBoundaries(t *testing.T){
+ for _,name:=range []string{"","../utun0","x\x00y",strings.Repeat("x",65)}{
+  if _,err:=RouterReadMTUInterface(name);err==nil{t.Fatal("invalid interface accepted")}
+  if _,err:=RouterMTUPhysicalPath(name);err==nil{t.Fatal("invalid physical path accepted")}
+  if err:=RouterMTUBindInterface(-1,name);err==nil{t.Fatal("invalid fd accepted")}
+ }
+}

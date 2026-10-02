@@ -1,0 +1,34 @@
+package libbox
+
+import (
+ "crypto/sha256"
+ "encoding/hex"
+ "errors"
+ "net"
+ "sort"
+ "strconv"
+ "strings"
+)
+func routerMTUInterface(name string) (*net.Interface,error) {
+ if name==""||len(name)>64||strings.IndexFunc(name,func(r rune)bool{return !(r>='a'&&r<='z'||r>='A'&&r<='Z'||r>='0'&&r<='9'||strings.ContainsRune("_.:-",r))})>=0{return nil,errors.New("invalid MTU interface name")}
+ value,err:=net.InterfaceByName(name)
+ if err!=nil{return nil,err}
+ if value.Index<1||value.Flags&net.FlagUp==0{return nil,errors.New("MTU interface is down")}
+ return value,nil
+}
+func RouterReadMTUInterface(name string) (int32,error) {
+ value,err:=routerMTUInterface(name);if err!=nil{return 0,err}
+ if value.MTU<1280||value.MTU>9000{return 0,errors.New("MTU readback is outside the supported bound")}
+ return int32(value.MTU),nil
+}
+// The platform supplies its selected physical interface, never a guessed route.
+// Persist the hash only, never interface addresses.
+func RouterMTUPhysicalPath(name string) (string,error) {
+ value,err:=routerMTUInterface(name);if err!=nil{return "",err}
+ if value.Flags&net.FlagLoopback!=0||strings.HasPrefix(name,"utun")||strings.HasPrefix(name,"tun"){return "",errors.New("physical MTU path cannot be a tunnel")}
+ addresses,err:=value.Addrs();if err!=nil||len(addresses)==0{return "",errors.New("physical interface has no address")}
+ fields:=[]string{name,strconv.Itoa(value.Index),strconv.Itoa(value.MTU)}
+ for _,address:=range addresses{fields=append(fields,address.String())};sort.Strings(fields)
+ digest:=sha256.Sum256([]byte(strings.Join(fields,"\x00")))
+ return hex.EncodeToString(digest[:]),nil
+}

@@ -1,0 +1,131 @@
+package libbox
+
+import (
+ "context"
+ "errors"
+ "net"
+ "net/netip"
+ "strconv"
+ "strings"
+ "sync"
+ "sync/atomic"
+ "syscall"
+
+ "github.com/sagernet/sing-box/adapter"
+ "github.com/sagernet/sing-box/daemon"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+type RouterMTUState struct { Session string; Path string; Interface string; MTU int32 }
+
+type RouterMTUPlatform interface {
+ CaptureMTU() *RouterMTUState
+ BeginMTUChange(expected *RouterMTUState) error
+ EndMTUChange() error
+ BindMTUSocket(expected *RouterMTUState, fd int64) error
+ ReadMTUCache() string
+ CompareAndSwapMTUCache(expected, replacement string) bool
+ AbortMTU(reason string)
+}
+
+type RouterMTU struct { controller *mobilemtu.Controller; owner *routerMTUOwner }
+type routerMTUOwner struct {
+ mu sync.Mutex
+ invalid atomic.Bool
+ platform RouterMTUPlatform
+ server *CommandServer
+ instance *daemon.Instance
+ inbound adapter.Inbound
+ session, path string
+}
+
+type routerMTUPreferences struct { platform RouterMTUPlatform }
+func (p routerMTUPreferences) ReadMTUCache() (string, error) {
+ raw := p.platform.ReadMTUCache()
+ if len(raw) > 65536 { return "", errors.New("MTU preferences exceed their bound") }
+ return raw, nil
+}
+func (p routerMTUPreferences) CompareAndSwapMTUCache(a, b string) (bool, error) {
+ if len(a) > 65536 || len(b) > 65536 { return false, errors.New("MTU preference write exceeds its bound") }
+ return p.platform.CompareAndSwapMTUCache(a,b), nil
+}
+func routerMTUState(value *RouterMTUState) (mobilemtu.State,error) {
+ if value == nil || value.Session == "" || value.Path == "" || value.Interface == "" || len(value.Session)>128 || len(value.Path)>256 || len(value.Interface)>128 || value.MTU<1280 || value.MTU>9000 {
+  return mobilemtu.State{}, errors.New("native MTU interface readback is unavailable")
+ }
+ return mobilemtu.State{Session:value.Session, Path:value.Path, Interface:value.Interface, MTU:int(value.MTU)},nil
+}
+func routerMTUExport(s mobilemtu.State) *RouterMTUState { return &RouterMTUState{Session:s.Session,Path:s.Path,Interface:s.Interface,MTU:int32(s.MTU)} }
+
+func NewRouterMTU(server *CommandServer, platform RouterMTUPlatform, config, profile string) (*RouterMTU,error) {
+ if server==nil || server.StartedService==nil || platform==nil { return nil,errors.New("MTU requires a running native command server and platform") }
+ instance:=server.Instance()
+ if instance==nil || instance.Box()==nil { return nil,errors.New("MTU native service is not running") }
+ state,err:=routerMTUState(platform.CaptureMTU());if err!=nil{return nil,err}
+ plan,err:=mobilemtu.NewPlan(config,state.MTU);if err!=nil{return nil,err}
+ inbound,ok:=instance.Box().Inbound().Get(plan.TunTag)
+ if !ok || inbound.Type()!="tun" { return nil,errors.New("MTU graph does not own the live TUN") }
+ owner:=&routerMTUOwner{platform:platform,server:server,instance:instance,inbound:inbound,session:state.Session,path:state.Path}
+ controller,err:=mobilemtu.New(owner,config,profile,mobilemtu.NewCache(routerMTUPreferences{platform}))
+ if err!=nil{return nil,err}
+ return &RouterMTU{controller:controller,owner:owner},nil
+}
+func (m *RouterMTU) Start(request string,force bool) error { if m==nil||m.controller==nil{return errors.New("MTU owner is missing")};return m.controller.Start(request,force) }
+func (m *RouterMTU) Cancel(request string) { if m!=nil&&m.controller!=nil{m.controller.Cancel(request)} }
+func (m *RouterMTU) NetworkChanged() { if m!=nil&&m.owner!=nil{m.owner.invalid.Store(true);m.controller.Invalidate()} }
+func (m *RouterMTU) Close() error { if m==nil||m.controller==nil{return nil};m.owner.invalid.Store(true);return m.controller.Close() }
+func (m *RouterMTU) Running() bool { return m!=nil&&m.controller!=nil&&m.controller.Running() }
+func (m *RouterMTU) StatusJSON() string { if m==nil||m.controller==nil{return "{}"};return m.controller.StatusJSON() }
+func (o *routerMTUOwner) currentLocked() bool {
+ if o.invalid.Load() || o.server.Instance()!=o.instance || o.inbound==nil {return false}
+ current,ok:=o.instance.Box().Inbound().Get(o.inbound.Tag())
+ return ok&&current==o.inbound
+}
+func (o *routerMTUOwner) captureLocked() (mobilemtu.State,error) {
+ if !o.currentLocked(){return mobilemtu.State{},errors.New("MTU native session was replaced or stopped")}
+ state,err:=routerMTUState(o.platform.CaptureMTU())
+ if err!=nil||state.Session!=o.session||state.Path!=o.path||!o.currentLocked(){return mobilemtu.State{},errors.New("MTU physical path or session changed")}
+ return state,nil
+}
+func (o *routerMTUOwner) Capture() (mobilemtu.State,error) {o.mu.Lock();defer o.mu.Unlock();return o.captureLocked()}
+func (o *routerMTUOwner) ChangeMTU(ctx context.Context, expected mobilemtu.State, mtu int) (mobilemtu.State,error) {
+ o.mu.Lock();defer o.mu.Unlock()
+ state,err:=o.captureLocked()
+ if err!=nil||state!=expected||ctx.Err()!=nil||mtu<1280||mtu>9000{return state,errors.New("stale or invalid MTU mutation")}
+ if mtu==state.MTU{return state,nil}
+ if err=o.platform.BeginMTUChange(routerMTUExport(expected));err!=nil{return state,err}
+ current,changeErr:=o.instance.Box().RouterVPNChangeMTU(ctx,o.inbound,mtu)
+ o.inbound=current
+ endErr:=o.platform.EndMTUChange()
+ after,captureErr:=o.captureLocked()
+ if current==nil||endErr!=nil||captureErr!=nil {
+  o.invalid.Store(true)
+  // The platform must queue shutdown, never synchronously re-enter this owner.
+  o.platform.AbortMTU("MTU transaction lost its captured native TUN")
+  return mobilemtu.State{},errors.New("native MTU application or rollback could not be confirmed")
+ }
+ if changeErr!=nil{return after,changeErr}
+ if after.MTU!=mtu{return after,errors.New("native MTU readback differs from the candidate")}
+ if ctx.Err()!=nil{return after,ctx.Err()}
+ return after,nil
+}
+func (o *routerMTUOwner) DialThroughTunnel(ctx context.Context, expected mobilemtu.State, network,address string) (net.Conn,error) {
+ // The controller further restricts these sockets to the frozen paired endpoint.
+ host,port,err:=net.SplitHostPort(address);ip,ipErr:=netip.ParseAddr(host);number,portErr:=strconv.Atoi(port)
+ if err!=nil||ipErr!=nil||portErr!=nil||number<1||number>65535||!ip.IsPrivate()||ip.Zone()!=""||ip.Is4In6()||(network!="tcp"&&network!="udp"){return nil,errors.New("invalid private MTU socket target")}
+ state,err:=o.Capture();if err!=nil||state!=expected||ctx.Err()!=nil{return nil,errors.New("stale MTU socket owner")}
+ dialer:=net.Dialer{ControlContext:func(ctx context.Context, transport,address string, raw syscall.RawConn)error{
+  state,err:=o.Capture();if err!=nil||state!=expected||ctx.Err()!=nil{return errors.New("MTU socket invalidated before binding")}
+  var bindErr error
+  if err=raw.Control(func(fd uintptr){
+   bindErr=o.platform.BindMTUSocket(routerMTUExport(expected),int64(fd))
+   if bindErr==nil&&strings.HasPrefix(transport,"udp"){bindErr=routerMTUNoFragment(int(fd),strings.HasSuffix(transport,"6"))}
+  });err!=nil{return err}
+  if bindErr!=nil{return bindErr}
+  state,err=o.Capture();if err!=nil||state!=expected||ctx.Err()!=nil{return errors.New("MTU socket invalidated while binding")}
+  return nil
+ }}
+ conn,err:=dialer.DialContext(ctx,network,address);if err!=nil{return nil,err}
+ state,err=o.Capture();if err!=nil||state!=expected||ctx.Err()!=nil{_ = conn.Close();return nil,errors.New("MTU socket invalidated during connect")}
+ return conn,nil
+}

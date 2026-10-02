@@ -1,0 +1,7 @@
+//go:build !linux && !android && !darwin && !ios
+
+package libbox
+
+import "errors"
+func routerMTUNoFragment(fd int,ipv6 bool) error{return errors.New("native MTU no-fragment socket is unsupported")}
+func RouterMTUBindInterface(fd int64,name string)error{return errors.New("native MTU interface binding is unsupported")}

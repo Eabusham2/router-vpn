@@ -1,0 +1,20 @@
+package box
+
+import (
+ "context"
+ "errors"
+ "github.com/sagernet/sing-box/adapter"
+ "github.com/sagernet/sing-box/protocol/tun"
+)
+
+// RouterVPNChangeMTU never reloads the Box, selectors, keys or DNS policy.
+func (s *Box) RouterVPNChangeMTU(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+ select { case <-s.done: return nil, errors.New("MTU service is closed"); default: }
+ original, ok := expected.(*tun.Inbound)
+ if !ok { return nil, errors.New("captured inbound is not the native TUN") }
+ current, exists := s.inbound.Get(expected.Tag())
+ if !exists || current != expected || ctx.Err() != nil { return current, errors.New("MTU inbound ownership changed") }
+ candidate, rollback, err := original.RouterVPNMTUReaders(mtu)
+ if err != nil { return expected, err }
+ return s.inbound.RouterVPNReplaceTun(ctx, expected, candidate, rollback)
+}

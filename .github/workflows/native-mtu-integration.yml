@@ -1,0 +1,56 @@
+name: Native MTU integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-native-mtu:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/checkout@v4
+        with:
+          repository: SagerNet/sing-box
+          ref: 1ac1a339cb1223e9c70eae14c44411c75033c02d
+          path: .native-mtu-core
+          persist-credentials: false
+      - name: Prepare exact-pinned native MTU source
+        run: |
+          python3 deploy/prepare-mobile-mtu.py .native-mtu-core
+          python3 deploy/prepare-mobile-mtu.py .native-mtu-core
+      - name: Execute native manager, bridge and measurement tests with race detection
+        working-directory: .native-mtu-core
+        env:
+          GOTOOLCHAIN: local
+          GOMAXPROCS: '2'
+          GOMEMLIMIT: 2GiB
+        run: go test -p 2 -race ./adapter/inbound ./experimental/libbox/routervpn/mobilemtu ./experimental/libbox/routervpn/mtuprobe ./experimental/libbox/routervpn/hopmeasure ./experimental/libbox
+      - name: Preserve source-bound native integration evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p native-mtu-evidence
+          git rev-parse HEAD > native-mtu-evidence/application-sha.txt
+          git -C .native-mtu-core rev-parse HEAD > native-mtu-evidence/native-core-sha.txt
+          python3 deploy/prepare-mobile-mtu.py --digest > native-mtu-evidence/source-digest.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-mtu-evidence-${{ matrix.os }}-${{ github.sha }}
+          path: native-mtu-evidence
+          retention-days: 14

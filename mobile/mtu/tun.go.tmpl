@@ -1,0 +1,35 @@
+package tun
+
+import (
+ "errors"
+ "github.com/sagernet/sing-box/adapter"
+)
+
+// RouterVPNMTUReaders builds distinct readers from the immutable original TUN
+// policy. Only the inbound manager starts them; encrypted endpoints stay alive.
+func (t *Inbound) RouterVPNMTUReaders(mtu int) (adapter.Inbound, adapter.Inbound, error) {
+ t.routervpnLifecycle.Lock()
+ defer t.routervpnLifecycle.Unlock()
+ if !t.routervpnReady || t.platformInterface == nil || t.autoRedirect != nil || mtu < 1280 || mtu > 9000 {
+  return nil, nil, errors.New("MTU replacement requires a live platform-owned TUN")
+ }
+ options := t.routervpnInitial
+ options.MTU = uint32(mtu)
+ candidate, err := NewInbound(t.ctx, t.router, t.logger, t.tag, options)
+ if err != nil { return nil, nil, err }
+ options.MTU = t.tunOptions.MTU
+ rollback, err := NewInbound(t.ctx, t.router, t.logger, t.tag, options)
+ if err != nil { _ = candidate.Close(); return nil, nil, err }
+ return candidate, rollback, nil
+}
+
+// Suppress reset callbacks until all native reader startup stages finish.
+func (t *Inbound) Start(stage adapter.StartStage) error {
+ err := t.routervpnStart(stage)
+ if err == nil && stage == adapter.StartStateStarted {
+  t.routervpnLifecycle.Lock()
+  t.routervpnReady = true
+  t.routervpnLifecycle.Unlock()
+ }
+ return err
+}
