@@ -62,7 +62,9 @@ jobs:
               assert text.count(old)==1
               text=text.replace(old,new)
           p.write_text(text)
-          p=Path('docs/CURRENT-STATUS.md');text=p.read_text()
+          p=Path('docs/CURRENT-STATUS.md');raw=p.read_bytes()
+          assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()=='7475d50c3ea04e3a85c443288d1174abd8c3de18'
+          text=raw.decode('utf-8')
           heading='''## Current mobile MTU integration (October 1, 2026)
 
           Android (`71be1466`) and iOS (`2dc2630f`) now include the process-owned
@@ -71,15 +73,14 @@ jobs:
           sessions. Native integration passed on Linux and macOS. See
           `internal/mobilemtu/README.md` for behavior and test boundaries.
 
-          This supersedes the older “not wired into live TUN replacement” statement
-          below. That earlier section remains as a historical recovery checkpoint.
+          This supersedes older mobile MTU limitations in historical checkpoints.
           Actual packaged-app builds and device acceptance are separate gates;
           source/contract passes do not establish complete release readiness.
           The raw Apple WireGuardKit MTU adapter, other listed helper-engine gaps,
           signed/device/off-LAN/ASUS validation remain open. No router was deployed.
 
           '''
-          assert text.startswith('# Current Status — single operational checklist\n\n')
+          assert text.startswith('# Current implementation status\n\n')
           p.write_text(text.replace('\n\n','\n\n'+heading,1))
           PY
       - name: Run the real Java-to-Go graph integration and ownership regressions
