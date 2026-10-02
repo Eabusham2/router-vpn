@@ -46,8 +46,8 @@ jobs:
           patch=Path('docs/continuations/mtu-recovery-20261001.patch').read_bytes()
           assert hashlib.sha256(patch).hexdigest()=='e2c61ce4644649cc901d843b4ac4c5f6ce6340b5a5c48569d3a44b08b52b8691'
           PY
-          git apply --unidiff-zero --check --include='android/*' --include='deploy/prepare-mobile-multihop.py' --include='.github/workflows/mtu-contract.yml' --include='deploy/test_mobile_mtu_status.py' docs/continuations/mtu-recovery-20261001.patch
-          git apply --unidiff-zero --include='android/*' --include='deploy/prepare-mobile-multihop.py' --include='.github/workflows/mtu-contract.yml' --include='deploy/test_mobile_mtu_status.py' docs/continuations/mtu-recovery-20261001.patch
+          git apply --unidiff-zero --check --include='android/*' --include='deploy/prepare-mobile-multihop.py' --include='deploy/test_mobile_mtu_status.py' docs/continuations/mtu-recovery-20261001.patch
+          git apply --unidiff-zero --include='android/*' --include='deploy/prepare-mobile-multihop.py' --include='deploy/test_mobile_mtu_status.py' docs/continuations/mtu-recovery-20261001.patch
       - name: Execute real production-source behavioral contracts before committing
         shell: bash
         run: |
@@ -61,7 +61,7 @@ jobs:
           python3 modes/test_mtu_policy.py
           python3 -m py_compile deploy/prepare-mobile-multihop.py deploy/prepare-mobile-mtu.py deploy/test_mobile_mtu_status.py
           bash -n android/build-sing-box-libbox.sh
-      - name: Commit only the reviewed recovery manifest, then fast-forward main
+      - name: Commit only the reviewed application-source manifest, then fast-forward main
         shell: bash
         run: |
           set -euo pipefail
@@ -69,8 +69,8 @@ jobs:
           import json,subprocess
           from pathlib import Path
           files=json.loads(Path('docs/continuations/mtu-recovery-20261001.json').read_text())['files']
-          selected=[p for p in files if p.startswith('android/') or p in ['deploy/prepare-mobile-multihop.py','.github/workflows/mtu-contract.yml','deploy/test_mobile_mtu_status.py']]
-          assert selected and all(not p.startswith('/') and '..' not in Path(p).parts for p in selected)
+          selected=[p for p in files if p.startswith('android/') or p in ['deploy/prepare-mobile-multihop.py','deploy/test_mobile_mtu_status.py']]
+          assert selected and all(not p.startswith('/') and '..' not in Path(p).parts and not p.startswith('.github/') for p in selected)
           changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
           changed.update(subprocess.check_output(['git','ls-files','--others','--exclude-standard'],text=True).splitlines())
           assert changed.issubset(set(selected)),sorted(changed-set(selected))

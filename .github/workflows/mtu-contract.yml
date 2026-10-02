@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,6 +14,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android JSON for executable adapter tests
+        run: sudo apt-get update && sudo apt-get install -y libandroid-json-java
+      - name: Run native-session and shared-controller MTU behavior
+        run: |
+          go test -race ./internal/mobilemtu ./internal/hopmeasure ./internal/mtuprobe
+          python3 android/test_android_mtu_measurement_gate.py
+          python3 android/test_android_mtu_session.py
+          python3 android/test_android_layered_service_compile.py
       - name: MTU policy unit tests
         run: python3 modes/test_mtu_policy.py
       - name: Shell syntax
@@ -27,3 +44,10 @@ jobs:
           grep -q 'mtu-policy.py.*apply' modes/run-combined.sh
           grep -q 'mtu-policy.py.*apply' modes/run-xhttp.sh
           grep -q 'mtu-policy.py.*apply' modes/run-max.sh
+
+  apple-mtu-status:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute production Swift MTU result decoder and rejection cases
+        run: python3 deploy/test_mobile_mtu_status.py
