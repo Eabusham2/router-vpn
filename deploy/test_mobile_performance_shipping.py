@@ -16,7 +16,7 @@ class Shipping(unittest.TestCase):
             vendor=Path(tmp);(vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
             with mock.patch.object(PREPARE.WHITENING,'prepare'),mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare:
                 PREPARE.prepare(vendor)
-                mtu_prepare.assert_called_once_with(vendor)
+                mtu_prepare.assert_called_once_with(vendor.resolve())
             for source in (ROOT/'internal/mobileperf').glob('*.go'):
                 expected=source.read_text().replace('"router-vpn/internal/','"github.com/sagernet/sing-box/experimental/libbox/routervpn/')
                 self.assertEqual(expected,(vendor/'experimental/libbox/routervpn/mobileperf'/source.name).read_text())
