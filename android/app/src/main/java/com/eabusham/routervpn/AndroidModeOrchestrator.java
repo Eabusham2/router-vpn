@@ -97,6 +97,7 @@ final class AndroidModeOrchestrator {
                 current=best;
                 String transition=smart&&!initial.id.equals(best.id)?initial.id+" -> "+best.id:"";
                 AndroidHomeStateStore.connected(context,requested,best.id,baseFor(best),transition,activeNodeId);
+                if(best.kind==Kind.LIBBOX)LayeredVpnService.startAutomaticMTU();
                 cb.finished(true,best.id,requested+" selected "+best.name+" after real selected-node path proof.");
             }catch(Throwable error){String message=failClosedAfterError(error);cb.finished(false,"",message);}finally{running=false;}
         });
@@ -130,6 +131,7 @@ final class AndroidModeOrchestrator {
                 for(String rawId:candidateIds){Candidate c=byId.get(rawId);if(c==null){failures.add(rawId+": unavailable on Android under current node/Start Layer policy");continue;}cb.progress(logical.optString("name",logicalId)+" trying "+c.name+"…");if(startAndProve(bundle,c,cb)){winner=c;break;}failures.add(rawId+": selected-node proof or Start Layer requirement failed");}
                 if(winner==null)throw new IllegalStateException("Logical mode "+logical.optString("name",logicalId)+" failed closed: "+String.join(" • ",failures));
                 current=winner;AndroidHomeStateStore.connected(context,logicalId,winner.id,baseFor(winner),"",activeNodeId);
+                if(winner.kind==Kind.LIBBOX)LayeredVpnService.startAutomaticMTU();
                 cb.finished(true,winner.id,logical.optString("name",logicalId)+" connected with runtime "+winner.id+" after selected-node proof.");
             }catch(Throwable error){String message=failClosedAfterError(error);cb.finished(false,"",message);}finally{running=false;}
         });
@@ -146,6 +148,7 @@ final class AndroidModeOrchestrator {
                 Candidate best=null;for(Candidate c:candidates){cb.progress("ALL testing protected Android-native branch "+c.name+"…");if(startAndProve(bundle,c,cb)){best=c;break;}}
                 if(best==null)throw new IllegalStateException("ALL failed closed because no Android-native branch passed Start Layer requirements and selected-node path proof.");
                 current=best;AndroidHomeStateStore.connected(context,"ALL",best.id,baseFor(best),"",activeNodeId);
+                if(best.kind==Kind.LIBBOX)LayeredVpnService.startAutomaticMTU();
                 cb.finished(true,best.id,"ALL selected the strongest available Android-native branch that passed selected-node path proof: "+best.name+". Composite desktop MAX chains remain separate and are never faked on Android.");
             }catch(Throwable error){String message=failClosedAfterError(error);cb.finished(false,"",message);}finally{running=false;}
         });

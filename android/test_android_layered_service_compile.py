@@ -52,7 +52,7 @@ stub('android.net','VpnService','''extends android.app.Service {public static an
  public Builder addAddress(String s,int p){return this;}public Builder addDnsServer(String s){return this;}public Builder addRoute(IpPrefix p){return this;}public Builder addRoute(String a,int p){return this;}public Builder excludeRoute(IpPrefix p){return this;}
  public Builder addAllowedApplication(String s)throws android.content.pm.PackageManager.NameNotFoundException{return this;}public Builder addDisallowedApplication(String s)throws android.content.pm.PackageManager.NameNotFoundException{return this;}
  public android.os.ParcelFileDescriptor establish(){return null;} } }''')
-stub('org.json','JSONObject','{public JSONObject(String s)throws Exception {} public String optString(String a,String b){return b;} }')
+stub('org.json','JSONObject','{public JSONObject(String s)throws Exception {} public String optString(String a,String b){return b;} public boolean optBoolean(String a,boolean b){return b;} }')
 PKG='io.nekohasekai.libbox'
 for name in ('LocalDNSTransport','WIFIState','Notification','NeighborUpdateListener','ShellSession','PlatformUser','BridgeSession','BridgeOptions','OverrideOptions','SystemProxyStatus'):stub(PKG,name,'{}')
 stub(PKG,'StringIterator','{int len();boolean hasNext();String next();}','interface')
@@ -88,6 +88,7 @@ stub(PKG,'PlatformInterface','''{
 APP='com.eabusham.routervpn'
 stub(APP,'AndroidServiceStopConfirmation','{public static final String EXTRA_COMMAND="stop";public static void acknowledge(String k,long c){} }')
 stub(APP,'AndroidKillSwitchPolicy','{public static final String SESSION_MARKER="kill-switch";public static String requirementMessage(){return "";} }')
+stub(APP,'AndroidMTUSession','{interface Failure{void abort(AndroidMTUSession owner);}public AndroidMTUSession(android.content.Context c,Failure f){} public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata){}public String request(String a,String b,String c)throws Exception{return "";}public boolean running(){return false;}public void drainForMeasurement()throws Exception{}public void networkChanged(){}public void close()throws Exception{}public void beforeOpen()throws Exception{}public void established(int mtu)throws Exception{}public void registered(String name){}public boolean unchangedPhysicalPath(){return false;}public void checkNetwork(){} }')
 stub(APP,'AndroidStartLayerRelay','implements java.io.Closeable{public static AndroidStartLayerRelay startIfConfigured(android.content.Context c,java.io.File f,java.util.function.Consumer<String> failure)throws Exception{return null;}public void close(){} }')
 
 def main():

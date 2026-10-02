@@ -114,6 +114,8 @@ final class AndroidNativeProfilePolicy {
 
     static boolean requiresLibbox(JSONObject bundle) throws Exception {
         JSONObject profile = selectedProfile(bundle);
+        String mtu=stringPolicy(profile,"mtu_policy","auto");
+        if ((mtu.isEmpty()||"auto".equals(mtu))&&!booleanPolicy(profile,"jumbo_tun",false)) return true;
         String ipv6 = stringPolicy(profile, "ipv6_mode", "on");
         if (!java.util.Arrays.asList("", "on", "auto", "off").contains(ipv6)) throw new IllegalStateException("Unknown IPv6 policy.");
         if ("off".equals(ipv6) || !booleanPolicy(profile, "home_lan_access", true)

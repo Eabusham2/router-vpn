@@ -147,6 +147,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 activeExitMode = prepared.exitMode;
                 AndroidHomeStateStore.connectedMultihop(context, entry.id, exit.id, prepared.exitMode, entryMode);
             }
+            LayeredVpnService.startAutomaticMTU();
             callback.finished(true, "Connected: " + entry.name + " → " + exit.name + " via " + entryMode + " entry + " + prepared.exitMode + " exit. Exit-node private path proof passed.");
         } catch (InterruptedException interrupted) {
             boolean stopped = !started || stopEmbeddedAndProve();

@@ -153,7 +153,7 @@ final class AndroidMultihopController {
             if (names == null) throw new IllegalStateException("Exit profile is empty.");
             for (int i = 0; i < names.length(); i++) {
                 String name = names.getString(i);
-                if("routervpn-multihop.json".equals(name))throw new IllegalArgumentException("Imported profile uses a reserved multihop metadata file.");
+                if("routervpn-multihop.json".equals(name)||"routervpn-mtu.json".equals(name))throw new IllegalArgumentException("Imported profile uses a reserved multihop metadata file.");
                 if (!safeFileName(name)) throw new IllegalStateException("Unsafe exit profile filename: " + name);
                 byte[] data;
                 if ("sing-box.json".equals(name)) data = patched;
@@ -180,6 +180,13 @@ final class AndroidMultihopController {
                 if(privateMetadata.length>16384)throw new IllegalArgumentException("Multihop metadata exceeds the safety bound.");
                 writeFile(new File(session,"routervpn-multihop.json"),privateMetadata);
             }
+                JSONObject mtuProfile=new JSONObject(selectedRouterProfile(exit).toString());
+                mtuProfile.put("node_proof_id",exitIdentity);
+                byte[] mtuBytes=mtuProfile.toString().getBytes(StandardCharsets.UTF_8);
+                if(mtuBytes.length>256*1024)throw new IllegalStateException("Captured MTU metadata exceeds its bound.");
+                total += mtuBytes.length;
+                if(total>MAX_TOTAL)throw new IllegalStateException("MTU metadata exceeds the staged profile budget.");
+                writeFile(new File(session,"routervpn-mtu.json"),mtuBytes);
             File configFile = new File(session, "sing-box.json");
             if (!configFile.isFile() || configFile.length() == 0) throw new IllegalStateException("Multihop session is missing sing-box.json.");
             return new Prepared(new NativeSingBoxController.SessionInfo(sessionId, "multihop-" + exitMode), exitBundle, exitMode);

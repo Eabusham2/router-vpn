@@ -73,6 +73,41 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Object lock = new Object();
+    private final Object tunAccess = new Object();
+    private volatile AndroidMTUSession mtuSession;
+    private String mtuMetadata = "";
+    static void startAutomaticMTU(){
+        LayeredVpnService service=currentService.get();if(service==null)return;
+        CommandServer core=service.commandServer;AndroidMTUSession captured=service.mtuSession;
+        service.executor.execute(()->{
+            if(core==null||captured==null||service.commandServer!=core||service.mtuSession!=captured||service.explicitStop||!"UP".equals(service.state))return;
+            if(!service.mtuMetadata.isEmpty())captured.activate(core,service.activeConfig,service.mtuMetadata);
+        });
+    }
+    static void quiesceMTUForSpeedLab(java.util.function.Consumer<Throwable> completion){
+        LayeredVpnService service=currentService.get();
+        if(service==null){completion.accept(null);return;}
+        AndroidMTUSession captured=service.mtuSession;
+        try{service.executor.execute(()->{
+            try{
+                if(captured!=service.mtuSession)throw new IllegalStateException("VPN changed while acquiring the Speed Lab path.");
+                if(captured!=null)captured.drainForMeasurement();
+                completion.accept(null);
+            }catch(Throwable error){completion.accept(error);}
+        });}catch(java.util.concurrent.RejectedExecutionException error){completion.accept(error);}
+    }
+    static String mtuRequest(String operation,String session,String request)throws Exception{
+        LayeredVpnService service=currentService.get();if(service==null)throw new IllegalStateException("No live Router VPN session.");
+        synchronized(service.lock){
+            AndroidMTUSession owned=service.mtuSession;
+            if(owned==null||!"UP".equals(service.state)||service.explicitStop)throw new IllegalStateException("Connect a proved Router VPN path first.");
+            if("start".equals(operation)&&service.hopMeasurement!=null){
+                JSONObject progress=new JSONObject(service.hopMeasurement.statusJSON());
+                if(!progress.optBoolean("complete",false)&&!progress.optString("request_id","").isEmpty())throw new IllegalStateException("Finish hop measurement before MTU Retest.");
+            }
+            return owned.request(operation,session,request);
+        }
+    }
     private volatile CommandServer commandServer;
     private volatile boolean performanceActive;
     private final Runnable performanceWatch = new Runnable() { public void run() {
@@ -98,7 +133,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         synchronized(service.lock){
             io.nekohasekai.libbox.RouterHopMeasurement probe=service.hopMeasurement;
             if(probe==null||!"UP".equals(service.state))throw new IllegalStateException("The proved multihop runtime is unavailable.");
-            if("start".equals(operation))probe.start(id,8388608);
+            if("start".equals(operation)){
+                if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("Finish MTU Retest before measuring hops.");
+                probe.start(id,8388608);
+            }
             else if("cancel".equals(operation))probe.cancel(id);
             else if(!"status".equals(operation))throw new IllegalArgumentException("Unknown hop measurement operation.");
             String response=probe.statusJSON();
@@ -106,7 +144,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             return response;
         }
     }
-    private void cancelMultihopComparison(){CommandServer owned=commandServer;if(owned!=null)Libbox.routerInvalidatePerformance(owned);io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
+    private void cancelMultihopComparison(){AndroidMTUSession mtu=mtuSession;if(mtu!=null)mtu.networkChanged();CommandServer owned=commandServer;if(owned!=null)Libbox.routerInvalidatePerformance(owned);io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
     private String executionNetworkIdentity(){
         java.util.ArrayList<String> values=new java.util.ArrayList<>();
         try{for(Network network:connectivity.getAllNetworks()){
@@ -124,7 +162,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
         executionHandler.postDelayed(this,500);
     }};
-    private ParcelFileDescriptor tunDescriptor;
+    private volatile ParcelFileDescriptor tunDescriptor;
     private AndroidStartLayerRelay startLayerRelay;
     private File activeSession;
     private String activeMode = "";
@@ -216,6 +254,12 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     config=preparedExecution.config();
                 }
             }
+            String capturedMTU="";
+            File mtuFile=new File(session,"routervpn-mtu.json").getCanonicalFile();
+            if(mtuFile.isFile()){
+                if(!mtuFile.getParentFile().equals(session))throw new IllegalStateException("Unowned MTU profile file.");
+                capturedMTU=new String(readLimited(mtuFile,256*1024),java.nio.charset.StandardCharsets.UTF_8);
+            }
             Libbox.checkConfig(config);
 
             pendingRelay = AndroidStartLayerRelay.startIfConfigured(this, session, message -> executor.execute(() -> {
@@ -228,6 +272,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 activeSession = session;
                 activeMode = modeId;
                 activeConfig = config;
+                mtuMetadata=capturedMTU;
+                mtuSession=new AndroidMTUSession(this,owner->executor.execute(()->{
+                    if(mtuSession==owner)shutdown("FAILED","MTU transaction could not retain the verified VPN interface.");
+                }));
                 executionController=preparedExecution;executionProved=false;
                 commandServer = new CommandServer(this, this);
                 commandServer.start();
@@ -312,6 +360,12 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     private void closeCoreLocked() {
+        AndroidMTUSession oldMTU=mtuSession;
+        if(oldMTU!=null){
+            oldMTU.networkChanged();
+            try{oldMTU.close();}catch(Exception error){Log.w(TAG,"MTU controller drain failed before native teardown.");}
+        }
+        mtuSession=null;mtuMetadata="";
         performanceActive = false;
         executionHandler.removeCallbacks(performanceWatch);
         if (commandServer != null) Libbox.routerInvalidatePerformance(commandServer);
@@ -330,9 +384,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             try { startLayerRelay.close(); } catch (Throwable ignored) { }
             startLayerRelay = null;
         }
-        if (tunDescriptor != null) {
-            try { tunDescriptor.close(); } catch (Throwable ignored) { }
-            tunDescriptor = null;
+        synchronized(tunAccess){
+            if (tunDescriptor != null) {try { tunDescriptor.close(); } catch (Throwable ignored) { } tunDescriptor=null;}
         }
         unregisterInterfaceMonitorLocked();
     }
@@ -354,6 +407,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
 
     @Override public int openTun(TunOptions options) throws Exception {
         if (VpnService.prepare(this) != null) throw new RevokedException("Android VPN permission was revoked before TUN creation.");
+        AndroidMTUSession opening=mtuSession;
+        if(opening==null||explicitStop)throw new IllegalStateException("TUN owner stopped before establishment.");
+        opening.beforeOpen();
         Builder builder = new Builder().setSession("Router VPN — " + (activeMode.isEmpty() ? "layered" : activeMode)).setMtu(options.getMTU());
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false);
 
@@ -393,9 +449,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
 
         ParcelFileDescriptor pfd = builder.establish();
         if (pfd == null) throw new RevokedException("Android refused to establish the VPN interface.");
-        synchronized (lock) {
-            if (tunDescriptor != null) try { tunDescriptor.close(); } catch (Throwable ignored) { }
-            tunDescriptor = pfd;
+        synchronized (tunAccess) {
+            if(opening!=mtuSession||explicitStop){pfd.close();throw new IllegalStateException("TUN establishment became stale.");}
+            try{opening.established(options.getMTU());}catch(Exception error){pfd.close();throw error;}
+            ParcelFileDescriptor previous=tunDescriptor;tunDescriptor=pfd;
+            if(previous!=null)previous.close();
         }
         return pfd.getFd();
     }
@@ -474,6 +532,12 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     private void pushDefaultInterface() {
+        AndroidMTUSession mtu=mtuSession;
+        if(mtu!=null){
+            // Own VPN replacement is not a physical-interface transition.
+            if(mtu.unchangedPhysicalPath())return;
+            mtu.checkNetwork();
+        }
         InterfaceUpdateListener listener = interfaceListener;
         if (listener == null) return;
         try {
@@ -574,7 +638,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         executor.execute(() -> {
             synchronized (lock) {
                 if (commandServer == null || activeConfig.isEmpty()) return;
-                if(executionController!=null||hopMeasurement!=null){cancelMultihopComparison();shutdown("FAILED","Multihop reload needs a fresh owned comparison.");return;}
+                if(executionController!=null||hopMeasurement!=null||mtuSession!=null){cancelMultihopComparison();shutdown("FAILED","Native reload needs fresh path and MTU ownership.");return;}
                 try {
                     commandServer.startOrReloadService(activeConfig, new OverrideOptions());
                 } catch (Throwable error) {
@@ -592,7 +656,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     @Override public void cancelNotification(String identifier, int typeID) { }
     @Override public void startNeighborMonitor(io.nekohasekai.libbox.NeighborUpdateListener listener) throws Exception { throw unsupportedPlatformService(); }
     @Override public void closeNeighborMonitor(io.nekohasekai.libbox.NeighborUpdateListener listener) { }
-    @Override public void registerMyInterface(String name) { }
+    @Override public void registerMyInterface(String name) { AndroidMTUSession owned=mtuSession;if(owned!=null)owned.registered(name); }
     @Override public boolean usePlatformShell() { return false; }
     @Override public void checkPlatformShell() throws Exception { throw unsupportedPlatformService(); }
     @Override public io.nekohasekai.libbox.ShellSession openShellSession(io.nekohasekai.libbox.PlatformUser user, String command, StringIterator environ, String term, int rows, int cols) throws Exception { throw unsupportedPlatformService(); }

@@ -29,6 +29,7 @@ final class AndroidSpeedLabController {
     private final AtomicBoolean running=new AtomicBoolean(false);
     private volatile List<AndroidSpeedLabHopMeter.Hop> lastHops=Collections.emptyList();
     private volatile String lastHopError="";
+    private Object mtuLease;
 
     AndroidSpeedLabController(Activity activity,AndroidUnifiedConnectionController connection){this.activity=activity;this.connection=connection;this.meter=new AndroidSpeedLab(activity);this.hopMeter=new AndroidSpeedLabHopMeter(activity);}
     boolean isRunning(){return running.get();}
@@ -38,6 +39,17 @@ final class AndroidSpeedLabController {
     void run(Request request,Callback callback){
         if(request==null){callback.finished(null,new IllegalArgumentException("Speed Lab request is required."));return;}
         if(!running.compareAndSet(false,true)){callback.finished(null,new IllegalStateException("Another Speed Lab test is already running."));return;}
+        try{mtuLease=AndroidMTUMeasurementGate.acquire();}
+        catch(Throwable error){running.set(false);callback.finished(null,error);return;}
+        final Object lease=mtuLease;
+        LayeredVpnService.quiesceMTUForSpeedLab(error->activity.runOnUiThread(()->{
+            if(mtuLease!=lease||!running.get())return;
+            if(error!=null){finish(callback,null,error);return;}
+            runOwned(request,callback);
+        }));
+    }
+
+    private void runOwned(Request request,Callback callback){
         lastHops=Collections.emptyList();lastHopError="";
         boolean temporaryRuntimeRequested=false;
         try{
@@ -103,6 +115,9 @@ final class AndroidSpeedLabController {
     }
 
     private static AndroidNodeStore.Node find(List<AndroidNodeStore.Node>nodes,String id){if(nodes==null||id==null)return null;for(AndroidNodeStore.Node node:nodes)if(node!=null&&id.equals(node.id))return node;return null;}
-    private void finish(Callback callback,AndroidSpeedLab.Result result,Throwable error){running.set(false);callback.finished(result,error);}
+    private void finish(Callback callback,AndroidSpeedLab.Result result,Throwable error){
+        Object lease=mtuLease;mtuLease=null;AndroidMTUMeasurementGate.release(lease);
+        running.set(false);callback.finished(result,error);
+    }
     private static String normalize(String value,String fallback){String out=value==null?"":value.trim().toLowerCase(Locale.US);return out.isEmpty()?fallback:out;}
 }

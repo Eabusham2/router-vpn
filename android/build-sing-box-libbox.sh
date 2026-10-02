@@ -75,7 +75,7 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in     routerApplyPerformancePolicy     routerStartPerformance     routerPerformanceFailure     routerInvalidatePerformance     routerPerformanceStatus     routerCompileAmneziaProfile     routerAmneziaExitConfig     routerCompileWireGuardProfile     routerWireGuardExitConfig     routerApplyMultihopMTUPolicy     routerApplyMultihopLANPolicy     newRouterHopMeasurement     routerCompileSIP003Profile     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
+  for symbol in     newRouterMTU     routerMTUPhysicalPath     routerReadMTUInterface     routerApplyPerformancePolicy     routerStartPerformance     routerPerformanceFailure     routerInvalidatePerformance     routerPerformanceStatus     routerCompileAmneziaProfile     routerAmneziaExitConfig     routerCompileWireGuardProfile     routerWireGuardExitConfig     routerApplyMultihopMTUPolicy     routerApplyMultihopLANPolicy     newRouterHopMeasurement     routerCompileSIP003Profile     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
     grep -Fq "$symbol" "$api_list" || {
       echo "combined libbox AAR is missing $symbol bridge" >&2
       return 1
@@ -217,7 +217,8 @@ python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
   go_retry test ./experimental/libbox/routervpn/...
-  go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance)' -count=1
+  go_retry test -race ./adapter/inbound -run TestRouterVPN -count=1
+  go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|MTU)' -count=1
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf -count=1 -timeout=120s
   python3 "$ROOT/../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"

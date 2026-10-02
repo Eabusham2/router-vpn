@@ -13,6 +13,9 @@ _whitening_spec.loader.exec_module(WHITENING)
 _amnezia_spec = importlib.util.spec_from_file_location('routervpn_amnezia', ROOT/'deploy/prepare-mobile-amnezia.py')
 AMNEZIA = importlib.util.module_from_spec(_amnezia_spec)
 _amnezia_spec.loader.exec_module(AMNEZIA)
+_mtu_spec = importlib.util.spec_from_file_location('routervpn_mtu', ROOT/'deploy/prepare-mobile-mtu.py')
+MTU = importlib.util.module_from_spec(_mtu_spec)
+_mtu_spec.loader.exec_module(MTU)
 _perf_spec = importlib.util.spec_from_file_location('routervpn_perf', ROOT/'deploy/prepare-mobile-performance.py')
 PERFORMANCE = importlib.util.module_from_spec(_perf_spec)
 _perf_spec.loader.exec_module(PERFORMANCE)
@@ -20,7 +23,7 @@ def inputs():
     paths = [ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + [Path(__file__).resolve()]
+    return paths + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -51,6 +54,7 @@ def prepare(vendor):
     (tests/'traffic_test.go').write_bytes((ROOT/'mobile/sip003/traffic_test.go.tmpl').read_bytes())
     AMNEZIA.prepare(vendor)
     PERFORMANCE.prepare(vendor)
+    MTU.prepare(vendor)
     print('Shared multihop source digest:',digest())
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('vendor',type=Path,nargs='?');parser.add_argument('--digest',action='store_true');args=parser.parse_args()

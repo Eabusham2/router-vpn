@@ -159,6 +159,13 @@ final class NativeSingBoxController {
                     if (total > MAX_PROFILE_TOTAL) throw new IllegalStateException("Selected mode profile exceeds safety limit.");
                     writeFile(new File(session, name), decoded);
                 }
+                JSONObject mtuProfile=new JSONObject(AndroidProfileSelection.selectedRouterProfile(root).toString());
+                mtuProfile.put("node_proof_id",AndroidNodeStore.stableNodeIdentity(root));
+                byte[] mtuBytes=mtuProfile.toString().getBytes(StandardCharsets.UTF_8);
+                if(mtuBytes.length>256*1024)throw new IllegalStateException("Captured MTU metadata exceeds its bound.");
+                total += mtuBytes.length;
+                if(total>MAX_PROFILE_TOTAL)throw new IllegalStateException("MTU metadata exceeds the staged profile budget.");
+                writeFile(new File(session,"routervpn-mtu.json"),mtuBytes);
                 File configFile = new File(session, "sing-box.json");
                 if (!configFile.isFile() || configFile.length() == 0) throw new IllegalStateException("Session is missing sing-box.json.");
                 return new SessionInfo(sessionId, modeId);
