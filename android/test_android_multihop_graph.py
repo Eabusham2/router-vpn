@@ -240,11 +240,18 @@ public final class MultihopGraphHarness {
   JSONObject graph=direct(nativeWG,dir,app,source);
   check(graph.getJSONArray("endpoints").getJSONObject(0).getInt("mtu")==1420,"stale saved MTU adopted as current path proof");
   check(AndroidNativeProfilePolicy.selectedMtu(source,1380)==1380,"raw backend adopted stale saved MTU");
-  check(!AndroidNativeProfilePolicy.requiresLibbox(source),"ordinary home DNS lost raw WG capability");
+  check(AndroidNativeProfilePolicy.requiresLibbox(source),"adaptive MTU selected an address-only backend without its owner");
+  JSONObject fixedHome=new JSONObject(source.toString());profile(fixedHome).put("mtu_policy","fixed").put("manual_mtu",1380);
+  check(!AndroidNativeProfilePolicy.requiresLibbox(fixedHome),"fixed home DNS lost raw WG capability");
+  String fixedRaw=AndroidNativeProfilePolicy.patchWireGuardLikeConfig(fixedHome,wg('b'),1380);
+  check(fixedRaw.contains("DNS = 192.168.50.133")&&fixedRaw.contains("MTU = 1380"),"raw fixed policy lost its requested DNS or MTU");
+  boolean adaptiveRawRejected=false;
+  try{AndroidNativeProfilePolicy.patchWireGuardLikeConfig(source,wg('b'),1380);}catch(Exception expected){adaptiveRawRejected=true;}
+  check(adaptiveRawRejected,"address-only backend silently accepted adaptive MTU");
   check(AndroidNativeProfilePolicy.selectedPlainUdpDns(source).equals("192.168.50.133"),"literal home DNS rejected");
   for(String mode:new String[]{"custom","dot","doh","doh3"}) {
    source=bundle('b');JSONObject policy=profile(source);
-   policy.put("dns_mode",mode).put("dns_host","192.0.2.53").put("dns_protocol","tcp").put("dns_server_name","dns.example.test");
+   policy.put("mtu_policy","fixed").put("manual_mtu",1380).put("dns_mode",mode).put("dns_host","192.0.2.53").put("dns_protocol","tcp").put("dns_server_name","dns.example.test");
    if(mode.equals("custom"))policy.put("dns_port",5353);
    graph=direct(nativeWG,dir,app,source);
    JSONObject dns=graph.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
@@ -303,7 +310,7 @@ public final class MultihopGraphHarness {
   check(Files.isRegularFile(app.resolve("layered-sessions").resolve(strict.sessionId).resolve(AndroidKillSwitchPolicy.SESSION_MARKER)),"strict WG policy was not delivered to the VpnService");
   for(String extra:new String[]{"DNS = 192.0.2.53\n", "MTU = 1350\n", "[Interface]\n"}) {
    String raw=wg('b').replace("[Peer]",extra+"[Peer]");boolean failed=false;
-   try{AndroidNativeProfilePolicy.patchWireGuardLikeConfig(bundle('b'),raw,1380);}catch(Exception expected){failed=true;}
+   try{AndroidNativeProfilePolicy.patchWireGuardLikeConfig(fixedHome,raw,1380);}catch(Exception expected){failed=true;}
    check(failed,"raw policy silently repaired ambiguous interface fields");
   }
  }

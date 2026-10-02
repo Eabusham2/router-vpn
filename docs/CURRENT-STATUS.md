@@ -1,5 +1,19 @@
 # Current implementation status
 
+## Current mobile MTU integration (October 1, 2026)
+
+Android (`71be1466`) and iOS (`2dc2630f`) now include the process-owned
+Libbox Auto-MTU controller, Retest UI, cancellation, actual MTU readback,
+VPN-bound probes, and measurement holds across temporary comparison
+sessions. Native integration passed on Linux and macOS. See
+`internal/mobilemtu/README.md` for behavior and test boundaries.
+
+This supersedes older mobile MTU limitations in historical checkpoints.
+Actual packaged-app builds and device acceptance are separate gates;
+source/contract passes do not establish complete release readiness.
+The raw Apple WireGuardKit MTU adapter, other listed helper-engine gaps,
+signed/device/off-LAN/ASUS validation remain open. No router was deployed.
+
 This file describes the **current source implementation**. It does not turn a source feature into a release claim by itself: physical-device, off-LAN, leak-negative, signing and production-deploy gates remain separate and must be passed before release.
 
 ## Product split
