@@ -126,6 +126,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let nativeModes: Set<String> = ["wg", "awg2-fast", "awg2-strong"]
         guard nativeModes.contains(requestedMode) else { throw tunnelError(7, "Native WireGuard-family engine received unsupported mode \(requestedMode).") }
         try IOSStartLayer.validateWireGuard(profile: selectedProfile)
+        guard try !RouterVPNMTUPolicy.requiresAdaptiveOwner(profile: selectedProfile) else { throw tunnelError(60, "Auto-MTU requires the Libbox TUN owner. Reconnect from Router VPN to refresh this saved native selection.") }
         let profileText = try RouterVPNMTUPolicy.wireGuard(wireGuardLikeProfile(root, rawProfileID: requestedMode), profile: selectedProfile)
         let tunnelConfiguration = try RouterVPNWireGuardConfig.parse(profileText, name: requestedMode == "wg" ? "Router VPN" : "Router VPN AmneziaWG", amnezia: requestedMode != "wg")
         guard tunnelConfiguration.peers.count == 1 else { throw tunnelError(8, "Router VPN iOS node proof requires exactly one generated WireGuard-family server peer.") }
@@ -217,6 +218,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let entryURL = try selectedProofURL(entryProfile), exitURL = try selectedProofURL(selectedProfile)
         let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self)
+        try engine.prepareMTUHold(initialMTUHold)
         libboxEngine = engine
         let metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
             "entry_node_id": entryProofID, "exit_node_id": exitProofID,

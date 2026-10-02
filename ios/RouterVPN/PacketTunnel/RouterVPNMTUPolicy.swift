@@ -7,6 +7,16 @@ enum RouterVPNMTUPolicy {
     static let maximum = 9000
     private static let maxConfigBytes = 4 * 1024 * 1024
 
+    static func requiresAdaptiveOwner(profile: [String: Any]) throws -> Bool {
+        struct Settings: Decodable { let mtu_policy: String?; let jumbo_tun: Bool? }
+        let settings = try JSONDecoder().decode(Settings.self, from: JSONSerialization.data(withJSONObject: profile))
+        switch (settings.mtu_policy ?? "auto").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "", "auto": return settings.jumbo_tun != true
+        case "default", "manual", "fixed": return false
+        default: throw issue("Unknown iOS MTU policy; refusing an unowned native backend.")
+        }
+    }
+
     static func fixedMTU(profile: [String: Any]) throws -> Int? {
         struct Settings: Decodable {
             let mtu_policy: String?

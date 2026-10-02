@@ -117,6 +117,31 @@ import NetworkExtension
  }
 }
 """
+def verify_startup_holds(provider):
+    sections=(('startMultihop(', 'multihopWireGuardEndpoint('),
+              ('startLibbox(', 'performanceFiles('),
+              ('startExternalLibbox(', 'selectedRouterProfile('))
+    for start, end in sections:
+        begin=provider.index('    private func '+start)
+        finish=provider.index('    private func '+end,begin)
+        body=provider[begin:finish]
+        assert body.count('try engine.prepareMTUHold(initialMTUHold)')==1, start+' lost startup MTU hold'
+        assert body.index('try engine.prepareMTUHold(initialMTUHold)') < body.index('engine.start('), start+' starts before holding MTU'
+
+provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
+raw=provider[provider.index('        let requestedMode ='):provider.index('    private func startMultihop(')]
+assert raw.index('!RouterVPNMTUPolicy.requiresAdaptiveOwner(profile: selectedProfile)') < raw.index('WireGuardAdapter(with: self)')
+
+verify_startup_holds(provider)
+for index in range(3):
+    marker='try engine.prepareMTUHold(initialMTUHold)'
+    before, after=provider.split(marker,index+1)[:-1],provider.split(marker,index+1)[-1]
+    mutant=marker.join(before)+'// missing comparison hold'+after
+    try:verify_startup_holds(mutant)
+    except AssertionError:pass
+    else:raise AssertionError('Startup-hold negative control was accepted: '+str(index))
+print('Every native Apple startup holds MTU before launch; all three missing-hold controls rejected.')
+
 with tempfile.TemporaryDirectory(prefix='routervpn-mtu-control-') as directory:
  tmp=Path(directory);(tmp/'NetworkExtension.swift').write_text(STUB);(tmp/'Harness.swift').write_text(TEST)
  swift=shutil.which('swiftc')

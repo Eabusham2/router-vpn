@@ -11,8 +11,11 @@ sessions. Native integration passed on Linux and macOS. See
 This supersedes older mobile MTU limitations in historical checkpoints.
 Actual packaged-app builds and device acceptance are separate gates;
 source/contract passes do not establish complete release readiness.
-The raw Apple WireGuardKit MTU adapter, other listed helper-engine gaps,
-signed/device/off-LAN/ASUS validation remain open. No router was deployed.
+Apple WG/AWG Auto-MTU uses the Libbox endpoint owner without changing the
+selected transport; nonadaptive fixed/manual/default MTU retains the raw
+WireGuardKit path. Multihop also adopts its startup measurement hold before
+launch. Other listed helper-engine gaps and signed/device/off-LAN/ASUS
+validation remain open. No router was deployed.
 
 This file describes the **current source implementation**. It does not turn a source feature into a release claim by itself: physical-device, off-LAN, leak-negative, signing and production-deploy gates remain separate and must be passed before release.
 

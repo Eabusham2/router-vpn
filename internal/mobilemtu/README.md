@@ -21,8 +21,10 @@ Speed Lab, hop measurements and SMART AUTO comparisons hold/drain adaptive MTU
 work, including temporary replacement sessions. UI completion requires fresh
 packet and transfer evidence rather than a stored number or a cache hit.
 
-The separate Apple WireGuardKit owner is not yet adapted to this controller;
-its existing fixed/manual policy is unchanged. Supported native graphs, actual
+Apple WG and both native AWG variants select their Libbox endpoint owner for
+Auto-MTU, preserving the exact transport and imported peer bytes. The raw
+WireGuardKit path remains available for nonadaptive fixed/manual/default MTU;
+a stale raw Auto-MTU handoff is rejected rather than silently ignored. Supported native graphs, actual
 packaged-app compilation and physical-device acceptance remain separate gates.
 
 ## Controller behavior

@@ -64,7 +64,13 @@ enum IOSDNSRuntimePolicy {
         let ipv6 = clean(profile.ipv6Mode).lowercased()
         guard ["", "on", "auto", "off"].contains(ipv6) else { throw error("Unknown saved IPv6 policy.") }
         let dns = try resolve(profile)
-        return dns?.wireGuardCompatible == false || profile.homeLANAccess == false || ipv6 == "off" || profile.daitaEnabled == true || profile.jumboTUN == true
+        let mtu = clean(profile.mtuPolicy).lowercased()
+        guard ["", "auto", "default", "manual", "fixed"].contains(mtu) else { throw error("Unknown saved MTU policy.") }
+        // Auto-MTU needs the process-owned TUN replacement and socket binding
+        // callbacks. Preserve the exact WG/AWG mode and peer, not a protocol
+        // fallback. Fixed/default MTU can still use the raw native adapter.
+        let adaptiveMTU = (mtu.isEmpty || mtu == "auto") && profile.jumboTUN != true
+        return adaptiveMTU || dns?.wireGuardCompatible == false || profile.homeLANAccess == false || ipv6 == "off" || profile.daitaEnabled == true || profile.jumboTUN == true
     }
 
     static func validate(selection: IOSRuntimeSelection, in bundle: ClientBundle) throws {

@@ -36,6 +36,16 @@ let absent = source.replacingOccurrences(of:"MTU = 1420\n", with:"")
 try check("insert missing MTU", P.wireGuard(absent, profile: fixed(1300)) == absent.replacingOccurrences(of:"[Interface]\n", with:"[Interface]\nMTU = 1300\n"))
 let commented = source.replacingOccurrences(of:"MTU = 1420", with:"  mtu = 1420 # old mtu")
 try check("case insensitive exact key", P.wireGuard(commented, profile: fixed(1300)).contains("MTU = 1300\n"))
+for profile: [String: Any] in [[:], ["mtu_policy":""], ["mtu_policy":"auto"], ["mtu_policy":" AUTO "]] {
+    try check("adaptive policy requires an owned backend", P.requiresAdaptiveOwner(profile:profile))
+}
+for mode in ["manual", "fixed", "default"] {
+    try check("nonadaptive raw policy preserved", !P.requiresAdaptiveOwner(profile:["mtu_policy":mode]))
+}
+try check("Jumbo is not silently adaptive", !P.requiresAdaptiveOwner(profile:["mtu_policy":"auto","jumbo_tun":true]))
+for invalid: [String: Any] in [["mtu_policy":true],["mtu_policy":14],["mtu_policy":"invented"],["jumbo_tun":"true"]] {
+    reject("invalid adaptive-owner settings") { _ = try P.requiresAdaptiveOwner(profile:invalid) }
+}
 let crlf = source.replacingOccurrences(of:"\n", with:"\r\n")
 try check("CRLF accepted", P.wireGuard(crlf, profile: fixed(1400)) == crlf.replacingOccurrences(of:"MTU = 1420", with:"MTU = 1400"))
 let awg = source.replacingOccurrences(of:"[Interface]\n", with:"[Interface]\nJc=4\nJmin=40\nJmax=70\nS1=40\nS2=60\nS3=0\nS4=0\nH1=11111\nH2=22222\nH3=33333\nH4=44444\n")

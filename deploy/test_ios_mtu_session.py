@@ -131,6 +131,12 @@ _ = request(held,"mtu-release",id,heldSession)
 check(FakeOS.starts==starts+1,"deferred Auto-MTU did not start after final release")
 check(request(held,"mtu-hold",id,heldSession)?["measurement_ready"] as? Bool == true,"running Auto-MTU was not drained for Speed Lab")
 let stoppedCount=FakeOS.closes;held.stop();check(FakeOS.closes==stoppedCount+1,"native controller not closed on Stop")
+for raw in ["{}", "{\"mtu_policy\":\"\"}", "{\"mtu_policy\":\" AUTO \"}"] {
+ let alias=ready();let count=FakeOS.starts
+ alias.activate(server:LibboxCommandServer(),config:"{}",profile:raw){_ in}
+ check(FakeOS.starts==count+1,"normalized automatic policy failed to start")
+ alias.stop()
+}
 let manual=ready();let manualStarts=FakeOS.starts
 manual.activate(server:LibboxCommandServer(),config:"{}",profile:"{\"mtu_policy\":\"manual\"}"){_ in}
 check(FakeOS.starts==manualStarts,"manual policy silently optimized")

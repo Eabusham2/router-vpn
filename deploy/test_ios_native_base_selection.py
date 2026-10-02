@@ -57,7 +57,7 @@ func fixture(base: String = "auto", fallback: Bool = false, dns: String = "home"
         "router_api":"http://10.77.0.1:8787", "api_token":"fixture-only-not-a-secret",
         "adguard_ipv4":"10.77.0.1", "adguard_ipv6":"fd77:77::1", "socks_host":"10.77.0.1",
         "socks_port":1080, "socks_username":"", "socks_password":"", "base_tunnel":base,
-        "base_fallback":fallback, "dns_mode":dns, "dns_host":"1.1.1.1", "dns_server_name":"cloudflare-dns.com", "start_layer":start
+        "mtu_policy":"fixed", "manual_mtu":1380, "base_fallback":fallback, "dns_mode":dns, "dns_host":"1.1.1.1", "dns_server_name":"cloudflare-dns.com", "start_layer":start
     ]
     var bundle = ClientBundle.empty
     bundle.selectedRouterID = "home"
@@ -122,6 +122,21 @@ func candidates(_ bundle: ClientBundle, _ logical: String = "base-raw") throws -
             unsupportedPort.routerProfiles[0].dnsProtocol = "udp"
             unsupportedPort.routerProfiles[0].dnsPort = 5353
             try check("native family custom port uses Libbox", IOSRuntimeSelector.selectRaw(bundle:unsupportedPort,rawProfileID:raw).engine == .libbox)
+        }
+        for raw in ["wg", "awg2-fast", "awg2-strong"] {
+            for policy: String? in [nil, "", "auto", "AUTO", " auto "] {
+                var adaptive = try fixture(); adaptive.routerProfiles[0].mtuPolicy = policy
+                let selected = try IOSRuntimeSelector.selectRaw(bundle: adaptive, rawProfileID: raw)
+                let asset = raw == "wg" ? "wg.conf" : "awg.conf"
+                try check("Auto-MTU uses its owned Libbox TUN \(raw) \(policy ?? "absent")", selected.engine == .libbox)
+                try check("Auto-MTU preserves exact protocol and peer bytes", selected.rawProfileID == raw && selected.files[asset]?.base64EncodedString() == adaptive.profiles[raw]?[asset])
+            }
+            for policy in ["fixed", "manual", "default"] {
+                var fixed = try fixture(); fixed.routerProfiles[0].mtuPolicy = policy
+                try check("nonadaptive native adapter remains runnable \(raw) \(policy)", IOSRuntimeSelector.selectRaw(bundle: fixed, rawProfileID: raw).engine == .wireGuard)
+            }
+            var invalid = try fixture(); invalid.routerProfiles[0].mtuPolicy = "unknown-mtu"
+            reject("invalid MTU policy cannot silently pick a backend") { _ = try IOSRuntimeSelector.selectRaw(bundle: invalid, rawProfileID: raw) }
         }
         var allowedCustomPort = try fixture(dns:"custom")
         allowedCustomPort.routerProfiles[0].dnsProtocol = "udp"

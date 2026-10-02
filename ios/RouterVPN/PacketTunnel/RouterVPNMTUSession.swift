@@ -135,7 +135,8 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         // The shared profile parser owns policy validation. Manual/fixed/Jumbo
         // never silently become automatic; do not start a test for those modes.
         let policy = (try? JSONSerialization.jsonObject(with: Data(profile.utf8))) as? [String: Any]
-        let automatic = (policy?["mtu_policy"] as? String ?? "auto").lowercased() == "auto"
+        let mode = (policy?["mtu_policy"] as? String ?? "auto").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let automatic = mode.isEmpty || mode == "auto"
         stateLock.lock(); automaticPending = automatic && policy?["jumbo_tun"] as? Bool != true && hold; stateLock.unlock()
         if automatic && policy?["jumbo_tun"] as? Bool != true && !hold {
             try? next.start(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(), force: false)
