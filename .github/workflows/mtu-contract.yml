@@ -30,6 +30,9 @@ jobs:
           python3 android/test_android_mtu_measurement_gate.py
           python3 android/test_android_mtu_session.py
           python3 android/test_android_layered_service_compile.py
+          python3 android/test_android_runtime_teardown.py
+          python3 deploy/test_native_sip003_shipping.py
+          python3 deploy/test_mobile_performance_shipping.py
       - name: MTU policy unit tests
         run: python3 modes/test_mtu_policy.py
       - name: Shell syntax
@@ -49,5 +52,13 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Execute production Swift MTU result decoder and rejection cases
-        run: python3 deploy/test_mobile_mtu_status.py
+      - name: Execute production Swift owner, IPC, leases and rejection cases
+        run: |
+          python3 deploy/test_mobile_mtu_status.py
+          python3 deploy/test_ios_mtu_session.py
+          python3 deploy/test_ios_mtu_control.py
+          python3 deploy/test_ios_libbox_delivery.py
+          python3 deploy/test_ios_session_identity.py
+          python3 deploy/test_ios_disconnect_ownership.py
+          python3 deploy/test_ios_mtu_policy.py
+          python3 deploy/test_ios_start_layer.py

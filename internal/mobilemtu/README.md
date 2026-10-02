@@ -2,18 +2,28 @@
 
 ## Implementation status
 
-The shared controller and its behavioral tests are implemented. **This package
-is not yet connected to Android's VpnService or Apple's PacketTunnel.** It does
-not make the mobile Auto-MTU/Retest requirement complete, and it does not replace
-that requirement with a capability exclusion. Existing mobile runtime selection
-and production network behavior are unchanged by adding this package.
+The shared controller is connected to the process-owned Libbox TUN path on
+Android and iOS/iPadOS. Android source integration is committed in `71be1466`;
+Apple tunnel ownership, Retest UI, IPC and comparison-lease integration are
+committed in `2dc2630f`. Native Go core preparation is pinned and exercised on
+both Linux and macOS. These are source and test facts, not a declaration that
+all Router VPN requirements or device acceptance gates are complete.
 
-The `Owner` adapter must supply a live session, physical-path and virtual-interface
-identity, actual interface MTU readback, a guarded TUN-only MTU change, and sockets
-explicitly bound to that OS VPN. It must never provide an ambient/default-network
-socket or restart an invalidated connection. No production adapter is claimed
-here. The native adapter, UI/IPC, complete packaged-app tests and physical-device
-acceptance remain separate work.
+`AndroidMTUSession` and `RouterVPNMTUSession` provide captured session, physical
+path and reader identities, actual MTU readback, a TUN-reader-only transaction,
+and sockets explicitly bound to that OS VPN. The native bridge replaces only
+the captured inbound. It does not restart the Box, rekey the encrypted tunnel,
+change DNS, or use an ambient/default-network probe fallback.
+
+Auto-MTU activation follows selected-node path proof. Manual/Jumbo settings do
+not silently enter the optimizer. Retest and Cancel are session/request bound.
+Speed Lab, hop measurements and SMART AUTO comparisons hold/drain adaptive MTU
+work, including temporary replacement sessions. UI completion requires fresh
+packet and transfer evidence rather than a stored number or a cache hit.
+
+The separate Apple WireGuardKit owner is not yet adapted to this controller;
+its existing fixed/manual policy is unchanged. Supported native graphs, actual
+packaged-app compilation and physical-device acceptance remain separate gates.
 
 ## Controller behavior
 
@@ -42,9 +52,18 @@ credentials or reuses old rates as fresh measurements.
 
 ## Test scope
 
-`go test -race ./internal/mobilemtu ./internal/hopmeasure` executes the production
-controller, validators, cache, authentication and transfer measurement code.
-The tests exchange real local HTTP payloads and authenticated datagrams, but
-double the OS interface ownership/application boundary. They are not real-phone
-routing, leak, reconnect or radio-transition tests. The full repository Go suite
-continues to include this package automatically.
+`go test -race ./internal/mobilemtu ./internal/hopmeasure ./internal/mtuprobe`
+executes the production controller, validators, cache, authentication and
+transfer measurement code. Tests exchange real local HTTP payloads and
+authenticated datagrams but double OS ownership/application boundaries.
+
+`native-mtu-integration.yml` prepares the exact native core and executes its
+manager, bridge and shared controller with race detection on Linux and macOS.
+`mtu-contract.yml` executes the shipping Java and Swift ownership, IPC, lease,
+readback and evidence-validation implementations against platform boundary
+doubles; negative controls must still fail. Build-all and the Apple compile
+smoke separately compile actual SDK applications and embedded native engines.
+
+None of those substitute for real-phone routing, leak, cancellation,
+Wi-Fi/cellular transition, reconnect, signed installation or off-LAN tests.
+No new device-validation claim is made by this source integration.

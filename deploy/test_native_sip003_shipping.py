@@ -10,8 +10,9 @@ class Shipping(unittest.TestCase):
     def test_compiler_and_bridge_are_copied_byte_exactly(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/'go.mod').write_text('module github.com/sagernet/sing-box\n')
-            with mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'):
+            with mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare:
                 PREPARE.prepare(root)
+                mtu_prepare.assert_called_once_with(root)
             native=root/'experimental/libbox/routervpn/nativesip003'
             for source in (ROOT/'internal/nativesip003').glob('*.go'):
                 self.assertEqual(source.read_bytes(),(native/source.name).read_bytes())

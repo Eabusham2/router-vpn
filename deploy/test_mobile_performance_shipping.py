@@ -3,6 +3,8 @@
 from pathlib import Path
 import importlib.util
 import tempfile
+import re
+import shlex
 import unittest
 from unittest import mock
 ROOT=Path(__file__).resolve().parents[1]
@@ -12,8 +14,9 @@ class Shipping(unittest.TestCase):
     def test_shared_policy_is_built_byte_exactly(self):
         with tempfile.TemporaryDirectory() as tmp:
             vendor=Path(tmp);(vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
-            with mock.patch.object(PREPARE.WHITENING,'prepare'),mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'):
+            with mock.patch.object(PREPARE.WHITENING,'prepare'),mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare:
                 PREPARE.prepare(vendor)
+                mtu_prepare.assert_called_once_with(vendor)
             for source in (ROOT/'internal/mobileperf').glob('*.go'):
                 expected=source.read_text().replace('"router-vpn/internal/','"github.com/sagernet/sing-box/experimental/libbox/routervpn/')
                 self.assertEqual(expected,(vendor/'experimental/libbox/routervpn/mobileperf'/source.name).read_text())
@@ -22,12 +25,20 @@ class Shipping(unittest.TestCase):
     def test_mobile_sdk_builds_run_real_worker_and_graph_tests(self):
         for path,capital in [('android/build-sing-box-libbox.sh','router'),('ios/RouterVPN/prepare-libbox.sh','LibboxRouter')]:
             text=(ROOT/path).read_text()
-            self.assertIn('TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance)',text)
             self.assertIn('./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf',text)
             for suffix in ['ApplyPerformancePolicy','StartPerformance','PerformanceFailure','InvalidatePerformance','PerformanceStatus']:
                 self.assertIn(capital+suffix,text)
-            line=next(line for line in text.splitlines() if 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance)' in line)
-            self.assertIn('with_quic',line)
+            selectors=[]
+            for line in text.splitlines():
+                if line.lstrip().startswith('#') or './experimental/libbox ' not in line or '-run ' not in line:continue
+                words=shlex.split(line)
+                if 'test' in words and './experimental/libbox' in words and '-run' in words:
+                    self.assertIn('-count=1',words)
+                    self.assertIn('-tags',words)
+                    self.assertIn('with_quic',words[words.index('-tags')+1].split(','))
+                    selectors.append(re.compile(words[words.index('-run')+1]))
+            for family in ('Multihop','NativeWireGuard','NativeAmnezia','NativePerformance','MTU'):
+                self.assertTrue(any(p.search('TestRouter'+family) for p in selectors),path+' omits '+family)
             for command in text.splitlines():
                 if 'test ' in command and './experimental/libbox' in command and './experimental/libbox/routervpn' not in command:
                     self.assertIn('with_quic',command,'every libbox graph test includes the real QUIC transport')
