@@ -32,6 +32,10 @@ func (b *peerBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint16, error) {
 		return nil, 0, errors.New("native AWG has no imported listen port")
 	}
 	b.mu.Lock()
+	if b.ctx == nil || b.ctx.Err() != nil {
+		b.mu.Unlock()
+		return nil, 0, net.ErrClosed
+	}
 	if b.conn != nil || b.cancel != nil {
 		b.mu.Unlock()
 		return nil, 0, awgconn.ErrBindAlreadyOpen
@@ -51,14 +55,21 @@ func (b *peerBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint16, error) {
 		}
 		return nil, 0, net.ErrClosed
 	}
+	// A dialer may return a socket together with an error or finish after its
+	// attempt was cancelled. Never adopt it or leak its cleanup responsibility.
+	// Check the attempt context BEFORE our own successful-dial cancellation.
 	b.cancel = nil
-	cancel()
-	if err != nil {
+	if err != nil || c == nil || ctx.Err() != nil {
 		b.mu.Unlock()
+		cancel()
+		if c != nil {
+			_ = c.Close()
+		}
 		return nil, 0, errors.New("native AWG protected peer dial failed")
 	}
 	b.conn = c
 	b.mu.Unlock()
+	cancel()
 	receive := func(packets [][]byte, sizes []int, endpoints []awgconn.Endpoint) (int, error) {
 		if len(packets) != 1 || len(sizes) < 1 || len(endpoints) < 1 {
 			return 0, errors.New("invalid AWG receive batch")

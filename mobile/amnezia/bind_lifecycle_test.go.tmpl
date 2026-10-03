@@ -1,0 +1,124 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"sync/atomic"
+	"testing"
+
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type ownedProbeConn struct {
+	net.Conn
+	closed atomic.Int32
+}
+
+func (c *ownedProbeConn) Close() error { c.closed.Add(1); return nil }
+
+type lifetimeDialer struct {
+	connect func(context.Context) (net.Conn, error)
+	calls   atomic.Int32
+}
+
+func (d *lifetimeDialer) DialContext(ctx context.Context, network string, target M.Socksaddr) (net.Conn, error) {
+	d.calls.Add(1)
+	return d.connect(ctx)
+}
+func (*lifetimeDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, net.ErrClosed
+}
+func TestBindRejectsFailedAndCancelledDialResources(t *testing.T) {
+	for _, scenario := range []string{"cancelled-success", "connection-and-error", "nil-success"} {
+		t.Run(scenario, func(t *testing.T) {
+			conn := new(ownedProbeConn)
+			bind := &peerBind{ctx: context.Background(), target: netip.MustParseAddrPort("192.0.2.1:51820")}
+			dialer := &lifetimeDialer{connect: func(ctx context.Context) (net.Conn, error) {
+				switch scenario {
+				case "cancelled-success":
+					// Simulate a dialer that returns success after its per-open context has
+					// expired. This is not parent shutdown or a different bind generation.
+					bind.mu.Lock()
+					cancel := bind.cancel
+					bind.mu.Unlock()
+					cancel()
+					if ctx.Err() == nil {
+						t.Fatal("dial cancellation did not occur")
+					}
+					return conn, nil
+				case "connection-and-error":
+					return conn, errors.New("fixture dial failed")
+				default:
+					return nil, nil
+				}
+			}}
+			bind.dialer = dialer
+			if _, _, err := bind.Open(0); err == nil {
+				t.Fatal("adopted failed, nil or cancelled dial")
+			}
+			if bind.conn != nil || bind.cancel != nil {
+				t.Fatal("failed open retained a live reservation")
+			}
+			expected := int32(1)
+			if scenario == "nil-success" {
+				expected = 0
+			}
+			if conn.closed.Load() != expected {
+				t.Fatalf("failed dial resource closed %d times, expected %d", conn.closed.Load(), expected)
+			}
+			// A failed attempt must neither leak nor permanently block a later open.
+			next := new(ownedProbeConn)
+			dialer.connect = func(context.Context) (net.Conn, error) { return next, nil }
+			if _, _, err := bind.Open(0); err != nil {
+				t.Fatal("failed dial poisoned next open", err)
+			}
+			if err := bind.Close(); err != nil || next.closed.Load() != 1 {
+				t.Fatal("replacement close lost ownership", err)
+			}
+		})
+	}
+}
+func TestBindCancelledParentNeverDials(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dialer := &lifetimeDialer{connect: func(context.Context) (net.Conn, error) { return nil, errors.New("should not dial") }}
+	bind := &peerBind{ctx: ctx, dialer: dialer, target: netip.MustParseAddrPort("192.0.2.1:51820")}
+	if _, _, err := bind.Open(0); err == nil || dialer.calls.Load() != 0 {
+		t.Fatal("stopped endpoint attempted a new outbound")
+	}
+}
+func TestLateBindCannotReplaceNewGeneration(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	old, current := new(ownedProbeConn), new(ownedProbeConn)
+	var calls atomic.Int32
+	dialer := &lifetimeDialer{connect: func(context.Context) (net.Conn, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			return old, nil
+		}
+		return current, nil
+	}}
+	bind := &peerBind{ctx: context.Background(), dialer: dialer, target: netip.MustParseAddrPort("192.0.2.1:51820")}
+	result := make(chan error, 1)
+	go func() { _, _, err := bind.Open(0); result <- err }()
+	<-entered
+	if err := bind.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := bind.Open(0); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-result; err == nil {
+		t.Fatal("obsolete open adopted its returned socket")
+	}
+	if bind.conn != current || old.closed.Load() != 1 || current.closed.Load() != 0 {
+		t.Fatal("old completion modified the current bind")
+	}
+	if err := bind.Close(); err != nil || current.closed.Load() != 1 {
+		t.Fatal("current bind did not close once")
+	}
+}
