@@ -624,9 +624,12 @@ func coldUDPReady(pair *actualPair) error {
 // The entry reference forwards only the test exit's encrypted UDP packets.
 // All outer sockets are loopback fixtures; no user node or Internet route is used.
 type nestedExitRelay struct {
-	target  M.Socksaddr
-	actual  string
-	packets atomic.Int64
+	dropFirstInitiation atomic.Bool
+	dropped             atomic.Int64
+	replies             atomic.Int64
+	target              M.Socksaddr
+	actual              string
+	packets             atomic.Int64
 }
 
 func (*nestedExitRelay) JudgeFlow(uint8, netip.AddrPort, netip.AddrPort, []byte) tun.FlowVerdict {
@@ -672,6 +675,7 @@ func (r *nestedExitRelay) NewPacketConnectionEx(ctx context.Context, c N.PacketC
 				}
 				p := buf.NewPacket()
 				_, _ = p.Write(data[:n])
+				r.replies.Add(1)
 				if err = c.WritePacket(p, destination); err != nil {
 					finished <- err
 					_ = upstream.Close()
@@ -686,7 +690,15 @@ func (r *nestedExitRelay) NewPacketConnectionEx(ctx context.Context, c N.PacketC
 				err = errors.New("nested target changed")
 			}
 			if err == nil {
-				_, err = upstream.Write(p.Bytes())
+				raw := p.Bytes()
+				// Fault injection drops one actual encrypted initiation only.
+				// Junk/prelude packets are not substituted for a handshake.
+				if len(raw) == 56+148 && binary.LittleEndian.Uint32(raw[56:60]) >= 10000000 && binary.LittleEndian.Uint32(raw[56:60]) <= 19999999 && r.dropFirstInitiation.CompareAndSwap(true, false) {
+					r.dropped.Add(1)
+					p.Release()
+					continue
+				}
+				_, err = upstream.Write(raw)
 				r.packets.Add(1)
 			}
 			p.Release()
@@ -720,6 +732,16 @@ func (*retainedEntryDialer) ListenPacket(context.Context, M.Socksaddr) (net.Pack
 	return nil, errors.New("nested exit cannot open another listener")
 }
 func TestActualAmneziaExitOverRetainedAmneziaEntry(t *testing.T) {
+	for _, dropFirst := range []bool{false, true} {
+		name := "cold-start"
+		if dropFirst {
+			name = "lost-first-initiation"
+		}
+		t.Run(name, func(t *testing.T) { testActualNestedAmnezia(t, dropFirst) })
+	}
+}
+
+func testActualNestedAmnezia(t *testing.T, dropFirst bool) {
 	var innerOptions Options
 	exit := newActualPairLifecycle(t, func(options *Options) { innerOptions = *options }, echoHandler{}, false)
 	if exit.dialer.calls.Load() != 0 || exit.binding.packets.Load() != 0 || exit.client.device != nil {
@@ -730,6 +752,7 @@ func TestActualAmneziaExitOverRetainedAmneziaEntry(t *testing.T) {
 	}
 	target := M.ParseSocksaddr("192.0.2.1:51820")
 	relay := &nestedExitRelay{target: target, actual: exit.binding.address()}
+	relay.dropFirstInitiation.Store(dropFirst)
 	entry := newActualPairWithHandler(t, nil, relay)
 	innerOptions.MTU = 1280
 	innerOptions.Detour = "entry"
@@ -743,6 +766,25 @@ func TestActualAmneziaExitOverRetainedAmneziaEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	pair := &actualPair{client: nested}
+	// Prove the same captured two-hop path with a random nonce before the
+	// existing short TCP/UDP data checks. Up() is not a completed handshake;
+	// the pinned backend's 5-second retry exceeds the 2-second stream test.
+	// This neither changes runtime timeouts nor permits another socket/path.
+	if err = coldUDPReady(pair); err != nil {
+		for name, dev := range map[string]*awg.Device{"entry-client": entry.client.device, "entry-server": entry.reference, "exit-client": nested.device, "exit-server": exit.reference} {
+			state, _ := dev.IpcGet()
+			for _, line := range strings.Split(state, "\n") {
+				if strings.HasPrefix(line, "last_handshake_") || strings.HasPrefix(line, "rx_bytes=") || strings.HasPrefix(line, "tx_bytes=") {
+					t.Log(name, line)
+				}
+			}
+		}
+		t.Log("nested packet counts", entry.binding.packets.Load(), relay.packets.Load(), relay.replies.Load(), exit.binding.packets.Load())
+		t.Fatal("nested cold-start proof failed", err)
+	}
+	if dropFirst && relay.dropped.Load() != 1 {
+		t.Fatal("lost-handshake negative scenario was not exercised")
+	}
 	for _, network := range []string{"tcp", "udp"} {
 		for _, host := range []string{"10.78.0.1", "fd78:78::1"} {
 			if err = exchange(t, pair, network, host); err != nil {
@@ -750,7 +792,7 @@ func TestActualAmneziaExitOverRetainedAmneziaEntry(t *testing.T) {
 			}
 		}
 	}
-	if relay.packets.Load() == 0 || exit.binding.packets.Load() == 0 || entry.binding.packets.Load() == 0 || owned.calls.Load() != 1 || entry.dialer.calls.Load() != 1 {
+	if relay.packets.Load() == 0 || relay.replies.Load() == 0 || exit.binding.packets.Load() == 0 || entry.binding.packets.Load() == 0 || owned.calls.Load() != 1 || entry.dialer.calls.Load() != 1 {
 		t.Fatal("did not traverse two real independent encrypted AWG engines")
 	}
 	if err = entry.client.Close(); err != nil {
