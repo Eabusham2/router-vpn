@@ -30,6 +30,11 @@ func RouterCompileAmneziaProfile(config, nodeID string) (string, error) {
 func RouterAmneziaExitConfig(config, nodeID string) (string, error) {
 	return mobilemultihop.AmneziaExitConfig(config, nodeID)
 }
+
+// RouterCompileProxyEntry inlines only the selected entry's owned trust asset.
+func RouterCompileProxyEntry(profile, mode string) (string, error) {
+	return mobilemultihop.CompileProxyEntry(profile, mode)
+}
 func RouterWireGuardExitConfig(config, nodeID string) (string, error) {
 	return mobilemultihop.WireGuardExitConfig(config, nodeID)
 }

@@ -188,7 +188,7 @@ func New(config, metadata string) (*Controller, error) {
 	if meta.EntryMode == "" {
 		meta.EntryMode = "wg"
 	}
-	if meta.EntryMode != "wg" && meta.EntryMode != "awg2-fast" && meta.EntryMode != "awg2-strong" {
+	if !awgpolicy.WireGuardFamily(meta.EntryMode) && !ProxyEntryMode(meta.EntryMode) {
 		return nil, errors.New("unimplemented entry transport")
 	}
 	if !awgpolicy.WireGuardFamily(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" {
@@ -217,9 +217,10 @@ func New(config, metadata string) (*Controller, error) {
 	if !ok || route["final"] != "proxy" {
 		return nil, errors.New("mobile graph lost its exit final route")
 	}
-	endpoints, ok := root["endpoints"].([]any)
-	if !ok {
-		return nil, errors.New("mobile graph has no entry endpoint")
+	if endpoints, exists := root["endpoints"]; exists {
+		if _, ok := endpoints.([]any); !ok {
+			return nil, errors.New("invalid native endpoints")
+		}
 	}
 	var local map[string]any
 	entryCount, exitCount := 0, 0
@@ -235,9 +236,22 @@ func New(config, metadata string) (*Controller, error) {
 			}
 			if value["tag"] == meta.EntryTag {
 				entryCount++
-				expectedEntry := "wireguard"
-				if meta.EntryMode != "wg" {
-					expectedEntry = AmneziaType
+				expectedEntry := meta.EntryMode
+				expectedList := "outbounds"
+				if awgpolicy.WireGuardFamily(meta.EntryMode) {
+					expectedList = "endpoints"
+					expectedEntry = "wireguard"
+					if meta.EntryMode != "wg" {
+						expectedEntry = AmneziaType
+					}
+				}
+				if list != expectedList {
+					return nil, errors.New("entry transport is not owned by its native manager")
+				}
+				if ProxyEntryMode(meta.EntryMode) {
+					if err := validateProxyEntry(value, meta.EntryMode); err != nil {
+						return nil, err
+					}
 				}
 				if value["type"] != expectedEntry {
 					return nil, errors.New("entry label does not match the owned native endpoint")
@@ -279,7 +293,6 @@ func New(config, metadata string) (*Controller, error) {
 			return nil, err
 		}
 	}
-	_ = endpoints
 	c := &Controller{meta: meta, progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}}}
 	c.generation.Store(1)
 	nonce, e := randomHex(16)
