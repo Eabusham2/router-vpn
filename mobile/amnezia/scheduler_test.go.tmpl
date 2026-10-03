@@ -1,0 +1,44 @@
+package routervpnamnezia
+
+import (
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	gvsync "github.com/sagernet/gvisor/pkg/sync"
+)
+
+// Exercise the actual linked dependency, not a simulated CAS. In the pinned
+// ARM64 race assembly, loading new into R1 overwrote old and left R2 unset.
+// The sleeper then failed to commit its park and starved nested tunnel work.
+func TestNativeTunSchedulerAtomicCAS(t *testing.T) {
+	for _, values := range [][2]uintptr{{7, 9}, {0, 1}, {^uintptr(0), 0}, {1, ^uintptr(0)}, {11, 11}} {
+		value := values[0]
+		if !gvsync.RaceUncheckedAtomicCompareAndSwapUintptr(&value, values[0], values[1]) || value != values[1] {
+			t.Fatalf("scheduler CAS failed to install replacement: old=%d new=%d actual=%d", values[0], values[1], value)
+		}
+		if gvsync.RaceUncheckedAtomicCompareAndSwapUintptr(&value, values[1]^1, 42) || value != values[1] {
+			t.Fatal("scheduler CAS accepted the wrong expected value")
+		}
+	}
+	var value uintptr
+	var workers sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for update := 0; update < 128; update++ {
+				for {
+					old := atomic.LoadUintptr(&value)
+					if gvsync.RaceUncheckedAtomicCompareAndSwapUintptr(&value, old, old+1) {
+						break
+					}
+				}
+			}
+		}()
+	}
+	workers.Wait()
+	if value != 8*128 {
+		t.Fatal("scheduler CAS lost concurrent updates", value)
+	}
+}

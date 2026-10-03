@@ -3,6 +3,7 @@
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 import json
 import subprocess
 
@@ -11,9 +12,12 @@ CORE='1ac1a339cb1223e9c70eae14c44411c75033c02d'
 VERSION='v3.1.20260814'
 MODULE='github.com/amnezia-vpn/amneziawg-go/v3'
 SUM='h1:l2AhBD+sFycU8Im81n/bZORMxW7fWtlZJEuJ4Hh0+z0='
+_scheduler_spec=importlib.util.spec_from_file_location('routervpn_gvisor_scheduler', ROOT/'deploy/prepare-gvisor-scheduler.py')
+SCHEDULER=importlib.util.module_from_spec(_scheduler_spec)
+_scheduler_spec.loader.exec_module(SCHEDULER)
 
 def inputs():
-    return [Path(__file__).resolve()]+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))
+    return [Path(__file__).resolve(),ROOT/'deploy/prepare-gvisor-scheduler.py']+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))
 def digest():
     h=hashlib.sha256()
     for path in inputs():h.update(str(path.relative_to(ROOT)).encode()+b'\0'+path.read_bytes())
@@ -22,6 +26,7 @@ def prepare(vendor):
     vendor=vendor.resolve()
     if subprocess.check_output(['git','-C',str(vendor),'rev-parse','HEAD'],text=True).strip()!=CORE:
         raise ValueError('native AWG requires the exact pinned core')
+    SCHEDULER.prepare(vendor)
     registry=vendor/'include/registry.go';text=registry.read_text()
     for old,extra in [('"github.com/sagernet/sing-box/protocol/tor"','\n\t"github.com/sagernet/sing-box/protocol/routervpnamnezia"'),
                       ('\tregisterWireGuardEndpoint(registry)','\n\troutervpnamnezia.RegisterEndpoint(registry)')]:
@@ -35,6 +40,7 @@ def prepare(vendor):
     subprocess.run(['go','mod','edit','-require='+MODULE+'@'+VERSION],cwd=vendor,check=True)
     print('Native AmneziaWG endpoint:',VERSION,digest())
 def verify(vendor):
+    SCHEDULER.verify(vendor)
     result=json.loads(subprocess.check_output(['go','list','-m','-json',MODULE],cwd=vendor,text=True))
     if result.get('Version')!=VERSION or result.get('Sum')!=SUM or result.get('Replace'):
         raise ValueError('native AmneziaWG backend does not match its exact pinned checksum')

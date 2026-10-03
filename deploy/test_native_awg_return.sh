@@ -30,6 +30,31 @@ python3 "$ROOT/deploy/prepare-mobile-amnezia.py" "$WORK/core"
  cd "$WORK/core"
  go mod tidy
  python3 "$ROOT/deploy/prepare-mobile-amnezia.py" --verify-dependency "$WORK/core"
+ # On ARM64, prove that the original dependency fails the direct regression.
+ # Restore the owned copy even on compiler/test errors; never edit module cache.
+ python3 - "$ROOT" "$WORK/core" <<'PYPROOF'
+from pathlib import Path
+import importlib.util
+import subprocess
+import sys
+source, core = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location('scheduler_proof', source/'deploy/prepare-gvisor-scheduler.py')
+SCHEDULER = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(SCHEDULER)
+if subprocess.check_output(['go', 'env', 'GOARCH'], text=True).strip() == 'arm64':
+    path = core/SCHEDULER.COPY/SCHEDULER.ASSEMBLY
+    fixed = path.read_bytes()
+    try:
+        path.write_bytes(SCHEDULER.original(fixed))
+        control = subprocess.run(['go', 'test', '-race', '-ldflags=-checklinkname=0', '-tags', 'with_wireguard,with_gvisor', '-count=1', '-timeout=20s', './protocol/routervpnamnezia', '-run', '^TestNativeTunSchedulerAtomicCAS$'], cwd=core, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    finally:
+        path.write_bytes(fixed)
+    if control.returncode != 1 or 'scheduler CAS failed to install replacement' not in control.stdout:
+        print(control.stdout)
+        raise SystemExit('Original ARM64 scheduler did not fail the expected atomic regression')
+    print('Verified ARM64 negative control: original pinned scheduler fails the atomic regression')
+SCHEDULER.verify(core)
+PYPROOF
  result=0
  go test -cpuprofile="$WORK/awg.cpu" -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor -count=2 -timeout=120s -v ./protocol/routervpnamnezia -run 'TestNativeTun|TestActualAmnezia(EntryUDPReturn|NestedReturnBoundaries|ExitOverRetainedAmneziaEntry)$' || result=$?
  # Function-level CPU attribution contains no generated keys or packet data.
