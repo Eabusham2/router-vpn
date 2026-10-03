@@ -48,9 +48,13 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 			tun = value
 		}
 	}
-	endpoints, ok := root["endpoints"].([]any)
-	if !ok {
-		return "", errors.New("MTU graph has no endpoints")
+	endpoints := []any{}
+	if raw, exists := root["endpoints"]; exists {
+		var valid bool
+		endpoints, valid = raw.([]any)
+		if !valid {
+			return "", errors.New("MTU graph has malformed endpoints")
+		}
 	}
 	for _, raw := range endpoints {
 		value, ok := raw.(map[string]any)
@@ -72,15 +76,50 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 			return "", errors.New("unowned MTU endpoint tag")
 		}
 	}
+	proxyEntry := false
+	outbounds, ok := root["outbounds"].([]any)
+	if !ok {
+		return "", errors.New("MTU graph has malformed outbounds")
+	}
+	for _, raw := range outbounds {
+		value, valid := raw.(map[string]any)
+		if !valid {
+			return "", errors.New("invalid MTU outbound")
+		}
+		if value["tag"] != "entry-wg" && value["tag"] != "routervpn-hop-entry" {
+			continue
+		}
+		mode, _ := value["type"].(string)
+		if entry != nil || !ProxyEntryMode(mode) {
+			return "", errors.New("MTU entry is ambiguous or in the wrong manager")
+		}
+		if err := validateProxyEntry(value, mode); err != nil {
+			return "", err
+		}
+		entry, proxyEntry = value, true
+	}
 	if tun == nil || entry == nil || tun["auto_route"] != true || tun["strict_route"] != true {
 		return "", errors.New("MTU requires exactly one full-device TUN and native entry")
 	}
-	entryMTU, err := mtuNumber(entry["mtu"])
-	if err != nil {
-		return "", err
-	}
-	if entryFixed != 0 {
-		entryMTU = entryFixed
+	entryMTU := 0
+	if proxyEntry {
+		// A proxy owns no IP interface. Its fixed setting therefore constrains
+		// the one OS TUN, not an invented WireGuard-sized packet envelope.
+		if entryFixed != 0 {
+			if exitFixed != 0 && entryFixed != exitFixed {
+				return "", errors.New("proxy entry and exit fixed MTUs disagree for the one shared TUN")
+			}
+			exitFixed = entryFixed
+		}
+	} else {
+		entryMTU, err = mtuNumber(entry["mtu"])
+		if err != nil {
+			return "", err
+		}
+		if entryFixed != 0 {
+			entryMTU = entryFixed
+		}
+		entry["mtu"] = entryMTU
 	}
 	tunMTU, err := mtuNumber(tun["mtu"])
 	if err != nil {
@@ -89,7 +128,6 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 	if exitFixed != 0 {
 		tunMTU = exitFixed
 	}
-	entry["mtu"] = entryMTU
 	if exit != nil {
 		if exit["detour"] != entry["tag"] {
 			return "", errors.New("nested MTU exit lost its entry dialer")
@@ -123,7 +161,10 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 			// calculate a WG-sized envelope then silently fragment AWG packets.
 			overhead += native.TransportPadding
 		}
-		limit := (entryMTU - overhead) / 16 * 16
+		limit := 9000
+		if !proxyEntry {
+			limit = (entryMTU - overhead) / 16 * 16
+		}
 		if limit < 1280 {
 			return "", errors.New("entry MTU cannot carry a dual-stack nested WireGuard packet")
 		}
@@ -190,6 +231,41 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 	encoded, err := json.Marshal(root)
 	return string(encoded), err
 }
+
+// MultihopMTUProfile freezes the effective exit-side optimizer policy. A proxy
+// entry's fixed value must not be overwritten later by the exit's Auto worker.
+// Packet entries retain their separate inner interface setting as before.
+func MultihopMTUProfile(config, profiles string) (string, error) {
+	checked, err := ApplyMTUPolicy(config, profiles)
+	if err != nil {
+		return "", err
+	}
+	var pair struct {
+		Entry map[string]any `json:"entry"`
+		Exit  map[string]any `json:"exit"`
+	}
+	if err = exactJSON([]byte(profiles), &pair, 256*1024); err != nil {
+		return "", err
+	}
+	var graph map[string]any
+	if err = json.Unmarshal([]byte(checked), &graph); err != nil {
+		return "", err
+	}
+	for _, raw := range graph["outbounds"].([]any) {
+		out := raw.(map[string]any)
+		if out["tag"] != "entry-wg" && out["tag"] != "routervpn-hop-entry" {
+			continue
+		}
+		if mtu, err := fixedMTU(pair.Entry); err != nil {
+			return "", err
+		} else if mtu != 0 {
+			pair.Exit["mtu_policy"], pair.Exit["manual_mtu"] = "fixed", mtu
+		}
+	}
+	encoded, err := json.Marshal(pair.Exit)
+	return string(encoded), err
+}
+
 func fixedMTU(profile map[string]any) (int, error) {
 	mode := "auto"
 	if value, exists := profile["mtu_policy"]; exists {

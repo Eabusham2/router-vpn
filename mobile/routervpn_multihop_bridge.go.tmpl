@@ -42,6 +42,12 @@ func RouterApplyMultihopMTUPolicy(config, profiles string) (string, error) {
 	return mobilemultihop.ApplyMTUPolicy(config, profiles)
 }
 
+// RouterMultihopMTUProfile prevents a later Auto worker from overriding the
+// fixed policy of a proxy entry which shares the same OS TUN as its exit.
+func RouterMultihopMTUProfile(config, profiles string) (string, error) {
+	return mobilemultihop.MultihopMTUProfile(config, profiles)
+}
+
 type RouterMultihop struct{ controller *mobilemultihop.Controller }
 
 func NewRouterMultihop(config, metadata string) (*RouterMultihop, error) {
