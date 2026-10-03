@@ -157,8 +157,16 @@ func secret() (string, error) {
 	return hex.EncodeToString(b), e
 }
 func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease, error) {
+	if err := ctx.Err(); err != nil {
+		return Lease{}, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// The request may have been cancelled while another owned engine was
+	// starting or stopping. Do not turn stale work into a new lease/renewal.
+	if err := ctx.Err(); err != nil {
+		return Lease{}, err
+	}
 	if m.closed {
 		return Lease{}, ErrUnavailable
 	}
@@ -166,6 +174,9 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 		return Lease{}, err
 	}
 	if err := m.reapLocked(ctx); err != nil {
+		return Lease{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return Lease{}, err
 	}
 	key := PeerKey(peer)
@@ -249,6 +260,9 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	lease := Lease{Request: q, NodeID: m.node, ExitNodeID: exit.NodeID, Host: m.cfg.ListenIP, Port: port, Username: username, Password: password, ExpiresAt: m.now().Add(time.Duration(m.cfg.TTLSeconds) * time.Second)}
 	config, err := Build(*exit, peer, lease)
 	if err != nil {
+		return Lease{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return Lease{}, err
 	}
 	process, err := m.runner.Start(ctx, config, lease)
