@@ -1,0 +1,119 @@
+package routervpnamnezia
+
+import (
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+)
+
+type lifecycleDevice struct {
+	wg.Device
+	closes atomic.Int32
+}
+
+func (d *lifecycleDevice) Close() error { d.closes.Add(1); return nil }
+
+type lifecycleReturn struct {
+	headroom int
+	calls    atomic.Int32
+}
+
+func (r *lifecycleReturn) ReturnHeadroom() int {
+	r.calls.Add(1)
+	return r.headroom
+}
+func (*lifecycleReturn) ReturnPackets(packets [][]byte) [][]byte { return packets }
+
+func lifecycleTun() (*nativeTun, *lifecycleDevice) {
+	d := new(lifecycleDevice)
+	return &nativeTun{Device: d, done: make(chan struct{})}, d
+}
+
+func TestNativeTunReturnOwnerCannotOutliveClose(t *testing.T) {
+	tunnel, device := lifecycleTun()
+	owner := &lifecycleReturn{headroom: 4}
+	if err := tunnel.attach(owner); err != nil {
+		t.Fatal(err)
+	}
+	if owner.calls.Load() != 1 {
+		t.Fatal("return headroom must be captured once")
+	}
+	if err := tunnel.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tunnel.attach(owner); !errors.Is(err, net.ErrClosed) {
+		t.Fatal("closed tunnel accepted a return owner", err)
+	}
+	if tunnel.returnPath.Load() != nil {
+		t.Fatal("closed tunnel retained a return owner")
+	}
+	_ = tunnel.detach(owner)
+	_ = tunnel.Close()
+	if device.closes.Load() != 1 {
+		t.Fatal("underlying device closed more than once")
+	}
+}
+
+func TestNativeTunConcurrentReturnAttachAndClose(t *testing.T) {
+	for attempt := 0; attempt < 256; attempt++ {
+		tunnel, _ := lifecycleTun()
+		owner := &lifecycleReturn{headroom: 4}
+		start := make(chan struct{})
+		var group sync.WaitGroup
+		group.Add(3)
+		go func() {
+			defer group.Done()
+			<-start
+			err := tunnel.attach(owner)
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Error(err)
+			}
+		}()
+		go func() { defer group.Done(); <-start; _ = tunnel.Close() }()
+		go func() { defer group.Done(); <-start; _ = tunnel.detach(owner) }()
+		close(start)
+		group.Wait()
+		if tunnel.returnPath.Load() != nil {
+			t.Fatal("attachment survived concurrent close")
+		}
+	}
+}
+
+func TestNativeTunReturnOwnerReplacementAndHeadroom(t *testing.T) {
+	tunnel, _ := lifecycleTun()
+	defer tunnel.Close()
+	for _, headroom := range []int{-1, 257} {
+		if err := tunnel.attach(&lifecycleReturn{headroom: headroom}); err == nil {
+			t.Fatal("invalid headroom accepted")
+		}
+	}
+	if err := tunnel.attach(nil); err == nil {
+		t.Fatal("nil owner accepted")
+	}
+	first, second := &lifecycleReturn{}, &lifecycleReturn{headroom: 256}
+	if err := tunnel.attach(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := tunnel.attach(first); err != nil {
+		t.Fatal("idempotent attach failed", err)
+	}
+	if err := tunnel.attach(second); err == nil {
+		t.Fatal("foreign owner replaced active return path")
+	}
+	_ = tunnel.detach(second)
+	if tunnel.returnPath.Load().path != first {
+		t.Fatal("foreign detach removed owner")
+	}
+	_ = tunnel.detach(first)
+	if err := tunnel.attach(second); err != nil {
+		t.Fatal("detached owner prevented replacement", err)
+	}
+	_ = tunnel.detach(first)
+	if tunnel.returnPath.Load().path != second {
+		t.Fatal("late detach removed new owner")
+	}
+}

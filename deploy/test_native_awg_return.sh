@@ -30,5 +30,5 @@ python3 "$ROOT/deploy/prepare-mobile-amnezia.py" "$WORK/core"
  cd "$WORK/core"
  go mod tidy
  python3 "$ROOT/deploy/prepare-mobile-amnezia.py" --verify-dependency "$WORK/core"
- go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor -count=2 -timeout=120s -v ./protocol/routervpnamnezia -run 'TestActualAmnezia(EntryUDPReturn|NestedReturnBoundaries|ExitOverRetainedAmneziaEntry)$'
+ go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor -count=2 -timeout=120s -v ./protocol/routervpnamnezia -run 'TestNativeTun|TestActualAmnezia(EntryUDPReturn|NestedReturnBoundaries|ExitOverRetainedAmneziaEntry)$'
 )

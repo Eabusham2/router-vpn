@@ -20,6 +20,7 @@ type nativeTun struct {
 	done            chan struct{}
 	once            sync.Once
 	pumps           sync.WaitGroup
+	returnMu        sync.Mutex
 	returnPath      atomic.Pointer[packetReturn]
 	configured      chan struct{}
 	readOffset      atomic.Int32
@@ -178,10 +179,28 @@ func (t *nativeTun) inject(packets [][]byte) error {
 	return nil
 }
 func (t *nativeTun) attach(path tun.Return) error {
-	if path == nil || path.ReturnHeadroom() < 0 || path.ReturnHeadroom() > 256 {
+	select {
+	case <-t.done:
+		return net.ErrClosed
+	default:
+	}
+	if path == nil {
 		return errors.New("invalid native AWG return owner")
 	}
-	next := &packetReturn{path: path, headroom: path.ReturnHeadroom()}
+	headroom := path.ReturnHeadroom()
+	if headroom < 0 || headroom > 256 {
+		return errors.New("invalid native AWG return owner")
+	}
+	// Closing and publishing an owner share a lifecycle boundary. An atomic
+	// pointer alone could be re-populated after Close had already cleared it.
+	t.returnMu.Lock()
+	defer t.returnMu.Unlock()
+	select {
+	case <-t.done:
+		return net.ErrClosed
+	default:
+	}
+	next := &packetReturn{path: path, headroom: headroom}
 	for {
 		old := t.returnPath.Load()
 		if old != nil {
@@ -203,6 +222,14 @@ func (t *nativeTun) detach(path tun.Return) error {
 	return nil
 }
 func (t *nativeTun) Close() error {
-	t.once.Do(func() { close(t.done); t.returnPath.Store(nil); _ = t.Device.Close(); t.pumps.Wait() })
+	t.once.Do(func() {
+		t.returnMu.Lock()
+		close(t.done)
+		t.returnPath.Store(nil)
+		t.returnMu.Unlock()
+		// Never hold the owner lock across upstream teardown or packet pumps.
+		_ = t.Device.Close()
+		t.pumps.Wait()
+	})
 	return nil
 }
