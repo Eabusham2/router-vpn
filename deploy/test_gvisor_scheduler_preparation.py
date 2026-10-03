@@ -122,7 +122,32 @@ class SchedulerPreparation(unittest.TestCase):
             PATCH.verify(self.vendor)
             downloads = [c for c in commands.call_args_list if c.args[0][1:3] == ['mod', 'download']]
             self.assertEqual(len(downloads), 1)
-            run.assert_called_with(['go', 'mod', 'edit', '-replace='+PATCH.MODULE+'@'+PATCH.VERSION+'=./'+PATCH.COPY], cwd=self.vendor, check=True)
+            run.assert_called_with(['go', 'mod', 'edit', '-replace='+PATCH.MODULE+'@'+PATCH.VERSION+'=./'+PATCH.COPY], cwd=self.vendor.resolve(), check=True)
+
+    def test_prepare_and_verify_use_the_resolved_vendor_for_every_command(self):
+        # Windows may return an 8.3 TEMP name while Path.resolve expands it.
+        # A lexical alias exercises the same canonical-cwd contract on Unix.
+        alias = self.vendor / '..' / self.vendor.name
+        canonical = self.vendor.resolve()
+        with mock.patch.object(PATCH, 'SUM', self.sum), mock.patch.object(PATCH.subprocess, 'check_output', side_effect=self.commands) as commands, mock.patch.object(PATCH.subprocess, 'run') as run:
+            PATCH.prepare(alias)
+            self.plan['Replace'] = [{'Old': {'Path': PATCH.MODULE, 'Version': PATCH.VERSION}, 'New': {'Path': './'+PATCH.COPY}}]
+            PATCH.verify(alias)
+            for call in commands.call_args_list:
+                if call.args[0][0] == 'git':
+                    self.assertEqual(call.args[0][1:3], ['-C', str(canonical)])
+                else:
+                    self.assertEqual(call.kwargs['cwd'], canonical)
+            run.assert_called_once_with(['go', 'mod', 'edit', '-replace='+PATCH.MODULE+'@'+PATCH.VERSION+'=./'+PATCH.COPY], cwd=canonical, check=True)
+
+    def test_verify_rejects_a_foreign_selected_directory(self):
+        self.extract()
+        def selected(command, **kwargs):
+            if command[1:5] == ['list', '-m', '-json', PATCH.MODULE]:
+                return json.dumps({'Version': PATCH.VERSION, 'Replace': {'Path': './'+PATCH.COPY, 'Dir': str(self.root/'foreign')}})
+            return self.commands(command, **kwargs)
+        with mock.patch.object(PATCH, 'SUM', self.sum), mock.patch.object(PATCH.subprocess, 'check_output', side_effect=selected), self.assertRaises(ValueError):
+            PATCH.verify(self.vendor)
 
     def test_failed_checksum_cannot_publish_a_partial_dependency(self):
         self.files['pkg/other.go'] = b'package altered\n'
