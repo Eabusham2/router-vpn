@@ -131,13 +131,8 @@ func (m *Manager) Available() []map[string]string {
 	for _, e := range m.cfg.Exits {
 		item := map[string]string{"exit_id": e.ID, "exit_mode": e.Mode, "exit_node_id": e.NodeID}
 		if awgpolicy.WireGuardFamily(e.Mode) {
-			if text, ok := e.Transport["private_key"].(string); ok {
-				raw, err := base64.StdEncoding.Strict().DecodeString(text)
-				if err == nil {
-					if key, err := ecdh.X25519().NewPrivateKey(raw); err == nil {
-						item["client_public_key"] = base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
-					}
-				}
+			if identity, err := clientIdentity(e.Transport); err == nil {
+				item["client_public_key"] = identity
 			}
 		}
 		out = append(out, item)
@@ -198,12 +193,26 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	if awgpolicy.WireGuardFamily(exit.Mode) {
 		// A WireGuard peer key identifies one roaming endpoint. Two independent
 		// processes using that key would steal each other's reply endpoint.
+		// X25519 clamps scalar bits: distinct private-key encodings can be the
+		// same peer. Use the public identity already advertised to clients, not
+		// private-key text or the remote server's public key.
+		identity, err := clientIdentity(exit.Transport)
+		if err != nil {
+			return Lease{}, err
+		}
 		for _, active := range m.leases {
 			if !awgpolicy.WireGuardFamily(active.ExitMode) {
 				continue
 			}
 			for _, paired := range m.cfg.Exits {
-				if paired.ID == active.ExitID && paired.Mode == active.ExitMode && awgpolicy.WireGuardFamily(paired.Mode) && paired.Transport["private_key"] == exit.Transport["private_key"] {
+				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || !awgpolicy.WireGuardFamily(paired.Mode) {
+					continue
+				}
+				other, err := clientIdentity(paired.Transport)
+				if err != nil {
+					return Lease{}, err
+				}
+				if identity == other {
 					return Lease{}, errors.New("paired WireGuard credentials already own another relay; provision distinct client credentials for concurrent use")
 				}
 			}
@@ -333,6 +342,26 @@ func literalServer(raw any) bool {
 	ip = ip.Unmap()
 	return !ip.IsUnspecified() && !ip.IsLoopback() && !ip.IsMulticast() && !ip.IsLinkLocalUnicast()
 }
+
+// clientIdentity returns only the canonical public identity. Errors never
+// echo a private key, and WG/AWG transport labels cannot split its ownership.
+func clientIdentity(transport map[string]any) (string, error) {
+	bad := errors.New("invalid paired WireGuard client identity")
+	text, ok := transport["private_key"].(string)
+	if !ok {
+		return "", bad
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(text)
+	if err != nil || len(raw) != 32 {
+		return "", bad
+	}
+	key, err := ecdh.X25519().NewPrivateKey(raw)
+	if err != nil {
+		return "", bad
+	}
+	return base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()), nil
+}
+
 func key32(v any) bool {
 	s, ok := v.(string)
 	if !ok {
