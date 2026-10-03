@@ -269,7 +269,12 @@ public final class MultihopGraphHarness {
    File broken=save(dir,bad);int before=sessions(app);boolean failed=false;
    try{builder.prepare(entry,broken,mode);}catch(Exception expected){failed=true;}
    check(failed&&sessions(app)==before,"missing AWG exit parameter left staged session");
-   check(builder.listSupportedExitModes(broken).stream().noneMatch(m->m.id.equals(mode)),"malformed AWG exit falsely ready");
+   List<NativeSingBoxController.ModeInfo> available=builder.listSupportedExitModes(broken);
+   check(available.stream().noneMatch(m->m.id.equals(mode)),"malformed AWG exit falsely ready");
+   String intact=mode.equals("awg2-fast")?"awg2-strong":"awg2-fast";
+   check(available.stream().anyMatch(m->m.id.equals(intact)),"one invalid AWG exit hid the other valid AWG variant");
+   check(available.stream().anyMatch(m->m.id.equals("wg")),"invalid AWG exit hid valid standard WireGuard");
+   check(sessions(app)==before,"read-only mode listing staged a native session");
   }
  }
  static void directChecks(Context context,Path dir,Path app)throws Exception {

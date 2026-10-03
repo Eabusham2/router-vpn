@@ -199,6 +199,13 @@ func newActualPair(t *testing.T, mutate func(*Options)) *actualPair {
 }
 
 func newActualPairWithHandler(t *testing.T, mutate func(*Options), handler tun.Handler) *actualPair {
+	return newActualPairLifecycle(t, mutate, handler, true)
+}
+
+// A nested-exit fixture needs a configured reference server but must not start
+// a throwaway direct client with the same peer key before the real nested one.
+// That would race two handshake generations and test a rekey, not a new path.
+func newActualPairLifecycle(t *testing.T, mutate func(*Options), handler tun.Handler, start bool) *actualPair {
 	t.Helper()
 	clientKey, clientPublic := keys(t)
 	serverKey, serverPublic := keys(t)
@@ -249,8 +256,10 @@ func newActualPairWithHandler(t *testing.T, mutate func(*Options), handler tun.H
 	}
 	pair := &actualPair{client, server, bind, dialer, wrapped}
 	t.Cleanup(func() { _ = client.Close(); server.Close() })
-	if err = client.Start(adapter.StartStateStart); err != nil {
-		t.Fatal(err)
+	if start {
+		if err = client.Start(adapter.StartStateStart); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return pair
 }
@@ -712,7 +721,10 @@ func (*retainedEntryDialer) ListenPacket(context.Context, M.Socksaddr) (net.Pack
 }
 func TestActualAmneziaExitOverRetainedAmneziaEntry(t *testing.T) {
 	var innerOptions Options
-	exit := newActualPair(t, func(options *Options) { innerOptions = *options })
+	exit := newActualPairLifecycle(t, func(options *Options) { innerOptions = *options }, echoHandler{}, false)
+	if exit.dialer.calls.Load() != 0 || exit.binding.packets.Load() != 0 || exit.client.device != nil {
+		t.Fatal("nested exit preparation started a competing direct client")
+	}
 	if err := exit.client.Close(); err != nil {
 		t.Fatal(err)
 	}

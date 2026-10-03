@@ -75,12 +75,19 @@ final class AndroidMultihopController {
         JSONObject profiles = bundle.optJSONObject("profiles");
         for (String mode : new String[]{"wg", "awg2-fast", "awg2-strong"}) {
             if (profiles == null || profiles.optJSONObject(mode) == null) continue;
-            String text = readNativeText(bundle, mode), identity = AndroidNodeStore.stableNodeIdentity(bundle);
-            String nativeConfig = "wg".equals(mode)
-                    ? io.nekohasekai.libbox.Libbox.routerWireGuardExitConfig(text, identity)
-                    : io.nekohasekai.libbox.Libbox.routerAmneziaExitConfig(text, identity);
-            io.nekohasekai.libbox.Libbox.checkConfig(nativeConfig);
-            result.add(new NativeSingBoxController.ModeInfo(mode, "wg".equals(mode) ? "WireGuard" : "awg2-fast".equals(mode) ? "AmneziaWG Fast" : "AmneziaWG Strong"));
+            try {
+                String text = readNativeText(bundle, mode), identity = AndroidNodeStore.stableNodeIdentity(bundle);
+                String nativeConfig = "wg".equals(mode)
+                        ? io.nekohasekai.libbox.Libbox.routerWireGuardExitConfig(text, identity)
+                        : io.nekohasekai.libbox.Libbox.routerAmneziaExitConfig(text, identity);
+                io.nekohasekai.libbox.Libbox.checkConfig(nativeConfig);
+                result.add(new NativeSingBoxController.ModeInfo(mode, "wg".equals(mode) ? "WireGuard" : "awg2-fast".equals(mode) ? "AmneziaWG Fast" : "AmneziaWG Strong"));
+            } catch (Exception invalidProfile) {
+                // Reject this candidate without hiding independently valid modes.
+                // prepare() still recompiles the exact selected profile and fails
+                // before staging; never downgrade AWG or expose its credentials.
+                continue;
+            }
         }
         for (NativeSingBoxController.ModeInfo mode : singBox.listDirectLibboxModes(exitBundle)) {
             if ("shadowsocks".equals(mode.id) || "hysteria2".equals(mode.id)) result.add(mode);
