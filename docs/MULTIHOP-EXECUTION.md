@@ -40,7 +40,7 @@ never relay passwords or node tokens.
 ## Provisioning a server-owned exit
 
 Server execution requires an operator-paired exit registry on the entry node.
-The current registry supports WireGuard, Shadowsocks and Hysteria2. A client
+The registry source supports WireGuard, AmneziaWG Fast/Strong, Shadowsocks and Hysteria2. A client
 cannot submit arbitrary executable paths, shell commands or entire server engine
 configurations through the lease API.
 
@@ -67,8 +67,8 @@ through the normal deployment procedure after successful validation.
 
 The exit ID must match the selected exit ID in each client's node list. The
 registry node proof must match the selected exit's actual identity. For mobile
-WireGuard local/server comparison, provision a **separate authorized client key
-on the exit** for the server engine. Reusing the mobile's own WireGuard key would
+WireGuard or AmneziaWG local/server comparison, provision a **separate authorized client key
+on the exit** for the server engine. Reusing the mobile's own WG/AWG client key would
 make the exit peer roam between two endpoints. The mobile controller rejects that
 unsafe pairing rather than falsely reporting two independent paths.
 
@@ -151,3 +151,31 @@ double Android OS handles and the node store, not the graph/compiler/DNS policy.
 They do not replace physical-device routing, leak or network-transition tests.
 Additional helper/PQ/MAX/ALL, AWG-entry and mobile Tor dataplanes remain open;
 this addition does not waive or claim those broader requirements.
+
+## Native AWG exit source integration
+
+Android and iOS/iPadOS can compose supported WG/AWG entry endpoints with an
+AWG Fast or Strong exit in one native graph. The exact exit mode, peer key,
+preshared key, all eleven obfuscation parameters, and DNS detour are retained.
+Saved-profile validation includes both AWG variants. This extends the exit side;
+it does not claim support for arbitrary mixed helper/PQ/MAX graphs.
+
+The shared execution controller exposes the paired AWG exit to Local, Server and
+Auto comparison. Server comparison requires distinct paired client credentials.
+The entry relay's custom CLI is built with the identical pinned AWG endpoint
+implementation used by mobile; stock sing-box cannot parse that endpoint. The
+image checks production-generated configurations for all five relay transports.
+Keep the old image until the new exact-SHA image gates pass; copying a registry
+does not upgrade a running server engine.
+
+Nested packet sizing subtracts IPv4/IPv6 UDP/WG framing plus the AWG exit's S4
+transport padding, then aligns down to sixteen bytes. A fixed MTU exceeding that
+envelope, or an envelope below the dual-stack minimum, is rejected. Live Auto-MTU
+retains its existing captured-owner validation.
+
+Regression coverage includes shared controller/key ownership, server lease
+validation, provisioning, saved-profile round trips and Swift/Java graph
+composition. A native two-hop AWG TCP/UDP IPv4/IPv6 traffic test is included in
+the pinned engine's existing test suite. Only executed tests are proof: this
+continuation still requires actual Android/native build execution and a new
+exact-SHA release run, followed by physical-device/off-LAN acceptance.

@@ -74,13 +74,15 @@ def literal(value):
         raise ValueError('unscoped literal server address required')
     return str(address)
 
-def native_wireguard(encoded, node, server):
+def native_wireguard(encoded, node, server, *, amnezia=False):
     raw = base64.b64decode(encoded, validate=True)
     if len(raw) > 256*1024:
         raise ValueError('WireGuard profile exceeds the safety bound')
     sections = {'interface': {}, 'peer': {}}
     allowed = {'interface': {'privatekey','address','dns','listenport','mtu'},
                'peer': {'publickey','presharedkey','endpoint','allowedips','persistentkeepalive'}}
+    awg_keys = {'jc','jmin','jmax','s1','s2','s3','s4','h1','h2','h3','h4'}
+    if amnezia: allowed['interface'] |= awg_keys
     seen = set();section = None
     for line in raw.decode('utf-8').splitlines():
         line = line.split('#', 1)[0].strip()
@@ -98,7 +100,7 @@ def native_wireguard(encoded, node, server):
     iface, peer = sections['interface'], sections['peer']
     for field in (iface.get('privatekey',''), peer.get('publickey','')):
         if len(base64.b64decode(field, validate=True)) != 32: raise ValueError('Invalid WireGuard key')
-    if hashlib.sha256(('router-vpn-node-proof-v1\n'+peer['publickey']).encode()).hexdigest() != node:
+    if not amnezia and hashlib.sha256(('router-vpn-node-proof-v1\n'+peer['publickey']).encode()).hexdigest() != node:
         raise ValueError('WireGuard server key does not match the paired node identity')
     endpoint = urlsplit('udp://'+peer.get('endpoint',''))
     if endpoint.username or endpoint.password or endpoint.path or not endpoint.port or not 1 <= endpoint.port <= 65535:
@@ -124,7 +126,39 @@ def native_wireguard(encoded, node, server):
         result['mtu'] = mtu
     if iface.get('listenport') and int(iface['listenport']) != 0:
         raise ValueError('A fixed local WireGuard listen port cannot be shared by isolated server leases')
+    if amnezia:
+        # Node identity remains the paired standard-WG identity; AWG has its
+        # own different peer key. The selected-node API proves it after startup.
+        params = {key: iface[key] for key in awg_keys if key in iface}
+        validate_amnezia_parameters(params)
+        result['type'] = 'routervpn-amneziawg'
+        result['amnezia'] = params
+        result.setdefault('mtu', 1280)
     return result
+
+
+def validate_amnezia_parameters(parameters):
+    names = {'jc','jmin','jmax','s1','s2','s3','s4','h1','h2','h3','h4'}
+    if set(parameters) != names: raise ValueError('Complete native AWG obfuscation policy is required')
+    numbers = {}
+    for key in ('jc','jmin','jmax','s1','s2','s3','s4'):
+        text = parameters[key]
+        if not isinstance(text,str) or not re.fullmatch(r'[0-9]{1,10}',text):
+            raise ValueError('Invalid native AWG integer')
+        n = int(text)
+        if n > (128 if key == 'jc' else 1280): raise ValueError('Native AWG noise or padding exceeds its bound')
+        numbers[key] = n
+    if numbers['jmin'] > numbers['jmax'] or numbers['s1']+148 == numbers['s2']+92:
+        raise ValueError('Inconsistent native AWG padding')
+    ranges = []
+    for key in ('h1','h2','h3','h4'):
+        text = parameters[key]
+        if not isinstance(text,str) or not re.fullmatch(r'[0-9]{1,10}(?:-[0-9]{1,10})?',text):
+            raise ValueError('Invalid native AWG header range')
+        parts = text.split('-');low,high = int(parts[0]),int(parts[-1])
+        if not 4 < low <= high <= 4294967295 or any(low<=b and a<=high for a,b in ranges):
+            raise ValueError('Overlapping, reversed or standard-WG native AWG headers')
+        ranges.append((low,high))
 
 
 def pair(bundle, alias, selected=None):
@@ -146,6 +180,11 @@ def pair(bundle, alias, selected=None):
     if 'wg.conf' in modes.get('wg', {}):
         transport = native_wireguard(modes['wg']['wg.conf'], node, endpoint)
         exits.append(dict(id=alias,mode='wg',node_id=node,dns_server=dns,transport=transport))
+    for mode in ('awg2-fast', 'awg2-strong'):
+        assets = modes.get(mode, {})
+        if 'awg.conf' not in assets: continue
+        transport = native_wireguard(assets['awg.conf'], node, endpoint, amnezia=True)
+        exits.append(dict(id=alias,mode=mode,node_id=node,dns_server=dns,transport=transport))
     for mode in ('shadowsocks', 'hysteria2'):
         assets = modes.get(mode, {})
         encoded = assets.get('sing-box.json')

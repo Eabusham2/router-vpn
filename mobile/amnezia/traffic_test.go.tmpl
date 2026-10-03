@@ -195,6 +195,10 @@ type actualPair struct {
 }
 
 func newActualPair(t *testing.T, mutate func(*Options)) *actualPair {
+	return newActualPairWithHandler(t, mutate, echoHandler{})
+}
+
+func newActualPairWithHandler(t *testing.T, mutate func(*Options), handler tun.Handler) *actualPair {
 	t.Helper()
 	clientKey, clientPublic := keys(t)
 	serverKey, serverPublic := keys(t)
@@ -203,7 +207,7 @@ func newActualPair(t *testing.T, mutate func(*Options)) *actualPair {
 	options := Options{Type: mobilemultihop.AmneziaType, MTU: 1400, Address: []string{"10.78.0.2/24", "fd78:78::2/64"}, PrivateKey: clientKey,
 		Peers: []mobilemultihop.AmneziaPeer{{Address: "192.0.2.1", Port: 51820, PublicKey: serverPublic, PreSharedKey: base64.StdEncoding.EncodeToString(psk), AllowedIPs: []string{"0.0.0.0/0", "::/0"}, Keepalive: 25}}, Parameters: parameters()}
 	logger := log.NewNOPFactory().Logger()
-	stack, err := wg.NewDevice(wg.DeviceOptions{Context: context.Background(), Logger: logger, Handler: echoHandler{}, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/24"), netip.MustParsePrefix("fd78:78::1/64")}})
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: context.Background(), Logger: logger, Handler: handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/24"), netip.MustParsePrefix("fd78:78::1/64")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,4 +610,144 @@ func coldUDPReady(pair *actualPair) error {
 		}
 	}
 	return errors.New("native cold UDP did not prove its captured encrypted path within the bounded handshake budget")
+}
+
+// The entry reference forwards only the test exit's encrypted UDP packets.
+// All outer sockets are loopback fixtures; no user node or Internet route is used.
+type nestedExitRelay struct {
+	target  M.Socksaddr
+	actual  string
+	packets atomic.Int64
+}
+
+func (*nestedExitRelay) JudgeFlow(uint8, netip.AddrPort, netip.AddrPort, []byte) tun.FlowVerdict {
+	return tun.FlowVerdict{Action: tun.ActionAccept}
+}
+func (*nestedExitRelay) NewDNSPacket([]byte, M.Socksaddr, M.Socksaddr, N.PacketWriter) {}
+func (*nestedExitRelay) NewConnectionEx(_ context.Context, c net.Conn, _, _ M.Socksaddr, done N.CloseHandlerFunc) {
+	_ = c.Close()
+	if done != nil {
+		done(errors.New("TCP cannot bypass the nested exit"))
+	}
+}
+func (r *nestedExitRelay) NewPacketConnectionEx(ctx context.Context, c N.PacketConn, _, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if destination != r.target {
+		_ = c.Close()
+		if done != nil {
+			done(errors.New("unowned nested relay target"))
+		}
+		return
+	}
+	go func() {
+		upstream, err := (&net.Dialer{}).DialContext(ctx, "udp4", r.actual)
+		if err != nil {
+			_ = c.Close()
+			if done != nil {
+				done(err)
+			}
+			return
+		}
+		defer upstream.Close()
+		defer c.Close()
+		_ = upstream.SetDeadline(time.Now().Add(12 * time.Second))
+		_ = c.SetDeadline(time.Now().Add(12 * time.Second))
+		finished := make(chan error, 1)
+		go func() {
+			data := make([]byte, 65535)
+			for {
+				n, err := upstream.Read(data)
+				if err != nil {
+					finished <- err
+					_ = c.Close()
+					return
+				}
+				p := buf.NewPacket()
+				_, _ = p.Write(data[:n])
+				if err = c.WritePacket(p, destination); err != nil {
+					finished <- err
+					_ = upstream.Close()
+					return
+				}
+			}
+		}()
+		for {
+			p := buf.NewPacket()
+			address, err := c.ReadPacket(p)
+			if err == nil && address != r.target {
+				err = errors.New("nested target changed")
+			}
+			if err == nil {
+				_, err = upstream.Write(p.Bytes())
+				r.packets.Add(1)
+			}
+			p.Release()
+			if err != nil {
+				_ = upstream.Close()
+				_ = c.Close()
+				<-finished
+				if done != nil {
+					done(err)
+				}
+				return
+			}
+		}
+	}()
+}
+
+type retainedEntryDialer struct {
+	entry  *Endpoint
+	target M.Socksaddr
+	calls  atomic.Int64
+}
+
+func (d *retainedEntryDialer) DialContext(ctx context.Context, network string, target M.Socksaddr) (net.Conn, error) {
+	d.calls.Add(1)
+	if network != "udp" || target != d.target {
+		return nil, errors.New("nested exit dial escaped its bound target")
+	}
+	return d.entry.DialContext(ctx, network, target)
+}
+func (*retainedEntryDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("nested exit cannot open another listener")
+}
+func TestActualAmneziaExitOverRetainedAmneziaEntry(t *testing.T) {
+	var innerOptions Options
+	exit := newActualPair(t, func(options *Options) { innerOptions = *options })
+	if err := exit.client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := M.ParseSocksaddr("192.0.2.1:51820")
+	relay := &nestedExitRelay{target: target, actual: exit.binding.address()}
+	entry := newActualPairWithHandler(t, nil, relay)
+	innerOptions.MTU = 1280
+	innerOptions.Detour = "entry"
+	owned := &retainedEntryDialer{entry: entry.client, target: target}
+	nested, err := newEndpoint(context.Background(), nil, log.NewNOPFactory().Logger(), "nested-exit", innerOptions, owned, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nested.Close()
+	if err = nested.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	pair := &actualPair{client: nested}
+	for _, network := range []string{"tcp", "udp"} {
+		for _, host := range []string{"10.78.0.1", "fd78:78::1"} {
+			if err = exchange(t, pair, network, host); err != nil {
+				t.Fatal("nested AWG", network, host, err)
+			}
+		}
+	}
+	if relay.packets.Load() == 0 || exit.binding.packets.Load() == 0 || entry.binding.packets.Load() == 0 || owned.calls.Load() != 1 || entry.dialer.calls.Load() != 1 {
+		t.Fatal("did not traverse two real independent encrypted AWG engines")
+	}
+	if err = entry.client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = exchange(t, pair, "udp", "10.78.0.1"); err == nil {
+		t.Fatal("nested AWG bypassed the stopped entry")
+	}
+	if owned.calls.Load() != 1 {
+		t.Fatal("entry teardown created a fallback exit socket")
+	}
 }

@@ -72,6 +72,8 @@ func TestExecutionPlanRejectsAmbiguousInputs(t *testing.T) {
 }
 
 type fakeEngine struct {
+	exitMode      string
+	clientPublic  string
 	mu            sync.Mutex
 	servers       map[string]*httptest.Server
 	selected      string
@@ -120,7 +122,11 @@ func (e *fakeEngine) handler(tag string) http.HandlerFunc {
 			}
 			switch r.Method {
 			case "GET":
-				json.NewEncoder(w).Encode(map[string]any{"node_id": strings.Repeat("a", 64), "execution": "server", "exits": []any{map[string]any{"exit_id": "exit", "exit_mode": "shadowsocks", "exit_node_id": strings.Repeat("b", 64)}}})
+				mode := e.exitMode
+				if mode == "" {
+					mode = "shadowsocks"
+				}
+				json.NewEncoder(w).Encode(map[string]any{"node_id": strings.Repeat("a", 64), "execution": "server", "exits": []any{map[string]any{"exit_id": "exit", "exit_mode": mode, "exit_node_id": strings.Repeat("b", 64), "client_public_key": e.clientPublic}}})
 			case "PUT":
 				var q multihoprelay.Request
 				if json.NewDecoder(r.Body).Decode(&q) != nil {

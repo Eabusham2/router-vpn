@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"unicode/utf8"
 
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/routechoice"
 )
@@ -190,7 +191,7 @@ func New(config, metadata string) (*Controller, error) {
 	if meta.EntryMode != "wg" && meta.EntryMode != "awg2-fast" && meta.EntryMode != "awg2-strong" {
 		return nil, errors.New("unimplemented entry transport")
 	}
-	if meta.ExitMode != "wg" && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" {
+	if !awgpolicy.WireGuardFamily(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" {
 		return nil, errors.New("unimplemented exit transport")
 	}
 	if meta.Execution != "local" && meta.Execution != "server" && meta.Execution != "auto" {
@@ -263,9 +264,20 @@ func New(config, metadata string) (*Controller, error) {
 	expectedType := meta.ExitMode
 	if expectedType == "wg" {
 		expectedType = "wireguard"
+	} else if awgpolicy.IsMode(expectedType) {
+		expectedType = AmneziaType
 	}
 	if local["type"] != expectedType {
 		return nil, errors.New("exit label does not match the dataplane")
+	}
+	if expectedType == AmneziaType {
+		raw, err := json.Marshal(local)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = AmneziaRuntimeConfig(string(raw)); err != nil {
+			return nil, err
+		}
 	}
 	_ = endpoints
 	c := &Controller{meta: meta, progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}}}
@@ -288,7 +300,7 @@ func New(config, metadata string) (*Controller, error) {
 	}
 	c.proposal = multihoprelay.Request{SessionID: nonce, EntryNodeID: meta.EntryNodeID, ExitID: meta.ExitID, ExitMode: meta.ExitMode, Port: 26240 + int(seed[0]%32), Username: user, Password: password}
 	c.expected = multihoprelay.Lease{Request: c.proposal, NodeID: meta.EntryNodeID, ExitNodeID: meta.ExitNodeID, Host: entry.Hostname(), Port: c.proposal.Port, Username: user, Password: password}
-	if meta.ExitMode == "wg" {
+	if awgpolicy.WireGuardFamily(meta.ExitMode) {
 		text, _ := local["private_key"].(string)
 		key, e := base64.StdEncoding.Strict().DecodeString(text)
 		if e != nil || len(key) != 32 {

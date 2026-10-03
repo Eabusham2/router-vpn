@@ -35,6 +35,7 @@ func TestExportPinnedCoreRelayConfigurations(t *testing.T) {
 		{ID: "fixture", Mode: "hysteria2", DNS: "10.88.0.1", NodeID: strings.Repeat("b", 64), Transport: map[string]any{"type": "hysteria2", "server": "192.0.2.2", "server_port": 443, "password": "offline-fixture-only", "tls": map[string]any{"enabled": true, "server_name": "vpn.invalid"}}},
 		{ID: "fixture", Mode: "wg", DNS: "10.88.0.1", NodeID: strings.Repeat("b", 64), Transport: map[string]any{"type": "wireguard", "private_key": base64.StdEncoding.EncodeToString(key.Bytes()), "address": []string{"10.88.0.2/32"}, "mtu": 1280, "peers": []any{map[string]any{"address": "192.0.2.2", "port": 51820, "public_key": base64.StdEncoding.EncodeToString(peer.PublicKey().Bytes()), "allowed_ips": []string{"0.0.0.0/0", "::/0"}}}}},
 	}
+	configurations = append(configurations, awgExit(t, "awg2-fast"), awgExit(t, "awg2-strong"))
 	for _, exit := range configurations {
 		cfg := config()
 		cfg.Exits = []Exit{exit}

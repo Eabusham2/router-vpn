@@ -128,7 +128,15 @@ enum RouterVPNMTUPolicy {
                   let host = peers[0]["address"] as? String, !host.isEmpty else {
                 throw issue("Nested WireGuard MTU requires the owned exit-through-entry dialer.")
             }
-            let overhead = host.contains(":") ? 80 : 60
+            var overhead = host.contains(":") ? 80 : 60
+            if endpoints[exitIndex]["type"] as? String == "routervpn-amneziawg" {
+                guard let params = endpoints[exitIndex]["amnezia"] as? [String: String],
+                      let raw = params["s4"], raw.range(of: "^[0-9]+$", options: .regularExpression) != nil,
+                      let padding = Int(raw), (0...1280).contains(padding) else {
+                    throw issue("Nested AWG requires its actual bounded transport padding.")
+                }
+                overhead += padding
+            }
             let payloadLimit = ((entryMTU - overhead) / 16) * 16
             guard payloadLimit >= minimum else {
                 throw issue("The configured entry MTU cannot carry a dual-stack nested WireGuard packet. Increase the entry MTU or select another exit transport.")

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"router-vpn/internal/awgpolicy"
 )
 
 var ident = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
@@ -128,7 +130,7 @@ func (m *Manager) Available() []map[string]string {
 	out := []map[string]string{}
 	for _, e := range m.cfg.Exits {
 		item := map[string]string{"exit_id": e.ID, "exit_mode": e.Mode, "exit_node_id": e.NodeID}
-		if e.Mode == "wg" {
+		if awgpolicy.WireGuardFamily(e.Mode) {
 			if text, ok := e.Transport["private_key"].(string); ok {
 				raw, err := base64.StdEncoding.Strict().DecodeString(text)
 				if err == nil {
@@ -193,15 +195,15 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	if exit == nil {
 		return Lease{}, ErrUnavailable
 	}
-	if exit.Mode == "wg" {
+	if awgpolicy.WireGuardFamily(exit.Mode) {
 		// A WireGuard peer key identifies one roaming endpoint. Two independent
 		// processes using that key would steal each other's reply endpoint.
 		for _, active := range m.leases {
-			if active.ExitMode != "wg" {
+			if !awgpolicy.WireGuardFamily(active.ExitMode) {
 				continue
 			}
 			for _, paired := range m.cfg.Exits {
-				if paired.ID == active.ExitID && paired.Mode == "wg" && paired.Transport["private_key"] == exit.Transport["private_key"] {
+				if paired.ID == active.ExitID && paired.Mode == active.ExitMode && awgpolicy.WireGuardFamily(paired.Mode) && paired.Transport["private_key"] == exit.Transport["private_key"] {
 					return Lease{}, errors.New("paired WireGuard credentials already own another relay; provision distinct client credentials for concurrent use")
 				}
 			}
@@ -352,6 +354,8 @@ func validateTransport(e Exit) (map[string]any, error) {
 	switch e.Mode {
 	case "wg":
 		keys = []string{"private_key", "address", "mtu", "peers", "workers", "udp_timeout"}
+	case "awg2-fast", "awg2-strong":
+		keys = []string{"private_key", "address", "mtu", "peers", "amnezia"}
 	case "shadowsocks":
 		keys = []string{"server", "server_port", "method", "password", "network", "udp_over_tcp"}
 	case "hysteria2":
@@ -373,8 +377,12 @@ func validateTransport(e Exit) (map[string]any, error) {
 			return nil, fmt.Errorf("relay transport cannot override %s", k)
 		}
 	}
-	if e.Mode == "wg" {
-		if p["type"] != "wireguard" || !key32(p["private_key"]) {
+	if awgpolicy.WireGuardFamily(e.Mode) {
+		expectedType := "wireguard"
+		if awgpolicy.IsMode(e.Mode) {
+			expectedType = awgpolicy.Type
+		}
+		if p["type"] != expectedType || !key32(p["private_key"]) {
 			return nil, errors.New("relay WireGuard transport requires its native key")
 		}
 		peers, ok := p["peers"].([]any)
@@ -384,6 +392,11 @@ func validateTransport(e Exit) (map[string]any, error) {
 		peer, ok := peers[0].(map[string]any)
 		if !ok || !literalServer(peer["address"]) || !key32(peer["public_key"]) || !validPort(peer["port"]) {
 			return nil, errors.New("invalid relay WireGuard peer")
+		}
+		if awgpolicy.IsMode(e.Mode) {
+			if err := validateAmnezia(p, peer); err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		if (e.Mode != "shadowsocks" && e.Mode != "hysteria2") || p["type"] != e.Mode || !literalServer(p["server"]) || !validPort(p["server_port"]) {
@@ -435,7 +448,7 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 		"dns":      map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "exit-dns", "server": exit.DNS, "detour": "exit"}}, "final": "exit-dns"},
 		"route":    map[string]any{"default_domain_resolver": "exit-dns", "rules": []any{map[string]any{"source_ip_cidr": []string{netip.PrefixFrom(peer, bits).String()}, "invert": true, "action": "reject"}}, "final": "exit"},
 	}
-	if exit.Mode == "wg" {
+	if awgpolicy.WireGuardFamily(exit.Mode) {
 		config["endpoints"] = []any{transport}
 		config["outbounds"] = []any{}
 	} else {

@@ -13,7 +13,7 @@ enum RouterVPNMultihopGraph {
     static let entryTag = "routervpn-hop-entry"
     static let entryProofTag = "routervpn-hop-entry-proof"
     static let entryPrivateTag = "routervpn-hop-entry-private"
-    static let supportedExitModes = ["wg", "shadowsocks", "hysteria2"]
+    static let supportedExitModes = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"]
     private static let maxBytes = 4 * 1024 * 1024
 
     static func build(entryEndpoint: [String: Any], entryProfile: [String: Any],
@@ -66,7 +66,7 @@ enum RouterVPNMultihopGraph {
               var tun = inbounds.first, tun["type"] as? String == "tun", tun["auto_route"] as? Bool == true,
               let route = original["route"] as? [String: Any], route["final"] as? String == "proxy",
               let outbounds = original["outbounds"] as? [[String: Any]] else {
-            throw issue("The exit must contain one self-contained full-device WireGuard/Shadowsocks/Hysteria2 profile.")
+            throw issue("The exit must contain one self-contained full-device WireGuard/AmneziaWG/Shadowsocks/Hysteria2 profile.")
         }
         // Only the generated full-device policy is transformed. A saved split
         // route, bypass or DNS rule must never disappear as a side effect.
@@ -83,12 +83,14 @@ enum RouterVPNMultihopGraph {
             throw issue("Exit endpoints must be an explicit array, not an ignored malformed field.")
         }
         var proxy: [String: Any]
-        if exitMode == "wg" {
+        if ["wg", "awg2-fast", "awg2-strong"].contains(exitMode) {
             guard originalEndpoints.count == 1, let exitEndpoint = originalEndpoints.first,
                   outbounds.isEmpty else {
                 throw issue("WireGuard exit must contain exactly one owned endpoint and no alternate outbound.")
             }
             proxy = try wireGuardEndpoint(exitEndpoint, tag: "proxy")
+            let expectedType = exitMode == "wg" ? "wireguard" : "routervpn-amneziawg"
+            guard proxy["type"] as? String == expectedType else { throw issue("Exit transport label does not match its native endpoint.") }
             guard let entryPeer = (entry["peers"] as? [[String: Any]])?.first,
                   let exitPeer = (proxy["peers"] as? [[String: Any]])?.first,
                   entryPeer["public_key"] as? String != exitPeer["public_key"] as? String else {
@@ -145,8 +147,8 @@ enum RouterVPNMultihopGraph {
         let config: [String: Any] = [
             "log": ["level": "warn"],
             "dns": dnsPolicy,
-            "endpoints": exitMode == "wg" ? [entry, proxy] : [entry],
-            "outbounds": exitMode == "wg" ? [privateProxy] : [proxy, privateProxy],
+            "endpoints": ["wg", "awg2-fast", "awg2-strong"].contains(exitMode) ? [entry, proxy] : [entry],
+            "outbounds": ["wg", "awg2-fast", "awg2-strong"].contains(exitMode) ? [privateProxy] : [proxy, privateProxy],
             "inbounds": [tun, ["type": "mixed", "tag": entryProofTag,
                 "listen": "127.0.0.1", "listen_port": entryProofPort]],
             "route": ["auto_detect_interface": true, "final": "proxy", "rules": routeRules]

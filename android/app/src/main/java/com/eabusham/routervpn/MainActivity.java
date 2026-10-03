@@ -185,7 +185,7 @@ public final class MainActivity extends Activity {
         modesView = section("Modes in active bundle", "Not imported");
         c.addView(modesView, margins(0, dp(12), 0, 0));
         c.addView(section("Android capability boundary",
-                "Raw WireGuard and AmneziaWG 2 use embedded userspace backends. Self-contained generated sing-box profiles use pinned libbox, and self-contained Reality/XHTTP profiles use pinned Xray-core v26.7.11 through a dedicated Android VpnService. AUTO/SMART/CUSTOM/ALL require selected-node private path proof. Real Android multihop is currently available with a WireGuard entry plus a different stored node, or a native AmneziaWG Fast/Strong entry, using a self-contained WireGuard, Shadowsocks or Hysteria2 exit; the exit node must pass private path proof before Connected. AWG-entry multihop uses the native pinned endpoint; composite MAX/mixed sidecar chains remain separate; ALL ranks only real Android-native branches strongest-to-weaker and never relabels a partial MAX sidecar as ALL. Strict embedded libbox/Xray sessions require Android 10+ Always-on plus lockdown/Block connections without VPN; raw strict WG/AWG fail closed. Multihop adds latency by design. Network changes reset/revalidate libbox and native Xray, but final reconnect/leak behavior still needs real-device validation. SOCKS5 remains tunnel/LAN-only; never expose TCP 1080 to WAN."), margins(0, dp(20), 0, dp(20)));
+                "Raw WireGuard and AmneziaWG 2 use embedded userspace backends. Self-contained generated sing-box profiles use pinned libbox, and self-contained Reality/XHTTP profiles use pinned Xray-core v26.7.11 through a dedicated Android VpnService. AUTO/SMART/CUSTOM/ALL require selected-node private path proof. Real Android multihop is currently available with a WireGuard entry plus a different stored node, or a native AmneziaWG Fast/Strong entry, using a self-contained WireGuard, AmneziaWG Fast/Strong, Shadowsocks or Hysteria2 exit; the exit node must pass private path proof before Connected. AWG-entry multihop uses the native pinned endpoint; composite MAX/mixed sidecar chains remain separate; ALL ranks only real Android-native branches strongest-to-weaker and never relabels a partial MAX sidecar as ALL. Strict embedded libbox/Xray sessions require Android 10+ Always-on plus lockdown/Block connections without VPN; raw strict WG/AWG fail closed. Multihop adds latency by design. Network changes reset/revalidate libbox and native Xray, but final reconnect/leak behavior still needs real-device validation. SOCKS5 remains tunnel/LAN-only; never expose TCP 1080 to WAN."), margins(0, dp(20), 0, dp(20)));
 
         ScrollView s = new ScrollView(this);
         s.addView(c);
@@ -243,7 +243,7 @@ public final class MainActivity extends Activity {
             case 4: return "ASUS forwarding exposes only intended public VPN/auxiliary ports. Never expose SOCKS5 1080, Setup Center 8786, health/admin/Portainer/AdGuard/SSH or private credentials to WAN.";
             case 5: return "Add router-vpn-bundle.json for each router. Router linking is a data operation: the app is installed once, keeps multiple node bundles in bounded Android app-private storage, and never relies on the server's repeated display id as a local filename.";
             case 6: return "Choose an active router for single-hop. Raw WG/AWG, self-contained libbox, and native self-contained Xray modes are real choices. AUTO tests native candidates; SMART tries simpler candidates and restores the last proven mode if reduction fails. ALL tests the strongest available Android-native protection branch first and truthfully falls back only after a failed proof. Strict policy excludes raw WG/AWG and requires proven Android Always-on plus lockdown for embedded libbox/Xray.";
-            case 7: return "Multihop requires two different stored nodes. Current proven Android graph is standard WireGuard entry → WireGuard, Shadowsocks or Hysteria2 exit → Internet. The app builds one VpnService graph and requires private proof from the selected exit before Connected. AWG-entry/mixed ALL/MAX multihop stays unavailable. Expect more latency.";
+            case 7: return "Multihop requires two different stored nodes. Current native Android graph is WireGuard or AmneziaWG entry → WireGuard, AmneziaWG Fast/Strong, Shadowsocks or Hysteria2 exit → Internet. The app builds one VpnService graph and requires private proof from the selected exit before Connected. Mixed helper/ALL/MAX multihop remains separately gated. Expect more latency.";
             case 8: return "CUSTOM selects only a native candidate containing all requested layers. A TUN UP state alone is never AUTO or multihop success: selected-node/exit private path proof must pass. Selected DNS transport is fully enforced by embedded libbox modes. Native WG/AWG/Xray enforce only literal-IP UDP DNS and fail closed for DoH/DoT/H3/TCP selections instead of silently downgrading them; final DNS/leak proof remains a release gate.";
             case 9: return "Run setup check, server doctor, and ASUS forwarding status. Final release still requires live exit-IP, DNS, leak, reconnect, kill-switch, multihop-failure and network-transition checks on real devices and off-LAN networks.";
             default: return "Finish dismisses onboarding; reopen it any time. Router VPN deliberately greys or rejects combinations it cannot prove rather than reporting a fake Connected state.";
@@ -580,7 +580,7 @@ public final class MainActivity extends Activity {
         try {
             List<AndroidNodeStore.Node> nodes = nodeStore.list();
             if (nodes.size() < 2) {
-                new AlertDialog.Builder(this).setTitle("Two routers required").setMessage("Add at least two different Router VPN node bundles. Android multihop supports WireGuard or AmneziaWG entry → WireGuard/Shadowsocks/Hysteria2 exit.").setPositiveButton("Add router", (d, w) -> openBundlePicker()).setNegativeButton("Cancel", null).show();
+                new AlertDialog.Builder(this).setTitle("Two routers required").setMessage("Add at least two different Router VPN node bundles. Android multihop supports WireGuard or AmneziaWG entry → WireGuard/AmneziaWG/Shadowsocks/Hysteria2 exit.").setPositiveButton("Add router", (d, w) -> openBundlePicker()).setNegativeButton("Cancel", null).show();
                 return;
             }
             CharSequence[] labels = nodeLabels(nodes, null);
@@ -594,7 +594,7 @@ public final class MainActivity extends Activity {
             List<AndroidNodeStore.Node> exits = new ArrayList<>();
             for (AndroidNodeStore.Node node : all) if (!node.id.equals(entry.id)) exits.add(node);
             CharSequence[] labels = nodeLabels(exits, null);
-            new AlertDialog.Builder(this).setTitle("Choose multihop exit node").setMessage("The selected exit must have a self-contained WireGuard, Shadowsocks or Hysteria2 profile. Entry and exit are always different nodes.").setItems(labels, (d, which) -> chooseMultihopExitMode(entry, exits.get(which))).setNegativeButton("Cancel", null).show();
+            new AlertDialog.Builder(this).setTitle("Choose multihop exit node").setMessage("The selected exit must have a self-contained WireGuard, AmneziaWG Fast/Strong, Shadowsocks or Hysteria2 profile. Entry and exit are always different nodes.").setItems(labels, (d, which) -> chooseMultihopExitMode(entry, exits.get(which))).setNegativeButton("Cancel", null).show();
         } catch (Exception e) { toast("Multihop exit scan failed: " + e.getMessage()); }
     }
 
@@ -602,7 +602,7 @@ public final class MainActivity extends Activity {
         try {
             List<NativeSingBoxController.ModeInfo> modes = multihop.listSupportedExitModes(exit.file);
             if (modes.isEmpty()) {
-                new AlertDialog.Builder(this).setTitle("Exit is not compatible").setMessage("This exit node has no self-contained WireGuard, Shadowsocks or Hysteria2 Android profile. Mixed/Xray/ALL/MAX exits remain gated rather than being faked.").setPositiveButton("OK", null).show();
+                new AlertDialog.Builder(this).setTitle("Exit is not compatible").setMessage("This exit node has no self-contained WireGuard, AmneziaWG Fast/Strong, Shadowsocks or Hysteria2 Android profile. Mixed/Xray/ALL/MAX exits remain gated rather than being faked.").setPositiveButton("OK", null).show();
                 return;
             }
             CharSequence[] labels = new CharSequence[modes.size()];

@@ -11,6 +11,10 @@ on:
       - 'android/test_android_multihop_contract.py'
       - 'android/test_android_multihop_graph.py'
       - 'internal/mobilemultihop/**'
+      - 'internal/awgpolicy/**'
+      - 'internal/multihoprelay/**'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java'
+      - 'android/test_android_multihop_modes.py'
       - 'mobile/routervpn_multihop_native_test.go.tmpl'
       - 'android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java'
       - '.github/workflows/android-multihop-contract.yml'
@@ -24,6 +28,10 @@ on:
       - 'android/test_android_multihop_contract.py'
       - 'android/test_android_multihop_graph.py'
       - 'internal/mobilemultihop/**'
+      - 'internal/awgpolicy/**'
+      - 'internal/multihoprelay/**'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java'
+      - 'android/test_android_multihop_modes.py'
       - 'mobile/routervpn_multihop_native_test.go.tmpl'
       - 'android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java'
       - '.github/workflows/android-multihop-contract.yml'
@@ -48,5 +56,6 @@ jobs:
       - name: Verify Android multihop boundaries and executable graph
         run: |
           python3 android/test_android_multihop_contract.py
+          python3 android/test_android_multihop_modes.py
           python3 android/test_android_multihop_graph.py
-          go test -race -count=1 -timeout=120s ./internal/mobilemultihop
+          go test -race -count=1 -timeout=120s ./internal/mobilemultihop ./internal/multihoprelay ./internal/awgpolicy

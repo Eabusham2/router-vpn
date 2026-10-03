@@ -234,6 +234,44 @@ public final class MultihopGraphHarness {
   boolean failed=false;try{builder.prepare(entry,exit,"wg","local","awg2-pq");}catch(Exception expected){failed=true;}
   check(failed,"unimplemented AWG PQ mislabeled as Fast");
  }
+
+ static void awgExitChecks(Path dir)throws Exception {
+  Path app=Files.createDirectory(dir.resolve("awg-exit-app"));Context context=new Context(app.toFile());
+  AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
+  JSONObject a=awgBundle('a'),b=awgBundle('b');
+  // The entry and exit are distinct nodes with different AWG server keys.
+  File entry=save(dir,a),exit=save(dir,b);byte[] original=Files.readAllBytes(exit.toPath());
+  for(String mode:new String[]{"awg2-fast","awg2-strong"}) {
+   check(builder.listSupportedExitModes(exit).stream().anyMatch(m->m.id.equals(mode)),"AWG exit not offered by real readiness picker");
+   for(String entryMode:new String[]{"wg","awg2-fast","awg2-strong"})for(String execution:new String[]{"local","server","auto"}) {
+    // Strong's 80-byte S4 fits the dual-stack floor with a 1500-byte entry.
+    JSONObject imported=new JSONObject(a.toString());profile(imported).put("mtu_policy","fixed").put("manual_mtu",1500);
+    AndroidMultihopController.Prepared result=builder.prepare(save(dir,imported),exit,mode,execution,entryMode);
+    Path session=app.resolve("layered-sessions").resolve(result.session.sessionId);
+    JSONObject graph=new JSONObject(Files.readString(session.resolve("sing-box.json"))),meta=new JSONObject(Files.readString(session.resolve("routervpn-multihop.json")));
+    JSONArray endpoints=graph.getJSONArray("endpoints");JSONObject first=endpoints.getJSONObject(0),last=endpoints.getJSONObject(1);
+    check(last.getString("type").equals("routervpn-amneziawg"),"AWG exit silently replaced with WG");
+    check(last.getString("detour").equals(first.getString("tag")),"AWG exit escaped selected entry");
+    check(last.getJSONObject("amnezia").length()==11&&last.getJSONObject("amnezia").getString("s4").equals(mode.equals("awg2-strong")?"80":"32"),"AWG exit strength or padding lost");
+    check(last.getJSONArray("peers").getJSONObject(0).getString("public_key").equals(key('g')),"exit uses entry or WG peer credentials");
+    check(meta.getString("exit_mode").equals(mode)&&meta.getString("entry_mode").equals(entryMode)&&meta.getString("execution").equals(execution),"native graph identity drifted");
+    int limit=((1500-60-Integer.parseInt(last.getJSONObject("amnezia").getString("s4")))/16)*16;
+    check(last.getInt("mtu")==Math.min(1420,limit),"AWG exit sizing forgot transport padding");
+    check(graph.getJSONArray("inbounds").length()==3&&!Files.exists(session.resolve("awg.conf")),"AWG exit opened a second VPN");
+    JSONArray dns=graph.getJSONObject("dns").getJSONArray("servers");for(int i=0;i<dns.length();i++)check(dns.getJSONObject(i).getString("detour").equals("proxy"),"AWG exit DNS escaped");
+   }
+  }
+  check(Arrays.equals(original,Files.readAllBytes(exit.toPath())),"AWG exit mutated its saved source");
+  for(String mode:new String[]{"awg2-fast","awg2-strong"}) {
+   JSONObject bad=new JSONObject(b.toString());JSONObject nativeFiles=bad.getJSONObject("profiles").getJSONObject(mode);
+   String raw=new String(Base64.getDecoder().decode(nativeFiles.getString("awg.conf")),StandardCharsets.UTF_8).replace(mode.equals("awg2-strong")?"S4=80\n":"S4=32\n","");
+   nativeFiles.put("awg.conf",Base64.getEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8)));
+   File broken=save(dir,bad);int before=sessions(app);boolean failed=false;
+   try{builder.prepare(entry,broken,mode);}catch(Exception expected){failed=true;}
+   check(failed&&sessions(app)==before,"missing AWG exit parameter left staged session");
+   check(builder.listSupportedExitModes(broken).stream().noneMatch(m->m.id.equals(mode)),"malformed AWG exit falsely ready");
+  }
+ }
  static void directChecks(Context context,Path dir,Path app)throws Exception {
   NativeSingBoxController nativeWG=new NativeSingBoxController(context);
   JSONObject source=bundle('b');profile(source).put("effective_mtu",9000).put("mtu_policy","auto");
@@ -358,6 +396,7 @@ public final class MultihopGraphHarness {
   directChecks(context,dir,app);
   awgChecks(context,dir,app);
   awgEntryChecks(context,dir);
+  awgExitChecks(dir);
   System.out.println("Android shipping single/multihop WG compiler: PASS ("+checks+" checks; real Go policy, Android handles doubled)");
  }
 }

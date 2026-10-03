@@ -268,7 +268,7 @@ for marker in (
     "Always-on",
     "Block connections without VPN",
     "WireGuard entry plus a different stored node",
-    "WireGuard, Shadowsocks or Hysteria2 exit",
+    "WireGuard, AmneziaWG Fast/Strong, Shadowsocks or Hysteria2 exit",
     "AWG-entry multihop",
     "private NativeXrayController xray;",
     "private void chooseXrayMode()",
@@ -291,6 +291,7 @@ assert "libbox or native Xray mode" in policy
 # doubles. This checks cancellation/adoption behavior, not physical VPN traffic.
 for executable_contract in (
     "test_android_java_syntax.py",
+    "test_android_multihop_modes.py",
     "test_android_layered_service_compile.py",
     "test_android_custom_preset_commit.py",
     "test_android_runtime_teardown.py",

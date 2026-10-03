@@ -73,11 +73,14 @@ final class AndroidMultihopController {
         List<NativeSingBoxController.ModeInfo> result = new ArrayList<>();
         JSONObject bundle = loadBundle(exitBundle);
         JSONObject profiles = bundle.optJSONObject("profiles");
-        if (profiles != null && profiles.optJSONObject("wg") != null) {
-            String nativeConfig = io.nekohasekai.libbox.Libbox.routerWireGuardExitConfig(
-                    readWireGuardText(bundle), AndroidNodeStore.stableNodeIdentity(bundle));
+        for (String mode : new String[]{"wg", "awg2-fast", "awg2-strong"}) {
+            if (profiles == null || profiles.optJSONObject(mode) == null) continue;
+            String text = readNativeText(bundle, mode), identity = AndroidNodeStore.stableNodeIdentity(bundle);
+            String nativeConfig = "wg".equals(mode)
+                    ? io.nekohasekai.libbox.Libbox.routerWireGuardExitConfig(text, identity)
+                    : io.nekohasekai.libbox.Libbox.routerAmneziaExitConfig(text, identity);
             io.nekohasekai.libbox.Libbox.checkConfig(nativeConfig);
-            result.add(new NativeSingBoxController.ModeInfo("wg", "WireGuard"));
+            result.add(new NativeSingBoxController.ModeInfo(mode, "wg".equals(mode) ? "WireGuard" : "awg2-fast".equals(mode) ? "AmneziaWG Fast" : "AmneziaWG Strong"));
         }
         for (NativeSingBoxController.ModeInfo mode : singBox.listDirectLibboxModes(exitBundle)) {
             if ("shadowsocks".equals(mode.id) || "hysteria2".equals(mode.id)) result.add(mode);
@@ -96,7 +99,7 @@ final class AndroidMultihopController {
         if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
         if (entryBundle == null || exitBundle == null) throw new IllegalArgumentException("Choose both an entry and an exit node.");
         if (entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())) throw new IllegalArgumentException("Entry and exit must be different stored nodes.");
-        if (!("wg".equals(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode))) throw new IllegalArgumentException("Android multihop requires a native WireGuard, Shadowsocks or Hysteria2 exit.");
+        if (!(NativeSingBoxController.nativeWireGuardFamily(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode))) throw new IllegalArgumentException("Android multihop requires a native WireGuard/AmneziaWG, Shadowsocks or Hysteria2 exit.");
 
         JSONObject entry = loadBundle(entryBundle);
         JSONObject exit = loadBundle(exitBundle);
@@ -113,8 +116,11 @@ final class AndroidMultihopController {
         EntryPrivate entryPrivate = parseEntryPrivate(entry);
         JSONObject exitProfile;
         JSONObject config;
-        if ("wg".equals(exitMode)) {
-            String compiled = io.nekohasekai.libbox.Libbox.routerWireGuardExitConfig(readWireGuardText(exit), exitIdentity);
+        if (NativeSingBoxController.nativeWireGuardFamily(exitMode)) {
+            String exitText = readNativeText(exit, exitMode);
+            String compiled = "wg".equals(exitMode)
+                    ? io.nekohasekai.libbox.Libbox.routerWireGuardExitConfig(exitText, exitIdentity)
+                    : io.nekohasekai.libbox.Libbox.routerAmneziaExitConfig(exitText, exitIdentity);
             config = new JSONObject(compiled);
             // Stage only the compiled graph: a second raw VPN is never started.
             exitProfile = new JSONObject().put("sing-box.json", "native-wireguard-graph");
@@ -198,7 +204,7 @@ final class AndroidMultihopController {
 
     private static void makeMultihopConfig(JSONObject config, JSONObject wg, EntryPrivate entryPrivate, String exitMode) throws Exception {
         JSONArray existingEndpoints = config.optJSONArray("endpoints");
-        boolean wireGuardExit = "wg".equals(exitMode);
+        boolean wireGuardExit = NativeSingBoxController.nativeWireGuardFamily(exitMode);
         if (config.has("endpoints") && existingEndpoints == null) throw new IllegalStateException("Malformed exit endpoints.");
         if (wireGuardExit) {
             if (existingEndpoints == null || existingEndpoints.length()!=1) throw new IllegalStateException("WireGuard exit requires exactly one owned endpoint.");
@@ -239,7 +245,7 @@ final class AndroidMultihopController {
         }
         if (proxy == null) throw new IllegalStateException("Exit profile has no proxy outbound.");
         String type = proxy.optString("type", "").toLowerCase(Locale.ROOT);
-        String expected = wireGuardExit ? "wireguard" : exitMode;
+        String expected = wireGuardExit ? ("wg".equals(exitMode) ? "wireguard" : "routervpn-amneziawg") : exitMode;
         if (!expected.equals(type)) throw new IllegalStateException("Exit mode engine does not match its generated profile.");
         if (!"proxy".equals(proxy.optString("tag"))) throw new IllegalStateException("Exit endpoint lost its owned tag.");
         for (String key:new String[]{"detour","bind_interface","inet4_bind_address","inet6_bind_address","routing_mark","network_strategy","domain_resolver"}) {

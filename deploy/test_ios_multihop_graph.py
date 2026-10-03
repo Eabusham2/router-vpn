@@ -368,6 +368,49 @@ for mutation in ["missing","wrong-type","overlap","extra"] {
     changed["amnezia"]=params
     reject("invalid native AWG " + mutation) { _ = try P.build(entryEndpoint:changed,entryProfile:entry,exitProfile:wgExitProfile,exitMode:"wg",files:wgFiles()) }
 }
+
+// Both AWG strengths are native EXIT transports, never labels over raw WG.
+for mode in ["awg2-fast", "awg2-strong"] {
+    var exit = wgExit
+    exit["type"] = "routervpn-amneziawg"
+    var parameters = nativeAWG["amnezia"] as! [String:String]
+    if mode == "awg2-strong" { parameters["jc"] = "6"; parameters["s4"] = "48" }
+    exit["amnezia"] = parameters
+    let input = try wgFiles(exit,wgExitProfile)
+    for entryEndpoint in [wg,nativeAWG] {
+        let graph = try P.build(entryEndpoint:entryEndpoint,entryProfile:entry,exitProfile:wgExitProfile,exitMode:mode,files:input)
+        let sized = try RouterVPNMTUPolicy.multihop(graph,entryProfile:entry,exitProfile:wgExitProfile)
+        let root = try JSONSerialization.jsonObject(with:sized["sing-box.json"]!) as! [String:Any]
+        let endpoints = root["endpoints"] as! [[String:Any]]
+        try check("AWG exit uses real native engine", endpoints.count == 2 && endpoints[1]["type"] as? String == "routervpn-amneziawg")
+        try check("exit strength and every native AWG parameter preserved", endpoints[1]["amnezia"] as? [String:String] == parameters)
+        try check("AWG exit uses only the selected entry", endpoints[1]["detour"] as? String == endpoints[0]["tag"] as? String)
+        try check("AWG peer credentials are retained", JSONSerialization.data(withJSONObject:endpoints[1]["peers"]!,options:[.sortedKeys]) == JSONSerialization.data(withJSONObject:exit["peers"]!,options:[.sortedKeys]))
+        let entryMTU = endpoints[0]["mtu"] as! Int
+        let padding = Int(parameters["s4"]!)!
+        let limit = ((entryMTU - 60 - padding) / 16) * 16
+        try check("AWG exit MTU accounts for transport padding", endpoints[1]["mtu"] as? Int == min(exit["mtu"] as! Int,limit))
+        if CommandLine.arguments.count == 2 {
+            try sized["sing-box.json"]!.write(to:URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true).appendingPathComponent("native-"+(entryEndpoint["type"] as! String)+"-to-"+mode+".json"))
+        }
+    }
+    reject("AWG exit cannot be relabeled as WG") { _ = try P.build(entryEndpoint:wg,entryProfile:entry,exitProfile:wgExitProfile,exitMode:"wg",files:input) }
+    for mutation in ["missing-s4", "overlap", "unowned", "bad-peer", "cannot-carry"] {
+        var badExit = exit, badParameters = parameters
+        switch mutation {
+        case "missing-s4": badParameters.removeValue(forKey:"s4")
+        case "overlap": badParameters["h2"] = badParameters["h1"]
+        case "unowned": badParameters["listen_port"] = "42"
+        case "bad-peer": badExit["peers"] = [] as [[String:Any]]
+        default: badParameters["s4"] = "1280"
+        }
+        badExit["amnezia"] = badParameters
+        reject("malformed native AWG exit " + mutation) {
+            let graph = try P.build(entryEndpoint:wg,entryProfile:entry,exitProfile:wgExitProfile,exitMode:mode,files:wgFiles(badExit,wgExitProfile))
+            _ = try RouterVPNMTUPolicy.multihop(graph,entryProfile:entry,exitProfile:wgExitProfile)
+        }
+    }
+}
 print("Native iOS multihop graph: PASS (\(checks) executable checks; no node was contacted)")
 '''
 

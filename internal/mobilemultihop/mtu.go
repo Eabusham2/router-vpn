@@ -110,6 +110,19 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 		if strings.Contains(host, ":") {
 			overhead = 80
 		}
+		if exit["type"] == AmneziaType {
+			encoded, marshalErr := json.Marshal(exit)
+			if marshalErr != nil {
+				return "", marshalErr
+			}
+			native, validationErr := AmneziaRuntimeConfig(string(encoded))
+			if validationErr != nil {
+				return "", validationErr
+			}
+			// S4 is wire padding outside the encrypted inner IP packet. Do not
+			// calculate a WG-sized envelope then silently fragment AWG packets.
+			overhead += native.TransportPadding
+		}
 		limit := (entryMTU - overhead) / 16 * 16
 		if limit < 1280 {
 			return "", errors.New("entry MTU cannot carry a dual-stack nested WireGuard packet")

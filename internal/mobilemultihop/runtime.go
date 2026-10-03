@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/routechoice"
 )
@@ -107,7 +108,7 @@ func (c *Controller) acquire(ctx context.Context) error {
 	found := false
 	for _, exit := range caps.Exits {
 		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.Node == c.meta.ExitNodeID {
-			if c.meta.ExitMode == "wg" && (exit.PublicKey == "" || exit.PublicKey == c.localPublicKey) {
+			if awgpolicy.WireGuardFamily(c.meta.ExitMode) && (exit.PublicKey == "" || exit.PublicKey == c.localPublicKey) {
 				return errors.New("server WireGuard needs separately paired client credentials to avoid peer roaming")
 			}
 			found = true

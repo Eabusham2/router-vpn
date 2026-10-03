@@ -366,7 +366,7 @@ private enum IOSConnectionProfileStore {
         if p.multihopEnabled {
             guard let entry = p.multihopEntryID, let exit = p.multihopExitID, entry != exit,
                   [entry, exit].allSatisfy({ $0.range(of: "\\A[A-Za-z0-9._-]{1,128}\\z", options: .regularExpression) != nil }),
-                  let mode = p.multihopExitMode, ["wg", "shadowsocks", "hysteria2"].contains(mode) else {
+                  let mode = p.multihopExitMode, ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"].contains(mode) else {
                 throw issue("Saved multihop requires distinct linked entry/exit ids and a supported exit transport.")
             }
         }

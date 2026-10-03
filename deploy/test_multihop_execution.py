@@ -79,6 +79,24 @@ class ExecutionTests(unittest.TestCase):
         profile['node_proof_id']='c'*64
         with self.assertRaises(ValueError):pairing.native_wireguard(base64.b64encode(text.encode()).decode(),profile["node_proof_id"],"192.0.2.2")
 
+
+    def test_native_awg_pairing_preserves_strength_and_independent_node_proof(self):
+        source=fixture();params={'jc':'3','jmin':'40','jmax':'900','s1':'56','s2':'48','s3':'24','s4':'32',
+            'h1':'10-19','h2':'20-29','h3':'30-39','h4':'40-49'}
+        private=base64.b64encode(b'a'*32).decode();public=base64.b64encode(b'b'*32).decode()
+        text=f'[Interface]\nPrivateKey={private}\nAddress=10.88.0.2/32,fd88::2/128\nMTU=1380\n'+''.join(k.upper()+'='+v+'\n' for k,v in params.items())+f'[Peer]\nPublicKey={public}\nAllowedIPs=0.0.0.0/0,::/0\nEndpoint=exit.example:51820\nPersistentKeepalive=25\n'
+        for mode in ['awg2-fast','awg2-strong']:
+            raw=text if mode.endswith('fast') else text.replace('S4=32','S4=80')
+            source['profiles'][mode]={'awg.conf':base64.b64encode(raw.encode()).decode()}
+        before=copy.deepcopy(source);paired=pairing.pair(source,'owned');self.assertEqual(source,before)
+        for mode,padding in [('awg2-fast','32'),('awg2-strong','80')]:
+            out=next(x for x in paired if x['mode']==mode)
+            self.assertEqual(out['node_id'],'b'*64);self.assertEqual(out['transport']['type'],'routervpn-amneziawg')
+            self.assertEqual(out['transport']['amnezia']['s4'],padding);self.assertEqual(len(out['transport']['amnezia']),11)
+            self.assertEqual(out['transport']['peers'][0]['public_key'],public)
+            self.assertEqual(out['transport']['peers'][0]['address'],'192.0.2.2')
+        for bad in [text.replace('S4=32\n',''),text.replace('H2=20-29','H2=10-19'),text.replace('JC=3','JC=129'),text.replace('[Peer]','PostUp=touch /tmp/no\n[Peer]')]:
+            with self.assertRaises(ValueError):pairing.native_wireguard(base64.b64encode(bad.encode()).decode(),'b'*64,'192.0.2.2',amnezia=True)
     def test_private_registry_roundtrip_and_foreign_preservation(self):
         with tempfile.TemporaryDirectory() as root:
             root=Path(root);read,write,_=pairing.helpers()

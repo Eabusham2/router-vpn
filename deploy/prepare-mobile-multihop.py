@@ -6,7 +6,7 @@ import importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGES = ('routechoice', 'multihoprelay', 'mobilemultihop', 'nativesip003', 'hopmeasure', 'mobileperf')
+PACKAGES = ('awgpolicy', 'routechoice', 'multihoprelay', 'mobilemultihop', 'nativesip003', 'hopmeasure', 'mobileperf')
 _whitening_spec = importlib.util.spec_from_file_location('routervpn_whitening', ROOT/'deploy/prepare-mobile-whitening.py')
 WHITENING = importlib.util.module_from_spec(_whitening_spec)
 _whitening_spec.loader.exec_module(WHITENING)

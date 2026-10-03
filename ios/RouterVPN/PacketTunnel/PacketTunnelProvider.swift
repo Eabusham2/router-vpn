@@ -193,6 +193,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if exitMode == "wg" {
             let exit = try multihopWireGuardEndpoint(root: root, expectedProofID: exitProofID, name: "Router VPN exit")
             rawFiles = try RouterVPNMultihopGraph.wireGuardFiles(endpoint: exit.endpoint, profile: exitProfile, dnsServers: exit.dns)
+        } else if ["awg2-fast", "awg2-strong"].contains(exitMode) {
+            let exit = try nativeAmneziaEndpoint(root: root, expectedProofID: exitProofID, mode: exitMode)
+            rawFiles = try RouterVPNMultihopGraph.wireGuardFiles(endpoint: exit.endpoint, profile: exitProfile, dnsServers: exit.dns)
         } else {
             rawFiles = try layeredProfile(root, rawProfileID: exitMode)
         }

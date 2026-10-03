@@ -9,7 +9,7 @@ extension RouterVPNModel {
         guard let exit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle),
               exit.normalizedNodeKind == "router-vpn", exit.multihopEnabled == true,
               exit.multihopExitID == exit.id, let entryID = exit.multihopEntryID, entryID != exit.id,
-              let mode = exit.multihopExitMode, ["wg", "shadowsocks", "hysteria2"].contains(mode),
+              let mode = exit.multihopExitMode, ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"].contains(mode),
               let data = IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
               data.count <= 32 * 1024 * 1024 else {
             throw iosMultihopError("The saved multihop entry/exit is missing or no longer linked. Choose the graph again.")
@@ -52,7 +52,7 @@ extension RouterVPNModel {
             message = "Multihop disabled. The next Connect uses the selected normal mode."
             return
         }
-        guard ["wg", "shadowsocks", "hysteria2"].contains(exitMode), entryID != exitID,
+        guard ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"].contains(exitMode), entryID != exitID,
               let data = IOSNodeBundleStore.shared.bundleData(containing: exitID, current: bundle) else {
             throw iosMultihopError("Choose two different linked Router VPN nodes and an exit transport.")
         }
@@ -122,6 +122,8 @@ struct IOSMultihopView: View {
                     }
                     Picker("Exit transport", selection: $exitMode) {
                         Text("WireGuard").tag("wg")
+                        Text("AmneziaWG Fast").tag("awg2-fast")
+                        Text("AmneziaWG Strong").tag("awg2-strong")
                         Text("Shadowsocks 2022").tag("shadowsocks")
                         Text("Hysteria2").tag("hysteria2")
                     }
@@ -136,7 +138,7 @@ struct IOSMultihopView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }.disabled(model.profileMutationBlocked)
                 Section("Connection requirements") {
-                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard or native AmneziaWG Fast/Strong entry and a WireGuard, self-contained Shadowsocks or Hysteria2 exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. Additional Start Layers remain separate. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
+                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard or native AmneziaWG Fast/Strong entry and a WireGuard/AmneziaWG, self-contained Shadowsocks or Hysteria2 exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. Additional Start Layers remain separate. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)
