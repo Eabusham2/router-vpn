@@ -30,5 +30,12 @@ python3 "$ROOT/deploy/prepare-mobile-amnezia.py" "$WORK/core"
  cd "$WORK/core"
  go mod tidy
  python3 "$ROOT/deploy/prepare-mobile-amnezia.py" --verify-dependency "$WORK/core"
- go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor -count=2 -timeout=120s -v ./protocol/routervpnamnezia -run 'TestNativeTun|TestActualAmnezia(EntryUDPReturn|NestedReturnBoundaries|ExitOverRetainedAmneziaEntry)$'
+ result=0
+ go test -cpuprofile="$WORK/awg.cpu" -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor -count=2 -timeout=120s -v ./protocol/routervpnamnezia -run 'TestNativeTun|TestActualAmnezia(EntryUDPReturn|NestedReturnBoundaries|ExitOverRetainedAmneziaEntry)$' || result=$?
+ # Function-level CPU attribution contains no generated keys or packet data.
+ # Preserve the test's failure status; diagnostics can never make it pass.
+ if [[ -s "$WORK/awg.cpu" ]]; then
+   go tool pprof -top -nodecount=20 "$WORK/awg.cpu" || true
+ fi
+ exit "$result"
 )
