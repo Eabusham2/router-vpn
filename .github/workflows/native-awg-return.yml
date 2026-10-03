@@ -1,0 +1,43 @@
+name: Native AWG encrypted return path
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/amnezia/**'
+      - 'internal/awgpolicy/**'
+      - 'internal/mobilemultihop/**'
+      - 'deploy/prepare-mobile-amnezia.py'
+      - 'deploy/test_native_awg_return.sh'
+      - '.github/workflows/native-awg-return.yml'
+permissions:
+  contents: read
+concurrency:
+  group: native-awg-return-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  encrypted-return:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Verify captured encrypted entry and nested return paths
+        shell: bash
+        run: |
+          set -o pipefail
+          bash deploy/test_native_awg_return.sh 2>&1 | tee "$RUNNER_TEMP/native-awg-return.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-awg-return-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/native-awg-return.log
+          if-no-files-found: error
+          retention-days: 7

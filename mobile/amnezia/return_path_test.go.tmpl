@@ -1,0 +1,215 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
+	"net"
+	"net/netip"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// Capture only synthetic fixture packet headers and digests, never keys or
+// application data. The untouched production reader still receives each byte.
+type returnObservation struct {
+	mu      sync.Mutex
+	rows    []string
+	packets int
+}
+
+func (o *returnObservation) record(label string, packet []byte) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.packets++
+	if len(o.rows) >= 24 {
+		return
+	}
+	digest := sha256.Sum256(packet)
+	detail := fmt.Sprintf("%s size=%d digest=%x", label, len(packet), digest[:6])
+	if len(packet) >= 28 && packet[0]>>4 == 4 {
+		size := int(packet[0]&15) * 4
+		detail += fmt.Sprintf(" ipv4=%s->%s total=%d proto=%d", net.IP(packet[12:16]), net.IP(packet[16:20]), binary.BigEndian.Uint16(packet[2:4]), packet[9])
+		if packet[9] == 17 && size >= 20 && size+8 <= len(packet) {
+			udp := packet[size:]
+			detail += fmt.Sprintf(" udp=%d->%d length=%d checksum=%04x", binary.BigEndian.Uint16(udp[:2]), binary.BigEndian.Uint16(udp[2:4]), binary.BigEndian.Uint16(udp[4:6]), binary.BigEndian.Uint16(udp[6:8]))
+		}
+	}
+	o.rows = append(o.rows, detail)
+}
+func (o *returnObservation) report(t *testing.T) {
+	t.Helper()
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	t.Log("observed packets", o.packets)
+	for _, row := range o.rows {
+		t.Log(row)
+	}
+}
+
+type observedReturnDevice struct {
+	wg.Device
+	observed *returnObservation
+}
+
+func (d *observedReturnDevice) Write(packets [][]byte, offset int) (int, error) {
+	for _, p := range packets {
+		if offset >= 0 && offset <= len(p) {
+			d.observed.record("decrypted-entry-return", p[offset:])
+		}
+	}
+	return d.Device.Write(packets, offset)
+}
+
+type observedEntryConnection struct {
+	net.Conn
+	observed *returnObservation
+}
+
+func (c *observedEntryConnection) Read(data []byte) (int, error) {
+	n, e := c.Conn.Read(data)
+	if n > 0 {
+		c.observed.record("inner-peer-received", data[:n])
+	}
+	return n, e
+}
+
+type observedEntryDialer struct {
+	entry    *Endpoint
+	target   M.Socksaddr
+	observed *returnObservation
+}
+
+func (d *observedEntryDialer) DialContext(ctx context.Context, network string, target M.Socksaddr) (net.Conn, error) {
+	if network != "udp" || target != d.target {
+		return nil, net.InvalidAddrError("fixture outbound escaped its retained entry")
+	}
+	c, e := d.entry.DialContext(ctx, network, target)
+	if e != nil {
+		return nil, e
+	}
+	return &observedEntryConnection{c, d.observed}, nil
+}
+func (*observedEntryDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, net.ErrClosed
+}
+
+// Isolate forwarding through the first encrypted hop before involving the
+// second handshake. It proves the remote source/port survives the return path.
+func TestActualAmneziaEntryUDPReturn(t *testing.T) {
+	echo, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		data := make([]byte, 2048)
+		for {
+			n, peer, e := echo.ReadFromUDP(data)
+			if e != nil {
+				return
+			}
+			if _, e = echo.WriteToUDP(data[:n], peer); e != nil {
+				return
+			}
+		}
+	}()
+	defer func() { echo.Close(); <-done }()
+	target := M.ParseSocksaddr("192.0.2.1:51820")
+	relay := &nestedExitRelay{target: target, actual: echo.LocalAddr().String()}
+	pair := newActualPairLifecycle(t, nil, relay, false)
+	observation := new(returnObservation)
+	pair.client.stack.Device = &observedReturnDevice{pair.client.stack.Device, observation}
+	if err = pair.client.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	c, err := pair.client.DialContext(ctx, "udp", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	// One bound socket, fixed nonce and target throughout retries; never direct.
+	payload := []byte("entry-return-path-fresh-nonce-validate")
+	reply := make([]byte, len(payload)+1)
+	matched := false
+	for i := 0; i < 24 && ctx.Err() == nil; i++ {
+		if err = c.SetDeadline(time.Now().Add(300 * time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = c.Write(payload); err != nil {
+			break
+		}
+		n, e := c.Read(reply)
+		if e == nil && n == len(payload) && string(reply[:n]) == string(payload) {
+			matched = true
+			break
+		}
+		if e != nil {
+			if timeout, ok := e.(net.Error); !ok || !timeout.Timeout() {
+				err = e
+				break
+			}
+		}
+	}
+	if !matched {
+		observation.report(t)
+		t.Fatalf("encrypted entry UDP return failed: %v; forwarded=%d received=%d", err, relay.packets.Load(), relay.replies.Load())
+	}
+	if relay.packets.Load() == 0 || relay.replies.Load() == 0 || pair.dialer.calls.Load() != 1 {
+		t.Fatal("return-path proof bypassed the captured entry")
+	}
+}
+
+func TestActualAmneziaNestedReturnBoundaries(t *testing.T) {
+	var options Options
+	exit := newActualPairLifecycle(t, func(p *Options) { options = *p }, echoHandler{}, false)
+	if exit.dialer.calls.Load() != 0 {
+		t.Fatal("fixture started a competing direct exit")
+	}
+	if err := exit.client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := M.ParseSocksaddr("192.0.2.1:51820")
+	relay := &nestedExitRelay{target: target, actual: exit.binding.address()}
+	entry := newActualPairLifecycle(t, nil, relay, false)
+	raw, inner := new(returnObservation), new(returnObservation)
+	entry.client.stack.Device = &observedReturnDevice{entry.client.stack.Device, raw}
+	if err := entry.client.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	options.Detour = "entry"
+	options.MTU = 1280
+	dialer := &observedEntryDialer{entry.client, target, inner}
+	client, err := newEndpoint(context.Background(), nil, log.NewNOPFactory().Logger(), "nested-observed", options, dialer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err = client.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	if err = coldUDPReady(&actualPair{client: client}); err != nil {
+		raw.report(t)
+		inner.report(t)
+		t.Log("relay datagrams", relay.packets.Load(), relay.replies.Load())
+		t.Fatal("nested encrypted response did not cross captured boundaries", err)
+	}
+	// Still require real TCP/UDP, both address families, after the diagnostics.
+	for _, network := range []string{"tcp", "udp"} {
+		for _, ip := range []netip.Addr{netip.MustParseAddr("10.78.0.1"), netip.MustParseAddr("fd78:78::1")} {
+			if err = exchange(t, &actualPair{client: client}, network, ip.String()); err != nil {
+				t.Fatal(network, ip, err)
+			}
+		}
+	}
+}
