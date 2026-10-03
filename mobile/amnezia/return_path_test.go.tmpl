@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
 	wg "github.com/sagernet/sing-box/transport/wireguard"
@@ -29,17 +31,39 @@ func (o *returnObservation) record(label string, packet []byte) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.packets++
-	if len(o.rows) >= 24 {
+	if len(o.rows) >= 192 {
 		return
 	}
 	digest := sha256.Sum256(packet)
-	detail := fmt.Sprintf("%s size=%d digest=%x", label, len(packet), digest[:6])
+	detail := fmt.Sprintf("%d %s size=%d digest=%x", time.Now().UnixMilli(), label, len(packet), digest[:6])
 	if len(packet) >= 28 && packet[0]>>4 == 4 {
 		size := int(packet[0]&15) * 4
 		detail += fmt.Sprintf(" ipv4=%s->%s total=%d proto=%d", net.IP(packet[12:16]), net.IP(packet[16:20]), binary.BigEndian.Uint16(packet[2:4]), packet[9])
 		if packet[9] == 17 && size >= 20 && size+8 <= len(packet) {
 			udp := packet[size:]
 			detail += fmt.Sprintf(" udp=%d->%d length=%d checksum=%04x", binary.BigEndian.Uint16(udp[:2]), binary.BigEndian.Uint16(udp[2:4]), binary.BigEndian.Uint16(udp[4:6]), binary.BigEndian.Uint16(udp[6:8]))
+			length := int(binary.BigEndian.Uint16(udp[4:6]))
+			if length >= 8 && length <= len(udp) {
+				payload := sha256.Sum256(udp[8:length])
+				detail += fmt.Sprintf(" payload-digest=%x", payload[:6])
+			}
+		} else if packet[9] == 6 && size >= 20 && size+20 <= len(packet) {
+			tcp := packet[size:]
+			detail += fmt.Sprintf(" tcp=%d->%d flags=%02x seq=%d ack=%d", binary.BigEndian.Uint16(tcp[:2]), binary.BigEndian.Uint16(tcp[2:4]), tcp[13], binary.BigEndian.Uint32(tcp[4:8]), binary.BigEndian.Uint32(tcp[8:12]))
+		}
+	}
+	// Fixture parameters have bounded header ranges and fixed S1/S2/S3/S4.
+	// Report only type/index/counter metadata, never decrypted application data.
+	for index, offset := range []int{56, 48, 24, 32} {
+		if len(packet) < offset+8 {
+			continue
+		}
+		header := binary.LittleEndian.Uint32(packet[offset : offset+4])
+		if header/10000000 == uint32(index+1) {
+			detail += fmt.Sprintf(" awg-type=%d index=%d", index+1, binary.LittleEndian.Uint32(packet[offset+4:offset+8]))
+			if index == 3 && len(packet) >= offset+16 {
+				detail += fmt.Sprintf(" counter=%d", binary.LittleEndian.Uint64(packet[offset+8:offset+16]))
+			}
 		}
 	}
 	o.rows = append(o.rows, detail)
@@ -57,12 +81,13 @@ func (o *returnObservation) report(t *testing.T) {
 type observedReturnDevice struct {
 	wg.Device
 	observed *returnObservation
+	label    string
 }
 
 func (d *observedReturnDevice) Write(packets [][]byte, offset int) (int, error) {
 	for _, p := range packets {
 		if offset >= 0 && offset <= len(p) {
-			d.observed.record("decrypted-entry-return", p[offset:])
+			d.observed.record(d.label, p[offset:])
 		}
 	}
 	return d.Device.Write(packets, offset)
@@ -79,6 +104,11 @@ func (c *observedEntryConnection) Read(data []byte) (int, error) {
 		c.observed.record("inner-peer-received", data[:n])
 	}
 	return n, e
+}
+
+func (c *observedEntryConnection) Write(data []byte) (int, error) {
+	c.observed.record("inner-peer-sent", data)
+	return c.Conn.Write(data)
 }
 
 type observedEntryDialer struct {
@@ -127,7 +157,7 @@ func TestActualAmneziaEntryUDPReturn(t *testing.T) {
 	relay := &nestedExitRelay{target: target, actual: echo.LocalAddr().String()}
 	pair := newActualPairLifecycle(t, nil, relay, false)
 	observation := new(returnObservation)
-	pair.client.stack.Device = &observedReturnDevice{pair.client.stack.Device, observation}
+	pair.client.stack.Device = &observedReturnDevice{pair.client.stack.Device, observation, "decrypted-entry-return"}
 	if err = pair.client.Start(adapter.StartStateStart); err != nil {
 		t.Fatal(err)
 	}
@@ -182,31 +212,55 @@ func TestActualAmneziaNestedReturnBoundaries(t *testing.T) {
 	target := M.ParseSocksaddr("192.0.2.1:51820")
 	relay := &nestedExitRelay{target: target, actual: exit.binding.address()}
 	entry := newActualPairLifecycle(t, nil, relay, false)
-	raw, inner := new(returnObservation), new(returnObservation)
-	entry.client.stack.Device = &observedReturnDevice{entry.client.stack.Device, raw}
+	trace := new(returnObservation)
+	entry.client.stack.Device = &observedReturnDevice{entry.client.stack.Device, trace, "entry-client-plaintext"}
 	if err := entry.client.Start(adapter.StartStateStart); err != nil {
 		t.Fatal(err)
 	}
 	options.Detour = "entry"
 	options.MTU = 1280
-	dialer := &observedEntryDialer{entry.client, target, inner}
+	dialer := &observedEntryDialer{entry.client, target, trace}
 	client, err := newEndpoint(context.Background(), nil, log.NewNOPFactory().Logger(), "nested-observed", options, dialer, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
+	client.stack.Device = &observedReturnDevice{client.stack.Device, trace, "exit-client-plaintext"}
+	// Run before Close clears device ownership, for EVERY failed assertion,
+	// including TCP after a successful UDP readiness probe.
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		trace.report(t)
+		t.Log("relay datagrams", relay.packets.Load(), relay.replies.Load())
+		for name, dev := range map[string]*awg.Device{"entry-client": entry.client.device, "entry-server": entry.reference, "exit-client": client.device, "exit-server": exit.reference} {
+			if dev == nil {
+				continue
+			}
+			state, stateErr := dev.IpcGet()
+			if stateErr != nil {
+				t.Log(name, "state unavailable")
+				continue
+			}
+			for _, line := range strings.Split(state, "\n") {
+				if strings.HasPrefix(line, "last_handshake_") || strings.HasPrefix(line, "rx_bytes=") || strings.HasPrefix(line, "tx_bytes=") {
+					t.Log(name, line)
+				}
+			}
+		}
+	}()
 	if err = client.Start(adapter.StartStateStart); err != nil {
 		t.Fatal(err)
 	}
 	if err = coldUDPReady(&actualPair{client: client}); err != nil {
-		raw.report(t)
-		inner.report(t)
-		t.Log("relay datagrams", relay.packets.Load(), relay.replies.Load())
 		t.Fatal("nested encrypted response did not cross captured boundaries", err)
 	}
+	trace.record("phase-udp-ready", nil)
 	// Still require real TCP/UDP, both address families, after the diagnostics.
 	for _, network := range []string{"tcp", "udp"} {
 		for _, ip := range []netip.Addr{netip.MustParseAddr("10.78.0.1"), netip.MustParseAddr("fd78:78::1")} {
+			trace.record("phase-"+network+"-"+ip.String(), nil)
 			if err = exchange(t, &actualPair{client: client}, network, ip.String()); err != nil {
 				t.Fatal(network, ip, err)
 			}
