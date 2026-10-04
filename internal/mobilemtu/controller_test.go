@@ -129,6 +129,28 @@ func (o *testOwner) DialThroughTunnel(ctx context.Context, expected State, netwo
 	}()
 	return c, nil
 }
+
+// Keep completion validation strict while distinguishing an intentional
+// request cancellation from a complete-but-malformed upload. This is a test
+// server boundary; production transfer validation is unchanged.
+func readFixtureUpload(r *http.Request) (int64, error) {
+	const size = 256 << 10
+	if r.ContentLength != size || len(r.TransferEncoding) != 0 {
+		return 0, errors.New("upload declaration not bounded")
+	}
+	n, err := io.Copy(io.Discard, io.LimitReader(r.Body, size+1))
+	if n > size {
+		return n, errors.New("upload payload exceeds declared bound")
+	}
+	if cancelled := r.Context().Err(); cancelled != nil {
+		return n, cancelled
+	}
+	if err != nil || n != size {
+		return n, fmt.Errorf("complete upload payload not bounded: bytes=%d error=%v", n, err)
+	}
+	return n, nil
+}
+
 func fixtureController(t *testing.T) (*Controller, *testOwner, *testPreferences) {
 	t.Helper()
 	owner := &testOwner{state: State{Session: "native-encrypted-owner", Path: "physical-WiFi", Interface: "native-interface-0", MTU: 1380}}
@@ -161,9 +183,16 @@ func fixtureController(t *testing.T) (*Controller, *testOwner, *testPreferences)
 			w.Header().Set("X-Routervpn-Benchmark-Bytes", strconv.Itoa(size))
 			w.Write(make([]byte, size))
 		case "/api/benchmark/upload":
-			n, err := io.Copy(io.Discard, io.LimitReader(r.Body, (1<<20)+1))
-			if err != nil || n != 256<<10 {
-				t.Error("upload payload not bounded")
+			n, err := readFixtureUpload(r)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				// Client cancellation intentionally interrupts the body. Never
+				// acknowledge that partial upload as a successful measurement.
+				return
+			}
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
 			}
 			json.NewEncoder(w).Encode(map[string]any{"ok": true, "direction": "upload", "bytes": n, "server_receive_ms": 1, "peer": "10.77.0.2", "proof": "authenticated tunnel-peer private throughput sink"})
 		default:
