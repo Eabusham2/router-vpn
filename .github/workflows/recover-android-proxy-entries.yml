@@ -1,0 +1,93 @@
+name: Recover tested Android proxy entries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: recover-android-proxy-entries
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.repository == 'Eabusham2/router-vpn' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GOMAXPROCS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Verify exact base and apply the saved source delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 85ae9e7e4982380e8348f7f9fb8f026f400783d3
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, shutil, subprocess, tempfile
+          raw = subprocess.check_output(['gh','api','repos/Eabusham2/router-vpn/git/blobs/af46649c086b92cd5d2b020c0cc91e5eb9a6b1aa'])
+          blob = json.loads(raw)
+          packed = base64.b64decode(''.join(blob['content'].split()), validate=True)
+          assert len(packed) == 7756
+          assert hashlib.sha1(b'blob 7756\0' + packed).hexdigest() == 'af46649c086b92cd5d2b020c0cc91e5eb9a6b1aa'
+          decoder = lzma.LZMADecompressor(memlimit=64*1024*1024)
+          patch = decoder.decompress(packed, max_length=64*1024)
+          assert decoder.eof and not decoder.unused_data and len(patch) == 32166
+          assert hashlib.sha256(patch).hexdigest() == '19d7c6816042414dcd0bff53da5de3ae5a4556abfb9d7dd4e9ac1f423ca54cc9'
+          subprocess.run(['git','apply','--unidiff-zero','--index','--check','-'],input=patch,check=True)
+          subprocess.run(['git','apply','--unidiff-zero','--index','-'],input=patch,check=True)
+          # Compare the entire staged project to the tested tree, excluding only
+          # this temporary publication workflow. No recovery input is executable.
+          with tempfile.TemporaryDirectory() as td:
+              index = pathlib.Path(td)/'index'
+              source = subprocess.check_output(['git','rev-parse','--git-path','index'],text=True).strip()
+              shutil.copyfile(source,index)
+              env = dict(os.environ,GIT_INDEX_FILE=str(index))
+              subprocess.run(['git','update-index','--force-remove','.github/workflows/recover-android-proxy-entries.yml'],env=env,check=True)
+              tree = subprocess.check_output(['git','write-tree'],env=env,text=True).strip()
+              assert tree == 'a43b3dc0d00b3d13eb996b56924e84702f402fb0', tree
+          print('Exact tested Android source tree restored; unrelated files preserved.')
+          PY
+      - name: Run shipping Java and shared Go regression gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_JSON_JAR="$RUNNER_TEMP/android-json.jar"
+          curl --fail --location --max-time 60 -o "$ANDROID_JSON_JAR" https://repo.maven.apache.org/maven2/com/vaadin/external/google/android-json/0.0.20131108.vaadin1/android-json-0.0.20131108.vaadin1.jar
+          echo "dfb7bae2f404cfe0b72b4d23944698cb716b7665171812a0a4d0f5926c0fac79  $ANDROID_JSON_JAR" | sha256sum --check
+          python3 android/test_android_multihop_graph.py
+          python3 android/test_android_multihop_modes.py
+          python3 android/test_android_multihop_contract.py
+          python3 android/test_android_session_identity_contract.py
+          python3 android/test_android_java_syntax.py
+          go test -race ./...
+          go vet ./...
+          git diff --check --cached
+          git diff --exit-code
+      - name: Commit tested source and fast-forward main without rewriting history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          test "$(git diff --cached --name-only | wc -l)" -eq 11
+          git config user.name 'Eabusham2'
+          git config user.email '50059804+Eabusham2@users.noreply.github.com'
+          git commit -m 'Wire Android native proxy multihop entries through saved and live sessions'
+          git push origin HEAD:refs/heads/main
+          echo "PUBLISHED_COMMIT=$(git rev-parse HEAD)"
+          echo 'The temporary recovery workflow can now be removed through the normal GitHub connector.'
