@@ -11,6 +11,29 @@ struct IOSRuntimeSelection: Hashable {
     let logicalModeID: String
     let rawProfileID: String
     let files: [String: Data]
+    // Capture before suspension. A label must not read mutable saved settings
+    // after an asynchronous connection attempt has selected another graph.
+    let multihopEntryMode: String?
+
+    init(engine: IOSRuntimeEngine, logicalModeID: String, rawProfileID: String,
+         files: [String: Data], multihopEntryMode: String? = nil) {
+        self.engine = engine
+        self.logicalModeID = logicalModeID
+        self.rawProfileID = rawProfileID
+        self.files = files
+        self.multihopEntryMode = multihopEntryMode
+    }
+
+    var displayName: String {
+        if engine == .multihop {
+            let entry = multihopEntryMode ?? "Unspecified"
+            return "\(entry) entry → \(rawProfileID) exit"
+        }
+        if engine == .libbox {
+            return files["xray.json"] != nil ? "Xray 26.7.11 + Libbox 1.14.1" : "Libbox 1.14.1"
+        }
+        return rawProfileID.hasPrefix("awg2") ? "AmneziaWG native" : "WireGuardKit"
+    }
 
     var configText: String? {
         guard let data = files["sing-box.json"] else { return nil }

@@ -87,7 +87,7 @@ final class RouterVPNModel: ObservableObject {
         case .wireGuard:
             return selection.rawProfileID.hasPrefix("awg2") ? "AmneziaWG • native" : "WireGuardKit"
         case .libbox: return selection.files["xray.json"] != nil ? "Xray + Libbox • \(selection.rawProfileID)" : "Libbox • \(selection.rawProfileID)"
-        case .multihop: return "Multihop • WireGuard → \(selection.rawProfileID)"
+        case .multihop: return "Multihop • \(selection.displayName)"
         }
     }
 
@@ -238,7 +238,7 @@ final class RouterVPNModel: ObservableObject {
                     throw IOSRuntimeSelectionError.unsupportedMode("Choose a valid multihop graph or disable multihop before selecting an individual raw mode.")
                 }
                 _ = try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: mode)
-                selections = [IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: mode, files: [:])]
+                selections = [IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: mode, files: [:], multihopEntryMode: profile.multihopEntryMode ?? "wg")]
             } else if let rawProfileID {
                 selections = [try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawProfileID)]
             } else if auto {
@@ -455,9 +455,7 @@ final class RouterVPNModel: ObservableObject {
 
     private func modeName(_ id: String) -> String { logicalModes.first(where: { $0.id == id })?.name ?? id }
     private func engineName(_ selection: IOSRuntimeSelection) -> String {
-        if selection.engine == .multihop { return "\(selectedProfile?.multihopEntryMode ?? "wg") entry → \(selection.rawProfileID) exit" }
-        if selection.engine == .libbox { return selection.files["xray.json"] != nil ? "Xray 26.7.11 + Libbox 1.14.1" : "Libbox 1.14.1" }
-        return selection.rawProfileID.hasPrefix("awg2") ? "AmneziaWG native" : "WireGuardKit"
+        selection.displayName
     }
 
     func refreshTunnelStatus() async {
