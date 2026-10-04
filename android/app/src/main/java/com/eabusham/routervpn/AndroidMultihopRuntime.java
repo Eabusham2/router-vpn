@@ -82,7 +82,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         connect(entry,exit,exitMode,execution,"wg",callback);
     }
     synchronized void connect(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String entryMode, Callback callback) {
-        if (!NativeSingBoxController.nativeWireGuardFamily(entryMode)) { callback.finished(false,"Choose an exact native entry transport.");return; }
+        if (!NativeSingBoxController.nativeMultihopEntry(entryMode)) { callback.finished(false,"Choose an exact native entry transport.");return; }
         if(!java.util.Arrays.asList("local","server","auto").contains(execution)){callback.finished(false,"Invalid multihop execution.");return;}
         if (closed.get()) { callback.finished(false, "Android multihop runtime is closed."); return; }
         reconcileRuntimeLocked();
@@ -274,7 +274,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
 
     private synchronized void restoreFromPersistedState() {
         AndroidHomeStateStore.Snapshot state = AndroidHomeStateStore.snapshot(context);
-        if (state.connected && "multihop".equals(state.logicalMode) && !state.activeEntryId.isEmpty() && !state.activeExitId.isEmpty() && NativeSingBoxController.nativeWireGuardFamily(state.activeEntryMode) && "UP".equals(singBox.getState())) {
+        if (state.connected && "multihop".equals(state.logicalMode) && !state.activeEntryId.isEmpty() && !state.activeExitId.isEmpty() && NativeSingBoxController.nativeMultihopEntry(state.activeEntryMode) && "UP".equals(singBox.getState())) {
             connected = true;
             transitioning = false;
             activeEntryId = state.activeEntryId;

@@ -214,7 +214,7 @@ public final class ProductActivity extends Activity {
 
     private void chooseMultihopExecution(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode){
         new AlertDialog.Builder(this).setTitle("Entry transport")
-            .setItems(new String[]{"WireGuard","AmneziaWG Fast","AmneziaWG Strong"},(dialog,index)->chooseMultihopExecution(entry,exit,mode,new String[]{"wg","awg2-fast","awg2-strong"}[index]))
+            .setItems(new String[]{"WireGuard","AmneziaWG Fast","AmneziaWG Strong","Shadowsocks","Hysteria2"},(dialog,index)->chooseMultihopExecution(entry,exit,mode,new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"}[index]))
             .setNegativeButton("Cancel",null).show();
     }
     private void chooseMultihopExecution(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String entryMode){

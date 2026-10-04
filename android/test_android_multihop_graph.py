@@ -15,7 +15,7 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 JAVA=ROOT/'android/app/src/main/java/com/eabusham/routervpn'
 GO_HELPER=r'''package main
-import("encoding/json";"fmt";"os";"io";"router-vpn/internal/mobilemultihop";"router-vpn/internal/mobileperf")
+import("crypto/ecdsa";"crypto/elliptic";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"time";"encoding/json";"fmt";"os";"io";"router-vpn/internal/mobilemultihop";"router-vpn/internal/mobileperf")
 func main(){
  var r struct{Operation string;Config string;Policy string}
  if err:=json.NewDecoder(io.LimitReader(os.Stdin,8*1024*1024)).Decode(&r);err!=nil{fmt.Fprintln(os.Stderr,"invalid request");os.Exit(2)}
@@ -25,6 +25,13 @@ func main(){
  case "exit":value,err=mobilemultihop.WireGuardExitConfig(r.Config,r.Policy)
  case "awg-parse":value,err=mobilemultihop.CompileAmneziaProfile(r.Config,r.Policy)
  case "awg-exit":value,err=mobilemultihop.AmneziaExitConfig(r.Config,r.Policy)
+ case "test-certificate":
+  var key *ecdsa.PrivateKey; key,err=ecdsa.GenerateKey(elliptic.P256(),rand.Reader)
+  if err==nil{template:=&x509.Certificate{SerialNumber:big.NewInt(1),Subject:pkix.Name{CommonName:r.Config},DNSNames:[]string{r.Config},NotBefore:time.Now().Add(-time.Hour),NotAfter:time.Now().Add(time.Hour),IsCA:true,BasicConstraintsValid:true,KeyUsage:x509.KeyUsageCertSign|x509.KeyUsageDigitalSignature};var der []byte;der,err=x509.CreateCertificate(rand.Reader,template,template,&key.PublicKey,key);if err==nil{value=string(pem.EncodeToMemory(&pem.Block{Type:"CERTIFICATE",Bytes:der}))}}
+ case "plan":
+  var controller *mobilemultihop.Controller;controller,err=mobilemultihop.New(r.Config,r.Policy);if err==nil{value=controller.Config();err=controller.Close()}
+ case "proxy-entry":value,err=mobilemultihop.CompileProxyEntry(r.Config,r.Policy)
+ case "mtu-profile":value,err=mobilemultihop.MultihopMTUProfile(r.Config,r.Policy)
  case "mtu":value,err=mobilemultihop.ApplyMTUPolicy(r.Config,r.Policy)
  case "lan":value,err=mobilemultihop.ApplyLANPolicy(r.Config,r.Policy)
  case "performance":value,err=mobileperf.Apply(r.Config,r.Policy)
@@ -91,6 +98,10 @@ public final class Libbox {
  public static String routerWireGuardExitConfig(String c,String p)throws Exception{return call("exit",c,p);}
  public static String routerCompileAmneziaProfile(String c,String p)throws Exception{return call("awg-parse",c,p);}
  public static String routerAmneziaExitConfig(String c,String p)throws Exception{return call("awg-exit",c,p);}
+ public static String testCertificate(String name)throws Exception{return call("test-certificate",name,"");}
+ public static String testPlan(String c,String p)throws Exception{return call("plan",c,p);}
+ public static String routerCompileProxyEntry(String c,String p)throws Exception{return call("proxy-entry",c,p);}
+ public static String routerMultihopMTUProfile(String c,String p)throws Exception{return call("mtu-profile",c,p);}
  public static String routerApplyMultihopMTUPolicy(String c,String p)throws Exception{return call("mtu",c,p);}
  public static String routerApplyMultihopLANPolicy(String c,String p)throws Exception{return call("lan",c,p);}
  public static String routerApplyPerformancePolicy(String c,String p)throws Exception{return call("performance",c,p);}
@@ -277,6 +288,103 @@ public final class MultihopGraphHarness {
    check(sessions(app)==before,"read-only mode listing staged a native session");
   }
  }
+
+ static JSONObject proxyBundle(char ch,String mode,String certificate)throws Exception {
+  JSONObject source=awgBundle(ch);
+  JSONObject outbound=new JSONObject().put("tag","proxy").put("type",mode).put("server",ch=='a'?"192.0.2.11":"198.51.100.12").put("server_port",8443)
+   .put("password",ch=='a'?"entry-only-secret":"exit-only-secret");
+  if(mode.equals("shadowsocks"))outbound.put("method","chacha20-ietf-poly1305");
+  else outbound.put("tls",new JSONObject().put("enabled",true).put("server_name",ch=='a'?"entry.example.test":"exit.example.test").put("certificate_path","trust.pem"));
+  JSONObject config=new JSONObject().put("log",new JSONObject().put("level","warn"))
+   .put("inbounds",new JSONArray().put(new JSONObject().put("type","tun").put("tag","tun-in").put("address",new JSONArray().put("172.29.94.1/30").put("fd29:94::1/126")).put("auto_route",true).put("strict_route",true).put("mtu",1280)))
+   .put("outbounds",new JSONArray().put(outbound))
+   .put("dns",new JSONObject().put("servers",new JSONArray().put(new JSONObject().put("type","udp").put("tag","selected-dns").put("server","192.168.50.133").put("detour","proxy"))))
+   .put("route",new JSONObject().put("final","proxy").put("auto_detect_interface",true).put("rules",new JSONArray().put(new JSONObject().put("protocol","dns").put("action","hijack-dns"))));
+  JSONObject files=new JSONObject().put("sing-box.json",Base64.getEncoder().encodeToString(config.toString().getBytes(StandardCharsets.UTF_8)));
+  if(mode.equals("hysteria2"))files.put("trust.pem",Base64.getEncoder().encodeToString(certificate.getBytes(StandardCharsets.UTF_8)));
+  source.getJSONObject("profiles").put(mode,files);
+  source.getJSONArray("modes").put(new JSONObject().put("id",mode).put("name",mode));
+  return source;
+ }
+ static JSONObject byTag(JSONObject graph,String tag)throws Exception {
+  for(String list:new String[]{"endpoints","outbounds"}){
+   JSONArray entries=graph.optJSONArray(list);if(entries==null)continue;
+   for(int i=0;i<entries.length();i++)if(entries.getJSONObject(i).optString("tag").equals(tag))return entries.getJSONObject(i);
+  }
+  throw new AssertionError("Missing graph owner: "+tag);
+ }
+ static void proxyRejected(Path dir,JSONObject a,JSONObject b,String entryMode,String exitMode)throws Exception {
+  Path app=Files.createTempDirectory(dir,"rejected-proxy-");Context context=new Context(app.toFile());
+  AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
+  File entry=save(dir,a),exit=save(dir,b);byte[] beforeA=Files.readAllBytes(entry.toPath()),beforeB=Files.readAllBytes(exit.toPath());
+  boolean rejected=false;try{builder.prepare(entry,exit,exitMode,"auto",entryMode);}catch(Exception expected){rejected=true;}
+  check(rejected,"invalid proxy entry was accepted");check(sessions(app)==0,"invalid proxy entry staged private session state");
+  check(Arrays.equals(beforeA,Files.readAllBytes(entry.toPath()))&&Arrays.equals(beforeB,Files.readAllBytes(exit.toPath())),"rejected proxy graph changed source credentials");
+ }
+ static void proxyEntryChecks(Path dir)throws Exception {
+  String entryCert=io.nekohasekai.libbox.Libbox.testCertificate("entry.example.test"),exitCert=io.nekohasekai.libbox.Libbox.testCertificate("exit.example.test");
+  for(String entryMode:new String[]{"shadowsocks","hysteria2"})for(String exitMode:new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"}) {
+   Path app=Files.createTempDirectory(dir,"proxy-app-");Context context=new Context(app.toFile());
+   AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
+   JSONObject a=proxyBundle('a',entryMode,entryCert),b=NativeSingBoxController.nativeWireGuardFamily(exitMode)?awgBundle('b'):proxyBundle('b',exitMode,exitCert);
+   profile(a).put("mtu_policy","fixed").put("manual_mtu",1500).put("kill_switch",true);
+   profile(b).put("mtu_policy","auto").put("effective_mtu",9000);
+   File entry=save(dir,a),exit=save(dir,b);byte[] beforeA=Files.readAllBytes(entry.toPath()),beforeB=Files.readAllBytes(exit.toPath());
+   for(String execution:new String[]{"local","server","auto"}) {
+    AndroidMultihopController.Prepared result=builder.prepare(entry,exit,exitMode,execution,entryMode);
+    Path session=app.resolve("layered-sessions").resolve(result.session.sessionId);
+    JSONObject graph=new JSONObject(Files.readString(session.resolve("sing-box.json"))),meta=new JSONObject(Files.readString(session.resolve("routervpn-multihop.json"))),mtu=new JSONObject(Files.readString(session.resolve("routervpn-mtu.json")));
+    JSONObject first=byTag(graph,"entry-wg"),last=byTag(graph,"proxy"),privateProxy=byTag(graph,"entry-private");
+    check(first.getString("type").equals(entryMode)&&first.getString("password").equals("entry-only-secret"),"entry lost its exact native transport or credential");
+    check(!first.has("detour")&&!first.has("mtu"),"proxy entry gained a fake packet interface or upstream bypass");
+    check(last.getString("detour").equals("entry-wg")&&privateProxy.getString("detour").equals("entry-wg"),"exit/private proof sockets do not traverse entry");
+    check(graph.getJSONArray("endpoints").length()==(NativeSingBoxController.nativeWireGuardFamily(exitMode)?1:0),"proxy entry staged an extra native packet endpoint");
+    check(graph.getJSONArray("inbounds").length()==3&&graph.getJSONArray("inbounds").getJSONObject(0).getString("type").equals("tun"),"proxy entry did not retain one system TUN plus two proof lanes");
+    check(graph.getJSONArray("inbounds").getJSONObject(1).getInt("listen_port")==1098&&graph.getJSONArray("inbounds").getJSONObject(2).getInt("listen_port")==1099,"separate entry/exit measurement ports collapsed");
+    check(graph.getJSONArray("inbounds").getJSONObject(0).getInt("mtu")==1500,"entry fixed MTU was overwritten by exit Auto");
+    check(mtu.getString("mtu_policy").equals("fixed")&&mtu.getInt("manual_mtu")==1500&&mtu.getString("node_proof_id").equals(b.getString("nodeProofId")),"optimizer metadata lost fixed shared TUN or selected exit proof");
+    check(meta.getString("entry_mode").equals(entryMode)&&meta.getString("exit_mode").equals(exitMode)&&meta.getString("execution").equals(execution),"frozen transport/execution identity drifted");
+    check(meta.getString("entry_node_id").equals(a.getString("nodeProofId"))&&meta.getString("exit_node_id").equals(b.getString("nodeProofId")),"node proof ownership collapsed");
+    check(Files.exists(session.resolve(AndroidKillSwitchPolicy.SESSION_MARKER))&&!Files.exists(session.resolve("wg.conf"))&&!Files.exists(session.resolve("awg.conf")),"strict policy or single-VPN staging ownership lost");
+    if(NativeSingBoxController.nativeWireGuardFamily(exitMode)){
+     check(last.getInt("mtu")==1500,"packet exit ignored fixed shared TUN policy");
+     check(last.getJSONArray("peers").getJSONObject(0).getString("public_key").equals(key(exitMode.equals("wg")?'b':'g')),"exit peer key came from the entry");
+     if(!exitMode.equals("wg"))check(last.getJSONObject("amnezia").length()==11&&last.getJSONObject("amnezia").getString("s4").equals(exitMode.equals("awg2-strong")?"80":"32"),"AWG exit strength lost through proxy entry");
+    }else check(last.getString("type").equals(exitMode)&&last.getString("password").equals("exit-only-secret"),"proxy exit borrowed entry credentials");
+    if(entryMode.equals("hysteria2"))check(!first.getJSONObject("tls").has("certificate_path")&&first.getJSONObject("tls").getJSONArray("certificate").getString(0).equals(entryCert),"entry TLS did not retain its own inlined trust asset");
+    if(exitMode.equals("hysteria2"))check(Files.readString(session.resolve("trust.pem")).equals(exitCert)&&last.getJSONObject("tls").getString("certificate_path").equals("trust.pem"),"entry certificate overwrote exit same-name trust asset");
+    else check(!Files.exists(session.resolve("trust.pem")),"entry-only certificate leaked into exit files");
+    JSONArray dns=graph.getJSONObject("dns").getJSONArray("servers");for(int i=0;i<dns.length();i++)check(dns.getJSONObject(i).getString("detour").equals("proxy"),"DNS escaped the selected exit");
+    JSONObject planned=new JSONObject(io.nekohasekai.libbox.Libbox.testPlan(graph.toString(),meta.toString()));
+    check(byTag(planned,"entry-wg").toString().equals(first.toString()),"Local/Server/Auto compiler changed entry credential ownership");
+    check(byTag(planned,"routervpn-execution-local").getString("detour").equals("entry-wg"),"local candidate bypasses entry");
+    check(byTag(planned,"routervpn-execution-server").getString("detour").equals("entry-wg"),"server candidate bypasses entry");
+    check(byTag(planned,"proxy").getString("type").equals("selector"),"execution is not owned by native selector");
+    String fixtures=System.getenv("ROUTERVPN_ANDROID_GRAPH_FIXTURES");
+    if(fixtures!=null&&!fixtures.isEmpty()){
+     Path out=Path.of(fixtures).resolve(entryMode+"-"+exitMode+"-"+execution);Files.createDirectories(out);
+     Files.writeString(out.resolve("sing-box.json"),graph.toString());Files.writeString(out.resolve("planned.json"),planned.toString());
+     if(exitMode.equals("hysteria2"))Files.writeString(out.resolve("trust.pem"),exitCert);
+    }
+   }
+   check(Arrays.equals(beforeA,Files.readAllBytes(entry.toPath()))&&Arrays.equals(beforeB,Files.readAllBytes(exit.toPath())),"proxy graph preparation mutated private source bundles");
+   JSONObject conflict=new JSONObject(b.toString());profile(conflict).put("mtu_policy","fixed").put("manual_mtu",1400);proxyRejected(dir,a,conflict,entryMode,exitMode);
+  }
+  for(String mode:new String[]{"shadowsocks","hysteria2"}) {
+   JSONObject a=proxyBundle('a',mode,entryCert),b=awgBundle('b');
+   for(String kind:new String[]{"detour","network","server","mode","routing","helper","missing"}) {
+    JSONObject bad=new JSONObject(a.toString()),files=bad.getJSONObject("profiles").getJSONObject(mode);
+    JSONObject config=new JSONObject(new String(Base64.getDecoder().decode(files.getString("sing-box.json")),StandardCharsets.UTF_8)),out=config.getJSONArray("outbounds").getJSONObject(0);
+    if(kind.equals("detour"))out.put("detour","bypass");else if(kind.equals("network"))out.put("network","tcp");else if(kind.equals("server"))out.put("server","unowned.example.test");else if(kind.equals("mode"))out.put("type","socks");else if(kind.equals("routing"))config.getJSONObject("route").put("rules",new JSONArray().put(new JSONObject().put("ip_is_private",true).put("outbound","direct")));else if(kind.equals("helper"))files.put("xray.json","e30=");
+    files.put("sing-box.json",Base64.getEncoder().encodeToString(config.toString().getBytes(StandardCharsets.UTF_8)));
+    if(kind.equals("missing"))bad.getJSONObject("profiles").remove(mode);
+    proxyRejected(dir,bad,b,mode,"wg");
+   }
+   io.nekohasekai.libbox.Libbox.rejectConfig=true;
+   try{proxyRejected(dir,a,b,mode,"wg");}finally{io.nekohasekai.libbox.Libbox.rejectConfig=false;}
+  }
+ }
+
  static void directChecks(Context context,Path dir,Path app)throws Exception {
   NativeSingBoxController nativeWG=new NativeSingBoxController(context);
   JSONObject source=bundle('b');profile(source).put("effective_mtu",9000).put("mtu_policy","auto");
@@ -402,7 +510,8 @@ public final class MultihopGraphHarness {
   awgChecks(context,dir,app);
   awgEntryChecks(context,dir);
   awgExitChecks(dir);
-  System.out.println("Android shipping single/multihop WG compiler: PASS ("+checks+" checks; real Go policy, Android handles doubled)");
+  proxyEntryChecks(dir);
+  System.out.println("Android shipping native/proxy multihop compiler: PASS ("+checks+" checks; real Go policy, Android handles doubled)");
  }
 }
 '''

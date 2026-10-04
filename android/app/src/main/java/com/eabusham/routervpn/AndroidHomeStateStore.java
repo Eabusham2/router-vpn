@@ -55,7 +55,7 @@ final class AndroidHomeStateStore {
         return beginMultihop(context,entryId,exitId,runtimeMode,"wg");
     }
     static String beginMultihop(Context context, String entryId, String exitId, String runtimeMode, String entryMode) {
-        if (!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(entryMode)) throw new IllegalArgumentException("Invalid live entry transport.");
+        if (!java.util.Arrays.asList("wg","awg2-fast","awg2-strong","shadowsocks","hysteria2").contains(entryMode)) throw new IllegalArgumentException("Invalid live entry transport.");
         String session = UUID.randomUUID().toString();
         SharedPreferences.Editor e = clearExternal(baseSession(context, session, "multihop", runtimeMode, entryMode.equals("wg") ? "wg" : "awg"));
         e.putString("active_node_id", clean(exitId)).putString("active_entry_id", clean(entryId)).putString("active_entry_mode",entryMode).putString("active_exit_id", clean(exitId)).apply();
@@ -80,7 +80,7 @@ final class AndroidHomeStateStore {
         connectedMultihop(context,entryId,exitId,runtimeMode,"wg");
     }
     static void connectedMultihop(Context context, String entryId, String exitId, String runtimeMode, String entryMode) {
-        if (!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(entryMode)) throw new IllegalArgumentException("Invalid live entry transport.");
+        if (!java.util.Arrays.asList("wg","awg2-fast","awg2-strong","shadowsocks","hysteria2").contains(entryMode)) throw new IllegalArgumentException("Invalid live entry transport.");
         SharedPreferences p = prefs(context); String session = existingOrNewSession(p);
         SharedPreferences.Editor e = clearExternal(p.edit());
         e.putString("session_id", session).putString("phase", "connected").putString("logical_mode", "multihop").putString("runtime_mode", clean(runtimeMode)).putString("actual_base", entryMode.equals("wg") ? "wg" : "awg").putString("active_node_id", clean(exitId)).putString("fallback", "").putString("warning", "").putString("path_proof", "passed").putString("active_entry_id", clean(entryId)).putString("active_entry_mode",entryMode).putString("active_exit_id", clean(exitId)).putBoolean("connected", true).apply();

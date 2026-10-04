@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Builds one real Android VpnService graph: standard WireGuard entry endpoint ->
+ * Builds one Android VpnService graph: native WG/AWG or encrypted proxy entry ->
  * independent WireGuard endpoint or Shadowsocks/Hysteria2 exit -> Internet.
  *
  * Pinned sing-box 1.14.1 resolves DialerOptions.detour through OutboundManager,
@@ -102,7 +102,7 @@ final class AndroidMultihopController {
         return prepare(entryBundle, exitBundle, exitMode, execution, "wg");
     }
     Prepared prepare(File entryBundle, File exitBundle, String exitMode, String execution, String entryMode) throws Exception {
-        if (!NativeSingBoxController.nativeWireGuardFamily(entryMode)) throw new IllegalArgumentException("Choose the exact native entry transport.");
+        if (!NativeSingBoxController.nativeMultihopEntry(entryMode)) throw new IllegalArgumentException("Choose the exact native entry transport.");
         if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
         if (entryBundle == null || exitBundle == null) throw new IllegalArgumentException("Choose both an entry and an exit node.");
         if (entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())) throw new IllegalArgumentException("Entry and exit must be different stored nodes.");
@@ -115,11 +115,22 @@ final class AndroidMultihopController {
         if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
         if (entryIdentity.isEmpty() || exitIdentity.isEmpty()) throw new IllegalArgumentException("Both multihop nodes need paired identities.");
         requireOwnedPolicies(entry); requireOwnedPolicies(exit);
-        String entryText = readNativeText(entry, entryMode);
-        String nativeEntry = "wg".equals(entryMode)
-                ? io.nekohasekai.libbox.Libbox.routerCompileWireGuardProfile(entryText, entryIdentity)
-                : io.nekohasekai.libbox.Libbox.routerCompileAmneziaProfile(entryText, entryIdentity);
-        JSONObject wg = new JSONObject(nativeEntry).getJSONObject("endpoint").put("tag", "entry-wg");
+        boolean packetEntry = NativeSingBoxController.nativeWireGuardFamily(entryMode);
+        JSONObject wg;
+        if (packetEntry) {
+            String entryText = readNativeText(entry, entryMode);
+            String nativeEntry = "wg".equals(entryMode)
+                    ? io.nekohasekai.libbox.Libbox.routerCompileWireGuardProfile(entryText, entryIdentity)
+                    : io.nekohasekai.libbox.Libbox.routerCompileAmneziaProfile(entryText, entryIdentity);
+            wg = new JSONObject(nativeEntry).getJSONObject("endpoint");
+        } else {
+            // Consume only this entry's selected profile. The shared compiler
+            // embeds its owned TLS certificate, never the exit's same-name file.
+            wg = new JSONObject(io.nekohasekai.libbox.Libbox.routerCompileProxyEntry(
+                    requiredProfile(entry, entryMode).toString(), entryMode));
+        }
+        // Keep the existing proof/measurement lane identity for either transport.
+        wg.put("tag", "entry-wg");
         EntryPrivate entryPrivate = parseEntryPrivate(entry);
         JSONObject exitProfile;
         JSONObject config;
@@ -139,7 +150,7 @@ final class AndroidMultihopController {
             if (rawConfig.length == 0 || rawConfig.length > MAX_CONFIG) throw new IllegalStateException("Exit sing-box config size is invalid.");
             config = new JSONObject(strictUTF8(rawConfig));
         }
-        makeMultihopConfig(config, wg, entryPrivate, exitMode);
+        makeMultihopConfig(config, wg, entryPrivate, exitMode, packetEntry);
         NativeSingBoxController.applySelectedDns(exit, config);
         JSONObject lanProfiles=new JSONObject().put("entry",selectedRouterProfile(entry)).put("exit",selectedRouterProfile(exit));
         String sized=io.nekohasekai.libbox.Libbox.routerApplyMultihopMTUPolicy(config.toString(),lanProfiles.toString());
@@ -193,7 +204,8 @@ final class AndroidMultihopController {
                 if(privateMetadata.length>16384)throw new IllegalArgumentException("Multihop metadata exceeds the safety bound.");
                 writeFile(new File(session,"routervpn-multihop.json"),privateMetadata);
             }
-                JSONObject mtuProfile=new JSONObject(selectedRouterProfile(exit).toString());
+                JSONObject mtuProfile=new JSONObject(io.nekohasekai.libbox.Libbox.routerMultihopMTUProfile(
+                        config.toString(), lanProfiles.toString()));
                 mtuProfile.put("node_proof_id",exitIdentity);
                 byte[] mtuBytes=mtuProfile.toString().getBytes(StandardCharsets.UTF_8);
                 if(mtuBytes.length>256*1024)throw new IllegalStateException("Captured MTU metadata exceeds its bound.");
@@ -209,7 +221,7 @@ final class AndroidMultihopController {
         }
     }
 
-    private static void makeMultihopConfig(JSONObject config, JSONObject wg, EntryPrivate entryPrivate, String exitMode) throws Exception {
+    private static void makeMultihopConfig(JSONObject config, JSONObject wg, EntryPrivate entryPrivate, String exitMode, boolean packetEntry) throws Exception {
         JSONArray existingEndpoints = config.optJSONArray("endpoints");
         boolean wireGuardExit = NativeSingBoxController.nativeWireGuardFamily(exitMode);
         if (config.has("endpoints") && existingEndpoints == null) throw new IllegalStateException("Malformed exit endpoints.");
@@ -258,11 +270,11 @@ final class AndroidMultihopController {
         for (String key:new String[]{"detour","bind_interface","inet4_bind_address","inet6_bind_address","routing_mark","network_strategy","domain_resolver"}) {
             if (proxy.has(key)) throw new IllegalStateException("Exit already owns dial policy; it was not overwritten.");
         }
-        if (wireGuardExit) {
+        if (wireGuardExit && packetEntry) {
             String a=wg.getJSONArray("peers").getJSONObject(0).getString("public_key");
             String b=proxy.getJSONArray("peers").getJSONObject(0).getString("public_key");
             if(a.equals(b)) throw new IllegalStateException("WireGuard hops cannot reuse the same server key under different labels.");
-        } else if (!literalIP(proxy.optString("server", ""))) {
+        } else if (!wireGuardExit && !literalIP(proxy.optString("server", ""))) {
             throw new IllegalStateException("Exit requires a literal endpoint; direct DNS bootstrap is forbidden.");
         }
 
@@ -281,8 +293,10 @@ final class AndroidMultihopController {
         tun.remove("interface_name");
         proxy.put("detour", "entry-wg");
         outbounds.put(entryPrivate.toOutboundJson());
+        if (!packetEntry) outbounds.put(wg);
         config.put("outbounds", outbounds);
-        JSONArray endpoints=new JSONArray().put(wg);
+        JSONArray endpoints=new JSONArray();
+        if (packetEntry) endpoints.put(wg);
         if(wireGuardExit) endpoints.put(proxy);
         config.put("endpoints", endpoints);
         inbounds.put(new JSONObject().put("type", "mixed").put("tag", "multihop-entry-proof").put("listen", "127.0.0.1").put("listen_port", ENTRY_PROOF_PORT));

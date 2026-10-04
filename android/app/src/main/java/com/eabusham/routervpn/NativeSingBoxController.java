@@ -184,6 +184,10 @@ final class NativeSingBoxController {
         return new JSONObject(result);
     }
 
+    static boolean nativeMultihopEntry(String mode) {
+        return nativeWireGuardFamily(mode) || "shadowsocks".equals(mode) || "hysteria2".equals(mode);
+    }
+
     static boolean nativeWireGuardFamily(String mode) {
         return "wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode);
     }

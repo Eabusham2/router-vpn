@@ -172,7 +172,7 @@ final class AndroidConnectionProfileStore {
     private List<String> customLayers(String mode)throws Exception{if(mode==null||!mode.startsWith("custom:"))return new ArrayList<>();String name=mode.substring(7);JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&name.equals(p.optString("name","")))return jsonStrings(p.optJSONArray("layers"),32);}return new ArrayList<>();}
     private String prepareCustomPresetJSON(String mode,List<String>layers)throws Exception{if(mode==null||!mode.startsWith("custom:")||layers.isEmpty())return null;String name=mode.substring(7);if(name.trim().isEmpty()||name.length()>64)throw new IllegalArgumentException("CUSTOM profile name is invalid.");JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]")),next=new JSONArray();for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&!name.equals(p.optString("name","")))next.put(p);}next.put(new JSONObject().put("name",name).put("layers",new JSONArray(layers)));return next.toString();}
     private static String normalizeEntryMode(String value) {
-        if (!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(value)) throw new IllegalArgumentException("Unknown saved entry transport.");
+        if (!java.util.Arrays.asList("wg","awg2-fast","awg2-strong","shadowsocks","hysteria2").contains(value)) throw new IllegalArgumentException("Unknown saved entry transport.");
         return value;
     }
     private static String normalizeExecution(String value){if(!java.util.Arrays.asList("local","server","auto").contains(value))throw new IllegalArgumentException("Invalid saved multihop execution.");return value;}
