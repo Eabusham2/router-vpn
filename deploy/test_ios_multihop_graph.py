@@ -411,6 +411,101 @@ for mode in ["awg2-fast", "awg2-strong"] {
         }
     }
 }
+// Native proxy-entry composition. The entry has no virtual IP interface: it
+// remains an outbound while packet exits keep their existing endpoint owner.
+func proxyInput(_ mode: String) -> [String:Any] {
+    var result: [String:Any] = ["type":mode,"tag":"compiled-entry","server":"192.0.2.77","server_port":443,"password":key]
+    if mode == "shadowsocks" { result["method"]="2022-blake3-aes-256-gcm" }
+    else { result["tls"]=["enabled":true,"server_name":"entry.router-vpn.home"]; result["obfs"]=["type":"salamander","password":"entry-only-obfuscation"] }
+    return result
+}
+@MainActor func sameJSON(_ a: Any, _ b: Any) throws -> Bool {
+    try JSONSerialization.data(withJSONObject:a,options:[.sortedKeys]) == JSONSerialization.data(withJSONObject:b,options:[.sortedKeys])
+}
+for entryMode in ["shadowsocks", "hysteria2"] {
+    let importedEntry = proxyInput(entryMode)
+    var expectedEntry = importedEntry; expectedEntry["tag"] = P.entryTag
+    for exitMode in P.supportedExitModes {
+        let packetExit = ["wg", "awg2-fast", "awg2-strong"].contains(exitMode)
+        var exitEndpoint = wgExit
+        if exitMode.hasPrefix("awg2-") {
+            exitEndpoint["type"]="routervpn-amneziawg"
+            var parameters=nativeAWG["amnezia"] as! [String:String]
+            parameters["s4"] = exitMode == "awg2-strong" ? "48" : "32"
+            exitEndpoint["amnezia"] = parameters
+        }
+        let input = try packetExit ? wgFiles(exitEndpoint,wgExitProfile) : files(original(exitMode))
+        let graph = try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:wgExitProfile,exitMode:exitMode,files:input)
+        let composed = try RouterVPNMTUPolicy.multihop(graph,entryProfile:entry,exitProfile:wgExitProfile)
+        let root = try JSONSerialization.jsonObject(with:composed["sing-box.json"]!) as! [String:Any]
+        let out = root["outbounds"] as! [[String:Any]], endpoints = root["endpoints"] as! [[String:Any]]
+        let tun = (root["inbounds"] as! [[String:Any]]).filter { $0["type"] as? String == "tun" }
+        let actualEntry = out.first { $0["tag"] as? String == P.entryTag }!
+        let actualExit = (packetExit ? endpoints : out).first { $0["tag"] as? String == "proxy" }!
+        let privateEntry = out.first { $0["tag"] as? String == P.entryPrivateTag }!
+        let dns = (root["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+        try check("proxy entry credentials and trust retained", sameJSON(actualEntry, expectedEntry))
+        try check("proxy entry not mislabeled as a TUN", actualEntry["mtu"] == nil && actualEntry["address"] == nil && actualEntry["system"] == nil)
+        try check("entry appears only in outbound manager", endpoints.count == (packetExit ? 1 : 0) && !endpoints.contains { $0["tag"] as? String == P.entryTag })
+        try check("one strict system capture path", tun.count == 1 && tun[0]["auto_route"] as? Bool == true && tun[0]["strict_route"] as? Bool == true)
+        try check("exit must dial only its captured proxy entry", actualExit["detour"] as? String == P.entryTag && actualEntry["detour"] == nil)
+        try check("node proofs do not collapse to one path", privateEntry["detour"] as? String == P.entryTag && privateEntry["server"] as? String == "10.77.0.1")
+        try check("resolver remains on exit path", dns.allSatisfy { $0["detour"] as? String == "proxy" })
+        try check("no direct fallback inserted", out.allSatisfy { $0["type"] as? String != "direct" })
+        try check("proxy input remains immutable", sameJSON(importedEntry, proxyInput(entryMode)))
+        try check("entry assets cannot overwrite exit files", composed["cert.pem"] == input["cert.pem"])
+        try check("proxy composition deterministic", try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:wgExitProfile,exitMode:exitMode,files:input) == graph)
+        if packetExit {
+            try check("proxy does not impose an invented outer WG MTU", actualExit["mtu"] as? Int == exitEndpoint["mtu"] as? Int)
+            try check("native encrypted exit credentials retained", sameJSON(actualExit["peers"]!,exitEndpoint["peers"]!))
+        }
+        for fixed in [1280,1500,9000] {
+            var fixedEntry=entry; fixedEntry["mtu_policy"]="fixed";fixedEntry["manual_mtu"]=fixed
+            let sized = try RouterVPNMTUPolicy.multihop(graph,entryProfile:fixedEntry,exitProfile:wgExitProfile)
+            let sizedRoot = try JSONSerialization.jsonObject(with:sized["sing-box.json"]!) as! [String:Any]
+            let sizedTun = (sizedRoot["inbounds"] as! [[String:Any]]).first { $0["type"] as? String == "tun" }!
+            try check("entry fixed value owns the actual TUN", sizedTun["mtu"] as? Int == fixed)
+            try check("MTU never rewrites proxy credentials or trust", sameJSON(sizedRoot["outbounds"]!, root["outbounds"]!))
+            try check("MTU projection idempotent", try RouterVPNMTUPolicy.multihop(sized,entryProfile:fixedEntry,exitProfile:wgExitProfile) == sized)
+            if packetExit {
+                try check("fixed proxy TUN agrees with packet exit MTU", (sizedRoot["endpoints"] as! [[String:Any]])[0]["mtu"] as? Int == fixed)
+            }
+            var conflictingExit=wgExitProfile;conflictingExit["mtu_policy"]="fixed";conflictingExit["manual_mtu"]=fixed == 1500 ? 1400 : 1500
+            reject("conflicting fixed values cannot silently win") { _ = try RouterVPNMTUPolicy.multihop(graph,entryProfile:fixedEntry,exitProfile:conflictingExit) }
+        }
+        var staleEntry=entry;staleEntry["effective_mtu"]=9000
+        var staleExit=wgExitProfile;staleExit["effective_mtu"]=9000
+        try check("stale measurements cannot replace current interface policy", try RouterVPNMTUPolicy.multihop(graph,entryProfile:staleEntry,exitProfile:staleExit) == composed)
+        for changed in ["entry-duplicate", "packet-duplicate", "wrong-manager", "wrong-detour", "fake-mtu"] {
+            var broken=root
+            switch changed {
+            case "entry-duplicate": broken["outbounds"] = out + [actualEntry]
+            case "packet-duplicate": var bad=wg;bad["tag"]=P.entryTag;broken["endpoints"]=endpoints+[bad]
+            case "wrong-manager": var bad=actualEntry;bad["type"]="socks";broken["outbounds"]=out.filter { $0["tag"] as? String != P.entryTag }+[bad]
+            case "wrong-detour": var bad=actualEntry;bad["detour"]="bypass";broken["outbounds"]=out.filter { $0["tag"] as? String != P.entryTag }+[bad]
+            default: var bad=actualEntry;bad["mtu"]=1500;broken["outbounds"]=out.filter { $0["tag"] as? String != P.entryTag }+[bad]
+            }
+            reject("MTU rejects lost proxy ownership " + changed) { _ = try RouterVPNMTUPolicy.multihop(files(broken),entryProfile:entry,exitProfile:wgExitProfile) }
+        }
+        if CommandLine.arguments.count == 2 {
+            try composed["sing-box.json"]!.write(to:URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true).appendingPathComponent("proxy-"+entryMode+"-to-"+exitMode+".json"))
+        }
+    }
+    for (field,value) in [("server", "localhost" as Any), ("server", "127.0.0.1" as Any), ("server_port",true as Any), ("server_port",0 as Any), ("server_port",65536 as Any), ("server_port",443.5 as Any), ("password","" as Any), ("password","bad\u{0}secret" as Any), ("network","tcp" as Any), ("mtu",1500 as Any), ("detour","bypass" as Any), ("bind_interface","en0" as Any), ("system",true as Any), ("certificate_path","entry.pem" as Any)] {
+        var broken=importedEntry;broken[field]=value
+        reject("malformed proxy entry " + field) { _ = try build(original(), entry, exit, broken) }
+    }
+    if entryMode == "hysteria2" {
+        for tls in [["enabled":false], ["enabled":true,"insecure":true], ["enabled":true,"certificate_path":"entry.pem"], ["enabled":true,"nested":["path":"/unowned"]]] as [[String:Any]] {
+            var broken=importedEntry;broken["tls"]=tls
+            reject("unverified or file-backed proxy TLS") { _ = try build(original(), entry, exit, broken) }
+        }
+    } else {
+        var broken=importedEntry;broken["method"]="none"
+        reject("unauthenticated proxy cipher") { _ = try build(original(), entry, exit, broken) }
+    }
+}
+
 print("Native iOS multihop graph: PASS (\(checks) executable checks; no node was contacted)")
 '''
 
@@ -441,6 +536,9 @@ def main():
         'expectedNodeID: entryProofID, proxyPort: RouterVPNMultihopGraph.entryProofPort',
         'expectedNodeID: exitProofID, proxyPort: RouterVPNLibboxEngine.proofProxyPort',
         'self.libboxEngine === engine',
+        'LibboxRouterCompileProxyEntry(',
+        'LibboxRouterMultihopMTUProfile(',
+        'JSONSerialization.jsonObject(with: mtuProfileData)',
     ]:
         assert required in provider, "shipping proof/ownership chain missing " + required
     start = provider.index('private func startMultihop(')

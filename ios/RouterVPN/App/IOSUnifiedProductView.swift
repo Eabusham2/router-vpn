@@ -425,7 +425,7 @@ struct IOSUnifiedProductView: View {
             if let path = telemetry.livePathMs, model.connected { text += String(format: " • PATH %.1f", path) }
             return text
         }
-        return "Choose WireGuard entry → encrypted exit"
+        return "Choose native entry → encrypted exit"
     }
     private var settingsSummary: String {
         let p = selectedProfile

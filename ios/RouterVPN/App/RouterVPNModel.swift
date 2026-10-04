@@ -455,7 +455,7 @@ final class RouterVPNModel: ObservableObject {
 
     private func modeName(_ id: String) -> String { logicalModes.first(where: { $0.id == id })?.name ?? id }
     private func engineName(_ selection: IOSRuntimeSelection) -> String {
-        if selection.engine == .multihop { return "WireGuard entry → \(selection.rawProfileID) exit" }
+        if selection.engine == .multihop { return "\(selectedProfile?.multihopEntryMode ?? "wg") entry → \(selection.rawProfileID) exit" }
         if selection.engine == .libbox { return selection.files["xray.json"] != nil ? "Xray 26.7.11 + Libbox 1.14.1" : "Libbox 1.14.1" }
         return selection.rawProfileID.hasPrefix("awg2") ? "AmneziaWG native" : "WireGuardKit"
     }

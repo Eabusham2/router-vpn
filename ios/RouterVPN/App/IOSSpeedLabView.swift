@@ -116,7 +116,7 @@ struct IOSSpeedLabView: View {
                     }
                 } else if topology == .multihop {
                     nodePicker(nodes: multihopNodes, title: "Saved multihop exit")
-                    Text("Tests the saved WireGuard entry → Shadowsocks/Hysteria2 exit graph. Both nodes must pass routed proof. The original selection is restored after teardown; Speed Lab will not substitute a direct path.")
+                    Text("Tests the saved native entry → encrypted exit graph. Both nodes must pass routed proof. The original selection is restored after teardown; Speed Lab will not substitute a direct path.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 

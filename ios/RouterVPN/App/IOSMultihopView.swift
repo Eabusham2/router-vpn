@@ -15,14 +15,15 @@ extension RouterVPNModel {
             throw iosMultihopError("The saved multihop entry/exit is missing or no longer linked. Choose the graph again.")
         }
         let entryMode = exit.multihopEntryMode ?? "wg"
-        guard ["wg","awg2-fast","awg2-strong"].contains(entryMode) else { throw iosMultihopError("Unknown saved entry transport.") }
+        guard ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains(entryMode) else { throw iosMultihopError("Unknown saved entry transport.") }
+        let entryAsset = entryMode == "wg" ? "wg.conf" : (["awg2-fast", "awg2-strong"].contains(entryMode) ? "awg.conf" : "sing-box.json")
         var entry = try JSONDecoder().decode(ClientBundle.self, from: data)
         guard let profile = entry.routerProfiles.first(where: { $0.id == entryID }),
               profile.normalizedNodeKind == "router-vpn",
               let proof = profile.nodeProofID, !proof.isEmpty, proof != exit.nodeProofID,
-              let raw = entry.profiles[entryMode]?[entryMode == "wg" ? "wg.conf" : "awg.conf"],
-              let config = Data(base64Encoded: raw), !config.isEmpty, config.count <= 1024 * 1024 else {
-            throw iosMultihopError("Choose a different paired Router VPN entry with its own selected WireGuard-family profile.")
+              let raw = entry.profiles[entryMode]?[entryAsset],
+              let config = Data(base64Encoded: raw), !config.isEmpty, config.count <= 4 * 1024 * 1024 else {
+            throw iosMultihopError("Choose a different paired Router VPN entry with its own selected native entry profile.")
         }
         for node in [profile, exit] {
             guard ["", "off", "none", "disabled"].contains((node.startLayer ?? "off").lowercased()) else {
@@ -39,7 +40,7 @@ extension RouterVPNModel {
     }
 
     func saveIOSMultihop(enabled: Bool, entryID: String, exitID: String, exitMode: String, execution: String = "local", entryMode: String = "wg") throws {
-        guard ["wg","awg2-fast","awg2-strong"].contains(entryMode) else { throw iosMultihopError("Choose an exact native entry transport.") }
+        guard ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains(entryMode) else { throw iosMultihopError("Choose an exact native entry transport.") }
         guard ["local", "server", "auto"].contains(execution) else { throw iosMultihopError("Choose Local, Server, or Compare both.") }
         guard !profileMutationBlocked else { throw iosMultihopError("Disconnect before changing the active graph.") }
         if !enabled {
@@ -82,7 +83,7 @@ extension RouterVPNModel {
         // Store the old home before selecting the new exit. Node secrets remain
         // in the existing per-node store; connection profiles only reference ids.
         try linkNodeBundle(JSONEncoder().encode(value))
-        message = "Saved WireGuard entry → \(exitMode) exit. Press Connect to start and prove both nodes."
+        message = "Saved \(entryMode) entry → \(exitMode) exit. Press Connect to start and prove both nodes."
     }
 
     private func iosMultihopError(_ text: String) -> NSError {
@@ -115,6 +116,8 @@ struct IOSMultihopView: View {
                         Text("WireGuard").tag("wg")
                         Text("AmneziaWG Fast").tag("awg2-fast")
                         Text("AmneziaWG Strong").tag("awg2-strong")
+                        Text("Shadowsocks").tag("shadowsocks")
+                        Text("Hysteria2").tag("hysteria2")
                     }
                     Picker("Exit node", selection: $exitID) {
                         Text("Choose exit").tag("")
@@ -138,7 +141,7 @@ struct IOSMultihopView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }.disabled(model.profileMutationBlocked)
                 Section("Connection requirements") {
-                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard or native AmneziaWG Fast/Strong entry and a WireGuard/AmneziaWG, self-contained Shadowsocks or Hysteria2 exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. Additional Start Layers remain separate. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
+                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard, native AmneziaWG Fast/Strong, Shadowsocks or Hysteria2 entry and a WireGuard/AmneziaWG, self-contained Shadowsocks or Hysteria2 exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. Additional Start Layers remain separate. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)

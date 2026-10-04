@@ -78,7 +78,7 @@ private extension IOSConnectionSafePreferences {
         multihopEnabled = try c.decodeIfPresent(Bool.self, forKey: .multihopEnabled) ?? false
         multihopEntryID = try c.decodeIfPresent(String.self, forKey: .multihopEntryID)
         multihopEntryMode = try c.decodeIfPresent(String.self, forKey: .multihopEntryMode)
-        guard ["wg","awg2-fast","awg2-strong"].contains(multihopEntryMode ?? "wg") else { throw DecodingError.dataCorruptedError(forKey: .multihopEntryMode, in: c, debugDescription:"Unknown multihop entry transport") }
+        guard ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains(multihopEntryMode ?? "wg") else { throw DecodingError.dataCorruptedError(forKey: .multihopEntryMode, in: c, debugDescription:"Unknown multihop entry transport") }
         multihopExitID = try c.decodeIfPresent(String.self, forKey: .multihopExitID)
         multihopExitMode = try c.decodeIfPresent(String.self, forKey: .multihopExitMode)
         multihopExecution = try c.decodeIfPresent(String.self, forKey: .multihopExecution)

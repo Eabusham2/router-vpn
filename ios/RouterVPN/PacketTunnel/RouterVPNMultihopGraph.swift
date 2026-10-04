@@ -6,7 +6,7 @@ import Glibc
 #endif
 
 /// One Libbox TUN, not two competing system VPNs. The exit's transport sockets
-/// are dialled by the entry WireGuard endpoint. Neither a saved graph nor a
+/// are dialled by the selected packet endpoint or authenticated proxy outbound. Neither a saved graph nor a
 /// successful engine start is connection proof; PacketTunnel proves both nodes.
 enum RouterVPNMultihopGraph {
     static let entryProofPort = 1098
@@ -42,7 +42,8 @@ enum RouterVPNMultihopGraph {
                 throw issue("This multihop graph does not yet compose an additional Start Layer; turn it off before selecting this graph.")
             }
         }
-        let entry = try wireGuardEndpoint(entryEndpoint, tag: entryTag)
+        let packetEntry = ["wireguard", "routervpn-amneziawg"].contains(entryEndpoint["type"] as? String ?? "")
+        let entry = try packetEntry ? wireGuardEndpoint(entryEndpoint, tag: entryTag) : proxyEntry(entryEndpoint, tag: entryTag)
         let privateHost = entryProfile["socks_host"] as? String ?? ""
         guard privateIP(privateHost), let privatePort = try integer(entryProfile["socks_port"]),
               (1...65535).contains(privatePort) else {
@@ -91,10 +92,12 @@ enum RouterVPNMultihopGraph {
             proxy = try wireGuardEndpoint(exitEndpoint, tag: "proxy")
             let expectedType = exitMode == "wg" ? "wireguard" : "routervpn-amneziawg"
             guard proxy["type"] as? String == expectedType else { throw issue("Exit transport label does not match its native endpoint.") }
-            guard let entryPeer = (entry["peers"] as? [[String: Any]])?.first,
-                  let exitPeer = (proxy["peers"] as? [[String: Any]])?.first,
-                  entryPeer["public_key"] as? String != exitPeer["public_key"] as? String else {
-                throw issue("Two WireGuard hops cannot use the same server key under different node labels.")
+            if packetEntry {
+                guard let entryPeer = (entry["peers"] as? [[String: Any]])?.first,
+                      let exitPeer = (proxy["peers"] as? [[String: Any]])?.first,
+                      entryPeer["public_key"] as? String != exitPeer["public_key"] as? String else {
+                    throw issue("Two WireGuard hops cannot use the same server key under different node labels.")
+                }
             }
         } else {
             let proxies = outbounds.filter { $0["tag"] as? String == "proxy" }
@@ -144,11 +147,14 @@ enum RouterVPNMultihopGraph {
             routeRules.append(["inbound": [tun["tag"] as? String ?? "tun-in"], "ip_version": 6, "action": "reject"])
             dnsPolicy["strategy"] = "ipv4_only"
         }
+        let packetExit = ["wg", "awg2-fast", "awg2-strong"].contains(exitMode)
+        let endpoints = (packetEntry ? [entry] : []) + (packetExit ? [proxy] : [])
+        let proxyOutbounds = (packetExit ? [] : [proxy]) + [privateProxy] + (packetEntry ? [] : [entry])
         let config: [String: Any] = [
             "log": ["level": "warn"],
             "dns": dnsPolicy,
-            "endpoints": ["wg", "awg2-fast", "awg2-strong"].contains(exitMode) ? [entry, proxy] : [entry],
-            "outbounds": ["wg", "awg2-fast", "awg2-strong"].contains(exitMode) ? [privateProxy] : [proxy, privateProxy],
+            "endpoints": endpoints,
+            "outbounds": proxyOutbounds,
             "inbounds": [tun, ["type": "mixed", "tag": entryProofTag,
                 "listen": "127.0.0.1", "listen_port": entryProofPort]],
             "route": ["auto_detect_interface": true, "final": "proxy", "rules": routeRules]
@@ -339,6 +345,44 @@ enum RouterVPNMultihopGraph {
         endpoint["tag"] = tag; endpoint["system"] = false
         return endpoint
     }
+    /// The shared native compiler resolves entry-owned certificate assets
+    /// before this point. The host graph keeps the self-contained outbound
+    /// intact and refuses any attempt to replace its physical dial ownership.
+    private static func proxyEntry(_ value: [String: Any], tag: String) throws -> [String: Any] {
+        let mode = value["type"] as? String ?? ""
+        var allowed: Set<String> = ["type", "tag", "server", "server_port", "password", "network"]
+        if mode == "shadowsocks" { allowed.formUnion(["method", "udp_over_tcp"]) }
+        else if mode == "hysteria2" { allowed.formUnion(["tls", "obfs", "up_mbps", "down_mbps"]) }
+        else { throw issue("This entry has no authenticated native TCP/UDP proxy implementation.") }
+        guard Set(value.keys).isSubset(of: allowed),
+              let host = value["server"] as? String, serverIP(host),
+              let port = try integer(value["server_port"]), (1...65535).contains(port),
+              let password = value["password"] as? String, !password.isEmpty, password.utf8.count <= 4096,
+              !password.utf8.contains(0), value["network"] == nil || value["network"] as? String == "",
+              !hasHostPath(value) else {
+            throw issue("Proxy entry lost its own bounded credentials, literal server or TCP/UDP path.")
+        }
+        if mode == "shadowsocks" {
+            guard ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305", "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"].contains(value["method"] as? String ?? "") else {
+                throw issue("Shadowsocks entry requires an authenticated cipher.")
+            }
+        } else {
+            guard let tls = value["tls"] as? [String: Any], tls["enabled"] as? Bool == true,
+                  tls["insecure"] == nil || tls["insecure"] as? Bool == false else {
+                throw issue("Hysteria2 entry requires its own verified TLS identity.")
+            }
+        }
+        var result = value; result["tag"] = tag
+        return result
+    }
+    private static func hasHostPath(_ value: Any) -> Bool {
+        if let object = value as? [String: Any] {
+            return object.contains { key, value in key == "path" || key.hasSuffix("_path") || hasHostPath(value) }
+        }
+        if let array = value as? [Any] { return array.contains(where: hasHostPath) }
+        return false
+    }
+
     private static func validKey(_ value: Any?) -> Bool {
         guard let key = value as? String, let data = Data(base64Encoded: key, options: []), data.count == 32 else { return false }
         return data.contains { $0 != 0 }

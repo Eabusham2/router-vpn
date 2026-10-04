@@ -185,10 +185,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         entryProfile["node_proof_id"] = entryProofID
         exitProfile["node_proof_id"] = exitProofID
         let entryMode = selectedProfile["multihop_entry_mode"] as? String ?? "wg"
-        guard ["wg","awg2-fast","awg2-strong"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
-        let endpoint = entryMode == "wg"
-            ? try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: entryProofID, name: "Router VPN entry").endpoint
-            : try nativeAmneziaEndpoint(root: entryRoot, expectedProofID: entryProofID, mode: entryMode).endpoint
+        guard ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
+        let endpoint: [String: Any]
+        if entryMode == "wg" {
+            endpoint = try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: entryProofID, name: "Router VPN entry").endpoint
+        } else if ["awg2-fast", "awg2-strong"].contains(entryMode) {
+            endpoint = try nativeAmneziaEndpoint(root: entryRoot, expectedProofID: entryProofID, mode: entryMode).endpoint
+        } else {
+            guard let profiles = entryRoot["profiles"] as? [String: Any], let files = profiles[entryMode] as? [String: String] else {
+                throw tunnelError(58, "The selected entry has no self-contained proxy profile.")
+            }
+            let profileData = try JSONSerialization.data(withJSONObject: files)
+            guard profileData.count <= 8 * 1024 * 1024 else { throw tunnelError(58, "Entry profile exceeds its native bound.") }
+            var failure: NSError?
+            let compiled: String? = LibboxRouterCompileProxyEntry(String(decoding: profileData, as: UTF8.self), entryMode, &failure)
+            if let failure { throw failure }
+            guard let compiled, !compiled.isEmpty, compiled.utf8.count <= Self.maxProfileBytes,
+                  let parsed = try JSONSerialization.jsonObject(with: Data(compiled.utf8)) as? [String: Any] else {
+                throw tunnelError(58, "Native entry compilation did not return an owned outbound.")
+            }
+            endpoint = parsed
+        }
         let rawFiles: [String: Data]
         if exitMode == "wg" {
             let exit = try multihopWireGuardEndpoint(root: root, expectedProofID: exitProofID, name: "Router VPN exit")
@@ -204,6 +221,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let mtuFiles = try RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)
         guard let source = mtuFiles["sing-box.json"], let text = String(data: source, encoding: .utf8) else { throw tunnelError(58, "Missing multihop LAN-policy graph") }
         let policy = try JSONSerialization.data(withJSONObject: ["entry": entryProfile, "exit": exitProfile])
+        var mtuFailure: NSError?
+        let mtuProfileText: String? = LibboxRouterMultihopMTUProfile(text, String(decoding: policy, as: UTF8.self), &mtuFailure)
+        if let mtuFailure { throw mtuFailure }
+        guard let mtuProfileText, !mtuProfileText.isEmpty, mtuProfileText.utf8.count <= 256 * 1024 else {
+            throw tunnelError(58, "Native multihop MTU ownership was not captured.")
+        }
+        let mtuProfileData = Data(mtuProfileText.utf8)
         var failure: NSError?
         let filtered: String? = LibboxRouterApplyMultihopLANPolicy(text, String(decoding: policy, as: UTF8.self), &failure)
         if let failure { throw failure }
@@ -259,9 +283,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 do { try engine.activatePerformance(); try engine.enableHopMeasurement(metadata: hopMetadata) }
                 catch { engine.stop(); self.libboxEngine = nil; completionHandler(error); return }
                 guard self.currentPathProofGuard() === comparisonGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Multihop changed during performance activation.")); return }
-                var mtuProfile = selectedProfile
-                mtuProfile["node_proof_id"] = exitProofID
-                engine.activateMTU(profile: mtuProfile)
+                do {
+                    guard var mtuProfile = try JSONSerialization.jsonObject(with: mtuProfileData) as? [String: Any] else {
+                        throw self.tunnelError(58, "Captured multihop MTU profile is invalid.")
+                    }
+                    mtuProfile["node_proof_id"] = exitProofID
+                    engine.activateMTU(profile: mtuProfile)
+                } catch { engine.stop(); self.libboxEngine = nil; completionHandler(error); return }
                 self.enableForwarding(profileData: forwardingProfileData, proofID: exitProofID)
                 completionHandler(nil)
             }

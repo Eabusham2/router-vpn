@@ -110,6 +110,37 @@ enum RouterVPNMTUPolicy {
         }
         let tun = inbounds.indices.filter { inbounds[$0]["type"] as? String == "tun" }
         let entry = endpoints.indices.filter { endpoints[$0]["tag"] as? String == "routervpn-hop-entry" }
+        if let outbounds = root["outbounds"] as? [[String: Any]] {
+            let proxies = outbounds.filter { $0["tag"] as? String == "routervpn-hop-entry" }
+            if !proxies.isEmpty {
+                guard entry.isEmpty, proxies.count == 1,
+                      ["shadowsocks", "hysteria2"].contains(proxies[0]["type"] as? String ?? ""),
+                      proxies[0]["mtu"] == nil, proxies[0]["detour"] == nil, tun.count == 1,
+                      endpoints.count <= 1,
+                      endpoints.allSatisfy({ $0["tag"] as? String == "proxy" && ["wireguard", "routervpn-amneziawg"].contains($0["type"] as? String ?? "") && $0["detour"] as? String == "routervpn-hop-entry" }) else {
+                    throw issue("Proxy MTU requires one real shared TUN and unambiguous entry ownership.")
+                }
+                let entryFixed = try fixedMTU(profile: entryProfile), exitFixed = try fixedMTU(profile: exitProfile)
+                if let a = entryFixed, let b = exitFixed, a != b {
+                    throw issue("Entry and exit fixed MTUs conflict for the one shared proxy TUN.")
+                }
+                let fixed = entryFixed ?? exitFixed
+                var mtu = try fixed ?? mtuValue(inbounds[tun[0]]["mtu"])
+                if !endpoints.isEmpty {
+                    let envelope = try fixed ?? mtuValue(endpoints[0]["mtu"])
+                    guard (minimum...maximum).contains(envelope) else { throw issue("Invalid encrypted packet MTU.") }
+                    endpoints[0]["mtu"] = envelope
+                    mtu = min(mtu, envelope)
+                }
+                guard (minimum...maximum).contains(mtu) else { throw issue("Invalid shared TUN MTU.") }
+                inbounds[tun[0]]["mtu"] = mtu
+                root["inbounds"] = inbounds; root["endpoints"] = endpoints
+                let encoded = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+                guard encoded.count <= maxConfigBytes else { throw issue("Proxy MTU graph exceeds its bound.") }
+                var result = files; result["sing-box.json"] = encoded
+                return result
+            }
+        }
         let exit = endpoints.indices.filter { endpoints[$0]["tag"] as? String == "proxy" }
         guard tun.count == 1, entry.count == 1, exit.count <= 1,
               endpoints.count == entry.count + exit.count,
