@@ -306,4 +306,7 @@ for executable_contract in (
         check=True,
     )
 
+subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_multihop_pinned_contract.py")],
+               cwd=ROOT.parent, check=True)
+
 print("Android runtime truth contract: PASS")

@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -216,4 +218,76 @@ func TestRouterNativePerformanceGraph(t *testing.T) {
 		t.Fatal("missing native owner reported healthy")
 	}
 	RouterInvalidatePerformance(nil)
+}
+
+// This consumes files emitted by the real Android Java session builder and the
+// shared execution compiler. The Android build gate supplies the complete matrix;
+// unrelated Apple/unit-test invocations need not have Java fixture files.
+func TestRouterMultihopAndroidGeneratedGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_ANDROID_GRAPH_FIXTURES")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_ANDROID_GRAPH_FIXTURES") == "1" {
+			t.Fatal("required Android fixture matrix is missing")
+		}
+		t.Skip("Android-generated fixtures are validated by the required Android build gate")
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	for _, entry := range []string{"shadowsocks", "hysteria2"} {
+		for _, exit := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"} {
+			for _, execution := range []string{"local", "server", "auto"} {
+				name := entry + "-" + exit + "-" + execution
+				t.Run(name, func(t *testing.T) {
+					t.Chdir(filepath.Join(root, name))
+					for _, file := range []string{"sing-box.json", "planned.json"} {
+						info, err := os.Lstat(file)
+						if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 4<<20 {
+							t.Fatalf("invalid fixture %s: %v", file, err)
+						}
+						raw, err := os.ReadFile(file)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err = CheckConfig(string(raw)); err != nil {
+							t.Fatalf("native parser rejected shipping Android %s: %v", file, err)
+						}
+						// Acceptance must come from the real transport registry, not
+						// a syntactic JSON stub or a zero-tests-success invocation.
+						var graph map[string]any
+						if err = json.Unmarshal(raw, &graph); err != nil {
+							t.Fatal(err)
+						}
+						owned := false
+						for _, value := range graph["outbounds"].([]any) {
+							outbound := value.(map[string]any)
+							if outbound["tag"] == "entry-wg" {
+								if outbound["type"] != entry {
+									t.Fatal("entry label differs from native transport")
+								}
+								outbound["type"] = "unimplemented-fixture-transport"
+								owned = true
+							}
+						}
+						if !owned {
+							t.Fatal("generated proxy entry is absent")
+						}
+						bad, err := json.Marshal(graph)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err = CheckConfig(string(bad)); err == nil {
+							t.Fatal("native registry accepted an unknown transport")
+						}
+						checks++
+					}
+				})
+			}
+		}
+	}
+	if checks != 60 {
+		t.Fatalf("validated %d native graphs, expected 60", checks)
+	}
 }

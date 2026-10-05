@@ -34,3 +34,18 @@ Also run saved mode, Java syntax, multihop source and session identity contracts
 These host tests do not prove APK type checking or physical Android network,
 permission, lockdown, transition, public-exit or reconnect acceptance. Those gates
 remain separately required on the exact release commit.
+
+## Native parser release gate
+
+`deploy/test_android_multihop_pinned.py` consumes the actual Android-generated
+session and execution graphs on the immutable prepared Libbox core. It requires
+all 30 entry/exit/execution directories, both configurations per directory, and
+only the matching exit trust assets. The native test calls `CheckConfig` for
+all 60 configurations and also requires rejection after corrupting each native
+entry transport type. No VPN is started by this configuration gate.
+
+The Android AAR build runs this gate before binding and validates both proxy
+compiler API symbols. Its cache digest includes the shipping Java graph/policy
+sources and harness, and Gradle declares those inputs; a cached AAR from an older
+host graph cannot substitute for the new configuration evidence. This is native
+configuration acceptance, not encrypted-traffic or physical-device acceptance.

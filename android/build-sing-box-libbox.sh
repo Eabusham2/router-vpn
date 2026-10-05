@@ -26,6 +26,10 @@ OPENVPN_STAMP="$LIBDIR/libbox.openvpn.sha256"
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$OPENVPN_SOURCE")
 MULTIHOP_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-multihop.py" --digest)
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$MULTIHOP_SHA")
+# Native graph evidence is tied to the actual Java builder/policy inputs, not
+# only the Go core. Changing a host graph invalidates the cached AAR proof.
+ANDROID_GRAPH_SHA=$(python3 "$ROOT/../deploy/test_android_multihop_pinned.py" --digest)
+OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$ANDROID_GRAPH_SHA")
 EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA"
 
 verify_aar() {
@@ -75,7 +79,7 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in     newRouterMTU     routerMTUPhysicalPath     routerReadMTUInterface     routerApplyPerformancePolicy     routerStartPerformance     routerPerformanceFailure     routerInvalidatePerformance     routerPerformanceStatus     routerCompileAmneziaProfile     routerAmneziaExitConfig     routerCompileWireGuardProfile     routerWireGuardExitConfig     routerApplyMultihopMTUPolicy     routerApplyMultihopLANPolicy     newRouterHopMeasurement     routerCompileSIP003Profile     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
+  for symbol in     newRouterMTU     routerMTUPhysicalPath     routerReadMTUInterface     routerApplyPerformancePolicy     routerStartPerformance     routerPerformanceFailure     routerInvalidatePerformance     routerPerformanceStatus     routerCompileProxyEntry     routerMultihopMTUProfile     routerCompileAmneziaProfile     routerAmneziaExitConfig     routerCompileWireGuardProfile     routerWireGuardExitConfig     routerApplyMultihopMTUPolicy     routerApplyMultihopLANPolicy     newRouterHopMeasurement     routerCompileSIP003Profile     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
     grep -Fq "$symbol" "$api_list" || {
       echo "combined libbox AAR is missing $symbol bridge" >&2
       return 1
@@ -226,6 +230,7 @@ python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
+  python3 "$ROOT/../deploy/test_android_multihop_pinned.py" "$VENDOR"
   go_retry run ./cmd/internal/build_libbox -target android
 )
 
