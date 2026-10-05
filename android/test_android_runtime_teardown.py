@@ -5,6 +5,7 @@ No source rewriting or real networking is used. This proves controller lifecycle
 behavior, not Android VpnService traffic, device permissions, or leak resistance.
 """
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class NativeSingBoxController {
-    static boolean nativeWireGuardFamily(String mode){return java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode);}
+    // PRODUCTION_TRANSPORT_PREDICATES
     static final class ModeInfo {}
     static final class SessionInfo {}
     volatile String state = "DOWN", mode = "";
@@ -66,10 +67,10 @@ final class AndroidMultihopController {
     }
     AndroidMultihopController(Context c, NativeSingBoxController s) {}
     List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f) { return Collections.emptyList(); }
-    static volatile String lastExecution = "";
+    static volatile String lastExecution = "", lastEntryMode = "";
     Prepared prepare(File entry, File exit, String mode) { return prepare(entry,exit,mode,"local","wg"); }
     Prepared prepare(File entry, File exit, String mode, String execution, String entryMode) {
-        lastExecution=execution; return new Prepared(exit,mode);
+        lastExecution=execution; lastEntryMode=entryMode; return new Prepared(exit,mode);
     }
 }
 final class AndroidStandardExitStore {
@@ -204,16 +205,46 @@ public final class RuntimeTeardownHarness {
         check(!owner.busy(),"worker did not release ownership after completion");
     }
     static void tests(String kind) {
-        if ("multihop".equals(kind)) for (String execution:new String[]{"local","server","auto"}) {
-            test("multihop captured execution "+execution,()->{
+        if ("multihop".equals(kind)) for (String entryMode:new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"}) for (String execution:new String[]{"local","server","auto"}) {
+            test("multihop captured transport/execution "+entryMode+"/"+execution,()->{
                 try(Owner owner=new Owner(kind)) {
                     Callback cb=new Callback(0);
-                    owner.multihop.connect(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),"shadowsocks",execution,cb);
+                    owner.multihop.connect(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),"shadowsocks",execution,entryMode,cb);
                     cb.awaitDone();
                     check(cb.ok&&execution.equals(AndroidMultihopController.lastExecution),"execution changed before preparation");
+                    check(entryMode.equals(AndroidMultihopController.lastEntryMode),"entry transport changed before preparation");
+                    check(entryMode.equals(owner.multihop.activeEntryMode())&&entryMode.equals(AndroidHomeStateStore.current.activeEntryMode),"proved live entry identity changed");
+                    check(LayeredVpnService.mtuStarts.get()==1,"MTU did not start exactly once after path proof");
                     owner.disconnect();awaitIdle(owner);
                 }
             });
+        }
+        if ("multihop".equals(kind)) {
+            for(String entryMode:new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"}) {
+                test("multihop restore exact entry "+entryMode,()->{
+                    try(Owner owner=new Owner(kind)) {
+                        owner.engine.state="UP";
+                        AndroidHomeStateStore.connectedMultihop(owner.context,"entry","exit","hysteria2",entryMode);
+                        try(AndroidMultihopRuntime restored=new AndroidMultihopRuntime(owner.context,owner.engine)) {
+                            check(restored.isConnected()&&entryMode.equals(restored.activeEntryMode()),"saved proved entry was dropped or relabelled");
+                            check(restored.activeEntryId().equals("entry")&&restored.activeExitId().equals("exit")&&restored.activeExitMode().equals("hysteria2"),"restoration substituted a different graph");
+                            check(owner.engine.starts.get()==0&&LayeredVpnService.mtuStarts.get()==0,"restoration started another VPN or measurement");
+                            restored.disconnect();
+                        }
+                    }
+                });
+            }
+            for(String entryMode:new String[]{"socks","http","tor","max","awg2-pq","WG","",null}) {
+                test("multihop rejects unavailable entry "+entryMode,()->{
+                    try(Owner owner=new Owner(kind)) {
+                        Callback cb=new Callback(0);
+                        owner.multihop.connect(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),"shadowsocks","auto",entryMode,cb);
+                        cb.awaitDone();
+                        check(!cb.ok&&owner.engine.starts.get()==0&&LayeredVpnService.mtuStarts.get()==0,"unavailable entry started or reported success");
+                        check(!owner.busy()&&!AndroidHomeStateStore.current.connected,"invalid entry retained graph ownership");
+                    }
+                });
+            }
         }
         test(kind+" successful proof",()->{
             try(Owner owner=new Owner(kind)) {
@@ -321,6 +352,17 @@ public final class RuntimeTeardownHarness {
     }
 }
 '''
+
+# Engine operations are doubled, but the mode predicates are copied verbatim
+# from shipping source so this lifecycle harness cannot drift into a separate
+# capability allowlist. Runtime source files themselves are never rewritten.
+controller_source = (JAVA / 'NativeSingBoxController.java').read_text()
+predicates = []
+for name in ('nativeWireGuardFamily', 'nativeMultihopEntry'):
+    matches = re.findall(r'(?ms)^    static boolean ' + name + r'\(String mode\) \{\n.*?^    \}', controller_source)
+    assert len(matches) == 1, 'missing or ambiguous production transport predicate: ' + name
+    predicates.append(matches[0])
+STUBS = STUBS.replace('    // PRODUCTION_TRANSPORT_PREDICATES', '\n'.join(predicates))
 
 with tempfile.TemporaryDirectory(prefix='routervpn-runtime-teardown-') as tmp:
     base=Path(tmp); pkg=base/'com/eabusham/routervpn';pkg.mkdir(parents=True)
