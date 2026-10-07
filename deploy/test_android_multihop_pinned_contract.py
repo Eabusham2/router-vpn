@@ -3,6 +3,9 @@
 from pathlib import Path
 import importlib.util
 import itertools
+import hashlib
+import io
+import zipfile
 import tempfile
 import unittest
 from unittest import mock
@@ -23,6 +26,73 @@ class NativeGraphGate(unittest.TestCase):
             folder.mkdir()
             for name in ('sing-box.json', 'planned.json') + (('trust.pem',) if exit_mode == 'hysteria2' else ()):
                 (folder / name).write_text('{}')
+
+    def jar_bytes(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            for name in ('JSONObject', 'JSONArray', 'JSONTokener'):
+                archive.writestr('org/json/' + name + '.class', b'test-fixture-not-executed')
+        return buffer.getvalue()
+
+    def response(self, data):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.geturl.return_value = GATE.ANDROID_JSON_URL
+        response.read.return_value = data
+        return response
+
+    def test_missing_host_package_uses_only_hash_verified_temporary_dependency(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            data = self.jar_bytes()
+            response = self.response(data)
+            env = {}
+            with mock.patch.object(GATE, 'SYSTEM_JSON_JAR', root / 'missing'), mock.patch.object(GATE, 'ANDROID_JSON_SHA256', hashlib.sha256(data).hexdigest()), mock.patch.object(GATE.urllib.request, 'urlopen', return_value=response) as fetch:
+                selected = GATE.android_json_dependency(root, env)
+                self.assertEqual(selected.read_bytes(), data)
+                self.assertEqual(selected.parent, root)
+                self.assertEqual(env, {})
+                fetch.assert_called_once_with(GATE.ANDROID_JSON_URL, timeout=30)
+                response.read.assert_called_once_with(GATE.MAX_JSON_JAR + 1)
+                response.__exit__.assert_called_once()
+
+    def test_explicit_and_system_dependencies_never_download(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            jar = root / 'explicit.jar'
+            jar.write_bytes(self.jar_bytes())
+            with mock.patch.object(GATE.urllib.request, 'urlopen', side_effect=AssertionError('unexpected download')):
+                self.assertEqual(GATE.android_json_dependency(root, {'ANDROID_JSON_JAR': str(jar)}), jar)
+                with mock.patch.object(GATE, 'SYSTEM_JSON_JAR', jar):
+                    self.assertEqual(GATE.android_json_dependency(root, {}), jar)
+                for value in ('', str(root / 'missing'), str(root)):
+                    with self.assertRaises((ValueError, FileNotFoundError)):
+                        GATE.android_json_dependency(root, {'ANDROID_JSON_JAR': value})
+
+    def test_corrupt_oversized_redirected_or_failed_download_is_not_published(self):
+        for kind in ('hash', 'size', 'redirect', 'status', 'classes'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                data = b'x' * (GATE.MAX_JSON_JAR + 1) if kind == 'size' else self.jar_bytes()
+                if kind == 'classes':
+                    b = io.BytesIO()
+                    with zipfile.ZipFile(b, 'w') as z:
+                        z.writestr('not-json.class', b'no')
+                    data = b.getvalue()
+                response = self.response(data)
+                if kind == 'redirect': response.geturl.return_value = 'https://unowned.invalid/file.jar'
+                if kind == 'status': response.status = 503
+                checksum = '0' * 64 if kind == 'hash' else hashlib.sha256(data).hexdigest()
+                with mock.patch.object(GATE, 'SYSTEM_JSON_JAR', root / 'missing'), mock.patch.object(GATE, 'ANDROID_JSON_SHA256', checksum), mock.patch.object(GATE.urllib.request, 'urlopen', return_value=response):
+                    with self.assertRaises(ValueError):
+                        GATE.android_json_dependency(root, {})
+                self.assertFalse((root / 'android-json.jar').exists())
+
+    def test_jar_is_selected_before_host_graph_compilation(self):
+        script = (ROOT / 'deploy/test_android_multihop_pinned.py').read_text()
+        start = script.index('def run(')
+        self.assertLess(script.index("env['ANDROID_JSON_JAR'] =", start), script.index("subprocess.run([sys.executable", start))
 
     def test_exact_complete_matrix_and_no_extra_files(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -49,3 +49,10 @@ compiler API symbols. Its cache digest includes the shipping Java graph/policy
 sources and harness, and Gradle declares those inputs; a cached AAR from an older
 host graph cannot substitute for the new configuration evidence. This is native
 configuration acceptance, not encrypted-traffic or physical-device acceptance.
+
+The native parser gate accepts an explicit `ANDROID_JSON_JAR` or the installed
+Android JSON host package. When neither exists, it fetches only the SHA-256-pinned
+Maven artifact into its temporary test directory, validates the archive, and
+passes the absolute path to the shipping Java harness. Invalid explicit paths,
+checksum failures, oversized downloads and changed origins fail the build. This
+test dependency is not packaged into Android and does not change VPN DNS.

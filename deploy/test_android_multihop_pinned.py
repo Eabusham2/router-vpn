@@ -8,15 +8,63 @@ from __future__ import annotations
 import argparse
 import hashlib
 import itertools
+import io
 import os
 from pathlib import Path
 import stat
 import subprocess
 import sys
 import tempfile
+import urllib.request
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
+ANDROID_JSON_URL = ('https://repo.maven.apache.org/maven2/com/vaadin/external/google/'
+                    'android-json/0.0.20131108.vaadin1/android-json-0.0.20131108.vaadin1.jar')
+ANDROID_JSON_SHA256 = 'dfb7bae2f404cfe0b72b4d23944698cb716b7665171812a0a4d0f5926c0fac79'
+MAX_JSON_JAR = 1024 * 1024
+SYSTEM_JSON_JAR = Path('/usr/share/java/com.android.json.jar')
+
+
+def android_json_dependency(work: Path, env: dict[str, str]) -> Path:
+    """Resolve the real host JSON implementation; never an Android SDK stub.
+
+    Explicit overrides remain authoritative and fail if broken. With no system
+    package, acquire only the checksum-pinned artifact in this run's temporary
+    directory. It is test-only and is not added to the application or AAR.
+    """
+    override = env.get('ANDROID_JSON_JAR')
+    if override is not None:
+        if not override.strip():
+            raise ValueError('ANDROID_JSON_JAR must not be empty')
+        selected = Path(override).expanduser().resolve(strict=True)
+    elif SYSTEM_JSON_JAR.is_file():
+        selected = SYSTEM_JSON_JAR.resolve(strict=True)
+    else:
+        selected = None
+    if selected is not None:
+        if not selected.is_file() or not 0 < selected.stat().st_size <= MAX_JSON_JAR:
+            raise ValueError('Android JSON implementation is not a bounded regular file')
+        data = selected.read_bytes()
+    else:
+        with urllib.request.urlopen(ANDROID_JSON_URL, timeout=30) as response:
+            if response.status != 200 or response.geturl() != ANDROID_JSON_URL:
+                raise ValueError('Android JSON download did not return the pinned origin')
+            data = response.read(MAX_JSON_JAR + 1)
+        if not 0 < len(data) <= MAX_JSON_JAR or hashlib.sha256(data).hexdigest() != ANDROID_JSON_SHA256:
+            raise ValueError('Android JSON download failed its pinned SHA-256 check')
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for member in ('org/json/JSONObject.class', 'org/json/JSONArray.class', 'org/json/JSONTokener.class'):
+            if archive.namelist().count(member) != 1:
+                raise ValueError('Android JSON implementation is missing required unique classes')
+    if selected is None:
+        selected = work / 'android-json.jar'
+        with selected.open('xb') as output:
+            output.write(data)
+    return selected
+
+
 JAVA_NAMES = ('AndroidMultihopController', 'NativeSingBoxController',
               'AndroidProfileSelection', 'AndroidNumericAddress',
               'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy',
@@ -79,6 +127,7 @@ def run(vendor: Path) -> None:
     for key in ('GOOS', 'GOARCH'):
         env[key] = subprocess.check_output(['go', 'env', 'GOHOST' + key[2:]], text=True, env=env).strip()
     with tempfile.TemporaryDirectory(prefix='routervpn-native-android-graphs-') as temp:
+        env['ANDROID_JSON_JAR'] = str(android_json_dependency(Path(temp), env))
         fixtures = Path(temp) / 'fixtures'
         fixtures.mkdir()
         env['ROUTERVPN_ANDROID_GRAPH_FIXTURES'] = str(fixtures)
