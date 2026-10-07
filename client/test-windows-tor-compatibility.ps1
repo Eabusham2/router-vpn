@@ -36,7 +36,7 @@ foreach ($name in @('TorExpertVersion','TorVersion','TorExpertWindowsX64Sha256')
   if ($nodes.Count -ne 1) { throw "Missing/ambiguous shipping Tor pin: $name" }
   . ([scriptblock]::Create($nodes[0].Extent.Text))
 }
-foreach ($name in @('Get-RouterVPNTorHelperExecution','Invoke-RouterVPNTorHelperVersion','Install-PinnedTorExpertBundle')) {
+foreach ($name in @('Get-RouterVPNTorHelperExecution','Invoke-RouterVPNTorHelperVersion','Set-RouterVPNTorRuntimeDirectory','Install-PinnedTorExpertBundle')) {
   $nodes = @($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true))
   if ($nodes.Count -ne 1) { throw "Missing/ambiguous shipping Tor function: $name" }
   . ([scriptblock]::Create($nodes[0].Extent.Text))

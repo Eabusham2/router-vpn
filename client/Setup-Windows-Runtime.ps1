@@ -90,6 +90,46 @@ function Invoke-RouterVPNTorHelperVersion([string]$Executable,[string]$Argument,
   }
 }
 
+function Set-RouterVPNTorRuntimeDirectory([string]$Stage,[string]$Target,[string]$Backup) {
+  $stage = [IO.Path]::GetFullPath($Stage)
+  $target = [IO.Path]::GetFullPath($Target)
+  $backup = [IO.Path]::GetFullPath($Backup)
+  $parent = [IO.Path]::GetDirectoryName($target)
+  if ([IO.Path]::GetFileName($target) -cne 'tor-expert' -or
+      [IO.Path]::GetDirectoryName($stage) -ne $parent -or [IO.Path]::GetDirectoryName($backup) -ne $parent -or
+      [IO.Path]::GetFileName($stage) -cnotmatch '^tor-expert\.stage-[0-9a-f]{32}$' -or
+      [IO.Path]::GetFileName($backup) -cnotmatch '^tor-expert\.backup-[0-9a-f]{32}$') {
+    throw 'Tor adoption requires uniquely owned sibling stage/backup directories.'
+  }
+  if (-not (Test-Path -LiteralPath $stage -PathType Container) -or (Test-Path -LiteralPath $backup)) {
+    throw 'Tor stage is absent or its backup path is already occupied.'
+  }
+  $movedOld = $false
+  try {
+    if (Test-Path -LiteralPath $target) {
+      Move-Item -LiteralPath $target -Destination $backup -ErrorAction Stop
+      $movedOld = $true
+    }
+    Move-Item -LiteralPath $stage -Destination $target -ErrorAction Stop
+  } catch {
+    $adoptionFailure = $_
+    if ($movedOld) {
+      # Never delete a target whose ownership cannot be proved, and never
+      # destroy the only complete backup when rollback itself is blocked.
+      if (Test-Path -LiteralPath $target) { throw 'Tor adoption failed with an occupied target; complete backup retained for recovery.' }
+      try { Move-Item -LiteralPath $backup -Destination $target -ErrorAction Stop }
+      catch { throw "Tor adoption and rollback failed; complete backup retained: $backup" }
+    }
+    throw $adoptionFailure
+  }
+  # The new, verified directory is committed now. A partly deleted obsolete
+  # backup must NEVER be restored over it if cleanup encounters a file lock.
+  if ($movedOld -and (Test-Path -LiteralPath $backup)) {
+    try { Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction Stop }
+    catch { throw "Verified new Tor runtime retained; obsolete backup cleanup pending: $backup" }
+  }
+}
+
 function Install-PinnedTorExpertBundle([string]$Url,[string]$Sha256,[string]$ExpectedTorVersion,[string]$RuntimeRoot) {
   $tar = (Get-Command tar.exe -ErrorAction Stop).Source
   if ([string]::IsNullOrWhiteSpace($tar)) { throw 'Windows tar.exe is required to install the pinned Tor Expert Bundle.' }
@@ -137,18 +177,7 @@ function Install-PinnedTorExpertBundle([string]$Url,[string]$Sha256,[string]$Exp
     $backup = Join-Path $RuntimeRoot ('tor-expert.backup-'+[Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stage | Out-Null
     Get-ChildItem -LiteralPath $extract -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $stage -Recurse -Force }
-    $movedOld = $false
-    try {
-      if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $backup; $movedOld = $true }
-      Move-Item -LiteralPath $stage -Destination $target
-      if ($movedOld -and (Test-Path -LiteralPath $backup)) { Remove-Item -LiteralPath $backup -Recurse -Force }
-    } catch {
-      if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue }
-      if ($movedOld -and (Test-Path -LiteralPath $backup)) { Move-Item -LiteralPath $backup -Destination $target -ErrorAction SilentlyContinue }
-      throw
-    } finally {
-      if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
-    }
+    Set-RouterVPNTorRuntimeDirectory $stage $target $backup
 
     $adoptedTor = @(Get-ChildItem -LiteralPath $target -Recurse -File -Filter 'tor.exe')
     $adoptedLyrebird = @(Get-ChildItem -LiteralPath $target -Recurse -File -Filter 'lyrebird.exe')

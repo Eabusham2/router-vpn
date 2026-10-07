@@ -61,8 +61,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           ./client/test-windows-tor-cleanup.ps1
+          ./client/test-windows-tor-adoption.ps1
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-tor-cleanup.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 Tor cleanup regressions failed' }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-tor-adoption.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 Tor adoption regressions failed' }
       - name: Windows firewall primitives
         shell: pwsh
         run: |
