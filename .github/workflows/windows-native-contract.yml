@@ -56,6 +56,13 @@ jobs:
           ./client/test-windows-help-binding.ps1
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-help-binding.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 composed Help binding regressions failed' }
+      - name: Tor helper test cleanup regressions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./client/test-windows-tor-cleanup.ps1
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-tor-cleanup.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 Tor cleanup regressions failed' }
       - name: Windows firewall primitives
         shell: pwsh
         run: |

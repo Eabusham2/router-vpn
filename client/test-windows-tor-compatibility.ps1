@@ -3,6 +3,28 @@ param(
   [ValidateSet('amd64','arm64','')][string]$ExpectedArchitecture = ''
 )
 $ErrorActionPreference = 'Stop'
+# Version queries have exited and disposed their process handles before cleanup.
+# Windows/emulation or a scanner can nevertheless hold a just-executed image
+# briefly. Retry only filesystem sharing/access errors; never report leftovers
+# as a clean successful test or touch another test's directory.
+function Remove-RouterVPNTorTestDirectory([string]$Directory) {
+  $parent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
+  $path = [IO.Path]::GetFullPath($Directory).TrimEnd([IO.Path]::DirectorySeparatorChar)
+  if ([IO.Path]::GetDirectoryName($path) -ne $parent -or [IO.Path]::GetFileName($path) -cnotmatch '^router-vpn-tor-test-[0-9a-f]{32}$') {
+    throw 'Refusing cleanup outside the uniquely owned Tor test directory.'
+  }
+  for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    if (-not (Test-Path -LiteralPath $path -ErrorAction Stop)) { return }
+    try {
+      Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+      if (Test-Path -LiteralPath $path -ErrorAction Stop) { throw [IO.IOException]::new('Tor test directory remains after removal.') }
+      return
+    } catch [IO.IOException], [UnauthorizedAccessException] {
+      if ($attempt -eq 19) { throw }
+      Start-Sleep -Milliseconds 250
+    }
+  }
+}
 $setup = Join-Path $SourceRoot 'client\Setup-Windows-Runtime.ps1'
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($setup,[ref]$tokens,[ref]$errors)
@@ -56,5 +78,5 @@ try {
   Write-Output $ptText
   Write-Output 'No Tor network, proxy, VPN interface, driver or firewall was started by this compatibility test.'
 } finally {
-  Remove-Item -LiteralPath $temp -Recurse -Force
+  Remove-RouterVPNTorTestDirectory $temp
 }
