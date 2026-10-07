@@ -161,6 +161,13 @@ jobs:
           - {arch: arm64, runner: windows-11-arm}
     runs-on: ${{ matrix.runner }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.x', cache: false}
+      - name: Verify native Windows Tor host compatibility API
+        shell: pwsh
+        env: {ROUTER_VPN_REQUIRE_TOR_HELPERS: '1'}
+        run: go test -v -run '^TestWindowsTor(ArchitecturePolicy|HostCompatibilityNative)$' ./cmd/client
       - uses: actions/download-artifact@v4
         with: {name: RouterVPN-generic-release-candidate, path: artifacts}
       - name: Execute Portable native WPF self-test and relocation
@@ -190,6 +197,16 @@ jobs:
           & $asyncTest -Root $root.FullName
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $asyncTest -Root $root.FullName
           if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged async lifecycle tests failed'}
+      - name: Execute shipped Tor helpers on the actual Windows architecture
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          $root=Get-ChildItem -LiteralPath $installed -Directory|Select-Object -First 1
+          $test=Join-Path $root.FullName 'client\test-windows-tor-compatibility.ps1'
+          if(-not(Test-Path -LiteralPath $test)){throw 'Shipped Windows package lacks Tor compatibility test'}
+          & $test -SourceRoot $root.FullName -ExpectedArchitecture $arch
 
   android:
     name: Android native APK

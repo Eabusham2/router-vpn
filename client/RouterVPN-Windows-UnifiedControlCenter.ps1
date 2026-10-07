@@ -37,8 +37,8 @@ function Test-RouterVPNSecureNodeChain {
     if ($unavailable) { throw $unavailable }
     # tor-bridge is a complete final transport only when the live controller
     # capability and connect path prove the pinned Tor/PT runtime. Windows ARM64
-    # therefore remains unavailable through the backend capability reason even
-    # though this shared static policy recognizes the transport family.
+    # additionally requires Windows' x64 user-mode execution capability. The
+    # VPN driver stays native; static transport recognition cannot prove readiness.
     $allowed = @('router-vpn','wireguard','amneziawg','openvpn','shadowsocks','shadowsocks-2022','hysteria2','tor-bridge')
     if ($allowed -notcontains $final) {
         throw "$final is a bridge only. Add an authenticated encrypted tunnel after it."

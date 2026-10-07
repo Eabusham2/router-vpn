@@ -112,19 +112,28 @@ func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	cap := torBridgeRuntimeCapabilityForRoot(root)
+	helperExecution := "native helpers"
+	if runtime.GOOS == "windows" {
+		var err error
+		helperExecution, err = windowsTorHostCompatibility()
+		if err != nil {
+			helperExecution = "unavailable"
+		}
+	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": true,
-		"protocol": "tor-bridge",
-		"platform": runtime.GOOS,
-		"implemented": cap.Implemented,
-		"supported": cap.Supported,
-		"reason": cap.Reason,
+		"ok":                 true,
+		"protocol":           "tor-bridge",
+		"platform":           runtime.GOOS,
+		"helper_execution":   helperExecution,
+		"implemented":        cap.Implemented,
+		"supported":          cap.Supported,
+		"reason":             cap.Reason,
 		"direct_full_device": cap.Supported,
-		"upstream_hop": false,
-		"dynamic_exit": true,
-		"transports": torBridgeTransportCapabilities(),
-		"truth": "the pluggable transport evades censorship; Tor's proved ntor-v3 circuit is the encrypted final path",
+		"upstream_hop":       false,
+		"dynamic_exit":       true,
+		"transports":         torBridgeTransportCapabilities(),
+		"truth":              "the pluggable transport evades censorship; Tor's proved ntor-v3 circuit is the encrypted final path",
 	})
 }

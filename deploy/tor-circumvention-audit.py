@@ -67,9 +67,8 @@ need(
 
 # Desktop runtime: trusted Tor/PT helpers, private torrc, exact transport set,
 # bootstrap=100%, full-device TUN, owned children, and dynamic Tor exit proof.
-# Windows x64 uses the pinned Tor Expert Bundle + native PowerShell lifecycle;
-# Windows ARM64 remains unavailable until Tor Project publishes a pinned native
-# Expert Bundle for that architecture.
+# Windows x64/ARM64 retain native VPN engines/drivers. ARM64 uses the pinned
+# x64 Tor/PT userspace helpers only after an OS compatibility and execution check.
 need(
     "cmd/client/tor_bridge_runtime.go",
     'safeExecutable("lyrebird")',
@@ -77,7 +76,7 @@ need(
     "torBridgeTransportBinary",
     "torBridgeRuntimeCapabilityForRoot",
     'case "windows":',
-    'runtime.GOARCH != "amd64"',
+    'windowsTorHostCompatibility()',
     'windowsTorRuntimeExecutable(root, "tor.exe")',
     'windowsTorRuntimeExecutable(root, "lyrebird.exe")',
     'windowsTorRuntimeExecutable(root, "sing-box.exe")',
@@ -101,18 +100,27 @@ need(
     "windowsTorRuntimeExecutable",
     'filepath.Join(windowsRoot, "tor-expert")',
     "must contain exactly one",
-    "runtime.GOARCH != \"amd64\"",
-    "has no Windows ARM64 build",
+    "windowsTorHostCompatibility",
+)
+need(
+    "cmd/client/tor_windows_compatibility_windows.go",
+    "GetMachineTypeAttributes", "query.Call(0x8664", "attributes&1 != 0",
+)
+need(
+    "client/test-windows-tor-compatibility.ps1",
+    "ExpectedArchitecture", "Invoke-RouterVPNTorHelperVersion",
+    "0x8664", "Install-PinnedTorExpertBundle", "No Tor network",
 )
 need(
     "client/Setup-Windows-Runtime.ps1",
-    "TorExpertVersion = '15.0.21'",
+    "TorExpertVersion = '15.0.24'",
     "TorExpertWindowsX64Sha256",
     "Install-PinnedTorExpertBundle",
     "tor.exe",
     "lyrebird.exe",
-    "TorNativeAvailable = $true",
-    "Tor unavailable on Windows ARM64",
+    "TorHelpersAvailable = $true",
+    "GetMachineTypeAttributes",
+    "Invoke-RouterVPNTorHelperVersion",
 )
 need(
     "client/install-macos.sh",

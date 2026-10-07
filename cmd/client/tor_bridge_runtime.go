@@ -59,8 +59,8 @@ func torBridgeRuntimeCapabilityForRoot(root string) standardExitCapability {
 	cap := standardExitCapability{Protocol: "tor-bridge", Implemented: true}
 	switch runtime.GOOS {
 	case "windows":
-		if runtime.GOARCH != "amd64" {
-			cap.Reason = "native Tor bridge runtime is unavailable on Windows ARM64 because the pinned Tor Project Expert Bundle has no Windows ARM64 build"
+		if _, err := windowsTorHostCompatibility(); err != nil {
+			cap.Reason = err.Error()
 			return cap
 		}
 		for _, binary := range []string{"tor.exe", "lyrebird.exe", "sing-box.exe"} {

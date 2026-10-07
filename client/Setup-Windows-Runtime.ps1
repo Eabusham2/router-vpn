@@ -3,9 +3,9 @@ param([string]$PackageRoot = $PSScriptRoot)
 $ErrorActionPreference = 'Stop'
 $SingBoxVersion = '1.13.12'
 $XrayVersion = '26.7.11'
-$TorExpertVersion = '15.0.21'
-$TorVersion = '0.4.9.11'
-$TorExpertWindowsX64Sha256 = 'f22b8b17cb18c9fa775dfcf68acf6a2fe788336535fe94645204ca85158aa490'
+$TorExpertVersion = '15.0.24'
+$TorVersion = '0.4.9.13'
+$TorExpertWindowsX64Sha256 = 'e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65'
 
 function Assert-SafeZip([string]$ZipPath) {
   Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -38,6 +38,56 @@ function Install-PinnedArchive([string]$Name,[string]$Url,[string]$Sha256,[strin
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Destination $_.Name) -Force }
     }
   } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+function Get-RouterVPNTorHelperExecution([string]$Architecture) {
+  switch ($Architecture) {
+    'x64' { return 'x64 helpers' }
+    'arm64' {
+      if (-not ('RouterVpnTorMachineSupport' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class RouterVpnTorMachineSupport {
+  [DllImport("kernel32.dll", ExactSpelling=true)]
+  private static extern int GetMachineTypeAttributes(ushort machine, out uint attributes);
+  public static bool X64UserEnabled() {
+    uint attributes;
+    return GetMachineTypeAttributes(0x8664, out attributes) == 0 && (attributes & 1) != 0;
+  }
+}
+'@
+      }
+      try { $enabled = [RouterVpnTorMachineSupport]::X64UserEnabled() }
+      catch { throw 'Windows ARM64 Tor requires the Windows 11 x64 userspace execution API.' }
+      if (-not $enabled) { throw 'Windows did not report x64 userspace emulation enabled for Tor helpers.' }
+      return 'x64 helpers via Windows emulation; ARM64 VPN engine and driver'
+    }
+    default { throw "Unsupported Tor helper host architecture: $Architecture" }
+  }
+}
+
+function Invoke-RouterVPNTorHelperVersion([string]$Executable,[string]$Argument,[string]$Expected) {
+  if ($Argument -notin @('--version','-version')) { throw 'Only a version query is allowed for this helper check.' }
+  $info = New-Object Diagnostics.ProcessStartInfo
+  $info.FileName = $Executable; $info.Arguments = $Argument
+  $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+  $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+  $process = New-Object Diagnostics.Process
+  $process.StartInfo = $info
+  try {
+    if (-not $process.Start()) { throw 'Tor helper version process did not start.' }
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit(10000)) { throw 'Tor helper version process exceeded its timeout.' }
+    if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout,$stderr),2000)) { throw 'Tor helper output did not finish.' }
+    $text = $stdout.Result + $stderr.Result
+    if ($process.ExitCode -ne 0 -or $text.Length -gt 16384 -or $text -notmatch $Expected) { throw 'Pinned Tor helper failed its version/execution check.' }
+    return $text.Trim()
+  } finally {
+    try { if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(2000) } } catch { }
+    $process.Dispose()
+  }
 }
 
 function Install-PinnedTorExpertBundle([string]$Url,[string]$Sha256,[string]$ExpectedTorVersion,[string]$RuntimeRoot) {
@@ -77,8 +127,9 @@ function Install-PinnedTorExpertBundle([string]$Url,[string]$Sha256,[string]$Exp
     $lyrebirdMatches = @(Get-ChildItem -LiteralPath $extract -Recurse -File -Filter 'lyrebird.exe')
     if ($torMatches.Count -ne 1) { throw "Tor Expert Bundle must contain exactly one tor.exe; found $($torMatches.Count)." }
     if ($lyrebirdMatches.Count -ne 1) { throw "Tor Expert Bundle must contain exactly one lyrebird.exe; found $($lyrebirdMatches.Count)." }
-    $versionText = (& $torMatches[0].FullName --version 2>&1 | Out-String)
-    if ($LASTEXITCODE -ne 0 -or $versionText -notmatch [regex]::Escape($ExpectedTorVersion)) { throw "Tor Expert Bundle did not prove Tor $ExpectedTorVersion." }
+    $null = Invoke-RouterVPNTorHelperVersion $torMatches[0].FullName '--version' ('Tor version '+[regex]::Escape($ExpectedTorVersion)+'(?:[. ]|$)')
+    $null = Invoke-RouterVPNTorHelperVersion $lyrebirdMatches[0].FullName '-version' '(?i)lyrebird'
+
 
     New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
     $target = Join-Path $RuntimeRoot 'tor-expert'
@@ -136,12 +187,11 @@ if (-not (Test-Path -LiteralPath $Prep -PathType Leaf)) { throw "Missing Windows
 if (-not (Test-Path -LiteralPath $OpenVPNSetup -PathType Leaf)) { throw "Missing OpenVPN setup helper: $OpenVPNSetup" }
 
 $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
-$TorNativeAvailable = $false
+$TorHelpersAvailable = $false
 switch ($arch) {
   'x64' {
     $sbAsset = "sing-box-$SingBoxVersion-windows-amd64.zip"
     $sbSha = 'e93fc531134eb1beb4efa3c74990a24e48456098a31c03b60d5ddf17f223cf98'
-    $TorNativeAvailable = $true
   }
   'arm64' {
     $sbAsset = "sing-box-$SingBoxVersion-windows-arm64.zip"
@@ -149,14 +199,21 @@ switch ($arch) {
   }
   default { throw "Unsupported Windows architecture: $arch" }
 }
+$torHelperExecution = ''
+try {
+  $torHelperExecution = Get-RouterVPNTorHelperExecution $arch
+  $TorHelpersAvailable = $true
+} catch {
+  Write-Warning $_.Exception.Message
+}
 $sbUrl = "https://github.com/SagerNet/sing-box/releases/download/v$SingBoxVersion/$sbAsset"
 Install-PinnedArchive "sing-box-$SingBoxVersion" $sbUrl $sbSha 'sing-box.exe' $Runtime @('*.dll')
 Install-RouterVPNBundledXray -BundleRoot $AppRoot -Destination $Runtime -Architecture $arch
-if ($TorNativeAvailable) {
+if ($TorHelpersAvailable) {
   $torUrl = "https://dist.torproject.org/torbrowser/$TorExpertVersion/tor-expert-bundle-windows-x86_64-$TorExpertVersion.tar.gz"
   Install-PinnedTorExpertBundle $torUrl $TorExpertWindowsX64Sha256 $TorVersion $Runtime
 } else {
-  Write-Host 'Tor/Lyrebird native Windows runtime remains unavailable on Windows ARM64: Tor Project does not publish a Windows ARM64 Expert Bundle for this pinned release.'
+  Write-Host 'Tor helpers are unavailable because this Windows host did not prove x64 userspace execution support.'
 }
 
 & (Join-Path $Runtime 'sing-box.exe') version | Select-Object -First 1
@@ -174,6 +231,6 @@ if ($LASTEXITCODE -ne 0) { throw 'OpenVPN runtime setup failed.' }
 & $Prep -Root $DataRoot -Source $ModesSource -ModesDir $ModesDir -HelpersRoot $HelpersRoot
 if ($LASTEXITCODE -ne 0) { throw 'Windows mode-catalog preparation failed.' }
 Write-Host ''
-$torStatus = if ($TorNativeAvailable) { " + Tor $TorVersion/Lyrebird" } else { ' + Tor unavailable on Windows ARM64' }
+$torStatus = if ($TorHelpersAvailable) { " + Tor $TorVersion/Lyrebird ($torHelperExecution)" } else { ' + Tor helpers unavailable on this Windows host' }
 Write-Host "Router VPN native Windows runtime is ready: sing-box $SingBoxVersion + Xray $XrayVersion + OpenVPN 2.7.x$torStatus."
 Write-Host 'No WSL is used. Reopen Router VPN so readiness checks re-evaluate the native modes and custom external nodes.'

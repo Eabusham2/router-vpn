@@ -85,8 +85,8 @@ func windowsTorRuntimeExecutable(root, name string) (string, error) {
 	if runtime.GOOS != "windows" {
 		return "", errors.New("Windows Tor runtime requested on a non-Windows platform")
 	}
-	if runtime.GOARCH != "amd64" {
-		return "", errors.New("native Tor bridge runtime is unavailable on Windows ARM64 because the pinned Tor Project Expert Bundle has no Windows ARM64 build")
+	if _, err := windowsTorHostCompatibility(); err != nil {
+		return "", err
 	}
 	windowsRoot := filepath.Join(filepath.Clean(root), "runtime", "windows")
 	switch strings.ToLower(strings.TrimSpace(name)) {
