@@ -339,7 +339,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         var expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         var rawFiles: [String: Data]
         if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID) {
-            try IOSStartLayer.validateWireGuard(profile: selectedProfile)
+            // Raw WireGuardKit still rejects Start Layer. This branch composes
+            // the validated WG/AWG endpoint through the pinned native compiler.
+            _ = try IOSStartLayer.selectedMode(profile: selectedProfile)
             if expectedNodeID.isEmpty && rawProfileID == "wg" {
                 let parsed = try RouterVPNWireGuardConfig.parse(wireGuardLikeProfile(root, rawProfileID: "wg"), name: "Router VPN")
                 guard parsed.peers.count == 1, let peer = parsed.peers.first else { throw tunnelError(58, "Native WG requires exactly one owned peer.") }

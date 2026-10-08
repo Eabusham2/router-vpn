@@ -88,6 +88,8 @@ final class NativeSingBoxController {
                     applySelectedDns(root, config);
                     config = AndroidWireGuardLibboxPolicy.apply(root, config);
                     if (!AndroidStartLayer.nativeCapabilityReason(root, id).isEmpty()) continue;
+                    AndroidStartLayer.RelayPlan plan = AndroidStartLayer.apply(root, config, id);
+                    if (plan != null) { plan.clear(); throw new IllegalStateException("Native WG/AWG must own its Start Layer without a local relay."); }
                     config = applyPerformance(root, config);
                     Libbox.checkConfig(config.toString());
                 }

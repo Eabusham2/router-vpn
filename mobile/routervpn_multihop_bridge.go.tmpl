@@ -20,6 +20,11 @@ func RouterApplyMultihopLANPolicy(config, profiles string) (string, error) {
 	return mobilemultihop.ApplyLANPolicy(config, profiles)
 }
 
+// RouterComposeNativeBaseStartLayer returns one policy-preserving WG/AWG graph.
+func RouterComposeNativeBaseStartLayer(config, shadowsocks, policy string) (string, error) {
+    return mobilemultihop.ComposeNativeBaseStartLayer(config, shadowsocks, policy)
+}
+
 // RouterCompileWireGuardProfile verifies the paired key and keeps native options.
 func RouterCompileWireGuardProfile(config, nodeID string) (string, error) {
 	return mobilemultihop.CompileWireGuardProfile(config, nodeID)

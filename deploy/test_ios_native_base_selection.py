@@ -114,7 +114,15 @@ func candidates(_ bundle: ClientBundle, _ logical: String = "base-raw") throws -
             }
             var bad = try fixture(); bad.profiles[raw] = [asset:"not-base64"]
             reject("invalid native encoding \(raw)") { _ = try IOSRuntimeSelector.selectRaw(bundle:bad,rawProfileID:raw) }
-            reject("Start Layer not silently ignored \(raw)") { _ = try IOSRuntimeSelector.selectRaw(bundle:fixture(start:"aes-256-gcm"),rawProfileID:raw) }
+            for start in ["aes-256-gcm", "aes-256-gcm+xor-whitening"] {
+                var layered = try fixture(start:start)
+                layered.routerProfiles[0].mtuPolicy = "fixed"
+                layered.routerProfiles[0].manualMTU = 1380
+                let selected = try IOSRuntimeSelector.selectRaw(bundle:layered,rawProfileID:raw)
+                try check("Start Layer preserves exact mode on Libbox", selected.rawProfileID == raw && selected.engine == .libbox)
+                try check("Start Layer retains original peer profile", selected.files[asset] == Data(base64Encoded:layered.profiles[raw]![asset]!,options:[]))
+            }
+            reject("standalone XOR remains rejected") { _ = try IOSRuntimeSelector.selectRaw(bundle:fixture(start:"xor"),rawProfileID:raw) }
             try check("native family encrypted DNS keeps exact mode", IOSRuntimeSelector.selectRaw(bundle:fixture(dns:"dot"),rawProfileID:raw).engine == .libbox && IOSRuntimeSelector.selectRaw(bundle:fixture(dns:"dot"),rawProfileID:raw).rawProfileID == raw)
         }
         for raw in ["wg", "awg2-fast", "awg2-strong"] {

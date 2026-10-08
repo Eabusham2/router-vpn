@@ -114,6 +114,7 @@ final class AndroidNativeProfilePolicy {
 
     static boolean requiresLibbox(JSONObject bundle) throws Exception {
         JSONObject profile = selectedProfile(bundle);
+        if (!AndroidStartLayer.OFF.equals(AndroidStartLayer.selectedMode(bundle))) return true;
         String mtu=stringPolicy(profile,"mtu_policy","auto");
         if ((mtu.isEmpty()||"auto".equals(mtu))&&!booleanPolicy(profile,"jumbo_tun",false)) return true;
         String ipv6 = stringPolicy(profile, "ipv6_mode", "on");

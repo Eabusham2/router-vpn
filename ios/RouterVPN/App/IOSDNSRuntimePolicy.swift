@@ -70,7 +70,11 @@ enum IOSDNSRuntimePolicy {
         // callbacks. Preserve the exact WG/AWG mode and peer, not a protocol
         // fallback. Fixed/default MTU can still use the raw native adapter.
         let adaptiveMTU = (mtu.isEmpty || mtu == "auto") && profile.jumboTUN != true
-        return adaptiveMTU || dns?.wireGuardCompatible == false || profile.homeLANAccess == false || ipv6 == "off" || profile.daitaEnabled == true || profile.jumboTUN == true
+        // The raw adapter cannot wrap a packet endpoint in an owned AES path.
+        // IOSRuntimeSelector validates aliases and refuses standalone XOR first.
+        let start = clean(profile.startLayer).lowercased()
+        let layeredBase = !["", "off", "none", "disabled"].contains(start)
+        return layeredBase || adaptiveMTU || dns?.wireGuardCompatible == false || profile.homeLANAccess == false || ipv6 == "off" || profile.daitaEnabled == true || profile.jumboTUN == true
     }
 
     static func validate(selection: IOSRuntimeSelection, in bundle: ClientBundle) throws {

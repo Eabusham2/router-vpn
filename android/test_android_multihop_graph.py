@@ -30,6 +30,9 @@ func main(){
   if err==nil{template:=&x509.Certificate{SerialNumber:big.NewInt(1),Subject:pkix.Name{CommonName:r.Config},DNSNames:[]string{r.Config},NotBefore:time.Now().Add(-time.Hour),NotAfter:time.Now().Add(time.Hour),IsCA:true,BasicConstraintsValid:true,KeyUsage:x509.KeyUsageCertSign|x509.KeyUsageDigitalSignature};var der []byte;der,err=x509.CreateCertificate(rand.Reader,template,template,&key.PublicKey,key);if err==nil{value=string(pem.EncodeToMemory(&pem.Block{Type:"CERTIFICATE",Bytes:der}))}}
  case "plan":
   var controller *mobilemultihop.Controller;controller,err=mobilemultihop.New(r.Config,r.Policy);if err==nil{value=controller.Config();err=controller.Close()}
+ case "base-start":
+  var inputs struct{Config string;Source string};err=json.Unmarshal([]byte(r.Config),&inputs)
+  if err==nil{value,err=mobilemultihop.ComposeNativeBaseStartLayer(inputs.Config,inputs.Source,r.Policy)}
  case "proxy-entry":value,err=mobilemultihop.CompileProxyEntry(r.Config,r.Policy)
  case "mtu-profile":value,err=mobilemultihop.MultihopMTUProfile(r.Config,r.Policy)
  case "mtu":value,err=mobilemultihop.ApplyMTUPolicy(r.Config,r.Policy)
@@ -100,6 +103,9 @@ public final class Libbox {
  public static String routerAmneziaExitConfig(String c,String p)throws Exception{return call("awg-exit",c,p);}
  public static String testCertificate(String name)throws Exception{return call("test-certificate",name,"");}
  public static String testPlan(String c,String p)throws Exception{return call("plan",c,p);}
+ public static String routerComposeNativeBaseStartLayer(String c,String source,String policy)throws Exception {
+  return call("base-start",new JSONObject().put("Config",c).put("Source",source).toString(),policy);
+ }
  public static String routerCompileProxyEntry(String c,String p)throws Exception{return call("proxy-entry",c,p);}
  public static String routerMultihopMTUProfile(String c,String p)throws Exception{return call("mtu-profile",c,p);}
  public static String routerApplyMultihopMTUPolicy(String c,String p)throws Exception{return call("mtu",c,p);}
@@ -470,6 +476,46 @@ public final class MultihopGraphHarness {
   try{builder.prepare(a,file,"wg");}catch(Exception expected){rejected=true;}
   check(rejected,"invalid graph was accepted");check(sessions(app)==before,"rejected graph left session state");
  }
+ static void nativeStartChecks(Context context,Path dir,Path app)throws Exception {
+  NativeSingBoxController controller=new NativeSingBoxController(context);
+  String params="Jc=3\nJmin=40\nJmax=900\nS1=56\nS2=48\nS3=24\nS4=32\nH1=10000000-19999999\nH2=20000000-29999999\nH3=30000000-39999999\nH4=40000000-49999999\n";
+  for(String mode:new String[]{"wg","awg2-fast","awg2-strong"})for(String start:new String[]{"aes-256-gcm","aes-256-gcm+xor-whitening"})for(String dns:new String[]{"home","dot","doh","doh3"}){
+   JSONObject b=bundle('a'),p=profile(b);
+   p.put("start_layer",start).put("mtu_policy","fixed").put("manual_mtu",1380).put("home_lan_access",false).put("ipv6_mode","off");
+   if(!dns.equals("home"))p.put("dns_mode",dns).put("dns_host","1.1.1.1").put("dns_server_name","dns.example.test");
+   JSONObject outer=new JSONObject().put("type","shadowsocks").put("tag","proxy").put("method","2022-blake3-aes-256-gcm").put("password",key('s')).put("server","192.0.2.1").put("server_port",8388);
+   JSONObject aes=new JSONObject().put("outbounds",new JSONArray().put(outer));
+   b.getJSONObject("profiles").put("shadowsocks",new JSONObject().put("sing-box.json",Base64.getEncoder().encodeToString(aes.toString().getBytes(StandardCharsets.UTF_8))));
+   if(!mode.equals("wg")){
+    String awgText=wg('a').replace("[Peer]",params+"[Peer]");
+    b.getJSONObject("profiles").put(mode,new JSONObject().put("awg.conf",Base64.getEncoder().encodeToString(awgText.getBytes(StandardCharsets.UTF_8))));
+    b.getJSONArray("modes").put(new JSONObject().put("id",mode).put("name",mode));
+   }
+   File input=save(dir,b);byte[] original=Files.readAllBytes(input.toPath());
+   check(AndroidNativeProfilePolicy.requiresLibbox(b),"Start Layer must not select raw adapter");
+   check(controller.listDirectLibboxModes(input).stream().anyMatch(m->m.id.equals(mode)),"valid native Start Layer disappeared from readiness");
+   NativeSingBoxController.SessionInfo session=controller.prepareSession(input,mode);
+   Path folder=app.resolve("layered-sessions").resolve(session.sessionId);
+   JSONObject cfg=new JSONObject(Files.readString(folder.resolve("sing-box.json")));
+   check(session.modeId.equals(mode),"native Start Layer changed selected mode");
+   check(!Files.exists(folder.resolve("wg.conf"))&&!Files.exists(folder.resolve("awg.conf"))&&!Files.exists(folder.resolve(AndroidStartLayerRelay.SESSION_FILE)),"a second backend or local relay was staged");
+   check(cfg.getJSONArray("inbounds").length()==1&&cfg.getJSONArray("endpoints").length()==1,"Start Layer duplicated the system VPN");
+   JSONObject endpoint=cfg.getJSONArray("endpoints").getJSONObject(0),peer=endpoint.getJSONArray("peers").getJSONObject(0);
+   check(endpoint.getString("type").equals(mode.equals("wg")?"wireguard":"routervpn-amneziawg"),"protocol substituted");
+   check(endpoint.getString("private_key").equals(key('z'))&&peer.getString("public_key").equals(key('a'))&&peer.getString("pre_shared_key").equals(key('p')),"peer credentials changed");
+   check(endpoint.getString("detour").equals("start-layer-aes")&&peer.getString("address").equals("10.77.0.1")&&peer.getInt("port")==51820,"inner peer did not traverse remote AES service");
+   check(endpoint.getInt("mtu")==1380&&cfg.getJSONArray("inbounds").getJSONObject(0).getInt("mtu")==1380,"fixed MTU lost");
+   if(!mode.equals("wg"))check(endpoint.getJSONObject("amnezia").length()==11&&endpoint.getJSONObject("amnezia").getString("s4").equals("32"),"AWG parameters lost");
+   JSONObject aesOut=cfg.getJSONArray("outbounds").getJSONObject(0);
+   check(aesOut.getString("password").equals(key('s'))&&aesOut.getString("method").equals("2022-blake3-aes-256-gcm"),"AES authentication changed");
+   check(aesOut.getString("type").equals(start.endsWith("whitening")?"routervpn-aes-xor":"shadowsocks")&&aesOut.getString("server").equals("192.0.2.1"),"outer engine or address changed");
+   check(cfg.getJSONObject("dns").getJSONArray("servers").getJSONObject(0).getString("detour").equals("proxy"),"DNS escaped native base");
+   check(Arrays.equals(original,Files.readAllBytes(input.toPath())),"Start Layer mutated source bundle");
+   int before=sessions(app);b.getJSONArray("routerProfiles").put(new JSONObject(p.toString()));
+   boolean rejected=false;try{controller.prepareSession(save(dir,b),mode);}catch(Exception expected){rejected=true;}
+   check(rejected&&sessions(app)==before,"ambiguous profile staged files");
+  }
+ }
  public static void main(String[] args)throws Exception {
   Path dir=Path.of(args[0]);Path app=Files.createDirectory(dir.resolve("app"));Context context=new Context(app.toFile());
   AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
@@ -507,6 +553,7 @@ public final class MultihopGraphHarness {
   boolean failed=false;try{NativeSingBoxController.applySelectedDns(bundle('b'),new JSONObject().put("outbounds",new JSONArray().put(new JSONObject().put("type","direct").put("tag","proxy"))));}catch(Exception expected){failed=true;}
   check(failed,"DNS accepted a direct-only proxy tag");
   directChecks(context,dir,app);
+  nativeStartChecks(context,dir,app);
   awgChecks(context,dir,app);
   awgEntryChecks(context,dir);
   awgExitChecks(dir);

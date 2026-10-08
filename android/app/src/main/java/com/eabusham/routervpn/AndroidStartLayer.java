@@ -4,6 +4,7 @@ import android.util.Base64;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import io.nekohasekai.libbox.Libbox;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -42,11 +43,13 @@ final class AndroidStartLayer {
     }
 
     private static final Set<String> SUPPORTED = new HashSet<>(Arrays.asList(
-            "shadowsocks", "hysteria2", "naive-h2", "naive-h3"));
+            "wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "naive-h2", "naive-h3"));
 
     static String selectedMode(JSONObject bundle) throws Exception {
         JSONObject profile = selectedRouterProfile(bundle);
-        return normalize(profile.optString("start_layer", OFF));
+        Object raw = profile.opt("start_layer");
+        if (raw != null && !(raw instanceof String)) throw new IllegalStateException("Start Layer policy must be a string.");
+        return normalize(raw == null ? OFF : (String) raw);
     }
 
     static boolean supportsRawMode(String modeId) {
@@ -74,6 +77,33 @@ final class AndroidStartLayer {
         }
         if (!AES.equals(start) && !AES_XOR.equals(start)) throw new IllegalStateException("Unsupported Android Start Layer: " + start);
         boolean xor = AES_XOR.equals(start);
+        if ("wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode)) {
+            JSONObject profile = selectedRouterProfile(bundle);
+            JSONObject profiles = bundle.getJSONObject("profiles");
+            String encoded = profiles.getJSONObject("shadowsocks").getString("sing-box.json");
+            if (encoded.isEmpty() || encoded.length() > 6 * 1024 * 1024) throw new IllegalStateException("Native Start Layer source exceeds the safety bound.");
+            byte[] source = Base64.decode(encoded, Base64.DEFAULT);
+            if (source.length == 0 || source.length > 4 * 1024 * 1024 || !Base64.encodeToString(source, Base64.NO_WRAP).equals(encoded)) {
+                throw new IllegalStateException("Native Start Layer requires the exact generated AES profile encoding.");
+            }
+            String sourceText = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(source)).toString();
+            JSONObject policy = new JSONObject().put("mode", start).put("raw_mode", mode)
+                    .put("node_kind", "router-vpn").put("router_api", profile.getString("router_api"));
+            String composed = Libbox.routerComposeNativeBaseStartLayer(targetConfig.toString(), sourceText, policy.toString());
+            if (composed == null || composed.isEmpty() || composed.getBytes(StandardCharsets.UTF_8).length > 4 * 1024 * 1024) {
+                throw new IllegalStateException("Native Start Layer did not return a bounded graph.");
+            }
+            JSONObject verified = new JSONObject(composed);
+            JSONArray endpoints = verified.getJSONArray("endpoints"), routes = verified.getJSONArray("outbounds");
+            // Publish only after the shared compiler validates the complete graph.
+            // DNS, routing, MTU, authentication and the original bundle stay owned.
+            targetConfig.put("endpoints", endpoints);
+            targetConfig.put("outbounds", routes);
+            return null; // Native encrypted outbound owns UDP; no second relay/VPN.
+        }
 
         JSONArray outbounds = targetConfig.optJSONArray("outbounds");
         if (outbounds == null) throw new IllegalStateException(mode + " has no Libbox outbounds.");
@@ -134,18 +164,7 @@ final class AndroidStartLayer {
     }
 
     private static JSONObject selectedRouterProfile(JSONObject bundle) throws Exception {
-        JSONArray profiles = bundle.optJSONArray("routerProfiles");
-        String selected = bundle.optString("selectedRouterID", "").trim();
-        if (profiles == null || profiles.length() == 0) throw new IllegalStateException("Router VPN bundle has no Router profiles.");
-        JSONObject fallback = null;
-        for (int i = 0; i < profiles.length(); i++) {
-            JSONObject profile = profiles.optJSONObject(i);
-            if (profile == null) continue;
-            if (fallback == null) fallback = profile;
-            if (!selected.isEmpty() && selected.equals(profile.optString("id", ""))) return requireHome(profile);
-        }
-        if (!selected.isEmpty()) throw new IllegalStateException("Selected Router VPN profile is missing from the Android bundle.");
-        return requireHome(fallback);
+        return requireHome(AndroidProfileSelection.selectedRouterProfile(bundle));
     }
 
     private static JSONObject requireHome(JSONObject profile) throws Exception {

@@ -1,5 +1,8 @@
 import Foundation
 import CoreFoundation
+#if canImport(Libbox)
+import Libbox
+#endif
 
 enum IOSStartLayer {
     static let off = "off"
@@ -10,11 +13,15 @@ enum IOSStartLayer {
     static let nativeWhiteningType = "routervpn-aes-xor"
     static let whiteningPort = 8389
 
-    private static let supportedRawModes: Set<String> = ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"]
+    private static let supportedRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "naive-h2", "naive-h3"]
     private static let maxJSONBytes = 4 * 1024 * 1024
 
     static func selectedMode(profile: [String: Any]) throws -> String {
-        try normalize(profile["start_layer"] as? String ?? off)
+        if let raw = profile["start_layer"] {
+            guard let text = raw as? String else { throw error("Start Layer policy must be a string.") }
+            return try normalize(text)
+        }
+        return off
     }
 
     static func validateWireGuard(profile: [String: Any]) throws {
@@ -35,7 +42,8 @@ enum IOSStartLayer {
         root: [String: Any],
         selectedProfile: [String: Any],
         files: [String: Data],
-        rawProfileID: String
+        rawProfileID: String,
+        nativeBaseCompiler: ((String, String, String) throws -> String)? = nil
     ) throws -> [String: Data] {
         let start = try selectedMode(profile: selectedProfile)
         guard start != off else { return files }
@@ -54,6 +62,46 @@ enum IOSStartLayer {
         // XOR is obfuscation only; the native outbound always uses authenticated
         // Shadowsocks 2022 AES. No local listener, second VPN, or helper process.
         let whitening = start == aesXOR
+        if ["wg", "awg2-fast", "awg2-strong"].contains(rawMode) {
+            guard let config = files["sing-box.json"], !config.isEmpty, config.count <= maxJSONBytes,
+                  let configText = String(data: config, encoding: .utf8),
+                  let profiles = root["profiles"] as? [String: Any],
+                  let source = profiles["shadowsocks"] as? [String: Any],
+                  let encoded = source["sing-box.json"] as? String,
+                  !encoded.isEmpty, encoded.utf8.count <= 6 * 1024 * 1024,
+                  let data = Data(base64Encoded: encoded, options: []),
+                  !data.isEmpty, data.count <= maxJSONBytes,
+                  data.base64EncodedString() == encoded,
+                  let sourceText = String(data: data, encoding: .utf8),
+                  let routerAPI = selectedProfile["router_api"] as? String else {
+                throw error("Native WG/AWG Start Layer requires its exact bounded AES profile and private node address.")
+            }
+            let captured: [String: String] = ["mode": start, "raw_mode": rawMode,
+                                              "node_kind": kind, "router_api": routerAPI]
+            let policy = String(decoding: try JSONSerialization.data(withJSONObject: captured), as: UTF8.self)
+            let composed: String
+            if let nativeBaseCompiler {
+                composed = try nativeBaseCompiler(configText, sourceText, policy)
+            } else {
+                #if canImport(Libbox)
+                var failure: NSError?
+                let result: String? = LibboxRouterComposeNativeBaseStartLayer(configText, sourceText, policy, &failure)
+                if let failure { throw failure }
+                guard let result, !result.isEmpty else { throw error("The native Start Layer compiler returned no graph.") }
+                composed = result
+                #else
+                throw error("Native WG/AWG Start Layer requires the pinned Libbox compiler.")
+                #endif
+            }
+            guard !composed.isEmpty, composed.utf8.count <= maxJSONBytes,
+                  let graph = try JSONSerialization.jsonObject(with: Data(composed.utf8)) as? [String: Any],
+                  graph["endpoints"] is [[String: Any]], graph["outbounds"] is [[String: Any]] else {
+                throw error("The native Start Layer compiler returned an invalid or oversized graph.")
+            }
+            var result = files
+            result["sing-box.json"] = Data(composed.utf8)
+            return result
+        }
 
         guard let targetData = files["sing-box.json"], !targetData.isEmpty, targetData.count <= maxJSONBytes,
               var target = try JSONSerialization.jsonObject(with: targetData) as? [String: Any],
