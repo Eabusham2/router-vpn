@@ -18,14 +18,14 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
       - name: Validate iOS runtime and DNS truth contracts
         run: |
           python3 ios/RouterVPN/test_runtime_selection_contract.py
           python3 ios/RouterVPN/test_dns_policy_contract.py
           python3 deploy/test_ios_speed_lab_http_boundary.py
           python3 deploy/test_ios_physical_path.py
-      - uses: actions/setup-go@v5
-        with: {go-version: '1.26.3', cache: false}
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Prepare pinned native engines

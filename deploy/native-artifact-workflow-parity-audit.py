@@ -410,3 +410,14 @@ assert "Same-SHA native Android VpnService app" in publisher, "Setup Center publ
 assert "Android controller/importer APK" not in publisher, "Setup Center publisher contains retired Android shell wording"
 
 print("native artifact/workflow parity audit: OK")
+# Apple composition executes the shipping Go compiler before native packaging.
+# These single-job workflows must set up the pinned toolchain before invoking
+# the runtime contract; finding setup-go later in the file is not sufficient.
+for rel in (ios_compile_smoke_rel, ".github/workflows/restore-ios-mtu-source.yml"):
+    body = read(rel)
+    require(body, rel, "actions/setup-go@v5", "go-version: '1.26.3'",
+            "python3 ios/RouterVPN/test_runtime_selection_contract.py")
+    assert body.index("actions/setup-go@v5") < body.index(
+        "python3 ios/RouterVPN/test_runtime_selection_contract.py"
+    ), f"{rel}: Go must be installed before executing Apple Swift-to-Go contracts"
+print("Apple native contract toolchain ordering: PASS")
