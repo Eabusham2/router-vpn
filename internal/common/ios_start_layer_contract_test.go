@@ -11,10 +11,14 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 		`static let aes = "aes-256-gcm"`,
 		`static let aesXOR = "aes-256-gcm+xor-whitening"`,
 		`static let aesMethod = "2022-blake3-aes-256-gcm"`,
-		`private static let supportedRawModes: Set<String> = ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"]`,
+		`private static let supportedRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "naive-h2", "naive-h3"]`,
 		"Start Layer requires authenticated Shadowsocks 2022 BLAKE3 AES-256-GCM",
 		`static let nativeWhiteningType = "routervpn-aes-xor"`,
 		"XOR is obfuscation only",
+		"LibboxRouterComposeNativeBaseStartLayer(configText, sourceText, policy, &failure)",
+		`"node_kind": kind, "router_api": routerAPI`,
+		`data.base64EncodedString() == encoded`,
+		`result["sing-box.json"] = Data(composed.utf8)`,
 		`outbounds[proxyIndex]["server"] = "127.0.0.1"`,
 		`outbounds[proxyIndex]["detour"] = aesTag`,
 		`result["sing-box.json"] = composed`,
@@ -73,9 +77,9 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 
 	selector := repoFile(t, "ios/RouterVPN/App/IOSRuntimeSelection.swift")
 	for _, required := range []string{
-		`private static let startLayerRawModes: Set<String> = ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"]`,
+		`private static let startLayerRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "naive-h2", "naive-h3"]`,
 		"try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)",
-		"Start Layer AES-256-GCM requires an iOS Libbox raw mode",
+		"Start Layer AES-256-GCM requires an owned Libbox WG/AWG",
 		"start == startLayerAES || start == startLayerAESXOR",
 		"routervpn-aes-xor",
 	} {
@@ -115,5 +119,46 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	project := repoFile(t, "ios/RouterVPN/project.yml")
 	if !strings.Contains(project, "sources: [PacketTunnel]") {
 		t.Fatal("PacketTunnel target no longer composes the PacketTunnel source directory containing IOSStartLayer.swift")
+	}
+}
+
+// A mode list is not implementation proof. Keep both native host call paths
+// connected to the shipping Go composer and retain raw-backend rejection.
+func TestNativeBaseStartLayerHostsShareTheCompiler(t *testing.T) {
+	sources := map[string][]string{
+		"mobile/routervpn_multihop_bridge.go.tmpl": {
+			"func RouterComposeNativeBaseStartLayer(",
+			"return mobilemultihop.ComposeNativeBaseStartLayer(config, shadowsocks, policy)",
+		},
+		"ios/RouterVPN/App/IOSDNSRuntimePolicy.swift": {
+			"let layeredBase =", "return layeredBase || adaptiveMTU",
+		},
+		"android/app/src/main/java/com/eabusham/routervpn/AndroidNativeProfilePolicy.java": {
+			"if (!AndroidStartLayer.OFF.equals(AndroidStartLayer.selectedMode(bundle))) return true;",
+		},
+		"android/app/src/main/java/com/eabusham/routervpn/AndroidStartLayer.java": {
+			"Libbox.routerComposeNativeBaseStartLayer(targetConfig.toString(), sourceText, policy.toString())",
+			"AndroidProfileSelection.selectedRouterProfile(bundle)",
+		},
+		"android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java": {
+			"AndroidStartLayer.apply(root, config, id)",
+			"AndroidStartLayer.apply(root, patchedConfig, modeId)",
+		},
+		"ios/RouterVPN/test_runtime_selection_contract.py": {"deploy/test_ios_native_base_start_layer.py"},
+		"mobile/routervpn_multihop_native_test.go.tmpl":    {"func TestRouterNativeBaseStartLayerGraph("},
+	}
+	for path, markers := range sources {
+		source := repoFile(t, path)
+		for _, marker := range markers {
+			if !strings.Contains(source, marker) {
+				t.Errorf("native Start Layer missing %s in %s", marker, path)
+			}
+		}
+	}
+	provider := repoFile(t, "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift")
+	start := strings.Index(provider, "private func startWireGuard(")
+	end := strings.Index(provider, "private func startMultihop(")
+	if start < 0 || end <= start || !strings.Contains(provider[start:end], "try IOSStartLayer.validateWireGuard(profile: selectedProfile)") {
+		t.Fatal("raw WireGuardKit must not silently ignore a requested Start Layer")
 	}
 }
