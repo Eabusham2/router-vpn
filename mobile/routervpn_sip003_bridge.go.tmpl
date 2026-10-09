@@ -9,3 +9,10 @@ func RouterCompileSIP003Profile(wrapper, helper string) (string, error) {
 	result, err := nativesip003.Compile([]byte(wrapper), []byte(helper))
 	return string(result), err
 }
+
+// RouterComposeSIP003StartLayer keeps both native TCP and UDP paths inside the
+// explicitly selected authenticated home-node Start Layer.
+func RouterComposeSIP003StartLayer(wrapper, helper, aes, policy string) (string, error) {
+	result, err := nativesip003.ComposeStartLayer([]byte(wrapper), []byte(helper), []byte(aes), []byte(policy))
+	return string(result), err
+}
