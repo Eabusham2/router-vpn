@@ -92,3 +92,10 @@ func ResolveAndCompile(ctx context.Context, mode string, wrapper, raw []byte, lo
 	}
 	return map[string][]byte{"sing-box.json": normalized, "xray.json": resolved}, nil
 }
+
+// CompileForSelection validates without resolving a host or opening a socket.
+// Runtime construction still requires ResolveAndCompile and the literal-only
+// Prepare function; readiness is not permission to bypass native ownership.
+func CompileForSelection(mode string, wrapper, raw []byte) ([]byte, error) {
+	return compile(mode, wrapper, raw, true)
+}

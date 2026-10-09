@@ -13,6 +13,10 @@ import (
 // native DNS dialers retain their owned paths; ordinary TUN traffic cannot use
 // those internal dialers as a general private-LAN bypass.
 func ApplyLANPolicy(config, profiles string) (string, error) {
+	return applyLANPolicyFinal(config, profiles, "proxy")
+}
+
+func applyLANPolicyFinal(config, profiles, final string) (string, error) {
 	var pair struct {
 		Entry map[string]any `json:"entry"`
 		Exit  map[string]any `json:"exit"`
@@ -77,7 +81,7 @@ func ApplyLANPolicy(config, profiles string) (string, error) {
 		return "", errors.New("invalid bounded multihop graph")
 	}
 	route, valid := root["route"].(map[string]any)
-	if !valid || route["final"] != "proxy" {
+	if !valid || route["final"] != final {
 		return "", errors.New("LAN policy requires the owned encrypted exit route")
 	}
 	inbound, valid := root["inbounds"].([]any)
@@ -153,7 +157,7 @@ func ApplyLANPolicy(config, profiles string) (string, error) {
 	}
 	policy = append(policy, []any{
 		map[string]any{"inbound": []string{tag}, "protocol": "dns", "action": "hijack-dns"},
-		map[string]any{"inbound": []string{tag}, "network": "tcp", "ip_cidr": []string{host}, "port": port, "action": "route", "outbound": "proxy"},
+		map[string]any{"inbound": []string{tag}, "network": "tcp", "ip_cidr": []string{host}, "port": port, "action": "route", "outbound": final},
 		map[string]any{"inbound": []string{tag}, "ip_cidr": networks, "action": "reject"},
 	}...)
 	// Explicit included routes prevent a more-specific physical LAN route from

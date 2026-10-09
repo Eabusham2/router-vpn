@@ -54,3 +54,9 @@ func RouterResolveXrayStartLayerProfile(mode, wrapper, xray, aes, policy string)
 	output, err := json.Marshal(files)
 	return string(output), err
 }
+
+// RouterCheckXrayProfile is a pure, no-network readiness/compiler operation.
+func RouterCheckXrayProfile(mode, wrapper, xray string) (string, error) {
+	output, err := applexray.CompileForSelection(mode, []byte(wrapper), []byte(xray))
+	return string(output), err
+}
