@@ -44,13 +44,15 @@ class NativeRunnerDependencies(unittest.TestCase):
             (core/'include').mkdir()
             registry = core/'include/registry.go'
             registry.write_text('import (\n\t"github.com/sagernet/sing-box/protocol/shadowsocks"\n)\nfunc register() {\n\tshadowsocks.RegisterOutbound(registry)\n}\n')
-            with mock.patch.object(module, 'checkout'):
+            with mock.patch.object(module, 'checkout'), mock.patch.object(module.STREAM, 'prepare') as stream:
                 module.prepare(core)
                 before = {str(p.relative_to(core)):p.read_bytes() for p in core.rglob('*') if p.is_file()}
                 module.prepare(core)
                 self.assertEqual(before, {str(p.relative_to(core)):p.read_bytes() for p in core.rglob('*') if p.is_file()})
             self.assertIn('routervpnwhitening.RegisterOutbound(registry)', registry.read_text())
+            self.assertEqual(stream.call_count,2)
             for p in (ROOT/'mobile/startwhitening').glob('*.tmpl'):
+                if p.name=='ss_stream_guard.go.tmpl':continue
                 self.assertEqual((core/'protocol/routervpnwhitening'/p.name.removesuffix('.tmpl')).read_bytes(), p.read_bytes())
 
     def test_original_native_packet_gates_remain_required(self):

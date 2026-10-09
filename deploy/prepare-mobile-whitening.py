@@ -3,12 +3,16 @@
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+_spec=importlib.util.spec_from_file_location('ss_stream_policy',ROOT/'deploy/mobile_shadowsocks_stream_policy.py')
+STREAM=importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(STREAM)
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/"deploy/prepare-mobile-buffers.py", ROOT/"deploy/mobile_udp_socket_policy.py"] + sorted((ROOT/'internal/startwhitening').glob('*.go')) + sorted((ROOT/'mobile/startwhitening').glob('*.tmpl'))
+    return STREAM.inputs() + [Path(__file__).resolve(), ROOT/"deploy/prepare-mobile-buffers.py", ROOT/"deploy/mobile_udp_socket_policy.py"] + sorted((ROOT/'internal/startwhitening').glob('*.go')) + sorted((ROOT/'mobile/startwhitening').glob('*.tmpl'))
 
 def digest():
     h=hashlib.sha256()
@@ -41,10 +45,12 @@ def prepare(vendor):
     text=replace_once(text,old,old+'\n\t"github.com/sagernet/sing-box/protocol/routervpnwhitening"')
     old='\tshadowsocks.RegisterOutbound(registry)'
     text=replace_once(text,old,old+'\n\troutervpnwhitening.RegisterOutbound(registry)')
+    STREAM.prepare(vendor)
     policy=vendor/'experimental/libbox/routervpn/startwhitening';policy.mkdir(parents=True,exist_ok=True)
     for p in (ROOT/'internal/startwhitening').glob('*.go'): (policy/p.name).write_bytes(p.read_bytes())
     adapter=vendor/'protocol/routervpnwhitening';adapter.mkdir(parents=True,exist_ok=True)
     for p in (ROOT/'mobile/startwhitening').glob('*.tmpl'):
+        if p.name=='ss_stream_guard.go.tmpl': continue
         (adapter/p.name.removesuffix('.tmpl')).write_bytes(p.read_bytes())
     registry.write_text(text)
     print('Native authenticated Start Layer source:',digest())

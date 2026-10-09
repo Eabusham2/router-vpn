@@ -1,0 +1,10 @@
+package shadowsocks
+
+import (
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"net"
+)
+
+func routerVPNGuardStream(raw, cipher net.Conn) net.Conn {
+	return startwhitening.GuardAuthenticatedStream(raw, cipher)
+}
