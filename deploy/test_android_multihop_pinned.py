@@ -68,7 +68,7 @@ def android_json_dependency(work: Path, env: dict[str, str]) -> Path:
 JAVA_NAMES = ('AndroidMultihopController', 'NativeSingBoxController',
               'AndroidProfileSelection', 'AndroidNumericAddress',
               'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy',
-              'AndroidStartLayer')
+              'AndroidStartLayer', 'AndroidXrayLibboxPolicy', 'NativeXrayController')
 
 
 def inputs() -> list[Path]:

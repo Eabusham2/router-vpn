@@ -15,12 +15,35 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 JAVA=ROOT/'android/app/src/main/java/com/eabusham/routervpn'
 GO_HELPER=r'''package main
-import("crypto/ecdsa";"crypto/elliptic";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"time";"encoding/json";"fmt";"os";"io";"router-vpn/internal/mobilemultihop";"router-vpn/internal/mobileperf";"router-vpn/internal/nativesip003")
+import("context";"net/netip";"crypto/ecdh";"crypto/mlkem";"encoding/base64";"crypto/ecdsa";"crypto/elliptic";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"time";"encoding/json";"fmt";"os";"io";"router-vpn/internal/mobilemultihop";"router-vpn/internal/mobileperf";"router-vpn/internal/nativesip003";"router-vpn/internal/applexray")
 func main(){
  var r struct{Operation string;Config string;Policy string}
  if err:=json.NewDecoder(io.LimitReader(os.Stdin,8*1024*1024)).Decode(&r);err!=nil{fmt.Fprintln(os.Stderr,"invalid request");os.Exit(2)}
  var value string;var err error
  switch r.Operation{
+ case "xray-policy":value,err=mobilemultihop.ApplyNativeXrayDevicePolicy(r.Config,r.Policy)
+ case "test-xray":
+  key,_:=ecdh.X25519().NewPrivateKey(make([]byte,32));pq,_:=mlkem.NewDecapsulationKey768(make([]byte,64))
+  user:=map[string]any{"id":"11111111-1111-4111-8111-111111111111","encryption":"none","flow":"xtls-rprx-vision"}
+  stream:=map[string]any{"network":"raw","security":"reality","realitySettings":map[string]any{"password":base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()),"serverName":"server.example.test","fingerprint":"chrome","shortId":"0123456789abcdef"}}
+  if r.Config=="reality-pq-vision"||r.Config=="reality-xhttp"||r.Config=="max"{user["encryption"]="mlkem768x25519plus.native.0rtt."+base64.RawURLEncoding.EncodeToString(pq.EncapsulationKey().Bytes())}
+  if r.Config=="reality-xhttp"{delete(user,"flow");stream["network"]="xhttp";stream["xhttpSettings"]=map[string]any{"mode":"auto","path":"/preserved"};stream["finalmask"]=map[string]any{"tcp":[]any{map[string]any{"type":"fragment","settings":map[string]any{"packets":"tlshello","length":"100-300","delay":"10-30","maxSplit":"3-7"}}}}}
+  data,_:=json.Marshal(map[string]any{"inbounds":[]any{map[string]any{"protocol":"socks","listen":"127.0.0.1","port":1090,"settings":map[string]any{"auth":"noauth","udp":true}}},"outbounds":[]any{map[string]any{"tag":"proxy","protocol":"vless","settings":map[string]any{"vnext":[]any{map[string]any{"address":r.Policy,"port":443,"users":[]any{user}}}},"streamSettings":stream}}})
+  value=string(data)
+ case "xray-check","xray-compile","xray-start","xray-resolve","xray-start-resolve":
+  var input struct{Mode string;Config string;Raw string;AES string;Policy string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil {
+   var data []byte
+   lookup:=func(ctx context.Context,host string)([]netip.Addr,error){if host!="node.example.test"{return nil,fmt.Errorf("unowned test lookup")};return []netip.Addr{netip.MustParseAddr("192.0.2.77")},nil}
+   switch r.Operation {
+   case "xray-check":data,err=applexray.CompileForSelection(input.Mode,[]byte(input.Config),[]byte(input.Raw))
+   case "xray-compile":data,err=applexray.Compile(input.Mode,[]byte(input.Config),[]byte(input.Raw))
+   case "xray-start":data,err=applexray.ComposeStartLayer(input.Mode,[]byte(input.Config),[]byte(input.Raw),[]byte(input.AES),[]byte(input.Policy))
+   case "xray-resolve":var files map[string][]byte;files,err=applexray.ResolveAndCompile(context.Background(),input.Mode,[]byte(input.Config),[]byte(input.Raw),lookup);if err==nil{data,err=json.Marshal(files)}
+   case "xray-start-resolve":var files map[string][]byte;files,err=applexray.ResolveStartLayerInputs(context.Background(),input.Mode,[]byte(input.Config),[]byte(input.Raw),[]byte(input.AES),[]byte(input.Policy),lookup);if err==nil{data,err=json.Marshal(files)}
+   }
+   value=string(data)
+  }
  case "parse":value,err=mobilemultihop.CompileWireGuardProfile(r.Config,r.Policy)
  case "exit":value,err=mobilemultihop.WireGuardExitConfig(r.Config,r.Policy)
  case "awg-parse":value,err=mobilemultihop.CompileAmneziaProfile(r.Config,r.Policy)
@@ -85,6 +108,7 @@ final class AndroidServiceStopConfirmation {
  static String state(String key,java.util.function.Supplier<String> value){return value.get();}
 }
 final class LayeredVpnService {static final String ACTION_START="start",ACTION_STOP="stop",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode";}
+final class XrayVpnService {static final String ACTION_START="start",ACTION_STOP="stop",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode";}
 ''',
 'io/nekohasekai/libbox/Libbox.java':r'''package io.nekohasekai.libbox;
 import org.json.JSONObject;import java.nio.charset.StandardCharsets;import java.util.concurrent.TimeUnit;
@@ -94,10 +118,16 @@ public final class Libbox {
   try {
    JSONObject input=new JSONObject().put("Operation",op).put("Config",config).put("Policy",policy);
    p.getOutputStream().write(input.toString().getBytes(StandardCharsets.UTF_8));p.getOutputStream().close();
-   // Fixtures are deliberately bounded to less than a pipe buffer.
-   if(!p.waitFor(10,TimeUnit.SECONDS))throw new IllegalStateException("Native policy test timed out");
-   String out=new String(p.getInputStream().readAllBytes(),StandardCharsets.UTF_8);
-   String error=new String(p.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);
+   java.util.concurrent.ExecutorService drains=java.util.concurrent.Executors.newFixedThreadPool(2);
+   String out,error;
+   try {
+    java.util.concurrent.Future<byte[]> stdout=drains.submit(()->p.getInputStream().readNBytes(8*1024*1024+1));
+    java.util.concurrent.Future<byte[]> stderr=drains.submit(()->p.getErrorStream().readNBytes(64*1024+1));
+    if(!p.waitFor(10,TimeUnit.SECONDS))throw new IllegalStateException("Native policy test timed out");
+    byte[] a=stdout.get(2,TimeUnit.SECONDS),b=stderr.get(2,TimeUnit.SECONDS);
+    if(a.length>8*1024*1024||b.length>64*1024)throw new IllegalStateException("Native policy test output exceeds bounds");
+    out=new String(a,StandardCharsets.UTF_8);error=new String(b,StandardCharsets.UTF_8);
+   } finally {if(p.isAlive())p.destroyForcibly();drains.shutdownNow();drains.awaitTermination(2,TimeUnit.SECONDS);}
    if(p.exitValue()!=0)throw new IllegalArgumentException(error);
    return out;
   }finally{p.destroyForcibly();}
@@ -116,6 +146,22 @@ public final class Libbox {
  public static String routerApplyMultihopMTUPolicy(String c,String p)throws Exception{return call("mtu",c,p);}
  public static String routerApplyMultihopLANPolicy(String c,String p)throws Exception{return call("lan",c,p);}
  public static String routerApplyPerformancePolicy(String c,String p)throws Exception{return call("performance",c,p);}
+ public static int xrayResolutions;
+ public static Runnable afterXrayResolution;
+ public static String testXrayConfig(String mode,String host)throws Exception{return call("test-xray",mode,host);}
+ private static String xray(String op,String mode,String config,String raw,String aes,String policy)throws Exception{
+  return call(op,new JSONObject().put("Mode",mode).put("Config",config).put("Raw",raw).put("AES",aes).put("Policy",policy).toString(),"");
+ }
+ public static String routerCheckXrayProfile(String mode,String wrapper,String raw)throws Exception{return xray("xray-check",mode,wrapper,raw,"","");}
+ public static String routerCompileXrayProfile(String mode,String wrapper,String raw)throws Exception{return xray("xray-compile",mode,wrapper,raw,"","");}
+ public static String routerResolveXrayProfile(String mode,String wrapper,String raw)throws Exception{
+  xrayResolutions++;String result=xray("xray-resolve",mode,wrapper,raw,"","");if(afterXrayResolution!=null)afterXrayResolution.run();return result;
+ }
+ public static String routerComposeXrayStartLayer(String mode,String wrapper,String raw,String aes,String policy)throws Exception{return xray("xray-start",mode,wrapper,raw,aes,policy);}
+ public static String routerResolveXrayStartLayerProfile(String mode,String wrapper,String raw,String aes,String policy)throws Exception{
+  xrayResolutions++;String result=xray("xray-start-resolve",mode,wrapper,raw,aes,policy);if(afterXrayResolution!=null)afterXrayResolution.run();return result;
+ }
+ public static String routerApplyNativeXrayDevicePolicy(String config,String profile)throws Exception{return call("xray-policy",config,profile);}
  public static String routerCompileSIP003Profile(String a,String b)throws Exception{return call("sip-compile",a,b);}
  public static String routerComposeSIP003StartLayer(String c,String helper,String source,String policy)throws Exception {
   return call("sip-start",new JSONObject().put("Config",c).put("Helper",helper).put("Source",source).toString(),policy);
@@ -558,6 +604,71 @@ public final class MultihopGraphHarness {
    boolean rejected=false;try{controller.prepareSession(save(dir,b),"ss-v2ray");}catch(Exception expected){rejected=true;}check(rejected&&sessions(app)==count,"foreign Start Layer staged a session");
   }
  }
+ static JSONObject xrayBundle(String mode,String host)throws Exception{
+  JSONObject b=bundle('a');JSONObject p=profile(b);p.put("mtu_policy","fixed").put("manual_mtu",1380);
+  String raw=io.nekohasekai.libbox.Libbox.testXrayConfig(mode,host);
+  String tag=mode.equals("split")||mode.equals("max")?"tcp-stack":"proxy";
+  JSONArray out=new JSONArray().put(new JSONObject().put("type","socks").put("tag",tag).put("server","127.0.0.1").put("server_port",1090).put("version","5"));
+  JSONObject route=new JSONObject().put("final",tag).put("rules",new JSONArray());
+  if(mode.equals("split")||mode.equals("max")){
+   out.put(new JSONObject().put("type","hysteria2").put("tag","udp-stack").put("server",host).put("server_port",8443).put("password","HY-secret-preserved").put("obfs",new JSONObject().put("type","salamander").put("password","preserve-obfs")).put("tls",new JSONObject().put("enabled",true).put("server_name","hy.example.test")));
+   route.put("rules",new JSONArray().put(new JSONObject().put("network","tcp").put("action","route").put("outbound",tag)).put(new JSONObject().put("network","udp").put("action","route").put("outbound","udp-stack")));
+  }
+  JSONObject cfg=new JSONObject().put("inbounds",new JSONArray().put(new JSONObject().put("type","tun").put("tag","tun-in").put("address",new JSONArray().put("172.19.0.1/30")).put("auto_route",true).put("strict_route",true).put("mtu",1280))).put("outbounds",out).put("route",route);
+  JSONObject assets=new JSONObject().put("xray.json",Base64.getEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8)));
+  if(!mode.equals("reality-xhttp"))assets.put("sing-box.json",Base64.getEncoder().encodeToString(cfg.toString().getBytes(StandardCharsets.UTF_8)));
+  JSONObject aes=new JSONObject().put("outbounds",new JSONArray().put(new JSONObject().put("type","shadowsocks").put("tag","proxy").put("server",host).put("server_port",8388).put("method","2022-blake3-aes-256-gcm").put("password",key('s'))));
+  b.getJSONObject("profiles").put(mode,assets).put("shadowsocks",new JSONObject().put("sing-box.json",Base64.getEncoder().encodeToString(aes.toString().getBytes(StandardCharsets.UTF_8))));
+  b.getJSONArray("modes").put(new JSONObject().put("id",mode).put("name",mode));return b;
+ }
+ static boolean jsonSame(Object a,Object b)throws Exception{
+  if(a instanceof JSONObject && b instanceof JSONObject){JSONObject x=(JSONObject)a,y=(JSONObject)b;if(x.length()!=y.length())return false;JSONArray keys=x.names();for(int i=0;keys!=null&&i<keys.length();i++){String k=keys.getString(i);if(!y.has(k)||!jsonSame(x.get(k),y.get(k)))return false;}return true;}
+  if(a instanceof JSONArray && b instanceof JSONArray){JSONArray x=(JSONArray)a,y=(JSONArray)b;if(x.length()!=y.length())return false;for(int i=0;i<x.length();i++)if(!jsonSame(x.get(i),y.get(i)))return false;return true;}
+  return java.util.Objects.equals(a,b);
+ }
+ static void nativeXrayChecks(Context context,Path dir,Path app)throws Exception{
+  NativeSingBoxController controller=new NativeSingBoxController(context);
+  for(String mode:new String[]{"reality-vision","reality-pq-vision","reality-xhttp","split","max"})for(String start:new String[]{"off","aes-256-gcm","aes-256-gcm+xor-whitening"})for(String dns:new String[]{"home","dot","doh3"}){
+   JSONObject b=xrayBundle(mode,"node.example.test"),p=profile(b);p.put("start_layer",start).put("home_lan_access",false).put("ipv6_mode","off");
+   if(!dns.equals("home"))p.put("dns_mode",dns).put("dns_host","192.168.50.133").put("dns_server_name","dns.example.test").put("dns_port",5353);
+   File file=save(dir,b);byte[] original=Files.readAllBytes(file.toPath());int before=io.nekohasekai.libbox.Libbox.xrayResolutions;
+   check(controller.listDirectLibboxModes(file).stream().anyMatch(m->m.id.equals(mode)),"native Xray unavailable from readiness: "+mode+start+dns);
+   check(io.nekohasekai.libbox.Libbox.xrayResolutions==before,"readiness performed network bootstrap");
+   NativeXrayController legacy=new NativeXrayController(context);
+   check(legacy.listDirectXrayModes(file).stream().noneMatch(m->m.id.equals(mode)),"native mode exposed through legacy picker");
+   int staged=sessions(app);boolean legacyFailed=false;
+   try{legacy.prepareSession(file,mode);}catch(Exception rejected){legacyFailed=true;}
+   check(legacyFailed&&sessions(app)==staged,"legacy diagnostics bypassed native policy");
+   NativeSingBoxController.SessionInfo info=controller.prepareSession(file,mode);Path folder=app.resolve("layered-sessions").resolve(info.sessionId);
+   check(io.nekohasekai.libbox.Libbox.xrayResolutions==before+1,"selected preparation resolved more than once");
+   JSONObject graph=new JSONObject(Files.readString(folder.resolve("sing-box.json")));JSONArray outs=graph.getJSONArray("outbounds");JSONObject nativeOut=null,udp=null,aes=null;
+   for(int i=0;i<outs.length();i++){JSONObject out=outs.getJSONObject(i);if(out.optString("type").equals("routervpn-xray"))nativeOut=out;if(out.optString("type").equals("hysteria2"))udp=out;if(out.optString("tag").equals("start-layer-aes"))aes=out;}
+   check(nativeOut!=null&&nativeOut.getString("mode").equals(mode),"native raw mode substituted");
+   check(graph.getJSONArray("inbounds").length()==1&&!graph.has("endpoints")&&!Files.exists(folder.resolve("xray.json"))&&!Files.exists(folder.resolve(AndroidStartLayerRelay.SESSION_FILE)),"second engine or helper staged");
+   JSONObject nativeCfg=new JSONObject(nativeOut.getString("config_json"));JSONObject expected=new JSONObject(new String(Base64.getDecoder().decode(b.getJSONObject("profiles").getJSONObject(mode).getString("xray.json")),StandardCharsets.UTF_8));
+   expected.getJSONArray("outbounds").getJSONObject(0).getJSONObject("settings").getJSONArray("vnext").getJSONObject(0).put("address",start.equals("off")?"192.0.2.77":"10.77.0.1");
+   check(jsonSame(expected,nativeCfg),"native security/PQ/XHTTP/FinalMask lost");
+   if(!start.equals("off"))check(aes!=null&&aes.getString("server").equals("192.0.2.77")&&aes.getString("password").equals(key('s'))&&nativeOut.getString("detour").equals("start-layer-aes"),"outer Start Layer not same resolved node");
+   if(mode.equals("split")||mode.equals("max"))check(udp!=null&&udp.getString("password").equals("HY-secret-preserved")&&udp.getJSONObject("tls").getString("server_name").equals("hy.example.test")&&udp.getString("server").equals(start.equals("off")?"192.0.2.77":"10.77.0.1"),"dual UDP path changed");
+   JSONObject route=graph.getJSONObject("route");JSONArray rules=route.getJSONArray("rules");check(rules.getJSONObject(0).optInt("ip_version")==6&&rules.getJSONObject(0).getString("action").equals("reject"),"IPv6 disabled by bypass rather than rejection");
+   check(rules.getJSONObject(2).getString("outbound").equals(nativeOut.getString("tag"))&&rules.getJSONObject(2).getInt("port")==8787&&rules.getJSONObject(3).getString("action").equals("reject"),"private control/LAN policy broadened");
+   JSONArray addresses=graph.getJSONArray("inbounds").getJSONObject(0).getJSONArray("address");check(addresses.length()==2&&graph.getJSONArray("inbounds").getJSONObject(0).getInt("mtu")==1380,"IPv6 capture or fixed MTU lost");
+   JSONArray servers=graph.getJSONObject("dns").getJSONArray("servers");for(int i=0;i<servers.length();i++){JSONObject resolver=servers.getJSONObject(i);boolean datagram=Arrays.asList("udp","h3","quic").contains(resolver.getString("type"));String target=udp!=null&&datagram?udp.getString("tag"):nativeOut.getString("tag");check(resolver.getString("detour").equals(target),"selected DNS left intended native leg");check(resolver.getString("server").equals("192.168.50.133"),"selected AdGuard resolver changed");}
+   check(Arrays.equals(original,Files.readAllBytes(file.toPath())),"saved source updated during hostname resolution");
+  }
+  for(String mode:new String[]{"reality-vision","reality-pq-vision","reality-xhttp","split","max"}){
+   JSONObject b=xrayBundle(mode,"192.0.2.1");profile(b).put("start_layer","aes-256-gcm");b.getJSONObject("profiles").getJSONObject(mode).put("chain.env",Base64.getEncoder().encodeToString("bad helper".getBytes(StandardCharsets.UTF_8)));int count=sessions(app);boolean fail=false;try{controller.prepareSession(save(dir,b),mode);}catch(Exception expected){fail=true;}check(fail&&sessions(app)==count,"unowned Xray helper staged source");
+   b=xrayBundle(mode,"192.0.2.1");profile(b).put("home_lan_access","false");count=sessions(app);fail=false;try{controller.prepareSession(save(dir,b),mode);}catch(Exception expected){fail=true;}check(fail&&sessions(app)==count,"malformed policy silently coerced");
+  }
+  for(boolean interrupt:new boolean[]{false,true}){
+   JSONObject b=xrayBundle("reality-vision","node.example.test");profile(b).put("start_layer","aes-256-gcm");File file=save(dir,b);int count=sessions(app);
+   io.nekohasekai.libbox.Libbox.afterXrayResolution=()->{if(interrupt){Thread.currentThread().interrupt();}else{try{profile(b).put("manual_mtu",1390);Files.writeString(file.toPath(),b.toString());}catch(Exception error){throw new RuntimeException(error);}}};
+   boolean fail=false;
+   try{controller.prepareSession(file,"reality-vision");}catch(Exception expected){fail=true;}
+   finally{io.nekohasekai.libbox.Libbox.afterXrayResolution=null;Thread.interrupted();}
+   check(fail&&sessions(app)==count,"stale or cancelled native preparation staged a session");
+  }
+ }
  public static void main(String[] args)throws Exception {
   Path dir=Path.of(args[0]);Path app=Files.createDirectory(dir.resolve("app"));Context context=new Context(app.toFile());
   AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
@@ -597,6 +708,7 @@ public final class MultihopGraphHarness {
   directChecks(context,dir,app);
   nativeStartChecks(context,dir,app);
   nativeSIPStartChecks(context,dir,app);
+  nativeXrayChecks(context,dir,app);
   awgChecks(context,dir,app);
   awgEntryChecks(context,dir);
   awgExitChecks(dir);
@@ -618,7 +730,7 @@ def main():
         for name,source in STUBS.items():
             target=sources/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(source)
         app=sources/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
-        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer'):
+        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer','AndroidXrayLibboxPolicy','NativeXrayController'):
             shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
         (app/'MultihopGraphHarness.java').write_text(HARNESS)
         classes=temp/'classes'

@@ -83,7 +83,18 @@ final class NativeSingBoxController {
             try {
                 candidate = compileStandaloneProfile(root, profile, id);
                 if (!isDirectFullDeviceConfig(candidate)) continue;
-                if (nativeWireGuardFamily(id)) {
+                if (AndroidStartLayer.nativeXray(id)) {
+                    JSONObject config = new JSONObject(candidate);
+                    applySelectedDns(root, config);
+                    AndroidXrayLibboxPolicy.normalizeDnsRoutes(config);
+                    if (!AndroidStartLayer.nativeCapabilityReason(root, id).isEmpty()) continue;
+                    AndroidStartLayer.RelayPlan plan = AndroidStartLayer.apply(root, config, id);
+                    if (plan != null) { plan.clear(); throw new IllegalStateException("Native Xray cannot require another relay."); }
+                    config = AndroidXrayLibboxPolicy.applyDevice(root, config);
+                    applyPerformance(root, config);
+                    // No DNS/socket creation while populating readiness. The
+                    // selected launch resolves and checks the actual native core.
+                } else if (nativeWireGuardFamily(id)) {
                     JSONObject config = new JSONObject(candidate);
                     applySelectedDns(root, config);
                     config = AndroidWireGuardLibboxPolicy.apply(root, config);
@@ -106,7 +117,10 @@ final class NativeSingBoxController {
         JSONObject profiles = root.optJSONObject("profiles");
         JSONObject profile = profiles == null ? null : profiles.optJSONObject(modeId);
         if (profile == null) throw new IllegalStateException("The selected mode has no generated profile.");
-        String rawConfigText = compileStandaloneProfile(root, profile, modeId);
+        String capturedBundle = root.toString();
+        String rawConfigText = AndroidStartLayer.nativeXray(modeId)
+                ? AndroidXrayLibboxPolicy.resolve(root, profile, modeId)
+                : compileStandaloneProfile(root, profile, modeId);
         if (nativeWireGuardFamily(modeId)) {
             // Only the compiled graph is staged. A second WireGuard VPN or
             // unused raw-backend file must never be started implicitly.
@@ -115,17 +129,23 @@ final class NativeSingBoxController {
         if (!isDirectFullDeviceConfig(rawConfigText)) throw new IllegalStateException("This mode still depends on another local engine and is not a direct embedded libbox mode.");
         JSONObject patchedConfig = new JSONObject(rawConfigText);
         applySelectedDns(root, patchedConfig);
+        if (AndroidStartLayer.nativeXray(modeId)) AndroidXrayLibboxPolicy.normalizeDnsRoutes(patchedConfig);
         if (nativeWireGuardFamily(modeId)) patchedConfig = AndroidWireGuardLibboxPolicy.apply(root, patchedConfig);
         // Recompile after DNS selection: UDP/DoH3 must use the real Hysteria2
         // leg, not the SS2022 WebSocket/TLS transport restricted to TCP.
         if ("ss-v2ray".equals(modeId)) patchedConfig = new JSONObject(compileNativeSIP003(profile, modeId, patchedConfig.toString()));
         AndroidStartLayer.RelayPlan relayPlan = AndroidStartLayer.apply(root, patchedConfig, modeId);
         try {
+            if (AndroidStartLayer.nativeXray(modeId)) patchedConfig = AndroidXrayLibboxPolicy.applyDevice(root, patchedConfig);
             patchedConfig = applyPerformance(root, patchedConfig);
             Libbox.checkConfig(patchedConfig.toString());
             byte[] config = (patchedConfig.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
             if (config.length > MAX_CONFIG) throw new IllegalStateException("Patched sing-box config exceeds safety limit.");
 
+            if (AndroidStartLayer.nativeXray(modeId) && (Thread.currentThread().isInterrupted()
+                    || !capturedBundle.equals(loadBundle(privateBundle).toString()))) {
+                throw new IllegalStateException("Selected node changed or preparation was cancelled; no Xray session was staged.");
+            }
             File rootDir = new File(context.getFilesDir(), "layered-sessions");
             if (!rootDir.isDirectory() && !rootDir.mkdirs()) throw new IllegalStateException("Cannot create layered session directory.");
             cleanupOldSessions(rootDir);
@@ -148,6 +168,7 @@ final class NativeSingBoxController {
                 if (names == null) throw new IllegalStateException("Selected mode profile is empty.");
                 for (int i = 0; i < names.length(); i++) {
                     String name = names.getString(i);
+                    if (AndroidStartLayer.nativeXray(modeId) && "xray.json".equals(name)) continue;
                     if (!safeFileName(name)) throw new IllegalStateException("Unsafe profile filename: " + name);
                     byte[] decoded;
                     if ("sing-box.json".equals(name)) decoded = config;
@@ -195,6 +216,7 @@ final class NativeSingBoxController {
     }
 
     private static String compileStandaloneProfile(JSONObject bundle, JSONObject profile, String modeId) throws Exception {
+        if (AndroidStartLayer.nativeXray(modeId)) return AndroidXrayLibboxPolicy.check(bundle, profile, modeId);
         String asset = "wg".equals(modeId) ? "wg.conf" : nativeWireGuardFamily(modeId) ? "awg.conf" : "sing-box.json";
         int maximum = nativeWireGuardFamily(modeId) ? 1024 * 1024 : MAX_CONFIG;
         String encoded = profile.optString(asset, "");

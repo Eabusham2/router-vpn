@@ -15,6 +15,7 @@ VENDOR="$ROOT/.vendor/sing-box"
 XRAY_VENDOR="$ROOT/.vendor/libXray-combined"
 XRAY_CORE_VENDOR="$ROOT/.vendor/xray-core-shared"
 XRAY_POLICY_SHA=$(python3 "$ROOT/../deploy/prepare-xray-runtime.py" --digest)
+NATIVE_XRAY_SHA=$(python3 "$ROOT/../deploy/prepare-apple-xray.py" --digest)
 LIBDIR="$ROOT/app/libs"
 AAR="$LIBDIR/libbox.aar"
 STAMP="$LIBDIR/libbox.commit"
@@ -30,7 +31,7 @@ OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"
 # only the Go core. Changing a host graph invalidates the cached AAR proof.
 ANDROID_GRAPH_SHA=$(python3 "$ROOT/../deploy/test_android_multihop_pinned.py" --digest)
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$ANDROID_GRAPH_SHA")
-EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA"
+EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA+$NATIVE_XRAY_SHA"
 
 verify_aar() {
   test -s "$AAR"
@@ -79,7 +80,7 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in     newRouterMTU     routerMTUPhysicalPath     routerReadMTUInterface     routerApplyPerformancePolicy     routerStartPerformance     routerPerformanceFailure     routerInvalidatePerformance     routerPerformanceStatus     routerCompileProxyEntry     routerMultihopMTUProfile     routerCompileAmneziaProfile     routerAmneziaExitConfig     routerCompileWireGuardProfile     routerWireGuardExitConfig     routerApplyMultihopMTUPolicy     routerApplyMultihopLANPolicy     newRouterHopMeasurement     routerCompileSIP003Profile     routerComposeSIP003StartLayer     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
+  for symbol in     newRouterMTU     routerMTUPhysicalPath     routerReadMTUInterface     routerApplyPerformancePolicy     routerStartPerformance     routerPerformanceFailure     routerInvalidatePerformance     routerPerformanceStatus     routerCompileProxyEntry     routerMultihopMTUProfile     routerCompileAmneziaProfile     routerAmneziaExitConfig     routerCompileWireGuardProfile     routerWireGuardExitConfig     routerApplyMultihopMTUPolicy     routerApplyMultihopLANPolicy     newRouterHopMeasurement     routerCompileSIP003Profile     routerComposeSIP003StartLayer     routerCheckXrayProfile     routerCompileXrayProfile     routerResolveXrayProfile     routerComposeXrayStartLayer     routerResolveXrayStartLayerProfile     routerApplyNativeXrayDevicePolicy     newRouterMultihop     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
     grep -Fq "$symbol" "$api_list" || {
       echo "combined libbox AAR is missing $symbol bridge" >&2
       return 1
@@ -178,6 +179,9 @@ clone_exact https://github.com/SagerNet/sing-box.git "$VENDOR" "$COMMIT" "sing-b
 clone_exact https://github.com/XTLS/libXray.git "$XRAY_VENDOR" "$LIBXRAY_COMMIT" "libXray"
 clone_exact https://github.com/XTLS/Xray-core.git "$XRAY_CORE_VENDOR" 50231eaff98ccc31b5cbd247a721c16e97fe5ec1 "Xray-core"
 python3 "$ROOT/../deploy/prepare-xray-runtime.py" "$XRAY_CORE_VENDOR"
+# Context-scoped native Xray shares this Go runtime without replacing legacy
+# Android VpnService socket protection or constructing a second system VPN.
+python3 "$ROOT/../deploy/prepare-apple-xray.py" "$VENDOR" "$XRAY_CORE_VENDOR"
 
 grep -Fq "github.com/xtls/xray-core $XRAY_CORE_VERSION" "$XRAY_VENDOR/go.mod" || {
   echo 'Pinned libXray no longer references the expected Xray-core v26.7.11 pseudo-version' >&2
@@ -229,6 +233,7 @@ python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
   python3 "$ROOT/../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
   go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
+  bash "$ROOT/../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_CORE_VENDOR"
   bash "$ROOT/../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   python3 "$ROOT/../deploy/test_android_multihop_pinned.py" "$VENDOR"

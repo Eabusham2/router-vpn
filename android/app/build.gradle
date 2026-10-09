@@ -91,6 +91,7 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     inputs.file rootProject.file('../deploy/prepare-mobile-amnezia.py')
     inputs.file rootProject.file('../deploy/prepare-gvisor-scheduler.py')
     inputs.files rootProject.file('../deploy/prepare-mobile-mtu.py'), rootProject.file('../deploy/prepare-retained-tun.py'), rootProject.fileTree('../internal/mobilemtu'), rootProject.fileTree('../internal/mtuprobe'), rootProject.fileTree('../internal/hopmeasure')
+    inputs.files rootProject.file('../deploy/prepare-apple-xray.py'), rootProject.file('../deploy/xray_native_dialer_policy.py'), rootProject.fileTree('../internal/applexray'), rootProject.fileTree('../mobile/applexray')
     inputs.files rootProject.file('../deploy/prepare-mobile-multihop.py'), rootProject.fileTree('../internal/mobilemultihop'), rootProject.fileTree('../internal/routechoice'), rootProject.fileTree('../internal/multihoprelay'), rootProject.fileTree('../mobile')
     inputs.files rootProject.file('../deploy/prepare-xray-runtime.py'), rootProject.file('../deploy/xray_connection_policy.py'), rootProject.file('../deploy/xray_datagram_policy.py')
     inputs.files rootProject.file('../deploy/test_android_multihop_pinned.py'), rootProject.file('test_android_multihop_graph.py')

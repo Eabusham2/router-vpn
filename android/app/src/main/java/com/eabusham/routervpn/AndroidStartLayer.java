@@ -43,7 +43,7 @@ final class AndroidStartLayer {
     }
 
     private static final Set<String> SUPPORTED = new HashSet<>(Arrays.asList(
-            "wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3"));
+            "wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"));
 
     static String selectedMode(JSONObject bundle) throws Exception {
         JSONObject profile = selectedRouterProfile(bundle);
@@ -77,7 +77,7 @@ final class AndroidStartLayer {
         }
         if (!AES.equals(start) && !AES_XOR.equals(start)) throw new IllegalStateException("Unsupported Android Start Layer: " + start);
         boolean xor = AES_XOR.equals(start);
-        if ("wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode) || "ss-v2ray".equals(mode)) {
+        if ("wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode) || "ss-v2ray".equals(mode) || nativeXray(mode)) {
             JSONObject profile = selectedRouterProfile(bundle);
             JSONObject profiles = bundle.getJSONObject("profiles");
             String encoded = profiles.getJSONObject("shadowsocks").getString("sing-box.json");
@@ -93,7 +93,10 @@ final class AndroidStartLayer {
             JSONObject policy = new JSONObject().put("mode", start).put("raw_mode", mode)
                     .put("node_kind", "router-vpn").put("router_api", profile.getString("router_api"));
             String composed;
-            if ("ss-v2ray".equals(mode)) {
+            if (nativeXray(mode)) {
+                String original = exactNativeAsset(profiles.getJSONObject(mode), "xray.json");
+                composed = Libbox.routerComposeXrayStartLayer(mode, targetConfig.toString(), original, sourceText, policy.toString());
+            } else if ("ss-v2ray".equals(mode)) {
                 String helper = exactNativeAsset(profiles.getJSONObject(mode), "sslocal.json");
                 composed = Libbox.routerComposeSIP003StartLayer(targetConfig.toString(), helper, sourceText, policy.toString());
             } else {
@@ -103,7 +106,7 @@ final class AndroidStartLayer {
                 throw new IllegalStateException("Native Start Layer did not return a bounded graph.");
             }
             JSONObject verified = new JSONObject(composed);
-            JSONArray endpoints = "ss-v2ray".equals(mode) ? null : verified.getJSONArray("endpoints");
+            JSONArray endpoints = ("ss-v2ray".equals(mode) || nativeXray(mode)) ? null : verified.getJSONArray("endpoints");
             JSONArray routes = verified.getJSONArray("outbounds");
             // Publish only after the shared compiler validates the complete graph.
             // DNS, routing, MTU, authentication and the original bundle stay owned.
@@ -154,7 +157,11 @@ final class AndroidStartLayer {
         return relay;
     }
 
-    private static String exactNativeAsset(JSONObject profile, String name) throws Exception {
+    static boolean nativeXray(String mode) {
+        return Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max").contains(mode);
+    }
+
+    static String exactNativeAsset(JSONObject profile, String name) throws Exception {
         String encoded = profile.getString(name);
         if (encoded.isEmpty() || encoded.length() > 6 * 1024 * 1024) throw new IllegalStateException("Native helper configuration exceeds its bound.");
         byte[] raw = Base64.decode(encoded, Base64.DEFAULT);

@@ -60,7 +60,7 @@ final class NativeXrayController {
             JSONObject mode = modes.optJSONObject(i);
             if (mode == null) continue;
             String id = mode.optString("id", "").trim();
-            if (!safeToken(id)) continue;
+            if (!safeToken(id) || AndroidStartLayer.nativeXray(id)) continue;
             JSONObject profile = profiles.optJSONObject(id);
             if (profile == null || isCompositeProfile(profile)) continue;
             String encoded = profile.optString(CONFIG_FILE, "").trim();
@@ -77,6 +77,9 @@ final class NativeXrayController {
 
     SessionInfo prepareSession(File privateBundle, String modeId) throws Exception {
         if (!safeToken(modeId)) throw new IllegalArgumentException("Invalid Xray mode id.");
+        if (AndroidStartLayer.nativeXray(modeId)) {
+            throw new IllegalStateException("This Xray mode requires its owned Libbox graph; legacy startup cannot bypass native validation.");
+        }
         JSONObject root = loadBundle(privateBundle);
         JSONObject profiles = root.optJSONObject("profiles");
         JSONObject profile = profiles == null ? null : profiles.optJSONObject(modeId);

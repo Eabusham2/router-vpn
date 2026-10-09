@@ -219,7 +219,7 @@ final class AndroidModeOrchestrator {
         for(int i=0;i<catalog.length();i++){
             JSONObject m=catalog.optJSONObject(i);if(m==null||(autoOnly&&!m.optBoolean("auto_eligible",false)))continue;String id=m.optString("id","");List<String>layers=strings(m.optJSONArray("layers"));
             if(requireEncrypted&&!hasEncrypted(layers))continue;if(requireObfuscation&&!hasObfuscation(layers))continue;
-            Kind kind=null;if(!strict&&"wg".equals(id)&&!AndroidNativeProfilePolicy.requiresLibbox(root)&&has(profiles,"wg","wg.conf"))kind=Kind.WG;else if(!strict&&NativeAmneziaWGController.supportedRawProfile(id)&&has(profiles,id,"awg.conf")&&!AndroidNativeProfilePolicy.requiresLibbox(root))kind=Kind.AWG;else if(direct.contains(id))kind=Kind.LIBBOX;else if(directXray.contains(id))kind=Kind.XRAY;if(kind==null)continue;
+            Kind kind=null;if(!strict&&"wg".equals(id)&&!AndroidNativeProfilePolicy.requiresLibbox(root)&&has(profiles,"wg","wg.conf"))kind=Kind.WG;else if(!strict&&NativeAmneziaWGController.supportedRawProfile(id)&&has(profiles,id,"awg.conf")&&!AndroidNativeProfilePolicy.requiresLibbox(root))kind=Kind.AWG;else if(direct.contains(id))kind=Kind.LIBBOX;else if(directXray.contains(id)&&!AndroidStartLayer.nativeXray(id))kind=Kind.XRAY;if(kind==null)continue;
             if(startLayerEnabled){
                 if(kind!=Kind.LIBBOX||!AndroidStartLayer.supportsRawMode(id))continue;
             }
