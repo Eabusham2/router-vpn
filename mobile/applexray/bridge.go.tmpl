@@ -32,3 +32,9 @@ func RouterResolveXrayProfile(mode, wrapper, xray string) (string, error) {
 	output, err := json.Marshal(files)
 	return string(output), err
 }
+
+// RouterComposeXrayStartLayer preserves native authentication and both Split/MAX legs.
+func RouterComposeXrayStartLayer(mode, wrapper, xray, aes, policy string) (string, error) {
+	output, err := applexray.ComposeStartLayer(mode, []byte(wrapper), []byte(xray), []byte(aes), []byte(policy))
+	return string(output), err
+}
