@@ -43,7 +43,7 @@ final class AndroidStartLayer {
     }
 
     private static final Set<String> SUPPORTED = new HashSet<>(Arrays.asList(
-            "wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "naive-h2", "naive-h3"));
+            "wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3"));
 
     static String selectedMode(JSONObject bundle) throws Exception {
         JSONObject profile = selectedRouterProfile(bundle);
@@ -77,7 +77,7 @@ final class AndroidStartLayer {
         }
         if (!AES.equals(start) && !AES_XOR.equals(start)) throw new IllegalStateException("Unsupported Android Start Layer: " + start);
         boolean xor = AES_XOR.equals(start);
-        if ("wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode)) {
+        if ("wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode) || "ss-v2ray".equals(mode)) {
             JSONObject profile = selectedRouterProfile(bundle);
             JSONObject profiles = bundle.getJSONObject("profiles");
             String encoded = profiles.getJSONObject("shadowsocks").getString("sing-box.json");
@@ -92,15 +92,22 @@ final class AndroidStartLayer {
                     .decode(java.nio.ByteBuffer.wrap(source)).toString();
             JSONObject policy = new JSONObject().put("mode", start).put("raw_mode", mode)
                     .put("node_kind", "router-vpn").put("router_api", profile.getString("router_api"));
-            String composed = Libbox.routerComposeNativeBaseStartLayer(targetConfig.toString(), sourceText, policy.toString());
+            String composed;
+            if ("ss-v2ray".equals(mode)) {
+                String helper = exactNativeAsset(profiles.getJSONObject(mode), "sslocal.json");
+                composed = Libbox.routerComposeSIP003StartLayer(targetConfig.toString(), helper, sourceText, policy.toString());
+            } else {
+                composed = Libbox.routerComposeNativeBaseStartLayer(targetConfig.toString(), sourceText, policy.toString());
+            }
             if (composed == null || composed.isEmpty() || composed.getBytes(StandardCharsets.UTF_8).length > 4 * 1024 * 1024) {
                 throw new IllegalStateException("Native Start Layer did not return a bounded graph.");
             }
             JSONObject verified = new JSONObject(composed);
-            JSONArray endpoints = verified.getJSONArray("endpoints"), routes = verified.getJSONArray("outbounds");
+            JSONArray endpoints = "ss-v2ray".equals(mode) ? null : verified.getJSONArray("endpoints");
+            JSONArray routes = verified.getJSONArray("outbounds");
             // Publish only after the shared compiler validates the complete graph.
             // DNS, routing, MTU, authentication and the original bundle stay owned.
-            targetConfig.put("endpoints", endpoints);
+            if (endpoints != null) targetConfig.put("endpoints", endpoints);
             targetConfig.put("outbounds", routes);
             return null; // Native encrypted outbound owns UDP; no second relay/VPN.
         }
@@ -145,6 +152,17 @@ final class AndroidStartLayer {
         inner.put("detour", AES_TAG);
         outbounds.put(aes);
         return relay;
+    }
+
+    private static String exactNativeAsset(JSONObject profile, String name) throws Exception {
+        String encoded = profile.getString(name);
+        if (encoded.isEmpty() || encoded.length() > 6 * 1024 * 1024) throw new IllegalStateException("Native helper configuration exceeds its bound.");
+        byte[] raw = Base64.decode(encoded, Base64.DEFAULT);
+        if (raw.length == 0 || raw.length > 4 * 1024 * 1024 || !Base64.encodeToString(raw, Base64.NO_WRAP).equals(encoded)) {
+            throw new IllegalStateException("Native helper configuration is not exact base64.");
+        }
+        return StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(raw)).toString();
     }
 
     private static RelayPlan relayPlan(JSONObject outbound) throws Exception {

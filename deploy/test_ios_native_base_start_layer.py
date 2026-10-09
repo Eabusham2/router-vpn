@@ -13,11 +13,12 @@ import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
 GO=r''' package main
-import("encoding/json";"fmt";"io";"os";"router-vpn/internal/mobilemultihop")
+import("encoding/json";"fmt";"io";"os";"router-vpn/internal/mobilemultihop";"router-vpn/internal/nativesip003")
 func main(){
- var input struct{Config string;Source string;Policy string}
+ var input struct{Config string;Source string;Policy string;Helper string}
  if json.NewDecoder(io.LimitReader(os.Stdin,12<<20)).Decode(&input)!=nil{os.Exit(2)}
- value,err:=mobilemultihop.ComposeNativeBaseStartLayer(input.Config,input.Source,input.Policy)
+ var value string;var err error
+ if input.Helper!="" {var result []byte;result,err=nativesip003.ComposeStartLayer([]byte(input.Config),[]byte(input.Helper),[]byte(input.Source),[]byte(input.Policy));value=string(result)} else {value,err=mobilemultihop.ComposeNativeBaseStartLayer(input.Config,input.Source,input.Policy)}
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(2)}
  fmt.Print(value)
 }
@@ -46,6 +47,27 @@ func bridge(_ config: String,_ source: String,_ policy: String) throws -> String
 func compose(_ mode: String,_ start: String,profile: [String:Any]? = nil,config: [String:Any]? = nil,outer: [String:Any]? = nil) throws -> [String:Data] {
  let root: [String:Any] = ["profiles":["shadowsocks":["sing-box.json":try encoded(outer ?? source()).base64EncodedString()]]]
  return try IOSStartLayer.apply(root:root,selectedProfile:profile ?? ["node_kind":"router-vpn","start_layer":start,"router_api":"http://10.77.0.1:8787"],files:["sing-box.json":try encoded(config ?? configuration(mode)),"owned.pem":Data("unchanged-certificate".utf8)],rawProfileID:mode,nativeBaseCompiler:bridge)
+}
+
+func sipHelper() -> [String:Any] { ["server":"192.0.2.1","server_port":10443,"password":key(116),"method":"2022-blake3-aes-256-gcm","local_address":"127.0.0.1","local_port":1092,"mode":"tcp_only","plugin":"v2ray-plugin","plugin_opts":"tls;host=node.example.test;path=/preserved"] }
+func sipConfig(_ dns: String) -> [String:Any] {
+ let helper=sipHelper()
+ let tcp: [String:Any] = ["type":"shadowsocks","tag":"tcp-stack","server":helper["server"]!,"server_port":helper["server_port"]!,"method":helper["method"]!,"password":helper["password"]!,"plugin":helper["plugin"]!,"plugin_opts":helper["plugin_opts"]!,"network":"tcp"]
+ let udp: [String:Any] = ["type":"hysteria2","tag":"udp-stack","server":"192.0.2.1","server_port":8443,"password":"keep-hy-auth","obfs":["type":"salamander","password":"keep-obfs"],"tls":["enabled":true,"server_name":"hy.example.test","certificate_path":"owned.pem"]]
+ let resolver: [String:Any] = ["type":dns,"tag":"selected","server":"192.168.50.133","server_port":5353,"detour":["udp","h3","quic"].contains(dns) ? "udp-stack":"tcp-stack"]
+ return ["inbounds":[["type":"tun","auto_route":true,"strict_route":true,"mtu":1360]],"outbounds":[tcp,udp],"dns":["servers":[resolver],"final":"selected"],"route":["final":"tcp-stack","rules":[["protocol":"dns","action":"hijack-dns"],["network":"tcp","action":"route","outbound":"tcp-stack"],["network":"udp","action":"route","outbound":"udp-stack"]]]]
+}
+func sipBridge(_ config: String,_ helper: String,_ source: String,_ policy: String) throws -> String {
+ let process=Process();process.executableURL=URL(fileURLWithPath:CommandLine.arguments[1])
+ let input=Pipe(),output=Pipe(),errors=Pipe();process.standardInput=input;process.standardOutput=output;process.standardError=errors
+ try process.run();try input.fileHandleForWriting.write(contentsOf:encoded(["Config":config,"Helper":helper,"Source":source,"Policy":policy]));try input.fileHandleForWriting.close()
+ let result=output.fileHandleForReading.readDataToEndOfFile();process.waitUntilExit()
+ guard process.terminationStatus==0,let text=String(data:result,encoding:.utf8) else {throw NSError(domain:"NativeSIPCompilerTest",code:1)}
+ return text
+}
+func composeSIP(_ start: String,_ dns: String,api: String = "http://10.77.0.1:8787",helper: [String:Any]? = nil,outer: [String:Any]? = nil) throws -> [String:Data] {
+ let root: [String:Any] = ["profiles":["ss-v2ray":["sslocal.json":try encoded(helper ?? sipHelper()).base64EncodedString()],"shadowsocks":["sing-box.json":try encoded(outer ?? source()).base64EncodedString()]]]
+ return try IOSStartLayer.apply(root:root,selectedProfile:["node_kind":"router-vpn","start_layer":start,"router_api":api],files:["sing-box.json":try encoded(sipConfig(dns)),"owned.pem":Data("certificate-unchanged".utf8)],rawProfileID:"ss-v2ray",nativeSIPCompiler:sipBridge)
 }
 @main struct Tests {
  @MainActor static var checks=0
@@ -77,7 +99,24 @@ func compose(_ mode: String,_ start: String,profile: [String:Any]? = nil,config:
   }
   var altered=source();var out=(altered["outbounds"] as! [[String:Any]])[0];out["plugin"]="unowned";altered["outbounds"]=[out]
   reject("unowned helper not discarded"){_=try compose("wg",IOSStartLayer.aes,outer:altered)}
-  print("Apple WG/AWG Start Layer shipping Swift + Go compiler: PASS (\(checks) checks)")
+
+  for start in [IOSStartLayer.aes,IOSStartLayer.aesXOR] {for api in ["http://10.77.0.1:8787","https://[fd77:77::1]:8787"] {for dns in ["udp","tcp","tls","https","h3","quic"] {
+   let files=try composeSIP(start,dns,api:api),graph=try object(files["sing-box.json"]!),original=sipConfig(dns)
+   for field in ["inbounds","dns","route"] {try check("SIP003 exact "+field,encoded(graph[field]!)==encoded(original[field]!))}
+   try check("SIP003 private certificate retained",files["owned.pem"]==Data("certificate-unchanged".utf8))
+   let next=graph["outbounds"] as! [[String:Any]],old=original["outbounds"] as! [[String:Any]]
+   try check("one added transport, no duplicate TUN",next.count==old.count+1&&graph["endpoints"]==nil)
+   for i in old.indices {var expected=old[i];expected["server"]=api.contains("fd77") ? "fd77:77::1":"10.77.0.1";expected["detour"]="start-layer-aes";try check("SIP003 complete inner policy retained",encoded(expected)==encoded(next[i]))}
+   try check("SIP003 encrypted outer type",next.last?["type"] as? String==(start==IOSStartLayer.aesXOR ? "routervpn-aes-xor":"shadowsocks"))
+   try check("SIP003 encrypted outer credentials",next.last?["password"] as? String==key(115))
+  }}}
+  var badHelper=sipHelper();badHelper["plugin_opts"]="tls;host=node.example.test;path=/preserved;insecure"
+  reject("SIP003 cannot weaken TLS"){_=try composeSIP(IOSStartLayer.aes,"h3",helper:badHelper)}
+  var badAES=source();var outbound=(badAES["outbounds"] as! [[String:Any]])[0];outbound["server"]="192.0.2.99";badAES["outbounds"]=[outbound]
+  reject("SIP003 cannot retarget foreign node"){_=try composeSIP(IOSStartLayer.aes,"tcp",outer:badAES)}
+  reject("SIP003 cannot use local unauthenticated service"){_=try composeSIP(IOSStartLayer.aes,"udp",api:"http://127.0.0.1:8787")}
+  reject("SIP003 standalone XOR is not supported"){_=try composeSIP("xor","udp")}
+  print("Apple WG/AWG/SIP003 Start Layer shipping Swift + Go compiler: PASS (\(checks) checks)")
  }
 }
 '''

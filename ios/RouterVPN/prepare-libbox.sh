@@ -72,6 +72,7 @@ for header in headers:
     assert 'LibboxRouterApplyMultihopMTUPolicy' in header.read_text(), str(header)
     assert 'LibboxRouterCompileXrayProfile' in header.read_text(), str(header)
     assert 'LibboxRouterCompileSIP003Profile' in header.read_text(), str(header)
+    assert 'LibboxRouterComposeSIP003StartLayer' in header.read_text(), str(header)
     assert 'LibboxRouterXrayRevision' in header.read_text(), str(header)
     assert 'LibboxRouterResolveXrayProfile' in header.read_text(), str(header)
 PYHEAD
@@ -149,7 +150,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   go test ./experimental/libbox/routervpn/...
   go test -race ./adapter/inbound -run TestRouterVPN -count=1
-  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|MTU)' -count=1
+  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU)' -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./transport/wireguard -run TestRouterVPNClientBind -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf -count=1 -timeout=120s

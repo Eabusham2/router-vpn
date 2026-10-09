@@ -347,3 +347,27 @@ func TestRouterNativeBaseStartLayerGraph(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterNativeSIP003StartLayerGraph(t *testing.T) {
+	helper := map[string]any{"server": "192.0.2.1", "server_port": 10443, "method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("t", 32))), "local_address": "127.0.0.1", "local_port": 1092, "mode": "tcp_only", "plugin": "v2ray-plugin", "plugin_opts": "tls;host=server.example.test;path=/authenticated"}
+	outer := map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.1", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))}}}
+	for _, start := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, kind := range []string{"udp", "tcp", "tls", "https", "h3"} {
+			t.Run(start+"/"+kind, func(t *testing.T) {
+				wrapper := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "address": []string{"172.29.94.1/30"}, "auto_route": true, "strict_route": true, "mtu": 1360}}, "outbounds": []any{map[string]any{"type": "socks", "tag": "tcp-stack", "server": "127.0.0.1", "server_port": 1092, "version": "5"}, map[string]any{"type": "hysteria2", "tag": "udp-stack", "server": "192.0.2.1", "server_port": 8443, "password": "hy-authenticated-fixture", "tls": map[string]any{"enabled": true, "server_name": "server.example.test"}}}, "route": map[string]any{"final": "tcp-stack", "rules": []any{map[string]any{"protocol": "dns", "action": "hijack-dns"}, map[string]any{"network": "tcp", "action": "route", "outbound": "tcp-stack"}, map[string]any{"network": "udp", "action": "route", "outbound": "udp-stack"}}}, "dns": map[string]any{"final": "home", "servers": []any{map[string]any{"type": kind, "tag": "home", "server": "10.77.0.1", "detour": "tcp-stack"}}}}
+				metadata := map[string]string{"mode": start, "raw_mode": "ss-v2ray", "node_kind": "router-vpn", "router_api": "http://10.77.0.1:8787"}
+				a, _ := json.Marshal(wrapper)
+				b, _ := json.Marshal(helper)
+				c, _ := json.Marshal(outer)
+				d, _ := json.Marshal(metadata)
+				compiled, e := RouterComposeSIP003StartLayer(string(a), string(b), string(c), string(d))
+				if e != nil {
+					t.Fatal(e)
+				}
+				if e = CheckConfig(compiled); e != nil {
+					t.Fatal("actual native two-leg Start Layer graph rejected", e)
+				}
+			})
+		}
+	}
+}

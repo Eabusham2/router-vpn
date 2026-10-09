@@ -11,7 +11,7 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 		`static let aes = "aes-256-gcm"`,
 		`static let aesXOR = "aes-256-gcm+xor-whitening"`,
 		`static let aesMethod = "2022-blake3-aes-256-gcm"`,
-		`private static let supportedRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "naive-h2", "naive-h3"]`,
+		`private static let supportedRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3"]`,
 		"Start Layer requires authenticated Shadowsocks 2022 BLAKE3 AES-256-GCM",
 		`static let nativeWhiteningType = "routervpn-aes-xor"`,
 		"XOR is obfuscation only",
@@ -77,7 +77,7 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 
 	selector := repoFile(t, "ios/RouterVPN/App/IOSRuntimeSelection.swift")
 	for _, required := range []string{
-		`private static let startLayerRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "naive-h2", "naive-h3"]`,
+		`private static let startLayerRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3"]`,
 		"try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)",
 		"Start Layer AES-256-GCM requires an owned Libbox WG/AWG",
 		"start == startLayerAES || start == startLayerAESXOR",

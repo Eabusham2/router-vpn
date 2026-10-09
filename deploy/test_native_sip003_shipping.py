@@ -21,6 +21,8 @@ class Shipping(unittest.TestCase):
     def test_both_native_builds_require_compiler_api_and_real_traffic(self):
         android=(ROOT/'android/build-sing-box-libbox.sh').read_text();ios=(ROOT/'ios/RouterVPN/prepare-libbox.sh').read_text()
         self.assertIn('routerCompileSIP003Profile',android);self.assertIn('LibboxRouterCompileSIP003Profile',ios)
+        self.assertIn('routerComposeSIP003StartLayer',android);self.assertIn('LibboxRouterComposeSIP003StartLayer',ios)
+        self.assertIn('TestRouterNativeSIP003StartLayerGraph',(ROOT/'mobile/routervpn_multihop_native_test.go.tmpl').read_text())
         for text in (android,ios):
             self.assertIn('test_mobile_sip003_pinned.sh',text)
             self.assertLess(text.index('test_mobile_sip003_pinned.sh'),text.index('go_retry run ./cmd/internal/build_libbox') if 'go_retry run ./cmd/internal/build_libbox' in text else text.index('go run ./cmd/internal/build_libbox'))
@@ -52,4 +54,16 @@ class Shipping(unittest.TestCase):
         traffic=(ROOT/'mobile/sip003/traffic_test.go.tmpl').read_text()
         for required in ('RouterCompileSIP003Profile','CheckConfig','tcpExchange','udpExchange','wrong-key','wrong-certificate'):
             self.assertIn(required,traffic)
+    def test_native_start_layer_is_wired_without_extra_system_vpn(self):
+        java=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/AndroidStartLayer.java').read_text()
+        swift=(ROOT/'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift').read_text()
+        self.assertIn('Libbox.routerComposeSIP003StartLayer(targetConfig.toString(), helper, sourceText, policy.toString())',java)
+        self.assertIn('LibboxRouterComposeSIP003StartLayer(configText, helperText, sourceText, policy, &failure)',swift)
+        self.assertIn('helper.base64EncodedString() == helper64',swift)
+        self.assertIn('exactNativeAsset',java)
+        self.assertIn('CodingErrorAction.REPORT',java)
+        self.assertIn('"ss-v2ray"',(ROOT/'ios/RouterVPN/App/IOSRuntimeSelection.swift').read_text())
+        self.assertIn('nativeSIPStartChecks', (ROOT/'android/test_android_multihop_graph.py').read_text())
+        self.assertIn('composeSIP', (ROOT/'deploy/test_ios_native_base_start_layer.py').read_text())
+
 if __name__=='__main__':unittest.main()

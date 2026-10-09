@@ -15,7 +15,7 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 JAVA=ROOT/'android/app/src/main/java/com/eabusham/routervpn'
 GO_HELPER=r'''package main
-import("crypto/ecdsa";"crypto/elliptic";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"time";"encoding/json";"fmt";"os";"io";"router-vpn/internal/mobilemultihop";"router-vpn/internal/mobileperf")
+import("crypto/ecdsa";"crypto/elliptic";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"time";"encoding/json";"fmt";"os";"io";"router-vpn/internal/mobilemultihop";"router-vpn/internal/mobileperf";"router-vpn/internal/nativesip003")
 func main(){
  var r struct{Operation string;Config string;Policy string}
  if err:=json.NewDecoder(io.LimitReader(os.Stdin,8*1024*1024)).Decode(&r);err!=nil{fmt.Fprintln(os.Stderr,"invalid request");os.Exit(2)}
@@ -30,6 +30,11 @@ func main(){
   if err==nil{template:=&x509.Certificate{SerialNumber:big.NewInt(1),Subject:pkix.Name{CommonName:r.Config},DNSNames:[]string{r.Config},NotBefore:time.Now().Add(-time.Hour),NotAfter:time.Now().Add(time.Hour),IsCA:true,BasicConstraintsValid:true,KeyUsage:x509.KeyUsageCertSign|x509.KeyUsageDigitalSignature};var der []byte;der,err=x509.CreateCertificate(rand.Reader,template,template,&key.PublicKey,key);if err==nil{value=string(pem.EncodeToMemory(&pem.Block{Type:"CERTIFICATE",Bytes:der}))}}
  case "plan":
   var controller *mobilemultihop.Controller;controller,err=mobilemultihop.New(r.Config,r.Policy);if err==nil{value=controller.Config();err=controller.Close()}
+ case "sip-compile":
+  var result []byte;result,err=nativesip003.Compile([]byte(r.Config),[]byte(r.Policy));value=string(result)
+ case "sip-start":
+  var inputs struct{Config string;Helper string;Source string};err=json.Unmarshal([]byte(r.Config),&inputs)
+  if err==nil{var result []byte;result,err=nativesip003.ComposeStartLayer([]byte(inputs.Config),[]byte(inputs.Helper),[]byte(inputs.Source),[]byte(r.Policy));value=string(result)}
  case "base-start":
   var inputs struct{Config string;Source string};err=json.Unmarshal([]byte(r.Config),&inputs)
   if err==nil{value,err=mobilemultihop.ComposeNativeBaseStartLayer(inputs.Config,inputs.Source,r.Policy)}
@@ -111,7 +116,10 @@ public final class Libbox {
  public static String routerApplyMultihopMTUPolicy(String c,String p)throws Exception{return call("mtu",c,p);}
  public static String routerApplyMultihopLANPolicy(String c,String p)throws Exception{return call("lan",c,p);}
  public static String routerApplyPerformancePolicy(String c,String p)throws Exception{return call("performance",c,p);}
- public static String routerCompileSIP003Profile(String a,String b){throw new AssertionError("Unrelated native compiler cannot be substituted");}
+ public static String routerCompileSIP003Profile(String a,String b)throws Exception{return call("sip-compile",a,b);}
+ public static String routerComposeSIP003StartLayer(String c,String helper,String source,String policy)throws Exception {
+  return call("sip-start",new JSONObject().put("Config",c).put("Helper",helper).put("Source",source).toString(),policy);
+ }
  public static boolean rejectConfig;
  public static void checkConfig(String c)throws Exception {if(rejectConfig)throw new IllegalArgumentException("Injected native schema failure");new JSONObject(c);}
 }''',
@@ -516,6 +524,40 @@ public final class MultihopGraphHarness {
    check(rejected&&sessions(app)==before,"ambiguous profile staged files");
   }
  }
+ static void nativeSIPStartChecks(Context context,Path dir,Path app)throws Exception {
+  NativeSingBoxController controller=new NativeSingBoxController(context);
+  for(String start:new String[]{"aes-256-gcm","aes-256-gcm+xor-whitening"})for(String dnsMode:new String[]{"home","custom","dot","doh","doh3"}){
+   JSONObject b=bundle('a'),p=profile(b);p.put("start_layer",start).put("mtu_policy","fixed").put("manual_mtu",1360);
+   if(!dnsMode.equals("home"))p.put("dns_mode",dnsMode).put("dns_host","192.168.50.133").put("dns_server_name","dns.example.test");
+   if(dnsMode.equals("custom"))p.put("dns_custom_transport","tcp").put("dns_host","192.168.50.133:5353");
+   JSONObject helper=new JSONObject().put("server","192.0.2.1").put("server_port",10443).put("password",key('t')).put("method","2022-blake3-aes-256-gcm").put("local_address","127.0.0.1").put("local_port",1092).put("mode","tcp_only").put("plugin","v2ray-plugin").put("plugin_opts","tls;host=server.example.test;path=/preserved");
+   JSONObject tcp=new JSONObject().put("type","socks").put("tag","tcp-stack").put("server","127.0.0.1").put("server_port",1092).put("version","5");
+   JSONObject udp=new JSONObject().put("type","hysteria2").put("tag","udp-stack").put("server","192.0.2.1").put("server_port",8443).put("password","hy-secret-preserved").put("obfs",new JSONObject().put("type","salamander").put("password","hy-obfs-preserved")).put("tls",new JSONObject().put("enabled",true).put("server_name","node.example.test"));
+   JSONObject tun=new JSONObject().put("type","tun").put("tag","tun-in").put("address",new JSONArray().put("172.29.94.1/30").put("fd00:29:94::1/126")).put("auto_route",true).put("strict_route",true).put("mtu",1360);
+   JSONObject route=new JSONObject().put("final","tcp-stack").put("rules",new JSONArray().put(new JSONObject().put("protocol","dns").put("action","hijack-dns")).put(new JSONObject().put("network","tcp").put("action","route").put("outbound","tcp-stack")).put(new JSONObject().put("network","udp").put("action","route").put("outbound","udp-stack")));
+   JSONObject cfg=new JSONObject().put("inbounds",new JSONArray().put(tun)).put("outbounds",new JSONArray().put(tcp).put(udp)).put("route",route).put("dns",new JSONObject().put("final","home").put("servers",new JSONArray().put(new JSONObject().put("type","udp").put("tag","home").put("server","10.77.0.1").put("detour","tcp-stack"))));
+   JSONObject aes=new JSONObject().put("outbounds",new JSONArray().put(new JSONObject().put("type","shadowsocks").put("tag","proxy").put("server","192.0.2.1").put("server_port",8388).put("method","2022-blake3-aes-256-gcm").put("password",key('s'))));
+   JSONObject assets=new JSONObject().put("sing-box.json",Base64.getEncoder().encodeToString(cfg.toString().getBytes(StandardCharsets.UTF_8))).put("sslocal.json",Base64.getEncoder().encodeToString(helper.toString().getBytes(StandardCharsets.UTF_8)));
+   b.getJSONObject("profiles").put("ss-v2ray",assets).put("shadowsocks",new JSONObject().put("sing-box.json",Base64.getEncoder().encodeToString(aes.toString().getBytes(StandardCharsets.UTF_8))));b.getJSONArray("modes").put(new JSONObject().put("id","ss-v2ray").put("name","SIP003"));
+   File input=save(dir,b);byte[] before=Files.readAllBytes(input.toPath());
+   check(controller.listDirectLibboxModes(input).stream().anyMatch(m->m.id.equals("ss-v2ray")),"valid SIP003 Start Layer hidden from readiness");
+   NativeSingBoxController.SessionInfo session=controller.prepareSession(input,"ss-v2ray");Path folder=app.resolve("layered-sessions").resolve(session.sessionId);
+   JSONObject result=new JSONObject(Files.readString(folder.resolve("sing-box.json")));JSONArray out=result.getJSONArray("outbounds");
+   check(result.getJSONArray("inbounds").length()==1&&!result.has("endpoints"),"SIP003 starts a second tunnel");
+   check(!Files.exists(folder.resolve(AndroidStartLayerRelay.SESSION_FILE)),"SIP003 starts a separate local relay");
+   check(out.length()==3,"SIP003 graph lost or duplicated a layer");
+   JSONObject a=out.getJSONObject(0),u=out.getJSONObject(1),outer=out.getJSONObject(2);
+   check(a.getString("type").equals("shadowsocks")&&a.getString("network").equals("tcp")&&a.getString("plugin_opts").equals(helper.getString("plugin_opts")),"TCP WebSocket/TLS settings changed");
+   check(a.getString("password").equals(key('t'))&&a.getInt("server_port")==10443,"TCP credentials or service port changed");
+   check(u.getString("type").equals("hysteria2")&&u.getString("password").equals("hy-secret-preserved")&&u.getInt("server_port")==8443&&u.getJSONObject("tls").toString().equals(udp.getJSONObject("tls").toString()),"UDP encryption or TLS policy changed");
+   check(a.getString("server").equals("10.77.0.1")&&u.getString("server").equals("10.77.0.1")&&a.getString("detour").equals("start-layer-aes")&&u.getString("detour").equals("start-layer-aes"),"one leg bypasses the Start Layer");
+   check(outer.getString("type").equals(start.endsWith("whitening")?"routervpn-aes-xor":"shadowsocks")&&outer.getString("password").equals(key('s')),"outer encryption changed");
+   JSONArray servers=result.getJSONObject("dns").getJSONArray("servers");for(int i=0;i<servers.length();i++){JSONObject resolver=servers.getJSONObject(i);String transport=resolver.getString("type");String expected=java.util.Arrays.asList("udp","h3","quic").contains(transport)?"udp-stack":"tcp-stack";check(resolver.getString("detour").equals(expected),"resolver uses the wrong encrypted leg");}
+   check(Arrays.equals(before,Files.readAllBytes(input.toPath())),"SIP003 Start Layer rewrites private input");
+   int count=sessions(app);aes.getJSONArray("outbounds").getJSONObject(0).put("server","192.0.2.9");b.getJSONObject("profiles").getJSONObject("shadowsocks").put("sing-box.json",Base64.getEncoder().encodeToString(aes.toString().getBytes(StandardCharsets.UTF_8)));
+   boolean rejected=false;try{controller.prepareSession(save(dir,b),"ss-v2ray");}catch(Exception expected){rejected=true;}check(rejected&&sessions(app)==count,"foreign Start Layer staged a session");
+  }
+ }
  public static void main(String[] args)throws Exception {
   Path dir=Path.of(args[0]);Path app=Files.createDirectory(dir.resolve("app"));Context context=new Context(app.toFile());
   AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
@@ -554,6 +596,7 @@ public final class MultihopGraphHarness {
   check(failed,"DNS accepted a direct-only proxy tag");
   directChecks(context,dir,app);
   nativeStartChecks(context,dir,app);
+  nativeSIPStartChecks(context,dir,app);
   awgChecks(context,dir,app);
   awgEntryChecks(context,dir);
   awgExitChecks(dir);
