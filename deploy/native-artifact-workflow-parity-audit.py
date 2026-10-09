@@ -421,3 +421,8 @@ for rel in (ios_compile_smoke_rel, ".github/workflows/restore-ios-mtu-source.yml
         "python3 ios/RouterVPN/test_runtime_selection_contract.py"
     ), f"{rel}: Go must be installed before executing Apple Swift-to-Go contracts"
 print("Apple native contract toolchain ordering: PASS")
+
+# Standalone native runners must prepare all their imported/registered modules.
+import subprocess
+import sys
+subprocess.run([sys.executable, str(ROOT/"deploy/test_native_runner_dependencies.py")], check=True)

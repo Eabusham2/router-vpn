@@ -5,6 +5,10 @@ on:
       - 'internal/applexray/**'
       - 'mobile/applexray/**'
       - 'deploy/prepare-apple-xray.py'
+      - 'deploy/prepare-mobile-whitening.py'
+      - 'mobile/startwhitening/**'
+      - 'internal/startwhitening/**'
+      - 'deploy/xray_native_dialer_policy.py'
       - 'deploy/prepare-xray-runtime.py'
       - 'deploy/xray_datagram_policy.py'
       - 'deploy/xray_connection_policy.py'
@@ -39,6 +43,7 @@ jobs:
           git -C "$XRAY" remote add origin https://github.com/XTLS/Xray-core.git
           git -C "$XRAY" fetch --depth=1 origin 50231eaff98ccc31b5cbd247a721c16e97fe5ec1
           git -C "$XRAY" checkout --detach FETCH_HEAD
+          python3 deploy/prepare-mobile-whitening.py "$SING"
           python3 deploy/prepare-apple-xray.py "$SING" "$XRAY"
           (
             cd "$SING"
