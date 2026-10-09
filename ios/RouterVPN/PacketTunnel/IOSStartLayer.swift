@@ -13,7 +13,7 @@ enum IOSStartLayer {
     static let nativeWhiteningType = "routervpn-aes-xor"
     static let whiteningPort = 8389
 
-    private static let supportedRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3"]
+    private static let supportedRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"]
     private static let maxJSONBytes = 4 * 1024 * 1024
 
     static func selectedMode(profile: [String: Any]) throws -> String {
@@ -44,7 +44,8 @@ enum IOSStartLayer {
         files: [String: Data],
         rawProfileID: String,
         nativeBaseCompiler: ((String, String, String) throws -> String)? = nil,
-        nativeSIPCompiler: ((String, String, String, String) throws -> String)? = nil
+        nativeSIPCompiler: ((String, String, String, String) throws -> String)? = nil,
+        nativeXrayCompiler: ((String, String, String, String, String) throws -> String)? = nil
     ) throws -> [String: Data] {
         let start = try selectedMode(profile: selectedProfile)
         guard start != off else { return files }
@@ -63,7 +64,7 @@ enum IOSStartLayer {
         // XOR is obfuscation only; the native outbound always uses authenticated
         // Shadowsocks 2022 AES. No local listener, second VPN, or helper process.
         let whitening = start == aesXOR
-        if ["wg", "awg2-fast", "awg2-strong", "ss-v2ray"].contains(rawMode) {
+        if ["wg", "awg2-fast", "awg2-strong", "ss-v2ray", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"].contains(rawMode) {
             guard let config = files["sing-box.json"], !config.isEmpty, config.count <= maxJSONBytes,
                   let configText = String(data: config, encoding: .utf8),
                   let profiles = root["profiles"] as? [String: Any],
@@ -81,7 +82,25 @@ enum IOSStartLayer {
                                               "node_kind": kind, "router_api": routerAPI]
             let policy = String(decoding: try JSONSerialization.data(withJSONObject: captured), as: UTF8.self)
             let composed: String
-            if rawMode == "ss-v2ray" {
+            if ["reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"].contains(rawMode) {
+                guard let original = files["xray.json"], !original.isEmpty, original.count <= maxJSONBytes,
+                      let text = String(data: original, encoding: .utf8) else {
+                    throw error("Xray Start Layer requires the exact bounded native protocol profile.")
+                }
+                if let nativeXrayCompiler {
+                    composed = try nativeXrayCompiler(rawMode, configText, text, sourceText, policy)
+                } else {
+                    #if canImport(Libbox)
+                    var failure: NSError?
+                    let output: String? = LibboxRouterComposeXrayStartLayer(rawMode, configText, text, sourceText, policy, &failure)
+                    if let failure { throw failure }
+                    guard let output, !output.isEmpty else { throw error("The native Xray Start Layer compiler returned no graph.") }
+                    composed = output
+                    #else
+                    throw error("Native Xray Start Layer requires its pinned compiler.")
+                    #endif
+                }
+            } else if rawMode == "ss-v2ray" {
                 guard let rawProfile = profiles[rawMode] as? [String: Any],
                       let helper64 = rawProfile["sslocal.json"] as? String,
                       !helper64.isEmpty, helper64.utf8.count <= 6 * 1024 * 1024,
@@ -118,7 +137,7 @@ enum IOSStartLayer {
             }
             guard !composed.isEmpty, composed.utf8.count <= maxJSONBytes,
                   let graph = try JSONSerialization.jsonObject(with: Data(composed.utf8)) as? [String: Any],
-                  (rawMode == "ss-v2ray" || graph["endpoints"] is [[String: Any]]), graph["outbounds"] is [[String: Any]] else {
+                  (!["wg", "awg2-fast", "awg2-strong"].contains(rawMode) || graph["endpoints"] is [[String: Any]]), graph["outbounds"] is [[String: Any]] else {
                 throw error("The native Start Layer compiler returned an invalid or oversized graph.")
             }
             var result = files

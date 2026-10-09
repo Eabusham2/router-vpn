@@ -340,9 +340,35 @@ final class RouterVPNModel: ObservableObject {
                 throw IOSRuntimeSelectionError.unsupportedMode("The native Xray selection lost its owned graph.")
             }
             let mode = selection.rawProfileID
+            let startLayer = try IOSRuntimeSelector.normalizedStartLayer(in: bundle)
+            var aesInput: String?
+            var startPolicy: String?
+            if startLayer != "off" {
+                guard let selected = IOSDNSRuntimePolicy.selectedProfile(in: bundle),
+                      let encoded = bundle.profiles["shadowsocks"]?["sing-box.json"],
+                      !encoded.isEmpty, encoded.utf8.count <= 6 * 1024 * 1024,
+                      let bytes = Data(base64Encoded: encoded, options: []),
+                      !bytes.isEmpty, bytes.count <= 4 * 1024 * 1024,
+                      bytes.base64EncodedString() == encoded,
+                      let text = String(data: bytes, encoding: .utf8) else {
+                    throw IOSRuntimeSelectionError.unsupportedMode("Xray Start Layer requires its exact AES node profile.")
+                }
+                aesInput = text
+                let metadata = ["mode": startLayer, "raw_mode": mode,
+                                "node_kind": selected.nodeKind ?? "router-vpn", "router_api": selected.routerAPI]
+                startPolicy = String(decoding: try JSONSerialization.data(withJSONObject: metadata), as: UTF8.self)
+            }
+            // Immutable captured strings may cross the asynchronous boundary;
+            // live settings/credentials must be rechecked before publication.
+            let capturedAES = aesInput, capturedPolicy = startPolicy
             let resolved = try await Task.detached(priority: .userInitiated) {
                 var failure: NSError?
-                let output: String? = LibboxRouterResolveXrayProfile(mode, wrapper, original, &failure)
+                let output: String?
+                if let capturedAES, let capturedPolicy {
+                    output = LibboxRouterResolveXrayStartLayerProfile(mode, wrapper, original, capturedAES, capturedPolicy, &failure)
+                } else {
+                    output = LibboxRouterResolveXrayProfile(mode, wrapper, original, &failure)
+                }
                 if let failure { throw failure }
                 guard let output, output.utf8.count <= 12 * 1024 * 1024 else {
                     throw IOSRuntimeSelectionError.unsupportedMode("Native Xray endpoint preparation failed.")
@@ -357,11 +383,17 @@ final class RouterVPNModel: ObservableObject {
                 throw IOSRuntimeSelectionError.unsupportedMode("The selected node or VPN ownership changed during endpoint preparation.")
             }
             let replacements = try JSONDecoder().decode([String: Data].self, from: Data(resolved.utf8))
-            guard Set(replacements.keys) == Set(["sing-box.json", "xray.json"]), replacements.values.allSatisfy({ !$0.isEmpty && $0.count <= 4 * 1024 * 1024 }) else {
+            let expectedFiles: Set<String> = startLayer == "off" ? ["sing-box.json", "xray.json"] : ["sing-box.json", "xray.json", "start-layer-source.json"]
+            guard Set(replacements.keys) == expectedFiles, replacements.values.allSatisfy({ !$0.isEmpty && $0.count <= 4 * 1024 * 1024 }) else {
                 throw IOSRuntimeSelectionError.unsupportedMode("Native Xray preparation returned an invalid asset set.")
             }
             var launchFiles = selection.files
-            for (name, data) in replacements { launchFiles[name] = data }
+            for (name, data) in replacements where name != "start-layer-source.json" { launchFiles[name] = data }
+            if let aes = replacements["start-layer-source.json"] {
+                // Launch-only address alignment; do not mutate bundle/self.bundle.
+                guard launchBundle.profiles["shadowsocks"] != nil else { throw IOSRuntimeSelectionError.invalidSingBoxConfig }
+                launchBundle.profiles["shadowsocks"]?["sing-box.json"] = aes.base64EncodedString()
+            }
             launchBundle.profiles[selection.rawProfileID] = launchFiles.mapValues { $0.base64EncodedString() }
             launchBundle = try IOSDNSRuntimePolicy.patch(launchBundle)
         }

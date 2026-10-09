@@ -75,7 +75,7 @@ enum IOSRuntimeSelector {
         "wg.conf", "wg-socks.conf", "awg.conf", "awg-socks.conf"
     ]
     private static let loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]
-    private static let startLayerRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3"]
+    private static let startLayerRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"]
     private static let startLayerAES = "aes-256-gcm"
     private static let startLayerAESXOR = "aes-256-gcm+xor-whitening"
 
@@ -178,11 +178,11 @@ enum IOSRuntimeSelector {
         }
         let raw = rawProfileID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard startLayerRawModes.contains(raw) else {
-            throw IOSRuntimeSelectionError.unsupportedMode("Start Layer AES-256-GCM requires an owned Libbox WG/AWG, Shadowsocks/SIP003, Hysteria2, Naive H2, or Naive H3 mode; \(raw) is not a proved composition path.")
+            throw IOSRuntimeSelectionError.unsupportedMode("Start Layer AES-256-GCM requires an owned Libbox WG/AWG, Shadowsocks/SIP003, Hysteria2, Naive, or native REALITY/XHTTP/Split/MAX mode; \(raw) is not a proved composition path.")
         }
     }
 
-    private static func normalizedStartLayer(in bundle: ClientBundle) throws -> String {
+    static func normalizedStartLayer(in bundle: ClientBundle) throws -> String {
         guard let profile = IOSDNSRuntimePolicy.selectedProfile(in: bundle) else {
             throw IOSRuntimeSelectionError.unsupportedMode("The selected Router VPN profile is missing or ambiguous.")
         }

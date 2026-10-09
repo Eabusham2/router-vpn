@@ -17,5 +17,5 @@ export ROUTER_VPN_XRAY_TEST_BINARY="$FIXTURE_DIR/xray-fixture"
  cd "$VENDOR"
  go test -race -count=1 ./experimental/libbox/routervpn/applexray
  go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor -count=1 -timeout=180s -v ./protocol/routervpnxray
- go test -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouterXray' -count=1
+ go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouterXray' -count=1
 )
