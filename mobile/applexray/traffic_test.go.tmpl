@@ -32,7 +32,6 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
 	M "github.com/sagernet/sing/common/metadata"
-	"github.com/xtls/xray-core/transport/internet"
 )
 
 // These tests never reach the public Internet, use a user key or change routes.
@@ -258,7 +257,7 @@ func startLoopbackXray(t *testing.T, mode, camouflage, tcpEcho, udpEcho string, 
 	return address, normalized
 }
 func TestNativeXrayEncryptedLoopbackTCPAndUDP(t *testing.T) {
-	install.Do(func() { internet.UseAlternativeSystemDialer(systemDialer{}) })
+	installScopedDialer()
 	camouflage := loopbackCamouflage(t)
 	tcp, udp := loopbackEcho(t)
 	tests := []struct{ mode, mask string }{

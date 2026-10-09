@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
@@ -37,12 +38,14 @@ type Options struct {
 }
 
 var install sync.Once
+var installError error
+var activeNative atomic.Int64
 var lifecycle sync.Mutex
 
 func RegisterOutbound(registry *outbound.Registry) {
 	// Immutable after first installation: Xray's dialer API forbids concurrent
 	// replacement. Every actual call still requires its exact owned instance.
-	install.Do(func() { internet.UseAlternativeSystemDialer(systemDialer{}) })
+	installScopedDialer()
 	outbound.Register[Options](registry, applexray.Type, NewOutbound)
 }
 
@@ -58,9 +61,14 @@ type Outbound struct {
 	mu       sync.Mutex
 	instance *xcore.Instance
 	closed   bool
+	counted  bool
 }
 
 func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options Options) (adapter.Outbound, error) {
+	installScopedDialer()
+	if installError != nil {
+		return nil, installError
+	}
 	plan, err := applexray.Prepare(options.Mode, []byte(options.ConfigJSON))
 	if err != nil {
 		return nil, err
@@ -88,6 +96,17 @@ func (h *Outbound) Start(stage adapter.StartStage) error {
 	}
 	lifecycle.Lock()
 	defer lifecycle.Unlock()
+	installScopedDialer()
+	if installError != nil {
+		return installError
+	}
+	activeNative.Add(1)
+	published := false
+	defer func() {
+		if !published {
+			activeNative.Add(-1)
+		}
+	}()
 	cfg, err := xcore.LoadConfig("json", bytes.NewReader(h.plan.JSON))
 	if err != nil {
 		return errors.New("native Xray rejected the imported protocol configuration")
@@ -104,6 +123,8 @@ func (h *Outbound) Start(stage adapter.StartStage) error {
 		return errors.New("native Xray instance failed to start")
 	}
 	h.instance = instance
+	h.counted = true
+	published = true
 	return nil
 }
 func (h *Outbound) owner() (*xcore.Instance, error) {
@@ -165,6 +186,10 @@ func (h *Outbound) Close() error {
 		return nil
 	}
 	h.closed = true
+	if h.counted {
+		defer activeNative.Add(-1)
+		h.counted = false
+	}
 	h.cancel()
 	h.binding.close()
 	if h.instance == nil {
@@ -203,10 +228,32 @@ type binding struct {
 	closed  bool
 	sockets map[*ownedConn]bool
 }
+
+func installScopedDialer() {
+	install.Do(func() { installError = internet.RouterVPNInstallScopedSystemDialer(selectNativeDialer) })
+}
+func selectNativeDialer(ctx context.Context) (internet.SystemDialer, bool) {
+	if ctx == nil {
+		return systemDialer{}, true
+	}
+	if ctx.Value(bindingKey{}) != nil || xcore.RouterVPNIsNativeContext(ctx) || activeNative.Load() != 0 {
+		return systemDialer{}, true
+	}
+	if instance := xcore.FromContext(ctx); instance != nil {
+		if _, owned := bindings.Load(instance); owned {
+			return systemDialer{}, true
+		}
+	}
+	return nil, false
+}
+
 type systemDialer struct{}
 
 func (systemDialer) DestIpAddress() xnet.IP { return nil }
 func (systemDialer) Dial(ctx context.Context, source xnet.Address, dest xnet.Destination, sockopt *internet.SocketConfig) (net.Conn, error) {
+	if ctx == nil {
+		return nil, errors.New("native Xray has no connection context")
+	}
 	b, _ := ctx.Value(bindingKey{}).(*binding)
 	if b == nil {
 		if instance := xcore.FromContext(ctx); instance != nil {

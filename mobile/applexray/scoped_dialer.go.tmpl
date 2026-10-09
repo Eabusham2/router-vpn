@@ -1,0 +1,42 @@
+// Added only to Router VPN's verified disposable Xray checkout.
+package internet
+
+import (
+	"context"
+	"errors"
+	"github.com/xtls/xray-core/common/net"
+	"sync/atomic"
+)
+
+type RouterVPNNativeDialerSelector func(context.Context) (SystemDialer, bool)
+type routerVPNDialerSlot struct{ selectDialer RouterVPNNativeDialerSelector }
+
+var routerVPNNativeSelector atomic.Pointer[routerVPNDialerSlot]
+
+// Register one immutable dispatcher. It does not replace effectiveSystemDialer
+// or the ordinary socket controllers. Returning owned=true is fail-closed even
+// when its dialer is missing or returns an error; there is no direct retry.
+func RouterVPNInstallScopedSystemDialer(selector RouterVPNNativeDialerSelector) error {
+	if selector == nil {
+		return errors.New("nil native dialer selector")
+	}
+	if !routerVPNNativeSelector.CompareAndSwap(nil, &routerVPNDialerSlot{selector}) {
+		return errors.New("native dialer selector already installed")
+	}
+	return nil
+}
+func routerVPNScopedDial(ctx context.Context, src net.Address, dest net.Destination, opts *SocketConfig) (net.Conn, error, bool) {
+	slot := routerVPNNativeSelector.Load()
+	if slot == nil {
+		return nil, nil, false
+	}
+	dialer, owned := slot.selectDialer(ctx)
+	if !owned {
+		return nil, nil, false
+	}
+	if dialer == nil {
+		return nil, errors.New("native connection has no owned system dialer"), true
+	}
+	conn, err := dialer.Dial(ctx, src, dest, opts)
+	return conn, err, true
+}

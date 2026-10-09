@@ -1,0 +1,92 @@
+package internet
+
+import (
+	"context"
+	"errors"
+	"github.com/xtls/xray-core/common/net"
+	"sync"
+	"sync/atomic"
+	"testing"
+)
+
+type routerTestDialer struct {
+	calls  atomic.Int64
+	result error
+}
+
+func (d *routerTestDialer) Dial(context.Context, net.Address, net.Destination, *SocketConfig) (net.Conn, error) {
+	d.calls.Add(1)
+	return nil, d.result
+}
+func (*routerTestDialer) DestIpAddress() net.IP { return nil }
+
+type routerOwnedKey struct{}
+
+func TestRouterVPNScopedDialerDoesNotReplaceLegacyOrFallback(t *testing.T) {
+	old := effectiveSystemDialer
+	slot := routerVPNNativeSelector.Swap(nil)
+	defer func() { effectiveSystemDialer = old; routerVPNNativeSelector.Store(slot) }()
+	legacy := &routerTestDialer{result: errors.New("legacy sentinel")}
+	native := &routerTestDialer{result: errors.New("native sentinel")}
+	effectiveSystemDialer = legacy
+	selectNative := func(ctx context.Context) (SystemDialer, bool) {
+		switch ctx.Value(routerOwnedKey{}) {
+		case "native":
+			return native, true
+		case "expired":
+			return nil, true
+		default:
+			return nil, false
+		}
+	}
+	if RouterVPNInstallScopedSystemDialer(nil) == nil {
+		t.Fatal("nil selector accepted")
+	}
+	if err := RouterVPNInstallScopedSystemDialer(selectNative); err != nil {
+		t.Fatal(err)
+	}
+	if effectiveSystemDialer != legacy {
+		t.Fatal("legacy system dialer was overwritten")
+	}
+	if RouterVPNInstallScopedSystemDialer(selectNative) == nil {
+		t.Fatal("published owner replaced")
+	}
+	dest := net.TCPDestination(net.ParseAddress("192.0.2.1"), 443)
+	if _, e := DialSystem(context.Background(), dest, nil); e != legacy.result {
+		t.Fatal("ordinary service changed", e)
+	}
+	ctx := context.WithValue(context.Background(), routerOwnedKey{}, "native")
+	if _, e := DialSystem(ctx, dest, nil); e != native.result {
+		t.Fatal("owned native error did not propagate", e)
+	}
+	if legacy.calls.Load() != 1 {
+		t.Fatal("native error fell back to ordinary network")
+	}
+	// Invalid native socket options are passed to its owner for rejection before
+	// upstream domain strategy or an unrelated outbound redirection can run.
+	if _, e := DialSystem(ctx, dest, &SocketConfig{DialerProxy: "unowned"}); e != native.result {
+		t.Fatal("native request escaped to upstream redirect", e)
+	}
+	if _, e := DialSystem(context.WithValue(ctx, routerOwnedKey{}, "expired"), dest, nil); e == nil {
+		t.Fatal("expired owner accepted")
+	}
+	if legacy.calls.Load() != 1 {
+		t.Fatal("expired owner fell back")
+	}
+	var jobs sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		jobs.Add(1)
+		go func() {
+			defer jobs.Done()
+			for j := 0; j < 20; j++ {
+				if _, e := DialSystem(ctx, dest, nil); e != native.result {
+					t.Error("concurrent native owner changed")
+				}
+			}
+		}()
+	}
+	jobs.Wait()
+	if native.calls.Load() != 1282 || legacy.calls.Load() != 1 {
+		t.Fatal("duplicate or foreign physical dialing")
+	}
+}

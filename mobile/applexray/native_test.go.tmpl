@@ -74,7 +74,7 @@ func (d *fixtureDialer) close() {
 	}
 }
 func TestNativeXrayActualPinnedConfigurationAndLifecycle(t *testing.T) {
-	install.Do(func() { internet.UseAlternativeSystemDialer(systemDialer{}) })
+	installScopedDialer()
 	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"} {
 		t.Run(mode, func(t *testing.T) {
 			plan, err := applexray.Prepare(mode, nativeConfig(t, mode))
@@ -150,5 +150,30 @@ func TestNativeXrayUnderlayCannotEscapeOrOutliveItsOwner(t *testing.T) {
 	}
 	if d.calls != 1 {
 		t.Fatal("unexpected network attempts")
+	}
+}
+
+func TestScopedSelectorRetainsNativeOwnershipUntilClose(t *testing.T) {
+	if activeNative.Load() != 0 {
+		t.Fatal("previous native instance leaked")
+	}
+	if _, owned := selectNativeDialer(context.Background()); owned {
+		t.Fatal("idle selector changed legacy service")
+	}
+	marked := xcore.RouterVPNNativeContext(context.Background())
+	if _, owned := selectNativeDialer(marked); !owned {
+		t.Fatal("marked native context escaped after owner expiry")
+	}
+	if _, owned := selectNativeDialer(context.WithValue(context.Background(), bindingKey{}, &binding{})); !owned {
+		t.Fatal("native binding not selected")
+	}
+	activeNative.Add(1)
+	_, guarded := selectNativeDialer(context.Background())
+	activeNative.Add(-1)
+	if !guarded {
+		t.Fatal("unowned background dial fell back while native session active")
+	}
+	if _, owned := selectNativeDialer(context.Background()); owned {
+		t.Fatal("legacy path remained blocked after native teardown")
 	}
 }

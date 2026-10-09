@@ -19,8 +19,12 @@ _connection_spec = importlib.util.spec_from_file_location('xray_connection_polic
 CONNECTIONS = importlib.util.module_from_spec(_connection_spec)
 _connection_spec.loader.exec_module(CONNECTIONS)
 
+_native_spec = importlib.util.spec_from_file_location('routervpn_native_dialer', ROOT/'deploy/xray_native_dialer_policy.py')
+NATIVE_DIALER = importlib.util.module_from_spec(_native_spec)
+_native_spec.loader.exec_module(NATIVE_DIALER)
+
 def sources():
-    return sorted((ROOT/'internal/applexray').glob('*.go')) + sorted((ROOT/'mobile/applexray').glob('*.tmpl')) + [Path(__file__).resolve(), ROOT/'deploy/xray_datagram_policy.py', ROOT/'deploy/xray_connection_policy.py', ROOT/'deploy/prepare-xray-runtime.py']
+    return sorted((ROOT/'internal/applexray').glob('*.go')) + sorted((ROOT/'mobile/applexray').glob('*.tmpl')) + NATIVE_DIALER.inputs() + [Path(__file__).resolve(), ROOT/'deploy/xray_datagram_policy.py', ROOT/'deploy/xray_connection_policy.py', ROOT/'deploy/prepare-xray-runtime.py']
 
 def digest():
     h = hashlib.sha256()
@@ -53,6 +57,7 @@ def prepare(sing, xray):
     checkout(sing,SING_PIN,'github.com/sagernet/sing-box')
     checkout(xray,XRAY_PIN,'github.com/xtls/xray-core')
     SHARED.prepare(xray)
+    NATIVE_DIALER.prepare(xray)
     (xray/'transport/internet/splithttp/routervpn_response_test.go').write_bytes((ROOT/'mobile/applexray/wait_reader_test.go.tmpl').read_bytes())
     policy=sing/'experimental/libbox/routervpn/applexray';policy.mkdir(parents=True,exist_ok=True)
     for source in (ROOT/'internal/applexray').glob('*.go'):

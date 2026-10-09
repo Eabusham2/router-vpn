@@ -13,6 +13,7 @@ trap 'rm -rf "$FIXTURE_DIR"' EXIT
 (cd "$XRAY" && go build -ldflags=-checklinkname=0 -o "$FIXTURE_DIR/xray-fixture" ./main)
 export ROUTER_VPN_XRAY_TEST_BINARY="$FIXTURE_DIR/xray-fixture"
 (cd "$XRAY" && go test -race -ldflags=-checklinkname=0 -count=1 -run 'TestRouterVPN' ./transport/internet/splithttp)
+(cd "$XRAY" && go test -race -ldflags=-checklinkname=0 -count=1 -run 'TestRouterVPNScoped' ./transport/internet)
 (
  cd "$VENDOR"
  go test -race -count=1 ./experimental/libbox/routervpn/applexray

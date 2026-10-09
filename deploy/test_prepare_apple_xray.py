@@ -38,7 +38,7 @@ class Prepare(unittest.TestCase):
             path.write_text('\n'.join(old if old!='c.closed = true' else (old+'\n')*3 for old,_ in pairs))
         return sing,xray
     def run_prepare(self,sing,xray):
-        with mock.patch.object(MODULE,'checkout') as check, mock.patch.object(MODULE.SHARED,'checkout'):
+        with mock.patch.object(MODULE,'checkout') as check, mock.patch.object(MODULE.SHARED,'checkout'), mock.patch.object(MODULE.NATIVE_DIALER,'prepare'):
             MODULE.prepare(sing,xray)
             self.assertEqual(check.call_count,2)
     def test_deterministic_composition_and_instance_scope(self):
@@ -56,7 +56,10 @@ class Prepare(unittest.TestCase):
             self.assertIn('legacySpider()',reality,'ordinary upstream instance behavior must not be rewritten')
             native=(sing/'protocol/routervpnxray/outbound.go').read_text()
             self.assertIn('xcore.NewWithContext(xcore.RouterVPNNativeContext(h.ctx), cfg)',native)
-            self.assertIn('internet.UseAlternativeSystemDialer(systemDialer{})',native)
+            self.assertIn('internet.RouterVPNInstallScopedSystemDialer(selectNativeDialer)',native)
+            self.assertNotIn('internet.UseAlternativeSystemDialer(',native)
+            self.assertIn('xcore.RouterVPNIsNativeContext(ctx)',native)
+            self.assertIn('activeNative.Load()',native)
             self.assertIn('bindings.Delete(instance)',native)
     def test_vision_pointer_checks_are_kept_not_suppressed(self):
         patched = MODULE.patch_vision_buffers(VISION)
@@ -102,6 +105,19 @@ class Prepare(unittest.TestCase):
             sing,xray=self.fixture(tmp);self.run_prepare(sing,xray)
             file=xray/'transport/internet/reality/reality.go'
             file.write_text(file.read_text().replace('_ = uConn.Close()','weakenedClose()'))
-            with mock.patch.object(MODULE,'checkout'),mock.patch.object(MODULE.SHARED,'checkout'),self.assertRaises(ValueError):MODULE.prepare(sing,xray)
+            with mock.patch.object(MODULE,'checkout'),mock.patch.object(MODULE.SHARED,'checkout'), mock.patch.object(MODULE.NATIVE_DIALER,'prepare'),self.assertRaises(ValueError):MODULE.prepare(sing,xray)
+
+class ScopedDialPolicy(unittest.TestCase):
+    def test_exact_policy_and_partial_patch_rejection(self):
+        policy=MODULE.NATIVE_DIALER
+        self.assertEqual(len(policy.SOURCE_SHA),40)
+        original=policy.OLD+'\n// isolated fixture\n'
+        with mock.patch.object(policy,'SOURCE_SHA',policy.blobsha(original.encode())):
+            prepared=policy.patch(original)
+            self.assertEqual(policy.patch(prepared),prepared)
+            self.assertLess(prepared.index('routerVPNScopedDial'),prepared.index('effectiveSystemDialer.Dial'))
+            for corrupt in (prepared+'changed',original+'changed',prepared.replace('return conn, err','return nil, nil')):
+                with self.assertRaises(ValueError):policy.patch(corrupt)
+        with self.assertRaises(ValueError):policy.patch(original)
 
 if __name__=='__main__':unittest.main()
