@@ -1,0 +1,201 @@
+name: Verify and stage exact SIP003 mobile source
+'on':
+  push:
+    branches:
+    - main
+    paths:
+    - .github/workflows/publish-sip003-source.yml
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'Eabusham2/router-vpn' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - ubuntu-latest
+        - macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+    - uses: actions/setup-go@v5
+      with:
+        go-version: 1.26.3
+        cache: false
+    - uses: actions/setup-java@v5
+      if: runner.os == 'Linux'
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: Reconstruct checksum-verified source
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import base64, hashlib, json, os, pathlib, subprocess, urllib.request, zlib
+        REPO = "Eabusham2/router-vpn"
+        BASE = "b303093e550228a052b548f2d50399e3fa8ed67a"
+        TREE = "2d076efbda04a49cc99afafa2b0c7f96a13a97d1"
+        WORKFLOW = ".github/workflows/publish-sip003-source.yml"
+        PATCH_SHA = "19173f8a2827aa2bc03853a9b0b9b5cc9693b213db61b1edf500c44ee93f0489"
+        def git(*args):
+            return subprocess.check_output(["git", *args])
+        def api(path, data=None):
+            request = urllib.request.Request("https://api.github.com/repos/"+REPO+"/"+path,
+                data=None if data is None else json.dumps(data).encode(),
+                headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                         "Accept":"application/vnd.github+json", "Content-Type":"application/json"})
+            with urllib.request.urlopen(request, timeout=40) as response:
+                return json.load(response)
+        def reconstruct(patch):
+            assert os.environ["GITHUB_REPOSITORY"] == REPO
+            assert git("rev-parse", "HEAD").decode().strip() == os.environ["GITHUB_SHA"]
+            assert git("rev-parse", "HEAD^").decode().strip() == BASE, "transfer base changed"
+            assert git("status", "--porcelain").strip() == b"", "dirty source before import"
+            assert len(patch) == 40965 and hashlib.sha256(patch).hexdigest() == PATCH_SHA
+            dest=pathlib.Path(os.environ["RUNNER_TEMP"])/"source.patch"
+            dest.write_bytes(patch)
+            git("rm", "--", WORKFLOW)
+            git("apply", "--index", "--check", str(dest))
+            git("apply", "--index", str(dest))
+            assert git("write-tree").decode().strip() == TREE, "source tree mismatch"
+            git("diff", "--cached", "--check")
+            print("Reconstructed exact source tree",TREE,flush=True)
+        parts = [('7dcb231880b2a19117f1c320f8b2fce0939fc110',4000),
+                 ('918dfa1c8a8d132e3c977369809471eb8d12d76c',4000),
+                 ('28024dc5b8d0419da0af85eb792b97b48bd4368c',4000),
+                 ('1eab6a1afdb315d78b1f77f576f3863f9edb7279',2776)]
+        chunks=[]
+        for sha,size in parts:
+            item=api("git/blobs/"+sha)
+            raw=base64.b64decode(item["content"])
+            assert len(raw)==size
+            assert hashlib.sha1(b"blob "+str(size).encode()+b"\0"+raw).hexdigest()==sha
+            chunks.append(raw)
+        encoded=b"".join(chunks)
+        assert len(encoded)==14776
+        compressed=base64.b64decode(encoded,validate=True)
+        assert len(compressed)==11082
+        assert hashlib.sha256(compressed).hexdigest()=="35684241ee81483ad3095eeb8be5cf3a7b9f5b80ce61409f0f4440652a3f673e"
+        unzip=zlib.decompressobj(16+zlib.MAX_WBITS)
+        patch=unzip.decompress(compressed,40966)
+        assert unzip.eof and not unzip.unused_data and not unzip.unconsumed_tail
+        reconstruct(patch)
+        PY
+    - name: Run actual host integration and source tests
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 deploy/validate-repo.py
+        python3 deploy/test_native_sip003_shipping.py
+        if [ "$RUNNER_OS" = Linux ]; then
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libandroid-json-java
+          go test -race -count=1 -timeout=240s ./...
+          go vet ./...
+          python3 android/test_android_multihop_graph.py
+        else
+          python3 deploy/test_ios_native_base_start_layer.py
+          python3 deploy/test_ios_start_layer.py
+          python3 deploy/test_ios_native_base_selection.py
+        fi
+        [ "$(git write-tree)" = 2d076efbda04a49cc99afafa2b0c7f96a13a97d1 ]
+        [ -z "$(git diff --name-only)" ]
+    - uses: actions/upload-artifact@v4
+      with:
+        name: sip003-verified-${{ matrix.os }}
+        path: ${{ runner.temp }}/source.patch
+        if-no-files-found: error
+        retention-days: 7
+  stage:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+    - uses: actions/download-artifact@v4
+      with:
+        name: sip003-verified-ubuntu-latest
+        path: ${{ runner.temp }}/verified
+    - name: Stage exact tested source commit without moving main
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import base64, hashlib, json, os, pathlib, subprocess, urllib.request, zlib
+        REPO = "Eabusham2/router-vpn"
+        BASE = "b303093e550228a052b548f2d50399e3fa8ed67a"
+        TREE = "2d076efbda04a49cc99afafa2b0c7f96a13a97d1"
+        WORKFLOW = ".github/workflows/publish-sip003-source.yml"
+        PATCH_SHA = "19173f8a2827aa2bc03853a9b0b9b5cc9693b213db61b1edf500c44ee93f0489"
+        def git(*args):
+            return subprocess.check_output(["git", *args])
+        def api(path, data=None):
+            request = urllib.request.Request("https://api.github.com/repos/"+REPO+"/"+path,
+                data=None if data is None else json.dumps(data).encode(),
+                headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],
+                         "Accept":"application/vnd.github+json", "Content-Type":"application/json"})
+            with urllib.request.urlopen(request, timeout=40) as response:
+                return json.load(response)
+        def reconstruct(patch):
+            assert os.environ["GITHUB_REPOSITORY"] == REPO
+            assert git("rev-parse", "HEAD").decode().strip() == os.environ["GITHUB_SHA"]
+            assert git("rev-parse", "HEAD^").decode().strip() == BASE, "transfer base changed"
+            assert git("status", "--porcelain").strip() == b"", "dirty source before import"
+            assert len(patch) == 40965 and hashlib.sha256(patch).hexdigest() == PATCH_SHA
+            dest=pathlib.Path(os.environ["RUNNER_TEMP"])/"source.patch"
+            dest.write_bytes(patch)
+            git("rm", "--", WORKFLOW)
+            git("apply", "--index", "--check", str(dest))
+            git("apply", "--index", str(dest))
+            assert git("write-tree").decode().strip() == TREE, "source tree mismatch"
+            git("diff", "--cached", "--check")
+            print("Reconstructed exact source tree",TREE,flush=True)
+        patch=(pathlib.Path(os.environ["RUNNER_TEMP"])/"verified/source.patch").read_bytes()
+        reconstruct(patch)
+        head=os.environ["GITHUB_SHA"]
+        assert api("git/ref/heads/main")["object"]["sha"]==head, "main advanced; do not replace newer work"
+        rows=git("diff","--cached","--name-status","--no-renames").decode().splitlines()
+        assert len(rows)==11
+        entries=[]
+        for row in rows:
+            status,path=row.split("\t",1)
+            if status=="D":
+                assert path==WORKFLOW
+                entries.append({"path":path,"mode":"100644","type":"blob","sha":None})
+                continue
+            assert status=="M"
+            mode,sha,_=git("ls-files","--stage","--",path).decode().split("\t",1)[0].split()
+            raw=git("cat-file","blob",sha)
+            blob=api("git/blobs",{"content":base64.b64encode(raw).decode(),"encoding":"base64"})
+            assert blob["sha"]==sha
+            entries.append({"path":path,"mode":mode,"type":"blob","sha":sha})
+            print("Preserved",path,flush=True)
+        parent=api("git/commits/"+head)
+        tree=api("git/trees",{"base_tree":parent["tree"]["sha"],"tree":entries})
+        assert tree["sha"]==TREE
+        commit=api("git/commits",{"message":"Wire authenticated SIP003 Start Layer into Android and Apple apps","tree":TREE,"parents":[head]})
+        record={"commit":commit["sha"],"tree":TREE,"parent":head,"base":BASE,
+                "verified_run":os.environ["GITHUB_RUN_ID"],"branch_updated":False,
+                "tests":["Ubuntu full Go race tests and vet", "Android shipping Java/Go integration", "Apple shipping Swift/Go integration"]}
+        out=pathlib.Path(os.environ["RUNNER_TEMP"])/"publication.json"
+        out.write_text(json.dumps(record,indent=2)+"\n")
+        print(json.dumps(record),flush=True)
+        print("Source commit staged; branch was NOT updated by the workflow.",flush=True)
+        PY
+    - uses: actions/upload-artifact@v4
+      with:
+        name: sip003-verified-publication
+        path: ${{ runner.temp }}/publication.json
+        if-no-files-found: error
+        retention-days: 7
