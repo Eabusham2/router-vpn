@@ -1,8 +1,10 @@
 package hopmeasure
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -22,6 +25,8 @@ type testEngine struct {
 	destinations map[string]string
 	requests     map[string]int
 	errors       []string
+	gateLoads    bool
+	gates        map[string]*atomic.Pointer[testLoadGate]
 }
 
 func (e *testEngine) Identity() string { e.mu.Lock(); defer e.mu.Unlock(); return e.generation }
@@ -34,14 +39,26 @@ func (e *testEngine) Dial(ctx context.Context, tag, address string) (net.Conn, e
 	if server == nil || address != wanted {
 		return nil, fmt.Errorf("unexpected native dial tag/destination")
 	}
-	return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	if err != nil {
+		return nil, err
+	}
+	e.mu.Lock()
+	gate, enabled := e.gates[tag], e.gateLoads
+	e.mu.Unlock()
+	if enabled {
+		return &testUploadConn{Conn: conn, load: gate, closed: make(chan struct{})}, nil
+	}
+	return conn, nil
 }
 func fixture(t *testing.T) (*Service, *testEngine) {
 	t.Helper()
-	e := &testEngine{generation: "generation-one:local", bad: map[string]string{}, servers: map[string]*httptest.Server{}, requests: map[string]int{}, destinations: map[string]string{"entry-wg": "10.77.0.1:8787", "proxy": "10.88.0.1:8787"}}
+	e := &testEngine{gates: map[string]*atomic.Pointer[testLoadGate]{}, generation: "generation-one:local", bad: map[string]string{}, servers: map[string]*httptest.Server{}, requests: map[string]int{}, destinations: map[string]string{"entry-wg": "10.77.0.1:8787", "proxy": "10.88.0.1:8787"}}
 	hops := []Hop{{"one", "entry", "entry-wg", "http://10.77.0.1:8787", "token-one", strings.Repeat("a", 64)}, {"two", "exit", "proxy", "http://10.88.0.1:8787", "token-two", strings.Repeat("b", 64)}}
 	for _, hop := range hops {
 		h := hop
+		load := &atomic.Pointer[testLoadGate]{}
+		e.gates[h.Tag] = load
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			e.mu.Lock()
 			bad := e.bad[h.Tag]
@@ -62,6 +79,9 @@ func fixture(t *testing.T) (*Service, *testEngine) {
 			}
 			switch r.URL.Path {
 			case "/health":
+				if g := load.Load(); g != nil {
+					g.probed()
+				}
 				time.Sleep(2 * time.Millisecond)
 				proof := h.Proof
 				if bad == "identity" {
@@ -84,6 +104,23 @@ func fixture(t *testing.T) (*Service, *testEngine) {
 				}
 				if bad == "framing" {
 					w.Header().Set("X-Routervpn-Benchmark-Bytes", "0")
+				}
+				e.mu.Lock()
+				gated := e.gateLoads
+				e.mu.Unlock()
+				if gated {
+					gate := newTestLoadGate()
+					load.Store(gate)
+					defer load.CompareAndSwap(gate, nil)
+					if _, err := w.Write(make([]byte, 1024)); err != nil {
+						return
+					}
+					w.(http.Flusher).Flush()
+					if !gate.wait(r.Context()) {
+						return
+					}
+					_, _ = w.Write(make([]byte, n-1024))
+					return
 				}
 				chunk := make([]byte, 16384)
 				for sent := 0; sent < n; sent += len(chunk) {
@@ -136,8 +173,12 @@ func wait(t *testing.T, s *Service) Status {
 }
 func TestMeasuresActualSeparateHopBytesAndLatency(t *testing.T) {
 	s, e := fixture(t)
+	e.mu.Lock()
+	e.gateLoads = true
+	e.mu.Unlock()
+	const size = 256 << 10
 	id := strings.Repeat("1", 32)
-	if err := s.Start(id, 65536); err != nil {
+	if err := s.Start(id, size); err != nil {
 		t.Fatal(err)
 	}
 	v := wait(t, s)
@@ -145,7 +186,7 @@ func TestMeasuresActualSeparateHopBytesAndLatency(t *testing.T) {
 		t.Fatal(v)
 	}
 	for i, r := range v.Results {
-		if !r.Ready || r.ID != s.hops[i].ID || r.Idle.Samples != 6 || r.Download.Bytes != 65536 || r.Upload.Bytes != 65536 {
+		if !r.Ready || r.ID != s.hops[i].ID || r.Idle.Samples != 6 || r.Download.Bytes != size || r.Upload.Bytes != size {
 			t.Fatal(r)
 		}
 		for _, transfer := range []*Transfer{r.Download, r.Upload} {
@@ -256,3 +297,90 @@ func TestLatencyDistributionUsesSamplesNotSpeed(t *testing.T) {
 		t.Fatal("missing samples manufactured")
 	}
 }
+
+// A second probe can start only after the sampler accepted the first. Hold real
+// transfer bytes until that event instead of assuming a sleeping server keeps
+// a fast CI runner busy long enough. Production tests keep exact byte counts.
+type testLoadGate struct {
+	seen  atomic.Int64
+	ready chan struct{}
+}
+
+func newTestLoadGate() *testLoadGate { return &testLoadGate{ready: make(chan struct{})} }
+func (g *testLoadGate) probed() {
+	if g.seen.Add(1) == 2 {
+		close(g.ready)
+	}
+}
+func (g *testLoadGate) wait(ctx context.Context) bool {
+	select {
+	case <-g.ready:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-time.After(3 * time.Second):
+		return false
+	}
+}
+
+type testUploadConn struct {
+	net.Conn
+	load                 *atomic.Pointer[testLoadGate]
+	closed               chan struct{}
+	once                 sync.Once
+	header               []byte
+	parsed, upload, held bool
+}
+
+func (c *testUploadConn) Write(p []byte) (int, error) {
+	if c.held {
+		return c.Conn.Write(p)
+	}
+	body := 0
+	if !c.parsed {
+		previous := len(c.header)
+		c.header = append(c.header, p...)
+		end := bytes.Index(c.header, []byte("\r\n\r\n"))
+		if end < 0 {
+			return c.Conn.Write(p)
+		}
+		c.upload = bytes.HasPrefix(c.header, []byte("POST /api/benchmark/upload "))
+		c.parsed = true
+		c.header = nil
+		body = end + 4 - previous
+	}
+	if !c.upload {
+		c.held = true
+		return c.Conn.Write(p)
+	}
+	if body >= len(p) {
+		return c.Conn.Write(p)
+	}
+	prefix := body + 512
+	if prefix > len(p) {
+		prefix = len(p)
+	}
+	gate := newTestLoadGate()
+	c.load.Store(gate)
+	defer c.load.CompareAndSwap(gate, nil)
+	n, err := c.Conn.Write(p[:prefix])
+	if err != nil {
+		return n, err
+	}
+	c.held = true
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-gate.ready:
+	case <-c.closed:
+		return n, net.ErrClosed
+	case <-timer.C:
+		return n, errors.New("no loaded probe completed during held upload")
+	}
+	if n < len(p) {
+		rest, err := c.Conn.Write(p[n:])
+		return n + rest, err
+	}
+	return n, nil
+}
+func (c *testUploadConn) Close() error { c.once.Do(func() { close(c.closed) }); return c.Conn.Close() }

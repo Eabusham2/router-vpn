@@ -12,6 +12,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/netip"
 	"net/url"
 	"regexp"
@@ -300,6 +301,9 @@ func (s *Service) client(h Hop) *http.Client {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("measurement redirects are forbidden") }}
 }
 func (s *Service) request(ctx context.Context, h Hop, path string, size int, upload bool) (*http.Response, time.Time, *http.Client, error) {
+	return s.requestWithActivity(ctx, h, path, size, upload, nil)
+}
+func (s *Service) requestWithActivity(ctx context.Context, h Hop, path string, size int, upload bool, activity *transferActivity) (*http.Response, time.Time, *http.Client, error) {
 	u, _ := privateAPI(h.API)
 	u.Path = path
 	if path == "/api/benchmark/download" {
@@ -310,6 +314,10 @@ func (s *Service) request(ctx context.Context, h Hop, path string, size int, upl
 	if upload {
 		method = http.MethodPost
 		reader = io.LimitReader(rand.Reader, int64(size))
+		if activity != nil {
+			reader = &activityReader{Reader: reader, activity: activity}
+			ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { activity.finish() }})
+		}
 	}
 	r, _ := http.NewRequestWithContext(ctx, method, u.String(), reader)
 	if upload {
@@ -395,39 +403,19 @@ func distribution(samples []float64) *Latency {
 func (s *Service) transfer(parent context.Context, h Hop, size int, upload bool, idle *Latency) (*Transfer, error) {
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
+	activity := newTransferActivity()
+	defer activity.finish()
 	monitor, stop := context.WithCancel(ctx)
 	defer stop()
-	type sampling struct {
-		values []float64
-		failed bool
-	}
-	ch := make(chan sampling, 1)
+	ch := make(chan loadedSampling, 1)
 	go func() {
-		r := sampling{}
-		defer func() { ch <- r }()
-		for i := 0; i < 24; i++ {
-			select {
-			case <-monitor.Done():
-				return
-			case <-time.After(60 * time.Millisecond):
-			}
-			n, err := s.prove(monitor, h)
-			if err != nil {
-				if monitor.Err() == nil {
-					r.failed = true
-				}
-				return
-			}
-			if monitor.Err() == nil {
-				r.values = append(r.values, n)
-			}
-		}
+		ch <- sampleUnderLoad(monitor, activity, func(ctx context.Context) (float64, error) { return s.prove(ctx, h) })
 	}()
 	path := "/api/benchmark/download"
 	if upload {
 		path = "/api/benchmark/upload"
 	}
-	resp, start, client, err := s.request(ctx, h, path, size, upload)
+	resp, start, client, err := s.requestWithActivity(ctx, h, path, size, upload, activity)
 	if err != nil {
 		stop()
 		<-ch
@@ -455,13 +443,14 @@ func (s *Service) transfer(parent context.Context, h Hop, size int, upload bool,
 		if resp.ContentLength != int64(size) || resp.Header.Get("X-Routervpn-Benchmark") != "download-v1" || resp.Header.Get("X-Routervpn-Benchmark-Bytes") != strconv.Itoa(size) {
 			err = errors.New("unproved download framing")
 		} else {
-			n, err = io.Copy(io.Discard, io.LimitReader(resp.Body, int64(size)+1))
+			n, err = io.Copy(io.Discard, io.LimitReader(&activityReader{Reader: resp.Body, activity: activity, remaining: int64(size), finishOnBytes: true}, int64(size)+1))
 			if n != int64(size) {
 				err = errors.New("download byte count differs")
 			}
 		}
 	}
 	elapsed := time.Since(start).Seconds()
+	activity.finish()
 	stop()
 	samples := <-ch
 	if err != nil || elapsed <= 0 {
