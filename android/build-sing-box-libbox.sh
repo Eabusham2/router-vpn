@@ -224,6 +224,7 @@ python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
   go_retry test -race ./adapter/inbound -run TestRouterVPN -count=1
   go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|MTU)' -count=1
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
+  go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./transport/wireguard -run TestRouterVPNClientBind -count=1
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf -count=1 -timeout=120s
   python3 "$ROOT/../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
   go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox

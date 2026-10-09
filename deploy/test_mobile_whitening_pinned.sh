@@ -14,3 +14,7 @@ export ROUTER_VPN_WHITENING_TEST_BINARY="$FIXTURE_DIR/start-layer-relay"
 # Apple binds Libbox with with_low_memory. Exercise the actual constrained
 # build too; a default-only test would hide its former 8 KiB UDP truncation.
 (cd "$VENDOR" && go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor,with_low_memory -count=1 -timeout=90s ./protocol/routervpnwhitening)
+
+# Both encryption layers must carry real IPv4/IPv6 TCP/UDP packets; no second TUN.
+(cd "$VENDOR" && go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor,routervpn_start_layer_integration -count=1 -timeout=120s -v ./protocol/routervpnamnezia -run '^TestNativeBaseStartLayerRealEncryptedTraffic$')
+(cd "$VENDOR" && go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor,with_low_memory,routervpn_start_layer_integration -count=1 -timeout=120s ./protocol/routervpnamnezia -run '^TestNativeBaseStartLayerRealEncryptedTraffic$')

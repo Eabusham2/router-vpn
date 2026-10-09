@@ -4,6 +4,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import importlib.util
 import tempfile
 import unittest
+from unittest import mock
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('buffer_policy',ROOT/'deploy/prepare-mobile-buffers.py')
 MODULE=importlib.util.module_from_spec(spec);spec.loader.exec_module(MODULE)
@@ -105,5 +106,25 @@ class SocketPolicyTests(unittest.TestCase):
             broken.write_text('changed upstream source')
             with self.assertRaises(ValueError):MODULE.SOCKETS.prepare(root)
             self.assertEqual((root/'common/dialer/default.go').read_text(),sources['common/dialer/default.go'])
+
+class WireGuardPublicationPolicyTests(unittest.TestCase):
+    def test_exact_pin_idempotency_and_drift_rejection(self):
+        spec=importlib.util.spec_from_file_location('wg_bind_policy',ROOT/'deploy/mobile_wireguard_bind_policy.py')
+        policy=importlib.util.module_from_spec(spec);spec.loader.exec_module(policy)
+        self.assertEqual(policy.SOURCE_SHA,'b423558e90f6aa2f1d14258ad9ea311c455cd038')
+        original=policy.OLD+'\n// isolated unit fixture; native tests use the complete pinned file\n'
+        with mock.patch.object(policy,'SOURCE_SHA',policy.blobsha(original.encode())):
+            fixed=policy.patch(original)
+            self.assertEqual(policy.patch(fixed),fixed)
+            self.assertLess(fixed.index('c.connAccess.Lock()'),fixed.index('serverConn := c.conn'))
+            for broken in (original+'changed',fixed+'changed',fixed.replace('c.connAccess.Lock()','',1)):
+                with self.assertRaises(ValueError):policy.patch(broken)
+        with self.assertRaises(ValueError):policy.patch(original)
+    def test_build_cache_and_native_test_require_the_owned_fix(self):
+        prepare=(ROOT/'deploy/prepare-mobile-multihop.py').read_text()
+        self.assertIn('WIREGUARD_BIND.inputs()',prepare)
+        self.assertIn('WIREGUARD_BIND.prepare(vendor)',prepare)
+        for path in ('ios/RouterVPN/prepare-libbox.sh','android/build-sing-box-libbox.sh'):
+            self.assertIn('./transport/wireguard -run TestRouterVPNClientBind', (ROOT/path).read_text())
 
 if __name__=='__main__':unittest.main()

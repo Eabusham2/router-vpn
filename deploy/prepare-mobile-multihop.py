@@ -19,11 +19,14 @@ _mtu_spec.loader.exec_module(MTU)
 _perf_spec = importlib.util.spec_from_file_location('routervpn_perf', ROOT/'deploy/prepare-mobile-performance.py')
 PERFORMANCE = importlib.util.module_from_spec(_perf_spec)
 _perf_spec.loader.exec_module(PERFORMANCE)
+_wg_spec = importlib.util.spec_from_file_location('routervpn_wg_bind', ROOT/'deploy/mobile_wireguard_bind_policy.py')
+WIREGUARD_BIND = importlib.util.module_from_spec(_wg_spec)
+_wg_spec.loader.exec_module(WIREGUARD_BIND)
 def inputs():
     paths = [ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + [Path(__file__).resolve()]
+    return paths + WIREGUARD_BIND.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -55,6 +58,7 @@ def prepare(vendor):
     AMNEZIA.prepare(vendor)
     PERFORMANCE.prepare(vendor)
     MTU.prepare(vendor)
+    WIREGUARD_BIND.prepare(vendor)
     print('Shared multihop source digest:',digest())
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('vendor',type=Path,nargs='?');parser.add_argument('--digest',action='store_true');args=parser.parse_args()

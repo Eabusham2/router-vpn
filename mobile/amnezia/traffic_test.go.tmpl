@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -206,13 +207,16 @@ func newActualPairWithHandler(t *testing.T, mutate func(*Options), handler tun.H
 // a throwaway direct client with the same peer key before the real nested one.
 // That would race two handshake generations and test a rekey, not a new path.
 func newActualPairLifecycle(t *testing.T, mutate func(*Options), handler tun.Handler, start bool) *actualPair {
+	return newActualPairWithParameters(t, mutate, handler, start, parameters())
+}
+func newActualPairWithParameters(t *testing.T, mutate func(*Options), handler tun.Handler, start bool, fixtureParameters map[string]string) *actualPair {
 	t.Helper()
 	clientKey, clientPublic := keys(t)
 	serverKey, serverPublic := keys(t)
 	psk := make([]byte, 32)
 	_, _ = rand.Read(psk)
 	options := Options{Type: mobilemultihop.AmneziaType, MTU: 1400, Address: []string{"10.78.0.2/24", "fd78:78::2/64"}, PrivateKey: clientKey,
-		Peers: []mobilemultihop.AmneziaPeer{{Address: "192.0.2.1", Port: 51820, PublicKey: serverPublic, PreSharedKey: base64.StdEncoding.EncodeToString(psk), AllowedIPs: []string{"0.0.0.0/0", "::/0"}, Keepalive: 25}}, Parameters: parameters()}
+		Peers: []mobilemultihop.AmneziaPeer{{Address: "192.0.2.1", Port: 51820, PublicKey: serverPublic, PreSharedKey: base64.StdEncoding.EncodeToString(psk), AllowedIPs: []string{"0.0.0.0/0", "::/0"}, Keepalive: 25}}, Parameters: fixtureParameters}
 	logger := log.NewNOPFactory().Logger()
 	stack, err := wg.NewDevice(wg.DeviceOptions{Context: context.Background(), Logger: logger, Handler: handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/24"), netip.MustParsePrefix("fd78:78::1/64")}})
 	if err != nil {
@@ -225,7 +229,7 @@ func newActualPairLifecycle(t *testing.T, mutate func(*Options), handler tun.Han
 	key, _ := base64.StdEncoding.DecodeString(serverKey)
 	pub, _ := base64.StdEncoding.DecodeString(clientPublic)
 	fmt.Fprintf(&ipc, "private_key=%x\n", key)
-	for k, v := range parameters() {
+	for k, v := range fixtureParameters {
 		fmt.Fprintf(&ipc, "%s=%s\n", k, v)
 	}
 	fmt.Fprintf(&ipc, "public_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", pub, psk)
@@ -233,7 +237,7 @@ func newActualPairLifecycle(t *testing.T, mutate func(*Options), handler tun.Han
 		server.Close()
 		t.Fatal("reference configuration rejected")
 	}
-	if err = wrapped.configuredPadding(32); err != nil {
+	if err = wrapped.configuredPadding(fixturePadding(fixtureParameters)); err != nil {
 		server.Close()
 		t.Fatal(err)
 	}
@@ -805,3 +809,5 @@ func testActualNestedAmnezia(t *testing.T, dropFirst bool) {
 		t.Fatal("entry teardown created a fallback exit socket")
 	}
 }
+
+func fixturePadding(p map[string]string) int { n, _ := strconv.Atoi(p["s4"]); return n }

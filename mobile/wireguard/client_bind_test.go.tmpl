@@ -1,0 +1,98 @@
+package wireguard
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/log"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service/pause"
+	"net"
+	"net/netip"
+	"sync"
+	"sync/atomic"
+	"testing"
+)
+
+type routerBindDialer struct {
+	calls atomic.Int64
+	mu    sync.Mutex
+	peers []net.Conn
+}
+
+func (d *routerBindDialer) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	d.calls.Add(1)
+	a, b := net.Pipe()
+	d.mu.Lock()
+	d.peers = append(d.peers, b)
+	d.mu.Unlock()
+	return a, nil
+}
+func (d *routerBindDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	panic("unexpected unconnected socket")
+}
+func (d *routerBindDialer) Close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, c := range d.peers {
+		c.Close()
+	}
+}
+func TestRouterVPNClientBindConnectionPublication(t *testing.T) {
+	d := &routerBindDialer{}
+	defer d.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bind := NewClientBind(pause.WithDefaultManager(ctx), log.NewNOPFactory().Logger(), d, true, netip.MustParseAddrPort("192.0.2.1:51820"), [3]byte{})
+	if _, _, err := bind.Open(0); err != nil {
+		t.Fatal(err)
+	}
+	defer bind.Close()
+	barrier := make(chan struct{})
+	results := make(chan *wireConn, 64)
+	failure := make(chan error, 64)
+	var jobs sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		jobs.Add(1)
+		go func() {
+			defer jobs.Done()
+			<-barrier
+			for j := 0; j < 20; j++ {
+				c, e := bind.connect()
+				if e != nil {
+					failure <- e
+					return
+				}
+				if j == 0 {
+					results <- c
+				}
+			}
+		}()
+	}
+	close(barrier)
+	jobs.Wait()
+	close(results)
+	close(failure)
+	for e := range failure {
+		t.Fatal(e)
+	}
+	var first *wireConn
+	for c := range results {
+		if first == nil {
+			first = c
+		}
+		if c != first {
+			t.Fatal("concurrent readers received different physical owners")
+		}
+	}
+	if d.calls.Load() != 1 {
+		t.Fatal("duplicate physical connections", d.calls.Load())
+	}
+	if err := bind.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bind.connect(); err == nil {
+		t.Fatal("closed bind published a connection")
+	}
+	if d.calls.Load() != 1 {
+		t.Fatal("closed bind opened a fallback socket")
+	}
+}

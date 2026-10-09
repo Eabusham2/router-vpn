@@ -1,0 +1,391 @@
+//go:build routervpn_start_layer_integration
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"github.com/sagernet/sing-box/log"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	ss "github.com/sagernet/sing-shadowsocks"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	ssclient "github.com/sagernet/sing-shadowsocks2"
+	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service/pause"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// The pinned SS2022 server handles ciphertext in-process, avoiding a full
+// daemon binary. Only the authorized private destination is mapped to the
+// owned loopback WG/AWG reference; no production routing rule is changed.
+type startForward struct {
+	ctx     context.Context
+	target  string
+	mu      sync.Mutex
+	closing bool
+	workers sync.WaitGroup
+	packets atomic.Int64
+}
+
+func (h *startForward) NewConnection(context.Context, net.Conn, M.Metadata) error {
+	return errors.New("only encrypted UDP is authorized")
+}
+func (*startForward) NewError(context.Context, error) {}
+func (h *startForward) NewPacketConnection(ctx context.Context, conn N.PacketConn, meta M.Metadata) error {
+	h.mu.Lock()
+	if h.closing {
+		h.mu.Unlock()
+		return net.ErrClosed
+	}
+	h.workers.Add(1)
+	h.mu.Unlock()
+	defer h.workers.Done()
+	defer conn.Close()
+	if meta.Destination != M.ParseSocksaddr("10.77.0.1:51820") {
+		return errors.New("unowned private destination")
+	}
+	peer, e := (&net.Dialer{}).DialContext(h.ctx, "udp", h.target)
+	if e != nil {
+		return e
+	}
+	defer peer.Close()
+	stop := context.AfterFunc(h.ctx, func() { _ = peer.Close(); _ = conn.Close() })
+	defer stop()
+	copied := make(chan struct{})
+	go func() {
+		defer close(copied)
+		defer peer.Close()
+		for {
+			packet := buf.NewPacket()
+			_, err := conn.ReadPacket(packet)
+			if err != nil {
+				packet.Release()
+				return
+			}
+			_, err = peer.Write(packet.Bytes())
+			packet.Release()
+			if err != nil {
+				return
+			}
+			h.packets.Add(1)
+		}
+	}()
+	defer func() { _ = conn.Close(); _ = peer.Close(); <-copied }()
+	for {
+		packet := buf.NewSize(65535 + 256)
+		packet.Resize(256, 0) // SS2022's reply writer prepends its authenticated envelope.
+		n, err := peer.Read(packet.FreeBytes())
+		if err != nil {
+			packet.Release()
+			return err
+		}
+		packet.Truncate(n)
+		if err = conn.WritePacket(packet, meta.Destination); err != nil {
+			return err
+		}
+	}
+}
+func (h *startForward) shutdown() { h.mu.Lock(); h.closing = true; h.mu.Unlock(); h.workers.Wait() }
+func aesReference(t *testing.T, target string) (string, string, *startForward) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	listener, e := net.ListenPacket("udp", "127.0.0.1:0")
+	if e != nil {
+		cancel()
+		t.Fatal(e)
+	}
+	handler := &startForward{ctx: ctx, target: target}
+	key := make([]byte, 32)
+	if _, e = rand.Read(key); e != nil {
+		t.Fatal(e)
+	}
+	password := base64.StdEncoding.EncodeToString(key)
+	service, e := shadowaead_2022.NewServiceWithPassword(startwhitening.Method, password, 2, handler, nil)
+	if e != nil {
+		cancel()
+		listener.Close()
+		t.Fatal(e)
+	}
+	var _ ss.Service = service
+	packetConn := bufio.NewPacketConn(listener)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			packet := buf.NewPacket()
+			source, err := packetConn.ReadPacket(packet)
+			if err != nil {
+				packet.Release()
+				return
+			}
+			if err = service.NewPacket(ctx, packetConn, packet, M.Metadata{Source: source}); err != nil {
+				packet.Release()
+			}
+		}
+	}()
+	t.Cleanup(func() { cancel(); _ = listener.Close(); <-done; handler.shutdown() })
+	return listener.LocalAddr().String(), password, handler
+}
+func xorReference(t *testing.T, target, password string) string {
+	t.Helper()
+	binary := os.Getenv("ROUTER_VPN_WHITENING_TEST_BINARY")
+	if binary == "" {
+		t.Fatal("owned whitening reference binary is required")
+	}
+	tcp, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	address := tcp.Addr().String()
+	tcp.Close()
+	config := filepath.Join(t.TempDir(), "key.json")
+	data, _ := json.Marshal(map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "method": startwhitening.Method, "password": password}}})
+	if e = os.WriteFile(config, data, 0600); e != nil {
+		t.Fatal(e)
+	}
+	// The production relay accepts a Shadowsocks config, not plaintext key flags.
+	cmd := exec.Command(binary, "--mode", "server", "--listen", address, "--target", target, "--key-config", config)
+	logFile, e := os.Create(filepath.Join(t.TempDir(), "relay.log"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if e = cmd.Start(); e != nil {
+		t.Fatal(e)
+	}
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("relay stop timeout")
+		}
+		logFile.Close()
+		if t.Failed() {
+			b, _ := os.ReadFile(logFile.Name())
+			if len(b) > 2000 {
+				b = b[len(b)-2000:]
+			}
+			t.Logf("relay: %s", b)
+		}
+	})
+	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); {
+		select {
+		case <-done:
+			t.Fatal("whitening fixture exited")
+		default:
+		}
+		c, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return address
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("whitening fixture did not start")
+	return ""
+}
+
+type startDialer struct {
+	method  ssclient.Method
+	address string
+	xor     bool
+	key     [32]byte
+	owner   *startwhitening.Owner
+	calls   atomic.Int64
+}
+
+func (d *startDialer) DialContext(ctx context.Context, network string, target M.Socksaddr) (net.Conn, error) {
+	if network != "udp" || target != M.ParseSocksaddr("10.77.0.1:51820") {
+		return nil, errors.New("ordinary-interface fallback denied")
+	}
+	dial := func(ctx context.Context) (net.Conn, error) {
+		return (&net.Dialer{Control: startwhitening.UDPControl}).DialContext(ctx, "udp", d.address)
+	}
+	var raw net.Conn
+	var err error
+	if d.xor {
+		raw, err = d.owner.Open(ctx, d.key, true, dial)
+	} else {
+		raw, err = d.owner.Open(ctx, [32]byte{}, true, dial)
+	}
+	if err != nil {
+		return nil, err
+	}
+	d.calls.Add(1)
+	packet, err := startwhitening.OwnAuthenticatedPacket(raw.(*startwhitening.Conn), d.method.DialPacketConn(raw))
+	if err != nil {
+		return nil, err
+	}
+	return bufio.NewBindPacketConn(packet, target), nil
+}
+func (*startDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("unowned unconnected socket denied")
+}
+func nativeStartClient(t *testing.T, mode string, options Options, owned N.Dialer) N.Dialer {
+	t.Helper()
+	if mode != "wg" {
+		client, e := newEndpoint(context.Background(), nil, log.NewNOPFactory().Logger(), "proxy", options, owned, nil)
+		if e != nil {
+			t.Fatal(e)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+		if e = client.Start(adapter.StartStateStart); e != nil {
+			t.Fatal(e)
+		}
+		return client
+	}
+	var addresses []netip.Prefix
+	for _, a := range options.Address {
+		addresses = append(addresses, netip.MustParsePrefix(a))
+	}
+	peer := options.Peers[0]
+	var allowed []netip.Prefix
+	for _, a := range peer.AllowedIPs {
+		allowed = append(allowed, netip.MustParsePrefix(a))
+	}
+	client, e := wg.NewEndpoint(wg.EndpointOptions{Context: pause.WithDefaultManager(context.Background()), Logger: log.NewNOPFactory().Logger(), Dialer: owned, System: false, Tag: "proxy", MTU: uint32(options.MTU), Address: addresses, PrivateKey: options.PrivateKey, Peers: []wg.PeerOptions{{Endpoint: M.ParseSocksaddrHostPort(peer.Address, uint16(peer.Port)), PublicKey: peer.PublicKey, PreSharedKey: peer.PreSharedKey, AllowedIPs: allowed, PersistentKeepaliveInterval: uint16(peer.Keepalive)}}, UDPTimeout: 2 * time.Second, ICMPTimeout: time.Second})
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if e = client.Start(false); e != nil {
+		t.Fatal(e)
+	}
+	if e = client.Start(true); e != nil {
+		t.Fatal(e)
+	}
+	return client
+}
+func startExchange(client N.Dialer, network, host string, limit time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	c, e := client.DialContext(ctx, network, M.ParseSocksaddr(net.JoinHostPort(host, "9999")))
+	if e != nil {
+		return e
+	}
+	defer c.Close()
+	if e = c.SetDeadline(time.Now().Add(limit)); e != nil {
+		return e
+	}
+	payload := bytes.Repeat([]byte("owned-double-encrypted-traffic/"), 32)
+	if _, e = c.Write(payload); e != nil {
+		return e
+	}
+	result := make([]byte, len(payload))
+	if _, e = io.ReadFull(c, result); e != nil {
+		return e
+	}
+	if !bytes.Equal(payload, result) {
+		return errors.New("decrypted response mismatch")
+	}
+	return nil
+}
+func TestNativeBaseStartLayerRealEncryptedTraffic(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, xor := range []bool{false, true} {
+			t.Run(fmt.Sprint(mode, "/xor=", xor), func(t *testing.T) {
+				var options Options
+				params := parameters()
+				if mode == "wg" {
+					params = map[string]string{}
+				} else if mode == "awg2-strong" {
+					params["jc"] = "8"
+					params["jmax"] = "1200"
+				}
+				pair := newActualPairWithParameters(t, func(v *Options) {
+					options = *v
+					if mode == "wg" {
+						v.Parameters = parameters()
+					}
+				}, echoHandler{}, false, params)
+				address, password, reference := aesReference(t, pair.binding.address())
+				if xor {
+					address = xorReference(t, address, password)
+				}
+				options.Tag = "proxy"
+				if mode == "wg" {
+					options.Type = "wireguard"
+				}
+				raw, _ := json.Marshal(options)
+				var ep map[string]any
+				json.Unmarshal(raw, &ep)
+				ep["system"] = false
+				if mode == "wg" {
+					delete(ep, "amnezia")
+				}
+				graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}}, "endpoints": []any{ep}, "outbounds": []any{}, "route": map[string]any{"final": "proxy"}}
+				source := map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.1", "server_port": 8388, "method": startwhitening.Method, "password": password}}}
+				start := "aes-256-gcm"
+				if xor {
+					start += "+xor-whitening"
+				}
+				metadata, _ := json.Marshal(map[string]string{"mode": start, "raw_mode": mode, "node_kind": "router-vpn", "router_api": "http://10.77.0.1:8787"})
+				a, _ := json.Marshal(graph)
+				b, _ := json.Marshal(source)
+				composed, e := mobilemultihop.ComposeNativeBaseStartLayer(string(a), string(b), string(metadata))
+				if e != nil {
+					t.Fatal(e)
+				}
+				var result map[string]json.RawMessage
+				json.Unmarshal([]byte(composed), &result)
+				var endpoints []json.RawMessage
+				json.Unmarshal(result["endpoints"], &endpoints)
+				if e = json.Unmarshal(endpoints[0], &options); e != nil {
+					t.Fatal(e)
+				}
+				key, e := startwhitening.Key(startwhitening.Method, password)
+				if e != nil {
+					t.Fatal(e)
+				}
+				method, e := ssclient.CreateMethod(context.Background(), startwhitening.Method, ssclient.MethodOptions{Password: password})
+				if e != nil {
+					t.Fatal(e)
+				}
+				owned := &startDialer{method: method, address: address, xor: xor, key: key, owner: startwhitening.NewOwner(context.Background())}
+				t.Cleanup(func() { _ = owned.owner.Close() })
+				client := nativeStartClient(t, mode, options, owned)
+				for _, network := range []string{"tcp", "udp"} {
+					for _, host := range []string{"10.78.0.1", "fd78:78::1"} {
+						if e = startExchange(client, network, host, 4*time.Second); e != nil {
+							t.Fatal(network, host, e)
+						}
+					}
+				}
+				if owned.calls.Load() != 1 || reference.packets.Load() == 0 {
+					t.Fatal("encrypted transport was bypassed")
+				}
+				_ = owned.owner.Close()
+				if e = startExchange(client, "udp", "10.78.0.1", 300*time.Millisecond); e == nil {
+					t.Fatal("closed owner still carries traffic")
+				}
+				if owned.calls.Load() != 1 {
+					t.Fatal("teardown created an ordinary-network fallback")
+				}
+			})
+		}
+	}
+}
