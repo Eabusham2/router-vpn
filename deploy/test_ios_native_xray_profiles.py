@@ -65,7 +65,11 @@ func xrayBundle(_ mode: String, dns: String = "home") throws -> ClientBundle {
                 let dnsObject = config["dns"] as! [String:Any]
                 let servers = dnsObject["servers"] as! [[String:Any]]
                 let expected = mode == "split" || mode == "max" ? "tcp-stack" : "proxy"
-                try check("DNS never escapes the native route", servers.allSatisfy { $0["detour"] as? String == expected })
+                try check("DNS follows the actual native transport", servers.allSatisfy {
+                    let datagram = ["udp", "h3", "quic"].contains($0["type"] as? String ?? "")
+                    let tag = (mode == "split" || mode == "max") && datagram ? "udp-stack" : expected
+                    return $0["detour"] as? String == tag
+                })
                 let types = ["home":"udp","custom":"udp","dot":"tls","doh":"https","doh3":"h3","rescue":"udp"]
                 try check("selected DNS protocol preserved", servers.last?["type"] as? String == types[dns])
                 try check("saved composition is idempotent", IOSDNSRuntimePolicy.patch(patched).profiles == patched.profiles)
@@ -78,6 +82,17 @@ func xrayBundle(_ mode: String, dns: String = "home") throws -> ClientBundle {
             var invalid = try xrayBundle(mode)
             invalid.profiles[mode]?["chain.env"] = Data("exec forbidden".utf8).base64EncodedString()
             reject("unowned extra helper") { _ = try IOSRuntimeSelector.selectRaw(bundle:invalid,rawProfileID:mode) }
+        }
+        for mode in ["split", "max"] {
+            var domain = try xrayBundle(mode, dns: "dot")
+            domain.routerProfiles[0].dnsHost = "dns.example.test"
+            domain.routerProfiles[0].dnsServerName = "dns.example.test"
+            let patched = try IOSDNSRuntimePolicy.patch(domain)
+            let selection = try IOSRuntimeSelector.selectRaw(bundle: patched, rawProfileID: mode)
+            let graph = try JSONSerialization.jsonObject(with: selection.files["sing-box.json"]!) as! [String: Any]
+            let servers = (graph["dns"] as! [String: Any])["servers"] as! [[String: Any]]
+            try check("DNS bootstrap uses real datagram leg", servers.first?["type"] as? String == "udp" && servers.first?["detour"] as? String == "udp-stack")
+            try check("TLS resolver uses real stream leg", servers.last?["type"] as? String == "tls" && servers.last?["detour"] as? String == "tcp-stack")
         }
         var ordinary = try xrayBundle("reality-vision")
         ordinary.profiles["reality-pq-vision"] = ordinary.profiles["reality-vision"]

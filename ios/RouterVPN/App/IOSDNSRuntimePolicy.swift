@@ -163,7 +163,7 @@ enum IOSDNSRuntimePolicy {
 
     private static func patchLibbox(_ data: Data, policy: IOSResolvedDNSPolicy, profile: RouterProfile) throws -> Data {
         guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw error("Libbox DNS patch requires a JSON object.") }
-        let detour = try selectedDetour(root)
+        let detour = try nativeDNSDetour(root, transport: policy.type)
         var server: [String: Any] = ["type": policy.type, "tag": "routervpn-selected-dns", "server": policy.host, "server_port": policy.port, "detour": detour]
         if ["tls", "https", "h3"].contains(policy.type) { server["tls"] = ["enabled": true, "server_name": policy.serverName] }
         if ["https", "h3"].contains(policy.type) { server["path"] = policy.path }
@@ -176,7 +176,7 @@ enum IOSDNSRuntimePolicy {
                 "tag": "routervpn-bootstrap-dns",
                 "server": bootstrap,
                 "server_port": 53,
-                "detour": detour,
+                "detour": try nativeDNSDetour(root, transport: "udp"),
             ])
             // sing-box 1.12+ new DNS transports require a domain_resolver for
             // hostname server addresses. The bootstrap DNS itself is a literal
@@ -196,6 +196,26 @@ enum IOSDNSRuntimePolicy {
         let patched = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         guard patched.count <= 4 * 1024 * 1024 else { throw error("DNS-patched Libbox profile exceeds 4 MiB.") }
         return patched
+    }
+
+    /// Split/MAX retains its real Hysteria2 datagram leg. Resolver traffic
+    /// follows its actual transport; hostname bootstrap is also a UDP query.
+    private static func nativeDNSDetour(_ root: [String: Any], transport: String) throws -> String {
+        let final = try selectedDetour(root)
+        let outbounds = root["outbounds"] as? [[String: Any]] ?? []
+        guard outbounds.contains(where: { $0["type"] as? String == "routervpn-xray" && $0["tag"] as? String == final }),
+              ["udp", "h3", "quic"].contains(transport) else { return final }
+        let datagrams = outbounds.filter { $0["type"] as? String == "hysteria2" }
+        guard !datagrams.isEmpty else { return final }
+        guard datagrams.count == 1, let tag = datagrams[0]["tag"] as? String, !tag.isEmpty,
+              let route = root["route"] as? [String: Any],
+              let rules = route["rules"] as? [[String: Any]],
+              rules.contains(where: {
+                  Set($0.keys).isSubset(of: ["network", "action", "outbound"]) &&
+                  $0["network"] as? String == "udp" && $0["outbound"] as? String == tag &&
+                  ($0["action"] == nil || $0["action"] as? String == "route")
+              }) else { throw error("Native Xray DNS has no unambiguous datagram route.") }
+        return tag
     }
 
     private static func selectedDetour(_ root: [String: Any]) throws -> String {
