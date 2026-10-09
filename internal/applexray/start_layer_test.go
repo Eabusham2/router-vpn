@@ -2,8 +2,10 @@ package applexray
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -149,5 +151,71 @@ func TestStartLayerHostnamesRemainOnTheOwnedOuterPath(t *testing.T) {
 	inner, _ := Object([]byte(outs[0].(map[string]any)["config_json"].(string)))
 	if remote(inner)["address"] != "10.77.0.1" {
 		t.Fatal("inner native path did not freeze private service")
+	}
+}
+
+func TestStartLayerBootstrapResolvesOnlyTheCapturedNode(t *testing.T) {
+	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"} {
+		a, b := startSource("aes-256-gcm", mode, "http://10.77.0.1:8787")
+		raw, _ := Object(sampleConfig(mode))
+		remote(raw)["address"] = "node.example.test"
+		source, _ := Object(a)
+		source["outbounds"].([]any)[0].(map[string]any)["server"] = "node.example.test"
+		wrapper, _ := Object(wrapperFor(mode))
+		for _, item := range wrapper["outbounds"].([]any) {
+			out := item.(map[string]any)
+			if out["type"] == "hysteria2" {
+				out["server"] = "node.example.test"
+			}
+		}
+		calls := 0
+		inputs, err := ResolveStartLayerInputs(context.Background(), mode, startBytes(wrapper), startBytes(raw), startBytes(source), b, func(ctx context.Context, host string) ([]netip.Addr, error) {
+			calls++
+			if host != "node.example.test" {
+				t.Fatal("unowned hostname lookup")
+			}
+			return []netip.Addr{netip.MustParseAddr("192.0.2.77")}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calls != 1 || len(inputs) != 3 {
+			t.Fatal("unexpected bootstrap or assets")
+		}
+		resolved, _ := Object(inputs["xray.json"])
+		if remote(resolved)["address"] != "192.0.2.77" {
+			t.Fatal("wrong Xray launch target")
+		}
+		outer, _ := Object(inputs["start-layer-source.json"])
+		if outer["outbounds"].([]any)[0].(map[string]any)["server"] != "192.0.2.77" {
+			t.Fatal("AES launch target not aligned")
+		}
+		if _, err = ComposeStartLayer(mode, inputs["sing-box.json"], inputs["xray.json"], inputs["start-layer-source.json"], b); err != nil {
+			t.Fatal(err)
+		}
+		if remote(raw)["address"] != "node.example.test" {
+			t.Fatal("saved source mutated")
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		calls = 0
+		result, err := ResolveStartLayerInputs(ctx, mode, startBytes(wrapper), startBytes(raw), startBytes(source), b, func(context.Context, string) ([]netip.Addr, error) {
+			calls++
+			cancel()
+			return []netip.Addr{netip.MustParseAddr("192.0.2.77")}, nil
+		})
+		if err == nil || result != nil || calls != 1 {
+			t.Fatal("stale bootstrap published")
+		}
+	}
+}
+func TestStartLayerRejectsForeignNodeBeforeAnyBootstrap(t *testing.T) {
+	mode := "reality-vision"
+	a, b := startSource("aes-256-gcm", mode, "http://10.77.0.1:8787")
+	raw, _ := Object(sampleConfig(mode))
+	remote(raw)["address"] = "other.example.test"
+	calls := 0
+	_, err := ResolveStartLayerInputs(context.Background(), mode, wrapperFor(mode), startBytes(raw), a, b, func(context.Context, string) ([]netip.Addr, error) { calls++; return nil, nil })
+	if err == nil || calls != 0 {
+		t.Fatal("invalid same-node policy queried DNS")
 	}
 }

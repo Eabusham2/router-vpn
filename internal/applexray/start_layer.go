@@ -1,6 +1,7 @@
 package applexray
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -161,4 +162,48 @@ func sameStartHost(a, b string) bool {
 		return xe == nil && ye == nil && safeIP(x) && safeIP(y) && x.Unmap() == y.Unmap()
 	}
 	return safeHostname(a) && safeHostname(b) && strings.EqualFold(strings.TrimSuffix(a, "."), strings.TrimSuffix(b, "."))
+}
+
+// ResolveStartLayerInputs validates same-node composition BEFORE bootstrap,
+// resolves only that node once, and returns launch-only inputs. It does not
+// rewrite saved profiles or resolve application/DNS payload destinations.
+func ResolveStartLayerInputs(ctx context.Context, mode string, wrapper, raw, aes, policy []byte, lookup Lookup) (map[string][]byte, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("Start Layer preparation cancelled")
+	}
+	if _, err := ComposeStartLayer(mode, wrapper, raw, aes, policy); err != nil {
+		return nil, err
+	}
+	files, err := ResolveAndCompile(ctx, mode, wrapper, raw, lookup)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := Prepare(mode, files["xray.json"])
+	if err != nil {
+		return nil, err
+	}
+	source, err := Object(aes)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range source["outbounds"].([]any) {
+		out := item.(map[string]any)
+		if out["type"] == "shadowsocks" {
+			out["server"] = plan.Server.Addr().String()
+		}
+	}
+	normalized, err := json.Marshal(source)
+	if err != nil {
+		return nil, err
+	}
+	// Revalidate after bootstrap to prove the resolved pair still composes and
+	// no concurrent cancellation can publish an outdated startup configuration.
+	if _, err = ComposeStartLayer(mode, files["sing-box.json"], files["xray.json"], normalized, policy); err != nil {
+		return nil, err
+	}
+	if ctx.Err() != nil {
+		return nil, errors.New("Start Layer preparation cancelled")
+	}
+	files["start-layer-source.json"] = normalized
+	return files, nil
 }
