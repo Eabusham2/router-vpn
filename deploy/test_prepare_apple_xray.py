@@ -61,6 +61,21 @@ class Prepare(unittest.TestCase):
             self.assertIn('xcore.RouterVPNIsNativeContext(ctx)',native)
             self.assertIn('activeNative.Load()',native)
             self.assertIn('bindings.Delete(instance)',native)
+    def test_nested_transport_fixtures_are_test_tagged_and_exact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sing,xray=self.fixture(tmp);self.run_prepare(sing,xray)
+            for folder,name in [('shadowsocks','start_layer_ss_fixture.go.tmpl'),('routervpnwhitening','start_layer_whitening_fixture.go.tmpl')]:
+                source=(ROOT/'mobile/applexray'/name).read_bytes()
+                self.assertTrue(source.startswith(b'//go:build routervpn_start_layer_integration\n'))
+                self.assertEqual((sing/'protocol'/folder/'routervpn_start_layer_fixture.go').read_bytes(),source)
+                self.assertIn(b'NewOutbound(ctx',source)
+                self.assertIn(b'.dialer = physical',source)
+            nested=(sing/'protocol/routervpnxray/start_layer_traffic_test.go').read_text()
+            self.assertIn('applexray.ComposeStartLayer',nested)
+            self.assertIn('TestNativeXrayStartLayerWrongKeysCannotBypass',nested)
+            self.assertIn('[]int{64, 1200, 9000}',nested)
+            self.assertNotIn('t.Skip',nested)
+
     def test_vision_pointer_checks_are_kept_not_suppressed(self):
         patched = MODULE.patch_vision_buffers(VISION)
         self.assertEqual(MODULE.patch_vision_buffers(patched), patched)

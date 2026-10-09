@@ -1,0 +1,371 @@
+//go:build routervpn_start_layer_integration
+
+package routervpnxray
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"github.com/sagernet/sing-box/option"
+	xorout "github.com/sagernet/sing-box/protocol/routervpnwhitening"
+	aesout "github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// The AES server authorizes exactly the composed node's private Xray service.
+// That test-only private endpoint maps to the owned loopback Xray process.
+// All AES, REALITY, VLESS/PQ and packet framing remain actual native protocols.
+type nestedForward struct {
+	ctx           context.Context
+	target        string
+	authenticated atomic.Int64
+}
+
+func (*nestedForward) NewError(context.Context, error) {}
+func (*nestedForward) NewPacketConnection(context.Context, N.PacketConn, M.Metadata) error {
+	return errors.New("unexpected outer UDP connection")
+}
+func (h *nestedForward) NewConnection(ctx context.Context, incoming net.Conn, meta M.Metadata) error {
+	if meta.Destination.String() != "10.77.0.1:443" {
+		return errors.New("unowned inner Xray endpoint")
+	}
+	h.authenticated.Add(1)
+	remote, err := (&net.Dialer{}).DialContext(h.ctx, "tcp", h.target)
+	if err != nil {
+		return err
+	}
+	defer remote.Close()
+	defer incoming.Close()
+	stop := context.AfterFunc(h.ctx, func() { _ = remote.Close(); _ = incoming.Close() })
+	defer stop()
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = io.Copy(remote, incoming); _ = remote.Close() }()
+	_, err = io.Copy(incoming, remote)
+	_ = incoming.Close()
+	_ = remote.Close()
+	<-done
+	return err
+}
+
+func nestedAESServer(t *testing.T, target string) (string, string, *nestedForward) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	key := make([]byte, 32)
+	if _, err = rand.Read(key); err != nil {
+		listener.Close()
+		cancel()
+		t.Fatal(err)
+	}
+	password := base64.StdEncoding.EncodeToString(key)
+	handler := &nestedForward{ctx: ctx, target: target}
+	server, err := shadowaead_2022.NewServiceWithPassword(startwhitening.Method, password, 2, handler, nil)
+	if err != nil {
+		listener.Close()
+		cancel()
+		t.Fatal(err)
+	}
+	var workers sync.WaitGroup
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				defer conn.Close()
+				stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+				defer stop()
+				_ = server.NewConnection(ctx, conn, M.Metadata{Source: M.ParseSocksaddr(conn.RemoteAddr().String())})
+			}()
+		}
+	}()
+	t.Cleanup(func() { cancel(); _ = listener.Close(); <-done; workers.Wait() })
+	return listener.Addr().String(), password, handler
+}
+
+func nestedWhiteningServer(t *testing.T, target, password string) string {
+	t.Helper()
+	binary := os.Getenv("ROUTER_VPN_WHITENING_TEST_BINARY")
+	if binary == "" {
+		t.Fatal("pinned whitening fixture is required")
+	}
+	candidate, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := candidate.Addr().String()
+	candidate.Close()
+	path := filepath.Join(t.TempDir(), "key.json")
+	raw, _ := json.Marshal(map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "method": startwhitening.Method, "password": password}}})
+	if err = os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := os.Create(filepath.Join(t.TempDir(), "relay.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "--mode", "server", "--listen", address, "--target", target, "--key-config", path)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err = cmd.Start(); err != nil {
+		logFile.Close()
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("relay did not stop")
+		}
+		logFile.Close()
+	})
+	for until := time.Now().Add(5 * time.Second); time.Now().Before(until); {
+		select {
+		case <-done:
+			t.Fatal("relay exited before readiness")
+		default:
+		}
+		conn, e := net.DialTimeout("tcp", address, 100*time.Millisecond)
+		if e == nil {
+			conn.Close()
+			return address
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("relay readiness expired")
+	return ""
+}
+
+type nestedPhysical struct {
+	address  string
+	expected M.Socksaddr
+	calls    atomic.Int64
+	written  atomic.Int64
+}
+
+func (p *nestedPhysical) DialContext(ctx context.Context, network string, target M.Socksaddr) (net.Conn, error) {
+	if network != "tcp" || target != p.expected {
+		return nil, errors.New("native path attempted an unowned physical dial")
+	}
+	p.calls.Add(1)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", p.address)
+	if err != nil {
+		return nil, err
+	}
+	return &nestedWire{Conn: conn, bytes: &p.written}, nil
+}
+func (*nestedPhysical) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("native Xray outer path must be TCP")
+}
+
+type nestedWire struct {
+	net.Conn
+	bytes *atomic.Int64
+}
+
+func (c *nestedWire) Write(data []byte) (int, error) {
+	n, err := c.Conn.Write(data)
+	c.bytes.Add(int64(n))
+	return n, err
+}
+
+func nestedNativeClient(t *testing.T, mode, layer, raw, password, address string) (*Outbound, *nestedPhysical) {
+	t.Helper()
+	wrapper := []byte(`{"inbounds":[{"type":"tun","auto_route":true,"strict_route":true}],"outbounds":[{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":1090,"version":"5"}],"route":{"final":"proxy"},"dns":{"servers":[{"type":"udp","tag":"home","server":"192.168.50.133","detour":"proxy"}],"final":"home"}}`)
+	source, _ := json.Marshal(map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.1", "server_port": 8388, "method": startwhitening.Method, "password": password}}})
+	policy, _ := json.Marshal(map[string]string{"mode": layer, "raw_mode": mode, "node_kind": "router-vpn", "router_api": "http://10.77.0.1:8787"})
+	compiled, err := applexray.ComposeStartLayer(mode, wrapper, []byte(raw), source, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, err := applexray.Object(compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outs := graph["outbounds"].([]any)
+	native := outs[0].(map[string]any)
+	outer := outs[len(outs)-1].(map[string]any)
+	if native["detour"] != applexray.StartLayerTag || len(outs) != 2 {
+		t.Fatal("actual compiler did not assign its one outer transport")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	physical := &nestedPhysical{address: address}
+	var protected adapter.Outbound
+	encoded, _ := json.Marshal(outer)
+	if layer == "aes-256-gcm" {
+		var options option.ShadowsocksOutboundOptions
+		if err = json.Unmarshal(encoded, &options); err != nil {
+			t.Fatal(err)
+		}
+		physical.expected = options.ServerOptions.Build()
+		protected, err = aesout.RouterVPNTestPhysicalOutbound(ctx, applexray.StartLayerTag, options, physical)
+	} else {
+		var options xorout.Options
+		if err = json.Unmarshal(encoded, &options); err != nil {
+			t.Fatal(err)
+		}
+		physical.expected = options.ServerOptions.Build()
+		protected, err = xorout.RouterVPNTestPhysicalOutbound(ctx, applexray.StartLayerTag, options, physical)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closer, ok := protected.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	})
+	plan, err := applexray.Prepare(mode, []byte(native["config_json"].(string)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Server != netip.MustParseAddrPort("10.77.0.1:443") {
+		t.Fatal("private service identity changed")
+	}
+	owner := &binding{ctx: ctx, dialer: protected, server: plan.Server, sockets: map[*ownedConn]bool{}}
+	h := &Outbound{ctx: context.WithValue(ctx, bindingKey{}, owner), cancel: cancel, binding: owner, plan: plan}
+	if err = h.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	return h, physical
+}
+
+func TestNativeXrayStartLayerRealEncryptedTraffic(t *testing.T) {
+	installScopedDialer()
+	camouflage := loopbackCamouflage(t)
+	tcp, udp := loopbackEcho(t)
+	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(mode+"/"+layer, func(t *testing.T) {
+				endpoint, raw := startLoopbackXray(t, mode, camouflage, tcp, udp, nativeConfig(t, mode))
+				address, password, server := nestedAESServer(t, endpoint)
+				if layer != "aes-256-gcm" {
+					address = nestedWhiteningServer(t, address, password)
+				}
+				h, physical := nestedNativeClient(t, mode, layer, string(raw), password, address)
+				conn, err := h.DialContext(context.Background(), "tcp", M.ParseSocksaddr(tcp))
+				if err != nil {
+					t.Fatal(err)
+				}
+				conn.SetDeadline(time.Now().Add(12 * time.Second))
+				sent := bytes.Repeat([]byte("two-authenticated-layers/"), 700)
+				saved := append([]byte(nil), sent...)
+				done := make(chan error, 1)
+				go func() { _, err := conn.Write(sent); done <- err }()
+				got := make([]byte, len(sent))
+				_, err = io.ReadFull(conn, got)
+				conn.Close()
+				writeErr := <-done
+				if err != nil || writeErr != nil || !bytes.Equal(got, saved) || !bytes.Equal(sent, saved) {
+					t.Fatalf("nested encrypted TCP failed: read=%v write=%v", err, writeErr)
+				}
+				packets, err := h.ListenPacket(context.Background(), M.ParseSocksaddr(udp))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer packets.Close()
+				for _, size := range []int{64, 1200, 9000} {
+					packets.SetDeadline(time.Now().Add(12 * time.Second))
+					message := bytes.Repeat([]byte{byte(size)}, size)
+					if _, err = packets.WriteTo(message, M.ParseSocksaddr(udp)); err != nil {
+						t.Fatal(err)
+					}
+					output := make([]byte, 65535)
+					n, from, err := packets.ReadFrom(output)
+					if err != nil || n != size || from.String() != udp || !bytes.Equal(output[:n], message) {
+						t.Fatalf("nested encrypted UDP %d failed: %v", size, err)
+					}
+				}
+				if physical.calls.Load() == 0 || physical.written.Load() == 0 || server.authenticated.Load() == 0 {
+					t.Fatal("test did not traverse both real authenticated transports")
+				}
+				if err = h.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = packets.WriteTo([]byte("stale"), M.ParseSocksaddr(udp)); err == nil {
+					t.Fatal("nested packet path survived owner close")
+				}
+				if _, err = h.DialContext(context.Background(), "tcp", M.ParseSocksaddr(tcp)); err == nil {
+					t.Fatal("closed native owner opened a new nested path")
+				}
+			})
+		}
+	}
+}
+
+func TestNativeXrayStartLayerWrongKeysCannotBypass(t *testing.T) {
+	camouflage := loopbackCamouflage(t)
+	tcp, udp := loopbackEcho(t)
+	for _, wrong := range []string{"outer-aes", "inner-reality"} {
+		t.Run(wrong, func(t *testing.T) {
+			endpoint, raw := startLoopbackXray(t, "reality-vision", camouflage, tcp, udp, nativeConfig(t, "reality-vision"))
+			address, password, server := nestedAESServer(t, endpoint)
+			if wrong == "outer-aes" {
+				key := make([]byte, 32)
+				if _, err := rand.Read(key); err != nil {
+					t.Fatal(err)
+				}
+				password = base64.StdEncoding.EncodeToString(key)
+			} else {
+				doc, _ := applexray.Object(raw)
+				stream := doc["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
+				stream["realitySettings"].(map[string]any)["shortId"] = "fedcba9876543210"
+				raw, _ = json.Marshal(doc)
+			}
+			h, physical := nestedNativeClient(t, "reality-vision", "aes-256-gcm", string(raw), password, address)
+			conn, err := h.DialContext(context.Background(), "tcp", M.ParseSocksaddr(tcp))
+			if err == nil {
+				defer conn.Close()
+				conn.SetDeadline(time.Now().Add(1500 * time.Millisecond))
+				_, _ = conn.Write([]byte("must-not-echo"))
+				b := make([]byte, 64)
+				n, readErr := conn.Read(b)
+				if n != 0 || readErr == nil {
+					t.Fatal("incorrect authentication produced application bytes")
+				}
+			}
+			if err = h.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if physical.calls.Load() == 0 {
+				t.Fatal("negative control did not attempt encrypted transport")
+			}
+			if wrong == "outer-aes" && server.authenticated.Load() != 0 {
+				t.Fatal("wrong AES key reached the inner transport")
+			}
+		})
+	}
+}

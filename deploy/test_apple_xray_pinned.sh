@@ -8,6 +8,8 @@ XRAY=${2:?prepared pinned Xray checkout}
 export GOTOOLCHAIN=go1.26.3+auto
 FIXTURE_DIR=$(mktemp -d)
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
+# Full native packet tests require the same corrected dependency buffers as apps.
+python3 "$ROOT/deploy/prepare-mobile-buffers.py" "$VENDOR"
 # A separate server process avoids replacing the native client's globally
 # registered system dialer. This executable is a CI fixture, not an app helper.
 (cd "$XRAY" && go build -ldflags=-checklinkname=0 -o "$FIXTURE_DIR/xray-fixture" ./main)
@@ -20,3 +22,5 @@ export ROUTER_VPN_XRAY_TEST_BINARY="$FIXTURE_DIR/xray-fixture"
  go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor -count=1 -timeout=180s -v ./protocol/routervpnxray
  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouterXray' -count=1
 )
+
+bash "$ROOT/deploy/test_xray_start_layer_pinned.sh" "$VENDOR"

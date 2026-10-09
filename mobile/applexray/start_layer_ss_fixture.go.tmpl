@@ -1,0 +1,20 @@
+//go:build routervpn_start_layer_integration
+
+package shadowsocks
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	N "github.com/sagernet/sing/common/network"
+)
+
+func RouterVPNTestPhysicalOutbound(ctx context.Context, tag string, options option.ShadowsocksOutboundOptions, physical N.Dialer) (adapter.Outbound, error) {
+	result, err := NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), tag, options)
+	if err != nil {
+		return nil, err
+	}
+	result.(*Outbound).dialer = physical
+	return result, nil
+}

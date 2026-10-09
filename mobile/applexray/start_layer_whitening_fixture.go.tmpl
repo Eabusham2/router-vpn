@@ -1,0 +1,19 @@
+//go:build routervpn_start_layer_integration
+
+package routervpnwhitening
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
+	N "github.com/sagernet/sing/common/network"
+)
+
+func RouterVPNTestPhysicalOutbound(ctx context.Context, tag string, options Options, physical N.Dialer) (adapter.Outbound, error) {
+	result, err := NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), tag, options)
+	if err != nil {
+		return nil, err
+	}
+	result.(*Outbound).dialer = physical
+	return result, nil
+}

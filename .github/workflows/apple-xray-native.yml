@@ -15,6 +15,10 @@ on:
       - 'deploy/xray_datagram_policy.py'
       - 'deploy/xray_connection_policy.py'
       - 'deploy/test_apple_xray_pinned.sh'
+      - 'deploy/test_xray_start_layer_pinned.sh'
+      - 'deploy/prepare-mobile-buffers.py'
+      - 'deploy/mobile_udp_socket_policy.py'
+      - 'cmd/start-layer-relay/**'
       - '.github/workflows/apple-xray-native.yml'
   workflow_dispatch:
 permissions:
