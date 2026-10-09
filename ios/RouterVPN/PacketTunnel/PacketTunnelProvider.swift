@@ -378,6 +378,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
         var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)
+        if rawFiles["xray.json"] != nil {
+            files = try IOSXrayDevicePolicy.apply(files: files, profile: selectedProfile)
+        }
         if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID) {
             guard let data = files["sing-box.json"], let text = String(data: data, encoding: .utf8) else { throw tunnelError(58, "Native WG lost its compiled graph.") }
             let policies = try JSONSerialization.data(withJSONObject: ["entry": selectedProfile, "exit": selectedProfile])

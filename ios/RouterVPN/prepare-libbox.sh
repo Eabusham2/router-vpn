@@ -63,6 +63,7 @@ for header in headers:
     assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
     assert 'LibboxNewRouterHopMeasurement' in header.read_text(), str(header)
     assert 'LibboxRouterApplyMultihopLANPolicy' in header.read_text(), str(header)
+    assert 'LibboxRouterApplyNativeXrayDevicePolicy' in header.read_text(), str(header)
     assert 'LibboxRouterCompileWireGuardProfile' in header.read_text(), str(header)
     assert 'LibboxRouterCompileAmneziaProfile' in header.read_text(), str(header)
     for symbol in ['LibboxRouterApplyPerformancePolicy','LibboxRouterStartPerformance','LibboxRouterPerformanceFailure','LibboxRouterInvalidatePerformance','LibboxRouterPerformanceStatus']:
