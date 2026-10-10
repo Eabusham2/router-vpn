@@ -38,7 +38,7 @@ TEST=r"""
   check(captured.equals(AndroidMultihopStartLayer.capture(entry)),"saved entry layer borrowed another node source");
   JSONObject selected=new JSONObject(metadata);check(selected.getString("entry_start_layer").equals(layer),"requested layer not marked in frozen metadata");
   check(!byTag(new JSONObject(config),"entry-wg").has("detour"),"preflight mutated bare staged graph");
-  io.nekohasekai.libbox.RouterMultihop runtime=AndroidMultihopStartLayer.prepareExecution(config,metadata,captured,capturedExit);
+  io.nekohasekai.libbox.RouterMultihop runtime=AndroidMultihopStartLayer.prepareExecution(config,metadata,captured,null);
   check(runtime!=null,"Local mode silently skipped authenticated entry layer");
   JSONObject graph=new JSONObject(runtime.config()),inner=byTag(graph,"entry-wg"),outer=byTag(graph,"routervpn-entry-start-layer");
   check(inner.getString("detour").equals("routervpn-entry-start-layer")&&!outer.has("detour"),"wrong physical encryption ownership");
