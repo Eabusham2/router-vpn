@@ -244,6 +244,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             String hopMetadata=null;
             File executionFile=new File(session,"routervpn-multihop.json").getCanonicalFile();
             File entryLayerFile=new File(session,AndroidMultihopStartLayer.SESSION_FILE).getCanonicalFile();
+            File exitLayerFile=new File(session,AndroidMultihopStartLayer.EXIT_SESSION_FILE).getCanonicalFile();
+            if(exitLayerFile.exists()&&(!executionFile.isFile()||!exitLayerFile.getParentFile().equals(session)))throw new IllegalStateException("Exit Start Layer has no owned multihop session.");
             if (entryLayerFile.exists() && (!executionFile.isFile() || !entryLayerFile.getParentFile().equals(session))) {
                 throw new IllegalStateException("Entry Start Layer has no owned multihop session.");
             }
@@ -262,7 +264,16 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                         .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
                         .decode(java.nio.ByteBuffer.wrap(raw)).toString();
                 }
-                preparedExecution=AndroidMultihopStartLayer.prepareExecution(config,metadata,captured);
+                String capturedExit=null;
+                if(exitLayerFile.exists()){
+                    if(!exitLayerFile.isFile())throw new IllegalStateException("Captured exit layer is not a private file.");
+                    byte[] raw=readLimited(exitLayerFile,AndroidMultihopStartLayer.MAX_BYTES);
+                    capturedExit=java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                        .decode(java.nio.ByteBuffer.wrap(raw)).toString();
+                }
+                preparedExecution=AndroidMultihopStartLayer.prepareExecution(config,metadata,captured,capturedExit);
                 if(preparedExecution!=null)config=preparedExecution.config();
             }
             String capturedMTU="";

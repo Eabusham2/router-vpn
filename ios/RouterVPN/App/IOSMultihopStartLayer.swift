@@ -50,6 +50,21 @@ enum IOSMultihopStartLayer {
 
     /// A missing or changed layer must not select the old bare-entry factory.
     /// The existing native controller revalidates the complete metadata/source.
+    static func requiredExitSource(metadata: String?, source: String?) throws -> String? {
+        guard let metadata else {
+            if source != nil { throw issue("Exit layer source has no captured multihop owner.") }
+            return nil
+        }
+        guard metadata.utf8.count <= maxBytes,
+              var selected = try JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [String: Any] else {
+            throw issue("Malformed captured exit-layer metadata.")
+        }
+        selected.removeValue(forKey: "entry_start_layer")
+        if let required = selected["exit_start_layer"] { selected["entry_start_layer"] = required }
+        let translated = String(decoding: try JSONSerialization.data(withJSONObject: selected), as: UTF8.self)
+        return try requiredSource(metadata: translated, source: source)
+    }
+
     static func requiredSource(metadata: String?, source: String?) throws -> String? {
         guard let metadata else {
             guard source == nil else { throw issue("Entry layer has no captured multihop owner.") }

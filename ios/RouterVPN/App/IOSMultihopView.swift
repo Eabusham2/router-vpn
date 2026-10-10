@@ -28,7 +28,7 @@ extension RouterVPNModel {
         let capturedProfile = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile)) as! [String: Any]
         let capturedExit = try JSONSerialization.jsonObject(with: JSONEncoder().encode(exit)) as! [String: Any]
         _ = try IOSMultihopStartLayer.capture(profile: capturedProfile, profiles: entry.profiles)
-        try IOSMultihopStartLayer.validateExit(capturedExit)
+        _ = try IOSMultihopStartLayer.capture(profile: capturedExit, profiles: exitBundle.profiles)
         entry.selectedRouterID = profile.id
         entry.nodeProofID = proof
         entry.endpoint = profile.endpoint

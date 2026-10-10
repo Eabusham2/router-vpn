@@ -44,6 +44,9 @@ func main(){
    }
    value=string(data)
   }
+ case "start-layers":
+  var input struct{Config string;Metadata string;Entry string;Exit string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{var c *mobilemultihop.Controller;c,err=mobilemultihop.NewWithStartLayers(input.Config,input.Metadata,input.Entry,input.Exit);if err==nil{value=c.Config();err=c.Close()}}
  case "entry-start":
   var input struct{Config string;Metadata string;Source string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{var c *mobilemultihop.Controller;c,err=mobilemultihop.NewWithEntryStartLayer(input.Config,input.Metadata,input.Source);if err==nil{value=c.Config();err=c.Close()}}
@@ -140,6 +143,13 @@ public final class Libbox {
  public static String routerCompileMultihopEntryStartLayer(String config,String metadata,String source)throws Exception {
   String result=call("entry-start",new JSONObject().put("Config",config).put("Metadata",metadata).put("Source",source).toString(),"");
   if(afterEntryLayerPreflight!=null)afterEntryLayerPreflight.run();return result;
+ }
+ public static String routerCompileMultihopStartLayers(String config,String metadata,String entry,String exit)throws Exception{
+  String result=call("start-layers",new JSONObject().put("Config",config).put("Metadata",metadata).put("Entry",entry).put("Exit",exit).toString(),"");
+  if(afterEntryLayerPreflight!=null)afterEntryLayerPreflight.run();return result;
+ }
+ public static RouterMultihop newRouterMultihopWithStartLayers(String config,String metadata,String entry,String exit)throws Exception{
+  return new RouterMultihop(call("start-layers",new JSONObject().put("Config",config).put("Metadata",metadata).put("Entry",entry).put("Exit",exit).toString(),""));
  }
  public static RouterMultihop newRouterMultihop(String config,String metadata)throws Exception{return new RouterMultihop(testPlan(config,metadata));}
  public static RouterMultihop newRouterMultihopWithEntryStartLayer(String config,String metadata,String source)throws Exception {

@@ -62,6 +62,8 @@ for header in headers:
     assert 'LibboxRouterOpenVPNEndpoint' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihopWithEntryStartLayer' in header.read_text(), str(header)
+    assert "LibboxNewRouterMultihopWithStartLayers" in header.read_text(), str(header)
+    assert "LibboxRouterCompileMultihopStartLayers" in header.read_text(), str(header)
     assert 'LibboxRouterCompileMultihopEntryStartLayer' in header.read_text(), str(header)
     assert 'LibboxNewRouterHopMeasurement' in header.read_text(), str(header)
     assert 'LibboxRouterApplyMultihopLANPolicy' in header.read_text(), str(header)

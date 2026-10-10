@@ -242,7 +242,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         let entryLayer = try IOSMultihopStartLayer.capture(profile: entryProfile,
             profiles: entryRoot["profiles"] as? [String: [String: String]] ?? [:])
-        try IOSMultihopStartLayer.validateExit(exitProfile)
+        let exitLayer = try IOSMultihopStartLayer.capture(profile: exitProfile, profiles: root["profiles"] as? [String: [String: String]] ?? [:])
         let files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryLayer.graphProfile,
             exitProfile: exitProfile, exitMode: exitMode, files: rawFiles)
         let mtuFiles = try RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)

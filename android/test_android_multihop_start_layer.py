@@ -38,7 +38,7 @@ TEST=r"""
   check(captured.equals(AndroidMultihopStartLayer.capture(entry)),"saved entry layer borrowed another node source");
   JSONObject selected=new JSONObject(metadata);check(selected.getString("entry_start_layer").equals(layer),"requested layer not marked in frozen metadata");
   check(!byTag(new JSONObject(config),"entry-wg").has("detour"),"preflight mutated bare staged graph");
-  io.nekohasekai.libbox.RouterMultihop runtime=AndroidMultihopStartLayer.prepareExecution(config,metadata,captured);
+  io.nekohasekai.libbox.RouterMultihop runtime=AndroidMultihopStartLayer.prepareExecution(config,metadata,captured,capturedExit);
   check(runtime!=null,"Local mode silently skipped authenticated entry layer");
   JSONObject graph=new JSONObject(runtime.config()),inner=byTag(graph,"entry-wg"),outer=byTag(graph,"routervpn-entry-start-layer");
   check(inner.getString("detour").equals("routervpn-entry-start-layer")&&!outer.has("detour"),"wrong physical encryption ownership");
@@ -100,7 +100,7 @@ def main():
             if previous is None:os.environ.pop('ANDROID_JSON_JAR',None)
             else:os.environ['ANDROID_JSON_JAR']=previous
     runtime=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java').read_text()
-    for marker in ['AndroidMultihopStartLayer.prepareExecution(config,metadata,captured)','readLimited(entryLayerFile,AndroidMultihopStartLayer.MAX_BYTES)','!entryLayerFile.getParentFile().equals(session)']:
+    for marker in ['AndroidMultihopStartLayer.prepareExecution(config,metadata,captured,capturedExit)','readLimited(entryLayerFile,AndroidMultihopStartLayer.MAX_BYTES)','!entryLayerFile.getParentFile().equals(session)']:
         assert marker in runtime,marker
     print('Actual service uses the tested factory decision; no separate VPN or local relay is created.')
 if __name__=='__main__':main()

@@ -15,7 +15,7 @@ func TestMultihopExecutionShippingOwners(t *testing.T) {
 		"client/RouterVPN-Windows-UnifiedShell.ps1":                                                {"UnifiedExecution", "RefreshUnifiedMultihopComparison", "StopUnifiedComparisonProgress"},
 		"client/macos/RouterVPNMacProduct.swift":                                                   {"multihopExecutionChoice", "multihopComparisonSummary", "stopMultihopProgress"},
 		"client/linux/apply-multihop-execution.py":                                                 {"linux_multihop_execution_changed_v1", "execution"},
-		"android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java":                  {"AndroidMultihopStartLayer.prepareExecution(config,metadata,captured)", "multihopProgressJSON", "executionController"},
+		"android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java":                  {"AndroidMultihopStartLayer.prepareExecution(config,metadata,captured,capturedExit)", "multihopProgressJSON", "executionController"},
 		"android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopStartLayer.java":          {"Libbox.newRouterMultihop(config, metadata)", "Libbox.newRouterMultihopWithEntryStartLayer(config, metadata, captured)", "Captured entry layer source is missing", "Unrequested entry layer file"},
 		"android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedConnectionController.java": {"pendingExecution", "execution"},
 		"ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift":                                   {"LibboxNewRouterMultihop", "plan.run(server)", "MultihopDelivery", "delivery.run()", "callbackLock", "callback = nil", "isCurrent(owner)", "try plan.close()", "ownershipLock", "ownershipGeneration"},

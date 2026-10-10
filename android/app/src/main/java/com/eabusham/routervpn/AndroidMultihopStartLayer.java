@@ -8,6 +8,7 @@ import io.nekohasekai.libbox.RouterMultihop;
 /** Captured entry policy; no independent VPN, local relay or network lookup. */
 final class AndroidMultihopStartLayer {
     static final String SESSION_FILE = "routervpn-entry-start-layer.json";
+    static final String EXIT_SESSION_FILE = "routervpn-exit-start-layer.json";
     static final int MAX_BYTES = 16384;
 
     static String capture(JSONObject entry) throws Exception {
@@ -38,6 +39,7 @@ final class AndroidMultihopStartLayer {
     }
 
     static RouterMultihop prepareExecution(String config, String metadata, String captured) throws Exception {
+        if (new JSONObject(metadata).has("exit_start_layer")) throw new IllegalStateException("Requested exit layer requires its paired captured source.");
         JSONObject selection = new JSONObject(metadata);
         String execution = selection.has("execution") ? selection.getString("execution") : "local";
         if (!java.util.Arrays.asList("local", "server", "auto").contains(execution)) throw new IllegalArgumentException("Unknown multihop execution.");
@@ -57,6 +59,27 @@ final class AndroidMultihopStartLayer {
         // This path is used even for Local. Omitting comparison does not mean
         // permission to omit a requested authenticated physical entry layer.
         return Libbox.newRouterMultihopWithEntryStartLayer(config, metadata, captured);
+    }
+
+    static void preflight(String config, String metadata, String entry, String exit) throws Exception {
+        if (exit.isEmpty()) { preflight(config,metadata,entry); return; }
+        String graph=Libbox.routerCompileMultihopStartLayers(config,metadata,entry,exit);
+        if(graph==null||graph.isEmpty()||graph.getBytes(StandardCharsets.UTF_8).length>4*1024*1024) throw new IllegalStateException("Native two-layer graph exceeds its bound.");
+        Libbox.checkConfig(graph);
+    }
+
+    static RouterMultihop prepareExecution(String config,String metadata,String entry,String exit) throws Exception {
+        JSONObject selected=new JSONObject(metadata);
+        String required=selected.has("exit_start_layer")?selected.getString("exit_start_layer"):"";
+        if(exit==null){
+            if(!required.isEmpty())throw new IllegalStateException("Captured exit layer source is missing.");
+            return prepareExecution(config,metadata,entry);
+        }
+        if(required.isEmpty()||exit.isEmpty()||exit.getBytes(StandardCharsets.UTF_8).length>MAX_BYTES)throw new IllegalStateException("Exit layer is unrequested, missing or oversized.");
+        if(entry!=null && (entry.isEmpty()||entry.getBytes(StandardCharsets.UTF_8).length>MAX_BYTES))throw new IllegalStateException("Captured entry layer is invalid.");
+        // The native constructor checks exact layer modes, same-node credentials,
+        // Local/Server/Compare execution and both required-source markers again.
+        return Libbox.newRouterMultihopWithStartLayers(config,metadata,entry==null?"":entry,exit);
     }
 
     private AndroidMultihopStartLayer() {}
