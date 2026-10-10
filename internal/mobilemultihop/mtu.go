@@ -89,7 +89,7 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 		if value["tag"] != "entry-wg" && value["tag"] != "routervpn-hop-entry" {
 			continue
 		}
-		mode, _ := value["type"].(string)
+		mode := proxyModeForOutbound(value)
 		if entry != nil || !ProxyEntryMode(mode) {
 			return "", errors.New("MTU entry is ambiguous or in the wrong manager")
 		}

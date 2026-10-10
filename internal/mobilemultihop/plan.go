@@ -236,7 +236,7 @@ func New(config, metadata string) (*Controller, error) {
 			}
 			if value["tag"] == meta.EntryTag {
 				entryCount++
-				expectedEntry := meta.EntryMode
+				expectedEntry := proxyEntryType(meta.EntryMode)
 				expectedList := "outbounds"
 				if awgpolicy.WireGuardFamily(meta.EntryMode) {
 					expectedList = "endpoints"

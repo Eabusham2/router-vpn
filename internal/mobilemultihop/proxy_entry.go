@@ -13,7 +13,9 @@ import (
 
 // ProxyEntryMode denotes a native TCP+UDP encrypted transport. A SOCKS label,
 // TCP-only proxy or an unstarted helper process is not an equivalent entry.
-func ProxyEntryMode(mode string) bool { return mode == "shadowsocks" || mode == "hysteria2" }
+func ProxyEntryMode(mode string) bool {
+	return mode == "shadowsocks" || mode == "hysteria2" || XrayEntryMode(mode)
+}
 
 // CompileProxyEntry consumes the exact selected bundle profile (base64 files),
 // not mutable app state. Its output is a self-contained native outbound. The
@@ -21,6 +23,9 @@ func ProxyEntryMode(mode string) bool { return mode == "shadowsocks" || mode == 
 // exit certificate cannot replace it when the two node profiles are composed.
 // It opens no files, sockets, listeners, routes, or OS VPN services.
 func CompileProxyEntry(profile, mode string) (string, error) {
+	if XrayEntryMode(mode) {
+		return compileXrayEntry(profile, mode)
+	}
 	bad := errors.New("entry requires one bounded self-contained native Shadowsocks or Hysteria2 profile")
 	if !ProxyEntryMode(mode) {
 		return "", bad
@@ -182,6 +187,9 @@ func validEntryCertificate(data []byte) bool {
 }
 
 func validateProxyEntry(entry map[string]any, mode string) error {
+	if XrayEntryMode(mode) {
+		return validateXrayEntry(entry, mode)
+	}
 	bad := errors.New("entry transport must retain its authenticated native TCP/UDP path")
 	if !ProxyEntryMode(mode) || entry["type"] != mode {
 		return bad
