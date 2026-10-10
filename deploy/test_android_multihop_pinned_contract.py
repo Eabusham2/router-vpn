@@ -63,9 +63,9 @@ class NativeGraphGate(unittest.TestCase):
             jar = root / 'explicit.jar'
             jar.write_bytes(self.jar_bytes())
             with mock.patch.object(GATE.urllib.request, 'urlopen', side_effect=AssertionError('unexpected download')):
-                self.assertEqual(GATE.android_json_dependency(root, {'ANDROID_JSON_JAR': str(jar)}), jar)
+                self.assertEqual(GATE.android_json_dependency(root, {'ANDROID_JSON_JAR': str(jar)}), jar.resolve())
                 with mock.patch.object(GATE, 'SYSTEM_JSON_JAR', jar):
-                    self.assertEqual(GATE.android_json_dependency(root, {}), jar)
+                    self.assertEqual(GATE.android_json_dependency(root, {}), jar.resolve())
                 for value in ('', str(root / 'missing'), str(root)):
                     with self.assertRaises((ValueError, FileNotFoundError)):
                         GATE.android_json_dependency(root, {'ANDROID_JSON_JAR': value})
