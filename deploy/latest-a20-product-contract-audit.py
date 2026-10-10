@@ -63,7 +63,7 @@ need('ios/RouterVPN/App/IOSForwardingMasterView.swift','sendProviderMessage','se
 # or a comment copying the old Swift-only call spelling.
 need('ios/RouterVPN/PacketTunnel/RouterVPNForwardingChannel.swift','RVPNTunnelTCPConnection(provider: provider','Policy.verifyProof','Policy.authorize','readback')
 need('ios/RouterVPN/PacketTunnel/RVPNTunnelTCPConnection.m','[provider createTCPConnectionThroughTunnelToEndpoint:endpoint','inet_pton(AF_INET','inet_pton(AF_INET6','[_connection cancel]')
-need('ios/RouterVPN/project.yml','sources: [PacketTunnel]','SWIFT_OBJC_BRIDGING_HEADER: PacketTunnel/RVPNTunnelTCPConnection.h')
+need('ios/RouterVPN/project.yml','sources: [PacketTunnel, App/IOSMultihopStartLayer.swift]','SWIFT_OBJC_BRIDGING_HEADER: PacketTunnel/RVPNTunnelTCPConnection.h')
 forbid('ios/RouterVPN/PacketTunnel/RVPNTunnelTCPConnection.m','[provider createTCPConnectionToEndpoint:','[NWTCPConnection alloc]')
 
 # A20-10/11: schema-v4 whole-connection profiles + transactional/frozen runtime identity.
