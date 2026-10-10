@@ -161,7 +161,7 @@ class NativeGraphGate(unittest.TestCase):
         script = (ROOT / 'deploy/test_android_multihop_pinned.py').read_text()
         template = (ROOT / 'mobile/routervpn_multihop_native_test.go.tmpl').read_text()
         self.assertIn("env['ROUTERVPN_REQUIRE_ANDROID_GRAPH_FIXTURES'] = '1'", script)
-        self.assertIn("'^TestRouterMultihop(AndroidGeneratedGraphs|EntryStartLayerGeneratedGraphs)$'", script)
+        self.assertIn("'^TestRouterMultihop(AndroidGeneratedGraphs|EntryStartLayerGeneratedGraphs|BothStartLayersGeneratedGraphs)$'", script)
         self.assertIn("env['ROUTERVPN_REQUIRE_ENTRY_LAYER_FIXTURES']='1'",script)
         self.assertIn("cases != 48",template)
         self.assertIn("unimplemented-negative-entry-layer",template)
@@ -173,6 +173,30 @@ class NativeGraphGate(unittest.TestCase):
         self.assertIn('if checks != 150', template)
         self.assertNotIn('t.Parallel()', template)
 
+
+class BothLayerGate(unittest.TestCase):
+    def populate(self,root):
+        for i in range(1,385): (root/(str(i)+'.json')).write_text('{}')
+    def test_requires_all_384_regular_bounded_outputs(self):
+        for kind in ('missing','extra','empty','directory','oversized'):
+            with tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);self.populate(root);GATE.require_both_layer_matrix(root)
+                path=root/'384.json'
+                if kind=='missing':path.unlink()
+                elif kind=='extra':(root/'385.json').write_text('{}')
+                elif kind=='empty':path.write_text('')
+                elif kind=='directory':path.unlink();path.mkdir()
+                else:
+                    with path.open('wb') as out:out.truncate(4*1024*1024+1)
+                with self.assertRaises(ValueError):GATE.require_both_layer_matrix(root)
+    def test_real_parser_and_negative_controls_remain_mandatory(self):
+        source=(ROOT/'deploy/test_android_multihop_pinned.py').read_text()
+        native=(ROOT/'mobile/routervpn_multihop_native_test.go.tmpl').read_text()
+        self.assertIn("env['ROUTERVPN_REQUIRE_BOTH_LAYER_FIXTURES']='1'",source)
+        self.assertIn('android/test_android_multihop_layers.py',source)
+        self.assertIn('BothStartLayersGeneratedGraphs',source)
+        self.assertIn('len(files) != 384',native)
+        self.assertIn('unimplemented-negative-exit-layer',native)
 
 if __name__ == '__main__':
     unittest.main()

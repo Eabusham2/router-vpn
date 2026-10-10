@@ -73,7 +73,7 @@ JAVA_NAMES = ('AndroidMultihopController', 'NativeSingBoxController',
 
 def inputs() -> list[Path]:
     java = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
-    return [Path(__file__).resolve(), ROOT / 'android/test_android_multihop_start_layer.py', ROOT / 'android/test_android_multihop_graph.py',
+    return [Path(__file__).resolve(), ROOT / 'android/test_android_multihop_layers.py', ROOT / 'android/test_android_multihop_start_layer.py', ROOT / 'android/test_android_multihop_graph.py',
             ROOT / 'mobile/routervpn_multihop_native_test.go.tmpl',
             *[java / (name + '.java') for name in JAVA_NAMES]]
 
@@ -114,6 +114,16 @@ def require_fixture_matrix(root: Path) -> None:
         raise ValueError('Generated graph matrix has missing or unowned entries')
 
 
+def require_both_layer_matrix(root: Path) -> None:
+    expected = {str(i)+'.json' for i in range(1,385)}
+    if not root.is_dir() or root.is_symlink() or {p.name for p in root.iterdir()} != expected:
+        raise ValueError('Both-layer matrix must contain exactly 384 generated graphs')
+    for path in root.iterdir():
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4 * 1024 * 1024:
+            raise ValueError('Unsafe, empty or oversized both-layer graph')
+
+
 def run(vendor: Path) -> None:
     vendor = vendor.resolve(strict=True)
     revision = subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True).strip()
@@ -145,11 +155,19 @@ def run(vendor: Path) -> None:
         expected={mode+'-'+layer+'-'+execution+'.json' for mode in modes for layer in ('aes','aes-xor') for execution in ('local','server','auto')}
         if {p.name for p in entry_layers.iterdir()}!=expected:raise ValueError('Missing or extra native entry-layer fixture')
 
+        both_layers=Path(temp)/'both-layers'
+        both_layers.mkdir()
+        env['ROUTERVPN_BOTH_LAYER_FIXTURES']=str(both_layers)
+        env['ROUTERVPN_REQUIRE_BOTH_LAYER_FIXTURES']='1'
+        subprocess.run([sys.executable,str(ROOT/'android/test_android_multihop_layers.py')],
+                       cwd=ROOT,env=env,check=True,timeout=180)
+        require_both_layer_matrix(both_layers)
+
         subprocess.run(['go', 'test', '-ldflags=-checklinkname=0',
                         '-tags', 'with_quic,with_wireguard,with_gvisor',
-                        './experimental/libbox', '-run', '^TestRouterMultihop(AndroidGeneratedGraphs|EntryStartLayerGeneratedGraphs)$',
+                        './experimental/libbox', '-run', '^TestRouterMultihop(AndroidGeneratedGraphs|EntryStartLayerGeneratedGraphs|BothStartLayersGeneratedGraphs)$',
                         '-count=1', '-timeout=120s', '-v'], cwd=vendor, env=env, check=True, timeout=600)
-    print('All 150 shipping Android graphs passed the pinned native parser; negative schema controls rejected.')
+    print('All 150 base, 48 entry-layer and 384 both-layer Android graphs passed the pinned native parser; negative controls rejected.')
 
 
 if __name__ == '__main__':
