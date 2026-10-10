@@ -191,7 +191,7 @@ func New(config, metadata string) (*Controller, error) {
 	if !awgpolicy.WireGuardFamily(meta.EntryMode) && !ProxyEntryMode(meta.EntryMode) {
 		return nil, errors.New("unimplemented entry transport")
 	}
-	if !awgpolicy.WireGuardFamily(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" {
+	if !awgpolicy.WireGuardFamily(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" && !XrayEntryMode(meta.ExitMode) {
 		return nil, errors.New("unimplemented exit transport")
 	}
 	if meta.Execution != "local" && meta.Execution != "server" && meta.Execution != "auto" {
@@ -223,6 +223,7 @@ func New(config, metadata string) (*Controller, error) {
 		}
 	}
 	var local map[string]any
+	var exitList string
 	entryCount, exitCount := 0, 0
 	for _, list := range []string{"outbounds", "endpoints"} {
 		values, _ := root[list].([]any)
@@ -269,13 +270,14 @@ func New(config, metadata string) (*Controller, error) {
 			if value["tag"] == "proxy" {
 				exitCount++
 				local = value
+				exitList = list
 			}
 		}
 	}
 	if entryCount != 1 || exitCount != 1 || local == nil || local["detour"] != meta.EntryTag {
 		return nil, errors.New("exact nested local graph required")
 	}
-	expectedType := meta.ExitMode
+	expectedType := proxyEntryType(meta.ExitMode)
 	if expectedType == "wg" {
 		expectedType = "wireguard"
 	} else if awgpolicy.IsMode(expectedType) {
@@ -283,6 +285,14 @@ func New(config, metadata string) (*Controller, error) {
 	}
 	if local["type"] != expectedType {
 		return nil, errors.New("exit label does not match the dataplane")
+	}
+	if XrayEntryMode(meta.ExitMode) {
+		if exitList != "outbounds" {
+			return nil, errors.New("native Xray exit belongs to the outbound manager")
+		}
+		if err := validateNestedXrayExit(local, meta.ExitMode, meta.EntryTag); err != nil {
+			return nil, err
+		}
 	}
 	if expectedType == AmneziaType {
 		raw, err := json.Marshal(local)

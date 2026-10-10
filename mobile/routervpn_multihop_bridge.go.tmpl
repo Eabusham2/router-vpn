@@ -143,3 +143,8 @@ func (e *routerMultihopEngine) Selected() string {
 func RouterApplyNativeXrayDevicePolicy(config, profile string) (string, error) {
 	return mobilemultihop.ApplyNativeXrayDevicePolicy(config, profile)
 }
+
+// RouterCompileXrayExit builds an exact single-transport native exit graph.
+func RouterCompileXrayExit(profile, mode string) (string, error) {
+	return mobilemultihop.CompileXrayExit(profile, mode)
+}
