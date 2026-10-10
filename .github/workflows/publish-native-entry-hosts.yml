@@ -1,0 +1,235 @@
+name: Verify native Xray entry host source
+on:
+  push:
+    paths: ['.github/workflows/publish-native-entry-hosts.yml']
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: c802c3db8882ebc3ffbc1fa049e954905cf97ac7
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: '21'}
+      - name: Apply explicit saved source changes and verify exact tree
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          def replace(name, old, new):
+              p=Path(name);text=p.read_text();assert text.count(old)==1,(name,old[:90],text.count(old));p.write_text(text.replace(old,new,1))
+          replace('android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java', 'return nativeWireGuardFamily(mode) || "shadowsocks".equals(mode) || "hysteria2".equals(mode);', 'return nativeWireGuardFamily(mode) || "shadowsocks".equals(mode) || "hysteria2".equals(mode)\n                || java.util.Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp").contains(mode);')
+          replace('android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java', '.setItems(new String[]{"WireGuard","AmneziaWG Fast","AmneziaWG Strong","Shadowsocks","Hysteria2"},(dialog,index)->chooseMultihopExecution(entry,exit,mode,new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"}[index]))', '.setItems(new String[]{"WireGuard","AmneziaWG Fast","AmneziaWG Strong","Shadowsocks","Hysteria2","REALITY Vision","PQ REALITY Vision","REALITY XHTTP"},(dialog,index)->chooseMultihopExecution(entry,exit,mode,new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp"}[index]))')
+          replace('android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java','java.util.Arrays.asList("wg","awg2-fast","awg2-strong","shadowsocks","hysteria2").contains(value)','java.util.Arrays.asList("wg","awg2-fast","awg2-strong","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp").contains(value)')
+          for name in ['ios/RouterVPN/App/IOSMultihopView.swift','ios/RouterVPN/App/IOSConnectionProfilesView.swift','ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift']:
+              p=Path(name);s=p.read_text();old='["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"]';assert old in s;p.write_text(s.replace(old,old[:-1]+',"reality-vision","reality-pq-vision","reality-xhttp"]'))
+          replace('ios/RouterVPN/App/IOSMultihopView.swift','let entryAsset = entryMode == "wg" ? "wg.conf" : (["awg2-fast", "awg2-strong"].contains(entryMode) ? "awg.conf" : "sing-box.json")','let entryAsset = entryMode == "wg" ? "wg.conf" : (["awg2-fast", "awg2-strong"].contains(entryMode) ? "awg.conf" : (["reality-vision", "reality-pq-vision", "reality-xhttp"].contains(entryMode) ? "xray.json" : "sing-box.json"))')
+          p=Path('ios/RouterVPN/App/IOSMultihopView.swift');s=p.read_text();start=s.index('Picker("Entry transport"');end=s.index('Picker("Exit node"',start);part=s[start:end];old='Text("Hysteria2").tag("hysteria2")';assert part.count(old)==1;part=part.replace(old,old+'\n                        Text("REALITY Vision").tag("reality-vision")\n                        Text("PQ REALITY Vision").tag("reality-pq-vision")\n                        Text("REALITY XHTTP").tag("reality-xhttp")');s=s[:start]+part+s[end:];s=s.replace('Shadowsocks or Hysteria2 entry and a WireGuard/AmneziaWG','Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP entry and a WireGuard/AmneziaWG');p.write_text(s)
+          replace('ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', '        let mode = value["type"] as? String ?? ""\n        var allowed: Set<String>', '''        let mode = value["type"] as? String ?? ""
+                  if mode == "routervpn-xray" {
+                      guard Set(value.keys) == Set(["type", "tag", "mode", "config_json"]),
+                            let rawMode = value["mode"] as? String,
+                            ["reality-vision", "reality-pq-vision", "reality-xhttp"].contains(rawMode),
+                            let text = value["config_json"] as? String, !text.isEmpty, text.utf8.count <= maxBytes,
+                            let native = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+                            Set(native.keys).isSubset(of: ["log", "inbounds", "outbounds"]),
+                            let outs = native["outbounds"] as? [[String: Any]], outs.count == 1,
+                            outs[0]["protocol"] as? String == "vless",
+                            let settings = outs[0]["settings"] as? [String: Any],
+                            let peers = settings["vnext"] as? [[String: Any]], peers.count == 1,
+                            let host = peers[0]["address"] as? String, serverIP(host),
+                            let port = try integer(peers[0]["port"]), (1...65535).contains(port) else {
+                          throw issue("Native Xray entry must retain its exact compiled protocol and literal owned server.")
+                      }
+                      // LibboxRouterCompileProxyEntry has verified raw REALITY/PQ fields.
+                      // The mandatory shared MTU/controller checks revalidate these bytes
+                      // before startup; this graph operation cannot substitute credentials.
+                      var result = value; result["tag"] = tag
+                      return result
+                  }
+                  var allowed: Set<String>'''.replace('\n          ','\n'))
+          replace('ios/RouterVPN/PacketTunnel/RouterVPNMTUPolicy.swift','["shadowsocks", "hysteria2"].contains(proxies[0]["type"] as? String ?? "")','["shadowsocks", "hysteria2", "routervpn-xray"].contains(proxies[0]["type"] as? String ?? "")')
+          replace('android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java','        String entryIdentity = AndroidNodeStore.stableNodeIdentity(entry);','        String entrySnapshot = entry.toString(), exitSnapshot = exit.toString();\n        String entryIdentity = AndroidNodeStore.stableNodeIdentity(entry);')
+          replace('android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java','        File root = new File(context.getFilesDir(), "layered-sessions");','        if (Thread.currentThread().isInterrupted()\n                || !entrySnapshot.equals(loadBundle(entryBundle).toString())\n                || !exitSnapshot.equals(loadBundle(exitBundle).toString())) {\n            throw new IllegalStateException("Multihop preparation was cancelled or a captured node changed; no session was staged.");\n        }\n        File root = new File(context.getFilesDir(), "layered-sessions");')
+          replace('deploy/test_ios_multihop_profiles.py','for mode in ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"]','for mode in ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp"]')
+          p=Path('android/test_android_multihop_graph.py');s=p.read_text()
+          old=' public static String routerCompileProxyEntry(String c,String p)throws Exception{return call("proxy-entry",c,p);}';new=' public static Runnable afterProxyEntryCompilation;\n public static String routerCompileProxyEntry(String c,String p)throws Exception{\n  String result=call("proxy-entry",c,p);if(afterProxyEntryCompilation!=null)afterProxyEntryCompilation.run();return result;\n }';assert s.count(old)==1;s=s.replace(old,new)
+          old='for(String entryMode:new String[]{"shadowsocks","hysteria2"})for(String exitMode:';assert s.count(old)==1;s=s.replace(old,'for(String entryMode:new String[]{"shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp"})for(String exitMode:')
+          old="JSONObject a=proxyBundle('a',entryMode,entryCert),b=NativeSingBoxController.nativeWireGuardFamily(exitMode)?awgBundle('b'):proxyBundle('b',exitMode,exitCert);";assert s.count(old)==1;s=s.replace(old,"JSONObject a=entryMode.startsWith(\"reality-\")?xrayBundle(entryMode,\"192.0.2.11\"):proxyBundle('a',entryMode,entryCert),b=NativeSingBoxController.nativeWireGuardFamily(exitMode)?awgBundle('b'):proxyBundle('b',exitMode,exitCert);")
+          old='    check(first.getString("type").equals(entryMode)&&first.getString("password").equals("entry-only-secret"),"entry lost its exact native transport or credential");';assert s.count(old)==1
+          s=s.replace(old,'    if(entryMode.startsWith("reality-")){\n     String original=new String(Base64.getDecoder().decode(a.getJSONObject("profiles").getJSONObject(entryMode).getString("xray.json")),StandardCharsets.UTF_8);\n     check(first.getString("type").equals("routervpn-xray")&&first.getString("mode").equals(entryMode)&&first.getString("config_json").equals(original)&&first.length()==4,"native Xray entry lost exact original authentication and transport");\n    }else check(first.getString("type").equals(entryMode)&&first.getString("password").equals("entry-only-secret"),"entry lost its exact native transport or credential");')
+          old='check(Files.exists(session.resolve(AndroidKillSwitchPolicy.SESSION_MARKER))&&!Files.exists(session.resolve("wg.conf"))&&!Files.exists(session.resolve("awg.conf")),"strict policy or single-VPN staging ownership lost");';assert s.count(old)==1;s=s.replace(old,old+'\n    check(!Files.exists(session.resolve("xray.json")),"entry-only Xray source was staged as another backend");')
+          method=''' static void nativeEntryRejections(Path dir)throws Exception {
+            JSONObject exit=awgBundle('b');
+            for(String mode:new String[]{"reality-vision","reality-pq-vision","reality-xhttp"}){
+             for(String fault:new String[]{"security","peer","extra","missing"}){
+              JSONObject source=xrayBundle(mode,"192.0.2.11"),assets=source.getJSONObject("profiles").getJSONObject(mode);
+              JSONObject raw=new JSONObject(new String(Base64.getDecoder().decode(assets.getString("xray.json")),StandardCharsets.UTF_8));
+              JSONObject out=raw.getJSONArray("outbounds").getJSONObject(0);
+              if(fault.equals("security"))out.getJSONObject("streamSettings").put("security","none");
+              if(fault.equals("peer"))out.getJSONObject("settings").getJSONArray("vnext").getJSONObject(0).put("address","hostname-must-not-resolve.example");
+              if(fault.equals("extra"))assets.put("unowned.conf","e30=");
+              assets.put("xray.json",Base64.getEncoder().encodeToString(raw.toString().getBytes(StandardCharsets.UTF_8)));
+              if(fault.equals("missing"))assets.remove("xray.json");
+              proxyRejected(dir,source,exit,mode,"wg");
+             }
+             Path app=Files.createTempDirectory(dir,"cancelled-xray-entry");Context ctx=new Context(app.toFile());
+             AndroidMultihopController builder=new AndroidMultihopController(ctx,new NativeSingBoxController(ctx));
+             File a=save(dir,xrayBundle(mode,"192.0.2.11")),b=save(dir,exit);boolean failed=false;
+             io.nekohasekai.libbox.Libbox.afterProxyEntryCompilation=()->Thread.currentThread().interrupt();
+             try{builder.prepare(a,b,"wg","auto",mode);}catch(Exception expected){failed=true;}
+             finally{io.nekohasekai.libbox.Libbox.afterProxyEntryCompilation=null;Thread.interrupted();}
+             check(failed&&sessions(app)==0,"cancelled Xray entry preparation staged a session");
+             io.nekohasekai.libbox.Libbox.afterProxyEntryCompilation=()->{try{Files.writeString(a.toPath(),"{}");}catch(Exception e){throw new RuntimeException(e);}};
+             failed=false;try{builder.prepare(a,b,"wg","local",mode);}catch(Exception expected){failed=true;}
+             finally{io.nekohasekai.libbox.Libbox.afterProxyEntryCompilation=null;}
+             check(failed&&sessions(app)==0,"changed captured entry staged a session");
+            }
+           }
+          '''.replace('\n          ','\n')
+          old=' public static void main(String[] args)throws Exception {';assert s.count(old)==1;s=s.replace(old,method+old);s=s.replace('  proxyEntryChecks(dir);','  proxyEntryChecks(dir);\n  nativeEntryRejections(dir);',1);p.write_text(s)
+          replace('deploy/test_android_multihop_pinned.py',"('shadowsocks', 'hysteria2'),","('shadowsocks', 'hysteria2', 'reality-vision', 'reality-pq-vision', 'reality-xhttp'),")
+          p=Path('deploy/test_android_multihop_pinned.py');p.write_text(p.read_text().replace('All 60 shipping Android graphs','All 150 shipping Android graphs'))
+          p=Path('deploy/test_android_multihop_pinned_contract.py');s=p.read_text().replace("('shadowsocks', 'hysteria2'),","('shadowsocks', 'hysteria2', 'reality-vision', 'reality-pq-vision', 'reality-xhttp'),",1).replace("len(list(root.glob('*/*.json'))), 60","len(list(root.glob('*/*.json'))), 150").replace("'if checks != 60'","'if checks != 150'");p.write_text(s)
+          p=Path('mobile/routervpn_multihop_native_test.go.tmpl');s=p.read_text();a=s.index('func TestRouterMultihopAndroidGeneratedGraphs(');b=s.index('// This executes the actual registered',a);part=s[a:b].replace('[]string{"shadowsocks", "hysteria2"}','[]string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"}',1)
+          old='\t\t\t\t\t\t\t\tif outbound["type"] != entry {\n\t\t\t\t\t\t\t\t\tt.Fatal("entry label differs from native transport")\n\t\t\t\t\t\t\t\t}'
+          new='                                expectedType := entry\n                                if strings.HasPrefix(entry,"reality-") {\n                                    expectedType="routervpn-xray"\n                                    if outbound["mode"]!=entry {t.Fatal("native Xray entry mode was substituted")}\n                                }\n                                if outbound["type"]!=expectedType {t.Fatal("entry label differs from native transport")}'
+          assert part.count(old)==1;part=part.replace(old,new).replace('checks != 60','checks != 150').replace('expected 60','expected 150');p.write_text(s[:a]+part+s[b:])
+          generator='''// Command xray-entry emits public, deterministic test fixtures. It does not
+          // start an engine, open a socket or read any user configuration.
+          package main
+          import (
+           "crypto/ecdh"
+           "crypto/mlkem"
+           "encoding/base64"
+           "encoding/json"
+           "fmt"
+           "os"
+           "router-vpn/internal/mobilemultihop"
+          )
+          func encode(v any)(string,error){b,e:=json.Marshal(v);return base64.StdEncoding.EncodeToString(b),e}
+          func main(){if err:=run();err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}}
+          func run()error{
+           key,err:=ecdh.X25519().NewPrivateKey(make([]byte,32));if err!=nil{return err}
+           pq,err:=mlkem.NewDecapsulationKey768(make([]byte,64));if err!=nil{return err}
+           entries:=map[string]json.RawMessage{}
+           for _,mode:=range []string{"reality-vision","reality-pq-vision","reality-xhttp"}{
+            user:=map[string]any{"id":"11111111-1111-4111-8111-111111111111","flow":"xtls-rprx-vision","encryption":"none"}
+            stream:=map[string]any{"network":"raw","security":"reality","realitySettings":map[string]any{"serverName":"entry.example.test","fingerprint":"chrome","password":base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()),"shortId":"0123456789abcdef"}}
+            if mode!="reality-vision"{user["encryption"]="mlkem768x25519plus.native.0rtt."+base64.RawURLEncoding.EncodeToString(pq.EncapsulationKey().Bytes())}
+            if mode=="reality-xhttp"{delete(user,"flow");stream["network"]="xhttp";stream["xhttpSettings"]=map[string]any{"path":"/entry-authenticated","mode":"auto"};stream["finalmask"]=map[string]any{"tcp":[]any{map[string]any{"type":"fragment","settings":map[string]any{"packets":"tlshello","length":"100-300","delay":"10-30","maxSplit":"3-7"}}}}}
+            raw:=map[string]any{"inbounds":[]any{map[string]any{"protocol":"socks","listen":"127.0.0.1","port":1090,"settings":map[string]any{"auth":"noauth","udp":true}}},"outbounds":[]any{map[string]any{"protocol":"vless","tag":"proxy","settings":map[string]any{"vnext":[]any{map[string]any{"address":"192.0.2.11","port":443,"users":[]any{user}}}},"streamSettings":stream}}}
+            wrapper:=map[string]any{"inbounds":[]any{map[string]any{"type":"tun","auto_route":true,"strict_route":true}},"outbounds":[]any{map[string]any{"type":"socks","tag":"proxy","server":"127.0.0.1","server_port":1090,"version":"5"}},"route":map[string]any{"final":"proxy"}}
+            original,e:=encode(raw);if e!=nil{return e};outer,e:=encode(wrapper);if e!=nil{return e}
+            profile,e:=json.Marshal(map[string]string{"sing-box.json":outer,"xray.json":original});if e!=nil{return e}
+            result,e:=mobilemultihop.CompileProxyEntry(string(profile),mode);if e!=nil{return e}
+            entries[mode]=json.RawMessage(result)
+           }
+           return json.NewEncoder(os.Stdout).Encode(entries)
+          }
+          '''
+          p=Path('deploy/testfixtures/xray-entry/main.go');p.parent.mkdir(parents=True,exist_ok=True);p.write_text(generator)
+          subprocess.run(['gofmt','-w','mobile/routervpn_multihop_native_test.go.tmpl',str(p)],check=True)
+          p=Path('deploy/test_ios_multihop_graph.py');s=p.read_text().replace('import argparse\n','import argparse\nimport os\n',1)
+          old='func proxyInput(_ mode: String) -> [String:Any] {';assert s.count(old)==1;s=s.replace(old,'let xrayEntryPath = ProcessInfo.processInfo.environment["ROUTERVPN_XRAY_ENTRY_FIXTURES"]!\nlet xrayEntries = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath:xrayEntryPath))) as! [String:[String:Any]]\n@MainActor func proxyInput(_ mode: String) -> [String:Any] {\n    if let native = xrayEntries[mode] { return native }\n')
+          s=s.replace('for entryMode in ["shadowsocks", "hysteria2"] {','for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"] {',1)
+          old='        source.write_text(TEST)';assert s.count(old)==1;s=s.replace(old,'        native_entries = Path(directory) / "xray-entry-fixtures.json"\n        with native_entries.open("w") as output:\n            subprocess.run(["go", "run", "./deploy/testfixtures/xray-entry"], cwd=ROOT, stdout=output, check=True, timeout=90)\n        env = dict(os.environ, ROUTERVPN_XRAY_ENTRY_FIXTURES=str(native_entries))\n'+old)
+          old='        subprocess.run(command, check=True, timeout=30)';assert s.count(old)==1;s=s.replace(old,'        subprocess.run(command, env=env, check=True, timeout=30)');p.write_text(s)
+          test='''#!/usr/bin/env python3
+          from pathlib import Path
+          import unittest
+          ROOT=Path(__file__).resolve().parents[1]
+          MODES=('reality-vision','reality-pq-vision','reality-xhttp')
+          class XrayEntryBindings(unittest.TestCase):
+              def test_mobile_entry_controls_and_profiles_retain_exact_mode(self):
+                  paths=('android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java',
+                         'android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java',
+                         'android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java',
+                         'ios/RouterVPN/App/IOSMultihopView.swift','ios/RouterVPN/App/IOSConnectionProfilesView.swift',
+                         'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift')
+                  for path in paths:
+                      source=(ROOT/path).read_text()
+                      for mode in MODES:self.assertIn('"'+mode+'"',source,path)
+                  java=(ROOT/paths[2]).read_text().split('private static String normalizeMultiMode',1)[1].split('\\n',1)[0]
+                  self.assertNotIn('reality-',java,'entry implementation must not advertise unfinished Xray exits')
+              def test_real_shared_compiler_and_two_node_proofs_remain_bound(self):
+                  java=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java').read_text()
+                  swift=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
+                  self.assertIn('Libbox.routerCompileProxyEntry(',java)
+                  self.assertIn('LibboxRouterCompileProxyEntry(',swift)
+                  self.assertIn('"entry_mode"',java);self.assertIn('"entry_mode"',swift)
+                  self.assertIn('entrySnapshot.equals(loadBundle(entryBundle).toString())',java)
+                  self.assertIn('exitSnapshot.equals(loadBundle(exitBundle).toString())',java)
+                  self.assertIn('expectedNodeID: entryProofID',swift);self.assertIn('expectedNodeID: exitProofID',swift)
+              def test_native_parser_reads_expanded_generated_matrix(self):
+                  gate=(ROOT/'deploy/test_android_multihop_pinned.py').read_text()
+                  native=(ROOT/'mobile/routervpn_multihop_native_test.go.tmpl').read_text()
+                  for mode in MODES:self.assertIn(mode,gate);self.assertIn(mode,native)
+                  self.assertIn('checks != 150',native)
+                  self.assertIn('unimplemented-fixture-transport',native)
+                  apple=(ROOT/'deploy/test_ios_multihop_graph.py').read_text()
+                  self.assertIn('./deploy/testfixtures/xray-entry',apple)
+                  self.assertIn('proxy-'+ '"+entryMode',apple)
+          if __name__=='__main__':unittest.main()
+          '''
+          Path('deploy/test_mobile_xray_entry_bindings.py').write_text(test)
+          p=Path('deploy/native-artifact-workflow-parity-audit.py');p.write_text(p.read_text()+'\nsubprocess.run([sys.executable, str(ROOT/"deploy/test_mobile_xray_entry_bindings.py")], check=True)\n')
+          replace('deploy/prepare-mobile-multihop.py',"    paths = [ROOT/'mobile/routervpn_hop_measurement.go.tmpl'","    paths = [ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl'")
+          subprocess.run(['git','add','.'],check=True)
+          tree=subprocess.check_output(['git','write-tree'],text=True).strip()
+          print('RECONSTRUCTED_TREE',tree,flush=True)
+          if tree!='99c883863370e8f4e8e0f1eb0ef27560604ca212':
+              subprocess.run(['git','diff','--cached','--stat'],check=True)
+              subprocess.run(['git','ls-files','--stage'],check=True)
+              raise ValueError('Source tree differs from saved tested host commit')
+          PY
+      - name: Execute production host and shared policy regressions
+        run: |
+          go test -race -count=1 -timeout=90s ./internal/mobilemultihop
+          go vet ./internal/mobilemultihop
+          python3 android/test_android_multihop_graph.py
+          python3 deploy/test_ios_multihop_graph.py
+          python3 deploy/test_ios_multihop_profiles.py
+          python3 deploy/test_ios_mtu_policy.py
+          python3 deploy/test_android_multihop_pinned_contract.py
+          python3 deploy/test_mobile_xray_entry_bindings.py
+      - name: Publish exact source Git objects without updating main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import subprocess,os,json,base64,urllib.request,pathlib
+          TREE='99c883863370e8f4e8e0f1eb0ef27560604ca212'
+          parent=os.environ['GITHUB_SHA']
+          def git(*args):return subprocess.check_output(['git',*args])
+          assert git('write-tree').decode().strip()==TREE and git('diff','--name-only').strip()==b''
+          def api(path,value=None):
+              request=urllib.request.Request('https://api.github.com/repos/Eabusham2/router-vpn/'+path,data=None if value is None else json.dumps(value).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+              with urllib.request.urlopen(request,timeout=40) as r:return json.load(r)
+          assert api('git/ref/heads/main')['object']['sha']==parent
+          entries=[]
+          for name in git('diff','--cached','--name-only').decode().splitlines():
+              mode,sha,_=git('ls-files','--stage','--',name).decode().split('\t')[0].split()
+              data=git('cat-file','blob',sha)
+              blob=api('git/blobs',{'encoding':'base64','content':base64.b64encode(data).decode()})
+              assert blob['sha']==sha
+              entries.append({'path':name,'type':'blob','mode':mode,'sha':sha})
+          entries.append({'path':'.github/workflows/publish-native-entry-hosts.yml','mode':'100644','type':'blob','sha':None})
+          base=api('git/commits/'+parent)
+          tree=api('git/trees',{'base_tree':base['tree']['sha'],'tree':entries});assert tree['sha']==TREE
+          commit=api('git/commits',{'message':'Wire native REALITY and XHTTP entries into Android and Apple multihop','tree':TREE,'parents':[parent]})
+          result={'commit':commit['sha'],'tree':TREE,'parent':parent,'files':len(entries)-1,'ref_updated':False}
+          print('VERIFIED_SOURCE_COMMIT '+json.dumps(result),flush=True)
+          pathlib.Path(os.environ['RUNNER_TEMP'],'verified-hosts.json').write_text(json.dumps(result,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-native-entry-hosts
+          path: ${{ runner.temp }}/verified-hosts.json
+          if-no-files-found: error
+          retention-days: 7
