@@ -36,7 +36,8 @@ type Exit struct {
 	DNS    string `json:"dns_server"`
 	// Operator-owned, private configuration. A client request never supplies
 	// arbitrary sing-box configuration, executable paths or remote credentials.
-	Transport map[string]any `json:"transport"`
+	Transport  map[string]any `json:"transport"`
+	StartLayer *StartLayer    `json:"start_layer,omitempty"`
 }
 type Config struct {
 	ListenIP   string `json:"listen_ip"`
@@ -46,10 +47,11 @@ type Config struct {
 	Exits      []Exit `json:"exits"`
 }
 type Request struct {
-	SessionID   string `json:"session_id"`
-	EntryNodeID string `json:"entry_node_id"`
-	ExitID      string `json:"exit_id"`
-	ExitMode    string `json:"exit_mode"`
+	SessionID      string `json:"session_id"`
+	EntryNodeID    string `json:"entry_node_id"`
+	ExitID         string `json:"exit_id"`
+	ExitMode       string `json:"exit_mode"`
+	ExitStartLayer string `json:"exit_start_layer,omitempty"`
 	// Optional client-generated listener proposal allows the client to prepare
 	// its final graph before acquiring a lease, without restarting its TUN.
 	Port     int    `json:"listen_port,omitempty"`
@@ -108,13 +110,19 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 	}
 	seen := map[string]bool{}
 	for _, e := range c.Exits {
-		if !ident.MatchString(e.ID) || !proofID.MatchString(e.NodeID) || e.NodeID == node || seen[e.ID+"/"+e.Mode] {
+		if !ident.MatchString(e.ID) || !proofID.MatchString(e.NodeID) || e.NodeID == node || seen[e.ID+"/"+e.Mode+"/"+LayerMode(e.StartLayer)] {
 			return nil, errors.New("relay exits require distinct paired identities and unique modes")
 		}
-		if _, err := validateTransport(e); err != nil {
+		validated, err := validateTransport(e)
+		if err != nil {
 			return nil, err
 		}
-		seen[e.ID+"/"+e.Mode] = true
+		if e.StartLayer != nil {
+			if _, _, err := WrapStartLayer(validated, e.Mode, e.StartLayer, ExitStartLayerTag, ""); err != nil {
+				return nil, err
+			}
+		}
+		seen[e.ID+"/"+e.Mode+"/"+LayerMode(e.StartLayer)] = true
 	}
 	// Copy the supplied private configuration so callers cannot mutate live plans.
 	raw, _ := json.Marshal(c)
@@ -131,6 +139,9 @@ func (m *Manager) Available() []map[string]string {
 	out := []map[string]string{}
 	for _, e := range m.cfg.Exits {
 		item := map[string]string{"exit_id": e.ID, "exit_mode": e.Mode, "exit_node_id": e.NodeID}
+		if e.StartLayer != nil {
+			item["exit_start_layer"] = e.StartLayer.Mode
+		}
 		if awgpolicy.WireGuardFamily(e.Mode) {
 			if identity, err := clientIdentity(e.Transport); err == nil {
 				item["client_public_key"] = identity
@@ -141,6 +152,9 @@ func (m *Manager) Available() []map[string]string {
 	return out
 }
 func (m *Manager) validate(peer netip.Addr, q Request) error {
+	if q.ExitStartLayer != "" && !ValidLayerMode(q.ExitStartLayer) {
+		return ErrOwnership
+	}
 	if !peer.IsValid() || peer.Zone() != "" || peer.IsUnspecified() || !nonce.MatchString(q.SessionID) || q.EntryNodeID != m.node || !ident.MatchString(q.ExitID) {
 		return ErrOwnership
 	}
@@ -194,7 +208,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	var exit *Exit
 	for i := range m.cfg.Exits {
 		e := &m.cfg.Exits[i]
-		if e.ID == q.ExitID && e.Mode == q.ExitMode {
+		if e.ID == q.ExitID && e.Mode == q.ExitMode && LayerMode(e.StartLayer) == q.ExitStartLayer {
 			exit = e
 			break
 		}
@@ -217,7 +231,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 				continue
 			}
 			for _, paired := range m.cfg.Exits {
-				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || !awgpolicy.WireGuardFamily(paired.Mode) {
+				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || LayerMode(paired.StartLayer) != active.ExitStartLayer || !awgpolicy.WireGuardFamily(paired.Mode) {
 					continue
 				}
 				other, err := clientIdentity(paired.Transport)
@@ -479,6 +493,9 @@ func validPort(v any) bool {
 	return ok && n >= 1 && n <= 65535 && n == float64(int(n))
 }
 func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
+	if LayerMode(exit.StartLayer) != lease.ExitStartLayer {
+		return nil, errors.New("relay lease does not match paired exit encryption")
+	}
 	transport, err := validateTransport(exit)
 	if err != nil {
 		return nil, err
@@ -503,6 +520,18 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 		config["outbounds"] = []any{}
 	} else {
 		config["outbounds"] = []any{transport}
+	}
+	if exit.StartLayer != nil {
+		inner, outer, err := WrapStartLayer(transport, exit.Mode, exit.StartLayer, ExitStartLayerTag, "")
+		if err != nil {
+			return nil, err
+		}
+		if awgpolicy.WireGuardFamily(exit.Mode) {
+			config["endpoints"] = []any{inner}
+			config["outbounds"] = []any{outer}
+		} else {
+			config["outbounds"] = []any{inner, outer}
+		}
 	}
 	return json.Marshal(config)
 }
