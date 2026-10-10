@@ -243,8 +243,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let entryLayer = try IOSMultihopStartLayer.capture(profile: entryProfile,
             profiles: entryRoot["profiles"] as? [String: [String: String]] ?? [:])
         let exitLayer = try IOSMultihopStartLayer.capture(profile: exitProfile, profiles: root["profiles"] as? [String: [String: String]] ?? [:])
+        var baseFiles = rawFiles
+        if exitLayer.source != nil && exitMode == "hysteria2" {
+            guard let profiles = root["profiles"] as? [String: [String: String]], let assets = profiles[exitMode] else {
+                throw tunnelError(58, "Exit TLS source is missing.")
+            }
+            baseFiles = try IOSMultihopStartLayer.inlineExitTLS(files: rawFiles, assets: assets) { profile, mode in
+                var failure: NSError?
+                let result: String? = LibboxRouterCompileProxyEntry(profile, mode, &failure)
+                if let failure { throw failure }
+                guard let result else { throw self.tunnelError(58, "Exit TLS source did not compile.") }
+                return result
+            }
+        }
         let files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryLayer.graphProfile,
-            exitProfile: exitLayer.graphProfile, exitMode: exitMode, files: rawFiles)
+            exitProfile: exitLayer.graphProfile, exitMode: exitMode, files: baseFiles)
         let mtuFiles = try RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)
         guard let source = mtuFiles["sing-box.json"], let text = String(data: source, encoding: .utf8) else { throw tunnelError(58, "Missing multihop LAN-policy graph") }
         let policy = try JSONSerialization.data(withJSONObject: ["entry": entryProfile, "exit": exitProfile])

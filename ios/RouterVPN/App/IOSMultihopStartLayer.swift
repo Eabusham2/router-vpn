@@ -42,6 +42,44 @@ enum IOSMultihopStartLayer {
         return Capture(mode: mode, source: String(decoding: bytes, as: UTF8.self), graphProfile: graph)
     }
 
+    /// Convert only the exit-owned certificate file to its exact inline bytes.
+    /// All route, DNS, TUN, credential and non-certificate transport data survive.
+    static func inlineExitTLS(files: [String: Data], assets: [String: String],
+                              compiler: (String, String) throws -> String) throws -> [String: Data] {
+        guard let data = files["sing-box.json"], data.count <= 4 * 1024 * 1024,
+              var graph = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var outbounds = graph["outbounds"] as? [[String: Any]],
+              outbounds.filter({ $0["tag"] as? String == "proxy" }).count == 1,
+              let index = outbounds.firstIndex(where: { $0["tag"] as? String == "proxy" }),
+              outbounds[index]["type"] as? String == "hysteria2" else { throw issue("Exit trust has no unique captured transport.") }
+        let payload = try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys])
+        guard payload.count <= 8 * 1024 * 1024 else { throw issue("Exit trust source exceeds its bound.") }
+        let output = try compiler(String(decoding: payload, as: UTF8.self), "hysteria2")
+        guard output.utf8.count <= 4 * 1024 * 1024,
+              var normalized = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
+              let tls = normalized["tls"] as? [String: Any], tls["enabled"] as? Bool == true,
+              tls["certificate_path"] == nil else { throw issue("Exit trust did not compile to its owned inline policy.") }
+        normalized["tag"] = "proxy"
+        var expected = outbounds[index]
+        guard var originalTLS = expected["tls"] as? [String: Any] else { throw issue("Exit TLS is missing.") }
+        if let file = originalTLS["certificate_path"] as? String {
+            guard !file.contains("/"), !file.contains("\\"), !file.contains(".."),
+                  let bytes = files[file], bytes.count <= 128 * 1024,
+                  let text = String(data: bytes, encoding: .utf8),
+                  tls["certificate"] as? [String] == [text] else { throw issue("Inline trust differs from the captured exit certificate.") }
+            originalTLS.removeValue(forKey: "certificate_path")
+            originalTLS["certificate"] = [text]
+        }
+        expected["tls"] = originalTLS
+        guard try JSONSerialization.data(withJSONObject: normalized, options: [.sortedKeys]) == JSONSerialization.data(withJSONObject: expected, options: [.sortedKeys]) else {
+            throw issue("Inlining exit trust changed another transport setting.")
+        }
+        outbounds[index] = normalized; graph["outbounds"] = outbounds
+        var result = files
+        result["sing-box.json"] = try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])
+        return result
+    }
+
     static func validateExit(_ profile: [String: Any]) throws {
         guard try selected(profile) == "off" else {
             throw issue("An exit Start Layer requires its own paired execution policy.")

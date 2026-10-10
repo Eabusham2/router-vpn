@@ -213,6 +213,19 @@ final class AndroidMultihopController {
             byte[] rawConfig = Base64.decode(encodedConfig, Base64.DEFAULT);
             if (rawConfig.length == 0 || rawConfig.length > MAX_CONFIG) throw new IllegalStateException("Exit sing-box config size is invalid.");
             config = new JSONObject(strictUTF8(rawConfig));
+            if (!exitStartLayer.isEmpty() && "hysteria2".equals(exitMode)) {
+                // The shared controller receives a self-contained graph. Resolve
+                // only this exit's owned trust asset using the same strict native
+                // compiler as proxy entries; never borrow the entry certificate.
+                JSONObject inline = new JSONObject(io.nekohasekai.libbox.Libbox.routerCompileProxyEntry(exitProfile.toString(), exitMode));
+                inline.put("tag", "proxy");
+                JSONArray outputs = config.getJSONArray("outbounds");
+                int found = 0;
+                for (int i = 0; i < outputs.length(); i++) if ("proxy".equals(outputs.getJSONObject(i).optString("tag"))) {
+                    outputs.put(i, inline); found++;
+                }
+                if (found != 1) throw new IllegalStateException("Exit TLS has no unique captured transport owner.");
+            }
         }
         makeMultihopConfig(config, wg, entryPrivate, exitMode, packetEntry);
         NativeSingBoxController.applySelectedDns(exit, config);

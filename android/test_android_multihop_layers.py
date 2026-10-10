@@ -34,7 +34,8 @@ TEST=r"""
   JSONObject entry=capturedLayerNode(entryMode,entryLayer,false),exit=capturedLayerNode(exitMode,exitLayer,true);
   profile(exit).put("dns_mode","doh3").put("dns_host","192.168.50.133").put("dns_port",5353).put("dns_server_name","adguard.example.test");
   File a=save(dir,entry),b=save(dir,exit);byte[] originalA=Files.readAllBytes(a.toPath()),originalB=Files.readAllBytes(b.toPath());
-  AndroidMultihopController.Prepared prepared=builder.prepare(a,b,exitMode,execution,entryMode);
+  AndroidMultihopController.Prepared prepared;
+  try{prepared=builder.prepare(a,b,exitMode,execution,entryMode);}catch(Exception error){throw new AssertionError("graph="+entryMode+"/"+exitMode+" layers="+entryLayer+"/"+exitLayer+" execution="+execution,error);}
   Path session=app.resolve("layered-sessions").resolve(prepared.session.sessionId);
   String config=Files.readString(session.resolve("sing-box.json")),metadata=Files.readString(session.resolve("routervpn-multihop.json"));
   String capturedEntry=Files.exists(session.resolve(AndroidMultihopStartLayer.SESSION_FILE))?Files.readString(session.resolve(AndroidMultihopStartLayer.SESSION_FILE)):null;
