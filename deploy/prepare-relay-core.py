@@ -18,10 +18,18 @@ spec = importlib.util.spec_from_file_location('relay_amnezia', ROOT/'deploy/prep
 AMNEZIA = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(AMNEZIA)
 
+xray_spec = importlib.util.spec_from_file_location('relay_xray', ROOT/'deploy/prepare-apple-xray.py')
+XRAY = importlib.util.module_from_spec(xray_spec)
+xray_spec.loader.exec_module(XRAY)
+whitening_spec = importlib.util.spec_from_file_location('relay_whitening', ROOT/'deploy/prepare-mobile-whitening.py')
+WHITENING = importlib.util.module_from_spec(whitening_spec)
+whitening_spec.loader.exec_module(WHITENING)
+XRAY_VERSION = 'v1.260327.1-0.20260711155151-50231eaff98c'
+
 def inputs():
-    files = [Path(__file__).resolve()] + AMNEZIA.inputs()
+    files = [Path(__file__).resolve()] + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs()
     for package in PACKAGES: files += sorted((ROOT/'internal'/package).glob('*.go'))
-    return files
+    return list(dict.fromkeys(files))
 
 def digest():
     h = hashlib.sha256()
@@ -56,11 +64,29 @@ def prepare(vendor):
     AMNEZIA.prepare(vendor)
     print('Private relay source digest:', digest())
 
+def prepare_native(vendor, xray):
+    vendor = vendor.resolve()
+    xray = xray.resolve()
+    # Validate both immutable checkouts before changing either dependency tree.
+    XRAY.checkout(vendor, CORE, 'github.com/sagernet/sing-box')
+    XRAY.checkout(xray, XRAY.XRAY_PIN, 'github.com/xtls/xray-core')
+    prepare(vendor)
+    WHITENING.prepare(vendor)
+    XRAY.prepare(vendor, xray)
+    subprocess.run(['go','mod','edit','-require=github.com/xtls/xray-core@'+XRAY_VERSION],cwd=vendor,check=True)
+    subprocess.run(['go','mod','edit','-replace=github.com/xtls/xray-core='+str(xray)],cwd=vendor,check=True)
+    license = xray/'LICENSE'
+    if not license.is_file() or license.is_symlink() or license.stat().st_size < 100:
+        raise ValueError('Pinned native Xray license missing')
+    (vendor/'routervpn-xray-LICENSE.txt').write_bytes(license.read_bytes())
+    print('Private native Xray relay:', XRAY.XRAY_PIN, digest())
+
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('vendor',type=Path,nargs='?')
+    parser.add_argument('xray',type=Path,nargs='?')
     parser.add_argument('--digest',action='store_true')
     args=parser.parse_args()
     if args.digest: print(digest())
-    elif args.vendor: prepare(args.vendor)
-    else: parser.error('vendor or --digest is required')
+    elif args.vendor and args.xray: prepare_native(args.vendor,args.xray)
+    else: parser.error('verified native core and Xray checkouts, or --digest, are required')
