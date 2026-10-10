@@ -117,8 +117,8 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	}
 
 	project := repoFile(t, "ios/RouterVPN/project.yml")
-	if !strings.Contains(project, "sources: [PacketTunnel]") {
-		t.Fatal("PacketTunnel target no longer composes the PacketTunnel source directory containing IOSStartLayer.swift")
+	if !strings.Contains(project, "sources: [PacketTunnel, App/IOSMultihopStartLayer.swift]") {
+		t.Fatal("PacketTunnel target must compile both its source directory and the shared captured Start Layer policy")
 	}
 }
 
