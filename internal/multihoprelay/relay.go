@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"router-vpn/internal/applexray"
 	"router-vpn/internal/awgpolicy"
 )
 
@@ -401,6 +402,8 @@ func validateTransport(e Exit) (map[string]any, error) {
 		keys = []string{"private_key", "address", "mtu", "peers", "amnezia"}
 	case "shadowsocks":
 		keys = []string{"server", "server_port", "method", "password", "network", "udp_over_tcp"}
+	case "reality-vision", "reality-pq-vision", "reality-xhttp":
+		keys = []string{"mode", "config_json"}
 	case "hysteria2":
 		keys = []string{"server", "server_port", "password", "tls", "up_mbps", "down_mbps", "obfs"}
 	}
@@ -420,7 +423,11 @@ func validateTransport(e Exit) (map[string]any, error) {
 			return nil, fmt.Errorf("relay transport cannot override %s", k)
 		}
 	}
-	if awgpolicy.WireGuardFamily(e.Mode) {
+	if applexray.SingleTransportMode(e.Mode) {
+		if err := applexray.ValidateSingleTransport(p, e.Mode); err != nil {
+			return nil, err
+		}
+	} else if awgpolicy.WireGuardFamily(e.Mode) {
 		expectedType := "wireguard"
 		if awgpolicy.IsMode(e.Mode) {
 			expectedType = awgpolicy.Type

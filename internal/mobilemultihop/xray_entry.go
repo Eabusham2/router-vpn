@@ -10,7 +10,7 @@ import (
 // A single native REALITY/XHTTP outbound provides both TCP and UDP. Split/MAX
 // have two independent transport legs and cannot be relabeled as this entry.
 func XrayEntryMode(mode string) bool {
-	return mode == "reality-vision" || mode == "reality-pq-vision" || mode == "reality-xhttp"
+	return applexray.SingleTransportMode(mode)
 }
 func proxyEntryType(mode string) string {
 	if XrayEntryMode(mode) {
