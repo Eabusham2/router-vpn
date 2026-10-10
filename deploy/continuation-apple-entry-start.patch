@@ -1,0 +1,183 @@
+diff --git a/deploy/test_ios_libbox_delivery.py b/deploy/test_ios_libbox_delivery.py
+index 7168231b1b64c1ece4d98a21f73e676fe3e99a7f..6ca1f49110a4cf3496ae43e06fe8669f6ba05ef0 100644
+--- a/deploy/test_ios_libbox_delivery.py
++++ b/deploy/test_ios_libbox_delivery.py
+@@ -23,2 +23,3 @@ public final class LibboxTestState: @unchecked Sendable {
+     private var plan: LibboxRouterMultihop?
++    private var capturedLayers: [String] = []
+     private var starts = 0
+@@ -31,4 +32,5 @@ public final class LibboxTestState: @unchecked Sendable {
+     }
+-    public func make(_ text: String) -> LibboxRouterMultihop {
++    public func make(_ text: String, layer: String? = nil) -> LibboxRouterMultihop {
+         lock.lock(); defer { lock.unlock() }
++        if let layer { capturedLayers.append(layer) }
+         let value = LibboxRouterMultihop(text, block: block, fail: fail)
+@@ -36,2 +38,3 @@ public final class LibboxTestState: @unchecked Sendable {
+     }
++    public func layers() -> [String] { lock.lock(); defer { lock.unlock() }; return capturedLayers }
+     public func current() -> LibboxRouterMultihop? { lock.lock(); defer { lock.unlock() }; return plan }
+@@ -115,2 +118,3 @@ public func LibboxNewRouterHopMeasurement(_ server: LibboxCommandServer, _ metad
+ public func LibboxNewRouterMultihop(_ text: String, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text) }
++public func LibboxNewRouterMultihopWithEntryStartLayer(_ text: String, _ metadata: String, _ layer: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text,layer:layer) }
+ public func LibboxSetup(_ setup: LibboxSetupOptions, _ failure: UnsafeMutablePointer<NSError?>?) {}
+@@ -176,3 +180,3 @@ final class CompletionState: @unchecked Sendable {
+             let engine = RouterVPNLibboxEngine(tunnel: provider)
+-            try engine.start(files: files, strict: false, multihopMetadata: "fixture")
++            try engine.start(files: files, strict: false, multihopMetadata: "{}")
+             engine.completeMultihopExecution(completed.finish)
+@@ -191,3 +195,3 @@ final class CompletionState: @unchecked Sendable {
+             let engine = RouterVPNLibboxEngine(tunnel: provider)
+-            try engine.start(files: files, strict: false, multihopMetadata: "fixture")
++            try engine.start(files: files, strict: false, multihopMetadata: "{}")
+             let old = state.current()!
+@@ -199,3 +203,3 @@ final class CompletionState: @unchecked Sendable {
+             state.configure()
+-            try engine.start(files: files, strict: false, multihopMetadata: "new-fixture")
++            try engine.start(files: files, strict: false, multihopMetadata: "{}")
+             let replacement = CompletionState(); engine.completeMultihopExecution(replacement.finish)
+@@ -212,3 +216,3 @@ final class CompletionState: @unchecked Sendable {
+             let engine = RouterVPNLibboxEngine(tunnel: provider)
+-            try engine.start(files: files, strict: false, multihopMetadata: "fixture")
++            try engine.start(files: files, strict: false, multihopMetadata: "{}")
+             engine.completeMultihopExecution { error in engine.stop(); completed.finish(error) }
+@@ -253,2 +257,22 @@ final class CompletionState: @unchecked Sendable {
+         }
++        for execution in ["local","server","auto"] {
++            state.configure()
++            let profile:[String:Any] = ["node_kind":"router-vpn","start_layer":"aes"]
++            let assets=["shadowsocks":["sing-box.json":Data("{}".utf8).base64EncodedString()]]
++            let captured=try IOSMultihopStartLayer.capture(profile:profile,profiles:assets)
++            let metadata=String(decoding:try JSONSerialization.data(withJSONObject:["entry_start_layer":captured.mode,"execution":execution]),as:UTF8.self)
++            let engine=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
++            let before=state.layers().count
++            try engine.start(files:files,strict:true,multihopMetadata:metadata,entryStartLayerSource:captured.source)
++            check("exact layer reaches native factory even in Local",state.layers().count==before+1 && state.layers().last==captured.source)
++            let completed=CompletionState();engine.completeMultihopExecution(completed.finish)
++            check("layered execution completes under the same owner",completed.wait() && completed.values()==(1,0))
++            engine.stop()
++            for source in [nil,"", "{}"] as [String?] {
++                let stoppedBefore=state.counts()
++                var rejected=false
++                do {try engine.start(files:files,strict:true,multihopMetadata:metadata,entryStartLayerSource:source)}catch{rejected=true}
++                check("missing or changed layer cannot start a native service",rejected && state.counts()==stoppedBefore)
++            }
++        }
+         check("no mock native server survives tests", state.counts().0 == state.counts().1)
+@@ -271,3 +295,3 @@ def main():
+         args=[swift,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(tmp)]
+-        subprocess.run(args+[str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
++        subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
+         subprocess.run([str(tmp/'test')],check=True,timeout=25)
+@@ -280,3 +304,3 @@ def main():
+         broken.write_text(text.replace(seam, 'let unsafe: @Sendable () -> Void = { try? plan.run(owned); completion(nil) }; DispatchQueue.global(qos: .userInitiated).async(execute: unsafe)'))
+-        bad=subprocess.run(args+[str(broken),str(harness),'-o',str(tmp/'bad')],capture_output=True,text=True,timeout=90)
++        bad=subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(broken),str(harness),'-o',str(tmp/'bad')],capture_output=True,text=True,timeout=90)
+         diagnostics = (bad.stdout + bad.stderr).lower()
+diff --git a/ios/RouterVPN/App/IOSMultihopStartLayer.swift b/ios/RouterVPN/App/IOSMultihopStartLayer.swift
+index 77e76ac68a09d902ca20fd522408b94f22960b78..99ca17bf1a744b2143ccb0729e7d5f68c7379d16 100644
+--- a/ios/RouterVPN/App/IOSMultihopStartLayer.swift
++++ b/ios/RouterVPN/App/IOSMultihopStartLayer.swift
+@@ -15,6 +15,6 @@ enum IOSMultihopStartLayer {
+         guard let text = raw as? String else { throw issue("Start Layer must be a string.") }
+-        switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
++        switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: "_", with: "-").replacingOccurrences(of: " ", with: "") {
+         case "", "off", "none", "disabled": return "off"
+-        case "aes", "aes-256-gcm": return "aes-256-gcm"
+-        case "aes+xor", "aes-xor", "aes-256-gcm+xor-whitening": return "aes-256-gcm+xor-whitening"
++        case "aes", "aes256", "aes-256", "aes-gcm", "aes256-gcm", "aes-256-gcm": return "aes-256-gcm"
++        case "aes+xor", "aes-xor", "xor+aes", "aes-256-gcm+xor", "xor+aes-256-gcm", "aes-256-gcm+xor-whitening": return "aes-256-gcm+xor-whitening"
+         default: throw issue("Select authenticated AES or AES with XOR whitening; standalone XOR is not encryption.")
+@@ -26,3 +26,4 @@ enum IOSMultihopStartLayer {
+         if mode == "off" { return Capture(mode: mode, source: nil, graphProfile: profile) }
+-        let kind = profile["node_kind"] as? String ?? "router-vpn"
++        let rawKind = profile["node_kind"] ?? "router-vpn"
++        guard let kind = rawKind as? String else { throw issue("Invalid captured node kind.") }
+         guard kind == "router-vpn", let assets = profiles["shadowsocks"], assets.count == 1,
+diff --git a/ios/RouterVPN/App/IOSMultihopView.swift b/ios/RouterVPN/App/IOSMultihopView.swift
+index 2f6d697f1ecc8bace0aced2f8a2c2e5a657f537d..79f37ed721ea3df35de1a83c970369801785d05c 100644
+--- a/ios/RouterVPN/App/IOSMultihopView.swift
++++ b/ios/RouterVPN/App/IOSMultihopView.swift
+@@ -27,7 +27,6 @@ extension RouterVPNModel {
+         }
+-        for node in [profile, exit] {
+-            guard ["", "off", "none", "disabled"].contains((node.startLayer ?? "off").lowercased()) else {
+-                throw iosMultihopError("Additional Start Layers are not yet composed by this multihop path; turn them off for the selected nodes.")
+-            }
+-        }
++        let capturedProfile = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile)) as! [String: Any]
++        let capturedExit = try JSONSerialization.jsonObject(with: JSONEncoder().encode(exit)) as! [String: Any]
++        _ = try IOSMultihopStartLayer.capture(profile: capturedProfile, profiles: entry.profiles)
++        try IOSMultihopStartLayer.validateExit(capturedExit)
+         entry.selectedRouterID = profile.id
+@@ -149,3 +148,3 @@ struct IOSMultihopView: View {
+                 Section("Connection requirements") {
+-                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard, native AmneziaWG Fast/Strong, Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP entry and a WireGuard/AmneziaWG, self-contained Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. Additional Start Layers remain separate. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
++                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard, native AmneziaWG Fast/Strong, Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP entry and a WireGuard/AmneziaWG, self-contained Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. An entry AES or AES+XOR Start Layer stays on the captured entry for Local, Server and Compare. Exit Start Layers require a separate paired execution policy. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
+                         .font(.caption).foregroundStyle(.secondary)
+diff --git a/ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift b/ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift
+index 18422cd1cd4bdcd3ce790b50fe71cd77d38c63fc..8b77a6b1ab85f331810ceb7eef1f9dad403e4a83 100644
+--- a/ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift
++++ b/ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift
+@@ -242,3 +242,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
+         }
+-        let files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryProfile,
++        let entryLayer = try IOSMultihopStartLayer.capture(profile: entryProfile,
++            profiles: entryRoot["profiles"] as? [String: [String: String]] ?? [:])
++        try IOSMultihopStartLayer.validateExit(exitProfile)
++        let files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryLayer.graphProfile,
+             exitProfile: exitProfile, exitMode: exitMode, files: rawFiles)
+@@ -273,3 +276,3 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
+         libboxEngine = engine
+-        let metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
++        var metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
+             "entry_node_id": entryProofID, "exit_node_id": exitProofID,
+@@ -278,2 +281,3 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
+             "entry_tag": RouterVPNMultihopGraph.entryTag, "entry_mode": entryMode, "exit_mode": exitMode, "execution": selectedProfile["multihop_execution"] as? String ?? "local"]
++        if entryLayer.source != nil { metadata["entry_start_layer"] = entryLayer.mode }
+         let encoded = try JSONSerialization.data(withJSONObject: metadata)
+@@ -283,3 +287,5 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
+             guard ["local", "server", "auto"].contains(execution) else { throw tunnelError(56, "Unknown multihop execution choice") }
+-            if execution == "local" { try engine.start(files: finalFiles, strict: strict) }
++            if let captured = entryLayer.source {
++                try engine.start(files: finalFiles, strict: strict, multihopMetadata: hopMetadata, entryStartLayerSource: captured)
++            } else if execution == "local" { try engine.start(files: finalFiles, strict: strict) }
+             else { try engine.start(files: finalFiles, strict: strict, multihopMetadata: hopMetadata) }
+diff --git a/ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift b/ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift
+index 91befb420a948deea1ab029d37c9aef78edb0423..ebd048a11e6f06e4644d9866299b0eed568aa5f6 100644
+--- a/ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift
++++ b/ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift
+@@ -30,3 +30,4 @@ final class RouterVPNLibboxEngine {
+ 
+-    func start(files: [String: Data], strict: Bool, multihopMetadata: String?) throws {
++    func start(files: [String: Data], strict: Bool, multihopMetadata: String?, entryStartLayerSource: String? = nil) throws {
++        let capturedLayer = try IOSMultihopStartLayer.requiredSource(metadata: multihopMetadata, source: entryStartLayerSource)
+         try RouterVPNLibboxboxCompileProbe.verifyPinnedRuntime()
+@@ -48,3 +49,9 @@ final class RouterVPNLibboxEngine {
+             var failure: NSError?
+-            guard let plan = LibboxNewRouterMultihop(text, multihopMetadata, &failure), failure == nil else { throw failure ?? error("Multihop controller could not be constructed") }
++            let prepared: LibboxRouterMultihop?
++            if let capturedLayer {
++                prepared = LibboxNewRouterMultihopWithEntryStartLayer(text, multihopMetadata, capturedLayer, &failure)
++            } else {
++                prepared = LibboxNewRouterMultihop(text, multihopMetadata, &failure)
++            }
++            guard let plan = prepared, failure == nil else { throw failure ?? error("Multihop controller could not be constructed") }
+             ownershipLock.lock()
+diff --git a/ios/RouterVPN/project.yml b/ios/RouterVPN/project.yml
+index ecc63b4700d8fc31f6ac40339633c8edb25c7c04..5746808e17cab72cf636185cd93b3101e4543c8f 100644
+--- a/ios/RouterVPN/project.yml
++++ b/ios/RouterVPN/project.yml
+@@ -63,3 +63,3 @@ targets:
+     platform: iOS
+-    sources: [PacketTunnel]
++    sources: [PacketTunnel, App/IOSMultihopStartLayer.swift]
+     preBuildScripts:
+diff --git a/ios/RouterVPN/test_runtime_selection_contract.py b/ios/RouterVPN/test_runtime_selection_contract.py
+index 1b824aa5625042019546ac0979b1dbe988843633..3865c7176c8c5d69d4a4cc8f8563d5a0ecc1da63 100644
+--- a/ios/RouterVPN/test_runtime_selection_contract.py
++++ b/ios/RouterVPN/test_runtime_selection_contract.py
+@@ -114,2 +114,3 @@ if platform.system() == 'Darwin':
+     subprocess.run([sys.executable, str(root / 'deploy/test_ios_start_layer.py')], check=True, timeout=150)
++    subprocess.run([sys.executable, str(root / 'deploy/test_ios_entry_start_capture.py')], check=True, timeout=150)
+     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_base_start_layer.py')], check=True, timeout=240)
