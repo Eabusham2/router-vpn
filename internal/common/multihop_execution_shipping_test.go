@@ -15,7 +15,8 @@ func TestMultihopExecutionShippingOwners(t *testing.T) {
 		"client/RouterVPN-Windows-UnifiedShell.ps1":                                                {"UnifiedExecution", "RefreshUnifiedMultihopComparison", "StopUnifiedComparisonProgress"},
 		"client/macos/RouterVPNMacProduct.swift":                                                   {"multihopExecutionChoice", "multihopComparisonSummary", "stopMultihopProgress"},
 		"client/linux/apply-multihop-execution.py":                                                 {"linux_multihop_execution_changed_v1", "execution"},
-		"android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java":                  {"newRouterMultihop", "multihopProgressJSON", "executionController"},
+		"android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java":                  {"AndroidMultihopStartLayer.prepareExecution(config,metadata,captured)", "multihopProgressJSON", "executionController"},
+		"android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopStartLayer.java":          {"Libbox.newRouterMultihop(config, metadata)", "Libbox.newRouterMultihopWithEntryStartLayer(config, metadata, captured)", "Captured entry layer source is missing", "Unrequested entry layer file"},
 		"android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedConnectionController.java": {"pendingExecution", "execution"},
 		"ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift":                                   {"LibboxNewRouterMultihop", "plan.run(server)", "MultihopDelivery", "delivery.run()", "callbackLock", "callback = nil", "isCurrent(owner)", "try plan.close()", "ownershipLock", "ownershipGeneration"},
 		"ios/RouterVPN/App/IOSMultihopProgress.swift":                                              {"multihopProgressInFlight", "multihopProgressDeadline", "multihopProgressGeneration", "16384"},
@@ -91,6 +92,30 @@ func TestMobileLANPolicyCannotSkipEitherNativeOwner(t *testing.T) {
 		for _, marker := range markers {
 			if !strings.Contains(string(body), marker) {
 				t.Errorf("%s lost LAN policy owner %q", file, marker)
+			}
+		}
+	}
+}
+
+// Capturing a layer must not turn Local execution into a bare-entry exception.
+// Native factory selection is validated by executable Android/Swift contracts;
+// these checks bind those tests and source paths to every root Go build.
+func TestEntryStartLayerHasAnUnbrokenNativeStartupOwner(t *testing.T) {
+	for file, markers := range map[string][]string{
+		"android/test_android_runtime_contract.py":               {"test_android_multihop_start_layer.py"},
+		"ios/RouterVPN/test_runtime_selection_contract.py":       {"test_ios_entry_start_capture.py"},
+		"ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift":  {"entryStartLayerSource: captured", "entryLayer.graphProfile", "entry_start_layer"},
+		"ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift": {"IOSMultihopStartLayer.requiredSource", "LibboxNewRouterMultihopWithEntryStartLayer"},
+		"ios/RouterVPN/project.yml":                              {"sources: [PacketTunnel, App/IOSMultihopStartLayer.swift]"},
+		"mobile/routervpn_multihop_bridge.go.tmpl":               {"NewRouterMultihopWithEntryStartLayer", "mobilemultihop.NewWithEntryStartLayer"},
+	} {
+		content, err := os.ReadFile(filepath.Join("../..", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, marker := range markers {
+			if !strings.Contains(string(content), marker) {
+				t.Errorf("%s lost required entry-layer owner %q", file, marker)
 			}
 		}
 	}
