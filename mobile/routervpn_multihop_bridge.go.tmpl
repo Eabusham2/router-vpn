@@ -169,3 +169,22 @@ func RouterCompileMultihopEntryStartLayer(config, metadata, start string) (strin
 	defer c.Close()
 	return c.Config(), nil
 }
+
+// NewRouterMultihopWithStartLayers binds both sources to the same native owner.
+func NewRouterMultihopWithStartLayers(config, metadata, entry, exit string) (*RouterMultihop, error) {
+	c, e := mobilemultihop.NewWithStartLayers(config, metadata, entry, exit)
+	if e != nil {
+		return nil, e
+	}
+	return &RouterMultihop{c}, nil
+}
+
+// Pure preflight must repeat at runtime; its random lease proposal is not reused.
+func RouterCompileMultihopStartLayers(config, metadata, entry, exit string) (string, error) {
+	c, e := mobilemultihop.NewWithStartLayers(config, metadata, entry, exit)
+	if e != nil {
+		return "", e
+	}
+	defer c.Close()
+	return c.Config(), nil
+}

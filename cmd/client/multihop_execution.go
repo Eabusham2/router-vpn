@@ -411,6 +411,7 @@ func (o *desktopRelayOwner) available(ctx context.Context) error {
 			Mode      string `json:"exit_mode"`
 			NodeID    string `json:"exit_node_id"`
 			PublicKey string `json:"client_public_key,omitempty"`
+			Layer     string `json:"exit_start_layer,omitempty"`
 		} `json:"exits"`
 	}
 	if err := o.requestControl(ctx, http.MethodGet, &response); err != nil {
@@ -420,7 +421,7 @@ func (o *desktopRelayOwner) available(ctx context.Context) error {
 		return errors.New("server capabilities answered for another node")
 	}
 	for _, exit := range response.Exits {
-		if exit.ID == o.request.ExitID && exit.Mode == o.request.ExitMode && exit.NodeID == o.expected.ExitNodeID {
+		if exit.ID == o.request.ExitID && exit.Mode == o.request.ExitMode && exit.NodeID == o.expected.ExitNodeID && exit.Layer == "" {
 			return nil
 		}
 	}

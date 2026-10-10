@@ -51,6 +51,7 @@ type Metadata struct {
 	EntryMode       string `json:"entry_mode,omitempty"`
 	EntryStartLayer string `json:"entry_start_layer,omitempty"`
 	ExitMode        string `json:"exit_mode"`
+	ExitStartLayer  string `json:"exit_start_layer,omitempty"`
 	Execution       string `json:"execution"`
 }
 
@@ -180,8 +181,8 @@ func New(config, metadata string) (*Controller, error) {
 	if exactJSON([]byte(metadata), &meta, 16384) != nil {
 		return nil, errors.New("invalid frozen multihop metadata")
 	}
-	if meta.EntryStartLayer != "" {
-		return nil, errors.New("captured entry layer requires its authenticated native source")
+	if meta.EntryStartLayer != "" || meta.ExitStartLayer != "" {
+		return nil, errors.New("captured entry or exit layer requires its authenticated native source")
 	}
 	if !exactID.MatchString(meta.EntryID) || !exactID.MatchString(meta.ExitID) || meta.EntryID == meta.ExitID || !proofID.MatchString(meta.EntryNodeID) || !proofID.MatchString(meta.ExitNodeID) || meta.EntryNodeID == meta.ExitNodeID {
 		return nil, errors.New("distinct paired multihop identities required")

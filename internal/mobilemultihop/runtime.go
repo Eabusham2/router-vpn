@@ -100,6 +100,7 @@ func (c *Controller) acquire(ctx context.Context) error {
 			Mode      string `json:"exit_mode"`
 			Node      string `json:"exit_node_id"`
 			PublicKey string `json:"client_public_key,omitempty"`
+			Layer     string `json:"exit_start_layer,omitempty"`
 		} `json:"exits"`
 	}
 	if exactJSON(data, &caps, 8192) != nil || caps.NodeID != c.meta.EntryNodeID || caps.Execution != "server" {
@@ -107,7 +108,7 @@ func (c *Controller) acquire(ctx context.Context) error {
 	}
 	found := false
 	for _, exit := range caps.Exits {
-		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.Node == c.meta.ExitNodeID {
+		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.Node == c.meta.ExitNodeID && exit.Layer == c.meta.ExitStartLayer {
 			if awgpolicy.WireGuardFamily(c.meta.ExitMode) && (exit.PublicKey == "" || exit.PublicKey == c.localPublicKey) {
 				return errors.New("server WireGuard needs separately paired client credentials to avoid peer roaming")
 			}
