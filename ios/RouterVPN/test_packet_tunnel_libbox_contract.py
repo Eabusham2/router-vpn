@@ -85,9 +85,17 @@ def verify_proof_lifecycle(source):
             assert guard in body[proof:padding], 'node proof must retain its original network generation'
             assert guard in body[padding:success], 'padding activation must retain the same network generation'
         else:
-            for call in calls:
-                assert 0 <= body.find(call) < arm, name + ': guard activation must follow routed identity proof'
-            assert body.rfind(owner, 0, arm) >= 0, name + ': success must retain the exact runtime owner'
+            captured = 'rawPathGuard' if name == 'startWireGuard' else 'externalPathGuard'
+            assert ('let '+captured+' = self.armNetworkProofGuard()') in body
+            proof = body.index(calls[0])
+            guard = 'guard self.currentPathProofGuard() === '+captured+' else'
+            assert guard in body, name + ': captured network checkpoint is required'
+            assert arm < proof < body.index(guard) < success
+            assert owner in body[proof:success], name + ': proof must retain its exact runtime'
+            assert ('self.releasePathProofGuard('+captured+')') in body[proof:success]
+            if name == 'startWireGuard':
+                forwarding = body.index('self.enableForwarding(')
+                assert guard in body[proof:forwarding] and guard in body[forwarding:success]
 
 verify_proof_lifecycle(provider)
 for runtime in ('startWireGuard', 'startMultihop', 'startLibbox', 'startExternalLibbox'):
@@ -104,7 +112,7 @@ for runtime in ('startWireGuard', 'startMultihop', 'startLibbox', 'startExternal
 
 # Removing any one checkpoint must be rejected, including the checkpoint
 # after padding rather than merely the older comparison/node-proof checks.
-for runtime, captured in [('startMultihop','comparisonGuard'),('startLibbox','singlePathGuard')]:
+for runtime, captured in [('startMultihop','comparisonGuard'),('startLibbox','singlePathGuard'),('startWireGuard','rawPathGuard'),('startExternalLibbox','externalPathGuard')]:
     checkpoint = 'guard self.currentPathProofGuard() === ' + captured + ' else'
     start = provider.index('    private func ' + runtime + '(')
     end = provider.find('\n    private func ',start+1)
@@ -127,4 +135,5 @@ for marker in ['LibboxPlatformInterfaceProtocol','LibboxCommandServerHandlerProt
     assert marker in platform, marker
 subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_multihop_host_environment.py')], check=True, timeout=45)
 assert 'fake Connected' not in provider
+subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_direct_proof_lifecycle.py')], check=True, timeout=45)
 print('iOS PacketTunnel Libbox + async ownership/network-change/wake proof contract OK')

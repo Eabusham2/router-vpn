@@ -152,11 +152,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 11, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during startup."])); return }
             guard self.wireGuardAdapter === adapter else { adapter.stop { _ in completionHandler(self.tunnelError(40, "A newer iOS WireGuard runtime replaced this startup attempt.")) }; return }
             if let adapterError { self.wireGuardAdapter = nil; completionHandler(self.tunnelError(12, "WireGuard-family engine failed to start: \(adapterError.localizedDescription)")); return }
+            let rawPathGuard = self.armNetworkProofGuard()
             self.proveSelectedNode(url: proofURL, expectedNodeID: expectedNodeID, proxyPort: nil) { proofError in
                 guard self.wireGuardAdapter === adapter else { adapter.stop { _ in completionHandler(self.tunnelError(41, "A newer iOS WireGuard runtime replaced this proof attempt.")) }; return }
-                if let proofError { adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(proofError) }; return }
+                if let proofError {
+                    self.releasePathProofGuard(rawPathGuard)
+                    adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(proofError) }
+                    return
+                }
+                guard self.currentPathProofGuard() === rawPathGuard else {
+                    adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(self.tunnelError(57, "WireGuard path changed during node proof.")) }
+                    return
+                }
                 self.enableForwarding(profileData: forwardingProfileData, proofID: expectedNodeID)
-                self.armNetworkProofGuard()
+                guard self.currentPathProofGuard() === rawPathGuard else {
+                    adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(self.tunnelError(57, "WireGuard path changed during forwarding activation.")) }
+                    return
+                }
                 completionHandler(nil)
             }
         }
@@ -444,11 +456,20 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
         try engine.prepareMTUHold(initialMTUHold)
         do { try engine.start(files: RouterVPNMTUPolicy.libbox(runtime.files, profile: selectedProfile), strict: strict) } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
+        let externalPathGuard = self.armNetworkProofGuard()
         proveExternalExit(expectedPublicIP: runtime.expectedPublicIP, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 18, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during external-exit proof."])); return }
             guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(43, "A newer iOS external runtime replaced this proof attempt.")); return }
-            if let proofError { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(proofError); return }
-            self.armNetworkProofGuard()
+            if let proofError {
+                self.releasePathProofGuard(externalPathGuard)
+                engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(proofError)
+                return
+            }
+            guard self.currentPathProofGuard() === externalPathGuard else {
+                engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }
+                completionHandler(self.tunnelError(57, "External path changed during public-exit proof."))
+                return
+            }
             completionHandler(nil)
         }
     }
@@ -479,6 +500,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         libboxEngine?.invalidateMultihop()
         forwardingChannel?.invalidate()
         cancelTunnelWithError(tunnelError(19, "Underlying network changed; selected-node/public-exit proof was invalidated. Reconnect must establish and prove the selected path again."))
+    }
+
+    /// Failed proof cleanup belongs to its captured guard, never a newer path.
+    private func releasePathProofGuard(_ captured: NetworkProofGuard) {
+        pathProofOwnerLock.lock()
+        guard pathProofGuard === captured else { pathProofOwnerLock.unlock(); return }
+        let monitor = pathMonitor
+        pathMonitor = nil
+        pathProofGuard = nil
+        pathProofOwnerLock.unlock()
+        monitor?.cancel()
     }
 
     private func clearPathProofGuard() {
