@@ -16,6 +16,7 @@ unset IPHONEOS_DEPLOYMENT_TARGET TVOS_DEPLOYMENT_TARGET WATCHOS_DEPLOYMENT_TARGE
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 python3 "$ROOT/deploy/test_ios_multihop_graph.py" --fixture-dir "$WORK/fixtures"
+python3 "$ROOT/deploy/test_ios_xray_exits.py" --fixture-dir "$WORK/xray-exits"
 (
   cd "$VENDOR"
   export GOTOOLCHAIN=go1.26.3
@@ -27,4 +28,11 @@ python3 "$ROOT/deploy/test_ios_multihop_graph.py" --fixture-dir "$WORK/fixtures"
 for graph in "$WORK"/fixtures/*.json; do
   "$WORK/sing-box" check -c "$graph"
 done
+count=0
+for graph in "$WORK"/xray-exits/*/sing-box.json "$WORK"/xray-exits/*/planned.json; do
+  test -f "$graph"
+  "$WORK/sing-box" check -c "$graph"
+  count=$((count+1))
+done
+[[ "$count" -eq 174 ]] || { echo 'Incomplete Apple native exit graph matrix'; exit 1; }
 echo 'Pinned Libbox accepts all owned multihop graphs (configuration proof only, not device traffic proof)'

@@ -72,6 +72,7 @@ for header in headers:
     assert 'LibboxRouterWireGuardExitConfig' in header.read_text(), str(header)
     assert 'LibboxRouterApplyMultihopMTUPolicy' in header.read_text(), str(header)
     assert 'LibboxRouterCompileXrayProfile' in header.read_text(), str(header)
+    assert 'LibboxRouterCompileXrayExit' in header.read_text(), str(header)
     assert 'LibboxRouterComposeXrayStartLayer' in header.read_text(), str(header)
     assert 'LibboxRouterResolveXrayStartLayerProfile' in header.read_text(), str(header)
     assert 'LibboxRouterCompileSIP003Profile' in header.read_text(), str(header)

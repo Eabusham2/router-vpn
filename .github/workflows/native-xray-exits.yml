@@ -7,6 +7,9 @@ on:
       - '.github/workflows/native-xray-exits.yml'
       - 'android/**'
       - 'ios/RouterVPN/PacketTunnel/**'
+      - 'ios/RouterVPN/App/**'
+      - 'deploy/test_ios_xray_exits.py'
+      - 'deploy/test_ios_multihop_profiles.py'
       - 'internal/applexray/**'
       - 'internal/mobilemultihop/**'
       - 'internal/multihoprelay/**'
@@ -22,7 +25,27 @@ concurrency:
   group: native-xray-exits-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  apple-graphs:
+    runs-on: macos-15
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - name: Execute shipping Apple exit and profile consumers
+        run: |
+          python3 deploy/test_ios_xray_exits.py --fixture-dir "${{ runner.temp }}/apple-xray-exits"
+          python3 deploy/test_ios_multihop_profiles.py
+          python3 deploy/test_ios_mtu_policy.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apple-native-xray-exit-graphs
+          path: ${{ runner.temp }}/apple-xray-exits
+          if-no-files-found: error
+          retention-days: 7
   android-and-native-parser:
+    needs: apple-graphs
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -44,6 +67,10 @@ jobs:
         env:
           ROUTERVPN_ANDROID_XRAY_EXIT_FIXTURES: ${{ runner.temp }}/native-xray-exits
         run: python3 android/test_android_xray_exits.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: apple-native-xray-exit-graphs
+          path: ${{ runner.temp }}/apple-xray-exits
       - name: Build the exact-source native relay engine
         run: docker build --progress=plain -f deploy/router-agent.Dockerfile -t router-vpn-native-exit-check:current .
       - name: Validate every generated graph with the real native registry
@@ -59,4 +86,18 @@ jobs:
               done
               test "$count" -eq 174
               echo "Validated all 174 actual Android native exit graphs"
+            '
+      - name: Validate every Apple graph with the same native registry
+        run: |
+          docker run --rm --entrypoint sh \
+            -v "${{ runner.temp }}/apple-xray-exits:/fixtures:ro" \
+            router-vpn-native-exit-check:current -eu -c '
+              count=0
+              for graph in /fixtures/*/sing-box.json /fixtures/*/planned.json; do
+                test -f "$graph"
+                /usr/local/bin/sing-box check -c "$graph"
+                count=$((count+1))
+              done
+              test "$count" -eq 174
+              echo "Validated all 174 actual Apple native exit graphs"
             '
