@@ -55,7 +55,7 @@ enum IOSMultihopStartLayer {
             if source != nil { throw issue("Exit layer source has no captured multihop owner.") }
             return nil
         }
-        guard metadata.utf8.count <= maxBytes,
+        guard metadata.utf8.count <= maximumBytes,
               var selected = try JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [String: Any] else {
             throw issue("Malformed captured exit-layer metadata.")
         }
