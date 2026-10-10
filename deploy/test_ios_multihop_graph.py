@@ -23,7 +23,10 @@ let exit: [String:Any] = ["id":"exit", "node_kind":"router-vpn", "node_proof_id"
 let wg: [String:Any] = ["type":"wireguard", "address":["10.77.0.2/32","fd77:77::2/128"], "private_key":key, "mtu":1400,
     "peers":[["address":"192.0.2.1", "port":51820, "public_key":key, "pre_shared_key":key,
         "allowed_ips":["0.0.0.0/0","::/0"], "persistent_keepalive_interval":25]]]
-func original(_ mode: String = "shadowsocks") -> [String:Any] {
+let xrayExitPath = ProcessInfo.processInfo.environment["ROUTERVPN_XRAY_EXIT_FIXTURES"]!
+let xrayExits = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath:xrayExitPath))) as! [String:[String:Any]]
+@MainActor func original(_ mode: String = "shadowsocks") -> [String:Any] {
+    if let native = xrayExits[mode] { return native }
     var proxy: [String:Any] = ["type":mode,"tag":"proxy","server":"198.51.100.2","server_port":8388,"password":key]
     if mode == "shadowsocks" { proxy["method"] = "2022-blake3-aes-256-gcm" }
     else { proxy["tls"] = ["enabled":true,"server_name":"router-vpn.home"]; proxy["obfs"] = ["type":"salamander","password":"fixture"] }
@@ -430,6 +433,7 @@ let xrayEntries = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fi
 for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"] {
     let importedEntry = proxyInput(entryMode)
     var expectedEntry = importedEntry; expectedEntry["tag"] = P.entryTag
+    try check("all native exit fixtures generated", Set(xrayExits.keys) == Set(P.nativeXrayModes))
     for exitMode in P.supportedExitModes {
         let packetExit = ["wg", "awg2-fast", "awg2-strong"].contains(exitMode)
         var exitEndpoint = wgExit
@@ -460,6 +464,16 @@ for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-visi
         try check("proxy input remains immutable", sameJSON(importedEntry, proxyInput(entryMode)))
         try check("entry assets cannot overwrite exit files", composed["cert.pem"] == input["cert.pem"])
         try check("proxy composition deterministic", try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:wgExitProfile,exitMode:exitMode,files:input) == graph)
+        if P.nativeXrayModes.contains(exitMode) {
+            let reference = (xrayExits[exitMode]!["outbounds"] as! [[String:Any]]).first { $0["type"] as? String == "routervpn-xray" }!
+            try check("native exit retains exact compiled authentication", actualExit["config_json"] as? String == reference["config_json"] as? String)
+            try check("native exit retains its requested mode", actualExit["mode"] as? String == exitMode)
+            var expectedExit = reference; expectedExit["detour"] = P.entryTag
+            try check("native exit changes only its owned detour", sameJSON(actualExit, expectedExit))
+            reject("old generic proxy fixture cannot masquerade as Xray") {
+                _ = try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:wgExitProfile,exitMode:exitMode,files:files(original()))
+            }
+        }
         if packetExit {
             try check("proxy does not impose an invented outer WG MTU", actualExit["mtu"] as? Int == exitEndpoint["mtu"] as? Int)
             try check("native encrypted exit credentials retained", sameJSON(actualExit["peers"]!,exitEndpoint["peers"]!))
@@ -526,7 +540,10 @@ def main():
         native_entries = Path(directory) / "xray-entry-fixtures.json"
         with native_entries.open("w") as output:
             subprocess.run(["go", "run", "./deploy/testfixtures/xray-entry"], cwd=ROOT, stdout=output, check=True, timeout=90)
-        env = dict(os.environ, ROUTERVPN_XRAY_ENTRY_FIXTURES=str(native_entries))
+        native_exits = Path(directory) / "xray-exit-fixtures.json"
+        with native_exits.open("w") as output:
+            subprocess.run(["go", "run", "./deploy/testfixtures/xray-entry", "--exits"], cwd=ROOT, stdout=output, check=True, timeout=90)
+        env = dict(os.environ, ROUTERVPN_XRAY_ENTRY_FIXTURES=str(native_entries), ROUTERVPN_XRAY_EXIT_FIXTURES=str(native_exits))
         source.write_text(TEST)
         subprocess.run([swift, "-swift-version", "6", str(POLICY), str(POLICY.with_name("RouterVPNMTUPolicy.swift")), str(ROOT / "ios/RouterVPN/App/Models.swift"), str(source), "-o", str(exe)], check=True, timeout=90)
         command = [str(exe)]
