@@ -60,6 +60,12 @@ def prepare(sing, xray):
     NATIVE_DIALER.prepare(xray)
     (xray/'transport/internet/splithttp/routervpn_response_test.go').write_bytes((ROOT/'mobile/applexray/wait_reader_test.go.tmpl').read_bytes())
     policy=sing/'experimental/libbox/routervpn/applexray';policy.mkdir(parents=True,exist_ok=True)
+    parent_test = policy/'preparation_test.go'
+    if parent_test.is_symlink(): raise ValueError('Linked parent-only test in native Xray tree')
+    if parent_test.exists():
+        if not parent_test.is_file() or parent_test.read_bytes() != (ROOT/'internal/applexray/preparation_test.go').read_bytes():
+            raise ValueError('Unexpected parent-only test in native Xray tree')
+        parent_test.unlink()
     for source in (ROOT/'internal/applexray').glob('*.go'):
         if source.name == 'preparation_test.go':
             continue  # Parent-only composition test; native tests use the actual prepared cores.

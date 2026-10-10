@@ -14,6 +14,10 @@ func TestPinnedNativeCompositionAndFailureScope(t *testing.T) {
 	if err != nil {
 		t.Fatal("Python is required to verify native engine composition")
 	}
+	scopeCheck := exec.Command(python, filepath.Join("..", "..", "deploy", "test_native_policy_scope.py"))
+	if out, err := scopeCheck.CombinedOutput(); err != nil {
+		t.Fatalf("native policy source scope: %v\n%s", err, out)
+	}
 	responseCheck := exec.Command(python, filepath.Join("..", "..", "deploy", "test_xray_response_ownership.py"))
 	if out, err := responseCheck.CombinedOutput(); err != nil {
 		t.Fatalf("HTTP response ownership regression: %v\n%s", err, out)

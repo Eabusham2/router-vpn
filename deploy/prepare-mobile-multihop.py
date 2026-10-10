@@ -42,8 +42,15 @@ def prepare(vendor):
     root=vendor/'experimental/libbox'
     for package in PACKAGES:
         output=root/'routervpn'/package;output.mkdir(parents=True,exist_ok=True)
+        if package == 'applexray':
+            parent_test = output/'preparation_test.go'
+            if parent_test.is_symlink(): raise ValueError('Linked parent-only test in native policy tree')
+            if parent_test.exists():
+                if not parent_test.is_file() or parent_test.read_bytes() != (ROOT/'internal/applexray/preparation_test.go').read_bytes():
+                    raise ValueError('Unexpected parent-only test in native policy tree')
+                parent_test.unlink()
         for source in (ROOT/'internal'/package).glob('*.go'):
-            if source.name=='core_config_test.go':continue
+            if source.name=='core_config_test.go' or (package=='applexray' and source.name=='preparation_test.go'):continue
             text=source.read_text()
             for name in PACKAGES:
                 text=text.replace('"router-vpn/internal/'+name+'"','"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"')
