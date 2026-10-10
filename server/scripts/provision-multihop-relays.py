@@ -187,6 +187,40 @@ def native_xray(assets, mode, server):
     value['tag'] = 'exit'
     return value
 
+def paired_start_layer(bundle, profile, endpoint):
+    raw_mode = profile.get('start_layer', 'off')
+    if not isinstance(raw_mode, str):
+        raise ValueError('The selected Start Layer must be a string')
+    normalized = raw_mode.strip().lower().replace('_', '-').replace(' ', '')
+    if normalized in ('', 'off', 'none', 'disabled'):
+        return None
+    assets = bundle.get('profiles', {}).get('shadowsocks')
+    if not isinstance(assets, dict) or set(assets) != {'sing-box.json'}:
+        raise ValueError('Selected relay encryption requires the exit-owned AES profile')
+    api = profile.get('router_api')
+    if not isinstance(api, str):
+        raise ValueError('Selected relay encryption requires the exit private API')
+    payload = json.dumps({'mode': raw_mode, 'profile': assets}, allow_nan=False).encode('utf-8')
+    if len(payload) > 16384:
+        raise ValueError('Selected relay encryption exceeds its private source bound')
+    try:
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-relay-start-layer', endpoint, api],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        raise ValueError('Selected relay encryption failed offline native validation') from None
+    if not result.stdout or len(result.stdout) > 16385:
+        raise ValueError('Native layer compiler returned no bounded result')
+    layer = decode(result.stdout)
+    if not isinstance(layer, dict) or set(layer) != {'mode', 'api', 'transport'} or layer.get('api') != api:
+        raise ValueError('Native layer compiler changed the captured private node')
+    if layer.get('mode') not in ('aes-256-gcm', 'aes-256-gcm+xor-whitening'):
+        raise ValueError('Native layer compiler omitted authenticated encryption')
+    transport = layer.get('transport')
+    if not isinstance(transport, dict) or set(transport) != {'type','tag','server','server_port','method','password'} or transport.get('server') != endpoint:
+        raise ValueError('Native layer compiler changed the selected exit transport')
+    return layer
+
 def pair(bundle, alias, selected=None):
     if not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', alias):
         raise ValueError('invalid paired exit ID')
@@ -244,6 +278,11 @@ def pair(bundle, alias, selected=None):
         exits.append(dict(id=alias, mode=mode, node_id=node, dns_server=dns, transport=transport))
     if not exits:
         raise ValueError('bundle has no supported standalone server exit transport')
+    layer = paired_start_layer(bundle, profile, endpoint)
+    if layer is not None:
+        # Pair exactly the saved choice. A later client requesting another
+        # encryption mode must re-pair; it cannot fall back to a bare exit.
+        for item in exits: item['start_layer'] = copy.deepcopy(layer)
     return exits
 
 def main():

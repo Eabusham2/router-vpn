@@ -42,6 +42,15 @@ type server struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "compile-relay-start-layer" {
+		if len(os.Args) != 4 {
+			log.Fatal("compile-relay-start-layer requires the captured endpoint and private API")
+		}
+		if err := compileRelayStartLayer(os.Stdin, os.Stdout, os.Args[2], os.Args[3]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "compile-native-relay-profile" {
 		if len(os.Args) != 3 {
 			log.Fatal("compile-native-relay-profile requires an exact native mode")

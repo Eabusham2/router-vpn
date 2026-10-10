@@ -68,7 +68,7 @@ func checkRelayRegistry(registryPath, agentPath string) (int, error) {
 	}
 	defer os.RemoveAll(dir)
 	for _, exit := range registry.Exits {
-		lease := multihoprelay.Lease{Host: registry.ListenIP, Port: registry.FirstPort, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48)}
+		lease := relayValidationLease(exit, registry.ListenIP, registry.FirstPort)
 		body, err := multihoprelay.Build(exit, ip.Next(), lease)
 		if err != nil {
 			return 0, err
@@ -89,4 +89,12 @@ func checkRelayRegistry(registryPath, agentPath string) (int, error) {
 		}
 	}
 	return len(registry.Exits), nil
+}
+
+// Offline checks must use the same layer identity required by a live lease.
+func relayValidationLease(exit multihoprelay.Exit, host string, port int) multihoprelay.Lease {
+	return multihoprelay.Lease{
+		Request: multihoprelay.Request{ExitID: exit.ID, ExitMode: exit.Mode, ExitStartLayer: multihoprelay.LayerMode(exit.StartLayer)},
+		Host:    host, Port: port, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48),
+	}
 }
