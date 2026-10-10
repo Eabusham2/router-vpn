@@ -1,0 +1,62 @@
+name: Native Xray exit integration
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/native-xray-exits.yml'
+      - 'android/**'
+      - 'ios/RouterVPN/PacketTunnel/**'
+      - 'internal/applexray/**'
+      - 'internal/mobilemultihop/**'
+      - 'internal/multihoprelay/**'
+      - 'mobile/**'
+      - 'cmd/router-agent/**'
+      - 'deploy/prepare-*.py'
+      - 'deploy/router-agent.Dockerfile'
+      - 'deploy/test_native_xray_*.py'
+      - 'server/scripts/provision-multihop-relays.py'
+permissions:
+  contents: read
+concurrency:
+  group: native-xray-exits-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  android-and-native-parser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Shared policy and agent regressions
+        run: |
+          go test -race -count=1 -timeout=180s ./internal/applexray ./internal/mobilemultihop ./internal/multihoprelay ./cmd/router-agent
+          go vet ./internal/applexray ./internal/mobilemultihop ./internal/multihoprelay ./cmd/router-agent
+          python3 deploy/test_native_xray_pairing.py
+          python3 deploy/test_mobile_xray_entry_bindings.py
+      - name: Execute actual Android exit consumers
+        env:
+          ROUTERVPN_ANDROID_XRAY_EXIT_FIXTURES: ${{ runner.temp }}/native-xray-exits
+        run: python3 android/test_android_xray_exits.py
+      - name: Build the exact-source native relay engine
+        run: docker build --progress=plain -f deploy/router-agent.Dockerfile -t router-vpn-native-exit-check:current .
+      - name: Validate every generated graph with the real native registry
+        run: |
+          docker run --rm --entrypoint sh \
+            -v "${{ runner.temp }}/native-xray-exits:/fixtures:ro" \
+            router-vpn-native-exit-check:current -eu -c '
+              count=0
+              for graph in /fixtures/*/sing-box.json /fixtures/*/planned.json; do
+                test -f "$graph"
+                /usr/local/bin/sing-box check -c "$graph"
+                count=$((count+1))
+              done
+              test "$count" -eq 174
+              echo "Validated all 174 actual Android native exit graphs"
+            '

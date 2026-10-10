@@ -17,7 +17,49 @@ final class AndroidXrayLibboxPolicy {
         String raw = AndroidStartLayer.exactNativeAsset(profile, "xray.json");
         String wrapper = profile.has("sing-box.json")
                 ? AndroidStartLayer.exactNativeAsset(profile, "sing-box.json") : legacyWrapper(mode, raw);
-        return bounded(Libbox.routerCheckXrayProfile(mode, wrapper, raw));
+        JSONObject graph = new JSONObject(bounded(Libbox.routerCheckXrayProfile(mode, wrapper, raw)));
+        captureBothFamilies(graph);
+        return bounded(graph.toString());
+    }
+
+    /** Capture IPv6 even when policy rejects it; omitting its OS route would leak it. */
+    private static void captureBothFamilies(JSONObject graph) throws Exception {
+        JSONArray inbounds = graph.getJSONArray("inbounds");
+        if (inbounds.length() != 1) throw new IllegalStateException("One native Xray TUN is required.");
+        JSONObject tun = inbounds.getJSONObject(0);
+        if (!"tun".equals(tun.optString("type")) || !Boolean.TRUE.equals(tun.opt("auto_route"))
+                || !Boolean.TRUE.equals(tun.opt("strict_route"))) {
+            throw new IllegalStateException("Native Xray requires one full-device capture interface.");
+        }
+        JSONArray addresses;
+        if (tun.has("address")) {
+            addresses = tun.getJSONArray("address");
+            if (addresses.length() == 0 || addresses.length() > 16) throw new IllegalStateException("Invalid native TUN address count.");
+        } else addresses = new JSONArray();
+        boolean ipv4 = false, ipv6 = false;
+        for (int i = 0; i < addresses.length(); i++) {
+            Object value = addresses.get(i);
+            if (!(value instanceof String)) throw new IllegalStateException("TUN addresses must be numeric prefixes.");
+            String[] parts = ((String) value).split("/", -1);
+            if (parts.length != 2 || !parts[1].matches("[0-9]{1,3}") || parts[0].contains("%")
+                    || AndroidNumericAddress.parse(parts[0]) == null) {
+                throw new IllegalStateException("Native TUN address is not an unscoped numeric prefix.");
+            }
+            boolean v6 = parts[0].contains(":");
+            int prefix = Integer.parseInt(parts[1]);
+            if (prefix > (v6 ? 128 : 32)) throw new IllegalStateException("Native TUN prefix length is invalid.");
+            if (v6) ipv6 = true; else ipv4 = true;
+        }
+        // Keep every supplied interface address; add only a missing family.
+        if (!ipv4) addresses.put("172.19.0.1/30");
+        if (!ipv6) addresses.put("fdfe:dcba:9876::1/126");
+        tun.put("address", addresses);
+        if (!tun.has("tag")) tun.put("tag", "tun-in");
+        Object tag = tun.get("tag");
+        if (!(tag instanceof String) || !((String) tag).matches("[A-Za-z0-9_.-]{1,128}")) {
+            throw new IllegalStateException("Native TUN requires an exact owned route tag.");
+        }
+        tun.put("mtu", AndroidNativeProfilePolicy.exactInteger(tun, "mtu", 1280, 1280, 9000));
     }
 
     static String resolve(JSONObject bundle, JSONObject profile, String mode) throws Exception {

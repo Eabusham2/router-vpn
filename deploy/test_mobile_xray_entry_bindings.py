@@ -14,7 +14,8 @@ class XrayEntryBindings(unittest.TestCase):
             source=(ROOT/path).read_text()
             for mode in MODES:self.assertIn('"'+mode+'"',source,path)
         java=(ROOT/paths[2]).read_text().split('private static String normalizeMultiMode',1)[1].split('\n',1)[0]
-        self.assertNotIn('reality-',java,'entry implementation must not advertise unfinished Xray exits')
+        for mode in MODES:self.assertIn('"'+mode+'"',java)
+        for mode in ('max','split'):self.assertNotIn('"'+mode+'"',java,'dual transports require their own exit graph implementation')
     def test_real_shared_compiler_and_two_node_proofs_remain_bound(self):
         java=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java').read_text()
         swift=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()

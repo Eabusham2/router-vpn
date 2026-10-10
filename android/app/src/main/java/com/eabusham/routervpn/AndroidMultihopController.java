@@ -18,7 +18,7 @@ import java.util.Locale;
 
 /**
  * Builds one Android VpnService graph: native WG/AWG or encrypted proxy entry ->
- * independent WireGuard endpoint or Shadowsocks/Hysteria2 exit -> Internet.
+ * an independently authenticated packet/proxy/native-Xray exit -> Internet.
  *
  * Pinned sing-box 1.14.1 resolves DialerOptions.detour through OutboundManager,
  * whose Outbound(tag) falls back to EndpointManager.Get(tag); WireGuard endpoints
@@ -69,6 +69,49 @@ final class AndroidMultihopController {
         this.singBox = singBox;
     }
 
+    private static boolean nativeXrayExit(String mode) {
+        return java.util.Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp").contains(mode);
+    }
+
+    /** Reuse the native validators; do not open a listener or resolve a hostname. */
+    private static JSONObject compileXrayExit(JSONObject bundle, String mode) throws Exception {
+        JSONObject files = requiredProfile(bundle, mode);
+        // The strict transport compiler rejects extra assets, bypass routes and
+        // nonliteral peers before the full wrapper is consumed by this owner.
+        JSONObject transport = new JSONObject(io.nekohasekai.libbox.Libbox.routerCompileProxyEntry(files.toString(), mode));
+        JSONObject config = new JSONObject(AndroidXrayLibboxPolicy.check(bundle, files, mode));
+        JSONObject route = config.getJSONObject("route");
+        String previous = route.getString("final");
+        JSONArray outbounds = config.getJSONArray("outbounds");
+        int nativeCount = 0;
+        for (int i = 0; i < outbounds.length(); i++) {
+            JSONObject out = outbounds.getJSONObject(i);
+            if ("routervpn-xray".equals(out.optString("type"))) {
+                if (!mode.equals(out.optString("mode")) || !previous.equals(out.optString("tag"))
+                        || !transport.getString("config_json").equals(out.optString("config_json")) || out.length() != 4) {
+                    throw new IllegalStateException("Native exit does not match its exact captured protocol.");
+                }
+                out.put("tag", "proxy");
+                nativeCount++;
+            } else if ("proxy".equals(out.optString("tag"))) {
+                throw new IllegalStateException("Exit profile already owns the normalized final tag.");
+            }
+        }
+        if (nativeCount != 1) throw new IllegalStateException("One native Xray exit owner is required.");
+        if (config.has("dns")) {
+            JSONArray resolvers = config.getJSONObject("dns").getJSONArray("servers");
+            for (int i = 0; i < resolvers.length(); i++) {
+                JSONObject resolver = resolvers.getJSONObject(i);
+                if (!previous.equals(resolver.optString("detour"))) {
+                    throw new IllegalStateException("Exit DNS cannot bypass its captured encrypted transport.");
+                }
+                resolver.put("detour", "proxy");
+            }
+        }
+        route.put("final", "proxy");
+        return config;
+    }
+
     List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File exitBundle) throws Exception {
         List<NativeSingBoxController.ModeInfo> result = new ArrayList<>();
         JSONObject bundle = loadBundle(exitBundle);
@@ -92,6 +135,19 @@ final class AndroidMultihopController {
         for (NativeSingBoxController.ModeInfo mode : singBox.listDirectLibboxModes(exitBundle)) {
             if ("shadowsocks".equals(mode.id) || "hysteria2".equals(mode.id)) result.add(mode);
         }
+        for (String mode : new String[]{"reality-vision", "reality-pq-vision", "reality-xhttp"}) {
+            if (profiles == null || profiles.optJSONObject(mode) == null) continue;
+            try {
+                JSONObject graph = compileXrayExit(bundle, mode);
+                NativeSingBoxController.applySelectedDns(bundle, graph);
+                io.nekohasekai.libbox.Libbox.checkConfig(graph.toString());
+                result.add(new NativeSingBoxController.ModeInfo(mode,
+                        "reality-vision".equals(mode) ? "REALITY Vision" : "reality-pq-vision".equals(mode) ? "PQ REALITY Vision" : "REALITY XHTTP"));
+            } catch (Exception invalidProfile) {
+                // An invalid native candidate cannot hide another valid exit.
+                continue;
+            }
+        }
         return result;
     }
 
@@ -106,7 +162,7 @@ final class AndroidMultihopController {
         if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
         if (entryBundle == null || exitBundle == null) throw new IllegalArgumentException("Choose both an entry and an exit node.");
         if (entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())) throw new IllegalArgumentException("Entry and exit must be different stored nodes.");
-        if (!(NativeSingBoxController.nativeWireGuardFamily(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode))) throw new IllegalArgumentException("Android multihop requires a native WireGuard/AmneziaWG, Shadowsocks or Hysteria2 exit.");
+        if (!(NativeSingBoxController.nativeWireGuardFamily(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode) || nativeXrayExit(exitMode))) throw new IllegalArgumentException("Choose an implemented native packet, proxy or Xray exit transport.");
 
         JSONObject entry = loadBundle(entryBundle);
         JSONObject exit = loadBundle(exitBundle);
@@ -143,6 +199,11 @@ final class AndroidMultihopController {
             config = new JSONObject(compiled);
             // Stage only the compiled graph: a second raw VPN is never started.
             exitProfile = new JSONObject().put("sing-box.json", "native-wireguard-graph");
+        } else if (nativeXrayExit(exitMode)) {
+            config = compileXrayExit(exit, exitMode);
+            // The raw Xray configuration lives inside the owned native outbound.
+            // Never stage xray.json as a separately launchable second backend.
+            exitProfile = new JSONObject().put("sing-box.json", "native-xray-graph");
         } else {
             exitProfile = requiredProfile(exit, exitMode);
             String encodedConfig = exitProfile.optString("sing-box.json", "").trim();
@@ -230,6 +291,7 @@ final class AndroidMultihopController {
     private static void makeMultihopConfig(JSONObject config, JSONObject wg, EntryPrivate entryPrivate, String exitMode, boolean packetEntry) throws Exception {
         JSONArray existingEndpoints = config.optJSONArray("endpoints");
         boolean wireGuardExit = NativeSingBoxController.nativeWireGuardFamily(exitMode);
+        boolean xrayExit = nativeXrayExit(exitMode);
         if (config.has("endpoints") && existingEndpoints == null) throw new IllegalStateException("Malformed exit endpoints.");
         if (wireGuardExit) {
             if (existingEndpoints == null || existingEndpoints.length()!=1) throw new IllegalStateException("WireGuard exit requires exactly one owned endpoint.");
@@ -270,8 +332,9 @@ final class AndroidMultihopController {
         }
         if (proxy == null) throw new IllegalStateException("Exit profile has no proxy outbound.");
         String type = proxy.optString("type", "").toLowerCase(Locale.ROOT);
-        String expected = wireGuardExit ? ("wg".equals(exitMode) ? "wireguard" : "routervpn-amneziawg") : exitMode;
+        String expected = wireGuardExit ? ("wg".equals(exitMode) ? "wireguard" : "routervpn-amneziawg") : xrayExit ? "routervpn-xray" : exitMode;
         if (!expected.equals(type)) throw new IllegalStateException("Exit mode engine does not match its generated profile.");
+        if (xrayExit && (!exitMode.equals(proxy.optString("mode")) || proxy.length() != 4)) throw new IllegalStateException("Native Xray exit lost its exact transport ownership.");
         if (!"proxy".equals(proxy.optString("tag"))) throw new IllegalStateException("Exit endpoint lost its owned tag.");
         for (String key:new String[]{"detour","bind_interface","inet4_bind_address","inet6_bind_address","routing_mark","network_strategy","domain_resolver"}) {
             if (proxy.has(key)) throw new IllegalStateException("Exit already owns dial policy; it was not overwritten.");
@@ -280,7 +343,7 @@ final class AndroidMultihopController {
             String a=wg.getJSONArray("peers").getJSONObject(0).getString("public_key");
             String b=proxy.getJSONArray("peers").getJSONObject(0).getString("public_key");
             if(a.equals(b)) throw new IllegalStateException("WireGuard hops cannot reuse the same server key under different labels.");
-        } else if (!wireGuardExit && !literalIP(proxy.optString("server", ""))) {
+        } else if (!wireGuardExit && !xrayExit && !literalIP(proxy.optString("server", ""))) {
             throw new IllegalStateException("Exit requires a literal endpoint; direct DNS bootstrap is forbidden.");
         }
 
