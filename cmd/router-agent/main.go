@@ -42,6 +42,15 @@ type server struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "compile-native-relay-profile" {
+		if len(os.Args) != 3 {
+			log.Fatal("compile-native-relay-profile requires an exact native mode")
+		}
+		if err := compileNativeRelayProfile(os.Stdin, os.Stdout, os.Args[2]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "check-multihop-registry" {
 		if len(os.Args) != 4 {
 			log.Fatal("check-multihop-registry requires private registry and entry configuration paths")

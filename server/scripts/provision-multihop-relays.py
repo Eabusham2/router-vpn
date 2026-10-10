@@ -161,6 +161,32 @@ def validate_amnezia_parameters(parameters):
         ranges.append((low,high))
 
 
+def native_xray(assets, mode, server):
+    if not isinstance(assets, dict) or not 1 <= len(assets) <= 2 or set(assets) - {'sing-box.json', 'xray.json'}:
+        raise ValueError('Native Xray pairing requires its exact self-contained source assets')
+    payload = json.dumps(assets, ensure_ascii=False, allow_nan=False).encode('utf-8')
+    if len(payload) > 8*1024*1024:
+        raise ValueError('Native Xray pairing exceeds its source bound')
+    # Call the same compiler used by mobile entry/exit preparation. In
+    # particular, split routes and extra helpers are rejected, never discarded.
+    result = subprocess.run(['/usr/local/bin/router-vpn-agent','compile-native-relay-profile',mode],
+                            input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            check=True, timeout=20)
+    if not result.stdout or len(result.stdout) > 4*1024*1024:
+        raise ValueError('Native relay compiler returned no bounded transport')
+    value = decode(result.stdout)
+    if not isinstance(value,dict) or set(value) != {'type','tag','mode','config_json'} or value.get('type') != 'routervpn-xray' or value.get('mode') != mode:
+        raise ValueError('Native relay compiler returned an unowned transport')
+    original = base64.b64decode(assets['xray.json'],validate=True).decode('utf-8')
+    if value['config_json'] != original:
+        raise ValueError('Native pairing changed the original protocol or authentication')
+    raw = decode(original.encode('utf-8'))
+    peers = raw['outbounds'][0]['settings']['vnext']
+    if len(peers) != 1 or literal(peers[0]['address']) != server:
+        raise ValueError('Native Xray transport belongs to another paired server')
+    value['tag'] = 'exit'
+    return value
+
 def pair(bundle, alias, selected=None):
     if not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', alias):
         raise ValueError('invalid paired exit ID')
@@ -210,6 +236,11 @@ def pair(bundle, alias, selected=None):
             if len(certificate) > 128*1024:
                 raise ValueError('TLS certificate exceeds safety bound')
             tls['certificate'] = [certificate.decode('utf-8')]
+        exits.append(dict(id=alias, mode=mode, node_id=node, dns_server=dns, transport=transport))
+    for mode in ('reality-vision', 'reality-pq-vision', 'reality-xhttp'):
+        assets = modes.get(mode)
+        if assets is None: continue
+        transport = native_xray(assets, mode, endpoint)
         exits.append(dict(id=alias, mode=mode, node_id=node, dns_server=dns, transport=transport))
     if not exits:
         raise ValueError('bundle has no supported standalone server exit transport')
