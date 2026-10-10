@@ -104,8 +104,8 @@ func TestEntryStartLayerHasAnUnbrokenNativeStartupOwner(t *testing.T) {
 	for file, markers := range map[string][]string{
 		"android/test_android_runtime_contract.py":               {"test_android_multihop_start_layer.py"},
 		"ios/RouterVPN/test_runtime_selection_contract.py":       {"test_ios_entry_start_capture.py"},
-		"ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift":  {"entryStartLayerSource: captured", "entryLayer.graphProfile", "entry_start_layer"},
-		"ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift": {"IOSMultihopStartLayer.requiredSource", "LibboxNewRouterMultihopWithEntryStartLayer"},
+		"ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift":  {"entryStartLayerSource: entryLayer.source, exitStartLayerSource: exitLayer.source", "entryLayer.graphProfile", "exitLayer.graphProfile", "entry_start_layer", "exit_start_layer"},
+		"ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift": {"IOSMultihopStartLayer.requiredSource", "IOSMultihopStartLayer.requiredExitSource", "LibboxNewRouterMultihopWithEntryStartLayer", "LibboxNewRouterMultihopWithStartLayers"},
 		"ios/RouterVPN/project.yml":                              {"sources: [PacketTunnel, App/IOSMultihopStartLayer.swift]"},
 		"mobile/routervpn_multihop_bridge.go.tmpl":               {"NewRouterMultihopWithEntryStartLayer", "mobilemultihop.NewWithEntryStartLayer"},
 	} {

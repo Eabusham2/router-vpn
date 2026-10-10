@@ -19,7 +19,7 @@ TEST=r"""
    node=bundle(exit?'b':'a');node.getJSONObject("profiles").put(mode,asset.getJSONObject("profiles").getJSONObject(mode));
    node.getJSONArray("modes").put(new JSONObject().put("id",mode).put("name",mode));
   }else node=proxyBundle(exit?'b':'a',mode,io.nekohasekai.libbox.Libbox.testCertificate(exit?"exit.example.test":"entry.example.test"));
-  String host=NativeSingBoxController.nativeWireGuardFamily(mode)?"192.0.2.1":exit?(mode.startsWith("reality-")?"198.51.100.22":"198.51.100.12"):"192.0.2.11";
+  String host=NativeSingBoxController.nativeWireGuardFamily(mode)?(exit?"192.0.2.2":"192.0.2.1"):exit?(mode.startsWith("reality-")?"198.51.100.22":"198.51.100.12"):"192.0.2.11";
   JSONObject files=proxyBundle(exit?'b':'a',"shadowsocks","").getJSONObject("profiles").getJSONObject("shadowsocks");
   JSONObject graph=new JSONObject(new String(Base64.getDecoder().decode(files.getString("sing-box.json")),StandardCharsets.UTF_8));
   graph.getJSONArray("outbounds").getJSONObject(0).put("server",host).put("server_port",8388).put("method","2022-blake3-aes-256-gcm").put("password",key(exit?'z':'s'));

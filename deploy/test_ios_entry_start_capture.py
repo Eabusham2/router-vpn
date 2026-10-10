@@ -52,6 +52,19 @@ import Foundation
   check("ordinary factory unchanged",try IOSMultihopStartLayer.requiredSource(metadata:nil,source:nil)==nil)
   check("ordinary metadata unchanged",try IOSMultihopStartLayer.requiredSource(metadata:"{}",source:nil)==nil)
   reject("invalid required mode type"){_=try IOSMultihopStartLayer.requiredSource(metadata:"{\"entry_start_layer\":true}",source:nil)}
+  for mode in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   var node=profile;node["start_layer"]=mode
+   let captured=try IOSMultihopStartLayer.capture(profile:node,profiles:assets)
+   let meta=String(decoding:try JSONSerialization.data(withJSONObject:["entry_start_layer":"aes-256-gcm+xor-whitening","exit_start_layer":mode]),as:UTF8.self)
+   check("exit source has independent mode",try IOSMultihopStartLayer.requiredExitSource(metadata:meta,source:captured.source)==captured.source)
+   for bad in [nil,"","{}",String(repeating:"x",count:16385)] as [String?] {
+    reject("missing/corrupt exit source"){_=try IOSMultihopStartLayer.requiredExitSource(metadata:meta,source:bad)}
+   }
+   reject("unrequested exit"){_=try IOSMultihopStartLayer.requiredExitSource(metadata:"{}",source:captured.source)}
+   reject("ownerless exit"){_=try IOSMultihopStartLayer.requiredExitSource(metadata:nil,source:captured.source)}
+  }
+  reject("exit type mismatch"){_=try IOSMultihopStartLayer.requiredExitSource(metadata:"{\"exit_start_layer\":true}",source:nil)}
+  check("entry marker never requests an exit",try IOSMultihopStartLayer.requiredExitSource(metadata:"{\"entry_start_layer\":\"aes-256-gcm\"}",source:nil)==nil)
   check("caller source unchanged",try JSONSerialization.data(withJSONObject:profile,options:[.sortedKeys])==original)
   print("Apple captured entry-layer policy: PASS (\(checks) checks; no engine or network started)")
  }

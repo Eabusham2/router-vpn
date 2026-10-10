@@ -22,6 +22,7 @@ public final class LibboxTestState: @unchecked Sendable {
     private var fail = false
     private var plan: LibboxRouterMultihop?
     private var capturedLayers: [String] = []
+    private var capturedPairs: [[String]] = []
     private var starts = 0
     private var stops = 0
     private var paddingCount: Int64 = 0
@@ -30,13 +31,15 @@ public final class LibboxTestState: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         self.block = block; self.fail = fail; plan = nil
     }
-    public func make(_ text: String, layer: String? = nil) -> LibboxRouterMultihop {
+    public func make(_ text: String, layer: String? = nil, exit: String? = nil) -> LibboxRouterMultihop {
         lock.lock(); defer { lock.unlock() }
         if let layer { capturedLayers.append(layer) }
+        if let exit { capturedPairs.append([layer ?? "", exit]) }
         let value = LibboxRouterMultihop(text, block: block, fail: fail)
         plan = value; return value
     }
     public func layers() -> [String] { lock.lock(); defer { lock.unlock() }; return capturedLayers }
+    public func pairs() -> [[String]] { lock.lock(); defer { lock.unlock() }; return capturedPairs }
     public func current() -> LibboxRouterMultihop? { lock.lock(); defer { lock.unlock() }; return plan }
     public func configurePadding(_ count: Int64) { lock.lock(); paddingCount=count; lock.unlock() }
     public func makeServer() -> LibboxCommandServer {
@@ -117,6 +120,7 @@ public func LibboxNewRouterHopMeasurement(_ server: LibboxCommandServer, _ metad
 
 public func LibboxNewRouterMultihop(_ text: String, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text) }
 public func LibboxNewRouterMultihopWithEntryStartLayer(_ text: String, _ metadata: String, _ layer: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text,layer:layer) }
+public func LibboxNewRouterMultihopWithStartLayers(_ text: String, _ metadata: String, _ entry: String, _ exit: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text,layer:entry,exit:exit) }
 public func LibboxSetup(_ setup: LibboxSetupOptions, _ failure: UnsafeMutablePointer<NSError?>?) {}
 public func LibboxNewCommandServer(_ platform: AnyObject, _ handler: AnyObject, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxCommandServer? { LibboxTestState.shared.makeServer() }
 '''
@@ -275,6 +279,34 @@ final class CompletionState: @unchecked Sendable {
                 check("missing or changed layer cannot start a native service",rejected && state.counts()==stoppedBefore)
             }
         }
+        for execution in ["local","server","auto"] { for entryMode in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] { for exitMode in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {
+            state.configure()
+            let entry = try IOSMultihopStartLayer.capture(profile:["node_kind":"router-vpn","start_layer":entryMode], profiles:["shadowsocks":["sing-box.json":Data("entry-source".utf8).base64EncodedString()]])
+            let exit = try IOSMultihopStartLayer.capture(profile:["node_kind":"router-vpn","start_layer":exitMode], profiles:["shadowsocks":["sing-box.json":Data("exit-source".utf8).base64EncodedString()]])
+            var value:[String:String] = ["execution":execution,"exit_start_layer":exit.mode]
+            if entry.source != nil {value["entry_start_layer"]=entry.mode}
+            let metadata=String(decoding:try JSONSerialization.data(withJSONObject:value),as:UTF8.self)
+            let engine=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),before=state.pairs().count
+            try engine.start(files:files,strict:true,multihopMetadata:metadata,entryStartLayerSource:entry.source,exitStartLayerSource:exit.source)
+            check("both exact sources reach one native factory",state.pairs().count==before+1 && state.pairs().last==[entry.source ?? "",exit.source!])
+            let completed=CompletionState();engine.completeMultihopExecution(completed.finish)
+            check("layered Local/Server/Auto completes once",completed.wait() && completed.values()==(1,0))
+            engine.stop()
+            for source in [nil,"","{}",entry.source] as [String?] {
+                // Equal canonical modes do not prove node ownership: the native
+                // compiler checks keys. Here reject only missing/malformed data.
+                if source==entry.source && source != nil {continue}
+                let previous=state.counts(),pairCount=state.pairs().count
+                var refused=false
+                do{try engine.start(files:files,strict:true,multihopMetadata:metadata,entryStartLayerSource:entry.source,exitStartLayerSource:source)}catch{refused=true}
+                check("missing exit cannot start a bare engine",refused && state.counts()==previous && state.pairs().count==pairCount)
+            }
+            var missingOwner=value;missingOwner.removeValue(forKey:"exit_start_layer")
+            let wrong=String(decoding:try JSONSerialization.data(withJSONObject:missingOwner),as:UTF8.self)
+            var refused=false
+            do{try engine.start(files:files,strict:true,multihopMetadata:wrong,entryStartLayerSource:entry.source,exitStartLayerSource:exit.source)}catch{refused=true}
+            check("unrequested exit source not activated",refused)
+        }}}
         check("no mock native server survives tests", state.counts().0 == state.counts().1)
         print("Swift 6 shipping Libbox delivery: PASS (\(checks) checks; native handles doubled, no network opened)")
     }
