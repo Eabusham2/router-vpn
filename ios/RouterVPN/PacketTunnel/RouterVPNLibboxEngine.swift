@@ -28,7 +28,8 @@ final class RouterVPNLibboxEngine {
         try start(files: files, strict: strict, multihopMetadata: nil)
     }
 
-    func start(files: [String: Data], strict: Bool, multihopMetadata: String?) throws {
+    func start(files: [String: Data], strict: Bool, multihopMetadata: String?, entryStartLayerSource: String? = nil) throws {
+        let capturedLayer = try IOSMultihopStartLayer.requiredSource(metadata: multihopMetadata, source: entryStartLayerSource)
         try RouterVPNLibboxCompileProbe.verifyPinnedRuntime()
         ownershipLock.lock()
         guard server == nil, !starting else { ownershipLock.unlock(); throw error("Libbox service is already running") }
@@ -46,7 +47,13 @@ final class RouterVPNLibboxEngine {
         if let multihopMetadata {
             guard let raw = safeFiles["sing-box.json"], let text = String(data: raw, encoding: .utf8) else { throw error("Missing multihop graph") }
             var failure: NSError?
-            guard let plan = LibboxNewRouterMultihop(text, multihopMetadata, &failure), failure == nil else { throw failure ?? error("Multihop controller could not be constructed") }
+            let prepared: LibboxRouterMultihop?
+            if let capturedLayer {
+                prepared = LibboxNewRouterMultihopWithEntryStartLayer(text, multihopMetadata, capturedLayer, &failure)
+            } else {
+                prepared = LibboxNewRouterMultihop(text, multihopMetadata, &failure)
+            }
+            guard let plan = prepared, failure == nil else { throw failure ?? error("Multihop controller could not be constructed") }
             ownershipLock.lock()
             guard ownershipGeneration == generation else { ownershipLock.unlock(); try? plan.close(); throw error("Libbox startup was cancelled") }
             multihop = plan

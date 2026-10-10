@@ -25,11 +25,10 @@ extension RouterVPNModel {
               let config = Data(base64Encoded: raw), !config.isEmpty, config.count <= 4 * 1024 * 1024 else {
             throw iosMultihopError("Choose a different paired Router VPN entry with its own selected native entry profile.")
         }
-        for node in [profile, exit] {
-            guard ["", "off", "none", "disabled"].contains((node.startLayer ?? "off").lowercased()) else {
-                throw iosMultihopError("Additional Start Layers are not yet composed by this multihop path; turn them off for the selected nodes.")
-            }
-        }
+        let capturedProfile = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile)) as! [String: Any]
+        let capturedExit = try JSONSerialization.jsonObject(with: JSONEncoder().encode(exit)) as! [String: Any]
+        _ = try IOSMultihopStartLayer.capture(profile: capturedProfile, profiles: entry.profiles)
+        try IOSMultihopStartLayer.validateExit(capturedExit)
         entry.selectedRouterID = profile.id
         entry.nodeProofID = proof
         entry.endpoint = profile.endpoint
@@ -147,7 +146,7 @@ struct IOSMultihopView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }.disabled(model.profileMutationBlocked)
                 Section("Connection requirements") {
-                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard, native AmneziaWG Fast/Strong, Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP entry and a WireGuard/AmneziaWG, self-contained Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. Additional Start Layers remain separate. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
+                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard, native AmneziaWG Fast/Strong, Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP entry and a WireGuard/AmneziaWG, self-contained Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. An entry AES or AES+XOR Start Layer stays on the captured entry for Local, Server and Compare. Exit Start Layers require a separate paired execution policy. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)

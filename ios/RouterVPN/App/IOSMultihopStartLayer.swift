@@ -13,10 +13,10 @@ enum IOSMultihopStartLayer {
     static func selected(_ profile: [String: Any]) throws -> String {
         guard let raw = profile["start_layer"] else { return "off" }
         guard let text = raw as? String else { throw issue("Start Layer must be a string.") }
-        switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: "_", with: "-").replacingOccurrences(of: " ", with: "") {
         case "", "off", "none", "disabled": return "off"
-        case "aes", "aes-256-gcm": return "aes-256-gcm"
-        case "aes+xor", "aes-xor", "aes-256-gcm+xor-whitening": return "aes-256-gcm+xor-whitening"
+        case "aes", "aes256", "aes-256", "aes-gcm", "aes256-gcm", "aes-256-gcm": return "aes-256-gcm"
+        case "aes+xor", "aes-xor", "xor+aes", "aes-256-gcm+xor", "xor+aes-256-gcm", "aes-256-gcm+xor-whitening": return "aes-256-gcm+xor-whitening"
         default: throw issue("Select authenticated AES or AES with XOR whitening; standalone XOR is not encryption.")
         }
     }
@@ -24,7 +24,8 @@ enum IOSMultihopStartLayer {
     static func capture(profile: [String: Any], profiles: [String: [String: String]]) throws -> Capture {
         let mode = try selected(profile)
         if mode == "off" { return Capture(mode: mode, source: nil, graphProfile: profile) }
-        let kind = profile["node_kind"] as? String ?? "router-vpn"
+        let rawKind = profile["node_kind"] ?? "router-vpn"
+        guard let kind = rawKind as? String else { throw issue("Invalid captured node kind.") }
         guard kind == "router-vpn", let assets = profiles["shadowsocks"], assets.count == 1,
               let encoded = assets["sing-box.json"], !encoded.isEmpty, encoded.utf8.count < maximumBytes,
               let raw = Data(base64Encoded: encoded, options: []), !raw.isEmpty,

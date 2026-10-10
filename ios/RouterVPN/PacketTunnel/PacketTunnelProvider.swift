@@ -240,7 +240,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         } else {
             rawFiles = try layeredProfile(root, rawProfileID: exitMode)
         }
-        let files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryProfile,
+        let entryLayer = try IOSMultihopStartLayer.capture(profile: entryProfile,
+            profiles: entryRoot["profiles"] as? [String: [String: String]] ?? [:])
+        try IOSMultihopStartLayer.validateExit(exitProfile)
+        let files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryLayer.graphProfile,
             exitProfile: exitProfile, exitMode: exitMode, files: rawFiles)
         let mtuFiles = try RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)
         guard let source = mtuFiles["sing-box.json"], let text = String(data: source, encoding: .utf8) else { throw tunnelError(58, "Missing multihop LAN-policy graph") }
@@ -271,17 +274,20 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let engine = RouterVPNLibboxEngine(tunnel: self)
         try engine.prepareMTUHold(initialMTUHold)
         libboxEngine = engine
-        let metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
+        var metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
             "entry_node_id": entryProofID, "exit_node_id": exitProofID,
             "entry_api": entryProfile["router_api"] as? String ?? "", "exit_api": selectedProfile["router_api"] as? String ?? "",
             "entry_token": entryProfile["api_token"] as? String ?? "", "exit_token": selectedProfile["api_token"] as? String ?? "",
             "entry_tag": RouterVPNMultihopGraph.entryTag, "entry_mode": entryMode, "exit_mode": exitMode, "execution": selectedProfile["multihop_execution"] as? String ?? "local"]
+        if entryLayer.source != nil { metadata["entry_start_layer"] = entryLayer.mode }
         let encoded = try JSONSerialization.data(withJSONObject: metadata)
         let hopMetadata = String(decoding: encoded, as: UTF8.self)
         do {
             let execution = selectedProfile["multihop_execution"] as? String ?? "local"
             guard ["local", "server", "auto"].contains(execution) else { throw tunnelError(56, "Unknown multihop execution choice") }
-            if execution == "local" { try engine.start(files: finalFiles, strict: strict) }
+            if let captured = entryLayer.source {
+                try engine.start(files: finalFiles, strict: strict, multihopMetadata: hopMetadata, entryStartLayerSource: captured)
+            } else if execution == "local" { try engine.start(files: finalFiles, strict: strict) }
             else { try engine.start(files: finalFiles, strict: strict, multihopMetadata: hopMetadata) }
         }
         catch { engine.stop(); libboxEngine = nil; throw error }

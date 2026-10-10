@@ -21,6 +21,7 @@ public final class LibboxTestState: @unchecked Sendable {
     private var block = false
     private var fail = false
     private var plan: LibboxRouterMultihop?
+    private var capturedLayers: [String] = []
     private var starts = 0
     private var stops = 0
     private var paddingCount: Int64 = 0
@@ -29,11 +30,13 @@ public final class LibboxTestState: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         self.block = block; self.fail = fail; plan = nil
     }
-    public func make(_ text: String) -> LibboxRouterMultihop {
+    public func make(_ text: String, layer: String? = nil) -> LibboxRouterMultihop {
         lock.lock(); defer { lock.unlock() }
+        if let layer { capturedLayers.append(layer) }
         let value = LibboxRouterMultihop(text, block: block, fail: fail)
         plan = value; return value
     }
+    public func layers() -> [String] { lock.lock(); defer { lock.unlock() }; return capturedLayers }
     public func current() -> LibboxRouterMultihop? { lock.lock(); defer { lock.unlock() }; return plan }
     public func configurePadding(_ count: Int64) { lock.lock(); paddingCount=count; lock.unlock() }
     public func makeServer() -> LibboxCommandServer {
@@ -113,6 +116,7 @@ public func LibboxRouterPerformanceFailure(_ server: LibboxCommandServer) -> Str
 public func LibboxNewRouterHopMeasurement(_ server: LibboxCommandServer, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterHopMeasurement? { LibboxRouterHopMeasurement() }
 
 public func LibboxNewRouterMultihop(_ text: String, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text) }
+public func LibboxNewRouterMultihopWithEntryStartLayer(_ text: String, _ metadata: String, _ layer: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text,layer:layer) }
 public func LibboxSetup(_ setup: LibboxSetupOptions, _ failure: UnsafeMutablePointer<NSError?>?) {}
 public func LibboxNewCommandServer(_ platform: AnyObject, _ handler: AnyObject, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxCommandServer? { LibboxTestState.shared.makeServer() }
 '''
@@ -174,7 +178,7 @@ final class CompletionState: @unchecked Sendable {
             state.configure()
             let provider = PacketTunnelProvider(), completed = CompletionState()
             let engine = RouterVPNLibboxEngine(tunnel: provider)
-            try engine.start(files: files, strict: false, multihopMetadata: "fixture")
+            try engine.start(files: files, strict: false, multihopMetadata: "{}")
             engine.completeMultihopExecution(completed.finish)
             check("comparison completion delivered", completed.wait())
             check("one successful result", completed.values() == (1, 0))
@@ -189,7 +193,7 @@ final class CompletionState: @unchecked Sendable {
             state.configure(block: true)
             let provider = PacketTunnelProvider(), completed = CompletionState()
             let engine = RouterVPNLibboxEngine(tunnel: provider)
-            try engine.start(files: files, strict: false, multihopMetadata: "fixture")
+            try engine.start(files: files, strict: false, multihopMetadata: "{}")
             let old = state.current()!
             engine.completeMultihopExecution(completed.finish)
             check("comparison entered before stop", old.entered.wait(timeout: .now() + 3) == .success)
@@ -197,7 +201,7 @@ final class CompletionState: @unchecked Sendable {
             check("cancelled comparison returns", completed.wait())
             check("cancelled comparison cannot claim success", completed.values() == (1, 1))
             state.configure()
-            try engine.start(files: files, strict: false, multihopMetadata: "new-fixture")
+            try engine.start(files: files, strict: false, multihopMetadata: "{}")
             let replacement = CompletionState(); engine.completeMultihopExecution(replacement.finish)
             check("replacement completed", replacement.wait())
             check("replacement succeeded", replacement.values() == (1, 0))
@@ -210,7 +214,7 @@ final class CompletionState: @unchecked Sendable {
             state.configure(fail: true)
             let provider = PacketTunnelProvider(), completed = CompletionState()
             let engine = RouterVPNLibboxEngine(tunnel: provider)
-            try engine.start(files: files, strict: false, multihopMetadata: "fixture")
+            try engine.start(files: files, strict: false, multihopMetadata: "{}")
             engine.completeMultihopExecution { error in engine.stop(); completed.finish(error) }
             check("failure allows reentrant owned cleanup", completed.wait())
             check("failure is delivered once", completed.values() == (1, 1))
@@ -251,6 +255,26 @@ final class CompletionState: @unchecked Sendable {
             check("stopped padding timer cannot cancel again",provider.count()==before)
             state.configurePadding(0)
         }
+        for execution in ["local","server","auto"] {
+            state.configure()
+            let profile:[String:Any] = ["node_kind":"router-vpn","start_layer":"aes"]
+            let assets=["shadowsocks":["sing-box.json":Data("{}".utf8).base64EncodedString()]]
+            let captured=try IOSMultihopStartLayer.capture(profile:profile,profiles:assets)
+            let metadata=String(decoding:try JSONSerialization.data(withJSONObject:["entry_start_layer":captured.mode,"execution":execution]),as:UTF8.self)
+            let engine=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            let before=state.layers().count
+            try engine.start(files:files,strict:true,multihopMetadata:metadata,entryStartLayerSource:captured.source)
+            check("exact layer reaches native factory even in Local",state.layers().count==before+1 && state.layers().last==captured.source)
+            let completed=CompletionState();engine.completeMultihopExecution(completed.finish)
+            check("layered execution completes under the same owner",completed.wait() && completed.values()==(1,0))
+            engine.stop()
+            for source in [nil,"", "{}"] as [String?] {
+                let stoppedBefore=state.counts()
+                var rejected=false
+                do {try engine.start(files:files,strict:true,multihopMetadata:metadata,entryStartLayerSource:source)}catch{rejected=true}
+                check("missing or changed layer cannot start a native service",rejected && state.counts()==stoppedBefore)
+            }
+        }
         check("no mock native server survives tests", state.counts().0 == state.counts().1)
         print("Swift 6 shipping Libbox delivery: PASS (\(checks) checks; native handles doubled, no network opened)")
     }
@@ -269,7 +293,7 @@ def main():
         subprocess.run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','Libbox',str(stub),
                         '-emit-module-path',str(tmp/'Libbox.swiftmodule'),'-o',str(lib)],check=True,timeout=60)
         args=[swift,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(tmp)]
-        subprocess.run(args+[str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
+        subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
         subprocess.run([str(tmp/'test')],check=True,timeout=25)
         broken=tmp/'Broken.swift'
         text=ENGINE.read_text()
@@ -278,7 +302,7 @@ def main():
         # Require an explicit Sendable closure: Apple's preconcurrency Dispatch
         # overload and compiler versions can diagnose inferred closures differently.
         broken.write_text(text.replace(seam, 'let unsafe: @Sendable () -> Void = { try? plan.run(owned); completion(nil) }; DispatchQueue.global(qos: .userInitiated).async(execute: unsafe)'))
-        bad=subprocess.run(args+[str(broken),str(harness),'-o',str(tmp/'bad')],capture_output=True,text=True,timeout=90)
+        bad=subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(broken),str(harness),'-o',str(tmp/'bad')],capture_output=True,text=True,timeout=90)
         diagnostics = (bad.stdout + bad.stderr).lower()
         assert bad.returncode != 0 and ('sendable' in diagnostics or 'data race' in diagnostics), ('Regression control accepted unowned foreign captures or failed for another reason: ' + diagnostics[-2000:])
         print('Negative control: old non-Sendable asynchronous captures correctly rejected')
