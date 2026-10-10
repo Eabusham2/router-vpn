@@ -114,8 +114,17 @@ def require_fixture_matrix(root: Path) -> None:
         raise ValueError('Generated graph matrix has missing or unowned entries')
 
 
+def both_layer_case_names() -> set[str]:
+    modes = ('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2',
+             'reality-vision', 'reality-pq-vision', 'reality-xhttp')
+    layers = (('off', 'aes-256-gcm'), ('aes-256-gcm', 'aes-256-gcm+xor-whitening'))
+    return {f'{entry}-{exit_mode}-{first}-{last}-{execution}.json'
+            for entry, exit_mode, (first, last), execution in itertools.product(
+                modes, modes, layers, ('local', 'server', 'auto'))}
+
+
 def require_both_layer_matrix(root: Path) -> None:
-    expected = {str(i)+'.json' for i in range(1,385)}
+    expected = both_layer_case_names()
     if not root.is_dir() or root.is_symlink() or {p.name for p in root.iterdir()} != expected:
         raise ValueError('Both-layer matrix must contain exactly 384 generated graphs')
     for path in root.iterdir():

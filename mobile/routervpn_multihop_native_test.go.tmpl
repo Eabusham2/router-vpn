@@ -439,8 +439,22 @@ func TestRouterMultihopBothStartLayersGeneratedGraphs(t *testing.T) {
 	if err != nil || len(files) != 384 {
 		t.Fatal("incomplete generated both-layer matrix", err)
 	}
-	for i := 1; i <= 384; i++ {
-		name := filepath.Join(root, fmt.Sprint(i)+".json")
+	modes := []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"}
+	names := make([]string, 0, 384)
+	for _, entry := range modes {
+		for _, exit := range modes {
+			for _, layer := range [][2]string{{"off", "aes-256-gcm"}, {"aes-256-gcm", "aes-256-gcm+xor-whitening"}} {
+				for _, execution := range []string{"local", "server", "auto"} {
+					names = append(names, strings.Join([]string{entry, exit, layer[0], layer[1], execution}, "-")+".json")
+				}
+			}
+		}
+	}
+	if len(names) != 384 {
+		t.Fatal("incomplete expected both-layer combinations")
+	}
+	for _, fixtureName := range names {
+		name := filepath.Join(root, fixtureName)
 		info, err := os.Lstat(name)
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > 4<<20 {
 			t.Fatal("invalid generated both-layer file", name, err)
@@ -450,7 +464,7 @@ func TestRouterMultihopBothStartLayersGeneratedGraphs(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err = CheckConfig(string(raw)); err != nil {
-			t.Fatal("real native registry rejected both-layer graph", i, err)
+			t.Fatal("real native registry rejected both-layer graph", fixtureName, err)
 		}
 		var graph map[string]any
 		if err = json.Unmarshal(raw, &graph); err != nil {

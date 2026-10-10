@@ -101,6 +101,8 @@ def main():
   try:
    os.environ['ANDROID_JSON_JAR']=str(dependency.android_json_dependency(Path(tmp),dict(os.environ)))
    module.main()
+   exported=os.environ.get('ROUTERVPN_BOTH_LAYER_FIXTURES')
+   if exported:dependency.require_both_layer_matrix(Path(exported))
   finally:
    if previous is None:os.environ.pop('ANDROID_JSON_JAR',None)
    else:os.environ['ANDROID_JSON_JAR']=previous

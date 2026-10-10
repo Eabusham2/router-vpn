@@ -176,12 +176,12 @@ class NativeGraphGate(unittest.TestCase):
 
 class BothLayerGate(unittest.TestCase):
     def populate(self,root):
-        for i in range(1,385): (root/(str(i)+'.json')).write_text('{}')
+        for name in GATE.both_layer_case_names(): (root/name).write_text('{}')
     def test_requires_all_384_regular_bounded_outputs(self):
         for kind in ('missing','extra','empty','directory','oversized'):
             with tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);self.populate(root);GATE.require_both_layer_matrix(root)
-                path=root/'384.json'
+                path=root/'reality-xhttp-reality-xhttp-aes-256-gcm-aes-256-gcm+xor-whitening-auto.json'
                 if kind=='missing':path.unlink()
                 elif kind=='extra':(root/'385.json').write_text('{}')
                 elif kind=='empty':path.write_text('')
@@ -189,6 +189,21 @@ class BothLayerGate(unittest.TestCase):
                 else:
                     with path.open('wb') as out:out.truncate(4*1024*1024+1)
                 with self.assertRaises(ValueError):GATE.require_both_layer_matrix(root)
+    def test_case_names_match_the_shipping_java_export(self):
+        modes=('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp')
+        expected=set()
+        for entry in modes:
+            for exit_mode in modes:
+                for execution in ('local','server','auto'):
+                    for first,last in (('off','aes-256-gcm'),('aes-256-gcm','aes-256-gcm+xor-whitening')):
+                        expected.add('-'.join((entry,exit_mode,first,last,execution))+'.json')
+        self.assertEqual(GATE.both_layer_case_names(),expected)
+        self.assertEqual(len(expected),384)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            for i in range(1,385): (root/(str(i)+'.json')).write_text('{}')
+            with self.assertRaises(ValueError): GATE.require_both_layer_matrix(root)
+
     def test_real_parser_and_negative_controls_remain_mandatory(self):
         source=(ROOT/'deploy/test_android_multihop_pinned.py').read_text()
         native=(ROOT/'mobile/routervpn_multihop_native_test.go.tmpl').read_text()
