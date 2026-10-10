@@ -185,7 +185,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         entryProfile["node_proof_id"] = entryProofID
         exitProfile["node_proof_id"] = exitProofID
         let entryMode = selectedProfile["multihop_entry_mode"] as? String ?? "wg"
-        guard ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
+        guard ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
         let endpoint: [String: Any]
         if entryMode == "wg" {
             endpoint = try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: entryProofID, name: "Router VPN entry").endpoint

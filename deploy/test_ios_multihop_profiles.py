@@ -33,7 +33,7 @@ for mode in ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"] {
     let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self, from: JSONEncoder().encode(candidate))
     try check("saved graph preserves exact exit family \(mode)", copy == candidate && copy.multihopExitMode == mode)
 }
-for mode in ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"] {
+for mode in ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp"] {
     var candidate = graph; candidate.multihopEntryMode = mode
     let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONEncoder().encode(candidate))
     try check("saved entry mode keeps exact engine variant",copy.multihopEntryMode == mode && copy == candidate)

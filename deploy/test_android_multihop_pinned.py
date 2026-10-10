@@ -88,7 +88,7 @@ def digest() -> str:
 def require_fixture_matrix(root: Path) -> None:
     expected = set()
     for entry, exit_mode, execution in itertools.product(
-            ('shadowsocks', 'hysteria2'),
+            ('shadowsocks', 'hysteria2', 'reality-vision', 'reality-pq-vision', 'reality-xhttp'),
             ('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2'),
             ('local', 'server', 'auto')):
         folder = root / f'{entry}-{exit_mode}-{execution}'
@@ -139,7 +139,7 @@ def run(vendor: Path) -> None:
                         '-tags', 'with_quic,with_wireguard,with_gvisor',
                         './experimental/libbox', '-run', '^TestRouterMultihopAndroidGeneratedGraphs$',
                         '-count=1', '-timeout=120s', '-v'], cwd=vendor, env=env, check=True, timeout=600)
-    print('All 60 shipping Android graphs passed the pinned native parser; negative schema controls rejected.')
+    print('All 150 shipping Android graphs passed the pinned native parser; negative schema controls rejected.')
 
 
 if __name__ == '__main__':

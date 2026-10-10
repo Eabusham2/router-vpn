@@ -236,7 +236,7 @@ func TestRouterMultihopAndroidGeneratedGraphs(t *testing.T) {
 		t.Fatal(err)
 	}
 	checks := 0
-	for _, entry := range []string{"shadowsocks", "hysteria2"} {
+	for _, entry := range []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"} {
 		for _, exit := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"} {
 			for _, execution := range []string{"local", "server", "auto"} {
 				name := entry + "-" + exit + "-" + execution
@@ -264,7 +264,14 @@ func TestRouterMultihopAndroidGeneratedGraphs(t *testing.T) {
 						for _, value := range graph["outbounds"].([]any) {
 							outbound := value.(map[string]any)
 							if outbound["tag"] == "entry-wg" {
-								if outbound["type"] != entry {
+								expectedType := entry
+								if strings.HasPrefix(entry, "reality-") {
+									expectedType = "routervpn-xray"
+									if outbound["mode"] != entry {
+										t.Fatal("native Xray entry mode was substituted")
+									}
+								}
+								if outbound["type"] != expectedType {
 									t.Fatal("entry label differs from native transport")
 								}
 								outbound["type"] = "unimplemented-fixture-transport"
@@ -287,8 +294,8 @@ func TestRouterMultihopAndroidGeneratedGraphs(t *testing.T) {
 			}
 		}
 	}
-	if checks != 60 {
-		t.Fatalf("validated %d native graphs, expected 60", checks)
+	if checks != 150 {
+		t.Fatalf("validated %d native graphs, expected 150", checks)
 	}
 }
 

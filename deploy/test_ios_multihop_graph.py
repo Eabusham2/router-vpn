@@ -6,6 +6,7 @@ runs the exact pinned Libbox source's configuration parser in native CI.
 """
 from pathlib import Path
 import argparse
+import os
 import shutil
 import subprocess
 import tempfile
@@ -413,7 +414,11 @@ for mode in ["awg2-fast", "awg2-strong"] {
 }
 // Native proxy-entry composition. The entry has no virtual IP interface: it
 // remains an outbound while packet exits keep their existing endpoint owner.
-func proxyInput(_ mode: String) -> [String:Any] {
+let xrayEntryPath = ProcessInfo.processInfo.environment["ROUTERVPN_XRAY_ENTRY_FIXTURES"]!
+let xrayEntries = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath:xrayEntryPath))) as! [String:[String:Any]]
+@MainActor func proxyInput(_ mode: String) -> [String:Any] {
+    if let native = xrayEntries[mode] { return native }
+
     var result: [String:Any] = ["type":mode,"tag":"compiled-entry","server":"192.0.2.77","server_port":443,"password":key]
     if mode == "shadowsocks" { result["method"]="2022-blake3-aes-256-gcm" }
     else { result["tls"]=["enabled":true,"server_name":"entry.router-vpn.home"]; result["obfs"]=["type":"salamander","password":"entry-only-obfuscation"] }
@@ -422,7 +427,7 @@ func proxyInput(_ mode: String) -> [String:Any] {
 @MainActor func sameJSON(_ a: Any, _ b: Any) throws -> Bool {
     try JSONSerialization.data(withJSONObject:a,options:[.sortedKeys]) == JSONSerialization.data(withJSONObject:b,options:[.sortedKeys])
 }
-for entryMode in ["shadowsocks", "hysteria2"] {
+for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"] {
     let importedEntry = proxyInput(entryMode)
     var expectedEntry = importedEntry; expectedEntry["tag"] = P.entryTag
     for exitMode in P.supportedExitModes {
@@ -518,12 +523,16 @@ def main():
         raise SystemExit("swiftc is required; a text search cannot certify the multihop graph")
     with tempfile.TemporaryDirectory(prefix="routervpn-multihop-") as directory:
         source, exe = Path(directory) / "main.swift", Path(directory) / "graph-tests"
+        native_entries = Path(directory) / "xray-entry-fixtures.json"
+        with native_entries.open("w") as output:
+            subprocess.run(["go", "run", "./deploy/testfixtures/xray-entry"], cwd=ROOT, stdout=output, check=True, timeout=90)
+        env = dict(os.environ, ROUTERVPN_XRAY_ENTRY_FIXTURES=str(native_entries))
         source.write_text(TEST)
         subprocess.run([swift, "-swift-version", "6", str(POLICY), str(POLICY.with_name("RouterVPNMTUPolicy.swift")), str(ROOT / "ios/RouterVPN/App/Models.swift"), str(source), "-o", str(exe)], check=True, timeout=90)
         command = [str(exe)]
         if args.fixture_dir:
             command.append(str(args.fixture_dir.resolve()))
-        subprocess.run(command, check=True, timeout=30)
+        subprocess.run(command, env=env, check=True, timeout=30)
     provider = (POLICY.parent / "PacketTunnelProvider.swift").read_text()
     for required in [
         'case "multihop-libbox": try startMultihop',

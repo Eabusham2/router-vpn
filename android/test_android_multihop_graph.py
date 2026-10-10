@@ -141,7 +141,10 @@ public final class Libbox {
  public static String routerComposeNativeBaseStartLayer(String c,String source,String policy)throws Exception {
   return call("base-start",new JSONObject().put("Config",c).put("Source",source).toString(),policy);
  }
- public static String routerCompileProxyEntry(String c,String p)throws Exception{return call("proxy-entry",c,p);}
+ public static Runnable afterProxyEntryCompilation;
+ public static String routerCompileProxyEntry(String c,String p)throws Exception{
+  String result=call("proxy-entry",c,p);if(afterProxyEntryCompilation!=null)afterProxyEntryCompilation.run();return result;
+ }
  public static String routerMultihopMTUProfile(String c,String p)throws Exception{return call("mtu-profile",c,p);}
  public static String routerApplyMultihopMTUPolicy(String c,String p)throws Exception{return call("mtu",c,p);}
  public static String routerApplyMultihopLANPolicy(String c,String p)throws Exception{return call("lan",c,p);}
@@ -383,10 +386,10 @@ public final class MultihopGraphHarness {
  }
  static void proxyEntryChecks(Path dir)throws Exception {
   String entryCert=io.nekohasekai.libbox.Libbox.testCertificate("entry.example.test"),exitCert=io.nekohasekai.libbox.Libbox.testCertificate("exit.example.test");
-  for(String entryMode:new String[]{"shadowsocks","hysteria2"})for(String exitMode:new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"}) {
+  for(String entryMode:new String[]{"shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp"})for(String exitMode:new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"}) {
    Path app=Files.createTempDirectory(dir,"proxy-app-");Context context=new Context(app.toFile());
    AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
-   JSONObject a=proxyBundle('a',entryMode,entryCert),b=NativeSingBoxController.nativeWireGuardFamily(exitMode)?awgBundle('b'):proxyBundle('b',exitMode,exitCert);
+   JSONObject a=entryMode.startsWith("reality-")?xrayBundle(entryMode,"192.0.2.11"):proxyBundle('a',entryMode,entryCert),b=NativeSingBoxController.nativeWireGuardFamily(exitMode)?awgBundle('b'):proxyBundle('b',exitMode,exitCert);
    profile(a).put("mtu_policy","fixed").put("manual_mtu",1500).put("kill_switch",true);
    profile(b).put("mtu_policy","auto").put("effective_mtu",9000);
    File entry=save(dir,a),exit=save(dir,b);byte[] beforeA=Files.readAllBytes(entry.toPath()),beforeB=Files.readAllBytes(exit.toPath());
@@ -395,7 +398,10 @@ public final class MultihopGraphHarness {
     Path session=app.resolve("layered-sessions").resolve(result.session.sessionId);
     JSONObject graph=new JSONObject(Files.readString(session.resolve("sing-box.json"))),meta=new JSONObject(Files.readString(session.resolve("routervpn-multihop.json"))),mtu=new JSONObject(Files.readString(session.resolve("routervpn-mtu.json")));
     JSONObject first=byTag(graph,"entry-wg"),last=byTag(graph,"proxy"),privateProxy=byTag(graph,"entry-private");
-    check(first.getString("type").equals(entryMode)&&first.getString("password").equals("entry-only-secret"),"entry lost its exact native transport or credential");
+    if(entryMode.startsWith("reality-")){
+     String original=new String(Base64.getDecoder().decode(a.getJSONObject("profiles").getJSONObject(entryMode).getString("xray.json")),StandardCharsets.UTF_8);
+     check(first.getString("type").equals("routervpn-xray")&&first.getString("mode").equals(entryMode)&&first.getString("config_json").equals(original)&&first.length()==4,"native Xray entry lost exact original authentication and transport");
+    }else check(first.getString("type").equals(entryMode)&&first.getString("password").equals("entry-only-secret"),"entry lost its exact native transport or credential");
     check(!first.has("detour")&&!first.has("mtu"),"proxy entry gained a fake packet interface or upstream bypass");
     check(last.getString("detour").equals("entry-wg")&&privateProxy.getString("detour").equals("entry-wg"),"exit/private proof sockets do not traverse entry");
     check(graph.getJSONArray("endpoints").length()==(NativeSingBoxController.nativeWireGuardFamily(exitMode)?1:0),"proxy entry staged an extra native packet endpoint");
@@ -406,6 +412,7 @@ public final class MultihopGraphHarness {
     check(meta.getString("entry_mode").equals(entryMode)&&meta.getString("exit_mode").equals(exitMode)&&meta.getString("execution").equals(execution),"frozen transport/execution identity drifted");
     check(meta.getString("entry_node_id").equals(a.getString("nodeProofId"))&&meta.getString("exit_node_id").equals(b.getString("nodeProofId")),"node proof ownership collapsed");
     check(Files.exists(session.resolve(AndroidKillSwitchPolicy.SESSION_MARKER))&&!Files.exists(session.resolve("wg.conf"))&&!Files.exists(session.resolve("awg.conf")),"strict policy or single-VPN staging ownership lost");
+    check(!Files.exists(session.resolve("xray.json")),"entry-only Xray source was staged as another backend");
     if(NativeSingBoxController.nativeWireGuardFamily(exitMode)){
      check(last.getInt("mtu")==1500,"packet exit ignored fixed shared TUN policy");
      check(last.getJSONArray("peers").getJSONObject(0).getString("public_key").equals(key(exitMode.equals("wg")?'b':'g')),"exit peer key came from the entry");
@@ -669,6 +676,33 @@ public final class MultihopGraphHarness {
    check(fail&&sessions(app)==count,"stale or cancelled native preparation staged a session");
   }
  }
+ static void nativeEntryRejections(Path dir)throws Exception {
+  JSONObject exit=awgBundle('b');
+  for(String mode:new String[]{"reality-vision","reality-pq-vision","reality-xhttp"}){
+   for(String fault:new String[]{"security","peer","extra","missing"}){
+    JSONObject source=xrayBundle(mode,"192.0.2.11"),assets=source.getJSONObject("profiles").getJSONObject(mode);
+    JSONObject raw=new JSONObject(new String(Base64.getDecoder().decode(assets.getString("xray.json")),StandardCharsets.UTF_8));
+    JSONObject out=raw.getJSONArray("outbounds").getJSONObject(0);
+    if(fault.equals("security"))out.getJSONObject("streamSettings").put("security","none");
+    if(fault.equals("peer"))out.getJSONObject("settings").getJSONArray("vnext").getJSONObject(0).put("address","hostname-must-not-resolve.example");
+    if(fault.equals("extra"))assets.put("unowned.conf","e30=");
+    assets.put("xray.json",Base64.getEncoder().encodeToString(raw.toString().getBytes(StandardCharsets.UTF_8)));
+    if(fault.equals("missing"))assets.remove("xray.json");
+    proxyRejected(dir,source,exit,mode,"wg");
+   }
+   Path app=Files.createTempDirectory(dir,"cancelled-xray-entry");Context ctx=new Context(app.toFile());
+   AndroidMultihopController builder=new AndroidMultihopController(ctx,new NativeSingBoxController(ctx));
+   File a=save(dir,xrayBundle(mode,"192.0.2.11")),b=save(dir,exit);boolean failed=false;
+   io.nekohasekai.libbox.Libbox.afterProxyEntryCompilation=()->Thread.currentThread().interrupt();
+   try{builder.prepare(a,b,"wg","auto",mode);}catch(Exception expected){failed=true;}
+   finally{io.nekohasekai.libbox.Libbox.afterProxyEntryCompilation=null;Thread.interrupted();}
+   check(failed&&sessions(app)==0,"cancelled Xray entry preparation staged a session");
+   io.nekohasekai.libbox.Libbox.afterProxyEntryCompilation=()->{try{Files.writeString(a.toPath(),"{}");}catch(Exception e){throw new RuntimeException(e);}};
+   failed=false;try{builder.prepare(a,b,"wg","local",mode);}catch(Exception expected){failed=true;}
+   finally{io.nekohasekai.libbox.Libbox.afterProxyEntryCompilation=null;}
+   check(failed&&sessions(app)==0,"changed captured entry staged a session");
+  }
+ }
  public static void main(String[] args)throws Exception {
   Path dir=Path.of(args[0]);Path app=Files.createDirectory(dir.resolve("app"));Context context=new Context(app.toFile());
   AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
@@ -713,6 +747,7 @@ public final class MultihopGraphHarness {
   awgEntryChecks(context,dir);
   awgExitChecks(dir);
   proxyEntryChecks(dir);
+  nativeEntryRejections(dir);
   System.out.println("Android shipping native/proxy multihop compiler: PASS ("+checks+" checks; real Go policy, Android handles doubled)");
  }
 }

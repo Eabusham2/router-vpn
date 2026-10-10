@@ -110,6 +110,7 @@ final class AndroidMultihopController {
 
         JSONObject entry = loadBundle(entryBundle);
         JSONObject exit = loadBundle(exitBundle);
+        String entrySnapshot = entry.toString(), exitSnapshot = exit.toString();
         String entryIdentity = AndroidNodeStore.stableNodeIdentity(entry);
         String exitIdentity = AndroidNodeStore.stableNodeIdentity(exit);
         if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
@@ -163,6 +164,11 @@ final class AndroidMultihopController {
         byte[] patched = (config.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         if (patched.length > MAX_CONFIG) throw new IllegalStateException("Multihop sing-box config exceeds safety limit.");
 
+        if (Thread.currentThread().isInterrupted()
+                || !entrySnapshot.equals(loadBundle(entryBundle).toString())
+                || !exitSnapshot.equals(loadBundle(exitBundle).toString())) {
+            throw new IllegalStateException("Multihop preparation was cancelled or a captured node changed; no session was staged.");
+        }
         File root = new File(context.getFilesDir(), "layered-sessions");
         if (!root.isDirectory() && !root.mkdirs()) throw new IllegalStateException("Cannot create layered session directory.");
         File[] dirs = root.listFiles(File::isDirectory);

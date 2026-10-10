@@ -23,7 +23,7 @@ _wg_spec = importlib.util.spec_from_file_location('routervpn_wg_bind', ROOT/'dep
 WIREGUARD_BIND = importlib.util.module_from_spec(_wg_spec)
 _wg_spec.loader.exec_module(WIREGUARD_BIND)
 def inputs():
-    paths = [ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
+    paths = [ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
     return paths + WIREGUARD_BIND.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + [Path(__file__).resolve()]

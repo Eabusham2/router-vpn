@@ -208,7 +208,8 @@ final class NativeSingBoxController {
     }
 
     static boolean nativeMultihopEntry(String mode) {
-        return nativeWireGuardFamily(mode) || "shadowsocks".equals(mode) || "hysteria2".equals(mode);
+        return nativeWireGuardFamily(mode) || "shadowsocks".equals(mode) || "hysteria2".equals(mode)
+                || java.util.Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp").contains(mode);
     }
 
     static boolean nativeWireGuardFamily(String mode) {

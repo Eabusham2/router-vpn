@@ -426,3 +426,5 @@ print("Apple native contract toolchain ordering: PASS")
 import subprocess
 import sys
 subprocess.run([sys.executable, str(ROOT/"deploy/test_native_runner_dependencies.py")], check=True)
+
+subprocess.run([sys.executable, str(ROOT/"deploy/test_mobile_xray_entry_bindings.py")], check=True)

@@ -19,7 +19,7 @@ SPEC.loader.exec_module(GATE)
 class NativeGraphGate(unittest.TestCase):
     def populate(self, root):
         for entry, exit_mode, execution in itertools.product(
-                ('shadowsocks', 'hysteria2'),
+                ('shadowsocks', 'hysteria2', 'reality-vision', 'reality-pq-vision', 'reality-xhttp'),
                 ('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2'),
                 ('local', 'server', 'auto')):
             folder = root / f'{entry}-{exit_mode}-{execution}'
@@ -99,7 +99,7 @@ class NativeGraphGate(unittest.TestCase):
             root = Path(temp)
             self.populate(root)
             GATE.require_fixture_matrix(root)
-            self.assertEqual(len(list(root.glob('*/*.json'))), 60)
+            self.assertEqual(len(list(root.glob('*/*.json'))), 150)
             extra = root / 'shadowsocks-wg-local' / 'unexpected.txt'
             extra.write_text('unowned')
             with self.assertRaises(ValueError):
@@ -167,7 +167,7 @@ class NativeGraphGate(unittest.TestCase):
         self.assertIn('required Android fixture matrix is missing', template)
         self.assertIn('CheckConfig(string(raw))', template)
         self.assertIn('CheckConfig(string(bad))', template)
-        self.assertIn('if checks != 60', template)
+        self.assertIn('if checks != 150', template)
         self.assertNotIn('t.Parallel()', template)
 
 

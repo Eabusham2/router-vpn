@@ -350,6 +350,27 @@ enum RouterVPNMultihopGraph {
     /// intact and refuses any attempt to replace its physical dial ownership.
     private static func proxyEntry(_ value: [String: Any], tag: String) throws -> [String: Any] {
         let mode = value["type"] as? String ?? ""
+        if mode == "routervpn-xray" {
+            guard Set(value.keys) == Set(["type", "tag", "mode", "config_json"]),
+                  let rawMode = value["mode"] as? String,
+                  ["reality-vision", "reality-pq-vision", "reality-xhttp"].contains(rawMode),
+                  let text = value["config_json"] as? String, !text.isEmpty, text.utf8.count <= maxBytes,
+                  let native = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+                  Set(native.keys).isSubset(of: ["log", "inbounds", "outbounds"]),
+                  let outs = native["outbounds"] as? [[String: Any]], outs.count == 1,
+                  outs[0]["protocol"] as? String == "vless",
+                  let settings = outs[0]["settings"] as? [String: Any],
+                  let peers = settings["vnext"] as? [[String: Any]], peers.count == 1,
+                  let host = peers[0]["address"] as? String, serverIP(host),
+                  let port = try integer(peers[0]["port"]), (1...65535).contains(port) else {
+                throw issue("Native Xray entry must retain its exact compiled protocol and literal owned server.")
+            }
+            // LibboxRouterCompileProxyEntry has verified raw REALITY/PQ fields.
+            // The mandatory shared MTU/controller checks revalidate these bytes
+            // before startup; this graph operation cannot substitute credentials.
+            var result = value; result["tag"] = tag
+            return result
+        }
         var allowed: Set<String> = ["type", "tag", "server", "server_port", "password", "network"]
         if mode == "shadowsocks" { allowed.formUnion(["method", "udp_over_tcp"]) }
         else if mode == "hysteria2" { allowed.formUnion(["tls", "obfs", "up_mbps", "down_mbps"]) }
