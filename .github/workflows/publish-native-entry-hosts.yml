@@ -16,18 +16,16 @@ jobs:
         with: {go-version: '1.26.3', cache: false}
       - uses: actions/setup-java@v5
         with: {distribution: temurin, java-version: '21'}
-      - name: Verify exact unencoded source, run tests and publish Git objects
+      - name: Verify exact source, run host tests and stage source commits
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import ast,hashlib,subprocess,urllib.request,importlib.util,os,pathlib
-          # Full unencoded source edits are retained at this immutable commit.
+          import ast,hashlib,subprocess,urllib.request,importlib.util,os,pathlib,json,base64
           url='https://raw.githubusercontent.com/Eabusham2/router-vpn/3cd17ce42e6d507082f4756ff502be5182240251/.github/workflows/publish-native-entry-hosts.yml'
           with urllib.request.urlopen(url,timeout=30) as response:raw=response.read(200000)
           assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()=='881d598d011885e14fa499a8e3f538a002cc360d'
-          lines=raw.decode().splitlines()
-          blocks=[]
+          lines=raw.decode().splitlines();blocks=[]
           for i,line in enumerate(lines):
               if line=='        run: |':
                   block=[]
@@ -39,8 +37,7 @@ jobs:
           def python_body(block):
               assert block.startswith("python3 - <<'PY'\n") and block.rstrip().endswith('\nPY')
               return block.split('\n',1)[1].rsplit('\nPY',1)[0]
-          source=ast.parse(python_body(blocks[0]))
-          corrected=0
+          source=ast.parse(python_body(blocks[0]));corrected=0
           for statement in source.body:
               if isinstance(statement,ast.Expr) and isinstance(statement.value,ast.Call):
                   call=statement.value
@@ -48,18 +45,48 @@ jobs:
                       replacement=call.args[2]
                       assert isinstance(replacement,ast.Call) and isinstance(replacement.func,ast.Attribute) and replacement.func.attr=='replace'
                       assert isinstance(replacement.func.value,ast.Constant)
-                      call.args[2]=replacement.func.value
-                      corrected+=1
+                      call.args[2]=replacement.func.value;corrected+=1
           assert corrected==1
           exec(compile(ast.fix_missing_locations(source),'verified-host-source','exec'))
-          # Reuse the production gate's bounded, SHA-256-verified dependency
-          # retrieval. No test doubles or unverified JARs replace Android JSON.
+          HOST_TREE='99c883863370e8f4e8e0f1eb0ef27560604ca212'
+          FINAL_TREE='8833a349790b8cfa913120a2b0d64b1fb3cc3089'
+          def git(*args):return subprocess.check_output(['git',*args])
+          assert git('write-tree').decode().strip()==HOST_TREE
+          test=pathlib.Path('deploy/test_android_multihop_pinned_contract.py');text=test.read_text()
+          for before in ["self.assertEqual(GATE.android_json_dependency(root, {'ANDROID_JSON_JAR': str(jar)}), jar)","self.assertEqual(GATE.android_json_dependency(root, {}), jar)"]:
+              assert text.count(before)==1
+              text=text.replace(before,before[:-4]+'jar.resolve())')
+          test.write_text(text);subprocess.run(['git','add',str(test)],check=True)
+          assert git('write-tree').decode().strip()==FINAL_TREE
           spec=importlib.util.spec_from_file_location('android_graph_dependency',pathlib.Path('deploy/test_android_multihop_pinned.py'))
           module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
           temp=pathlib.Path(os.environ['RUNNER_TEMP'])/'android-json';temp.mkdir(exist_ok=True)
           os.environ['ANDROID_JSON_JAR']=str(module.android_json_dependency(temp,dict(os.environ)))
           subprocess.run(['bash','-e','-c',blocks[1]],check=True,timeout=720)
-          exec(compile(python_body(blocks[2]),'verified-host-publication','exec'))
+          assert git('write-tree').decode().strip()==FINAL_TREE and git('diff','--name-only').strip()==b''
+          def api(path,value=None):
+              request=urllib.request.Request('https://api.github.com/repos/Eabusham2/router-vpn/'+path,data=None if value is None else json.dumps(value).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+              with urllib.request.urlopen(request,timeout=40) as response:return json.load(response)
+          parent=os.environ['GITHUB_SHA'];assert api('git/ref/heads/main')['object']['sha']==parent
+          entries=[]
+          for name in git('diff','--cached','--name-only').decode().splitlines():
+              item=git('ls-tree',HOST_TREE,'--',name).decode().strip()
+              assert item
+              mode,kind,sha=item.split('\t')[0].split();assert kind=='blob'
+              content=git('cat-file','blob',sha)
+              blob=api('git/blobs',{'encoding':'base64','content':base64.b64encode(content).decode()});assert blob['sha']==sha
+              entries.append({'path':name,'mode':mode,'type':'blob','sha':sha})
+          entries.append({'path':'.github/workflows/publish-native-entry-hosts.yml','mode':'100644','type':'blob','sha':None})
+          previous=api('git/commits/'+parent)
+          tree=api('git/trees',{'base_tree':previous['tree']['sha'],'tree':entries});assert tree['sha']==HOST_TREE
+          host=api('git/commits',{'message':'Wire native REALITY and XHTTP entries into Android and Apple multihop','tree':HOST_TREE,'parents':[parent]})
+          item=git('ls-files','--stage','--',str(test)).decode().split('\t')[0].split();mode,sha=item[:2]
+          blob=api('git/blobs',{'encoding':'base64','content':base64.b64encode(git('cat-file','blob',sha)).decode()});assert blob['sha']==sha
+          tree=api('git/trees',{'base_tree':HOST_TREE,'tree':[{'path':str(test),'mode':mode,'type':'blob','sha':sha}]});assert tree['sha']==FINAL_TREE
+          fix=api('git/commits',{'message':'Compare canonical Android dependency paths on macOS','tree':FINAL_TREE,'parents':[host['sha']]})
+          result={'commit':fix['sha'],'host_commit':host['sha'],'tree':FINAL_TREE,'parent':parent,'files':len(entries)-1,'ref_updated':False}
+          print('VERIFIED_SOURCE_COMMIT '+json.dumps(result),flush=True)
+          pathlib.Path(os.environ['RUNNER_TEMP'],'verified-hosts.json').write_text(json.dumps(result,indent=2))
           PY
       - uses: actions/upload-artifact@v4
         with:
