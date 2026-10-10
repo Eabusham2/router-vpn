@@ -196,3 +196,29 @@ func TestEntryLayerLeavesExecutionLifecycleOwned(t *testing.T) {
 		}
 	}
 }
+
+func TestEntryStartLayerCannotDisappearOrChangeAfterCapture(t *testing.T) {
+	config, meta, source, _ := entryLayerFixture(t, "wg", "aes-256-gcm", "local")
+	captured := startObject(t, meta)
+	captured["entry_start_layer"] = "aes-256-gcm"
+	for _, missing := range []string{"", `{"mode":"aes-256-gcm+xor-whitening","profile":{}}`} {
+		if c, e := NewWithEntryStartLayer(config, startJSON(t, captured), missing); e == nil || c != nil {
+			t.Fatal("requested layer was omitted or changed")
+		}
+	}
+	if c, e := New(config, startJSON(t, captured)); e == nil || c != nil {
+		t.Fatal("ordinary controller silently omitted entry layer")
+	}
+	c, e := NewWithEntryStartLayer(config, startJSON(t, captured), source)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer c.Close()
+	if c.meta.EntryStartLayer != "aes-256-gcm" {
+		t.Fatal("captured layer forgotten")
+	}
+	captured["entry_start_layer"] = "aes-256-gcm+xor-whitening"
+	if c, e := NewWithEntryStartLayer(config, startJSON(t, captured), source); e == nil || c != nil {
+		t.Fatal("captured layer was downgraded")
+	}
+}

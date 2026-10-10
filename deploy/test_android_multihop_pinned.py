@@ -68,12 +68,12 @@ def android_json_dependency(work: Path, env: dict[str, str]) -> Path:
 JAVA_NAMES = ('AndroidMultihopController', 'NativeSingBoxController',
               'AndroidProfileSelection', 'AndroidNumericAddress',
               'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy',
-              'AndroidStartLayer', 'AndroidXrayLibboxPolicy', 'NativeXrayController')
+              'AndroidStartLayer', 'AndroidXrayLibboxPolicy', 'NativeXrayController','AndroidMultihopStartLayer')
 
 
 def inputs() -> list[Path]:
     java = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
-    return [Path(__file__).resolve(), ROOT / 'android/test_android_multihop_graph.py',
+    return [Path(__file__).resolve(), ROOT / 'android/test_android_multihop_start_layer.py', ROOT / 'android/test_android_multihop_graph.py',
             ROOT / 'mobile/routervpn_multihop_native_test.go.tmpl',
             *[java / (name + '.java') for name in JAVA_NAMES]]
 
@@ -135,9 +135,19 @@ def run(vendor: Path) -> None:
         subprocess.run([sys.executable, str(ROOT / 'android/test_android_multihop_graph.py')],
                        cwd=ROOT, env=env, check=True, timeout=180)
         require_fixture_matrix(fixtures)
+        entry_layers=Path(temp)/'entry-layers'
+        entry_layers.mkdir()
+        env['ROUTERVPN_ENTRY_LAYER_FIXTURES']=str(entry_layers)
+        env['ROUTERVPN_REQUIRE_ENTRY_LAYER_FIXTURES']='1'
+        subprocess.run([sys.executable,str(ROOT/'android/test_android_multihop_start_layer.py')],
+                       cwd=ROOT,env=env,check=True,timeout=180)
+        modes=('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp')
+        expected={mode+'-'+layer+'-'+execution+'.json' for mode in modes for layer in ('aes','aes-xor') for execution in ('local','server','auto')}
+        if {p.name for p in entry_layers.iterdir()}!=expected:raise ValueError('Missing or extra native entry-layer fixture')
+
         subprocess.run(['go', 'test', '-ldflags=-checklinkname=0',
                         '-tags', 'with_quic,with_wireguard,with_gvisor',
-                        './experimental/libbox', '-run', '^TestRouterMultihopAndroidGeneratedGraphs$',
+                        './experimental/libbox', '-run', '^TestRouterMultihop(AndroidGeneratedGraphs|EntryStartLayerGeneratedGraphs)$',
                         '-count=1', '-timeout=120s', '-v'], cwd=vendor, env=env, check=True, timeout=600)
     print('All 150 shipping Android graphs passed the pinned native parser; negative schema controls rejected.')
 

@@ -243,16 +243,27 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             io.nekohasekai.libbox.RouterMultihop preparedExecution=null;
             String hopMetadata=null;
             File executionFile=new File(session,"routervpn-multihop.json").getCanonicalFile();
+            File entryLayerFile=new File(session,AndroidMultihopStartLayer.SESSION_FILE).getCanonicalFile();
+            if (entryLayerFile.exists() && (!executionFile.isFile() || !entryLayerFile.getParentFile().equals(session))) {
+                throw new IllegalStateException("Entry Start Layer has no owned multihop session.");
+            }
             if(executionFile.isFile()){
                 if(!modeId.startsWith("multihop-")||!executionFile.getParentFile().equals(session))throw new IllegalStateException("Unowned multihop metadata.");
                 String metadata=new String(readLimited(executionFile,16384),java.nio.charset.StandardCharsets.UTF_8);
                 hopMetadata=metadata;
                 String execution=new JSONObject(metadata).optString("execution","local");
                 if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Unknown multihop execution.");
-                if(!"local".equals(execution)){
-                    preparedExecution=Libbox.newRouterMultihop(config,metadata);
-                    config=preparedExecution.config();
+                String captured=null;
+                if(entryLayerFile.exists()) {
+                    if(!entryLayerFile.isFile())throw new IllegalStateException("Captured entry layer is not a private file.");
+                    byte[] raw=readLimited(entryLayerFile,AndroidMultihopStartLayer.MAX_BYTES);
+                    captured=java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                        .decode(java.nio.ByteBuffer.wrap(raw)).toString();
                 }
+                preparedExecution=AndroidMultihopStartLayer.prepareExecution(config,metadata,captured);
+                if(preparedExecution!=null)config=preparedExecution.config();
             }
             String capturedMTU="";
             File mtuFile=new File(session,"routervpn-mtu.json").getCanonicalFile();

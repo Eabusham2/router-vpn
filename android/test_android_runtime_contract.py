@@ -292,6 +292,7 @@ assert "libbox or native Xray mode" in policy
 for executable_contract in (
     "test_android_java_syntax.py",
     "test_android_multihop_modes.py",
+    "test_android_multihop_start_layer.py",
     "test_android_layered_service_compile.py",
     "test_android_custom_preset_commit.py",
     "test_android_runtime_teardown.py",

@@ -378,3 +378,51 @@ func TestRouterNativeSIP003StartLayerGraph(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterMultihopEntryStartLayerGeneratedGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_ENTRY_LAYER_FIXTURES")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_ENTRY_LAYER_FIXTURES") == "1" {
+			t.Fatal("required entry layer fixtures missing")
+		}
+		t.Skip("host fixture generator is required by the Android shipping lane")
+	}
+	cases := 0
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"} {
+		for _, layer := range []string{"aes", "aes-xor"} {
+			for _, execution := range []string{"local", "server", "auto"} {
+				path := filepath.Join(root, mode+"-"+layer+"-"+execution+".json")
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = CheckConfig(string(raw)); err != nil {
+					t.Fatal("actual entry Start Layer graph rejected", path, err)
+				}
+				var graph map[string]any
+				if err = json.Unmarshal(raw, &graph); err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, value := range graph["outbounds"].([]any) {
+					out := value.(map[string]any)
+					if out["tag"] == "routervpn-entry-start-layer" {
+						found = true
+						out["type"] = "unimplemented-negative-entry-layer"
+					}
+				}
+				if !found {
+					t.Fatal("fixture silently omitted entry layer")
+				}
+				broken, _ := json.Marshal(graph)
+				if CheckConfig(string(broken)) == nil {
+					t.Fatal("native parser accepted unregistered entry engine")
+				}
+				cases++
+			}
+		}
+	}
+	if cases != 48 {
+		t.Fatal("incomplete authenticated entry layer matrix", cases)
+	}
+}

@@ -61,6 +61,8 @@ assert headers, 'Libbox generated headers missing'
 for header in headers:
     assert 'LibboxRouterOpenVPNEndpoint' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
+    assert 'LibboxNewRouterMultihopWithEntryStartLayer' in header.read_text(), str(header)
+    assert 'LibboxRouterCompileMultihopEntryStartLayer' in header.read_text(), str(header)
     assert 'LibboxNewRouterHopMeasurement' in header.read_text(), str(header)
     assert 'LibboxRouterApplyMultihopLANPolicy' in header.read_text(), str(header)
     assert 'LibboxRouterApplyNativeXrayDevicePolicy' in header.read_text(), str(header)

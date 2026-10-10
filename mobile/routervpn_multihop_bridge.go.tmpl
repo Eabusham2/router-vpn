@@ -148,3 +148,24 @@ func RouterApplyNativeXrayDevicePolicy(config, profile string) (string, error) {
 func RouterCompileXrayExit(profile, mode string) (string, error) {
 	return mobilemultihop.CompileXrayExit(profile, mode)
 }
+
+// NewRouterMultihopWithEntryStartLayer retains the captured comparison owner
+// while the authenticated entry layer is added before any native engine starts.
+func NewRouterMultihopWithEntryStartLayer(config, metadata, start string) (*RouterMultihop, error) {
+	c, e := mobilemultihop.NewWithEntryStartLayer(config, metadata, start)
+	if e != nil {
+		return nil, e
+	}
+	return &RouterMultihop{c}, nil
+}
+
+// RouterCompileMultihopEntryStartLayer is pure preflight for private staging.
+// Runtime creation repeats this validation; the returned proposal is not reused.
+func RouterCompileMultihopEntryStartLayer(config, metadata, start string) (string, error) {
+	c, e := mobilemultihop.NewWithEntryStartLayer(config, metadata, start)
+	if e != nil {
+		return "", e
+	}
+	defer c.Close()
+	return c.Config(), nil
+}

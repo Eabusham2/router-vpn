@@ -54,7 +54,19 @@ func NewWithEntryStartLayer(config, metadata, start string) (*Controller, error)
 			return nil, errors.New("entry AES requires exact 256-bit keys")
 		}
 	}
-	controller, err := New(config, metadata)
+	var captured Metadata
+	if exactJSON([]byte(metadata), &captured, 16384) != nil {
+		return nil, errors.New("invalid captured multihop metadata")
+	}
+	if captured.EntryStartLayer != "" && captured.EntryStartLayer != request.Mode {
+		return nil, errors.New("entry Start Layer differs from the captured node selection")
+	}
+	captured.EntryStartLayer = ""
+	baseMetadata, err := json.Marshal(captured)
+	if err != nil {
+		return nil, err
+	}
+	controller, err := New(config, string(baseMetadata))
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +127,7 @@ func NewWithEntryStartLayer(config, metadata, start string) (*Controller, error)
 	if err != nil || len(result) > 4<<20 {
 		return nil, errors.New("entry Start Layer graph exceeds its bound")
 	}
+	controller.meta.EntryStartLayer = request.Mode
 	controller.config = string(result)
 	return controller, nil
 }

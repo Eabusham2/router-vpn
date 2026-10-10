@@ -44,6 +44,9 @@ func main(){
    }
    value=string(data)
   }
+ case "entry-start":
+  var input struct{Config string;Metadata string;Source string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{var c *mobilemultihop.Controller;c,err=mobilemultihop.NewWithEntryStartLayer(input.Config,input.Metadata,input.Source);if err==nil{value=c.Config();err=c.Close()}}
  case "parse":value,err=mobilemultihop.CompileWireGuardProfile(r.Config,r.Policy)
  case "exit":value,err=mobilemultihop.WireGuardExitConfig(r.Config,r.Policy)
  case "awg-parse":value,err=mobilemultihop.CompileAmneziaProfile(r.Config,r.Policy)
@@ -73,6 +76,7 @@ func main(){
 }
 '''
 STUBS={
+'io/nekohasekai/libbox/RouterMultihop.java':r'''package io.nekohasekai.libbox; public final class RouterMultihop {private final String graph;public RouterMultihop(String g){graph=g;}public String config(){return graph;}public void close(){}}''',
 'android/content/Context.java':r'''package android.content;
 public class Context {
  private final java.io.File root;
@@ -131,6 +135,15 @@ public final class Libbox {
    if(p.exitValue()!=0)throw new IllegalArgumentException(error);
    return out;
   }finally{p.destroyForcibly();}
+ }
+ public static Runnable afterEntryLayerPreflight;
+ public static String routerCompileMultihopEntryStartLayer(String config,String metadata,String source)throws Exception {
+  String result=call("entry-start",new JSONObject().put("Config",config).put("Metadata",metadata).put("Source",source).toString(),"");
+  if(afterEntryLayerPreflight!=null)afterEntryLayerPreflight.run();return result;
+ }
+ public static RouterMultihop newRouterMultihop(String config,String metadata)throws Exception{return new RouterMultihop(testPlan(config,metadata));}
+ public static RouterMultihop newRouterMultihopWithEntryStartLayer(String config,String metadata,String source)throws Exception {
+  return new RouterMultihop(call("entry-start",new JSONObject().put("Config",config).put("Metadata",metadata).put("Source",source).toString(),""));
  }
  public static String routerCompileWireGuardProfile(String c,String p)throws Exception{return call("parse",c,p);}
  public static String routerWireGuardExitConfig(String c,String p)throws Exception{return call("exit",c,p);}
@@ -765,7 +778,7 @@ def main():
         for name,source in STUBS.items():
             target=sources/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(source)
         app=sources/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
-        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer','AndroidXrayLibboxPolicy','NativeXrayController'):
+        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer','AndroidXrayLibboxPolicy','NativeXrayController','AndroidMultihopStartLayer'):
             shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
         (app/'MultihopGraphHarness.java').write_text(HARNESS)
         classes=temp/'classes'

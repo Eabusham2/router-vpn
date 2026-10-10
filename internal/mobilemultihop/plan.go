@@ -39,18 +39,19 @@ var Targets = []string{"https://1.1.1.1/cdn-cgi/trace", "https://1.0.0.1/cdn-cgi
 // Metadata is captured from the paired entry and exit, never the mutable UI.
 // It contains credentials and must not be returned by a progress/status API.
 type Metadata struct {
-	EntryID     string `json:"entry_id"`
-	ExitID      string `json:"exit_id"`
-	EntryNodeID string `json:"entry_node_id"`
-	ExitNodeID  string `json:"exit_node_id"`
-	EntryAPI    string `json:"entry_api"`
-	ExitAPI     string `json:"exit_api"`
-	EntryToken  string `json:"entry_token"`
-	ExitToken   string `json:"exit_token"`
-	EntryTag    string `json:"entry_tag"`
-	EntryMode   string `json:"entry_mode,omitempty"`
-	ExitMode    string `json:"exit_mode"`
-	Execution   string `json:"execution"`
+	EntryID         string `json:"entry_id"`
+	ExitID          string `json:"exit_id"`
+	EntryNodeID     string `json:"entry_node_id"`
+	ExitNodeID      string `json:"exit_node_id"`
+	EntryAPI        string `json:"entry_api"`
+	ExitAPI         string `json:"exit_api"`
+	EntryToken      string `json:"entry_token"`
+	ExitToken       string `json:"exit_token"`
+	EntryTag        string `json:"entry_tag"`
+	EntryMode       string `json:"entry_mode,omitempty"`
+	EntryStartLayer string `json:"entry_start_layer,omitempty"`
+	ExitMode        string `json:"exit_mode"`
+	Execution       string `json:"execution"`
 }
 
 // Engine must dial the named outbound on the same retained native instance.
@@ -178,6 +179,9 @@ func New(config, metadata string) (*Controller, error) {
 	var meta Metadata
 	if exactJSON([]byte(metadata), &meta, 16384) != nil {
 		return nil, errors.New("invalid frozen multihop metadata")
+	}
+	if meta.EntryStartLayer != "" {
+		return nil, errors.New("captured entry layer requires its authenticated native source")
 	}
 	if !exactID.MatchString(meta.EntryID) || !exactID.MatchString(meta.ExitID) || meta.EntryID == meta.ExitID || !proofID.MatchString(meta.EntryNodeID) || !proofID.MatchString(meta.ExitNodeID) || meta.EntryNodeID == meta.ExitNodeID {
 		return nil, errors.New("distinct paired multihop identities required")

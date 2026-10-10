@@ -171,7 +171,8 @@ final class AndroidMultihopController {
         String exitIdentity = AndroidNodeStore.stableNodeIdentity(exit);
         if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
         if (entryIdentity.isEmpty() || exitIdentity.isEmpty()) throw new IllegalArgumentException("Both multihop nodes need paired identities.");
-        requireOwnedPolicies(entry); requireOwnedPolicies(exit);
+        String entryStartLayer = AndroidMultihopStartLayer.capture(entry);
+        requireOwnedPolicies(entry, true); requireOwnedPolicies(exit, false);
         boolean packetEntry = NativeSingBoxController.nativeWireGuardFamily(entryMode);
         JSONObject wg;
         if (packetEntry) {
@@ -225,6 +226,19 @@ final class AndroidMultihopController {
         byte[] patched = (config.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         if (patched.length > MAX_CONFIG) throw new IllegalStateException("Multihop sing-box config exceeds safety limit.");
 
+        JSONObject a=selectedRouterProfile(entry),b=selectedRouterProfile(exit);
+        if(a==null||b==null)throw new IllegalArgumentException("Both paired node profiles are required.");
+        JSONObject metadata=new JSONObject().put("entry_id",a.getString("id")).put("exit_id",b.getString("id"))
+            .put("entry_node_id",entryIdentity).put("entry_mode",entryMode)
+            .put("exit_node_id",exitIdentity)
+            .put("entry_api",a.getString("router_api")).put("exit_api",b.getString("router_api"))
+            .put("entry_token",a.getString("api_token")).put("exit_token",b.getString("api_token"))
+            .put("entry_tag","entry-wg").put("exit_mode",exitMode).put("execution",execution);
+        if (!entryStartLayer.isEmpty()) metadata.put("entry_start_layer",new JSONObject(entryStartLayer).getString("mode"));
+        byte[] privateMetadata=metadata.toString().getBytes(StandardCharsets.UTF_8);
+        if(privateMetadata.length>16384)throw new IllegalArgumentException("Multihop metadata exceeds the safety bound.");
+        AndroidMultihopStartLayer.preflight(config.toString(),metadata.toString(),entryStartLayer);
+
         if (Thread.currentThread().isInterrupted()
                 || !entrySnapshot.equals(loadBundle(entryBundle).toString())
                 || !exitSnapshot.equals(loadBundle(exitBundle).toString())) {
@@ -244,7 +258,7 @@ final class AndroidMultihopController {
             if (names == null) throw new IllegalStateException("Exit profile is empty.");
             for (int i = 0; i < names.length(); i++) {
                 String name = names.getString(i);
-                if("routervpn-multihop.json".equals(name)||"routervpn-mtu.json".equals(name))throw new IllegalArgumentException("Imported profile uses a reserved multihop metadata file.");
+                if("routervpn-multihop.json".equals(name)||"routervpn-mtu.json".equals(name)||AndroidMultihopStartLayer.SESSION_FILE.equals(name))throw new IllegalArgumentException("Imported profile uses a reserved multihop metadata file.");
                 if (!safeFileName(name)) throw new IllegalStateException("Unsafe exit profile filename: " + name);
                 byte[] data;
                 if ("sing-box.json".equals(name)) data = patched;
@@ -258,18 +272,13 @@ final class AndroidMultihopController {
                 if (total > MAX_TOTAL) throw new IllegalStateException("Multihop session exceeds private staging limit.");
                 writeFile(new File(session, name), data);
             }
-            {
-                JSONObject a=selectedRouterProfile(entry),b=selectedRouterProfile(exit);
-                if(a==null||b==null)throw new IllegalArgumentException("Both paired node profiles are required.");
-                JSONObject metadata=new JSONObject().put("entry_id",a.getString("id")).put("exit_id",b.getString("id"))
-                    .put("entry_node_id",entryIdentity).put("entry_mode",entryMode)
-                    .put("exit_node_id",exitIdentity)
-                    .put("entry_api",a.getString("router_api")).put("exit_api",b.getString("router_api"))
-                    .put("entry_token",a.getString("api_token")).put("exit_token",b.getString("api_token"))
-                    .put("entry_tag","entry-wg").put("exit_mode",exitMode).put("execution",execution);
-                byte[] privateMetadata=metadata.toString().getBytes(StandardCharsets.UTF_8);
-                if(privateMetadata.length>16384)throw new IllegalArgumentException("Multihop metadata exceeds the safety bound.");
-                writeFile(new File(session,"routervpn-multihop.json"),privateMetadata);
+            writeFile(new File(session,"routervpn-multihop.json"),privateMetadata);
+            total += privateMetadata.length;
+            if (!entryStartLayer.isEmpty()) {
+                byte[] captured = entryStartLayer.getBytes(StandardCharsets.UTF_8);
+                total += captured.length;
+                if (total > MAX_TOTAL) throw new IllegalStateException("Captured entry exceeds the staged profile budget.");
+                writeFile(new File(session,AndroidMultihopStartLayer.SESSION_FILE),captured);
             }
                 JSONObject mtuProfile=new JSONObject(io.nekohasekai.libbox.Libbox.routerMultihopMTUProfile(
                         config.toString(), lanProfiles.toString()));
@@ -385,7 +394,7 @@ final class AndroidMultihopController {
         return AndroidProfileSelection.selectedRouterProfile(bundle);
     }
 
-    private static void requireOwnedPolicies(JSONObject bundle) {
+    private static void requireOwnedPolicies(JSONObject bundle, boolean capturedEntryLayer) throws Exception {
         JSONObject profile=selectedRouterProfile(bundle);
         for (String name:new String[]{"daita_enabled","jumbo_tun"}) {
             Object value=profile.opt(name);
@@ -393,8 +402,8 @@ final class AndroidMultihopController {
             // The shared performance compiler enforces both captured policies
             // after graph/MTU/LAN composition and before any session is staged.
         }
-        String start=profile.optString("start_layer","off").trim().toLowerCase(Locale.ROOT);
-        if (!java.util.Arrays.asList("","off","none","disabled").contains(start)) throw new IllegalArgumentException("This graph does not own an additional Start Layer.");
+        String start=AndroidStartLayer.selectedMode(bundle);
+        if (!capturedEntryLayer && !AndroidStartLayer.OFF.equals(start)) throw new IllegalArgumentException("Exit Start Layer requires its own paired execution policy.");
     }
 
     private static EntryPrivate parseEntryPrivate(JSONObject bundle) {
