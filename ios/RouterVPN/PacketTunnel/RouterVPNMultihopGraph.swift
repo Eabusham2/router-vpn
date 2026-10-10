@@ -13,7 +13,8 @@ enum RouterVPNMultihopGraph {
     static let entryTag = "routervpn-hop-entry"
     static let entryProofTag = "routervpn-hop-entry-proof"
     static let entryPrivateTag = "routervpn-hop-entry-private"
-    static let supportedExitModes = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"]
+    static let nativeXrayModes = ["reality-vision", "reality-pq-vision", "reality-xhttp"]
+    static let supportedExitModes = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"] + nativeXrayModes
     private static let maxBytes = 4 * 1024 * 1024
 
     static func build(entryEndpoint: [String: Any], entryProfile: [String: Any],
@@ -67,7 +68,7 @@ enum RouterVPNMultihopGraph {
               var tun = inbounds.first, tun["type"] as? String == "tun", tun["auto_route"] as? Bool == true,
               let route = original["route"] as? [String: Any], route["final"] as? String == "proxy",
               let outbounds = original["outbounds"] as? [[String: Any]] else {
-            throw issue("The exit must contain one self-contained full-device WireGuard/AmneziaWG/Shadowsocks/Hysteria2 profile.")
+            throw issue("The exit must contain one self-contained full-device native packet or encrypted proxy profile.")
         }
         // Only the generated full-device policy is transformed. A saved split
         // route, bypass or DNS rule must never disappear as a side effect.
@@ -99,6 +100,17 @@ enum RouterVPNMultihopGraph {
                     throw issue("Two WireGuard hops cannot use the same server key under different node labels.")
                 }
             }
+        } else if nativeXrayModes.contains(exitMode) {
+            let proxies = outbounds.filter { $0["tag"] as? String == "proxy" }
+            guard originalEndpoints.isEmpty, proxies.count == 1, let native = proxies.first,
+                  native["mode"] as? String == exitMode,
+                  outbounds.allSatisfy({ $0["tag"] as? String == "proxy" ||
+                      ($0["type"] as? String == "direct" && Set($0.keys) == Set(["type", "tag"])) }) else {
+                throw issue("Native Xray exit lost its exact protocol or contains another routing owner.")
+            }
+            // xrayFiles already ran the shared strict native compiler. Keep its
+            // original authentication bytes; add only this graph's entry detour.
+            proxy = try proxyEntry(native, tag: "proxy")
         } else {
             let proxies = outbounds.filter { $0["tag"] as? String == "proxy" }
             guard originalEndpoints.isEmpty, proxies.count == 1, let exitProxy = proxies.first,
@@ -127,6 +139,7 @@ enum RouterVPNMultihopGraph {
         tun.removeValue(forKey: "interface_name")
         tun.removeValue(forKey: "route_exclude_address")
         tun.removeValue(forKey: "route_address")
+        if tun["tag"] == nil { tun["tag"] = "tun-in" }
         tun["strict_route"] = true
         tun["stack"] = "system"
         tun["address"] = ["172.29.94.1/30", "fd29:94::1/126"]
@@ -172,6 +185,73 @@ enum RouterVPNMultihopGraph {
         guard dnsServers.count == 1, let importedDNS = dnsServers.first, serverIP(importedDNS) else {
             throw issue("WireGuard requires exactly one bounded literal imported DNS resolver.")
         }
+        let dns = try selectedDNS(profile, importedDNS: importedDNS, requireImportedMatch: true)
+        let exit = try wireGuardEndpoint(endpoint, tag: "proxy")
+        let config: [String: Any] = [
+            "log": ["level": "warn"],
+            "inbounds": [["type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true,
+                "stack": "system", "address": ["172.29.94.1/30", "fd29:94::1/126"], "mtu": 1280]],
+            "endpoints": [exit], "outbounds": [[String: Any]](),
+            "dns": dns,
+            "route": ["auto_detect_interface": true, "final": "proxy", "rules": [["protocol": "dns", "action": "hijack-dns"]]]
+        ]
+        return ["sing-box.json": try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])]
+    }
+
+    /// Compile before any engine or private session is created. The closure is
+    /// the pinned native compiler in production, not a host-side approximation.
+    static func xrayFiles(assets: [String: String], mode: String, profile: [String: Any],
+                          compiler: (String, String) throws -> String) throws -> [String: Data] {
+        guard nativeXrayModes.contains(mode), (1...2).contains(assets.count),
+              Set(assets.keys).isSubset(of: ["sing-box.json", "xray.json"]),
+              let encoded = assets["xray.json"], encoded.utf8.count <= 6 * 1024 * 1024,
+              let original = Data(base64Encoded: encoded, options: []),
+              !original.isEmpty, original.count <= maxBytes,
+              original.base64EncodedString() == encoded,
+              let originalText = String(data: original, encoding: .utf8) else {
+            throw issue("The exact selected Xray exit assets are missing, ambiguous or oversized.")
+        }
+        let payload = try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys])
+        guard payload.count <= 8 * 1024 * 1024 else { throw issue("Native exit input exceeds its bound.") }
+        let compiled = try compiler(String(decoding: payload, as: UTF8.self), mode)
+        guard !compiled.isEmpty, compiled.utf8.count <= maxBytes,
+              var graph = try JSONSerialization.jsonObject(with: Data(compiled.utf8)) as? [String: Any],
+              let ins = graph["inbounds"] as? [[String: Any]], ins.count == 1,
+              ins[0]["type"] as? String == "tun", ins[0]["auto_route"] as? Bool == true,
+              ins[0]["strict_route"] as? Bool == true,
+              let outs = graph["outbounds"] as? [[String: Any]],
+              let route = graph["route"] as? [String: Any], route["final"] as? String == "proxy" else {
+            throw issue("Native exit compilation lost its one-TUN graph.")
+        }
+        let native = outs.filter { $0["type"] as? String == "routervpn-xray" }
+        guard native.count == 1, native[0]["tag"] as? String == "proxy",
+              native[0]["mode"] as? String == mode,
+              native[0]["config_json"] as? String == originalText else {
+            throw issue("Native exit compilation changed the captured protocol or authentication.")
+        }
+        _ = try proxyEntry(native[0], tag: "proxy")
+        // An explicit saved DNS policy wins. Otherwise retain valid imported
+        // DNS, falling back only to this node's own AdGuard for legacy raw XHTTP.
+        let savedMode = try setting(profile, "dns_mode", "").lowercased()
+        if !savedMode.isEmpty || graph["dns"] == nil {
+            let v4 = try setting(profile, "adguard_ipv4", "")
+            let home = try v4.isEmpty ? setting(profile, "adguard_ipv6", "") : v4
+            var captured = profile
+            if savedMode.isEmpty { captured["dns_mode"] = "home" }
+            graph["dns"] = try selectedDNS(captured, importedDNS: home, requireImportedMatch: false)
+        } else {
+            guard let dns = graph["dns"] as? [String: Any] else { throw issue("Malformed imported exit DNS.") }
+            graph["dns"] = try exitDNS(dns)
+        }
+        let result = try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])
+        guard result.count <= maxBytes else { throw issue("Native exit graph exceeds its bound.") }
+        // Original xray.json is carried INSIDE the native outbound, never as a
+        // separately launchable file, process or second system VPN.
+        return ["sing-box.json": result]
+    }
+
+    private static func selectedDNS(_ profile: [String: Any], importedDNS: String,
+                                    requireImportedMatch: Bool) throws -> [String: Any] {
         let mode = try setting(profile, "dns_mode", "").lowercased()
         var host = "", type = "udp", port = 53
         let requestedPort = try integer(profile["dns_port"])
@@ -199,10 +279,10 @@ enum RouterVPNMultihopGraph {
             }.sorted { ($0["latency_ms"] as? Double ?? .greatestFiniteMagnitude) < ($1["latency_ms"] as? Double ?? .greatestFiniteMagnitude) }
             host = saved.isEmpty ? results.first?["address"] as? String ?? "" : saved
             if host.isEmpty && mode == "rescue" { host = "1.1.1.1" }
-        default: throw issue("Unknown saved WireGuard DNS policy.")
+        default: throw issue("Unknown saved native DNS policy.")
         }
         guard (1...65535).contains(port), serverIP(host) || hostname(host) else { throw issue("The selected DNS host or port is invalid.") }
-        if type == "udp", port == 53, serverIP(host) {
+        if requireImportedMatch && type == "udp", port == 53, serverIP(host) {
             guard host == importedDNS else { throw issue("WireGuard DNS does not match the frozen exit-node DNS selection.") }
         }
         var server: [String: Any] = ["type": type, "tag": "selected-dns", "server": host, "server_port": port, "detour": "proxy"]
@@ -229,16 +309,7 @@ enum RouterVPNMultihopGraph {
             server["domain_resolver"] = "routervpn-bootstrap-dns"
         }
         servers.append(server)
-        let exit = try wireGuardEndpoint(endpoint, tag: "proxy")
-        let config: [String: Any] = [
-            "log": ["level": "warn"],
-            "inbounds": [["type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true,
-                "stack": "system", "address": ["172.29.94.1/30", "fd29:94::1/126"], "mtu": 1280]],
-            "endpoints": [exit], "outbounds": [[String: Any]](),
-            "dns": try exitDNS(["servers": servers, "final": "selected-dns"]),
-            "route": ["auto_detect_interface": true, "final": "proxy", "rules": [["protocol": "dns", "action": "hijack-dns"]]]
-        ]
-        return ["sing-box.json": try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])]
+        return try exitDNS(["servers": servers, "final": "selected-dns"])
     }
 
     /// Apply a saved IPv6 preference to the existing single-node WG graph.

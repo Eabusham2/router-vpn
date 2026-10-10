@@ -213,6 +213,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         } else if ["awg2-fast", "awg2-strong"].contains(exitMode) {
             let exit = try nativeAmneziaEndpoint(root: root, expectedProofID: exitProofID, mode: exitMode)
             rawFiles = try RouterVPNMultihopGraph.wireGuardFiles(endpoint: exit.endpoint, profile: exitProfile, dnsServers: exit.dns)
+        } else if RouterVPNMultihopGraph.nativeXrayModes.contains(exitMode) {
+            guard let profiles = root["profiles"] as? [String: Any],
+                  let assets = profiles[exitMode] as? [String: String] else {
+                throw tunnelError(58, "The captured exit has no exact native Xray assets.")
+            }
+            rawFiles = try RouterVPNMultihopGraph.xrayFiles(assets: assets, mode: exitMode, profile: exitProfile) { payload, mode in
+                var failure: NSError?
+                let compiled: String? = LibboxRouterCompileXrayExit(payload, mode, &failure)
+                if let failure { throw failure }
+                guard let compiled else { throw self.tunnelError(58, "Native Xray exit compilation returned no graph.") }
+                return compiled
+            }
         } else {
             rawFiles = try layeredProfile(root, rawProfileID: exitMode)
         }
