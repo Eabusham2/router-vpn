@@ -1,3 +1,5 @@
+//go:build go1.24
+
 // Command xray-entry emits public, deterministic test fixtures. It does not
 // start an engine, open a socket or read any user configuration.
 package main
