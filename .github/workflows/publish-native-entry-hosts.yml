@@ -21,9 +21,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import ast,hashlib,subprocess,urllib.request
-          # The complete unencoded changes and publication script are retained
-          # in this immutable repository commit, not a mutable remote program.
+          import ast,hashlib,subprocess,urllib.request,importlib.util,os,pathlib
+          # Full unencoded source edits are retained at this immutable commit.
           url='https://raw.githubusercontent.com/Eabusham2/router-vpn/3cd17ce42e6d507082f4756ff502be5182240251/.github/workflows/publish-native-entry-hosts.yml'
           with urllib.request.urlopen(url,timeout=30) as response:raw=response.read(200000)
           assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()=='881d598d011885e14fa499a8e3f538a002cc360d'
@@ -49,14 +48,16 @@ jobs:
                       replacement=call.args[2]
                       assert isinstance(replacement,ast.Call) and isinstance(replacement.func,ast.Attribute) and replacement.func.attr=='replace'
                       assert isinstance(replacement.func.value,ast.Constant)
-                      # YAML already removed the workflow indentation. Preserve
-                      # the original Swift replacement string exactly once.
                       call.args[2]=replacement.func.value
                       corrected+=1
           assert corrected==1
           exec(compile(ast.fix_missing_locations(source),'verified-host-source','exec'))
-          # The recovered script itself asserts the expected source tree before
-          # tests. Any other changed byte prevents publication.
+          # Reuse the production gate's bounded, SHA-256-verified dependency
+          # retrieval. No test doubles or unverified JARs replace Android JSON.
+          spec=importlib.util.spec_from_file_location('android_graph_dependency',pathlib.Path('deploy/test_android_multihop_pinned.py'))
+          module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+          temp=pathlib.Path(os.environ['RUNNER_TEMP'])/'android-json';temp.mkdir(exist_ok=True)
+          os.environ['ANDROID_JSON_JAR']=str(module.android_json_dependency(temp,dict(os.environ)))
           subprocess.run(['bash','-e','-c',blocks[1]],check=True,timeout=720)
           exec(compile(python_body(blocks[2]),'verified-host-publication','exec'))
           PY
