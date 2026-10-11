@@ -1,0 +1,70 @@
+name: Native Rosenpass protocol and ownership
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/native-pq.yml'
+      - 'mobile/rosenpass/**'
+      - 'internal/mobilepq/**'
+permissions:
+  contents: read
+concurrency:
+  group: native-pq-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  protocol:
+    name: Pinned protocol on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev
+      - name: Apple native dependencies
+        if: runner.os == 'macOS'
+        run: |
+          command -v cmake || brew install cmake
+          command -v ninja || brew install ninja
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+      - name: Select exact Rust compiler
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --no-self-update
+          rustup default 1.99.0
+          rustc --version
+      - name: Compile and exchange real pinned protocol packets
+        run: cargo test --manifest-path mobile/rosenpass/Cargo.toml -- --test-threads=1
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Race-test the native key lifecycle
+        run: |
+          go test -race -count=20 -timeout=90s ./internal/mobilepq
+          go vet ./internal/mobilepq
+      - name: Preserve resolved dependencies and source identity
+        if: always()
+        run: |
+          mkdir -p pq-evidence
+          git rev-parse HEAD > pq-evidence/source-sha.txt
+          test ! -f mobile/rosenpass/Cargo.lock || cp mobile/rosenpass/Cargo.lock pq-evidence/Cargo.lock
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-pq-dependencies-${{ runner.os }}-${{ github.sha }}
+          path: pq-evidence/
+          if-no-files-found: error
+          retention-days: 7
