@@ -54,14 +54,15 @@ var _ adapter.Lifecycle = (*Outbound)(nil)
 
 type Outbound struct {
 	outbound.Adapter
-	ctx      context.Context
-	cancel   context.CancelFunc
-	binding  *binding
-	plan     applexray.Plan
-	mu       sync.Mutex
-	instance *xcore.Instance
-	closed   bool
-	counted  bool
+	ctx         context.Context
+	cancel      context.CancelFunc
+	binding     *binding
+	plan        applexray.Plan
+	mu          sync.Mutex
+	instance    *xcore.Instance
+	closed      bool
+	counted     bool
+	connections applexray.Connections
 }
 
 func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options Options) (adapter.Outbound, error) {
@@ -152,32 +153,48 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 		return nil, errors.New("unsupported Xray connection network")
 	}
 	dest := xnet.Destination{Network: xnet.Network_TCP, Address: xnet.ParseAddress(destination.AddrString()), Port: xnet.Port(destination.Port)}
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(h.ctx, cancel)
+	request, err := h.connections.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ctx = request.Context
+	stop := context.AfterFunc(h.ctx, request.Cancel)
 	conn, err := xcore.Dial(ctx, instance, dest)
 	if err != nil {
 		stop()
-		cancel()
+		request.Release()
 		return nil, err
 	}
-	return applexray.NewStreamConn(ctx, &rayConn{Conn: conn, cancel: cancel, stop: stop}, destination), nil
+	stream := applexray.NewStreamConn(ctx, &rayConn{Conn: conn, cancel: request.Cancel, stop: stop, release: request.Release}, destination)
+	if err = request.Publish(stream); err != nil {
+		return nil, err
+	}
+	return stream, nil
 }
 func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
 	instance, err := h.owner()
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(h.ctx, cancel)
+	request, err := h.connections.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ctx = request.Context
+	stop := context.AfterFunc(h.ctx, request.Cancel)
 	dest := xnet.UDPDestination(xnet.ParseAddress(destination.AddrString()), xnet.Port(destination.Port))
 	link, err := xcore.RouterVPNDispatchPacket(ctx, instance, dest)
 	if err != nil {
 		stop()
-		cancel()
+		request.Release()
 		return nil, err
 	}
-	backend := &packetRay{link: link, dest: dest, cancel: cancel, stop: stop}
-	return applexray.NewPacketConn(ctx, backend), nil
+	backend := &packetRay{link: link, dest: dest, cancel: request.Cancel, stop: stop, release: request.Release}
+	packet := applexray.NewPacketConn(ctx, backend)
+	if err = request.Publish(packet); err != nil {
+		return nil, err
+	}
+	return packet, nil
 }
 func (h *Outbound) Close() error {
 	h.mu.Lock()
@@ -191,9 +208,10 @@ func (h *Outbound) Close() error {
 		h.counted = false
 	}
 	h.cancel()
+	connectionErr := h.connections.Close()
 	h.binding.close()
 	if h.instance == nil {
-		return nil
+		return connectionErr
 	}
 	instance := h.instance
 	h.instance = nil
@@ -201,19 +219,20 @@ func (h *Outbound) Close() error {
 	err := instance.Close()
 	lifecycle.Unlock()
 	bindings.Delete(instance)
-	return err
+	return errors.Join(connectionErr, err)
 }
 
 type rayConn struct {
 	net.Conn
-	once   sync.Once
-	cancel context.CancelFunc
-	stop   func() bool
+	once    sync.Once
+	cancel  context.CancelFunc
+	stop    func() bool
+	release func()
 }
 
 func (c *rayConn) Close() error {
 	var err error
-	c.once.Do(func() { c.stop(); c.cancel(); err = c.Conn.Close() })
+	c.once.Do(func() { defer c.release(); c.stop(); c.cancel(); err = c.Conn.Close() })
 	return err
 }
 
@@ -329,6 +348,7 @@ type packetRay struct {
 	dest    xnet.Destination
 	cancel  context.CancelFunc
 	stop    func() bool
+	release func()
 	once    sync.Once
 	readMu  sync.Mutex
 	writeMu sync.Mutex
@@ -376,6 +396,7 @@ func (p *packetRay) WritePacket(data []byte, addr net.Addr) error {
 }
 func (p *packetRay) Close() error {
 	p.once.Do(func() {
+		defer p.release()
 		p.stop()
 		p.cancel()
 		xcommon.Interrupt(p.link.Reader)

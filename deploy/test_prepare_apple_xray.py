@@ -61,6 +61,11 @@ class Prepare(unittest.TestCase):
             self.assertIn('xcore.RouterVPNIsNativeContext(ctx)',native)
             self.assertIn('activeNative.Load()',native)
             self.assertIn('bindings.Delete(instance)',native)
+            self.assertEqual(native.count('h.connections.Begin(ctx)'), 2)
+            self.assertIn('request.Publish(stream)', native)
+            self.assertIn('request.Publish(packet)', native)
+            self.assertLess(native.index('connectionErr := h.connections.Close()'), native.index('err := instance.Close()'))
+            self.assertEqual((sing/'experimental/libbox/routervpn/applexray/connections.go').read_bytes(), (ROOT/'internal/applexray/connections.go').read_bytes())
     def test_nested_transport_fixtures_are_test_tagged_and_exact(self):
         with tempfile.TemporaryDirectory() as tmp:
             sing,xray=self.fixture(tmp);self.run_prepare(sing,xray)
