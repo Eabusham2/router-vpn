@@ -26,6 +26,7 @@ import (
 
 type Options struct {
 	option.ServerOptions
+	Detour string `json:"detour,omitempty"`
 	Method   string `json:"method"`
 	Password string `json:"password"`
 }
@@ -50,17 +51,24 @@ func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag
 		return nil, err
 	}
 	// There is no raw socket, subprocess, local listener, imported socket option
-	// or fallback dialer. Libbox supplies the active native platform protection.
-	d, err := dialer.New(ctx, option.DialerOptions{}, options.ServerIsDomain())
+	// or fallback dialer. Explicit detours retain their captured entry; direct
+	// Start Layers retain Libbox's active native platform protection.
+	d, err := dialer.New(ctx, option.DialerOptions{Detour: options.Detour}, options.ServerIsDomain())
 	if err != nil {
 		return nil, err
 	}
 	return newOutbound(ctx, tag, options, d)
 }
 
+var detourTag = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
+
 var hostnameLabel = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
 func validate(options Options) error {
+    if options.Detour != "" {
+        if !detourTag.MatchString(options.Detour) { return errors.New("invalid captured AES+XOR entry tag") }
+        if _,err:=netip.ParseAddr(options.Server);err!=nil { return errors.New("nested AES+XOR requires its captured literal server") }
+    }
 	if _, err := startwhitening.Key(options.Method, options.Password); err != nil {
 		return err
 	}
@@ -82,7 +90,7 @@ func validate(options Options) error {
 	return nil
 }
 func newOutbound(ctx context.Context, tag string, options Options, d N.Dialer) (*Outbound, error) {
-	if ctx == nil || d == nil {
+	if ctx == nil || d == nil || (options.Detour != "" && options.Detour == tag) {
 		return nil, errors.New("native AES+XOR requires an owned platform dialer")
 	}
 	if err := validate(options); err != nil {
@@ -96,7 +104,7 @@ func newOutbound(ctx context.Context, tag string, options Options, d N.Dialer) (
 	if err != nil {
 		return nil, errors.New("native AES+XOR profile has invalid authenticated AES key material")
 	}
-	return &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(startwhitening.Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, option.DialerOptions{}), owner: startwhitening.NewOwner(ctx), dialer: d, method: method, server: options.ServerOptions.Build(), key: key}, nil
+	return &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(startwhitening.Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, option.DialerOptions{Detour: options.Detour}), owner: startwhitening.NewOwner(ctx), dialer: d, method: method, server: options.ServerOptions.Build(), key: key}, nil
 }
 func (h *Outbound) physical(ctx context.Context, network string) (*startwhitening.Conn, error) {
 	return h.owner.Open(ctx, h.key, network == N.NetworkUDP, func(ctx context.Context) (net.Conn, error) { return h.dialer.DialContext(ctx, network, h.server) })
