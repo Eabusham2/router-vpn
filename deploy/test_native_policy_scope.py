@@ -33,6 +33,14 @@ class NativePolicyScope(unittest.TestCase):
             self.assertFalse(parent.exists())
             for name in ('config.go','config_test.go','start_layer.go','start_layer_test.go'):
                 self.assertEqual((output/name).read_bytes(),(ROOT/'internal/applexray'/name).read_bytes())
+            pq=vendor/'experimental/libbox/routervpn/mobilepq'
+            for source in (ROOT/'internal/mobilepq').glob('*.go'):
+                self.assertEqual((pq/source.name).read_bytes(), source.read_bytes())
+                self.assertIn(source, module.inputs())
+            compiler=vendor/'experimental/libbox/routervpn/mobilemultihop/pq.go'
+            self.assertEqual(compiler.read_text(), (ROOT/'internal/mobilemultihop/pq.go').read_text().replace('"router-vpn/internal/mobilepq"','"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"'))
+            for source in (vendor/'experimental/libbox/routervpn').rglob('*.go'):
+                self.assertNotIn('"router-vpn/internal/', source.read_text())
             before={str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
             module.prepare(vendor)
             self.assertEqual(before,{str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
