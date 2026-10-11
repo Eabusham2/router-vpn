@@ -166,6 +166,9 @@ func NewPlan(config string, actual int) (*Plan, error) {
 			if err != nil || !idPattern.MatchString(id) || all[id] != nil {
 				return nil, errors.New("ambiguous native transport identity")
 			}
+			if value["type"] == "routervpn-pq" && value["mode"] != "wg-pq" && value["mode"] != "awg2-pq" {
+				return nil, errors.New("unknown PQ packet envelope")
+			}
 			all[id] = value
 		}
 	}
@@ -186,7 +189,7 @@ func NewPlan(config string, actual int) (*Plan, error) {
 			return nil, errors.New("unowned execution selector")
 		}
 	}
-	if packet["type"] == "wireguard" || packet["type"] == "routervpn-amneziawg" {
+	if packet["type"] == "wireguard" || packet["type"] == "routervpn-amneziawg" || packet["type"] == "routervpn-pq" {
 		value, err := intField(packet, "mtu", 0)
 		if err != nil || value < MinMTU || value > MaxMTU {
 			return nil, errors.New("invalid encrypted packet envelope")
@@ -201,7 +204,7 @@ func NewPlan(config string, actual int) (*Plan, error) {
 			if entry == nil {
 				return nil, errors.New("nested MTU entry is missing")
 			}
-			if entry["type"] == "wireguard" || entry["type"] == "routervpn-amneziawg" {
+			if entry["type"] == "wireguard" || entry["type"] == "routervpn-amneziawg" || entry["type"] == "routervpn-pq" {
 				outer, err := intField(entry, "mtu", 0)
 				if err != nil || outer < MinMTU {
 					return nil, errors.New("invalid entry MTU")
@@ -223,7 +226,7 @@ func NewPlan(config string, actual int) (*Plan, error) {
 				if ip.Is6() {
 					overhead = 80
 				}
-				if packet["type"] == "routervpn-amneziawg" {
+				if packet["type"] == "routervpn-amneziawg" || (packet["type"] == "routervpn-pq" && packet["mode"] == "awg2-pq") {
 					params, ok := packet["amnezia"].(map[string]any)
 					if !ok {
 						return nil, errors.New("missing AWG overhead policy")

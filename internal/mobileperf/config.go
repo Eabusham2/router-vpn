@@ -211,7 +211,7 @@ func Apply(config, profiles string) (string, error) {
 	if jumbo {
 		for _, tag := range []string{final, udpTag} {
 			kind := text(byTag[tag], "type")
-			if kind == "wireguard" || kind == "routervpn-amneziawg" {
+			if kind == "wireguard" || kind == "routervpn-amneziawg" || kind == "routervpn-pq" {
 				return "", errors.New("Jumbo is for compatible proxy TUNs, not raw WG/AWG packet endpoints")
 			}
 		}
@@ -326,6 +326,10 @@ func encrypted(tags map[string]map[string]any, tag string, seen map[string]bool)
 	switch text(value, "type") {
 	case "wireguard", "routervpn-amneziawg", "shadowsocks", "hysteria2", "routervpn-aes-xor", "routervpn-xray":
 		return true
+	case "routervpn-pq":
+		// Native construction validates the keys; performance must still reject
+		// an unknown base protocol instead of treating any PQ label as encrypted.
+		return value["mode"] == "wg-pq" || value["mode"] == "awg2-pq"
 	case "socks":
 		detour := text(value, "detour")
 		return detour != "" && encrypted(tags, detour, seen)

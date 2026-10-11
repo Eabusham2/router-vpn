@@ -156,3 +156,37 @@ func TestImportedPaddingCannotOverrideDisabledPreferences(t *testing.T) {
 		t.Fatal("Jumbo reactivated old cover settings")
 	}
 }
+
+func TestPQCoverUsesEncryptedPeerWithoutChangingKeysOrDNS(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		t.Run(mode, func(t *testing.T) {
+			graph := perfFixture()
+			graph["outbounds"] = []any{}
+			endpoint := map[string]any{"type": "routervpn-pq", "mode": mode, "tag": "proxy", "mtu": 1420, "private_key": "captured-wg-key", "pq": map[string]any{"secret": "captured-pq-key", "endpoint": "192.0.2.1:51822"}}
+			graph["endpoints"] = []any{endpoint}
+			profile := node()
+			profile["daita_enabled"] = true
+			out, err := compilePerf(graph, profile, profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"endpoints", "dns", "route", "inbounds"} {
+				if jsonText(out[key]) != jsonText(graph[key]) {
+					t.Fatal("padding changed", key)
+				}
+			}
+			if len(out["services"].([]any)) != 1 {
+				t.Fatal("missing owned cover service")
+			}
+			profile["jumbo_tun"] = true
+			if _, err = compilePerf(graph, profile, profile); err == nil {
+				t.Fatal("PQ bypassed encrypted packet MTU ceiling")
+			}
+			profile["jumbo_tun"] = false
+			endpoint["mode"] = "unknown"
+			if _, err = compilePerf(graph, profile, profile); err == nil {
+				t.Fatal("unimplemented PQ mode marked encrypted")
+			}
+		})
+	}
+}

@@ -176,3 +176,53 @@ func TestMTUCacheBoundAndCASRollback(t *testing.T) {
 	}
 
 }
+
+func TestPQMTUUsesCapturedPacketCeilingAndKeepsKeys(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		t.Run(mode, func(t *testing.T) {
+			graph := fixtureGraph()
+			graph["outbounds"] = []any{}
+			endpoint := map[string]any{"type": "routervpn-pq", "mode": mode, "tag": "proxy", "mtu": 1420, "private_key": "captured-wg-key", "peers": []any{map[string]any{"address": "192.0.2.2", "public_key": "captured-peer"}}, "pq": map[string]any{"secret": "captured-pq-secret", "public": "captured-pq-public", "peer": "captured-pq-peer", "endpoint": "192.0.2.2:51822", "version": 2}}
+			if mode == "awg2-pq" {
+				endpoint["amnezia"] = map[string]any{"s4": "32"}
+			}
+			graph["endpoints"] = []any{endpoint}
+			plan, err := NewPlan(encoded(graph), 1380)
+			if err != nil || plan.Ceiling != 1420 {
+				t.Fatal(plan, err)
+			}
+			for _, candidate := range plan.Candidates(1500) {
+				if candidate > 1420 {
+					t.Fatal("PQ envelope escaped", candidate)
+				}
+				changed, err := plan.Config(candidate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var out map[string]any
+				if json.Unmarshal([]byte(changed), &out) != nil {
+					t.Fatal("invalid output")
+				}
+				for _, key := range []string{"endpoints", "dns", "route", "outbounds"} {
+					if encoded(out[key]) != encoded(graph[key]) {
+						t.Fatal("MTU changed captured", key)
+					}
+				}
+			}
+			endpoint["detour"] = "entry-wg"
+			graph["endpoints"] = append(graph["endpoints"].([]any), map[string]any{"type": "routervpn-pq", "mode": "wg-pq", "tag": "entry-wg", "mtu": 1500})
+			plan, err = NewPlan(encoded(graph), 1380)
+			expected := 1420
+			if mode == "awg2-pq" {
+				expected = 1408
+			}
+			if err != nil || plan.Ceiling != expected {
+				t.Fatal("nested PQ overhead changed", plan, err)
+			}
+			endpoint["mode"] = "unknown"
+			if _, err = NewPlan(encoded(graph), 1380); err == nil {
+				t.Fatal("unknown PQ native protocol accepted")
+			}
+		})
+	}
+}
