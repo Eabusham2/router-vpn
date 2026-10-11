@@ -34,6 +34,41 @@ class Prepare(unittest.TestCase):
                 before={str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
                 P.prepare(vendor)
                 self.assertEqual(before,{str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
+    def test_flow_authorization_uses_its_real_separate_interface(self):
+        # In the pinned core FlowOutbound embeds tun.Port, not tun.Handler.
+        # Execute the shipping method with that exact separation, so adding
+        # JudgeFlow to a permissive test double cannot hide this compiler bug.
+        source=(ROOT/'mobile/pq/endpoint.go.tmpl').read_text()
+        self.assertIn('judge, ok := base.(flowJudge)',source)
+        self.assertIn('native PQ base does not own flow authorization',source)
+        self.assertIn('judge: judge',source)
+        method=source[source.index('func (e *Endpoint) JudgeFlow('):]
+        method=method.replace('tun.FlowVerdict','FlowVerdict').replace('tun.ActionReject','ActionReject')
+        with tempfile.TemporaryDirectory(prefix='pq-flow-') as tmp:
+            work=Path(tmp)
+            (work/'go.mod').write_text('module pqflow\n\ngo 1.23\n')
+            (work/'flow.go').write_text('package pqflow\nimport "net/netip"\n'+r'''
+const ActionReject=9
+type FlowVerdict struct{Action int}
+type flowJudge interface{JudgeFlow(uint8,netip.AddrPort,netip.AddrPort,[]byte)FlowVerdict}
+type flowOutbound interface{WritePackets([][]byte)error}
+type owner struct{ready bool}
+func(o *owner)Ready()bool{return o.ready}
+type Endpoint struct{owner *owner;flow flowOutbound;judge flowJudge}
+'''+method)
+            (work/'flow_test.go').write_text(r'''package pqflow
+import("net/netip";"testing")
+type judge struct{calls int}
+func(j *judge)JudgeFlow(uint8,netip.AddrPort,netip.AddrPort,[]byte)FlowVerdict{j.calls++;return FlowVerdict{3}}
+func TestCapturedJudgeAndNotReadyRejection(t *testing.T){
+ j:=&judge{};e:=&Endpoint{owner:&owner{},judge:j}
+ if e.JudgeFlow(17,netip.AddrPort{},netip.AddrPort{},nil).Action!=ActionReject||j.calls!=0{t.Fatal("unready flow authorized")}
+ e.owner.ready=true
+ if e.JudgeFlow(17,netip.AddrPort{},netip.AddrPort{},nil).Action!=3||j.calls!=1{t.Fatal("captured authorization bypassed")}
+}
+''')
+            subprocess.run(['go','test','-race','./...'],cwd=work,check=True,timeout=30)
+
     def test_dependency_inputs_include_bridge_and_runtime(self):
         paths={p.relative_to(ROOT).as_posix() for p in P.inputs()}
         self.assertIn('mobile/routervpn_pq_bridge.go.tmpl',paths)
