@@ -1,0 +1,24 @@
+[package]
+name = "routervpn-rosenpass"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[workspace]
+
+[dependencies]
+rosenpass = { git = "https://github.com/rosenpass/rosenpass", rev = "00569eb273016a10d2e75e5142236f06f7c3d4b3", default-features = false }
+rosenpass-cipher-traits = { git = "https://github.com/rosenpass/rosenpass", rev = "00569eb273016a10d2e75e5142236f06f7c3d4b3", default-features = false }
+rosenpass-ciphers = { git = "https://github.com/rosenpass/rosenpass", rev = "00569eb273016a10d2e75e5142236f06f7c3d4b3", default-features = false }
+rosenpass-secret-memory = { git = "https://github.com/rosenpass/rosenpass", rev = "00569eb273016a10d2e75e5142236f06f7c3d4b3", default-features = false }
+zeroize = "=1.9.0"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
