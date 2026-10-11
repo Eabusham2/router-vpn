@@ -42,6 +42,7 @@ type AmneziaPeer struct {
 	Keepalive    int      `json:"persistent_keepalive_interval,omitempty"`
 }
 type AmneziaRuntime struct {
+	PeerPublic       [32]byte
 	TransportPadding int
 	UAPI             string
 	Addresses        []netip.Prefix
@@ -153,6 +154,7 @@ func AmneziaRuntimeConfig(raw string) (AmneziaRuntime, error) {
 	fmt.Fprintf(&uapi, "persistent_keepalive_interval=%d\n", p.Keepalive)
 	padding, _ := strconv.Atoi(config.Parameters["s4"])
 	result := AmneziaRuntime{TransportPadding: padding, UAPI: uapi.String(), MTU: config.MTU, Remote: netip.AddrPortFrom(netip.MustParseAddr(p.Address), uint16(p.Port))}
+	copy(result.PeerPublic[:], public)
 	for _, prefix := range config.Address {
 		result.Addresses = append(result.Addresses, netip.MustParsePrefix(prefix))
 	}

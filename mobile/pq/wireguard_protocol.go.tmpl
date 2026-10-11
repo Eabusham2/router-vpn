@@ -1,0 +1,8 @@
+package wireguard
+
+// RouterVPNSetPQKey serializes with native Start, Close and bind replacement.
+func (w *Endpoint) RouterVPNSetPQKey(publicKey, key []byte) error {
+	w.bindAccess.Lock()
+	defer w.bindAccess.Unlock()
+	return w.endpoint.RouterVPNSetPQKey(publicKey, key)
+}

@@ -1,0 +1,29 @@
+package wireguard
+
+import (
+	"encoding/hex"
+	"errors"
+)
+
+// Called only under the protocol endpoint's lifecycle lock. The generated
+// single-peer configuration is immutable except for this negotiated PSK.
+func (e *Endpoint) RouterVPNSetPQKey(publicKey, key []byte) error {
+	if len(e.peers) != 1 || len(publicKey) != 32 || len(key) != 32 || e.peers[0].publicKeyHex != hex.EncodeToString(publicKey) {
+		return errors.New("native PQ key does not belong to its WG peer")
+	}
+	var nonzero byte
+	for _, b := range key {
+		nonzero |= b
+	}
+	if nonzero == 0 {
+		return errors.New("native PQ refuses an empty WG key")
+	}
+	encoded := hex.EncodeToString(key)
+	if e.device != nil {
+		if e.device.IpcSet("public_key="+e.peers[0].publicKeyHex+"\nupdate_only=true\npreshared_key="+encoded+"\n") != nil {
+			return errors.New("native WG rejected its negotiated PQ key")
+		}
+	}
+	e.peers[0].preSharedKeyHex = encoded
+	return nil
+}

@@ -1,0 +1,181 @@
+package routervpnpq
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	"github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-tun"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+type Options mobilemultihop.PQEndpointConfig
+
+func RegisterEndpoint(registry *endpoint.Registry) {
+	endpoint.Register[Options](registry, mobilemultihop.PQType, NewEndpoint)
+}
+
+var (
+	_ adapter.Endpoint                    = (*Endpoint)(nil)
+	_ adapter.FlowOutbound                = (*Endpoint)(nil)
+	_ adapter.InterfaceUpdateListener     = (*Endpoint)(nil)
+	_ adapter.OutboundWithPreferredRoutes = (*Endpoint)(nil)
+)
+
+type Endpoint struct {
+	endpoint.Adapter
+	base   adapter.Endpoint
+	flow   adapter.FlowOutbound
+	owner  *mobilepq.PeerOwner
+	cancel context.CancelFunc
+}
+type nativePeer struct{ base adapter.Endpoint }
+
+func (p *nativePeer) Start(post bool) error {
+	if post {
+		return p.base.Start(adapter.StartStatePostStart)
+	}
+	return p.base.Start(adapter.StartStateStart)
+}
+func (p *nativePeer) Close() error { return p.base.Close() }
+func (p *nativePeer) SetPQKey(public, key []byte) error {
+	target, ok := p.base.(interface{ RouterVPNSetPQKey([]byte, []byte) error })
+	if !ok {
+		return errors.New("native PQ peer has no scoped key interface")
+	}
+	return target.RouterVPNSetPQKey(public, key)
+}
+func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options Options) (adapter.Endpoint, error) {
+	// Standard option decoding removes the common endpoint tag/type. Restore
+	// only those trusted parser values before strict runtime validation.
+	options.Type = mobilemultihop.PQType
+	options.Tag = tag
+	raw, err := json.Marshal(options)
+	if err != nil {
+		return nil, errors.New("invalid native PQ options")
+	}
+	runtime, err := mobilemultihop.PQRuntimeConfig(string(raw))
+	if err != nil {
+		return nil, err
+	}
+	defer runtime.PQ.Erase()
+	ctx, cancel := context.WithCancel(ctx)
+	var base adapter.Endpoint
+	switch runtime.Mode {
+	case "wg-pq":
+		var underlying option.WireGuardEndpointOptions
+		if err = json.Unmarshal([]byte(runtime.BaseJSON), &underlying); err == nil {
+			base, err = wireguard.NewEndpoint(ctx, router, logger, tag, underlying)
+		}
+	case "awg2-pq":
+		var underlying routervpnamnezia.Options
+		if err = json.Unmarshal([]byte(runtime.BaseJSON), &underlying); err == nil {
+			base, err = routervpnamnezia.NewEndpoint(ctx, router, logger, tag, underlying)
+		}
+	default:
+		err = errors.New("native PQ base protocol changed")
+	}
+	if err != nil {
+		cancel()
+		if base != nil {
+			_ = base.Close()
+		}
+		return nil, errors.New("native PQ base could not be constructed")
+	}
+	cleanup := func() { cancel(); _ = base.Close() }
+	flow, ok := base.(adapter.FlowOutbound)
+	if !ok {
+		cleanup()
+		return nil, errors.New("native PQ base does not own a packet path")
+	}
+	protocol, err := mobilepq.NativeProtocols.Open(runtime.PQ)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	d, err := dialer.New(ctx, option.DialerOptions{Detour: options.Detour}, false)
+	if err != nil {
+		cleanup()
+		_ = protocol.Close()
+		return nil, err
+	}
+	destination := M.ParseSocksaddr(runtime.PQ.Endpoint)
+	owner, err := mobilepq.NewPeerOwner(ctx, protocol, func(call context.Context) (net.Conn, error) {
+		// This dialer inherits the active VPN owner's protection and optional
+		// outer detour. Neither protocol code nor imported assets can bypass it.
+		return d.DialContext(call, N.NetworkUDP, destination)
+	}, &nativePeer{base}, runtime.PeerPublic)
+	if err != nil {
+		cleanup()
+		_ = protocol.Close()
+		return nil, err
+	}
+	return &Endpoint{Adapter: endpoint.NewAdapterWithDialerOptions(mobilemultihop.PQType, tag, []string{N.NetworkTCP, N.NetworkUDP, N.NetworkICMP}, option.DialerOptions{Detour: options.Detour}), base: base, flow: flow, owner: owner, cancel: cancel}, nil
+}
+func (e *Endpoint) Start(stage adapter.StartStage) error {
+	switch stage {
+	case adapter.StartStateStart:
+		return e.owner.Start(false)
+	case adapter.StartStatePostStart:
+		return e.owner.Start(true)
+	default:
+		return nil
+	}
+}
+func (e *Endpoint) Close() error { e.cancel(); return e.owner.Close() }
+func (e *Endpoint) InterfaceUpdated(context.Context) {
+	// The RP socket and captured peer share one path epoch. Reconnect creates
+	// a fresh owner; an old handshake must not rekey a replacement session.
+	_ = e.Close()
+}
+func (e *Endpoint) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if !e.owner.Ready() {
+		return nil, net.ErrClosed
+	}
+	return e.base.DialContext(ctx, network, destination)
+}
+func (e *Endpoint) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	if !e.owner.Ready() {
+		return nil, net.ErrClosed
+	}
+	return e.base.ListenPacket(ctx, destination)
+}
+func (e *Endpoint) PreferredDomain(*adapter.InboundContext, string) bool { return false }
+func (e *Endpoint) PreferredAddress(metadata *adapter.InboundContext, address netip.Addr) bool {
+	preferred, ok := e.base.(adapter.OutboundWithPreferredRoutes)
+	return e.owner.Ready() && ok && preferred.PreferredAddress(metadata, address)
+}
+func (e *Endpoint) PortAddresses() (netip.Addr, netip.Addr) { return e.flow.PortAddresses() }
+func (e *Endpoint) PortMTU() uint32                         { return e.flow.PortMTU() }
+func (e *Endpoint) AttachReturn(path tun.Return) error      { return e.flow.AttachReturn(path) }
+func (e *Endpoint) DetachReturn(path tun.Return) error      { return e.flow.DetachReturn(path) }
+func (e *Endpoint) WritePackets(packets [][]byte) error {
+	if !e.owner.Ready() {
+		return net.ErrClosed
+	}
+	return e.flow.WritePackets(packets)
+}
+func (e *Endpoint) PreMatchFlow(network string, destination netip.Addr) adapter.PreMatchAction {
+	if !e.owner.Ready() {
+		return adapter.PreMatchReject
+	}
+	return e.flow.PreMatchFlow(network, destination)
+}
+func (e *Endpoint) JudgeFlow(network uint8, source, destination netip.AddrPort, packet []byte) tun.FlowVerdict {
+	if !e.owner.Ready() {
+		return tun.FlowVerdict{Action: tun.ActionReject}
+	}
+	return e.flow.JudgeFlow(network, source, destination, packet)
+}

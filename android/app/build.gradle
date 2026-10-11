@@ -89,6 +89,7 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     commandLine 'bash', 'build-sing-box-libbox.sh'
     inputs.files rootProject.file('build-sing-box-libbox.sh'), rootProject.file('routervpn_xray_bridge.go'), rootProject.file('../mobile/routervpn_openvpn.go'), rootProject.file('../mobile/routervpn_openvpn_native_test.go.tmpl'), rootProject.file('../deploy/test_mobile_openvpn_pinned.sh')
     inputs.file rootProject.file('../deploy/prepare-mobile-amnezia.py')
+    inputs.file rootProject.file('../deploy/prepare-mobile-pq.py')
     inputs.file rootProject.file('../deploy/prepare-gvisor-scheduler.py')
     inputs.files rootProject.file('../deploy/prepare-mobile-mtu.py'), rootProject.file('../deploy/prepare-retained-tun.py'), rootProject.fileTree('../internal/mobilemtu'), rootProject.fileTree('../internal/mtuprobe'), rootProject.fileTree('../internal/hopmeasure')
     inputs.files rootProject.file('../deploy/prepare-apple-xray.py'), rootProject.file('../deploy/xray_native_dialer_policy.py'), rootProject.fileTree('../internal/applexray'), rootProject.fileTree('../mobile/applexray')

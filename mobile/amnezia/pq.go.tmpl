@@ -1,0 +1,61 @@
+package routervpnamnezia
+
+import (
+	"bytes"
+	"encoding/hex"
+	"errors"
+	"net"
+	"strings"
+)
+
+// RouterVPNSetPQKey mutates only the originally captured peer. It shares the
+// same lock as native startup, interface rebinding and teardown.
+func (e *Endpoint) RouterVPNSetPQKey(publicKey, key []byte) error {
+	e.life.Lock()
+	defer e.life.Unlock()
+	if e.closed || e.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	if len(publicKey) != 32 || len(key) != 32 || !bytes.Equal(publicKey, e.runtime.PeerPublic[:]) {
+		return errors.New("native PQ key does not belong to its AWG peer")
+	}
+	var nonzero byte
+	for _, b := range key {
+		nonzero |= b
+	}
+	if nonzero == 0 {
+		return errors.New("native PQ refuses an empty AWG key")
+	}
+	encoded := hex.EncodeToString(key)
+	if e.device != nil {
+		// update_only forbids an unintended second peer if the captured one
+		// ever disappears. No routing/endpoint/listener settings are changed.
+		if e.device.IpcSet("public_key="+hex.EncodeToString(publicKey)+"\nupdate_only=true\npreshared_key="+encoded+"\n") != nil {
+			return errors.New("native AWG rejected its negotiated PQ key")
+		}
+		return nil
+	}
+	// Initial negotiation finishes before device creation. Replace the one
+	// compiled PSK in place instead of retaining an unbounded rekey history.
+	lines := strings.Split(e.runtime.UAPI, "\n")
+	result := make([]string, 0, len(lines)+1)
+	found := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "preshared_key=") {
+			continue
+		}
+		result = append(result, line)
+		if line == "public_key="+hex.EncodeToString(publicKey) {
+			if found {
+				return errors.New("native AWG peer ownership changed")
+			}
+			found = true
+			result = append(result, "preshared_key="+encoded)
+		}
+	}
+	if !found {
+		return errors.New("native AWG has no captured PQ peer")
+	}
+	e.runtime.UAPI = strings.Join(result, "\n")
+	return nil
+}

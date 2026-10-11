@@ -1,0 +1,84 @@
+package libbox
+
+import (
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
+	"sync"
+	"time"
+)
+
+// The platform supplies only the compiled, socket-free Rust protocol. Protected
+// transport, peer selection, key installation and expiry remain in this owner.
+type RouterPQFactory interface {
+	CreateProtocol(secretKey, publicKey, peerKey []byte, version int32) (RouterPQProtocol, error)
+}
+type RouterPQProtocol interface {
+	ProcessEvent(kind int32, packet []byte) (*RouterPQEvent, error)
+	Stop() error
+}
+type RouterPQEvent struct {
+	Packet           []byte
+	Key              []byte
+	Rejected         bool
+	Expired          bool
+	WaitMilliseconds int32
+}
+type routerPQFactory struct{ factory RouterPQFactory }
+type routerPQProtocol struct {
+	protocol RouterPQProtocol
+	once     sync.Once
+	err      error
+}
+
+func RouterInstallPQFactory(factory RouterPQFactory) error {
+	if factory == nil {
+		return errors.New("missing compiled PQ factory")
+	}
+	return mobilepq.NativeProtocols.Install(&routerPQFactory{factory})
+}
+func (f *routerPQFactory) Open(secret, public, peer []byte, version int) (mobilepq.Protocol, error) {
+	p, err := f.factory.CreateProtocol(secret, public, peer, int32(version))
+	if err != nil || p == nil {
+		if p != nil {
+			_ = p.Stop()
+		}
+		return nil, errors.New("compiled PQ protocol construction failed")
+	}
+	return &routerPQProtocol{protocol: p}, nil
+}
+func (p *routerPQProtocol) Step(kind uint32, packet []byte) (mobilepq.Event, error) {
+	if kind > 2 || len(packet) > 65535 {
+		return mobilepq.Event{}, errors.New("invalid native PQ event")
+	}
+	event, err := p.protocol.ProcessEvent(int32(kind), packet)
+	if event != nil {
+		defer func() {
+			for i := range event.Key {
+				event.Key[i] = 0
+			}
+			event.Key = nil
+		}()
+	}
+	if err != nil || event == nil {
+		return mobilepq.Event{}, errors.New("compiled PQ protocol event failed")
+	}
+	if len(event.Packet) > 65535 || len(event.Key) != 0 && len(event.Key) != 32 || event.WaitMilliseconds < 0 || event.WaitMilliseconds > 1000 || event.Expired && len(event.Key) > 0 || event.Rejected && (len(event.Packet) > 0 || len(event.Key) > 0 || event.Expired) {
+		return mobilepq.Event{}, errors.New("invalid compiled PQ event output")
+	}
+	if event.Rejected {
+		return mobilepq.Event{}, mobilepq.ErrPacket
+	}
+	return mobilepq.Event{Packet: append([]byte(nil), event.Packet...), Key: append([]byte(nil), event.Key...), Expired: event.Expired, Wait: time.Duration(event.WaitMilliseconds) * time.Millisecond}, nil
+}
+func (p *routerPQProtocol) Close() error {
+	p.once.Do(func() {
+		if p.protocol.Stop() != nil {
+			p.err = errors.New("compiled PQ protocol cleanup failed")
+		}
+	})
+	return p.err
+}
+func RouterCompilePQProfile(mode, files, nodeID string) (string, error) {
+	return mobilemultihop.CompilePQProfile(mode, files, nodeID)
+}
