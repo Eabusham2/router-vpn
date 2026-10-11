@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"net"
 	"net/netip"
 	"net/url"
 	"strconv"
@@ -29,7 +30,7 @@ func ComposeNativeBaseStartLayer(config, shadowsocks, metadata string) (string, 
 	if exactJSON([]byte(metadata), &policy, 16384) != nil {
 		return "", errors.New("invalid captured Start Layer policy")
 	}
-	if policy.NodeKind != "router-vpn" || (policy.RawMode != "wg" && policy.RawMode != "awg2-fast" && policy.RawMode != "awg2-strong") {
+	if policy.NodeKind != "router-vpn" || (policy.RawMode != "wg" && policy.RawMode != "awg2-fast" && policy.RawMode != "awg2-strong" && !IsPQMode(policy.RawMode)) {
 		return "", errors.New("native Start Layer requires an exact Router VPN WG/AWG mode")
 	}
 	if policy.Mode != "aes-256-gcm" && policy.Mode != "aes-256-gcm+xor-whitening" {
@@ -62,15 +63,47 @@ func ComposeNativeBaseStartLayer(config, shadowsocks, metadata string) (string, 
 		return "", errors.New("native base has an existing or ambiguous transport owner")
 	}
 	expected := "wireguard"
-	if policy.RawMode != "wg" {
+	if IsPQMode(policy.RawMode) {
+		expected = PQType
+	} else if policy.RawMode != "wg" {
 		expected = AmneziaType
 	}
 	if ep["type"] != expected {
 		return "", errors.New("native base label does not match its actual protocol")
 	}
 	endpointFields := map[string]bool{"type": true, "tag": true, "system": true, "mtu": true, "address": true, "private_key": true, "listen_port": true, "peers": true}
-	if expected == AmneziaType {
+	if expected == AmneziaType || expected == PQType {
 		endpointFields["amnezia"] = true
+	}
+	var pqPort string
+	if expected == PQType {
+		for _, field := range []string{"mode", "node_id", "pq"} {
+			endpointFields[field] = true
+		}
+		raw, marshalErr := json.Marshal(ep)
+		if marshalErr != nil {
+			return "", errors.New("invalid captured PQ endpoint")
+		}
+		runtime, pqErr := PQRuntimeConfig(string(raw))
+		if pqErr != nil {
+			return "", pqErr
+		}
+		runtime.PQ.Erase()
+		if runtime.Mode != policy.RawMode {
+			return "", errors.New("PQ Start Layer cannot replace the selected base protocol")
+		}
+		pq, present := ep["pq"].(map[string]any)
+		if !present {
+			return "", errors.New("PQ Start Layer lost the captured handshake")
+		}
+		address, present := pq["endpoint"].(string)
+		if !present {
+			return "", errors.New("PQ Start Layer lost the captured handshake endpoint")
+		}
+		_, pqPort, err = net.SplitHostPort(address)
+		if err != nil {
+			return "", errors.New("invalid PQ handshake endpoint")
+		}
 	}
 	for field := range ep {
 		if !endpointFields[field] {
@@ -208,6 +241,11 @@ func ComposeNativeBaseStartLayer(config, shadowsocks, metadata string) (string, 
 	}
 	outer["tag"] = NativeStartLayerTag
 	peer["address"] = service.String()
+	if expected == PQType {
+		// Both independent encrypted exchanges belong to the same paired node
+		// and outer transport. Never send the PQ handshake around the AES layer.
+		ep["pq"].(map[string]any)["endpoint"] = net.JoinHostPort(service.String(), pqPort)
+	}
 	ep["detour"] = NativeStartLayerTag
 	graph["outbounds"] = append(outbounds, outer)
 	if expected == AmneziaType {
@@ -215,6 +253,14 @@ func ComposeNativeBaseStartLayer(config, shadowsocks, metadata string) (string, 
 		if _, e := AmneziaRuntimeConfig(string(raw)); e != nil {
 			return "", errors.New("composed native AWG endpoint failed its parameter/peer validation")
 		}
+	}
+	if expected == PQType {
+		raw, _ := json.Marshal(ep)
+		runtime, pqErr := PQRuntimeConfig(string(raw))
+		if pqErr != nil {
+			return "", errors.New("composed native PQ endpoint failed its peer/handshake validation")
+		}
+		runtime.PQ.Erase()
 	}
 	result, err := json.Marshal(graph)
 	if err != nil || len(result) > 4<<20 {
