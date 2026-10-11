@@ -57,19 +57,19 @@ impl Session {
                     PollResult::DeleteKey(p)=>{if p.0!=self.peer.0{return Err(FAULT);}event.flags=EXPIRED;event.wait_ms=0;},
                     PollResult::SendInitiation(p)=>{
                         if p.0!=self.peer.0{return Err(FAULT);}
-                        let n=self.core.initiate_handshake(p,&mut tx).map_err(|_|FAULT)?;
+                        let n=self.core.initiate_handshake(p,&mut tx[..]).map_err(|_|FAULT)?;
                         event.packet.extend_from_slice(tx.get(..n).ok_or(FAULT)?);event.wait_ms=0;
                     },
                     PollResult::SendRetransmission(p)=>{
                         if p.0!=self.peer.0{return Err(FAULT);}
-                        let n=self.core.retransmit_handshake(p,&mut tx).map_err(|_|FAULT)?;
+                        let n=self.core.retransmit_handshake(p,&mut tx[..]).map_err(|_|FAULT)?;
                         event.packet.extend_from_slice(tx.get(..n).ok_or(FAULT)?);event.wait_ms=0;
                     }
                 }
             },
             1=>{
                 if input.is_empty()||input.len()>tx.len(){return Err(REJECTED);}
-                let result=self.core.handle_msg(input,&mut tx).map_err(|_|REJECTED)?;
+                let result=self.core.handle_msg(input,&mut tx[..]).map_err(|_|REJECTED)?;
                 if let Some(p)=result.exchanged_with {
                     if p.0!=self.peer.0{return Err(FAULT);}
                     let key=self.core.osk(p).map_err(|_|FAULT)?;
@@ -80,7 +80,7 @@ impl Session {
             },
             2=>{
                 if !input.is_empty(){return Err(FAULT);}
-                let n=self.core.initiate_handshake(self.peer,&mut tx).map_err(|_|FAULT)?;
+                let n=self.core.initiate_handshake(self.peer,&mut tx[..]).map_err(|_|FAULT)?;
                 event.packet.extend_from_slice(tx.get(..n).ok_or(FAULT)?);
             },
             _=>return Err(FAULT)
