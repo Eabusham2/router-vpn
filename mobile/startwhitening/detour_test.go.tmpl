@@ -1,0 +1,175 @@
+package routervpnwhitening
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Only the selected entry's physical boundary is mapped to loopback. The
+// production constructor, detour resolver and authenticated AES/XOR are real.
+type detourEntry struct {
+	outbound.Adapter
+	*testUnderlay
+}
+type detourManager struct {
+	adapter.OutboundManager
+	mu    sync.Mutex
+	entry adapter.Outbound
+	calls []string
+}
+
+func (m *detourManager) Outbound(tag string) (adapter.Outbound, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, tag)
+	return m.entry, m.entry != nil && m.entry.Tag() == tag
+}
+func (*detourManager) Default() adapter.Outbound {
+	panic("explicit entry must never use a default outbound")
+}
+func detourContext(entry adapter.Outbound) (context.Context, *detourManager) {
+	manager := &detourManager{entry: entry}
+	return service.ContextWith[adapter.OutboundManager](context.Background(), manager), manager
+}
+func detourOptions(password string) Options {
+	return Options{ServerOptions: option.ServerOptions{Server: "192.0.2.1", ServerPort: 8389}, Detour: "entry-wg", Method: startwhitening.Method, Password: password}
+}
+func TestWhiteningDetourUsesProductionFactoryAndSelectedEntry(t *testing.T) {
+	tcp, udp := echoEndpoints(t)
+	address, password := runAESWhiteningServer(t, tcp, udp)
+	entry := &detourEntry{Adapter: outbound.NewAdapter("wireguard", "entry-wg", []string{"tcp", "udp"}, nil), testUnderlay: &testUnderlay{address: address}}
+	ctx, manager := detourContext(entry)
+	options := detourOptions(password)
+	raw, err := json.Marshal(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Options
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&decoded); err != nil || decoded.Detour != "entry-wg" {
+		t.Fatal("native schema lost selected detour", err)
+	}
+	selected, err := NewOutbound(ctx, nil, nil, "routervpn-exit-start-layer", decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := selected.(*Outbound)
+	defer h.Close()
+	if deps := h.Dependencies(); len(deps) != 1 || deps[0] != "entry-wg" {
+		t.Fatal("entry startup dependency was dropped", deps)
+	}
+	for _, network := range []string{"tcp", "udp"} {
+		destination := tcp
+		if network == "udp" {
+			destination = udp
+		}
+		c, err := h.DialContext(ctx, network, M.ParseSocksaddr(destination))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = c.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		size := 17000
+		if network == "udp" {
+			size = 9000
+		}
+		payload := bytes.Repeat([]byte{0x5a}, size)
+		written := make(chan error, 1)
+		go func() {
+			n, e := c.Write(payload)
+			if e == nil && n != len(payload) {
+				e = io.ErrShortWrite
+			}
+			written <- e
+		}()
+		got := make([]byte, len(payload))
+		_, err = io.ReadFull(c, got)
+		if err != nil {
+			c.Close()
+			t.Fatal(network, "encrypted selected-entry read", err)
+		}
+		if err = <-written; err != nil || !bytes.Equal(got, payload) {
+			c.Close()
+			t.Fatal(network, "encrypted payload differs", err)
+		}
+		c.Close()
+	}
+	manager.mu.Lock()
+	if len(manager.calls) != 1 || manager.calls[0] != "entry-wg" {
+		t.Error("resolved a foreign/default entry", manager.calls)
+	}
+	manager.mu.Unlock()
+	entry.mu.Lock()
+	if entry.calls != 2 {
+		t.Error("traffic did not traverse selected entry", entry.calls)
+	}
+	entry.mu.Unlock()
+	if err = h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := h.DialContext(ctx, "tcp", M.ParseSocksaddr(tcp)); err == nil {
+		c.Close()
+		t.Fatal("closed exit reused its entry")
+	}
+}
+func TestWhiteningMissingDetourNeverFallsBack(t *testing.T) {
+	ctx, manager := detourContext(nil)
+	h, err := NewOutbound(ctx, nil, nil, "exit", detourOptions(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.(*Outbound).Close()
+	for _, network := range []string{"tcp", "udp"} {
+		if c, err := h.DialContext(ctx, network, M.ParseSocksaddr("127.0.0.1:1")); err == nil {
+			c.Close()
+			t.Fatal("missing selected entry fell back", network)
+		}
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.calls) != 1 || manager.calls[0] != "entry-wg" {
+		t.Fatal("wrong detour lookup", manager.calls)
+	}
+}
+func TestWhiteningDetourRejectsInvalidOwnership(t *testing.T) {
+	valid := detourOptions(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)))
+	for _, tag := range []string{"exit", "bad tag", "../entry", strings.Repeat("a", 129)} {
+		bad := valid
+		bad.Detour = tag
+		if h, err := newOutbound(context.Background(), "exit", bad, &testUnderlay{}); err == nil {
+			h.Close()
+			t.Fatal("invalid/self detour accepted", tag)
+		}
+	}
+	bad := valid
+	bad.Server = "unresolved.example"
+	if err := validate(bad); err == nil {
+		t.Fatal("nested exit could perform direct hostname resolution")
+	}
+	raw := `{"server":"192.0.2.1","server_port":8389,"method":"2022-blake3-aes-256-gcm","password":"x","detour":"entry-wg","bind_interface":"unowned"}`
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var parsed Options
+	if err := decoder.Decode(&parsed); err == nil {
+		t.Fatal("imported socket ownership hint was accepted")
+	}
+	if _, err := NewOutbound(context.Background(), nil, nil, "exit", valid); err == nil {
+		t.Fatal("unowned detour constructed without native manager")
+	}
+}
