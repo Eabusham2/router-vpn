@@ -162,6 +162,92 @@ class PythonBootstrap(unittest.TestCase):
                     B.ensure_python()
                 execute.assert_not_called()
 
+class OutputPublication(unittest.TestCase):
+    @staticmethod
+    def fake_native(stage, cache):
+        for abi, _, _ in B.ANDROID:
+            p = stage/'jni'/abi/'libroutervpn_rosenpass_jni.so'
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b'test-only-native-payload')
+
+    def build(self, output):
+        with mock.patch.object(B, 'ensure_tools'), mock.patch.object(B, 'android_build', side_effect=self.fake_native):
+            B.build('android', output)
+
+    def test_gradle_precreated_empty_output_and_cached_reuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/'native'
+            (output/'jni').mkdir(parents=True)
+            self.build(output)
+            self.assertTrue(B.verify(output, 'android', B.source_digest()))
+            with mock.patch.object(B, 'ensure_tools') as tools, mock.patch.object(B, 'android_build') as compiler:
+                B.build('android', output)
+                tools.assert_not_called()
+                compiler.assert_not_called()
+
+    def test_unknown_files_and_final_symlinks_survive_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/'native';output.mkdir()
+            keep = output/'keep.txt';keep.write_text('unrelated')
+            for path in (output, Path(tmp)/'linked'):
+                if path != output:
+                    path.symlink_to(output, target_is_directory=True)
+                with mock.patch.object(B, 'ensure_tools') as tools:
+                    with self.assertRaisesRegex(RuntimeError, 'unowned'):
+                        B.build('android', path)
+                    tools.assert_not_called()
+                self.assertEqual(keep.read_text(), 'unrelated')
+            self.assertTrue((Path(tmp)/'linked').is_symlink())
+
+    def test_owned_artifact_rebuild_and_failed_publish_restore_original(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/'native';self.build(output)
+            original = {str(p.relative_to(output)): p.read_bytes() for p in output.rglob('*') if p.is_file()}
+            stage = Path(tmp)/'replacement';stage.mkdir();self.fake_native(stage, Path(tmp))
+            (stage/'source.json').write_bytes((output/'source.json').read_bytes())
+            replace = os.replace
+            calls = []
+            def fail_publication(source, target):
+                calls.append((source, target))
+                if source == stage:
+                    raise OSError('simulated publication failure')
+                return replace(source, target)
+            with mock.patch.object(B.os, 'replace', side_effect=fail_publication):
+                with self.assertRaisesRegex(OSError, 'simulated'):
+                    B.publish_output(stage, output, 'android')
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(original, {str(p.relative_to(output)): p.read_bytes() for p in output.rglob('*') if p.is_file()})
+            B.publish_output(stage, output, 'android')
+            self.assertTrue(B.verify(output, 'android', B.source_digest()))
+
+    def test_extra_file_invalid_marker_and_manifest_escape_are_not_owned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/'native';self.build(output)
+            marker = output/'source.json';original = marker.read_text()
+            extra = output/'keep.txt';extra.write_text('unrelated')
+            with self.assertRaisesRegex(RuntimeError, 'unowned'):
+                B.output_state(output, 'android')
+            self.assertEqual(extra.read_text(), 'unrelated');extra.unlink()
+            for content in ('{}', '{invalid', json.dumps({'schema':1, 'platform':'android', 'files':{'../outside':'0'*64}})):
+                marker.write_text(content)
+                with self.assertRaisesRegex(RuntimeError, 'unowned'):
+                    B.output_state(output, 'android')
+            marker.write_text(original)
+            self.assertEqual(B.output_state(output, 'android'), 'owned')
+            linked = output/'linked';linked.symlink_to(marker)
+            with self.assertRaisesRegex(RuntimeError, 'unowned'):
+                B.output_state(output, 'android')
+
+    def test_invalid_staging_does_not_remove_previous_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/'native';self.build(output)
+            marker = output/'source.json';old = json.loads(marker.read_text());old['source_sha256'] = '0'*64
+            marker.write_text(json.dumps(old));saved = marker.read_bytes()
+            with mock.patch.object(B, 'ensure_tools'), mock.patch.object(B, 'android_build'):
+                with self.assertRaisesRegex(RuntimeError, 'verification failed'):
+                    B.build('android', output)
+            self.assertEqual(marker.read_bytes(), saved)
+
 class Hosts(unittest.TestCase):
     def setup_sources(self,work):
         (work/'fake.c').write_text(FAKE)
