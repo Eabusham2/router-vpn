@@ -30,6 +30,7 @@ android {
 
     sourceSets {
         main {
+            jniLibs.srcDir file('libs/rosenpass-native/jni')
             assets.srcDir generatedLicenseAssets
             assets.srcDir generatedProvenanceAssets
         }
@@ -100,7 +101,16 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     outputs.files libboxAar, libboxStamp, libboxLicense, libxrayLicense, libboxOpenVPNStamp, nativeAwgLicense
 }
 
+tasks.register('prepareRosenpassNative', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'python3', '../deploy/build-mobile-pq.py', '--platform', 'android', '--output', 'app/libs/rosenpass-native'
+    inputs.file rootProject.file('../deploy/build-mobile-pq.py')
+    inputs.files rootProject.fileTree('../mobile/rosenpass') { exclude 'target/**' }
+    outputs.dir file('libs/rosenpass-native')
+}
+
 tasks.named('preBuild').configure {
+    dependsOn tasks.named('prepareRosenpassNative')
     dependsOn tasks.named('stageProjectLicense')
     dependsOn tasks.named('stageSourceProvenance')
     dependsOn tasks.named('prepareAmneziaWgTunnel')

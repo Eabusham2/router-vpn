@@ -103,9 +103,11 @@ targets:
         INFOPLIST_KEY_RouterVPNSourceRepository: "Eabusham2/router-vpn"
         INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-packet-tunnel"
         LIBRARY_SEARCH_PATHS: "$(inherited) $(CONFIGURATION_BUILD_DIR)"
-        OTHER_LDFLAGS: "$(inherited) -lresolv -framework UIKit"
+        OTHER_LDFLAGS: "$(inherited) -lresolv -framework UIKit -framework Security -framework SystemConfiguration"
         SKIP_INSTALL: YES
     dependencies:
+      - framework: .deps/rosenpass-native/RouterVPNPQ.xcframework
+        embed: false
       - package: WireGuardKit
         product: WireGuardKit
       - framework: .deps/Libbox.xcframework

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+python3 "$ROOT/../../deploy/build-mobile-pq.py" --platform ios --output "$ROOT/.deps/rosenpass-native"
 VERSION=1.14.1
 COMMIT=1ac1a339cb1223e9c70eae14c44411c75033c02d
 XRAY_COMMIT=50231eaff98ccc31b5cbd247a721c16e97fe5ec1
