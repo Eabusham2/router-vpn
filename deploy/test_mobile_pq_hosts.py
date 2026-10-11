@@ -3,6 +3,7 @@
 The Rust workflow independently exercises real encrypted Rosenpass packets.
 """
 from pathlib import Path
+from unittest import mock
 import importlib.util, json, os, shutil, subprocess, tempfile, unittest
 ROOT=Path(__file__).resolve().parents[1]
 S=ROOT/'mobile/rosenpass'
@@ -119,6 +120,48 @@ import Libbox
  }
 }
 '''
+class PythonBootstrap(unittest.TestCase):
+    def test_current_supported_python_is_not_restarted(self):
+        with mock.patch.object(B.sys, 'version_info', (3, 11)), mock.patch.object(B.os, 'execv') as execute:
+            B.ensure_python()
+            execute.assert_not_called()
+
+    def test_xcode_system_python_uses_checked_homebrew_interpreter(self):
+        modern = '/opt/homebrew/bin/python3'
+        which = lambda name: {'python3': '/usr/bin/python3', modern: modern}.get(name)
+        with mock.patch.object(B.sys, 'version_info', (3, 9)), mock.patch.object(B.sys, 'executable', '/usr/bin/python3'), \
+             mock.patch.object(B.sys, 'argv', ['build-mobile-pq.py', '--platform', 'ios', '--output', '/tmp/output with spaces']), \
+             mock.patch.dict(B.os.environ, {'ROUTER_VPN_PYTHON': ''}), mock.patch.object(B.shutil, 'which', side_effect=which), \
+             mock.patch.object(B.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as probe, \
+             mock.patch.object(B.os, 'execv', side_effect=SystemExit(0)) as execute:
+            with self.assertRaises(SystemExit):
+                B.ensure_python()
+            probe.assert_called_once()
+            self.assertIn('import sys, tomllib', probe.call_args.args[0][-1])
+            self.assertEqual(probe.call_args.kwargs['timeout'], 5)
+            execute.assert_called_once_with(modern, [modern, '-I', str(Path(B.__file__).resolve()), '--platform', 'ios', '--output', '/tmp/output with spaces'])
+
+    def test_invalid_explicit_interpreter_does_not_silently_fallback(self):
+        with mock.patch.object(B.sys, 'version_info', (3, 9)), \
+             mock.patch.dict(B.os.environ, {'ROUTER_VPN_PYTHON': '/chosen/python'}), \
+             mock.patch.object(B.shutil, 'which', return_value='/chosen/python') as which, \
+             mock.patch.object(B.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1)), \
+             mock.patch.object(B.os, 'execv') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'Python 3.11'):
+                B.ensure_python()
+            which.assert_called_once_with('/chosen/python')
+            execute.assert_not_called()
+
+    def test_interpreter_probe_is_bounded_and_no_candidate_is_not_success(self):
+        for failure in (OSError('missing'), subprocess.TimeoutExpired('python3', 5)):
+            with self.subTest(failure=failure), mock.patch.object(B.sys, 'version_info', (3, 9)), \
+                 mock.patch.dict(B.os.environ, {'ROUTER_VPN_PYTHON': '/chosen/python'}), \
+                 mock.patch.object(B.shutil, 'which', return_value='/chosen/python'), \
+                 mock.patch.object(B.subprocess, 'run', side_effect=failure), mock.patch.object(B.os, 'execv') as execute:
+                with self.assertRaisesRegex(RuntimeError, 'Python 3.11'):
+                    B.ensure_python()
+                execute.assert_not_called()
+
 class Hosts(unittest.TestCase):
     def setup_sources(self,work):
         (work/'fake.c').write_text(FAKE)

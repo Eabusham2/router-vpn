@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the pinned, socket-free Rosenpass C ABI for native mobile hosts."""
 from __future__ import annotations
-import argparse, hashlib, json, os, platform, plistlib, shutil, subprocess, tempfile
+import argparse, hashlib, json, os, platform, plistlib, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -10,6 +10,41 @@ RUST='1.99.0'
 NDK='28.0.13004108'
 ANDROID=(('arm64-v8a','aarch64-linux-android','aarch64-linux-android'),('armeabi-v7a','armv7-linux-androideabi','armv7a-linux-androideabi'),('x86','i686-linux-android','i686-linux-android'),('x86_64','x86_64-linux-android','x86_64-linux-android'))
 APPLE=(('aarch64-apple-ios','iphoneos','arm64'),('aarch64-apple-ios-sim','iphonesimulator','arm64'),('x86_64-apple-ios','iphonesimulator','x86_64'))
+
+def ensure_python():
+    """Xcode can replace PATH with Apple's older system Python during a build.
+
+    Find an installed interpreter with the real stdlib TOML parser before any
+    cache validation or output mutation. Never install packages or approximate
+    lockfile parsing to make an incompatible interpreter appear supported.
+    """
+    if sys.version_info >= (3, 11):
+        return
+    explicit = os.environ.get('ROUTER_VPN_PYTHON', '').strip()
+    candidates = [explicit] if explicit else [
+        'python3', 'python3.15', 'python3.14', 'python3.13', 'python3.12', 'python3.11',
+        '/opt/homebrew/bin/python3', '/usr/local/bin/python3',
+    ]
+    seen = {str(Path(sys.executable).resolve())}
+    for candidate in candidates:
+        executable = shutil.which(candidate)
+        if not executable:
+            continue
+        executable = str(Path(executable).resolve())
+        if executable in seen:
+            continue
+        seen.add(executable)
+        try:
+            result = subprocess.run(
+                [executable, '-I', '-c', 'import sys, tomllib; assert sys.version_info >= (3, 11)'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            os.execv(executable, [executable, '-I', str(Path(__file__).resolve()), *sys.argv[1:]])
+            raise RuntimeError('Native PQ Python replacement unexpectedly returned')
+    raise RuntimeError('Native PQ requires Python 3.11+ with tomllib; set ROUTER_VPN_PYTHON to its executable')
 
 def run(args, *, env=None, capture=False):
     return subprocess.run([str(x) for x in args],env=env,check=True,text=True,stdout=subprocess.PIPE if capture else None).stdout
@@ -155,6 +190,7 @@ def build(kind,output):
     print('Native PQ package built and hash-verified:',kind,digest)
 
 if __name__=='__main__':
+    ensure_python()
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--platform',choices=('android','ios'))
     parser.add_argument('--output',type=Path)
