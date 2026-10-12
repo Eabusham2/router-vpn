@@ -92,7 +92,7 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 			continue
 		}
 		switch name {
-		case "session_id", "entry_node_id", "exit_id", "exit_mode", "listener_username", "listener_password":
+		case "session_id", "entry_node_id", "exit_id", "exit_mode", "exit_start_layer", "listener_username", "listener_password":
 		default:
 			return q, bad
 		}
@@ -102,7 +102,7 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 		}
 		fields[name] = *value
 	}
-	if end, e := d.Token(); e != nil || end != json.Delim('}') || (len(fields) != 4 && len(fields) != 6) {
+	if end, e := d.Token(); e != nil || end != json.Delim('}') {
 		return q, bad
 	}
 	if _, e := d.Token(); e != io.EOF {
@@ -113,10 +113,15 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 			return q, bad
 		}
 	}
-	if (port != 0) != (fields["listener_username"] != "" && fields["listener_password"] != "") {
+	if seen["exit_start_layer"] && !multihoprelay.ValidLayerMode(fields["exit_start_layer"]) {
 		return q, bad
 	}
-	q = multihoprelay.Request{Port: port, Username: fields["listener_username"], Password: fields["listener_password"], SessionID: fields["session_id"], EntryNodeID: fields["entry_node_id"], ExitID: fields["exit_id"], ExitMode: fields["exit_mode"]}
+	// Listener credentials are an all-or-nothing proposal. An optional layer
+	// adds no executable/configuration input and does not change this contract.
+	if seen["listen_port"] != seen["listener_username"] || seen["listen_port"] != seen["listener_password"] {
+		return q, bad
+	}
+	q = multihoprelay.Request{Port: port, Username: fields["listener_username"], Password: fields["listener_password"], SessionID: fields["session_id"], EntryNodeID: fields["entry_node_id"], ExitID: fields["exit_id"], ExitMode: fields["exit_mode"], ExitStartLayer: fields["exit_start_layer"]}
 	return q, nil
 }
 func registerMultihopRelayRoute(h *http.ServeMux, s *server) {
