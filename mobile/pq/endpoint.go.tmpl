@@ -110,7 +110,10 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		cleanup()
 		return nil, errors.New("native PQ base does not own flow authorization")
 	}
-	protocol, err := mobilepq.NativeProtocols.Open(runtime.PQ)
+	// CheckConfig constructs this endpoint without starting its manager.
+	// A deferred owner validates/copies the captured keys but acquires no Rust
+	// handle until the actual controller starts polling the handshake.
+	protocol, err := mobilepq.NewDeferredProtocol(ctx, runtime.PQ, &mobilepq.NativeProtocols)
 	if err != nil {
 		cleanup()
 		return nil, err
