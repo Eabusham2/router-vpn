@@ -15,7 +15,7 @@ final class RouterVPNPQFactory: NSObject, LibboxRouterPQFactoryProtocol, @unchec
         if let error { throw error }
         installed = true
     }
-    func createProtocol(_ secretKey: Data?, publicKey: Data?, peerKey: Data?, version: Int32) throws -> (any LibboxRouterPQProtocolProtocol)? {
+    func createProtocol(_ secretKey: Data?, publicKey: Data?, peerKey: Data?, version: Int32) throws -> any LibboxRouterPQProtocolProtocol {
         guard let secretKey, let publicKey, let peerKey,
               secretKey.count == routervpn_rp_secret_size(), publicKey.count == routervpn_rp_public_size(),
               peerKey.count == publicKey.count, version == 2 || version == 3 else { throw pqError("Invalid native PQ keys") }
@@ -38,7 +38,7 @@ final class RouterVPNPQProtocol: NSObject, LibboxRouterPQProtocolProtocol, @unch
     private var closeError: NSError?
     init(handle: UInt64) { self.handle = handle; super.init() }
     deinit { if handle != 0 { _ = routervpn_rp_close(handle) } }
-    func processEvent(_ kind: Int32, packet: Data?) throws -> LibboxRouterPQEvent? {
+    func processEvent(_ kind: Int32, packet: Data?) throws -> LibboxRouterPQEvent {
         lock.lock(); defer { lock.unlock() }
         let packet = packet ?? Data()
         guard handle != 0, (0...2).contains(kind), packet.count <= 65535 else { throw pqError("Native PQ owner or event is invalid") }

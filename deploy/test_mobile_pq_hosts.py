@@ -95,8 +95,8 @@ public class TestPQHost {
 '''
 SWIFT_LIBBOX=r'''
 import Foundation
-public protocol LibboxRouterPQFactoryProtocol {func createProtocol(_ secretKey:Data?,publicKey:Data?,peerKey:Data?,version:Int32)throws->(any LibboxRouterPQProtocolProtocol)?}
-public protocol LibboxRouterPQProtocolProtocol {func processEvent(_ kind:Int32,packet:Data?)throws->LibboxRouterPQEvent?;func stop()throws}
+public protocol LibboxRouterPQFactoryProtocol {func createProtocol(_ secretKey:Data?,publicKey:Data?,peerKey:Data?,version:Int32)throws->any LibboxRouterPQProtocolProtocol}
+public protocol LibboxRouterPQProtocolProtocol {func processEvent(_ kind:Int32,packet:Data?)throws->LibboxRouterPQEvent;func stop()throws}
 public class LibboxRouterPQEvent {public init(){};public var waitMilliseconds:Int32=0;public var rejected=false;public var expired=false;public var key:Data?;public var packet:Data?}
 public func LibboxRouterInstallPQFactory(_ factory:any LibboxRouterPQFactoryProtocol,_ error:UnsafeMutablePointer<NSError?>?) {}
 '''
@@ -107,15 +107,15 @@ import Libbox
  static func main()throws{
   try RouterVPNPQFactory.install();try RouterVPNPQFactory.install()
   let s=Data(repeating:1,count:32),p=Data(repeating:2,count:32),r=Data(repeating:3,count:32)
-  let a=try RouterVPNPQFactory().createProtocol(s,publicKey:p,peerKey:r,version:2)!
-  let event=try a.processEvent(1,packet:Data([1]))!;precondition(event.key==Data(repeating:7,count:32)&&event.packet==Data("test".utf8))
-  let expired=try a.processEvent(1,packet:Data([2]))!;precondition(expired.expired)
-  let rejected=try a.processEvent(1,packet:Data([3]))!;precondition(rejected.rejected)
+  let a=try RouterVPNPQFactory().createProtocol(s,publicKey:p,peerKey:r,version:2)
+  let event=try a.processEvent(1,packet:Data([1]));precondition(event.key==Data(repeating:7,count:32)&&event.packet==Data("test".utf8))
+  let expired=try a.processEvent(1,packet:Data([2]));precondition(expired.expired)
+  let rejected=try a.processEvent(1,packet:Data([3]));precondition(rejected.rejected)
   for n in 4...8 {do{_ = try a.processEvent(1,packet:Data([UInt8(n)]));fatalError("invalid native event accepted")}catch{}}
   for flags:UInt8 in [3,4,255] {var b=[UInt8](repeating:0,count:44);b[8]=flags;do{_ = try RouterVPNPQProtocol.decode(b,size:44);fatalError()}catch{}}
   try a.stop();try a.stop();do{_ = try a.processEvent(0,packet:nil);fatalError("stale owner accepted")}catch{}
-  let next=try RouterVPNPQFactory().createProtocol(s,publicKey:p,peerKey:r,version:3)!
-  let key=try next.processEvent(1,packet:Data([1]))!;precondition(key.key==Data(repeating:7,count:32));try next.stop()
+  let next=try RouterVPNPQFactory().createProtocol(s,publicKey:p,peerKey:r,version:3)
+  let key=try next.processEvent(1,packet:Data([1]));precondition(key.key==Data(repeating:7,count:32));try next.stop()
   print("Swift/C host, decoding, cancellation and owner isolation passed")
  }
 }
