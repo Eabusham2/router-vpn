@@ -23,6 +23,11 @@ func validateAmnezia(endpoint, peer map[string]any) error {
 	if _, err = awgpolicy.ParametersUAPI(parameters); err != nil {
 		return bad
 	}
+	return validatePacketPeer(endpoint, peer)
+}
+
+func validatePacketPeer(endpoint, peer map[string]any) error {
+	bad := errors.New("invalid captured packet endpoint or peer")
 	mtu, ok := endpoint["mtu"].(float64)
 	if !ok || mtu < 1280 || mtu > 9000 || mtu != float64(int(mtu)) {
 		return bad

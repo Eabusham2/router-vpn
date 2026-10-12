@@ -24,6 +24,7 @@ import (
 	"unicode/utf8"
 
 	"router-vpn/internal/awgpolicy"
+	"router-vpn/internal/mobilepq"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/routechoice"
 )
@@ -73,22 +74,23 @@ type Progress struct {
 }
 
 type Controller struct {
-	meta           Metadata
-	config         string
-	proposal       multihoprelay.Request
-	expected       multihoprelay.Lease
-	localPublicKey string
-	generation     atomic.Uint64
-	mu             sync.Mutex
-	progress       Progress
-	engine         Engine
-	engineID       string
-	cancel         context.CancelFunc
-	runDone        chan struct{}
-	leaseMu        sync.Mutex
-	ownsLease      bool
-	renewCancel    context.CancelFunc
-	renewDone      chan struct{}
+	meta            Metadata
+	config          string
+	proposal        multihoprelay.Request
+	expected        multihoprelay.Lease
+	localPublicKey  string
+	localPQIdentity string
+	generation      atomic.Uint64
+	mu              sync.Mutex
+	progress        Progress
+	engine          Engine
+	engineID        string
+	cancel          context.CancelFunc
+	runDone         chan struct{}
+	leaseMu         sync.Mutex
+	ownsLease       bool
+	renewCancel     context.CancelFunc
+	renewDone       chan struct{}
 }
 
 func exactJSON(data []byte, output any, limit int) error {
@@ -196,7 +198,7 @@ func New(config, metadata string) (*Controller, error) {
 	if !awgpolicy.WireGuardFamily(meta.EntryMode) && !IsPQMode(meta.EntryMode) && !ProxyEntryMode(meta.EntryMode) {
 		return nil, errors.New("unimplemented entry transport")
 	}
-	if !awgpolicy.WireGuardFamily(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" && !XrayEntryMode(meta.ExitMode) {
+	if !multihoprelay.PacketMode(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" && !XrayEntryMode(meta.ExitMode) {
 		return nil, errors.New("unimplemented exit transport")
 	}
 	if meta.Execution != "local" && meta.Execution != "server" && meta.Execution != "auto" {
@@ -294,6 +296,15 @@ func New(config, metadata string) (*Controller, error) {
 	} else if awgpolicy.IsMode(expectedType) {
 		expectedType = AmneziaType
 	}
+	if IsPQMode(meta.ExitMode) {
+		expectedType = PQType
+		if exitList != "endpoints" {
+			return nil, errors.New("PQ exit requires its native endpoint owner")
+		}
+		if err := validatePQExit(local, meta.ExitMode, meta.ExitNodeID, meta.EntryTag); err != nil {
+			return nil, err
+		}
+	}
 	if local["type"] != expectedType {
 		return nil, errors.New("exit label does not match the dataplane")
 	}
@@ -334,7 +345,7 @@ func New(config, metadata string) (*Controller, error) {
 	}
 	c.proposal = multihoprelay.Request{SessionID: nonce, EntryNodeID: meta.EntryNodeID, ExitID: meta.ExitID, ExitMode: meta.ExitMode, Port: 26240 + int(seed[0]%32), Username: user, Password: password}
 	c.expected = multihoprelay.Lease{Request: c.proposal, NodeID: meta.EntryNodeID, ExitNodeID: meta.ExitNodeID, Host: entry.Hostname(), Port: c.proposal.Port, Username: user, Password: password}
-	if awgpolicy.WireGuardFamily(meta.ExitMode) {
+	if multihoprelay.PacketMode(meta.ExitMode) {
 		text, _ := local["private_key"].(string)
 		key, e := base64.StdEncoding.Strict().DecodeString(text)
 		if e != nil || len(key) != 32 {
@@ -345,6 +356,21 @@ func New(config, metadata string) (*Controller, error) {
 			return nil, e
 		}
 		c.localPublicKey = base64.StdEncoding.EncodeToString(private.PublicKey().Bytes())
+	}
+	if IsPQMode(meta.ExitMode) {
+		raw, err := json.Marshal(local)
+		if err != nil {
+			return nil, err
+		}
+		runtime, err := PQRuntimeConfig(string(raw))
+		if err != nil {
+			return nil, err
+		}
+		c.localPQIdentity, err = mobilepq.ClientIdentity(runtime.PQ)
+		runtime.PQ.Erase()
+		if err != nil {
+			return nil, err
+		}
 	}
 	local["tag"] = LocalTag
 	outbounds, _ := root["outbounds"].([]any)

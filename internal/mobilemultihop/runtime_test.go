@@ -73,6 +73,8 @@ func TestExecutionPlanRejectsAmbiguousInputs(t *testing.T) {
 
 type fakeEngine struct {
 	entryNode     string
+	exitNode      string
+	pqIdentity    string
 	exitMode      string
 	exitLayer     string
 	clientPublic  string
@@ -113,6 +115,12 @@ func (e *fakeEngine) entryProofID() string {
 	}
 	return strings.Repeat("a", 64)
 }
+func (e *fakeEngine) exitProofID() string {
+	if e.exitNode != "" {
+		return e.exitNode
+	}
+	return strings.Repeat("b", 64)
+}
 func (e *fakeEngine) handler(tag string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
@@ -134,7 +142,7 @@ func (e *fakeEngine) handler(tag string) http.HandlerFunc {
 				if mode == "" {
 					mode = "shadowsocks"
 				}
-				json.NewEncoder(w).Encode(map[string]any{"node_id": e.entryProofID(), "execution": "server", "exits": []any{map[string]any{"exit_id": "exit", "exit_mode": mode, "exit_node_id": strings.Repeat("b", 64), "client_public_key": e.clientPublic, "exit_start_layer": e.exitLayer}}})
+				json.NewEncoder(w).Encode(map[string]any{"node_id": e.entryProofID(), "execution": "server", "exits": []any{map[string]any{"exit_id": "exit", "exit_mode": mode, "exit_node_id": e.exitProofID(), "client_public_key": e.clientPublic, "pq_client_identity": e.pqIdentity, "exit_start_layer": e.exitLayer}}})
 			case "PUT":
 				var q multihoprelay.Request
 				if json.NewDecoder(r.Body).Decode(&q) != nil {
@@ -142,7 +150,7 @@ func (e *fakeEngine) handler(tag string) http.HandlerFunc {
 					return
 				}
 				e.lease = &q
-				json.NewEncoder(w).Encode(multihoprelay.Lease{Request: q, NodeID: e.entryProofID(), ExitNodeID: strings.Repeat("b", 64), Host: "10.77.0.1", Port: q.Port, Username: q.Username, Password: q.Password, ExpiresAt: time.Now().Add(90 * time.Second)})
+				json.NewEncoder(w).Encode(multihoprelay.Lease{Request: q, NodeID: e.entryProofID(), ExitNodeID: e.exitProofID(), Host: "10.77.0.1", Port: q.Port, Username: q.Username, Password: q.Password, ExpiresAt: time.Now().Add(90 * time.Second)})
 			case "DELETE":
 				if e.rejectCleanup {
 					w.WriteHeader(500)
@@ -155,7 +163,7 @@ func (e *fakeEngine) handler(tag string) http.HandlerFunc {
 			}
 			return
 		case "/health":
-			node := strings.Repeat("b", 64)
+			node := e.exitProofID()
 			token := "Bearer exit-private-token"
 			if tag == "entry-wg" {
 				node = e.entryProofID()

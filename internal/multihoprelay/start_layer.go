@@ -4,10 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/netip"
 	"net/url"
 	"router-vpn/internal/applexray"
-	"router-vpn/internal/awgpolicy"
+	"router-vpn/internal/mobilepq"
 	"strconv"
 	"strings"
 )
@@ -76,11 +77,11 @@ func WrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 		}
 		delete(checked, "listen_port")
 	}
-	if _, e = validateTransport(Exit{Mode: mode, DNS: address.String(), Transport: checked}); e != nil {
+	if _, e = validateTransport(Exit{Mode: mode, NodeID: stringValue(checked["node_id"]), DNS: address.String(), Transport: checked}); e != nil {
 		return nil, nil, bad
 	}
 	var host string
-	if awgpolicy.WireGuardFamily(mode) {
+	if PacketMode(mode) {
 		host, _ = inner["peers"].([]any)[0].(map[string]any)["address"].(string)
 	} else if applexray.SingleTransportMode(mode) {
 		raw, _ := inner["config_json"].(string)
@@ -121,8 +122,16 @@ func WrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 			return nil, nil, bad
 		}
 	}
-	if awgpolicy.WireGuardFamily(mode) {
+	if PacketMode(mode) {
 		inner["peers"].([]any)[0].(map[string]any)["address"] = address.String()
+		if mobilepq.IsMode(mode) {
+			pq := inner["pq"].(map[string]any)
+			_, port, err := net.SplitHostPort(pq["endpoint"].(string))
+			if err != nil {
+				return nil, nil, bad
+			}
+			pq["endpoint"] = net.JoinHostPort(address.String(), port)
+		}
 	} else if applexray.SingleTransportMode(mode) {
 		parsed, e := applexray.Object([]byte(inner["config_json"].(string)))
 		if e != nil {

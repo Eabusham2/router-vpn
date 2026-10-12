@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/routechoice"
 )
@@ -96,11 +95,12 @@ func (c *Controller) acquire(ctx context.Context) error {
 		NodeID    string `json:"node_id"`
 		Execution string `json:"execution"`
 		Exits     []struct {
-			ID        string `json:"exit_id"`
-			Mode      string `json:"exit_mode"`
-			Node      string `json:"exit_node_id"`
-			PublicKey string `json:"client_public_key,omitempty"`
-			Layer     string `json:"exit_start_layer,omitempty"`
+			ID         string `json:"exit_id"`
+			Mode       string `json:"exit_mode"`
+			Node       string `json:"exit_node_id"`
+			PublicKey  string `json:"client_public_key,omitempty"`
+			PQIdentity string `json:"pq_client_identity,omitempty"`
+			Layer      string `json:"exit_start_layer,omitempty"`
 		} `json:"exits"`
 	}
 	if exactJSON(data, &caps, 8192) != nil || caps.NodeID != c.meta.EntryNodeID || caps.Execution != "server" {
@@ -109,8 +109,11 @@ func (c *Controller) acquire(ctx context.Context) error {
 	found := false
 	for _, exit := range caps.Exits {
 		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.Node == c.meta.ExitNodeID && exit.Layer == c.meta.ExitStartLayer {
-			if awgpolicy.WireGuardFamily(c.meta.ExitMode) && (exit.PublicKey == "" || exit.PublicKey == c.localPublicKey) {
+			if multihoprelay.PacketMode(c.meta.ExitMode) && (exit.PublicKey == "" || exit.PublicKey == c.localPublicKey) {
 				return errors.New("server WireGuard needs separately paired client credentials to avoid peer roaming")
+			}
+			if IsPQMode(c.meta.ExitMode) && (!proofID.MatchString(exit.PQIdentity) || exit.PQIdentity == c.localPQIdentity) {
+				return errors.New("server PQ needs independently paired KEM credentials to avoid cross-session rekeying")
 			}
 			found = true
 		}

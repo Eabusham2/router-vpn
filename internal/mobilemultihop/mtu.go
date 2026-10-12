@@ -62,14 +62,19 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 			return "", errors.New("unowned MTU endpoint")
 		}
 		if value["type"] == PQType {
-			// Only the entry is enabled here. PQ exits require separately owned
-			// native server support; their labels cannot bypass this boundary.
-			if value["tag"] != "entry-wg" && value["tag"] != "routervpn-hop-entry" {
-				return "", errors.New("PQ MTU endpoint is not the captured entry")
-			}
 			mode, _ := value["mode"].(string)
 			node, _ := value["node_id"].(string)
-			if err := validatePQEntry(value, mode, node); err != nil {
+			var err error
+			if value["tag"] == "proxy" {
+				tag, _ := value["detour"].(string)
+				if tag != "entry-wg" && tag != "routervpn-hop-entry" {
+					return "", errors.New("PQ exit MTU lost the native entry")
+				}
+				err = validatePQExit(value, mode, node, tag)
+			} else {
+				err = validatePQEntry(value, mode, node)
+			}
+			if err != nil {
 				return "", err
 			}
 		}
@@ -160,8 +165,24 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 		if strings.Contains(host, ":") {
 			overhead = 80
 		}
-		if exit["type"] == AmneziaType {
-			encoded, marshalErr := json.Marshal(exit)
+		if exit["type"] == AmneziaType || exit["type"] == PQType && exit["mode"] == "awg2-pq" {
+			rawBase := exit
+			if exit["type"] == PQType {
+				encoded, err := json.Marshal(exit)
+				if err != nil {
+					return "", err
+				}
+				runtime, err := PQRuntimeConfig(string(encoded))
+				if err != nil {
+					return "", err
+				}
+				runtime.PQ.Erase()
+				rawBase = nil
+				if err = json.Unmarshal([]byte(runtime.BaseJSON), &rawBase); err != nil {
+					return "", err
+				}
+			}
+			encoded, marshalErr := json.Marshal(rawBase)
 			if marshalErr != nil {
 				return "", marshalErr
 			}

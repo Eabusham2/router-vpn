@@ -19,6 +19,7 @@ import (
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/awgpolicy"
+	"router-vpn/internal/mobilepq"
 )
 
 var ident = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
@@ -142,9 +143,14 @@ func (m *Manager) Available() []map[string]string {
 		if e.StartLayer != nil {
 			item["exit_start_layer"] = e.StartLayer.Mode
 		}
-		if awgpolicy.WireGuardFamily(e.Mode) {
+		if PacketMode(e.Mode) {
 			if identity, err := clientIdentity(e.Transport); err == nil {
 				item["client_public_key"] = identity
+			}
+		}
+		if mobilepq.IsMode(e.Mode) {
+			if identity, err := pqIdentity(e.Transport); err == nil {
+				item["pq_client_identity"] = identity
 			}
 		}
 		out = append(out, item)
@@ -216,7 +222,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	if exit == nil {
 		return Lease{}, ErrUnavailable
 	}
-	if awgpolicy.WireGuardFamily(exit.Mode) {
+	if PacketMode(exit.Mode) {
 		// A WireGuard peer key identifies one roaming endpoint. Two independent
 		// processes using that key would steal each other's reply endpoint.
 		// X25519 clamps scalar bits: distinct private-key encodings can be the
@@ -227,11 +233,11 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 			return Lease{}, err
 		}
 		for _, active := range m.leases {
-			if !awgpolicy.WireGuardFamily(active.ExitMode) {
+			if !PacketMode(active.ExitMode) {
 				continue
 			}
 			for _, paired := range m.cfg.Exits {
-				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || LayerMode(paired.StartLayer) != active.ExitStartLayer || !awgpolicy.WireGuardFamily(paired.Mode) {
+				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || LayerMode(paired.StartLayer) != active.ExitStartLayer || !PacketMode(paired.Mode) {
 					continue
 				}
 				other, err := clientIdentity(paired.Transport)
@@ -240,6 +246,29 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 				}
 				if identity == other {
 					return Lease{}, errors.New("paired WireGuard credentials already own another relay; provision distinct client credentials for concurrent use")
+				}
+			}
+		}
+	}
+	if mobilepq.IsMode(exit.Mode) {
+		identity, err := pqIdentity(exit.Transport)
+		if err != nil {
+			return Lease{}, err
+		}
+		for _, active := range m.leases {
+			if !mobilepq.IsMode(active.ExitMode) {
+				continue
+			}
+			for _, paired := range m.cfg.Exits {
+				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || LayerMode(paired.StartLayer) != active.ExitStartLayer {
+					continue
+				}
+				other, err := pqIdentity(paired.Transport)
+				if err != nil {
+					return Lease{}, err
+				}
+				if identity == other {
+					return Lease{}, errors.New("paired PQ credentials already own another relay; provision independent PQ client keys")
 				}
 			}
 		}
@@ -414,6 +443,8 @@ func validateTransport(e Exit) (map[string]any, error) {
 		keys = []string{"private_key", "address", "mtu", "peers", "workers", "udp_timeout"}
 	case "awg2-fast", "awg2-strong":
 		keys = []string{"private_key", "address", "mtu", "peers", "amnezia"}
+	case "wg-pq", "awg2-pq":
+		keys = []string{"private_key", "address", "mtu", "peers", "amnezia", "mode", "node_id", "pq"}
 	case "shadowsocks":
 		keys = []string{"server", "server_port", "method", "password", "network", "udp_over_tcp"}
 	case "reality-vision", "reality-pq-vision", "reality-xhttp":
@@ -439,6 +470,10 @@ func validateTransport(e Exit) (map[string]any, error) {
 	}
 	if applexray.SingleTransportMode(e.Mode) {
 		if err := applexray.ValidateSingleTransport(p, e.Mode); err != nil {
+			return nil, err
+		}
+	} else if mobilepq.IsMode(e.Mode) {
+		if err := validatePQTransport(p, e.Mode, e.NodeID); err != nil {
 			return nil, err
 		}
 	} else if awgpolicy.WireGuardFamily(e.Mode) {
@@ -515,7 +550,7 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 		"dns":      map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "exit-dns", "server": exit.DNS, "detour": "exit"}}, "final": "exit-dns"},
 		"route":    map[string]any{"default_domain_resolver": "exit-dns", "rules": []any{map[string]any{"source_ip_cidr": []string{netip.PrefixFrom(peer, bits).String()}, "invert": true, "action": "reject"}}, "final": "exit"},
 	}
-	if awgpolicy.WireGuardFamily(exit.Mode) {
+	if PacketMode(exit.Mode) {
 		config["endpoints"] = []any{transport}
 		config["outbounds"] = []any{}
 	} else {
@@ -526,7 +561,7 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if awgpolicy.WireGuardFamily(exit.Mode) {
+		if PacketMode(exit.Mode) {
 			config["endpoints"] = []any{inner}
 			config["outbounds"] = []any{outer}
 		} else {

@@ -32,7 +32,7 @@ type PQRuntime struct {
 	PQ         mobilepq.Config
 }
 
-func IsPQMode(mode string) bool { return mode == "wg-pq" || mode == "awg2-pq" }
+func IsPQMode(mode string) bool { return mobilepq.IsMode(mode) }
 
 // CompilePQProfile consumes the generated private profile assets as data. It
 // never executes TOML/env directives or opens their paths. The PQ transport IP
