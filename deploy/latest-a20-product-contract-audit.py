@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import json
+import re
+import subprocess
+import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 errors=[]
@@ -19,6 +22,22 @@ def forbid(rel,*markers):
     body=text(rel).lower()
     for m in markers:
         if m.lower() in body: errors.append(f'{rel}: forbidden {m!r}')
+
+def packet_tunnel_sources(project):
+    # Require the actual extension target, not a source name copied into an app
+    # target or a comment. The shipping XcodeGen spec uses one inline source list.
+    targets = re.findall(r'(?ms)^  RouterVPNPacketTunnel:\n(.*?)(?=^  [A-Za-z_][^\n]*:|\Z)', project)
+    if len(targets) != 1:
+        return False
+    block = targets[0]
+    lists = re.findall(r'^    sources: \[([^\]\n]*)\]\s*$', block, re.MULTILINE)
+    if len(lists) != 1:
+        return False
+    sources = [item.strip() for item in lists[0].split(',')]
+    required = {'PacketTunnel', 'App/IOSMultihopStartLayer.swift', 'App/IOSNativePQProfile.swift'}
+    return (len(sources) == len(set(sources)) and required.issubset(sources)
+            and all(re.fullmatch(r'[A-Za-z0-9_./-]+', item) for item in sources)
+            and re.search(r'^        SWIFT_OBJC_BRIDGING_HEADER: PacketTunnel/RVPNTunnelTCPConnection\.h\s*$', block, re.MULTILINE) is not None)
 
 # A20-1/2: daily native product stays map/globe-first and distinct from Setup Center admin.
 need('server/scripts/setup-center-server.py','Server administration','Connected clients','Persistent port forwarding')
@@ -63,7 +82,8 @@ need('ios/RouterVPN/App/IOSForwardingMasterView.swift','sendProviderMessage','se
 # or a comment copying the old Swift-only call spelling.
 need('ios/RouterVPN/PacketTunnel/RouterVPNForwardingChannel.swift','RVPNTunnelTCPConnection(provider: provider','Policy.verifyProof','Policy.authorize','readback')
 need('ios/RouterVPN/PacketTunnel/RVPNTunnelTCPConnection.m','[provider createTCPConnectionThroughTunnelToEndpoint:endpoint','inet_pton(AF_INET','inet_pton(AF_INET6','[_connection cancel]')
-need('ios/RouterVPN/project.yml','sources: [PacketTunnel, App/IOSMultihopStartLayer.swift]','SWIFT_OBJC_BRIDGING_HEADER: PacketTunnel/RVPNTunnelTCPConnection.h')
+if not packet_tunnel_sources(text('ios/RouterVPN/project.yml')):
+    errors.append('PacketTunnel target lost shared Start Layer/PQ sources or its tunnel-bound bridge')
 need('ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift','IOSMultihopStartLayer.requiredSource','IOSMultihopStartLayer.requiredExitSource','LibboxNewRouterMultihopWithStartLayers')
 forbid('ios/RouterVPN/PacketTunnel/RVPNTunnelTCPConnection.m','[provider createTCPConnectionToEndpoint:','[NWTCPConnection alloc]')
 
@@ -102,4 +122,5 @@ if errors:
     print('LATEST A20 PRODUCT/SHIPPING CONTRACT: FAIL')
     for e in errors: print(' - '+e)
     raise SystemExit(1)
+subprocess.run([sys.executable, str(ROOT/'deploy/test_a20_extension_sources.py')], check=True)
 print('LATEST A20 PRODUCT/SHIPPING CONTRACT: PASS')
