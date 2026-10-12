@@ -54,6 +54,9 @@ func main(){
  case "exit":value,err=mobilemultihop.WireGuardExitConfig(r.Config,r.Policy)
  case "awg-parse":value,err=mobilemultihop.CompileAmneziaProfile(r.Config,r.Policy)
  case "awg-exit":value,err=mobilemultihop.AmneziaExitConfig(r.Config,r.Policy)
+ case "pq-profile":
+  var input struct{Mode string;Files string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobilemultihop.CompilePQProfile(input.Mode,input.Files,r.Policy)}
  case "test-certificate":
   var key *ecdsa.PrivateKey; key,err=ecdsa.GenerateKey(elliptic.P256(),rand.Reader)
   if err==nil{template:=&x509.Certificate{SerialNumber:big.NewInt(1),Subject:pkix.Name{CommonName:r.Config},DNSNames:[]string{r.Config},NotBefore:time.Now().Add(-time.Hour),NotAfter:time.Now().Add(time.Hour),IsCA:true,BasicConstraintsValid:true,KeyUsage:x509.KeyUsageCertSign|x509.KeyUsageDigitalSignature};var der []byte;der,err=x509.CreateCertificate(rand.Reader,template,template,&key.PublicKey,key);if err==nil{value=string(pem.EncodeToMemory(&pem.Block{Type:"CERTIFICATE",Bytes:der}))}}
@@ -114,6 +117,7 @@ final class AndroidServiceStopConfirmation {
  static void request(String key,java.util.function.LongConsumer c){throw new AssertionError("No stop side effect in compiler test");}
  static String state(String key,java.util.function.Supplier<String> value){return value.get();}
 }
+final class RouterPQNative {static int installs;static boolean fail;static void install()throws Exception{if(fail)throw new java.io.IOException("test PQ initialization failure");installs++;}}
 final class LayeredVpnService {static final String ACTION_START="start",ACTION_STOP="stop",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode";}
 final class XrayVpnService {static final String ACTION_START="start",ACTION_STOP="stop",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode";}
 ''',
@@ -139,6 +143,7 @@ public final class Libbox {
    return out;
   }finally{p.destroyForcibly();}
  }
+ public static String routerCompilePQProfile(String mode,String files,String node)throws Exception{return call("pq-profile",new JSONObject().put("Mode",mode).put("Files",files).toString(),node);}
  public static Runnable afterEntryLayerPreflight;
  public static String routerCompileMultihopEntryStartLayer(String config,String metadata,String source)throws Exception {
   String result=call("entry-start",new JSONObject().put("Config",config).put("Metadata",metadata).put("Source",source).toString(),"");

@@ -94,7 +94,7 @@ final class NativeSingBoxController {
                     applyPerformance(root, config);
                     // No DNS/socket creation while populating readiness. The
                     // selected launch resolves and checks the actual native core.
-                } else if (nativeWireGuardFamily(id)) {
+                } else if (nativeSinglePacketMode(id)) {
                     JSONObject config = new JSONObject(candidate);
                     applySelectedDns(root, config);
                     config = AndroidWireGuardLibboxPolicy.apply(root, config);
@@ -102,7 +102,9 @@ final class NativeSingBoxController {
                     AndroidStartLayer.RelayPlan plan = AndroidStartLayer.apply(root, config, id);
                     if (plan != null) { plan.clear(); throw new IllegalStateException("Native WG/AWG must own its Start Layer without a local relay."); }
                     config = applyPerformance(root, config);
-                    Libbox.checkConfig(config.toString());
+                    // Picker validation is pure policy. PQ protocol handles are
+                    // constructed only for a selected launch, not during discovery.
+                    if (!nativePQFamily(id)) Libbox.checkConfig(config.toString());
                 }
             } catch (Exception invalid) { continue; }
             String name = mode.optString("name", id).trim();
@@ -121,7 +123,7 @@ final class NativeSingBoxController {
         String rawConfigText = AndroidStartLayer.nativeXray(modeId)
                 ? AndroidXrayLibboxPolicy.resolve(root, profile, modeId)
                 : compileStandaloneProfile(root, profile, modeId);
-        if (nativeWireGuardFamily(modeId)) {
+        if (nativeSinglePacketMode(modeId)) {
             // Only the compiled graph is staged. A second WireGuard VPN or
             // unused raw-backend file must never be started implicitly.
             profile = new JSONObject().put("sing-box.json", "native-wireguard-graph");
@@ -130,7 +132,7 @@ final class NativeSingBoxController {
         JSONObject patchedConfig = new JSONObject(rawConfigText);
         applySelectedDns(root, patchedConfig);
         if (AndroidStartLayer.nativeXray(modeId)) AndroidXrayLibboxPolicy.normalizeDnsRoutes(patchedConfig);
-        if (nativeWireGuardFamily(modeId)) patchedConfig = AndroidWireGuardLibboxPolicy.apply(root, patchedConfig);
+        if (nativeSinglePacketMode(modeId)) patchedConfig = AndroidWireGuardLibboxPolicy.apply(root, patchedConfig);
         // Recompile after DNS selection: UDP/DoH3 must use the real Hysteria2
         // leg, not the SS2022 WebSocket/TLS transport restricted to TCP.
         if ("ss-v2ray".equals(modeId)) patchedConfig = new JSONObject(compileNativeSIP003(profile, modeId, patchedConfig.toString()));
@@ -138,13 +140,14 @@ final class NativeSingBoxController {
         try {
             if (AndroidStartLayer.nativeXray(modeId)) patchedConfig = AndroidXrayLibboxPolicy.applyDevice(root, patchedConfig);
             patchedConfig = applyPerformance(root, patchedConfig);
+            if (nativePQFamily(modeId)) RouterPQNative.install();
             Libbox.checkConfig(patchedConfig.toString());
             byte[] config = (patchedConfig.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
             if (config.length > MAX_CONFIG) throw new IllegalStateException("Patched sing-box config exceeds safety limit.");
 
-            if (AndroidStartLayer.nativeXray(modeId) && (Thread.currentThread().isInterrupted()
+            if ((AndroidStartLayer.nativeXray(modeId) || nativePQFamily(modeId)) && (Thread.currentThread().isInterrupted()
                     || !capturedBundle.equals(loadBundle(privateBundle).toString()))) {
-                throw new IllegalStateException("Selected node changed or preparation was cancelled; no Xray session was staged.");
+                throw new IllegalStateException("Selected node changed or preparation was cancelled; no native session was staged.");
             }
             File rootDir = new File(context.getFilesDir(), "layered-sessions");
             if (!rootDir.isDirectory() && !rootDir.mkdirs()) throw new IllegalStateException("Cannot create layered session directory.");
@@ -216,7 +219,36 @@ final class NativeSingBoxController {
         return "wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode);
     }
 
+    static boolean nativePQFamily(String mode) {
+        return "wg-pq".equals(mode) || "awg2-pq".equals(mode);
+    }
+
+    private static boolean nativeSinglePacketMode(String mode) {
+        return nativeWireGuardFamily(mode) || nativePQFamily(mode);
+    }
+
     private static String compileStandaloneProfile(JSONObject bundle, JSONObject profile, String modeId) throws Exception {
+        if (nativePQFamily(modeId)) {
+            // The captured generated assets are data for the pinned compiler.
+            // They are never executed, staged as helper scripts, or rewritten
+            // into ordinary WG/AWG when post-quantum initialization fails.
+            java.util.Set<String> allowed = new java.util.HashSet<>(java.util.Arrays.asList(
+                    "wg-pq".equals(modeId) ? "wg.conf" : "awg.conf", "stack.json",
+                    "rosenpass.env", "rosenpass.toml", "rosenpass-client-secret",
+                    "rosenpass-client-public", "rosenpass-server-public"));
+            JSONArray names = profile.names();
+            if (names == null) throw new IllegalStateException("Native PQ assets are missing.");
+            for (int i = 0; i < names.length(); i++) {
+                if (!allowed.contains(names.getString(i))) throw new IllegalStateException("Native PQ contains an unowned helper asset.");
+            }
+            String captured = profile.toString();
+            if (captured.getBytes(StandardCharsets.UTF_8).length > 12 * 1024 * 1024)
+                throw new IllegalStateException("Native PQ asset map exceeds its bound.");
+            String compiled = Libbox.routerCompilePQProfile(modeId, captured, AndroidNodeStore.stableNodeIdentity(bundle));
+            if (compiled == null || compiled.isEmpty() || compiled.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG)
+                throw new IllegalStateException("Native PQ compiler returned no bounded graph.");
+            return compiled;
+        }
         if (AndroidStartLayer.nativeXray(modeId)) return AndroidXrayLibboxPolicy.check(bundle, profile, modeId);
         String asset = "wg".equals(modeId) ? "wg.conf" : nativeWireGuardFamily(modeId) ? "awg.conf" : "sing-box.json";
         int maximum = nativeWireGuardFamily(modeId) ? 1024 * 1024 : MAX_CONFIG;

@@ -87,6 +87,7 @@ stub(PKG,'PlatformInterface','''{
  String tailscaleHostname();boolean usePlatformBridge();BridgeSession createBridge(BridgeOptions o)throws Exception;void triggerNativeCrash()throws Exception;int connectSSHAgent()throws Exception;
 }''','interface')
 APP='com.eabusham.routervpn'
+stub(APP,'RouterPQNative','{public static void install()throws Exception{} }')
 stub(APP,'AndroidServiceStopConfirmation','{public static final String EXTRA_COMMAND="stop";public static void acknowledge(String k,long c){} }')
 stub(APP,'AndroidKillSwitchPolicy','{public static final String SESSION_MARKER="kill-switch";public static String requirementMessage(){return "";} }')
 stub(APP,'AndroidMTUSession','{interface Failure{void abort(AndroidMTUSession owner);}public AndroidMTUSession(android.content.Context c,Failure f){} public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata){}public String request(String a,String b,String c)throws Exception{return "";}public boolean running(){return false;}public void drainForMeasurement()throws Exception{}public void networkChanged(){}public void close()throws Exception{}public void beforeOpen()throws Exception{}public void established(int mtu)throws Exception{}public void registered(String name){}public boolean unchangedPhysicalPath(){return false;}public void checkNetwork(){} }')

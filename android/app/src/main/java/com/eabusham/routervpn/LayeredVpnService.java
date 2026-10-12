@@ -240,6 +240,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             setup.setLogMaxLines(2000);
             setup.setDebug(false);
             Libbox.setup(setup);
+            // The immutable factory owns no peer or network. Each compiled PQ
+            // endpoint creates its own protocol under this service's VPN owner.
+            RouterPQNative.install();
             io.nekohasekai.libbox.RouterMultihop preparedExecution=null;
             String hopMetadata=null;
             File executionFile=new File(session,"routervpn-multihop.json").getCanonicalFile();

@@ -43,7 +43,7 @@ final class AndroidStartLayer {
     }
 
     private static final Set<String> SUPPORTED = new HashSet<>(Arrays.asList(
-            "wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"));
+            "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"));
 
     static String selectedMode(JSONObject bundle) throws Exception {
         JSONObject profile = selectedRouterProfile(bundle);
@@ -77,7 +77,7 @@ final class AndroidStartLayer {
         }
         if (!AES.equals(start) && !AES_XOR.equals(start)) throw new IllegalStateException("Unsupported Android Start Layer: " + start);
         boolean xor = AES_XOR.equals(start);
-        if ("wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode) || "ss-v2ray".equals(mode) || nativeXray(mode)) {
+        if ("wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode) || "wg-pq".equals(mode) || "awg2-pq".equals(mode) || "ss-v2ray".equals(mode) || nativeXray(mode)) {
             JSONObject profile = selectedRouterProfile(bundle);
             JSONObject profiles = bundle.getJSONObject("profiles");
             String encoded = profiles.getJSONObject("shadowsocks").getString("sing-box.json");
