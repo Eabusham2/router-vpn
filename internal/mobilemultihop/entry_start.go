@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/netip"
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/awgpolicy"
@@ -134,7 +135,7 @@ func NewWithEntryStartLayer(config, metadata, start string) (*Controller, error)
 
 func entryStartHost(entry map[string]any, mode string) (string, error) {
 	bad := errors.New("entry Start Layer lost its exact native transport")
-	if awgpolicy.WireGuardFamily(mode) {
+	if awgpolicy.WireGuardFamily(mode) || IsPQMode(mode) {
 		peers, ok := entry["peers"].([]any)
 		if !ok || len(peers) != 1 {
 			return "", bad
@@ -177,9 +178,29 @@ func entryStartHost(entry map[string]any, mode string) (string, error) {
 }
 
 func rewriteEntryStartHost(entry map[string]any, mode, host string) error {
-	if awgpolicy.WireGuardFamily(mode) {
+	if awgpolicy.WireGuardFamily(mode) || IsPQMode(mode) {
 		entry["peers"].([]any)[0].(map[string]any)["address"] = host
-		if mode != "wg" {
+		if IsPQMode(mode) {
+			pq, ok := entry["pq"].(map[string]any)
+			if !ok {
+				return errors.New("PQ entry lost its captured handshake")
+			}
+			address, ok := pq["endpoint"].(string)
+			if !ok {
+				return errors.New("PQ entry lost its handshake endpoint")
+			}
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return errors.New("invalid captured PQ handshake endpoint")
+			}
+			pq["endpoint"] = net.JoinHostPort(host, port)
+			raw, _ := json.Marshal(entry)
+			runtime, err := PQRuntimeConfig(string(raw))
+			if err != nil {
+				return err
+			}
+			runtime.PQ.Erase()
+		} else if mode != "wg" {
 			raw, _ := json.Marshal(entry)
 			if _, err := AmneziaRuntimeConfig(string(raw)); err != nil {
 				return err

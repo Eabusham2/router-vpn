@@ -193,7 +193,7 @@ func New(config, metadata string) (*Controller, error) {
 	if meta.EntryMode == "" {
 		meta.EntryMode = "wg"
 	}
-	if !awgpolicy.WireGuardFamily(meta.EntryMode) && !ProxyEntryMode(meta.EntryMode) {
+	if !awgpolicy.WireGuardFamily(meta.EntryMode) && !IsPQMode(meta.EntryMode) && !ProxyEntryMode(meta.EntryMode) {
 		return nil, errors.New("unimplemented entry transport")
 	}
 	if !awgpolicy.WireGuardFamily(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" && !XrayEntryMode(meta.ExitMode) {
@@ -249,6 +249,12 @@ func New(config, metadata string) (*Controller, error) {
 					expectedEntry = "wireguard"
 					if meta.EntryMode != "wg" {
 						expectedEntry = AmneziaType
+					}
+				}
+				if IsPQMode(meta.EntryMode) {
+					expectedList, expectedEntry = "endpoints", PQType
+					if err := validatePQEntry(value, meta.EntryMode, meta.EntryNodeID); err != nil {
+						return nil, err
 					}
 				}
 				if list != expectedList {

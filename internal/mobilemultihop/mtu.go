@@ -58,8 +58,20 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 	}
 	for _, raw := range endpoints {
 		value, ok := raw.(map[string]any)
-		if !ok || value["type"] != "wireguard" && value["type"] != AmneziaType {
+		if !ok || value["type"] != "wireguard" && value["type"] != AmneziaType && value["type"] != PQType {
 			return "", errors.New("unowned MTU endpoint")
+		}
+		if value["type"] == PQType {
+			// Only the entry is enabled here. PQ exits require separately owned
+			// native server support; their labels cannot bypass this boundary.
+			if value["tag"] != "entry-wg" && value["tag"] != "routervpn-hop-entry" {
+				return "", errors.New("PQ MTU endpoint is not the captured entry")
+			}
+			mode, _ := value["mode"].(string)
+			node, _ := value["node_id"].(string)
+			if err := validatePQEntry(value, mode, node); err != nil {
+				return "", err
+			}
 		}
 		switch value["tag"] {
 		case "entry-wg", "routervpn-hop-entry":
