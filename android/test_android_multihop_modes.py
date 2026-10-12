@@ -23,11 +23,15 @@ public static void main(String[] args) {
   boolean rejected=false;try{normalizeMultiMode(mode);}catch(IllegalArgumentException expected){rejected=true;}
   if(!rejected)throw new AssertionError("unimplemented or malformed transport accepted");checks++;
  }
- for(String mode:new String[]{"awg2","awg2-pq","max","socks","wg;exec","WG","",null}){
+ for(String mode:new String[]{"awg2","max","socks","wg;exec","WG","",null}){
   boolean rejected=false;try{normalizeEntryMode(mode);}catch(IllegalArgumentException expected){rejected=true;}
   if(!rejected)throw new AssertionError("unimplemented or ambiguous entry accepted");checks++;
  }
  if(!normalizeMultiMode(null).equals("shadowsocks")||!normalizeMultiMode("").equals("shadowsocks"))throw new AssertionError("legacy default changed");checks+=2;
+ for(String mode:new String[]{"wg-pq","awg2-pq"}){
+  if(!normalizeEntryMode(mode).equals(mode))throw new AssertionError("saved PQ entry changed");checks++;
+  try{normalizeMultiMode(mode);throw new AssertionError("unimplemented PQ exit accepted");}catch(IllegalArgumentException expected){checks++;}
+ }
  System.out.println("Production Android saved multihop modes: PASS ("+checks+" checks)");
 }}
 '''

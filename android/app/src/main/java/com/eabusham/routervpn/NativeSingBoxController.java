@@ -211,7 +211,7 @@ final class NativeSingBoxController {
     }
 
     static boolean nativeMultihopEntry(String mode) {
-        return nativeWireGuardFamily(mode) || "shadowsocks".equals(mode) || "hysteria2".equals(mode)
+        return nativeWireGuardFamily(mode) || nativePQFamily(mode) || "shadowsocks".equals(mode) || "hysteria2".equals(mode)
                 || java.util.Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp").contains(mode);
     }
 
@@ -221,6 +221,22 @@ final class NativeSingBoxController {
 
     static boolean nativePQFamily(String mode) {
         return "wg-pq".equals(mode) || "awg2-pq".equals(mode);
+    }
+
+    /** Reuse the selected single-peer compiler without starting or staging a VPN. */
+    static JSONObject compilePQEntry(JSONObject bundle, String mode) throws Exception {
+        if (!nativePQFamily(mode)) throw new IllegalArgumentException("Unknown native PQ entry transport.");
+        JSONObject profile = bundle.getJSONObject("profiles").getJSONObject(mode);
+        JSONObject graph = new JSONObject(compileStandaloneProfile(bundle, profile, mode));
+        JSONArray endpoints = graph.getJSONArray("endpoints");
+        if (endpoints.length() != 1) throw new IllegalStateException("PQ entry requires one captured native endpoint.");
+        JSONObject endpoint = endpoints.getJSONObject(0);
+        if (!"routervpn-pq".equals(endpoint.optString("type")) || !mode.equals(endpoint.optString("mode"))
+                || !AndroidNodeStore.stableNodeIdentity(bundle).equals(endpoint.optString("node_id"))
+                || !"proxy".equals(endpoint.optString("tag")) || endpoint.has("detour")) {
+            throw new IllegalStateException("PQ entry compiler lost the captured protocol or node.");
+        }
+        return endpoint;
     }
 
     private static boolean nativeSinglePacketMode(String mode) {

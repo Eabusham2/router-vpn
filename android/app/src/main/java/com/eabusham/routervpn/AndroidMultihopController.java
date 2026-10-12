@@ -174,9 +174,12 @@ final class AndroidMultihopController {
         String entryStartLayer = AndroidMultihopStartLayer.capture(entry);
         String exitStartLayer = AndroidMultihopStartLayer.capture(exit);
         requireOwnedPolicies(entry, true); requireOwnedPolicies(exit, true);
-        boolean packetEntry = NativeSingBoxController.nativeWireGuardFamily(entryMode);
+        boolean pqEntry = NativeSingBoxController.nativePQFamily(entryMode);
+        boolean packetEntry = NativeSingBoxController.nativeWireGuardFamily(entryMode) || pqEntry;
         JSONObject wg;
-        if (packetEntry) {
+        if (pqEntry) {
+            wg = NativeSingBoxController.compilePQEntry(entry, entryMode);
+        } else if (packetEntry) {
             String entryText = readNativeText(entry, entryMode);
             String nativeEntry = "wg".equals(entryMode)
                     ? io.nekohasekai.libbox.Libbox.routerCompileWireGuardProfile(entryText, entryIdentity)
@@ -236,6 +239,9 @@ final class AndroidMultihopController {
         JSONObject entryPerformance = new JSONObject(selectedRouterProfile(entry).toString()).put("node_proof_id",entryIdentity);
         JSONObject exitPerformance = new JSONObject(selectedRouterProfile(exit).toString()).put("node_proof_id",exitIdentity);
         config = new JSONObject(io.nekohasekai.libbox.Libbox.routerApplyPerformancePolicy(filtered,new JSONObject().put("entry",entryPerformance).put("exit",exitPerformance).toString()));
+        // A selected PQ entry needs the real process-owned factory even when
+        // the previous session used a raw backend. Discovery never installs it.
+        if (pqEntry) RouterPQNative.install();
         io.nekohasekai.libbox.Libbox.checkConfig(config.toString());
         byte[] patched = (config.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         if (patched.length > MAX_CONFIG) throw new IllegalStateException("Multihop sing-box config exceeds safety limit.");
