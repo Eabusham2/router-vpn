@@ -43,8 +43,17 @@ enum RouterVPNMultihopGraph {
                 throw issue("This multihop graph does not yet compose an additional Start Layer; turn it off before selecting this graph.")
             }
         }
-        let packetEntry = ["wireguard", "routervpn-amneziawg"].contains(entryEndpoint["type"] as? String ?? "")
-        let entry = try packetEntry ? wireGuardEndpoint(entryEndpoint, tag: entryTag) : proxyEntry(entryEndpoint, tag: entryTag)
+        let isPQEntry = entryEndpoint["type"] as? String == "routervpn-pq"
+        let selectedPQ = ["wg-pq", "awg2-pq"].contains(exitProfile["multihop_entry_mode"] as? String ?? "")
+        guard isPQEntry == selectedPQ else { throw issue("The selected PQ entry cannot be downgraded to an ordinary transport.") }
+        let packetEntry = isPQEntry || ["wireguard", "routervpn-amneziawg"].contains(entryEndpoint["type"] as? String ?? "")
+        let entry: [String: Any]
+        if isPQEntry {
+            guard let capturedMode = exitProfile["multihop_entry_mode"] as? String else { throw issue("PQ entry needs its captured transport selection.") }
+            entry = try pqEntryEndpoint(entryEndpoint, mode: capturedMode, nodeID: entryProof, tag: entryTag)
+        } else {
+            entry = try packetEntry ? wireGuardEndpoint(entryEndpoint, tag: entryTag) : proxyEntry(entryEndpoint, tag: entryTag)
+        }
         let privateHost = entryProfile["socks_host"] as? String ?? ""
         guard privateIP(privateHost), let privatePort = try integer(entryProfile["socks_port"]),
               (1...65535).contains(privatePort) else {
@@ -399,6 +408,59 @@ enum RouterVPNMultihopGraph {
 
     /// Both hops have independent userspace WG devices. Only the final graph
     /// composer adds the exit detour; imported bind/detour policy is forbidden.
+    /// Validate the negotiated-key envelope as well as its unchanged WG/AWG
+    /// peer. No flag can turn an ordinary peer into a ready PQ entry.
+    private static func pqEntryEndpoint(_ value: [String: Any], mode: String, nodeID: String, tag: String) throws -> [String: Any] {
+        guard ["wg-pq", "awg2-pq"].contains(mode), fullMatch(nodeID, "[0-9a-f]{64}"),
+              value["type"] as? String == "routervpn-pq", value["mode"] as? String == mode,
+              value["node_id"] as? String == nodeID, value["detour"] == nil,
+              (try integer(value["listen_port"]) ?? 0) == 0,
+              let pq = value["pq"] as? [String: Any],
+              Set(pq.keys) == Set(["endpoint", "version", "secret", "public", "peer"]),
+              [2, 3].contains(try integer(pq["version"]) ?? 0) else {
+            throw issue("PQ entry does not belong to the captured mode, node and handshake.")
+        }
+        var base = value
+        for key in ["mode", "node_id", "pq", "listen_port"] { base.removeValue(forKey: key) }
+        base["type"] = mode == "wg-pq" ? "wireguard" : "routervpn-amneziawg"
+        if mode == "wg-pq" {
+            // The shared PQ envelope serializes its unused AWG map as null.
+            // Remove only an absent/null/empty map; nonempty or wrongly typed
+            // parameters may never be discarded to turn AWG into WireGuard.
+            guard base["amnezia"] == nil || base["amnezia"] is NSNull ||
+                  (base["amnezia"] as? [String: String])?.isEmpty == true else {
+                throw issue("Standard WG-PQ cannot discard AWG parameters.")
+            }
+            base.removeValue(forKey: "amnezia")
+        }
+        _ = try wireGuardEndpoint(base, tag: tag)
+        guard let peer = (base["peers"] as? [[String: Any]])?.first,
+              let host = peer["address"] as? String, let address = pq["endpoint"] as? String else {
+            throw issue("PQ entry has no captured handshake address.")
+        }
+        let prefix = host.contains(":") ? "[\(host)]:" : "\(host):"
+        guard address.hasPrefix(prefix) else { throw issue("PQ handshake cannot bypass its captured WG/AWG server.") }
+        let port = String(address.dropFirst(prefix.count))
+        guard fullMatch(port, "[0-9]{1,5}"), let number = Int(port), (1...65535).contains(number) else {
+            throw issue("PQ handshake has an invalid literal endpoint port.")
+        }
+        var keys: [String: Data] = [:]
+        for name in ["secret", "public", "peer"] {
+            guard let text = pq[name] as? String, text.utf8.count <= ((2 * 1024 * 1024 + 2) / 3) * 4,
+                  let bytes = Data(base64Encoded: text, options: []), (32...2 * 1024 * 1024).contains(bytes.count),
+                  bytes.base64EncodedString() == text, bytes.contains(where: { $0 != 0 }) else {
+                throw issue("PQ entry lost its canonical bounded key material.")
+            }
+            keys[name] = bytes
+        }
+        guard keys["public"]!.count == keys["peer"]!.count, keys["public"]! != keys["peer"]! else {
+            throw issue("PQ entry requires two distinct complete protocol identities.")
+        }
+        var endpoint = value
+        endpoint["tag"] = tag
+        return endpoint
+    }
+
     private static func wireGuardEndpoint(_ value: [String: Any], tag: String) throws -> [String: Any] {
         let keys: Set<String> = ["type", "tag", "address", "private_key", "peers", "mtu", "system", "amnezia"]
         let peerKeys: Set<String> = ["address", "port", "public_key", "pre_shared_key", "allowed_ips", "persistent_keepalive_interval"]

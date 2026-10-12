@@ -69,6 +69,19 @@ enum IOSNativePQProfile {
         return ["sing-box.json": Data(result.utf8)]
     }
 
+    /// Use exactly the single-node compiler's captured assets for an entry.
+    /// The graph builder then revalidates mode/node ownership before nesting.
+    static func entryEndpoint(mode: String, encoded: [String: String], nodeID: String,
+                              compiler: (String, String, String) throws -> String) throws -> [String: Any] {
+        let files = try compile(mode: mode, encoded: encoded, nodeID: nodeID, compiler: compiler)
+        guard let data = files["sing-box.json"],
+              let graph = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let endpoints = graph["endpoints"] as? [[String: Any]], endpoints.count == 1 else {
+            throw issue("The captured PQ entry has no unique native endpoint.")
+        }
+        return endpoints[0]
+    }
+
     private static func issue(_ text: String) -> NSError {
         NSError(domain: "RouterVPN.NativePQProfile", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
     }

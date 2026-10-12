@@ -144,10 +144,24 @@ enum RouterVPNMTUPolicy {
         let exit = endpoints.indices.filter { endpoints[$0]["tag"] as? String == "proxy" }
         guard tun.count == 1, entry.count == 1, exit.count <= 1,
               endpoints.count == entry.count + exit.count,
-              endpoints.allSatisfy({ ["wireguard", "routervpn-amneziawg"].contains($0["type"] as? String ?? "") }) else {
+              endpoints.allSatisfy({ ["wireguard", "routervpn-amneziawg"].contains($0["type"] as? String ?? "") ||
+                  ($0["type"] as? String == "routervpn-pq" && $0["tag"] as? String == "routervpn-hop-entry") }) else {
             throw issue("Multihop MTU ownership is ambiguous; no hop policy was replaced.")
         }
         let tunIndex = tun[0], entryIndex = entry[0]
+        let selectedPQ = ["wg-pq", "awg2-pq"].contains(exitProfile["multihop_entry_mode"] as? String ?? "")
+        guard selectedPQ == (endpoints[entryIndex]["type"] as? String == "routervpn-pq") else {
+            throw issue("MTU policy cannot replace a selected PQ entry with an ordinary endpoint.")
+        }
+        if endpoints[entryIndex]["type"] as? String == "routervpn-pq" {
+            let value = endpoints[entryIndex]
+            guard let mode = value["mode"] as? String, ["wg-pq", "awg2-pq"].contains(mode),
+                  mode == exitProfile["multihop_entry_mode"] as? String,
+                  let nodeID = value["node_id"] as? String, nodeID == entryProfile["node_proof_id"] as? String,
+                  value["pq"] is [String: Any], value["detour"] == nil else {
+                throw issue("PQ MTU requires the same captured entry and transport.")
+            }
+        }
         let entryMTU = try fixedMTU(profile: entryProfile) ?? mtuValue(endpoints[entryIndex]["mtu"])
         guard (minimum...maximum).contains(entryMTU) else { throw issue("Entry MTU is outside the supported dual-stack range.") }
         let fixedExit = try fixedMTU(profile: exitProfile)

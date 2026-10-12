@@ -197,12 +197,24 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         entryProfile["node_proof_id"] = entryProofID
         exitProfile["node_proof_id"] = exitProofID
         let entryMode = selectedProfile["multihop_entry_mode"] as? String ?? "wg"
-        guard ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
+        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
         let endpoint: [String: Any]
         if entryMode == "wg" {
             endpoint = try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: entryProofID, name: "Router VPN entry").endpoint
         } else if ["awg2-fast", "awg2-strong"].contains(entryMode) {
             endpoint = try nativeAmneziaEndpoint(root: entryRoot, expectedProofID: entryProofID, mode: entryMode).endpoint
+        } else if IOSNativePQProfile.modeIDs.contains(entryMode) {
+            guard let profiles = entryRoot["profiles"] as? [String: Any],
+                  let assets = profiles[entryMode] as? [String: String] else {
+                throw tunnelError(58, "The captured entry has no complete native PQ assets.")
+            }
+            endpoint = try IOSNativePQProfile.entryEndpoint(mode: entryMode, encoded: assets, nodeID: entryProofID) { mode, input, node in
+                var failure: NSError?
+                let compiled: String? = LibboxRouterCompilePQProfile(mode, input, node, &failure)
+                if let failure { throw failure }
+                guard let compiled else { throw self.tunnelError(58, "Native PQ entry compilation returned no graph.") }
+                return compiled
+            }
         } else {
             guard let profiles = entryRoot["profiles"] as? [String: Any], let files = profiles[entryMode] as? [String: String] else {
                 throw tunnelError(58, "The selected entry has no self-contained proxy profile.")
