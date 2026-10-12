@@ -127,19 +127,48 @@ class PythonBootstrap(unittest.TestCase):
             execute.assert_not_called()
 
     def test_xcode_system_python_uses_checked_homebrew_interpreter(self):
-        modern = '/opt/homebrew/bin/python3'
-        which = lambda name: {'python3': '/usr/bin/python3', modern: modern}.get(name)
-        with mock.patch.object(B.sys, 'version_info', (3, 9)), mock.patch.object(B.sys, 'executable', '/usr/bin/python3'), \
-             mock.patch.object(B.sys, 'argv', ['build-mobile-pq.py', '--platform', 'ios', '--output', '/tmp/output with spaces']), \
-             mock.patch.dict(B.os.environ, {'ROUTER_VPN_PYTHON': ''}), mock.patch.object(B.shutil, 'which', side_effect=which), \
-             mock.patch.object(B.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as probe, \
-             mock.patch.object(B.os, 'execv', side_effect=SystemExit(0)) as execute:
-            with self.assertRaises(SystemExit):
-                B.ensure_python()
-            probe.assert_called_once()
-            self.assertIn('import sys, tomllib', probe.call_args.args[0][-1])
-            self.assertEqual(probe.call_args.kwargs['timeout'], 5)
-            execute.assert_called_once_with(modern, [modern, '-I', str(Path(B.__file__).resolve()), '--platform', 'ios', '--output', '/tmp/output with spaces'])
+        # Build a real Homebrew-style symlink. This must exercise canonical
+        # execution on Linux too, not depend on the runner's installed version.
+        with tempfile.TemporaryDirectory(prefix='pq interpreter ') as tmp:
+            root = Path(tmp)
+            modern = root/'Cellar/python/bin/python3'
+            modern.parent.mkdir(parents=True)
+            modern.write_text('test-only interpreter; execution is mocked')
+            alias = root/'bin/python3'
+            alias.parent.mkdir()
+            alias.symlink_to(modern)
+            current = root/'system/python3'
+            current.parent.mkdir()
+            current.write_text('test-only old interpreter')
+            canonical = str(modern.resolve())
+            which = lambda name: {'python3': str(current), '/opt/homebrew/bin/python3': str(alias)}.get(name)
+            with mock.patch.object(B.sys, 'version_info', (3, 9)), mock.patch.object(B.sys, 'executable', str(current)), \
+                 mock.patch.object(B.sys, 'argv', ['build-mobile-pq.py', '--platform', 'ios', '--output', '/tmp/output with spaces']), \
+                 mock.patch.dict(B.os.environ, {'ROUTER_VPN_PYTHON': ''}), mock.patch.object(B.shutil, 'which', side_effect=which), \
+                 mock.patch.object(B.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as probe, \
+                 mock.patch.object(B.os, 'execv', side_effect=SystemExit(0)) as execute:
+                with self.assertRaises(SystemExit):
+                    B.ensure_python()
+                probe.assert_called_once()
+                self.assertEqual(probe.call_args.args[0][0], canonical)
+                self.assertIn('import sys, tomllib', probe.call_args.args[0][-1])
+                self.assertEqual(probe.call_args.kwargs['timeout'], 5)
+                execute.assert_called_once_with(canonical, [canonical, '-I', str(Path(B.__file__).resolve()), '--platform', 'ios', '--output', '/tmp/output with spaces'])
+
+    def test_alias_of_current_interpreter_is_not_reprobed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = Path(tmp)/'python3'
+            executable.write_text('test-only current interpreter')
+            alias = Path(tmp)/'python-alias'
+            alias.symlink_to(executable)
+            with mock.patch.object(B.sys, 'version_info', (3, 9)), mock.patch.object(B.sys, 'executable', str(executable)), \
+                 mock.patch.dict(B.os.environ, {'ROUTER_VPN_PYTHON': ''}), \
+                 mock.patch.object(B.shutil, 'which', return_value=str(alias)), \
+                 mock.patch.object(B.subprocess, 'run') as probe, mock.patch.object(B.os, 'execv') as execute:
+                with self.assertRaisesRegex(RuntimeError, 'Python 3.11'):
+                    B.ensure_python()
+                probe.assert_not_called()
+                execute.assert_not_called()
 
     def test_invalid_explicit_interpreter_does_not_silently_fallback(self):
         with mock.patch.object(B.sys, 'version_info', (3, 9)), \
