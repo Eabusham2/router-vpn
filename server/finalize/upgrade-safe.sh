@@ -44,6 +44,11 @@ if [[ -n "$REQUESTED_REALITY_PORT_MIGRATION" ]]; then
     echo 'REALITY_PORT_MIGRATE_TO must be a TCP port from 1000 to 65535.' >&2
     exit 2
   fi
+
+fi
+eval "$(python3 /src/server/finalize/detect-settings.py "$BASE")"
+# Test collisions against *preserved* custom listener ports, not just defaults.
+if [[ -n "$REQUESTED_REALITY_PORT_MIGRATION" ]]; then
   for occupied in "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT" "$OVERTLS_PORT" "$OVERTLS_INTERNAL_PORT" "$SSR_PORT"; do
     if [[ "$REQUESTED_REALITY_PORT_MIGRATION" == "$occupied" ]]; then
       echo "REALITY_PORT_MIGRATE_TO collides with existing TCP listener $occupied." >&2
@@ -51,7 +56,6 @@ if [[ -n "$REQUESTED_REALITY_PORT_MIGRATION" ]]; then
     fi
   done
 fi
-eval "$(python3 /src/server/finalize/detect-settings.py "$BASE")"
 if [[ -n "$REQUESTED_REALITY_PORT_MIGRATION" ]]; then
   REALITY_PORT=$REQUESTED_REALITY_PORT_MIGRATION
   echo "Opt-in REALITY listener migration requested: TCP $REALITY_PORT (existing credentials preserved)."
