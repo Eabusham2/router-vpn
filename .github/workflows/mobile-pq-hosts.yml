@@ -40,6 +40,9 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
         if: matrix.platform == 'android'
+        with:
+          # Command-line tools are installed by the action; legacy 'tools' is retired.
+          packages: platform-tools
       - name: Linux compiler dependencies
         if: matrix.platform == 'android'
         run: |
