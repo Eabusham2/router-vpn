@@ -216,3 +216,76 @@ func TestPeerRejectsUnownedAndEmptyKeyInputs(t *testing.T) {
 		t.Fatal("missing public identity accepted")
 	}
 }
+
+// Emulate the pinned core's ordering: dependency Start, dependent Start, then
+// global post-start. This uses real owner/controller scheduling and explicit
+// protocol/peer doubles, not a claim of a physical or encrypted traffic test.
+func TestDependentPQHandshakeCanUseVerifiedTransportBeforeGlobalPostStart(t *testing.T) {
+	entry, _, _, entryWire := peerFixture(t)
+	entryDone := peerBegin(entry)
+	if entry.TransportReady() || entry.Ready() {
+		t.Fatal("unproved entry became usable")
+	}
+	send(t, entryWire, "key")
+	await(t, entryDone, false)
+	if !entry.TransportReady() || entry.Ready() {
+		t.Fatal("transport and full readiness were conflated")
+	}
+
+	a, b := net.Pipe()
+	defer b.Close()
+	exitPeer := &nativePeerProbe{}
+	exit, err := NewPeerOwner(context.Background(), &testProtocol{}, func(context.Context) (net.Conn, error) {
+		if !entry.TransportReady() {
+			return nil, errors.New("entry transport is unavailable")
+		}
+		return a, nil
+	}, exitPeer, bytes.Repeat([]byte{8}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer exit.Close()
+	exit.controller.timeout = time.Second
+	exitDone := peerBegin(exit)
+	send(t, b, "key")
+	await(t, exitDone, false)
+	if !exit.TransportReady() || exit.Ready() {
+		t.Fatal("dependent transport failed before post-start")
+	}
+	if err = entry.Start(true); err != nil {
+		t.Fatal(err)
+	}
+	if err = exit.Start(true); err != nil {
+		t.Fatal(err)
+	}
+	if !entry.Ready() || !exit.Ready() {
+		t.Fatal("post-start did not publish full readiness")
+	}
+	send(t, entryWire, "expire")
+	eventually(t, func() bool { return !entry.TransportReady() && !entry.Ready() })
+	if err = exit.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if exit.TransportReady() || exit.Ready() {
+		t.Fatal("closed dependent remained usable")
+	}
+}
+
+func TestTransportReadinessIsRevokedOnFailedPostStart(t *testing.T) {
+	owner, peer, _, wire := peerFixture(t)
+	done := peerBegin(owner)
+	send(t, wire, "key")
+	await(t, done, false)
+	if !owner.TransportReady() {
+		t.Fatal("verified transport never became available")
+	}
+	peer.mu.Lock()
+	peer.failPost = true
+	peer.mu.Unlock()
+	if owner.Start(true) == nil {
+		t.Fatal("post-start failure ignored")
+	}
+	if owner.TransportReady() || owner.Ready() {
+		t.Fatal("failed transport remained usable")
+	}
+}

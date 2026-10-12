@@ -151,13 +151,13 @@ func (e *Endpoint) InterfaceUpdated(context.Context) {
 	_ = e.Close()
 }
 func (e *Endpoint) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
-	if !e.owner.Ready() {
+	if !e.owner.TransportReady() {
 		return nil, net.ErrClosed
 	}
 	return e.base.DialContext(ctx, network, destination)
 }
 func (e *Endpoint) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
-	if !e.owner.Ready() {
+	if !e.owner.TransportReady() {
 		return nil, net.ErrClosed
 	}
 	return e.base.ListenPacket(ctx, destination)

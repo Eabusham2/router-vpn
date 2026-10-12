@@ -19,16 +19,17 @@ type Peer interface {
 // PeerOwner serializes key installation with native startup and teardown.
 // The first authenticated key is installed before any encrypted peer starts.
 type PeerOwner struct {
-	mu         sync.Mutex
-	ctx        context.Context
-	cancel     context.CancelFunc
-	peer       Peer
-	public     [32]byte
-	controller *Controller
-	phase      int
-	closed     bool
-	ready      atomic.Bool
-	peerErr    error
+	mu             sync.Mutex
+	ctx            context.Context
+	cancel         context.CancelFunc
+	peer           Peer
+	public         [32]byte
+	controller     *Controller
+	phase          int
+	closed         bool
+	ready          atomic.Bool
+	transportReady atomic.Bool
+	peerErr        error
 }
 
 func NewPeerOwner(ctx context.Context, protocol Protocol, dial Dial, peer Peer, publicKey []byte) (*PeerOwner, error) {
@@ -92,12 +93,23 @@ func (p *PeerOwner) Start(post bool) error {
 	err := p.peer.Start(false)
 	if err == nil && p.ctx.Err() == nil {
 		p.phase = 2
+		p.transportReady.Store(true)
 		p.mu.Unlock()
 		return nil
 	}
 	p.mu.Unlock()
 	return errors.Join(errors.New("native PQ peer startup failed"), p.Close())
 }
+
+// TransportReady permits only native outbound dials after the authenticated
+// key and the literal-peer transport are installed. The core starts dependent
+// endpoints in dependency order before its global post-start stage. Waiting for
+// that later stage here would prevent a nested tunnel from starting at all.
+// Flow forwarding and externally reported readiness still require Ready().
+func (p *PeerOwner) TransportReady() bool {
+	return p != nil && p.transportReady.Load() && p.ctx.Err() == nil && p.controller.Ready()
+}
+
 func (p *PeerOwner) Ready() bool {
 	return p != nil && p.ready.Load() && p.ctx.Err() == nil && p.controller.Ready()
 }
@@ -120,6 +132,7 @@ func (p *PeerOwner) ApplyPQKey(key []byte) error {
 func (p *PeerOwner) RevokePQKey() error {
 	p.cancel()
 	p.ready.Store(false)
+	p.transportReady.Store(false)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !p.closed {
@@ -135,6 +148,7 @@ func (p *PeerOwner) RevokePQKey() error {
 func (p *PeerOwner) Close() error {
 	p.cancel()
 	p.ready.Store(false)
+	p.transportReady.Store(false)
 	// Controller cleanup invokes RevokePQKey and joins in-flight key adoption.
 	// Calling this with mu held would block the very operation being joined.
 	return p.controller.Close()
