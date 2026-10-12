@@ -205,7 +205,7 @@ public final class RuntimeTeardownHarness {
         check(!owner.busy(),"worker did not release ownership after completion");
     }
     static void tests(String kind) {
-        if ("multihop".equals(kind)) for (String entryMode:new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"}) for (String execution:new String[]{"local","server","auto"}) {
+        if ("multihop".equals(kind)) for (String entryMode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2"}) for (String execution:new String[]{"local","server","auto"}) {
             test("multihop captured transport/execution "+entryMode+"/"+execution,()->{
                 try(Owner owner=new Owner(kind)) {
                     Callback cb=new Callback(0);
@@ -220,7 +220,7 @@ public final class RuntimeTeardownHarness {
             });
         }
         if ("multihop".equals(kind)) {
-            for(String entryMode:new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"}) {
+            for(String entryMode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2"}) {
                 test("multihop restore exact entry "+entryMode,()->{
                     try(Owner owner=new Owner(kind)) {
                         owner.engine.state="UP";
@@ -234,7 +234,7 @@ public final class RuntimeTeardownHarness {
                     }
                 });
             }
-            for(String entryMode:new String[]{"socks","http","tor","max","awg2-pq","WG","",null}) {
+            for(String entryMode:new String[]{"socks","http","tor","max","awg2-pq-unknown","WG","",null}) {
                 test("multihop rejects unavailable entry "+entryMode,()->{
                     try(Owner owner=new Owner(kind)) {
                         Callback cb=new Callback(0);
@@ -358,7 +358,7 @@ public final class RuntimeTeardownHarness {
 # capability allowlist. Runtime source files themselves are never rewritten.
 controller_source = (JAVA / 'NativeSingBoxController.java').read_text()
 predicates = []
-for name in ('nativeWireGuardFamily', 'nativeMultihopEntry'):
+for name in ('nativeWireGuardFamily', 'nativePQFamily', 'nativeMultihopEntry'):
     matches = re.findall(r'(?ms)^    static boolean ' + name + r'\(String mode\) \{\n.*?^    \}', controller_source)
     assert len(matches) == 1, 'missing or ambiguous production transport predicate: ' + name
     predicates.append(matches[0])
