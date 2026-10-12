@@ -108,6 +108,21 @@ enum RouterVPNMTUPolicy {
               var endpoints = root["endpoints"] as? [[String: Any]] else {
             throw issue("Multihop MTU requires the owned bounded native graph.")
         }
+        // Detect a complete PQ-to-ordinary downgrade before either packet-entry
+        // or proxy-entry MTU policy can operate on the graph.
+        let selectedPQExit = ["wg-pq", "awg2-pq"].contains(exitProfile["multihop_exit_mode"] as? String ?? "")
+        let exits = endpoints.filter { $0["tag"] as? String == "proxy" }
+        let actualPQExit = exits.contains { $0["type"] as? String == "routervpn-pq" }
+        guard selectedPQExit == actualPQExit else { throw issue("MTU cannot downgrade the selected PQ exit.") }
+        if actualPQExit {
+            guard exits.count == 1, let value = exits.first,
+                  value["mode"] as? String == exitProfile["multihop_exit_mode"] as? String,
+                  value["node_id"] as? String == exitProfile["node_proof_id"] as? String,
+                  let node = value["node_id"] as? String, node.utf8.count == 64, node.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+                  value["pq"] is [String: Any], value["detour"] as? String == "routervpn-hop-entry" else {
+                throw issue("PQ exit MTU requires the same captured transport, node and entry.")
+            }
+        }
         let tun = inbounds.indices.filter { inbounds[$0]["type"] as? String == "tun" }
         let entry = endpoints.indices.filter { endpoints[$0]["tag"] as? String == "routervpn-hop-entry" }
         if let outbounds = root["outbounds"] as? [[String: Any]] {
@@ -117,7 +132,7 @@ enum RouterVPNMTUPolicy {
                       ["shadowsocks", "hysteria2", "routervpn-xray"].contains(proxies[0]["type"] as? String ?? ""),
                       proxies[0]["mtu"] == nil, proxies[0]["detour"] == nil, tun.count == 1,
                       endpoints.count <= 1,
-                      endpoints.allSatisfy({ $0["tag"] as? String == "proxy" && ["wireguard", "routervpn-amneziawg"].contains($0["type"] as? String ?? "") && $0["detour"] as? String == "routervpn-hop-entry" }) else {
+                      endpoints.allSatisfy({ $0["tag"] as? String == "proxy" && ["wireguard", "routervpn-amneziawg", "routervpn-pq"].contains($0["type"] as? String ?? "") && $0["detour"] as? String == "routervpn-hop-entry" }) else {
                     throw issue("Proxy MTU requires one real shared TUN and unambiguous entry ownership.")
                 }
                 let entryFixed = try fixedMTU(profile: entryProfile), exitFixed = try fixedMTU(profile: exitProfile)
@@ -145,7 +160,7 @@ enum RouterVPNMTUPolicy {
         guard tun.count == 1, entry.count == 1, exit.count <= 1,
               endpoints.count == entry.count + exit.count,
               endpoints.allSatisfy({ ["wireguard", "routervpn-amneziawg"].contains($0["type"] as? String ?? "") ||
-                  ($0["type"] as? String == "routervpn-pq" && $0["tag"] as? String == "routervpn-hop-entry") }) else {
+                  ($0["type"] as? String == "routervpn-pq" && ["routervpn-hop-entry", "proxy"].contains($0["tag"] as? String ?? "")) }) else {
             throw issue("Multihop MTU ownership is ambiguous; no hop policy was replaced.")
         }
         let tunIndex = tun[0], entryIndex = entry[0]
@@ -174,7 +189,8 @@ enum RouterVPNMTUPolicy {
                 throw issue("Nested WireGuard MTU requires the owned exit-through-entry dialer.")
             }
             var overhead = host.contains(":") ? 80 : 60
-            if endpoints[exitIndex]["type"] as? String == "routervpn-amneziawg" {
+            if endpoints[exitIndex]["type"] as? String == "routervpn-amneziawg" ||
+               (endpoints[exitIndex]["type"] as? String == "routervpn-pq" && endpoints[exitIndex]["mode"] as? String == "awg2-pq") {
                 guard let params = endpoints[exitIndex]["amnezia"] as? [String: String],
                       let raw = params["s4"], raw.range(of: "^[0-9]+$", options: .regularExpression) != nil,
                       let padding = Int(raw), (0...1280).contains(padding) else {

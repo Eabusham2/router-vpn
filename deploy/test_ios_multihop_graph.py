@@ -25,6 +25,8 @@ let wg: [String:Any] = ["type":"wireguard", "address":["10.77.0.2/32","fd77:77::
         "allowed_ips":["0.0.0.0/0","::/0"], "persistent_keepalive_interval":25]]]
 let xrayExitPath = ProcessInfo.processInfo.environment["ROUTERVPN_XRAY_EXIT_FIXTURES"]!
 let xrayExits = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath:xrayExitPath))) as! [String:[String:Any]]
+let pqExitPath = ProcessInfo.processInfo.environment["ROUTERVPN_PQ_EXIT_FIXTURES"]!
+let pqExits = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath:pqExitPath))) as! [String:[String:Any]]
 @MainActor func original(_ mode: String = "shadowsocks") -> [String:Any] {
     if let native = xrayExits[mode] { return native }
     var proxy: [String:Any] = ["type":mode,"tag":"proxy","server":"198.51.100.2","server_port":8388,"password":key]
@@ -435,17 +437,25 @@ for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-visi
     var expectedEntry = importedEntry; expectedEntry["tag"] = P.entryTag
     try check("all native exit fixtures generated", Set(xrayExits.keys) == Set(P.nativeXrayModes))
     for exitMode in P.supportedExitModes {
-        let packetExit = ["wg", "awg2-fast", "awg2-strong"].contains(exitMode)
+        let pqExit = ["wg-pq", "awg2-pq"].contains(exitMode)
+        let packetExit = pqExit || ["wg", "awg2-fast", "awg2-strong"].contains(exitMode)
+        var capturedExit = wgExitProfile; capturedExit["multihop_exit_mode"] = exitMode
         var exitEndpoint = wgExit
-        if exitMode.hasPrefix("awg2-") {
+        if exitMode.hasPrefix("awg2-") && !pqExit {
             exitEndpoint["type"]="routervpn-amneziawg"
             var parameters=nativeAWG["amnezia"] as! [String:String]
             parameters["s4"] = exitMode == "awg2-strong" ? "48" : "32"
             exitEndpoint["amnezia"] = parameters
         }
-        let input = try packetExit ? wgFiles(exitEndpoint,wgExitProfile) : files(original(exitMode))
-        let graph = try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:wgExitProfile,exitMode:exitMode,files:input)
-        let composed = try RouterVPNMTUPolicy.multihop(graph,entryProfile:entry,exitProfile:wgExitProfile)
+        let input: [String:Data]
+        if pqExit {
+            let fixture = pqExits[exitMode]!, compiled = fixture["config"] as! [String:Any]
+            capturedExit["node_proof_id"] = fixture["node"]
+            exitEndpoint = (compiled["endpoints"] as! [[String:Any]])[0]
+            input = try files(compiled)
+        } else { input = try packetExit ? wgFiles(exitEndpoint,capturedExit) : files(original(exitMode)) }
+        let graph = try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:capturedExit,exitMode:exitMode,files:input)
+        let composed = try RouterVPNMTUPolicy.multihop(graph,entryProfile:entry,exitProfile:capturedExit)
         let root = try JSONSerialization.jsonObject(with:composed["sing-box.json"]!) as! [String:Any]
         let out = root["outbounds"] as! [[String:Any]], endpoints = root["endpoints"] as! [[String:Any]]
         let tun = (root["inbounds"] as! [[String:Any]]).filter { $0["type"] as? String == "tun" }
@@ -463,7 +473,7 @@ for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-visi
         try check("no direct fallback inserted", out.allSatisfy { $0["type"] as? String != "direct" })
         try check("proxy input remains immutable", sameJSON(importedEntry, proxyInput(entryMode)))
         try check("entry assets cannot overwrite exit files", composed["cert.pem"] == input["cert.pem"])
-        try check("proxy composition deterministic", try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:wgExitProfile,exitMode:exitMode,files:input) == graph)
+        try check("proxy composition deterministic", try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:capturedExit,exitMode:exitMode,files:input) == graph)
         if P.nativeXrayModes.contains(exitMode) {
             let reference = (xrayExits[exitMode]!["outbounds"] as! [[String:Any]]).first { $0["type"] as? String == "routervpn-xray" }!
             try check("native exit retains exact compiled authentication", actualExit["config_json"] as? String == reference["config_json"] as? String)
@@ -471,7 +481,7 @@ for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-visi
             var expectedExit = reference; expectedExit["detour"] = P.entryTag
             try check("native exit changes only its owned detour", sameJSON(actualExit, expectedExit))
             reject("old generic proxy fixture cannot masquerade as Xray") {
-                _ = try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:wgExitProfile,exitMode:exitMode,files:files(original()))
+                _ = try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:capturedExit,exitMode:exitMode,files:files(original()))
             }
         }
         if packetExit {
@@ -480,20 +490,20 @@ for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-visi
         }
         for fixed in [1280,1500,9000] {
             var fixedEntry=entry; fixedEntry["mtu_policy"]="fixed";fixedEntry["manual_mtu"]=fixed
-            let sized = try RouterVPNMTUPolicy.multihop(graph,entryProfile:fixedEntry,exitProfile:wgExitProfile)
+            let sized = try RouterVPNMTUPolicy.multihop(graph,entryProfile:fixedEntry,exitProfile:capturedExit)
             let sizedRoot = try JSONSerialization.jsonObject(with:sized["sing-box.json"]!) as! [String:Any]
             let sizedTun = (sizedRoot["inbounds"] as! [[String:Any]]).first { $0["type"] as? String == "tun" }!
             try check("entry fixed value owns the actual TUN", sizedTun["mtu"] as? Int == fixed)
             try check("MTU never rewrites proxy credentials or trust", sameJSON(sizedRoot["outbounds"]!, root["outbounds"]!))
-            try check("MTU projection idempotent", try RouterVPNMTUPolicy.multihop(sized,entryProfile:fixedEntry,exitProfile:wgExitProfile) == sized)
+            try check("MTU projection idempotent", try RouterVPNMTUPolicy.multihop(sized,entryProfile:fixedEntry,exitProfile:capturedExit) == sized)
             if packetExit {
                 try check("fixed proxy TUN agrees with packet exit MTU", (sizedRoot["endpoints"] as! [[String:Any]])[0]["mtu"] as? Int == fixed)
             }
-            var conflictingExit=wgExitProfile;conflictingExit["mtu_policy"]="fixed";conflictingExit["manual_mtu"]=fixed == 1500 ? 1400 : 1500
+            var conflictingExit=capturedExit;conflictingExit["mtu_policy"]="fixed";conflictingExit["manual_mtu"]=fixed == 1500 ? 1400 : 1500
             reject("conflicting fixed values cannot silently win") { _ = try RouterVPNMTUPolicy.multihop(graph,entryProfile:fixedEntry,exitProfile:conflictingExit) }
         }
         var staleEntry=entry;staleEntry["effective_mtu"]=9000
-        var staleExit=wgExitProfile;staleExit["effective_mtu"]=9000
+        var staleExit=capturedExit;staleExit["effective_mtu"]=9000
         try check("stale measurements cannot replace current interface policy", try RouterVPNMTUPolicy.multihop(graph,entryProfile:staleEntry,exitProfile:staleExit) == composed)
         for changed in ["entry-duplicate", "packet-duplicate", "wrong-manager", "wrong-detour", "fake-mtu"] {
             var broken=root
@@ -504,7 +514,7 @@ for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-visi
             case "wrong-detour": var bad=actualEntry;bad["detour"]="bypass";broken["outbounds"]=out.filter { $0["tag"] as? String != P.entryTag }+[bad]
             default: var bad=actualEntry;bad["mtu"]=1500;broken["outbounds"]=out.filter { $0["tag"] as? String != P.entryTag }+[bad]
             }
-            reject("MTU rejects lost proxy ownership " + changed) { _ = try RouterVPNMTUPolicy.multihop(files(broken),entryProfile:entry,exitProfile:wgExitProfile) }
+            reject("MTU rejects lost proxy ownership " + changed) { _ = try RouterVPNMTUPolicy.multihop(files(broken),entryProfile:entry,exitProfile:capturedExit) }
         }
         if CommandLine.arguments.count == 2 {
             try composed["sing-box.json"]!.write(to:URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true).appendingPathComponent("proxy-"+entryMode+"-to-"+exitMode+".json"))
@@ -543,7 +553,10 @@ def main():
         native_exits = Path(directory) / "xray-exit-fixtures.json"
         with native_exits.open("w") as output:
             subprocess.run(["go", "run", "./deploy/testfixtures/xray-entry", "--exits"], cwd=ROOT, stdout=output, check=True, timeout=90)
-        env = dict(os.environ, ROUTERVPN_XRAY_ENTRY_FIXTURES=str(native_entries), ROUTERVPN_XRAY_EXIT_FIXTURES=str(native_exits))
+        pq_exits = Path(directory) / "pq-exit-fixtures.json"
+        with pq_exits.open("w") as output:
+            subprocess.run(["go", "run", "./deploy/testfixtures/pq-exit"], cwd=ROOT, stdout=output, check=True, timeout=90)
+        env = dict(os.environ, ROUTERVPN_XRAY_ENTRY_FIXTURES=str(native_entries), ROUTERVPN_XRAY_EXIT_FIXTURES=str(native_exits), ROUTERVPN_PQ_EXIT_FIXTURES=str(pq_exits))
         source.write_text(TEST)
         subprocess.run([swift, "-swift-version", "6", str(POLICY), str(POLICY.with_name("RouterVPNMTUPolicy.swift")), str(ROOT / "ios/RouterVPN/App/Models.swift"), str(source), "-o", str(exe)], check=True, timeout=90)
         command = [str(exe)]

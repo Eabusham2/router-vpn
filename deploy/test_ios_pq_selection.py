@@ -248,7 +248,7 @@ func outer()throws->[String:Any]{["profiles":["shadowsocks":["sing-box.json":try
    for name in ["mode","node_id","pq","listen_port"]{endpoints[index].removeValue(forKey:name)}
    if mode=="wg-pq"{endpoints[index].removeValue(forKey:"amnezia")};downgraded["endpoints"]=endpoints
    reject("MTU cannot downgrade PQ"){_ = try RouterVPNMTUPolicy.multihop(["sing-box.json":json(downgraded)],entryProfile:a,exitProfile:b)}
-   for exit in ["wg-pq","awg2-pq"]{reject("unimplemented PQ exit"){_ = try RouterVPNMultihopGraph.build(entryEndpoint:entry,entryProfile:a,exitProfile:b,exitMode:exit,files:files)}}
+   for exit in ["wg-pq","awg2-pq"]{reject("PQ exit cannot use an ordinary WG fixture"){_ = try RouterVPNMultihopGraph.build(entryEndpoint:entry,entryProfile:a,exitProfile:b,exitMode:exit,files:files)}}
    reject("failing native entry compiler"){_ = try IOSNativePQProfile.entryEndpoint(mode:mode,encoded:assets,nodeID:node){_,_,_ in throw NSError(domain:"test",code:1)}}
   }
   try check("complete Apple PQ-entry matrix",graphs==120)

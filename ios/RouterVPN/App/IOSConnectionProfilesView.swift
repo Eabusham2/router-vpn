@@ -82,7 +82,7 @@ private extension IOSConnectionSafePreferences {
         multihopExitID = try c.decodeIfPresent(String.self, forKey: .multihopExitID)
         multihopExitMode = try c.decodeIfPresent(String.self, forKey: .multihopExitMode)
         if let mode = multihopExitMode {
-            guard ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"].contains(mode) else {
+            guard ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"].contains(mode) else {
                 throw DecodingError.dataCorruptedError(forKey: .multihopExitMode, in: c, debugDescription: "Unknown multihop exit transport")
             }
         }
@@ -371,7 +371,7 @@ private enum IOSConnectionProfileStore {
         if p.multihopEnabled {
             guard let entry = p.multihopEntryID, let exit = p.multihopExitID, entry != exit,
                   [entry, exit].allSatisfy({ $0.range(of: "\\A[A-Za-z0-9._-]{1,128}\\z", options: .regularExpression) != nil }),
-                  let mode = p.multihopExitMode, ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"].contains(mode) else {
+                  let mode = p.multihopExitMode, ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"].contains(mode) else {
                 throw issue("Saved multihop requires distinct linked entry/exit ids and a supported exit transport.")
             }
         }

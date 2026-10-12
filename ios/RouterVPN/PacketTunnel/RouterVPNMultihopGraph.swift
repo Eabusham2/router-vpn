@@ -14,7 +14,7 @@ enum RouterVPNMultihopGraph {
     static let entryProofTag = "routervpn-hop-entry-proof"
     static let entryPrivateTag = "routervpn-hop-entry-private"
     static let nativeXrayModes = ["reality-vision", "reality-pq-vision", "reality-xhttp"]
-    static let supportedExitModes = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"] + nativeXrayModes
+    static let supportedExitModes = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2"] + nativeXrayModes
     private static let maxBytes = 4 * 1024 * 1024
 
     static func build(entryEndpoint: [String: Any], entryProfile: [String: Any],
@@ -94,13 +94,16 @@ enum RouterVPNMultihopGraph {
             throw issue("Exit endpoints must be an explicit array, not an ignored malformed field.")
         }
         var proxy: [String: Any]
-        if ["wg", "awg2-fast", "awg2-strong"].contains(exitMode) {
+        if ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"].contains(exitMode) {
             guard originalEndpoints.count == 1, let exitEndpoint = originalEndpoints.first,
                   outbounds.isEmpty else {
                 throw issue("WireGuard exit must contain exactly one owned endpoint and no alternate outbound.")
             }
-            proxy = try wireGuardEndpoint(exitEndpoint, tag: "proxy")
-            let expectedType = exitMode == "wg" ? "wireguard" : "routervpn-amneziawg"
+            let pqExit = ["wg-pq", "awg2-pq"].contains(exitMode)
+            proxy = try pqExit
+                ? pqEntryEndpoint(exitEndpoint, mode: exitMode, nodeID: exitProof, tag: "proxy")
+                : wireGuardEndpoint(exitEndpoint, tag: "proxy")
+            let expectedType = pqExit ? "routervpn-pq" : exitMode == "wg" ? "wireguard" : "routervpn-amneziawg"
             guard proxy["type"] as? String == expectedType else { throw issue("Exit transport label does not match its native endpoint.") }
             if packetEntry {
                 guard let entryPeer = (entry["peers"] as? [[String: Any]])?.first,
@@ -169,7 +172,7 @@ enum RouterVPNMultihopGraph {
             routeRules.append(["inbound": [tun["tag"] as? String ?? "tun-in"], "ip_version": 6, "action": "reject"])
             dnsPolicy["strategy"] = "ipv4_only"
         }
-        let packetExit = ["wg", "awg2-fast", "awg2-strong"].contains(exitMode)
+        let packetExit = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"].contains(exitMode)
         let endpoints = (packetEntry ? [entry] : []) + (packetExit ? [proxy] : [])
         let proxyOutbounds = (packetExit ? [] : [proxy]) + [privateProxy] + (packetEntry ? [] : [entry])
         let config: [String: Any] = [
@@ -324,6 +327,13 @@ enum RouterVPNMultihopGraph {
     /// Apply the saved resolver and IPv6 policy to a compiled single PQ peer.
     /// Its endpoint (including handshake keys and base protocol) stays unchanged.
     static func singlePQPolicy(_ files: [String: Data], profile: [String: Any]) throws -> [String: Data] {
+        try singleWireGuardPolicy(pqDNSPolicy(files, profile: profile), profile: profile)
+    }
+
+    /// Freeze the selected exit resolver without adding single-node route rules.
+    /// Multihop's graph builder subsequently enforces both nodes' IPv6/LAN
+    /// policies; the independent Rosenpass and WG/AWG identities are unchanged.
+    static func pqDNSPolicy(_ files: [String: Data], profile: [String: Any]) throws -> [String: Data] {
         guard files.count == 1, let data = files["sing-box.json"], data.count <= maxBytes,
               var graph = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let endpoints = graph["endpoints"] as? [[String: Any]], endpoints.count == 1,
@@ -337,7 +347,7 @@ enum RouterVPNMultihopGraph {
         graph["dns"] = try selectedDNS(profile, importedDNS: importedDNS, requireImportedMatch: false)
         let encoded = try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])
         guard encoded.count <= maxBytes else { throw issue("Native PQ DNS graph exceeds its bound.") }
-        return try singleWireGuardPolicy(["sing-box.json": encoded], profile: profile)
+        return ["sing-box.json": encoded]
     }
 
     /// Apply a saved IPv6 preference to the existing single-node WG graph.

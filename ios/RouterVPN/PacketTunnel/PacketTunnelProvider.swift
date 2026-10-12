@@ -237,6 +237,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         } else if ["awg2-fast", "awg2-strong"].contains(exitMode) {
             let exit = try nativeAmneziaEndpoint(root: root, expectedProofID: exitProofID, mode: exitMode)
             rawFiles = try RouterVPNMultihopGraph.wireGuardFiles(endpoint: exit.endpoint, profile: exitProfile, dnsServers: exit.dns)
+        } else if IOSNativePQProfile.modeIDs.contains(exitMode) {
+            guard let profiles = root["profiles"] as? [String: Any],
+                  let assets = profiles[exitMode] as? [String: String] else {
+                throw tunnelError(58, "The captured exit has no complete native PQ assets.")
+            }
+            let compiled = try IOSNativePQProfile.compile(mode: exitMode, encoded: assets, nodeID: exitProofID) { mode, input, node in
+                var failure: NSError?
+                let result: String? = LibboxRouterCompilePQProfile(mode, input, node, &failure)
+                if let failure { throw failure }
+                guard let result else { throw self.tunnelError(58, "Native PQ exit compilation returned no graph.") }
+                return result
+            }
+            rawFiles = try RouterVPNMultihopGraph.pqDNSPolicy(compiled, profile: exitProfile)
         } else if RouterVPNMultihopGraph.nativeXrayModes.contains(exitMode) {
             guard let profiles = root["profiles"] as? [String: Any],
                   let assets = profiles[exitMode] as? [String: String] else {
