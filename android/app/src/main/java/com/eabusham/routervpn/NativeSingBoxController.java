@@ -225,6 +225,11 @@ final class NativeSingBoxController {
 
     /** Reuse the selected single-peer compiler without starting or staging a VPN. */
     static JSONObject compilePQEntry(JSONObject bundle, String mode) throws Exception {
+        return compilePQGraph(bundle, mode).getJSONArray("endpoints").getJSONObject(0);
+    }
+
+    /** Keep the complete compiled one-peer graph for an independently selected exit. */
+    static JSONObject compilePQGraph(JSONObject bundle, String mode) throws Exception {
         if (!nativePQFamily(mode)) throw new IllegalArgumentException("Unknown native PQ entry transport.");
         JSONObject profile = bundle.getJSONObject("profiles").getJSONObject(mode);
         JSONObject graph = new JSONObject(compileStandaloneProfile(bundle, profile, mode));
@@ -236,7 +241,7 @@ final class NativeSingBoxController {
                 || !"proxy".equals(endpoint.optString("tag")) || endpoint.has("detour")) {
             throw new IllegalStateException("PQ entry compiler lost the captured protocol or node.");
         }
-        return endpoint;
+        return graph;
     }
 
     private static boolean nativeSinglePacketMode(String mode) {
