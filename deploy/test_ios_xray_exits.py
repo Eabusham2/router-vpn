@@ -202,6 +202,8 @@ def main():
     boundary='for mode in ["shadowsocks", "hysteria2"] {'
     prefix=fixture.TEST.split(boundary,1)[0]
     if prefix==fixture.TEST:raise RuntimeError('Original graph harness boundary changed')
+    if 'ROUTERVPN_PQ_EXIT_FIXTURES' in prefix:
+        raise RuntimeError('Shared Xray preamble acquired an unrelated PQ fixture dependency')
     with tempfile.TemporaryDirectory(prefix='.ios-xray-exit-policy-',dir=ROOT) as go_dir,tempfile.TemporaryDirectory(prefix='router-ios-xray-exits-') as temp:
         go_dir=Path(go_dir);temp=Path(temp)
         (go_dir/'main.go').write_text(GO_HELPER)
@@ -212,6 +214,8 @@ def main():
         exe=temp/'tests'
         subprocess.run(['swiftc','-swift-version','6',str(POLICY),str(POLICY.with_name('RouterVPNMTUPolicy.swift')),str(ROOT/'ios/RouterVPN/App/Models.swift'),str(source),'-o',str(exe)],check=True,timeout=90)
         env=dict(os.environ,ROUTERVPN_XRAY_EXIT_POLICY=str(helper),ROUTERVPN_XRAY_ENTRY_FIXTURES=str(entries),ROUTERVPN_XRAY_EXIT_FIXTURES=str(exits))
+        # An inherited graph-suite environment must not hide a missing input.
+        env.pop('ROUTERVPN_PQ_EXIT_FIXTURES', None)
         if args.fixture_dir:env['ROUTERVPN_IOS_XRAY_EXIT_FIXTURES']=str(args.fixture_dir.resolve())
         subprocess.run([str(exe)],env=env,check=True,timeout=90)
     provider=(POLICY.parent/'PacketTunnelProvider.swift').read_text()

@@ -25,8 +25,6 @@ let wg: [String:Any] = ["type":"wireguard", "address":["10.77.0.2/32","fd77:77::
         "allowed_ips":["0.0.0.0/0","::/0"], "persistent_keepalive_interval":25]]]
 let xrayExitPath = ProcessInfo.processInfo.environment["ROUTERVPN_XRAY_EXIT_FIXTURES"]!
 let xrayExits = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath:xrayExitPath))) as! [String:[String:Any]]
-let pqExitPath = ProcessInfo.processInfo.environment["ROUTERVPN_PQ_EXIT_FIXTURES"]!
-let pqExits = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath:pqExitPath))) as! [String:[String:Any]]
 @MainActor func original(_ mode: String = "shadowsocks") -> [String:Any] {
     if let native = xrayExits[mode] { return native }
     var proxy: [String:Any] = ["type":mode,"tag":"proxy","server":"198.51.100.2","server_port":8388,"password":key]
@@ -417,6 +415,9 @@ for mode in ["awg2-fast", "awg2-strong"] {
         }
     }
 }
+// PQ-only inputs belong to this matrix, not the preamble reused by Xray tests.
+let pqExitPath = ProcessInfo.processInfo.environment["ROUTERVPN_PQ_EXIT_FIXTURES"]!
+let pqExits = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath:pqExitPath))) as! [String:[String:Any]]
 // Native proxy-entry composition. The entry has no virtual IP interface: it
 // remains an outbound while packet exits keep their existing endpoint owner.
 let xrayEntryPath = ProcessInfo.processInfo.environment["ROUTERVPN_XRAY_ENTRY_FIXTURES"]!
