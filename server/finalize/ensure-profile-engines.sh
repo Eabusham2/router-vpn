@@ -5,7 +5,7 @@ ENDPOINT=${2:-router.invalid}
 ADGUARD4=${3:-192.168.50.133}
 WG_PORT=${4:-51820}
 AWG_PORT=${5:-585}
-REALITY_PORT=${6:-443}
+REALITY_PORT=${6:-24443}
 HY2_PORT=${7:-8443}
 SS_PORT=${8:-8388}
 XRAY_PQ_PORT=${9:-10443}
@@ -87,7 +87,9 @@ core_ready(){
     "$GENERATED/reality-pq-vision/sing-box.json"; do
     private_ok "$f" || return 1
   done
-  verified_json_tags "$CONFIG/xray/server.json" "$CONFIG/transports/server.json"
+  verified_json_tags "$CONFIG/xray/server.json" "$CONFIG/transports/server.json" || return 1
+  # Rebuild stale listener/client ports together while preserving credentials.
+  python3 /src/server/scripts/verify-reality-port.py "$BASE" "$REALITY_PORT" "$XRAY_PQ_PORT"
 }
 
 advanced_credentials_ready(){

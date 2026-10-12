@@ -23,6 +23,7 @@ jobs:
           python3 deploy/validate-repo.py
           python3 deploy/product-parity-audit.py
           python3 deploy/router-forwarding-audit.py
+          python3 deploy/test_reality_port_migration.py
           python3 deploy/test_router_forwarding_fail_open.py
           python3 -m json.tool configs/client/modes.json >/dev/null
           python3 -m json.tool configs/client/logical-modes.json >/dev/null

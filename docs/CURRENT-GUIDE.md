@@ -130,7 +130,7 @@ Default WAN → AI Board mapping:
 
 ```text
 TCP      80      -> 18080
-TCP      443     -> 443
+TCP      24443   -> 24443
 UDP      585     -> 585
 TCP+UDP  8388    -> 8388
 UDP      8443    -> 8443
@@ -144,7 +144,7 @@ UDP      51820   -> 51820
 UDP      51822   -> 51822
 ```
 
-`14443/TCP` (OverTLS) and `15443/TCP+UDP` (legacy SSR) remain because current source still publishes those services. External TCP `80` maps to internal `18080` for ACME; never change it to `80 -> 80`.
+`14443/TCP` (OverTLS) and `15443/TCP+UDP` (legacy SSR) remain because current source still publishes those services. Standard REALITY defaults to `24443/TCP` for fresh deployments. Existing installations retain their preserved port until an explicit opt-in migration; see [AdGuard block-page / REALITY coexistence](ADGUARD-BLOCKPAGE-REALITY.md). External TCP `80` maps to internal `18080` for ACME; never change it to `80 -> 80`.
 
 Never WAN-expose:
 
