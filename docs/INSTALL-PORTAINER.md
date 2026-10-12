@@ -92,7 +92,7 @@ Default public listeners:
 
 ```text
 TCP      80      -> 18080
-TCP      443     -> 443
+TCP      24443   -> 24443
 UDP      585     -> 585
 TCP+UDP  8388    -> 8388
 UDP      8443    -> 8443
@@ -106,7 +106,7 @@ UDP      51820   -> 51820
 UDP      51822   -> 51822
 ```
 
-External TCP `80` maps to internal `18080` for ACME. Current source still uses public OverTLS `14443/TCP` and legacy SSR `15443/TCP+UDP`. Never expose `22/53`, `1080`, `3000`, `8786-8793`, `9443`, `14444`, `45999`, SSH, Portainer or AdGuard management.
+Standard REALITY defaults to `24443/TCP` on fresh installations; existing deployments preserve 443 until opt-in migration, documented in [AdGuard block-page / REALITY coexistence](ADGUARD-BLOCKPAGE-REALITY.md). External TCP `80` maps to internal `18080` for ACME. Current source still uses public OverTLS `14443/TCP` and legacy SSR `15443/TCP+UDP`. Never expose `22/53`, `1080`, `3000`, `8786-8793`, `9443`, `14444`, `45999`, SSH, Portainer or AdGuard management.
 
 The helper supports `status`, `apply`, `verify`, `remove`, and `uninstall`. Both persistent Merlin hooks call the same guarded `apply || true`; `remove` withdraws only Router-VPN rules/hooks while preserving the helper/config for recovery, and `uninstall` additionally removes the helper/config. Every unrelated line in `nat-start` and `firewall-start` is preserved.
 

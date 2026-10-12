@@ -5,7 +5,7 @@ ENDPOINT=${2:?endpoint}
 ADGUARD4=${3:?adguard ipv4}
 PQ_PORT=${4:-10443}
 TARGET=${5:-www.microsoft.com:443}
-REALITY_PORT=${6:-443}
+REALITY_PORT=${6:-24443}
 PRIVATE_BATCH=/src/server/scripts/atomic-private-batch.py
 xr(){ if command -v xray >/dev/null 2>&1; then xray "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/xtls/xray-core:26.7.11 "$@"; fi; }
 sb(){ if command -v sing-box >/dev/null 2>&1; then sing-box "$@"; else docker run --rm -v "$BASE:$BASE" ghcr.io/sagernet/sing-box:v1.13.12 "$@"; fi; }

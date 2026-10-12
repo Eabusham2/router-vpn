@@ -52,7 +52,7 @@ prompt ENDPOINT 'Router public IP or hostname (blank is allowed)' "$DEFAULT_PUBL
 prompt WG_PORT 'Raw WireGuard UDP port' '51820'
 prompt AWG_PORT 'AmneziaWG UDP port' '585'
 prompt ROSENPASS_PORT 'Rosenpass PQ UDP port' '51822'
-prompt REALITY_PORT 'REALITY/Vision TCP port' '443'
+prompt REALITY_PORT 'REALITY/Vision TCP port' '24443'
 prompt HY2_PORT 'Hysteria2/QUIC UDP port' '8443'
 prompt SS_PORT 'Shadowsocks TCP and UDP port' '8388'
 prompt XRAY_PQ_PORT 'PQ REALITY TCP port' '10443'

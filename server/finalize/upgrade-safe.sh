@@ -8,7 +8,7 @@ ENDPOINT=${ENDPOINT:-}
 WG_PORT=${WG_PORT:-51820}
 AWG_PORT=${AWG_PORT:-585}
 ROSENPASS_PORT=${ROSENPASS_PORT:-51822}
-REALITY_PORT=${REALITY_PORT:-443}
+REALITY_PORT=${REALITY_PORT:-24443}
 HY2_PORT=${HY2_PORT:-8443}
 SS_PORT=${SS_PORT:-8388}
 XRAY_PQ_PORT=${XRAY_PQ_PORT:-10443}
@@ -37,7 +37,25 @@ bash /src/server/finalize/sync-client-runtime.sh "$BASE"
 # current-entrypoint may have auto-detected a fresh public IP, and an explicit
 # ENDPOINT from Portainer must also win. detect-settings is only fallback state.
 REQUESTED_ENDPOINT=${ENDPOINT:-}
+# Existing installations keep their preserved port unless explicitly migrated.
+REQUESTED_REALITY_PORT_MIGRATION=${REALITY_PORT_MIGRATE_TO:-}
+if [[ -n "$REQUESTED_REALITY_PORT_MIGRATION" ]]; then
+  if [[ ! "$REQUESTED_REALITY_PORT_MIGRATION" =~ ^[1-9][0-9]{3,4}$ ]] || (( 10#$REQUESTED_REALITY_PORT_MIGRATION > 65535 )); then
+    echo 'REALITY_PORT_MIGRATE_TO must be a TCP port from 1000 to 65535.' >&2
+    exit 2
+  fi
+  for occupied in "$XRAY_PQ_PORT" "$XHTTP_PORT" "$SS_V2RAY_PORT" "$NAIVE_PORT" "$OVERTLS_PORT" "$OVERTLS_INTERNAL_PORT" "$SSR_PORT"; do
+    if [[ "$REQUESTED_REALITY_PORT_MIGRATION" == "$occupied" ]]; then
+      echo "REALITY_PORT_MIGRATE_TO collides with existing TCP listener $occupied." >&2
+      exit 2
+    fi
+  done
+fi
 eval "$(python3 /src/server/finalize/detect-settings.py "$BASE")"
+if [[ -n "$REQUESTED_REALITY_PORT_MIGRATION" ]]; then
+  REALITY_PORT=$REQUESTED_REALITY_PORT_MIGRATION
+  echo "Opt-in REALITY listener migration requested: TCP $REALITY_PORT (existing credentials preserved)."
+fi
 if [[ -n "$REQUESTED_ENDPOINT" ]]; then
   ENDPOINT=$REQUESTED_ENDPOINT
 fi
