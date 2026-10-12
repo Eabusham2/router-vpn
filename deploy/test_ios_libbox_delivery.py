@@ -153,6 +153,16 @@ final class RouterVPNLibboxPlatform {
     func reset() {}
 }
 enum RouterVPNLibboxCompileProbe { static func verifyPinnedRuntime() throws {} }
+final class RouterVPNPQFactory: @unchecked Sendable {
+    static let shared = RouterVPNPQFactory()
+    private let lock = NSLock()
+    private var failure = false
+    static func failNext() { shared.lock.lock(); shared.failure = true; shared.lock.unlock() }
+    static func install() throws {
+        shared.lock.lock(); let fail = shared.failure; shared.failure = false; shared.lock.unlock()
+        if fail { throw NSError(domain: "TestPQFactory", code: 1) }
+    }
+}
 final class CompletionState: @unchecked Sendable {
     private let lock = NSLock()
     private var calls = 0
@@ -169,6 +179,17 @@ final class CompletionState: @unchecked Sendable {
         var checks = 0
         func check(_ label: String, _ value: @autoclosure () -> Bool) {
             guard value() else { fatalError("FAIL: " + label) }; checks += 1
+        }
+        do {
+            let engine = RouterVPNLibboxEngine(tunnel: PacketTunnelProvider())
+            let before = state.counts()
+            RouterVPNPQFactory.failNext()
+            var rejected = false
+            do { try engine.start(files: files, strict: true) } catch { rejected = true }
+            check("failed protocol registration cannot create a native service", rejected && state.counts() == before)
+            try engine.start(files: files, strict: true)
+            check("registration failure releases startup ownership", state.currentServer() != nil)
+            engine.stop()
         }
         do {
             let provider = PacketTunnelProvider()

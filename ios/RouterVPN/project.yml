@@ -61,7 +61,7 @@ targets:
   RouterVPNPacketTunnel:
     type: app-extension
     platform: iOS
-    sources: [PacketTunnel, App/IOSMultihopStartLayer.swift]
+    sources: [PacketTunnel, App/IOSMultihopStartLayer.swift, App/IOSNativePQProfile.swift]
     preBuildScripts:
       - name: Build pinned wireguard-go bridge and Libbox bridge
         basedOnDependencyAnalysis: false

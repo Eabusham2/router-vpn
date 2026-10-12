@@ -44,6 +44,9 @@ final class RouterVPNLibboxEngine {
             ownershipLock.unlock()
             if !adopted { stopGeneration(generation) }
         }
+        // Factory registration owns no peer or socket. Native PQ endpoints
+        // create independent protocol handles only under this captured runtime.
+        try RouterVPNPQFactory.install()
         var safeFiles = try validateAndInjectProof(files)
         if let multihopMetadata {
             guard let raw = safeFiles["sing-box.json"], let text = String(data: raw, encoding: .utf8) else { throw error("Missing multihop graph") }

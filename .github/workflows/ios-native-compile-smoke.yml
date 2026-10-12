@@ -26,6 +26,7 @@ jobs:
           python3 ios/RouterVPN/test_dns_policy_contract.py
           python3 deploy/test_ios_speed_lab_http_boundary.py
           python3 deploy/test_ios_physical_path.py
+          python3 deploy/test_ios_pq_selection.py
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Prepare pinned native engines

@@ -91,7 +91,7 @@ def main():
    text=dns.read_text();dns=tmp/dns.name;dns.write_text(text.replace('import Network\n',base.base.base.NETWORK_SHIM))
   fixture=base.base.TEST[:base.base.TEST.index('@main struct Tests')]
   (tmp/'Tests.swift').write_text('import Foundation\n'+base.base.FIXTURE+fixture+TEST)
-  subprocess.run(['swiftc','-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'),str(APP/'IOSRuntimeSelection.swift'),str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMTUPolicy.swift'),str(ROOT/'ios/RouterVPN/PacketTunnel/IOSXrayDevicePolicy.swift'),str(tmp/'Tests.swift'),'-o',str(tmp/'tests')],check=True,timeout=120)
+  subprocess.run(['swiftc','-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'), str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSRuntimeSelection.swift'),str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMTUPolicy.swift'),str(ROOT/'ios/RouterVPN/PacketTunnel/IOSXrayDevicePolicy.swift'),str(tmp/'Tests.swift'),'-o',str(tmp/'tests')],check=True,timeout=120)
   subprocess.run([str(tmp/'tests'),str(tmp/'compiler')],check=True,timeout=120)
  source=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
  start=source.index('private func startLibbox(');end=source.index('private func startExternalLibbox(',start);body=source[start:end]

@@ -13,7 +13,7 @@ enum IOSStartLayer {
     static let nativeWhiteningType = "routervpn-aes-xor"
     static let whiteningPort = 8389
 
-    private static let supportedRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"]
+    private static let supportedRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"]
     private static let maxJSONBytes = 4 * 1024 * 1024
 
     static func selectedMode(profile: [String: Any]) throws -> String {
@@ -64,7 +64,7 @@ enum IOSStartLayer {
         // XOR is obfuscation only; the native outbound always uses authenticated
         // Shadowsocks 2022 AES. No local listener, second VPN, or helper process.
         let whitening = start == aesXOR
-        if ["wg", "awg2-fast", "awg2-strong", "ss-v2ray", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"].contains(rawMode) {
+        if ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "ss-v2ray", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"].contains(rawMode) {
             guard let config = files["sing-box.json"], !config.isEmpty, config.count <= maxJSONBytes,
                   let configText = String(data: config, encoding: .utf8),
                   let profiles = root["profiles"] as? [String: Any],
@@ -137,7 +137,7 @@ enum IOSStartLayer {
             }
             guard !composed.isEmpty, composed.utf8.count <= maxJSONBytes,
                   let graph = try JSONSerialization.jsonObject(with: Data(composed.utf8)) as? [String: Any],
-                  (!["wg", "awg2-fast", "awg2-strong"].contains(rawMode) || graph["endpoints"] is [[String: Any]]), graph["outbounds"] is [[String: Any]] else {
+                  (!["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"].contains(rawMode) || graph["endpoints"] is [[String: Any]]), graph["outbounds"] is [[String: Any]] else {
                 throw error("The native Start Layer compiler returned an invalid or oversized graph.")
             }
             var result = files

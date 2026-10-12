@@ -12,6 +12,8 @@ on:
       - 'deploy/*pq*'
       - 'android/app/src/main/java/com/eabusham/routervpn/RouterPQNative.java'
       - 'ios/RouterVPN/PacketTunnel/RouterVPNPQFactory.swift'
+      - 'ios/RouterVPN/App/IOSNativePQProfile.swift'
+      - 'ios/RouterVPN/App/IOSRuntimeSelection.swift'
 permissions:
   contents: read
 concurrency:

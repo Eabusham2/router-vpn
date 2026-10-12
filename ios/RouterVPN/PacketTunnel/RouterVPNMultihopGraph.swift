@@ -312,6 +312,25 @@ enum RouterVPNMultihopGraph {
         return try exitDNS(["servers": servers, "final": "selected-dns"])
     }
 
+    /// Apply the saved resolver and IPv6 policy to a compiled single PQ peer.
+    /// Its endpoint (including handshake keys and base protocol) stays unchanged.
+    static func singlePQPolicy(_ files: [String: Data], profile: [String: Any]) throws -> [String: Data] {
+        guard files.count == 1, let data = files["sing-box.json"], data.count <= maxBytes,
+              var graph = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let endpoints = graph["endpoints"] as? [[String: Any]], endpoints.count == 1,
+              endpoints[0]["type"] as? String == "routervpn-pq", endpoints[0]["tag"] as? String == "proxy",
+              let dns = graph["dns"] as? [String: Any],
+              let servers = dns["servers"] as? [[String: Any]], servers.count == 1,
+              let importedDNS = servers[0]["server"] as? String, serverIP(importedDNS),
+              servers[0]["detour"] as? String == "proxy" else { throw issue("Native PQ lost its captured endpoint or resolver.") }
+        // The selected preferences may differ from the imported default; neither
+        // the original WG asset nor the PQ keys are rewritten to change DNS.
+        graph["dns"] = try selectedDNS(profile, importedDNS: importedDNS, requireImportedMatch: false)
+        let encoded = try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])
+        guard encoded.count <= maxBytes else { throw issue("Native PQ DNS graph exceeds its bound.") }
+        return try singleWireGuardPolicy(["sing-box.json": encoded], profile: profile)
+    }
+
     /// Apply a saved IPv6 preference to the existing single-node WG graph.
     static func singleWireGuardPolicy(_ files: [String: Data], profile: [String: Any]) throws -> [String: Data] {
         struct Policy: Decodable { let ipv6_mode: String?; let daita_enabled: Bool?; let jumbo_tun: Bool? }

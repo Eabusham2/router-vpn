@@ -383,7 +383,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard rawProfileID.range(of: "^[A-Za-z0-9._-]{1,96}$", options: .regularExpression) != nil, !rawProfileID.contains("..") else { throw tunnelError(13, "iOS Libbox raw profile id is invalid.") }
         var expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         var rawFiles: [String: Data]
-        if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID) {
+        if IOSNativePQProfile.modeIDs.contains(rawProfileID) {
+            guard let profiles = root["profiles"] as? [String: Any],
+                  let encoded = profiles[rawProfileID] as? [String: String] else { throw tunnelError(58, "Native PQ captured assets are missing.") }
+            rawFiles = try IOSNativePQProfile.compile(mode: rawProfileID, encoded: encoded, nodeID: expectedNodeID) { mode, assets, nodeID in
+                var failure: NSError?
+                let result: String? = LibboxRouterCompilePQProfile(mode, assets, nodeID, &failure)
+                if let failure { throw failure }
+                guard let result else { throw tunnelError(58, "Native PQ compiler returned no graph.") }
+                return result
+            }
+            rawFiles = try RouterVPNMultihopGraph.singlePQPolicy(rawFiles, profile: selectedProfile)
+        } else if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID) {
             // Raw WireGuardKit still rejects Start Layer. This branch composes
             // the validated WG/AWG endpoint through the pinned native compiler.
             _ = try IOSStartLayer.selectedMode(profile: selectedProfile)
@@ -426,7 +437,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if rawFiles["xray.json"] != nil {
             files = try IOSXrayDevicePolicy.apply(files: files, profile: selectedProfile)
         }
-        if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID) {
+        if ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"].contains(rawProfileID) {
             guard let data = files["sing-box.json"], let text = String(data: data, encoding: .utf8) else { throw tunnelError(58, "Native WG lost its compiled graph.") }
             let policies = try JSONSerialization.data(withJSONObject: ["entry": selectedProfile, "exit": selectedProfile])
             var failure: NSError?

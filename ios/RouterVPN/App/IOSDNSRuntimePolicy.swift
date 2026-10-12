@@ -100,7 +100,7 @@ enum IOSDNSRuntimePolicy {
                 profiles[rawID] = native
             }
         }
-        let nativeIDs: Set<String> = ["wg", "awg2-fast", "awg2-strong"]
+        let nativeIDs: Set<String> = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"]
         for rawID in Array(profiles.keys).filter({ !nativeIDs.contains($0) }) {
             guard var encodedFiles = profiles[rawID] else { continue }
             var nativeXray = false

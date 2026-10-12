@@ -30,6 +30,8 @@ struct IOSRuntimeSelection: Hashable {
             return "\(entry) entry → \(rawProfileID) exit"
         }
         if engine == .libbox {
+            if rawProfileID == "wg-pq" { return "WireGuard + Rosenpass (Libbox)" }
+            if rawProfileID == "awg2-pq" { return "AmneziaWG + Rosenpass (Libbox)" }
             return files["xray.json"] != nil ? "Xray 26.7.11 + Libbox 1.14.1" : "Libbox 1.14.1"
         }
         return rawProfileID.hasPrefix("awg2") ? "AmneziaWG native" : "WireGuardKit"
@@ -75,7 +77,7 @@ enum IOSRuntimeSelector {
         "wg.conf", "wg-socks.conf", "awg.conf", "awg-socks.conf"
     ]
     private static let loopbackHosts: Set<String> = ["127.0.0.1", "::1", "localhost"]
-    private static let startLayerRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"]
+    private static let startLayerRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"]
     private static let startLayerAES = "aes-256-gcm"
     private static let startLayerAESXOR = "aes-256-gcm+xor-whitening"
 
@@ -111,7 +113,7 @@ enum IOSRuntimeSelector {
         if !selections.isEmpty { return selections }
 
         throw IOSRuntimeSelectionError.unsupportedMode(
-            "This iOS build cannot run \(logical.name) from the imported node: \(lastReason). Unimplemented helper/PQ/MAX chains and unsupported multihop combinations remain unavailable instead of faking Connected; native REALITY, PQ REALITY, XHTTP and dual-transport Xray graphs are supported. Each requested helper must be part of the owned Apple dataplane. OpenVPN is available through the native external TLS-client node path."
+            "This iOS build cannot run \(logical.name) from the imported node: \(lastReason). Unimplemented helper combinations and unsupported multihop combinations remain unavailable instead of faking Connected; native REALITY, PQ REALITY, XHTTP and dual-transport Xray graphs are supported. Each requested helper must be part of the owned Apple dataplane. OpenVPN is available through the native external TLS-client node path."
         )
     }
 
@@ -129,6 +131,11 @@ enum IOSRuntimeSelector {
     private static func selectRawCore(bundle: ClientBundle, rawProfileID: String, logicalModeID: String) throws -> IOSRuntimeSelection {
         guard isSafe(rawProfileID, pattern: rawProfilePattern) else { throw IOSRuntimeSelectionError.invalidProfileName(rawProfileID) }
         try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)
+        if IOSNativePQProfile.modeIDs.contains(rawProfileID) {
+            guard let encoded = bundle.profiles[rawProfileID] else { throw IOSRuntimeSelectionError.unsupportedMode("Native PQ assets are missing.") }
+            let files = try IOSNativePQProfile.decode(mode: rawProfileID, encoded: encoded)
+            return IOSRuntimeSelection(engine: .libbox, logicalModeID: logicalModeID, rawProfileID: rawProfileID, files: files)
+        }
         if ["wg", "awg2-fast", "awg2-strong"].contains(rawProfileID) {
             let asset = rawProfileID == "wg" ? "wg.conf" : "awg.conf"
             guard let encoded = bundle.profiles[rawProfileID],

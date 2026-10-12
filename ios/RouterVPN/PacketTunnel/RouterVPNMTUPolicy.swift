@@ -87,7 +87,7 @@ enum RouterVPNMTUPolicy {
         // A native WireGuard endpoint has its own userspace TUN. Keep a fixed
         // manual policy consistent there instead of only changing the OS TUN.
         if var endpoints = root["endpoints"] as? [[String: Any]] {
-            for i in endpoints.indices where ["wireguard", "routervpn-amneziawg"].contains(endpoints[i]["type"] as? String ?? "") { endpoints[i]["mtu"] = mtu }
+            for i in endpoints.indices where ["wireguard", "routervpn-amneziawg", "routervpn-pq"].contains(endpoints[i]["type"] as? String ?? "") { endpoints[i]["mtu"] = mtu }
             root["endpoints"] = endpoints
         }
         var output = files

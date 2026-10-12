@@ -115,7 +115,7 @@ def main():
             text=dns.read_text();dns=tmp/dns.name;dns.write_text(text.replace('import Network\n',base.NETWORK_SHIM))
         tests=tmp/'Tests.swift';tests.write_text('import Foundation\n'+FIXTURE+TEST)
         executable=tmp/'tests'
-        subprocess.run([swift,'-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'),str(APP/'IOSRuntimeSelection.swift'),str(tests),'-o',str(executable)],check=True,timeout=90)
+        subprocess.run([swift,'-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'), str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSRuntimeSelection.swift'),str(tests),'-o',str(executable)],check=True,timeout=90)
         subprocess.run([str(executable)],check=True,timeout=25)
     source=(APP/'RouterVPNModel.swift').read_text()
     assert 'launchBundle.profiles[selection.rawProfileID] = launchFiles.mapValues' in source
