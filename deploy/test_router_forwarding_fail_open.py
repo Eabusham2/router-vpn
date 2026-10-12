@@ -23,7 +23,7 @@ def unrelated(state):
             [x for x in lines(state,'filter','FORWARD') if 'ROUTER_VPN' not in x])
 def snap(state): return {p.name:p.read_text() for p in sorted(state.iterdir()) if p.is_file()}
 
-def main():
+def simulate(reality_port):
   with tempfile.TemporaryDirectory(prefix='rv-fwd-') as td:
     b=Path(td); bin=b/'bin'; jffs=b/'jffs/scripts'; state=b/'state'; bin.mkdir(); jffs.mkdir(parents=True); state.mkdir()
     (state/'nat.PREROUTING').write_text('-A PREROUTING -i eth0 -p tcp --dport 5555 -j DNAT --to-destination 192.168.50.99:5555\n-A PREROUTING -i eth0 -j ROUTER_VPN_DNAT\n')
@@ -54,7 +54,7 @@ C=${ROUTER_VPN_TEST_HEALTH_COUNT:-}; if [ -n "$C" ]; then N=0; [ ! -f "$C" ] || 
     nat=jffs/'nat-start'; fw=jffs/'firewall-start'
     nat.write_text('#!/bin/sh\necho unrelated-nat-hook >/dev/null\n/jffs/scripts/router-vpn-forward.sh apply-nat\n')
     fw.write_text('#!/bin/sh\n/jffs/scripts/cod-na-block.sh &\n/jffs/scripts/rogue-dhcp-ra-guard.sh\n/jffs/scripts/att-bgw-guard.sh\n/jffs/scripts/router-vpn-forward.sh apply-filter\n')
-    env=os.environ.copy(); env.update(PATH=str(bin)+os.pathsep+env.get('PATH',''),ROUTER_VPN_JFFS_DIR=str(jffs),ROUTER_VPN_IPTABLES=str(bin/'iptables'),ROUTER_VPN_TEST_STATE=str(state),ROUTER_VPN_WAN_INTERFACE='eth0',ROUTER_VPN_SKIP_NVRAM='1',ROUTER_VPN_TEST_HEALTH='up',ROUTER_VPN_TEST_HEALTH_COUNT=str(b/'health-count'))
+    env=os.environ.copy(); env['REALITY_PORT']=str(reality_port); env.update(PATH=str(bin)+os.pathsep+env.get('PATH',''),ROUTER_VPN_JFFS_DIR=str(jffs),ROUTER_VPN_IPTABLES=str(bin/'iptables'),ROUTER_VPN_TEST_STATE=str(state),ROUTER_VPN_WAN_INTERFACE='eth0',ROUTER_VPN_SKIP_NVRAM='1',ROUTER_VPN_TEST_HEALTH='up',ROUTER_VPN_TEST_HEALTH_COUNT=str(b/'health-count'))
 
     run(['/bin/sh',str(HELPER),'install'],env); rt=jffs/'router-vpn-forward.sh'; cfg=jffs/'router-vpn-forward.conf'
     assert rt.exists() and cfg.exists(); assert f'{rt} apply || true' in nat.read_text(); assert f'{rt} apply || true' in fw.read_text(); assert unrelated(state)==baseline
@@ -75,9 +75,19 @@ C=${ROUTER_VPN_TEST_HEALTH_COUNT:-}; if [ -n "$C" ]; then N=0; [ ! -f "$C" ] || 
     down=env|{'ROUTER_VPN_TEST_HEALTH':'down'}; run(['/bin/sh',str(rt),'apply'],down,False); run(['/bin/sh',str(nat)],down); run(['/bin/sh',str(fw)],down); assert unrelated(state)==baseline and owned(state)==([],[])
     run(['/bin/sh',str(rt),'apply'],env)
 
-    foreign='-A PREROUTING -i eth0 -p tcp --dport 443 -j DNAT --to-destination 192.168.50.77:443'; nf=state/'nat.PREROUTING'; nf.write_text(nf.read_text()+foreign+'\n'); ub=unrelated(state)
+    foreign=f'-A PREROUTING -i eth0 -p tcp --dport {reality_port} -j DNAT --to-destination 192.168.50.77:{reality_port}'; nf=state/'nat.PREROUTING'; nf.write_text(nf.read_text()+foreign+'\n'); ub=unrelated(state)
     run(['/bin/sh',str(rt),'apply'],env,False); assert unrelated(state)==ub and foreign in lines(state,'nat','PREROUTING') and owned(state)==([],[])
     nf.write_text('\n'.join(x for x in lines(state,'nat','PREROUTING') if x!=foreign)+'\n'); assert unrelated(state)==baseline; run(['/bin/sh',str(rt),'apply'],env)
+
+    # An unrelated legacy/new REALITY port must not be mistaken for the owned
+    # port. Keep both cases: existing 443 deployments and fresh 24443 installs.
+    other = 443 if reality_port == 24443 else 24443
+    independent = f'-A PREROUTING -i eth0 -p tcp --dport {other} -j DNAT --to-destination 192.168.50.77:{other}'
+    nf.write_text(nf.read_text()+independent+'\n'); ub=unrelated(state)
+    run(['/bin/sh',str(rt),'apply'],env)
+    assert unrelated(state)==ub and independent in lines(state,'nat','PREROUTING') and tuple(map(len,owned(state)))==(18,18)
+    nf.write_text('\n'.join(x for x in lines(state,'nat','PREROUTING') if x!=independent)+'\n')
+    assert unrelated(state)==baseline
 
     # force a fresh add, then inject failure
     run(['/bin/sh',str(rt),'remove'],env); assert rt.exists() and cfg.exists(); assert owned(state)==([],[])
@@ -107,5 +117,10 @@ C=${ROUTER_VPN_TEST_HEALTH_COUNT:-}; if [ -n "$C" ]; then N=0; [ ! -f "$C" ] || 
     redirected=env|{'ROUTER_VPN_JFFS_DIR':str(alias/'scripts')}
     run(['/bin/sh',str(HELPER),'status'],redirected,False)
     assert not list(real_scripts.iterdir()), 'redirected JFFS ancestry received Router VPN state'
-  print('ASUS Router VPN fail-open forwarding simulation: OK')
+  print(f'ASUS Router VPN fail-open forwarding simulation (REALITY {reality_port}): OK')
+
+def main():
+  for port in (24443, 443):
+    simulate(port)
+
 if __name__=='__main__': main()
