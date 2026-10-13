@@ -10,6 +10,9 @@ on:
       - 'internal/mobilepq/**'
       - 'mobile/pq/**'
       - 'deploy/test_server_pq_real.py'
+      - 'deploy/test_native_pq_pairing.py'
+      - 'server/scripts/provision-multihop-relays.py'
+      - 'cmd/router-agent/multihop_pq_compile*'
 permissions:
   contents: read
 concurrency:
@@ -53,6 +56,8 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - name: Execute actual private PQ pairing compiler
+        run: python3 deploy/test_native_pq_pairing.py
       - name: Verify real server Go/C/Rust exchange and rekey
         run: |
           cargo build --release --locked --manifest-path mobile/rosenpass/Cargo.toml --lib

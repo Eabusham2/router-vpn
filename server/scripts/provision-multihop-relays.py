@@ -189,6 +189,55 @@ def native_xray(assets, mode, server):
     value['tag'] = 'exit'
     return value
 
+def native_pq(assets, mode, node, server):
+    """Pair the exact selected PQ protocol; never execute imported helper files."""
+    bad = ValueError('Native PQ pairing lost its captured protocol, key material or node')
+    if mode not in ('wg-pq', 'awg2-pq') or not isinstance(assets, dict):
+        raise bad
+    config = 'wg.conf' if mode == 'wg-pq' else 'awg.conf'
+    required = {config, 'rosenpass.env', 'rosenpass.toml', 'rosenpass-client-secret',
+                'rosenpass-client-public', 'rosenpass-server-public'}
+    if not required.issubset(assets) or set(assets) - required - {'stack.json'}:
+        raise bad
+    if not all(isinstance(value, str) for value in assets.values()):
+        raise bad
+    payload = json.dumps(assets, allow_nan=False, separators=(',', ':')).encode('utf-8')
+    maximum = 12 << 20  # same bounded asset map as compilePQRelayProfile
+    if len(payload) > maximum:
+        raise ValueError('Native PQ pairing exceeds its source bound')
+    try:
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-pq-relay-profile', mode, node, server],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        raise ValueError('Native PQ pairing failed offline validation') from None
+    if not result.stdout or len(result.stdout) > maximum:
+        raise bad
+    value = decode(result.stdout)
+    fields = {'type', 'tag', 'mode', 'node_id', 'private_key', 'address', 'mtu', 'peers', 'pq', 'amnezia'}
+    if not isinstance(value, dict) or set(value) - fields or not fields.difference({'amnezia'}).issubset(value):
+        raise bad
+    if value['type'] != 'routervpn-pq' or value['tag'] != 'exit' or value['mode'] != mode or value['node_id'] != node:
+        raise bad
+    peers, pq = value['peers'], value['pq']
+    if not isinstance(peers, list) or len(peers) != 1 or not isinstance(peers[0], dict) or peers[0].get('address') != server:
+        raise bad
+    if not isinstance(pq, dict) or set(pq) != {'endpoint', 'version', 'secret', 'public', 'peer'}:
+        raise bad
+    if type(pq['version']) is not int or pq['version'] not in (2, 3):
+        raise bad
+    endpoint = urlsplit('udp://'+pq['endpoint'])
+    if endpoint.username or endpoint.password or endpoint.path or endpoint.query or endpoint.fragment or not endpoint.port or literal(endpoint.hostname) != server:
+        raise bad
+    for field, asset in (('secret', 'rosenpass-client-secret'), ('public', 'rosenpass-client-public'), ('peer', 'rosenpass-server-public')):
+        if not isinstance(pq[field], str) or base64.b64decode(pq[field], validate=True) != base64.b64decode(assets[asset], validate=True):
+            raise bad
+    if mode == 'awg2-pq':
+        validate_amnezia_parameters(value.get('amnezia', {}))
+    elif value.get('amnezia'):
+        raise bad
+    return value
+
 def paired_start_layer(bundle, profile, endpoint):
     raw_mode = profile.get('start_layer', 'off')
     if not isinstance(raw_mode, str):
@@ -247,6 +296,10 @@ def pair(bundle, alias, selected=None):
         if 'awg.conf' not in assets: continue
         transport = native_wireguard(assets['awg.conf'], node, endpoint, amnezia=True)
         exits.append(dict(id=alias,mode=mode,node_id=node,dns_server=dns,transport=transport))
+    for mode in ('wg-pq', 'awg2-pq'):
+        if mode not in modes: continue
+        transport = native_pq(modes[mode], mode, node, endpoint)
+        exits.append(dict(id=alias, mode=mode, node_id=node, dns_server=dns, transport=transport))
     for mode in ('shadowsocks', 'hysteria2'):
         assets = modes.get(mode, {})
         encoded = assets.get('sing-box.json')
