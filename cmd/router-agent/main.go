@@ -51,6 +51,15 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "compile-pq-relay-profile" {
+		if len(os.Args) != 5 {
+			log.Fatal("compile-pq-relay-profile requires the captured mode, node and literal server")
+		}
+		if err := compilePQRelayProfile(os.Stdin, os.Stdout, os.Args[2], os.Args[3], os.Args[4]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "compile-native-relay-profile" {
 		if len(os.Args) != 3 {
 			log.Fatal("compile-native-relay-profile requires an exact native mode")
