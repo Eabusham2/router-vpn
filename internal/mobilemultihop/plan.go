@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"router-vpn/internal/awgpolicy"
@@ -88,6 +89,7 @@ type Controller struct {
 	cancel          context.CancelFunc
 	runDone         chan struct{}
 	leaseMu         sync.Mutex
+	leaseDeadline   atomic.Pointer[time.Time]
 	ownsLease       bool
 	renewCancel     context.CancelFunc
 	renewDone       chan struct{}

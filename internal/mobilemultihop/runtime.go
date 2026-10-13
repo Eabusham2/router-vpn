@@ -159,16 +159,24 @@ func (c *Controller) renewLocked(ctx context.Context) error {
 	if exactJSON(data, &lease, 8192) != nil || lease.Request != c.proposal || lease.NodeID != c.meta.EntryNodeID || lease.ExitNodeID != c.meta.ExitNodeID || lease.Host != c.expected.Host || lease.Port != c.expected.Port || lease.Username != c.expected.Username || lease.Password != c.expected.Password {
 		return errors.New("server relay response changed the frozen lease")
 	}
-	remaining := time.Until(lease.ExpiresAt)
+	acknowledgedAt := time.Now()
+	remaining := lease.ExpiresAt.Sub(acknowledgedAt)
 	if remaining < 2*time.Second || remaining > 305*time.Second {
 		return errors.New("relay expiry is invalid")
 	}
 	c.expected.ExpiresAt = lease.ExpiresAt
+	// Keep a local monotonic deadline. A wall-clock change must not prolong an
+	// already acknowledged server lease, and health reads must not wait on HTTP.
+	deadline := acknowledgedAt.Add(remaining)
+	c.leaseDeadline.Store(&deadline)
 	return nil
 }
 func (c *Controller) release() error {
 	c.leaseMu.Lock()
 	defer c.leaseMu.Unlock()
+	// Revoke proof before sending DELETE. A missing acknowledgement retains
+	// cleanup ownership, not permission to advertise the path as healthy.
+	c.leaseDeadline.Store(nil)
 	if !c.ownsLease {
 		return nil
 	}
@@ -371,6 +379,9 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 		if err == nil {
 			err = ctx.Err()
 		}
+		if err == nil && result.Winner.Execution == routechoice.Server && !c.leaseFresh() {
+			err = errors.New("proved server lease expired before activation")
+		}
 	}
 	if err != nil || result.Winner == nil {
 		c.invalidate()
@@ -395,6 +406,11 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 	}
 	return nil
 }
+func (c *Controller) leaseFresh() bool {
+	deadline := c.leaseDeadline.Load()
+	return deadline != nil && time.Now().Before(*deadline)
+}
+
 func (c *Controller) Healthy() bool {
 	c.mu.Lock()
 	engine, identity, outcome := c.engine, c.engineID, c.progress.Execution
@@ -414,7 +430,7 @@ func (c *Controller) Healthy() bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.generation.Load() == 1 && c.progress.Complete && c.progress.Stage == "selected" && c.progress.Execution == outcome
+	return c.generation.Load() == 1 && c.progress.Complete && c.progress.Stage == "selected" && c.progress.Execution == outcome && (outcome != "server" || c.leaseFresh())
 }
 func (c *Controller) Close() error {
 	c.invalidate()
