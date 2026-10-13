@@ -8,11 +8,6 @@ import io.nekohasekai.libbox.Libbox;
 final class AndroidWireGuardLibboxPolicy {
     static JSONObject apply(JSONObject bundle, JSONObject config) throws Exception {
         JSONObject profile = AndroidProfileSelection.selectedRouterProfile(bundle);
-        for (String key : new String[]{"jumbo_tun"}) {
-            if (AndroidNativeProfilePolicy.booleanPolicy(profile, key, false)) {
-                throw new IllegalStateException("Native WireGuard Libbox does not implement " + key + "; no session was started.");
-            }
-        }
         JSONArray inbounds = config.getJSONArray("inbounds");
         JSONArray endpoints = config.getJSONArray("endpoints");
         if (inbounds.length() != 1 || endpoints.length() != 1 || config.getJSONArray("outbounds").length() != 0) {
@@ -26,6 +21,22 @@ final class AndroidWireGuardLibboxPolicy {
                 || !"proxy".equals(config.getJSONObject("route").getString("final"))) {
             throw new IllegalStateException("Single-node WireGuard lost its native graph ownership.");
         }
+        return applyCapturedDevicePolicy(bundle, config, profile);
+    }
+
+    static JSONObject applyCompleteMAX(JSONObject bundle, JSONObject config, String mode) throws Exception {
+        AndroidNativeMAXProfile.validateGraph(bundle, bundle.getJSONObject("profiles").getJSONObject(mode), config, mode);
+        return applyCapturedDevicePolicy(bundle, config, AndroidProfileSelection.selectedRouterProfile(bundle));
+    }
+
+    private static JSONObject applyCapturedDevicePolicy(JSONObject bundle, JSONObject config, JSONObject profile) throws Exception {
+        for (String key : new String[]{"jumbo_tun"}) {
+            if (AndroidNativeProfilePolicy.booleanPolicy(profile, key, false)) {
+                throw new IllegalStateException("Native WireGuard Libbox does not implement " + key + "; no session was started.");
+            }
+        }
+        JSONObject tun = config.getJSONArray("inbounds").getJSONObject(0);
+        JSONObject endpoint = config.getJSONArray("endpoints").getJSONObject(0);
         int nativeMtu = AndroidNativeProfilePolicy.selectedMtu(bundle,
                 AndroidNativeProfilePolicy.exactInteger(endpoint, "mtu", 1280, 1280, 9000));
         String policy = AndroidNativeProfilePolicy.stringPolicy(profile, "mtu_policy", "auto");

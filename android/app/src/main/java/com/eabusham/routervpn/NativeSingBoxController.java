@@ -94,6 +94,13 @@ final class NativeSingBoxController {
                     applyPerformance(root, config);
                     // No DNS/socket creation while populating readiness. The
                     // selected launch resolves and checks the actual native core.
+                } else if (AndroidNativeMAXProfile.isMode(id)) {
+                    JSONObject config = new JSONObject(candidate);
+                    applySelectedDns(root, config);
+                    config = AndroidWireGuardLibboxPolicy.applyCompleteMAX(root, config, id);
+                    applyPerformance(root, config);
+                    // The complete compiler already composed the selected Start
+                    // Layer. Discovery never starts a PQ factory or network.
                 } else if (nativeSinglePacketMode(id)) {
                     JSONObject config = new JSONObject(candidate);
                     applySelectedDns(root, config);
@@ -123,7 +130,7 @@ final class NativeSingBoxController {
         String rawConfigText = AndroidStartLayer.nativeXray(modeId)
                 ? AndroidXrayLibboxPolicy.resolve(root, profile, modeId)
                 : compileStandaloneProfile(root, profile, modeId);
-        if (nativeSinglePacketMode(modeId)) {
+        if (nativeSinglePacketMode(modeId) || AndroidNativeMAXProfile.isMode(modeId)) {
             // Only the compiled graph is staged. A second WireGuard VPN or
             // unused raw-backend file must never be started implicitly.
             profile = new JSONObject().put("sing-box.json", "native-wireguard-graph");
@@ -133,19 +140,21 @@ final class NativeSingBoxController {
         applySelectedDns(root, patchedConfig);
         if (AndroidStartLayer.nativeXray(modeId)) AndroidXrayLibboxPolicy.normalizeDnsRoutes(patchedConfig);
         if (nativeSinglePacketMode(modeId)) patchedConfig = AndroidWireGuardLibboxPolicy.apply(root, patchedConfig);
+        else if (AndroidNativeMAXProfile.isMode(modeId)) patchedConfig = AndroidWireGuardLibboxPolicy.applyCompleteMAX(root, patchedConfig, modeId);
         // Recompile after DNS selection: UDP/DoH3 must use the real Hysteria2
         // leg, not the SS2022 WebSocket/TLS transport restricted to TCP.
         if ("ss-v2ray".equals(modeId)) patchedConfig = new JSONObject(compileNativeSIP003(profile, modeId, patchedConfig.toString()));
-        AndroidStartLayer.RelayPlan relayPlan = AndroidStartLayer.apply(root, patchedConfig, modeId);
+        AndroidStartLayer.RelayPlan relayPlan = AndroidNativeMAXProfile.isMode(modeId) ? null
+                : AndroidStartLayer.apply(root, patchedConfig, modeId);
         try {
             if (AndroidStartLayer.nativeXray(modeId)) patchedConfig = AndroidXrayLibboxPolicy.applyDevice(root, patchedConfig);
             patchedConfig = applyPerformance(root, patchedConfig);
-            if (nativePQFamily(modeId)) RouterPQNative.install();
+            if (nativePQFamily(modeId) || AndroidNativeMAXProfile.isMode(modeId)) RouterPQNative.install();
             Libbox.checkConfig(patchedConfig.toString());
             byte[] config = (patchedConfig.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
             if (config.length > MAX_CONFIG) throw new IllegalStateException("Patched sing-box config exceeds safety limit.");
 
-            if ((AndroidStartLayer.nativeXray(modeId) || nativePQFamily(modeId)) && (Thread.currentThread().isInterrupted()
+            if ((AndroidStartLayer.nativeXray(modeId) || nativePQFamily(modeId) || AndroidNativeMAXProfile.isMode(modeId)) && (Thread.currentThread().isInterrupted()
                     || !capturedBundle.equals(loadBundle(privateBundle).toString()))) {
                 throw new IllegalStateException("Selected node changed or preparation was cancelled; no native session was staged.");
             }
@@ -249,6 +258,7 @@ final class NativeSingBoxController {
     }
 
     private static String compileStandaloneProfile(JSONObject bundle, JSONObject profile, String modeId) throws Exception {
+        if (AndroidNativeMAXProfile.isMode(modeId)) return AndroidNativeMAXProfile.compile(bundle, profile, modeId);
         if (nativePQFamily(modeId)) {
             // The captured generated assets are data for the pinned compiler.
             // They are never executed, staged as helper scripts, or rewritten

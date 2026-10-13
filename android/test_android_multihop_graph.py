@@ -54,6 +54,9 @@ func main(){
  case "exit":value,err=mobilemultihop.WireGuardExitConfig(r.Config,r.Policy)
  case "awg-parse":value,err=mobilemultihop.CompileAmneziaProfile(r.Config,r.Policy)
  case "awg-exit":value,err=mobilemultihop.AmneziaExitConfig(r.Config,r.Policy)
+ case "max-profile":
+  var input struct{Mode string;Files string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobilemultihop.CompileMAXProfile(input.Mode,input.Files,r.Policy)}
  case "pq-profile":
   var input struct{Mode string;Files string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{value,err=mobilemultihop.CompilePQProfile(input.Mode,input.Files,r.Policy)}
@@ -144,6 +147,7 @@ public final class Libbox {
   }finally{p.destroyForcibly();}
  }
  public static String routerCompilePQProfile(String mode,String files,String node)throws Exception{return call("pq-profile",new JSONObject().put("Mode",mode).put("Files",files).toString(),node);}
+ public static String routerCompileMAXProfile(String mode,String files,String policy)throws Exception{return call("max-profile",new JSONObject().put("Mode",mode).put("Files",files).toString(),policy);}
  public static Runnable afterEntryLayerPreflight;
  public static String routerCompileMultihopEntryStartLayer(String config,String metadata,String source)throws Exception {
   String result=call("entry-start",new JSONObject().put("Config",config).put("Metadata",metadata).put("Source",source).toString(),"");
@@ -793,7 +797,7 @@ def main():
         for name,source in STUBS.items():
             target=sources/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(source)
         app=sources/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
-        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer','AndroidXrayLibboxPolicy','NativeXrayController','AndroidMultihopStartLayer'):
+        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidNativeMAXProfile','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer','AndroidXrayLibboxPolicy','NativeXrayController','AndroidMultihopStartLayer'):
             shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
         (app/'MultihopGraphHarness.java').write_text(HARNESS)
         classes=temp/'classes'

@@ -43,7 +43,7 @@ final class AndroidStartLayer {
     }
 
     private static final Set<String> SUPPORTED = new HashSet<>(Arrays.asList(
-            "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"));
+            "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"));
 
     static String selectedMode(JSONObject bundle) throws Exception {
         JSONObject profile = selectedRouterProfile(bundle);
@@ -70,6 +70,7 @@ final class AndroidStartLayer {
 
     static RelayPlan apply(JSONObject bundle, JSONObject targetConfig, String modeId) throws Exception {
         String start = selectedMode(bundle);
+        if (AndroidNativeMAXProfile.isMode(modeId)) throw new IllegalStateException("Complete MAX must own its Start Layer in the shared compiler.");
         if (OFF.equals(start)) return null;
         String mode = modeId == null ? "" : modeId.trim().toLowerCase(Locale.ROOT);
         if (!SUPPORTED.contains(mode)) {
