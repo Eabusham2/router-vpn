@@ -19,6 +19,10 @@ type controlError struct{ status int }
 
 func (e controlError) Error() string { return "private entry rejected the lease operation" }
 func (c *Controller) exchange(ctx context.Context, tag, method, target, token string, payload []byte) ([]byte, time.Duration, error) {
+	return c.exchangeBounded(ctx, tag, method, target, token, payload, multihoprelay.MaxControlResponseBytes)
+}
+
+func (c *Controller) exchangeBounded(ctx context.Context, tag, method, target, token string, payload []byte, limit int) ([]byte, time.Duration, error) {
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSHandshakeTimeout: 2500 * time.Millisecond,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			if network != "tcp" {
@@ -45,13 +49,13 @@ func (c *Controller) exchange(ctx context.Context, tag, method, target, token st
 	if e != nil {
 		return nil, 0, errors.New("routed request failed or timed out")
 	}
-	data, readErr := io.ReadAll(io.LimitReader(response.Body, 8193))
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
 	_ = response.Body.Close()
 	elapsed := time.Since(start)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, 0, controlError{response.StatusCode}
 	}
-	if readErr != nil || len(data) > 8192 || ctx.Err() != nil {
+	if readErr != nil || len(data) > limit || ctx.Err() != nil {
 		return nil, 0, errors.New("routed response was oversized or expired")
 	}
 	return data, elapsed, nil
@@ -78,7 +82,7 @@ func (c *Controller) prove(ctx context.Context, tag, api, token, node string) (t
 func (c *Controller) leaseRequest(ctx context.Context, method string, body []byte) ([]byte, error) {
 	target, _ := url.Parse(c.meta.EntryAPI)
 	target.Path = "/api/multihop/lease"
-	data, _, e := c.exchange(ctx, c.meta.EntryTag, method, target.String(), c.meta.EntryToken, body)
+	data, _, e := c.exchangeBounded(ctx, c.meta.EntryTag, method, target.String(), c.meta.EntryToken, body, multihoprelay.LeaseResponseLimit(method))
 	return data, e
 }
 func (c *Controller) acquire(ctx context.Context) error {
@@ -91,24 +95,13 @@ func (c *Controller) acquire(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	var caps struct {
-		NodeID    string `json:"node_id"`
-		Execution string `json:"execution"`
-		Exits     []struct {
-			ID         string `json:"exit_id"`
-			Mode       string `json:"exit_mode"`
-			Node       string `json:"exit_node_id"`
-			PublicKey  string `json:"client_public_key,omitempty"`
-			PQIdentity string `json:"pq_client_identity,omitempty"`
-			Layer      string `json:"exit_start_layer,omitempty"`
-		} `json:"exits"`
-	}
-	if exactJSON(data, &caps, 8192) != nil || caps.NodeID != c.meta.EntryNodeID || caps.Execution != "server" {
+	var caps multihoprelay.Capabilities
+	if exactJSON(data, &caps, multihoprelay.MaxCapabilitiesBytes) != nil || caps.Validate(c.meta.EntryNodeID) != nil {
 		return errors.New("unproved entry relay capabilities")
 	}
 	found := false
 	for _, exit := range caps.Exits {
-		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.Node == c.meta.ExitNodeID && exit.Layer == c.meta.ExitStartLayer {
+		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.NodeID == c.meta.ExitNodeID && exit.Layer == c.meta.ExitStartLayer {
 			if multihoprelay.PacketMode(c.meta.ExitMode) && (exit.PublicKey == "" || exit.PublicKey == c.localPublicKey) {
 				return errors.New("server WireGuard needs separately paired client credentials to avoid peer roaming")
 			}

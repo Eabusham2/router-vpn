@@ -5,14 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"router-vpn/internal/multihoprelay"
 	"unicode/utf8"
 )
 
 // decodeRelayControlJSON rejects ambiguous duplicate members before decoding a
 // bounded exact response. No response material is copied into an error message.
 func decodeRelayControlJSON(data []byte, out any) error {
+	return decodeRelayControlJSONBounded(data, out, multihoprelay.MaxControlResponseBytes)
+}
+
+func decodeRelayControlJSONBounded(data []byte, out any, limit int) error {
 	bad := errors.New("relay control response must be bounded unambiguous JSON")
-	if len(data) == 0 || len(data) > 8192 || !utf8.Valid(data) {
+	if (limit != multihoprelay.MaxControlResponseBytes && limit != multihoprelay.MaxCapabilitiesBytes) || len(data) == 0 || len(data) > limit || !utf8.Valid(data) {
 		return bad
 	}
 	scan := json.NewDecoder(bytes.NewReader(data))

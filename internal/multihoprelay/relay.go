@@ -111,7 +111,7 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 	if c.TTLSeconds == 0 {
 		c.TTLSeconds = 90
 	}
-	if c.TTLSeconds < 15 || c.TTLSeconds > 300 || len(c.Exits) > 64 {
+	if c.TTLSeconds < 15 || c.TTLSeconds > 300 || len(c.Exits) > MaxPairedExits {
 		return nil, errors.New("relay TTL or exit limit is invalid")
 	}
 	seen := map[string]bool{}

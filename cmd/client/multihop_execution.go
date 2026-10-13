@@ -386,15 +386,16 @@ func (o *desktopRelayOwner) requestControl(ctx context.Context, method string, o
 	if err != nil {
 		return errors.New("private relay control request failed")
 	}
-	raw, readErr := io.ReadAll(io.LimitReader(response.Body, 8193))
+	limit := multihoprelay.LeaseResponseLimit(method)
+	raw, readErr := io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
 	_ = response.Body.Close()
-	if readErr == nil && ctx.Err() == nil && len(raw) <= 8192 && response.StatusCode >= 400 && response.StatusCode < 500 {
+	if readErr == nil && ctx.Err() == nil && len(raw) <= limit && response.StatusCode >= 400 && response.StatusCode < 500 {
 		return desktopRelayRejected{response.StatusCode}
 	}
-	if readErr != nil || response.StatusCode != 200 || len(raw) > 8192 || ctx.Err() != nil {
+	if readErr != nil || response.StatusCode != 200 || len(raw) > limit || ctx.Err() != nil {
 		return errors.New("private relay control was rejected or timed out")
 	}
-	if err = decodeRelayControlJSON(raw, out); err != nil {
+	if err = decodeRelayControlJSONBounded(raw, out, limit); err != nil {
 		return err
 	}
 	if !o.app.ownsConnectionRuntime(o.command) {
@@ -403,22 +404,12 @@ func (o *desktopRelayOwner) requestControl(ctx context.Context, method string, o
 	return nil
 }
 func (o *desktopRelayOwner) available(ctx context.Context) error {
-	var response struct {
-		NodeID    string `json:"node_id"`
-		Execution string `json:"execution"`
-		Exits     []struct {
-			ID        string `json:"exit_id"`
-			Mode      string `json:"exit_mode"`
-			NodeID    string `json:"exit_node_id"`
-			PublicKey string `json:"client_public_key,omitempty"`
-			Layer     string `json:"exit_start_layer,omitempty"`
-		} `json:"exits"`
-	}
+	var response multihoprelay.Capabilities
 	if err := o.requestControl(ctx, http.MethodGet, &response); err != nil {
 		return err
 	}
-	if response.NodeID != o.entry.NodeProofID || response.Execution != "server" {
-		return errors.New("server capabilities answered for another node")
+	if err := response.Validate(o.entry.NodeProofID); err != nil {
+		return err
 	}
 	for _, exit := range response.Exits {
 		if exit.ID == o.request.ExitID && exit.Mode == o.request.ExitMode && exit.NodeID == o.expected.ExitNodeID && exit.Layer == "" {
