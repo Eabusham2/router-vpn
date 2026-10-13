@@ -37,7 +37,8 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	for _, required := range []string{
 		"try IOSStartLayer.validateWireGuard(profile: selectedProfile)",
 		"rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)",
-		"let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)",
+		"let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles",
+		": IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)",
 		"var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)",
 		"try IOSStartLayer.validateExternal(profile: selectedProfile)",
 		"try engine.start(files: files, strict: strict)",
@@ -56,10 +57,10 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	}
 	body := provider[start:end]
 	native := strings.Index(body, "LibboxRouterCompileXrayProfile(")
-	compose := strings.Index(body, "let composedFiles = try IOSStartLayer.apply(")
+	compose := strings.Index(body, "let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(")
 	mtu := strings.Index(body, "var files = try RouterVPNMTUPolicy.libbox(composedFiles,")
 	run := strings.Index(body, "try engine.start(files: files, strict: strict)")
-	if native < 0 || compose <= native || mtu <= compose || run <= mtu {
+	if !appleSingleLayerDispatchIsOwned(body) || native < 0 || compose <= native || mtu <= compose || run <= mtu {
 		t.Fatal("Start Layer and MTU must both compose before the native engine starts")
 	}
 
@@ -77,7 +78,7 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 
 	selector := repoFile(t, "ios/RouterVPN/App/IOSRuntimeSelection.swift")
 	for _, required := range []string{
-		`private static let startLayerRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max"]`,
+		`private static let startLayerRawModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "ss-v2ray", "hysteria2", "naive-h2", "naive-h3", "reality-vision", "reality-pq-vision", "reality-xhttp", "split", "max", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"]`,
 		"try validateStartLayer(bundle: bundle, rawProfileID: rawProfileID)",
 		"Start Layer AES-256-GCM requires an owned Libbox WG/AWG",
 		"start == startLayerAES || start == startLayerAESXOR",
@@ -160,5 +161,56 @@ func TestNativeBaseStartLayerHostsShareTheCompiler(t *testing.T) {
 	end := strings.Index(provider, "private func startMultihop(")
 	if start < 0 || end <= start || !strings.Contains(provider[start:end], "try IOSStartLayer.validateWireGuard(profile: selectedProfile)") {
 		t.Fatal("raw WireGuardKit must not silently ignore a requested Start Layer")
+	}
+}
+
+// This is a source wiring contract, not a substitute for the executable Swift/Go
+// MAX tests. Only the complete MAX compiler may consume an already-composed
+// Start Layer. Every ordinary mode must still pass through IOSStartLayer.apply.
+func appleSingleLayerDispatchIsOwned(body string) bool {
+	normalized := strings.Join(strings.Fields(body), " ")
+	dispatch := "let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles : IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)"
+	pos := strings.Index(normalized, dispatch)
+	if pos < 0 || strings.Count(normalized, "let composedFiles =") != 1 {
+		return false
+	}
+	compile := strings.Index(normalized, "rawFiles = try IOSNativeMAXProfile.compile(")
+	selected := strings.Index(normalized, "let start = try IOSStartLayer.selectedMode(profile: selectedProfile)")
+	capture := strings.Index(normalized, "profile: selectedProfile, startLayer: start)")
+	bridge := strings.Index(normalized, "LibboxRouterCompileMAXProfile(mode, assets, metadata, &failure)")
+	mtu := strings.Index(normalized, "var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)")
+	run := strings.Index(normalized, "try engine.start(files: files, strict: strict)")
+	proof := strings.Index(normalized, "proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID")
+	return selected >= 0 && compile > selected && capture > compile && bridge > capture && pos > bridge && mtu > pos && run > mtu && proof > run
+}
+
+func TestAppleSingleLayerDispatchRejectsUnownedMAXBypass(t *testing.T) {
+	provider := repoFile(t, "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift")
+	start := strings.Index(provider, "private func startLibbox(")
+	end := strings.Index(provider, "private func startExternalLibbox(")
+	if start < 0 || end <= start {
+		t.Fatal("missing native startup owner")
+	}
+	body := provider[start:end]
+	if !appleSingleLayerDispatchIsOwned(body) {
+		t.Fatal("shipping MAX/ordinary dispatch is disconnected")
+	}
+	cases := [][2]string{
+		{"IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles", "true ? rawFiles"},
+		{"? rawFiles\n            : IOSStartLayer.apply(", "? rawFiles\n            : bypass("},
+		{"rawFiles = try IOSNativeMAXProfile.compile(", "rawFiles = try ignored("},
+		{"profile: selectedProfile, startLayer: start)", "profile: selectedProfile, startLayer: \"off\")"},
+		{"LibboxRouterCompileMAXProfile(mode, assets, metadata, &failure)", "fakeGraph(mode)"},
+		{"RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)", "RouterVPNMTUPolicy.libbox(rawFiles, profile: selectedProfile)"},
+		{"engine.start(files: files, strict: strict)", "engine.start(files: rawFiles, strict: strict)"},
+		{"proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID", "pretendConnected(url: proofURL, expectedNodeID: provenNodeID"},
+	}
+	for _, test := range cases {
+		if strings.Count(body, test[0]) != 1 {
+			t.Fatalf("negative control missing its unique anchor: %q", test[0])
+		}
+		if appleSingleLayerDispatchIsOwned(strings.Replace(body, test[0], test[1], 1)) {
+			t.Fatalf("unowned pipeline accepted: %s", test[0])
+		}
 	}
 }
