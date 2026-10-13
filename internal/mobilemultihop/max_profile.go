@@ -12,10 +12,12 @@ import (
 	"unicode/utf8"
 
 	"router-vpn/internal/applexray"
+	"router-vpn/internal/multihoprelay"
 )
 
 const MAXShadowsocksTag = "routervpn-max-ss"
 const MAXOuterTag = "routervpn-max-outer"
+const MAXStartLayerTag = "routervpn-max-start-layer"
 
 // MAXMode denotes a complete generated chain, not the older raw "max" Xray
 // dual-transport mode. Each complete chain retains a mandatory PQ-keyed base.
@@ -28,16 +30,24 @@ func MAXMode(mode string) bool {
 }
 
 type maxPolicy struct {
-	NodeID    string `json:"node_id"`
-	NodeKind  string `json:"node_kind"`
-	RouterAPI string `json:"router_api"`
-	Endpoint  string `json:"endpoint"`
+	NodeID     string `json:"node_id"`
+	NodeKind   string `json:"node_kind"`
+	RouterAPI  string `json:"router_api"`
+	Endpoint   string `json:"endpoint"`
+	StartLayer string `json:"start_layer,omitempty"`
 }
 
 func capturedMAXPolicy(raw string) (maxPolicy, string, error) {
 	var policy maxPolicy
 	bad := errors.New("MAX requires the exact selected Router VPN node and private service")
 	if exactJSON([]byte(raw), &policy, 16384) != nil || !proofID.MatchString(policy.NodeID) || policy.NodeKind != "router-vpn" || !wireGuardServerIP(policy.Endpoint) {
+		return policy, "", bad
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &fields) != nil {
+		return policy, "", bad
+	}
+	if value, present := fields["start_layer"]; present && (len(value) < 2 || value[0] != '"') {
 		return policy, "", bad
 	}
 	// Reject unknown fields as well as duplicate keys; policy is a frozen launch
@@ -59,6 +69,9 @@ func capturedMAXPolicy(raw string) (maxPolicy, string, error) {
 		if _, err = wireGuardNumber(api.Port(), 1, 65535); err != nil {
 			return policy, "", bad
 		}
+	}
+	if policy.StartLayer != "" && policy.StartLayer != "off" && !multihoprelay.ValidLayerMode(policy.StartLayer) {
+		return policy, "", errors.New("MAX Start Layer must use authenticated AES; no unknown or XOR-only downgrade")
 	}
 	return policy, ip.String(), nil
 }
@@ -249,6 +262,34 @@ func CompileMAXProfile(mode, encodedFiles, metadata string) (string, error) {
 	endpoint := root["endpoints"].([]any)[0].(map[string]any)
 	endpoint["detour"] = MAXShadowsocksTag
 	root["outbounds"] = []any{ss, outer}
+	if policy.StartLayer != "" && policy.StartLayer != "off" {
+		// Add the requested outermost AES transport. The existing SS middle
+		// layer stays present and keeps its credentials and position in MAX.
+		// The generated middle and outer Start Layer share this paired node's
+		// SS2022 service; no plaintext local helper or second VPN is introduced.
+		aes := map[string]any{"type": "shadowsocks", "tag": "proxy", "server": policy.Endpoint,
+			"server_port": ss["server_port"], "method": ss["method"], "password": ss["password"]}
+		outerMode := "hysteria2"
+		if tls {
+			outerMode = "reality-xhttp"
+		}
+		// The relay wrapper expects the exact explicit service port. Preserve
+		// URL semantics when an imported private API uses HTTP(S)'s default.
+		api, _ := url.Parse(policy.RouterAPI)
+		if api.Port() == "" {
+			port := "80"
+			if api.Scheme == "https" {
+				port = "443"
+			}
+			api.Host = net.JoinHostPort(service, port)
+		}
+		inner, added, wrapErr := multihoprelay.WrapStartLayer(outer, outerMode,
+			&multihoprelay.StartLayer{Mode: policy.StartLayer, API: api.String(), Transport: aes}, MAXStartLayerTag, "")
+		if wrapErr != nil {
+			return "", wrapErr
+		}
+		root["outbounds"] = []any{ss, inner, added}
+	}
 	result, err := json.Marshal(root)
 	if err != nil || len(result) > 4<<20 {
 		return "", bad
