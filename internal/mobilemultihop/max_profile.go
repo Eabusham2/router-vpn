@@ -205,6 +205,9 @@ func CompileMAXProfile(mode, encodedFiles, metadata string) (string, error) {
 		if e != nil {
 			return "", e
 		}
+		// Unmarshal reuses non-nil maps: discard the old SOCKS wrapper so its
+		// server/version fields cannot leak into the native Xray outbound.
+		outer = nil
 		if json.Unmarshal([]byte(value), &outer) != nil {
 			return "", bad
 		}
