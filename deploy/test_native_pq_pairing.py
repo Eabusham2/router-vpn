@@ -159,8 +159,17 @@ class PQPairing(unittest.TestCase):
         paired = self.pair(source)
         self.assertGreater(len(PAIR.registry_bytes({'exits': paired})), 1<<20)
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            # macOS temporary paths may pass through /var -> /private/var.
+            # Canonicalize only this freshly created test directory; production
+            # private-file readers must continue rejecting symlink ancestors.
+            root = Path(tmp).resolve()
             read, write, _ = PAIR.helpers()
+            alias = root/'untrusted-alias'
+            owned = root/'owned'; owned.mkdir()
+            alias.symlink_to(owned, target_is_directory=True)
+            with self.assertRaises(RuntimeError):
+                write(alias/'must-not-exist.json', b'{}')
+            self.assertFalse((owned/'must-not-exist.json').exists())
             files = {name: root/(name+'.json') for name in ('bundle', 'agent', 'registry')}
             write(files['bundle'], json.dumps(source).encode())
             write(files['agent'], json.dumps({'node_id': 'a'*64, 'tunnel_cidrs': ['10.77.0.0/24']}).encode())
