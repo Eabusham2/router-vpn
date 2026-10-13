@@ -82,3 +82,9 @@ func (p *routerPQProtocol) Close() error {
 func RouterCompilePQProfile(mode, files, nodeID string) (string, error) {
 	return mobilemultihop.CompilePQProfile(mode, files, nodeID)
 }
+
+// Complete MAX branches use the same installed native PQ factory and one VPN.
+// The compiler retains all nested layers; it never executes imported helpers.
+func RouterCompileMAXProfile(mode, files, metadata string) (string, error) {
+	return mobilemultihop.CompileMAXProfile(mode, files, metadata)
+}
