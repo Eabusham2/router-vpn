@@ -8,6 +8,8 @@ on:
       - '.github/workflows/native-pq.yml'
       - 'mobile/rosenpass/**'
       - 'internal/mobilepq/**'
+      - 'mobile/pq/**'
+      - 'deploy/test_server_pq_real.py'
 permissions:
   contents: read
 concurrency:
@@ -51,6 +53,11 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - name: Verify real server Go/C/Rust exchange and rekey
+        run: |
+          cargo build --release --locked --manifest-path mobile/rosenpass/Cargo.toml --lib
+          cargo run --release --locked --manifest-path mobile/rosenpass/Cargo.toml --example native_keys -- "${{ runner.temp }}/routervpn-pq-native-keys"
+          python3 deploy/test_server_pq_real.py --library mobile/rosenpass/target/release/libroutervpn_rosenpass.a --keys "${{ runner.temp }}/routervpn-pq-native-keys"
       - name: Race-test the native key lifecycle
         run: |
           go test -race -count=20 -timeout=90s ./internal/mobilepq

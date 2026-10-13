@@ -1,0 +1,161 @@
+//go:build cgo && routervpn_native_pq
+
+package routervpnpq
+
+import (
+	"bytes"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
+)
+
+func realKeys(t *testing.T, name, kind string) []byte {
+	t.Helper()
+	root := os.Getenv("ROUTERVPN_PQ_TEST_KEYS")
+	if root == "" {
+		t.Fatal("real protocol fixture directory is required")
+	}
+	f, err := os.Open(filepath.Join(root, name+"."+kind))
+	if err != nil {
+		t.Fatal("test key fixture missing")
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 32 || info.Size() > 2<<20 {
+		t.Fatal("test key fixture has an invalid type/size")
+	}
+	value, err := io.ReadAll(io.LimitReader(f, (2<<20)+1))
+	if err != nil || len(value) != int(info.Size()) {
+		t.Fatal("test key fixture changed while reading")
+	}
+	t.Cleanup(func() { clear(value) })
+	return value
+}
+
+func realOwner(t *testing.T, local, remote string, version int) mobilepq.Protocol {
+	t.Helper()
+	secret, public, peer := realKeys(t, local, "secret"), realKeys(t, local, "public"), realKeys(t, remote, "public")
+	protocol, err := (nativePQFactory{}).Open(secret, public, peer, version)
+	if err != nil {
+		t.Fatal("pinned factory failed to construct with real upstream keys", err)
+	}
+	clear(secret)
+	clear(public)
+	clear(peer)
+	t.Cleanup(func() {
+		if err := protocol.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return protocol
+}
+
+func exchangeReal(t *testing.T, a, b mobilepq.Protocol, valid bool) []byte {
+	t.Helper()
+	start, err := a.Step(2, nil)
+	if err != nil || len(start.Packet) == 0 || len(start.Key) != 0 {
+		t.Fatal("real initiator failed or published an unauthenticated key", err)
+	}
+	packet := start.Packet
+	var left, right []byte
+	target := b
+	for count := 0; count < 16 && len(packet) != 0; count++ {
+		event, err := target.Step(1, packet)
+		if err != nil {
+			if !valid && errors.Is(err, mobilepq.ErrPacket) {
+				break
+			}
+			t.Fatal("real handshake packet was not accepted", err)
+		}
+		if event.Expired {
+			t.Fatal("fresh handshake unexpectedly expired")
+		}
+		if len(event.Key) != 0 {
+			if len(event.Key) != 32 || bytes.Equal(event.Key, make([]byte, 32)) {
+				t.Fatal("real handshake produced an invalid key")
+			}
+			if target == a {
+				clear(left)
+				left = event.Key
+			} else {
+				clear(right)
+				right = event.Key
+			}
+		}
+		packet = event.Packet
+		if target == b {
+			target = a
+		} else {
+			target = b
+		}
+	}
+	defer clear(right)
+	if !valid {
+		defer clear(left)
+		if len(left) != 0 || len(right) != 0 {
+			t.Fatal("wrong peer authenticated across the native ABI")
+		}
+		return nil
+	}
+	if len(left) != 32 || !bytes.Equal(left, right) {
+		clear(left)
+		t.Fatal("Go/C/Rust owners did not agree on a negotiated key")
+	}
+	return left
+}
+
+func TestRealPinnedFactoryExchangeAndRekey(t *testing.T) {
+	for _, version := range []int{2, 3} {
+		t.Run(map[int]string{2: "v2", 3: "v3"}[version], func(t *testing.T) {
+			a, b := realOwner(t, "client", "server", version), realOwner(t, "server", "client", version)
+			var previous []byte
+			defer func() { clear(previous) }()
+			for epoch := 0; epoch < 3; epoch++ {
+				key := exchangeReal(t, a, b, true)
+				if previous != nil && bytes.Equal(previous, key) {
+					clear(key)
+					t.Fatal("real rekey reused its previous session key")
+				}
+				clear(previous)
+				previous = key
+			}
+			event, err := a.Step(1, []byte("not an authenticated Rosenpass datagram"))
+			if !errors.Is(err, mobilepq.ErrPacket) || len(event.Key) != 0 || len(event.Packet) != 0 {
+				t.Fatal("invalid packet crossed the real protocol boundary", err)
+			}
+			if err = a.Close(); err != nil {
+				t.Fatal(err)
+			}
+			event, err = a.Step(0, nil)
+			if !errors.Is(err, net.ErrClosed) || len(event.Key) != 0 {
+				t.Fatal("closed native owner published a result", err)
+			}
+			if _, err = b.Step(0, nil); err != nil {
+				t.Fatal("closing one real owner invalidated its independent peer", err)
+			}
+		})
+	}
+}
+
+func TestRealPinnedFactoryRejectsWrongPeer(t *testing.T) {
+	a, b := realOwner(t, "client", "other", 2), realOwner(t, "server", "client", 2)
+	exchangeReal(t, a, b, false)
+}
+
+func TestRealFactoryNeverRetainsCallerKeyBuffers(t *testing.T) {
+	config := mobilepq.Config{Endpoint: "192.0.2.1:51822", Version: 2,
+		Secret: realKeys(t, "client", "secret"), Public: realKeys(t, "client", "public"), Peer: realKeys(t, "server", "public")}
+	a, err := mobilepq.NativeProtocols.Open(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	config.Erase()
+	b := realOwner(t, "server", "client", 2)
+	clear(exchangeReal(t, a, b, true))
+}
