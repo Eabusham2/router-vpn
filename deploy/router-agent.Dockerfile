@@ -2,7 +2,7 @@ FROM golang:1.24.13-alpine AS build
 WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /router-vpn-agent ./cmd/router-agent
-RUN ROUTER_VPN_RELAY_FIXTURES_DIR=/relay-fixtures CGO_ENABLED=0 go test -count=1 -run 'TestExportPinnedCore(Relay|XrayRelay)Configurations' ./internal/multihoprelay
+RUN ROUTER_VPN_RELAY_FIXTURES_DIR=/relay-fixtures CGO_ENABLED=0 go test -count=1 -run 'TestExportPinnedCore(Relay|XrayRelay|PQRelay)Configurations' ./internal/multihoprelay
 
 FROM alpine:3.22 AS awg-tools-build
 ARG AWGTOOLS_COMMIT=5e882890fbca2316f8ca40e992789d24f67f0118
@@ -15,6 +15,18 @@ RUN apk add --no-cache build-base linux-headers curl tar \
  && rm -f /tmp/amneziawg-tools.tar.gz \
  && make -C /src/amneziawg-tools/src \
  && test -x /src/amneziawg-tools/src/wg
+
+# The static protocol library owns no networking. Runtime sockets and peer keys
+# remain scoped to each native relay endpoint; test keys never enter the image.
+FROM rust:1.99.0-alpine3.22 AS relay-pq-protocol
+RUN apk add --no-cache build-base clang clang-dev cmake ninja linux-headers git python3
+WORKDIR /pq
+COPY mobile/rosenpass/ ./
+ENV CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CMAKE_GENERATOR=Ninja
+RUN rustc --version | grep -F 'rustc 1.99.0 ' \
+ && cargo build --release --locked --lib \
+ && cargo run --release --locked --example native_keys -- /pq-test-keys \
+ && sha256sum Cargo.lock > /pq-Cargo.lock.sha256
 
 # The relay runs the same pinned AWG and Xray implementations as the phone apps.
 # Stock sing-box cannot interpret these owned native outbounds/endpoints.
@@ -32,11 +44,16 @@ RUN git init -q /xray-core \
  && git -C /xray-core checkout --detach FETCH_HEAD \
  && test "$(git -C /xray-core rev-parse HEAD)" = "${RELAY_XRAY_COMMIT}"
 COPY --from=build /src /routervpn-source
+COPY --from=relay-pq-protocol /pq/target/release/libroutervpn_rosenpass.a /pq-native/libroutervpn_rosenpass.a
+COPY --from=relay-pq-protocol /pq-test-keys /pq-native/keys
+COPY --from=relay-pq-protocol /pq-Cargo.lock.sha256 /routervpn-pq-Cargo.lock.sha256
 RUN python3 /routervpn-source/deploy/prepare-relay-core.py /core /xray-core \
  && go mod download github.com/amnezia-vpn/amneziawg-go/v3@v3.1.20260814 \
- && CGO_ENABLED=0 go build -mod=mod -trimpath -tags with_quic,with_wireguard,with_gvisor \
-      -ldflags='-checklinkname=0 -s -w -X github.com/sagernet/sing-box/constant.Version=1.14.1-routervpn' \
+ && python3 /routervpn-source/deploy/test_server_pq_real.py --library /pq-native/libroutervpn_rosenpass.a --keys /pq-native/keys \
+ && CGO_ENABLED=1 CGO_LDFLAGS='-L/pq-native' go build -mod=mod -trimpath -tags with_quic,with_wireguard,with_gvisor,routervpn_native_pq \
+      -ldflags='-checklinkname=0 -linkmode external -extldflags "-static" -s -w -X github.com/sagernet/sing-box/constant.Version=1.14.1-routervpn' \
       -o /usr/local/bin/sing-box ./cmd/sing-box \
+ && ! readelf -l /usr/local/bin/sing-box | grep -q INTERP \
  && python3 /routervpn-source/deploy/prepare-mobile-amnezia.py --verify-dependency /core \
  && python3 /routervpn-source/deploy/prepare-relay-core.py --digest > /routervpn-relay-source.sha256
 
@@ -48,6 +65,7 @@ COPY --from=build /relay-fixtures /tmp/relay-fixtures
 COPY --from=relay-core /core/routervpn-amnezia-LICENSE.txt /usr/local/share/router-vpn/amneziawg-LICENSE.txt
 COPY --from=relay-core /core/routervpn-xray-LICENSE.txt /usr/local/share/router-vpn/xray-LICENSE.txt
 COPY --from=relay-core /routervpn-relay-source.sha256 /usr/local/share/router-vpn/relay-source.sha256
+COPY --from=relay-core /routervpn-pq-Cargo.lock.sha256 /usr/local/share/router-vpn/pq-Cargo.lock.sha256
 RUN sing-box version | grep -F "sing-box version 1.14.1-routervpn" \
  && for config in /tmp/relay-fixtures/*.json; do sing-box check -c "$config" || exit 1; done \
  && rm -rf /tmp/relay-fixtures

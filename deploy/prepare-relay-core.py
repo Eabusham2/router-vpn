@@ -24,10 +24,13 @@ xray_spec.loader.exec_module(XRAY)
 whitening_spec = importlib.util.spec_from_file_location('relay_whitening', ROOT/'deploy/prepare-mobile-whitening.py')
 WHITENING = importlib.util.module_from_spec(whitening_spec)
 whitening_spec.loader.exec_module(WHITENING)
+pq_spec = importlib.util.spec_from_file_location('relay_native_pq', ROOT/'deploy/prepare-server-pq.py')
+PQ = importlib.util.module_from_spec(pq_spec)
+pq_spec.loader.exec_module(PQ)
 XRAY_VERSION = 'v1.260327.1-0.20260711155151-50231eaff98c'
 
 def inputs():
-    files = [Path(__file__).resolve()] + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs()
+    files = [Path(__file__).resolve()] + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs()
     for package in PACKAGES: files += sorted((ROOT/'internal'/package).glob('*.go'))
     return list(dict.fromkeys(files))
 
@@ -73,6 +76,7 @@ def prepare_native(vendor, xray):
     prepare(vendor)
     WHITENING.prepare(vendor)
     XRAY.prepare(vendor, xray)
+    PQ.prepare(vendor)
     subprocess.run(['go','mod','edit','-require=github.com/xtls/xray-core@'+XRAY_VERSION],cwd=vendor,check=True)
     subprocess.run(['go','mod','edit','-replace=github.com/xtls/xray-core='+str(xray)],cwd=vendor,check=True)
     license = xray/'LICENSE'

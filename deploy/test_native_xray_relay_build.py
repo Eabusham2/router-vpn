@@ -11,12 +11,12 @@ class NativeRelayBuild(unittest.TestCase):
     def test_exact_xray_and_guard_are_prepared_before_native_build(self):
         with tempfile.TemporaryDirectory() as tmp:
             core=Path(tmp)/'core';xray=Path(tmp)/'xray';core.mkdir();xray.mkdir();(xray/'LICENSE').write_text('license fixture\n'*20)
-            with mock.patch.object(M.XRAY,'checkout') as checkout, mock.patch.object(M,'prepare') as policy, mock.patch.object(M.XRAY,'prepare') as native, mock.patch.object(M.WHITENING,'prepare') as stream, mock.patch.object(M.subprocess,'run') as run:
+            with mock.patch.object(M.XRAY,'checkout') as checkout, mock.patch.object(M,'prepare') as policy, mock.patch.object(M.XRAY,'prepare') as native, mock.patch.object(M.WHITENING,'prepare') as stream, mock.patch.object(M.PQ,'prepare') as pq, mock.patch.object(M.subprocess,'run') as run:
                 M.prepare_native(core,xray)
                 self.assertEqual(checkout.call_count,2)
                 checkout.assert_any_call(core,M.CORE,'github.com/sagernet/sing-box')
                 checkout.assert_any_call(xray,M.XRAY.XRAY_PIN,'github.com/xtls/xray-core')
-                policy.assert_called_once_with(core);native.assert_called_once_with(core,xray);stream.assert_called_once_with(core)
+                policy.assert_called_once_with(core);native.assert_called_once_with(core,xray);stream.assert_called_once_with(core);pq.assert_called_once_with(core)
                 self.assertEqual(run.call_count,2)
                 self.assertIn('github.com/xtls/xray-core='+str(xray),run.call_args_list[1].args[0][-1])
             self.assertEqual((core/'routervpn-xray-LICENSE.txt').read_bytes(),(xray/'LICENSE').read_bytes())
@@ -30,7 +30,17 @@ class NativeRelayBuild(unittest.TestCase):
         self.assertIn('ARG RELAY_XRAY_COMMIT='+M.XRAY.XRAY_PIN,docker)
         self.assertIn('prepare-relay-core.py /core /xray-core',docker)
         self.assertIn('-checklinkname=0',docker)
-        self.assertIn('TestExportPinnedCore(Relay|XrayRelay)Configurations',docker)
+        self.assertIn('TestExportPinnedCore(Relay|XrayRelay|PQRelay)Configurations',docker)
         self.assertIn('routervpn-xray-LICENSE.txt',docker)
         self.assertIn('sing-box check -c',docker)
+        for source in ('deploy/prepare-server-pq.py', 'mobile/pq/native_factory.go.tmpl', 'mobile/rosenpass/Cargo.lock', 'mobile/rosenpass/src/lib.rs'):
+            self.assertIn(ROOT/source, inputs)
+        for marker in ('rust:1.99.0-alpine3.22', 'cargo build --release --locked --lib', 'test_server_pq_real.py',
+                       'CGO_ENABLED=1', 'routervpn_native_pq', '-linkmode external', '-extldflags "-static"',
+                       'pq-Cargo.lock.sha256', 'readelf -l'):
+            self.assertIn(marker, docker)
+        final = docker.split('FROM alpine:3.22\n', 1)[1]
+        self.assertNotIn('pq-test-keys', final)
+        self.assertNotIn('/pq-native/keys', final)
+
 if __name__=='__main__':unittest.main()
