@@ -1,0 +1,87 @@
+//go:build cgo && routervpn_native_pq
+
+package routervpnpq
+
+/*
+#cgo LDFLAGS: -lroutervpn_rosenpass
+#cgo linux LDFLAGS: -ldl -lm
+#include "routervpn_pq_host.h"
+*/
+import "C"
+
+import (
+    "encoding/binary"
+    "errors"
+    "net"
+    "runtime"
+    "sync"
+    "sync/atomic"
+    "time"
+    "unsafe"
+
+    "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
+)
+
+// The server owns its compiled C ABI directly. Mobile builds do not select
+// this file: their process-owned JNI/Swift factory remains unchanged.
+func init() {
+    if C.routervpn_rp_abi_version()!=1 {panic("incompatible pinned PQ protocol ABI")}
+    if err:=mobilepq.NativeProtocols.Install(nativePQFactory{});err!=nil {panic("native PQ factory already installed")}
+}
+
+type nativePQFactory struct{}
+func (nativePQFactory) Open(secret,public,peer []byte,version int)(mobilepq.Protocol,error){
+    bad:=errors.New("pinned native PQ rejected captured key material")
+    sk,pk:=uint64(C.routervpn_rp_secret_size()),uint64(C.routervpn_rp_public_size())
+    if C.routervpn_rp_abi_version()!=1 || sk==0 || pk==0 || sk>2<<20 || pk>2<<20 || uint64(len(secret))!=sk || uint64(len(public))!=pk || uint64(len(peer))!=pk || (version!=2 && version!=3){return nil,bad}
+    var handle C.uint64_t
+    status:=C.routervpn_rp_new((*C.uint8_t)(unsafe.Pointer(&secret[0])),C.size_t(len(secret)),(*C.uint8_t)(unsafe.Pointer(&public[0])),C.size_t(len(public)),(*C.uint8_t)(unsafe.Pointer(&peer[0])),C.size_t(len(peer)),C.uint32_t(version),&handle)
+    // The ABI copies these inputs during Open and retains no Go pointer.
+    runtime.KeepAlive(secret);runtime.KeepAlive(public);runtime.KeepAlive(peer)
+    if status!=0 || handle==0 {if handle!=0 {C.routervpn_rp_close(handle)};return nil,bad}
+    return &nativePQProtocol{handle:handle},nil
+}
+
+type nativePQProtocol struct {
+    mu sync.Mutex
+    closing atomic.Bool
+    handle C.uint64_t
+    closeErr error
+}
+
+func(p *nativePQProtocol) Step(kind uint32,input []byte)(mobilepq.Event,error){
+    bad:=errors.New("invalid pinned PQ protocol event")
+    if kind>2 || len(input)>65535 || kind!=1 && len(input)!=0 {return mobilepq.Event{},bad}
+    p.mu.Lock();defer p.mu.Unlock()
+    if p.closing.Load() || p.handle==0{return mobilepq.Event{},net.ErrClosed}
+    frame:=make([]byte,int(C.ROUTERVPN_PQ_FRAME_CAPACITY));defer clear(frame)
+    var pointer *C.uint8_t
+    if len(input)>0 {pointer=(*C.uint8_t)(unsafe.Pointer(&input[0]))}
+    var length C.size_t
+    status:=C.routervpn_pq_event(p.handle,C.uint32_t(kind),pointer,C.size_t(len(input)),(*C.uint8_t)(unsafe.Pointer(&frame[0])),C.size_t(len(frame)),&length)
+    runtime.KeepAlive(input)
+    if p.closing.Load(){return mobilepq.Event{},net.ErrClosed}
+    if status!=0 || uint64(length)<44 || uint64(length)>uint64(len(frame)){return mobilepq.Event{},bad}
+    frame=frame[:int(length)]
+    result:=int32(binary.LittleEndian.Uint32(frame[:4]));wait:=binary.LittleEndian.Uint32(frame[4:8]);flags:=binary.LittleEndian.Uint32(frame[8:12])
+    if wait>1000 || flags>2 || result!=0 && result!=-2 {return mobilepq.Event{},bad}
+    keyNonzero:=false;for _,b:=range frame[12:44] {keyNonzero=keyNonzero || b!=0}
+    if flags!=1 && keyNonzero || flags==1 && !keyNonzero {return mobilepq.Event{},bad}
+    if result==-2 {
+        if flags!=0 || len(frame)!=44{return mobilepq.Event{},bad}
+        return mobilepq.Event{},mobilepq.ErrPacket
+    }
+    event:=mobilepq.Event{Wait:time.Duration(wait)*time.Millisecond,Expired:flags==2,Packet:append([]byte(nil),frame[44:]...)}
+    if flags==1 {event.Key=append([]byte(nil),frame[12:44]...)}
+    return event,nil
+}
+
+func(p *nativePQProtocol)Close()error{
+    // Signal before joining the C call so an in-flight result is discarded.
+    p.closing.Store(true)
+    p.mu.Lock();defer p.mu.Unlock()
+    if p.handle==0{return p.closeErr}
+    handle:=p.handle;p.handle=0
+    if C.routervpn_rp_close(handle)!=0 {p.closeErr=errors.New("pinned PQ protocol cleanup failed")}
+    return p.closeErr
+}
