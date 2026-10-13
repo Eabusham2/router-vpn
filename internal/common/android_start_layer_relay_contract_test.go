@@ -52,7 +52,8 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 
 	controller := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java")
 	for _, required := range []string{
-		"AndroidStartLayer.RelayPlan relayPlan = AndroidStartLayer.apply",
+		"AndroidStartLayer.RelayPlan relayPlan = AndroidNativeMAXProfile.isMode(modeId) ? null",
+		"AndroidStartLayer.apply(root, patchedConfig, modeId)",
 		"AndroidStartLayerRelay.SESSION_FILE",
 		"relayPlan.metadata()",
 		"relayPlan.clear()",
@@ -163,5 +164,88 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 		if !strings.Contains(home, required) {
 			t.Fatalf("Android Emergency Disconnect transaction missing %q", required)
 		}
+	}
+}
+
+func androidMAXDispatchIsOwned(controller, compiler string) bool {
+	compact := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	controller, compiler = compact(controller), compact(compiler)
+	start := strings.Index(controller, "SessionInfo prepareSession(")
+	end := strings.Index(controller, "static JSONObject applyPerformance(")
+	if start < 0 || end <= start {
+		return false
+	}
+	body := controller[start:end]
+	previous := -1
+	for _, marker := range []string{
+		"compileStandaloneProfile(root, profile, modeId)",
+		"AndroidWireGuardLibboxPolicy.applyCompleteMAX(root, patchedConfig, modeId)",
+		"AndroidStartLayer.RelayPlan relayPlan = AndroidNativeMAXProfile.isMode(modeId) ? null : AndroidStartLayer.apply(root, patchedConfig, modeId)",
+		"if (nativePQFamily(modeId) || AndroidNativeMAXProfile.isMode(modeId)) RouterPQNative.install();",
+		"Libbox.checkConfig(patchedConfig.toString());",
+		"!capturedBundle.equals(loadBundle(privateBundle).toString())",
+		"if (!session.mkdir())",
+	} {
+		index := strings.Index(body, marker)
+		if index <= previous {
+			return false
+		}
+		previous = index
+	}
+	for _, marker := range []string{
+		"if (AndroidNativeMAXProfile.isMode(modeId)) return AndroidNativeMAXProfile.compile(bundle, profile, modeId);",
+		"profile = new JSONObject().put(\"sing-box.json\", \"native-wireguard-graph\");",
+	} {
+		if !strings.Contains(controller, marker) {
+			return false
+		}
+	}
+	for _, marker := range []string{
+		"validateAssets(assets, mode);",
+		".put(\"start_layer\", layer)",
+		"Libbox.routerCompileMAXProfile(mode, input, metadata.toString())",
+		"validateGraph(bundle, assets, new JSONObject(compiled), mode);",
+		"Arrays.fill(raw, (byte) 0)",
+	} {
+		if !strings.Contains(compiler, marker) {
+			return false
+		}
+	}
+	return true
+}
+
+func TestAndroidMAXDispatchRetainsOwnedCompilationAndFailureBoundaries(t *testing.T) {
+	controller := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java")
+	compiler := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java")
+	if !androidMAXDispatchIsOwned(controller, compiler) {
+		t.Fatal("complete MAX dispatch lost captured policy, runtime initialization or staging order")
+	}
+	for _, mutation := range [][2]string{
+		{"AndroidNativeMAXProfile.isMode(modeId) ? null", "true ? null"},
+		{"AndroidStartLayer.apply(root, patchedConfig, modeId)", "null"},
+		{"return AndroidNativeMAXProfile.compile(bundle, profile, modeId);", "return ignored(bundle);"},
+		{"AndroidWireGuardLibboxPolicy.applyCompleteMAX(root, patchedConfig, modeId)", "patchedConfig"},
+		{"RouterPQNative.install();", "ignoredFactory();"},
+		{"Libbox.checkConfig(patchedConfig.toString());", "acceptWithoutNativeValidation();"},
+		{"!capturedBundle.equals(loadBundle(privateBundle).toString())", "false"},
+	} {
+		if !strings.Contains(controller, mutation[0]) {
+			t.Fatal("negative control anchor missing", mutation[0])
+		}
+		if androidMAXDispatchIsOwned(strings.Replace(controller, mutation[0], mutation[1], 1), compiler) {
+			t.Fatal("unowned dispatch accepted", mutation[0])
+		}
+	}
+	for _, marker := range []string{"validateAssets(assets, mode);", ".put(\"start_layer\", layer)", "Libbox.routerCompileMAXProfile(mode, input, metadata.toString())", "validateGraph(bundle, assets, new JSONObject(compiled), mode);"} {
+		if !strings.Contains(compiler, marker) {
+			t.Fatal("negative compiler anchor missing", marker)
+		}
+		if androidMAXDispatchIsOwned(controller, strings.Replace(compiler, marker, "missing", 1)) {
+			t.Fatal("unvalidated MAX compiler accepted", marker)
+		}
+	}
+	release := repoFile(t, ".github/workflows/release-candidate.yml")
+	if strings.Count(release, "python3 android/test_android_max_selection.py") != 2 {
+		t.Fatal("both source and Android package gates must execute MAX host tests")
 	}
 }
