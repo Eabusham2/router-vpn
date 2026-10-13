@@ -88,6 +88,12 @@ func (c *Controller) leaseRequest(ctx context.Context, method string, body []byt
 func (c *Controller) acquire(ctx context.Context) error {
 	c.leaseMu.Lock()
 	defer c.leaseMu.Unlock()
+	if err := c.requireValid(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if c.ownsLease {
 		return errors.New("a previous server lease has not been released")
 	}
@@ -114,6 +120,14 @@ func (c *Controller) acquire(ctx context.Context) error {
 	if !found {
 		return errors.New("the selected exit is not paired on the entry server")
 	}
+	// Discovery can finish after a network switch without cancelling its HTTP
+	// response. Never use that stale catalog to authorize a new mutation.
+	if err := c.requireValid(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.ownsLease = true // An expired HTTP request may nevertheless have created it.
 	if e = c.renewLocked(ctx); e != nil {
 		var rejected controlError
@@ -124,10 +138,22 @@ func (c *Controller) acquire(ctx context.Context) error {
 	return e
 }
 func (c *Controller) renewLocked(ctx context.Context) error {
+	if err := c.requireValid(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	body, _ := json.Marshal(c.proposal)
 	data, e := c.leaseRequest(ctx, "PUT", body)
 	if e != nil {
 		return e
+	}
+	if err := c.requireValid(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	var lease multihoprelay.Lease
 	if exactJSON(data, &lease, 8192) != nil || lease.Request != c.proposal || lease.NodeID != c.meta.EntryNodeID || lease.ExitNodeID != c.meta.ExitNodeID || lease.Host != c.expected.Host || lease.Port != c.expected.Port || lease.Username != c.expected.Username || lease.Password != c.expected.Password {
@@ -337,10 +363,21 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 		if err == nil && engine.Selected() != tag {
 			err = errors.New("native selector did not retain the proved winner")
 		}
+		// Selection may synchronously deliver a cancellation/network callback.
+		// The pre-selection proof cannot authorize publication after that boundary.
+		if err == nil {
+			err = c.requireValid()
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
 	}
 	if err != nil || result.Winner == nil {
+		c.invalidate()
 		if active != nil {
-			_ = active.Close(context.Background())
+			if cleanup := active.Close(context.Background()); cleanup != nil {
+				err = errors.Join(err, routechoice.ErrTeardown)
+			}
 		}
 		c.failed("No eligible path remained after comparison or activation.")
 		if err == nil {
@@ -360,8 +397,24 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 }
 func (c *Controller) Healthy() bool {
 	c.mu.Lock()
+	engine, identity, outcome := c.engine, c.engineID, c.progress.Execution
+	complete := c.progress.Complete && c.progress.Stage == "selected"
+	c.mu.Unlock()
+	if !complete || engine == nil || identity == "" || (outcome != "local" && outcome != "server") || c.generation.Load() != 1 {
+		return false
+	}
+	tag := LocalTag
+	if outcome == "server" {
+		tag = ServerTag
+	}
+	// Do not call the native engine while holding the state mutex: callbacks
+	// may invalidate this same controller. Recheck the outcome after readback.
+	if engine.Identity() != identity || engine.Selected() != tag {
+		return false
+	}
+	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.engine != nil && c.generation.Load() == 1 && c.engine.Identity() == c.engineID
+	return c.generation.Load() == 1 && c.progress.Complete && c.progress.Stage == "selected" && c.progress.Execution == outcome
 }
 func (c *Controller) Close() error {
 	c.invalidate()
