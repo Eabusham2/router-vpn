@@ -408,7 +408,20 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard rawProfileID.range(of: "^[A-Za-z0-9._-]{1,96}$", options: .regularExpression) != nil, !rawProfileID.contains("..") else { throw tunnelError(13, "iOS Libbox raw profile id is invalid.") }
         var expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
         var rawFiles: [String: Data]
-        if IOSNativePQProfile.modeIDs.contains(rawProfileID) {
+        if IOSNativeMAXProfile.modeIDs.contains(rawProfileID) {
+            guard let profiles = root["profiles"] as? [String: Any],
+                  let encoded = profiles[rawProfileID] as? [String: String] else { throw tunnelError(58, "Complete MAX captured assets are missing.") }
+            let start = try IOSStartLayer.selectedMode(profile: selectedProfile)
+            rawFiles = try IOSNativeMAXProfile.compile(mode: rawProfileID, encoded: encoded, nodeID: expectedNodeID,
+                                                       profile: selectedProfile, startLayer: start) { mode, assets, metadata in
+                var failure: NSError?
+                let result: String? = LibboxRouterCompileMAXProfile(mode, assets, metadata, &failure)
+                if let failure { throw failure }
+                guard let result else { throw tunnelError(58, "Complete MAX compiler returned no graph.") }
+                return result
+            }
+            rawFiles = try RouterVPNMultihopGraph.singlePQPolicy(rawFiles, profile: selectedProfile)
+        } else if IOSNativePQProfile.modeIDs.contains(rawProfileID) {
             guard let profiles = root["profiles"] as? [String: Any],
                   let encoded = profiles[rawProfileID] as? [String: String] else { throw tunnelError(58, "Native PQ captured assets are missing.") }
             rawFiles = try IOSNativePQProfile.compile(mode: rawProfileID, encoded: encoded, nodeID: expectedNodeID) { mode, assets, nodeID in
@@ -457,12 +470,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             rawFiles["sing-box.json"] = Data(compiled.utf8)
         }
-        let composedFiles = try IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
+        // The complete-chain compiler already owns MAX's selected outer layer.
+        let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles
+            : IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
         var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)
         if rawFiles["xray.json"] != nil {
             files = try IOSXrayDevicePolicy.apply(files: files, profile: selectedProfile)
         }
-        if ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"].contains(rawProfileID) {
+        if IOSNativeMAXProfile.modeIDs.contains(rawProfileID) || ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"].contains(rawProfileID) {
             guard let data = files["sing-box.json"], let text = String(data: data, encoding: .utf8) else { throw tunnelError(58, "Native WG lost its compiled graph.") }
             let policies = try JSONSerialization.data(withJSONObject: ["entry": selectedProfile, "exit": selectedProfile])
             var failure: NSError?
