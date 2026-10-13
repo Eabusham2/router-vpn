@@ -146,9 +146,13 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 activeExitId = exit.id;
                 activeExitMode = prepared.exitMode;
                 AndroidHomeStateStore.connectedMultihop(context, entry.id, exit.id, prepared.exitMode, entryMode);
+                // The captured graph's post-proof activation and completion are
+                // part of the same adoption as its state. Disconnect must not
+                // invalidate that owner and then let this worker start MTU or
+                // deliver a stale Connected callback. UI callbacks only enqueue.
+                LayeredVpnService.startAutomaticMTU();
+                callback.finished(true, "Connected: " + entry.name + " → " + exit.name + " via " + entryMode + " entry + " + prepared.exitMode + " exit. Exit-node private path proof passed.");
             }
-            LayeredVpnService.startAutomaticMTU();
-            callback.finished(true, "Connected: " + entry.name + " → " + exit.name + " via " + entryMode + " entry + " + prepared.exitMode + " exit. Exit-node private path proof passed.");
         } catch (InterruptedException interrupted) {
             boolean stopped = !started || stopEmbeddedAndProve();
             Thread.currentThread().interrupt();
@@ -204,8 +208,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
 
     void disconnect() {
         boolean emergency = AndroidHomeStateStore.emergencyDisconnectPending(context);
-        if (!emergency) AndroidHomeStateStore.beginPathRevalidation(context, "Android multihop disconnect requested; retaining graph ownership until embedded teardown is proved.");
         synchronized (this) {
+            if (!emergency) AndroidHomeStateStore.beginPathRevalidation(context, "Android multihop disconnect requested; retaining graph ownership until embedded teardown is proved.");
             disconnectRequested = true;
             revalidationTeardown = false;
             transitioning = true;

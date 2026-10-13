@@ -48,8 +48,16 @@ final class NativeSingBoxController {
 }
 final class LayeredVpnService {
     static final AtomicInteger mtuStarts = new AtomicInteger();
+    static volatile java.util.concurrent.CountDownLatch mtuEntered, mtuRelease;
     static void startAutomaticMTU() {
         if (!AndroidHomeStateStore.current.connected) throw new AssertionError("MTU started before path proof adoption");
+        java.util.concurrent.CountDownLatch entered=mtuEntered, release=mtuRelease;
+        if(entered!=null){
+            entered.countDown(); boolean interrupted=false;
+            while(true){try{release.await();break;}catch(InterruptedException e){interrupted=true;}}
+            if(interrupted)Thread.currentThread().interrupt();
+        }
+        if (!AndroidHomeStateStore.current.connected) throw new AssertionError("MTU activation escaped its captured adoption");
         mtuStarts.incrementAndGet();
     }
 }
@@ -177,7 +185,7 @@ public final class RuntimeTeardownHarness {
         final Context context=new Context(); final NativeSingBoxController engine=new NativeSingBoxController();
         final AndroidMultihopRuntime multihop; final AndroidStandardExitRuntime external;
         Owner(String kind) {
-            AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0);
+            AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
             multihop="multihop".equals(kind)?new AndroidMultihopRuntime(context,engine):null;
             external=multihop==null?new AndroidStandardExitRuntime(context,engine):null;
         }
@@ -301,6 +309,30 @@ public final class RuntimeTeardownHarness {
                 check(finished.await(3,TimeUnit.SECONDS),"disconnect remained blocked after publication completed");
                 check(error.get()==null,"disconnect threw: "+error.get());
                 check(!AndroidHomeStateStore.current.connected,"stale Connected write overtook completed Disconnect");
+                awaitIdle(owner);
+            }
+        });
+        if("multihop".equals(kind)) test("multihop MTU activation cannot escape captured adoption",()->{
+            try(Owner owner=new Owner(kind)){
+                CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1),stopping=new CountDownLatch(1),finished=new CountDownLatch(1);
+                LayeredVpnService.mtuEntered=entered;LayeredVpnService.mtuRelease=release;
+                Callback cb=new Callback(0);
+                java.util.concurrent.atomic.AtomicReference<Throwable> failure=new java.util.concurrent.atomic.AtomicReference<>();
+                Thread stop=new Thread(()->{stopping.countDown();try{owner.disconnect();}catch(Throwable e){failure.set(e);}finally{finished.countDown();}});
+                try{
+                    owner.connect(cb);check(entered.await(3,TimeUnit.SECONDS),"MTU adoption was never reached");
+                    stop.start();check(stopping.await(3,TimeUnit.SECONDS),"disconnect was not attempted");
+                    long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+                    while(stop.getState()!=Thread.State.BLOCKED&&finished.getCount()!=0&&System.nanoTime()<deadline)Thread.sleep(2);
+                    check(stop.getState()==Thread.State.BLOCKED&&finished.getCount()!=0,"Disconnect completed outside the MTU adoption boundary");
+                    check(AndroidHomeStateStore.current.connected,"Disconnect invalidated Home before captured activation completed");
+                }finally{
+                    release.countDown();
+                    check(finished.await(3,TimeUnit.SECONDS),"disconnect did not complete after activation release");
+                    cb.awaitDone();
+                }
+                check(failure.get()==null,"disconnect failed after adoption release");
+                check(LayeredVpnService.mtuStarts.get()==1&&!AndroidHomeStateStore.current.connected,"stale activation/Connected survived Disconnect");
                 awaitIdle(owner);
             }
         });
