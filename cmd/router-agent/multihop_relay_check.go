@@ -23,15 +23,11 @@ func (relayCheckOnlyRunner) Start(context.Context, []byte, multihoprelay.Lease) 
 // checkRelayRegistry validates an operator-staged registry with the real pinned
 // core but does not open a tunnel, change routes, or modify live agent state.
 func checkRelayRegistry(registryPath, agentPath string) (int, error) {
-	raw, err := readPrivilegedState(registryPath, 1<<20)
+	registry, err := readRelayRegistry(registryPath)
 	if err != nil {
 		return 0, errors.New("private staged registry could not be read")
 	}
-	var registry multihoprelay.Config
-	if json.Unmarshal(raw, &registry) != nil {
-		return 0, errors.New("invalid staged registry")
-	}
-	raw, err = readPrivilegedState(agentPath, 1<<20)
+	raw, err := readPrivilegedState(agentPath, 1<<20)
 	if err != nil {
 		return 0, errors.New("private entry configuration could not be read")
 	}

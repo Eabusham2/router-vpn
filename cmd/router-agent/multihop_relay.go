@@ -17,16 +17,12 @@ const multihopRelayConfig = "/etc/router-vpn/multihop-relays.json"
 
 func (s *server) initializeMultihopRelay() error {
 	path := getenv("ROUTER_VPN_MULTIHOP_CONFIG", multihopRelayConfig)
-	raw, err := readPrivilegedState(path, 1<<20)
+	cfg, err := readRelayRegistry(path)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return errors.New("private multihop relay configuration could not be read safely")
-	}
-	var cfg multihoprelay.Config
-	if json.Unmarshal(raw, &cfg) != nil {
-		return errors.New("invalid private multihop relay configuration")
 	}
 	if cfg.FirstPort < 26240 || cfg.LastPort > 26271 {
 		return errors.New("relay listener ports must use the reserved 26240..26271 pool")

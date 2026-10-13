@@ -24,6 +24,8 @@ import subprocess
 import tempfile
 
 HERE = Path(__file__).resolve().parent
+# Match multihoprelay.MaxRegistryBytes; lease HTTP limits remain unchanged.
+MAX_REGISTRY_BYTES = 32 << 20
 
 def helpers():
     writer = runpy.run_path(str(HERE/'atomic-private-write.py'))
@@ -285,6 +287,12 @@ def pair(bundle, alias, selected=None):
         for item in exits: item['start_layer'] = copy.deepcopy(layer)
     return exits
 
+def registry_bytes(registry):
+    body = (json.dumps(registry, indent=2, allow_nan=False)+'\n').encode('utf-8')
+    if len(body) > MAX_REGISTRY_BYTES:
+        raise ValueError('paired registry exceeds its private source bound')
+    return body
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bundle', type=Path, required=True)
@@ -304,7 +312,7 @@ def main():
         raise ValueError('entry and exit must have distinct identities')
     with registry_lock(args.registry):
         try:
-            existing_raw = read(args.registry, 1 << 20)
+            existing_raw = read(args.registry, MAX_REGISTRY_BYTES)
             registry = decode(existing_raw)
         except FileNotFoundError:
             existing_raw = None
@@ -314,14 +322,14 @@ def main():
         registry['exits'] = [e for e in registry['exits'] if e['id'] != args.exit_id] + entries
         if len(registry['exits']) > 64:
             raise ValueError('paired exit count exceeds bound')
-        body = (json.dumps(registry, indent=2)+'\n').encode()
+        body = registry_bytes(registry)
         with tempfile.TemporaryDirectory(prefix='.relay-pair-', dir=args.registry.parent) as tmp:
             stage = Path(tmp)/'registry.json'
             write(stage, body)
             subprocess.run(['/usr/local/bin/router-vpn-agent', 'check-multihop-registry', str(stage), str(args.agent_config)],
                            check=True, timeout=60, stdout=subprocess.DEVNULL)
             try:
-                now = read(args.registry, 1 << 20)
+                now = read(args.registry, MAX_REGISTRY_BYTES)
             except FileNotFoundError:
                 now = None
             if now != existing_raw:

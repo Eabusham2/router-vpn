@@ -40,6 +40,11 @@ type Exit struct {
 	Transport  map[string]any `json:"transport"`
 	StartLayer *StartLayer    `json:"start_layer,omitempty"`
 }
+
+// MaxRegistryBytes bounds private paired key material, including two public
+// McEliece keys per PQ exit. This is not a network request or lease-body limit.
+const MaxRegistryBytes = 32 << 20
+
 type Config struct {
 	ListenIP   string `json:"listen_ip"`
 	FirstPort  int    `json:"first_port"`

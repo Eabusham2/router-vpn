@@ -112,6 +112,32 @@ class ExecutionTests(unittest.TestCase):
             self.assertEqual([e['id'] for e in value['exits']],['foreign','owned'])
             self.assertEqual(registry.stat().st_mode & 0o777,0o600)
             self.assertFalse(list(root.glob('.relay-pair-*')))
+    def test_large_private_registry_roundtrip_and_capacity_rejection(self):
+        self.assertEqual(pairing.MAX_REGISTRY_BYTES,32<<20)
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);read,write,_=pairing.helpers()
+            bundle=root/'bundle.json';agent=root/'agent.json';registry=root/'registry.json'
+            write(bundle,json.dumps(fixture()).encode())
+            write(agent,json.dumps({'node_id':'a'*64,'tunnel_cidrs':['10.77.0.0/24']}).encode())
+            # Size-policy sentinel, not native credential validation. The real
+            # compiler/parser gate has separate valid PQ key-fixture coverage.
+            original={'listen_ip':'10.77.0.1','first_port':26240,'last_port':26271,'ttl_seconds':90,
+                      'exits':[dict(id='foreign',mode='wg-pq',node_id='c'*64,private_fixture='k'*(2<<20))]}
+            write(registry,pairing.registry_bytes(original))
+            argv=['pair','--bundle',str(bundle),'--exit-id','owned','--agent-config',str(agent),'--registry',str(registry),'--listen-ip','10.77.0.1']
+            with patch.object(sys,'argv',argv),patch.object(pairing.subprocess,'run') as check:
+                pairing.main();self.assertEqual(check.call_count,1)
+            updated=pairing.decode(read(registry,pairing.MAX_REGISTRY_BYTES))
+            self.assertEqual(updated['exits'][0],original['exits'][0])
+            saved=registry.read_bytes()
+            with patch.object(pairing,'MAX_REGISTRY_BYTES',len(saved)-1),patch.object(sys,'argv',argv),patch.object(pairing.subprocess,'run') as check:
+                with self.assertRaises((ValueError,RuntimeError)):pairing.main()
+                check.assert_not_called()
+            self.assertEqual(registry.read_bytes(),saved)
+            with patch.object(pairing,'MAX_REGISTRY_BYTES',64):
+                with self.assertRaisesRegex(ValueError,'bound'):pairing.registry_bytes(updated)
+            with self.assertRaises(ValueError):pairing.registry_bytes({'invalid':float('nan')})
+
     def test_symlink_ancestor_and_lock_refused(self):
         with tempfile.TemporaryDirectory() as root:
             root=Path(root);real=root/'real';real.mkdir();link=root/'link';link.symlink_to(real,target_is_directory=True)
