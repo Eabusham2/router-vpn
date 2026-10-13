@@ -22,7 +22,9 @@ FROM rust:1.99.0-alpine3.22 AS relay-pq-protocol
 RUN apk add --no-cache build-base clang clang-dev cmake ninja linux-headers git python3
 WORKDIR /pq
 COPY mobile/rosenpass/ ./
-ENV CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CMAKE_GENERATOR=Ninja
+# Cargo build scripts must load libclang on musl. Only these build-time tools
+# link a dynamic CRT; the delivered Go executable is explicitly static below.
+ENV CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CMAKE_GENERATOR=Ninja RUSTFLAGS="-C target-feature=-crt-static"
 RUN rustc --version | grep -F 'rustc 1.99.0 ' \
  && cargo build --release --locked --lib \
  && cargo run --release --locked --example native_keys -- /pq-test-keys \

@@ -37,7 +37,7 @@ class NativeRelayBuild(unittest.TestCase):
             self.assertIn(ROOT/source, inputs)
         for marker in ('rust:1.99.0-alpine3.22', 'cargo build --release --locked --lib', 'test_server_pq_real.py',
                        'CGO_ENABLED=1', 'routervpn_native_pq', '-linkmode external', '-extldflags "-static"',
-                       'pq-Cargo.lock.sha256', 'readelf -l'):
+                       'pq-Cargo.lock.sha256', 'readelf -l', 'RUSTFLAGS="-C target-feature=-crt-static"'):
             self.assertIn(marker, docker)
         final = docker.split('FROM alpine:3.22\n', 1)[1]
         self.assertNotIn('pq-test-keys', final)
