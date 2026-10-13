@@ -1,0 +1,227 @@
+//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	"github.com/sagernet/sing-box/log"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/buf"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// NativePQTrafficReference is a test-only unmodified cryptographic peer on an
+// isolated userspace IP stack. Empty AWG parameters select ordinary WG framing.
+// It has no OS TUN, hostname, public listener, routes or persistent private keys.
+type NativePQTrafficReference struct {
+	Public     []byte
+	Parameters map[string]string
+	device     *awg.Device
+	binding    *pqTrafficBind
+	client     []byte
+	updates    atomic.Int64
+	once       sync.Once
+}
+
+func NewNativePQTrafficReference(t *testing.T, client []byte, obfuscated bool) *NativePQTrafficReference {
+	t.Helper()
+	if len(client) != 32 {
+		t.Fatal("reference requires a valid public identity")
+	}
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := make([]byte, 32)
+	if _, err = rand.Read(initial); err != nil {
+		t.Fatal(err)
+	}
+	defer clear(initial)
+	parameters := map[string]string{}
+	padding := 0
+	if obfuscated {
+		parameters = map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+		padding = 32
+	}
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: context.Background(), Logger: log.NewNOPFactory().Logger(), Handler: pqTrafficEcho{}, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/24"), netip.MustParsePrefix("fd78:78::1/64")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := wrapTun(stack)
+	binding := &pqTrafficBind{}
+	device := awg.NewDevice(wrapped, binding, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+	ref := &NativePQTrafficReference{Public: private.PublicKey().Bytes(), Parameters: parameters, device: device, binding: binding, client: append([]byte(nil), client...)}
+	t.Cleanup(ref.Close)
+	var uapi strings.Builder
+	fmt.Fprintf(&uapi, "private_key=%x\n", private.Bytes())
+	for name, value := range parameters {
+		fmt.Fprintf(&uapi, "%s=%s\n", name, value)
+	}
+	fmt.Fprintf(&uapi, "public_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", client, initial)
+	if err = device.IpcSet(uapi.String()); err != nil {
+		t.Fatal("reference rejected its generated configuration")
+	}
+	if err = wrapped.configuredPadding(padding); err != nil {
+		t.Fatal(err)
+	}
+	if err = wrapped.Device.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err = device.Up(); err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+func (r *NativePQTrafficReference) Address() string {
+	r.binding.mu.Lock()
+	defer r.binding.mu.Unlock()
+	return r.binding.conn.LocalAddr().String()
+}
+func (r *NativePQTrafficReference) SetKey(key []byte) error {
+	if len(key) != 32 || bytes.Equal(key, make([]byte, 32)) {
+		return errors.New("invalid negotiated test key")
+	}
+	if err := r.device.IpcSet(fmt.Sprintf("public_key=%x\nupdate_only=true\npreshared_key=%x\n", r.client, key)); err != nil {
+		return errors.New("reference refused the authenticated key")
+	}
+	r.updates.Add(1)
+	return nil
+}
+func (r *NativePQTrafficReference) Updates() int64      { return r.updates.Load() }
+func (r *NativePQTrafficReference) Packets() int64      { return r.binding.packets.Load() }
+func (r *NativePQTrafficReference) PlaintextSeen() bool { return r.binding.plain.Load() }
+func (r *NativePQTrafficReference) Close()              { r.once.Do(func() { r.device.Close() }) }
+
+type pqTrafficBind struct {
+	mu      sync.Mutex
+	conn    *net.UDPConn
+	packets atomic.Int64
+	plain   atomic.Bool
+}
+
+func (b *pqTrafficBind) Open(uint16) ([]awgconn.ReceiveFunc, uint16, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.conn != nil {
+		return nil, 0, errors.New("duplicate reference bind")
+	}
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return nil, 0, err
+	}
+	b.conn = conn
+	receive := func(packets [][]byte, sizes []int, endpoints []awgconn.Endpoint) (int, error) {
+		n, remote, err := conn.ReadFromUDPAddrPort(packets[0])
+		if err != nil {
+			return 0, err
+		}
+		sizes[0] = n
+		endpoints[0] = peerEndpoint(remote)
+		b.packets.Add(1)
+		if bytes.Contains(packets[0][:n], []byte("routervpn-authenticated-pq-data-")) {
+			b.plain.Store(true)
+		}
+		return 1, nil
+	}
+	return []awgconn.ReceiveFunc{receive}, uint16(conn.LocalAddr().(*net.UDPAddr).Port), nil
+}
+func (b *pqTrafficBind) Close() error {
+	b.mu.Lock()
+	conn := b.conn
+	b.conn = nil
+	b.mu.Unlock()
+	if conn != nil {
+		return conn.Close()
+	}
+	return nil
+}
+func (*pqTrafficBind) SetMark(mark uint32) error {
+	if mark != 0 {
+		return errors.New("unowned reference mark")
+	}
+	return nil
+}
+func (b *pqTrafficBind) Send(packets [][]byte, endpoint awgconn.Endpoint) error {
+	remote, ok := endpoint.(peerEndpoint)
+	if !ok {
+		return errors.New("unowned reference endpoint")
+	}
+	b.mu.Lock()
+	conn := b.conn
+	b.mu.Unlock()
+	if conn == nil {
+		return net.ErrClosed
+	}
+	for _, packet := range packets {
+		if _, err := conn.WriteToUDPAddrPort(packet, netip.AddrPort(remote)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (*pqTrafficBind) ParseEndpoint(text string) (awgconn.Endpoint, error) {
+	remote, err := netip.ParseAddrPort(text)
+	if err != nil || !remote.Addr().IsLoopback() {
+		return nil, errors.New("reference endpoint must be loopback")
+	}
+	return peerEndpoint(remote), nil
+}
+func (*pqTrafficBind) BatchSize() int { return 1 }
+
+type pqTrafficEcho struct{}
+
+func (pqTrafficEcho) JudgeFlow(uint8, netip.AddrPort, netip.AddrPort, []byte) tun.FlowVerdict {
+	return tun.FlowVerdict{Action: tun.ActionAccept}
+}
+func (pqTrafficEcho) NewDNSPacket([]byte, M.Socksaddr, M.Socksaddr, N.PacketWriter) {}
+func (pqTrafficEcho) NewConnectionEx(_ context.Context, c net.Conn, _, _ M.Socksaddr, done N.CloseHandlerFunc) {
+	go func() {
+		defer c.Close()
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		_, err := io.Copy(c, c)
+		if done != nil {
+			done(err)
+		}
+	}()
+}
+func (pqTrafficEcho) NewPacketConnectionEx(_ context.Context, c N.PacketConn, _, _ M.Socksaddr, done N.CloseHandlerFunc) {
+	go func() {
+		defer c.Close()
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		for {
+			p := buf.NewPacket()
+			address, err := c.ReadPacket(p)
+			if err != nil {
+				p.Release()
+				if done != nil {
+					done(err)
+				}
+				return
+			}
+			if err = c.WritePacket(p, address); err != nil {
+				if done != nil {
+					done(err)
+				}
+				return
+			}
+		}
+	}()
+}

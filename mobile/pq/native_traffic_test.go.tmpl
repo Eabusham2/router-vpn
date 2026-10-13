@@ -1,0 +1,397 @@
+//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test
+
+package routervpnpq
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// These adapters model only the platform's protected physical routing boundary.
+// Any unexpected network/host/port or default fallback is a failing test, not
+// an ordinary-network path. The endpoint, PQ protocol and WG/AWG crypto are real.
+type pqTrafficUnderlay struct {
+	outbound.Adapter
+	targets map[string]string
+	active  atomic.Int64
+	calls   sync.Map
+	bad     atomic.Int64
+}
+type pqTrafficConn struct {
+	net.Conn
+	owner *pqTrafficUnderlay
+	once  sync.Once
+}
+
+func (c *pqTrafficConn) Close() error {
+	var err error
+	c.once.Do(func() { err = c.Conn.Close(); c.owner.active.Add(-1) })
+	return err
+}
+func (d *pqTrafficUnderlay) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	actual, ok := d.targets[address.String()]
+	if !ok || network != "udp" {
+		d.bad.Add(1)
+		return nil, errors.New("unowned physical route")
+	}
+	v, _ := d.calls.LoadOrStore(address.String(), &atomic.Int64{})
+	v.(*atomic.Int64).Add(1)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "udp4", actual)
+	if err != nil {
+		return nil, err
+	}
+	d.active.Add(1)
+	return &pqTrafficConn{Conn: conn, owner: d}, nil
+}
+func (d *pqTrafficUnderlay) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	d.bad.Add(1)
+	return nil, errors.New("unowned physical listener")
+}
+
+type pqTrafficManager struct {
+	adapter.OutboundManager
+	out adapter.Outbound
+}
+
+func (m *pqTrafficManager) Outbound(tag string) (adapter.Outbound, bool) {
+	return m.out, m.out != nil && m.out.Tag() == tag
+}
+func (*pqTrafficManager) Default() adapter.Outbound {
+	panic("a PQ endpoint attempted a default-route fallback")
+}
+
+type pqTrafficNetwork struct{ adapter.NetworkManager }
+
+func (pqTrafficNetwork) InterfaceFinder() control.InterfaceFinder      { return nil }
+func (pqTrafficNetwork) InterfaceMonitor() tun.DefaultInterfaceMonitor { return nil }
+func (pqTrafficNetwork) AutoRedirectOutputMark() uint32                { return 0 }
+
+// Every event is processed by the real compiled Rust server owner, then its key
+// is installed into the independently generated WG/AWG reference peer before
+// sending the protocol's next packet. No expected/derived key is supplied.
+type pqTrafficServer struct {
+	conn     *net.UDPConn
+	protocol mobilepq.Protocol
+	peer     *routervpnamnezia.NativePQTrafficReference
+	rekey    chan chan error
+	done     chan struct{}
+	failure  chan error
+	stop     sync.Once
+}
+
+func newPQTrafficServer(t *testing.T, peer *routervpnamnezia.NativePQTrafficReference, version int) *pqTrafficServer {
+	t.Helper()
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &pqTrafficServer{conn: conn, protocol: realOwner(t, "server", "client", version), peer: peer, rekey: make(chan chan error), done: make(chan struct{}), failure: make(chan error, 1)}
+	t.Cleanup(server.close)
+	go server.run()
+	return server
+}
+func (s *pqTrafficServer) close() {
+	s.stop.Do(func() { _ = s.conn.Close(); <-s.done; _ = s.protocol.Close() })
+}
+func (s *pqTrafficServer) run() {
+	defer close(s.done)
+	var remote *net.UDPAddr
+	deliver := func(event mobilepq.Event) error {
+		defer clear(event.Key)
+		if event.Expired {
+			return errors.New("reference PQ key expired")
+		}
+		if len(event.Key) != 0 {
+			if err := s.peer.SetKey(event.Key); err != nil {
+				return err
+			}
+		}
+		if len(event.Packet) != 0 && remote != nil {
+			_, err := s.conn.WriteToUDP(event.Packet, remote)
+			return err
+		}
+		return nil
+	}
+	fatal := func(err error) {
+		select {
+		case s.failure <- err:
+		default:
+		}
+	}
+	packet := make([]byte, 65535)
+	for {
+		select {
+		case answer := <-s.rekey:
+			if remote == nil {
+				answer <- errors.New("no authenticated peer address")
+				continue
+			}
+			event, err := s.protocol.Step(2, nil)
+			if err == nil {
+				err = deliver(event)
+			}
+			answer <- err
+			if err != nil {
+				fatal(err)
+				return
+			}
+		default:
+		}
+		_ = s.conn.SetReadDeadline(time.Now().Add(25 * time.Millisecond))
+		n, address, err := s.conn.ReadFromUDP(packet)
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				continue
+			}
+			if !errors.Is(err, net.ErrClosed) {
+				fatal(err)
+			}
+			return
+		}
+		event, err := s.protocol.Step(1, packet[:n])
+		if errors.Is(err, mobilepq.ErrPacket) {
+			clear(event.Key)
+			continue
+		}
+		if err != nil {
+			clear(event.Key)
+			fatal(err)
+			return
+		}
+		if remote != nil && remote.String() != address.String() {
+			clear(event.Key)
+			fatal(errors.New("test peer endpoint changed"))
+			return
+		}
+		remote = address
+		if err = deliver(event); err != nil {
+			fatal(err)
+			return
+		}
+	}
+}
+func (s *pqTrafficServer) force(t *testing.T) {
+	t.Helper()
+	answer := make(chan error, 1)
+	select {
+	case s.rekey <- answer:
+	case <-s.done:
+		t.Fatal("reference protocol already stopped")
+	case <-time.After(time.Second):
+		t.Fatal("reference rekey request timed out")
+	}
+	select {
+	case err := <-answer:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reference rekey did not return")
+	}
+}
+
+func pqTrafficClient(t *testing.T, mode string, version int, wrongPeer bool) (*Endpoint, *pqTrafficUnderlay, *pqTrafficServer, *routervpnamnezia.NativePQTrafficReference) {
+	t.Helper()
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := routervpnamnezia.NewNativePQTrafficReference(t, private.PublicKey().Bytes(), mode == "awg2-pq")
+	server := newPQTrafficServer(t, reference, version)
+	underlay := &pqTrafficUnderlay{Adapter: outbound.NewAdapter("test-owned-physical", "pq-test-underlay", []string{"udp"}, nil), targets: map[string]string{
+		"192.0.2.1:51820": reference.Address(), "192.0.2.1:51822": server.conn.LocalAddr().String()}}
+	ctx := service.ContextWith[adapter.OutboundManager](context.Background(), &pqTrafficManager{out: underlay})
+	ctx = service.ContextWith[adapter.NetworkManager](ctx, pqTrafficNetwork{})
+	ctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	public := base64.StdEncoding.EncodeToString(reference.Public)
+	proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+	initial := make([]byte, 32)
+	if _, err = rand.Read(initial); err != nil {
+		t.Fatal(err)
+	}
+	defer clear(initial)
+	peerName := "server"
+	if wrongPeer {
+		peerName = "other"
+	}
+	options := Options(mobilemultihop.PQEndpointConfig{AmneziaEndpointConfig: mobilemultihop.AmneziaEndpointConfig{
+		Type: mobilemultihop.PQType, Tag: "proxy", Detour: underlay.Tag(), MTU: 1400, Address: []string{"10.78.0.2/24", "fd78:78::2/64"}, PrivateKey: base64.StdEncoding.EncodeToString(private.Bytes()),
+		Peers: []mobilemultihop.AmneziaPeer{{Address: "192.0.2.1", Port: 51820, PublicKey: public, PreSharedKey: base64.StdEncoding.EncodeToString(initial), AllowedIPs: []string{"0.0.0.0/0", "::/0"}, Keepalive: 25}}, Parameters: reference.Parameters},
+		Mode: mode, NodeID: hex.EncodeToString(proof[:]), PQ: mobilepq.Config{Endpoint: "192.0.2.1:51822", Version: version, Secret: realKeys(t, "client", "secret"), Public: realKeys(t, "client", "public"), Peer: realKeys(t, peerName, "public")}})
+	ep, err := NewEndpoint(ctx, nil, log.NewNOPFactory().Logger(), "proxy", options)
+	options.PQ.Erase()
+	if err != nil {
+		t.Fatal("production PQ constructor rejected generated keys", err)
+	}
+	endpoint := ep.(*Endpoint)
+	t.Cleanup(func() { _ = endpoint.Close() })
+	return endpoint, underlay, server, reference
+}
+func pqTrafficStart(t *testing.T, ep *Endpoint) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- ep.Start(adapter.StartStateStart) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(8 * time.Second):
+		_ = ep.Close()
+		t.Fatal("real PQ endpoint failed bounded authenticated startup")
+	}
+	if err := ep.Start(adapter.StartStatePostStart); err != nil {
+		t.Fatal(err)
+	}
+}
+func pqTrafficExchange(t *testing.T, ep *Endpoint, network, host string, epoch int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c, err := ep.DialContext(ctx, network, M.ParseSocksaddr(net.JoinHostPort(host, "9999")))
+	if err != nil {
+		t.Fatal(network, host, err)
+	}
+	defer c.Close()
+	if err = c.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	payload := append([]byte("routervpn-authenticated-pq-data-"), bytes.Repeat([]byte{byte(epoch + 11)}, 1200)...)
+	n, err := c.Write(payload)
+	if err != nil || n != len(payload) {
+		t.Fatal("encrypted write failed", n, err)
+	}
+	got := make([]byte, len(payload))
+	if _, err = io.ReadFull(c, got); err != nil {
+		t.Fatal(network, host, "encrypted return path failed", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("negotiated-key data corrupted")
+	}
+}
+func TestRealPQTrafficNegotiatedKeysAndRekey(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		for _, version := range []int{2, 3} {
+			t.Run(mode+map[int]string{2: "/v2", 3: "/v3"}[version], func(t *testing.T) {
+				ep, underlay, server, reference := pqTrafficClient(t, mode, version, false)
+				if ep.owner.Ready() || ep.owner.TransportReady() || underlay.active.Load() != 0 {
+					t.Fatal("unstarted PQ acquired a physical transport")
+				}
+				if _, err := ep.DialContext(context.Background(), "udp", M.ParseSocksaddr("10.78.0.1:9999")); !errors.Is(err, net.ErrClosed) {
+					t.Fatal("plaintext fallback before authentication", err)
+				}
+				pqTrafficStart(t, ep)
+				for epoch := 0; epoch < 2; epoch++ {
+					if epoch != 0 {
+						server.force(t)
+						deadline := time.Now().Add(2 * time.Second)
+						for reference.Updates() < int64(epoch+1) {
+							select {
+							case err := <-server.failure:
+								t.Fatal(err)
+							default:
+							}
+							if time.Now().After(deadline) {
+								t.Fatal("real PQ rekey did not install a fresh peer key")
+							}
+							time.Sleep(time.Millisecond)
+						}
+					}
+					for _, network := range []string{"tcp", "udp"} {
+						for _, host := range []string{"10.78.0.1", "fd78:78::1"} {
+							pqTrafficExchange(t, ep, network, host, epoch)
+						}
+					}
+					if reference.Updates() < int64(epoch+1) {
+						t.Fatal("traffic did not use a negotiated/rekeyed reference peer")
+					}
+				}
+				if reference.Packets() == 0 || reference.PlaintextSeen() || underlay.bad.Load() != 0 {
+					t.Fatal("actual encrypted-path or underlay isolation assertion failed")
+				}
+				select {
+				case err := <-server.failure:
+					t.Fatal(err)
+				default:
+				}
+				ep.InterfaceUpdated(context.Background())
+				if ep.owner.Ready() || ep.owner.TransportReady() {
+					t.Fatal("network change retained negotiated key readiness")
+				}
+				if _, err := ep.DialContext(context.Background(), "tcp", M.ParseSocksaddr("10.78.0.1:9999")); !errors.Is(err, net.ErrClosed) {
+					t.Fatal("changed owner accepted a new data flow")
+				}
+				if underlay.active.Load() != 0 {
+					t.Fatal("closed endpoint retained physical protocol or transport sockets", underlay.active.Load())
+				}
+			})
+		}
+	}
+}
+func TestRealPQTrafficWrongPeerCannotStartOrFallback(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		t.Run(mode, func(t *testing.T) {
+			ep, underlay, _, reference := pqTrafficClient(t, mode, 2, true)
+			done := make(chan error, 1)
+			go func() { done <- ep.Start(adapter.StartStateStart) }()
+			timer := time.NewTimer(300 * time.Millisecond)
+			defer timer.Stop()
+			completed := false
+			select {
+			case err := <-done:
+				completed = true
+				if err == nil {
+					t.Fatal("wrong PQ peer started")
+				}
+			case <-timer.C:
+			}
+			if ep.owner.Ready() || ep.owner.TransportReady() || reference.Updates() != 0 {
+				t.Fatal("untrusted peer authenticated")
+			}
+			if _, found := underlay.calls.Load("192.0.2.1:51820"); found {
+				t.Fatal("WG/AWG started before required PQ authentication")
+			}
+			if err := ep.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if !completed {
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Fatal("cancelled handshake became successful")
+					}
+				case <-time.After(time.Second):
+					t.Fatal("closing failed to cancel pending PQ startup")
+				}
+			}
+			if underlay.active.Load() != 0 || underlay.bad.Load() != 0 {
+				t.Fatal("wrong-peer cleanup leaked a transport or used fallback")
+			}
+		})
+	}
+}

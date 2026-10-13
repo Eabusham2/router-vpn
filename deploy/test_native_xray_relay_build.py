@@ -35,7 +35,7 @@ class NativeRelayBuild(unittest.TestCase):
         self.assertIn('sing-box check -c',docker)
         for source in ('deploy/prepare-server-pq.py', 'mobile/pq/native_factory.go.tmpl', 'mobile/rosenpass/Cargo.lock', 'mobile/rosenpass/src/lib.rs'):
             self.assertIn(ROOT/source, inputs)
-        for marker in ('rust:1.99.0-alpine3.22', 'cargo build --release --locked --lib', 'test_server_pq_real.py',
+        for marker in ('rust:1.99.0-alpine3.22', 'cargo build --release --locked --lib', 'test_server_pq_real.py', 'test_server_pq_traffic.py --core /core',
                        'CGO_ENABLED=1', 'routervpn_native_pq', '-linkmode external', '-extldflags "-static"',
                        'pq-Cargo.lock.sha256', 'readelf -l', 'RUSTFLAGS="-C target-feature=-crt-static"'):
             self.assertIn(marker, docker)
