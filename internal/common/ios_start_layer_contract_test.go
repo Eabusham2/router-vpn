@@ -191,7 +191,7 @@ func TestAppleSingleLayerDispatchRejectsUnownedMAXBypass(t *testing.T) {
 	if start < 0 || end <= start {
 		t.Fatal("missing native startup owner")
 	}
-	body := provider[start:end]
+	body := strings.ReplaceAll(provider[start:end], "\r\n", "\n")
 	if !appleSingleLayerDispatchIsOwned(body) {
 		t.Fatal("shipping MAX/ordinary dispatch is disconnected")
 	}
@@ -205,12 +205,20 @@ func TestAppleSingleLayerDispatchRejectsUnownedMAXBypass(t *testing.T) {
 		{"engine.start(files: files, strict: strict)", "engine.start(files: rawFiles, strict: strict)"},
 		{"proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID", "pretendConnected(url: proofURL, expectedNodeID: provenNodeID"},
 	}
-	for _, test := range cases {
-		if strings.Count(body, test[0]) != 1 {
-			t.Fatalf("negative control missing its unique anchor: %q", test[0])
+	for _, ending := range []string{"\n", "\r\n"} {
+		captured := strings.ReplaceAll(body, "\n", ending)
+		if !appleSingleLayerDispatchIsOwned(captured) {
+			t.Fatal("valid dispatch rejected due to checkout line endings")
 		}
-		if appleSingleLayerDispatchIsOwned(strings.Replace(body, test[0], test[1], 1)) {
-			t.Fatalf("unowned pipeline accepted: %s", test[0])
+		for _, test := range cases {
+			before := strings.ReplaceAll(test[0], "\n", ending)
+			after := strings.ReplaceAll(test[1], "\n", ending)
+			if strings.Count(captured, before) != 1 {
+				t.Fatalf("negative control missing its unique anchor: %q", before)
+			}
+			if appleSingleLayerDispatchIsOwned(strings.Replace(captured, before, after, 1)) {
+				t.Fatalf("unowned pipeline accepted: %s", before)
+			}
 		}
 	}
 }

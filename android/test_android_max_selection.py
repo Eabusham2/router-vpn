@@ -82,7 +82,7 @@ public final class PQSelectionHarness {
   Path dir=Path.of(args[0]),app=dir.resolve("app");Files.createDirectories(app);NativeSingBoxController owner=new NativeSingBoxController(new Context(app.toFile()));int graphs=0;
   for(String mode:new String[]{"max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"}){
    check(AndroidNativeMAXProfile.isMode(mode),"exact MAX branch not registered");
-   check(!NativeSingBoxController.nativeMultihopEntry(mode),"composite entry support was falsely declared");
+   check(NativeSingBoxController.nativeMultihopEntry(mode),"complete MAX entry selection is missing");
    for(String layer:new String[]{"off","aes-256-gcm","aes-256-gcm+xor-whitening"})for(String dns:new String[]{"home","custom","dot","doh","doh3","hostname"}){
     JSONObject b=source(mode,dns,layer),assets=b.getJSONObject("profiles").getJSONObject(mode);File file=save(dir,b);byte[] before=Files.readAllBytes(file.toPath());
     JSONObject compiled=new JSONObject(AndroidNativeMAXProfile.compile(b,assets,mode));
