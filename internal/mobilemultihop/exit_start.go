@@ -18,6 +18,9 @@ func NewWithStartLayers(config, metadata, entrySource, exitSource string) (*Cont
 	if exactJSON([]byte(metadata), &meta, 16384) != nil {
 		return nil, errors.New("invalid captured two-layer metadata")
 	}
+	if MAXMode(meta.ExitMode) {
+		return nil, errors.New("complete MAX exit already owns its captured Start Layer")
+	}
 	var source EntryStartLayer
 	if exactJSON([]byte(exitSource), &source, 16384) != nil || source.Profile == nil || !multihoprelay.ValidLayerMode(source.Mode) || meta.ExitStartLayer != source.Mode {
 		return nil, errors.New("exit layer is missing, unrequested or different from captured selection")

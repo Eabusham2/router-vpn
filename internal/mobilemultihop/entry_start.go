@@ -26,6 +26,13 @@ func NewWithEntryStartLayer(config, metadata, start string) (*Controller, error)
 	if start == "" {
 		return New(config, metadata)
 	}
+	var selected Metadata
+	if exactJSON([]byte(metadata), &selected, 16384) != nil {
+		return nil, errors.New("invalid captured entry metadata")
+	}
+	if MAXMode(selected.EntryMode) {
+		return nil, errors.New("complete MAX entry already owns its captured Start Layer")
+	}
 	var request EntryStartLayer
 	if exactJSON([]byte(start), &request, 16384) != nil || request.Profile == nil {
 		return nil, errors.New("invalid captured entry Start Layer")

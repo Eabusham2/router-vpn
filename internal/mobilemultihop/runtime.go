@@ -108,10 +108,10 @@ func (c *Controller) acquire(ctx context.Context) error {
 	found := false
 	for _, exit := range caps.Exits {
 		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.NodeID == c.meta.ExitNodeID && exit.Layer == c.meta.ExitStartLayer {
-			if multihoprelay.PacketMode(c.meta.ExitMode) && (exit.PublicKey == "" || exit.PublicKey == c.localPublicKey) {
+			if (multihoprelay.PacketMode(c.meta.ExitMode) || MAXMode(c.meta.ExitMode)) && (exit.PublicKey == "" || exit.PublicKey == c.localPublicKey) {
 				return errors.New("server WireGuard needs separately paired client credentials to avoid peer roaming")
 			}
-			if IsPQMode(c.meta.ExitMode) && (!proofID.MatchString(exit.PQIdentity) || exit.PQIdentity == c.localPQIdentity) {
+			if (IsPQMode(c.meta.ExitMode) || MAXMode(c.meta.ExitMode)) && (!proofID.MatchString(exit.PQIdentity) || exit.PQIdentity == c.localPQIdentity) {
 				return errors.New("server PQ needs independently paired KEM credentials to avoid cross-session rekeying")
 			}
 			found = true

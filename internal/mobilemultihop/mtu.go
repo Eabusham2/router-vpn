@@ -35,6 +35,10 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 	if !ok {
 		return "", errors.New("MTU graph has no TUN")
 	}
+	restoreMAX, err := maxMTUNormalize(root)
+	if err != nil {
+		return "", err
+	}
 	var tun, entry, exit map[string]any
 	for _, raw := range inbounds {
 		value, ok := raw.(map[string]any)
@@ -261,6 +265,7 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 		}
 		dns["strategy"] = "ipv4_only"
 	}
+	restoreMAX()
 	encoded, err := json.Marshal(root)
 	return string(encoded), err
 }
