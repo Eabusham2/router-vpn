@@ -77,20 +77,29 @@ func(c *Controller)deliver(event Event)error{
  if c.ctx.Err()!=nil{return ErrStopped}
  if event.Expired{return ErrExpired}
  if len(event.Packet)>65535||(len(event.Key)!=0&&len(event.Key)!=32){return errors.New("invalid pinned PQ event")}
- if len(event.Packet)>0{
-  if err:=c.conn.SetWriteDeadline(time.Now().Add(time.Second));err!=nil{return errors.New("PQ transport lacks enforced write deadlines")}
-  n,err:=c.conn.Write(event.Packet);if err!=nil{return errors.New("PQ transport write failed")};if n!=len(event.Packet){return io.ErrShortWrite}
- }
+ // An authenticated reply may let the remote peer adopt this key immediately.
+ // Install locally first; never acknowledge a rejected or cancelled adoption.
+ // Initial readiness is published only after both installation and delivery.
  if len(event.Key)>0{
   var nonzero byte;for _,b:=range event.Key{nonzero|=b};if nonzero==0{return errors.New("invalid authenticated PQ key")}
   c.mu.Lock()
   if c.closing||c.ctx.Err()!=nil{c.mu.Unlock();return ErrStopped}
   err:=c.target.ApplyPQKey(event.Key)
-  if err==nil&&!c.closing&&c.ctx.Err()==nil{c.ready.Store(true);c.notify.Do(func(){close(c.initial)})}
   c.mu.Unlock()
   if err!=nil{return errors.New("captured native peer refused the PQ key")}
   if c.ctx.Err()!=nil{return ErrStopped}
  }
+ if len(event.Packet)>0{
+  if err:=c.conn.SetWriteDeadline(time.Now().Add(time.Second));err!=nil{return errors.New("PQ transport lacks enforced write deadlines")}
+  n,err:=c.conn.Write(event.Packet);if err!=nil{return errors.New("PQ transport write failed")};if n!=len(event.Packet){return io.ErrShortWrite}
+ }
+ if len(event.Key)>0{
+  c.mu.Lock()
+  if c.closing||c.ctx.Err()!=nil{c.mu.Unlock();return ErrStopped}
+  c.ready.Store(true);c.notify.Do(func(){close(c.initial)})
+  c.mu.Unlock()
+ }
+ if c.ctx.Err()!=nil{return ErrStopped}
  return nil
 }
 func(c *Controller)run(){
