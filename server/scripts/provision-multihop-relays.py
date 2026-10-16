@@ -189,6 +189,46 @@ def native_xray(assets, mode, server):
     value['tag'] = 'exit'
     return value
 
+def native_naive(assets, mode, server):
+    """Pair native HTTP and UDP-over-streams without an external helper."""
+    bad = ValueError('Native Naive pairing lost its exact transport or selected node')
+    if mode not in ('naive-h2', 'naive-h3') or not isinstance(assets, dict) or not 1 <= len(assets) <= 2 or 'sing-box.json' not in assets:
+        raise bad
+    if not all(isinstance(value, str) for value in assets.values()):
+        raise bad
+    payload = json.dumps(assets, ensure_ascii=False, allow_nan=False).encode('utf-8')
+    if len(payload) > 8 << 20:
+        raise ValueError('Native Naive pairing exceeds its source bound')
+    try:
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-native-relay-profile', mode],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        raise ValueError('Native Naive pairing failed offline validation') from None
+    if not result.stdout or len(result.stdout) > 4 << 20:
+        raise bad
+    value = decode(result.stdout)
+    original = decode(base64.b64decode(assets['sing-box.json'], validate=True))
+    candidates = [item for item in original.get('outbounds', []) if isinstance(item, dict) and item.get('tag') == 'proxy']
+    if len(candidates) != 1:
+        raise bad
+    expected = copy.deepcopy(candidates[0])
+    expected['tag'] = 'routervpn-hop-entry'
+    tls = expected.get('tls')
+    if not isinstance(tls, dict):
+        raise bad
+    if 'certificate_path' in tls:
+        name = tls.pop('certificate_path')
+        if not isinstance(name, str) or name not in assets or name == 'sing-box.json' or 'certificate' in tls:
+            raise bad
+        tls['certificate'] = [base64.b64decode(assets[name], validate=True).decode('utf-8')]
+    if not isinstance(value, dict) or value != expected or value.get('type') != 'naive' or literal(value.get('server','')) != server:
+        raise bad
+    if type(value.get('quic')) is not bool or value['quic'] != (mode == 'naive-h3') or value.get('detour') is not None:
+        raise bad
+    value['tag'] = 'exit'
+    return value
+
 def native_pq(assets, mode, node, server):
     """Pair the exact selected PQ protocol; never execute imported helper files."""
     bad = ValueError('Native PQ pairing lost its captured protocol, key material or node')
@@ -299,6 +339,10 @@ def pair(bundle, alias, selected=None):
     for mode in ('wg-pq', 'awg2-pq'):
         if mode not in modes: continue
         transport = native_pq(modes[mode], mode, node, endpoint)
+        exits.append(dict(id=alias, mode=mode, node_id=node, dns_server=dns, transport=transport))
+    for mode in ('naive-h2', 'naive-h3'):
+        if mode not in modes: continue
+        transport = native_naive(modes[mode], mode, endpoint)
         exits.append(dict(id=alias, mode=mode, node_id=node, dns_server=dns, transport=transport))
     for mode in ('shadowsocks', 'hysteria2'):
         assets = modes.get(mode, {})

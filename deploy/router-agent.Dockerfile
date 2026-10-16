@@ -2,7 +2,7 @@ FROM golang:1.24.13-alpine AS build
 WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /router-vpn-agent ./cmd/router-agent
-RUN ROUTER_VPN_RELAY_FIXTURES_DIR=/relay-fixtures CGO_ENABLED=0 go test -count=1 -run 'TestExportPinnedCore(Relay|XrayRelay|PQRelay)Configurations' ./internal/multihoprelay
+RUN ROUTER_VPN_RELAY_FIXTURES_DIR=/relay-fixtures CGO_ENABLED=0 go test -count=1 -run 'TestExportPinnedCore(Relay|XrayRelay|PQRelay|NaiveRelay)Configurations' ./internal/multihoprelay
 
 FROM alpine:3.22 AS awg-tools-build
 ARG AWGTOOLS_COMMIT=5e882890fbca2316f8ca40e992789d24f67f0118
@@ -53,7 +53,7 @@ RUN python3 /routervpn-source/deploy/prepare-relay-core.py /core /xray-core \
  && go mod download github.com/amnezia-vpn/amneziawg-go/v3@v3.1.20260814 \
  && python3 /routervpn-source/deploy/test_server_pq_real.py --library /pq-native/libroutervpn_rosenpass.a --keys /pq-native/keys \
  && python3 /routervpn-source/deploy/test_server_pq_traffic.py --core /core --library /pq-native/libroutervpn_rosenpass.a --keys /pq-native/keys \
- && CGO_ENABLED=1 CGO_LDFLAGS='-L/pq-native' go build -mod=mod -trimpath -tags with_quic,with_wireguard,with_gvisor,routervpn_native_pq \
+ && CGO_ENABLED=1 CGO_LDFLAGS='-L/pq-native' go build -mod=mod -trimpath -tags with_quic,with_wireguard,with_gvisor,routervpn_native_pq,with_naive_outbound,with_musl \
       -ldflags='-checklinkname=0 -linkmode external -extldflags "-static" -s -w -X github.com/sagernet/sing-box/constant.Version=1.14.1-routervpn' \
       -o /usr/local/bin/sing-box ./cmd/sing-box \
  && ! readelf -l /usr/local/bin/sing-box | grep -q INTERP \
