@@ -53,7 +53,7 @@ $temp = Join-Path ([IO.Path]::GetTempPath()) ('router-vpn-tor-test-'+[Guid]::New
 New-Item -ItemType Directory -Path $temp | Out-Null
 try {
   $runtime = Join-Path $temp 'runtime'
-  $url = "https://dist.torproject.org/torbrowser/$TorExpertVersion/tor-expert-bundle-windows-x86_64-$TorExpertVersion.tar.gz"
+  $url = "https://archive.torproject.org/tor-package-archive/torbrowser/$TorExpertVersion/tor-expert-bundle-windows-x86_64-$TorExpertVersion.tar.gz"
   Install-PinnedTorExpertBundle $url $TorExpertWindowsX64Sha256 $TorVersion $runtime
   $tor = @(Get-ChildItem (Join-Path $runtime 'tor-expert') -Recurse -File -Filter 'tor.exe')
   $pt = @(Get-ChildItem (Join-Path $runtime 'tor-expert') -Recurse -File -Filter 'lyrebird.exe')

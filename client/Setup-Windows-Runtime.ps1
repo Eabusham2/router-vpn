@@ -239,7 +239,7 @@ $sbUrl = "https://github.com/SagerNet/sing-box/releases/download/v$SingBoxVersio
 Install-PinnedArchive "sing-box-$SingBoxVersion" $sbUrl $sbSha 'sing-box.exe' $Runtime @('*.dll')
 Install-RouterVPNBundledXray -BundleRoot $AppRoot -Destination $Runtime -Architecture $arch
 if ($TorHelpersAvailable) {
-  $torUrl = "https://dist.torproject.org/torbrowser/$TorExpertVersion/tor-expert-bundle-windows-x86_64-$TorExpertVersion.tar.gz"
+  $torUrl = "https://archive.torproject.org/tor-package-archive/torbrowser/$TorExpertVersion/tor-expert-bundle-windows-x86_64-$TorExpertVersion.tar.gz"
   Install-PinnedTorExpertBundle $torUrl $TorExpertWindowsX64Sha256 $TorVersion $Runtime
 } else {
   Write-Host 'Tor helpers are unavailable because this Windows host did not prove x64 userspace execution support.'

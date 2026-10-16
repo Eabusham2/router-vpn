@@ -122,6 +122,16 @@ need(
     "GetMachineTypeAttributes",
     "Invoke-RouterVPNTorHelperVersion",
 )
+# Release pins remain reproducible after dist.torproject.org removes an older
+# release. Installer and actual Windows execution tests use the same official
+# archived bytes; neither a moving version nor an unchecked mirror is allowed.
+for path in ("client/Setup-Windows-Runtime.ps1", "client/test-windows-tor-compatibility.ps1"):
+    need(path, "https://archive.torproject.org/tor-package-archive/torbrowser/$TorExpertVersion/tor-expert-bundle-windows-x86_64-$TorExpertVersion.tar.gz")
+    forbid(path, "https://dist.torproject.org/torbrowser/", "/latest/")
+need("client/Setup-Windows-Runtime.ps1",
+     "e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65",
+     "Get-FileHash -Algorithm SHA256", "if ($actual -ne $Sha256.ToLowerInvariant())")
+
 need(
     "client/install-macos.sh",
     "refs/tags/lyrebird-0.8.1",
