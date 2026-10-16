@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"router-vpn/internal/applexray"
+	"router-vpn/internal/multihoprelay"
 )
 
 // A single native REALITY/XHTTP outbound provides both TCP and UDP. Split/MAX
@@ -13,6 +14,9 @@ func XrayEntryMode(mode string) bool {
 	return applexray.SingleTransportMode(mode)
 }
 func proxyEntryType(mode string) string {
+	if multihoprelay.NaiveMode(mode) {
+		return "naive"
+	}
 	if XrayEntryMode(mode) {
 		return applexray.Type
 	}
@@ -20,6 +24,16 @@ func proxyEntryType(mode string) string {
 }
 func proxyModeForOutbound(out map[string]any) string {
 	kind, _ := out["type"].(string)
+	if kind == "naive" {
+		quic, ok := out["quic"].(bool)
+		if !ok {
+			return ""
+		}
+		if quic {
+			return "naive-h3"
+		}
+		return "naive-h2"
+	}
 	if kind == applexray.Type {
 		mode, _ := out["mode"].(string)
 		return mode

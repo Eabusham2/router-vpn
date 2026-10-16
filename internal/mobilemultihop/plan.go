@@ -200,7 +200,7 @@ func New(config, metadata string) (*Controller, error) {
 	if !awgpolicy.WireGuardFamily(meta.EntryMode) && !IsPQMode(meta.EntryMode) && !MAXMode(meta.EntryMode) && !ProxyEntryMode(meta.EntryMode) {
 		return nil, errors.New("unimplemented entry transport")
 	}
-	if !multihoprelay.PacketMode(meta.ExitMode) && !MAXMode(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" && !XrayEntryMode(meta.ExitMode) {
+	if !multihoprelay.PacketMode(meta.ExitMode) && !MAXMode(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" && !multihoprelay.NaiveMode(meta.ExitMode) && !XrayEntryMode(meta.ExitMode) {
 		return nil, errors.New("unimplemented exit transport")
 	}
 	if meta.Execution != "local" && meta.Execution != "server" && meta.Execution != "auto" {
@@ -318,6 +318,20 @@ func New(config, metadata string) (*Controller, error) {
 	}
 	if local["type"] != expectedType {
 		return nil, errors.New("exit label does not match the dataplane")
+	}
+	if multihoprelay.NaiveMode(meta.ExitMode) {
+		if exitList != "outbounds" {
+			return nil, errors.New("Naive exit requires its native outbound manager")
+		}
+		detached := make(map[string]any, len(local))
+		for key, value := range local {
+			if key != "detour" {
+				detached[key] = value
+			}
+		}
+		if err := multihoprelay.ValidateNaiveTransport(detached, meta.ExitMode); err != nil {
+			return nil, err
+		}
 	}
 	if XrayEntryMode(meta.ExitMode) {
 		if exitList != "outbounds" {

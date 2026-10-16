@@ -437,6 +437,13 @@ func validateTransport(e Exit) (map[string]any, error) {
 	if !literalServer(e.DNS) {
 		return nil, errors.New("relay exit requires a literal exit-routed DNS server")
 	}
+	// Validate before JSON copying: encoding/json normalizes invalid UTF-8,
+	// which would silently change an authentication credential.
+	if NaiveMode(e.Mode) {
+		if err := ValidateNaiveTransport(e.Transport, e.Mode); err != nil {
+			return nil, err
+		}
+	}
 	p, err := copyMap(e.Transport)
 	if err != nil {
 		return nil, err
@@ -450,6 +457,8 @@ func validateTransport(e Exit) (map[string]any, error) {
 		keys = []string{"private_key", "address", "mtu", "peers", "amnezia"}
 	case "wg-pq", "awg2-pq":
 		keys = []string{"private_key", "address", "mtu", "peers", "amnezia", "mode", "node_id", "pq"}
+	case "naive-h2", "naive-h3":
+		keys = []string{"server", "server_port", "username", "password", "quic", "udp_over_tcp", "tls"}
 	case "shadowsocks":
 		keys = []string{"server", "server_port", "method", "password", "network", "udp_over_tcp"}
 	case "reality-vision", "reality-pq-vision", "reality-xhttp":
@@ -473,7 +482,11 @@ func validateTransport(e Exit) (map[string]any, error) {
 			return nil, fmt.Errorf("relay transport cannot override %s", k)
 		}
 	}
-	if applexray.SingleTransportMode(e.Mode) {
+	if NaiveMode(e.Mode) {
+		if err := ValidateNaiveTransport(p, e.Mode); err != nil {
+			return nil, err
+		}
+	} else if applexray.SingleTransportMode(e.Mode) {
 		if err := applexray.ValidateSingleTransport(p, e.Mode); err != nil {
 			return nil, err
 		}

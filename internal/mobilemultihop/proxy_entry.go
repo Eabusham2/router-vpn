@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"router-vpn/internal/multihoprelay"
 	"strings"
 	"unicode/utf8"
 )
@@ -14,7 +15,7 @@ import (
 // ProxyEntryMode denotes a native TCP+UDP encrypted transport. A SOCKS label,
 // TCP-only proxy or an unstarted helper process is not an equivalent entry.
 func ProxyEntryMode(mode string) bool {
-	return mode == "shadowsocks" || mode == "hysteria2" || XrayEntryMode(mode)
+	return mode == "shadowsocks" || mode == "hysteria2" || XrayEntryMode(mode) || multihoprelay.NaiveMode(mode)
 }
 
 // CompileProxyEntry consumes the exact selected bundle profile (base64 files),
@@ -26,7 +27,7 @@ func CompileProxyEntry(profile, mode string) (string, error) {
 	if XrayEntryMode(mode) {
 		return compileXrayEntry(profile, mode)
 	}
-	bad := errors.New("entry requires one bounded self-contained native Shadowsocks or Hysteria2 profile")
+	bad := errors.New("entry requires one bounded self-contained authenticated native proxy profile")
 	if !ProxyEntryMode(mode) {
 		return "", bad
 	}
@@ -128,11 +129,11 @@ func CompileProxyEntry(profile, mode string) (string, error) {
 			return "", bad
 		}
 	}
-	if entry == nil || entry["type"] != mode {
+	if entry == nil || entry["type"] != proxyEntryType(mode) {
 		return "", bad
 	}
 	used := map[string]bool{"sing-box.json": true}
-	if mode == "hysteria2" {
+	if mode == "hysteria2" || multihoprelay.NaiveMode(mode) {
 		tls, ok := entry["tls"].(map[string]any)
 		if !ok {
 			return "", bad
@@ -187,6 +188,9 @@ func validEntryCertificate(data []byte) bool {
 }
 
 func validateProxyEntry(entry map[string]any, mode string) error {
+	if multihoprelay.NaiveMode(mode) {
+		return multihoprelay.ValidateNaiveTransport(entry, mode)
+	}
 	if XrayEntryMode(mode) {
 		return validateXrayEntry(entry, mode)
 	}

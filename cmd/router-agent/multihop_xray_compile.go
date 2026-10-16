@@ -5,12 +5,13 @@ import (
 	"io"
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/multihoprelay"
 )
 
 // This offline command shares the phone apps' strict native profile compiler.
 // No agent config, interface, credentials file or live listener is opened.
 func compileNativeRelayProfile(input io.Reader, output io.Writer, mode string) error {
-	if !applexray.SingleTransportMode(mode) {
+	if !applexray.SingleTransportMode(mode) && !multihoprelay.NaiveMode(mode) {
 		return errors.New("unsupported native relay profile mode")
 	}
 	raw, err := io.ReadAll(io.LimitReader(input, (8<<20)+1))

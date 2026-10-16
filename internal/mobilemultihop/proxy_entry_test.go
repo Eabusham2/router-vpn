@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"reflect"
+	"router-vpn/internal/multihoprelay"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,13 @@ func entryCertificate(t *testing.T) string {
 }
 func proxyEntryGraph(mode string) map[string]any {
 	outbound := map[string]any{"type": mode, "tag": "proxy", "server": "192.0.2.44", "server_port": float64(443), "password": "entry-private-credential"}
-	if mode == "shadowsocks" {
+	if multihoprelay.NaiveMode(mode) {
+		outbound["type"] = "naive"
+		outbound["username"] = "fixture-naive-user"
+		outbound["quic"] = mode == "naive-h3"
+		outbound["udp_over_tcp"] = map[string]any{"enabled": true, "version": 2}
+		outbound["tls"] = map[string]any{"enabled": true, "server_name": "entry.example"}
+	} else if mode == "shadowsocks" {
 		outbound["method"] = "chacha20-ietf-poly1305"
 	} else {
 		outbound["tls"] = map[string]any{"enabled": true, "server_name": "entry.example", "certificate_path": "cert.pem"}

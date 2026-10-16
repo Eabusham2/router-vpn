@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/awgpolicy"
+	"router-vpn/internal/multihoprelay"
 	"strings"
 )
 
@@ -171,7 +172,7 @@ func entryStartHost(entry map[string]any, mode string) (string, error) {
 		}
 		return plan.ServerHost, nil
 	}
-	if mode == "shadowsocks" || mode == "hysteria2" {
+	if mode == "shadowsocks" || mode == "hysteria2" || multihoprelay.NaiveMode(mode) {
 		if err := validateProxyEntry(entry, mode); err != nil {
 			return "", bad
 		}
