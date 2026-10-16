@@ -110,7 +110,9 @@ def naive(quic: bool, name: str):
     outbound={
       "type":"naive","tag":"proxy","server":endpoint,"server_port":naive_port,
       "username":naive_user,"password":naive_pw,
-      "udp_over_tcp":False if quic else {"enabled":True,"version":2},"quic":quic,
+      # Naive carries UDP via the versioned stream protocol on both H2 and H3.
+      # QUIC is the outer HTTP transport; it does not enable UDP forwarding.
+      "udp_over_tcp":{"enabled":True,"version":2},"quic":quic,
       "tls":{"enabled":True,"server_name":tls_name}
     }
     return {

@@ -36,7 +36,7 @@ require("server/awg2/Dockerfile", "AWG_GO_COMMIT=0527dfa47639714dd8f5c9ffbd9d40d
 require("server/awg2/entrypoint.sh", "WG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go")
 
 # Naive remains the pinned forward-proxy build and owns the public ACME/TLS edge.
-require("server/naive/Dockerfile", "FROM pocat/naiveproxy:v2.11.4", "forward_proxy")
+require("server/naive/Dockerfile", "FROM pocat/naiveproxy:v2.11.4-uot", "forward_proxy")
 require(
     "server/naive/entrypoint.sh",
     "http_port ${ACME_HTTP_PORT}",

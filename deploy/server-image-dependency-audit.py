@@ -54,7 +54,7 @@ for required in (
     "ghcr.io/sagernet/sing-box:v1.13.12",
     "golang:1.26.3-alpine AS xray",
     "ghcr.io/rosenpass/rosenpass:sha-00569eb",
-    "pocat/naiveproxy:v2.11.4",
+    "pocat/naiveproxy:v2.11.4-uot",
     "ghcr.io/shadowsocks/ssserver-rust:v1.24.0",
     "ARG OVERTLS_VERSION=0.3.12",
 ):

@@ -394,7 +394,7 @@ pins = {
         "ghcr.io/rosenpass/rosenpass:sha-00569eb",
         "AWGTOOLS_COMMIT=5e882890fbca2316f8ca40e992789d24f67f0118",
     ),
-    "server/naive/Dockerfile": ("pocat/naiveproxy:v2.11.4", "forward_proxy"),
+    "server/naive/Dockerfile": ("pocat/naiveproxy:v2.11.4-uot", "forward_proxy"),
     "server/ss-v2ray/Dockerfile": ("golang:1.23.12-alpine", "V2RAY_PLUGIN_COMMIT=e9af1cdd2549d528deb20a4ab8d61c5fbe51f306", "ghcr.io/shadowsocks/ssserver-rust:v1.24.0"),
     "server/aux-proxies/Dockerfile": ("OVERTLS_VERSION=0.3.12", "SSR_COMMIT=227127c4bc5a6555e0556693d084c96860e75b5e"),
 }

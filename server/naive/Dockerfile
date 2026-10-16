@@ -1,4 +1,4 @@
-FROM pocat/naiveproxy:v2.11.4
+FROM pocat/naiveproxy:v2.11.4-uot
 
 USER root
 COPY --chmod=0755 server/naive/entrypoint.sh /usr/local/bin/router-vpn-naive
