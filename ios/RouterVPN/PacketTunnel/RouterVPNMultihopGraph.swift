@@ -14,7 +14,8 @@ enum RouterVPNMultihopGraph {
     static let entryProofTag = "routervpn-hop-entry-proof"
     static let entryPrivateTag = "routervpn-hop-entry-private"
     static let nativeXrayModes = ["reality-vision", "reality-pq-vision", "reality-xhttp"]
-    static let supportedExitModes = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2"] + nativeXrayModes
+    static let nativeNaiveModes = ["naive-h2", "naive-h3"]
+    static let supportedExitModes = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2"] + nativeXrayModes + nativeNaiveModes
     private static let maxBytes = 4 * 1024 * 1024
 
     static func build(entryEndpoint: [String: Any], entryProfile: [String: Any],
@@ -41,6 +42,13 @@ enum RouterVPNMultihopGraph {
             let start = (profile["start_layer"] as? String ?? "off").lowercased()
             guard ["", "off", "none", "disabled"].contains(start) else {
                 throw issue("This multihop graph does not yet compose an additional Start Layer; turn it off before selecting this graph.")
+            }
+        }
+        let capturedEntryMode = exitProfile["multihop_entry_mode"] as? String ?? "wg"
+        if nativeNaiveModes.contains(capturedEntryMode) || entryEndpoint["type"] as? String == "naive" {
+            guard nativeNaiveModes.contains(capturedEntryMode), entryEndpoint["type"] as? String == "naive",
+                  try boolean(entryEndpoint["quic"]) == (capturedEntryMode == "naive-h3") else {
+                throw issue("Naive entry HTTP version does not match the captured selection.")
             }
         }
         let isPQEntry = entryEndpoint["type"] as? String == "routervpn-pq"
@@ -122,6 +130,17 @@ enum RouterVPNMultihopGraph {
             }
             // xrayFiles already ran the shared strict native compiler. Keep its
             // original authentication bytes; add only this graph's entry detour.
+            proxy = try proxyEntry(native, tag: "proxy")
+        } else if nativeNaiveModes.contains(exitMode) {
+            let proxies = outbounds.filter { $0["tag"] as? String == "proxy" }
+            guard originalEndpoints.isEmpty, proxies.count == 1, let native = proxies.first,
+                  native["type"] as? String == "naive", try boolean(native["quic"]) == (exitMode == "naive-h3"),
+                  outbounds.allSatisfy({ $0["tag"] as? String == "proxy" ||
+                      ($0["type"] as? String == "direct" && Set($0.keys) == Set(["type", "tag"])) }) else {
+                throw issue("Naive exit lost its exact HTTP version or contains another routing owner.")
+            }
+            // The captured source is compiled and inlined before this builder;
+            // the shared runtime compiler independently validates it again.
             proxy = try proxyEntry(native, tag: "proxy")
         } else {
             let proxies = outbounds.filter { $0["tag"] as? String == "proxy" }
@@ -533,6 +552,34 @@ enum RouterVPNMultihopGraph {
             var result = value; result["tag"] = tag
             return result
         }
+        if mode == "naive" {
+            let allowed: Set<String> = ["type", "tag", "server", "server_port", "username", "password", "quic", "udp_over_tcp", "tls"]
+            guard Set(value.keys).isSubset(of: allowed), !hasHostPath(value),
+                  let host = value["server"] as? String, serverIP(host),
+                  let port = try integer(value["server_port"]), (1...65535).contains(port),
+                  try boolean(value["quic"]) != nil,
+                  let username = value["username"] as? String, let password = value["password"] as? String,
+                  !username.contains(":"), [username, password].allSatisfy({ !$0.isEmpty && $0.utf8.count <= 4096 && !$0.utf8.contains(where: { [0, 10, 13].contains($0) }) }),
+                  let udp = value["udp_over_tcp"] as? [String: Any], Set(udp.keys) == Set(["enabled", "version"]),
+                  try boolean(udp["enabled"]) == true, try integer(udp["version"]) == 2,
+                  let tls = value["tls"] as? [String: Any], Set(tls.keys).isSubset(of: ["enabled", "server_name", "certificate", "insecure"]),
+                  try boolean(tls["enabled"]) == true,
+                  try (tls["insecure"] == nil || boolean(tls["insecure"]) == false),
+                  let name = tls["server_name"] as? String, !name.isEmpty, name.utf8.count <= 253,
+                  name == name.trimmingCharacters(in: .whitespacesAndNewlines),
+                  name.unicodeScalars.allSatisfy({ $0.isASCII && $0.value > 32 && $0.value != 127 }) else {
+                throw issue("Naive requires its own credentials, verified TLS and version-2 UDP stream protocol.")
+            }
+            if let certificate = tls["certificate"] {
+                let material = certificate as? [String] ?? (certificate as? String).map { [$0] }
+                guard let material, !material.isEmpty, material.count <= 16,
+                      material.allSatisfy({ !$0.isEmpty }), material.reduce(0, { $0 + $1.utf8.count }) <= 256 * 1024 else {
+                    throw issue("Naive inline trust is not a bounded captured certificate set.")
+                }
+            }
+            var result = value; result["tag"] = tag
+            return result
+        }
         var allowed: Set<String> = ["type", "tag", "server", "server_port", "password", "network"]
         if mode == "shadowsocks" { allowed.formUnion(["method", "udp_over_tcp"]) }
         else if mode == "hysteria2" { allowed.formUnion(["tls", "obfs", "up_mbps", "down_mbps"]) }
@@ -605,6 +652,11 @@ enum RouterVPNMultihopGraph {
               host.unicodeScalars.allSatisfy({ $0.isASCII }) else { return false }
         var v4 = in_addr(), v6 = in6_addr()
         return inet_pton(AF_INET, host, &v4) == 1 || inet_pton(AF_INET6, host, &v6) == 1
+    }
+    private static func boolean(_ value: Any?) throws -> Bool? {
+        guard let value else { return nil }
+        struct Flag: Decodable { let value: Bool }
+        return try JSONDecoder().decode(Flag.self, from: JSONSerialization.data(withJSONObject: ["value": value])).value
     }
     private static func integer(_ value: Any?) throws -> Int? {
         guard let value else { return nil }

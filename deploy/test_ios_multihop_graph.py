@@ -29,6 +29,11 @@ let xrayExits = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(file
     if let native = xrayExits[mode] { return native }
     var proxy: [String:Any] = ["type":mode,"tag":"proxy","server":"198.51.100.2","server_port":8388,"password":key]
     if mode == "shadowsocks" { proxy["method"] = "2022-blake3-aes-256-gcm" }
+    else if P.nativeNaiveModes.contains(mode) {
+        proxy["type"] = "naive"; proxy["username"] = "fixture-naive-user"
+        proxy["quic"] = mode == "naive-h3"; proxy["udp_over_tcp"] = ["enabled":true,"version":2]
+        proxy["tls"] = ["enabled":true,"server_name":"router-vpn.home"]
+    }
     else { proxy["tls"] = ["enabled":true,"server_name":"router-vpn.home"]; proxy["obfs"] = ["type":"salamander","password":"fixture"] }
     return ["log":["level":"warn"],
         "inbounds":[["type":"tun","tag":"tun-in","address":["172.19.0.1/30"],"auto_route":true,"mtu":1380]],
@@ -483,6 +488,15 @@ for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-visi
             try check("native exit changes only its owned detour", sameJSON(actualExit, expectedExit))
             reject("old generic proxy fixture cannot masquerade as Xray") {
                 _ = try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:capturedExit,exitMode:exitMode,files:files(original()))
+            }
+        }
+        if P.nativeNaiveModes.contains(exitMode) {
+            let reference = (original(exitMode)["outbounds"] as! [[String:Any]])[0]
+            var expectedExit = reference; expectedExit["detour"] = P.entryTag
+            try check("Naive exit retains exact HTTP version, auth and UDP framing", sameJSON(actualExit, expectedExit))
+            reject("Naive H2/H3 labels cannot change the selected protocol") {
+                _ = try P.build(entryEndpoint:importedEntry,entryProfile:entry,exitProfile:capturedExit,
+                                exitMode:exitMode == "naive-h2" ? "naive-h3" : "naive-h2",files:input)
             }
         }
         if packetExit {

@@ -44,17 +44,19 @@ enum IOSMultihopStartLayer {
 
     /// Convert only the exit-owned certificate file to its exact inline bytes.
     /// All route, DNS, TUN, credential and non-certificate transport data survive.
-    static func inlineExitTLS(files: [String: Data], assets: [String: String],
+    static func inlineExitTLS(files: [String: Data], assets: [String: String], mode: String = "hysteria2",
                               compiler: (String, String) throws -> String) throws -> [String: Data] {
+        guard ["hysteria2", "naive-h2", "naive-h3"].contains(mode) else { throw issue("Unknown captured TLS transport.") }
+        let naive = mode == "naive-h2" || mode == "naive-h3"
         guard let data = files["sing-box.json"], data.count <= 4 * 1024 * 1024,
               var graph = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               var outbounds = graph["outbounds"] as? [[String: Any]],
               outbounds.filter({ $0["tag"] as? String == "proxy" }).count == 1,
               let index = outbounds.firstIndex(where: { $0["tag"] as? String == "proxy" }),
-              outbounds[index]["type"] as? String == "hysteria2" else { throw issue("Exit trust has no unique captured transport.") }
+              outbounds[index]["type"] as? String == (naive ? "naive" : "hysteria2") else { throw issue("Exit trust has no unique captured transport.") }
         let payload = try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys])
         guard payload.count <= 8 * 1024 * 1024 else { throw issue("Exit trust source exceeds its bound.") }
-        let output = try compiler(String(decoding: payload, as: UTF8.self), "hysteria2")
+        let output = try compiler(String(decoding: payload, as: UTF8.self), mode)
         guard output.utf8.count <= 4 * 1024 * 1024,
               var normalized = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
               let tls = normalized["tls"] as? [String: Any], tls["enabled"] as? Bool == true,
@@ -75,7 +77,9 @@ enum IOSMultihopStartLayer {
             throw issue("Inlining exit trust changed another transport setting.")
         }
         outbounds[index] = normalized; graph["outbounds"] = outbounds
-        var result = files
+        // Naive's exact compiler already rejects extra helper assets. Retain
+        // only the inlined graph; it has no native certificate-file owner.
+        var result: [String: Data] = naive ? [:] : files
         result["sing-box.json"] = try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])
         return result
     }

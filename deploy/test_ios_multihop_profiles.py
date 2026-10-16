@@ -27,13 +27,13 @@ graph.multihopEntryID = "home-entry"
 graph.multihopExitID = "home-exit"
 graph.multihopExitMode = "shadowsocks"
 // Every offered exit mode survives the real private Codable profile model.
-for mode in ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"] {
+for mode in ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"] {
     var candidate = graph
     candidate.multihopExitMode = mode
     let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self, from: JSONEncoder().encode(candidate))
     try check("saved graph preserves exact exit family \(mode)", copy == candidate && copy.multihopExitMode == mode)
 }
-for mode in ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"] {
+for mode in ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"] {
     var candidate = graph; candidate.multihopEntryMode = mode
     let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONEncoder().encode(candidate))
     try check("saved entry mode keeps exact engine variant",copy.multihopEntryMode == mode && copy == candidate)

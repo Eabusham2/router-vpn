@@ -129,7 +129,7 @@ enum RouterVPNMTUPolicy {
             let proxies = outbounds.filter { $0["tag"] as? String == "routervpn-hop-entry" }
             if !proxies.isEmpty {
                 guard entry.isEmpty, proxies.count == 1,
-                      ["shadowsocks", "hysteria2", "routervpn-xray"].contains(proxies[0]["type"] as? String ?? ""),
+                      ["shadowsocks", "hysteria2", "routervpn-xray", "naive"].contains(proxies[0]["type"] as? String ?? ""),
                       proxies[0]["mtu"] == nil, proxies[0]["detour"] == nil, tun.count == 1,
                       endpoints.count <= 1,
                       endpoints.allSatisfy({ $0["tag"] as? String == "proxy" && ["wireguard", "routervpn-amneziawg", "routervpn-pq"].contains($0["type"] as? String ?? "") && $0["detour"] as? String == "routervpn-hop-entry" }) else {

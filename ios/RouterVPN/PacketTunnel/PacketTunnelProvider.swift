@@ -218,7 +218,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         entryProfile["node_proof_id"] = entryProofID
         exitProfile["node_proof_id"] = exitProofID
         let entryMode = selectedProfile["multihop_entry_mode"] as? String ?? "wg"
-        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
+        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","naive-h2","naive-h3"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
         let entryLayerMode = try IOSMultihopStartLayer.selected(entryProfile)
         let exitLayerMode = try IOSMultihopStartLayer.selected(exitProfile)
         let entryMAX = try multihopMAX(root: entryRoot, mode: entryMode, profile: entryProfile, nodeID: entryProofID, layer: entryLayerMode)
@@ -307,11 +307,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         var constructionExitProfile = exitLayer.graphProfile
         if let entryMAX { constructionExitProfile["multihop_entry_mode"] = entryMAX.baseMode }
         var baseFiles = rawFiles
-        if exitLayer.source != nil && exitMode == "hysteria2" {
+        if (exitLayer.source != nil && exitMode == "hysteria2") || RouterVPNMultihopGraph.nativeNaiveModes.contains(exitMode) {
             guard let profiles = root["profiles"] as? [String: [String: String]], let assets = profiles[exitMode] else {
                 throw tunnelError(58, "Exit TLS source is missing.")
             }
-            baseFiles = try IOSMultihopStartLayer.inlineExitTLS(files: rawFiles, assets: assets) { profile, mode in
+            baseFiles = try IOSMultihopStartLayer.inlineExitTLS(files: rawFiles, assets: assets, mode: exitMode) { profile, mode in
                 var failure: NSError?
                 let result: String? = LibboxRouterCompileProxyEntry(profile, mode, &failure)
                 if let failure { throw failure }

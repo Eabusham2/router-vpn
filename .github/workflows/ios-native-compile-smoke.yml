@@ -29,6 +29,7 @@ jobs:
           python3 deploy/test_ios_pq_selection.py
           python3 deploy/test_ios_max_selection.py
           python3 deploy/test_ios_max_multihop.py
+          python3 deploy/test_ios_naive_multihop.py
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Prepare pinned native engines

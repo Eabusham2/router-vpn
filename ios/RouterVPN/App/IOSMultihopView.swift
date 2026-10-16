@@ -9,13 +9,13 @@ extension RouterVPNModel {
         guard let exit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle),
               exit.normalizedNodeKind == "router-vpn", exit.multihopEnabled == true,
               exit.multihopExitID == exit.id, let entryID = exit.multihopEntryID, entryID != exit.id,
-              let mode = exit.multihopExitMode, ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"].contains(mode),
+              let mode = exit.multihopExitMode, ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"].contains(mode),
               let data = IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
               data.count <= 32 * 1024 * 1024 else {
             throw iosMultihopError("The saved multihop entry/exit is missing or no longer linked. Choose the graph again.")
         }
         let entryMode = exit.multihopEntryMode ?? "wg"
-        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"].contains(entryMode) else { throw iosMultihopError("Unknown saved entry transport.") }
+        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","naive-h2","naive-h3"].contains(entryMode) else { throw iosMultihopError("Unknown saved entry transport.") }
         let entryAsset = IOSNativeMAXProfile.modeIDs.contains(entryMode) ? (entryMode.hasSuffix("-awg") ? "awg.conf" : "wg.conf") : ["wg", "wg-pq"].contains(entryMode) ? "wg.conf" : (["awg2-fast", "awg2-strong", "awg2-pq"].contains(entryMode) ? "awg.conf" : (["reality-vision", "reality-pq-vision", "reality-xhttp"].contains(entryMode) ? "xray.json" : "sing-box.json"))
         var entry = try JSONDecoder().decode(ClientBundle.self, from: data)
         guard entry.routerProfiles.filter({ $0.id == entryID }).count == 1,
@@ -49,7 +49,7 @@ extension RouterVPNModel {
     }
 
     func saveIOSMultihop(enabled: Bool, entryID: String, exitID: String, exitMode: String, execution: String = "local", entryMode: String = "wg") throws {
-        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"].contains(entryMode) else { throw iosMultihopError("Choose an exact native entry transport.") }
+        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","naive-h2","naive-h3"].contains(entryMode) else { throw iosMultihopError("Choose an exact native entry transport.") }
         guard ["local", "server", "auto"].contains(execution) else { throw iosMultihopError("Choose Local, Server, or Compare both.") }
         guard !profileMutationBlocked else { throw iosMultihopError("Disconnect before changing the active graph.") }
         if !enabled {
@@ -62,7 +62,7 @@ extension RouterVPNModel {
             message = "Multihop disabled. The next Connect uses the selected normal mode."
             return
         }
-        guard ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"].contains(exitMode), entryID != exitID,
+        guard ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"].contains(exitMode), entryID != exitID,
               let data = IOSNodeBundleStore.shared.bundleData(containing: exitID, current: bundle) else {
             throw iosMultihopError("Choose two different linked Router VPN nodes and an exit transport.")
         }
@@ -130,6 +130,8 @@ struct IOSMultihopView: View {
                         Text("AmneziaWG + Rosenpass PQ").tag("awg2-pq")
                         Text("Shadowsocks").tag("shadowsocks")
                         Text("Hysteria2").tag("hysteria2")
+                        Text("Naive HTTP/2").tag("naive-h2")
+                        Text("Naive HTTP/3").tag("naive-h3")
                         Text("REALITY Vision").tag("reality-vision")
                         Text("PQ REALITY Vision").tag("reality-pq-vision")
                         Text("REALITY XHTTP").tag("reality-xhttp")
@@ -150,6 +152,8 @@ struct IOSMultihopView: View {
                         Text("AmneziaWG + Rosenpass PQ").tag("awg2-pq")
                         Text("Shadowsocks 2022").tag("shadowsocks")
                         Text("Hysteria2").tag("hysteria2")
+                        Text("Naive HTTP/2").tag("naive-h2")
+                        Text("Naive HTTP/3").tag("naive-h3")
                         Text("REALITY Vision").tag("reality-vision")
                         Text("PQ REALITY Vision").tag("reality-pq-vision")
                         Text("REALITY XHTTP").tag("reality-xhttp")
@@ -169,7 +173,7 @@ struct IOSMultihopView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }.disabled(model.profileMutationBlocked)
                 Section("Connection requirements") {
-                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard, native AmneziaWG Fast/Strong, WireGuard/AmneziaWG with Rosenpass PQ, Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP entry and a WireGuard/AmneziaWG (with or without Rosenpass PQ), self-contained Shadowsocks, Hysteria2, or native REALITY/PQ/XHTTP exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. An entry AES or AES+XOR Start Layer stays on the captured entry for Local, Server and Compare. Exit AES or AES+XOR uses the same captured exit in Local, Server and Compare; Server requires matching private relay provisioning. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
+                    Text("Link at least two Router VPN homes. This path uses a full-route WireGuard, native AmneziaWG Fast/Strong, WireGuard/AmneziaWG with Rosenpass PQ, Shadowsocks, Hysteria2, Naive HTTP/2 or HTTP/3, or native REALITY/PQ/XHTTP entry and a WireGuard/AmneziaWG (with or without Rosenpass PQ), self-contained Shadowsocks, Hysteria2, Naive HTTP/2 or HTTP/3, or native REALITY/PQ/XHTTP exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. An entry AES or AES+XOR Start Layer stays on the captured entry for Local, Server and Compare. Exit AES or AES+XOR uses the same captured exit in Local, Server and Compare; Server requires matching private relay provisioning. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)
