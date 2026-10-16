@@ -25,6 +25,15 @@ func RouterComposeNativeBaseStartLayer(config, shadowsocks, policy string) (stri
 	return mobilemultihop.ComposeNativeBaseStartLayer(config, shadowsocks, policy)
 }
 
+// RouterMAXMultihopBase is a temporary construction value, never a runnable
+// substitute for a complete chain. Compose must restore every captured layer.
+func RouterMAXMultihopBase(config, mode, nodeID, startLayer string) (string, error) {
+	return mobilemultihop.MAXMultihopBase(config, mode, nodeID, startLayer)
+}
+func RouterComposeMAXMultihop(config, metadata, entrySource, exitSource string) (string, error) {
+	return mobilemultihop.ComposeMAXMultihop(config, metadata, entrySource, exitSource)
+}
+
 // RouterCompileWireGuardProfile verifies the paired key and keeps native options.
 func RouterCompileWireGuardProfile(config, nodeID string) (string, error) {
 	return mobilemultihop.CompileWireGuardProfile(config, nodeID)

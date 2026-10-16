@@ -70,6 +70,12 @@ func main(){
  case "sip-start":
   var inputs struct{Config string;Helper string;Source string};err=json.Unmarshal([]byte(r.Config),&inputs)
   if err==nil{var result []byte;result,err=nativesip003.ComposeStartLayer([]byte(inputs.Config),[]byte(inputs.Helper),[]byte(inputs.Source),[]byte(r.Policy));value=string(result)}
+ case "max-base":
+  var input struct{Config,Mode,Node,Layer string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobilemultihop.MAXMultihopBase(input.Config,input.Mode,input.Node,input.Layer)}
+ case "max-multihop":
+  var input struct{Config,Entry,Exit string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobilemultihop.ComposeMAXMultihop(input.Config,r.Policy,input.Entry,input.Exit)}
  case "base-start":
   var inputs struct{Config string;Source string};err=json.Unmarshal([]byte(r.Config),&inputs)
   if err==nil{value,err=mobilemultihop.ComposeNativeBaseStartLayer(inputs.Config,inputs.Source,r.Policy)}
@@ -147,6 +153,9 @@ public final class Libbox {
   }finally{p.destroyForcibly();}
  }
  public static String routerCompilePQProfile(String mode,String files,String node)throws Exception{return call("pq-profile",new JSONObject().put("Mode",mode).put("Files",files).toString(),node);}
+ public static String routerMAXMultihopBase(String config,String mode,String node,String layer)throws Exception{return call("max-base",new JSONObject().put("Config",config).put("Mode",mode).put("Node",node).put("Layer",layer).toString(),"");}
+ public static String routerComposeMAXMultihop(String config,String metadata,String entry,String exit)throws Exception{return call("max-multihop",new JSONObject().put("Config",config).put("Entry",entry).put("Exit",exit).toString(),metadata);}
+
  public static String routerCompileMAXProfile(String mode,String files,String policy)throws Exception{return call("max-profile",new JSONObject().put("Mode",mode).put("Files",files).toString(),policy);}
  public static Runnable afterEntryLayerPreflight;
  public static String routerCompileMultihopEntryStartLayer(String config,String metadata,String source)throws Exception {

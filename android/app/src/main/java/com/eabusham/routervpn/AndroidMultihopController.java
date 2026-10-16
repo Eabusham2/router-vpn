@@ -133,7 +133,7 @@ final class AndroidMultihopController {
             }
         }
         for (NativeSingBoxController.ModeInfo mode : singBox.listDirectLibboxModes(exitBundle)) {
-            if ("shadowsocks".equals(mode.id) || "hysteria2".equals(mode.id) || NativeSingBoxController.nativePQFamily(mode.id)) result.add(mode);
+            if ("shadowsocks".equals(mode.id) || "hysteria2".equals(mode.id) || NativeSingBoxController.nativePQFamily(mode.id) || AndroidNativeMAXProfile.isMode(mode.id)) result.add(mode);
         }
         for (String mode : new String[]{"reality-vision", "reality-pq-vision", "reality-xhttp"}) {
             if (profiles == null || profiles.optJSONObject(mode) == null) continue;
@@ -162,7 +162,7 @@ final class AndroidMultihopController {
         if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
         if (entryBundle == null || exitBundle == null) throw new IllegalArgumentException("Choose both an entry and an exit node.");
         if (entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())) throw new IllegalArgumentException("Entry and exit must be different stored nodes.");
-        if (!(NativeSingBoxController.nativeWireGuardFamily(exitMode) || NativeSingBoxController.nativePQFamily(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode) || nativeXrayExit(exitMode))) throw new IllegalArgumentException("Choose an implemented native packet, proxy or Xray exit transport.");
+        if (!(AndroidNativeMAXProfile.isMode(exitMode) || NativeSingBoxController.nativeWireGuardFamily(exitMode) || NativeSingBoxController.nativePQFamily(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode) || nativeXrayExit(exitMode))) throw new IllegalArgumentException("Choose an implemented native packet, proxy or Xray exit transport.");
 
         JSONObject entry = loadBundle(entryBundle);
         JSONObject exit = loadBundle(exitBundle);
@@ -171,13 +171,21 @@ final class AndroidMultihopController {
         String exitIdentity = AndroidNodeStore.stableNodeIdentity(exit);
         if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
         if (entryIdentity.isEmpty() || exitIdentity.isEmpty()) throw new IllegalArgumentException("Both multihop nodes need paired identities.");
-        String entryStartLayer = AndroidMultihopStartLayer.capture(entry);
-        String exitStartLayer = AndroidMultihopStartLayer.capture(exit);
+        boolean maxEntry = AndroidNativeMAXProfile.isMode(entryMode), maxExit = AndroidNativeMAXProfile.isMode(exitMode);
+        String entryLayerMode = AndroidStartLayer.selectedMode(entry), exitLayerMode = AndroidStartLayer.selectedMode(exit);
+        // MAX's complete compiler already owns its optional outermost AES leg.
+        // Ordinary hops retain their independently captured layer assets.
+        String entryStartLayer = maxEntry ? "" : AndroidMultihopStartLayer.capture(entry);
+        String exitStartLayer = maxExit ? "" : AndroidMultihopStartLayer.capture(exit);
+        String entryMAX = maxEntry ? AndroidNativeMAXProfile.compile(entry, requiredProfile(entry, entryMode), entryMode) : "";
+        String exitMAX = maxExit ? AndroidNativeMAXProfile.compile(exit, requiredProfile(exit, exitMode), exitMode) : "";
         requireOwnedPolicies(entry, true); requireOwnedPolicies(exit, true);
         boolean pqEntry = NativeSingBoxController.nativePQFamily(entryMode);
-        boolean packetEntry = NativeSingBoxController.nativeWireGuardFamily(entryMode) || pqEntry;
+        boolean packetEntry = NativeSingBoxController.nativeWireGuardFamily(entryMode) || pqEntry || maxEntry;
         JSONObject wg;
-        if (pqEntry) {
+        if (maxEntry) {
+            wg = completeMAXBase(entryMAX, entryMode, entryIdentity, entryLayerMode).getJSONArray("endpoints").getJSONObject(0);
+        } else if (pqEntry) {
             wg = NativeSingBoxController.compilePQEntry(entry, entryMode);
         } else if (packetEntry) {
             String entryText = readNativeText(entry, entryMode);
@@ -197,7 +205,10 @@ final class AndroidMultihopController {
         JSONObject exitProfile;
         JSONObject config;
         boolean pqExit = NativeSingBoxController.nativePQFamily(exitMode);
-        if (pqExit) {
+        if (maxExit) {
+            config = completeMAXBase(exitMAX, exitMode, exitIdentity, exitLayerMode);
+            exitProfile = new JSONObject().put("sing-box.json", "native-complete-max-graph");
+        } else if (pqExit) {
             config = NativeSingBoxController.compilePQGraph(exit, exitMode);
             // The negotiated keys remain inside this endpoint; no raw config,
             // executable helper, or independent system VPN is staged.
@@ -236,7 +247,27 @@ final class AndroidMultihopController {
                 if (found != 1) throw new IllegalStateException("Exit TLS has no unique captured transport owner.");
             }
         }
-        makeMultihopConfig(config, wg, entryPrivate, exitMode, packetEntry);
+        // Build proof/DNS lanes using only the temporary base, then restore
+        // complete encryption before any native configuration check or staging.
+        String constructionExit = maxExit ? (exitMode.endsWith("-awg") ? "awg2-pq" : "wg-pq") : exitMode;
+        makeMultihopConfig(config, wg, entryPrivate, constructionExit, packetEntry);
+        JSONObject a=selectedRouterProfile(entry),b=selectedRouterProfile(exit);
+        if(a==null||b==null)throw new IllegalArgumentException("Both paired node profiles are required.");
+        JSONObject metadata=new JSONObject().put("entry_id",a.getString("id")).put("exit_id",b.getString("id"))
+            .put("entry_node_id",entryIdentity).put("entry_mode",entryMode)
+            .put("exit_node_id",exitIdentity)
+            .put("entry_api",a.getString("router_api")).put("exit_api",b.getString("router_api"))
+            .put("entry_token",a.getString("api_token")).put("exit_token",b.getString("api_token"))
+            .put("entry_tag","entry-wg").put("exit_mode",exitMode).put("execution",execution);
+        if (!AndroidStartLayer.OFF.equals(entryLayerMode)) metadata.put("entry_start_layer",entryLayerMode);
+        if (!AndroidStartLayer.OFF.equals(exitLayerMode)) metadata.put("exit_start_layer",exitLayerMode);
+        if (maxEntry || maxExit) {
+            String composed = io.nekohasekai.libbox.Libbox.routerComposeMAXMultihop(config.toString(), metadata.toString(), entryMAX, exitMAX);
+            if (composed == null || composed.isEmpty() || composed.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG) {
+                throw new IllegalStateException("Complete MAX multihop did not restore a bounded owned graph.");
+            }
+            config = new JSONObject(composed);
+        }
         NativeSingBoxController.applySelectedDns(exit, config);
         JSONObject lanProfiles=new JSONObject().put("entry",selectedRouterProfile(entry)).put("exit",selectedRouterProfile(exit));
         String sized=io.nekohasekai.libbox.Libbox.routerApplyMultihopMTUPolicy(config.toString(),lanProfiles.toString());
@@ -247,21 +278,11 @@ final class AndroidMultihopController {
         config = new JSONObject(io.nekohasekai.libbox.Libbox.routerApplyPerformancePolicy(filtered,new JSONObject().put("entry",entryPerformance).put("exit",exitPerformance).toString()));
         // A selected PQ entry needs the real process-owned factory even when
         // the previous session used a raw backend. Discovery never installs it.
-        if (pqEntry || pqExit) RouterPQNative.install();
+        if (pqEntry || pqExit || maxEntry || maxExit) RouterPQNative.install();
         io.nekohasekai.libbox.Libbox.checkConfig(config.toString());
         byte[] patched = (config.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         if (patched.length > MAX_CONFIG) throw new IllegalStateException("Multihop sing-box config exceeds safety limit.");
 
-        JSONObject a=selectedRouterProfile(entry),b=selectedRouterProfile(exit);
-        if(a==null||b==null)throw new IllegalArgumentException("Both paired node profiles are required.");
-        JSONObject metadata=new JSONObject().put("entry_id",a.getString("id")).put("exit_id",b.getString("id"))
-            .put("entry_node_id",entryIdentity).put("entry_mode",entryMode)
-            .put("exit_node_id",exitIdentity)
-            .put("entry_api",a.getString("router_api")).put("exit_api",b.getString("router_api"))
-            .put("entry_token",a.getString("api_token")).put("exit_token",b.getString("api_token"))
-            .put("entry_tag","entry-wg").put("exit_mode",exitMode).put("execution",execution);
-        if (!entryStartLayer.isEmpty()) metadata.put("entry_start_layer",new JSONObject(entryStartLayer).getString("mode"));
-        if (!exitStartLayer.isEmpty()) metadata.put("exit_start_layer",new JSONObject(exitStartLayer).getString("mode"));
         byte[] privateMetadata=metadata.toString().getBytes(StandardCharsets.UTF_8);
         if(privateMetadata.length>16384)throw new IllegalArgumentException("Multihop metadata exceeds the safety bound.");
         AndroidMultihopStartLayer.preflight(config.toString(),metadata.toString(),entryStartLayer,exitStartLayer);
@@ -328,6 +349,14 @@ final class AndroidMultihopController {
             deleteTree(session);
             throw error;
         }
+    }
+
+    private static JSONObject completeMAXBase(String source, String mode, String node, String layer) throws Exception {
+        String result = io.nekohasekai.libbox.Libbox.routerMAXMultihopBase(source, mode, node, layer);
+        if (result == null || result.isEmpty() || result.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG) {
+            throw new IllegalStateException("Complete MAX base construction failed validation.");
+        }
+        return new JSONObject(result);
     }
 
     private static void makeMultihopConfig(JSONObject config, JSONObject wg, EntryPrivate entryPrivate, String exitMode, boolean packetEntry) throws Exception {
