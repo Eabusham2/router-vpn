@@ -234,7 +234,7 @@ final class RouterVPNModel: ObservableObject {
             if selectedRouterProfile?.multihopEnabled == true {
                 guard rawProfileID == nil, let profile = selectedRouterProfile,
                       profile.multihopExitID == profile.id,
-                      let mode = profile.multihopExitMode, ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"].contains(mode) else {
+                      let mode = profile.multihopExitMode, ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"].contains(mode) else {
                     throw IOSRuntimeSelectionError.unsupportedMode("Choose a valid multihop graph or disable multihop before selecting an individual raw mode.")
                 }
                 _ = try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: mode)

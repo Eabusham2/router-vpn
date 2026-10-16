@@ -174,6 +174,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    private func multihopMAX(root: [String: Any], mode: String, profile: [String: Any], nodeID: String, layer: String) throws -> IOSNativeMAXMultihop.Capture? {
+        guard IOSNativeMAXProfile.modeIDs.contains(mode) else { return nil }
+        guard let profiles = root["profiles"] as? [String: Any], let assets = profiles[mode] as? [String: String] else {
+            throw tunnelError(58, "Complete MAX multihop assets are missing.")
+        }
+        return try IOSNativeMAXMultihop.capture(mode: mode, encoded: assets, nodeID: nodeID, profile: profile, startLayer: layer,
+            compiler: { mode, assets, metadata in
+                var failure: NSError?
+                let result: String? = LibboxRouterCompileMAXProfile(mode, assets, metadata, &failure)
+                if let failure { throw failure }
+                guard let result else { throw self.tunnelError(58, "Complete MAX source compilation returned no graph.") }
+                return result
+            }, baseCompiler: { config, mode, node, layer in
+                var failure: NSError?
+                let result: String? = LibboxRouterMAXMultihopBase(config, mode, node, layer, &failure)
+                if let failure { throw failure }
+                guard let result else { throw self.tunnelError(58, "Complete MAX graph-construction input is missing.") }
+                return result
+            })
+    }
+
     private func startMultihop(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], completionHandler: @escaping (Error?) -> Void) throws {
         guard selectedProfile["multihop_enabled"] as? Bool == true,
               let entryID = selectedProfile["multihop_entry_id"] as? String,
@@ -182,7 +203,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
               root["selectedRouterID"] as? String == exitID,
               let exitMode = selectedProfile["multihop_exit_mode"] as? String,
               provider["rawProfileID"] as? String == exitMode,
-              RouterVPNMultihopGraph.supportedExitModes.contains(exitMode),
+              (RouterVPNMultihopGraph.supportedExitModes.contains(exitMode) || IOSNativeMAXProfile.modeIDs.contains(exitMode)),
               let entryData = provider["entryBundle"] as? Data, !entryData.isEmpty,
               entryData.count <= Self.maxBundleBytes,
               let entryRoot = try JSONSerialization.jsonObject(with: entryData) as? [String: Any],
@@ -197,9 +218,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         entryProfile["node_proof_id"] = entryProofID
         exitProfile["node_proof_id"] = exitProofID
         let entryMode = selectedProfile["multihop_entry_mode"] as? String ?? "wg"
-        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
+        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
+        let entryLayerMode = try IOSMultihopStartLayer.selected(entryProfile)
+        let exitLayerMode = try IOSMultihopStartLayer.selected(exitProfile)
+        let entryMAX = try multihopMAX(root: entryRoot, mode: entryMode, profile: entryProfile, nodeID: entryProofID, layer: entryLayerMode)
+        let exitMAX = try multihopMAX(root: root, mode: exitMode, profile: exitProfile, nodeID: exitProofID, layer: exitLayerMode)
         let endpoint: [String: Any]
-        if entryMode == "wg" {
+        if let entryMAX {
+            endpoint = try entryMAX.endpoint()
+        } else if entryMode == "wg" {
             endpoint = try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: entryProofID, name: "Router VPN entry").endpoint
         } else if ["awg2-fast", "awg2-strong"].contains(entryMode) {
             endpoint = try nativeAmneziaEndpoint(root: entryRoot, expectedProofID: entryProofID, mode: entryMode).endpoint
@@ -231,7 +258,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             endpoint = parsed
         }
         let rawFiles: [String: Data]
-        if exitMode == "wg" {
+        if let exitMAX {
+            rawFiles = try RouterVPNMultihopGraph.pqDNSPolicy(exitMAX.baseFiles, profile: exitProfile)
+        } else if exitMode == "wg" {
             let exit = try multihopWireGuardEndpoint(root: root, expectedProofID: exitProofID, name: "Router VPN exit")
             rawFiles = try RouterVPNMultihopGraph.wireGuardFiles(endpoint: exit.endpoint, profile: exitProfile, dnsServers: exit.dns)
         } else if ["awg2-fast", "awg2-strong"].contains(exitMode) {
@@ -265,9 +294,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         } else {
             rawFiles = try layeredProfile(root, rawProfileID: exitMode)
         }
-        let entryLayer = try IOSMultihopStartLayer.capture(profile: entryProfile,
-            profiles: entryRoot["profiles"] as? [String: [String: String]] ?? [:])
-        let exitLayer = try IOSMultihopStartLayer.capture(profile: exitProfile, profiles: root["profiles"] as? [String: [String: String]] ?? [:])
+        // Complete MAX already contains its selected outermost Start Layer.
+        // Only ordinary hops pass a separate AES source to the runtime factory.
+        var entryConstruction = entryProfile, exitConstruction = exitProfile
+        entryConstruction["start_layer"] = "off"; exitConstruction["start_layer"] = "off"
+        let entryLayer = try entryMAX == nil ? IOSMultihopStartLayer.capture(profile: entryProfile,
+            profiles: entryRoot["profiles"] as? [String: [String: String]] ?? [:]) :
+            IOSMultihopStartLayer.Capture(mode: entryLayerMode, source: nil, graphProfile: entryConstruction)
+        let exitLayer = try exitMAX == nil ? IOSMultihopStartLayer.capture(profile: exitProfile,
+            profiles: root["profiles"] as? [String: [String: String]] ?? [:]) :
+            IOSMultihopStartLayer.Capture(mode: exitLayerMode, source: nil, graphProfile: exitConstruction)
+        var constructionExitProfile = exitLayer.graphProfile
+        if let entryMAX { constructionExitProfile["multihop_entry_mode"] = entryMAX.baseMode }
         var baseFiles = rawFiles
         if exitLayer.source != nil && exitMode == "hysteria2" {
             guard let profiles = root["profiles"] as? [String: [String: String]], let assets = profiles[exitMode] else {
@@ -281,11 +319,40 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 return result
             }
         }
-        let files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryLayer.graphProfile,
-            exitProfile: exitLayer.graphProfile, exitMode: exitMode, files: baseFiles)
-        let mtuFiles = try RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)
-        guard let source = mtuFiles["sing-box.json"], let text = String(data: source, encoding: .utf8) else { throw tunnelError(58, "Missing multihop LAN-policy graph") }
+        var metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
+            "entry_node_id": entryProofID, "exit_node_id": exitProofID,
+            "entry_api": entryProfile["router_api"] as? String ?? "", "exit_api": selectedProfile["router_api"] as? String ?? "",
+            "entry_token": entryProfile["api_token"] as? String ?? "", "exit_token": selectedProfile["api_token"] as? String ?? "",
+            "entry_tag": RouterVPNMultihopGraph.entryTag, "entry_mode": entryMode, "exit_mode": exitMode, "execution": selectedProfile["multihop_execution"] as? String ?? "local"]
+        if entryLayer.mode != "off" { metadata["entry_start_layer"] = entryLayer.mode }
+        if exitLayer.mode != "off" { metadata["exit_start_layer"] = exitLayer.mode }
+        let encoded = try JSONSerialization.data(withJSONObject: metadata)
+        guard encoded.count <= 16384 else { throw tunnelError(58, "Captured multihop metadata exceeds its bound.") }
+        let hopMetadata = String(decoding: encoded, as: UTF8.self)
+        var files = try RouterVPNMultihopGraph.build(entryEndpoint: endpoint, entryProfile: entryLayer.graphProfile,
+            exitProfile: constructionExitProfile, exitMode: exitMAX?.baseMode ?? exitMode, files: baseFiles)
+        if entryMAX != nil || exitMAX != nil {
+            files = try IOSNativeMAXMultihop.compose(files: files, metadata: hopMetadata, entry: entryMAX, exit: exitMAX) { config, metadata, entry, exit in
+                var failure: NSError?
+                let result: String? = LibboxRouterComposeMAXMultihop(config, metadata, entry, exit, &failure)
+                if let failure { throw failure }
+                guard let result else { throw self.tunnelError(58, "Complete MAX multihop returned no restored encryption graph.") }
+                return result
+            }
+        }
         let policy = try JSONSerialization.data(withJSONObject: ["entry": entryProfile, "exit": exitProfile])
+        let mtuFiles: [String: Data]
+        if entryMAX != nil || exitMAX != nil {
+            guard let source = files["sing-box.json"], let config = String(data: source, encoding: .utf8) else { throw tunnelError(58, "Missing complete MAX graph.") }
+            var failure: NSError?
+            let sized: String? = LibboxRouterApplyMultihopMTUPolicy(config, String(decoding: policy, as: UTF8.self), &failure)
+            if let failure { throw failure }
+            guard let sized, !sized.isEmpty, sized.utf8.count <= Self.maxProfileBytes else { throw tunnelError(58, "Complete MAX MTU ownership failed.") }
+            var output = files; output["sing-box.json"] = Data(sized.utf8); mtuFiles = output
+        } else {
+            mtuFiles = try RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)
+        }
+        guard let source = mtuFiles["sing-box.json"], let text = String(data: source, encoding: .utf8) else { throw tunnelError(58, "Missing multihop LAN-policy graph") }
         var mtuFailure: NSError?
         let mtuProfileText: String? = LibboxRouterMultihopMTUProfile(text, String(decoding: policy, as: UTF8.self), &mtuFailure)
         if let mtuFailure { throw mtuFailure }
@@ -312,19 +379,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let engine = RouterVPNLibboxEngine(tunnel: self)
         try engine.prepareMTUHold(initialMTUHold)
         libboxEngine = engine
-        var metadata: [String: String] = ["entry_id": entryID, "exit_id": selectedProfile["id"] as? String ?? "",
-            "entry_node_id": entryProofID, "exit_node_id": exitProofID,
-            "entry_api": entryProfile["router_api"] as? String ?? "", "exit_api": selectedProfile["router_api"] as? String ?? "",
-            "entry_token": entryProfile["api_token"] as? String ?? "", "exit_token": selectedProfile["api_token"] as? String ?? "",
-            "entry_tag": RouterVPNMultihopGraph.entryTag, "entry_mode": entryMode, "exit_mode": exitMode, "execution": selectedProfile["multihop_execution"] as? String ?? "local"]
-        if entryLayer.source != nil { metadata["entry_start_layer"] = entryLayer.mode }
-        if exitLayer.source != nil { metadata["exit_start_layer"] = exitLayer.mode }
-        let encoded = try JSONSerialization.data(withJSONObject: metadata)
-        let hopMetadata = String(decoding: encoded, as: UTF8.self)
         do {
             let execution = selectedProfile["multihop_execution"] as? String ?? "local"
             guard ["local", "server", "auto"].contains(execution) else { throw tunnelError(56, "Unknown multihop execution choice") }
-            if entryLayer.source != nil || exitLayer.source != nil {
+            if entryLayer.source != nil || exitLayer.source != nil || entryMAX != nil || exitMAX != nil {
                 try engine.start(files: finalFiles, strict: strict, multihopMetadata: hopMetadata,
                                  entryStartLayerSource: entryLayer.source, exitStartLayerSource: exitLayer.source)
             } else if execution == "local" { try engine.start(files: finalFiles, strict: strict) }

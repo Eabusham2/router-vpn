@@ -98,6 +98,8 @@ enum IOSMultihopStartLayer {
             throw issue("Malformed captured exit-layer metadata.")
         }
         selected.removeValue(forKey: "entry_start_layer")
+        selected.removeValue(forKey: "entry_mode")
+        if let mode = selected["exit_mode"] { selected["entry_mode"] = mode }
         if let required = selected["exit_start_layer"] { selected["entry_start_layer"] = required }
         let translated = String(decoding: try JSONSerialization.data(withJSONObject: selected), as: UTF8.self)
         return try requiredSource(metadata: translated, source: source)
@@ -117,6 +119,15 @@ enum IOSMultihopStartLayer {
             guard let text = value as? String else { throw issue("Invalid requested entry layer.") }
             required = text
         } else { required = "" }
+        if ["max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"].contains(captured["entry_mode"] as? String ?? "") {
+            // MAX's exact chain compiler already embedded the selected layer.
+            // The native multihop factory must still validate that full chain;
+            // a second source could wrap a different node or double-encrypt it.
+            guard source == nil, required.isEmpty || ["aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(required) else {
+                throw issue("Complete MAX owns its one captured Start Layer inside the graph.")
+            }
+            return nil
+        }
         guard let source else {
             guard required.isEmpty else { throw issue("Requested entry layer source is missing.") }
             return nil

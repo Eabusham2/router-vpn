@@ -176,3 +176,139 @@ enum IOSNativeMAXProfile {
         NSError(domain: "RouterVPN.NativeMAXProfile", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
     }
 }
+
+
+/// Captures complete MAX encryption before reusing the existing two-node graph
+/// builder. Temporary PQ-only values are construction inputs, never runnable
+/// selections; all captured layers must be restored before native validation.
+enum IOSNativeMAXMultihop {
+    struct Capture {
+        let mode: String
+        let nodeID: String
+        let startLayer: String
+        let source: String
+        let baseFiles: [String: Data]
+
+        var baseMode: String { mode.hasSuffix("-awg") ? "awg2-pq" : "wg-pq" }
+        func endpoint() throws -> [String: Any] {
+            let graph = try IOSNativeMAXMultihop.object(baseFiles["sing-box.json"])
+            guard let values = graph["endpoints"] as? [[String: Any]], values.count == 1 else {
+                throw IOSNativeMAXMultihop.issue("MAX construction lost its packet owner.")
+            }
+            return values[0]
+        }
+    }
+
+    static func capture(mode: String, encoded: [String: String], nodeID: String,
+                        profile: [String: Any], startLayer: String,
+                        compiler: (String, String, String) throws -> String,
+                        baseCompiler: (String, String, String, String) throws -> String) throws -> Capture {
+        let files = try IOSNativeMAXProfile.compile(mode: mode, encoded: encoded, nodeID: nodeID,
+            profile: profile, startLayer: startLayer, compiler: compiler)
+        guard let original = files["sing-box.json"], let source = String(data: original, encoding: .utf8) else {
+            throw issue("MAX source did not compile to its complete owned graph.")
+        }
+        let temporary = try baseCompiler(source, mode, nodeID, startLayer)
+        let base = try object(Data(temporary.utf8))
+        var expected = try object(original)
+        guard var endpoints = expected["endpoints"] as? [[String: Any]], endpoints.count == 1 else {
+            throw issue("Complete MAX has no unique packet endpoint.")
+        }
+        endpoints[0].removeValue(forKey: "detour")
+        expected["endpoints"] = endpoints
+        expected["outbounds"] = [[String: Any]]()
+        guard try same(expected, base) else {
+            throw issue("MAX construction changed captured keys, node, DNS or native policy.")
+        }
+        return Capture(mode: mode, nodeID: nodeID, startLayer: startLayer, source: source,
+                       baseFiles: ["sing-box.json": Data(temporary.utf8)])
+    }
+
+    static func compose(files: [String: Data], metadata: String,
+                        entry: Capture?, exit: Capture?,
+                        compiler: (String, String, String, String) throws -> String) throws -> [String: Data] {
+        guard entry != nil || exit != nil, metadata.utf8.count <= 16384,
+              let captured = try JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [String: String],
+              let entryTag = captured["entry_tag"], entryTag == "routervpn-hop-entry",
+              let input = files["sing-box.json"], let config = String(data: input, encoding: .utf8) else {
+            throw issue("MAX multihop requires complete captured node and source ownership.")
+        }
+        var expected = try object(input)
+        guard var endpoints = expected["endpoints"] as? [[String: Any]],
+              var outbounds = expected["outbounds"] as? [[String: Any]] else {
+            throw issue("MAX multihop has no owned native managers.")
+        }
+        for (side, capture) in [("entry", entry), ("exit", exit)] {
+            guard let mode = captured[side + "_mode"], IOSNativeMAXProfile.modeIDs.contains(mode) == (capture != nil) else {
+                throw issue("MAX multihop source does not match its selected transport.")
+            }
+            guard let capture else { continue }
+            let selectedLayer = captured[side + "_start_layer"] ?? ""
+            guard mode == capture.mode, captured[side + "_node_id"] == capture.nodeID,
+                  selectedLayer == (capture.startLayer == "off" ? "" : capture.startLayer) else {
+                throw issue("MAX source belongs to a different node, protocol or outer layer.")
+            }
+            let source = try object(Data(capture.source.utf8))
+            guard let originals = source["endpoints"] as? [[String: Any]], originals.count == 1,
+                  let layers = source["outbounds"] as? [[String: Any]] else {
+                throw issue("Captured MAX source lost an encryption layer.")
+            }
+            let tag = side == "entry" ? entryTag : "proxy"
+            let prefix = "routervpn-" + side + "-max-"
+            let tags = ["proxy": tag, "routervpn-max-ss": prefix + "ss",
+                        "routervpn-max-outer": prefix + "outer", "routervpn-max-start-layer": prefix + "start"]
+            let positions = endpoints.indices.filter { endpoints[$0]["tag"] as? String == tag }
+            guard positions.count == 1 else { throw issue("MAX packet endpoint is missing or duplicated.") }
+            var placeholder = originals[0]
+            placeholder["tag"] = tag
+            if side == "entry" { placeholder.removeValue(forKey: "detour") }
+            else { placeholder["detour"] = entryTag }
+            guard try same(placeholder, endpoints[positions[0]]) else {
+                throw issue("MAX base changed before complete encryption could be restored.")
+            }
+            var restored = originals[0]
+            restored["tag"] = tag; restored["detour"] = prefix + "ss"
+            endpoints[positions[0]] = restored
+            for var layer in layers {
+                guard let originalTag = layer["tag"] as? String, let ownedTag = tags[originalTag],
+                      originalTag != "proxy",
+                      !endpoints.contains(where: { $0["tag"] as? String == ownedTag }),
+                      !outbounds.contains(where: { $0["tag"] as? String == ownedTag }) else {
+                    throw issue("MAX encryption layer names already have an owner.")
+                }
+                layer["tag"] = ownedTag
+                if let detour = layer["detour"] {
+                    guard let old = detour as? String, let owned = tags[old] else {
+                        throw issue("MAX contains a route outside its captured chain.")
+                    }
+                    layer["detour"] = owned
+                } else if side == "exit" { layer["detour"] = entryTag }
+                outbounds.append(layer)
+            }
+        }
+        expected["endpoints"] = endpoints; expected["outbounds"] = outbounds
+        let compiled = try compiler(config, metadata, entry?.source ?? "", exit?.source ?? "")
+        let result = try object(Data(compiled.utf8))
+        guard try same(expected, result) else {
+            throw issue("MAX composition changed a captured layer, proof path or exit policy.")
+        }
+        var output = files
+        output["sing-box.json"] = Data(compiled.utf8)
+        return output
+    }
+
+    private static func object(_ data: Data?) throws -> [String: Any] {
+        guard let data, !data.isEmpty, data.count <= IOSNativeMAXProfile.maxGraphBytes,
+              let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw issue("Missing or oversized MAX graph.")
+        }
+        return value
+    }
+    private static func same(_ a: [String: Any], _ b: [String: Any]) throws -> Bool {
+        try JSONSerialization.data(withJSONObject: a, options: [.sortedKeys]) ==
+            JSONSerialization.data(withJSONObject: b, options: [.sortedKeys])
+    }
+    private static func issue(_ message: String) -> NSError {
+        NSError(domain: "RouterVPN.MAXMultihop", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+}
