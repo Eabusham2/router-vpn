@@ -1,0 +1,55 @@
+//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test
+
+package routervpnamnezia
+
+import (
+	"encoding/hex"
+	"errors"
+	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
+)
+
+func (e *Endpoint) RouterVPNTestPQSnapshot() (mobilepq.NativePQSnapshot, error) {
+	e.life.Lock()
+	defer e.life.Unlock()
+	if e.closed || e.device == nil {
+		return mobilepq.NativePQSnapshot{}, errors.New("AWG test peer unavailable")
+	}
+	raw, err := e.device.IpcGet()
+	if err != nil {
+		return mobilepq.NativePQSnapshot{}, errors.New("AWG test readback failed")
+	}
+	return mobilepq.ReadNativePQSnapshot(raw, hex.EncodeToString(e.runtime.PeerPublic[:]))
+}
+func (e *Endpoint) RouterVPNTestPQRehandshake() error {
+	e.life.Lock()
+	defer e.life.Unlock()
+	if e.closed || e.device == nil {
+		return errors.New("AWG test peer unavailable")
+	}
+	var key awg.NoisePublicKey
+	copy(key[:], e.runtime.PeerPublic[:])
+	peer := e.device.LookupPeer(key)
+	if peer == nil {
+		return errors.New("AWG test peer disappeared")
+	}
+	peer.ExpireCurrentKeypairs()
+	return nil
+}
+func (r *NativePQTrafficReference) Snapshot() (mobilepq.NativePQSnapshot, error) {
+	raw, err := r.device.IpcGet()
+	if err != nil {
+		return mobilepq.NativePQSnapshot{}, errors.New("reference readback failed")
+	}
+	return mobilepq.ReadNativePQSnapshot(raw, hex.EncodeToString(r.client))
+}
+func (r *NativePQTrafficReference) Rehandshake() error {
+	var key awg.NoisePublicKey
+	copy(key[:], r.client)
+	peer := r.device.LookupPeer(key)
+	if peer == nil {
+		return errors.New("reference peer disappeared")
+	}
+	peer.ExpireCurrentKeypairs()
+	return nil
+}

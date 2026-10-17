@@ -293,6 +293,46 @@ func pqTrafficExchange(t *testing.T, ep *Endpoint, network, host string, epoch i
 		t.Fatal("negotiated-key data corrupted")
 	}
 }
+
+type nativePQReadback interface {
+	RouterVPNTestPQSnapshot() (mobilepq.NativePQSnapshot, error)
+	RouterVPNTestPQRehandshake() error
+}
+
+// A key-adoption reply and a WireGuard initiation travel over different UDP
+// sockets. Neither local Ready nor the reference's counter is a two-peer barrier.
+// Require matching native PSK readback before the original bounded traffic test.
+func pqTrafficAgreedKeys(t *testing.T, ep *Endpoint, server *pqTrafficServer, reference *routervpnamnezia.NativePQTrafficReference, previous [32]byte, epoch int) [32]byte {
+	t.Helper()
+	native, ok := ep.base.(nativePQReadback)
+	if !ok {
+		t.Fatal("test lacks native peer readback")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		select {
+		case err := <-server.failure:
+			t.Fatal(err)
+		default:
+		}
+		local, err := native.RouterVPNTestPQSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		remote, err := reference.Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reference.Updates() >= int64(epoch+1) && local.KeyDigest == remote.KeyDigest && local.KeyDigest != previous {
+			return local.KeyDigest
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("both native peers did not adopt the same fresh PQ key", "epoch", epoch)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestRealPQTrafficNegotiatedKeysAndRekey(t *testing.T) {
 	for _, mode := range []string{"wg-pq", "awg2-pq"} {
 		for _, version := range []int{2, 3} {
@@ -305,20 +345,20 @@ func TestRealPQTrafficNegotiatedKeysAndRekey(t *testing.T) {
 					t.Fatal("plaintext fallback before authentication", err)
 				}
 				pqTrafficStart(t, ep)
+				var previous [32]byte
+				native := ep.base.(nativePQReadback)
+				var priorLocal, priorRemote int64
 				for epoch := 0; epoch < 2; epoch++ {
 					if epoch != 0 {
 						server.force(t)
-						deadline := time.Now().Add(2 * time.Second)
-						for reference.Updates() < int64(epoch+1) {
-							select {
-							case err := <-server.failure:
-								t.Fatal(err)
-							default:
-							}
-							if time.Now().After(deadline) {
-								t.Fatal("real PQ rekey did not install a fresh peer key")
-							}
-							time.Sleep(time.Millisecond)
+					}
+					previous = pqTrafficAgreedKeys(t, ep, server, reference, previous, epoch)
+					if epoch != 0 {
+						if err := reference.Rehandshake(); err != nil {
+							t.Fatal(err)
+						}
+						if err := native.RouterVPNTestPQRehandshake(); err != nil {
+							t.Fatal(err)
 						}
 					}
 					for _, network := range []string{"tcp", "udp"} {
@@ -329,6 +369,18 @@ func TestRealPQTrafficNegotiatedKeysAndRekey(t *testing.T) {
 					if reference.Updates() < int64(epoch+1) {
 						t.Fatal("traffic did not use a negotiated/rekeyed reference peer")
 					}
+					local, err := native.RouterVPNTestPQSnapshot()
+					if err != nil {
+						t.Fatal(err)
+					}
+					remote, err := reference.Snapshot()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if local.KeyDigest != previous || remote.KeyDigest != previous || local.HandshakeNanos <= priorLocal || remote.HandshakeNanos <= priorRemote {
+						t.Fatal("traffic reused a prior native handshake or changed its negotiated key", "epoch", epoch)
+					}
+					priorLocal, priorRemote = local.HandshakeNanos, remote.HandshakeNanos
 				}
 				if reference.Packets() == 0 || reference.PlaintextSeen() || underlay.bad.Load() != 0 {
 					t.Fatal("actual encrypted-path or underlay isolation assertion failed")

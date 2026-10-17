@@ -1,0 +1,16 @@
+//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test
+
+package wireguard
+
+import "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
+
+func (w *Endpoint) RouterVPNTestPQSnapshot() (mobilepq.NativePQSnapshot, error) {
+	w.bindAccess.Lock()
+	defer w.bindAccess.Unlock()
+	return w.endpoint.RouterVPNTestPQSnapshot()
+}
+func (w *Endpoint) RouterVPNTestPQRehandshake() error {
+	w.bindAccess.Lock()
+	defer w.bindAccess.Unlock()
+	return w.endpoint.RouterVPNTestPQRehandshake()
+}

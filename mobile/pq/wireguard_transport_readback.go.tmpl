@@ -1,0 +1,38 @@
+//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test
+
+package wireguard
+
+import (
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
+	"github.com/sagernet/wireguard-go/device"
+)
+
+// Test-only methods called under the protocol endpoint's bind/lifecycle lock.
+func (e *Endpoint) RouterVPNTestPQSnapshot() (mobilepq.NativePQSnapshot, error) {
+	if e.device == nil || len(e.peers) != 1 {
+		return mobilepq.NativePQSnapshot{}, errors.New("native test peer unavailable")
+	}
+	raw, err := e.device.IpcGet()
+	if err != nil {
+		return mobilepq.NativePQSnapshot{}, errors.New("native test readback failed")
+	}
+	return mobilepq.ReadNativePQSnapshot(raw, e.peers[0].publicKeyHex)
+}
+func (e *Endpoint) RouterVPNTestPQRehandshake() error {
+	if e.device == nil || len(e.peers) != 1 {
+		return errors.New("native test peer unavailable")
+	}
+	var key device.NoisePublicKey
+	if err := key.FromHex(e.peers[0].publicKeyHex); err != nil {
+		return err
+	}
+	peer, ok := e.device.LookupActivePeer(key)
+	if !ok {
+		return errors.New("captured native test peer disappeared")
+	}
+	// Force the next data packet to negotiate, rather than let an older symmetric
+	// session make a changed-PSK test pass without actually consuming that PSK.
+	peer.ExpireCurrentKeypairs()
+	return nil
+}

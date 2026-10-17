@@ -17,6 +17,9 @@ CORE = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 COPIES = {
     'mobile/pq/native_factory_real_test.go.tmpl': 'protocol/routervpnpq/native_factory_real_test.go',
     'mobile/pq/native_traffic_test.go.tmpl': 'protocol/routervpnpq/native_traffic_test.go',
+    'mobile/pq/wireguard_protocol_readback.go.tmpl': 'protocol/wireguard/routervpn_pq_readback.go',
+    'mobile/pq/wireguard_transport_readback.go.tmpl': 'transport/wireguard/routervpn_pq_readback.go',
+    'mobile/pq/amnezia_readback.go.tmpl': 'protocol/routervpnamnezia/routervpn_pq_readback.go',
 }
 
 
