@@ -12,6 +12,7 @@ on:
       - 'android/test_android_multihop_graph.py'
       - 'android/test_android_pq_selection.py'
       - 'android/test_android_max_selection.py'
+      - 'android/test_android_naive_multihop.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java'
       - 'internal/mobilepq/**'
       - 'internal/mobilemultihop/**'
@@ -33,6 +34,7 @@ on:
       - 'android/test_android_multihop_graph.py'
       - 'android/test_android_pq_selection.py'
       - 'android/test_android_max_selection.py'
+      - 'android/test_android_naive_multihop.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java'
       - 'internal/mobilepq/**'
       - 'internal/mobilemultihop/**'
@@ -68,4 +70,5 @@ jobs:
           python3 android/test_android_multihop_graph.py
           python3 android/test_android_pq_selection.py
           python3 android/test_android_max_selection.py
+          python3 android/test_android_naive_multihop.py
           go test -race -count=1 -timeout=120s ./internal/mobilemultihop ./internal/multihoprelay ./internal/awgpolicy

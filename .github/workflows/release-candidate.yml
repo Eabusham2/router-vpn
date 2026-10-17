@@ -103,6 +103,7 @@ jobs:
           python3 android/test_android_multihop_graph.py
           python3 android/test_android_pq_selection.py
           python3 android/test_android_max_selection.py
+          python3 android/test_android_naive_multihop.py
           python3 android/test_android_session_identity_contract.py
           python3 android/test_android_native_policy_contract.py
           python3 android/test_android_standard_exit_contract.py
@@ -234,6 +235,7 @@ jobs:
           python3 android/test_android_multihop_graph.py
           python3 android/test_android_pq_selection.py
           python3 android/test_android_max_selection.py
+          python3 android/test_android_naive_multihop.py
           python3 android/test_android_session_identity_contract.py
           python3 android/test_android_native_policy_contract.py
           python3 android/test_android_standard_exit_contract.py
