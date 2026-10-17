@@ -62,6 +62,7 @@ elif name == "go":
         assert os.environ["GOARCH"] == "arm64"
         assert os.environ["CGO_ENABLED"] == "0"
         assert os.environ["GOTOOLCHAIN"] == "go1.26.3"
+        assert {"with_wireguard", "with_quic", "with_gvisor", "with_naive_outbound"}.issubset(args[args.index("-tags") + 1].split(",")), "host parser lost a shipping protocol"
         record({"event":"build"})
         if os.environ.get("HOST_TEST_FAIL") == "build":
             sys.exit(3)
@@ -95,13 +96,15 @@ else:
 
 
 class HostEnvironmentTest(unittest.TestCase):
-    def run_gate(self, failure="", missing_sdk=False):
+    def run_gate(self, failure="", missing_sdk=False, drop_naive=False):
         with tempfile.TemporaryDirectory(prefix="routervpn-host-sdk-") as tmp:
             root = Path(tmp)
             (root / "deploy").mkdir()
             (root / "ios/RouterVPN/.deps/sing-box-apple").mkdir(parents=True)
             script = root / "deploy/test_ios_multihop_pinned.sh"
             shutil.copyfile(SCRIPT, script)
+            if drop_naive:
+                script.write_text(script.read_text().replace(",with_naive_outbound", ""))
             sdk = root / "MacOSX.sdk"
             if not missing_sdk:
                 sdk.mkdir()
@@ -131,6 +134,12 @@ class HostEnvironmentTest(unittest.TestCase):
         self.assertEqual([event["event"] for event in events], ["fixtures", "native-fixtures", "build"] + ["check"] * 179)
         self.assertEqual({event["fixture"] for event in events if event["event"] == "check"},
                          {"shadowsocks.json", "hysteria2.json", "shadowsocks-ipv4-only.json", "wireguard.json", "wireguard-ipv4-only.json", "sing-box.json", "planned.json"})
+
+    def test_naive_build_tag_cannot_be_removed(self):
+        result, events = self.run_gate(drop_naive=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("host parser lost a shipping protocol", result.stderr)
+        self.assertFalse(any(event["event"] == "check" for event in events))
 
     def test_wrong_pin_stops_before_build(self):
         result, events = self.run_gate("pin")

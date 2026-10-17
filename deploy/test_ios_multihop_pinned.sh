@@ -23,7 +23,7 @@ python3 "$ROOT/deploy/test_ios_xray_exits.py" --fixture-dir "$WORK/xray-exits"
   export GOOS=darwin
   export GOARCH=$(go env GOHOSTARCH)
   export CGO_ENABLED=0
-  go build -trimpath -ldflags=-checklinkname=0 -tags with_wireguard,with_quic,with_gvisor -o "$WORK/sing-box" ./cmd/sing-box
+  go build -trimpath -ldflags=-checklinkname=0 -tags with_wireguard,with_quic,with_gvisor,with_naive_outbound -o "$WORK/sing-box" ./cmd/sing-box
 )
 for graph in "$WORK"/fixtures/*.json; do
   "$WORK/sing-box" check -c "$graph"
