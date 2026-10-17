@@ -390,7 +390,7 @@ public final class RuntimeTeardownHarness {
 # capability allowlist. Runtime source files themselves are never rewritten.
 controller_source = (JAVA / 'NativeSingBoxController.java').read_text()
 predicates = []
-for name in ('nativeWireGuardFamily', 'nativePQFamily', 'nativeMultihopEntry'):
+for name in ('nativeWireGuardFamily', 'nativePQFamily', 'nativeNaiveFamily', 'nativeMultihopEntry'):
     matches = re.findall(r'(?ms)^    static boolean ' + name + r'\(String mode\) \{\n.*?^    \}', controller_source)
     assert len(matches) == 1, 'missing or ambiguous production transport predicate: ' + name
     predicates.append(matches[0])

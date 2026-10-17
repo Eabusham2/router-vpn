@@ -28,7 +28,7 @@ public static void main(String[] args) {
   if(!rejected)throw new AssertionError("unimplemented or ambiguous entry accepted");checks++;
  }
  if(!normalizeMultiMode(null).equals("shadowsocks")||!normalizeMultiMode("").equals("shadowsocks"))throw new AssertionError("legacy default changed");checks+=2;
- for(String mode:new String[]{"wg-pq","awg2-pq","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"}){
+ for(String mode:new String[]{"wg-pq","awg2-pq","naive-h2","naive-h3","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"}){
   if(!normalizeEntryMode(mode).equals(mode))throw new AssertionError("saved PQ entry changed");checks++;
   if(!normalizeMultiMode(mode).equals(mode)||!normalizeMultiMode(" "+mode.toUpperCase(Locale.ROOT)+" ").equals(mode))throw new AssertionError("saved PQ exit changed");checks+=2;
  }

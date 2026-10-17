@@ -214,7 +214,7 @@ public final class ProductActivity extends Activity {
 
     private void chooseMultihopExecution(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode){
         new AlertDialog.Builder(this).setTitle("Entry transport")
-            .setItems(new String[]{"WireGuard","AmneziaWG Fast","AmneziaWG Strong","WireGuard + Rosenpass PQ","AmneziaWG + Rosenpass PQ","Shadowsocks","Hysteria2","REALITY Vision","PQ REALITY Vision","REALITY XHTTP","MAX TLS / WG-PQ","MAX TLS / AWG-PQ","MAX QUIC / WG-PQ","MAX QUIC / AWG-PQ"},(dialog,index)->chooseMultihopExecution(entry,exit,mode,new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"}[index]))
+            .setItems(new String[]{"WireGuard","AmneziaWG Fast","AmneziaWG Strong","WireGuard + Rosenpass PQ","AmneziaWG + Rosenpass PQ","Shadowsocks","Hysteria2","Naive H2","Naive H3","REALITY Vision","PQ REALITY Vision","REALITY XHTTP","MAX TLS / WG-PQ","MAX TLS / AWG-PQ","MAX QUIC / WG-PQ","MAX QUIC / AWG-PQ"},(dialog,index)->chooseMultihopExecution(entry,exit,mode,new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","naive-h2","naive-h3","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"}[index]))
             .setNegativeButton("Cancel",null).show();
     }
     private void chooseMultihopExecution(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String entryMode){

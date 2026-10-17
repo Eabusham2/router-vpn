@@ -130,7 +130,7 @@ final class NativeSingBoxController {
         String rawConfigText = AndroidStartLayer.nativeXray(modeId)
                 ? AndroidXrayLibboxPolicy.resolve(root, profile, modeId)
                 : compileStandaloneProfile(root, profile, modeId);
-        if (nativeSinglePacketMode(modeId) || AndroidNativeMAXProfile.isMode(modeId)) {
+        if (nativeSinglePacketMode(modeId) || AndroidNativeMAXProfile.isMode(modeId) || nativeNaiveFamily(modeId)) {
             // Only the compiled graph is staged. A second WireGuard VPN or
             // unused raw-backend file must never be started implicitly.
             profile = new JSONObject().put("sing-box.json", "native-wireguard-graph");
@@ -154,7 +154,7 @@ final class NativeSingBoxController {
             byte[] config = (patchedConfig.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
             if (config.length > MAX_CONFIG) throw new IllegalStateException("Patched sing-box config exceeds safety limit.");
 
-            if ((AndroidStartLayer.nativeXray(modeId) || nativePQFamily(modeId) || AndroidNativeMAXProfile.isMode(modeId)) && (Thread.currentThread().isInterrupted()
+            if ((AndroidStartLayer.nativeXray(modeId) || nativePQFamily(modeId) || AndroidNativeMAXProfile.isMode(modeId) || nativeNaiveFamily(modeId)) && (Thread.currentThread().isInterrupted()
                     || !capturedBundle.equals(loadBundle(privateBundle).toString()))) {
                 throw new IllegalStateException("Selected node changed or preparation was cancelled; no native session was staged.");
             }
@@ -220,12 +220,54 @@ final class NativeSingBoxController {
     }
 
     static boolean nativeMultihopEntry(String mode) {
-        return nativeWireGuardFamily(mode) || nativePQFamily(mode) || "shadowsocks".equals(mode) || "hysteria2".equals(mode)
+        return nativeWireGuardFamily(mode) || nativePQFamily(mode) || nativeNaiveFamily(mode) || "shadowsocks".equals(mode) || "hysteria2".equals(mode)
                 || java.util.Arrays.asList("reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg").contains(mode);
     }
 
     static boolean nativeWireGuardFamily(String mode) {
         return "wg".equals(mode) || "awg2-fast".equals(mode) || "awg2-strong".equals(mode);
+    }
+
+    static boolean nativeNaiveFamily(String mode) {
+        return "naive-h2".equals(mode) || "naive-h3".equals(mode);
+    }
+
+    /** Validate captured Naive assets and keep the full DNS/TUN wrapper.
+     * Only the selected node's inline trust is retained in the compiled graph.
+     * No helper process, alternate endpoint or unused trust file is staged.
+     */
+    static JSONObject compileNaiveProfile(JSONObject profile, String mode) throws Exception {
+        if (!nativeNaiveFamily(mode)) throw new IllegalArgumentException("Unknown Naive transport.");
+        String captured = profile.toString();
+        if (captured.getBytes(StandardCharsets.UTF_8).length > MAX_PROFILE_TOTAL)
+            throw new IllegalStateException("Naive assets exceed the captured profile limit.");
+        String verified = Libbox.routerCompileProxyEntry(captured, mode);
+        if (verified == null || verified.isEmpty() || verified.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG)
+            throw new IllegalStateException("Naive compiler returned no bounded transport.");
+        JSONObject transport = new JSONObject(verified);
+        if (!"naive".equals(transport.optString("type")) || !"routervpn-hop-entry".equals(transport.optString("tag"))
+                || !(transport.get("quic") instanceof Boolean) || transport.getBoolean("quic") != "naive-h3".equals(mode)
+                || transport.has("detour")) {
+            throw new IllegalStateException("Naive compiler changed the captured transport owner.");
+        }
+        String encoded = profile.getString("sing-box.json");
+        if (encoded.length() > ((MAX_CONFIG + 2) / 3) * 4)
+            throw new IllegalStateException("Naive wrapper exceeds the native configuration limit.");
+        byte[] raw = Base64.decode(encoded, Base64.DEFAULT);
+        if (raw.length == 0 || raw.length > MAX_CONFIG)
+            throw new IllegalStateException("Naive wrapper is empty or oversized.");
+        JSONObject graph = new JSONObject(strictUTF8(raw));
+        JSONArray outputs = graph.getJSONArray("outbounds");
+        int found = 0;
+        for (int i = 0; i < outputs.length(); i++) {
+            if ("proxy".equals(outputs.getJSONObject(i).optString("tag"))) {
+                outputs.put(i, transport.put("tag", "proxy"));
+                found++;
+            }
+        }
+        if (found != 1 || !"proxy".equals(graph.getJSONObject("route").optString("final")))
+            throw new IllegalStateException("Naive wrapper lost its final transport owner.");
+        return graph;
     }
 
     static boolean nativePQFamily(String mode) {
@@ -280,6 +322,7 @@ final class NativeSingBoxController {
                 throw new IllegalStateException("Native PQ compiler returned no bounded graph.");
             return compiled;
         }
+        if (nativeNaiveFamily(modeId)) return compileNaiveProfile(profile, modeId).toString();
         if (AndroidStartLayer.nativeXray(modeId)) return AndroidXrayLibboxPolicy.check(bundle, profile, modeId);
         String asset = "wg".equals(modeId) ? "wg.conf" : nativeWireGuardFamily(modeId) ? "awg.conf" : "sing-box.json";
         int maximum = nativeWireGuardFamily(modeId) ? 1024 * 1024 : MAX_CONFIG;

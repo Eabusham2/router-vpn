@@ -133,7 +133,7 @@ final class AndroidMultihopController {
             }
         }
         for (NativeSingBoxController.ModeInfo mode : singBox.listDirectLibboxModes(exitBundle)) {
-            if ("shadowsocks".equals(mode.id) || "hysteria2".equals(mode.id) || NativeSingBoxController.nativePQFamily(mode.id) || AndroidNativeMAXProfile.isMode(mode.id)) result.add(mode);
+            if ("shadowsocks".equals(mode.id) || "hysteria2".equals(mode.id) || NativeSingBoxController.nativeNaiveFamily(mode.id) || NativeSingBoxController.nativePQFamily(mode.id) || AndroidNativeMAXProfile.isMode(mode.id)) result.add(mode);
         }
         for (String mode : new String[]{"reality-vision", "reality-pq-vision", "reality-xhttp"}) {
             if (profiles == null || profiles.optJSONObject(mode) == null) continue;
@@ -162,7 +162,7 @@ final class AndroidMultihopController {
         if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
         if (entryBundle == null || exitBundle == null) throw new IllegalArgumentException("Choose both an entry and an exit node.");
         if (entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())) throw new IllegalArgumentException("Entry and exit must be different stored nodes.");
-        if (!(AndroidNativeMAXProfile.isMode(exitMode) || NativeSingBoxController.nativeWireGuardFamily(exitMode) || NativeSingBoxController.nativePQFamily(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode) || nativeXrayExit(exitMode))) throw new IllegalArgumentException("Choose an implemented native packet, proxy or Xray exit transport.");
+        if (!(AndroidNativeMAXProfile.isMode(exitMode) || NativeSingBoxController.nativeWireGuardFamily(exitMode) || NativeSingBoxController.nativePQFamily(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode) || NativeSingBoxController.nativeNaiveFamily(exitMode) || nativeXrayExit(exitMode))) throw new IllegalArgumentException("Choose an implemented native packet, proxy or Xray exit transport.");
 
         JSONObject entry = loadBundle(entryBundle);
         JSONObject exit = loadBundle(exitBundle);
@@ -221,6 +221,9 @@ final class AndroidMultihopController {
             config = new JSONObject(compiled);
             // Stage only the compiled graph: a second raw VPN is never started.
             exitProfile = new JSONObject().put("sing-box.json", "native-wireguard-graph");
+        } else if (NativeSingBoxController.nativeNaiveFamily(exitMode)) {
+            config = NativeSingBoxController.compileNaiveProfile(requiredProfile(exit, exitMode), exitMode);
+            exitProfile = new JSONObject().put("sing-box.json", "native-naive-graph");
         } else if (nativeXrayExit(exitMode)) {
             config = compileXrayExit(exit, exitMode);
             // The raw Xray configuration lives inside the owned native outbound.
@@ -403,7 +406,7 @@ final class AndroidMultihopController {
         }
         if (proxy == null) throw new IllegalStateException("Exit profile has no proxy outbound.");
         String type = proxy.optString("type", "").toLowerCase(Locale.ROOT);
-        String expected = NativeSingBoxController.nativePQFamily(exitMode) ? "routervpn-pq" : wireGuardExit ? ("wg".equals(exitMode) ? "wireguard" : "routervpn-amneziawg") : xrayExit ? "routervpn-xray" : exitMode;
+        String expected = NativeSingBoxController.nativePQFamily(exitMode) ? "routervpn-pq" : wireGuardExit ? ("wg".equals(exitMode) ? "wireguard" : "routervpn-amneziawg") : xrayExit ? "routervpn-xray" : NativeSingBoxController.nativeNaiveFamily(exitMode) ? "naive" : exitMode;
         if (!expected.equals(type)) throw new IllegalStateException("Exit mode engine does not match its generated profile.");
         if (xrayExit && (!exitMode.equals(proxy.optString("mode")) || proxy.length() != 4)) throw new IllegalStateException("Native Xray exit lost its exact transport ownership.");
         if (!"proxy".equals(proxy.optString("tag"))) throw new IllegalStateException("Exit endpoint lost its owned tag.");
