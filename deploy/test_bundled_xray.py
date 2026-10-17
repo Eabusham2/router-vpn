@@ -83,6 +83,74 @@ class Bundle(unittest.TestCase):
             with mock.patch.object(BUILD,'fetch_source') as fetch,self.assertRaises(ValueError):BUILD.build('linux/amd64',folder)
             fetch.assert_not_called();self.assertEqual(binary.read_bytes(),before)
 
+class SourceMatrix(unittest.TestCase):
+    def test_transient_fetch_retries_exact_origin_and_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'checkout';calls=[]
+            def execute(command,**kwargs):
+                calls.append(command)
+                if 'fetch' in command and sum('fetch' in c for c in calls)<3:
+                    raise subprocess.CalledProcessError(128,command)
+                return ''
+            with mock.patch.object(BUILD,'run',side_effect=execute),mock.patch.object(BUILD.time,'sleep') as sleep,mock.patch.object(BUILD.POLICY,'checkout') as check:
+                BUILD.fetch_source(root)
+            fetch=[c for c in calls if 'fetch' in c]
+            self.assertEqual(len(fetch),3)
+            self.assertTrue(all(c==['git','-C',str(root),'fetch','--depth=1','origin',BUILD.POLICY.XRAY_PIN] for c in fetch))
+            self.assertEqual(sleep.call_args_list,[mock.call(1),mock.call(2)])
+            self.assertEqual(calls[1][-1],'https://github.com/XTLS/Xray-core.git')
+            self.assertEqual(calls[-1],['git','-C',str(root),'checkout','--detach','FETCH_HEAD'])
+            check.assert_called_once_with(root)
+
+    def test_download_failure_never_checks_out_or_builds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'matrix';calls=[]
+            def execute(command,**kwargs):
+                calls.append(command)
+                if 'fetch' in command:raise subprocess.TimeoutExpired(command,600)
+                return ''
+            with mock.patch.object(BUILD,'run',side_effect=execute),mock.patch.object(BUILD.time,'sleep'),mock.patch.object(BUILD.POLICY,'checkout') as check,mock.patch.object(BUILD,'build') as build:
+                with self.assertRaises(subprocess.TimeoutExpired):BUILD.build_matrix(root)
+            self.assertEqual(sum('fetch' in c for c in calls),3)
+            self.assertFalse(any('checkout' in c for c in calls))
+            check.assert_not_called();build.assert_not_called()
+            self.assertEqual(list(Path(tmp).iterdir()),[root])
+            self.assertEqual(list(root.iterdir()),[])
+
+    def test_six_targets_share_one_checked_source_without_skipping_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'matrix'
+            with mock.patch.object(BUILD,'fetch_source') as fetch,mock.patch.object(BUILD.POLICY,'checkout') as check,mock.patch.object(BUILD,'build') as build:
+                outputs=BUILD.build_matrix(root)
+            fetch.assert_called_once();source=fetch.call_args.args[0]
+            check.assert_called_once_with(source.resolve())
+            self.assertEqual(len(outputs),6)
+            self.assertEqual(build.call_args_list,[mock.call(t,root/t.replace('/','-'),source.resolve()) for t in BUILD.TARGETS])
+            self.assertFalse(source.parent.exists(),'temporary source leaked into the image')
+            self.assertIn('build-xray-runtime.py all /xray',(ROOT/'server/init/Dockerfile').read_text())
+
+    def test_supplied_source_is_checked_and_drift_cannot_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'source';source.mkdir();(source/'sentinel').write_text('retained')
+            with mock.patch.object(BUILD,'fetch_source') as fetch,mock.patch.object(BUILD.POLICY,'checkout',side_effect=ValueError('wrong revision')),mock.patch.object(BUILD,'build') as build:
+                with self.assertRaisesRegex(ValueError,'wrong revision'):BUILD.build_matrix(root/'matrix',source)
+            fetch.assert_not_called();build.assert_not_called()
+            self.assertEqual((source/'sentinel').read_text(),'retained')
+
+    def test_failed_architecture_stops_remaining_targets_and_keeps_prior_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'matrix';attempts=[]
+            def compile(target,destination,source):
+                attempts.append(target)
+                if len(attempts)==2:raise ValueError('wrong binary metadata')
+                destination.mkdir();(destination/'receipt').write_text('verified target fixture')
+                return destination
+            with mock.patch.object(BUILD,'fetch_source'),mock.patch.object(BUILD.POLICY,'checkout'),mock.patch.object(BUILD,'build',side_effect=compile):
+                with self.assertRaisesRegex(ValueError,'wrong binary metadata'):BUILD.build_matrix(root)
+            self.assertEqual(attempts,list(BUILD.TARGETS[:2]))
+            self.assertEqual((root/BUILD.TARGETS[0].replace('/','-')/'receipt').read_text(),'verified target fixture')
+            self.assertEqual(len(list(root.iterdir())),1)
+
 class ImageRuntime(unittest.TestCase):
     def test_image_installs_complete_code_owned_runtime_and_verifies_it(self):
         dockerfile=(ROOT/'server/init/Dockerfile').read_text()

@@ -32,9 +32,7 @@ WORKDIR /src
 COPY . /src
 # Prepared at image build time in CI; the private server never recompiles these
 # engines at startup or when serving a requested package.
-RUN for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
-      python3 /src/deploy/build-xray-runtime.py "$target" "/xray/$(echo "$target" | tr / -)" || exit 1; \
-    done
+RUN python3 /src/deploy/build-xray-runtime.py all /xray
 FROM ghcr.io/rosenpass/rosenpass:sha-00569eb AS rosenpass
 
 FROM debian:bookworm-slim

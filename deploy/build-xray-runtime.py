@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('shared_xray',ROOT/'deploy/prepare-xray-runtime.py')
@@ -60,8 +61,18 @@ def reuse(destination,target,policy,env):
 def fetch_source(path):
     run(['git','init',str(path)])
     run(['git','-C',str(path),'remote','add','origin','https://github.com/XTLS/Xray-core.git'])
-    run(['git','-C',str(path),'fetch','--depth=1','origin',POLICY.XRAY_PIN])
+    # Retry only the same public origin and exact revision. A failed download
+    # cannot become an unchecked archive, moving-ref fallback or ready runtime.
+    command=['git','-C',str(path),'fetch','--depth=1','origin',POLICY.XRAY_PIN]
+    for attempt in range(3):
+        try:
+            run(command)
+            break
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if attempt==2:raise
+            time.sleep(2**attempt)
     run(['git','-C',str(path),'checkout','--detach','FETCH_HEAD'])
+    POLICY.checkout(Path(path))
 
 def build(target,destination,source=None):
     env=environment(target)
@@ -102,8 +113,27 @@ def build(target,destination,source=None):
     print('Built corrected Xray '+target+' '+policy,flush=True)
     return destination
 
+def build_matrix(destination,source=None):
+    """Reuse one build-owned verified checkout across all six native targets.
+
+    Each architecture still passes the ordinary compile/receipt/metadata path.
+    Per-target publication remains atomic; the release gate owns matrix closure.
+    """
+    destination=Path(destination).absolute()
+    if destination.is_symlink():raise ValueError('Refusing a symlink engine matrix')
+    destination.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.xray-matrix-',dir=destination.parent) as temp:
+        if source is None:
+            source=Path(temp)/'source'
+            fetch_source(source)
+        source=Path(source).resolve()
+        POLICY.checkout(source)
+        return [build(target,destination/target.replace('/','-'),source) for target in TARGETS]
+
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('target',choices=TARGETS);parser.add_argument('destination',type=Path)
+    parser.add_argument('target',choices=(*TARGETS,'all'));parser.add_argument('destination',type=Path)
     parser.add_argument('--source',type=Path,help='existing disposable exact-pinned source checkout')
-    args=parser.parse_args();build(args.target,args.destination,args.source)
+    args=parser.parse_args()
+    if args.target=='all':build_matrix(args.destination,args.source)
+    else:build(args.target,args.destination,args.source)
