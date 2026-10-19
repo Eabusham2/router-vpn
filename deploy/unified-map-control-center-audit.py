@@ -105,7 +105,8 @@ forbid(
 # iOS policy must be an intersection of the shared product catalog and the real
 # Apple PacketTunnel, not a copy of desktop/cross-platform capability. The
 # PacketTunnel owns WG and the bounded Libbox external families, including
-# OpenVPN. External AWG and Tor retain separate unimplemented capability gates.
+# OpenVPN. The generic CUSTOM builder retains its own composition limits;
+# dedicated external Tor controls require the native circuit and proof owner.
 need(
     "ios/RouterVPN/App/IOSUnifiedSecureTransport.swift",
     "alwaysOn = true",
@@ -138,8 +139,17 @@ need(
     "LibboxRouterOpenVPNEndpoint",
     'endpoint["type"] as? String == "openvpn-client"',
     'endpoint["system"] as? Bool == false',
-    "Tor bridges are unavailable on iOS",
+    "LibboxRouterCompileTorProfile",
+    'tor["session_id"] as? String == sessionID',
+    'tor["detour"] as? String == predecessorTag',
+    'torPredecessorProfile: proofProfile',
     "must be a literal IP so setup cannot leak pre-tunnel DNS",
+)
+need(
+    "ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",
+    "LibboxRouterTorCreateProofWithPredecessor",
+    "LibboxRouterStrategyDNSProof(server, &dnsFailure)",
+    "TorProofDelivery",
 )
 
 # Android owns its separate VpnService boundary. OpenVPN is compiled into that
@@ -169,11 +179,18 @@ forbid(
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
     'new Capability("openvpn",true',
-    'new Capability("tor-bridge",false',
+    'new Capability("tor",true',
+    'new Capability("tor-bridge",true',
     'AndroidOpenVPN.endpoint(e, "")',
-    "Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on Android",
+    "AndroidTorProfile.validate(e)",
     'Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn")',
     "must be a literal IP to avoid pre-tunnel DNS",
+)
+need(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidTorSession.java",
+    "Libbox.routerTorCreateProofWithPredecessor",
+    "Libbox.routerStrategyDNSProof(server)",
+    "request.healthy()",
 )
 
 # Windows x64 owns a real pinned Tor + PT + full-device wrapper and the WPF form
