@@ -79,10 +79,11 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	switch ext.Protocol {
 	case "http", "http_connect", "http-connect": ext.Protocol = "http-connect"
 	case "https", "https_connect", "https-connect": ext.Protocol = "https-connect"
-	case "tor", "tor_bridge", "tor-bridge": ext.Protocol = "tor-bridge"
+	case "tor": if ext.TorBridge != nil { ext.Protocol = "tor-bridge" }
+	case "tor_bridge", "tor-bridge": ext.Protocol = "tor-bridge"
 	}
 	ext.ExpectedPublicIP = strings.TrimSpace(ext.ExpectedPublicIP)
-	if ext.Protocol == "tor-bridge" {
+	if ext.Protocol == "tor-bridge" || ext.Protocol == "tor" {
 		if ext.ExpectedPublicIP != "" { return fmt.Errorf("Tor bridge has a dynamic circuit exit; expected_public_ip must be empty and the runtime must prove/observe the live Tor exit") }
 	} else {
 		normalized, err := NormalizeExpectedPublicIP(ext.ExpectedPublicIP)
@@ -101,6 +102,10 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	if ext.HTTPSConnect != nil { blocks++ }
 	if ext.Hysteria2 != nil { blocks++ }
 	if ext.TorBridge != nil { blocks++ }
+	if ext.Protocol == "tor" {
+		if blocks != 0 { return fmt.Errorf("plain Tor cannot contain another protocol or bridge block") }
+		return nil
+	}
 	if blocks != 1 { return fmt.Errorf("external node requires exactly one protocol block") }
 	noHTTP := ext.HTTPConnect == nil && ext.HTTPSConnect == nil
 	switch ext.Protocol {
@@ -155,6 +160,7 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 func externalNodeEndpoint(ext *ExternalNodeConfig) string {
 	if ext == nil { return "" }
 	switch ext.Protocol {
+	case "tor": return "tor"
 	case "wireguard":
 		if ext.WireGuard != nil { value := strings.TrimSpace(ext.WireGuard.Endpoint); if h, _, err := net.SplitHostPort(value); err == nil { return strings.Trim(h, "[]") }; if i := strings.LastIndex(value, ":"); i > 0 { return strings.Trim(strings.TrimSpace(value[:i]), "[]") }; return strings.Trim(value, "[]") }
 	case "shadowsocks":

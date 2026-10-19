@@ -3,8 +3,15 @@ package libbox
 import (
 	"errors"
 
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing-box/routervpn/tornotices"
 )
+
+// RouterCompileTorProfile compiles captured node, DNS, interface and optional
+// predecessor configuration before either host stages files or opens a VPN.
+func RouterCompileTorProfile(profileJSON, sessionID, predecessorJSON string) (string, error) {
+	return mobiletor.CompileProfile(profileJSON, sessionID, predecessorJSON)
+}
 
 // RouterTorProof must receive the provider's captured native CommandServer,
 // final outbound tag and frozen connection session ID. The result is JSON with
