@@ -226,7 +226,7 @@ struct RouterVPNNodeManagerSheet: View {
                         Task { await model.connectSelectedExternal() }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(model.profileMutationBlocked || !["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(profile.external?.protocolName.lowercased() ?? ""))
+                    .disabled(model.profileMutationBlocked || !["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"].contains(profile.external?.protocolName.lowercased() ?? ""))
                 }
             }
         }

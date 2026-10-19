@@ -33,8 +33,8 @@ class Shipping(unittest.TestCase):
         source=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java').read_text()
         listing=source[source.index('List<ModeInfo> listDirectLibboxModes'):source.index('SessionInfo prepareSession')]
         self.assertLess(listing.index('compileStandaloneProfile'),listing.index('isDirectFullDeviceConfig'))
-        setup=source[source.index('SessionInfo prepareSession'):source.index('private static String compileStandaloneProfile')]
-        compiler=source[source.index('private static String compileStandaloneProfile'):source.index('private static String strictUTF8')]
+        setup=source[source.index('SessionInfo prepareSession'):source.index('static String compileStandaloneProfile')]
+        compiler=source[source.index('static String compileStandaloneProfile'):source.index('private static String strictUTF8')]
         self.assertIn('if (!nativeWireGuardFamily(modeId)) return compileNativeSIP003(profile, modeId, strictUTF8(raw));',compiler)
         self.assertIn('Libbox.routerWireGuardExitConfig',compiler)
         self.assertLess(setup.index('compileStandaloneProfile'),setup.index('isDirectFullDeviceConfig'))
@@ -53,7 +53,14 @@ class Shipping(unittest.TestCase):
         orchestrator=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java').read_text()
         self.assertIn('AndroidPathProbe.prove(bundle',orchestrator)
         ios=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
-        self.assertIn('LibboxRouterCompileSIP003Profile',ios)
+        compiler=ios[ios.index('private func compileLibbox('):ios.index('private func performanceFiles(')]
+        self.assertIn('IOSNativeCompositeMultihop.capture',compiler)
+        self.assertIn('LibboxRouterCompileCompositeProfile(mode, assets, policy, start, &failure)',compiler)
+        self.assertIn('LibboxRouterCompositeMultihopBase(source, mode, node, start, &failure)',compiler)
+        self.assertIn('Data(captured.source.utf8)',compiler)
+        start=ios[ios.index('private func startLibbox('):ios.index('private func compileLibbox(')]
+        self.assertLess(start.index('compileLibbox('),start.index('engine.start(files: files, strict: strict)'))
+        self.assertLess(start.index('engine.start(files: files, strict: strict)'),start.index('proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID'))
         traffic=(ROOT/'mobile/sip003/traffic_test.go.tmpl').read_text()
         for required in ('RouterCompileSIP003Profile','CheckConfig','tcpExchange','udpExchange','wrong-key','wrong-certificate'):
             self.assertIn(required,traffic)

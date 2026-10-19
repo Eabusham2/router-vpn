@@ -37,7 +37,8 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	for _, required := range []string{
 		"try IOSStartLayer.validateWireGuard(profile: selectedProfile)",
 		"rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)",
-		"let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles",
+		"let completeChain = IOSNativeMAXProfile.modeIDs.contains(rawProfileID) || IOSNativeCompositeMultihop.modeIDs.contains(rawProfileID)",
+		"let composedFiles = try completeChain ? rawFiles",
 		": IOSStartLayer.apply(root: compositionRoot, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)",
 		"var compositionRoot = root",
 		"var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)",
@@ -65,7 +66,7 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	}
 	compiler := body[compilerStart:compilerEnd]
 	native := strings.Index(compiler, "LibboxRouterCompileXrayProfile(")
-	compose := strings.Index(compiler, "let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(")
+	compose := strings.Index(compiler, "let composedFiles = try completeChain ? rawFiles")
 	mtu := strings.Index(compiler, "var files = try RouterVPNMTUPolicy.libbox(composedFiles,")
 	result := strings.Index(compiler, "return LibboxCompilation(files: files, nodeID: expectedNodeID")
 	if !appleSingleLayerDispatchIsOwned(body) || native < 0 || compose <= native || mtu <= compose || result <= mtu {
@@ -173,7 +174,7 @@ func TestNativeBaseStartLayerHostsShareTheCompiler(t *testing.T) {
 }
 
 // This is a source wiring contract, not a substitute for the executable Swift/Go
-// MAX tests. Only the complete MAX compiler may consume an already-composed
+// MAX/composite tests. Complete-chain compilers consume their already-composed
 // Start Layer. Every ordinary mode must still pass through IOSStartLayer.apply.
 func appleSingleLayerDispatchIsOwned(body string) bool {
 	normalized := strings.Join(strings.Fields(body), " ")
@@ -183,7 +184,8 @@ func appleSingleLayerDispatchIsOwned(body string) bool {
 		return false
 	}
 	launch, compiler := normalized[:compilerStart], normalized[compilerStart:compilerEnd]
-	dispatch := "let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles : IOSStartLayer.apply(root: compositionRoot, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)"
+	family := strings.Index(compiler, "let completeChain = IOSNativeMAXProfile.modeIDs.contains(rawProfileID) || IOSNativeCompositeMultihop.modeIDs.contains(rawProfileID)")
+	dispatch := "let composedFiles = try completeChain ? rawFiles : IOSStartLayer.apply(root: compositionRoot, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)"
 	pos := strings.Index(compiler, dispatch)
 	if pos < 0 || strings.Count(compiler, "let composedFiles =") != 1 || !strings.Contains(compiler, "var compositionRoot = root") {
 		return false
@@ -192,13 +194,20 @@ func appleSingleLayerDispatchIsOwned(body string) bool {
 	selected := strings.Index(compiler, "let start = try IOSStartLayer.selectedMode(profile: selectedProfile)")
 	capture := strings.Index(compiler, "profile: selectedProfile, startLayer: start)")
 	bridge := strings.Index(compiler, "LibboxRouterCompileMAXProfile(mode, assets, metadata, &failure)")
+	composite := strings.Index(compiler, "IOSNativeCompositeMultihop.capture(root: root, mode: rawProfileID,")
+	compositeBridge := strings.Index(compiler, "LibboxRouterCompileCompositeProfile(mode, assets, policy, start, &failure)")
+	baseProof := strings.Index(compiler, "LibboxRouterCompositeMultihopBase(source, mode, node, start, &failure)")
+	complete := strings.Index(compiler, "Data(captured.source.utf8)")
+	adopt := strings.Index(compiler, "rawFiles = [\"sing-box.json\": try JSONSerialization.data(withJSONObject: complete, options: [.sortedKeys])]")
 	mtu := strings.Index(compiler, "var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)")
 	result := strings.Index(compiler, "return LibboxCompilation(files: files, nodeID: expectedNodeID,")
 	prepare := strings.Index(launch, "let compiled = try compileLibbox(provider: provider, root: root, selectedProfile: selectedProfile)")
 	consume := strings.Index(launch, "let files = compiled.files, provenNodeID = compiled.nodeID")
 	run := strings.Index(launch, "try engine.start(files: files, strict: strict)")
 	proof := strings.Index(launch, "proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID")
-	return selected >= 0 && compile > selected && capture > compile && bridge > capture && pos > bridge && mtu > pos && result > mtu &&
+	return selected >= 0 && compile > selected && capture > compile && bridge > capture &&
+		composite > bridge && compositeBridge > composite && baseProof > compositeBridge && complete > baseProof && adopt > complete &&
+		family > adopt && pos > family && mtu > pos && result > mtu &&
 		prepare >= 0 && consume > prepare && run > consume && proof > run
 }
 
@@ -214,11 +223,16 @@ func TestAppleSingleLayerDispatchRejectsUnownedMAXBypass(t *testing.T) {
 		t.Fatal("shipping MAX/ordinary dispatch is disconnected")
 	}
 	cases := [][2]string{
-		{"IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles", "true ? rawFiles"},
+		{"let completeChain = IOSNativeMAXProfile.modeIDs.contains(rawProfileID) || IOSNativeCompositeMultihop.modeIDs.contains(rawProfileID)", "let completeChain = true"},
+		{"try completeChain ? rawFiles", "try true ? rawFiles"},
 		{"? rawFiles\n            : IOSStartLayer.apply(", "? rawFiles\n            : bypass("},
 		{"rawFiles = try IOSNativeMAXProfile.compile(", "rawFiles = try ignored("},
 		{"profile: selectedProfile, startLayer: start)", "profile: selectedProfile, startLayer: \"off\")"},
 		{"LibboxRouterCompileMAXProfile(mode, assets, metadata, &failure)", "fakeGraph(mode)"},
+		{"LibboxRouterCompileCompositeProfile(mode, assets, policy, start, &failure)", "fakeComposite(mode)"},
+		{"LibboxRouterCompositeMultihopBase(source, mode, node, start, &failure)", "fakeProof(source)"},
+		{"Data(captured.source.utf8)", "Data(captured.baseSource.utf8)"},
+		{"rawFiles = [\"sing-box.json\": try JSONSerialization.data(withJSONObject: complete, options: [.sortedKeys])]", "rawFiles = captured.baseFiles"},
 		{"RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)", "RouterVPNMTUPolicy.libbox(rawFiles, profile: selectedProfile)"},
 		{"var compositionRoot = root", "var compositionRoot: [String: Any] = [:]"},
 		{"return LibboxCompilation(files: files, nodeID: expectedNodeID,", "return LibboxCompilation(files: rawFiles, nodeID: expectedNodeID,"},
