@@ -135,6 +135,18 @@ final class AndroidMultihopController {
         for (NativeSingBoxController.ModeInfo mode : singBox.listDirectLibboxModes(exitBundle)) {
             if ("shadowsocks".equals(mode.id) || "hysteria2".equals(mode.id) || NativeSingBoxController.nativeNaiveFamily(mode.id) || NativeSingBoxController.nativePQFamily(mode.id) || AndroidNativeMAXProfile.isMode(mode.id)) result.add(mode);
         }
+        for (String mode : new String[]{"ss-v2ray", "split", "max"}) {
+            if (profiles == null || profiles.optJSONObject(mode) == null) continue;
+            try {
+                JSONObject graph = new JSONObject(AndroidNativeCompositeProfile.compile(bundle, profiles.getJSONObject(mode), mode));
+                NativeSingBoxController.applySelectedDns(bundle, graph);
+                io.nekohasekai.libbox.Libbox.checkConfig(graph.toString());
+                result.add(new NativeSingBoxController.ModeInfo(mode,
+                        "ss-v2ray".equals(mode) ? "Shadowsocks + WebSocket / Hysteria2" : "split".equals(mode) ? "Split TLS / QUIC" : "MAX TLS / QUIC"));
+            } catch (Exception invalidProfile) {
+                continue;
+            }
+        }
         for (String mode : new String[]{"reality-vision", "reality-pq-vision", "reality-xhttp"}) {
             if (profiles == null || profiles.optJSONObject(mode) == null) continue;
             try {
@@ -162,7 +174,7 @@ final class AndroidMultihopController {
         if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
         if (entryBundle == null || exitBundle == null) throw new IllegalArgumentException("Choose both an entry and an exit node.");
         if (entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())) throw new IllegalArgumentException("Entry and exit must be different stored nodes.");
-        if (!(AndroidNativeMAXProfile.isMode(exitMode) || NativeSingBoxController.nativeWireGuardFamily(exitMode) || NativeSingBoxController.nativePQFamily(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode) || NativeSingBoxController.nativeNaiveFamily(exitMode) || nativeXrayExit(exitMode))) throw new IllegalArgumentException("Choose an implemented native packet, proxy or Xray exit transport.");
+        if (!(AndroidNativeCompositeProfile.isMode(exitMode) || AndroidNativeMAXProfile.isMode(exitMode) || NativeSingBoxController.nativeWireGuardFamily(exitMode) || NativeSingBoxController.nativePQFamily(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode) || NativeSingBoxController.nativeNaiveFamily(exitMode) || nativeXrayExit(exitMode))) throw new IllegalArgumentException("Choose an implemented native packet, proxy or Xray exit transport.");
 
         JSONObject entry = loadBundle(entryBundle);
         JSONObject exit = loadBundle(exitBundle);
@@ -172,19 +184,24 @@ final class AndroidMultihopController {
         if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
         if (entryIdentity.isEmpty() || exitIdentity.isEmpty()) throw new IllegalArgumentException("Both multihop nodes need paired identities.");
         boolean maxEntry = AndroidNativeMAXProfile.isMode(entryMode), maxExit = AndroidNativeMAXProfile.isMode(exitMode);
+        boolean compositeEntry = AndroidNativeCompositeProfile.isMode(entryMode), compositeExit = AndroidNativeCompositeProfile.isMode(exitMode);
         String entryLayerMode = AndroidStartLayer.selectedMode(entry), exitLayerMode = AndroidStartLayer.selectedMode(exit);
         // MAX's complete compiler already owns its optional outermost AES leg.
         // Ordinary hops retain their independently captured layer assets.
-        String entryStartLayer = maxEntry ? "" : AndroidMultihopStartLayer.capture(entry);
-        String exitStartLayer = maxExit ? "" : AndroidMultihopStartLayer.capture(exit);
+        String entryStartLayer = maxEntry || compositeEntry ? "" : AndroidMultihopStartLayer.capture(entry);
+        String exitStartLayer = maxExit || compositeExit ? "" : AndroidMultihopStartLayer.capture(exit);
         String entryMAX = maxEntry ? AndroidNativeMAXProfile.compile(entry, requiredProfile(entry, entryMode), entryMode) : "";
         String exitMAX = maxExit ? AndroidNativeMAXProfile.compile(exit, requiredProfile(exit, exitMode), exitMode) : "";
+        String entryComposite = compositeEntry ? AndroidNativeCompositeProfile.compile(entry, requiredProfile(entry, entryMode), entryMode) : "";
+        String exitComposite = compositeExit ? AndroidNativeCompositeProfile.compile(exit, requiredProfile(exit, exitMode), exitMode) : "";
         requireOwnedPolicies(entry, true); requireOwnedPolicies(exit, true);
         boolean pqEntry = NativeSingBoxController.nativePQFamily(entryMode);
         boolean packetEntry = NativeSingBoxController.nativeWireGuardFamily(entryMode) || pqEntry || maxEntry;
         JSONObject wg;
         if (maxEntry) {
             wg = completeMAXBase(entryMAX, entryMode, entryIdentity, entryLayerMode).getJSONArray("endpoints").getJSONObject(0);
+        } else if (compositeEntry) {
+            wg = AndroidNativeCompositeProfile.base(entryComposite, entryMode, entryIdentity, entryLayerMode).getJSONArray("outbounds").getJSONObject(0);
         } else if (pqEntry) {
             wg = NativeSingBoxController.compilePQEntry(entry, entryMode);
         } else if (packetEntry) {
@@ -208,6 +225,9 @@ final class AndroidMultihopController {
         if (maxExit) {
             config = completeMAXBase(exitMAX, exitMode, exitIdentity, exitLayerMode);
             exitProfile = new JSONObject().put("sing-box.json", "native-complete-max-graph");
+        } else if (compositeExit) {
+            config = AndroidNativeCompositeProfile.base(exitComposite, exitMode, exitIdentity, exitLayerMode);
+            exitProfile = new JSONObject().put("sing-box.json", "native-complete-composite-graph");
         } else if (pqExit) {
             config = NativeSingBoxController.compilePQGraph(exit, exitMode);
             // The negotiated keys remain inside this endpoint; no raw config,
@@ -268,6 +288,13 @@ final class AndroidMultihopController {
             String composed = io.nekohasekai.libbox.Libbox.routerComposeMAXMultihop(config.toString(), metadata.toString(), entryMAX, exitMAX);
             if (composed == null || composed.isEmpty() || composed.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG) {
                 throw new IllegalStateException("Complete MAX multihop did not restore a bounded owned graph.");
+            }
+            config = new JSONObject(composed);
+        }
+        if (compositeEntry || compositeExit) {
+            String composed = io.nekohasekai.libbox.Libbox.routerComposeCompositeMultihop(config.toString(), metadata.toString(), entryComposite, exitComposite);
+            if (composed == null || composed.isEmpty() || composed.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG) {
+                throw new IllegalStateException("The composite multihop did not restore both captured transport lanes.");
             }
             config = new JSONObject(composed);
         }
@@ -406,9 +433,10 @@ final class AndroidMultihopController {
         }
         if (proxy == null) throw new IllegalStateException("Exit profile has no proxy outbound.");
         String type = proxy.optString("type", "").toLowerCase(Locale.ROOT);
-        String expected = NativeSingBoxController.nativePQFamily(exitMode) ? "routervpn-pq" : wireGuardExit ? ("wg".equals(exitMode) ? "wireguard" : "routervpn-amneziawg") : xrayExit ? "routervpn-xray" : NativeSingBoxController.nativeNaiveFamily(exitMode) ? "naive" : exitMode;
+        String expected = NativeSingBoxController.nativePQFamily(exitMode) ? "routervpn-pq" : wireGuardExit ? ("wg".equals(exitMode) ? "wireguard" : "routervpn-amneziawg") : AndroidNativeCompositeProfile.isMode(exitMode) ? "routervpn-composite" : xrayExit ? "routervpn-xray" : NativeSingBoxController.nativeNaiveFamily(exitMode) ? "naive" : exitMode;
         if (!expected.equals(type)) throw new IllegalStateException("Exit mode engine does not match its generated profile.");
         if (xrayExit && (!exitMode.equals(proxy.optString("mode")) || proxy.length() != 4)) throw new IllegalStateException("Native Xray exit lost its exact transport ownership.");
+        if (AndroidNativeCompositeProfile.isMode(exitMode) && !exitMode.equals(proxy.optString("mode"))) throw new IllegalStateException("Composite exit lost its captured raw mode.");
         if (!"proxy".equals(proxy.optString("tag"))) throw new IllegalStateException("Exit endpoint lost its owned tag.");
         for (String key:new String[]{"detour","bind_interface","inet4_bind_address","inet6_bind_address","routing_mark","network_strategy","domain_resolver"}) {
             if (proxy.has(key)) throw new IllegalStateException("Exit already owns dial policy; it was not overwritten.");
@@ -417,7 +445,7 @@ final class AndroidMultihopController {
             String a=wg.getJSONArray("peers").getJSONObject(0).getString("public_key");
             String b=proxy.getJSONArray("peers").getJSONObject(0).getString("public_key");
             if(a.equals(b)) throw new IllegalStateException("WireGuard hops cannot reuse the same server key under different labels.");
-        } else if (!wireGuardExit && !xrayExit && !literalIP(proxy.optString("server", ""))) {
+        } else if (!wireGuardExit && !xrayExit && !AndroidNativeCompositeProfile.isMode(exitMode) && !literalIP(proxy.optString("server", ""))) {
             throw new IllegalStateException("Exit requires a literal endpoint; direct DNS bootstrap is forbidden.");
         }
 

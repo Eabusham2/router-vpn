@@ -75,6 +75,9 @@ def inputs() -> list[Path]:
     java = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
     return [Path(__file__).resolve(), ROOT / 'android/test_android_multihop_layers.py', ROOT / 'android/test_android_multihop_start_layer.py', ROOT / 'android/test_android_multihop_graph.py',
             ROOT / 'mobile/routervpn_multihop_native_test.go.tmpl',
+            ROOT / 'android/test_android_composite_multihop.py', ROOT / 'android/test_android_max_multihop.py',
+            ROOT / 'android/test_android_pq_selection.py', ROOT / 'deploy/testfixtures/composite/main.go',
+            java / 'AndroidNativeCompositeProfile.java',
             *[java / (name + '.java') for name in JAVA_NAMES]]
 
 
@@ -172,11 +175,18 @@ def run(vendor: Path) -> None:
                        cwd=ROOT,env=env,check=True,timeout=180)
         require_both_layer_matrix(both_layers)
 
+        composites = Path(temp)/'composites'
+        composites.mkdir()
+        env['ROUTERVPN_ANDROID_COMPOSITE_GRAPHS'] = str(composites)
+        env['ROUTERVPN_REQUIRE_ANDROID_COMPOSITE_GRAPHS'] = '1'
+        subprocess.run([sys.executable, str(ROOT/'android/test_android_composite_multihop.py')],
+                       cwd=ROOT, env=env, check=True, timeout=240)
+
         subprocess.run(['go', 'test', '-ldflags=-checklinkname=0',
                         '-tags', 'with_quic,with_wireguard,with_gvisor',
-                        './experimental/libbox', '-run', '^TestRouterMultihop(AndroidGeneratedGraphs|EntryStartLayerGeneratedGraphs|BothStartLayersGeneratedGraphs)$',
+                        './experimental/libbox', '-run', '^TestRouterMultihop(AndroidGeneratedGraphs|EntryStartLayerGeneratedGraphs|BothStartLayersGeneratedGraphs|AndroidCompositeGeneratedGraphs)$',
                         '-count=1', '-timeout=120s', '-v'], cwd=vendor, env=env, check=True, timeout=600)
-    print('All 150 base, 48 entry-layer and 384 both-layer Android graphs passed the pinned native parser; negative controls rejected.')
+    print('All 150 base, 48 entry-layer, 384 both-layer and 837 composite Android graphs passed the pinned native parser; negative controls rejected.')
 
 
 if __name__ == '__main__':

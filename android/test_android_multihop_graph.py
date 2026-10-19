@@ -57,6 +57,15 @@ func main(){
  case "max-profile":
   var input struct{Mode string;Files string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{value,err=mobilemultihop.CompileMAXProfile(input.Mode,input.Files,r.Policy)}
+ case "composite-profile":
+  var input struct{Mode,Files,Start string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobilemultihop.CompileCompositeProfile(input.Mode,input.Files,r.Policy,input.Start)}
+ case "composite-base":
+  var input struct{Config,Mode,Node,Layer string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobilemultihop.CompositeMultihopBase(input.Config,input.Mode,input.Node,input.Layer)}
+ case "composite-multihop":
+  var input struct{Config,Entry,Exit string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobilemultihop.ComposeCompositeMultihop(input.Config,r.Policy,input.Entry,input.Exit)}
  case "pq-profile":
   var input struct{Mode string;Files string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{value,err=mobilemultihop.CompilePQProfile(input.Mode,input.Files,r.Policy)}
@@ -157,6 +166,9 @@ public final class Libbox {
  public static String routerComposeMAXMultihop(String config,String metadata,String entry,String exit)throws Exception{return call("max-multihop",new JSONObject().put("Config",config).put("Entry",entry).put("Exit",exit).toString(),metadata);}
 
  public static String routerCompileMAXProfile(String mode,String files,String policy)throws Exception{return call("max-profile",new JSONObject().put("Mode",mode).put("Files",files).toString(),policy);}
+ public static String routerCompileCompositeProfile(String mode,String files,String policy,String start)throws Exception{return call("composite-profile",new JSONObject().put("Mode",mode).put("Files",files).put("Start",start).toString(),policy);}
+ public static String routerCompositeMultihopBase(String config,String mode,String node,String layer)throws Exception{return call("composite-base",new JSONObject().put("Config",config).put("Mode",mode).put("Node",node).put("Layer",layer).toString(),"");}
+ public static String routerComposeCompositeMultihop(String config,String metadata,String entry,String exit)throws Exception{return call("composite-multihop",new JSONObject().put("Config",config).put("Entry",entry).put("Exit",exit).toString(),metadata);}
  public static Runnable afterEntryLayerPreflight;
  public static String routerCompileMultihopEntryStartLayer(String config,String metadata,String source)throws Exception {
   String result=call("entry-start",new JSONObject().put("Config",config).put("Metadata",metadata).put("Source",source).toString(),"");
@@ -806,7 +818,7 @@ def main():
         for name,source in STUBS.items():
             target=sources/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(source)
         app=sources/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
-        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidNativeMAXProfile','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer','AndroidXrayLibboxPolicy','NativeXrayController','AndroidMultihopStartLayer'):
+        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidNativeMAXProfile','AndroidNativeCompositeProfile','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer','AndroidXrayLibboxPolicy','NativeXrayController','AndroidMultihopStartLayer'):
             shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
         (app/'MultihopGraphHarness.java').write_text(HARNESS)
         classes=temp/'classes'

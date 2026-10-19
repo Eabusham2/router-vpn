@@ -165,7 +165,7 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(source)
         for name in ('AndroidHomeStateStore', 'AndroidMultihopController', 'NativeSingBoxController',
-                     'AndroidNativeMAXProfile', 'AndroidProfileSelection', 'AndroidNumericAddress',
+                     'AndroidNativeMAXProfile','AndroidNativeCompositeProfile', 'AndroidProfileSelection', 'AndroidNumericAddress',
                      'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy', 'AndroidStartLayer',
                      'AndroidXrayLibboxPolicy', 'NativeXrayController', 'AndroidMultihopStartLayer'):
             source = JAVA/(name+'.java')

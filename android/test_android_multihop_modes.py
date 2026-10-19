@@ -19,16 +19,16 @@ public static void main(String[] args) {
   if(!normalizeEntryMode(mode).equals(mode))throw new AssertionError("saved entry transport changed");checks++;
   if(!normalizeMultiMode(mode).equals(mode)||!normalizeMultiMode(" "+mode.toUpperCase(Locale.ROOT)+" ").equals(mode))throw new AssertionError("saved exit transport changed"); checks+=2;
  }
- for(String mode:new String[]{"awg2","awg2-pq-unknown","max","wg;exec","none"}){
+ for(String mode:new String[]{"awg2","awg2-pq-unknown","max-unknown","wg;exec","none"}){
   boolean rejected=false;try{normalizeMultiMode(mode);}catch(IllegalArgumentException expected){rejected=true;}
   if(!rejected)throw new AssertionError("unimplemented or malformed transport accepted");checks++;
  }
- for(String mode:new String[]{"awg2","max","socks","wg;exec","WG","",null}){
+ for(String mode:new String[]{"awg2","max-unknown","socks","wg;exec","WG","",null}){
   boolean rejected=false;try{normalizeEntryMode(mode);}catch(IllegalArgumentException expected){rejected=true;}
   if(!rejected)throw new AssertionError("unimplemented or ambiguous entry accepted");checks++;
  }
  if(!normalizeMultiMode(null).equals("shadowsocks")||!normalizeMultiMode("").equals("shadowsocks"))throw new AssertionError("legacy default changed");checks+=2;
- for(String mode:new String[]{"wg-pq","awg2-pq","naive-h2","naive-h3","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"}){
+ for(String mode:new String[]{"wg-pq","awg2-pq","naive-h2","naive-h3","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","ss-v2ray","split","max"}){
   if(!normalizeEntryMode(mode).equals(mode))throw new AssertionError("saved PQ entry changed");checks++;
   if(!normalizeMultiMode(mode).equals(mode)||!normalizeMultiMode(" "+mode.toUpperCase(Locale.ROOT)+" ").equals(mode))throw new AssertionError("saved PQ exit changed");checks+=2;
  }

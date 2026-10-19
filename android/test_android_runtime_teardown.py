@@ -242,7 +242,7 @@ public final class RuntimeTeardownHarness {
                     }
                 });
             }
-            for(String entryMode:new String[]{"socks","http","tor","max","awg2-pq-unknown","WG","",null}) {
+            for(String entryMode:new String[]{"socks","http","tor","max-unknown","awg2-pq-unknown","WG","",null}) {
                 test("multihop rejects unavailable entry "+entryMode,()->{
                     try(Owner owner=new Owner(kind)) {
                         Callback cb=new Callback(0);
@@ -395,6 +395,10 @@ for name in ('nativeWireGuardFamily', 'nativePQFamily', 'nativeNaiveFamily', 'na
     assert len(matches) == 1, 'missing or ambiguous production transport predicate: ' + name
     predicates.append(matches[0])
 STUBS = STUBS.replace('    // PRODUCTION_TRANSPORT_PREDICATES', '\n'.join(predicates))
+composite_source = (JAVA / 'AndroidNativeCompositeProfile.java').read_text()
+composite_predicate = re.findall(r'(?ms)^    static boolean isMode\(String mode\) \{\n.*?^    \}', composite_source)
+assert len(composite_predicate) == 1, 'missing exact composite transport predicate'
+STUBS += '\nfinal class AndroidNativeCompositeProfile {\n' + composite_predicate[0] + '\n}\n'
 
 with tempfile.TemporaryDirectory(prefix='routervpn-runtime-teardown-') as tmp:
     base=Path(tmp); pkg=base/'com/eabusham/routervpn';pkg.mkdir(parents=True)

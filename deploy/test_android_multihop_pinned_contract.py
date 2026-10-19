@@ -161,7 +161,7 @@ class NativeGraphGate(unittest.TestCase):
         script = (ROOT / 'deploy/test_android_multihop_pinned.py').read_text()
         template = (ROOT / 'mobile/routervpn_multihop_native_test.go.tmpl').read_text()
         self.assertIn("env['ROUTERVPN_REQUIRE_ANDROID_GRAPH_FIXTURES'] = '1'", script)
-        self.assertIn("'^TestRouterMultihop(AndroidGeneratedGraphs|EntryStartLayerGeneratedGraphs|BothStartLayersGeneratedGraphs)$'", script)
+        self.assertIn("'^TestRouterMultihop(AndroidGeneratedGraphs|EntryStartLayerGeneratedGraphs|BothStartLayersGeneratedGraphs|AndroidCompositeGeneratedGraphs)$'", script)
         self.assertIn("env['ROUTERVPN_REQUIRE_ENTRY_LAYER_FIXTURES']='1'",script)
         self.assertIn("cases != 48",template)
         self.assertIn("unimplemented-negative-entry-layer",template)
@@ -172,6 +172,28 @@ class NativeGraphGate(unittest.TestCase):
         self.assertIn('CheckConfig(string(bad))', template)
         self.assertIn('if checks != 150', template)
         self.assertNotIn('t.Parallel()', template)
+
+    def test_composite_graphs_remain_required_and_bound_to_the_native_cache(self):
+        script = (ROOT / 'deploy/test_android_multihop_pinned.py').read_text()
+        template = (ROOT / 'mobile/routervpn_multihop_native_test.go.tmpl').read_text()
+        composite = template.split('func TestRouterMultihopAndroidCompositeGeneratedGraphs', 1)[1].split('\nfunc ', 1)[0]
+        self.assertIn("env['ROUTERVPN_REQUIRE_ANDROID_COMPOSITE_GRAPHS'] = '1'", script)
+        self.assertIn("env['ROUTERVPN_ANDROID_COMPOSITE_GRAPHS'] = str(composites)", script)
+        self.assertIn("str(ROOT/'android/test_android_composite_multihop.py')", script)
+        for required in ('required Android composite graphs missing', 'len(entries) != 837',
+                         'if checks != 837', 'CheckConfig(string(raw))',
+                         'CheckConfig(string(bad)) == nil', 'unregistered-composite-negative',
+                         'composite fixture lost both requested lane owners'):
+            self.assertIn(required, composite)
+        before = GATE.digest()
+        original_read = Path.read_bytes
+        for relative in ('android/test_android_composite_multihop.py',
+                         'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeCompositeProfile.java',
+                         'deploy/testfixtures/composite/main.go'):
+            changed = ROOT / relative
+            self.assertIn(changed, GATE.inputs())
+            with mock.patch.object(Path, 'read_bytes', lambda path: original_read(path) + (b'\n// changed composite\n' if path == changed else b'')):
+                self.assertNotEqual(before, GATE.digest())
 
 
 class BothLayerGate(unittest.TestCase):

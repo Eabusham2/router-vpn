@@ -293,6 +293,7 @@ for executable_contract in (
     "test_android_java_syntax.py",
     "test_android_multihop_modes.py",
     "test_android_multihop_home_state.py",
+    "test_android_composite_multihop.py",
     "test_android_multihop_start_layer.py",
     "test_android_multihop_layers.py",
     "test_android_layered_service_compile.py",

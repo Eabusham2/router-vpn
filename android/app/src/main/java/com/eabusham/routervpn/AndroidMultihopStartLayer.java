@@ -39,7 +39,7 @@ final class AndroidMultihopStartLayer {
     }
 
     static RouterMultihop prepareExecution(String config, String metadata, String captured) throws Exception {
-        if (completeMAX(new JSONObject(metadata))) return prepareExecution(config,metadata,captured,null);
+        if (completeChain(new JSONObject(metadata))) return prepareExecution(config,metadata,captured,null);
         if (new JSONObject(metadata).has("exit_start_layer")) throw new IllegalStateException("Requested exit layer requires its paired captured source.");
         JSONObject selection = new JSONObject(metadata);
         String execution = selection.has("execution") ? selection.getString("execution") : "local";
@@ -63,7 +63,7 @@ final class AndroidMultihopStartLayer {
     }
 
     static void preflight(String config, String metadata, String entry, String exit) throws Exception {
-        if (!completeMAX(new JSONObject(metadata)) && exit.isEmpty()) { preflight(config,metadata,entry); return; }
+        if (!completeChain(new JSONObject(metadata)) && exit.isEmpty()) { preflight(config,metadata,entry); return; }
         String graph=Libbox.routerCompileMultihopStartLayers(config,metadata,entry,exit);
         if(graph==null||graph.isEmpty()||graph.getBytes(StandardCharsets.UTF_8).length>4*1024*1024) throw new IllegalStateException("Native two-layer graph exceeds its bound.");
         Libbox.checkConfig(graph);
@@ -71,13 +71,13 @@ final class AndroidMultihopStartLayer {
 
     static RouterMultihop prepareExecution(String config,String metadata,String entry,String exit) throws Exception {
         JSONObject selected=new JSONObject(metadata);
-        if (completeMAX(selected)) {
+        if (completeChain(selected)) {
             if (entry != null && (entry.isEmpty() || entry.getBytes(StandardCharsets.UTF_8).length > MAX_BYTES)
                     || exit != null && (exit.isEmpty() || exit.getBytes(StandardCharsets.UTF_8).length > MAX_BYTES)) {
                 throw new IllegalStateException("Invalid independently captured Start Layer.");
             }
-            // Even Local must revalidate every mandatory MAX layer and captured
-            // role. Empty sources are valid only for already-composed MAX legs.
+            // Even Local must revalidate every mandatory composite/MAX layer and captured
+            // role. Empty sources are valid only for already-composed transport legs.
             return Libbox.newRouterMultihopWithStartLayers(config,metadata,entry==null?"":entry,exit==null?"":exit);
         }
         String required=selected.has("exit_start_layer")?selected.getString("exit_start_layer"):"";
@@ -92,8 +92,10 @@ final class AndroidMultihopStartLayer {
         return Libbox.newRouterMultihopWithStartLayers(config,metadata,entry==null?"":entry,exit);
     }
 
-    private static boolean completeMAX(JSONObject metadata) {
-        return AndroidNativeMAXProfile.isMode(metadata.optString("entry_mode"))
+    private static boolean completeChain(JSONObject metadata) {
+        return AndroidNativeCompositeProfile.isMode(metadata.optString("entry_mode"))
+                || AndroidNativeCompositeProfile.isMode(metadata.optString("exit_mode"))
+                || AndroidNativeMAXProfile.isMode(metadata.optString("entry_mode"))
                 || AndroidNativeMAXProfile.isMode(metadata.optString("exit_mode"));
     }
 
