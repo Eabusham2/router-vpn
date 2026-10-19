@@ -32,10 +32,16 @@ elif name == "git":
     assert args[-2:] == ["rev-parse", "HEAD"]
     print("bad-pin" if os.environ.get("HOST_TEST_FAIL") == "pin" else os.environ["HOST_TEST_PIN"])
 elif name == "xcrun":
-    assert args == ["--sdk", "macosx", "--show-sdk-path"]
-    if os.environ.get("HOST_TEST_FAIL") == "sdk":
-        sys.exit(2)
-    print(os.environ["HOST_TEST_SDK"])
+    assert args[:2] == ["--sdk", "macosx"]
+    if args[2:] == ["--show-sdk-path"]:
+        if os.environ.get("HOST_TEST_FAIL") == "sdk":
+            sys.exit(2)
+        print(os.environ["HOST_TEST_SDK"])
+    else:
+        assert args[2:] in (["--find", "clang"], ["--find", "clang++"])
+        if os.environ.get("HOST_TEST_FAIL") == args[3]:
+            sys.exit(2)
+        print(os.environ["HOST_TEST_CXX" if args[3] == "clang++" else "HOST_TEST_CC"])
 elif name == "python3":
     host()
     assert args[1] == "--fixture-dir"
@@ -55,12 +61,16 @@ elif name == "python3":
 elif name == "go":
     host()
     if args == ["env", "GOHOSTARCH"]:
-        print("arm64")
+        print(os.environ["HOST_TEST_ARCH"])
     else:
         assert args[0] == "build" and "./cmd/sing-box" in args
         assert os.environ["GOOS"] == "darwin"
-        assert os.environ["GOARCH"] == "arm64"
-        assert os.environ["CGO_ENABLED"] == "0"
+        assert os.environ["GOARCH"] == os.environ["HOST_TEST_ARCH"]
+        assert os.environ["CGO_ENABLED"] == "1", "Naive's native Cronet parser requires cgo"
+        assert os.environ["CC"] == os.environ["HOST_TEST_CC"], "host parser inherited the iOS C compiler"
+        assert os.environ["CXX"] == os.environ["HOST_TEST_CXX"], "host parser inherited the iOS C++ compiler"
+        for key in ("CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CGO_LDFLAGS"):
+            assert key not in os.environ, "host parser inherited target flags: " + key
         assert os.environ["GOTOOLCHAIN"] == "go1.26.3"
         assert {"with_wireguard", "with_quic", "with_gvisor", "with_naive_outbound"}.issubset(args[args.index("-tags") + 1].split(",")), "host parser lost a shipping protocol"
         record({"event":"build"})
@@ -96,7 +106,8 @@ else:
 
 
 class HostEnvironmentTest(unittest.TestCase):
-    def run_gate(self, failure="", missing_sdk=False, drop_naive=False):
+    def run_gate(self, failure="", missing_sdk=False, drop_naive=False,
+                 disable_cgo=False, leak_cgo_flags=False, host_arch="arm64"):
         with tempfile.TemporaryDirectory(prefix="routervpn-host-sdk-") as tmp:
             root = Path(tmp)
             (root / "deploy").mkdir()
@@ -105,6 +116,10 @@ class HostEnvironmentTest(unittest.TestCase):
             shutil.copyfile(SCRIPT, script)
             if drop_naive:
                 script.write_text(script.read_text().replace(",with_naive_outbound", ""))
+            if disable_cgo:
+                script.write_text(script.read_text().replace("export CGO_ENABLED=1", "export CGO_ENABLED=0"))
+            if leak_cgo_flags:
+                script.write_text(script.read_text().replace("unset CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_LDFLAGS", ":"))
             sdk = root / "MacOSX.sdk"
             if not missing_sdk:
                 sdk.mkdir()
@@ -118,6 +133,12 @@ class HostEnvironmentTest(unittest.TestCase):
                        SDKROOT="/invalid/iPhoneOS.sdk", IPHONEOS_DEPLOYMENT_TARGET="17.0",
                        TVOS_DEPLOYMENT_TARGET="17.0", WATCHOS_DEPLOYMENT_TARGET="10.0",
                        XROS_DEPLOYMENT_TARGET="1.0", HOST_TEST_SDK=str(sdk),
+                       GOOS="ios", GOARCH="386", CGO_ENABLED="0",
+                       CC="/invalid/iPhoneOS/clang", CXX="/invalid/iPhoneOS/clang++",
+                       CGO_CFLAGS="-target arm64-apple-ios17.0", CGO_CPPFLAGS="-isysroot /invalid/iPhoneOS.sdk",
+                       CGO_CXXFLAGS="-target arm64-apple-ios17.0", CGO_LDFLAGS="-isysroot /invalid/iPhoneOS.sdk",
+                       HOST_TEST_CC=str(tools / "host-clang"), HOST_TEST_CXX=str(tools / "host-clang++"),
+                       HOST_TEST_ARCH=host_arch,
                        HOST_TEST_EVENTS=str(events_file), HOST_TEST_PIN=PIN, HOST_TEST_FAIL=failure)
             completed = subprocess.run(["bash", str(script)], env=env, text=True,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
@@ -126,6 +147,8 @@ class HostEnvironmentTest(unittest.TestCase):
                 if "work" in event:
                     self.assertFalse(Path(event["work"]).exists(), "temporary fixtures/binary were not removed")
             self.assertEqual(env["SDKROOT"], "/invalid/iPhoneOS.sdk", "enclosing IPA SDK was changed")
+            self.assertEqual(env["CGO_ENABLED"], "0", "enclosing IPA cgo setting was changed")
+            self.assertEqual(env["CGO_CFLAGS"], "-target arm64-apple-ios17.0", "enclosing IPA compiler flags were changed")
             return completed, events
 
     def test_xcode_iphone_sdk_is_not_used_for_host_executables(self):
@@ -134,6 +157,23 @@ class HostEnvironmentTest(unittest.TestCase):
         self.assertEqual([event["event"] for event in events], ["fixtures", "native-fixtures", "build"] + ["check"] * 179)
         self.assertEqual({event["fixture"] for event in events if event["event"] == "check"},
                          {"shadowsocks.json", "hysteria2.json", "shadowsocks-ipv4-only.json", "wireguard.json", "wireguard-ipv4-only.json", "sing-box.json", "planned.json"})
+
+    def test_intel_host_uses_its_own_architecture(self):
+        result, events = self.run_gate(host_arch="amd64")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sum(event["event"] == "check" for event in events), 179)
+
+    def test_naive_cgo_cannot_be_disabled(self):
+        result, events = self.run_gate(disable_cgo=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Naive's native Cronet parser requires cgo", result.stderr)
+        self.assertFalse(any(event["event"] == "check" for event in events))
+
+    def test_ios_cgo_flags_cannot_leak_into_host_parser(self):
+        result, events = self.run_gate(leak_cgo_flags=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("host parser inherited target flags", result.stderr)
+        self.assertFalse(any(event["event"] == "check" for event in events))
 
     def test_naive_build_tag_cannot_be_removed(self):
         result, events = self.run_gate(drop_naive=True)
@@ -155,6 +195,13 @@ class HostEnvironmentTest(unittest.TestCase):
         result, events = self.run_gate(missing_sdk=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(events, [])
+
+    def test_host_compiler_lookup_failure_stops_before_build(self):
+        for compiler in ("clang", "clang++"):
+            with self.subTest(compiler=compiler):
+                result, events = self.run_gate(compiler)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual([event["event"] for event in events], ["fixtures", "native-fixtures"])
 
     def test_compile_failure_is_not_a_pass(self):
         result, events = self.run_gate("build")

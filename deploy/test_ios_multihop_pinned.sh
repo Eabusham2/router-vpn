@@ -22,7 +22,13 @@ python3 "$ROOT/deploy/test_ios_xray_exits.py" --fixture-dir "$WORK/xray-exits"
   export GOTOOLCHAIN=go1.26.3
   export GOOS=darwin
   export GOARCH=$(go env GOHOSTARCH)
-  export CGO_ENABLED=0
+  # The shipped Naive parser links Cronet's native macOS archive. Disabling
+  # cgo excludes that package; using Xcode's iOS compiler flags cross-links it.
+  export CGO_ENABLED=1
+  CC="$(xcrun --sdk macosx --find clang)"
+  CXX="$(xcrun --sdk macosx --find clang++)"
+  export CC CXX
+  unset CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_LDFLAGS
   go build -trimpath -ldflags=-checklinkname=0 -tags with_wireguard,with_quic,with_gvisor,with_naive_outbound -o "$WORK/sing-box" ./cmd/sing-box
 )
 for graph in "$WORK"/fixtures/*.json; do
