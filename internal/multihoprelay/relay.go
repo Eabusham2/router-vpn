@@ -125,7 +125,11 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 			return nil, err
 		}
 		if e.StartLayer != nil {
-			if nativecomposite.Mode(e.Mode) {
+			if CompleteMAXMode(e.Mode) {
+				if _, _, err := maxRelayChain(e); err != nil {
+					return nil, err
+				}
+			} else if nativecomposite.Mode(e.Mode) {
 				if _, err := compositePlan(e); err != nil {
 					return nil, err
 				}
@@ -155,13 +159,19 @@ func (m *Manager) Available() []map[string]string {
 		if e.StartLayer != nil {
 			item["exit_start_layer"] = e.StartLayer.Mode
 		}
-		if PacketMode(e.Mode) {
-			if identity, err := clientIdentity(e.Transport); err == nil {
+		transport := e.Transport
+		if CompleteMAXMode(e.Mode) {
+			// New validated and froze this exact complete-chain owner. Public
+			// discovery fingerprints its base; no private chain is exposed.
+			transport = e.Transport["endpoint"].(map[string]any)
+		}
+		if PacketMode(e.Mode) || CompleteMAXMode(e.Mode) {
+			if identity, err := clientIdentity(transport); err == nil {
 				item["client_public_key"] = identity
 			}
 		}
-		if mobilepq.IsMode(e.Mode) {
-			if identity, err := pqIdentity(e.Transport); err == nil {
+		if mobilepq.IsMode(e.Mode) || CompleteMAXMode(e.Mode) {
+			if identity, err := pqIdentity(transport); err == nil {
 				item["pq_client_identity"] = identity
 			}
 		}
@@ -444,6 +454,9 @@ func validateTransport(e Exit) (map[string]any, error) {
 	if !literalServer(e.DNS) {
 		return nil, errors.New("relay exit requires a literal exit-routed DNS server")
 	}
+	if CompleteMAXMode(e.Mode) {
+		return validateMAXTransport(e)
+	}
 	if nativecomposite.Mode(e.Mode) {
 		if err := nativecomposite.ValidatePlan(e.Transport, e.Mode, e.NodeID, ""); err != nil {
 			return nil, err
@@ -581,7 +594,14 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 		"dns":      map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "exit-dns", "server": exit.DNS, "detour": "exit"}}, "final": "exit-dns"},
 		"route":    map[string]any{"default_domain_resolver": "exit-dns", "rules": []any{map[string]any{"source_ip_cidr": []string{netip.PrefixFrom(peer, bits).String()}, "invert": true, "action": "reject"}}, "final": "exit"},
 	}
-	if nativecomposite.Mode(exit.Mode) {
+	if CompleteMAXMode(exit.Mode) {
+		base, outputs, err := maxRelayChain(exit)
+		if err != nil {
+			return nil, err
+		}
+		config["endpoints"] = []any{base}
+		config["outbounds"] = outputs
+	} else if nativecomposite.Mode(exit.Mode) {
 		plan, err := compositePlan(exit)
 		if err != nil {
 			return nil, err
@@ -597,7 +617,7 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 	} else {
 		config["outbounds"] = []any{transport}
 	}
-	if exit.StartLayer != nil && !nativecomposite.Mode(exit.Mode) {
+	if exit.StartLayer != nil && !CompleteMAXMode(exit.Mode) && !nativecomposite.Mode(exit.Mode) {
 		inner, outer, err := WrapStartLayer(transport, exit.Mode, exit.StartLayer, ExitStartLayerTag, "")
 		if err != nil {
 			return nil, err

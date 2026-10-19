@@ -31,7 +31,7 @@ class NativeRelayBuild(unittest.TestCase):
         self.assertIn('ARG RELAY_XRAY_COMMIT='+M.XRAY.XRAY_PIN,docker)
         self.assertIn('prepare-relay-core.py /core /xray-core',docker)
         self.assertIn('-checklinkname=0',docker)
-        self.assertIn('TestExportPinnedCore(Relay|XrayRelay|PQRelay|NaiveRelay|CompositeRelay)Configurations',docker)
+        self.assertIn('TestExportPinnedCore(Relay|XrayRelay|PQRelay|NaiveRelay|CompositeRelay|MAXRelay)Configurations\' ./internal/multihoprelay ./internal/mobilemultihop',docker)
         self.assertIn('routervpn-xray-LICENSE.txt',docker)
         self.assertIn('sing-box check -c',docker)
         for source in ('deploy/prepare-server-pq.py', 'mobile/pq/native_factory.go.tmpl', 'mobile/rosenpass/Cargo.lock', 'mobile/rosenpass/src/lib.rs'):

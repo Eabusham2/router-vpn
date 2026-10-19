@@ -42,6 +42,15 @@ type server struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "compile-max-relay-profile" {
+		if len(os.Args) != 6 {
+			log.Fatal("compile-max-relay-profile requires the captured complete mode, node, endpoint and private API")
+		}
+		if err := compileMAXRelayProfile(os.Stdin, os.Stdout, os.Args[2], os.Args[3], os.Args[4], os.Args[5]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "compile-composite-relay-profile" {
 		if len(os.Args) != 6 {
 			log.Fatal("compile-composite-relay-profile requires the captured mode, node, endpoint and private API")

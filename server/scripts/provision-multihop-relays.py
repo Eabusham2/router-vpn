@@ -278,6 +278,56 @@ def native_pq(assets, mode, node, server):
         raise bad
     return value
 
+def native_max(assets, mode, node, server, api):
+    """Capture the full PQ/base/SS/outer chain with the shipping Go compiler."""
+    bad = ValueError('Native MAX pairing lost its complete captured node graph')
+    if mode not in ('max-tls-wg', 'max-tls-awg', 'max-quic-wg', 'max-quic-awg') or not isinstance(assets, dict) or not 9 <= len(assets) <= 12:
+        raise bad
+    if not isinstance(api, str) or not all(isinstance(value, str) for value in assets.values()):
+        raise bad
+    payload = json.dumps(assets, ensure_ascii=False, allow_nan=False).encode('utf-8')
+    if len(payload) > 16 << 20:
+        raise ValueError('Native MAX pairing exceeds its source bound')
+    try:
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-max-relay-profile', mode, node, server, api],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        raise ValueError('Native MAX pairing failed offline validation') from None
+    if not result.stdout or len(result.stdout) > (4 << 20) + 1:
+        raise bad
+    value = decode(result.stdout)
+    if not isinstance(value, dict) or set(value) != {'endpoint', 'outbounds'}:
+        raise bad
+    base, outputs = value['endpoint'], value['outbounds']
+    if not isinstance(base, dict) or not isinstance(outputs, list) or len(outputs) != 2 or not all(isinstance(item, dict) for item in outputs):
+        raise bad
+    expected_mode = 'awg2-pq' if mode.endswith('-awg') else 'wg-pq'
+    if base.get('type') != 'routervpn-pq' or base.get('mode') != expected_mode or base.get('node_id') != node or base.get('tag') != 'exit' or base.get('detour') != 'routervpn-relay-max-ss':
+        raise bad
+    try:
+        private = literal(urlsplit(api).hostname)
+    except (ValueError, TypeError):
+        raise bad from None
+    peers, pq = base.get('peers'), base.get('pq')
+    if not isinstance(peers, list) or len(peers) != 1 or not isinstance(peers[0], dict) or peers[0].get('address') != private or not isinstance(pq, dict):
+        raise bad
+    for field, asset in (('secret', 'rosenpass-client-secret'), ('public', 'rosenpass-client-public'), ('peer', 'rosenpass-server-public')):
+        if pq.get(field) != assets.get(asset):
+            raise bad
+    owned = {item.get('tag'): item for item in outputs}
+    if set(owned) != {'routervpn-relay-max-ss', 'routervpn-relay-max-outer'}:
+        raise bad
+    middle, outer = owned['routervpn-relay-max-ss'], owned['routervpn-relay-max-outer']
+    if middle.get('type') != 'shadowsocks' or middle.get('method') != '2022-blake3-aes-256-gcm' or middle.get('server') != private or middle.get('detour') != 'routervpn-relay-max-outer' or outer.get('detour') is not None:
+        raise bad
+    if mode.startswith('max-tls-'):
+        if outer.get('type') != 'routervpn-xray' or outer.get('mode') != 'reality-xhttp':
+            raise bad
+    elif outer.get('type') != 'hysteria2' or outer.get('server') != server:
+        raise bad
+    return value
+
 def native_composite(assets, mode, node, server, api):
     """Pair both authenticated lanes; no imported helper is ever executed."""
     bad = ValueError('Native composite pairing lost its complete captured node graph')
@@ -413,6 +463,10 @@ def pair(bundle, alias, selected=None):
     for mode in ('ss-v2ray', 'split', 'max'):
         if mode not in modes: continue
         transport = native_composite(modes[mode], mode, node, endpoint, profile.get('router_api'))
+        exits.append(dict(id=alias, mode=mode, node_id=node, dns_server=dns, transport=transport))
+    for mode in ('max-tls-wg', 'max-tls-awg', 'max-quic-wg', 'max-quic-awg'):
+        if mode not in modes: continue
+        transport = native_max(modes[mode], mode, node, endpoint, profile.get('router_api'))
         exits.append(dict(id=alias, mode=mode, node_id=node, dns_server=dns, transport=transport))
     if not exits:
         raise ValueError('bundle has no supported native server exit graph')
