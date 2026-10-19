@@ -1,0 +1,42 @@
+package openvpn
+
+import "net"
+
+// The pinned OpenVPN session interrupts its packet transport before closing
+// TLS. A closeNotify write can therefore report net.ErrClosed after shutdown
+// has completed. Preserve any other failure, including one joined with that
+// expected condition; the endpoint must still close its device and join its
+// reader and challenge workers before returning.
+func routerVPNOpenVPNCloseError(err error) error {
+	if routerVPNOpenVPNOnlyClosed(err, 0) {
+		return nil
+	}
+	return err
+}
+
+func routerVPNOpenVPNOnlyClosed(err error, depth int) bool {
+	if err == nil {
+		return true
+	}
+	if depth >= 32 {
+		return false
+	}
+	switch value := err.(type) {
+	case interface{ Unwrap() []error }:
+		children := value.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !routerVPNOpenVPNOnlyClosed(child, depth+1) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		child := value.Unwrap()
+		return child != nil && routerVPNOpenVPNOnlyClosed(child, depth+1)
+	default:
+		return err == net.ErrClosed
+	}
+}

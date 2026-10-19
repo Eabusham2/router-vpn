@@ -1,0 +1,60 @@
+package openvpn
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"testing"
+)
+
+type routerVPNOpenVPNCloseCycle struct{}
+
+func (e *routerVPNOpenVPNCloseCycle) Error() string { return "cyclic close error" }
+func (e *routerVPNOpenVPNCloseCycle) Unwrap() error { return e }
+
+type routerVPNOpenVPNEmptyCloseError struct{}
+
+func (e *routerVPNOpenVPNEmptyCloseError) Error() string   { return "empty close error" }
+func (e *routerVPNOpenVPNEmptyCloseError) Unwrap() []error { return nil }
+
+func TestRouterVPNOpenVPNCloseError(t *testing.T) {
+	closedNotify := fmt.Errorf("tls: failed to send closeNotify alert (but connection was closed anyway): %w", &net.OpError{Op: "write", Net: "tcp", Err: net.ErrClosed})
+	for name, err := range map[string]error{
+		"nil":                                 nil,
+		"closed":                              net.ErrClosed,
+		"tls-notify-on-interrupted-transport": closedNotify,
+		"joined-closed-transports":            errors.Join(net.ErrClosed, closedNotify),
+		"wrapped-joined-closed-transports":    fmt.Errorf("close session: %w", errors.Join(net.ErrClosed, closedNotify)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := routerVPNOpenVPNCloseError(err); got != nil {
+				t.Fatalf("completed close returned an expected transport condition: %v", got)
+			}
+		})
+	}
+
+	failure := errors.New("device cleanup failed")
+	for name, err := range map[string]error{
+		"real-failure":          failure,
+		"wrapped-real-failure":  fmt.Errorf("close session: %w", failure),
+		"closed-plus-failure":   errors.Join(net.ErrClosed, failure),
+		"failure-plus-closed":   errors.Join(failure, closedNotify),
+		"wrapped-mixed-failure": fmt.Errorf("close session: %w", errors.Join(closedNotify, failure)),
+		"timeout":               context.DeadlineExceeded,
+		"cancelled":             context.Canceled,
+		"unexpected-eof":        io.ErrUnexpectedEOF,
+		"eof":                   io.EOF,
+		"closed-pipe":           io.ErrClosedPipe,
+		"closed-looking-text":   errors.New(net.ErrClosed.Error()),
+		"cycle":                 &routerVPNOpenVPNCloseCycle{},
+		"empty-wrapper":         &routerVPNOpenVPNEmptyCloseError{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := routerVPNOpenVPNCloseError(err); got != err {
+				t.Fatalf("close failure was hidden or rewritten: %v", got)
+			}
+		})
+	}
+}

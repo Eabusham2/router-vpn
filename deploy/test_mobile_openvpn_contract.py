@@ -2,6 +2,7 @@
 """Shipping-chain guard; behavioral parsing lives in mobile/*_test.go."""
 from pathlib import Path
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 def need(path, *markers):
@@ -51,5 +52,6 @@ for path in ('ios/RouterVPN/App/IOSExternalNodeBuilderView.swift',
              'ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift'):
     text=need(path, 'guard let data = encoded.data(using: .utf8)')
     assert 'guard let encoded,' not in text, 'OpenVPN binding returns a non-optional String'
+subprocess.run([sys.executable, str(ROOT/'deploy/test_mobile_openvpn_close_policy.py')], cwd=ROOT, check=True, timeout=180)
 subprocess.run(['go','test','-count=1','./mobile'],cwd=ROOT,check=True,timeout=45)
 print('Mobile OpenVPN shipping, private-store, owned-graph and parser contracts: PASS')
